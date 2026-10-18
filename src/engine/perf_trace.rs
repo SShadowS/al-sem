@@ -626,6 +626,8 @@ pub fn maybe_exit_after(span_name: &str) {
         if let Ok(mut w) = t.writer.lock() {
             w.flush();
         }
+        // This exit skips `main`'s own census print (#160 §4.1.7).
+        crate::engine::l5::detector_context::report_cones_census();
         std::process::exit(0);
     }
 }

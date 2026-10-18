@@ -679,7 +679,7 @@ fn main() -> ExitCode {
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
-    match cli.command {
+    let code = match cli.command {
         Commands::Analyze(a) => run_analyze_cmd(a),
         Commands::Digest(d) => run_digest_cmd(d),
         Commands::Prove(p) => run_prove_cmd(p),
@@ -701,7 +701,11 @@ fn main() -> ExitCode {
             QueryCommands::Effects(e) => run_query_effects_cmd(e),
         },
         Commands::Graph(g) => run_graph_cmd(g),
-    }
+    };
+    // The process-cumulative cone census, once, after every cone the command
+    // composed (#160 §4.1.7). One OnceLock read when off.
+    al_sem::engine::l5::detector_context::report_cones_census();
+    code
 }
 
 // ── graph command ────────────────────────────────────────────────────────────

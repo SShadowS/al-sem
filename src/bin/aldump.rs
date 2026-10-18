@@ -178,6 +178,14 @@ fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    let code = run_main();
+    // The process-cumulative cone census, once, after every cone the mode
+    // composed (#160 §4.1.7). One OnceLock read when off.
+    al_sem::engine::l5::detector_context::report_cones_census();
+    code
+}
+
+fn run_main() -> ExitCode {
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();

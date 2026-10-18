@@ -955,7 +955,10 @@ pub fn run_prove_pipeline(
     let root_id = &changed_roots.roots[0];
 
     // Compute transaction context map
-    let tx_ctx_map = compute_tx_context_map(&resolved);
+    let tx_ctx_map = {
+        let _s = crate::engine::perf_trace::span("prove", "prove.tx_context_map");
+        compute_tx_context_map(&resolved)
+    };
 
     // Compute S4 ordering effects for all routines
     let all_s4_entries = compute_digest_effects_cli(&snap, &resolved, None);

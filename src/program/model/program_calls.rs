@@ -926,20 +926,27 @@ fn adapter(
     upgrade_dependency_bindings: bool,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
 ) -> (ResolvedCalls, SiteCensus) {
-    let j = join(report, ctx, ws);
+    use crate::engine::perf_trace as pt;
+    let j = {
+        let _s = pt::span("b3", "b3.adapter.join");
+        join(report, ctx, ws)
+    };
     let mut c = j.census;
     let surface = ctx.decl_surface();
     let graph = ctx.graph();
     let mut by_decl: HashMap<(&str, u32, u32), &ModelRoutine> = HashMap::new();
-    for r in &ws.routines {
-        let a = &r.source_anchor;
-        let unit = a
-            .source_unit_id
-            .strip_prefix("ws:")
-            .unwrap_or(&a.source_unit_id);
-        by_decl
-            .entry((unit, a.start_line, a.start_column))
-            .or_insert(r);
+    {
+        let _s = pt::span("b3", "b3.adapter.by_decl");
+        for r in &ws.routines {
+            let a = &r.source_anchor;
+            let unit = a
+                .source_unit_id
+                .strip_prefix("ws:")
+                .unwrap_or(&a.source_unit_id);
+            by_decl
+                .entry((unit, a.start_line, a.start_column))
+                .or_insert(r);
+        }
     }
     let objects = graph
         .objects
@@ -969,6 +976,8 @@ fn adapter(
         targets: std::cell::RefCell::new(Vec::new()),
     };
 
+    // The conversion loop to the end of the adapter.
+    let _s_convert = pt::span("b3", "b3.adapter.convert");
     let mut edges: Vec<CallEdge> = Vec::new();
     let mut upgraded_bindings: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
     // The adapter emits no resolver diagnostics (the legacy resolver's

@@ -343,7 +343,7 @@ impl UncertaintyIndex {
 /// once each — nothing per-routine, so the probe cannot distort what it measures.
 pub(crate) mod cones_census {
     use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
     pub(crate) static ROUTINES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static DIRECT_FACTS: AtomicU64 = AtomicU64::new(0);
@@ -356,19 +356,27 @@ pub(crate) mod cones_census {
     pub(crate) static WALK_SCC_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static WALK_DEDUP_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static WALK_COMPOSE_NANOS: AtomicU64 = AtomicU64::new(0);
-    // Inside compose: the two per-member inherited-fact walks.
-    pub(crate) static BFS_NANOS: AtomicU64 = AtomicU64::new(0);
+    // Inside compose: the two per-member inherited-fact walks. The recursive
+    // arm splits into the WALK (`inherited_facts_by_bfs`) and the per-pick
+    // FOLD (`emit_picks`), with the pick population beside them (#160 §4.1.1).
+    pub(crate) static BFS_WALK_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static BFS_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static BFS_PICKS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static BFS_CALLS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SINGLETON_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SINGLETON_CALLS: AtomicU64 = AtomicU64::new(0);
     /// Inside `inherited_facts_for_singleton`, which the first census round left
     /// at ONE number (4.8 s over 100,419 calls) with nothing saying what inside
     /// it costs — and where precomputing `edge_sort_key` then bought only 7 %,
-    /// proving the cost is elsewhere. Split three ways: the candidate SCAN over
-    /// every out-edge's callee cone, the derived FOLD over the surviving bests,
-    /// and the raw materialization (`retag` + `sort_inherited`, skipped under
+    /// proving the cost is elsewhere. Split: the per-edge SUBST of frame-bound
+    /// entries, the candidate scan over every out-edge's callee cone
+    /// (`SCAN_CONE`), the scan over the subject's own producer-solve entries
+    /// (`SCAN_OWN`), the derived FOLD over the surviving bests, and the raw
+    /// materialization (`retag` + `sort_inherited`, skipped under
     /// `ConeOutput::DerivedOnly`).
-    pub(crate) static SGL_SCAN_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_SUBST_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_SCAN_CONE_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_SCAN_OWN_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_RAW_NANOS: AtomicU64 = AtomicU64::new(0);
     /// Populations the scan time is per. Accumulated in plain locals inside the
@@ -376,9 +384,13 @@ pub(crate) mod cones_census {
     /// millions of times and must not touch an atomic (the distortion this
     /// module's `add_gated` doc records).
     pub(crate) static SGL_EDGES: AtomicU64 = AtomicU64::new(0);
-    /// Every `(key, entry)` pair scanned — the REAL population of the walk, as
-    /// opposed to its call count.
+    /// The `(key, entry)` pairs scanned — the REAL population of the walk, as
+    /// opposed to its call count — by class: CLOSED cone entries (read from the
+    /// callee cone as-is), OPEN entries (frame-bound, carried per edge through
+    /// `substitute_entry`), and the subject's OWN producer-solve entries.
     pub(crate) static SGL_CONE_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_OPEN_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_OWN_ENTRIES: AtomicU64 = AtomicU64::new(0);
     /// `best` insertions — each one a `String` key clone today.
     pub(crate) static SGL_WINS: AtomicU64 = AtomicU64::new(0);
     /// Surviving `best` entries summed over all calls (= `fold_fact` calls).
@@ -418,10 +430,33 @@ pub(crate) mod cones_census {
     pub(crate) static PD_LINKS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_ENTRIES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_EDGES: AtomicU64 = AtomicU64::new(0);
+    /// The solve's wall time and call count (a second solve is a second call).
+    pub(crate) static PD_SOLVE_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static PD_SOLVE_CALLS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_SOLVE_BYTES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static PD_SNAPSHOT_BYTES: AtomicU64 = AtomicU64::new(0);
     /// #69 D2: solve links whose cone edge has no snapshot typed edge (dropped).
     pub(crate) static PD_EDGE_UNMAPPED: AtomicU64 = AtomicU64::new(0);
+    /// What `compose_inherited_cones` spends outside every timed component,
+    /// charged PER CALL as `elapsed - Σ(component delta)` in `i64`. The one
+    /// signed counter: a negative total means two component timers overlap.
+    pub(crate) static COMPOSE_REST_NANOS: AtomicI64 = AtomicI64::new(0);
+
+    /// The eight components of compose that [`COMPOSE_REST_NANOS`] subtracts.
+    /// Read only under [`enabled`].
+    pub(crate) fn component_snapshot() -> [u64; 8] {
+        [
+            &FACTCONE_NANOS,
+            &COVERAGE_NANOS,
+            &BFS_WALK_NANOS,
+            &BFS_FOLD_NANOS,
+            &SINGLETON_NANOS,
+            &DERIVED_NANOS,
+            &EMIT_NANOS,
+            &PD_SOLVE_NANOS,
+        ]
+        .map(|c| c.load(Ordering::Relaxed))
+    }
 
     pub(crate) fn enabled() -> bool {
         static E: OnceLock<bool> = OnceLock::new();
@@ -501,16 +536,20 @@ pub(crate) mod cones_census {
             ms(WALK_COMPOSE_NANOS.load(Ordering::Relaxed)),
         );
         eprintln!(
-            "[cones-census]   compose: bfs={:.1}ms x{} singleton={:.1}ms x{} max_scc_members={}",
-            ms(BFS_NANOS.load(Ordering::Relaxed)),
+            "[cones-census]   compose: bfs_walk={:.1}ms bfs_fold={:.1}ms x{} picks={} singleton={:.1}ms x{} max_scc_members={}",
+            ms(BFS_WALK_NANOS.load(Ordering::Relaxed)),
+            ms(BFS_FOLD_NANOS.load(Ordering::Relaxed)),
             BFS_CALLS.load(Ordering::Relaxed),
+            BFS_PICKS.load(Ordering::Relaxed),
             ms(SINGLETON_NANOS.load(Ordering::Relaxed)),
             SINGLETON_CALLS.load(Ordering::Relaxed),
             MAX_SCC_MEMBERS.load(Ordering::Relaxed),
         );
         eprintln!(
-            "[cones-census]   singleton: scan={:.1}ms fold={:.1}ms raw={:.1}ms",
-            ms(SGL_SCAN_NANOS.load(Ordering::Relaxed)),
+            "[cones-census]   singleton: subst={:.1}ms scan_cone={:.1}ms scan_own={:.1}ms fold={:.1}ms raw={:.1}ms",
+            ms(SGL_SUBST_NANOS.load(Ordering::Relaxed)),
+            ms(SGL_SCAN_CONE_NANOS.load(Ordering::Relaxed)),
+            ms(SGL_SCAN_OWN_NANOS.load(Ordering::Relaxed)),
             ms(SGL_FOLD_NANOS.load(Ordering::Relaxed)),
             ms(SGL_RAW_NANOS.load(Ordering::Relaxed)),
         );
@@ -522,9 +561,11 @@ pub(crate) mod cones_census {
             SGL_ENTRIES_N_CONES.load(Ordering::Relaxed),
         );
         eprintln!(
-            "[cones-census]   singleton pop: edges={} cone_entries={} wins={} bests={}",
+            "[cones-census]   singleton pop: edges={} cone_entries={} open_entries={} own_entries={} wins={} bests={}",
             SGL_EDGES.load(Ordering::Relaxed),
             SGL_CONE_ENTRIES.load(Ordering::Relaxed),
+            SGL_OPEN_ENTRIES.load(Ordering::Relaxed),
+            SGL_OWN_ENTRIES.load(Ordering::Relaxed),
             SGL_WINS.load(Ordering::Relaxed),
             SGL_BESTS.load(Ordering::Relaxed),
         );
@@ -538,6 +579,12 @@ pub(crate) mod cones_census {
             ms(DERIVED_NANOS.load(Ordering::Relaxed)),
             ms(FACTCONE_NANOS.load(Ordering::Relaxed)),
             FACTCONE_CALLS.load(Ordering::Relaxed),
+        );
+        eprintln!(
+            "[cones-census]   compose untimed: rest={:.3}ms pd_solve={:.1}ms x{}",
+            COMPOSE_REST_NANOS.load(Ordering::Relaxed) as f64 / 1e6,
+            ms(PD_SOLVE_NANOS.load(Ordering::Relaxed)),
+            PD_SOLVE_CALLS.load(Ordering::Relaxed),
         );
         eprintln!(
             "[cones-census]   merge_cone: calls={} tiebreaks={} (a tiebreak = 2x rep_key, each JSON-serializing)",
@@ -555,6 +602,16 @@ pub(crate) mod cones_census {
             PD_SNAPSHOT_BYTES.load(Ordering::Relaxed),
             PD_EDGE_UNMAPPED.load(Ordering::Relaxed),
         );
+    }
+}
+
+/// Print the process-cumulative cone census once (spec #160 §4.1.7). One
+/// OnceLock read when off. Called by `alsem`'s and `aldump`'s `main` after the
+/// command returns, and by `perf_trace::maybe_exit_after` before its exit, so
+/// every cone the process composed (the snapshot's included) reaches the line.
+pub fn report_cones_census() {
+    if cones_census::enabled() {
+        cones_census::report();
     }
 }
 
@@ -1148,7 +1205,6 @@ pub(crate) fn build_detector_context_with<'a>(
             );
         }
         cones_census::add_since(&cones_census::ASSEMBLE_NANOS, _t_assemble);
-        cones_census::report();
         summaries
     } else {
         HashMap::new()

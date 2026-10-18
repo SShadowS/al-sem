@@ -590,6 +590,36 @@ fn query_single_app() {
     );
 }
 
+/// Spec §8.1: spawned, because `cones_census::enabled()` is a process OnceLock
+/// and its counters are process-global. `rest` is what compose spends outside
+/// every timed component, charged per call as `elapsed - Σ component deltas`;
+/// a negative value means two component timers overlap.
+#[test]
+fn census_rest_is_never_negative() {
+    let (out, _) = spawn_traced(
+        &["analyze", &ws_a(), "--single-app", "--format", "json"],
+        &[("ALSEM_CONES_CENSUS", "1")],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let line = err
+        .lines()
+        .find(|l| l.starts_with("[cones-census]") && l.contains("rest="))
+        .unwrap_or_else(|| panic!("no rest line:\n{err}"));
+    let v: f64 = line
+        .split("rest=")
+        .nth(1)
+        .unwrap()
+        .split(|c: char| !(c == '-' || c == '.' || c.is_ascii_digit()))
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        v >= 0.0,
+        "negative compose remainder (timer overlap): {line}"
+    );
+}
+
 #[test]
 fn graph() {
     let (_d, ws) = ws_dep();

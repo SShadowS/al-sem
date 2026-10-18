@@ -1773,6 +1773,7 @@ fn inherited_facts_for_singleton<'g>(
     // skips them in the cone and reads these instead. A guarded entry an
     // argument contradicts is dropped here. Rare: only sites under a
     // boolean-parameter guard are guarded.
+    let _subst_t = crate::engine::l5::detector_context::cones_census::start();
     let subst: Vec<Vec<(Arc<str>, ConeFactEntry)>> = out_edges
         .iter()
         .map(|edge| {
@@ -1796,6 +1797,10 @@ fn inherited_facts_for_singleton<'g>(
                 .collect()
         })
         .collect();
+    crate::engine::l5::detector_context::cones_census::add_since(
+        &crate::engine::l5::detector_context::cones_census::SGL_SUBST_NANOS,
+        _subst_t,
+    );
     // Keys BORROW from `cones` (and `subst`) instead of being cloned. The
     // census counted 10,522,793 `best` insertions per 8020 run against only
     // 136,952 out-edges — i.e. the walk is cone-ENTRY-bound, and every one of
@@ -1805,7 +1810,10 @@ fn inherited_facts_for_singleton<'g>(
     let mut best: BTreeMap<&str, Best<'_>> = BTreeMap::new();
     // Census populations: plain locals, folded into the atomics ONCE per call.
     let mut c_edges: u64 = 0;
-    let mut c_entries: u64 = 0;
+    // Scanned cone entries (closed + open), the open ones among them, and own.
+    let mut c_scanned: u64 = 0;
+    let mut c_open: u64 = 0;
+    let mut c_own: u64 = 0;
     let mut c_wins: u64 = 0;
     let mut c_cone_edges: u64 = 0;
     let _scan_t = crate::engine::l5::detector_context::cones_census::start();
@@ -1826,12 +1834,13 @@ fn inherited_facts_for_singleton<'g>(
             continue;
         };
         c_cone_edges += 1;
+        c_open += edge_subst.len() as u64;
         let entries = ycone
             .iter()
             .filter(|(_, e)| !frame_bound(e))
             .chain(edge_subst.iter().map(|(k, e)| (k, e)));
         for (key, entry) in entries {
-            c_entries += 1;
+            c_scanned += 1;
             // A guard does not matter at the subject: its own parameters are
             // unknown here, so a guarded fact is a possible one. One fact, one key.
             let key = base_key_of(key, entry);
@@ -1853,8 +1862,13 @@ fn inherited_facts_for_singleton<'g>(
     // #69 D1.3 use (a): the subject's own producer-solve entries compete under
     // the same rule. They are its COMPLETE parameter-dependent-origin output:
     // no cone carries a producer.
+    crate::engine::l5::detector_context::cones_census::add_since(
+        &crate::engine::l5::detector_context::cones_census::SGL_SCAN_CONE_NANOS,
+        _scan_t,
+    );
+    let _own_t = crate::engine::l5::detector_context::cones_census::start();
     for (e, key) in own.iter().zip(&own_keys) {
-        c_entries += 1;
+        c_own += 1;
         if candidate_wins(
             e.dist,
             e.first_hop,
@@ -1872,16 +1886,25 @@ fn inherited_facts_for_singleton<'g>(
         }
     }
     crate::engine::l5::detector_context::cones_census::add_since(
-        &crate::engine::l5::detector_context::cones_census::SGL_SCAN_NANOS,
-        _scan_t,
+        &crate::engine::l5::detector_context::cones_census::SGL_SCAN_OWN_NANOS,
+        _own_t,
     );
+    let c_entries = c_scanned + c_own;
     crate::engine::l5::detector_context::cones_census::add(
         &crate::engine::l5::detector_context::cones_census::SGL_EDGES,
         c_edges,
     );
-    crate::engine::l5::detector_context::cones_census::add(
+    crate::engine::l5::detector_context::cones_census::add_gated(
         &crate::engine::l5::detector_context::cones_census::SGL_CONE_ENTRIES,
-        c_entries,
+        c_scanned - c_open,
+    );
+    crate::engine::l5::detector_context::cones_census::add_gated(
+        &crate::engine::l5::detector_context::cones_census::SGL_OPEN_ENTRIES,
+        c_open,
+    );
+    crate::engine::l5::detector_context::cones_census::add_gated(
+        &crate::engine::l5::detector_context::cones_census::SGL_OWN_ENTRIES,
+        c_own,
     );
     crate::engine::l5::detector_context::cones_census::add(
         &crate::engine::l5::detector_context::cones_census::SGL_WINS,
@@ -2409,6 +2432,14 @@ fn compose_inherited_cones(
     ConeDerivedStore,
     super::pd_solve::ConeArena,
 ) {
+    // #160 §4.1.1: the per-call untimed remainder. Entry snapshot only under
+    // the census (one OnceLock read otherwise); the function has one exit.
+    let rest_entry = crate::engine::l5::detector_context::cones_census::enabled().then(|| {
+        (
+            std::time::Instant::now(),
+            crate::engine::l5::detector_context::cones_census::component_snapshot(),
+        )
+    });
     let mut out: HashMap<String, InheritedConeResult> = HashMap::new();
     let mut derived = ConeDerivedBuilder::default();
 
@@ -2444,7 +2475,16 @@ fn compose_inherited_cones(
             operation_id: op.to_string(),
         })
         .collect();
+    let _t_pd = crate::engine::l5::detector_context::cones_census::start();
     let (arena, resolved) = super::pd_solve::solve(producers, g, routines_by_id, frames);
+    crate::engine::l5::detector_context::cones_census::add_since(
+        &crate::engine::l5::detector_context::cones_census::PD_SOLVE_NANOS,
+        _t_pd,
+    );
+    crate::engine::l5::detector_context::cones_census::add_gated(
+        &crate::engine::l5::detector_context::cones_census::PD_SOLVE_CALLS,
+        1,
+    );
     let own_entries = |m: &str| resolved.get(m).map_or(&[][..], Vec::as_slice);
 
     let succ_sccs = build_succ_sccs(g, &scc.sccs, &scc.scc_id_by_routine);
@@ -2558,7 +2598,21 @@ fn compose_inherited_cones(
                     &fact_cones,
                     own_entries(m),
                 );
-                emit_picks(m, picks, mode, &mut derived)
+                crate::engine::l5::detector_context::cones_census::add_since(
+                    &crate::engine::l5::detector_context::cones_census::BFS_WALK_NANOS,
+                    _t_walk,
+                );
+                crate::engine::l5::detector_context::cones_census::add_gated(
+                    &crate::engine::l5::detector_context::cones_census::BFS_PICKS,
+                    picks.len() as u64,
+                );
+                let _t_fold = crate::engine::l5::detector_context::cones_census::start();
+                let out = emit_picks(m, picks, mode, &mut derived);
+                crate::engine::l5::detector_context::cones_census::add_since(
+                    &crate::engine::l5::detector_context::cones_census::BFS_FOLD_NANOS,
+                    _t_fold,
+                );
+                out
             } else {
                 inherited_facts_for_singleton(
                     m,
@@ -2574,10 +2628,6 @@ fn compose_inherited_cones(
                 )
             };
             if recursive {
-                crate::engine::l5::detector_context::cones_census::add_since(
-                    &crate::engine::l5::detector_context::cones_census::BFS_NANOS,
-                    _t_walk,
-                );
                 crate::engine::l5::detector_context::cones_census::add(
                     &crate::engine::l5::detector_context::cones_census::BFS_CALLS,
                     1,
@@ -2715,6 +2765,18 @@ fn compose_inherited_cones(
         );
     }
 
+    if let Some((t0, before)) = rest_entry {
+        let after = crate::engine::l5::detector_context::cones_census::component_snapshot();
+        let comp: i64 = after
+            .iter()
+            .zip(before.iter())
+            .map(|(a, b)| *a as i64 - *b as i64)
+            .sum();
+        crate::engine::l5::detector_context::cones_census::COMPOSE_REST_NANOS.fetch_add(
+            t0.elapsed().as_nanos() as i64 - comp,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
     (out, derived.finish(), arena)
 }
 
