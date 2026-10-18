@@ -523,6 +523,7 @@ mod tests {
             root_classifications: Vec::new(),
             primary_app: None,
             infra_diagnostics: Vec::new(),
+            workspace_diagnostics: Vec::new(),
             dependency_diagnostics: Vec::new(),
             calls: Default::default(),
             events: Default::default(),

@@ -10,11 +10,13 @@
 //!      OWN stage: `index` ("No object declaration found in <rel>"), `parse`
 //!      ([PARSER001] native parser unavailable), or `index` (failed-to-index warn).
 //!
-//! This is computed DETERMINISTICALLY from disk so BOTH the success path and the
-//! fail-closed path (`empty_output_result`, which previously dropped these) can
-//! thread it into the JSON envelope's `diagnostics` array. The success path's
-//! `assemble_*` silently skips unparseable files, so reproducing the index
-//! diagnostics here is the single source of truth for them in the gate.
+//! It is computed DETERMINISTICALLY from the command's one read of the workspace
+//! (`InputSet`, #160) so BOTH the success path (the model's
+//! `workspace_diagnostics`, built in `attach_program_calls`) and the fail-closed
+//! path (`empty_output_result`) can thread it into the JSON envelope's
+//! `diagnostics` array. The index rows come from the program build's own parse
+//! (`FreshCoverage::files_without_object`): there is no second parse, and no
+//! index row when the build parsed nothing.
 //!
 //! Determinism: the provider message for the multi-app case sorts the discovered
 //! `app.json` absolute paths (al-sem `appJsonPaths.slice().sort()`); the index
@@ -22,29 +24,42 @@
 //! order (the same total order `assemble_workspace` ingests). No HashMap/HashSet
 //! iteration leaks into the output order.
 
-use std::path::Path;
-
 use crate::engine::l5::registry::Diagnostic;
-use crate::source_text::{NestedApps, count_app_json_paths, discover_al_files, read_al_source};
+use crate::program::inputs::InputSet;
 
-/// Compute al-sem's `workspace.diagnostics` for a disk workspace: PROVIDER
-/// diagnostics (remapped to `stage: "discover"`) concatenated with INDEX
+/// Compute al-sem's `workspace.diagnostics` for the workspace `inputs` read:
+/// PROVIDER diagnostics (remapped to `stage: "discover"`) concatenated with INDEX
 /// diagnostics (their own `index`/`parse` stage), in al-sem order.
+///
+/// `files_without_object` is the program build's list of workspace files that
+/// parsed to no object (`FreshCoverage::files_without_object`); `None` when the
+/// build failed, which then emits no index row (#160 §4.2.4: no fallback parse).
 ///
 /// Engine-never-throws: any read/IO failure degrades to fewer diagnostics, never
 /// a panic. Returns an empty vec for a clean sound workspace with objects in every
 /// file (the source-only corpus's common case — which is why the 40 goldens have
 /// `diagnostics: []`).
-pub fn compute_workspace_diagnostics(workspace: &Path) -> Vec<Diagnostic> {
+pub fn compute_workspace_diagnostics(
+    inputs: &InputSet,
+    files_without_object: Option<&[String]>,
+) -> Vec<Diagnostic> {
+    assert!(
+        !inputs.build_only,
+        "InputSet read with build_only: the app.json list and nested flags were not read"
+    );
+    let workspace = inputs.workspace.as_path();
     let mut out: Vec<Diagnostic> = Vec::new();
 
     // --- 1. PROVIDER diagnostics (remapped to "discover") ----------------------
     // Mirror `WorkspaceProvider.collect`'s fail-closed layout detection EXACTLY:
     //   isMultiApp = (count app.json > 1);  appGuid = readable root id (non-empty).
-    let app_json_paths = count_app_json_paths(workspace);
+    let app_json_paths = &inputs.app_json_paths;
     let is_multi_app = app_json_paths.len() > 1;
 
-    let (root_app_json_readable, app_guid) = read_root_app_json_id(workspace);
+    // `readable` is true iff the file parsed as JSON (al-sem sets
+    // `rootAppJsonReadable = true` AFTER `JSON.parse`).
+    let root_app_json_readable = matches!(inputs.app_json_value, Some(Ok(_)));
+    let app_guid = inputs.app_id();
 
     if is_multi_app || app_guid.is_none() {
         if is_multi_app {
@@ -86,49 +101,30 @@ pub fn compute_workspace_diagnostics(workspace: &Path) -> Vec<Diagnostic> {
         return out;
     }
 
-    // --- 1b. PROVIDER per-file read warnings + collect readable units ----------
-    // `discover_al_files` already strips BOM and reads UTF-8-lossy; a read error
-    // surfaces as a provider `warning` (remapped to "discover"). Units are in
-    // rel-posix-sorted order — the same total order the index walks.
-    let Ok(discovered) = discover_al_files(workspace, NestedApps::Walk) else {
+    // --- 1b. PROVIDER per-file read warnings ------------------------------------
+    // The set's `.al` walk (`NestedApps::Walk`, rel-posix-sorted): a read error
+    // surfaces as a provider `warning` (remapped to "discover"). A failed walk
+    // left the list empty and stops here, as the disk walk did.
+    if inputs.al_walk.is_err() {
         return out;
-    };
-    let mut units: Vec<(String, String)> = Vec::new();
-    for f in &discovered {
-        match read_al_source(&f.abs_path) {
-            Ok(src) => units.push((f.rel_posix.clone(), src)),
-            Err(e) => out.push(Diagnostic {
+    }
+    for f in &inputs.al_files {
+        if let Err(e) = &f.text {
+            out.push(Diagnostic {
                 severity: "warning".to_string(),
                 stage: "discover".to_string(),
                 message: format!("Could not read {}: {e}", f.abs_path.to_string_lossy()),
-            }),
+            });
         }
     }
 
     // --- 2. INDEX diagnostics (buildSemanticIndex; their own stage) ------------
-    // Per unit, in ingestion (rel-posix-sorted) order: if the owned-IR parse produces
-    // NO object declaration, emit an `info`/`index` "No object declaration found in
-    // <rel>" — al-sem `indexer.ts:56-63`. Uses the same `al_syntax::parse` the engine
-    // indexes with, so the diagnostic reflects exactly what L3 sees (incl. objects
-    // nested under a `namespace`, which the former direct-root-children check missed).
-    // Parallel parse, order-preserving: par_iter keeps index order in collect,
-    // so the emitted diagnostics stay in rel-posix-sorted unit order. The rayon
-    // pool threads get the big stack via big_stack_pool (same pool the fresh
-    // engine's parse_snapshot uses — see src/snapshot/parse.rs:85-87).
-    use rayon::prelude::*;
-    let empties: Vec<Option<&String>> = crate::big_stack::big_stack_pool().install(|| {
-        units
-            .par_iter()
-            .map(|(rel, source)| {
-                if al_syntax::parse(source).objects.is_empty() {
-                    Some(rel)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    });
-    for rel in empties.into_iter().flatten() {
+    // Per file the program build parsed to NO object declaration, in
+    // rel-posix-sorted order: an `info`/`index` "No object declaration found in
+    // <rel>" — al-sem `indexer.ts:56-63`. The build's own `al_syntax::parse`, so
+    // the diagnostic reflects exactly what the engine sees (incl. objects nested
+    // under a `namespace`).
+    for rel in files_without_object.unwrap_or_default() {
         out.push(Diagnostic {
             severity: "info".to_string(),
             stage: "index".to_string(),
@@ -137,22 +133,4 @@ pub fn compute_workspace_diagnostics(workspace: &Path) -> Vec<Diagnostic> {
     }
 
     out
-}
-
-/// Read the workspace ROOT `app.json`: `(readable, Some(id) when non-empty string)`.
-/// Mirrors `WorkspaceProvider.collect`'s try/catch: `readable` is true iff the file
-/// parsed as JSON (al-sem sets `rootAppJsonReadable = true` AFTER `JSON.parse`).
-fn read_root_app_json_id(workspace: &Path) -> (bool, Option<String>) {
-    let Ok(text) = std::fs::read_to_string(workspace.join("app.json")) else {
-        return (false, None);
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return (false, None);
-    };
-    let id = v
-        .get("id")
-        .and_then(|x| x.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string());
-    (true, id)
 }

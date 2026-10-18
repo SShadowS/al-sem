@@ -1935,6 +1935,11 @@ pub struct FreshCoverage {
     /// S5.2b). Such a subscriber's dispatch is unknown, yet it is no call edge,
     /// so `unknown` does not count it.
     pub unbound_subscriptions: usize,
+    /// The workspace files (`rel_posix`, sorted) whose parse in this build
+    /// declared no object: the source of the `No object declaration found in
+    /// <rel>` index diagnostic (#160 §4.2.4), so the diagnostics never parse a
+    /// second time.
+    pub files_without_object: Vec<String>,
 }
 
 impl FreshCoverage {
@@ -2317,7 +2322,17 @@ pub fn reduce_fresh_coverage(
             })
             .count()
     };
+    let mut files_without_object: Vec<String> = ctx
+        .parsed()
+        .iter()
+        .filter(|u| u.app == ctx.snap.workspace_app)
+        .flat_map(|u| &u.files)
+        .filter(|f| f.file.objects.is_empty())
+        .map(|f| f.virtual_path.clone())
+        .collect();
+    files_without_object.sort();
     FreshCoverage {
+        files_without_object,
         unbound_subscriptions,
         unknown: report.primary_histogram.unknown,
         coverage_holds: coverage_holds(&report.coverage),

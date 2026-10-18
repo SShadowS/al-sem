@@ -884,7 +884,6 @@ pub fn run_prove_pipeline(
     alsem_ver: &str,
     deterministic: bool,
 ) -> Result<ProveRunResult, String> {
-    let workspace = inputs.workspace.as_path();
     // Assemble workspace
     let model_id = inputs
         .model_instance_id
@@ -900,7 +899,7 @@ pub fn run_prove_pipeline(
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
 
     // Build envelope diagnostics (the registry's 40-detector default set, shared with digest).
-    let diagnostics_json = build_envelope_diagnostics_json(workspace, &resolved);
+    let diagnostics_json = build_envelope_diagnostics_json(&resolved);
 
     // Resolve the routine selector → root IDs
     let changed_input = ChangedInput {

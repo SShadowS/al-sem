@@ -637,19 +637,22 @@ pub fn resolved_calls_from_program(
 ///
 /// `coverage` is the same build's `FreshCoverage`; its dependency-ledger warnings
 /// go on the model (#91). It is required, so no program-backed model can be built
-/// without them.
+/// without them. `inputs` is the set the build read: the model's workspace
+/// diagnostics come from it and `coverage.files_without_object` (#160 §4.2.4).
 pub fn attach_program_calls(
+    inputs: &crate::program::inputs::InputSet,
     rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
     coverage: &crate::program::resolve::full::FreshCoverage,
 ) -> crate::program::model::workspace::Model {
-    attach_program_calls_with(rows, ctx, report, coverage, None)
+    attach_program_calls_with(inputs, rows, ctx, report, coverage, None)
 }
 
 /// [`attach_program_calls`] for a cross-app model (engine-switch S7.3): `abi_rows`
 /// joins a symbol-only dependency routine to its model row.
 fn attach_program_calls_with(
+    inputs: &crate::program::inputs::InputSet,
     rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
@@ -685,6 +688,11 @@ fn attach_program_calls_with(
         root_classifications: rows.root_classifications,
         primary_app: rows.primary_app,
         infra_diagnostics: rows.infra_diagnostics,
+        workspace_diagnostics:
+            crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(
+                inputs,
+                Some(&coverage.files_without_object),
+            ),
         dependency_diagnostics: coverage.dependency_diagnostics(),
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
@@ -824,7 +832,7 @@ pub fn assemble_and_resolve_workspace_program(
         &ctx,
         &report.parenless_calls,
     )?;
-    Some(attach_program_calls(rows, ctx, report, &coverage))
+    Some(attach_program_calls(inputs, rows, ctx, report, &coverage))
 }
 
 /// [`assemble_and_resolve_workspace_program`] over inline `(relative path, source)`
@@ -999,7 +1007,7 @@ pub fn assemble_and_resolve_cross_app_program(
     let loaded_apps = crate::program::resolve::full::loaded_apps(&ctx, &coverage);
     let resolved = {
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
-        attach_program_calls_with(rows, ctx, report, &coverage, Some(&abi_rows))
+        attach_program_calls_with(inputs, rows, ctx, report, &coverage, Some(&abi_rows))
     };
     Some(CrossAppProgram {
         resolved,

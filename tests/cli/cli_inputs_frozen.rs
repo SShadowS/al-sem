@@ -162,37 +162,24 @@ fn roots_config_edit_after_read() {
 }
 
 /// Spec §8.2 `inputs::app_json_edit_after_read`: one edit of `app.json`
-/// reaches every reader of it: the model id, the primary app, pr-summary's
-/// app registry (`read_workspace_apps`) and the fingerprint's `app-json` row.
-/// The json and fingerprint comparisons leave out the envelope's `diagnostics`
-/// array: those rows still come from a disk read until
-/// `compute_workspace_diagnostics` reads the set (plan Task 13, which widens
-/// this to the whole bytes).
+/// reaches every reader of it: the model id, the primary app, the workspace
+/// diagnostics, pr-summary's app registry (`read_workspace_apps`) and the
+/// fingerprint's `app-json` row. Whole outputs are compared, the envelope's
+/// `diagnostics` array included.
 #[test]
 fn app_json_edit_after_read() {
     let d = tempfile::tempdir().unwrap();
     crate::copy_dir(&r0("ws-d1-multi-caller"), d.path());
-    let without_diagnostics = |mut v: serde_json::Value| {
-        v.as_object_mut().unwrap().remove("diagnostics");
-        v
-    };
-    let analyze_value = |inputs: &Arc<InputSet>| {
-        without_diagnostics(serde_json::from_str(&analyze_json(inputs)).expect("analyze json"))
-    };
-    let fingerprint_value = |inputs: &Arc<InputSet>| without_diagnostics(fingerprint_json(inputs));
-    let json0 = analyze_value(&read_fingerprint(d.path()));
+    let json0 = analyze_json(&read_fingerprint(d.path()));
     let pr0 = analyze(&read_fingerprint(d.path()), OutputFormat::PrSummary);
-    let fp0 = fingerprint_value(&read_fingerprint(d.path()));
-    assert!(
-        !json0["payload"]["findings"].as_array().unwrap().is_empty(),
-        "precondition: findings"
-    );
+    let fp0 = fingerprint_json(&read_fingerprint(d.path()));
+    assert!(!findings(&json0).is_empty(), "precondition: findings");
     let inputs = read_fingerprint(d.path());
     std::fs::write(d.path().join("app.json"), "{}").unwrap();
     assert_eq!(
-        analyze_value(&inputs),
+        analyze_json(&inputs),
         json0,
-        "json (model id / primary app)"
+        "json (model id / primary app / diagnostics)"
     );
     assert_eq!(
         analyze(&inputs, OutputFormat::PrSummary),
@@ -200,10 +187,73 @@ fn app_json_edit_after_read() {
         "pr-summary (read_workspace_apps)"
     );
     assert_eq!(
-        fingerprint_value(&inputs),
+        fingerprint_json(&inputs),
         fp0,
-        "fingerprint (derive_inputs app-json row)"
+        "fingerprint (derive_inputs app-json row / diagnostics)"
     );
+}
+
+/// The envelope's `diagnostics` array of an analyze json output.
+fn diagnostics(json: &str) -> Vec<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(json).expect("analyze json");
+    v["diagnostics"]
+        .as_array()
+        .expect("diagnostics array")
+        .clone()
+}
+
+/// Spec §8.2 `inputs::objectless_file_removed_after_read`: the index row
+/// `No object declaration found in <rel>` comes from the program build's own
+/// parse (`FreshCoverage::files_without_object`), not a second parse of the
+/// disk, so deleting the file after the read leaves the row in place.
+#[test]
+fn objectless_file_removed_after_read() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("app.json"),
+        r#"{"id":"11111111-0000-0000-0000-0000000d1301","name":"Objectless","publisher":"PT","version":"1.0.0.0","dependencies":[]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(d.path().join("src")).unwrap();
+    std::fs::write(
+        d.path().join("src/A.al"),
+        "codeunit 50100 A { procedure P() begin end; }",
+    )
+    .unwrap();
+    std::fs::write(d.path().join("src/Empty.al"), "// only a comment\n").unwrap();
+    let want = "No object declaration found in src/Empty.al";
+    let untouched = analyze_json(&read(d.path()));
+    assert!(
+        diagnostics(&untouched)
+            .iter()
+            .any(|x| x["message"] == want && x["code"] == "DIAG-index"),
+        "precondition: the untouched run has the index row:\n{untouched}"
+    );
+    let inputs = read(d.path());
+    std::fs::remove_file(d.path().join("src/Empty.al")).unwrap();
+    assert_eq!(analyze_json(&inputs), untouched);
+}
+
+/// Spec §8.2 `inputs::app_json_paths_edit_after_read`: the multi-app check
+/// reads the `app.json` list of the set, so a nested `app.json` written after
+/// the read adds no multi-app error.
+#[test]
+fn app_json_paths_edit_after_read() {
+    let d = tempfile::tempdir().unwrap();
+    crate::copy_dir(&r0("ws-d1-multi-caller"), d.path());
+    let untouched = analyze_json(&read(d.path()));
+    let inputs = read(d.path());
+    std::fs::create_dir_all(d.path().join("sub")).unwrap();
+    std::fs::write(d.path().join("sub/app.json"), "{}").unwrap();
+    assert!(
+        diagnostics(&analyze_json(&read(d.path())))
+            .iter()
+            .any(|x| x["message"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("multi-app source workspace unsupported"))),
+        "precondition: a fresh read sees the second app.json"
+    );
+    assert_eq!(analyze_json(&inputs), untouched);
 }
 
 /// Spec §8.2 `inputs::coverage_yaml_edit_after_read`: the `policy` input row

@@ -574,7 +574,13 @@ mod tests {
             p = sub.display()
         );
         assert_eq!(err, want);
-        // diagnostics: Task 13 adds the compute_workspace_diagnostics assertion (provider rows only)
+        // The diagnostics return the provider rows alone (here none: one
+        // readable `app.json` with an id), never an index row, even when
+        // handed an objectless-file list: a failed walk parsed nothing.
+        use crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics;
+        assert!(compute_workspace_diagnostics(&inputs, None).is_empty());
+        let listed = ["locked/X.al".to_string()];
+        assert!(compute_workspace_diagnostics(&inputs, Some(&listed)).is_empty());
     }
 
     /// Case (a) of A1.7: a directory symlink loop at the root. Unix only: on

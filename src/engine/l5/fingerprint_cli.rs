@@ -364,7 +364,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // --strict gate (fingerprint.ts:187): BEFORE composeSnapshot. If any analyzer
     // diagnostic is severity "error", print ALL analyzer diagnostics to stderr +
     // exit 1, before any output / sharding.
-    let analyzer_diags = analyzer_diags_for(workspace, &resolved);
+    let analyzer_diags = analyzer_diags_for(&resolved);
     if opts.strict {
         let fatal = analyzer_diags.iter().any(|(_, sev, _)| sev == "error");
         if fatal {
@@ -548,10 +548,9 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
 /// Build the analyzer diagnostics list as `(code, severity, message)` tuples,
 /// shared by the strict gate, the B0 envelope path, and the query JSON envelope.
 fn analyzer_diags_for(
-    workspace: &std::path::Path,
     resolved: &crate::program::model::workspace::Model,
 ) -> Vec<(String, String, String)> {
-    compute_analyzer_diagnostics(workspace, resolved)
+    compute_analyzer_diagnostics(resolved)
         .into_iter()
         .map(|d| (format!("DIAG-{}", d.stage), d.severity, d.message))
         .collect()

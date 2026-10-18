@@ -1082,7 +1082,7 @@ fn q6_retained_census(ws: &std::path::Path) {
     if let AnalysisTarget::CrossApp(base) = &target {
         // The default detector set, run by the cross-app runner: builds one
         // detector context (its `census.context` mark fires inside).
-        let diags = al_sem::engine::gate::run::compute_analyzer_diagnostics_cross_app(ws, base);
+        let diags = al_sem::engine::gate::run::compute_analyzer_diagnostics_cross_app(base);
         println!("    analyzer diagnostics: {}", diags.len());
     }
     on_mark("probe.context_dropped");
@@ -1177,6 +1177,7 @@ fn q6(ws: PathBuf) {
         root_classifications,
         primary_app,
         infra_diagnostics,
+        workspace_diagnostics,
         dependency_diagnostics,
         calls,
         events,
@@ -1268,6 +1269,7 @@ fn q6(ws: PathBuf) {
     top.drop_as("root_classifications", root_classifications);
     top.drop_as("primary_app", primary_app);
     top.drop_as("infra_diagnostics", infra_diagnostics);
+    top.drop_as("workspace_diagnostics", workspace_diagnostics);
     top.drop_as("dependency_diagnostics", dependency_diagnostics);
     top.drop_as("calls (program engine)", calls);
     top.drop_as("events (program engine)", events);

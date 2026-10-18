@@ -46,11 +46,8 @@ use crate::program::model::workspace::Model;
 /// Build the envelope `diagnostics` JSON array (the analyzer's per-stage diagnostics
 /// over the registry's default detector set). Shared by the digest AND prove CLI pipelines
 /// so they cannot desync. Each entry is `{code: "DIAG-<stage>", message, severity}`.
-pub fn build_envelope_diagnostics_json(
-    workspace: &std::path::Path,
-    resolved: &Model,
-) -> serde_json::Value {
-    diagnostics_json(&compute_analyzer_diagnostics(workspace, resolved))
+pub fn build_envelope_diagnostics_json(resolved: &Model) -> serde_json::Value {
+    diagnostics_json(&compute_analyzer_diagnostics(resolved))
 }
 
 /// [`build_envelope_diagnostics_json`] for the cross-app digest (#66): the detectors
@@ -58,10 +55,9 @@ pub fn build_envelope_diagnostics_json(
 /// `alsem analyze` runs by default (never the single-app runner over a cross-app
 /// model, which nothing else runs).
 fn build_envelope_diagnostics_json_cross_app(
-    workspace: &std::path::Path,
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
 ) -> serde_json::Value {
-    diagnostics_json(&compute_analyzer_diagnostics_cross_app(workspace, base))
+    diagnostics_json(&compute_analyzer_diagnostics_cross_app(base))
 }
 
 fn diagnostics_json(diag_vec: &[crate::engine::l5::registry::Diagnostic]) -> serde_json::Value {
@@ -1565,7 +1561,6 @@ pub fn run_digest_pipeline(
     single_app: bool,
 ) -> Result<DigestRunResult, String> {
     use crate::engine::gate::run::AnalysisTarget;
-    let workspace = inputs.workspace.as_path();
     // Assemble workspace (no model-instance id: `digest: could not compute
     // modelInstanceId`, `AnalysisTarget::build`).
     let target = AnalysisTarget::build(inputs, single_app, "digest")?;
@@ -1655,10 +1650,8 @@ pub fn run_digest_pipeline(
 
     // Build envelope diagnostics (the analyze default detector set, shared with prove).
     let diagnostics_json = match &target {
-        AnalysisTarget::SingleApp(r) => build_envelope_diagnostics_json(workspace, r),
-        AnalysisTarget::CrossApp(base) => {
-            build_envelope_diagnostics_json_cross_app(workspace, base)
-        }
+        AnalysisTarget::SingleApp(r) => build_envelope_diagnostics_json(r),
+        AnalysisTarget::CrossApp(base) => build_envelope_diagnostics_json_cross_app(base),
     };
 
     let changed_input_contract = ChangedInputContract {

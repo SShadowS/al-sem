@@ -114,7 +114,7 @@ fn load_snapshot_from_workspace(
         .ok_or_else(|| format!("workspace '{dir}' did not resolve"))?;
     let target = AnalysisTarget::SingleApp(Box::new(resolved));
     let diag_lines = if strict {
-        analyzer_diagnostic_lines(ws, &target)
+        analyzer_diagnostic_lines(&target)
     } else {
         Vec::new()
     };

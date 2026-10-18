@@ -1904,6 +1904,11 @@ pub struct Model {
     /// `kinds-mismatch` warnings from `roots.config.json`). Propagated to the JSON
     /// envelope.
     pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
+    /// al-sem's `workspace.diagnostics` (provider + index rows,
+    /// `gate::workspace_diagnostics::compute_workspace_diagnostics`), from the
+    /// command's `InputSet` and the program build's objectless-file list (#160
+    /// §4.2.4). Source (1) of every command's analyzer diagnostics.
+    pub workspace_diagnostics: Vec<crate::engine::l5::registry::Diagnostic>,
     /// The program build's dependency-ledger warnings
     /// (`FreshCoverage::dependency_diagnostics`), in ledger order: missing,
     /// older-than-declared, unreadable and unidentified dependency packages. Kept

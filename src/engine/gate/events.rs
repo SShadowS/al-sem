@@ -387,7 +387,7 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
     // events-fanout.ts emits these
     // to stderr at the end. `infra_diagnostics` alone is NOT enough — it omits the
     // detector-stage diagnostics that the goldens' `.stderr.txt` capture.
-    let diag_lines = analyzer_diagnostic_lines(&opts.inputs.workspace, &target);
+    let diag_lines = analyzer_diagnostic_lines(&target);
 
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return EventsRunResult {
@@ -516,7 +516,7 @@ pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
         }
     };
 
-    let diag_lines = analyzer_diagnostic_lines(&opts.inputs.workspace, &target);
+    let diag_lines = analyzer_diagnostic_lines(&target);
 
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return EventsRunResult {

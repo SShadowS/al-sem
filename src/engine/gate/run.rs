@@ -338,8 +338,9 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
     let coverage = fresh
         .as_ref()
         .expect("a built program carries its coverage");
-    let resolved =
-        crate::program::model::program_calls::attach_program_calls(rows, ctx, report, coverage);
+    let resolved = crate::program::model::program_calls::attach_program_calls(
+        inputs, rows, ctx, report, coverage,
+    );
     AnalysisModel {
         fresh,
         model: Ok(AnalysisTarget::SingleApp(Box::new(resolved))),
@@ -471,7 +472,6 @@ pub fn run_analyze_with_exit(
     // Assemble with the al-sem GATE modelInstanceId (content-derived, UNPINNED) so the
     // internal RoutineIds embedded in each finding's rootCauseKey — and therefore the
     // SARIF fingerprint hashed over them — byte-match the al-sem `analyze` CLI goldens.
-    let ws_path = inputs.workspace.as_path();
     let AnalysisModel { fresh, model, .. } = build_analysis_model(inputs, args.single_app);
     let target = match model {
         Ok(t) => t,
@@ -510,7 +510,7 @@ pub fn run_analyze_with_exit(
     // run (the selected detectors), so analyze and the rest report one set (#91).
     let run_diagnostics: Vec<crate::engine::l5::registry::Diagnostic> = {
         let _s = pt::span("gate", "gate.workspace_diagnostics");
-        analyzer_diagnostics_of_run(ws_path, resolved, &run)
+        analyzer_diagnostics_of_run(resolved, &run)
     };
     let run_detector_stats = run.detector_stats.clone();
 
@@ -776,14 +776,19 @@ pub(crate) fn empty_output_result(
     version: &str,
     fresh: &Result<crate::program::resolve::full::FreshCoverage, String>,
 ) -> Result<(String, u8, Option<String>), String> {
-    let ws_path = inputs.workspace.as_path();
     // Computed ONCE and reused by every arm below (Json/Terminal) AND by the
     // could-not-verify `reason` derivation past the format switch — these are the
     // real provider/index diagnostics for this workspace (spec §3: the fail-closed
     // reason should be the actual diagnostic text, not a generic fallback, whenever
-    // one is available).
-    let diagnostics =
-        crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(ws_path);
+    // one is available). The index rows come from the program build's parse; a
+    // failed build parsed nothing and gives none (#160 §4.2.4: no fallback parse).
+    let diagnostics = crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(
+        inputs,
+        fresh
+            .as_ref()
+            .ok()
+            .map(|f| f.files_without_object.as_slice()),
+    );
 
     let out = match args.format {
         OutputFormat::Sarif => format_sarif(&[], &[], version),
@@ -858,6 +863,7 @@ pub(crate) fn empty_output_result(
                 root_classifications: vec![],
                 primary_app: primary_app.clone(),
                 infra_diagnostics: vec![],
+                workspace_diagnostics: vec![],
                 dependency_diagnostics: vec![],
                 calls: Default::default(),
                 events: Default::default(),
@@ -1024,21 +1030,20 @@ fn range_extent_cmp(
 /// `alsem analyze` runs with no `--detector`/`--preset`) itself. There is no
 /// detector parameter, so no caller outside this module can pick another set (#68).
 pub fn compute_analyzer_diagnostics(
-    ws_path: &Path,
     resolved: &crate::program::model::workspace::Model,
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let run = run_detectors(resolved, &crate::engine::l5::detectors::default_detectors());
-    analyzer_diagnostics_of_run(ws_path, resolved, &run)
+    analyzer_diagnostics_of_run(resolved, &run)
 }
 
 /// The target's analyzer diagnostics ([`compute_analyzer_diagnostics`] or, for a
 /// cross-app base, [`compute_analyzer_diagnostics_cross_app`]) as
 /// `<severity>: <message>` lines, the stderr form `alsem events` and
 /// `alsem policy` print (and match `error:` against under `--strict`).
-pub fn analyzer_diagnostic_lines(ws_path: &Path, target: &AnalysisTarget) -> Vec<String> {
+pub fn analyzer_diagnostic_lines(target: &AnalysisTarget) -> Vec<String> {
     match target {
-        AnalysisTarget::SingleApp(r) => compute_analyzer_diagnostics(ws_path, r),
-        AnalysisTarget::CrossApp(b) => compute_analyzer_diagnostics_cross_app(ws_path, b),
+        AnalysisTarget::SingleApp(r) => compute_analyzer_diagnostics(r),
+        AnalysisTarget::CrossApp(b) => compute_analyzer_diagnostics_cross_app(b),
     }
     .iter()
     .map(|d| format!("{}: {}", d.severity, d.message))
@@ -1049,7 +1054,6 @@ pub fn analyzer_diagnostic_lines(ws_path: &Path, target: &AnalysisTarget) -> Vec
 /// default mode, #66): the default set run by the cross-app runner, the
 /// combination `alsem analyze` runs by default.
 pub fn compute_analyzer_diagnostics_cross_app(
-    ws_path: &Path,
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let run = crate::engine::l5::registry::run_detectors_cross_app(
@@ -1057,7 +1061,7 @@ pub fn compute_analyzer_diagnostics_cross_app(
         &crate::engine::l5::detectors::default_detectors(),
         true,
     );
-    analyzer_diagnostics_of_run(ws_path, &base.resolved, &run)
+    analyzer_diagnostics_of_run(&base.resolved, &run)
 }
 
 /// THE analyzer-diagnostics aggregation, over a detector run: `alsem analyze`
@@ -1081,13 +1085,14 @@ pub fn compute_analyzer_diagnostics_cross_app(
 /// `infra_diagnostics` the OVERLAY source (5), `run.diagnostics` DETECT (6). The
 /// TS-order #1 (workspace) goes FIRST so it precedes overlay.
 fn analyzer_diagnostics_of_run(
-    ws_path: &Path,
     resolved: &crate::program::model::workspace::Model,
     run: &crate::engine::l5::registry::RunOutput,
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let mut all: Vec<crate::engine::l5::registry::Diagnostic> = Vec::new();
-    // (1) workspace.diagnostics — provider (discover) + index, computed from disk.
-    all.extend(crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(ws_path));
+    // (1) workspace.diagnostics — provider (discover) + index, kept on the model
+    //     by `attach_program_calls` from the command's `InputSet` and the build's
+    //     objectless-file list (#160 §4.2.4).
+    all.extend(resolved.workspace_diagnostics.iter().cloned());
     // (2) dependency diagnostics — the program build's dependency ledger
     //     (engine-switch S5.2b): missing, older-than-declared, unreadable and
     //     unidentified dependency packages, kept on the model by
@@ -1121,8 +1126,9 @@ mod tests {
 
     /// #91: the shared aggregation returns every source, in analyze's order:
     /// (1) workspace, (2) dependency, (3) summarize, (5) overlay, (6) detect.
-    /// The workspace has no `app.json`, so (1) is the fail-closed `discover`
-    /// error. Mutation: drop (2) from `analyzer_diagnostics_of_run` -> this fails.
+    /// Every source is a hand-stated row; (1) is the model's
+    /// `workspace_diagnostics` (#160 §4.2.4). Mutation: drop (2) from
+    /// `analyzer_diagnostics_of_run` -> this fails.
     #[test]
     fn analyzer_diagnostics_of_run_keeps_every_source_in_order() {
         let d = |stage: &str| Diagnostic {
@@ -1130,7 +1136,6 @@ mod tests {
             stage: stage.to_string(),
             message: format!("{stage} message"),
         };
-        let ws = tempfile::tempdir().expect("tempdir");
         let model = Model {
             workspace: ModelEntities {
                 objects: vec![],
@@ -1144,6 +1149,7 @@ mod tests {
                 stage: "overlay".to_string(),
                 message: "overlay message".to_string(),
             }],
+            workspace_diagnostics: vec![d("discover")],
             dependency_diagnostics: vec![d("dependencies")],
             calls: Default::default(),
             events: Default::default(),
@@ -1155,7 +1161,7 @@ mod tests {
             summarize_diagnostics: vec![d("summarize")],
             d1_cohort_index: None,
         };
-        let stages: Vec<String> = super::analyzer_diagnostics_of_run(ws.path(), &model, &run)
+        let stages: Vec<String> = super::analyzer_diagnostics_of_run(&model, &run)
             .into_iter()
             .map(|d| d.stage)
             .collect();
@@ -1169,7 +1175,8 @@ mod tests {
     /// aggregation, not an inline copy of it. Its output cannot tell the two
     /// apart, so the call itself is pinned. Mutation: restore the inline
     /// `compute_workspace_diagnostics(` / `dependency_diagnostics(` block in
-    /// `run_analyze_with_exit` -> this fails.
+    /// `run_analyze_with_exit`, or read `.workspace_diagnostics` there (#160:
+    /// source (1) is now a model field) -> this fails.
     #[test]
     fn run_analyze_with_exit_uses_the_shared_aggregation() {
         let src = include_str!("run.rs");
@@ -1184,7 +1191,11 @@ mod tests {
             .filter_map(|m| body[1..].find(m))
             .min()
             .expect("an item after run_analyze_with_exit");
-        let body = &body[..end + 1];
+        // The trace span's NAME holds `.workspace_diagnostics` too; it is a
+        // label, not a read of the field, so it is cut out before the scan.
+        let span = "\"gate.workspace_diagnostics\"";
+        assert_eq!(body[..end + 1].matches(span).count(), 1, "the span label");
+        let body = &body[..end + 1].replace(span, "");
         // An anchor from the function's last statement proves the cut did not
         // stop early.
         assert!(
@@ -1197,6 +1208,7 @@ mod tests {
         );
         for banned in [
             "compute_workspace_diagnostics(",
+            ".workspace_diagnostics",
             "dependency_diagnostics(",
             "summarize_diagnostics",
             "infra_diagnostics",

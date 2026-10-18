@@ -181,7 +181,6 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
     // the facts its code adds), the workspace alone under `--single-app`. No
     // model-instance id is `al-sem policy check: could not compute
     // modelInstanceId`, exit 1 (`AnalysisTarget::build`).
-    let workspace = opts.inputs.workspace.as_path();
     let target = match AnalysisTarget::build(opts.inputs, opts.single_app, "al-sem policy check") {
         Ok(t) => t,
         Err(e) => {
@@ -197,7 +196,7 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
 
     // analyzeWorkspace diagnostics (run the default detector set so detector-stage
     // diagnostics surface exactly as al-sem does).
-    let diag_lines = analyzer_diagnostic_lines(workspace, &target);
+    let diag_lines = analyzer_diagnostic_lines(&target);
 
     // --strict: any error-severity diagnostic → exit 1 (stderr the diagnostics).
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {

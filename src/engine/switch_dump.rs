@@ -42,14 +42,23 @@ fn rows<T: std::fmt::Debug>(items: impl IntoIterator<Item = T>) -> Vec<String> {
 /// Render what `alsem analyze` builds and finds for `ws` (see the module doc).
 pub fn dump_lines(ws: &Path) -> Dump {
     let mut d = Dump::new();
+    // The dependency registry's body states (S2b.5). Nothing in production reads
+    // the registry yet, so it comes from its own program build. The workspace
+    // diagnostics' index rows come from that build's parse (#160 §4.2.4): none
+    // when it fails.
+    let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+    let built = crate::program::resolve::full::build_program_with_coverage(&inputs);
     d.insert(
         "diagnostics.workspace".into(),
-        rows(compute_workspace_diagnostics(ws)),
+        rows(compute_workspace_diagnostics(
+            &inputs,
+            built
+                .as_ref()
+                .ok()
+                .map(|(_, _, fc)| fc.files_without_object.as_slice()),
+        )),
     );
-    // The dependency registry's body states (S2b.5). Nothing in production reads
-    // the registry yet, so it comes from its own program build.
-    let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
-    if let Ok((ctx, _, _)) = crate::program::resolve::full::build_program_with_coverage(&inputs) {
+    if let Ok((ctx, _, _)) = built {
         d.insert(
             "registry.census".into(),
             ctx.registry()

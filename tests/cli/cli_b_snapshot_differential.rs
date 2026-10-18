@@ -48,8 +48,8 @@ use crate::regen;
 /// shape (`code = "DIAG-<stage>"`), over the registry's default detector set
 /// (`compute_analyzer_diagnostics` runs it itself). versionDiagnostic() is None
 /// under the version override, so it is not prepended.
-fn envelope_diagnostics(ws_path: &std::path::Path, resolved: &Model) -> Vec<EnvelopeDiagnostic> {
-    compute_analyzer_diagnostics(ws_path, resolved)
+fn envelope_diagnostics(resolved: &Model) -> Vec<EnvelopeDiagnostic> {
+    compute_analyzer_diagnostics(resolved)
         .into_iter()
         .map(|d| EnvelopeDiagnostic {
             code: format!("DIAG-{}", d.stage),
@@ -208,10 +208,10 @@ fn raw_json_matches_goldens() {
 #[test]
 fn envelope_json_matches_goldens() {
     for fixture in SNAPSHOT_CORPUS {
-        let (tree, resolved, ws_dir) = compose_for(fixture);
+        let (tree, resolved, _ws_dir) = compose_for(fixture);
         // versionDiagnostic() is None under the version override; the diagnostics
         // channel is the analyzer diagnostics (workspace + roots-overlay + detect).
-        let diags = envelope_diagnostics(&ws_dir, &resolved);
+        let diags = envelope_diagnostics(&resolved);
         let got = serialize_envelope(&tree, VERSION_OVERRIDE, true, &diags);
         let golden_path = goldens_dir().join(format!("{fixture}.envelope.json"));
         check_or_regen(
