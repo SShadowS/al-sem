@@ -466,11 +466,12 @@ Each child spec names which of these its step touches and how it proves them.
   Census count must be 0, policy included.
 - **I6 Every bound is relative and can fail.** Wall: a saving against the parent-commit
   interleaved median of the SAME sub-phase timer, minus that timer's own noise band
-  (band = max − min of the parent runs, ≥ 3 runs; the earlier "8 % of the command
-  median" is kept only for whole-command bounds). When the step DELETES the sub-phase, the
-  head has no such timer: the saving is then read off the whole-command wall (parent
-  median − head median), and the bound subtracts the wall's own band (max − min of the
-  parent's wall runs) as well as the timer's (step 2's digest bound). A sub-phase bound is written only when
+  (band = max − min of the parent runs, ≥ 3 runs). A whole-command wall's band is
+  defined the same way (max − min of the parent's wall runs); the earlier "8 % of the
+  command median" is withdrawn and applies to no bound. When the step DELETES the
+  sub-phase, the head has no such timer: the saving is then read off the whole-command
+  wall (parent median − head median), and the bound subtracts the wall's own band as well
+  as the timer's (step 2's digest bound). A sub-phase bound is written only when
   the step 0 median of that timer ≥ 2 × its band; otherwise the step is re-labelled
   non-speed before its spec is written (finding G-5). Peak: both numbers of §5.12.
 - **I7 Order is recorded, not assumed.** `rel.typed` concatenation, `from_order`, row
@@ -800,3 +801,9 @@ band too, because a deleted sub-phase's saving is read off two whole-command wal
 (P1-7); §5.8 drops the field index from `L4Analysis`, and §5.9 rule 3, Decision 56 and
 the G-2 row state the `l4` overlap during snapshot composition in digest and prove,
 which Round 12 fixed in the child only (P2-1). The rest is child-local.
+
+**Round 14** (child review log round panel-r3, 2026-10-18; reviewers sol and opus): all
+20 entries accepted; three new minor findings (P3-1 … P3-3), all held in source, none
+refuted. Epic amendment: I6 withdraws the "8 % of the command median" band for every
+bound, so a whole-command wall's band is max − min of the parent's wall runs, as the
+child already uses (P3-2). The rest is child-local.
