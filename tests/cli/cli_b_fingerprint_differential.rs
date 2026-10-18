@@ -141,10 +141,11 @@ fn compose_full_for(
     );
     let model_id = compute_gate_model_instance_id(&ws)
         .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
-    let resolved = assemble_and_resolve_workspace_program(&read(&ws), &model_id, false)
+    let inputs = read(&ws);
+    let resolved = assemble_and_resolve_workspace_program(&inputs, &model_id, false)
         .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
     let opts = FullSnapshotOptions {
-        workspace_dir: &ws,
+        inputs: &inputs,
         driver_version: VERSION_OVERRIDE,
         deterministic: true,
         roots_config_ignored: false,
@@ -539,9 +540,16 @@ fn shard_output_matches_goldens() {
 // diagnostic is severity "warning" (DIAG-detect), so the strict gate PASSES.
 // ===========================================================================
 
-/// The command's one read of `ws` (#160).
+/// The command's one read of `ws` (#160), with what `fingerprint` reads: the
+/// hash rows too.
 fn read(ws: &std::path::Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+    al_sem::program::inputs::InputSet::read(
+        ws,
+        &al_sem::program::inputs::InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        },
+    )
 }
 
 fn opts_for<'a>(

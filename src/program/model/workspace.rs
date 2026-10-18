@@ -1787,10 +1787,9 @@ fn finish_resolved(
 }
 
 /// The primary app's identity from the workspace root `app.json`, as the
-/// command's `InputSet` read it (#160). Mirrors `run::read_workspace_apps` but
-/// returns `Option<App>` instead of `Vec<App>`. Engine-never-throws: returns
-/// `None` on any read/parse failure.
-fn read_primary_app(
+/// command's `InputSet` read it (#160); `run::read_workspace_apps` reads it too.
+/// Engine-never-throws: returns `None` on any read/parse failure.
+pub(crate) fn read_primary_app(
     inputs: &crate::program::inputs::InputSet,
 ) -> Option<crate::engine::gate::app_attribution::App> {
     let Some(Ok(v)) = &inputs.app_json_value else {

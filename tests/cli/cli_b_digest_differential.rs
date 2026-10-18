@@ -152,7 +152,7 @@ fn run_files_digest(fixture: &str) -> (String, String) {
     );
 
     let result = run_digest_pipeline(
-        &al_sem::program::inputs::InputSet::read(&fixture_dir, &Default::default()),
+        &al_sem::program::inputs::InputSet::read(&fixture_dir, &crate::fingerprint_needs()),
         Some(al_files),
         None, // no routine selectors
         None, // no diff
@@ -186,7 +186,7 @@ fn run_diff_digest(fixture: &str) -> String {
         .unwrap_or_else(|e| panic!("read diff file {}: {e}", diff_path.display()));
 
     let result = run_digest_pipeline(
-        &al_sem::program::inputs::InputSet::read(&fixture_dir, &Default::default()),
+        &al_sem::program::inputs::InputSet::read(&fixture_dir, &crate::fingerprint_needs()),
         None, // no files
         None, // no routine selectors
         Some(diff_text),

@@ -31,7 +31,7 @@ fn commit_by_routine(al: &str, fires: &[&str]) -> BTreeMap<String, bool> {
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
     let r = run_digest_pipeline(
-        &al_sem::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        &al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs()),
         None,
         Some(fires.iter().map(|s| s.to_string()).collect()),
         None,
@@ -459,7 +459,7 @@ fn program_edges(
 ) {
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
-    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
     let (_, report, _) =
         al_sem::program::resolve::full::build_program_with_coverage(&inputs).expect("build");
     (report.edges, report.histogram)
@@ -505,7 +505,7 @@ fn model_event_edges(
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
-    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
     let m = assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
         .expect("model");
     let name_of = |id: &str| {
@@ -703,7 +703,7 @@ codeunit 50101 "Sub"
 fn include_sender_of(al: &str, name_lc: &str) -> Option<bool> {
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
-    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
     let (ctx, _, _) =
         al_sem::program::resolve::full::build_program_with_coverage(&inputs).expect("build");
     ctx.graph()
@@ -739,7 +739,7 @@ fn model_event_ids(al: &str) -> Vec<(String, String, String)> {
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
-    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
     let m = assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
         .expect("model");
     let name_of = |id: &str| {
@@ -967,7 +967,7 @@ fn a3e_real_table_publisher_readings_differing_only_in_element_are_one_subscript
     );
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), &al);
-    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
     let (ctx, _, _) =
         al_sem::program::resolve::full::build_program_with_coverage(&inputs).expect("build");
     let graph = ctx.graph();

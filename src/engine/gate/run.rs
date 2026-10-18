@@ -25,7 +25,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::engine::gate::app_attribution::App;
-use crate::engine::gate::baseline::{apply_baseline, load_baseline, save_baseline};
+use crate::engine::gate::baseline::{apply_baseline, load_baseline_bytes, save_baseline};
 use crate::engine::gate::exit_code::{compute_finding_exit, exit};
 use crate::engine::gate::filter::{FilterOptions, Scope, filter_findings, scope_filter};
 use crate::engine::gate::format_html::{HtmlFormatInputs, format_html};
@@ -135,41 +135,11 @@ impl AnalyzeArgs {
 ///
 /// SOURCE-ONLY: exactly one app per run. Returns an empty registry if `app.json` is
 /// unreadable (engine-never-throws; attribution then falls back to "(unknown app)").
-fn read_workspace_apps(ws: &Path) -> Vec<App> {
-    let Ok(text) = std::fs::read_to_string(ws.join("app.json")) else {
-        return Vec::new();
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Vec::new();
-    };
-    let Some(app_guid) = v
-        .get("id")
-        .and_then(|x| x.as_str())
-        .filter(|s| !s.is_empty())
-    else {
-        return Vec::new();
-    };
-    let publisher = v
-        .get("publisher")
-        .and_then(|x| x.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let name = v
-        .get("name")
-        .and_then(|x| x.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let version = v
-        .get("version")
-        .and_then(|x| x.as_str())
-        .unwrap_or("0.0.0.0")
-        .to_string();
-    vec![App {
-        app_guid: app_guid.to_string(),
-        publisher,
-        name,
-        version,
-    }]
+/// Reads the `app.json` the command's `InputSet` read (#160).
+fn read_workspace_apps(inputs: &InputSet) -> Vec<App> {
+    crate::program::model::workspace::read_primary_app(inputs)
+        .into_iter()
+        .collect()
 }
 
 /// Why [`build_analysis_model`] produced no model.
@@ -508,7 +478,7 @@ pub fn run_analyze_with_exit(
         // Fail-closed layout / unreadable workspace → empty output; preflight says
         // could-not-verify (never a fabricated clean — spec §3), gated on `fresh`.
         Err(ModelFailure::NoModelInstanceId | ModelFailure::AssemblyFailed) => {
-            return empty_output_result(args, &version, &fresh);
+            return empty_output_result(inputs, args, &version, &fresh);
         }
         Err(ModelFailure::ProgramBuildFailed(why)) => {
             return Err(format!(
@@ -601,21 +571,29 @@ pub fn run_analyze_with_exit(
     // whose fingerprint is in it. --update-baseline saves the CURRENT (post-limit) set —
     // the new floor — BEFORE the drop, matching al-sem (`saveBaseline(path, limited)`).
     if let Some(path) = &args.baseline {
-        if args.update_baseline {
-            let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
+        let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
+        let baseline = if args.update_baseline {
             // Engine-never-throws: a write failure is surfaced as Err to the caller,
             // which the bin maps to a config/IO error message.
             save_baseline(Path::new(path), &summaries)
                 .map_err(|e| format!("failed to write baseline '{path}': {e}"))?;
-        }
-        // A malformed baseline (exists but not valid JSON / non-array fingerprints) is
-        // an analysis-failure, not a config error: al-sem's loadBaseline throws and the
-        // CLI catch emits "al-sem: analysis failure — <msg>" + exits 2.  We surface
-        // this as an Err tagged with the "analysis failure — " prefix so the bin can
-        // distinguish it from config errors (exit 3) and use exit 2 instead.
-        let baseline =
-            load_baseline(Path::new(path)).map_err(|e| format!("analysis failure — {e}"))?;
-        let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
+            // The set applied is the set just written: every current finding. The
+            // old file (`inputs.baseline`) is never read, so a malformed one never
+            // errors, as when the file was overwritten before being read back (#160).
+            summaries.iter().map(|s| s.fingerprint.clone()).collect()
+        } else {
+            // A malformed baseline (exists but not valid JSON / non-array
+            // fingerprints) is an analysis-failure, not a config error: al-sem's
+            // loadBaseline throws and the CLI catch emits "al-sem: analysis failure —
+            // <msg>" + exits 2. We surface this as an Err tagged with the "analysis
+            // failure — " prefix so the bin can distinguish it from config errors
+            // (exit 3) and use exit 2 instead. The bytes are the ones the command's
+            // `InputSet` read (#160).
+            let file = inputs.baseline.as_ref().expect(
+                "--baseline set but the InputSet was read without it (AnalyzeArgs::read_inputs)",
+            );
+            load_baseline_bytes(file).map_err(|e| format!("analysis failure — {e}"))?
+        };
         let kept_ids: std::collections::HashSet<String> = apply_baseline(&summaries, &baseline)
             .into_iter()
             .map(|s| s.id)
@@ -624,14 +602,15 @@ pub fn run_analyze_with_exit(
     }
 
     // --- inline al-sem-ignore suppression (default-ON, al-sem index.ts:304-319) ---
-    // Parsed from workspace source files on disk; only ws: units are scanned. The kept
-    // set after this is `newFindings` — the set the exit gate and all formats use.
+    // Parsed from the workspace source texts the `InputSet` read; only ws: units are
+    // scanned. The kept set after this is `newFindings` — the set the exit gate and
+    // all formats use.
     if !args.disable_inline_suppression {
         let unit_ids: std::collections::HashSet<String> = paired
             .iter()
             .map(|(s, _)| s.primary_location.file.clone())
             .collect();
-        let suppression_map = build_suppression_map(ws_path, unit_ids.iter().map(|s| s.as_str()));
+        let suppression_map = build_suppression_map(inputs, unit_ids.iter().map(|s| s.as_str()));
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
         let outcome = apply_inline_suppressions(&summaries, &suppression_map);
         // outcome.kept holds indices into `summaries` (= into `paired`); retain them.
@@ -663,7 +642,7 @@ pub fn run_analyze_with_exit(
                 format_sarif(&summaries, &raws, &version)
             }
             OutputFormat::PrSummary => {
-                let apps = read_workspace_apps(ws_path);
+                let apps = read_workspace_apps(inputs);
                 format_pr_summary(&paired, &resolved.workspace.routines, &apps)
             }
             OutputFormat::Json => {
@@ -792,11 +771,12 @@ pub fn run_analyze_with_exit(
 /// (zero findings, zero coverage), the same shape Sarif/PrSummary/Json produce here —
 /// every arm returns `Ok`, never `Err`.
 pub(crate) fn empty_output_result(
+    inputs: &InputSet,
     args: &AnalyzeArgs,
     version: &str,
     fresh: &Result<crate::program::resolve::full::FreshCoverage, String>,
 ) -> Result<(String, u8, Option<String>), String> {
-    let ws_path = Path::new(&args.workspace);
+    let ws_path = inputs.workspace.as_path();
     // Computed ONCE and reused by every arm below (Json/Terminal) AND by the
     // could-not-verify `reason` derivation past the format switch — these are the
     // real provider/index diagnostics for this workspace (spec §3: the fail-closed
@@ -867,7 +847,7 @@ pub(crate) fn empty_output_result(
             };
             // For fail-closed HTML, we need an empty resolved model.
             // The assemble_and_resolve_workspace failed, so build a minimal one.
-            let primary_app = read_workspace_apps(ws_path).into_iter().next();
+            let primary_app = read_workspace_apps(inputs).into_iter().next();
             // Build an empty Model for the HTML formatter.
             let empty_resolved = crate::program::model::workspace::Model {
                 workspace: crate::program::model::workspace::ModelEntities {

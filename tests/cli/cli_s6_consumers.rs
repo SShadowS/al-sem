@@ -10,7 +10,7 @@ use std::path::Path;
 
 /// The command's one read of `ws` (#160), as `alsem` does it.
 fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+    al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs())
 }
 
 fn write(path: &Path, text: &str) {
@@ -286,10 +286,15 @@ codeunit 50622 "S6 Pol Sub"
 }
 "#,
     );
-    let inputs = read(ws);
+    let inputs = al_sem::program::inputs::InputSet::read(
+        ws,
+        &al_sem::program::inputs::InputNeeds {
+            policy: al_sem::engine::gate::policy::pipeline::policy_request(None, false),
+            ..Default::default()
+        },
+    );
     let out = run_policy_check(&PolicyCheckOptions {
         inputs: &inputs,
-        policy_path: None,
         no_policy: false,
         format: "json",
         out: None,

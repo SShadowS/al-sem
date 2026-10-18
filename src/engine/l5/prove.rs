@@ -897,7 +897,7 @@ pub fn run_prove_pipeline(
     // Compose snapshot
     let snap = compose_snapshot(&resolved);
     let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(workspace, alsem_ver);
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
 
     // Build envelope diagnostics (the registry's 40-detector default set, shared with digest).
     let diagnostics_json = build_envelope_diagnostics_json(workspace, &resolved);

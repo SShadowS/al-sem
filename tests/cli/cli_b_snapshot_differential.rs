@@ -151,11 +151,17 @@ fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, Model, 
     let model_instance_id = compute_gate_model_instance_id(&fixture_dir)
         .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
     // Engine-switch S6.4: the model `alsem diff`'s workspace mode builds.
-    let inputs = al_sem::program::inputs::InputSet::read(&fixture_dir, &Default::default());
+    let inputs = al_sem::program::inputs::InputSet::read(
+        &fixture_dir,
+        &al_sem::program::inputs::InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        },
+    );
     let resolved = assemble_and_resolve_workspace_program(&inputs, &model_instance_id, false)
         .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
     let opts = FullSnapshotOptions {
-        workspace_dir: &fixture_dir,
+        inputs: &inputs,
         driver_version: VERSION_OVERRIDE,
         deterministic: true,
         roots_config_ignored: false,

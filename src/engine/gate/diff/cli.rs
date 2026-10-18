@@ -119,7 +119,7 @@ fn load_snapshot_from_workspace(
         Vec::new()
     };
     let opts = FullSnapshotOptions {
-        workspace_dir: ws,
+        inputs: &inputs,
         driver_version,
         deterministic,
         roots_config_ignored: false,

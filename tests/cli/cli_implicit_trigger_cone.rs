@@ -213,7 +213,7 @@ fn fixture_is_where_the_literals_say() {
 
 /// The command's one read of `ws` (#160).
 fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+    al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs())
 }
 
 fn digest(ws: &Path, file: &str, single_app: bool) -> Value {
@@ -1108,7 +1108,9 @@ rules:
 /// see `.agent/issue-96/t8.md`, "F1 root cause", and the ledger's discovery).
 #[test]
 fn a6_dependency_origin_trigger_reaches_the_workspace_cone() {
-    use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
+    use al_sem::engine::gate::policy::pipeline::{
+        PolicyCheckOptions, policy_request, run_policy_check,
+    };
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("ws");
     write_cross_app_workspace(&ws);
@@ -1118,8 +1120,13 @@ fn a6_dependency_origin_trigger_reaches_the_workspace_cone() {
 
     let run = |single_app: bool| -> Vec<u64> {
         let out = run_policy_check(&PolicyCheckOptions {
-            inputs: &read(&ws),
-            policy_path: Some(&policy),
+            inputs: &al_sem::program::inputs::InputSet::read(
+                &ws,
+                &al_sem::program::inputs::InputNeeds {
+                    policy: policy_request(Some(&policy), false),
+                    ..Default::default()
+                },
+            ),
             no_policy: false,
             format: "json",
             out: None,

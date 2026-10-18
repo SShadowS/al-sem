@@ -13,7 +13,7 @@ use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintFormat, FingerprintOptions, FingerprintOutput, run_fingerprint_pipeline,
 };
-use al_sem::program::inputs::InputSet;
+use al_sem::program::inputs::{InputNeeds, InputSet, PolicyRequest};
 
 fn r0(ws: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -25,17 +25,22 @@ fn read(ws: &Path) -> Arc<InputSet> {
     InputSet::read(ws, &Default::default())
 }
 
-/// `analyze --format json --deterministic` over `inputs` (the harness call of
+/// What `fingerprint` reads: the hash rows too.
+fn read_fingerprint(ws: &Path) -> Arc<InputSet> {
+    InputSet::read(ws, &crate::fingerprint_needs())
+}
+
+/// `analyze --deterministic` arguments (the harness shape of
 /// `cli_a_json_differential.rs`).
-fn analyze_json(inputs: &Arc<InputSet>) -> String {
-    let args = AnalyzeArgs {
-        workspace: inputs.workspace.to_string_lossy().into_owned(),
+fn analyze_args(ws: &Path, format: OutputFormat) -> AnalyzeArgs {
+    AnalyzeArgs {
+        workspace: ws.to_string_lossy().into_owned(),
         min_severity: None,
         detector: None,
         preset: None,
         scope: Scope::Primary,
         limit: None,
-        format: OutputFormat::Json,
+        format,
         sarif_version_override: None,
         fail_on: None,
         require_dependencies: false,
@@ -46,11 +51,33 @@ fn analyze_json(inputs: &Arc<InputSet>) -> String {
         deterministic: true,
         with_evidence: false,
         single_app: false,
-    };
-    match run_analyze_with_exit(inputs, &args, "engine-default") {
-        Ok((out, _, _)) => out,
+    }
+}
+
+/// Run `analyze` over `inputs`: stdout and exit code.
+fn analyze_run(inputs: &Arc<InputSet>, args: &AnalyzeArgs) -> (String, u8) {
+    match run_analyze_with_exit(inputs, args, "engine-default") {
+        Ok((out, exit, _)) => (out, exit),
         Err(e) => panic!("analyze failed: {e}"),
     }
+}
+
+/// `analyze --format <format>` over `inputs`.
+fn analyze(inputs: &Arc<InputSet>, format: OutputFormat) -> String {
+    analyze_run(inputs, &analyze_args(&inputs.workspace, format)).0
+}
+
+/// `analyze --format json --deterministic` over `inputs`.
+fn analyze_json(inputs: &Arc<InputSet>) -> String {
+    analyze(inputs, OutputFormat::Json)
+}
+
+fn findings(json: &str) -> Vec<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(json).expect("analyze json");
+    v["payload"]["findings"]
+        .as_array()
+        .expect("findings array")
+        .clone()
 }
 
 /// `fingerprint --format json --deterministic` over `inputs` (the harness call
@@ -107,13 +134,13 @@ fn al_file_added_after_read() {
 
 /// Spec §8.2 `inputs::roots_config_edit_after_read`: the root classifications
 /// come from the `roots.config.json` bytes read with the set, not a later
-/// disk read (`finish_resolved` -> `compute_root_classifications`). The
-/// `inputs[]` rows are `derive_inputs`', rewired in plan Task 12.
+/// disk read (`finish_resolved` -> `compute_root_classifications`), and so do
+/// the `inputs[]` rows (`derive_inputs`' `roots-config` row).
 #[test]
 fn roots_config_edit_after_read() {
     let d = tempfile::tempdir().unwrap();
     crate::copy_dir(&r0("ws-d51-jobqueue"), d.path());
-    let untouched = fingerprint_json(&read(d.path()));
+    let untouched = fingerprint_json(&read_fingerprint(d.path()));
     let roots = &untouched["payload"]["rootClassifications"];
     assert!(
         roots
@@ -121,10 +148,259 @@ fn roots_config_edit_after_read() {
             .is_some_and(|a| a.iter().any(|r| r["source"] != "ast")),
         "precondition: the config moves a classification: {roots}"
     );
-    let inputs = read(d.path());
-    std::fs::remove_file(d.path().join("roots.config.json")).unwrap();
-    assert_eq!(
-        fingerprint_json(&inputs)["payload"]["rootClassifications"],
-        *roots
+    let rows = &untouched["payload"]["inputs"];
+    assert!(
+        rows.as_array()
+            .is_some_and(|a| a.iter().any(|r| r["kind"] == "roots-config")),
+        "precondition: a roots-config row: {rows}"
     );
+    let inputs = read_fingerprint(d.path());
+    std::fs::remove_file(d.path().join("roots.config.json")).unwrap();
+    let after = fingerprint_json(&inputs);
+    assert_eq!(after["payload"]["rootClassifications"], *roots);
+    assert_eq!(after["payload"]["inputs"], *rows);
+}
+
+/// Spec §8.2 `inputs::app_json_edit_after_read`: one edit of `app.json`
+/// reaches every reader of it: the model id, the primary app, pr-summary's
+/// app registry (`read_workspace_apps`) and the fingerprint's `app-json` row.
+/// The json and fingerprint comparisons leave out the envelope's `diagnostics`
+/// array: those rows still come from a disk read until
+/// `compute_workspace_diagnostics` reads the set (plan Task 13, which widens
+/// this to the whole bytes).
+#[test]
+fn app_json_edit_after_read() {
+    let d = tempfile::tempdir().unwrap();
+    crate::copy_dir(&r0("ws-d1-multi-caller"), d.path());
+    let without_diagnostics = |mut v: serde_json::Value| {
+        v.as_object_mut().unwrap().remove("diagnostics");
+        v
+    };
+    let analyze_value = |inputs: &Arc<InputSet>| {
+        without_diagnostics(serde_json::from_str(&analyze_json(inputs)).expect("analyze json"))
+    };
+    let fingerprint_value = |inputs: &Arc<InputSet>| without_diagnostics(fingerprint_json(inputs));
+    let json0 = analyze_value(&read_fingerprint(d.path()));
+    let pr0 = analyze(&read_fingerprint(d.path()), OutputFormat::PrSummary);
+    let fp0 = fingerprint_value(&read_fingerprint(d.path()));
+    assert!(
+        !json0["payload"]["findings"].as_array().unwrap().is_empty(),
+        "precondition: findings"
+    );
+    let inputs = read_fingerprint(d.path());
+    std::fs::write(d.path().join("app.json"), "{}").unwrap();
+    assert_eq!(
+        analyze_value(&inputs),
+        json0,
+        "json (model id / primary app)"
+    );
+    assert_eq!(
+        analyze(&inputs, OutputFormat::PrSummary),
+        pr0,
+        "pr-summary (read_workspace_apps)"
+    );
+    assert_eq!(
+        fingerprint_value(&inputs),
+        fp0,
+        "fingerprint (derive_inputs app-json row)"
+    );
+}
+
+/// Spec §8.2 `inputs::coverage_yaml_edit_after_read`: the `policy` input row
+/// hashes the `al-sem.coverage.yaml` bytes read with the set.
+#[test]
+fn coverage_yaml_edit_after_read() {
+    let d = tempfile::tempdir().unwrap();
+    crate::copy_dir(&r0("ws-d1-multi-caller"), d.path());
+    let yaml = d.path().join("al-sem.coverage.yaml");
+    std::fs::write(&yaml, "version: 1\n").unwrap();
+    let untouched = fingerprint_json(&read_fingerprint(d.path()));
+    let policy_row = |v: &serde_json::Value| {
+        v["payload"]["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "policy")
+            .cloned()
+    };
+    assert!(
+        policy_row(&untouched).is_some(),
+        "precondition: a policy row"
+    );
+    let inputs = read_fingerprint(d.path());
+    std::fs::write(&yaml, "version: 2\n").unwrap();
+    let after = fingerprint_json(&inputs);
+    assert_eq!(
+        after["payload"]["workspaceFingerprint"],
+        untouched["payload"]["workspaceFingerprint"]
+    );
+    assert_eq!(policy_row(&after), policy_row(&untouched));
+}
+
+/// Spec §8.2 `inputs::al_text_edit_after_read`: inline suppressions are parsed
+/// from the `.al` text read with the set. The directive names the finding's
+/// detector and sits at the END of the finding's line, so no line shifts and
+/// a disk read would suppress the finding.
+#[test]
+fn al_text_edit_after_read() {
+    let d = tempfile::tempdir().unwrap();
+    crate::copy_dir(&r0("ws-d14-dead-routine"), d.path());
+    let first = findings(&analyze_json(&read(d.path())));
+    let f = &first[0];
+    let det = f["detector"].as_str().unwrap().to_string();
+    let file = f["primaryLocation"]["file"].as_str().unwrap();
+    let rel = file.strip_prefix("ws:").expect("a workspace finding");
+    let line = f["primaryLocation"]["line"].as_u64().unwrap() as usize;
+    let inputs = read(d.path());
+    let p = d.path().join(rel);
+    let mut lines: Vec<String> = std::fs::read_to_string(&p)
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
+    lines[line - 1].push_str(&format!(" // al-sem-ignore {det}"));
+    std::fs::write(&p, lines.join("\n")).unwrap();
+    assert_eq!(findings(&analyze_json(&inputs)).len(), first.len());
+}
+
+/// Spec §8.2 `inputs::closure_app_replaced_after_read`: the `dep-package` row
+/// hashes the `.app` bytes read with the set. Stated limit: it pins the HASH
+/// rows only. The loader still opens the `.app` itself after the hash (spec
+/// §4.2.2), so a swap between the two reads gives a model from the new bytes
+/// under the old hash: today's race, unchanged.
+#[test]
+fn closure_app_replaced_after_read() {
+    let d = tempfile::tempdir().unwrap();
+    crate::cli_digest_query_dependencies::write_dependency_workspace(d.path());
+    let untouched = fingerprint_json(&read_fingerprint(d.path()));
+    let rows = &untouched["payload"]["inputs"];
+    assert!(
+        rows.as_array()
+            .is_some_and(|a| a.iter().any(|r| r["kind"] == "dep-package")),
+        "precondition: a dep-package row: {rows}"
+    );
+    let inputs = read_fingerprint(d.path());
+    // The same app, symbol-only: different bytes, still a loadable package.
+    crate::cli_digest_query_dependencies::symbol_only_dependency(d.path());
+    let after = fingerprint_json(&inputs);
+    assert_eq!(
+        after["payload"]["workspaceFingerprint"],
+        untouched["payload"]["workspaceFingerprint"]
+    );
+    assert_eq!(after["payload"]["inputs"], *rows);
+}
+
+/// `policy check --format json` over `inputs`.
+fn policy_check_json(inputs: &Arc<InputSet>) -> Option<String> {
+    use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
+    run_policy_check(&PolicyCheckOptions {
+        inputs,
+        no_policy: false,
+        format: "json",
+        out: None,
+        deterministic: true,
+        strict: false,
+        driver_version: "t",
+        single_app: false,
+    })
+    .text
+}
+
+/// Spec §8.2 `inputs::policy_edit_after_read`: the policy is loaded from the
+/// bytes read with the set (auto-detected `al-sem.policy.yaml`).
+#[test]
+fn policy_edit_after_read() {
+    let d = tempfile::tempdir().unwrap();
+    crate::copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli-c-policy/ws-policy-custom"),
+        d.path(),
+    );
+    let read_auto = || {
+        InputSet::read(
+            d.path(),
+            &InputNeeds {
+                policy: PolicyRequest::AutoDetect,
+                ..InputNeeds::default()
+            },
+        )
+    };
+    let untouched = policy_check_json(&read_auto()).expect("policy output");
+    assert!(
+        untouched.contains("cust-all-rule"),
+        "precondition: the workspace policy was loaded"
+    );
+    let inputs = read_auto();
+    std::fs::write(
+        d.path().join("al-sem.policy.yaml"),
+        "version: [not a policy\n",
+    )
+    .unwrap();
+    assert_eq!(
+        policy_check_json(&inputs).as_deref(),
+        Some(untouched.as_str())
+    );
+}
+
+/// `ws-d8-commit-in-tx` under the transaction preset, with `--baseline`.
+fn d8_args(dir: &Path, baseline: &Path, update: bool) -> AnalyzeArgs {
+    AnalyzeArgs {
+        preset: Some("transaction-integrity".to_string()),
+        baseline: Some(baseline.to_string_lossy().into_owned()),
+        update_baseline: update,
+        ..analyze_args(dir, OutputFormat::Json)
+    }
+}
+
+/// Spec §8.2 `inputs::baseline_edit_after_read`: the baseline applied is the
+/// file as read with the set (here: absent, so empty), not a later disk read.
+#[test]
+fn baseline_edit_after_read() {
+    let d = tempfile::tempdir().unwrap();
+    let base = d.path().join("baseline.json");
+    let ws = r0("ws-d8-commit-in-tx");
+    let args = d8_args(&ws, &base, false);
+    let first = findings(&analyze_run(&args.read_inputs(), &args).0);
+    assert!(!first.is_empty(), "precondition: findings");
+    let inputs = args.read_inputs();
+    let all: Vec<&str> = first
+        .iter()
+        .map(|f| f["fingerprint"].as_str().unwrap())
+        .collect();
+    std::fs::write(
+        &base,
+        serde_json::json!({"schemaVersion": "1", "generatedAt": "x", "fingerprints": all})
+            .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        findings(&analyze_run(&args.read_inputs(), &args).0).len(),
+        0,
+        "precondition: the rewritten baseline suppresses everything"
+    );
+    assert_eq!(findings(&analyze_run(&inputs, &args).0).len(), first.len());
+}
+
+/// A1.6 `baseline::update_baseline_applies_the_set_just_written`: with
+/// `--update-baseline` the set applied is the set just written, so every
+/// current finding is dropped, whatever the old file held: (a) no file,
+/// (b) a malformed file (never read, so never an error).
+#[test]
+fn update_baseline_applies_the_set_just_written() {
+    let ws = r0("ws-d8-commit-in-tx");
+    let d = tempfile::tempdir().unwrap();
+    let probe = d8_args(&ws, &d.path().join("none.json"), false);
+    assert!(
+        !findings(&analyze_run(&probe.read_inputs(), &probe).0).is_empty(),
+        "precondition: findings without a baseline"
+    );
+    for (case, old) in [("no file", None), ("malformed", Some("not json"))] {
+        let base = d.path().join(format!("{}.json", case.replace(' ', "-")));
+        if let Some(text) = old {
+            std::fs::write(&base, text).unwrap();
+        }
+        let args = d8_args(&ws, &base, true);
+        let (out, exit) = analyze_run(&args.read_inputs(), &args);
+        assert_eq!(exit, 0, "{case}");
+        assert_eq!(findings(&out).len(), 0, "{case}");
+    }
 }

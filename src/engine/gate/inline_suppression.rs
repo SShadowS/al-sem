@@ -16,10 +16,9 @@
 //! DEFAULT-ON: applied automatically like a compiler pragma. The count of suppressed
 //! findings is surfaced to the caller (the bin emits it to stderr).
 
-use std::collections::HashMap;
-use std::path::Path;
-
 use crate::engine::gate::projection::FindingSummary;
+use crate::program::inputs::InputSet;
+use std::collections::HashMap;
 
 /// A parsed `// al-sem-ignore` directive found in a source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,19 +181,11 @@ fn is_word_or_hyphen(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
 
-/// Scan a source file on disk for directives. Missing/unreadable → empty (no error).
-pub fn load_inline_suppressions(absolute_path: &Path) -> Vec<InlineSuppression> {
-    match crate::source_text::read_al_source(absolute_path) {
-        Ok(content) => parse_inline_suppressions_from_source(&content),
-        Err(_) => Vec::new(),
-    }
-}
-
 /// Build a `SuppressionMap` by scanning the given workspace source units. Only `ws:`
 /// prefixed units are scanned (dependency `.app` sources are not workspace-authored).
-/// `<root>/<relpath>` reconstructs the absolute path (relpath uses `/`; `Path::join`
-/// handles it on every platform).
-pub fn build_suppression_map<'a, I>(workspace_root: &Path, source_unit_ids: I) -> SuppressionMap
+/// The text is the one the command's `InputSet` read (#160), never a later disk
+/// read; a file the set could not read (or did not list) yields no suppressions.
+pub fn build_suppression_map<'a, I>(inputs: &InputSet, source_unit_ids: I) -> SuppressionMap
 where
     I: IntoIterator<Item = &'a str>,
 {
@@ -203,8 +194,10 @@ where
         let Some(rel) = unit_id.strip_prefix("ws:") else {
             continue;
         };
-        let abs = workspace_root.join(rel);
-        let suppressions = load_inline_suppressions(&abs);
+        let suppressions = match inputs.file(rel).map(|f| &f.text) {
+            Some(Ok(text)) => parse_inline_suppressions_from_source(text),
+            _ => Vec::new(),
+        };
         if !suppressions.is_empty() {
             map.insert(unit_id.to_string(), suppressions);
         }

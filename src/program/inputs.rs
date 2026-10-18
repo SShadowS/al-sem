@@ -51,8 +51,8 @@ pub struct InputSet {
     pub baseline: Option<FileInput>,
     /// The dependency closure the loader reads (`dependencies::discover_app_files`).
     pub closure: ClosureEntries,
-    /// `derive_inputs()`'s rows, present only when [`InputNeeds::fingerprint_rows`]
-    /// was asked for.
+    /// The snapshot's reproducibility input rows (`derive_inputs_from_parts`),
+    /// present only when [`InputNeeds::fingerprint_rows`] was asked for.
     pub snapshot_inputs: Option<Vec<SnapshotInput>>,
     /// The `.al` walk itself: `Err` on an unreadable folder or a link loop. Then
     /// `al_files` is EMPTY: a partial list must never reach the build as if it
@@ -604,41 +604,5 @@ mod tests {
             "snapshot build failed: workspace source provider: walking source {root}: File system loop found: {root}/loop points to an ancestor {root}"
         );
         assert_eq!(err, want);
-    }
-
-    /// The hash rows equal `derive_inputs`'s while that reader exists (Task 12
-    /// rewires it to this field).
-    #[test]
-    fn snapshot_inputs_equal_derive_inputs() {
-        let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("app.json"), r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#).unwrap();
-        std::fs::create_dir_all(d.path().join(".alpackages")).unwrap();
-        std::fs::write(d.path().join(".alpackages/a.app"), b"package").unwrap();
-        std::fs::write(d.path().join("al-sem.coverage.yaml"), b"x: 1\n").unwrap();
-        let d51 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d51-jobqueue");
-        let rows = |v: &[crate::engine::l5::snapshot_full::SnapshotInput]| {
-            v.iter()
-                .map(|r| format!("{}|{}|{}", r.kind, r.path, r.content_hash))
-                .collect::<Vec<_>>()
-        };
-        for root in [d.path(), d51.as_path()] {
-            let needs = InputNeeds {
-                fingerprint_rows: true,
-                ..InputNeeds::default()
-            };
-            let i = InputSet::read(root, &needs);
-            let want = crate::engine::l5::snapshot_full::derive_inputs(root);
-            assert!(
-                want.len() >= 2,
-                "{}: the fixture states rows",
-                root.display()
-            );
-            assert_eq!(
-                rows(i.snapshot_inputs.as_ref().unwrap()),
-                rows(&want),
-                "{}",
-                root.display()
-            );
-        }
     }
 }

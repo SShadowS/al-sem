@@ -80,7 +80,7 @@ use al_sem::engine::l5::fingerprint_cli::{
     write_fingerprint_output,
 };
 use al_sem::engine::l5::prove::{parse_question, question_ids, run_prove_pipeline};
-use al_sem::program::inputs::{InputNeeds, InputSet, PolicyRequest};
+use al_sem::program::inputs::{InputNeeds, InputSet};
 use clap::{Parser, Subcommand};
 
 const SEVERITY_VALUES: &[&str] = &["critical", "high", "medium", "low", "info"];
@@ -831,7 +831,9 @@ fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
 // ── policy check command ─────────────────────────────────────────────────────
 
 fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
-    use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
+    use al_sem::engine::gate::policy::pipeline::{
+        PolicyCheckOptions, policy_request, run_policy_check,
+    };
 
     // Validate --format (human | json | sarif). al-sem writes the message + exit 1.
     const VALID_FORMATS: &[&str] = &["human", "json", "sarif"];
@@ -840,23 +842,15 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let policy = if c.no_policy {
-        PolicyRequest::Disabled
-    } else if let Some(p) = &c.policy {
-        PolicyRequest::Path(p.into())
-    } else {
-        PolicyRequest::AutoDetect
-    };
     let inputs = InputSet::read(
         std::path::Path::new(&c.workspace),
         &InputNeeds {
-            policy,
+            policy: policy_request(c.policy.as_deref(), c.no_policy),
             ..InputNeeds::default()
         },
     );
     let opts = PolicyCheckOptions {
         inputs: &inputs,
-        policy_path: c.policy.as_deref(),
         no_policy: c.no_policy,
         format: &c.format,
         out: c.out.as_deref(),

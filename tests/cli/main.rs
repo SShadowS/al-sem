@@ -44,6 +44,16 @@ pub(crate) fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
     }
 }
 
+/// What `fingerprint`, `digest`, `prove` and `diff` read besides the build's
+/// inputs (#160 §4.2.6): the snapshot hash rows. Harnesses that call those
+/// pipelines read their `InputSet` with it.
+pub(crate) fn fingerprint_needs() -> al_sem::program::inputs::InputNeeds {
+    al_sem::program::inputs::InputNeeds {
+        fingerprint_rows: true,
+        ..Default::default()
+    }
+}
+
 mod al2dump_smoke;
 mod aldump_smoke;
 mod cli_a_html_differential;

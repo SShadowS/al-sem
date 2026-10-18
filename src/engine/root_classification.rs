@@ -5,7 +5,7 @@
 //!   - `src/model/root-classification.ts` — [`RootKind`], [`ROOT_KIND_VALUES`],
 //!     [`is_externally_reachable_kind`], [`RootClassification`].
 //!   - `src/engine/root-classifier.ts` — [`classify_roots`] (AST-only pass).
-//!   - `src/config/roots-config.ts` — [`load_roots_config`] (file → validated config).
+//!   - `src/config/roots-config.ts` — `roots_config_from_bytes` (file bytes → validated config).
 //!   - `src/engine/root-classifier-overlay.ts` — [`overlay_config_roots`] (config merge).
 //!
 //! Determinism (R4-F spec Rev 2):
@@ -18,7 +18,6 @@
 //!     `String` matches al-sem's `a < b` on its `RoutineId` string.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use crate::program::model::workspace::{ModelEntities, ModelObject, ModelRoutine};
 
@@ -322,7 +321,7 @@ pub fn classify_roots(workspace: &ModelEntities) -> Vec<RootClassification> {
 }
 
 // ---------------------------------------------------------------------------
-// roots.config.json loader — load_roots_config (roots-config.ts).
+// roots.config.json loader — roots_config_from_bytes (roots-config.ts).
 // ---------------------------------------------------------------------------
 
 /// A validated roots.config target (al-sem `RootsConfigTarget`).
@@ -436,28 +435,16 @@ fn validate_roots_config(parsed: &serde_json::Value) -> Option<RootsConfig> {
     Some(RootsConfig { roots: entries })
 }
 
-/// True when `<workspaceRoot>/roots.config.json` exists AND loads+validates —
-/// i.e. al-sem's `model.identity.rootsConfig !== undefined`. The cli-b snapshot
-/// `deriveInputs` includes a `roots-config` input iff this holds. Engine-never-
-/// throws (the inner loader is total).
-pub fn roots_config_was_loaded(workspace_root: &Path) -> bool {
-    load_roots_config(workspace_root).is_some()
-}
-
-/// Load + validate `<workspaceRoot>/roots.config.json` (al-sem `loadRootsConfig`).
-/// Missing file ⇒ `None` (clean empty, the common case). Parse / validation
-/// failure ⇒ `None`. Never throws / panics.
-fn load_roots_config(workspace_root: &Path) -> Option<RootsConfig> {
-    let path = workspace_root.join("roots.config.json");
-    roots_config_from_bytes(&std::fs::read(&path).ok()?)
-}
-
-/// [`roots_config_was_loaded`] from the file's bytes, already read.
+/// True when the `roots.config.json` bytes (as the command's `InputSet` read
+/// them, #160) load+validate — i.e. al-sem's `model.identity.rootsConfig !==
+/// undefined`. The cli-b snapshot `deriveInputs` includes a `roots-config`
+/// input iff this holds (`InputSet::roots_config_loaded`).
 pub(crate) fn roots_config_bytes_load(bytes: &[u8]) -> bool {
     roots_config_from_bytes(bytes).is_some()
 }
 
-/// [`load_roots_config`] from the file's bytes, already read.
+/// Load + validate the `roots.config.json` bytes (al-sem `loadRootsConfig`).
+/// Parse / validation failure ⇒ `None`. Never throws / panics.
 fn roots_config_from_bytes(bytes: &[u8]) -> Option<RootsConfig> {
     // Strip a leading UTF-8 BOM (EF BB BF) before JSON parse — mirrors the
     // `charCodeAt(0) === 0xFEFF` slice in al-sem (here on the byte form).

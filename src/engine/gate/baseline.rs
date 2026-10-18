@@ -20,6 +20,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::engine::gate::projection::FindingSummary;
+use crate::program::inputs::FileInput;
 
 /// The pinned `generatedAt` value — `new Date(0).toISOString()`.
 pub const EPOCH_GENERATED_AT: &str = "1970-01-01T00:00:00.000Z";
@@ -35,7 +36,18 @@ pub const EPOCH_GENERATED_AT: &str = "1970-01-01T00:00:00.000Z";
 ///   The Rust caller must map `Err` to the same exit-2 path and emit NO report.
 /// - **Other I/O errors** (unreadable / permission denied): also returns `Err(message)`.
 pub fn load_baseline(path: &Path) -> Result<BTreeSet<String>, String> {
-    let text = match std::fs::read_to_string(path) {
+    load_baseline_bytes(&FileInput {
+        path: path.to_path_buf(),
+        bytes: std::fs::read(path),
+    })
+}
+
+/// [`load_baseline`] over a file already read (the command's `InputSet`, #160).
+/// Reads [`FileInput::text`], so a non-UTF-8 file is still a READ error
+/// (`cannot read baseline`), never `is not valid JSON`.
+pub fn load_baseline_bytes(file: &FileInput) -> Result<BTreeSet<String>, String> {
+    let path = &file.path;
+    let text = match file.text() {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Missing file → graceful empty set, no error (mirrors al-sem existsSync guard).
@@ -43,7 +55,7 @@ pub fn load_baseline(path: &Path) -> Result<BTreeSet<String>, String> {
         }
         Err(e) => return Err(format!("cannot read baseline '{}': {e}", path.display())),
     };
-    let v = serde_json::from_str::<serde_json::Value>(&text)
+    let v = serde_json::from_str::<serde_json::Value>(text)
         .map_err(|e| format!("baseline '{}' is not valid JSON: {e}", path.display()))?;
     let arr = v
         .get("fingerprints")

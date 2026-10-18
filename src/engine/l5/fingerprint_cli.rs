@@ -359,8 +359,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // existed (and would have loaded+validated) AND --no-roots-config skipped it.
     // Passing --no-roots-config in a workspace with no such file is a no-op, not
     // a lie — it must report `false`, same as never having passed the flag.
-    let roots_config_ignored = opts.no_roots_config
-        && crate::engine::root_classification::roots_config_was_loaded(workspace);
+    let roots_config_ignored = opts.no_roots_config && opts.inputs.roots_config_loaded();
 
     // --strict gate (fingerprint.ts:187): BEFORE composeSnapshot. If any analyzer
     // diagnostic is severity "error", print ALL analyzer diagnostics to stderr +
@@ -399,7 +398,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             .collect();
 
         let full_opts = FullSnapshotOptions {
-            workspace_dir: workspace,
+            inputs: opts.inputs,
             driver_version: opts.driver_version,
             deterministic: opts.deterministic,
             roots_config_ignored,
@@ -466,8 +465,10 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // Query path: json-with-query or human.
     // Compose the consumed-core snapshot (not the full CBOR tree).
     let snap = compose_snapshot(&resolved);
-    let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(workspace, opts.driver_version);
+    let workspace_fp = crate::engine::l5::snapshot_full::workspace_fingerprint_of(
+        opts.inputs,
+        opts.driver_version,
+    );
 
     // Witness limit: default to 3 (the golden capturePoint default).
     let witness_limit = opts.witness_limit.unwrap_or(WitnessLimit::Capped(3));

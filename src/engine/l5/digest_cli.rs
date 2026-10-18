@@ -1578,7 +1578,7 @@ pub fn run_digest_pipeline(
     // snapshot `alsem analyze`'s ordering facts read.
     let snap = compose_snapshot(resolved);
     let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(workspace, alsem_ver);
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
 
     // Resolve changed roots
     let changed_input = ChangedInput {

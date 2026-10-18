@@ -29,7 +29,7 @@ const FIXTURE: &str = "ws-d8-commit-in-tx";
 
 /// The command's one read of `ws` (#160).
 fn read(ws: &std::path::Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+    al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs())
 }
 
 /// Build the base `FingerprintOptions` for the fixture.

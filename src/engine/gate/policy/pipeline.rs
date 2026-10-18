@@ -23,12 +23,14 @@ use crate::engine::gate::policy::format_policy::{
 };
 use crate::engine::gate::policy::policy_engine::{PolicyModel, PolicyRunResult, run_policy_engine};
 use crate::engine::gate::policy::policy_loader::{
-    BUNDLED_DEFAULT_POLICY_YAML, LoadResult, load_policy_from_file, load_policy_from_string,
+    BUNDLED_DEFAULT_POLICY_YAML, LoadResult, load_policy_from_file, load_policy_from_input,
+    load_policy_from_string,
 };
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
 use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
 use crate::engine::l5::detector_context::build_detector_context_with;
 use crate::engine::root_classification::classify_roots;
+use crate::program::inputs::{InputSet, PolicyOrigin, PolicyRequest};
 use crate::program::model::workspace::ModelRoutine;
 
 /// How the effective policy was resolved.
@@ -41,23 +43,39 @@ enum ResolvedPolicy {
     Error(Vec<String>),
 }
 
+/// The policy file `policy check` reads (#160): `--no-policy` reads none,
+/// `--policy <path>` that path, else the auto-detected workspace file. The
+/// command's `InputSet` is read with it, and [`resolve_policy_check`] then
+/// reads only the set.
+#[must_use]
+pub fn policy_request(policy_path: Option<&str>, no_policy: bool) -> PolicyRequest {
+    if no_policy {
+        PolicyRequest::Disabled
+    } else if let Some(p) = policy_path {
+        PolicyRequest::Path(p.into())
+    } else {
+        PolicyRequest::AutoDetect
+    }
+}
+
 /// Auto-detect / explicit / default policy resolution for `check`. Mirrors
-/// `runPolicyCheck`'s resolution block.
-fn resolve_policy_check(
-    workspace: &Path,
-    policy_path: Option<&str>,
-    no_policy: bool,
-) -> ResolvedPolicy {
+/// `runPolicyCheck`'s resolution block. The explicit-or-auto choice (and the
+/// exists-first auto-detect rule) was applied when the `InputSet` was read
+/// ([`policy_request`]); this loads the bytes it holds.
+fn resolve_policy_check(inputs: &InputSet, no_policy: bool) -> ResolvedPolicy {
     if no_policy {
         return ResolvedPolicy::Disabled;
     }
-    let ws_abs = absolutize(workspace);
-    if let Some(p) = policy_path {
-        let abs = absolutize(p);
-        return match load_policy_from_file(&abs) {
+    if let Some(p) = &inputs.policy_file {
+        let ws_abs = absolutize(&inputs.workspace);
+        let label = match p.origin {
+            PolicyOrigin::Explicit => "explicit",
+            PolicyOrigin::Auto => "auto",
+        };
+        return match load_policy_from_input(&p.file) {
             LoadResult::Ok { policy, .. } => ResolvedPolicy::Loaded {
                 policy,
-                source: format!("explicit:{}", workspace_relative(&ws_abs, &abs)),
+                source: format!("{label}:{}", workspace_relative(&ws_abs, &p.file.path)),
             },
             LoadResult::Err { errors, .. } => ResolvedPolicy::Error(
                 errors
@@ -66,25 +84,6 @@ fn resolve_policy_check(
                     .collect(),
             ),
         };
-    }
-    // Auto-detect.
-    for name in ["al-sem.policy.yaml", "al-sem.policy.yml"] {
-        let candidate = workspace.join(name);
-        if candidate.exists() {
-            let abs = absolutize(candidate.to_string_lossy().as_ref());
-            return match load_policy_from_file(&abs) {
-                LoadResult::Ok { policy, .. } => ResolvedPolicy::Loaded {
-                    policy,
-                    source: format!("auto:{}", workspace_relative(&ws_abs, &abs)),
-                },
-                LoadResult::Err { errors, .. } => ResolvedPolicy::Error(
-                    errors
-                        .into_iter()
-                        .map(|e| format!("policy load error: {e}"))
-                        .collect(),
-                ),
-            };
-        }
     }
     // Bundled default (embedded — byte-identical to the vendored yaml).
     match load_policy_from_string(BUNDLED_DEFAULT_POLICY_YAML) {
@@ -161,9 +160,9 @@ pub struct PolicyCheckOutcome {
 
 /// Options for `run_policy_check`.
 pub struct PolicyCheckOptions<'a> {
-    /// The command's one read of the workspace (#160).
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
-    pub policy_path: Option<&'a str>,
+    /// The command's one read of the workspace (#160), read with
+    /// [`policy_request`]: it holds the `--policy` / auto-detected file.
+    pub inputs: &'a std::sync::Arc<InputSet>,
     pub no_policy: bool,
     pub format: &'a str, // "human" | "json" | "sarif"
     pub out: Option<&'a str>,
@@ -212,7 +211,7 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
 
     // Resolve the effective policy.
     let (policy_opt, source): (Option<PolicyDoc>, String) =
-        match resolve_policy_check(workspace, opts.policy_path, opts.no_policy) {
+        match resolve_policy_check(opts.inputs, opts.no_policy) {
             ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
             ResolvedPolicy::Disabled => (None, "disabled".to_string()),
             ResolvedPolicy::Error(lines) => {
