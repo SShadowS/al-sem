@@ -103,7 +103,7 @@ fn resolve_policy_check(
 }
 
 /// Resolve an absolute path (al-sem `resolve(path)` semantics — relative to cwd).
-fn absolutize<P: AsRef<Path>>(p: P) -> PathBuf {
+pub(crate) fn absolutize<P: AsRef<Path>>(p: P) -> PathBuf {
     let path = p.as_ref();
     if path.is_absolute() {
         path.to_path_buf()

@@ -449,13 +449,22 @@ pub fn roots_config_was_loaded(workspace_root: &Path) -> bool {
 /// failure ⇒ `None`. Never throws / panics.
 fn load_roots_config(workspace_root: &Path) -> Option<RootsConfig> {
     let path = workspace_root.join("roots.config.json");
-    let bytes = std::fs::read(&path).ok()?;
+    roots_config_from_bytes(&std::fs::read(&path).ok()?)
+}
+
+/// [`roots_config_was_loaded`] from the file's bytes, already read.
+pub(crate) fn roots_config_bytes_load(bytes: &[u8]) -> bool {
+    roots_config_from_bytes(bytes).is_some()
+}
+
+/// [`load_roots_config`] from the file's bytes, already read.
+fn roots_config_from_bytes(bytes: &[u8]) -> Option<RootsConfig> {
     // Strip a leading UTF-8 BOM (EF BB BF) before JSON parse — mirrors the
     // `charCodeAt(0) === 0xFEFF` slice in al-sem (here on the byte form).
     let slice: &[u8] = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         &bytes[3..]
     } else {
-        &bytes[..]
+        bytes
     };
     let text = std::str::from_utf8(slice).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(text).ok()?;

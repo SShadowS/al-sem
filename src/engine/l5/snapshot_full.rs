@@ -812,19 +812,46 @@ pub struct SnapshotInput {
 ///   roots.config.json (if loaded) → "roots-config";
 ///   al-sem.coverage.yaml (if present) → "policy".
 /// Paths workspace-relative, forward-slash normalized. Sorted by (kind|path).
-fn derive_inputs(workspace_dir: &std::path::Path) -> Vec<SnapshotInput> {
+pub(crate) fn derive_inputs(workspace_dir: &std::path::Path) -> Vec<SnapshotInput> {
+    let read = |name: &str| {
+        let p = workspace_dir.join(name);
+        if p.exists() {
+            std::fs::read(&p).ok()
+        } else {
+            None
+        }
+    };
+    let roots = read("roots.config.json")
+        .filter(|_| crate::engine::root_classification::roots_config_was_loaded(workspace_dir));
+    derive_inputs_from_parts(
+        workspace_dir,
+        read("app.json").as_deref(),
+        dependency_closure_entries(workspace_dir),
+        roots.as_deref(),
+        read("al-sem.coverage.yaml").as_deref(),
+    )
+}
+
+/// [`derive_inputs`] over files already read: `app_json` (readable bytes),
+/// the closure entries, `roots_config` (only when it loads and validates) and
+/// `coverage_yaml`; `None` = no row. The closure `.app` files are hashed here.
+pub(crate) fn derive_inputs_from_parts(
+    workspace_dir: &std::path::Path,
+    app_json: Option<&[u8]>,
+    closure: crate::program::resolve::semantic_golden::ClosureEntries,
+    roots_config: Option<&[u8]>,
+    coverage_yaml: Option<&[u8]>,
+) -> Vec<SnapshotInput> {
     let mut out: Vec<SnapshotInput> = Vec::new();
+    let row = |kind: &str, name: &str, bytes: &[u8]| SnapshotInput {
+        kind: kind.into(),
+        path: rel(workspace_dir, &workspace_dir.join(name)),
+        content_hash: crate::engine::ids::sha256_bytes_hex(bytes),
+    };
 
     // app.json.
-    let app_json = workspace_dir.join("app.json");
-    if app_json.exists()
-        && let Some(hash) = hash_file(&app_json)
-    {
-        out.push(SnapshotInput {
-            kind: "app-json".into(),
-            path: rel(workspace_dir, &app_json),
-            content_hash: hash,
-        });
+    if let Some(bytes) = app_json {
+        out.push(row("app-json", "app.json", bytes));
     }
 
     // The dependency closure the loader reads (own AND ancestor caches, up to
@@ -836,7 +863,6 @@ fn derive_inputs(workspace_dir: &std::path::Path) -> Vec<SnapshotInput> {
         path: key,
         content_hash: crate::engine::ids::sha256_bytes_hex(kind.as_str().as_bytes()),
     };
-    let closure = dependency_closure_entries(workspace_dir);
     for (key, path) in closure.entries {
         match hash_file(&path) {
             Some(hash) => out.push(SnapshotInput {
@@ -853,27 +879,12 @@ fn derive_inputs(workspace_dir: &std::path::Path) -> Vec<SnapshotInput> {
 
     // roots.config.json — included iff it loads+validates (al-sem reads
     // model.identity.rootsConfig, set only when the config was actually loaded).
-    let roots_path = workspace_dir.join("roots.config.json");
-    if roots_path.exists()
-        && crate::engine::root_classification::roots_config_was_loaded(workspace_dir)
-        && let Some(hash) = hash_file(&roots_path)
-    {
-        out.push(SnapshotInput {
-            kind: "roots-config".into(),
-            path: rel(workspace_dir, &roots_path),
-            content_hash: hash,
-        });
+    if let Some(bytes) = roots_config {
+        out.push(row("roots-config", "roots.config.json", bytes));
     }
     // al-sem.coverage.yaml → "policy".
-    let coverage_policy = workspace_dir.join("al-sem.coverage.yaml");
-    if coverage_policy.exists()
-        && let Some(hash) = hash_file(&coverage_policy)
-    {
-        out.push(SnapshotInput {
-            kind: "policy".into(),
-            path: rel(workspace_dir, &coverage_policy),
-            content_hash: hash,
-        });
+    if let Some(bytes) = coverage_yaml {
+        out.push(row("policy", "al-sem.coverage.yaml", bytes));
     }
 
     // al-sem `deriveInputs`: `.sort((a,b) => `${a.kind}|${a.path}`.localeCompare(…))`.

@@ -75,16 +75,27 @@ fn read_root_app_version(workspace: &Path) -> String {
 pub fn compute_gate_model_instance_id(workspace: &Path) -> Option<String> {
     let app_guid = read_root_app_guid(workspace)?;
     let app_version = read_root_app_version(workspace);
+    let discovered = discover_al_files(workspace, NestedApps::Walk).ok()?;
+    Some(model_instance_id_from(
+        &app_guid,
+        &app_version,
+        discovered.iter().map(|f| f.rel_posix.as_str()),
+    ))
+}
 
+/// The id from its three inputs: the root `app.json` `id` and `version`, and
+/// the `rel_posix` of every discovered `.al` file (any order). The one
+/// algorithm behind [`compute_gate_model_instance_id`] and `InputSet::read`.
+pub(crate) fn model_instance_id_from<'a>(
+    app_guid: &str,
+    app_version: &str,
+    rel_paths: impl IntoIterator<Item = &'a str>,
+) -> String {
     // dependencyGraphHash — source-only: a single `appGuid@version` entry.
     let dep_graph_hash = sha256_of_strings(&[format!("{app_guid}@{app_version}")]);
 
     // unitIds — `ws:<relPosix>` for every discovered .al file, sorted.
-    let discovered = discover_al_files(workspace, NestedApps::Walk).ok()?;
-    let mut unit_ids: Vec<String> = discovered
-        .iter()
-        .map(|f| format!("ws:{}", f.rel_posix))
-        .collect();
+    let mut unit_ids: Vec<String> = rel_paths.into_iter().map(|p| format!("ws:{p}")).collect();
     unit_ids.sort();
 
     let mut parts: Vec<String> = Vec::with_capacity(1 + unit_ids.len());
@@ -92,7 +103,7 @@ pub fn compute_gate_model_instance_id(workspace: &Path) -> Option<String> {
     parts.extend(unit_ids);
 
     let full = sha256_of_strings(&parts);
-    Some(full.chars().take(16).collect())
+    full.chars().take(16).collect()
 }
 
 #[cfg(test)]

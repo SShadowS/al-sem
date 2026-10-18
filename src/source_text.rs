@@ -103,7 +103,7 @@ pub fn discover_al_files(root: &Path, nested: NestedApps) -> std::io::Result<Vec
 }
 
 /// True when `dir` directly holds an `app.json` file (any case).
-fn dir_has_app_json(dir: &Path) -> bool {
+pub(crate) fn dir_has_app_json(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|entries| {
         entries.flatten().any(|e| {
             e.file_name().eq_ignore_ascii_case("app.json")
