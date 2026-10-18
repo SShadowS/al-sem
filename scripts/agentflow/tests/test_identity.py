@@ -254,6 +254,50 @@ def test_docs_only_needs_no_cdo_record(gated):
     assert identity.identity_refusals(gated.ctx, Git(gated.clone), 8, gated.merge_sha, GATES[:2], True) == []
 
 
+# ---- post-merge takes the identity path --------------------------------------
+
+def _post_merge(capsys, g, monkeypatch, tmp_path, *extra):
+    """Gates patched to a child that leaves a marker, so the test sees whether
+    any gate ran at all."""
+    from agentflow import lock
+    marker = tmp_path / "gate-ran"
+    child = [sys.executable, "-c", f"open({str(marker)!r}, 'a').write('x')"]
+    monkeypatch.setattr(cli, "gates", lambda: [("ci-steps-all", child, 1), ("check-goldens", child, 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: (cli.CDO_GATE_KEY, child, 1))
+    lock.acquire(g.ctx, 8, "s", 1)
+    argv = ["--root", str(g.clone), "--repo", "SShadowS/al-sem", "--run-id", "run-test",
+            "post-merge", "--issue", "8", "--merge-sha", g.merge_sha, *extra]
+    code = cli.main(argv, gh_run=FakeRunner())
+    return code, json.loads(capsys.readouterr().out), marker
+
+
+def test_post_merge_identity_skip_runs_no_gate(capsys, gated, monkeypatch, tmp_path):
+    code, out, marker = _post_merge(capsys, gated, monkeypatch, tmp_path)
+    assert code == 0 and out["ok"] is True
+    assert out["verified_by"] == "identity" and out["identity_refused"] == []
+    assert out["gates"] == GREEN
+    assert not marker.exists()                              # no gate ran
+    assert list(gated.clone.parent.glob("al-sem-verify-*")) == []
+    rec = json.loads((gated.clone / ".agent" / "incidents.json").read_text())[gated.merge_sha]
+    assert rec["state"] == "resolved" and "identity" in rec["note"]
+    assert Git(gated.clone).branch() == "master"
+
+
+def test_post_merge_falls_back_to_gates_and_says_why(capsys, gated, monkeypatch, tmp_path):
+    (gated.ctx.run_dir / "attestation.json").unlink()
+    code, out, marker = _post_merge(capsys, gated, monkeypatch, tmp_path)
+    assert code == 0 and out["verified_by"] == "gates"
+    assert "no-attestation" in out["identity_refused"]
+    assert marker.exists()
+
+
+def test_post_merge_full_forces_the_gates(capsys, gated, monkeypatch, tmp_path):
+    code, out, marker = _post_merge(capsys, gated, monkeypatch, tmp_path, "--full")
+    assert code == 0 and out["verified_by"] == "gates"
+    assert out["identity_refused"] == ["forced-full"]
+    assert marker.exists()
+
+
 def test_run_outside_a_git_tree_still_runs_and_records_no_tree(capsys, root):
     code, out = _run(capsys, root, "noop", sys.executable, "-c", "pass", run_id="solo-run")
     assert code == 0 and out["exit_code"] == 0

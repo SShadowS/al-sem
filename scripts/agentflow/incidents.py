@@ -202,7 +202,7 @@ def record_outcome(ctx: Ctx, merge_sha: str, *, reason: str,
     return rec
 
 
-def mark_verified(ctx: Ctx, merge_sha: str, run_id: str | None) -> dict:
+def mark_verified(ctx: Ctx, merge_sha: str, run_id: str | None, note: str | None = None) -> dict:
     """The one automation close: a post-merge pass where every gate returned 0
     and the tree came back clean.
 
@@ -230,7 +230,7 @@ def mark_verified(ctx: Ctx, merge_sha: str, run_id: str | None) -> dict:
                 f"`resolve-incident` may close that")
         rec.update(state="resolved", resolved_at=ctx.now(),
                    resolved_by=f"post-merge:{run_id}",
-                   note="every gate returned 0 and the tree was clean")
+                   note=note or "every gate returned 0 and the tree was clean")
         records[merge_sha] = rec
         _save(ctx, records)
     return rec

@@ -1059,6 +1059,26 @@ def cmd_post_merge(args, ctx, gh, git):
     # be allowed to go verify it.
     incidents.open_incident(ctx, merge_sha=args.merge_sha, issue=args.issue, gate_red=False,
                             reason="post-merge verification has not completed", verifying=True)
+    # THE IDENTITY PATH (spec 2026-10-18-gate-speedups). When the merge is
+    # provably the tree the gates passed, built in the same environment, the
+    # rebuild proves nothing new: close the obligation on that evidence.
+    # `identity_refusals` never raises; anything else here failing refuses too.
+    try:
+        pm_docs_only = _docs_only(git, f"{args.merge_sha}~1", args.merge_sha)
+        names = [g[0] for g in gates()] + ([] if pm_docs_only else [cdo_gate()[0]])
+        refused = (["forced-full"] if args.full else
+                   identity.identity_refusals(ctx, git, args.issue, args.merge_sha, names, pm_docs_only))
+    except Exception as e:  # noqa: BLE001 -- fail closed: run the gates
+        refused = [f"error:identity:{type(e).__name__}"]
+    if not refused:
+        att = mergeops.read_attestation(ctx)
+        tree = git.rev(f"{args.merge_sha}^{{tree}}")
+        incidents.mark_verified(ctx, args.merge_sha, ctx.run_id,
+                                note=f"verified by identity: tree {tree} == attested final_head "
+                                     f"{att.final_head}; gates on H {att.H}")
+        lock.release_lane(ctx)
+        return _emit({"ok": True, "gates": dict(att.gates), "timeouts": [], "revert": None, "halt": None,
+                      "verify_worktree_removed": True, "verified_by": "identity", "identity_refused": []})
     results: dict = {}
     timeouts: list[str] = []
     verify_wt = worktrees.verify_path(ctx.paths.root, "merge", args.merge_sha)
@@ -1259,7 +1279,7 @@ def cmd_post_merge(args, ctx, gh, git):
     # gate the supervisor killed, so the JSON a human reads can tell "said no"
     # from "never finished" without knowing supervise.py's `code or 124`.
     payload = {"ok": ok, "gates": results, "timeouts": timeouts, "revert": revert, "halt": halt,
-               "verify_worktree_removed": removed}
+               "verify_worktree_removed": removed, "verified_by": "gates", "identity_refused": refused}
     if tree_anomaly:
         payload["tree_anomaly"] = tree_anomaly
         payload["tree_anomaly_total"] = tree_anomaly_total
@@ -1746,6 +1766,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = add("merge-gate", cmd_merge_gate); s.add_argument("--pr", type=int, required=True)
     s = add("merge", cmd_merge); s.add_argument("--pr", type=int, required=True)
     s = add("post-merge", cmd_post_merge); s.add_argument("--issue", type=int, required=True); s.add_argument("--merge-sha", required=True)
+    s.add_argument("--full", action="store_true", help="run the gates even when the identity check would skip them")
     s = add("pr-create", cmd_pr_create); s.add_argument("--title", required=True); s.add_argument("--body-file", required=True)
     s.add_argument("--head", required=True); s.add_argument("--base", default="master")
     s = add("pr-comment", cmd_pr_comment); s.add_argument("--pr", type=int, required=True); s.add_argument("--body-file", required=True)

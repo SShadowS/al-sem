@@ -399,6 +399,19 @@ its input.
 
 ## Post-merge verification
 
+**The identity path (2026-10-18, `docs/superpowers/specs/2026-10-18-gate-speedups-design.md`).**
+Every `run` appends a record to `<run dir>/gate-runs.jsonl` (gate, exit code, HEAD,
+tree, clean before and after, `rustc`, grammar commit and dirt, CDO workspace
+identity for `cdo-gate`). After opening the `verifying` incident, `post-merge`
+asks `identity.identity_refusals`. If nothing refuses — this run merged (not
+`recover`), its attestation is green, the squash sits on the attested `B`, the
+merge tree equals `final_head`'s, `H..final_head` is evidence only, and each
+gate's latest record is green and clean on `H`'s tree in today's environment —
+it resolves the incident with a note naming the trees, releases the lane, and
+builds nothing. Otherwise the gates run exactly as described below. The payload
+carries `verified_by` (`identity` | `gates`) and `identity_refused`; `--full`
+forces the gates.
+
 This section is the design of record for `post-merge`, rewritten on 2026-09-15
 against the shipped executor. It supersedes the single paragraph step 7 used to
 carry, which described a revert built in the shared checkout and one
