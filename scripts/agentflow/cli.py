@@ -20,7 +20,8 @@ from . import (budget, discoveries, eligibility, incidents, lock, mergeops, prot
                sanitize, supervise, worktrees)
 from .gh import Gh, GhError
 from .gitops import Git, GitError
-from .state import Ctx, DryRunViolation, Paths, config, new_run_id, read_json, update_json, write_json
+from .state import (Ctx, DryRunViolation, Paths, config, mutex, new_run_id, read_json, update_json,
+                    write_json)
 
 # `agent-regressed` is no longer spelled here: it comes from
 # `recovery.INCIDENT_LABELS` along with the three two-axis names, so the
@@ -50,6 +51,9 @@ MAX_ANOMALY_LISTED = 50
 # The free-disk floor `preflight` refuses below is `min_free_gb` in
 # `.agent/config.json` (see `state.CONFIG_DEFAULTS` for why it is 40 GB).
 _REJECTED_BASH_DIRS = ("system32", "windowsapps")
+# How long a root git write waits for a sibling session's (mutex `git`). A
+# `git worktree add` of this repository and a fetch are the long holders.
+GIT_MUTEX_TIMEOUT = 600.0
 
 
 def _git_exec_path() -> str | None:
@@ -237,8 +241,17 @@ def cmd_preflight(args, ctx, gh, git):
         git.fetch()
     except GitError:
         fails.append("fetch-failed")
-    if git.rev("master") != git.rev("origin/master"):
+    # BEHIND is not a failure, DIVERGED is. With several sessions a sibling's
+    # merge moves `origin/master`, and only that sibling's post-merge
+    # fast-forwards the root; issue worktrees branch from `origin/master`
+    # (`make-worktree`), so a lagging root `master` builds nothing wrong. A
+    # root `master` carrying a commit `origin` lacks still stops the tick.
+    # Fully qualified refs: `master` alone prefers a tag of that name.
+    behind = False
+    if not git.is_ancestor("refs/heads/master", "refs/remotes/origin/master"):
         fails.append("master-differs-from-origin")
+    else:
+        behind = git.rev("refs/heads/master") != git.rev("refs/remotes/origin/master")
     if (h := lock.halted(ctx)) is not None:
         fails.append(f"halt:{h}")
     # Computed INDEPENDENTLY of the halt row above, and that independence IS
@@ -295,7 +308,7 @@ def cmd_preflight(args, ctx, gh, git):
     out = {"ok": not fails, "failures": fails, "locks": leases, "stale_locks": stale_locks,
            "stale_lock": stale_locks[0] if stale_locks else None,
            "disk_free_gb": free_gb, "disk_required_gb": need_gb,
-           "warnings": warnings, "incidents": incidents.visible(ctx),
+           "warnings": warnings, "master_behind_origin": behind, "incidents": incidents.visible(ctx),
            "reviewers_check": "conductor: pi_models must list both reviewer models"}
     if state.status_only:
         # Visible, never a verdict: this branch must not touch `fails`. The
@@ -470,6 +483,25 @@ def cmd_claim(args, ctx, gh, git):
         except Exception:
             pass
     return _emit(info)
+
+
+def cmd_make_worktree(args, ctx, gh, git):
+    """The issue worktree, made by the executor instead of the conductor's
+    own `git worktree add` in the shared root (which raced a sibling
+    session's git writes). Fenced; the names come from THIS run's
+    `claim.json`, never argv. The base is `origin/master` after a fetch,
+    pinned to its SHA: the root's `master` can lag a sibling's merge until
+    that sibling's post-merge fast-forwards it."""
+    ctx.write_guard("make worktree")
+    lock.require_not_halted(ctx)
+    lk = lock.check_fence(ctx)
+    claim = read_json(ctx.run_dir / "claim.json")
+    if not isinstance(claim, dict) or claim.get("issue") != lk.issue or not claim.get("worktree"):
+        raise Fail({"error": "no claim.json for this run's lease"})
+    git.fetch()
+    base = git.rev("refs/remotes/origin/master")
+    git.worktree_add(Path(claim["worktree"]), claim["branch"], base)
+    return _emit({"worktree": claim["worktree"], "branch": claim["branch"], "base": base})
 
 
 def cmd_beat(args, ctx, gh, git):
@@ -1186,7 +1218,8 @@ def cmd_pr_comment(args, ctx, gh, git):
 
 def cmd_push_branch(args, ctx, gh, git):
     _guard_external_write(ctx, "push branch")
-    g = Git(args.cwd) if args.cwd else git
+    # A push from a worktree still updates the shared refs: same mutex.
+    g = Git(args.cwd, mutex=git.mutex) if args.cwd else git
     name = args.branch
     # Shape first, identity second: anything that is not a plain branch name is
     # refused before `master` is even considered, because a refspec argument can
@@ -1534,6 +1567,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = add("claim", cmd_claim); s.add_argument("issue", type=int); s.add_argument("--session", required=True); s.add_argument("--title-slug", required=True)
     s.add_argument("--loop-max", type=int, help="charge the shared loop budget (`--max-issues`) in the same step as the lease")
     add("beat", cmd_beat)
+    add("make-worktree", cmd_make_worktree)
     s = add("halt-check", cmd_halt_check); s.add_argument("--terminal", action="store_true")
     s = add("set-halt", cmd_set_halt); s.add_argument("reason")
     # OPERATOR-ONLY (see `lock.require_operator`). They appear in `--help`
@@ -1589,7 +1623,11 @@ def main(argv: list[str], gh_run=None, git_run=None) -> int:
         ctx = _ctx(args)
         gh_kw = {"run": gh_run} if gh_run else {}
         gh = Gh(ctx, args.repo, **gh_kw)
-        git = Git(ctx.paths.root, run=git_run) if git_run else Git(ctx.paths.root)
+        # Mutex `git` around every write to the shared root's `.git`, so two
+        # sessions' fetch / worktree add / checkout never collide on a lock.
+        # Looked up at call time, so a test can shorten the timeout.
+        git = Git(ctx.paths.root, run=git_run or subprocess.run,
+                  mutex=lambda: mutex(ctx, "git", timeout=GIT_MUTEX_TIMEOUT))
         return args.fn(args, ctx, gh, git)
     except Fail as f:
         return _emit(f.payload, f.code)

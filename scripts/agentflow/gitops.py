@@ -8,7 +8,7 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, ContextManager
 
 # A full, unabbreviated commit id. `push_master` below refuses anything else:
 # an abbreviation or a NAME would be re-resolved by git, which is the exact
@@ -74,11 +74,27 @@ class Git:
     # and is a no-op otherwise.
     _IGNORE_SUB = "--ignore-submodules=dirty"
 
-    def __init__(self, cwd: Path | str, run: Callable = subprocess.run):
-        self.cwd, self.run = str(cwd), run
+    # Subcommands that write the shared `.git` (index, refs, worktree list).
+    # Two sessions running these at once in one checkout fail with
+    # `index.lock` exists or `cannot lock ref`.
+    WRITES = frozenset({"fetch", "checkout", "merge", "update-index", "worktree", "branch", "push",
+                        "rebase", "revert", "commit", "add"})
+
+    def __init__(self, cwd: Path | str, run: Callable = subprocess.run,
+                 mutex: Callable[[], ContextManager] | None = None):
+        """`mutex`, when given, is a context-manager factory held around each
+        WRITES subcommand (the CLI's root checkout passes mutex `git`). Reads
+        never take it. It is held for one git call only, so no caller can
+        nest it."""
+        self.cwd, self.run, self.mutex = str(cwd), run, mutex
 
     def _run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-        r = self.run(["git", "-C", self.cwd, *args], capture_output=True, text=True)
+        argv = ["git", "-C", self.cwd, *args]
+        if self.mutex is not None and args and args[0] in self.WRITES:
+            with self.mutex():
+                r = self.run(argv, capture_output=True, text=True)
+        else:
+            r = self.run(argv, capture_output=True, text=True)
         if check and r.returncode != 0:
             raise GitError(f"git {' '.join(args)}: {r.stderr.strip()}")
         return r
@@ -271,7 +287,17 @@ class Git:
         return self.ok("push", "-q", "origin", f"{sha}:refs/heads/master")
 
     def ff(self, ref: str) -> bool:
-        return self.ok("merge", "-q", "--ff-only", ref)
+        """True when fast-forwarded; False ONLY when git says the branches
+        diverged ("Not possible to fast-forward"). Any other failure raises:
+        `post-merge` reads False as "master does not fast-forward" and
+        refuses to verify, so a lock collision (`index.lock`) must not look
+        like that verdict (measured messages: git 2.55.0.windows.3)."""
+        r = self._run("merge", "-q", "--ff-only", ref, check=False)
+        if r.returncode == 0:
+            return True
+        if "not possible to fast-forward" in r.stderr.lower():
+            return False
+        raise GitError(f"git merge --ff-only {ref}: {r.stderr.strip()}")
 
     def checkout(self, ref: str) -> None:
         self._run("checkout", "-q", ref)

@@ -36,6 +36,64 @@ def test_tracked_dirty_ignores_untracked_but_sees_content_changed_tracked_files(
     assert g.tracked_dirty()      # a modified TRACKED file: dirty
 
 
+def test_ff_says_no_only_for_a_real_non_fast_forward(repo_pair):
+    """Design test 35. `ff` returned False on ANY error, so a sibling's
+    `index.lock` inside `post-merge` read as "master does not fast-forward"
+    and refused to verify a real merge. Now False means git's own "Not
+    possible to fast-forward"; anything else raises. Staged by hand."""
+    _, clone = repo_pair
+    g = Git(clone)
+    g.out("checkout", "-q", "-b", "ahead")
+    ahead = commit_file(clone, "a.txt", "a\n", "ahead")
+    g.checkout("master")
+    lockfile = clone / ".git" / "index.lock"
+    lockfile.write_text("")
+    with pytest.raises(GitError, match="index.lock"):
+        g.ff("ahead")
+    lockfile.unlink()
+    assert g.ff("ahead") and g.rev("master") == ahead
+    g.out("checkout", "-q", "-b", "side", "HEAD~1")
+    commit_file(clone, "b.txt", "b\n", "side")
+    g.checkout("master")
+    assert g.ff("side") is False
+    assert g.rev("master") == ahead
+
+
+def test_the_root_mutex_covers_every_write_and_no_read(repo_pair, tmp_path):
+    """A `Git` built with `mutex` holds it around each subcommand that writes
+    the shared `.git` (`fetch`, `worktree`, `checkout`, `merge`, `push`,
+    `update-index`, ...) and never around a read: a read under the mutex
+    would serialise two sessions for nothing."""
+    from contextlib import contextmanager
+    _, clone = repo_pair
+    held = []
+    under = []
+
+    @contextmanager
+    def recording():
+        held.append(True)
+        try:
+            yield
+        finally:
+            held.pop()
+
+    def run(argv, **kw):
+        under.append((argv[3], bool(held)))
+        return subprocess.run(argv, **kw)
+
+    g = Git(clone, run=run, mutex=recording)
+    g.rev("HEAD")
+    g.fetch()
+    g.tree_state()
+    g.worktree_add(tmp_path / "wt", "issue/8-x-a1", "master")
+    g.checkout("master")
+    g.ff("origin/master")
+    g.is_ancestor("master", "master")
+    assert dict(under) == {"rev-parse": False, "fetch": True, "update-index": True, "diff": False,
+                           "status": False, "worktree": True, "checkout": True, "merge": True,
+                           "merge-base": False}, under
+
+
 def test_worktree_add_and_prune(repo_pair, tmp_path):
     origin, clone = repo_pair
     g = Git(clone)

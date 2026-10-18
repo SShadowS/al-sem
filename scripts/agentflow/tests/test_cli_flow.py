@@ -441,6 +441,82 @@ def test_two_processes_claiming_with_one_loop_unit_left_get_one_claim(root):
     assert _loop(root) == {"issues_done": 3}
 
 
+# ---- the root git mutex and make-worktree (commit 10) ------------------------
+
+def _merge_from_a_sibling(origin, tmp_path, name):
+    """Move `origin/master` from another clone, as a sibling session's merge
+    does. The root's local `master` is left behind."""
+    other = tmp_path / name
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, capture_output=True)
+    _git_raw(other, "config", "user.email", "o@x")
+    _git_raw(other, "config", "user.name", "o")
+    sha = commit_file(other, f"{name}.txt", "x\n", f"sibling merge {name}")
+    assert Git(other).push("origin", "master")
+    return sha
+
+
+def test_make_worktree_branches_the_claim_from_origin_master(capsys, repo_pair, tmp_path):
+    """Design test 37. `make-worktree` replaces the conductor's own
+    `git worktree add` in the root: it takes the worktree and branch from
+    THIS run's `claim.json`, fetches, and bases the branch on
+    `origin/master`, not local `master`, which lags while a sibling's merge
+    waits for its post-merge. It is fenced: a run with no lease gets nothing."""
+    origin, clone = repo_pair
+    code, claim = _claim(capsys, clone, 8, FakeRunner(CLAIM_GH), "run-test")
+    assert code == 0, claim
+    local_before = Git(clone).rev("master")
+    sibling = _merge_from_a_sibling(origin, tmp_path, "sib")
+    code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True), run_id="run-other")
+    assert code == 1 and "FenceError" in out["error"], out
+    assert not Path(claim["worktree"]).exists()
+    code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True))
+    assert code == 0, out
+    assert out == {"worktree": claim["worktree"], "branch": claim["branch"], "base": sibling}
+    wt = Git(claim["worktree"])
+    assert wt.branch() == claim["branch"] and wt.rev("HEAD") == sibling
+    assert Git(clone).rev("master") == local_before          # the root's master is not moved
+
+
+def test_make_worktree_waits_for_the_root_git_mutex(capsys, repo_pair, monkeypatch):
+    """The CLI's root `Git` takes mutex `git` for its writes, so a sibling
+    session's `git worktree add`/`fetch` and this one never collide on
+    `.git/index.lock` or a ref lock. Held here by the test: the command waits
+    and then fails `MutexTimeout` with nothing created; released, it works."""
+    from agentflow.state import mutex
+    _, clone = repo_pair
+    code, claim = _claim(capsys, clone, 8, FakeRunner(CLAIM_GH), "run-test")
+    assert code == 0, claim
+    monkeypatch.setattr(cli, "GIT_MUTEX_TIMEOUT", 0.3)
+    with mutex(Ctx(Paths(clone)), "git"):
+        code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True))
+    assert code == 1 and "MutexTimeout" in out["error"], out
+    assert not Path(claim["worktree"]).exists()
+    code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True))
+    assert code == 0 and Path(claim["worktree"]).exists(), out
+
+
+def test_preflight_passes_a_master_behind_origin_and_fails_a_diverged_one(
+        capsys, repo_pair, monkeypatch, tmp_path):
+    """With two sessions, a sibling's merge moves `origin/master`, and only
+    that sibling's post-merge fast-forwards the root. A root `master` BEHIND
+    `origin/master` is reported (`master_behind_origin`) and fails nothing;
+    one that has DIVERGED (a commit `origin` lacks) still fails
+    `master-differs-from-origin`."""
+    origin, clone = repo_pair
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+    preflight_ready(clone, monkeypatch, tmp_path)
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 0 and out["master_behind_origin"] is False, out
+    _merge_from_a_sibling(origin, tmp_path, "sib")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 0 and out["failures"] == [], out["failures"]
+    assert out["master_behind_origin"] is True
+    commit_file(clone, "local.txt", "x\n", "a local commit origin does not have")
+    code, out = run(capsys, clone, "preflight", gh_run=FakeRunner(READS), run_id=None)
+    assert code == 1 and out["failures"] == ["master-differs-from-origin"], out["failures"]
+
+
 def test_finish_naming_another_issue_than_the_lease_refuses_before_any_gh_call(
         capsys, root, tmp_path, monkeypatch):
     """Design test 12. `finish --issue 9` under a lease for 8 used to label

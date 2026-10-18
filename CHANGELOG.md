@@ -454,6 +454,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4 new tests (3 in `test_cli_flow.py`, among them two real processes at the
   last unit; 1 in `test_lock.py`). The suite is 348 passed (was 344).
 
+- **agentflow: one git writer at a time in the shared checkout, and
+  `make-worktree` (`scripts/agentflow/{gitops,cli}.py`).** Step 10 of the
+  parallel-issues design. The CLI's root `Git` holds mutex `git` around each
+  subcommand that writes the shared `.git` (`fetch`, `checkout`, `merge`,
+  `update-index`, `worktree`, `branch`, `push`, `rebase`, `revert`,
+  `commit`, `add`), never around a read; `push-branch --cwd` shares it, since
+  a push from a worktree updates shared refs. A waiter gives up after 600 s
+  with `MutexTimeout`. `Git.ff` returned False on ANY error, so a sibling's
+  `index.lock` inside `post-merge` read as "master does not fast-forward";
+  it now returns False only for git's "Not possible to fast-forward" and
+  raises otherwise. New fenced `make-worktree` replaces the conductor's own
+  `git worktree add`: it takes the worktree and branch from this run's
+  `claim.json`, fetches, and bases the branch on `origin/master` (pinned to
+  its SHA, reported as `base`), because the root's `master` can lag a
+  sibling's merge. `preflight` no longer fails a root `master` that is only
+  BEHIND `origin/master` (it reports `master_behind_origin: true`); a
+  diverged one still fails `master-differs-from-origin`.
+
+  5 new tests (2 in `test_gitops.py`, 3 in `test_cli_flow.py`). The suite is
+  353 passed (was 348).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.
