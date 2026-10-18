@@ -456,6 +456,11 @@ pub fn program_event_graph(
                                     "dependency publisher",
                                 )
                             };
+                            // `event_kind` (and `event_name`) stay first-wins from
+                            // `routine_by_id` on purpose: they can differ from
+                            // `s.platform` only if two physical routines share one
+                            // id, which the index's single platform decision (#104)
+                            // already treats as not occurring.
                             let event_kind = match node.and_then(|n| n.publisher_kind) {
                                 Some(PublisherKind::Integration) => "integration",
                                 Some(PublisherKind::Business) => "business",
