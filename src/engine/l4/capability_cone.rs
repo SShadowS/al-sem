@@ -1895,7 +1895,7 @@ fn inherited_facts_for_singleton<'g>(
         c_edges,
     );
     crate::engine::l5::detector_context::cones_census::add_gated(
-        &crate::engine::l5::detector_context::cones_census::SGL_CONE_ENTRIES,
+        &crate::engine::l5::detector_context::cones_census::SGL_CLOSED_ENTRIES,
         c_scanned - c_open,
     );
     crate::engine::l5::detector_context::cones_census::add_gated(
@@ -4225,7 +4225,7 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
 pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
     let ws: &ModelEntities = &resolved.workspace;
-    let _s0 = pt::span("r3a3", "r3a3.calls_graph");
+    let _s0 = pt::span("r3a3", "r3a3.clone_inputs");
     let calls = (*resolved.calls).clone();
     let event_graph: EventGraph = resolved.events.graph.clone();
     drop(_s0);

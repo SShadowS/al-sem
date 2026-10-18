@@ -683,7 +683,8 @@ sizings marked pre-arc).
   (`ConeOutput::DerivedOnly`), and the SCC walk stopped materializing cones no
   predecessor will ever read — it is Task 4's code change (not building a root
   SCC's cone at all) that takes the root-SCC residual to 0; the
-  `C1_CONE_CENSUS=1` byte census only MEASURES that it stayed at 0, it did not
+  `C1_CONE_CENSUS=1` byte census (since #160 step 0: `ALSEM_RETAINED_CENSUS=1`)
+  only MEASURES that it stayed at 0, it did not
   cause it. MEASURED (8020, `release-fast`, `d8-commit-in-transaction`-only
   shape, EXITCODE=0): span `rss_delta` 10 941 MB (pre-C1) → 2 151 MB (Task 3) →
   2 195 MB (Task 4); whole-process peak 17 055 MB → 9 593 MB (Task 3) →

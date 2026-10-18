@@ -71,60 +71,96 @@ pub fn enabled() -> bool {
 // `detector_context.rs`, was deleted alongside `direct_in` itself (Task 4).
 // ---------------------------------------------------------------------------
 
-/// Owned heap bytes reachable from one [`ValueSource`] (recurses through
+/// Owned heap reachable from one [`ValueSource`] (recurses through
 /// `ConstantVar`'s boxed initializer, counting the box's own
-/// `size_of::<ValueSource>()` allocation plus its content).
-pub(crate) fn value_source_heap_bytes(vs: &ValueSource) -> u64 {
+/// `size_of::<ValueSource>()` allocation plus its content). Each non-empty
+/// owned string is one allocation.
+fn value_source_heap(t: &mut Tally, vs: &ValueSource) {
     match vs {
-        ValueSource::Literal { value } => value.len() as u64,
+        ValueSource::Literal { value } => {
+            t.strs([value]);
+        }
         ValueSource::Enum { enum_name, member } => {
-            enum_name.len() as u64 + member.as_ref().map_or(0, |m| m.len() as u64)
+            t.strs([enum_name]).strs(member);
         }
         ValueSource::ConstantVar {
             var_name,
             initializer,
         } => {
-            var_name.len() as u64
-                + size_of::<ValueSource>() as u64 // the Box's own heap allocation
-                + value_source_heap_bytes(initializer)
+            // The Box's own heap allocation, then its content.
+            t.strs([var_name]).buf::<ValueSource>(1);
+            value_source_heap(t, initializer);
         }
-        ValueSource::Parameter { var_name, .. } => var_name.len() as u64,
+        ValueSource::Parameter { var_name, .. } => {
+            t.strs([var_name]);
+        }
         ValueSource::TableField {
             table_id,
             field_name,
-        } => table_id.len() as u64 + field_name.len() as u64,
-        ValueSource::Expression | ValueSource::Unknown => 0,
+        } => {
+            t.strs([table_id, field_name]);
+        }
+        ValueSource::Expression | ValueSource::Unknown => {}
     }
 }
 
-/// Owned heap bytes reachable from one [`CapabilityExtra`].
-pub(crate) fn capability_extra_heap_bytes(e: &CapabilityExtra) -> u64 {
+/// Owned heap reachable from one [`CapabilityExtra`].
+fn capability_extra_heap(t: &mut Tally, e: &CapabilityExtra) {
     match e {
         CapabilityExtra::Table {
             record_variable_id,
             temp_state,
             op_subtype,
         } => {
-            record_variable_id.as_ref().map_or(0, |s| s.len() as u64)
-                + temp_state.as_ref().map_or(0, |ts| ts.kind.len() as u64)
-                + op_subtype.as_ref().map_or(0, |s| s.len() as u64)
+            t.strs(record_variable_id)
+                .strs(temp_state.iter().map(|ts| &ts.kind))
+                .strs(op_subtype);
         }
-        CapabilityExtra::Dispatch { object_type, .. } => object_type.len() as u64,
-        CapabilityExtra::Event { event_class, .. } => event_class.len() as u64,
+        CapabilityExtra::Dispatch { object_type, .. } => {
+            t.strs([object_type]);
+        }
+        CapabilityExtra::Event { event_class, .. } => {
+            t.strs([event_class]);
+        }
         CapabilityExtra::Http {
             method,
             body_arg_source,
-        } => method.len() as u64 + body_arg_source.as_ref().map_or(0, value_source_heap_bytes),
+        } => {
+            t.strs([method]);
+            if let Some(vs) = body_arg_source {
+                value_source_heap(t, vs);
+            }
+        }
         CapabilityExtra::Storage {
             key_arg_source,
             value_arg_source,
             scope,
         } => {
-            key_arg_source.as_ref().map_or(0, value_source_heap_bytes)
-                + value_arg_source.as_ref().map_or(0, value_source_heap_bytes)
-                + scope.as_ref().map_or(0, |s| s.len() as u64)
+            for vs in key_arg_source.iter().chain(value_arg_source) {
+                value_source_heap(t, vs);
+            }
+            t.strs(scope);
         }
     }
+}
+
+/// Owned heap of one [`CapabilityFact`] (bytes and allocations): what
+/// [`capability_fact_heap_bytes`] reports the bytes of.
+fn capability_fact_heap(f: &CapabilityFact) -> Tally {
+    let mut t = Tally::default();
+    t.strs([&f.subject])
+        .strs(&f.resource_id)
+        .strs(&f.witness_operation_id)
+        .strs(&f.witness_callsite_id)
+        .strs(&f.witness_first_hop_operation_id)
+        .strs(&f.witness_first_hop_event_id);
+    if let Some(vs) = &f.resource_arg_source {
+        value_source_heap(&mut t, vs);
+    }
+    if let Some(e) = &f.extra {
+        capability_extra_heap(&mut t, e);
+    }
+    t
 }
 
 /// Owned heap bytes for one [`CapabilityFact`] — every OWNED
@@ -141,22 +177,20 @@ pub(crate) fn capability_extra_heap_bytes(e: &CapabilityExtra) -> u64 {
 /// the shrink removed. Their 16 B pointer+len pair is already inside
 /// `size_of::<CapabilityFact>()`.
 pub(crate) fn capability_fact_heap_bytes(f: &CapabilityFact) -> u64 {
-    f.subject.len() as u64
-        + f.resource_id.as_ref().map_or(0, |s| s.len() as u64)
-        + f.witness_operation_id
-            .as_ref()
-            .map_or(0, |s| s.len() as u64)
-        + f.witness_callsite_id.as_ref().map_or(0, |s| s.len() as u64)
-        + f.witness_first_hop_operation_id
-            .as_ref()
-            .map_or(0, |s| s.len() as u64)
-        + f.witness_first_hop_event_id
-            .as_ref()
-            .map_or(0, |s| s.len() as u64)
-        + f.resource_arg_source
-            .as_ref()
-            .map_or(0, value_source_heap_bytes)
-        + f.extra.as_ref().map_or(0, capability_extra_heap_bytes)
+    capability_fact_heap(f).bytes as u64
+}
+
+/// A slice of facts as a census tally: the backing buffer (one allocation
+/// when non-empty) plus every fact's owned heap, bytes and allocations.
+pub(crate) fn facts_tally(facts: &[CapabilityFact]) -> Tally {
+    let mut t = Tally::default();
+    t.buf::<CapabilityFact>(facts.len());
+    for f in facts {
+        let h = capability_fact_heap(f);
+        t.bytes += h.bytes;
+        t.allocs += h.allocs;
+    }
+    t
 }
 
 /// `(struct_bytes, heap_bytes)` for a slice of facts — `struct_bytes` is the
@@ -177,17 +211,13 @@ pub(crate) fn summaries_tally(summaries: &HashMap<String, FullRoutineSummary>) -
     let mut t = Tally::default();
     t.buf::<(String, FullRoutineSummary)>(summaries.len())
         .strs(summaries.keys());
-    let facts = |t: &mut Tally, f: &[CapabilityFact]| {
-        let (sb, hb) = facts_bytes(f);
-        t.bytes += (sb + hb) as usize;
-        t.allocs += usize::from(!f.is_empty());
-    };
     for s in summaries.values() {
         t.strs([&s.routine_id]);
-        facts(&mut t, &s.capability_facts_direct);
-        let (sb, hb) = s.census_inherited_bytes();
-        t.bytes += (sb + hb) as usize;
-        t.allocs += usize::from(sb > 0);
+        for f in [&s.capability_facts_direct[..], s.census_inherited_facts()] {
+            let ft = facts_tally(f);
+            t.bytes += ft.bytes;
+            t.allocs += ft.allocs;
+        }
         if let Some(cov) = &s.coverage {
             t.strs([&cov.subject, &cov.direct_status, &cov.inherited_status])
                 .buf::<String>(cov.reasons.len())
@@ -197,4 +227,51 @@ pub(crate) fn summaries_tally(summaries: &HashMap<String, FullRoutineSummary>) -
         }
     }
     t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fact(subject: &str, resource_id: Option<&str>, src: Option<ValueSource>) -> CapabilityFact {
+        CapabilityFact {
+            subject: subject.into(),
+            op: "read",
+            resource_kind: "table",
+            resource_id: resource_id.map(Into::into),
+            resource_arg_source: src,
+            confidence: "high",
+            provenance: "direct",
+            via: "direct",
+            witness_operation_id: None,
+            witness_callsite_id: None,
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
+            extra: None,
+        }
+    }
+
+    /// Code-review CR4: `context.summaries` is `kind=exact`, so every owned
+    /// allocation inside the facts is counted, not one per facts `Vec`.
+    #[test]
+    fn summaries_tally_counts_every_fact_allocation() {
+        let boxed = ValueSource::ConstantVar {
+            var_name: "v".into(),
+            initializer: Box::new(ValueSource::Literal { value: "x".into() }),
+        };
+        let s = FullRoutineSummary::new(
+            "r1".into(),
+            vec![fact("s", Some("t"), Some(boxed))],
+            Some(vec![fact("s2", None, None)]),
+            None,
+        );
+        let t = summaries_tally(&HashMap::from([("k1".to_string(), s)]));
+        // map buffer, key, routine_id; direct Vec, subject, resource_id,
+        // var_name, the Box, the literal; inherited Vec, subject.
+        assert_eq!(t.allocs, 11);
+        let entry = size_of::<(String, FullRoutineSummary)>();
+        let facts = 2 * size_of::<CapabilityFact>() + size_of::<ValueSource>();
+        // Heap bytes: "k1" "r1" "s" "t" "v" "x" "s2".
+        assert_eq!(t.bytes, entry + facts + 2 + 2 + 1 + 1 + 1 + 1 + 2);
+    }
 }

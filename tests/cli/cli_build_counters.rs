@@ -21,9 +21,19 @@ pub(crate) fn spawn_traced(
     args: &[&str],
     extra_env: &[(&str, &str)],
 ) -> (Output, BTreeMap<String, u64>) {
+    let (out, events) = spawn_trace_events(env!("CARGO_BIN_EXE_alsem"), args, extra_env);
+    (out, last_counters(&events))
+}
+
+/// [`spawn_traced`] for any binary, returning every trace event.
+fn spawn_trace_events(
+    exe: &str,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+) -> (Output, Vec<Value>) {
     let dir = tempfile::tempdir().expect("tempdir");
     let trace = dir.path().join("trace.json");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
+    let mut cmd = Command::new(exe);
     cmd.args(args)
         .env_remove("ALSEM_TRACE_DETAIL")
         .env_remove("ALSEM_TRACE_SAMPLE_EVERY")
@@ -37,10 +47,18 @@ pub(crate) fn spawn_traced(
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
-    let out = cmd.output().expect("spawn alsem");
+    let out = cmd.output().expect("spawn");
     let text = std::fs::read_to_string(&trace).unwrap_or_default();
-    let events: Vec<Value> = serde_json::from_str(&text).unwrap_or_default();
-    (out, last_counters(&events))
+    (out, serde_json::from_str(&text).unwrap_or_default())
+}
+
+/// The `phase.*` instant events, in trace order.
+fn phase_events(events: &[Value]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|e| e.get("cat").and_then(Value::as_str) == Some("phase"))
+        .filter_map(|e| e.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect()
 }
 
 /// LAST `C` event value per counter name (spec §4.1.2). `perf_trace`'s
@@ -640,6 +658,133 @@ fn phase_peak_is_reported() {
     assert!(
         0 < post && post <= proc_,
         "post_attach={post} process={proc_}"
+    );
+}
+
+/// Spec §4.1.4: `diff ws ws` builds a model per side. Each side's post-attach
+/// phase ends when that side's model is dropped, so the second side's parse and
+/// attach are never inside a phase and the reported peak is the maximum over
+/// both sides' phases (code-review CR2).
+#[test]
+fn diff_ends_each_sides_phase() {
+    let ws = ws_a();
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["diff", &ws, &ws, "--format", "json", "--deterministic"],
+        &[],
+    );
+    assert!(
+        out.status.code().is_some(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        phase_events(&events),
+        ["phase.start", "phase.end", "phase.start", "phase.end"]
+    );
+}
+
+/// Spec §4.1.4: `ALSEM_TRACE_EXIT_AFTER` exits from a span guard, where the
+/// run guard never drops; both peaks must still reach the trace (code-review
+/// CR6). Presence, not value: both are 0 off Windows.
+#[test]
+fn exit_after_still_reports_both_peaks() {
+    let (out, m) = spawn_traced(
+        &["analyze", &ws_a(), "--single-app", "--format", "json"],
+        &[("ALSEM_TRACE_EXIT_AFTER", "context.capability_cones")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for name in ["peak.process_mb", "peak.post_attach_mb"] {
+        assert!(m.contains_key(name), "{name} missing: {m:?}");
+    }
+}
+
+/// Spec §4.1.4: only a binary that opens `pt::run` reports a phase peak, so
+/// only there does `mark_phase_start` start a sampler. `aldump` opens none, yet
+/// attaches (code-review CR10).
+#[test]
+fn aldump_starts_no_phase_sampler() {
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_aldump"),
+        &["--r4-findings", &ws_a()],
+        &[],
+    );
+    assert!(
+        out.status.success() && count(&last_counters(&events), "build.program") > 0,
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        phase_events(&events).is_empty(),
+        "{:?}",
+        phase_events(&events)
+    );
+}
+
+/// Code-review CR8: one snapshot base build opens `r3a3.calls_graph` once, as
+/// it opens `r3a3.direct_facts` once; a span count is a build count.
+#[test]
+fn r3a3_spans_open_once_per_base() {
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &[
+            "fingerprint",
+            &ws_a(),
+            "--format",
+            "json",
+            "--deterministic",
+        ],
+        &[],
+    );
+    assert!(
+        out.status.code().is_some(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let opened = |name: &str| {
+        events
+            .iter()
+            .filter(|e| e["ph"] == "B" && e["name"] == name)
+            .count()
+    };
+    let bases = opened("r3a3.direct_facts");
+    assert!(bases > 0, "no snapshot base built");
+    assert_eq!(opened("r3a3.calls_graph"), bases);
+}
+
+/// Spec §4.1.5: d47 fills the ordering cell after the context is built, so its
+/// bucket is printed at the fill, not at the build where the cell is still
+/// empty (code-review CR3). The fixture is a d47 positive, so the routine it
+/// reports has ordering facts.
+#[test]
+fn retained_census_counts_the_filled_ordering_cell() {
+    let ws = r0("ws-txn-d47-pos-http-nocommit");
+    let (out, _) = spawn_traced(
+        &[
+            "analyze",
+            ws.to_str().unwrap(),
+            "--single-app",
+            "--format",
+            "json",
+            "--detector",
+            "d47-io-unsafe-txn",
+        ],
+        &[("ALSEM_RETAINED_CENSUS", "1")],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let bytes: Vec<u64> = err
+        .lines()
+        .filter_map(|l| l.split("bucket=context.ordering_facts bytes=").nth(1))
+        .map(|r| r.split(' ').next().unwrap().parse().unwrap())
+        .collect();
+    assert!(
+        bytes.len() == 1 && bytes[0] > 0,
+        "ordering bucket {bytes:?}:\n{err}"
     );
 }
 

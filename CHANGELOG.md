@@ -16,16 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `tests/cli/cli_build_counters.rs`.
   - Cone-census timers under `ALSEM_CONES_CENSUS=1`: the BFS walk and fold apart
     (`BFS_WALK_NANOS`, `BFS_FOLD_NANOS`, `BFS_PICKS`), the singleton scan split by entry
-    class, `PD_SOLVE_NANOS`/`PD_SOLVE_CALLS`, the signed `COMPOSE_REST_NANOS` remainder,
+    class (`closed_entries=`, `open_entries=`, `own_entries=`; the old `cone_entries=`
+    counted all three), `PD_SOLVE_NANOS`/`PD_SOLVE_CALLS`, the signed `COMPOSE_REST_NANOS` remainder,
     and the pd-solve bytes split into arena and working set. New trace spans
     `digest.tx_context_map`, `prove.tx_context_map`, `b3.adapter.join`,
-    `b3.adapter.by_decl` and `b3.adapter.convert`.
+    `b3.adapter.by_decl`, `b3.adapter.convert` and `r3a3.clone_inputs` (the
+    snapshot base's input clones, split out of `r3a3.calls_graph`).
   - The post-attach phase peak: `alsem` opens `pt::run("alsem")` and emits
-    `peak.process_mb` and `peak.post_attach_mb` (Windows; 0 elsewhere).
+    `peak.process_mb` and `peak.post_attach_mb` (Windows; 0 elsewhere), also when
+    `ALSEM_TRACE_EXIT_AFTER` ends the run early. `peak.post_attach_mb` is the maximum
+    over every model's post-attach phase (`diff` ends each side's phase when that side's
+    model is dropped). Only a binary that opens `pt::run` starts the sampler.
   - The retained byte census under `ALSEM_RETAINED_CENSUS=1` (`src/engine/census.rs`):
     one `[retained-census] bucket=… bytes=… allocs=… kind=exact|shallow` line per program,
     model, base, context, snapshot and arena structure, with `census_hook` marks so
-    `census-probe model` gives the live heap at each bucket point.
+    `census-probe retained <ws>` gives the live heap at each bucket point (its own mode,
+    so `census-probe model`'s phase peaks are not skewed by the marks). d47's ordering
+    cell is counted when it is filled.
   - `aldump --issue160-full-graph-timings <ws>`: the snapshot's cone, pd-solve and derive
     cost over the cut graph and the full graph (measurement only; deleted at step 6).
   - The step 0 CDO numbers: `docs/measurements/2026-10-18-issue-160-step0.md`.

@@ -1115,7 +1115,6 @@ fn q6_retained_census(ws: &std::path::Path) {
 fn q6(ws: PathBuf) {
     use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
     use al_sem::program::model::workspace::{Model, ModelEntities, ModelRoutine};
-    q6_retained_census(&ws);
     println!("==== Q6: alsem analyze pipeline on {} ====", ws.display());
     let fresh = phase("fresh_coverage", || {
         al_sem::program::resolve::full::build_program_with_coverage(&ws).map(|(_, _, fc)| fc)
@@ -1495,14 +1494,21 @@ fn main() {
         Some("symbols") => DependencySource::Symbols,
         // Q6, the analyze model's cost (was `l3` before engine-switch S9).
         Some("model") => {
+            q6(PathBuf::from(args.next().expect("workspace")));
+            return;
+        }
+        // #160 §4.1.5, its own mode: the census flag and the mark hook are
+        // process `OnceLock`s, and `on_mark` resets PEAK, so either would skew
+        // `model`'s phase peaks and seconds.
+        Some("retained") => {
             // Before the engine's first `census::enabled()` read (a OnceLock).
             // SAFETY: still single-threaded; no other thread reads the environment.
             unsafe { std::env::set_var("ALSEM_RETAINED_CENSUS", "1") };
             al_sem::census_hook::HOOK.set(on_mark).unwrap();
-            q6(PathBuf::from(args.next().expect("workspace")));
+            q6_retained_census(&PathBuf::from(args.next().expect("workspace")));
             return;
         }
-        _ => panic!("usage: census-probe <embedded|symbols> <root>..."),
+        _ => panic!("usage: census-probe <embedded|symbols|model|retained> <root>..."),
     };
     let rest: Vec<String> = args.collect();
     let with_updaters = rest.iter().any(|a| a == "--with-updaters");

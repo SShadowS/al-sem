@@ -406,7 +406,9 @@ pub(crate) mod cones_census {
     /// opposed to its call count — by class: CLOSED cone entries (read from the
     /// callee cone as-is), OPEN entries (frame-bound, carried per edge through
     /// `substitute_entry`), and the subject's OWN producer-solve entries.
-    pub(crate) static SGL_CONE_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    /// Until #160 one `cone_entries=` figure counted all three; it is now
+    /// `closed_entries + open_entries + own_entries`.
+    pub(crate) static SGL_CLOSED_ENTRIES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_OPEN_ENTRIES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_OWN_ENTRIES: AtomicU64 = AtomicU64::new(0);
     /// `best` insertions — each one a `String` key clone today.
@@ -588,9 +590,9 @@ pub(crate) mod cones_census {
             SGL_ENTRIES_N_CONES.load(Ordering::Relaxed),
         );
         eprintln!(
-            "[cones-census]   singleton pop: edges={} cone_entries={} open_entries={} own_entries={} wins={} bests={}",
+            "[cones-census]   singleton pop: edges={} closed_entries={} open_entries={} own_entries={} wins={} bests={}",
             SGL_EDGES.load(Ordering::Relaxed),
-            SGL_CONE_ENTRIES.load(Ordering::Relaxed),
+            SGL_CLOSED_ENTRIES.load(Ordering::Relaxed),
             SGL_OPEN_ENTRIES.load(Ordering::Relaxed),
             SGL_OWN_ENTRIES.load(Ordering::Relaxed),
             SGL_WINS.load(Ordering::Relaxed),
@@ -925,13 +927,21 @@ impl DetectorContext<'_> {
             "a detector read ctx.get_ordering_facts() inside the parallel detector \
              loop without declaring substrate::ORDERING_FACTS in its `requires`"
         );
-        self.ordering_facts
-            .get_or_init(|| match self.ordering_source {
+        self.ordering_facts.get_or_init(|| {
+            let facts = match self.ordering_source {
                 Some(resolved) => {
                     crate::engine::l5::ordering_facts::compute_ordering_facts(resolved)
                 }
                 None => HashMap::new(),
-            })
+            };
+            // #160 §4.1.5: the cell is empty when the context is built, so
+            // its bucket is printed here, at the fill.
+            if crate::engine::census::enabled() {
+                crate::census_hook::mark("census.ordering_facts");
+                census_ordering_facts(&facts);
+            }
+            facts
+        })
     }
 }
 
@@ -1860,14 +1870,8 @@ fn census_context(c: &DetectorContext<'_>) {
             .strs(c.friends.keys())
             .strs(c.friends.values().flatten()),
     );
-    emit(
-        "context.ordering_facts",
-        Tally::default()
-            .buf::<(String, crate::engine::l5::ordering_facts::OrderingFacts)>(
-                c.ordering_facts.get().map_or(0, HashMap::len),
-            )
-            .strs(c.ordering_facts.get().into_iter().flat_map(HashMap::keys)),
-    );
+    // `context.ordering_facts` is printed when the cell is filled
+    // (`get_ordering_facts`); here it is always empty.
     emit("context.ordering_source", &mut Tally::default());
     emit(
         "context.closed_world_temp_params",
@@ -1909,6 +1913,18 @@ fn census_context(c: &DetectorContext<'_>) {
             .bufs(c.cross_extension_subscribers.values())
             .strs(c.cross_extension_subscribers.values().flatten()),
     );
+}
+
+/// The filled ordering cell's `context.ordering_facts` bucket, shallow.
+fn census_ordering_facts(m: &HashMap<String, crate::engine::l5::ordering_facts::OrderingFacts>) {
+    use crate::engine::census::{Kind, Tally};
+    use crate::engine::l5::ordering_facts::OrderingFacts;
+    let mut t = Tally::default();
+    t.buf::<(String, OrderingFacts)>(m.len())
+        .strs(m.keys())
+        .strs(m.values().map(|f| &f.routine_id))
+        .bufs(m.values().map(|f| &f.facts));
+    t.emit("context.ordering_facts", Kind::Shallow);
 }
 
 /// `resolved_call_edge_by_callsite`: per call site, the FIRST edge that has a

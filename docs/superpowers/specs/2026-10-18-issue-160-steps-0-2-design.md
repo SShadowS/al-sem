@@ -246,9 +246,13 @@ sampled:
 - A sample interval of 10 ms misses spikes shorter than that. The band absorbs what it
   misses; the instrument is the same on both sides of every comparison (§6.1).
 - A second `mark_phase_start` in the same process (diff attaches once per side,
-  `diff/cli.rs:103` → `program_calls.rs:727`) RESTARTS the sampler: the maximum is reset
-  and `peak.post_attach_mb` reports the last phase's maximum. For diff that is the
-  second side; the numbers file says so where it quotes a diff peak.
+  `diff/cli.rs:103` → `program_calls.rs:727`) ends the running phase and starts a new
+  one; `peak.post_attach_mb` is the maximum over every phase. diff calls
+  `pt::end_phase` when a side's model is dropped, so the other side's parse and attach
+  are in no phase. (Code-review CR2 replaced the first design, which reset the maximum
+  and reported only the last phase.) Only an open `pt::run` guard reports the peak, so
+  without one `mark_phase_start` starts no sampler (CR10); the start, end and final read
+  run under one lock (CR5); an `ALSEM_TRACE_EXIT_AFTER` exit reports both peaks too (CR6).
 
 #### 4.1.5 The byte census
 

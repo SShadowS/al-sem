@@ -6,7 +6,9 @@
 //!
 //! Each site walks its own structure and prints through [`bucket`]. Bytes are
 //! heap bytes by `len` (allocator overhead excluded; a shared allocation once).
-//! `kind=exact` means the walk reaches every heap allocation of the structure;
+//! `kind=exact` means the walk reaches and counts every heap allocation of the
+//! structure, each by `len` (hash-table control bytes and capacity slack are
+//! not modeled for any kind; see [`Tally`]);
 //! `kind=shallow` means top-level buffers by `len × size_of`, plus the
 //! `String` / `Vec` heap one level down and nothing deeper. Every bucket is a
 //! LOWER bound; the ground-truth live heap comes from `tools/census-probe`,
