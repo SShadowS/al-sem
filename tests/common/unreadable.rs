@@ -13,8 +13,6 @@
 //! unreadable here` and returns. The guard restores access on drop, so the
 //! tempdir can be deleted.
 
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 /// Restores access to `path` when dropped.

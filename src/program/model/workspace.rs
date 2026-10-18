@@ -2834,8 +2834,9 @@ mod population_tests {
     fn model_population_follows_the_physical_rows() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
         let (mut ctx, _report, _) =
-            crate::program::resolve::full::build_program_with_coverage(&ws).unwrap();
+            crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let full =
             assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx, &Default::default())
                 .unwrap();
@@ -2881,8 +2882,9 @@ mod population_tests {
     fn declaration_only_routines_follow_the_population() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
         let (mut ctx, _report, _) =
-            crate::program::resolve::full::build_program_with_coverage(&ws).unwrap();
+            crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let decls = |m: &ModelRows| -> Vec<(String, u32)> {
             m.workspace
                 .objects

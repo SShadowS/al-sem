@@ -189,8 +189,8 @@ impl ImpactGraph {
 /// ([`crate::program::resolve::full::build_cross_app_program`]), its source
 /// facts, the projection and `meta`.
 pub fn export_workspace(workspace_root: &Path) -> Result<ImpactGraph, String> {
-    let (ctx, report, coverage) =
-        crate::program::resolve::full::build_cross_app_program(workspace_root)?;
+    let inputs = crate::program::inputs::InputSet::read(workspace_root, &Default::default());
+    let (ctx, report, coverage) = crate::program::resolve::full::build_cross_app_program(&inputs)?;
     // The gate's identity rule (#73): `app.json` needs a non-empty string `id`.
     // Checked on the snapshot's own reading of it (`guid` is "" exactly when the
     // `id` is missing, not a string, or empty, `snapshot.rs:199-208`), so the id

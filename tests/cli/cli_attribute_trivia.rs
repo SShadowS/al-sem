@@ -459,8 +459,9 @@ fn program_edges(
 ) {
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
     let (_, report, _) =
-        al_sem::program::resolve::full::build_program_with_coverage(dir.path()).expect("build");
+        al_sem::program::resolve::full::build_program_with_coverage(&inputs).expect("build");
     (report.edges, report.histogram)
 }
 
@@ -701,8 +702,9 @@ codeunit 50101 "Sub"
 fn include_sender_of(al: &str, name_lc: &str) -> Option<bool> {
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
     let (ctx, _, _) =
-        al_sem::program::resolve::full::build_program_with_coverage(dir.path()).expect("build");
+        al_sem::program::resolve::full::build_program_with_coverage(&inputs).expect("build");
     ctx.graph()
         .routines
         .iter()
@@ -963,8 +965,9 @@ fn a3e_real_table_publisher_readings_differing_only_in_element_are_one_subscript
     );
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), &al);
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
     let (ctx, _, _) =
-        al_sem::program::resolve::full::build_program_with_coverage(dir.path()).expect("build");
+        al_sem::program::resolve::full::build_program_with_coverage(&inputs).expect("build");
     let graph = ctx.graph();
     let index = SubscriberIndex::build(graph);
     let bound_kinds: Vec<Option<PublisherKind>> = index

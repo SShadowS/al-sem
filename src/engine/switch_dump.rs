@@ -48,7 +48,8 @@ pub fn dump_lines(ws: &Path) -> Dump {
     );
     // The dependency registry's body states (S2b.5). Nothing in production reads
     // the registry yet, so it comes from its own program build.
-    if let Ok((ctx, _, _)) = crate::program::resolve::full::build_program_with_coverage(ws) {
+    let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+    if let Ok((ctx, _, _)) = crate::program::resolve::full::build_program_with_coverage(&inputs) {
         d.insert(
             "registry.census".into(),
             ctx.registry()
@@ -410,8 +411,9 @@ mod tests {
         )
         .unwrap();
 
+        let inputs = crate::program::inputs::InputSet::read(&root, &Default::default());
         let (ctx, _report, _) =
-            crate::program::resolve::full::build_program_with_coverage(&root).unwrap();
+            crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let program_paths: Vec<&str> = ctx
             .parsed()
             .iter()

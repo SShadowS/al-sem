@@ -161,9 +161,13 @@ fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let inputs = al_sem::program::inputs::InputSet::read(
+        std::path::Path::new(ws),
+        &al_sem::program::inputs::InputNeeds::default(),
+    );
     let (ctx, report, _) =
         match al_sem::program::resolve::full::build_program_with_coverage_profiled(
-            std::path::Path::new(ws),
+            &inputs,
             BuildProfile::FULL,
         ) {
             Ok(x) => x,

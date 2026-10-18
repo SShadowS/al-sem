@@ -585,7 +585,23 @@ pub fn load_all_apps_with(
     cache: &DepCache,
 ) -> Result<(Vec<ResolvedDependency>, DependencyLoadReport)> {
     let (files, unreadable) = discover_app_files(project_root);
-    for (folder, e) in &unreadable {
+    load_all_apps_from(
+        project_root,
+        &crate::program::inputs::ClosureEntries { files, unreadable },
+        cache,
+    )
+}
+
+/// [`load_all_apps_with`] over a closure already discovered
+/// ([`discover_app_files`]'s two lists, read once into the command's
+/// `InputSet`, #160 step 1): the `.app` files themselves are still opened here.
+pub fn load_all_apps_from(
+    project_root: &Path,
+    closure: &crate::program::inputs::ClosureEntries,
+    cache: &DepCache,
+) -> Result<(Vec<ResolvedDependency>, DependencyLoadReport)> {
+    let (files, unreadable) = (&closure.files, &closure.unreadable);
+    for (folder, e) in unreadable {
         warn!(
             "load_all_apps: read_dir({}) failed: {}",
             folder.display(),
@@ -606,7 +622,7 @@ pub fn load_all_apps_with(
     for DiscoveredAppFile {
         folder: alpackages,
         path,
-    } in files
+    } in files.iter().cloned()
     {
         // Stamp BEFORE the first read of this file's bytes (see `AppFileStamp`).
         let stamp = AppFileStamp::of(&path);

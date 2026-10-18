@@ -814,8 +814,9 @@ pub fn assemble_and_resolve_workspace_program(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<crate::program::model::workspace::Model> {
+    let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
     let (ctx, report, coverage) =
-        crate::program::resolve::full::build_program_with_coverage(workspace).ok()?;
+        crate::program::resolve::full::build_program_with_coverage(&inputs).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
         workspace,
         model_instance_id,
@@ -918,8 +919,9 @@ pub fn assemble_and_resolve_cross_app_program(
     skip_roots_config: bool,
 ) -> Option<CrossAppProgram> {
     use crate::engine::perf_trace as pt;
+    let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
     let (ctx, report, coverage) =
-        crate::program::resolve::full::build_cross_app_program(workspace).ok()?;
+        crate::program::resolve::full::build_cross_app_program(&inputs).ok()?;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
         std::collections::HashMap::new();
     for u in &ctx.snapshot().apps {

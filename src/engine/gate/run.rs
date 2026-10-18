@@ -284,7 +284,8 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
     }
     let (fresh, program) = {
         let _s = pt::span("preflight", "preflight.fresh_program");
-        match crate::program::resolve::full::build_program_with_coverage(ws_path) {
+        let inputs = crate::program::inputs::InputSet::read(ws_path, &Default::default());
+        match crate::program::resolve::full::build_program_with_coverage(&inputs) {
             Ok((ctx, report, fc)) => (Ok(fc), Some((ctx, report))),
             Err(e) => (Err(e), None),
         }

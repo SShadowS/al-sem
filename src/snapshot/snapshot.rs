@@ -3,18 +3,20 @@
 //! source set.
 
 use crate::app_package::ParsedAppPackage;
-use crate::dependencies::load_all_apps_with;
+use crate::dependencies::load_all_apps_from;
 use crate::program::dep_cache::DepCache;
+use crate::program::inputs::{InputNeeds, InputSet};
 use crate::snapshot::compilation::{
     CompilationContext, context_from_app_json, context_from_metadata,
 };
 use crate::snapshot::identity::{AppId, Provenance, TrustTier};
 use crate::snapshot::provider::{
     EmbeddedAppProvider, LocalRepoProvider, SourceProvider, SourceRoot, SymbolOnlyProvider,
-    WorkspaceProvider, select_source,
+    select_source, workspace_source_from_inputs,
 };
 use anyhow::{Context, Result};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -163,7 +165,26 @@ impl SnapshotBuilder {
         dependency_source: DependencySource,
         cache: &DepCache,
     ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
-        self.build_inner(dependency_source, cache, false)
+        self.build_with_inputs(&Self::read_build_inputs(self), dependency_source, cache)
+    }
+
+    /// [`Self::build_with_options`] over an already-read [`InputSet`] (#160
+    /// step 1): the workspace's `app.json`, `.al` files and dependency closure
+    /// come from `inputs`, never the disk. `inputs` must be this builder's
+    /// workspace.
+    pub fn build_with_inputs(
+        &self,
+        inputs: &Arc<InputSet>,
+        dependency_source: DependencySource,
+        cache: &DepCache,
+    ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
+        self.build_inner(inputs, dependency_source, cache, false)
+    }
+
+    /// The one fresh read a `build*` without an [`InputSet`] makes: exactly
+    /// what the build reads ([`InputNeeds::build_only`]).
+    fn read_build_inputs(&self) -> Arc<InputSet> {
+        InputSet::read(&self.workspace_root, &InputNeeds::build_only())
     }
 
     /// [`Self::build_with_options`], but a dependency whose embedded source
@@ -176,25 +197,41 @@ impl SnapshotBuilder {
         dependency_source: DependencySource,
         cache: &DepCache,
     ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
-        self.build_inner(dependency_source, cache, true)
+        self.build_inner(&self.read_build_inputs(), dependency_source, cache, true)
     }
 
     fn build_inner(
         &self,
+        inputs: &Arc<InputSet>,
         dependency_source: DependencySource,
         cache: &DepCache,
         defer_text: bool,
     ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
         let ws = &self.workspace_root;
+        assert!(
+            inputs.workspace == *ws,
+            "SnapshotBuilder: the InputSet was read for {}, not {}",
+            inputs.workspace.display(),
+            ws.display()
+        );
 
         // ------------------------------------------------------------------
         // Workspace unit
         // ------------------------------------------------------------------
-        let app_json_path = ws.join("app.json");
-        let app_json_text = std::fs::read_to_string(&app_json_path)
+        let app_json_path = &inputs.app_json.path;
+        inputs
+            .app_json
+            .text()
             .with_context(|| format!("read {}", app_json_path.display()))?;
-        let app_json: serde_json::Value = serde_json::from_str(&app_json_text)
-            .with_context(|| format!("parse {}", app_json_path.display()))?;
+        let app_json: serde_json::Value = match &inputs.app_json_value {
+            Some(Ok(v)) => v.clone(),
+            // `text()` succeeded, so the value was parsed: an `Err` is serde's.
+            Some(Err(msg)) => {
+                return Err(anyhow::anyhow!("{msg}"))
+                    .with_context(|| format!("parse {}", app_json_path.display()));
+            }
+            None => unreachable!("app_json_value is parsed whenever app_json.text() is Ok"),
+        };
 
         let get_str = |k: &str| -> String {
             app_json
@@ -233,10 +270,8 @@ impl SnapshotBuilder {
 
         let ws_friends = workspace_friend_apps(&app_json);
 
-        let ws_source_provider = WorkspaceProvider { root: ws.clone() };
-        let ws_source = ws_source_provider
-            .try_provide(&workspace_app)
-            .context("workspace source provider")?;
+        let ws_source =
+            workspace_source_from_inputs(inputs).context("workspace source provider")?;
 
         let ws_tier = ws_source
             .as_ref()
@@ -266,7 +301,7 @@ impl SnapshotBuilder {
         // ------------------------------------------------------------------
         // Dependency units
         // ------------------------------------------------------------------
-        let (resolved_deps, dropped_dep_versions) = load_all_apps_with(ws, cache)?;
+        let (resolved_deps, dropped_dep_versions) = load_all_apps_from(ws, &inputs.closure, cache)?;
 
         let mut apps: Vec<AppUnit> = Vec::with_capacity(1 + resolved_deps.len());
         apps.push(ws_unit);

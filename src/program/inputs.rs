@@ -486,6 +486,126 @@ mod tests {
         assert!(p.file.bytes.is_err());
     }
 
+    const APP_JSON: &str = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#;
+
+    /// The workspace source from the set equals the disk walk's, file for file
+    /// and hash for hash: a BOM-prefixed file (BOM dropped), a lossy (invalid
+    /// UTF-8) file and a nested-app file (listed: the `NestedApps::Walk` list).
+    #[test]
+    fn workspace_root_equals_walk_al_source() {
+        use crate::snapshot::TrustTier;
+        use crate::snapshot::provider::{walk_al_source, workspace_source_from_inputs};
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("app.json"), APP_JSON).unwrap();
+        std::fs::write(
+            d.path().join("Bom.al"),
+            b"\xEF\xBB\xBFcodeunit 50100 Bom { }",
+        )
+        .unwrap();
+        std::fs::write(d.path().join("Bad.al"), b"codeunit 50101 Bad { } // \xff").unwrap();
+        std::fs::create_dir_all(d.path().join("sub")).unwrap();
+        std::fs::write(d.path().join("sub/app.json"), "{}").unwrap();
+        std::fs::write(d.path().join("sub/C.al"), "codeunit 50102 C { }").unwrap();
+        let inputs = InputSet::read(d.path(), &InputNeeds::build_only());
+        let new = workspace_source_from_inputs(&inputs).unwrap().unwrap();
+        let old = walk_al_source(d.path(), TrustTier::Workspace)
+            .unwrap()
+            .unwrap();
+        let files = |r: &crate::snapshot::provider::SourceRoot| {
+            r.files
+                .iter()
+                .map(|f| (f.virtual_path.clone(), f.text.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(files(&new).len(), 3, "precondition: three files listed");
+        assert_eq!(files(&new), files(&old));
+        assert_eq!(new.content_hash, old.content_hash);
+        assert_eq!(new.tier, old.tier);
+        // The SAME text, not a copy.
+        assert!(Arc::ptr_eq(
+            &new.files[0].text,
+            inputs.al_files[0].text.as_ref().unwrap()
+        ));
+    }
+
+    /// No `.al` file is a symbol-only workspace (`Ok(None)`), never an empty root.
+    #[test]
+    fn no_al_file_is_symbol_only() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("app.json"), APP_JSON).unwrap();
+        let inputs = InputSet::read(d.path(), &InputNeeds::build_only());
+        assert!(
+            crate::snapshot::provider::workspace_source_from_inputs(&inputs)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Case (b) of A1.7: an unreadable subfolder fails the walk, and the build
+    /// fails closed with today's text, link for link (the OS text twice: the
+    /// stored `io::Error` keeps its `source()`). The literals were captured from
+    /// the build BEFORE it read the set (Task 9's commit, on each platform).
+    #[test]
+    fn walk_error_fails_the_build() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("app.json"), APP_JSON).unwrap();
+        let sub = d.path().join("locked");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("X.al"), "codeunit 50100 X { }").unwrap();
+        let Some(_g) = unreadable::unreadable(&sub) else {
+            eprintln!("skipped: cannot make {} unreadable here", sub.display());
+            return;
+        };
+        let inputs = InputSet::read(d.path(), &InputNeeds::default());
+        assert!(inputs.al_walk.is_err());
+        assert!(inputs.al_files.is_empty());
+        assert!(inputs.model_instance_id.is_none());
+        let err = crate::program::resolve::full::build_program_with_coverage(&inputs)
+            .err()
+            .expect("build must fail closed");
+        let root = d.path().display();
+        #[cfg(windows)]
+        let want = format!(
+            "snapshot build failed: workspace source provider: walking source {root}: Access is denied. (os error 5): Access is denied. (os error 5)"
+        );
+        #[cfg(unix)]
+        let want = format!(
+            "snapshot build failed: workspace source provider: walking source {root}: IO error for operation on {p}: Permission denied (os error 13): Permission denied (os error 13)",
+            p = sub.display()
+        );
+        assert_eq!(err, want);
+        // diagnostics: Task 13 adds the compute_workspace_diagnostics assertion (provider rows only)
+    }
+
+    /// Case (a) of A1.7: a directory symlink loop at the root. Unix only: on
+    /// Windows a directory link needs a privilege the test user lacks
+    /// (`symlink_dir` failed when the literals were captured), so there is no
+    /// Windows literal to state.
+    #[cfg(unix)]
+    #[test]
+    fn walk_loop_fails_the_build() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("app.json"), APP_JSON).unwrap();
+        std::fs::write(d.path().join("A.al"), "codeunit 50100 A { }").unwrap();
+        let link = d.path().join("loop");
+        if std::os::unix::fs::symlink(d.path(), &link).is_err() {
+            eprintln!("skipped: cannot make {} here", link.display());
+            return;
+        }
+        let inputs = InputSet::read(d.path(), &InputNeeds::default());
+        assert!(inputs.al_walk.is_err());
+        assert!(inputs.al_files.is_empty());
+        assert!(inputs.model_instance_id.is_none());
+        let err = crate::program::resolve::full::build_program_with_coverage(&inputs)
+            .err()
+            .expect("build must fail closed");
+        let root = d.path().display();
+        let want = format!(
+            "snapshot build failed: workspace source provider: walking source {root}: File system loop found: {root}/loop points to an ancestor {root}"
+        );
+        assert_eq!(err, want);
+    }
+
     /// The hash rows equal `derive_inputs`'s while that reader exists (Task 12
     /// rewires it to this field).
     #[test]
