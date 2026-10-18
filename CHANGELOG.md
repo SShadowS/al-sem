@@ -43,6 +43,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Gate speed-ups (spec `docs/superpowers/specs/2026-10-18-gate-speedups-design.md`):
+  - `agentflow run` records every gate run in `<run dir>/gate-runs.jsonl`: gate, exit code,
+    HEAD, tree, clean before and after, `rustc`, grammar commit and dirt, and the CDO
+    workspace identity (path, commit, dirt, a hash of every dependency `.app`) for `cdo-gate`.
+  - `agentflow post-merge` skips its gates when the merge is provably the gated tree: this
+    run's merge (never a recovered one), a green attestation, the squash on the attested base,
+    the merge tree equal to `final_head`'s, only evidence files after `H`, and a green, clean
+    record for each gate on `H`'s tree in the same environment. Any doubt runs the gates as
+    before. The payload carries `verified_by` (`identity` | `gates`) and `identity_refused`
+    (every reason a skip was refused); `--full` forces the gates. It used to take 15–28 min
+    per merge.
+  - `scripts/ci-steps test` and `scripts/check-goldens` run on cargo-nextest (doc-tests still
+    on `cargo test --doc`); both fail with a clear message when nextest is missing, and CI
+    installs it. Measured 2026-10-18, warm tree, two runs each, same test counts (3430 and
+    876): `ci-steps test` 46–50 s against 81–104 s; `check-goldens` 27–31 s against 64–80 s,
+    at ~0.3 GB more peak memory (1.5 vs 1.25 GB). `scripts/cdo-gate` stays on `cargo test`:
+    nextest took 97–112 s against 72–84 s, because it runs one process per test and the
+    harness rebuilds its shared CDO context in each.
 - `C1_CONE_CENSUS=1` is replaced by `ALSEM_RETAINED_CENSUS=1`; the old
   `[C1_CONE_CENSUS]` report is gone (its structures are covered by the `context.*`
   buckets).

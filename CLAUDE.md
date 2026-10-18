@@ -86,6 +86,15 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   its files and forced a full recompile — fixed the same day), and the branch gate is
   `ci-steps all` (422 s) + `cdo-gate` (269 s) = **~11.5 min, once per branch**. A source
   edit adds its debug rebuild on top; that part was not measured.
+- **`ci-steps test` and `check-goldens` run on cargo-nextest; `cdo-gate` does not.**
+  Measured 2026-10-18 (warm, same test counts): the whole suite 46–50 s on nextest
+  against 81–104 s on `cargo test`, the golden targets 27–31 s against 64–80 s. On
+  `cdo-gate` nextest was slower (97–112 s against 72–84 s): it runs one process per
+  test, and `program_resolve_harness` rebuilds its shared CDO context in each. Install
+  it once with `cargo install cargo-nextest --locked`; the scripts refuse to run without it.
+- **`post-merge` usually builds nothing.** When the merge is provably the tree the gates
+  passed (spec `docs/superpowers/specs/2026-10-18-gate-speedups-design.md`), it closes
+  on the gate-run records instead of rebuilding; `post-merge --full` forces the gates.
 
 **Do not pipe a long-running gate/test through `| tail`** (e.g. `bash scripts/cdo-gate … | tail`): the pipeline's exit code is `tail`'s, not the command's, so a FAILURE reads as success. Redirect to a log file and `grep` it, or run it with `run_in_background` and read the output file.
 
