@@ -389,8 +389,8 @@ pub fn program_event_graph(
             let (event_id, resolution) = match &s.outcome {
                 SubscriptionOutcome::Bound(pid) => {
                     let node = routine_by_id.get(pid);
-                    let platform =
-                        node.is_some_and(|n| n.publisher_kind == Some(PublisherKind::Platform));
+                    // Decided once, by the index, from the chosen publisher.
+                    let platform = s.platform;
                     let object_id = super::model_object_id(graph, &pid.object);
                     let mut id = encode_event_id(&object_id, &s.event_name_lc);
                     // A platform field or action event fires per element:

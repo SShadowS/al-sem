@@ -23,11 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     in another is one key; the element counts only for a platform field/action event,
     where each element is its own event. A skip flag (`SkipOnMissingLicense` /
     `SkipOnMissingPermission`) stays on the merged edge only when every reading sets it.
-    The merge happens where subscriptions are wired (`SubscriberIndex::build`), so it
-    also gives one edge for two `#if` arms of one routine that subscribe the same event
+    The merge happens where subscriptions are wired (`SubscriberIndex::build`) and applies
+    to any entries of one routine that name one event, duplicate attributes included, so
+    it also gives one edge for two `#if` arms of one routine that subscribe the same event
     with different skip flags; the routine's own subscription list is unchanged.
   - **Isolated** is read from every `IntegrationEvent` and `BusinessEvent` reading: an
-    event isolated in any build is an isolation barrier.
+    event is isolated (an isolation barrier) when ANY reading is isolated, also when
+    another reading of the other publisher kind says it is not. This arises only across
+    builds, since AL allows one publisher attribute per build.
   The `IncludeSender +1` preflight diagnostic
   (`count_unknown_include_sender_plus1_subscribers`) can move either way on a publisher
   with several readings; binding is unaffected where it rises. `InternalEvent`'s

@@ -96,9 +96,11 @@ pub struct SubscriberEntry {
 /// One parsed `[EventSubscriber]` attribute and what it bound to (engine-switch
 /// S4, spec G7). [`SubscriberIndex`] keeps every one of them, bound or not: an
 /// unbound subscription still drives event fan-out coverage, so it must never
-/// vanish. Entries of one routine that name one event (per-build readings or
-/// `#if` arms, #104) are one `Subscription`: the first entry's fields, with only
-/// the skip conditions every entry carries.
+/// vanish. Entries of one routine that name one event are ONE `Subscription`
+/// (#104), whether they are per-build readings, `#if` arms or duplicate
+/// attributes: the first entry's fields, with only the skip conditions every
+/// entry carries. Recorded in `graph.routines` order, then first-attribute
+/// order; `ordinal` values can therefore have gaps.
 pub struct Subscription {
     /// The subscriber routine carrying the attribute.
     pub subscriber: RoutineNodeId,
@@ -121,6 +123,9 @@ pub struct Subscription {
     /// Dispatch conditions (manual binding, skip-on-missing-license/permission).
     pub conditions: Vec<Condition>,
     pub outcome: SubscriptionOutcome,
+    /// The bound publisher routine is a synthetic platform publisher
+    /// (`PublisherKind::Platform`); false when unbound.
+    pub platform: bool,
 }
 
 /// What a [`Subscription`] bound to.
@@ -246,13 +251,18 @@ pub struct ResolveIndex {
 pub struct SubscriberIndex {
     /// Publisher `RoutineNodeId` → ordered list of resolved subscribers.
     subscribers_map: HashMap<RoutineNodeId, Vec<SubscriberEntry>>,
-    /// Every parsed subscription, in `graph.routines` order then attribute
-    /// order (engine-switch S4, G7).
+    /// Every subscription, in `graph.routines` order then first-attribute
+    /// order (engine-switch S4, G7); one routine's entries naming one event
+    /// are one subscription (#104).
     subscriptions: Vec<Subscription>,
 }
 
 impl SubscriberIndex {
     /// Resolve every `[EventSubscriber]` in `graph` to its publisher routine.
+    /// Entries of one routine that name one event (per-build readings, `#if`
+    /// arms or duplicate attributes) are ONE subscription (#104), recorded in
+    /// `graph.routines` order then first-attribute order, so ordinals can have
+    /// gaps.
     pub fn build(graph: &ProgramGraph) -> Self {
         // `routine_indices_by_obj_name` groups `graph.routines` INDICES (not
         // ids) by `(object, name_lc)`. Indices — not a `RoutineNodeId`-keyed
@@ -289,7 +299,7 @@ impl SubscriberIndex {
             // readings of one attribute (#80) or `#if` arms of one routine
             // (#103). They are possible builds of one declaration, so pass 2
             // wires them as ONE subscription.
-            let mut outcomes: Vec<SubscriptionOutcome> = Vec::new();
+            let mut outcomes: Vec<(SubscriptionOutcome, bool)> = Vec::new();
             let mut keys: Vec<EventKey<'_>> = Vec::new();
             for args in &sub_routine.event_subscribers {
                 let event_name_lc = args.event_name.fold_identifier();
@@ -306,8 +316,10 @@ impl SubscriberIndex {
                     //     the comment on `routine_indices_by_obj_name` above) in
                     //     that object matching name + publisher_kind.is_some() +
                     //     params_count >= sub_params. Counts every matching
-                    //     routine even when two share a `RoutineNodeId`.
-                    let candidates: Vec<RoutineNodeId> = routine_indices_by_obj_name
+                    //     routine even when two share a `RoutineNodeId`. Each
+                    //     carries whether it is a PLATFORM publisher, so the
+                    //     chosen one decides `Subscription::platform`.
+                    let candidates: Vec<(RoutineNodeId, bool)> = routine_indices_by_obj_name
                         .get(&(pub_obj_id.clone(), event_name_lc.as_str().into()))
                         .map(Vec::as_slice)
                         .unwrap_or(&[])
@@ -334,13 +346,17 @@ impl SubscriberIndex {
                             // exact-arity match over a Sender-tolerant one.
                             let max_arity =
                                 subscriber_arity_bound(r.id.params_count, r.include_sender);
-                            (sub_params <= max_arity && r.publisher_kind.is_some())
-                                .then(|| r.id.clone())
+                            (sub_params <= max_arity && r.publisher_kind.is_some()).then(|| {
+                                (
+                                    r.id.clone(),
+                                    r.publisher_kind == Some(PublisherKind::Platform),
+                                )
+                            })
                         })
                         .collect();
 
                     // (d) Dispatch on candidate count.
-                    let chosen: Option<RoutineNodeId> = match candidates.len() {
+                    let chosen: Option<(RoutineNodeId, bool)> = match candidates.len() {
                         0 => {
                             // H-1 fix: this used to be a bare `continue` — the
                             // subscription vanished with no record at all (see
@@ -358,16 +374,16 @@ impl SubscriberIndex {
                             // MORE THAN ONE: prefer exactly one EXACT-arity match; else fall
                             // back to exactly one Sender-arity (`+1`) match. Only genuine
                             // ambiguity (0 or >1 at the chosen precision) is recorded.
-                            let exact: Vec<&RoutineNodeId> = candidates
+                            let exact: Vec<&(RoutineNodeId, bool)> = candidates
                                 .iter()
-                                .filter(|rid| rid.params_count == sub_params)
+                                .filter(|(rid, _)| rid.params_count == sub_params)
                                 .collect();
-                            let picked: Option<&RoutineNodeId> = if exact.len() == 1 {
+                            let picked: Option<&(RoutineNodeId, bool)> = if exact.len() == 1 {
                                 Some(exact[0])
                             } else if exact.is_empty() {
-                                let sender: Vec<&RoutineNodeId> = candidates
+                                let sender: Vec<&(RoutineNodeId, bool)> = candidates
                                     .iter()
-                                    .filter(|rid| rid.params_count + 1 == sub_params)
+                                    .filter(|(rid, _)| rid.params_count + 1 == sub_params)
                                     .collect();
                                 (sender.len() == 1).then(|| sender[0])
                             } else {
@@ -377,22 +393,10 @@ impl SubscriberIndex {
                         }
                     };
                     match chosen {
-                        Some(rid) => {
-                            // The model keys a bound PLATFORM publisher's events
-                            // per element (`model/events.rs`); see `EventKey`. Same
-                            // answer as the model's first-wins map unless two
-                            // physical routines share an id.
-                            let platform = routine_indices_by_obj_name
-                                .get(&(pub_obj_id, event_name_lc.as_str().into()))
-                                .is_some_and(|ix| {
-                                    ix.iter().any(|&i| {
-                                        let r = &graph.routines[i];
-                                        r.id == rid
-                                            && r.publisher_kind == Some(PublisherKind::Platform)
-                                    })
-                                });
-                            (SubscriptionOutcome::Bound(rid), platform)
-                        }
+                        // The chosen physical routine decides `platform`, read
+                        // by the element rule below and by the model
+                        // (`model/events.rs`), so the two never disagree.
+                        Some((rid, platform)) => (SubscriptionOutcome::Bound(rid), platform),
                         None => (
                             SubscriptionOutcome::Ambiguous {
                                 publisher_object: pub_obj_id,
@@ -417,7 +421,7 @@ impl SubscriberIndex {
                 } else {
                     None
                 };
-                outcomes.push(outcome);
+                outcomes.push((outcome, platform));
                 keys.push((publisher, event_name_lc, element));
             }
 
@@ -436,7 +440,7 @@ impl SubscriberIndex {
             }
             // Groups are in first-ordinal order, so walking the outcomes in order
             // and keeping each group head's moves every outcome out exactly once.
-            for (ordinal, outcome) in outcomes.into_iter().enumerate() {
+            for (ordinal, (outcome, platform)) in outcomes.into_iter().enumerate() {
                 let Some(group) = groups.iter().find(|g| g[0] == ordinal) else {
                     continue;
                 };
@@ -463,6 +467,7 @@ impl SubscriberIndex {
                     element: entry.element.clone(),
                     conditions: entry.conditions.clone(),
                     outcome,
+                    platform,
                 });
                 if let Some(rid) = bound {
                     subscribers_map.entry(rid).or_default().push(entry);
@@ -492,8 +497,10 @@ impl SubscriberIndex {
             .unwrap_or(&[])
     }
 
-    /// Every parsed subscription with its outcome, in `graph.routines` order
-    /// then attribute order (engine-switch S4, G7).
+    /// Every subscription with its outcome, in `graph.routines` order then
+    /// first-attribute order (engine-switch S4, G7). Entries of one routine
+    /// that name one event (per-build readings, `#if` arms or duplicate
+    /// attributes) are ONE subscription (#104), so ordinals can have gaps.
     pub fn subscriptions(&self) -> &[Subscription] {
         &self.subscriptions
     }
