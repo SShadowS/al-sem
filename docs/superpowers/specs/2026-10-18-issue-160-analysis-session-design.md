@@ -266,7 +266,8 @@ re-applies today's skip of anchorless rows (`snapshot.rs:1395-1501`), and the ru
 ### 5.8 L4 analysis, one builder (step 2)
 
 `L4Analysis { bundle, summarize diagnostics, warnings, scc (an `Arc`, shared with the
-cross-app base), field index }` over `Transfer::Primary` (at step 2: over the context's
+cross-app base) }` (the field index is a solver input with no reader after the solve, so
+it is a local of the builder and is not retained; child spec §4.4.1, Round 13) over `Transfer::Primary` (at step 2: over the context's
 combined graph; step 4 swaps in `rel`), plus the transient, UNHARVESTED core-summary
 map (`CoreSummaries`) that the `det` builder harvests into uncertainties and parameter
 roles. The `det` builder calls the `l4` builder itself, after its own cone, so the map is
@@ -334,8 +335,12 @@ impl View {
    released; (10) serialization, one job at a time. Before step 11 every cell keys routines
    by the model's string id (Decision 25). Before step 6, items 5–6 do not exist: digest's
    and prove's entries come from today's composed snapshot, built at item 9 AFTER `det`
-   is released (child spec §4.4; this is what keeps step 2's phase peak flat, G-2's
-   step-2 half).
+   is released (child spec §4.4; G-2's step-2 half: the snapshot never meets `det`).
+   `l4` (bundle, SCC) is still alive during that composition, because `DbTempStates`
+   borrows the bundle after it (`digest_cli.rs:744-761`); today digest builds its bundle
+   after composing. That is the one new overlap at step 2, in both universes, for
+   digest and prove: the `l4` census bucket sizes it and the step-2 peak bound covers
+   digest and prove (child spec §4.4.4, Round 13). It is not claimed flat.
 4. **Census counters are process-cumulative, never reset.** `cones_census::report()`
    prints running totals; a numbers file quotes the process total, so two steps' lines
    measure the same thing (child spec §4.1.7, review D6; a per-fill reset was the
@@ -462,7 +467,10 @@ Each child spec names which of these its step touches and how it proves them.
 - **I6 Every bound is relative and can fail.** Wall: a saving against the parent-commit
   interleaved median of the SAME sub-phase timer, minus that timer's own noise band
   (band = max − min of the parent runs, ≥ 3 runs; the earlier "8 % of the command
-  median" is kept only for whole-command bounds). A sub-phase bound is written only when
+  median" is kept only for whole-command bounds). When the step DELETES the sub-phase, the
+  head has no such timer: the saving is then read off the whole-command wall (parent
+  median − head median), and the bound subtracts the wall's own band (max − min of the
+  parent's wall runs) as well as the timer's (step 2's digest bound). A sub-phase bound is written only when
   the step 0 median of that timer ≥ 2 × its band; otherwise the step is re-labelled
   non-speed before its spec is written (finding G-5). Peak: both numbers of §5.12.
 - **I7 Order is recorded, not assumed.** `rel.typed` concatenation, `from_order`, row
@@ -535,7 +543,7 @@ reopens them without new evidence. Numbers are stable across rounds.
 53. **(round 6) The epic holds contracts; each delivery slice gets a child spec written against the code as it then is.** Five rounds of review on late-step detail (G-1 to G-5 were all in steps 6, 7a, 10, 11) showed that detail written before the early steps land is re-litigated, not refined.
 54. **(round 6) Per-timer noise bands, and the "≥ 2 × band" rule before a sub-phase bound is written** (I6; G-5). Step 0 records the bands.
 55. **(round 6) `edges`/`dependency_body_edges` are named for what they hold, and the concatenation order is kept because the `graph` projection's tie rule is order-sensitive** (R6-5; `project.rs:277-291`).
-56. **(round 6) At step 2, digest and prove compose their snapshot AFTER `det` is released**, so the one-context change adds no co-residency (G-2, step-2 half; child spec §4.4).
+56. **(round 6) At step 2, digest and prove compose their snapshot AFTER `det` is released**, so the snapshot never meets `det` (G-2, step-2 half; child spec §4.4). Amended in Round 13: `l4` (bundle, SCC) does overlap the composition, since the bundle is read after it (`DbTempStates`); that overlap is new for digest and prove, is sized by the `l4` bucket and is bounded by the step-2 peak bound (child spec §4.4.4).
 
 ## 9. Delivery order
 
@@ -554,7 +562,7 @@ contract. Later steps are contract only.
 | **0** Measurement | timers (`pd_solve`; BFS walk/fold split; singleton cone/own/open entry split per class; `solve_bytes` link-graph/working-set split; `b3.adapter.*` sub-spans), build counters (`build_combined_graph`, `compose_cone_over_graph`, `compute_summaries_v2*`, top-level `graph_scc`, `pd_solve`, `detector_context`) readable from the trace, `peak.post_attach`, a byte census (program parts, `InputSet`, model, base, context parts, snapshot, arena), the full-graph snapshot timings for step 6's stop rule, per-timer medians AND noise bands, the ordering counters | numbers file under `docs/`; outputs byte-identical census on/off; a `tests/cli` counter test pins today's counts per command and universe | CDO SARIF compared census on/off; one discrimination per counter | none |
 | **1** Frozen inputs | `InputSet`; every post-build disk read takes it; `has_object` replaces the second parse; one stdout/file/stderr writer with one text on every command (analyze exits 2, the eleven other sites keep exit 1; Decision 49) | 8 golden targets + lib byte-identical; CDO histogram SHA unchanged; disk-edit-after-read tests, one per input class; closed-pipe test | one discrimination per restored disk read | none |
 | **1b** `ResolvedProgram` | retained program, two edge sets apart, `graph` reads it, `export_workspace`'s private build deleted; body released at today's point | `alsem graph` byte golden; the body dropped at today's `b3.ctx_drop` span (`program_calls.rs:674-676`; `body.is_none()` after a `take()` is true by construction and pins nothing, child spec A1b.2 / review A7) with the post-attach peak as the measurement; both peaks ≤ parent + band on CDO analyze and digest; `InputSet` bytes in the census | drop `dependency_body_edges` / `site_facts` from the projection input → `graph_export_covers_dependencies` fails | none |
-| **2** Owned artifacts, borrowed context, one context per command | `DetectorArtifacts` + `L4Analysis` + borrowed `DetectorContext<'v>`; driver-owned `View` with `prepare`/`release`, `!in_detector_loop()` at `prepare`; ordering cell; `det` at the union of masks (policy's RAW build a command-local, not a cell, until step 6: I5, Decision 50), parity test over the whole `DetectorOutput`; digest/prove/events/policy/query reuse; prove `Some(root)`; analyze's failure classification; the warning on `l4` | counters read the child spec's table exactly; goldens byte-identical; CDO digest saving ≥ parent median of the deleted context's span (`digest.tx_context_map`, step 0) − its band (I6; ≈ 21 s on P5, indicative only); both peaks ≤ parent + band for analyze, digest and prove; cell census at the first run | one discrimination per counter; `Some(root)` moves no cli-b prove golden | none |
+| **2** Owned artifacts, borrowed context, one context per command | `DetectorArtifacts` + `L4Analysis` + borrowed `DetectorContext<'v>`; driver-owned `View` with `prepare`/`release`, `!in_detector_loop()` at `prepare`; ordering cell; `det` at the union of masks (policy's RAW build a command-local, not a cell, until step 6: I5, Decision 50), parity test over the whole `DetectorOutput`; digest/prove/events/policy/query reuse; prove `Some(root)`; analyze's failure classification; the warning on `l4` | counters read the child spec's table exactly; goldens byte-identical; CDO digest saving ≥ parent median of the deleted context's span (`digest.tx_context_map`, step 0) − its band − band(digest wall) (I6; the saving is read off two whole-command walls, so their noise is subtracted too; ≈ 21 s on P5, indicative only); both peaks ≤ parent + band for analyze, digest and prove; cell census at the first run | one discrimination per counter; `Some(root)` moves no cli-b prove golden | none |
 | **3** Fold from uncertainty edges | per-routine scan replaces the snapshot's fold solve; still only where the fold applies today, over the cut graph | r3a3, cli-b, r4f byte-identical on stdout; −1 `compute_summaries_v2*`, −1 `graph_scc` per snapshot; stderr: one non-convergence line fewer on a capped SCC, stated | oracle old == new on r0, gap, CDO with all four kinds in an SCC and a singleton; two discriminations (old kind list; new scan's kind list against hand-stated records) | none |
 | **4** `ExecRelation` | `Transfer::{Cone, Primary}`, two payloads, eager adjacency/SCC; base, context, r3a5, L4 read §5.5's table; snapshot on `LegacyCut`; dependency uncertainty edges kept | byte-identical everywhere; CDO detector baseline identical; counters: `build_combined_graph` 1, `graph_scc` 2 per view (+ snapshot's own until step 6) | dependency-publisher fixture (span, temp proof, reverse callers unchanged; discrimination "Primary callers only"); two-caller `from_order` fixture (reverse it; d17's sample flips) | none |
 | **7a** Membership: one inherited set per SCC | `DerivedOnly` reads one set per Cone-SCC; old path test-only until CDO passes | goldens unchanged; `bfs.walk` ≤ 1 s on CDO (absolute floor; expected ≈ 0) **and** cone saving ≥ parent `bfs.walk` median − 1 s − band(bfs.walk); retained ≤ 98 MB. The fold half (`bfs.fold`, G-3) is NOT in 7a's bound unless `fold_row` moves into 7a; the child spec states which | derived-row oracle on r0, gap, r4, CDO; scaling fixtures (chain, fan-out, 479-SCC, guard-heavy, producer blow-up); stop rule from step 0's SCC distribution | none |
@@ -586,7 +594,7 @@ contract. Later steps are contract only.
 | E12 | Memory within budget; no dependency subject materialized; `det` never carries a raw fact | both peaks every retention step; census | 1b, 2, 6, 9, 10, 12 |
 | E13 | Batch equals standalone | contract test | 12 |
 | E14 | CDO ratchets unchanged | `scripts/cdo-gate` | every non-docs step |
-| E15 | Measured speed is accepted, not reported | step 2 digest saving ≥ parent `digest.tx_context_map` median − its band; 7a/7b/10/11 per I6; 6 within parent; 12 batch < analyze + digest | 2, 6, 7a, 7b, 10, 11, 12 |
+| E15 | Measured speed is accepted, not reported | step 2 digest saving ≥ parent `digest.tx_context_map` median − its band − band(digest wall) (the saving is a difference of whole-command walls); 7a/7b/10/11 per I6; 6 within parent; 12 batch < analyze + digest | 2, 6, 7a, 7b, 10, 11, 12 |
 | E16 | Four workers fit the machine | summed peak ≤ RAM − 4 GB; throughput bounds | 12 |
 | E17 | Transfer rules reproduce today's adjacency per field | §5.5 table; publisher fixture | 4 |
 | E18 | One `pd` arena, never alive during a run; one write-failure exit code | step 6 census; closed-pipe test | 1, 6 |
@@ -619,7 +627,7 @@ complete.
 | Finding | Severity | Lineage | What it says | Resolved by |
 |---|---|---|---|---|
 | G-1 / R6-1 | important | r1 A3, r2 A2, r5 R5-1/G1, Decision 42 | The witness pass reads the solve's resolved own entries (`capability_cone.rs:2447-2448`, `:2559`, `:2571`; `ResolvedEntry<'g>`, `pd_solve.rs:89`), which the spec drops inside `caps`; "one `pd_solve` per view" cannot hold as written; no counter sees a second solve | **Step 0** adds the `pd_solve` counter and timer (child spec §4.1); **step 6** chooses retain-in-view-identity vs re-solve and re-budgets §5.6/§5.12 |
-| G-2 | important | Decision 15 | Digest's `ViewTree` (every routine's facts, edges, evidence) lives through `det` and every run, which is new retention (today digest frees its snapshot first, `digest_cli.rs:1643-1650`); no `ViewTree` size estimate; no digest fallback rung. Step-2 half: the tx map comes from `det.spans`, so the snapshot could outlive the run | **Step 2** (child spec §4.4): snapshot composed after `det` is released, so no new co-residency; **step 0** adds `ViewTree`-equivalent bytes (today's `CapabilitySnapshot` parts) to the census; **step 6** decides retention shape and the digest fallback |
+| G-2 | important | Decision 15 | Digest's `ViewTree` (every routine's facts, edges, evidence) lives through `det` and every run, which is new retention (today digest frees its snapshot first, `digest_cli.rs:1643-1650`); no `ViewTree` size estimate; no digest fallback rung. Step-2 half: the tx map comes from `det.spans`, so the snapshot could outlive the run | **Step 2** (child spec §4.4): snapshot composed after `det` is released, so the snapshot never meets `det`; the one new overlap is `l4` (bundle, SCC) through composition in digest and prove, sized by the `l4` bucket and bounded by the step-2 peak bound (child §4.4.4, Round 13); **step 0** adds `ViewTree`-equivalent bytes (today's `CapabilitySnapshot` parts) to the census; **step 6** decides retention shape and the digest fallback |
 | G-3 | important | r4 F2, r5 G3, Decision 44 | `BFS_NANOS` covers `emit_picks`'s per-pick fold (`:2551-2580`, `:2080-2084`); 7a cannot bring it to ≈ 0 without `fold_row`; the bound does not name its command | **Step 0** splits `bfs` into walk and fold with picks per call (child spec §4.1); **step 7a**'s spec sets its bound from the walk half and names the command |
 | G-4 | important | Decision 42 | The view-identity arena needs `rel.typed`'s `EdgeIx` and `ViewTree.direct`'s `DirectFactIx`, which first exist at step 6; step 11 precedes step 6 | **Epic**: the arena moves to step 6 (§5.6, step table); step 6's stop rule counts its cost |
 | G-5 | important | Decisions 34, 44 | The noise band is defined only for step 2; sub-phase bounds for 7a, 7b, 10, 11 can pass with no saving | **Epic** I6 + Decision 54; **step 0** records per-timer medians and bands (child spec §6); steps 7a/7b/10/11 apply the ≥ 2 × band rule in their specs |
@@ -784,3 +792,11 @@ row and E15 bound digest's saving on the parent median of the deleted context's 
 (`digest.tx_context_map`) minus its band, per I6, not on the P5 "21 s"; the step-2 peak
 bound adds prove (its `l4` now lives through snapshot composition); open question 15
 records that `InputSet` carries request inputs, for step 12. The rest is child-local.
+
+**Round 13** (child review log round panel-r2, 2026-10-18; reviewers sol and opus): two
+re-raised entries (P1-7, P1-10) and five new ones (P2-1 … P2-5), all held in source,
+none refuted. Epic amendments: I6, E15 and the step-2 row subtract the digest wall's own
+band too, because a deleted sub-phase's saving is read off two whole-command walls
+(P1-7); §5.8 drops the field index from `L4Analysis`, and §5.9 rule 3, Decision 56 and
+the G-2 row state the `l4` overlap during snapshot composition in digest and prove,
+which Round 12 fixed in the child only (P2-1). The rest is child-local.
