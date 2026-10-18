@@ -17,8 +17,8 @@ from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 
-from . import (budget, discoveries, eligibility, incidents, lock, mergeops, protect, recovery,
-               sanitize, supervise, worktrees)
+from . import (budget, discoveries, eligibility, identity, incidents, lock, mergeops, protect,
+               recovery, sanitize, supervise, worktrees)
 from .gh import Gh, GhError
 from .gitops import Git, GitError
 from .state import (Ctx, DryRunViolation, MutexTimeout, Paths, config, mutex, new_run_id, read_json,
@@ -659,6 +659,9 @@ def cmd_run(args, ctx, gh, git):
     if supervised:
         budget.check_deadline(ctx)
     cwd = Path(args.cwd).resolve() if args.cwd else ctx.paths.root
+    # Probed BEFORE the child: the record's tree names the tested code only if
+    # the tree held nothing else (spec 2026-10-18, post-merge identity skip).
+    clean_before = identity.tree_clean(cwd)
     try:
         r = _run_gate(ctx, args.name, _with_bash(args.child), args.timeout, cwd)
     except GateQueued as e:
@@ -666,6 +669,8 @@ def cmd_run(args, ctx, gh, git):
         # worth one more try; `halted-while-queued` is `blocked halted`.
         return _emit({"exit_code": None, "failure": e.failure, "queued_s": round(e.queued_s, 1),
                       "supervised": supervised}, 1)
+    identity.record_gate_run(ctx, args.name, r, cwd, supervised=supervised,
+                             clean_before=clean_before, cdo=args.name == CDO_GATE_KEY)
     out = {"exit_code": r.exit_code, "log": str(r.log_path), "timed_out": r.timed_out,
            "seconds": round(r.seconds, 1), "queued_s": r.queued_s, "supervised": supervised}
     if r.contended_build:
