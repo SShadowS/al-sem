@@ -33,6 +33,9 @@ class Result:
     # A failure whose log shows another build holding this worktree's target/
     # (#60), not a fault in the code under test. Re-run once nothing else builds.
     contended_build: bool = False
+    # Seconds a heavy gate waited for the gate semaphore before it started
+    # (`cli._run_gate`); not part of `seconds` or of the gate's timeout.
+    queued_s: float = 0.0
 
 
 # Signatures of a build that lost a race for target/ to another process in the

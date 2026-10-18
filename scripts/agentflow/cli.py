@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 
@@ -20,8 +21,8 @@ from . import (budget, discoveries, eligibility, incidents, lock, mergeops, prot
                sanitize, supervise, worktrees)
 from .gh import Gh, GhError
 from .gitops import Git, GitError
-from .state import (Ctx, DryRunViolation, Paths, config, mutex, new_run_id, read_json, update_json,
-                    write_json)
+from .state import (Ctx, DryRunViolation, MutexTimeout, Paths, config, mutex, new_run_id, read_json,
+                    update_json, write_json)
 
 # `agent-regressed` is no longer spelled here: it comes from
 # `recovery.INCIDENT_LABELS` along with the three two-axis names, so the
@@ -191,9 +192,80 @@ def _with_bash(cmd: list[str]) -> list[str]:
     return [resolve_bash(), *cmd[1:]] if cmd and cmd[0] == "bash" else list(cmd)
 
 
+# The gate semaphore. A HEAVY gate (a full build or the goldens/CDO suites)
+# runs only while it holds one of `heavy_gates` OS mutexes `gate-<k>`, so two
+# sessions' gates never build at once. The NAME is the classifier: the
+# conductor already names gates with these strings and `attest` keys on them.
+# `check-goldens-coverage` (no build) and `ci-wait` stay light.
+HEAVY_GATES = frozenset({"ci-steps-all", "check-goldens", "check-goldens-regen", "cdo-gate"})
+QUEUE_POLL_S = 15.0     # how often a queued gate retries the semaphore
+QUEUE_BEAT_S = 60.0     # how often a queued gate refreshes its run's lease
+
+
+class GateQueued(RuntimeError):
+    """A heavy gate never got the semaphore. `failure` is
+    `gate-queue-timeout` (waited `gate_wait_minutes`) or `halted-while-queued`.
+    Not a verdict: the child never started."""
+
+    def __init__(self, failure: str, queued_s: float):
+        super().__init__(f"{failure} after {queued_s:.0f} s")
+        self.failure, self.queued_s = failure, queued_s
+
+
+def _is_heavy(name: str) -> bool:
+    return name in HEAVY_GATES or name.endswith("-on-revert")
+
+
+def _gate_slot(ctx: Ctx, name: str, halt_aborts: bool, stack: ExitStack) -> float:
+    """Take a free `gate-<k>` mutex into `stack`; return the seconds waited.
+
+    A mutex, not a lease: if this process dies, the OS frees it, so it never
+    goes stale. Taken ONLY here, and the merge lane never is, so nothing
+    takes gate then lane (no deadlock). While waiting: beat the run's own
+    lease every QUEUE_BEAT_S, and, when `halt_aborts`, stop on HALT and on
+    the run's wall clock. `post-merge` passes `halt_aborts=False`: it runs
+    under HALT and past the deadline, and so must its queue. The wait does
+    not count toward the gate's own `--timeout`."""
+    n = max(1, config(ctx)["heavy_gates"])
+    wait_s = config(ctx)["gate_wait_minutes"] * 60
+    start = last_beat = time.monotonic()
+    while True:
+        for k in range(n):
+            try:
+                stack.enter_context(mutex(ctx, f"gate-{k}", timeout=0))
+            except MutexTimeout:
+                continue
+            info = ctx.paths.agent / "mutex" / f"gate-{k}.json"
+            write_json(ctx, info, {"run_id": ctx.run_id, "name": name, "pid": os.getpid(), "since": ctx.now()})
+            stack.callback(info.unlink, missing_ok=True)
+            return time.monotonic() - start
+        waited = time.monotonic() - start
+        owner = not ctx.dry_run and lock.own(ctx) is not None
+        if owner and time.monotonic() - last_beat >= QUEUE_BEAT_S:
+            lock.beat(ctx)
+            last_beat = time.monotonic()
+        if halt_aborts:
+            if lock.halted(ctx) is not None:
+                raise GateQueued("halted-while-queued", waited)
+            if owner:
+                budget.check_deadline(ctx)
+        if waited >= wait_s:
+            raise GateQueued("gate-queue-timeout", waited)
+        time.sleep(QUEUE_POLL_S)
+
+
 def _run_gate(ctx: Ctx, name: str, cmd: list[str], minutes: int, cwd: Path, *,
-              cargo_target_dir: str | None = None) -> supervise.Result:
+              cargo_target_dir: str | None = None, halt_aborts: bool = True) -> supervise.Result:
     ctx.write_guard("run gate")
+    with ExitStack() as stack:
+        queued = _gate_slot(ctx, name, halt_aborts, stack) if _is_heavy(name) else 0.0
+        r = _run_gate_now(ctx, name, cmd, minutes, cwd, cargo_target_dir)
+    r.queued_s = round(queued, 1)
+    return r
+
+
+def _run_gate_now(ctx: Ctx, name: str, cmd: list[str], minutes: int, cwd: Path,
+                  cargo_target_dir: str | None) -> supervise.Result:
     # `_grammar` is derived from `ctx.paths.root`, NOT from `cwd`, and that is
     # load-bearing rather than incidental: it is what lets a gate run in a
     # worktree that has no grammar clone of its own. See `worktrees`.
@@ -582,9 +654,15 @@ def cmd_run(args, ctx, gh, git):
     if supervised:
         budget.check_deadline(ctx)
     cwd = Path(args.cwd).resolve() if args.cwd else ctx.paths.root
-    r = _run_gate(ctx, args.name, _with_bash(args.child), args.timeout, cwd)
+    try:
+        r = _run_gate(ctx, args.name, _with_bash(args.child), args.timeout, cwd)
+    except GateQueued as e:
+        # Not a verdict: the child never started. `gate-queue-timeout` is
+        # worth one more try; `halted-while-queued` is `blocked halted`.
+        return _emit({"exit_code": None, "failure": e.failure, "queued_s": round(e.queued_s, 1),
+                      "supervised": supervised}, 1)
     out = {"exit_code": r.exit_code, "log": str(r.log_path), "timed_out": r.timed_out,
-           "seconds": round(r.seconds, 1), "supervised": supervised}
+           "seconds": round(r.seconds, 1), "queued_s": r.queued_s, "supervised": supervised}
     if r.contended_build:
         # #60: another build held target/ -- environmental, not a gate verdict.
         out["failure"] = "contended-build"
@@ -969,14 +1047,22 @@ def cmd_post_merge(args, ctx, gh, git):
             """Validate the revert IN THE TREE THE CALLER BUILT IT IN. This
             closure never chooses the tree, so it cannot re-run in a
             contaminated one."""
+            def green(gname, gcmd, gminutes) -> bool:
+                # Under HALT by construction (post_merge_failure set it), so
+                # the queue must not abort on it. A gate that never got the
+                # semaphore validated nothing: the revert is not pushed.
+                try:
+                    return _run_gate(ctx, gname, gcmd, gminutes, work, halt_aborts=False,
+                                     cargo_target_dir=_verify_target_dir(ctx)).exit_code == 0
+                except GateQueued:
+                    return False
+
             good = True
             for gname, gcmd, gminutes in gate_list:
-                if _run_gate(ctx, gname + "-on-revert", gcmd, gminutes, work,
-                             cargo_target_dir=_verify_target_dir(ctx)).exit_code != 0:
+                if not green(gname + "-on-revert", gcmd, gminutes):
                     good = False
             rerun_cmd = [resolve_bash(), "scripts/ci-steps", "test"]
-            if _run_gate(ctx, "ci-steps-test-on-revert", rerun_cmd, 45, work,
-                         cargo_target_dir=_verify_target_dir(ctx)).exit_code != 0:
+            if not green("ci-steps-test-on-revert", rerun_cmd, 45):
                 good = False
             return good
 
@@ -997,8 +1083,18 @@ def cmd_post_merge(args, ctx, gh, git):
             except GitError as e:
                 raise Fail({"error": f"verify-worktree-failed: {e}"})
             for name, cmd, minutes in gate_list:
-                r = _run_gate(ctx, name, cmd, minutes, verify_wt,
-                              cargo_target_dir=_verify_target_dir(ctx))
+                try:
+                    # `halt_aborts=False`: post-merge runs under HALT, so its
+                    # queue must too.
+                    r = _run_gate(ctx, name, cmd, minutes, verify_wt, halt_aborts=False,
+                                  cargo_target_dir=_verify_target_dir(ctx))
+                except GateQueued:
+                    # Never got the gate semaphore: COULD NOT VERIFY, the
+                    # same HALT-only route as a gate killed at its timeout,
+                    # never the revert. No exit code exists to record.
+                    timeouts.append(name)
+                    killed = name
+                    break
                 results[name] = r.exit_code
                 if r.timed_out:
                     # A gate the SUPERVISOR killed is not a gate that said no.

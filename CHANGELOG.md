@@ -475,6 +475,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   5 new tests (2 in `test_gitops.py`, 3 in `test_cli_flow.py`). The suite is
   353 passed (was 348).
 
+- **agentflow: one heavy gate at a time across sessions
+  (`scripts/agentflow/{cli,supervise}.py`).** Step 11 of the parallel-issues
+  design. A heavy gate (`ci-steps-all`, `check-goldens`,
+  `check-goldens-regen`, `cdo-gate`, or any name ending `-on-revert`) runs
+  only while it holds one of `heavy_gates` (config, default 1) OS mutexes
+  `.agent/mutex/gate-<k>.lock`, so a dying holder frees it and nothing goes
+  stale. Light gates (`check-goldens-coverage`, `ci-wait`, anything else)
+  never wait. A waiting gate retries every 15 s, beats its run's lease every
+  60 s, and, under `run`, stops on HALT (`failure: halted-while-queued`) and
+  on the run's wall clock. After `gate_wait_minutes` (default 180) it is
+  `failure: gate-queue-timeout`, `exit_code: null`: not a verdict, and the
+  child never started. The wait does not count toward the gate's own
+  `--timeout`. `run` reports `queued_s`. `post-merge` waits under HALT and
+  routes a queue timeout like a gate killed at its timeout (HALT only, never
+  the revert); a revert re-run that never got the semaphore counts as not
+  validated, so the revert is not pushed. The holder writes
+  `.agent/mutex/gate-<k>.json` (run, gate, pid, since) for humans.
+
+  7 new tests in `test_cli_flow.py` (two real processes with 1 and with 2
+  heavy slots, light vs heavy names, beat and HALT while queued, a killed
+  holder, and post-merge under HALT both timing out and waiting through). The
+  suite is 360 passed (was 353).
+
 - d35 (`d35-commit-in-event-subscriber`) no longer says a Commit is reachable when it only could not rule one out (#148). The report asked whether `Page.RunModal` counts as a commit point. It does not, in the engine or in Business Central. The finding came from incomplete call coverage: the subscriber's callee runs a workspace page that declares no `OnOpenPage`, the analyze path records that run as `object-run-unresolved`, so the subscriber's cone is `partial` and its commit answer is UNKNOWN, not YES. d35 reported unknown in the same words as a real `Commit()`. Now:
   - The unknown case has its own title, "Commit may be reachable from event subscriber (incomplete call coverage)". Its root cause, evidence note and fix hint name the coverage reasons (for example `object-run-unresolved`), and then up to three of the cone's partly analysed routines (`; partly analysed: …`, with `, +N more` for the rest). When the reasons are missing, they say `no effect summary`, `coverage unknown` or `incomplete coverage`. The wording does not blame the callees, since the gap can be in the subscriber itself.
   - Its confidence stays `possible`, now capped by the subscriber's own uncertainties (here `cappedBy: ["unresolved-call"]`). d35 therefore declares `CORE_SUMMARIES` as well as `SUMMARIES`.

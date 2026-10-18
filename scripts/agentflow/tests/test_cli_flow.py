@@ -3589,6 +3589,204 @@ def test_run_with_sibling_leases_is_supervised_for_the_owner_and_fenced_for_anyo
     assert code == 1 and "FenceError" in out["error"], out
 
 
+# ---- the gate semaphore (parallel-issues design, commit 11) -----------------
+
+GATE_CHILD = """
+import json
+from agentflow import cli
+cli.QUEUE_POLL_S = 0.05
+barrier()
+code = cli.main(["--root", str(ROOT), "--repo", "o/r", "--run-id", f"run-{TAG}", "run", "--name", ARGS[0],
+                 "--timeout", "1", "--", sys.executable, "-c",
+                 "import time; a = time.time(); time.sleep(2); print(a, time.time())"])
+print("EXIT", code)
+"""
+
+
+def _gate_window(out_text):
+    payload = json.loads(out_text.rsplit("EXIT", 1)[0])
+    start, end = map(float, Path(payload["log"]).read_text().split())
+    return payload, start, end
+
+
+def test_two_heavy_gates_do_not_overlap_and_the_second_reports_its_queue(root):
+    """Design test 15. Two processes run a heavy gate at once with
+    `heavy_gates: 1`: the children's time windows do not overlap, and the
+    one that waited says so in `queued_s`."""
+    from agentflow.tests.conftest import run_concurrently
+    res = run_concurrently(root, GATE_CHILD, ["a", "b"], extra=["check-goldens"])
+    assert all(o.strip().endswith("EXIT 0") for _, o, _ in res), res
+    (pa, sa, ea), (pb, sb, eb) = (_gate_window(o) for _, o, _ in res)
+    assert ea <= sb or eb <= sa, (sa, ea, sb, eb)
+    assert max(pa["queued_s"], pb["queued_s"]) > 1.0, (pa, pb)
+
+
+def test_with_two_heavy_gate_slots_two_heavy_gates_run_at_once(root):
+    """The other side of test 15: `heavy_gates: 2` lets both run together,
+    so the semaphore is the config number, not a fixed one."""
+    from agentflow.tests.conftest import run_concurrently
+    (root / ".agent" / "config.json").write_text(json.dumps({"heavy_gates": 2}), encoding="utf-8")
+    res = run_concurrently(root, GATE_CHILD, ["a", "b"], extra=["ci-steps-all"])
+    (pa, sa, ea), (pb, sb, eb) = (_gate_window(o) for _, o, _ in res)
+    assert sa < eb and sb < ea, (sa, ea, sb, eb)      # the windows overlap
+
+
+def test_a_light_gate_never_queues_and_a_queued_heavy_gate_times_out_without_running(
+        capsys, root, monkeypatch):
+    """Design tests 16 and 19. Held by a sibling (here, this test), the gate
+    semaphore leaves a light gate (`check-goldens-coverage`, `ci-wait`) alone.
+    A heavy one waits; past `gate_wait_minutes` it is `failure:
+    gate-queue-timeout` with `exit_code: null`, and its child never started.
+    The heavy set is the names the conductor and attest already use, plus
+    anything `-on-revert`."""
+    from agentflow.state import mutex
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    (root / ".agent" / "config.json").write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+    marker = root / "child-ran"
+    child = ("--", sys.executable, "-c", f"open({str(marker)!r}, 'w').close()")
+    with mutex(Ctx(Paths(root)), "gate-0"):
+        for name in ("check-goldens-coverage", "ci-wait"):
+            code, out = run(capsys, root, "run", "--name", name, "--timeout", "1", *child, gh_run=FakeRunner())
+            assert code == 0 and out["queued_s"] == 0 and marker.exists(), out
+            marker.unlink()
+        for name in ("ci-steps-all", "check-goldens", "check-goldens-regen", "cdo-gate", "x-on-revert"):
+            code, out = run(capsys, root, "run", "--name", name, "--timeout", "1", *child, gh_run=FakeRunner())
+            assert code == 1 and out["failure"] == "gate-queue-timeout" and out["exit_code"] is None, (name, out)
+            assert not marker.exists(), name
+
+
+def test_a_queued_gate_beats_and_stops_on_halt_unless_told_not_to(ctx, monkeypatch):
+    """Design tests 17 and 18, at the `_run_gate` level. While it waits, a
+    run that owns a lease keeps its heartbeat moving. HALT written while it
+    waits ends the wait as `halted-while-queued` with the child never
+    started; `post-merge` passes `halt_aborts=False`, and then HALT does not
+    end the wait (here it runs into `gate-wait` instead)."""
+    from agentflow import budget
+    from agentflow.state import mutex
+    clock = iter(range(1_000_000, 2_000_000, 10))
+    ticking = Ctx(paths=ctx.paths, run_id="run-test", now=lambda: float(next(clock)))
+    lock.acquire(ticking, 8, "s", 1)
+    budget.init(ticking, claimed_at=1_000_000.0)
+    before = lock.own(ticking).heartbeat
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    monkeypatch.setattr(cli, "QUEUE_BEAT_S", 0)
+    ctx.paths.config.write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+    marker = ctx.paths.root / "child-ran"
+    cmd = [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"]
+    with mutex(ctx, "gate-0"):
+        with pytest.raises(cli.GateQueued) as e:
+            cli._run_gate(ticking, "check-goldens", cmd, 1, ctx.paths.root)
+        assert e.value.failure == "gate-queue-timeout"
+        assert lock.own(ticking).heartbeat > before
+        lock.set_halt(ctx, "operator")
+        ctx.paths.config.write_text(json.dumps({"gate_wait_minutes": 1}), encoding="utf-8")
+        with pytest.raises(cli.GateQueued) as e:
+            cli._run_gate(ticking, "check-goldens", cmd, 1, ctx.paths.root)
+        assert e.value.failure == "halted-while-queued"
+        ctx.paths.config.write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+        with pytest.raises(cli.GateQueued) as e:
+            cli._run_gate(ticking, "check-goldens", cmd, 1, ctx.paths.root, halt_aborts=False)
+        assert e.value.failure == "gate-queue-timeout"
+    assert not marker.exists()
+
+
+def test_a_killed_holder_frees_the_gate_semaphore(root):
+    """Design test 20. The semaphore is an OS lock, so a holder that dies
+    frees it: a gate started after the kill does not wait."""
+    holder = subprocess.Popen([sys.executable, "-c", (
+        "import sys, time; from pathlib import Path; sys.path.insert(0, sys.argv[1])\n"
+        "from agentflow.state import Ctx, Paths, mutex\n"
+        "with mutex(Ctx(Paths(Path(sys.argv[2]))), 'gate-0'):\n"
+        "    (Path(sys.argv[2]) / 'held').write_text('')\n"
+        "    time.sleep(120)\n"), str(Path(cli.__file__).parents[1]), str(root)])
+    try:
+        for _ in range(600):
+            if (root / "held").exists():
+                break
+            import time
+            time.sleep(0.05)
+        assert (root / "held").exists()
+        (root / ".agent" / "config.json").write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+        ctx = Ctx(Paths(root), run_id="run-test")
+        with pytest.raises(cli.GateQueued):
+            cli._run_gate(ctx, "check-goldens", [sys.executable, "-c", "pass"], 1, root)
+    finally:
+        holder.kill()
+        holder.wait()
+    r = cli._run_gate(ctx, "check-goldens", [sys.executable, "-c", "pass"], 1, root)
+    assert r.exit_code == 0 and r.queued_s < 1.0
+
+
+def test_post_merge_routes_a_gate_queue_timeout_to_halt_only_even_under_halt(
+        capsys, repo_pair, monkeypatch):
+    """Design test 19, the post-merge half. `post-merge` runs under HALT, and
+    so does its queue (`halt_aborts=False`): a HALT already present does not
+    end the wait. A queue timeout is COULD NOT VERIFY, never PROVEN BAD: it
+    takes the `gate-timed-out` HALT-only route and never the revert path."""
+    from agentflow.state import mutex
+    _, clone = repo_pair
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    monkeypatch.setattr(cli, "gates", lambda: [("ci-steps-all", [sys.executable, "-c", "pass"], 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("cdo-gate", [sys.executable, "-c", "pass"], 1))
+    merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
+    assert Git(clone).push("origin", "master")
+    (clone / ".agent").mkdir(exist_ok=True)
+    (clone / ".agent" / "config.json").write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    record_merge(clone, merge_sha)
+    lock.set_halt(Ctx(Paths(clone)), "a sibling's post-merge stopped")
+
+    def no_revert(*a, **kw):
+        raise AssertionError("revert path reached on a gate that never ran")
+
+    monkeypatch.setattr(recovery, "post_merge_failure", no_revert)
+    gh = FakeRunner({
+        f"api repos/{REPO}/labels?per_page=100 --paginate --slurp":
+            json.dumps([[{"name": n} for n in recovery.INCIDENT_LABELS]]),
+        "issue edit 8 --add-label *": "", "issue edit 8 --remove-label agent-working": "",
+        "issue comment 8 *": "",
+    })
+    with mutex(Ctx(Paths(clone)), "gate-0"):
+        code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merge_sha, gh_run=gh)
+    assert code == 1 and out["ok"] is False and out["revert"] is None, out
+    assert out["halt"]["reason"] == "gate-timed-out", out["halt"]
+    assert out["timeouts"] == ["ci-steps-all"] and out["gates"] == {}, out
+
+
+def test_post_merge_under_halt_waits_for_the_gate_semaphore_and_verifies(capsys, repo_pair, monkeypatch):
+    """The test above cannot tell `halt_aborts=False` from a queue that gives
+    up on HALT: both end on the HALT-only route. Here the semaphore is held
+    for about a second under HALT and then released. A post-merge whose
+    queue ignored HALT waits, runs its gates and verifies the merge."""
+    import threading
+    from agentflow.state import mutex
+    _, clone = repo_pair
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.05)
+    _noop_heavy = [sys.executable, "-c", "pass"]
+    monkeypatch.setattr(cli, "gates", lambda: [("ci-steps-all", _noop_heavy, 1)])
+    monkeypatch.setattr(cli, "cdo_gate", lambda: ("cdo-gate", _noop_heavy, 1))
+    merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
+    assert Git(clone).push("origin", "master")
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    record_merge(clone, merge_sha)
+    lock.set_halt(Ctx(Paths(clone)), "a sibling's post-merge stopped")
+    held, release = threading.Event(), threading.Event()
+
+    def sibling():
+        with mutex(Ctx(Paths(clone)), "gate-0"):
+            held.set()
+            release.wait(10)
+
+    t = threading.Thread(target=sibling)
+    t.start()
+    held.wait(10)
+    threading.Timer(1.0, release.set).start()
+    code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merge_sha, gh_run=FakeRunner())
+    t.join()
+    assert code == 0 and out["ok"] is True, out
+    assert out["gates"] == {"ci-steps-all": 0, "cdo-gate": 0} and out["timeouts"] == []
+
+
 def test_each_gate_invocation_gets_its_own_log(ctx):
     # #43: `logs/<name>.log` was shared by every run under one name, so a
     # replacement run truncated a killed run's log and their output interleaved.
