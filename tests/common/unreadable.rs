@@ -39,7 +39,7 @@ pub fn unreadable(path: &Path) -> Option<Guard> {
     use std::os::unix::fs::PermissionsExt;
     let is_dir = path.is_dir();
     let mode = std::fs::metadata(path).ok()?.permissions().mode();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0)).ok()?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).ok()?;
     let guard = Guard {
         path: path.to_path_buf(),
         is_dir,
