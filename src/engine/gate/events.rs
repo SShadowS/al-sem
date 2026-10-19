@@ -39,7 +39,9 @@ use crate::engine::l5::event_flow::{
 };
 use crate::engine::l5::registry::Detector;
 use crate::engine::session::{Cell, Plan, View, events_plan};
+use crate::program::inputs::InputSet;
 use crate::program::resolve::full::LoadedDependencies;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // JSON insertion-order serializer — the shared `gate::ordered_json` module (one
@@ -356,7 +358,7 @@ pub struct EventsRunResult {
 /// omits the detector-stage ones the goldens' `.stderr.txt` capture.
 fn events_view(
     plan: Plan,
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &Arc<InputSet>,
     single_app: bool,
     strict: bool,
     cmd: &str,
@@ -374,17 +376,22 @@ fn events_view(
     view.prepare(&plan);
     let diag_lines = diagnostic_lines(&analyzer_diagnostics_of_view(&view, &key));
     drop(view.take_run(&key));
+    // `l4` is filled when the run demands `CORE_SUMMARIES`; nothing after the
+    // run reads it (as in policy check).
+    view.release(Cell::L4);
     if strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return Err(early(diag_lines));
     }
     Ok((view, diag_lines))
 }
 
-/// The report is the last reader of `det` and the graph; `l4` is filled only
-/// when the run demands `CORE_SUMMARIES`, and nothing after the run reads it.
+/// After the report, its last reader: `det` holds the graph's `Arc`, so both go
+/// together. `Ordering` too, so a future default detector demanding
+/// `ORDERING_FACTS` does not keep it alive silently. (`l4` went right after the
+/// run, in [`events_view`].)
 fn release_cells(view: &mut View) {
     view.release(Cell::Det);
-    view.release(Cell::L4);
+    view.release(Cell::Ordering);
     view.release(Cell::Graph);
 }
 
@@ -395,7 +402,7 @@ fn release_cells(view: &mut View) {
 /// Options for `run_events_fanout`.
 pub struct EventsFanoutOptions<'a> {
     /// The command's one read of the workspace (#160).
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
+    pub inputs: &'a Arc<InputSet>,
     pub format: &'a str, // "human" | "json"
     pub scope: Scope,
     /// "warn" (default) | "strict" | "ignore". Mirrors `--coverage-policy` in
@@ -518,7 +525,7 @@ pub(crate) fn events_fanout_with(
 /// Options for `run_events_chains`.
 pub struct EventsChainsOptions<'a> {
     /// The command's one read of the workspace (#160).
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
+    pub inputs: &'a Arc<InputSet>,
     pub format: &'a str,
     pub scope: Scope,
     /// "warn" | "strict" | "ignore". al-sem `events-chains.ts` VALIDATES this flag
@@ -547,8 +554,6 @@ pub(crate) fn events_chains_with(
     detectors: Vec<Detector>,
     opts: &EventsChainsOptions,
 ) -> EventsRunResult {
-    // #70: cross-app by default, as `run_events_fanout` (and its message when
-    // there is no model-instance id).
     let (mut view, diag_lines) = match events_view(
         events_plan(detectors),
         opts.inputs,

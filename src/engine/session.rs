@@ -524,7 +524,10 @@ mod tests {
                 name,
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| view().prepare(&plan))),
             );
-            assert!(msg.contains(bit), "{name}: {msg}");
+            assert!(
+                msg.contains(&format!("reads {bit} off det")),
+                "{name}: {msg}"
+            );
         }
     }
 

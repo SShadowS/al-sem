@@ -1057,8 +1057,9 @@ pub(crate) fn diagnostic_lines(diags: &[crate::engine::l5::registry::Diagnostic]
 }
 
 /// [`analyzer_diagnostics_of_run`] over the run `key` of a prepared `View`
-/// (#160 §4.4.4): what `fingerprint` and `diff --strict` report, from the
-/// view's own run instead of a context of their own.
+/// (#160 §4.4.4): what `fingerprint`, `diff --strict`, digest, prove, `events
+/// fanout` / `events chains` and `policy check` report, from the view's own run
+/// instead of a context of their own.
 pub(crate) fn analyzer_diagnostics_of_view(
     view: &View,
     key: &RunKey,
@@ -1082,8 +1083,8 @@ pub fn compute_analyzer_diagnostics_cross_app(
 
 /// THE analyzer-diagnostics aggregation, over a detector run: `alsem analyze`
 /// (over the run of its selected detectors), [`analyzer_diagnostics_of_view`]
-/// (fingerprint, `diff --strict`, digest and prove, over a `View`'s default-set
-/// run), [`compute_analyzer_diagnostics`] and
+/// (fingerprint, `diff --strict`, digest, prove, `events fanout` / `events
+/// chains` and `policy check`, over a `View`'s default-set run), [`compute_analyzer_diagnostics`] and
 /// [`compute_analyzer_diagnostics_cross_app`] (over a default-set run) all build
 /// their diagnostics here, so every command reports the same set (#91).
 ///

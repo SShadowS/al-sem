@@ -1755,7 +1755,9 @@ pub(crate) fn assert_prepare_refuses_a_reduced_set(
         .cloned()
         .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_default();
-    assert!(msg.contains(missing), "{msg}");
+    // `prepare`'s own `after_run` text: a bare `missing` would also match a
+    // panic naming `CORE_SUMMARIES` when `missing` is `SUMMARIES`.
+    assert!(msg.contains(&format!("reads {missing} off det")), "{msg}");
 }
 
 #[cfg(test)]
