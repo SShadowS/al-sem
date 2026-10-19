@@ -833,8 +833,9 @@ pub struct DetectorArtifacts {
     /// L4 summarize-stage diagnostics — presently just the roles-fixpoint
     /// cap-hit raised by `summary_runner::run_one_scc_roles` (the roles-only
     /// fixpoint that replaced the retired Jacobi `run_one_scc` at `b4181d8`).
-    /// Harvested from the SAME `compute_summaries*` call this module already makes for
-    /// `uncertainties_by_node`/`parameter_roles_by_routine` — not recomputed.
+    /// Cloned from `L4Analysis::summarize_diagnostics`, the SAME `build_l4` solve
+    /// whose core summaries fill `uncertainties_by_node`/`parameter_roles_by_routine`
+    /// — not recomputed.
     /// Empty for every workspace whose SCCs converge, which is the overwhelming
     /// common case (additive: `run_detectors` folds this into the "summarize"
     /// slot of the analyze/detect diagnostics envelope).
@@ -936,7 +937,7 @@ impl<'v> DetectorContext<'v> {
         }
         let fingerprint_index =
             crate::engine::l5::fingerprint::FingerprintIndex::build(routines, objects);
-        DetectorContext {
+        let ctx = DetectorContext {
             art,
             ordering,
             routine_by_id,
@@ -944,7 +945,14 @@ impl<'v> DetectorContext<'v> {
             table_by_id,
             call_site_by_id,
             fingerprint_index,
+        };
+        // #160 §4.1.5: the borrowed maps print as `context.*` here, under the
+        // same names as step 0, so parent and head line up one to one.
+        if crate::engine::census::enabled() {
+            crate::census_hook::mark("census.detector_context");
+            census_borrowed_maps(&ctx);
         }
+        ctx
     }
 
     /// The L4.5 ordering facts, keyed by `StableRoutineId`. d47/d49/d51 look up
@@ -1120,6 +1128,10 @@ pub(crate) fn build_detector_artifacts(
     cross: Option<CrossAppInputs<'_>>,
 ) -> (DetectorArtifacts, Option<L4Analysis>) {
     use crate::engine::l5::registry::substrate;
+    assert!(
+        demanded & substrate::CORE_SUMMARIES == 0 || l4.is_some(),
+        "CORE_SUMMARIES demanded without an l4 request: the uncertainty/roles harvest would be silently empty"
+    );
     pt::counter_delta("build.detector_context", 1);
     let ws = &resolved.workspace;
     let no_deps: BTreeSet<String> = BTreeSet::new();
@@ -1582,8 +1594,9 @@ pub(crate) fn build_detector_artifacts(
 
     // Expose the resolver's post-upgrade bindings (the `upgradeBindings` side
     // table) keyed by callsite id — the join target for d37/d39 which read
-    // `binding.bindingResolution` / `binding.calleeParameterIsVar`. `compute_summaries_v2`
-    // above was the last reader of `calls.upgraded_bindings`, so move it out here.
+    // `binding.bindingResolution` / `binding.calleeParameterIsVar`. `build_l4` reads
+    // `resolved.calls.upgraded_bindings`, not this local clone, and nothing else reads
+    // the clone's bindings, so move them out here.
     let upgraded_bindings_by_callsite: HashMap<String, Vec<UpgradedBinding>> =
         std::mem::take(&mut calls.upgraded_bindings);
 
@@ -1653,12 +1666,12 @@ pub(crate) fn build_detector_artifacts(
     (art, l4)
 }
 
-/// #160 §4.1.5: one `context.<field>` bucket per field of [`DetectorArtifacts`]
-/// (it replaced the old `[C1_CONE_CENSUS]` report of `summaries` +
-/// `cone_derived`). `summaries` uses the per-fact accounting (exact); the
-/// rest is shallow. `graph` is counted by whoever built it (#160 A4), the
-/// solve by `build_l4`'s `l4.*` buckets, and the borrowed maps of a
-/// [`DetectorContext`] are not artifacts.
+/// #160 §4.1.5: one `context.<field>` bucket per heap-owning field of
+/// [`DetectorArtifacts`] (it replaced the old `[C1_CONE_CENSUS]` report of
+/// `summaries` + `cone_derived`). `summaries` uses the per-fact accounting
+/// (exact); the rest is shallow. `graph` is counted by whoever built it
+/// (#160 A4), the solve by `build_l4`'s `l4.*` buckets, and the borrowed maps
+/// of a [`DetectorContext`] by [`census_borrowed_maps`] when it is built.
 fn census_context(c: &DetectorArtifacts) {
     use crate::engine::census::{Kind, Tally, event_graph};
     use crate::engine::l4::combined_graph::{CombinedEdge, Uncertainty};
@@ -1821,6 +1834,32 @@ fn census_context(c: &DetectorArtifacts) {
             .strs(c.cross_extension_subscribers.keys())
             .bufs(c.cross_extension_subscribers.values())
             .strs(c.cross_extension_subscribers.values().flatten()),
+    );
+}
+
+/// The borrowed maps of a [`DetectorContext`], shallow, under step 0's names.
+fn census_borrowed_maps(c: &DetectorContext<'_>) {
+    use crate::engine::census::{Kind, Tally};
+    let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
+    emit(
+        "context.routine_by_id",
+        Tally::default().buf::<(&str, &ModelRoutine)>(c.routine_by_id.len()),
+    );
+    emit(
+        "context.objects_by_id",
+        Tally::default().buf::<(&str, &ModelObject)>(c.objects_by_id.len()),
+    );
+    emit(
+        "context.table_by_id",
+        Tally::default().buf::<(&str, &ModelTable)>(c.table_by_id.len()),
+    );
+    emit(
+        "context.call_site_by_id",
+        Tally::default().buf::<(&str, &PCallSite)>(c.call_site_by_id.len()),
+    );
+    emit(
+        "context.fingerprint_index",
+        &mut c.fingerprint_index.census_tally(),
     );
 }
 
@@ -2718,5 +2757,28 @@ page 50813 "CP3 Wizard"
         assert_eq!(ix.elements(e), &[] as &[UncertaintyId]);
         let n = ix.intern_set(vec![u_iow("IAlpha")]);
         assert!(!ix.is_empty_set(n));
+    }
+
+    /// #160 task 21 review I-2: a `CORE_SUMMARIES` mask with `l4: None` would
+    /// leave the uncertainty/roles harvest silently empty. It must panic, in
+    /// every build.
+    #[test]
+    fn core_summaries_without_an_l4_request_panics() {
+        use crate::engine::l5::registry::substrate;
+        let model = crate::engine::l5::test_support::empty_resolved();
+        let graph = Arc::new(cross_app_context_graph(&model, None));
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_detector_artifacts(&model, substrate::CORE_SUMMARIES, graph, None, None);
+        }))
+        .expect_err("CORE_SUMMARIES with l4: None must panic");
+        let msg = err
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| err.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(
+            msg.contains("CORE_SUMMARIES demanded without an l4 request"),
+            "wrong panic: {msg}"
+        );
     }
 }

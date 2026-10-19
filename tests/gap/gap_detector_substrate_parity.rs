@@ -112,8 +112,8 @@ fn assert_parity(
     // Build the full context ONCE; each detector's minimal context is rebuilt from
     // its own declared `requires`. `ALL` carries no ordering bit, and a read of an
     // unfilled ordering slot panics, so the full context also fills it.
-    let full = build_detector_context(resolved, substrate::ALL | substrate::ORDERING_FACTS);
-    let full_ctx = full.ctx();
+    let full_owned = build_detector_context(resolved, substrate::ALL | substrate::ORDERING_FACTS);
+    let full_ctx = full_owned.ctx();
     for det in detectors {
         let min = build_detector_context(resolved, det.requires);
         let min_ctx = min.ctx();

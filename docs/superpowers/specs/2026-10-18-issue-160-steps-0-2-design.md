@@ -333,7 +333,7 @@ the binary cannot compute a residual. So:
 | `context.<field>` | end of `build_detector_context_with` (`detector_context.rs:1564-1616`), replacing `emit_full_census` (`:1161`) | one line per field of `DetectorContext` |
 | `snapshot.<field>` | end of `compose_snapshot_from_base` (`snapshot.rs:1161-1190`) | one line per field of `CapabilitySnapshot` (`:881-899`): this is the `ViewTree`-equivalent G-2 asked for (`capability_facts`, `typed_edges`, `operation_index`, `callsite_index`, `coverage`, …) and the derived `pd_solution` |
 | `arena` | `pd_solve::census` (`pd_solve.rs:435-457`) | the two halves of §4.1.1 |
-| `context.<field>`, `l4.<field>` (step 2; amended in attempt 5, plan A4) | `context.*` when the det cell is built; `l4.*` when `build_l4` fills an `L4Analysis` | the owned artifacts (`DetectorArtifacts`) and the solve (`l4.bundle`, `l4.scc`, `l4.summarize_diagnostics`, `l4.warnings`); an `Arc` shared with the cross-app base (its graph, its SCC) is counted by `base.*` only, with no alias line |
+| `context.<field>`, `l4.<field>` (step 2; amended in attempt 5, plan A4) | `context.*` when the det cell is built; `l4.*` when `build_l4` fills an `L4Analysis` | the owned artifacts (`DetectorArtifacts`) and the solve (`l4.bundle`, `l4.scc`, `l4.summarize_diagnostics`, `l4.warnings`); an `Arc` shared with the cross-app base (its graph, its SCC) is counted by `base.*` only, with no alias line. The borrowed maps a `DetectorContext` builds (`routine_by_id`, `objects_by_id`, `table_by_id`, `call_site_by_id`, `fingerprint_index`) print as `context.*` when the context is constructed, as in step 0, so parent and head line up |
 
 A walk over 15 M cone entries is not free; it runs only under the flag, and A0.5 proves
 the flag changes no byte of output.

@@ -645,7 +645,9 @@ mod tests {
         //   - root_classifications_by_routine (empty → all caps pass for r_committer)
         //   - summaries (empty → is_transaction_managing falls back to name match)
         // The context's borrowed maps (`routine_by_id`, `call_site_by_id`, …)
-        // come from the model below.
+        // come from the model below. Fixture routines (`test_support::routine`)
+        // carry no call sites, so `call_site_by_id` is empty → the finding
+        // anchors on the routine header (the fallback).
 
         // Pre-build the transaction spans:
         //   1. CheckedRunImplicit span: seed=r_seed, routines_in_span includes all 3.

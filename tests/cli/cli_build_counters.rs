@@ -848,6 +848,8 @@ fn retained_census_changes_no_output() {
         "bucket=model ",
         "bucket=program.report ",
         "bucket=context.",
+        // The borrowed maps of the detector context (#160 task 21 review I-1).
+        "bucket=context.fingerprint_index ",
         "bucket=l4.",
     ] {
         assert!(err.contains(b), "missing {b}:\n{err}");
