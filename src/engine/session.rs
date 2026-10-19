@@ -17,6 +17,7 @@ use crate::engine::l5::detector_context::{
     self as dc, DetectorArtifacts, DetectorContext, OrderingFactsMap,
 };
 use crate::engine::l5::registry::{self, Detector, RunOutput, substrate};
+use crate::engine::perf_trace as pt;
 use crate::program::model::workspace::Model;
 
 /// One command's model and the cells built over it (spec §4.4.3).
@@ -295,6 +296,13 @@ impl View {
             AnalysisTarget::SingleApp(_) => (None, None),
             AnalysisTarget::CrossApp(b) => (Some(&**b), Some(Arc::clone(&b.combined_scc))),
         };
+        // The det fill keeps the span the context build had before the View
+        // (`run_detectors` / `run_detectors_cross_app`), so its unspanned
+        // stretches stay out of the caller's self time.
+        let fill_span = (need_det && det.is_none()).then(|| match cross_base {
+            None => pt::span("context", "context.build_total"),
+            Some(_) => pt::span("crossapp", "crossapp.context_build"),
+        });
         // Ordering FIRST: it reads the model alone, and the deadlock rule
         // wants it before the runs.
         if need_ordering && ordering.is_none() {
@@ -336,6 +344,7 @@ impl View {
                 *l4 = solved;
             }
         }
+        drop(fill_span);
         // A plan with no run (query) fills `l4` alone.
         if need_l4 && l4.is_none() {
             let g = graph.as_ref().expect("graph filled above");
@@ -415,7 +424,8 @@ impl View {
     }
 
     /// Remove a run's stored output, so it dies with the caller's `Arc`:
-    /// digest and prove drop it before snapshot composition (§4.4.4).
+    /// digest, prove, fingerprint and `diff --strict` drop it before snapshot
+    /// composition (§4.4.4).
     pub fn take_run(&mut self, key: &RunKey) -> Arc<RunOutput> {
         self.runs
             .remove(key)

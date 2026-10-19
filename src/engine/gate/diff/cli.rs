@@ -116,19 +116,23 @@ fn load_snapshot_from_workspace(
     // Engine-switch S6.4: the program-backed model (program calls and events).
     let resolved = assemble_and_resolve_workspace_program(&inputs, model_id, false)
         .ok_or_else(|| format!("workspace '{dir}' did not resolve"))?;
-    // #160 §4.4.4: this side's `View`; `--strict` runs the default set on it,
-    // and its cells are released before snapshot composition.
+    // #160 §4.4.4: this side's `View`; `--strict` runs the default set on it
+    // and releases the run and its cells before snapshot composition. Without
+    // `--strict` nothing is filled, so nothing is released.
     let mut view = View::new(AnalysisTarget::SingleApp(Box::new(resolved)));
     let diag_lines = if strict {
         let plan = diff_strict_plan(default_detectors());
+        let key = plan.keys().remove(0);
         view.prepare(&plan);
-        diagnostic_lines(&analyzer_diagnostics_of_view(&view, &plan.keys()[0]))
+        let lines = diagnostic_lines(&analyzer_diagnostics_of_view(&view, &key));
+        drop(view.take_run(&key));
+        view.release(Cell::Det);
+        view.release(Cell::L4);
+        view.release(Cell::Graph);
+        lines
     } else {
         Vec::new()
     };
-    view.release(Cell::Det);
-    view.release(Cell::L4);
-    view.release(Cell::Graph);
     let opts = FullSnapshotOptions {
         inputs: &inputs,
         driver_version,

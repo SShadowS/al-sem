@@ -850,12 +850,38 @@ fn retained_census_counts_the_cross_app_graph_and_scc_on_the_base() {
     let err = String::from_utf8_lossy(&out.stderr);
     let lines = |b: &str| err.lines().filter(|l| l.contains(b)).count();
     assert_eq!(lines("bucket=base.graph "), 1, "base.graph lines:\n{err}");
+    assert_eq!(
+        lines("bucket=base.combined_scc "),
+        1,
+        "base.combined_scc lines:\n{err}"
+    );
     assert_eq!(lines("bucket=l4.scc "), 0, "l4.scc lines:\n{err}");
     assert_eq!(
         lines("bucket=context.graph "),
         0,
         "context.graph lines:\n{err}"
     );
+}
+
+/// #160 §4.4.4: `View::prepare`'s det fill opens the span the context build
+/// had before the View, once per analyze: `crossapp.context_build` by
+/// default, `context.build_total` under `--single-app`.
+#[test]
+fn analyze_det_fill_keeps_the_context_build_span() {
+    let (_d, ws) = ws_dep();
+    for (extra, span) in [
+        (None, "crossapp.context_build"),
+        (Some("--single-app"), "context.build_total"),
+    ] {
+        let mut args = vec!["analyze", ws.as_str(), "--format", "json"];
+        args.extend(extra);
+        let (_, events) = spawn_trace_events(env!("CARGO_BIN_EXE_alsem"), &args, &[]);
+        let begins = events
+            .iter()
+            .filter(|e| e["ph"] == "B" && e["name"] == span)
+            .count();
+        assert_eq!(begins, 1, "{args:?}: `{span}` spans");
+    }
 }
 
 /// Spec §4.1.5 / A0.5 on the fixture: `ALSEM_RETAINED_CENSUS=1` changes no

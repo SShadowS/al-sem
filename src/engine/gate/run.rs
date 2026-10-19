@@ -1091,7 +1091,9 @@ pub fn compute_analyzer_diagnostics_cross_app(
 }
 
 /// THE analyzer-diagnostics aggregation, over a detector run: `alsem analyze`
-/// (over the run of its selected detectors), [`compute_analyzer_diagnostics`] and
+/// (over the run of its selected detectors), [`analyzer_diagnostics_of_view`]
+/// (fingerprint, `diff --strict`, digest and prove, over a `View`'s default-set
+/// run), [`compute_analyzer_diagnostics`] and
 /// [`compute_analyzer_diagnostics_cross_app`] (over a default-set run) all build
 /// their diagnostics here, so every command reports the same set (#91).
 ///
@@ -1124,9 +1126,11 @@ fn analyzer_diagnostics_of_run(
     //     unidentified dependency packages, kept on the model by
     //     `attach_program_calls` (#91).
     all.extend(resolved.dependency_diagnostics.iter().cloned());
-    // (3) summarizeDiagnostics — L4 `compute_summaries*` (run inside
-    //     `run_detectors`'s `DetectorContext` build) surfaces the JACOBI
-    //     fixed-point cap-hit here. Empty whenever every SCC converges.
+    // (3) summarizeDiagnostics — L4 `compute_summaries*` surfaces the JACOBI
+    //     fixed-point cap-hit here: on a `View` run, from the `l4` cell's
+    //     `summarize_diagnostics` (`View::prepare`); on the `run_detectors`
+    //     shims, from their `DetectorContext` build. Empty whenever every SCC
+    //     converges.
     all.extend(run.summarize_diagnostics.iter().cloned());
     // (4) loadedRootsConfig.diagnostics — TRACKED GAP: the roots.config.json LOADER
     //     diagnostics (parse/schema errors) are not yet surfaced separately from the
@@ -1244,6 +1248,39 @@ mod tests {
                 "run_analyze_with_exit calls {banned} itself; aggregate through \
                  analyzer_diagnostics_of_run so every command reports the same set"
             );
+        }
+    }
+
+    /// #160 §4.4.4: fingerprint and `diff --strict` read their diagnostics off
+    /// a `View`'s run and take the run before snapshot composition. Their
+    /// counter rows match the parent's, so only a source scan sees a revert
+    /// to their own context. Comment lines are cut first.
+    #[test]
+    fn fingerprint_and_diff_read_diagnostics_off_the_view() {
+        for (name, src) in [
+            (
+                "fingerprint_cli.rs",
+                include_str!("../l5/fingerprint_cli.rs"),
+            ),
+            ("diff/cli.rs", include_str!("diff/cli.rs")),
+        ] {
+            let code: String = src
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for required in ["analyzer_diagnostics_of_view(", "take_run("] {
+                assert!(code.contains(required), "{name} must call {required}");
+            }
+            for banned in [
+                "compute_analyzer_diagnostics(",
+                "analyzer_diagnostic_lines(",
+            ] {
+                assert!(
+                    !code.contains(banned),
+                    "{name} calls {banned}; read the diagnostics off the View's run"
+                );
+            }
         }
     }
 }

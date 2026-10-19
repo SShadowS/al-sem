@@ -380,12 +380,15 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // a lie — it must report `false`, same as never having passed the flag.
     let roots_config_ignored = opts.no_roots_config && opts.inputs.roots_config_loaded();
 
-    // The default set's run on a `View` (#160 §4.4.4); its cells are released
-    // before snapshot composition, as today's context died inside the runner.
+    // The default set's run on a `View` (#160 §4.4.4); the run and its cells
+    // are released before snapshot composition, as today's context died
+    // inside the runner.
     let mut view = View::new(AnalysisTarget::SingleApp(Box::new(resolved)));
     let plan = fingerprint_plan(default_detectors());
+    let key = plan.keys().remove(0);
     view.prepare(&plan);
-    let analyzer_diags = analyzer_diags_for(&view, &plan.keys()[0]);
+    let analyzer_diags = analyzer_diags_for(&view, &key);
+    drop(view.take_run(&key));
     view.release(Cell::Det);
     view.release(Cell::L4);
     view.release(Cell::Graph);
