@@ -19,8 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **No output byte moves.** The CDO SARIF, digest, prove, query, fingerprint, histogram and detector baseline are identical.
   - **CDO numbers** (`docs/measurements/2026-10-19-issue-160-step2.md`):
     - `digest` takes 33.8 s instead of 52.7 s: its second, all-detector context is gone.
-    - `prove`'s peak is 575 MB instead of 2235 MB, and it takes 4.2 s instead of 6.9 s. Prove now computes effects for its one root, not for every root.
-    - analyze's post-attach peak is 99 MB lower, digest's 380 MB lower. `digest --single-app`'s is 11 MB higher: the solve now overlaps snapshot composition there.
+    - `prove`'s peak is 575 MiB instead of 2235 MiB, and it takes 4.2 s instead of 6.9 s.
+      - The peak and 1.7 s of the time come from computing effects for its one root, not for every root.
+      - 0.3 s comes from the deleted context.
+      - About 0.7 s comes from the deleted private bundle solve; that part has no span, so it is not isolated.
+    - analyze's post-attach peak is 99 MiB lower, digest's 380 MiB lower. Their process peak is set during attach (about 2.84 GiB) and does not move.
+    - `digest --single-app`'s post-attach peak is 11 MiB higher, inside its 3 % bound. The solve's retained output (`l4.bundle` + `l4.scc`, 2.2 MB on CDO) now stays alive through snapshot composition; the rest of the 11 MiB is not attributed.
   - **Commands.**
     - `digest`, `prove` and `events fanout|chains` no longer build a second context with every substrate.
     - `digest`, `prove` and `query` no longer run a private bundle solve.
