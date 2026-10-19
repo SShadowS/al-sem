@@ -243,7 +243,28 @@ Open from Task 19: the full mask stays `ALL` (spec §4.4.6 says `ALL | ORDERING_
 
 ## Gate results
 
-(pending)
+On `8e8d2c9fdd7836ad32b400c5dbfce69d658d2283` (the code-review fixes, numbers and ledger committed; clean tree), all through `agentflow run`, `supervised: true`, queued 0 s. Logs under `.agent/runs/20261019-162640-c4cf84/logs/`; toolchain `rustc` 1.96, grammar `8682cb5f`; `cdo-gate` with `CDO_WS=U:/Git/DO-cdo-baseline/Cloud` from the environment (no argument).
+
+| gate | exit | seconds | log |
+|---|--:|--:|---|
+| `ci-steps all` | 0 | 654.9 | `logs/ci-steps-all/20261019T213714-b7cf8091.log`: 3556 passed, 8 skipped |
+| `check-goldens --verify-coverage` | 0 | 0.3 | `logs/check-goldens-coverage/20261019T214809-106f813e.log` |
+| `check-goldens` | 0 | 24.8 | `logs/check-goldens/20261019T214810-70393da6.log` |
+| `cdo-gate` | 0 | 247.0 | `logs/cdo-gate/20261019T214836-1353f76f.log`: `cdo-gate: PASS`, 2154 lib tests |
+
+WSL Linux check on `8e8d2c9f`: clippy release `-D warnings` exit 0, `--no-run` exit 0, 41 CLI tests passed (`H:/al-sem-160-step2/wsl-linux2.log`).
+
+Final panel r1 (`gpt-6.1-sol` + `claude-opus-5.5`, fresh threads; `final-r1-{briefing,sol,opus}.md`): no critical or important finding from either. sol accepted F1-CR1..CR10; opus accepted 9 and re-raised CR6 (the CHANGELOG headline misses `diff`'s per-side fold solve and the d47/d49/d51 ordering snapshot). New entries P1-1..P1-11 (all minor). The gates above predate the r1 fixes and run again on the new head.
+
+Final panel r1 fixes: `42349a8d` (`final-r1-fix-report.md`; `ci-steps task` exit 0; no golden moved). P1-1, P1-2, P1-4, P1-5, P1-6, P1-8, P1-9 and the re-raised F1-CR6 fixed; P1-10, P1-11 deferred to step 12.
+
+| test | break | fail output (1 line) | revert |
+|---|---|---|---|
+| capability_cone::dependency_publisher_roles_stay_unknown_through_the_view (NEW, P1-1) | the View's det fill passes `None` for the cross inputs | `OnDepRec through the View; left: (Yes, Known([]), Yes, No, Full)`; the shim-path tests stay green under the same break | green |
+| cli_build_counters::views_release_their_cells_before_the_next_build (NEW, P1-5) | policy's `release_all_but` before the RAW build deleted | `policy check: got [ctx, ctx, rel:Graph], want [ctx, rel:Det, rel:L4, rel:Ordering, ctx, rel:Graph]` | green |
+| same | fingerprint's release and events' early `l4` release deleted | `fingerprint: got [ctx, snap]`; `events fanout: got [ctx, rel:Det, …]` | green |
+
+P1-3: A2.3 re-measured on `42349a8d` (bench3, 5 rounds, d + ds): saving 23.35 s ≥ bound 10.68 s, met. The machine was loaded (parent wall band 8.2 s), so the first bench's 17.33 s bound stays the tighter evidence. P1-7: `scc_stats` recorded (head once per digest, parent twice, identical payload). Both are in the numbers file.
 
 ## Discoveries
 
