@@ -4,6 +4,7 @@ The records are the evidence `post-merge` may skip on, so every test states
 its precondition by hand: a real git repo, a record written by `run`, an
 environment pinned through the `_rustc` seam."""
 import json
+import os
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -296,6 +297,30 @@ def test_post_merge_falls_back_to_gates_and_says_why(capsys, gated, monkeypatch,
     assert code == 0 and out["verified_by"] == "gates"
     assert "no-attestation" in out["identity_refused"]
     assert marker.exists()
+
+
+def test_post_merge_without_a_cdo_workspace_refuses_before_any_gate(capsys, gated, monkeypatch, tmp_path):
+    """#107: with CDO_WS unset, `cdo-gate`'s usage error (exit 2) read as a red
+    gate and a green merge was reverted. No workspace is no verdict: refuse
+    before the obligation is promoted, and run nothing."""
+    monkeypatch.delenv("CDO_WS")
+    code, out, marker = _post_merge(capsys, gated, monkeypatch, tmp_path, "--full")
+    assert code == 1 and out["error"].startswith("cdo-ws-unset")
+    assert not marker.exists()                              # no gate ran
+    rec = json.loads((gated.clone / ".agent" / "incidents.json").read_text())[gated.merge_sha]
+    assert rec["state"] == "verifying" and rec["gate_red"] is False
+
+
+def test_config_cdo_ws_stands_in_for_an_unset_shell(capsys, gated, monkeypatch, tmp_path):
+    """`cdo_ws` in `.agent/config.json` is the workspace every executor call
+    uses: with the shell's CDO_WS unset, the identity path still matches the
+    cdo-gate record minted under that workspace."""
+    ws = os.environ["CDO_WS"]
+    monkeypatch.delenv("CDO_WS")
+    gated.ctx.paths.config.write_text(json.dumps({"cdo_ws": ws}), encoding="utf-8")
+    code, out, marker = _post_merge(capsys, gated, monkeypatch, tmp_path)
+    assert code == 0 and out["verified_by"] == "identity", out
+    assert not marker.exists()
 
 
 def test_post_merge_full_forces_the_gates(capsys, gated, monkeypatch, tmp_path):

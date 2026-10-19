@@ -216,6 +216,13 @@ A major version, because some changes break existing users. Each one is describe
 
 ### Fixed
 
+- agentflow `post-merge` no longer reads a missing CDO workspace as a red gate. On
+  #107 it ran without `CDO_WS`. `cdo-gate` stopped at its usage error (exit 2),
+  and the executor counted that as a regression. It tried to revert a green
+  merge; the revert failed the same way, so nothing was pushed. `post-merge` now
+  refuses with `cdo-ws-unset` before it opens the verification, as `preflight`
+  already did. A new `cdo_ws` key in `.agent/config.json` names the pinned
+  workspace once, and every executor call uses it whatever the shell exported.
 - #160 step 1: no `alsem` reader goes back to the disk after the program build. The
   model id, roots config, program-file selection, coverage projection, inline
   suppressions, pr-summary's app registry, the snapshot hash rows and

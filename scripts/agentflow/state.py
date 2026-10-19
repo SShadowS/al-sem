@@ -45,9 +45,14 @@ class ConfigError(ValueError):
 # junction into `<target_root>/<worktree name>`, and `reserve_gb_per_run` is
 # asked of THAT drive while `min_free_gb` stays on the worktrees' drive. Empty
 # (the default) keeps builds inside the worktree.
+# `cdo_ws`: the pinned CDO workspace. When set it is THE `CDO_WS` for every
+# executor call (gates, identity records, sanitize, preflight), whatever the
+# caller's shell exported: on #107 a `post-merge` called without `CDO_WS` read
+# `cdo-gate`'s usage error as a red gate. Empty (the default) keeps reading
+# `CDO_WS` from the environment.
 CONFIG_DEFAULTS: dict[str, int | str] = {
     "slots": 1, "heavy_gates": 1, "min_free_gb": 40, "reserve_gb_per_run": 30,
-    "gate_wait_minutes": 180, "target_root": "",
+    "gate_wait_minutes": 180, "target_root": "", "cdo_ws": "",
 }
 
 

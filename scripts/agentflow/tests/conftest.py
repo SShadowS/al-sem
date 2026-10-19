@@ -25,6 +25,14 @@ def plenty_of_disk(monkeypatch):
     monkeypatch.setattr(shutil, "disk_usage", lambda p: SimpleNamespace(free=PLENTY_OF_DISK))
 
 
+@pytest.fixture(autouse=True)
+def a_cdo_workspace(monkeypatch, tmp_path_factory):
+    """`preflight` and `post-merge` refuse without a CDO workspace (#107: an
+    unset CDO_WS once read as a red gate). Every test gets an empty one unless
+    it unsets or replaces it to state what it is about."""
+    monkeypatch.setenv("CDO_WS", str(tmp_path_factory.mktemp("cdo-ws")))
+
+
 @pytest.fixture
 def root(tmp_path):
     (tmp_path / ".agent").mkdir()

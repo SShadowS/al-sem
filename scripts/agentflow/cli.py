@@ -255,6 +255,11 @@ def _gate_slot(ctx: Ctx, name: str, halt_aborts: bool, stack: ExitStack) -> floa
         time.sleep(QUEUE_POLL_S)
 
 
+def _cdo_ws_ok() -> bool:
+    cdo = os.environ.get("CDO_WS")
+    return bool(cdo) and Path(cdo).exists()
+
+
 def _run_gate(ctx: Ctx, name: str, cmd: list[str], minutes: int, cwd: Path, *,
               cargo_target_dir: str | None = None, halt_aborts: bool = True) -> supervise.Result:
     ctx.write_guard("run gate")
@@ -353,8 +358,7 @@ def cmd_preflight(args, ctx, gh, git):
     stale = [r for r in leases if r["stale"]]
     if not gh.auth_ok():
         fails.append("gh-auth")
-    cdo = os.environ.get("CDO_WS")
-    if not cdo or not Path(cdo).exists():
+    if not _cdo_ws_ok():
         fails.append("cdo-ws")
     if not (ctx.paths.root / "tree-sitter-al" / "src" / "node-types.json").exists():
         fails.append("grammar")
@@ -1059,6 +1063,12 @@ def cmd_post_merge(args, ctx, gh, git):
     # then blocks preflight.
     if not git.is_ancestor(args.merge_sha, "refs/remotes/origin/master"):
         raise Fail({"error": "merge sha is not on origin/master", "merge_sha": args.merge_sha})
+    # A gate that cannot start is not a verdict. On #107 `CDO_WS` was unset, so
+    # `cdo-gate` stopped at its usage error (exit 2), that read as a red gate,
+    # and a green merge was reverted (the revert failed the same way). Refuse
+    # here, before the obligation is opened, like the reachability check above.
+    if not _docs_only(git, f"{args.merge_sha}~1", args.merge_sha) and not _cdo_ws_ok():
+        raise Fail({"error": "cdo-ws-unset: set cdo_ws in .agent/config.json or export CDO_WS"})
     # The obligation is opened BEFORE the gates, not only when one fails, and
     # that closes a real hole. Any exception inside the gate block below is
     # stashed into `original_exc` and re-raised at the tail -- no HALT, no
@@ -1820,6 +1830,10 @@ def main(argv: list[str], gh_run=None, git_run=None) -> int:
         # AGENTFLOW_NOW, or any other setup failure must still emit one JSON
         # object rather than a bare traceback.
         ctx = _ctx(args)
+        # `cdo_ws` (config) overrides the shell's CDO_WS here, once, so every
+        # reader below sees the same pinned workspace.
+        if cdo_ws := config(ctx)["cdo_ws"]:
+            os.environ["CDO_WS"] = cdo_ws
         gh_kw = {"run": gh_run} if gh_run else {}
         gh = Gh(ctx, args.repo, **gh_kw)
         # Mutex `git` around every write to the shared root's `.git`, so two

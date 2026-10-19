@@ -219,7 +219,7 @@ def test_config_defaults_when_the_file_or_a_key_is_missing(ctx):
     `.agent/config.json` acts exactly as before. Stated as literals."""
     assert ctx.paths.config == ctx.paths.root / ".agent" / "config.json"
     defaults = {"slots": 1, "heavy_gates": 1, "min_free_gb": 40, "reserve_gb_per_run": 30,
-                "gate_wait_minutes": 180, "target_root": ""}
+                "gate_wait_minutes": 180, "target_root": "", "cdo_ws": ""}
     assert state.config(ctx) == defaults
     ctx.paths.config.write_text(json.dumps({"slots": 2}), encoding="utf-8")
     assert state.config(ctx) == {**defaults, "slots": 2}
