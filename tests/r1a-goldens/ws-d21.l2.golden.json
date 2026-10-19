@@ -206,23 +206,6 @@
             },
             "opSubtype": "Get"
           }
-        },
-        {
-          "op": "read",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
-          "witnessOperationId": "r0/84032dabffe77f7fd6d55243c23dc3fc2600d36d49f6bf2f748739d2c0ae3165/op1",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/84032dabffe77f7fd6d55243c23dc3fc2600d36d49f6bf2f748739d2c0ae3165/rv/customer",
-            "tempState": {
-              "kind": "known",
-              "value": false
-            },
-            "opSubtype": "TestField"
-          }
         }
       ],
       "capabilityStatus": "complete",
@@ -350,25 +333,7 @@
           }
         ]
       },
-      "capabilityFactsDirect": [
-        {
-          "op": "read",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
-          "witnessOperationId": "r0/47463525768b3eee89d17c04f4929f543848c89e4b6b6f6a4c33838bc4bec321/op0",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/47463525768b3eee89d17c04f4929f543848c89e4b6b6f6a4c33838bc4bec321/rv/customer",
-            "tempState": {
-              "kind": "parameter-dependent",
-              "parameterIndex": 0
-            },
-            "opSubtype": "TestField"
-          }
-        }
-      ],
+      "capabilityFactsDirect": [],
       "capabilityStatus": "complete",
       "capabilityReasons": [],
       "capabilityDiagnostics": []
@@ -492,25 +457,7 @@
           }
         ]
       },
-      "capabilityFactsDirect": [
-        {
-          "op": "read",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
-          "witnessOperationId": "r0/96cba26a400043c6aa138beb0f469f9bb79ecdae38b0537e87f91b5ccdcd9839/op0",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/96cba26a400043c6aa138beb0f469f9bb79ecdae38b0537e87f91b5ccdcd9839/rv/customer",
-            "tempState": {
-              "kind": "known",
-              "value": false
-            },
-            "opSubtype": "TestField"
-          }
-        }
-      ],
+      "capabilityFactsDirect": [],
       "capabilityStatus": "complete",
       "capabilityReasons": [],
       "capabilityDiagnostics": []

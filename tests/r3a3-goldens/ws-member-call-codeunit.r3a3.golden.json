@@ -31,25 +31,6 @@
 							"value": false
 						}
 					}
-				},
-				{
-					"op": "read",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "inherited",
-					"via": "call",
-					"resourceId": "44444444-4444-4444-4444-444444444444:Table:50102",
-					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0",
-					"witnessCallsiteId": "44444444-4444-4444-4444-444444444444:Codeunit:50100#cb01deefa01c77b7b956a4b280cfec1b430a6b3948de68e9348999e3b4867125/cs0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "TestField",
-						"recordVariableId": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/rv/rec",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
 				}
 			],
 			"coverage": {
@@ -90,27 +71,7 @@
 					}
 				}
 			],
-			"capabilityFactsInherited": [
-				{
-					"op": "read",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "inherited",
-					"via": "implicit-trigger",
-					"resourceId": "44444444-4444-4444-4444-444444444444:Table:50102",
-					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0",
-					"witnessFirstHopOperationId": "44444444-4444-4444-4444-444444444444:Codeunit:50101#a409707d31efb836493088d2e29cbb71f098f017068b06ed0050ddea85f49f92/op1",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "TestField",
-						"recordVariableId": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/rv/rec",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
-				}
-			],
+			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "44444444-4444-4444-4444-444444444444:Codeunit:50101#a409707d31efb836493088d2e29cbb71f098f017068b06ed0050ddea85f49f92",
 				"directStatus": "complete",
@@ -153,27 +114,7 @@
 					}
 				}
 			],
-			"capabilityFactsInherited": [
-				{
-					"op": "read",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "inherited",
-					"via": "implicit-trigger",
-					"resourceId": "44444444-4444-4444-4444-444444444444:Table:50102",
-					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0",
-					"witnessFirstHopOperationId": "44444444-4444-4444-4444-444444444444:Codeunit:50104#0ee6887b7588b60e569e5a6c679fb8766b5f347483371aa05d47b20126091e7e/op1",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "TestField",
-						"recordVariableId": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/rv/rec",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
-				}
-			],
+			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "44444444-4444-4444-4444-444444444444:Codeunit:50104#0ee6887b7588b60e569e5a6c679fb8766b5f347483371aa05d47b20126091e7e",
 				"directStatus": "complete",
@@ -213,25 +154,6 @@
 							"value": false
 						}
 					}
-				},
-				{
-					"op": "read",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "inherited",
-					"via": "call",
-					"resourceId": "44444444-4444-4444-4444-444444444444:Table:50102",
-					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0",
-					"witnessCallsiteId": "44444444-4444-4444-4444-444444444444:Codeunit:50104#351217b0668cdf1652d23b4416c3be54899eaaac2017209b4b39d43e3a57ae16/cs0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "TestField",
-						"recordVariableId": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/rv/rec",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
 				}
 			],
 			"coverage": {
@@ -244,26 +166,7 @@
 		},
 		{
 			"routineId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e",
-			"capabilityFactsDirect": [
-				{
-					"op": "read",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "direct",
-					"via": "self",
-					"resourceId": "44444444-4444-4444-4444-444444444444:Table:50102",
-					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "TestField",
-						"recordVariableId": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/rv/rec",
-						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 4294967295
-						}
-					}
-				}
-			],
+			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e",

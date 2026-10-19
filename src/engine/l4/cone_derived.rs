@@ -19,7 +19,9 @@
 //! A row is a fold over the routine's REACHABLE cone — `own direct ∪ inherited
 //! representatives`, i.e. the sequence the retired `FullRoutineSummary::
 //! reachable_iter` used to yield:
-//!   - `flags` — presence bits OR-merged over the cone (table / commit / http / file).
+//!   - `flags` — presence bits OR-merged over the cone (table / commit / http / file,
+//!     plus `TOUCHES_PHYSICAL_TABLE`, the table bit minus known-temp non-reads, which
+//!     d2 prunes on, issue #100).
 //!   - `table_writes_all` — insert|modify|delete on `resource_kind == "table"`
 //!     with a `resource_id`, INCLUDING known-temp. Backs `writes_tables_of`.
 //!   - `physical_table_writes` — the same, EXCLUDING [`fact_is_known_temp`], each
@@ -111,6 +113,10 @@ pub const TOUCHES_HTTP: u8 = 1 << 2;
 /// vocabulary — see [`io_kind_bit`], the ONE definition; `d48::is_io_resource_kind`
 /// routes through it too.
 pub const TOUCHES_FILE: u8 = 1 << 3;
+/// ⟨issue 100⟩ A reachable `table` fact that may touch a PHYSICAL table — set
+/// when [`fact_sets_physical_table_bit`] holds. d2's own pruning bit; d1 keeps
+/// [`TOUCHES_TABLE`] (its temporary terminals are deliberate).
+pub const TOUCHES_PHYSICAL_TABLE: u8 = 1 << 4;
 
 /// `op == "insert"`.
 pub const OP_INSERT: u8 = 1 << 0;
@@ -193,6 +199,26 @@ pub fn fact_is_known_temp(f: &CapabilityFact) -> bool {
         }
         _ => false,
     }
+}
+
+/// ⟨issue 100⟩ The ONE rule for [`TOUCHES_PHYSICAL_TABLE`]: a `table` fact sets
+/// it UNLESS it is known-temporary AND its op is not `read`. So every read sets
+/// it, temporary or not, and only a known-temp insert/modify/delete/rename/lock
+/// does not. Reads stay because a temporary host's FlowField is still computed
+/// against the physical flow-target tables (`CalcFields`). The rule reads only
+/// `op` and the temp class, both IN `inherited_fact_key`, so it is
+/// dedup-invariant (an `op_subtype` test would not be: a shorter temp `Count`
+/// can win the key over a `CalcFields`). The fold and the raw oracle
+/// `capability_query::touches_physical_table_of` both go through
+/// [`physical_table_bit`], the fold with its temp class already computed.
+pub fn fact_sets_physical_table_bit(f: &CapabilityFact) -> bool {
+    f.resource_kind == "table" && physical_table_bit(fact_is_known_temp(f), f.op)
+}
+
+/// The rule of [`fact_sets_physical_table_bit`] for a `table` fact whose temp
+/// class the caller has already computed (the fold evaluates it once per fact).
+fn physical_table_bit(is_known_temp: bool, op: &str) -> bool {
+    !(is_known_temp && op != "read")
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +479,12 @@ impl ConeDerivedStore {
         self.flags_of(routine_id) & TOUCHES_TABLE != 0
     }
 
+    /// ⟨issue 100⟩ Any reachable fact passing [`fact_sets_physical_table_bit`]
+    /// (the Yes arm of `touches_physical_table_of`) — d2's pruning bit.
+    pub fn touches_physical_table(&self, routine_id: &str) -> bool {
+        self.flags_of(routine_id) & TOUCHES_PHYSICAL_TABLE != 0
+    }
+
     /// Any reachable `commit` on `transaction` (the Yes arm of `may_commit`).
     pub fn may_commit_flag(&self, routine_id: &str) -> bool {
         self.flags_of(routine_id) & MAY_COMMIT != 0
@@ -694,10 +726,14 @@ impl ConeDerivedBuilder {
         match f.resource_kind {
             "table" => {
                 self.flags |= TOUCHES_TABLE;
+                let is_temp = fact_is_known_temp(f);
+                // Before the unresolved-id return, like TOUCHES_TABLE.
+                if physical_table_bit(is_temp, f.op) {
+                    self.flags |= TOUCHES_PHYSICAL_TABLE;
+                }
                 let Some(rid) = f.resource_id.as_deref() else {
                     return;
                 };
-                let is_temp = fact_is_known_temp(f);
                 if let Some(bit) = write_op_bit(f.op) {
                     let id = self.store.interner.intern(rid);
                     self.s_writes_all.push(id);

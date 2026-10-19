@@ -35,6 +35,7 @@ use super::cone_census;
 use super::cone_derived::{ConeDerivedBuilder, ConeDerivedStore, ConeOutput, fact_is_known_temp};
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
+use crate::program::body::capability::table_commit;
 use crate::program::body::features::{PCallSite, PCallee, PExpressionInfo, POperationSite};
 use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
@@ -112,7 +113,7 @@ pub struct CapabilityFact {
     pub subject: String,
     /// ⟨C1 Task 4⟩ `op` / `resource_kind` / `confidence` / `provenance` / `via`
     /// are CLOSED vocabularies — every producer in the engine hands one of a
-    /// fixed set of literals (`map_table_op`, `object_type_to_resource_kind`,
+    /// fixed set of literals (`table_commit::map_op`, `object_type_to_resource_kind`,
     /// `confidence_from_source`, `capability_via_for_edge_kind`, and the direct
     /// extractors' inline literals), so an owned `String` per field bought
     /// nothing but 5 heap allocations and 5 memcpys per fact — on every one of
@@ -163,12 +164,6 @@ pub struct CoverageRecord {
 // `extractCapabilities` read of the RESOLVED features + summary-runner.ts
 // publisher injection.
 // ===========================================================================
-
-/// Map an AL `RecordOpType` to a `CapabilityOp`, or `None` for state-only /
-/// filter ops. Delegates to the one table op map shared with L2 (#69 D5).
-fn map_table_op(op: &str) -> Option<&'static str> {
-    crate::program::body::capability::table_commit::map_op(op)
-}
 
 /// Map an object-run kind to the dispatch resourceKind (al-sem `dispatch.ts`).
 fn object_type_to_resource_kind(object_type: &str) -> &'static str {
@@ -607,7 +602,8 @@ pub(crate) fn direct_facts_for_routine(
 
     // ── table family (al-sem table.ts) ─────────────────────────────────────
     for op in &record_ops {
-        let Some(cap_op) = map_table_op(&op.op) else {
+        // The one table op map shared with L2 (#69 D5, #100).
+        let Some(cap_op) = table_commit::map_op(&op.op) else {
             continue;
         };
         let resource_id = op.table_id.clone();

@@ -106,6 +106,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`count_unknown_include_sender_plus1_subscribers`) can move either way on a publisher
   with several readings; binding is unaffected where it rises. `InternalEvent`'s
   `Isolated` argument is still not read.
+- `Record.TestField` is no longer a capability `read` (#100). It checks the value the
+  record variable already holds in memory and issues no query; the engine already
+  classified it state-only. Its table `read` facts are gone from `--r4f-snapshot`, the
+  r1a/r3a3 projections and `alsem fingerprint`, and where a `TestField` was a routine's
+  only read of a table, its required `TableData R` row and fingerprint `R` letter go
+  too (where another read survives, that read becomes the witness). Effects:
+  - `alsem diff` of a snapshot made before this change against one made after reports
+    `CapabilityLost` for each removed read.
+  - A user policy matching capability `op: read` matches fewer facts.
+  - d44 (event multi-subscriber overlap) loses a read-after-write finding when the
+    reader subscriber's only read of that table was a `TestField`. Measured on CDO:
+    one removed at `--scope all` (Sales Header on `OnBeforePostSalesDoc`), none at
+    `--scope primary`; 46 required `TableData R` rows removed.
+  - d1/d2 prune a callee whose cone no longer touches a table; a callee that only did
+    `TestField` is now pruned, which can free walk budget and ADD a d2 finding that
+    the budget used to cut off.
+  - Residual (stated, not modelled): under partial records (`SetLoadFields`), touching a
+    field that was not loaded makes the platform re-read the row (JIT loading). That
+    holds for any field access, and no field access is modelled as a read, so where the
+    platform loaded the record (a page's `Rec`, a table trigger's `Rec`, a report
+    dataitem), a read and its `TableData R` need can go unreported.
+- `Rename` and `LockTable` now give table capability facts, op `rename` and op `lock`
+  (#100). d1 and d2 skip callees with no table fact, so a callee whose only database ops
+  were `Rename`/`LockTable` was never walked; it is now, which can add d1/d2 findings.
+  `Rename` still maps to no permission letter (#9), and neither op makes a permission
+  row, digest effect or diff gain. They show in `--r4f-snapshot`, in `alsem fingerprint`
+  (a `Rename`/`LockTable`-only routine gains a table family with no permission line), as
+  `CapabilityLost` when such a fact disappears between two new snapshots, and in
+  policies: `CAPABILITY_OPS` accepts `rename` and `lock`, and a predicate on
+  `resourceKind: table` with no `op` filter now matches them (the bundled
+  `policy-default.yaml` behaves as before).
+- d2 prunes callees on its own presence bit, `TOUCHES_PHYSICAL_TABLE` (#100): set for a
+  table fact unless it is a known-temporary non-read. Every read sets it (a temporary
+  record's FlowField is still computed against physical tables), so a branch that only
+  writes, renames or locks temporary records no longer spends d2's 500-node walk budget.
+  An incomplete cone still counts as unknown and is walked. d1 keeps `touches_db`,
+  because its temporary terminals are deliberate. The bit reads cone facts, which can
+  disagree with d2's own terminal filter in three stated cases: (e) a routine passes its
+  own `Temporary` record to a `var` parameter that is written; the write is temporary in
+  that caller's frame, so that path's d2 finding (a false positive) is removed; (f) a
+  routine whose complete cone holds only known-temporary non-read table facts, and
+  whose physical op is unreachable (the cone drops dead code), is now pruned, so that
+  dead op gives no finding (a reachable temporary read keeps the routine walked); (g) a `Rename`/`LockTable`-only
+  branch on a virtual/system table is now walked with no terminal (meaningless AL; left
+  open).
+- One table op map serves L2 and the L4 cone: the cone's pass-through wrapper
+  `capability_cone::map_table_op` is deleted and the cone calls `table_commit::map_op`
+  directly (#100).
 
 ## [1.7.2] - 2026-10-17
 

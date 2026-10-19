@@ -22,17 +22,17 @@
 	"fixtureCount": 160,
 	"matrix": {
 		"routineCount": 595,
-		"routinesWithInheritedFacts": 143,
-		"factsWithMoreThan1HopWitness": 252,
+		"routinesWithInheritedFacts": 141,
+		"factsWithMoreThan1HopWitness": 248,
 		"equalDistanceTies": 5,
 		"coveragesWithNonTrivialInheritedStatus": 23,
 		"provenanceDistribution": {
-			"direct": 595,
-			"inherited": 252
+			"direct": 591,
+			"inherited": 248
 		},
 		"confidenceDistribution": {
 			"configDynamic": 1,
-			"static": 765,
+			"static": 757,
 			"unresolved": 81
 		},
 		"opDistribution": {
@@ -43,7 +43,7 @@
 			"insert": 78,
 			"modify": 109,
 			"publish": 95,
-			"read": 216,
+			"read": 208,
 			"send": 42,
 			"store-write": 1,
 			"subscribe": 122,
@@ -54,10 +54,10 @@
 			"write-blob": 2
 		},
 		"viaDistribution": {
-			"call": 195,
+			"call": 193,
 			"event-dispatch": 54,
-			"implicit-trigger": 3,
-			"self": 595
+			"implicit-trigger": 1,
+			"self": 591
 		},
 		"directStatusDistribution": {
 			"complete": 582,
@@ -990,16 +990,16 @@
 				"equalDistanceTies": 0,
 				"coveragesWithNonTrivialInheritedStatus": 0,
 				"provenanceDistribution": {
-					"direct": 5
+					"direct": 2
 				},
 				"confidenceDistribution": {
-					"static": 5
+					"static": 2
 				},
 				"opDistribution": {
-					"read": 5
+					"read": 2
 				},
 				"viaDistribution": {
-					"self": 5
+					"self": 2
 				},
 				"directStatusDistribution": {
 					"complete": 4
@@ -2815,26 +2815,24 @@
 			"goldenFile": "ws-member-call-codeunit.r3a3.golden.json",
 			"matrix": {
 				"routineCount": 6,
-				"routinesWithInheritedFacts": 4,
-				"factsWithMoreThan1HopWitness": 8,
+				"routinesWithInheritedFacts": 2,
+				"factsWithMoreThan1HopWitness": 4,
 				"equalDistanceTies": 0,
 				"coveragesWithNonTrivialInheritedStatus": 0,
 				"provenanceDistribution": {
-					"direct": 4,
-					"inherited": 8
+					"direct": 3,
+					"inherited": 4
 				},
 				"confidenceDistribution": {
-					"static": 12
+					"static": 7
 				},
 				"opDistribution": {
 					"commit": 3,
-					"insert": 4,
-					"read": 5
+					"insert": 4
 				},
 				"viaDistribution": {
-					"call": 6,
-					"implicit-trigger": 2,
-					"self": 4
+					"call": 4,
+					"self": 3
 				},
 				"directStatusDistribution": {
 					"complete": 6
