@@ -147,8 +147,12 @@ fn adapt_full(
     let (mut ctx, report, mut l3) = build_models(dir.path()).unwrap();
     mutate_graph(&mut ctx);
     mutate(&mut l3.workspace);
-    let (calls, census) =
-        resolved_calls_from_program(&report, &ctx, &l3.workspace, upgrade_dependency_bindings);
+    let (calls, census) = resolved_calls_from_program(
+        report.edge_view(),
+        &ctx,
+        &l3.workspace,
+        upgrade_dependency_bindings,
+    );
     Adapted {
         calls,
         census,
@@ -1307,7 +1311,7 @@ fn multi_route_call_keeps_every_route() {
     ce.edge.routes.push(second);
 
     let ws = &l3.workspace;
-    let (calls, census) = resolved_calls_from_program(&report, &ctx, ws, true);
+    let (calls, census) = resolved_calls_from_program(report.edge_view(), &ctx, ws, true);
     let caller = ws.routines.iter().find(|r| r.name == "Caller").unwrap();
     let id_of = |n: &str| ws.routines.iter().find(|r| r.name == n).unwrap().id.clone();
     let got = at(&calls, &caller.call_sites[0].id);

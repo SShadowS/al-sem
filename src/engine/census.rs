@@ -7,14 +7,19 @@
 //! Each site walks its own structure and prints through [`bucket`]. Bytes are
 //! heap bytes by `len` (allocator overhead excluded; a shared allocation once).
 //! `kind=exact` means the walk reaches and counts every heap allocation of the
-//! structure, each by `len` (hash-table control bytes and capacity slack are
+//! structure, each by `len` (hash-table control bytes, B-tree node overhead —
+//! a B-tree is charged as one buffer of its entries — and capacity slack are
 //! not modeled; see [`Tally`]). One exception: the producer-solve buckets
 //! (`arena.link_graph`, `arena.working`, via `pd_solve::arena_tally` /
 //! `working_tally`, and `snapshot.pd_solution`, via `pd_arena_bytes`) count
 //! every `Vec`, `String` and hash table at CAPACITY with one control byte per
 //! hash slot. They keep the accounting of the pre-#160 `solve_bytes` figure
-//! (525 MiB on CDO, epic §3), so step 0's numbers stay comparable with it;
-//! `kind=shallow` means top-level buffers by `len × size_of`, plus the
+//! (525 MiB on CDO, epic §3), so step 0's numbers stay comparable with it.
+//! The `inputs` bucket (`InputSet::census`) walks no `io::Error` held in a
+//! slot, and needs none: a census runs only after a successful build, and the
+//! one error that can carry a heap payload (a failed `.al` walk, `al_walk`)
+//! fails the build first (`snapshot/provider.rs`); the file-read slots hold OS
+//! errors, which own no heap. `kind=shallow` means top-level buffers by `len × size_of`, plus the
 //! `String` / `Vec` heap one level down and nothing deeper. Every bucket is a
 //! LOWER bound; the ground-truth live heap comes from `tools/census-probe`,
 //! which records it at the `census_hook::mark` each site sets before its walk.

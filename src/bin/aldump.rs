@@ -141,14 +141,15 @@ fn switch_compare_cmd(args: &[String]) -> ExitCode {
 }
 
 /// `aldump --compiler-oracle <graph.jsonl> <workspace> [--all-apps]`
-/// (engine-switch S9.0): compare the program resolver (FULL build) with the AL
+/// (engine-switch S9.0): compare the program resolver (a `ResolvedProgram`:
+/// `ProgramScope::CrossApp` with `--all-apps`, else `Workspace`) with the AL
 /// compiler's call graph from `altool graph extract-whole`, site by site. Writes
 /// the JSON report to stdout; the summary goes to stderr. Default scope: callers
 /// in the workspace app; `--all-apps` compares every app's callers.
 fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
-    use al_sem::program::profile::BuildProfile;
     use al_sem::program::resolve::compiler_oracle::{CompilerGraph, compare, program_sites};
     use al_sem::program::resolve::differential::project_fresh;
+    use al_sem::program::resolved::{ProgramScope, ResolvedProgram};
     let (Some(graph_path), Some(ws)) = (args.first(), args.get(1)) else {
         eprintln!("usage: aldump --compiler-oracle <graph.jsonl> <workspace> [--all-apps]");
         return ExitCode::FAILURE;
@@ -165,28 +166,22 @@ fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
         std::path::Path::new(ws),
         &al_sem::program::inputs::InputNeeds::default(),
     );
-    let (ctx, report, _) =
-        match al_sem::program::resolve::full::build_program_with_coverage_profiled(
-            &inputs,
-            BuildProfile::FULL,
-        ) {
-            Ok(x) => x,
-            Err(e) => {
-                eprintln!("aldump: error: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-    let mut edges: Vec<_> = report.edges.iter().map(|ce| ce.edge.clone()).collect();
-    if all_apps {
-        // Dependency call sites are resolved separately, from their own app
-        // (`resolve_dependency_bodies`, as the cross-app model does).
-        edges.extend(
-            ctx.resolve_dependency_bodies()
-                .edges
-                .into_iter()
-                .map(|ce| ce.edge),
-        );
-    }
+    // `--all-apps` also compares the dependency call sites, each resolved from
+    // its own app (as the cross-app model does); otherwise the workspace's.
+    let scope = if all_apps {
+        ProgramScope::CrossApp
+    } else {
+        ProgramScope::Workspace
+    };
+    let built = match ResolvedProgram::build(&inputs, scope) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("aldump: error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let ctx = &built.body().ctx;
+    let mut edges: Vec<_> = built.body().all_edges().map(|ce| ce.edge.clone()).collect();
     al_sem::program::resolve::compiler_oracle::reclassify_entry_runs(&mut edges, ctx.graph());
     let program = program_sites(&project_fresh(&edges, &ctx.graph().apps));
     let mut apps = std::collections::BTreeSet::new();

@@ -84,8 +84,8 @@ pub use project::{Inputs, Projection, project};
 use crate::program::graph::ProgramGraph;
 use crate::program::graphify_export::object_kind_str;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId};
-use crate::program::resolve::edge::{Edge as EngineEdge, Histogram};
-use crate::program::resolve::full::ObligationId;
+use crate::program::resolve::edge::Histogram;
+use crate::program::resolved::{ProgramScope, ResolvedProgram};
 use crate::snapshot::TrustTier;
 
 /// `meta.schema`.
@@ -185,53 +185,61 @@ impl ImpactGraph {
 }
 
 /// Build the export for a workspace: the cross-app program
-/// ([`crate::program::resolve::full::build_cross_app_program`]), its source
-/// facts, the projection and `meta`.
+/// ([`ResolvedProgram::build`] at [`ProgramScope::CrossApp`]), then
+/// [`export_from_program`].
 pub fn export_workspace(
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
 ) -> Result<ImpactGraph, String> {
-    let workspace_root = inputs.workspace.as_path();
-    let (ctx, report, coverage) = crate::program::resolve::full::build_cross_app_program(inputs)?;
-    // The gate's identity rule (#73): `app.json` needs a non-empty string `id`.
-    // Checked on the snapshot's own reading of it (`guid` is "" exactly when the
-    // `id` is missing, not a string, or empty, `snapshot.rs:199-208`), so the id
-    // checked is the id exported, with no second read. After the build, so a
-    // missing or unparseable `app.json` keeps the build's `read`/`parse` error.
-    if ctx.snapshot().workspace_app.guid.is_empty() {
+    let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp)?;
+    export_from_program(&program)
+}
+
+/// The export of a built program: its source facts, the projection and `meta`.
+/// The program must be [`ProgramScope::CrossApp`]: a workspace-scoped build has
+/// no dependency call-site edges, so its graph would lose them silently.
+pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, String> {
+    let pm = program.meta();
+    let inputs = &pm.inputs;
+    if pm.scope() != ProgramScope::CrossApp {
         return Err(format!(
-            "could not compute modelInstanceId for workspace '{}': app.json has no non-empty string id",
-            workspace_root.display()
+            "the call-graph export needs a cross-app program build; this one is {:?}",
+            pm.scope()
         ));
     }
+    // The gate's identity rule (#73): `app.json` needs a non-empty string `id`.
+    // Read from the input set the build read (#160 §4.3.3), so the id checked
+    // is the id exported, with no second read. After the build, so a missing or
+    // unparseable `app.json` keeps the build's `read`/`parse` error.
+    if inputs.app_id().is_none() {
+        return Err(format!(
+            "could not compute modelInstanceId for workspace '{}': app.json has no non-empty string id",
+            inputs.workspace.display()
+        ));
+    }
+    let body = program.body();
+    let ctx = &body.ctx;
     let graph = ctx.graph();
     let index = crate::program::resolve::index::ResolveIndex::build(graph);
     let facts = extract_source_facts(graph, &index, &ctx.all_units());
     let surface = ctx.decl_surface();
-    let recovered: HashSet<String> = report.recovered_files.iter().cloned().collect();
+    let recovered: HashSet<String> = pm.recovered_files.iter().cloned().collect();
     let projection = project(&Inputs {
         graph,
         index: &index,
         surface: &surface,
-        primary: report.primary_app_ref,
-        edges: &report.edges,
-        site_facts: &report.site_facts,
+        edges: body.edge_view(),
         facts: &facts,
-        missing_obligations: &report.coverage.missing,
+        missing_obligations: &pm.coverage_contract.missing,
         recovered_files: &recovered,
     });
 
-    let dependency_edges: Vec<EngineEdge> = report
-        .edges
-        .iter()
-        .filter(|ce| {
-            ce.edge.from.object.app != report.primary_app_ref
-                && matches!(ce.obligation_id, ObligationId::CallSite { .. })
-        })
-        .map(|ce| ce.edge.clone())
-        .collect();
+    // The dependency call sites (spec §4.3.2: over all edges, the dependency
+    // callers' `CallSite` edges are exactly this set).
+    let dependency_histogram =
+        Histogram::of_edges(body.dependency_body_edges().iter().map(|ce| &ce.edge));
     let snap = ctx.snapshot();
     let ws = snap.apps.first();
-    let apps = crate::program::resolve::full::loaded_apps(&ctx, &coverage);
+    let apps = program.loaded_apps();
     let meta = json!({
         "schema": SCHEMA,
         "version": VERSION,
@@ -246,8 +254,8 @@ pub fn export_workspace(
         },
         "apps": apps,
         "assumptions": ["opaqueCodeRunsNoObjectsById", "platformEntryPointsNotModelled"],
-        "recoveredFiles": report.recovered_files,
-        "coverageHolds": crate::program::resolve::full::coverage_holds(&report.coverage),
+        "recoveredFiles": pm.recovered_files,
+        "coverageHolds": crate::program::resolve::full::coverage_holds(&pm.coverage_contract),
         "counts": {
             "nodes": projection.nodes.len(),
             "edges": projection.edges.len(),
@@ -255,16 +263,16 @@ pub fn export_workspace(
             "universalCallers": projection.universal_callers,
         },
         "histogram": {
-            "primaryScoped": histogram_json(&report.primary_histogram),
-            "wholeProgram": histogram_json(&report.histogram),
-            "dependencyBodies": histogram_json(&Histogram::of_edges(&dependency_edges)),
+            "primaryScoped": histogram_json(&pm.primary_histogram),
+            "wholeProgram": histogram_json(&pm.histogram),
+            "dependencyBodies": histogram_json(&dependency_histogram),
         },
     });
-    if !crate::program::resolve::full::coverage_holds(&report.coverage) {
+    if !crate::program::resolve::full::coverage_holds(&pm.coverage_contract) {
         eprintln!(
             "al-sem graph: warning: the coverage contract does not hold ({} obligations without an edge); \
              their routines are linked to the universal hub",
-            report.coverage.missing.len()
+            pm.coverage_contract.missing.len()
         );
     }
     Ok(ImpactGraph {
@@ -404,7 +412,7 @@ pub(crate) fn render_node(
             },
             |x| x.name.to_string(),
         ));
-        n.dependency = Some(o.app != inp.primary);
+        n.dependency = Some(o.app != inp.edges.primary_app_ref);
         n.symbol_only = Some(obj.is_some_and(|x| x.tier == TrustTier::SymbolOnly));
     };
     match key {

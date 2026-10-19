@@ -2161,34 +2161,6 @@ pub fn build_program_with_coverage_profiled(
     Ok((ctx, report, fc))
 }
 
-/// The cross-app program (engine-switch S7.3): a `FULL` build, with every
-/// source-bearing dependency body resolved from its own app
-/// ([`ProgramContext::resolve_dependency_bodies`]) and merged into the report —
-/// edges, site facts and parens-less calls. `alsem analyze`'s cross-app model and
-/// `alsem graph` (#63) both start here, so the two cannot drift.
-///
-/// It stops at the merged edges. The demand filter
-/// (`program::resolve::demand::cross_app_demand`, S8.2) keeps only what the
-/// workspace reaches and is the detector model's choice; the call-graph export
-/// must not apply it (it would remove dependency code reachable only through
-/// interface implementations, extension triggers or run hubs).
-pub fn build_cross_app_program(
-    inputs: &Arc<InputSet>,
-) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
-    let (ctx, mut report, coverage) = {
-        let _s = pt::span("crossapp", "crossapp.program_build_full");
-        build_program_with_coverage_profiled(inputs, BuildProfile::FULL)?
-    };
-    let dependency = {
-        let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
-        ctx.resolve_dependency_bodies()
-    };
-    report.edges.extend(dependency.edges);
-    report.site_facts.extend(dependency.site_facts);
-    report.parenless_calls.extend(dependency.parenless_calls);
-    Ok((ctx, report, coverage))
-}
-
 /// Which dependency apps a cross-app build loaded, and how: one row per required
 /// dependency (`appId`, `name`, `publisher`, `version`, `source`), plus one
 /// `source: "missing"` row per declared dependency the ledger did not find, sorted

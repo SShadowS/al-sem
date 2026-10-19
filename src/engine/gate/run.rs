@@ -272,41 +272,47 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
     if !single_app {
         return build_cross_app_analysis_model(inputs);
     }
-    let (fresh, program) = {
+    let program = {
         let _s = pt::span("preflight", "preflight.fresh_program");
-        match crate::program::resolve::full::build_program_with_coverage(inputs) {
-            Ok((ctx, report, fc)) => (Ok(fc), Some((ctx, report))),
-            Err(e) => (Err(e), None),
+        crate::program::resolved::ResolvedProgram::build(
+            inputs,
+            crate::program::resolved::ProgramScope::Workspace,
+        )
+    };
+    let program = match program {
+        Ok(program) => program,
+        Err(why) => {
+            // A workspace with no app-scoped AL file is the empty-output case;
+            // otherwise the failed program build is an error. (Engine-switch S9.1:
+            // this used to assemble L3's model from disk only to tell the two
+            // apart.) The same rule as the `NestedApps::Skip` walk it replaces: a
+            // failed walk left `al_files` empty, so it does not assemble either.
+            // A missing model-instance id is reported first, as before.
+            let model = if inputs.model_instance_id.is_none() {
+                Err(ModelFailure::NoModelInstanceId)
+            } else if inputs.app_scoped_files().next().is_some() {
+                Err(ModelFailure::ProgramBuildFailed(why.clone()))
+            } else {
+                Err(ModelFailure::AssemblyFailed)
+            };
+            return AnalysisModel {
+                fresh: Err(why),
+                model,
+                physical: None,
+                object_facts: None,
+            };
         }
+    };
+    // The build's coverage, moved out once the program is done with (#91).
+    let failed = |program: crate::program::resolved::ResolvedProgram, model| AnalysisModel {
+        fresh: Ok(program.into_parts().0.coverage),
+        model: Err(model),
+        physical: None,
+        object_facts: None,
     };
     // The id `InputSet::read` computed (#160): no second disk walk.
     let Some(model_instance_id) = inputs.model_instance_id.as_deref() else {
-        return AnalysisModel {
-            fresh,
-            model: Err(ModelFailure::NoModelInstanceId),
-            physical: None,
-            object_facts: None,
-        };
-    };
-    let Some((ctx, report)) = program else {
-        // A workspace with no app-scoped AL file is the empty-output case;
-        // otherwise the failed program build is an error. (Engine-switch S9.1:
-        // this used to assemble L3's model from disk only to tell the two apart.)
-        // The same rule as the `NestedApps::Skip` walk it replaces: a failed walk
-        // left `al_files` empty, so it does not assemble either.
-        let assembles = inputs.app_scoped_files().next().is_some();
-        let model = if assembles {
-            let why = fresh.as_ref().err().cloned().unwrap_or_default();
-            Err(ModelFailure::ProgramBuildFailed(why))
-        } else {
-            Err(ModelFailure::AssemblyFailed)
-        };
-        return AnalysisModel {
-            fresh,
-            model,
-            physical: None,
-            object_facts: None,
-        };
+        return failed(program, ModelFailure::NoModelInstanceId);
     };
     // Engine-switch S2a: the model is projected from the program engine's parse.
     let resolved = {
@@ -315,31 +321,23 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
             inputs,
             model_instance_id,
             false,
-            &ctx,
-            &report.parenless_calls,
+            &program.body().ctx,
+            &program.body().parenless_calls,
         )
     };
     let Some(rows) = resolved else {
-        return AnalysisModel {
-            fresh,
-            model: Err(ModelFailure::AssemblyFailed),
-            physical: None,
-            object_facts: None,
-        };
+        return failed(program, ModelFailure::AssemblyFailed);
     };
     // Taken before the adapter consumes (and drops) the program context.
-    let physical = Some(ctx.graph().workspace_rows.clone());
+    let physical = Some(program.body().ctx.graph().workspace_rows.clone());
     let object_facts = Some(crate::program::model::census::object_fact_census(
         &rows.workspace,
-        ctx.graph(),
+        program.body().ctx.graph(),
     ));
-    // The same build's coverage (#91): `program` is `Some` exactly when `fresh` is `Ok`.
-    let coverage = fresh
-        .as_ref()
-        .expect("a built program carries its coverage");
-    let resolved = crate::program::model::program_calls::attach_program_calls(
-        inputs, rows, ctx, report, coverage,
-    );
+    // The same build's coverage (#91).
+    let (resolved, meta) =
+        crate::program::model::program_calls::attach_program_calls(rows, program);
+    let fresh = Ok(meta.coverage);
     AnalysisModel {
         fresh,
         model: Ok(AnalysisTarget::SingleApp(Box::new(resolved))),

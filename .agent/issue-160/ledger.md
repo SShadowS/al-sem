@@ -1,144 +1,117 @@
-# Issue #160 ledger: attempt 3 (epic step 1: frozen InputSet)
+# Issue #160 ledger: attempt 4 (epic step 1b: retained ResolvedProgram)
 
-Attempt 2's ledger and register (step 0) are on master at `5f096af9` (PR #165); `git show 5f096af9:.agent/issue-160/ledger.md`. This file replaces them for attempt 3.
+Earlier attempts' ledgers are in git history: step 0 at `5f096af9` (PR #165), step 1 at `576dd296` (PR #170). This file replaces them for attempt 4.
 
 ## Claim
 
 ```json
-{"run_id":"20261018-222527-440f4b","issue":160,"attempt":3,"session":"claude-code-session:cf05ae92-26c8-4a5d-a439-ddec4928220c","branch":"issue/160-alsem-batch-build-the-model-onc-a3","worktree":"U:\\Git\\al-sem-issue-160-a3","body_hash":"2ec746e00deded290965d462f57e8ade73a96d606db1b7f89361f532a6d32883"}
+{"run_id":"20261019-085626-fcb498","issue":160,"attempt":4,"session":"claude-code-session:cf05ae92-26c8-4a5d-a439-ddec4928220c","branch":"issue/160-alsem-batch-build-the-model-onc-a4","worktree":"U:\\Git\\al-sem-issue-160-a4","body_hash":"2ec746e00deded290965d462f57e8ade73a96d606db1b7f89361f532a6d32883"}
 ```
 
-Issue body hash: `2ec746e00deded290965d462f57e8ade73a96d606db1b7f89361f532a6d32883`. The base comes from `make-worktree` (origin/master): `5f096af915a068d3673eeb0e45a83e7b9f041627`.
+Base `576dd29685e426ad2780e5c3700f4bd66ec5212b` (make-worktree, origin/master). Build output: `H:\al-sem-targets\al-sem-issue-160-a4` (`target_root`).
 
 ## Classification
 
-**Architectural.** This is step 1 of the #160 epic. The owner re-scoped #160 on 2026-10-18: each step is its own PR, the PR says "Part of #160", it uses no closing keyword, and #160 stays open.
+**Architectural.** This is step 1b of the #160 epic. The owner re-scoped #160 on 2026-10-18: each step is its own PR, the PR says "Part of #160", it uses no closing keyword, and #160 stays open.
 
 ## Assumption probes
 
-Steps 2-5 are carried. The epic spec and the steps 0-2 spec were designed and panel-converged in attempt 2: spec panel 4 rounds, 23 entries accepted by both reviewers. They have been on master since PR #165 (`docs/superpowers/specs/2026-10-18-issue-160-*.md`) and have not changed since. The plan is `docs/superpowers/plans/2026-10-18-issue-160-steps-0-2.md`; this run delivers **tasks 9-15 (step 1)**. Step 0's numbers file (`docs/measurements/2026-10-18-issue-160-step0.md`) is the baseline for this step's bounds.
+Steps 2-5 are carried. The specs were panel-converged in attempt 2 and are on master: `docs/superpowers/specs/2026-10-18-issue-160-*.md`; step 1b is §4.3, acceptance A1b.*. This run delivers **plan tasks 16-18** of `docs/superpowers/plans/2026-10-18-issue-160-steps-0-2.md`. The bounds' baselines are the step 0 and step 1 numbers files.
 
 ## Base/Head SHAs
 
-- make-worktree base: `5f096af9`. Rebase 1, onto `214a7879` (nextest + gate speed-ups): one CHANGELOG conflict, both sides kept.
-- Rebase 2, onto `8405f96d` (#100 / #167): clean textually, but #167 added `tests/gap/gap_issue100_testfield_capability.rs` against the pre-step-1 `FullSnapshotOptions`/`PolicyCheckOptions` fields, and `ci-steps all` failed to compile (log `ci-steps-all/20261019T071250-ab9e7011.log`). Fixed in `ce7db1ed`: the test reads its inputs through `InputSet`, 14/14 pass. No assertion changed. `rebase_regate` is exhausted after this rebase.
-- First freeze: B = `8405f96d`, H = `ce7db1ed` (attested; PR #170). CI (ubuntu) then failed to compile a `#[cfg(unix)]` test arm (E0282, `src/program/inputs.rs:443`). The fix is `12dcf2d1` (`ci_fix` charged), and final round 4 accepted it.
-- Second freeze: H = `12dcf2d1`. CI then failed on Linux clippy (`non_octal_unix_permissions`, `tests/common/unreadable.rs:42`). The owner authorised a second CI fix beyond the `ci_fix` budget, on the condition that CI's exact Linux steps run first. They ran in a fresh WSL2 Ubuntu ext4 clone (clippy release `-D warnings` exit 0, `cargo test --no-run` exit 0, unix-sensitive tests green), and the fix is `d8412569`. Final round 5 accepted it.
-- **B = `8405f96dd6ef849a37ee3cce327185174abec537`** (origin/master), **H = `d84125694f4a9fed1bcd8917958286da9daff45e`**.
+B = `576dd29685e426ad2780e5c3700f4bd66ec5212b` (`origin/master`, unchanged since the claim). H = `778972cef6ef192499d4af39485d6055dd9f1d15` (gated; later commits change only the ledger and the register).
 
 ## Timeline
 
-- Claim attempt 3 + make-worktree at `5f096af9`. Preflight showed `master-differs-from-origin`: another session's 2 unpushed docs commits on local master. With the owner's OK they were pushed (master `37f6de49`), so the preflight condition is cleared.
-- A background heartbeat loop runs every 8 min. Claude Code stopped it once on low memory (the #100 session built in parallel); with the owner's OK it was restarted.
-- `plan_tasks` charged 7 (tasks 9-15), 5 remaining.
-- Implementation workflow, tasks 9-15: every task reviewed by opus. Task 10's review found a file I left out of the commit, fixed in `93c59e3b`. Task 9's `#![allow(dead_code)]` was refused by check-diff and removed.
-- `code-review` high: 10 candidates. 7 fixed, 3 refuted with spec citations (`8cd6d98d`).
-- Final panel r1: both reviewers accepted all 10 entries; 12 new findings merged into F2-1..F2-9 (`c670d966`). r2: opus accepted everything; sol re-raised F2-9 only (the empty Base/Head and Gate sections, now filled).
+- Claim attempt 4 + make-worktree at `576dd296`; preflight ok (one other live lease: #107). Heartbeat loop every 8 min. `plan_tasks` charged 3 (tasks 16-18).
+- Discovery #171 filed (executor gitops decodes git output as cp1252 on Windows; seen in attempt 3).
+- Code review (high, the `code-review` built-in skill, two forked reviews merged): 14 findings CR1-CR14 in `.agent/runs/20261019-085626-fcb498/code-review-r1.md`.
+- An opus fix agent committed `b8b59b5a` (CR1-CR9, CR11-CR14). The session hit the account spend limit at 10:59 before the agent wrote its dispositions file; CR10 was mid-measurement (bench r1, 8 pairs).
+- Resumed 2026-10-19 by session `7284feb0` (same run id; the lease was kept live by the old session's heartbeat loops, still running as orphans). Every fix in `b8b59b5a` source-checked against its finding; the four discrimination proofs re-run by this session (below); register entries `F1-CR*` written with `hash` = the fix commit's first 16 hex digits (`b8b59b5a086b94ae`).
+- `cargo build --profile release-fast` of `b8b59b5a`: exit 0, no warnings. CDO bench r2 (6 rounds, analyze + digest, `576dd296` vs `b8b59b5a`) for CR10 and A1b.4: every run exit 0; A1b.4 met on all four peaks (−4.5 to +2.5 MB); digest wall +0.1 s (3 of 6), analyze +0.8 s (2 of 6); SARIF, digest bytes (less `generatedAt`) and the CDO histogram SHA unchanged. CR10 refuted with r1 + r2 (14 more pairs); the step 1b numbers file records both.
+- No `cfg(unix)` code in `576dd296..b8b59b5a`'s fixes, so the WSL Linux check (passed after tasks 16-18) was not re-run. `origin/master` still `576dd296`: no rebase.
 
 ## Acceptance matrix
 
-This run's acceptance rows are the steps 0-2 spec's step 1 rows (A1.*). Each one maps to a test in plan tasks 9-15.
+This run's acceptance rows are the spec's step 1b rows (A1b.*). Each one maps to a test in plan tasks 16-18.
 
 ## Discrimination proofs
 
-Every break was made with the Edit tool and confirmed to apply exactly once before the test ran, then reverted to green. The SHAs below are the pre-rebase ones the proofs ran at. After the rebase onto 214a7879 they map (same trees apart from CHANGELOG): a47d9094→007c0205, 2041748c→b7b243db, 93c59e3b→649b989a, 09095df2→05bae2d3, 2796f6da→4522d226, 3126962e→626ee103, 648723d3→a8d281aa, 426e4c3d→376ef31b. The code-review fixes (8cd6d98d) carry their own proofs in `.agent/runs/20261018-222527-440f4b/code-review-r1-dispositions.md`.
+Every break was made with the Edit tool and applied exactly once, then reverted to green. Each of the three tasks was reviewed by opus with no blocking defects.
 
-**Task 9, `a47d9094` (InputSet types, read once)**
-
-| test | break | fail output (1 line) | revert |
-|---|---|---|---|
-| nested_app_files_are_listed_and_flagged | `nested_app: false && is_nested_app(..)` in `read` | `left: [("src/A.al", false), ("sub/src/B.al", false)] right: [.., ("sub/src/B.al", true)]` | green 8/8 |
-| invalid_utf8_is_the_read_to_string_error | `text()` error text changed to "app.json is not UTF-8" | `left: "app.json is not UTF-8" right: "stream did not contain valid UTF-8"` | green |
-| auto_detect_keeps_an_unreadable_yaml | auto-detect falls through on a read failure | `left: "...al-sem.policy.yml" right: "...al-sem.policy.yaml"` | green |
-| snapshot_inputs_equal_derive_inputs | roots guard `if false && self.roots_config_loaded()` | ws-d51-jobqueue: left lacks the `roots-config` row | green |
-| unreadable_al_file_keeps_its_slot | read error mapped to `Ok(Arc::from(""))` | `assertion failed: i.file("A.al").unwrap().text.is_err()` | green |
-| model_instance_id_equals_the_gate_function | the version always 0.0.0.0 | left Some("d25646e60dbbbb2f") right Some("225874ed4a5f49e9") | green |
-| build_only_* (2 tests) | not broken separately (they pin the build_only skips and the should_panic text) | - | green on Windows and WSL2 |
-| Unix arm | all 8 under WSL2 Ubuntu (ext4, uid 1000), chmod arm of `unreadable.rs` | - | 8 passed, 0 skipped |
-
-**Task 10, `2041748c` + `93c59e3b` (the build reads the InputSet)**
+**Task 16, `821cb7a4` (ResolvedProgram, two edge sets kept apart)**
 
 | test | break | fail output (1 line) | revert |
 |---|---|---|---|
-| walk_error_fails_the_build (Win+WSL), walk_loop_fails_the_build (WSL) | `read`: `Err(_e) => (Ok(()), Vec::new())` | `assertion failed: inputs.al_walk.is_err()` | green, both platforms |
-| walk_error_fails_the_build | provider: `anyhow!("{}", e.to_string())` instead of `Error::new(Arc::clone(e))` | the last `: <os>` part of the chain is gone (Win os error 5, WSL os error 13) | green |
-| workspace_root_equals_walk_al_source | the provider reads raw bytes lossily instead of the InputSet text | left keeps the BOM, right does not | green |
-| census-probe compile | the old call `build_program_with_coverage(&ws)` put back | `error[E0308]: expected &Arc<InputSet>, found &PathBuf` | builds |
-| stated limit | the walk-error tests panic at their first assertion, so later assertions are not proven separately; a loop error has no `source()`, so the to_string break cannot fail the loop test | | |
+| program::resolved::tests::all_edges_is_edges_then_dependency_bodies | `all_edges` chains dependency bodies first | `resolved.rs:229` left [..202.., ..101..] right [..101.., ..202..] | green |
+| same | `edge_view` swaps the two slice fields | `resolved.rs:233` (the view assert) | green |
+| cli_build_counters::retained_census_changes_no_output (A1b.5 inputs bucket) | `InputSet::census` drops the `.al` text bytes | first run stayed GREEN (the fixture's `.al` bytes were below the other inputs). The test was strengthened by padding one `.al` file with a 64 KiB comment. Then: `inputs 2446 < .al bytes 66005` | green 32/32 |
 
-**Task 11, `09095df2` (one InputSet per command)**
+**Task 17, `1d4b6bf7` (`alsem graph` reads the ResolvedProgram; one EdgeView)**
 
 | test | break | fail output (1 line) | revert |
 |---|---|---|---|
-| cli_build_counters::inputs_read_once | a second `InputSet::read` in `AnalysisTarget::build` | `"inputs.read": 2` | green |
-| cli_inputs_frozen::al_file_added_after_read | `select_program_files` walks the disk again | left `findings: []`, `sourceUnitsParsed: 0`; right has the d1 finding | green |
-| cli_inputs_frozen::roots_config_edit_after_read | `finish_resolved` reads `roots.config.json` from disk | `cli_inputs_frozen.rs:126` rootClassifications differ | green |
-| switch_dump::analyze_builds_through_the_dumped_functions | a direct `project_coverage_inputs` call in `run_analyze_with_exit` (new needle) | `run_analyze_with_exit calls project_coverage_inputs directly` | the same call under the OLD needle stays green, so the needle swap matters; both reverted |
-| cli_build_counters::inputs_relative_workspace_path_runs | `workspace_root = current_dir().join(..)` | `SnapshotBuilder: the InputSet was read for tests/r0-corpus/…, not U:\…` | green |
+| project::add_keeps_first_via_on_conf_tie | `<` to `<=` in `Builder::add` | left "second" right "first" | green 14/14 |
+| project::cross_set_tie_keeps_the_first_sets_via | the engine edges iterate dependency bodies first | left "dynamic" right "unresolved" | green |
+| cli_graph_export::dependency_bodies_histogram_is_the_dependency_call_sites | drop the `from.object.app != primary_app_ref` filter | resolvedSource 3/total 3 against 2/2 | green 8/8 |
+| cli_graph_export::graph_export_covers_dependencies | the projection is fed `dependency_body_edges: &[]` | `exactly one node Dep Worker.Work: []` | green |
+| same | delete only `report.site_facts.extend(dependency.site_facts)` | first run GREEN (the fixture had no dependency run site; the plan predicted this limit). A dependency `Page.Run` and a run-edge assertion were added; then `exactly one node Dep Worker.ShowPage: []` | green 8/8 |
 
-**Task 12, `2796f6da` (post-build readers; each break is a disk re-read instead of the InputSet)**
+**Task 18, `275a97a6`:** a docs-only measurement task, with no new test.
 
-| test | break | fail output (1 line) | revert |
-|---|---|---|---|
-| app_json_edit_after_read | (1) `read_workspace_apps`; (2) cross-app model id; (3) `finish_resolved` primary app; (5) `snapshot_rows` | (1) `pr-summary (read_workspace_apps)`; (2)/(3) `the cross-app model could not be built`; (5) `fingerprint (derive_inputs app-json row)` | green |
-| coverage_yaml_edit_after_read, closure_app_replaced_after_read, roots_config_edit_after_read | `snapshot_rows` disk read | `workspaceFingerprint` differs; `inputs` rows differ | green |
-| al_text_edit_after_read | `build_suppression_map` reads the `.al` | `left: 0 right: 1` | green |
-| policy_edit_after_read | `load_policy_from_file(path)` | `left: None right: Some(..)` | green |
-| baseline_edit_after_read | `load_baseline(&path)` | `left: 0 right: 2` | green |
-| update_baseline_applies_the_set_just_written | apply `inputs.baseline` instead of the set just written | (a) `left: 2 right: 0`; (b) `baseline '..malformed.json' is not valid JSON` (exit 2) | green |
+**Review fixes, `b8b59b5a`** (each break made with Edit, its absence checked by grep count 0, run with `cargo nextest`, then reverted; logs under `H:/al-sem-160-bench/`)
 
-**Task 13, `3126962e` (objectless files, second parse deleted)**
+| finding | test | break | fail output (1 line) | revert |
+|---|---|---|---|---|
+| CR3 | program::resolved::tests::report_tally_counts_the_meta_rows | the `coverage_contract.missing.len()` buffer deleted from `report_tally` | left 161 right 281 | green |
+| CR11 | program::resolved::tests::snapshot_texts_exclude_the_workspace + cli_build_counters::retained_census_changes_no_output | `.filter(\|u\| u.id != snap.workspace_app)` removed from `snapshot_texts_tally` | unit: left (12624, 8) right (0, 0); census: `program.snapshot_texts 66344 counts the workspace texts` | green (both) |
+| CR2 | cli_graph_export::export_refuses_a_workspace_scoped_program | the scope guard made `&& false` | panic `reading dependency trees needs DependencyBodies::Keep` | green |
+| CR14 | cli_graph_export::dependency_bodies_histogram_is_the_dependency_call_sites | histogram fed `body.all_edges()` | total 3 against 2 | green (reverted against the formatter hook's reflow) |
 
-| test | break | fail output (1 line) | revert |
-|---|---|---|---|
-| objectless_file_removed_after_read | the diagnostics re-walk and re-parse (the old second parse) | `cli_inputs_frozen.rs:234` missing `No object declaration found in src/Empty.al` | green 11/11 |
-| app_json_paths_edit_after_read | `count_app_json_paths(workspace)` | `:256` the multi-app DIAG-discover error appears | green |
-| app_json_edit_after_read (reader 4) | the app id read from disk | `:179` json differs | green |
-| walk_error_fails_the_build (diagnostics) | `if inputs.al_walk.is_err() && false` | `compute_workspace_diagnostics(&inputs, Some(&listed)).is_empty()` (stated limit: only the hand-stated `Some` list pins it) | green |
-| run_analyze_with_exit_uses_the_shared_aggregation | an inline `.workspace_diagnostics` read in `run_analyze_with_exit` | `run_analyze_with_exit calls .workspace_diagnostics itself` | green |
-| analyzer_diagnostics_of_run_keeps_every_source_in_order | drop source (1) | `left: [dependencies,…] right: [discover,dependencies,…]` | green |
+After all reverts: `git diff -- src/ tests/` empty; the five tests above plus `all_edges_is_edges_then_dependency_bodies`: 6 passed.
 
-**Task 14, `648723d3` (one writer)**
+**Final panel r1 fixes**
 
-| test | break | fail output (1 line) | revert |
-|---|---|---|---|
-| analyze_closed_pipe_exits_2 | `println!("{out}")` brought back in analyze | `left: Some(101) right: Some(2)` | green 3/3 |
-| digest_out_unwritable_exits_1, digest_closed_pipe_exits_1 | the old digest write block with its own `eprintln!` | `left: 0 right: 1` (no `al-sem: write error: …` line) | green 3/3 |
-
-**Task 15, `426e4c3d`:** a docs-only measurement task, with no new test.
-
-**Final panel r1 fixes, `c670d966`:**
-
-| test | break | outcome | revert |
-|---|---|---|---|
-| walk_error_fails_the_build (A1.7: the Windows literal is the parent's text) | `snapshot.rs:274` provider put back to the parent's disk walk `walk_al_source(&inputs.workspace, …)` | PASSED with no `skipped` line: the committed literal equals the old code's error text (A1.7 provenance; captured at 007c0205, whose build path equals the parent's) | restored |
-| analyze_json_reports_the_captured_driver_version | `run.rs:667`, then `:819`, back to `driver_version()` | FAILED: left "1.7.2" right "captured-160" | ok |
-| fingerprint_inventory_only_usage_errors_read_no_inputs | `false && f.inventory_only` in the pre-read check | FAILED: `inputs.read` left 1 right 0 | ok |
-| assert_row `inputs.read` (digest rows) | a second `InputSet::read` in `run_digest_cmd` | FAILED: `[digest cross-app] inputs.read: got 2, want 1` | ok |
-| census_model_rows_counts_the_workspace_diagnostics | the `workspace_diagnostics` census line removed | FAILED: left 0 right 216 | ok |
-
-Stated limit: the Linux A1.7 literal was not re-run in this round. Task 10's WSL rows are its evidence.
+| finding | test | break | fail output (1 line) | revert |
+|---|---|---|---|---|
+| F2-3 (r1) | doctest `program::resolved::ProgramMeta::scope` (`compile_fail,E0616`: setting `p.meta.scope` from outside the crate) | `scope` made `pub` again (grep count 1) | `Test compiled successfully, but it's marked compile_fail` | green |
+| F2-3 (r2: meta/body sealed) | doctest `program::resolved::ResolvedProgram` (`compile_fail,E0616`: `std::mem::swap(&mut a.meta, &mut b.meta)`) | `meta` made `pub` (grep count 1) | that doctest FAILED `Test compiled successfully…`; the scope doctest stayed ok | green |
+| F2-3 (r2) | doctest `ProgramMeta::scope`, retargeted to an owned `&mut ProgramMeta` (so it tests `scope`, not the now-private `meta`) | `scope` made `pub` (grep count 1; `pub meta` count 0) | that doctest FAILED `Test compiled successfully…`; the swap doctest stayed ok | green (both: 2 passed) |
 
 ## Findings register summary
 
+- Code review r1 (`code-review` built-in skill, high): F1-CR1..CR14. 13 fixed (`b8b59b5a`), CR10 refuted by re-measurement (r1 + r2, 14 pairs).
+- Final panel r1 (`gpt-6.1-sol`, `claude-opus-5.5` via `pi_ask`; files `.agent/runs/20261019-085626-fcb498/final-r1-{briefing,sol,opus}.md`): sol accepted 13, re-raised CR4; opus accepted 13, re-raised CR13. New: F2-1..F2-6. CR4 fixed at the definition (census.rs), CR13's evidence replaced by a direct CDO oracle comparison.
+- Final panel r2 (`final-r2-{briefing,sol,opus}.md`, same threads): opus accepted all 8; sol accepted 7 and re-raised F2-3 (the public `meta`/`body` still let one build's meta be swapped onto another's body; opus raised the same as a nit). Fixed by sealing both fields (`meta()`, `body()`, crate-only `into_parts()`), pinned by a second doctest. Opus's two other minors: F2-7 (the numbers file's branch gate), F2-8 (two more API changes for the CHANGELOG).
+- Final panel r3 (`final-r3-*.md`, `778972ce`): both accepted F2-3 and F2-8, no new findings; opus accepted F2-7, sol re-raised it (the frozen-head gates not yet recorded). The four gates then ran on H = `778972ce`, all exit 0, recorded above. r4 asks both for F2-7 only.
+- Final panel r4 (`final-r4-*.md`): both accepted F2-7, no new findings. Converged: all 22 entries accepted by both. `final_rounds` used 4 of 5.
+- Reviewers: the operator's standing instruction (also used for step 1, PR #170) replaces the `/issue` roster: `gpt-6.1-sol` and `claude-opus-5.5`, marks under `reviews.sol` / `reviews.opus`, attested with `--substitute astra=sol --substitute flash=opus`.
+
 ## Gate results
 
-Every gate ran supervised under run `20261018-222527-440f4b`. Logs are under `.agent/runs/20261018-222527-440f4b/logs/<gate>/`. `ci-steps test` and `check-goldens` run on cargo-nextest; `cdo-gate` stays on `cargo test`.
+On `933e4f41` (the review-fix head plus register), all through `agentflow run`, logs under `.agent/runs/20261019-085626-fcb498/logs/`:
 
-| head | ci-steps-all | coverage | check-goldens | cdo-gate | note |
-|---|---|---|---|---|---|
-| 376ef31b (after rebase 1) | 0 (376 s) | 0 | 0 (25.5 s) | 0 (130 s) | |
-| 8cd6d98d (code-review fixes) | 0 (641 s) | 0 | 0 (27 s) | 1 | the cdo-gate build saw the fix agent's uncommitted edits (`unresolved import reject_inventory_only_combos`); not a verdict on 8cd6d98d |
-| c670d966 (final r1 fixes) | 0 (382 s) | 0 | 0 (27 s) | 0 (149 s) | an earlier run was stopped on low memory and re-run |
-| beb4d531 (after rebase 2) | **1** | 0 | 0 | 0 | the #167 test does not compile against step 1's API (see Base/Head) |
-| ce7db1ed (first freeze) | 0 (266.6 s) | 0 | 0 (33.2 s) | 0 (82.9 s) | CI on ubuntu then failed: the unix test arm does not compile |
-| 12dcf2d1 (CI fix 1) | 0 (504.4 s) | 0 | 0 (30.7 s) | 0 (122.3 s) | CI on ubuntu then failed on clippy `non_octal_unix_permissions` |
-| **H = d8412569** (CI fix 2) | **0** (264.3 s, `20261019T080335-f97495d5.log`) | **0** (`20261019T080800-0b6409f4.log`) | **0** (29.2 s, `20261019T080801-27261cd6.log`) | **0** (77.7 s, `20261019T080831-38a6d7d0.log`) | final; the tree was clean after; CI's Linux clippy and test build were clean in WSL2 Ubuntu before the commit |
+| gate | exit | seconds |
+|---|--:|--:|
+| `ci-steps all` | 0 | 612.4 (queued 180 behind #107); 3481 passed, 8 skipped |
+| `check-goldens --verify-coverage` | 0 | 0.3 (36 golden dirs declared) |
+| `check-goldens` | 0 | 27.2 |
+| `cdo-gate` | 0 | 225.7 (`cdo-gate: PASS`, 2122 lib tests) |
 
-No golden moved in step 1. Toolchain: Rust 1.96.0. Grammar: tree-sitter-al `main` at the committed `node-types.sha256`. CDO_WS: the pinned baseline, enforced by cdo-gate's stamp checks.
+On the frozen head `778972cef6ef192499d4af39485d6055dd9f1d15` (after the final-panel r1 and r2 fixes; `origin/master` still `576dd296`, no rebase):
+
+| gate | exit | seconds | log |
+|---|--:|--:|---|
+| `ci-steps all` | 0 | 605.0 | `logs/ci-steps-all/20261019T130611-216c2047.log`: 3481 passed, 8 skipped; both `resolved.rs` `compile_fail` doctests ok |
+| `check-goldens --verify-coverage` | 0 | 0.4 | `logs/check-goldens-coverage/20261019T131617-c7e65ae5.log` (36 dirs) |
+| `check-goldens` | 0 | 31.1 | `logs/check-goldens/20261019T131618-94ddef56.log` |
+| `cdo-gate` | 0 | 204.7 | `logs/cdo-gate/20261019T131650-4dd43e04.log` (`cdo-gate: PASS`) |
 
 ## Discoveries
 
+- #171 (filed): executor gitops decodes git output as cp1252.
+
 ## Not delivered
 
-Steps 1b (plan tasks 16-18) and 2 (tasks 19-28) are not in this run. Each is its own later run of #160.
+Step 2 (plan tasks 19-28) is not in this run. It is its own later run of #160.

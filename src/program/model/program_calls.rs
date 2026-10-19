@@ -129,6 +129,7 @@ use crate::program::resolve::edge::{
     DispatchShape, EdgeKind, Evidence, Route, RouteTarget, UnknownReason as PReason, callee_fp,
 };
 use crate::program::resolve::full::{ClassifiedEdge, ObligationId, ProgramContext, ProgramReport};
+use crate::program::resolved::{EdgeView, ProgramMeta, ProgramScope, ResolvedProgram};
 use crate::snapshot::TrustTier;
 use al_syntax::ir::ObjectKind;
 
@@ -379,12 +380,13 @@ fn model_apps(graph: &ProgramGraph, primary: AppRef, ws: &ModelEntities) -> Hash
 }
 
 /// Pair every L3 call site with the program edge at the same exact span and
-/// count what does not pair, by reason. `report` must come from
-/// `resolve_full_program_with(ctx)`; `ws` is the L3 model of the same
+/// count what does not pair, by reason. `view` must come from
+/// `resolve_full_program_with(ctx)` (`ProgramReport::edge_view`, or a
+/// `ProgramBody::edge_view` of the same build); `ws` is the L3 model of the same
 /// workspace.
 #[must_use]
-pub fn site_census(report: &ProgramReport, ctx: &ProgramContext, ws: &ModelEntities) -> SiteCensus {
-    join(report, ctx, ws).census
+pub fn site_census(view: EdgeView<'_>, ctx: &ProgramContext, ws: &ModelEntities) -> SiteCensus {
+    join(view, ctx, ws).census
 }
 
 /// The census plus the pairs it found, for the adapter.
@@ -398,13 +400,13 @@ struct Join<'a> {
     ops: HashMap<(usize, usize), &'a ClassifiedEdge>,
 }
 
-fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &ModelEntities) -> Join<'a> {
+fn join<'a>(view: EdgeView<'a>, ctx: &ProgramContext, ws: &ModelEntities) -> Join<'a> {
     let mut c = SiteCensus::default();
     let mut matched_calls: HashMap<(usize, usize), &'a ClassifiedEdge> = HashMap::new();
     let mut matched_ops: HashMap<(usize, usize), &'a ClassifiedEdge> = HashMap::new();
     let surface = ctx.decl_surface();
     let graph = ctx.graph();
-    let primary = report.primary_app_ref;
+    let primary = view.primary_app_ref;
     let apps = model_apps(graph, primary, ws);
     // Keyed by model unit (S7.3): dependency files too, when the model holds them.
     let mut texts: HashMap<String, &str> = ctx
@@ -427,7 +429,7 @@ fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &ModelEntities)
 
     // The site links keep EVERY edge per span (S2b.6); this adapter still takes
     // the first in report order, as it always did — S3 converts all of them.
-    let links = crate::program::model::site_links::SiteLinks::build(report);
+    let links = crate::program::model::site_links::SiteLinks::build(view);
     let mut program: HashMap<SiteKey, &'a ClassifiedEdge> = HashMap::new();
     for &app in &apps {
         for (k, edges) in links.sites_of(app) {
@@ -610,8 +612,9 @@ fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &ModelEntities)
 
 /// The adapter, stage 1: L3's `ResolvedCalls` built from the program
 /// engine's call-site edges (code map B7; see the module doc), plus the
-/// census with its `adapter_*` counts. `report` must come from
-/// `resolve_full_program_with(ctx)`; `ws` is the L3 model of the same
+/// census with its `adapter_*` counts. `view` must come from
+/// `resolve_full_program_with(ctx)` (`ProgramReport::edge_view`, or a
+/// `ProgramBody::edge_view` of the same build); `ws` is the L3 model of the same
 /// workspace. Nothing here mutates `ws`.
 ///
 /// `upgrade_dependency_bindings` (stage 2): upgrade the bindings of a call
@@ -620,12 +623,12 @@ fn join<'a>(report: &'a ProgramReport, ctx: &ProgramContext, ws: &ModelEntities)
 /// stage 1 alone.
 #[must_use]
 pub fn resolved_calls_from_program(
-    report: &ProgramReport,
+    view: EdgeView<'_>,
     ctx: &ProgramContext,
     ws: &ModelEntities,
     upgrade_dependency_bindings: bool,
 ) -> (ResolvedCalls, SiteCensus) {
-    adapter(report, ctx, ws, upgrade_dependency_bindings, None)
+    adapter(view, ctx, ws, upgrade_dependency_bindings, None)
 }
 
 /// The production step that points the detectors at the program engine's
@@ -635,52 +638,42 @@ pub fn resolved_calls_from_program(
 /// [`assemble_and_resolve_workspace_program`] both use it, so a test cannot
 /// drift from the production path.
 ///
-/// `coverage` is the same build's `FreshCoverage`; its dependency-ledger warnings
-/// go on the model (#91). It is required, so no program-backed model can be built
-/// without them. `inputs` is the set the build read: the model's workspace
-/// diagnostics come from it and `coverage.files_without_object` (#160 §4.2.4).
+/// The program is the build the rows were assembled from: its body is consumed
+/// (dropped here, after the adapter), and its meta is handed back. The meta's
+/// `FreshCoverage` puts its dependency-ledger warnings on the model (#91), and its
+/// input set gives the model's workspace diagnostics, with
+/// `coverage.files_without_object` (#160 §4.2.4).
 pub fn attach_program_calls(
-    inputs: &crate::program::inputs::InputSet,
     rows: crate::program::model::workspace::ModelRows,
-    ctx: ProgramContext,
-    report: ProgramReport,
-    coverage: &crate::program::resolve::full::FreshCoverage,
-) -> crate::program::model::workspace::Model {
-    attach_program_calls_with(inputs, rows, ctx, report, coverage, None)
+    program: ResolvedProgram,
+) -> (crate::program::model::workspace::Model, ProgramMeta) {
+    attach_program_calls_with(rows, program, None)
 }
 
 /// [`attach_program_calls`] for a cross-app model (engine-switch S7.3): `abi_rows`
 /// joins a symbol-only dependency routine to its model row.
 fn attach_program_calls_with(
-    inputs: &crate::program::inputs::InputSet,
     rows: crate::program::model::workspace::ModelRows,
-    ctx: ProgramContext,
-    report: ProgramReport,
-    coverage: &crate::program::resolve::full::FreshCoverage,
+    program: ResolvedProgram,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
-) -> crate::program::model::workspace::Model {
+) -> (crate::program::model::workspace::Model, ProgramMeta) {
     use crate::engine::perf_trace as pt;
     let calls = {
         let _s = pt::span("b3", "b3.adapter");
-        adapter(&report, &ctx, &rows.workspace, true, abi_rows).0
+        let body = program.body();
+        adapter(body.edge_view(), &body.ctx, &rows.workspace, true, abi_rows).0
     };
     // Engine-switch S4.2: the detector event graph, from the same program build.
     let events = {
         let _s = pt::span("b3", "b3.events");
-        crate::program::model::events::program_event_graph(&ctx, &rows.workspace)
+        crate::program::model::events::program_event_graph(&program.body().ctx, &rows.workspace)
     };
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.program");
-        census_program(&ctx, &report);
+        program.census();
     }
-    {
-        let _s = pt::span("b3", "b3.report_drop");
-        drop(report);
-    }
-    {
-        let _s = pt::span("b3", "b3.ctx_drop");
-        drop(ctx);
-    }
+    let (meta, body) = program.into_parts();
+    body.release();
     // #160 §4.1.4: everything retained from here on is post-attach.
     pt::mark_phase_start("post_attach");
     let mut resolved = crate::program::model::workspace::Model {
@@ -690,10 +683,10 @@ fn attach_program_calls_with(
         infra_diagnostics: rows.infra_diagnostics,
         workspace_diagnostics:
             crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(
-                inputs,
-                Some(&coverage.files_without_object),
+                &meta.inputs,
+                Some(&meta.coverage.files_without_object),
             ),
-        dependency_diagnostics: coverage.dependency_diagnostics(),
+        dependency_diagnostics: meta.coverage.dependency_diagnostics(),
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
     };
@@ -704,47 +697,7 @@ fn attach_program_calls_with(
         crate::census_hook::mark("census.model");
         census_model(&resolved);
     }
-    resolved
-}
-
-/// #160 §4.1.5: `program.snapshot_texts` (every source text of every app in
-/// the snapshot, each shared `Arc<str>` once: exact) and `program.report`
-/// (shallow). At step 0 the workspace texts are counted here too.
-fn census_program(ctx: &ProgramContext, report: &ProgramReport) {
-    use crate::engine::census::{Kind, Tally};
-    let mut seen = std::collections::HashSet::new();
-    let mut texts = Tally::default();
-    for app in &ctx.snapshot().apps {
-        for f in app.source.iter().flat_map(|s| s.files.iter()) {
-            if seen.insert(std::sync::Arc::as_ptr(&f.text).cast::<u8>()) {
-                // `ArcInner<str>`: strong + weak counts, then the bytes, padded
-                // to the counts' alignment — the requested allocation size.
-                texts.bytes += (2 * std::mem::size_of::<usize>() + f.text.len())
-                    .next_multiple_of(std::mem::align_of::<usize>());
-                texts.allocs += 1;
-            }
-        }
-    }
-    texts.emit("program.snapshot_texts", Kind::Exact);
-    let mut r = Tally::default();
-    r.buf::<crate::program::resolve::full::ClassifiedEdge>(report.edges.len())
-        .buf::<(
-            crate::program::resolve::full::ObligationId,
-            crate::program::resolve::full::SiteFacts,
-        )>(report.site_facts.len())
-        .buf::<(
-            (crate::program::node::AppRef, String),
-            std::collections::HashSet<al_syntax::ir::ExprId>,
-        )>(report.parenless_calls.len())
-        .strs(report.parenless_calls.keys().map(|(_, f)| f))
-        .buf::<crate::program::resolve::full::ObligationId>(report.coverage.missing.len())
-        .buf::<crate::program::resolve::full::ObligationId>(report.coverage.extra.len())
-        .buf::<String>(report.recovered_files.len())
-        .strs(&report.recovered_files);
-    for ids in report.parenless_calls.values() {
-        r.buf::<al_syntax::ir::ExprId>(ids.len());
-    }
-    r.emit("program.report", Kind::Shallow);
+    (resolved, meta)
 }
 
 /// #160 §4.1.5: the `model` bucket, shallow: the rows' buffers, the calls and
@@ -824,16 +777,15 @@ pub fn assemble_and_resolve_workspace_program(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<crate::program::model::workspace::Model> {
-    let (ctx, report, coverage) =
-        crate::program::resolve::full::build_program_with_coverage(inputs).ok()?;
+    let program = ResolvedProgram::build(inputs, ProgramScope::Workspace).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
         inputs,
         model_instance_id,
         skip_roots_config,
-        &ctx,
-        &report.parenless_calls,
+        &program.body().ctx,
+        &program.body().parenless_calls,
     )?;
-    Some(attach_program_calls(inputs, rows, ctx, report, &coverage))
+    Some(attach_program_calls(rows, program).0)
 }
 
 /// [`assemble_and_resolve_workspace_program`] over inline `(relative path, source)`
@@ -932,8 +884,9 @@ pub fn assemble_and_resolve_cross_app_program(
     skip_roots_config: bool,
 ) -> Option<CrossAppProgram> {
     use crate::engine::perf_trace as pt;
-    let (ctx, report, coverage) =
-        crate::program::resolve::full::build_cross_app_program(inputs).ok()?;
+    let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp).ok()?;
+    let body = program.body();
+    let ctx = &body.ctx;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
         std::collections::HashMap::new();
     for u in &ctx.snapshot().apps {
@@ -951,9 +904,9 @@ pub fn assemble_and_resolve_cross_app_program(
     let demand = {
         let _s = pt::span("crossapp", "crossapp.demand");
         crate::program::resolve::demand::cross_app_demand(
-            report.primary_app_ref,
+            ctx.primary_app_ref,
             ctx.graph(),
-            &report.edges,
+            body.all_edges(),
         )
     };
     let (rows, abi_rows) = {
@@ -962,9 +915,9 @@ pub fn assemble_and_resolve_cross_app_program(
             inputs,
             model_instance_id,
             skip_roots_config,
-            &ctx,
+            ctx,
             Some(&demand),
-            &report.parenless_calls,
+            &body.parenless_calls,
         )?
     };
     let snap = ctx.snapshot();
@@ -1005,16 +958,16 @@ pub fn assemble_and_resolve_cross_app_program(
             has_source: u.source.is_some(),
         })
         .collect();
-    let loaded_apps = crate::program::resolve::full::loaded_apps(&ctx, &coverage);
-    let resolved = {
+    let loaded_apps = program.loaded_apps();
+    let (resolved, meta) = {
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
-        attach_program_calls_with(inputs, rows, ctx, report, &coverage, Some(&abi_rows))
+        attach_program_calls_with(rows, program, Some(&abi_rows))
     };
     Some(CrossAppProgram {
         resolved,
         declared_dependencies,
         dependency_apps,
-        coverage,
+        coverage: meta.coverage,
         friends,
         loaded_apps,
     })
@@ -1033,7 +986,7 @@ fn no_program_edge(r: &ModelRoutine, cs: &PCallSite) -> (Vec<CallEdge>, Vec<Upgr
 /// The adapter: the model's calls from the program engine's edges, and the
 /// census of how each site was produced.
 fn adapter(
-    report: &ProgramReport,
+    view: EdgeView<'_>,
     ctx: &ProgramContext,
     ws: &ModelEntities,
     upgrade_dependency_bindings: bool,
@@ -1042,7 +995,7 @@ fn adapter(
     use crate::engine::perf_trace as pt;
     let j = {
         let _s = pt::span("b3", "b3.adapter.join");
-        join(report, ctx, ws)
+        join(view, ctx, ws)
     };
     let mut c = j.census;
     let surface = ctx.decl_surface();
@@ -1069,13 +1022,13 @@ fn adapter(
     let primary_objects = graph
         .objects
         .iter()
-        .filter(|o| o.id.app == report.primary_app_ref)
+        .filter(|o| o.id.app == view.primary_app_ref)
         .map(|o| (o.id.kind, o.name.fold_identifier()))
         .collect();
     let empty_abi_rows = crate::program::model::workspace::AbiRowIds::new();
     let conv = Converter {
-        primary: report.primary_app_ref,
-        model_apps: model_apps(graph, report.primary_app_ref, ws),
+        primary: view.primary_app_ref,
+        model_apps: model_apps(graph, view.primary_app_ref, ws),
         abi_rows: abi_rows.unwrap_or(&empty_abi_rows),
         routine_by_id: ws.routines.iter().map(|r| (r.id.as_str(), r)).collect(),
         upgrade_dependency_bindings,
@@ -1084,7 +1037,7 @@ fn adapter(
         by_decl,
         objects,
         primary_objects,
-        site_facts: &report.site_facts,
+        site_facts: view.site_facts,
         registry: ctx.registry(),
         targets: std::cell::RefCell::new(Vec::new()),
     };
@@ -1992,7 +1945,7 @@ fn map_unknown(reason: PReason) -> Resolution {
 /// the adapter runs (analyze then drops them before the detector context).
 pub fn adapter_census_for_workspace(workspace: &std::path::Path) -> Result<SiteCensus, String> {
     let (ctx, report, l3) = build_models(workspace)?;
-    Ok(resolved_calls_from_program(&report, &ctx, &l3.workspace, true).1)
+    Ok(resolved_calls_from_program(report.edge_view(), &ctx, &l3.workspace, true).1)
 }
 
 pub(crate) fn build_models(
@@ -2282,7 +2235,7 @@ mod tests {
         }
         let (ctx, report, mut l3) = build_models(dir.path()).unwrap();
         mutate(&mut l3.workspace);
-        site_census(&report, &ctx, &l3.workspace)
+        site_census(report.edge_view(), &ctx, &l3.workspace)
     }
 
     const TWO_CALLS: &str = "codeunit 50100 \"M\"\n{\n    procedure Foo()\n    begin\n    end;\n\n    procedure Bar()\n    begin\n    end;\n\n    procedure Caller()\n    begin\n        Foo();\n        Bar();\n    end;\n}\n";
@@ -2607,7 +2560,8 @@ mod no_fallback_tests {
         .unwrap();
 
         let (ctx, report, l3) = build_models(&root).unwrap();
-        let (calls, census) = resolved_calls_from_program(&report, &ctx, &l3.workspace, true);
+        let (calls, census) =
+            resolved_calls_from_program(report.edge_view(), &ctx, &l3.workspace, true);
         std::fs::remove_dir_all(&root).ok();
         let caller = l3
             .workspace
@@ -2667,7 +2621,7 @@ mod no_fallback_tests {
             .find_map(|(ri, r)| (!r.call_sites.is_empty()).then_some((ri, 0)))
             .unwrap();
         let cs_id = l3.workspace.routines[ri].call_sites[ci].id.clone();
-        let before = resolved_calls_from_program(&report, &ctx, &l3.workspace, true).0;
+        let before = resolved_calls_from_program(report.edge_view(), &ctx, &l3.workspace, true).0;
         let resolved_before: Vec<_> = before
             .edges
             .iter()
@@ -2681,7 +2635,8 @@ mod no_fallback_tests {
         l3.workspace.routines[ri].call_sites[ci]
             .source_anchor
             .start_line += 9999;
-        let (calls, census) = resolved_calls_from_program(&report, &ctx, &l3.workspace, true);
+        let (calls, census) =
+            resolved_calls_from_program(report.edge_view(), &ctx, &l3.workspace, true);
         let site: Vec<_> = calls
             .edges
             .iter()

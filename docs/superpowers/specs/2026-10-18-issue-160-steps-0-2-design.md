@@ -87,7 +87,7 @@ numbers file and compared under §6.
 | A1.6 | `--update-baseline` keeps today's output | `baseline::update_baseline_applies_the_set_just_written`: stdout and exit code equal today's (every current finding dropped); a malformed old file is overwritten, never read (§4.2.3, §8.2) | 1 |
 | A1.7 | A failed `.al` walk still fails closed, with today's whole error text | `inputs::walk_error_fails_the_build`, two cases (a link loop; an unreadable subfolder, by the §8 recipe: `chmod` on Unix, a deny ACE on Windows): the build `Err` text equals the FULL literal today's code prints on the same input (the OS text twice in the subfolder case; one `cfg`-gated literal per platform, since the OS text differs, §8.2), `model_instance_id == None`, and the diagnostics equal today's (§4.2.1, §8.2) | 1 |
 | A1b.1 | `alsem graph` output unchanged | `tests/cli-query-goldens/graph.test-selection-graph.jsonl` byte golden (`tests/cli/cli_graph_export.rs:702-716`) | 1b |
-| A1b.2 | The body is released at today's point | the `b3.ctx_drop` span is still where it is (`program_calls.rs:674-676`) and A1b.4's post-attach peak is flat; no unit test (`body.take()` makes `is_none()` true by construction, see §8.3) | 1b |
+| A1b.2 | The body is released at today's point | the `b3.ctx_drop` span is still where it is (`program_calls.rs:674-676`) and A1b.4's post-attach peak is flat; no unit test (`attach_program_calls` consumes the program, so a read after the release does not compile; nothing at run time is left to assert, see §8.3) | 1b |
 | A1b.3 | The two edge sets reach the projection in today's order | `project::add_keeps_first_via_on_conf_tie` + `resolved::all_edges_is_edges_then_dependency_bodies` (the helpers) + `project::cross_set_tie_keeps_the_first_sets_via` (the use: a hand-stated tie across the two sets through `project`, which reads them only through `EdgeView::all_edges`, §8.3); dropping `dependency_body_edges`, or only the DEPENDENCY `site_facts` (the merge `full.rs:2177` does today), from the projection input → `graph_export_covers_dependencies` fails (`cli_graph_export.rs:597-650`; extended if needed, §8.3) | 1b |
 | A1b.4 | No new peak | both peaks ≤ parent + band on CDO analyze and digest (§6.3) | 1b |
 | A1b.5 | `InputSet` bytes are in the census | the `inputs` bucket prints a number (5.09 MB expected on CDO) | 1b |
@@ -821,6 +821,27 @@ line. No golden moves.
 
 #### 4.3.1 Types (`src/program/resolved.rs`)
 
+**Amended by code review r1 of the implementation (2026-10-19, CR1/2/5/6/8/9/12):** the
+body is NOT an `Option`. A reader of the whole build takes `&ResolvedProgram`; the model
+builder consumes it (`attach_program_calls(rows, program) -> (Model, ProgramMeta)`), so a
+read after the release does not compile instead of panicking at a `.expect`. Steps 2 and
+12 share one program the same way: the `graph` job borrows it, the model consumes it,
+and the holder keeps the returned `ProgramMeta` (epic §5.9 rule 3's order). The build
+takes a `ProgramScope` (`Workspace` = Summary, no dependency edges; `CrossApp` = FULL +
+`resolve_dependency_bodies`) instead of a `BuildProfile`, so retention and meaning
+cannot be chosen apart; `meta.scope` (private, read through `ProgramMeta::scope()`,
+final panel F2-3) records it and `export_from_program` refuses a `Workspace` program.
+`ResolvedProgram`'s `meta` and `body` are private too (`meta()`, `body()`, and the
+crate-only `into_parts()` for the consumers that split a build), so no caller can pair
+one build's meta with another's body. `ProgramMeta` loses `primary_app_ref` (the body's
+`ctx.primary_app_ref` is the one source; `edge_view()` takes no argument) and
+`loaded_apps` (`ResolvedProgram::loaded_apps()` computes it while the body is alive, for
+the two readers that need it). `ProgramBody` loses `builtin_dispatch_audit` and
+`event_flow_dual_publisher_alias_skips` (no reader; dropped in `build`), and its two edge
+sets are private (`all_edges()`, plus `dependency_body_edges()` for the graph's
+`dependencyBodies` histogram, which reads that slice; `EdgeView`'s are private too). The
+block below is the original design, kept for the record.
+
 ```rust
 pub struct ResolvedProgram { pub meta: ProgramMeta, pub body: Option<ProgramBody> }
 pub struct ProgramMeta {           // only the fields a step 0-2 reader reads (§4.3.3)
@@ -887,6 +908,13 @@ resolver returns; `ProgramBody` is its retained form.
 
 #### 4.3.2 The two edge sets (R6-5)
 
+**Amended by code review r1 (CR14):** the projection does not keep the filter over
+`all_edges`. The `dependencyBodies` histogram reads `body.dependency_body_edges()`
+directly (`impact_graph/mod.rs`, no clone); the equivalence argued below is now a
+`debug_assert!` in `ResolvedProgram::build` (every dependency body edge is a `CallSite`
+from a dependency app). A1b.1's golden and the CDO `alsem graph` bytes (parent vs head,
+equal) pin the output. The bullets below are the original design.
+
 The epic's earlier justification "no caller sits in both sets" was false. What is true:
 
 - `edges` holds the primary app's routines' edges (`resolve_full_program_from_parts`
@@ -909,6 +937,17 @@ The epic's earlier justification "no caller sits in both sets" was false. What i
 - The histograms describe `edges` only (`full.rs:1403-1418` run before `:2176`), as today.
 
 #### 4.3.3 Builder and consumers
+
+**Amended by code review r1 (CR5, CR7, CR8, CR9, CR13):** where the text below says
+`ResolvedProgram::build(inputs, FULL)` / `Summary`, read `ProgramScope::CrossApp` /
+`Workspace`. The names `meta.primary_app_ref` and `meta.loaded_apps` are gone: readers
+use the body's `ctx.primary_app_ref` (through `edge_view()`, which takes no argument)
+and `ResolvedProgram::loaded_apps()`. There is no `body.take().expect(..)`:
+`attach_program_calls(rows, program)` consumes the program and returns `(Model,
+ProgramMeta)`, reading inputs and coverage from the meta, and the single-app arm moves
+`meta.coverage` into `AnalysisModel.fresh` instead of cloning it. `aldump
+--compiler-oracle` also builds through `ResolvedProgram::build` (`Workspace`, or
+`CrossApp` under `--all-apps`). The bullets below are the original design.
 
 - `impact_graph::export_workspace(inputs)` → `export_from_program(&ResolvedProgram)`;
   it reads `body.ctx` (`graph()`, `all_units()`, `decl_surface()`, `snapshot()`),
@@ -978,7 +1017,8 @@ The epic's earlier justification "no caller sits in both sets" was false. What i
 `b3.ctx_drop`) — unchanged, except that `ProgramBody` is what is dropped. **`ProgramMeta`
 is a local of the builder that built the program, at steps 1b and 2.** The builders keep
 their return shapes (§4.3.3): each reader's value is copied out before the builder
-returns (`AnalysisModel.fresh` = `meta.coverage.clone()`, `loaded_apps` into
+returns (`AnalysisModel.fresh` = `meta.coverage`, moved out of the meta
+`attach_program_calls` hands back (amended by code review r1, CR7), `loaded_apps` into
 `CrossAppProgram`), and `ProgramMeta` drops when its builder returns (`graph`: when
 `export_from_program` returns). No command, `AnalysisTarget` or `View` holds it at these
 steps; it joins a holder at the first step whose reader needs it after the build (epic
@@ -1803,7 +1843,7 @@ repo root: from `src/program/inputs.rs` it is
 | `resolved::all_edges_is_edges_then_dependency_bodies` (unit: a `ProgramBody` with one hand-stated edge in each set; asserts the order of `body.all_edges()` AND of `body.edge_view(p).all_edges()`) | swap the two sets in `all_edges`; separately, swap the two slice fields inside `ProgramBody::edge_view` | the yielded order | restore |
 | `project::cross_set_tie_keeps_the_first_sets_via` (unit on `project.rs`'s test builder, `:1351-1383`, which gains a `dependency_body_edges` list; it pins the USE: `project` itself iterates `inp.edges.all_edges()`, §4.3.3). Hand-stated tie across the two sets, from one dependency routine R: in `edges`, R's event-flow edge with an unresolved route (`project.rs:333-335` sets `unknown`; a `Publisher` has no bounds, `:406`, so `:444-452` adds `(R, Hub::Any, Direct, Open)` with via `"unresolved"`; `from` is `Key::Routine(e.from)` for both, `:325`); in `dependency_body_edges`, R's `DynamicOpen` call site with an `OpenBound::Any` site fact (via `"dynamic"`, `:408-409`, same key at `:432-441`). Assert the `Hub::Any` edge's via is `"unresolved"` | in `project`'s `engine_edges`, iterate `dependency_body_edges` before `edges` | the kept via (`"dynamic"`) | restore |
 | `graph_export_covers_dependencies` (existing, `:597-650`; checks presence and `sourcePath`, not order) | feed `project` `edges` only (drop `dependency_body_edges`); separately, delete only the dependency merge of site facts inside `ResolvedProgram::build` (today `report.site_facts.extend(dependency.site_facts)`, `full.rs:2177`), keeping the workspace's. Dropping ALL site facts would also fail on the workspace facts alone and prove nothing about the merge. The projection reads site facts for `run` edges and open bounds (`project.rs:383-406`); if the dependency fixture has no dependency call site with a run target or an open bound, the second break stays green, and the test gains a dependency-side `Codeunit.Run` plus an assertion on its `run` edge until it fails | the dependency node's `sourcePath`/edges; the dependency-side `run` edge | restore |
-| A1b.2: no unit test. `attach_program_calls_with` takes `program.body.take()`, so `body.is_none()` afterwards is true by construction and pins nothing; the break "keep a clone" does not compile (`ProgramContext` derives no `Clone`, `full.rs:1489`). The claim is that the body's memory is released at `b3.ctx_drop` (`program_calls.rs:674-676`); A1b.4's post-attach peak is the measurement of that | — | — | — |
+| A1b.2: no unit test. `attach_program_calls_with` consumes the program (amended by code review r1; the original design took `program.body.take()`, whose `body.is_none()` afterwards was true by construction and pinned nothing), so a read after the release is a compile error; the break "keep a clone" does not compile (`ProgramContext` derives no `Clone`, `full.rs:1489`). The claim is that the body's memory is released at `b3.ctx_drop` (`program_calls.rs:674-676`); A1b.4's post-attach peak is the measurement of that | — | — | — |
 | `resolved::dependency_bodies_histogram_is_the_dependency_call_sites` (unit on a variant of the dependency workspace whose counting rule is trivial: the test writes its own source-bearing dependency (`symbol_app::write_source_app`, as `cli_digest_query_dependencies.rs:89-110` does) with one codeunit holding `procedure A() begin B(); B(); end;` and an empty `procedure B()`, and nothing else that makes a call site (no record method, builtin, trigger, event or `Codeunit.Run`); the workspace calls `A` once. So the dependency source has exactly two `CallSite` obligations, both plain calls to the dependency's own `B`, and the hand-stated literal is the histogram with `total` 2 and `resolvedSource` 2, every other bucket 0. `export_from_program`'s `meta` `dependencyBodies` histogram equals that literal (the break adds the workspace's one call to `A`, so `total` becomes 3). The shared dependency fixture is not used, because its one dependency call site is a record `Insert` whose bucket a reader would have to copy from the output; the §4.3.2 claim is then pinned on the production output, not on two computations inside the test) | in the production filter (`impact_graph/mod.rs:222-230`, the `dependency_edges` filter over `all_edges`), drop the `from.app != primary` test | the histogram literal (workspace call sites are counted too) | restore |
 
 ### 8.4 Step 2

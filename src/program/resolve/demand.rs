@@ -24,12 +24,13 @@ use crate::program::resolve::full::ClassifiedEdge;
 
 /// The demanded routines: the primary app's, and the dependency routines the rules
 /// above reach. `edges` must hold every body's edges (the workspace's report and
-/// `ProgramContext::resolve_dependency_bodies`), event flow included.
+/// `ProgramContext::resolve_dependency_bodies`, `ProgramBody::all_edges`), event
+/// flow included. They are walked once.
 #[must_use]
-pub fn cross_app_demand(
+pub fn cross_app_demand<'a>(
     primary: AppRef,
     graph: &ProgramGraph,
-    edges: &[ClassifiedEdge],
+    edges: impl IntoIterator<Item = &'a ClassifiedEdge>,
 ) -> HashSet<RoutineNodeId> {
     let mut forward: HashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = HashMap::new();
     let mut callers: HashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = HashMap::new();
