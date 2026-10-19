@@ -3417,9 +3417,6 @@ pub struct R3a5CrossAppBase {
     /// dependency leaf, plus the presence facts their dispatch composes (#107
     /// Design 6). The path facts do not follow the dispatch edges.
     pub fixed_roles: HashSet<String>,
-    /// The dependency-internal edges the cone follows (R3a-4 intra-app edges as
-    /// `direct-call` typed edges); also folded into [`Self::graph`].
-    pub injected_typed_edges: Vec<TypedEdge>,
     /// Per-routine direct capability facts (full, ordered).
     pub direct_full: HashMap<String, Vec<CapabilityFact>>,
     /// Per-routine direct coverage `(status, reasons)`.
@@ -3580,11 +3577,11 @@ pub(crate) fn build_cross_app_base(
         events: Vec::new(),
         edges: Vec::new(),
     };
-    let injected_typed_edges: Vec<TypedEdge> =
-        build_combined_graph(ws, &dep_calls, &no_events).typed_edges;
+    // The dependency-internal edges the cone follows (R3a-4 intra-app edges as
+    // `direct-call` typed edges), moved into the graph: the base keeps no copy.
     graph
         .typed_edges
-        .extend(injected_typed_edges.iter().cloned());
+        .extend(build_combined_graph(ws, &dep_calls, &no_events).typed_edges);
 
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
     for evt in &event_graph.events {
@@ -3647,7 +3644,6 @@ pub(crate) fn build_cross_app_base(
         event_graph: event_graph.clone(),
         leaf_summaries,
         fixed_roles,
-        injected_typed_edges,
         direct_full,
         direct_coverage,
         nodes,
@@ -3735,10 +3731,6 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
             .buf::<String>(b.fixed_roles.len())
             .strs(&b.fixed_roles),
     );
-    emit(
-        "base.injected_typed_edges",
-        Tally::default().buf::<TypedEdge>(b.injected_typed_edges.len()),
-    );
     let mut direct = Tally::default();
     direct
         .buf::<(String, Vec<CapabilityFact>)>(b.direct_full.len())
@@ -3812,7 +3804,9 @@ pub fn project_r3a5_cross_app(
     let direct_full = &base.direct_full;
 
     // From-scratch core (v2 db-effect solver, Phase-1-parity) + cone over the
-    // assembled base. Trace + roles-cap diagnostics ignored here.
+    // assembled base. Trace + roles-cap diagnostics ignored here, so since #160
+    // step 2 (§4.4.7) `aldump --r3a5-cross-app-summary` prints no
+    // non-convergence line (only `build_l4` prints).
     let (core_summaries, _) = compute_summaries_v2_with_leaves_core(
         ws_routines,
         graph,
@@ -5046,6 +5040,42 @@ codeunit 13 "Dep Rec Sub"
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// #160 Task 27 review I1: cross-app `alsem query` keeps the model, the
+    /// graph and the `l4` analysis, and drops the rest of the base before the
+    /// query and the render. The base holds its own `graph` and `combined_scc`
+    /// handles, so a live base shows as a second owner of each.
+    #[test]
+    fn cross_app_query_drops_the_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture(&ws);
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let q = crate::engine::l4::effect_query_cli::QuerySubstrate::build(&inputs, "r0", false)
+            .expect("cross-app query substrate");
+        assert_eq!(q.shared_owners(), (1, 1), "(graph, scc) owners");
+    }
+
+    /// #160 Task 27 review #2: the cross-app shim solves over the base's
+    /// graph, so it takes the base's SCC instead of running a second Tarjan.
+    #[test]
+    fn cross_app_shim_reuses_the_base_scc() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture(&ws);
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+        let owned = crate::engine::l5::detector_context::build_detector_context_with(
+            &base.resolved,
+            crate::engine::l5::registry::substrate::CORE_SUMMARIES,
+            Some(&base),
+        );
+        let l4 = owned.l4().expect("CORE_SUMMARIES solves");
+        assert!(
+            std::sync::Arc::ptr_eq(&l4.scc, &base.combined_scc),
+            "the shim computed its own SCC"
+        );
     }
 
     // -----------------------------------------------------------------------

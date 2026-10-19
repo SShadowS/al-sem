@@ -105,12 +105,14 @@ pub struct QueryRunResult {
 // The owned substrate (one workspace load per invocation).
 // ---------------------------------------------------------------------------
 
-/// What a [`DbEffectQuery`] borrows: a [`View`] whose `l4` cell is filled by
-/// query's plan (no detector run, #160 §4.4.4). The view holds the model, the
-/// graph and the `l4` analysis (the bundle and its SCC), so all outlive the
-/// query surface.
+/// What a [`DbEffectQuery`] borrows: the parts of a [`View`] whose `l4` cell
+/// query's plan filled (no detector run, #160 §4.4.4): the model, the graph
+/// and the `l4` analysis (the bundle and its SCC). The cross-app base's other
+/// fields drop before the query is built ([`View::into_query_parts`]).
 pub struct QuerySubstrate {
-    view: View,
+    model: Model,
+    graph: std::sync::Arc<crate::engine::l4::combined_graph::CombinedGraph>,
+    l4: crate::engine::l4::analysis::L4Analysis,
     /// Which dependencies the model holds (#66), stated in every document.
     pub dependencies: LoadedDependencies,
 }
@@ -152,18 +154,32 @@ impl QuerySubstrate {
         let dependencies = target.dependencies();
         let mut view = View::new(target);
         view.prepare(&query_plan());
-        Ok(QuerySubstrate { view, dependencies })
+        let (model, graph, l4) = view.into_query_parts();
+        Ok(QuerySubstrate {
+            model,
+            graph,
+            l4,
+            dependencies,
+        })
     }
 
     /// The model the selectors and joins read.
     pub fn resolved(&self) -> &Model {
-        self.view.model()
+        &self.model
     }
 
     /// The query surface over this substrate.
     pub fn query(&self) -> DbEffectQuery<'_> {
-        let l4 = self.view.l4();
-        DbEffectQuery::build(&l4.bundle, &l4.scc, self.view.graph())
+        DbEffectQuery::build(&self.l4.bundle, &self.l4.scc, &self.graph)
+    }
+
+    /// How many owners the graph and the SCC have (#160 Task 27 review I1).
+    #[cfg(test)]
+    pub(crate) fn shared_owners(&self) -> (usize, usize) {
+        (
+            std::sync::Arc::strong_count(&self.graph),
+            std::sync::Arc::strong_count(&self.l4.scc),
+        )
     }
 }
 

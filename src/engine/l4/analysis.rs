@@ -1,6 +1,6 @@
 //! #160 step 2 (spec §4.4.1): the L4 analysis as one value. [`build_l4`] is
-//! the SCC and the v2 solve that the detector context and query's two bundle
-//! builders (digest calls one of them) each ran for themselves.
+//! the one SCC and v2 solve that the detector context, digest, prove and
+//! query all take.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -45,10 +45,14 @@ pub struct L4Request {
 }
 
 /// The SCC (unless `req.scc` hands one in) and the v2 solve over `graph`, with
-/// the dependency leaves and fixed roles from `cross`.
+/// the dependency leaves and fixed roles from `cross`. `cross`'s leaf
+/// summaries change no output on any fixture (a leaf is a dependency routine
+/// with no out-edge, so the solver recomputes its direct rows); `fixed_roles`
+/// is pinned by `dependency_publisher_roles_stay_unknown` (ii) and
+/// `issue107_dependency_publisher_presence_composes_subscribers`.
 // The span names keep the detector context's (`context.*`) on purpose, so
-// traces stay comparable; query and digest report them too (and the summaries
-// census) once they call this (Tasks 25-27).
+// traces stay comparable; query and digest report them too, and the
+// summaries census.
 pub(crate) fn build_l4(
     model: &Model,
     graph: &CombinedGraph,
@@ -113,8 +117,8 @@ pub(crate) fn build_l4(
     (l4, CoreSummaries(core_summaries))
 }
 
-/// The line each non-convergence diagnostic stands for, as the solver prints
-/// it; a diagnostic without [`NON_CONVERGENCE_TAIL`] renders nothing.
+/// The line each non-convergence diagnostic stands for, as [`build_l4`]
+/// prints it; a diagnostic without [`NON_CONVERGENCE_TAIL`] renders nothing.
 pub fn render_warnings(diagnostics: &[SummarizeDiagnostic]) -> Vec<String> {
     diagnostics
         .iter()
@@ -127,7 +131,7 @@ pub fn render_warnings(diagnostics: &[SummarizeDiagnostic]) -> Vec<String> {
 }
 
 /// Tarjan over `graph.edges_by_from` (counter `build.graph_scc`).
-pub(crate) fn graph_scc(graph: &CombinedGraph) -> SccResult {
+fn graph_scc(graph: &CombinedGraph) -> SccResult {
     let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &graph.edges_by_from {
         scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
@@ -141,7 +145,7 @@ pub(crate) fn graph_scc(graph: &CombinedGraph) -> SccResult {
 
 /// The solver's field-resolution index (keyed (tableId, lowercased field
 /// name)), timed by the summaries census. `parameterRoles` need it.
-pub(crate) fn solver_field_index(ws: &ModelEntities) -> FieldIndex {
+fn solver_field_index(ws: &ModelEntities) -> FieldIndex {
     let t = summaries_census::start();
     let mut field_index: FieldIndex = HashMap::new();
     for table in &ws.tables {
@@ -164,7 +168,7 @@ pub(crate) fn solver_field_index(ws: &ModelEntities) -> FieldIndex {
 /// Reimplements the historical `SCCSTATS`/`SCCANATOMY` eprintln probe
 /// (`git show c8836e7^:src/engine/l5/detector_context.rs`) as one lazy JSON
 /// payload, built only when tracing is enabled.
-pub(crate) fn emit_scc_stats(graph: &CombinedGraph, scc: &SccResult) {
+fn emit_scc_stats(graph: &CombinedGraph, scc: &SccResult) {
     pt::instant_lazy("l4", "scc_stats", || {
         let max_scc = scc.sccs.iter().map(|s| s.members.len()).max().unwrap_or(0);
         let recursive_sccs = scc.sccs.iter().filter(|s| s.recursive).count();

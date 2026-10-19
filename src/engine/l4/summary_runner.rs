@@ -1778,8 +1778,8 @@ pub struct SummarizeDiagnostic {
     pub message: String,
 }
 
-/// The tail a non-convergence diagnostic's message carries after the line the
-/// solver prints. `l4::analysis::render_warnings` strips it to render that
+/// The tail a non-convergence diagnostic's message carries after the line
+/// `l4::analysis::build_l4` prints. `l4::analysis::render_warnings` strips it to render that
 /// line, and renders nothing for a message without it (#160 §4.4.7).
 pub(crate) const NON_CONVERGENCE_TAIL: &str = "; its facts are lower-confidence";
 

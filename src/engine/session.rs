@@ -424,6 +424,21 @@ impl View {
             .remove(key)
             .unwrap_or_else(|| panic!("run {key:?} not prepared or already taken"))
     }
+
+    /// Take the view apart into what `alsem query` reads once its plan is
+    /// prepared: the model, the graph and the `l4` analysis. Cross-app, the
+    /// rest of the base (its cone inputs, its own `graph` / `combined_scc`
+    /// handles) drops here, so it is not live through the query and the
+    /// render, as at `1524b1fd`.
+    pub fn into_query_parts(self) -> (Model, Arc<CombinedGraph>, L4Analysis) {
+        let graph = self.graph.expect("graph cell not filled");
+        let l4 = self.l4.expect("l4 cell not filled");
+        let model = match self.target {
+            AnalysisTarget::SingleApp(m) => *m,
+            AnalysisTarget::CrossApp(b) => b.resolved,
+        };
+        (model, graph, l4)
+    }
 }
 
 #[cfg(test)]

@@ -880,9 +880,9 @@ fn run_and_project(resolved: &Model) -> Vec<PRoutineSummaryCore> {
     // Run the v2 closed-form `EffectStore` solver (no fixed leaves — this is the
     // source-only R3a-2 projection). Byte-identical `RoutineSummary` output to
     // the retired Jacobi solver (proven by the frozen-baseline differential),
-    // so this projection is unchanged. Not the production detect/gate envelope —
-    // `detector_context::build_detector_context` is the path that threads cap-hit
-    // diagnostics into `DetectorContext`.
+    // so this projection is unchanged. Not the production detect/gate envelope:
+    // the cap-hit diagnostics are dropped here, so since #160 step 2 (§4.4.7)
+    // `aldump --r3a2` prints no non-convergence line (only `build_l4` prints).
     let no_leaves: std::collections::HashMap<String, RoutineSummary> =
         std::collections::HashMap::new();
     let (final_summaries, _cap_diagnostics) = compute_summaries_v2_with_leaves_core(

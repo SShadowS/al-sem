@@ -1082,8 +1082,9 @@ pub(crate) fn build_detector_context_with<'a>(
     use crate::engine::l5::registry::substrate;
     let ordering = (demanded & substrate::ORDERING_FACTS != 0).then(|| fill_ordering(resolved));
     let graph = context_graph(resolved, base);
+    // Cross-app the graph is the base's, so its SCC is too (no second Tarjan).
     let l4 = (demanded & substrate::CORE_SUMMARIES != 0).then(|| L4Request {
-        scc: None,
+        scc: base.map(|b| Arc::clone(&b.combined_scc)),
         extra_diagnostics: vec![],
     });
     let cross = base.map(|b| b.cross_app_inputs());

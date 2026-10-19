@@ -1067,8 +1067,9 @@ pub(crate) fn analyzer_diagnostics_of_view(
     analyzer_diagnostics_of_run(view.model(), &view.run(key))
 }
 
-/// [`compute_analyzer_diagnostics`] for a cross-app base (`alsem digest`'s
-/// default mode, #66): the default set run by the cross-app runner, the
+/// [`compute_analyzer_diagnostics`] for a cross-app base (its one caller is
+/// `tools/census-probe`; `alsem digest` reads its View's run): the default
+/// set run by the cross-app runner, the
 /// combination `alsem analyze` runs by default.
 pub fn compute_analyzer_diagnostics_cross_app(
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
