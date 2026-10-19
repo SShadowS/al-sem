@@ -187,10 +187,10 @@ fn analyze_cross_app_default() {
         &m,
         Row {
             program: 1,
-            bcg: 3,
+            bcg: 2,
             cone: 1,
             v2: 1,
-            scc: 3,
+            scc: 2,
             pd: 1,
             ctx: 1,
             snap: 0,
@@ -222,7 +222,7 @@ fn analyze_cross_app_d47() {
         &m,
         Row {
             program: 1,
-            bcg: 4,
+            bcg: 3,
             cone: 1,
             v2: 1,
             scc: 3,
@@ -812,6 +812,27 @@ fn retained_census_counts_the_single_app_scc_once() {
     let err = String::from_utf8_lossy(&out.stderr);
     let lines = err.lines().filter(|l| l.contains("bucket=l4.scc ")).count();
     assert_eq!(lines, 1, "l4.scc lines:\n{err}");
+}
+
+/// #160 A4, the cross-app half: the `View` takes the base's graph and SCC
+/// (`Arc::clone`), so `base.graph` / `base.combined_scc` count them and no
+/// `context.graph` or `l4.scc` line is printed for the alias.
+#[test]
+fn retained_census_counts_the_cross_app_graph_and_scc_on_the_base() {
+    let (_d, ws) = ws_dep();
+    let (out, _) = spawn_traced(
+        &["analyze", &ws, "--format", "json"],
+        &[("ALSEM_RETAINED_CENSUS", "1")],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let lines = |b: &str| err.lines().filter(|l| l.contains(b)).count();
+    assert_eq!(lines("bucket=base.graph "), 1, "base.graph lines:\n{err}");
+    assert_eq!(lines("bucket=l4.scc "), 0, "l4.scc lines:\n{err}");
+    assert_eq!(
+        lines("bucket=context.graph "),
+        0,
+        "context.graph lines:\n{err}"
+    );
 }
 
 /// Spec §4.1.5 / A0.5 on the fixture: `ALSEM_RETAINED_CENSUS=1` changes no

@@ -91,8 +91,12 @@ fn load_snapshot_from_workspace(
     deterministic: bool,
     strict: bool,
 ) -> Result<(CborValue, Vec<String>), String> {
-    use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
+    use crate::engine::gate::run::{
+        AnalysisTarget, analyzer_diagnostics_of_view, diagnostic_lines,
+    };
+    use crate::engine::l5::detectors::default_detectors;
     use crate::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
+    use crate::engine::session::{Cell, View, diff_strict_plan};
     use crate::program::inputs::{InputNeeds, InputSet};
     use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
@@ -112,20 +116,27 @@ fn load_snapshot_from_workspace(
     // Engine-switch S6.4: the program-backed model (program calls and events).
     let resolved = assemble_and_resolve_workspace_program(&inputs, model_id, false)
         .ok_or_else(|| format!("workspace '{dir}' did not resolve"))?;
-    let target = AnalysisTarget::SingleApp(Box::new(resolved));
+    // #160 §4.4.4: this side's `View`; `--strict` runs the default set on it,
+    // and its cells are released before snapshot composition.
+    let mut view = View::new(AnalysisTarget::SingleApp(Box::new(resolved)));
     let diag_lines = if strict {
-        analyzer_diagnostic_lines(&target)
+        let plan = diff_strict_plan(default_detectors());
+        view.prepare(&plan);
+        diagnostic_lines(&analyzer_diagnostics_of_view(&view, &plan.keys()[0]))
     } else {
         Vec::new()
     };
+    view.release(Cell::Det);
+    view.release(Cell::L4);
+    view.release(Cell::Graph);
     let opts = FullSnapshotOptions {
         inputs: &inputs,
         driver_version,
         deterministic,
         roots_config_ignored: false,
     };
-    let snapshot = compose_full_snapshot(target.resolved(), &opts);
-    drop(target);
+    let snapshot = compose_full_snapshot(view.model(), &opts);
+    drop(view);
     // #160 §4.1.4: this side's model is gone, so the other side's build is
     // not post-attach.
     crate::engine::perf_trace::end_phase("post_attach");

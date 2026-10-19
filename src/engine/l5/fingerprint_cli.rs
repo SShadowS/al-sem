@@ -27,7 +27,8 @@
 //!   - `--format cbor` + query    → exit 1 (error).
 //!   - `--format cbor.gz` + query → exit 1 (error).
 
-use crate::engine::gate::run::compute_analyzer_diagnostics;
+use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view};
+use crate::engine::l5::detectors::default_detectors;
 use crate::engine::l5::fingerprint_query::{
     FingerprintFilters, FingerprintQueryDiagnostic, WitnessLimit, fingerprint_query,
     format_fingerprint_human_verbosity, project_fingerprint_query_full,
@@ -37,6 +38,7 @@ use crate::engine::l5::snapshot_full::{
     EnvelopeDiagnostic, FullSnapshotOptions, build_inventory_envelope, compose_full_snapshot,
     serialize_cbor, serialize_cbor_gz, serialize_envelope, serialize_sharded,
 };
+use crate::engine::session::{Cell, RunKey, View, fingerprint_plan};
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
 /// The format the fingerprint command outputs.
@@ -378,10 +380,20 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // a lie — it must report `false`, same as never having passed the flag.
     let roots_config_ignored = opts.no_roots_config && opts.inputs.roots_config_loaded();
 
+    // The default set's run on a `View` (#160 §4.4.4); its cells are released
+    // before snapshot composition, as today's context died inside the runner.
+    let mut view = View::new(AnalysisTarget::SingleApp(Box::new(resolved)));
+    let plan = fingerprint_plan(default_detectors());
+    view.prepare(&plan);
+    let analyzer_diags = analyzer_diags_for(&view, &plan.keys()[0]);
+    view.release(Cell::Det);
+    view.release(Cell::L4);
+    view.release(Cell::Graph);
+    let resolved = view.model();
+
     // --strict gate (fingerprint.ts:187): BEFORE composeSnapshot. If any analyzer
     // diagnostic is severity "error", print ALL analyzer diagnostics to stderr +
     // exit 1, before any output / sharding.
-    let analyzer_diags = analyzer_diags_for(&resolved);
     if opts.strict {
         let fatal = analyzer_diags.iter().any(|(_, sev, _)| sev == "error");
         if fatal {
@@ -420,7 +432,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             deterministic: opts.deterministic,
             roots_config_ignored,
         };
-        let tree = compose_full_snapshot(&resolved, &full_opts);
+        let tree = compose_full_snapshot(resolved, &full_opts);
 
         // stderr diagnostics: base-json / cbor / shard print analyze errors to
         // stderr at exit (fingerprint.ts:242, 332). Shard path returns at :223
@@ -449,7 +461,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             // snapshot tree so apps/identities/coverage/rootClassifications are
             // byte-identical. The consumed-core (heavy) keys are not included.
             let text =
-                build_inventory_envelope(&tree, &resolved, opts.driver_version, opts.deterministic);
+                build_inventory_envelope(&tree, resolved, opts.driver_version, opts.deterministic);
             FingerprintOutput::Text(text)
         } else if let Some(mode) = opts.shard {
             // serialize_sharded: primaryOnly = (mode == PrimaryOnly).
@@ -481,7 +493,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
 
     // Query path: json-with-query or human.
     // Compose the consumed-core snapshot (not the full CBOR tree).
-    let snap = compose_snapshot(&resolved);
+    let snap = compose_snapshot(resolved);
     let workspace_fp = crate::engine::l5::snapshot_full::workspace_fingerprint_of(
         opts.inputs,
         opts.driver_version,
@@ -564,10 +576,8 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
 
 /// Build the analyzer diagnostics list as `(code, severity, message)` tuples,
 /// shared by the strict gate, the B0 envelope path, and the query JSON envelope.
-fn analyzer_diags_for(
-    resolved: &crate::program::model::workspace::Model,
-) -> Vec<(String, String, String)> {
-    compute_analyzer_diagnostics(resolved)
+fn analyzer_diags_for(view: &View, key: &RunKey) -> Vec<(String, String, String)> {
+    analyzer_diagnostics_of_view(view, key)
         .into_iter()
         .map(|d| (format!("DIAG-{}", d.stage), d.severity, d.message))
         .collect()

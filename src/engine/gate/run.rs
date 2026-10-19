@@ -39,6 +39,7 @@ use crate::engine::gate::presets::resolve_analyze_detectors;
 use crate::engine::gate::projection::{ProjectionIndex, project_finding};
 use crate::engine::l5::registry::run_detectors;
 use crate::engine::perf_trace as pt;
+use crate::engine::session::{Cell, RunKey, View, analyze_plan};
 use crate::program::inputs::{InputNeeds, InputSet};
 use crate::program::model::coverage::AnalysisCoverage;
 use crate::program::model::workspace::{Model, assemble_and_resolve_workspace_from_program};
@@ -506,24 +507,25 @@ pub fn run_analyze_with_exit(
         }
     };
 
-    // L4 + L5: run the selected detectors. Findings come pre-sorted by
-    // (detector, primaryLocationKey, rootCauseKey) with dep-anchored findings already
-    // role-scoped out (source-only ⇒ no-op).
-    let resolved = target.resolved();
+    // L4 + L5: run the selected detectors on a `View` (#160 §4.4.4). Findings
+    // come pre-sorted by (detector, primaryLocationKey, rootCauseKey). Cross-app,
+    // the run drops dependency-anchored findings itself for `--scope primary`
+    // (routine, object and `dep:` location); `--scope all` keeps them for the
+    // scope filter below.
+    let mut view = View::new(target);
     let run = {
         let _s = pt::span("l4_l5", "l4_l5.run_detectors");
-        match &target {
-            AnalysisTarget::SingleApp(r) => run_detectors(r, &detectors),
-            // The cross-app runner drops dependency-anchored findings itself for
-            // `--scope primary` (routine, object and `dep:` location); `--scope all`
-            // keeps them for the scope filter below.
-            AnalysisTarget::CrossApp(base) => crate::engine::l5::registry::run_detectors_cross_app(
-                base,
-                &detectors,
-                args.scope == Scope::Primary,
-            ),
-        }
+        let plan = analyze_plan(detectors, args.scope == Scope::Primary);
+        view.prepare(&plan);
+        view.run(&plan.keys()[0])
     };
+    // Today's context died inside the runner, before any projection: the view
+    // holds none of its cells longer.
+    view.release(Cell::Det);
+    view.release(Cell::L4);
+    view.release(Cell::Ordering);
+    view.release(Cell::Graph);
+    let resolved = view.model();
     // Capture diagnostics + detector stats for the Json formatter (consumed after
     // filtering), through the aggregation every other command uses, over THIS
     // run (the selected detectors), so analyze and the rest report one set (#91).
@@ -758,7 +760,7 @@ pub fn run_analyze_with_exit(
         drop(run_diagnostics);
         drop(coverage);
         drop(run);
-        drop(target);
+        drop(view);
     }
 
     Ok((output, exit_code, stderr_warning))
@@ -1033,8 +1035,9 @@ fn range_extent_cmp(
 /// This is the source for the cli-b capability-snapshot envelope's `diagnostics`
 /// channel (`projectDiagnostics`). It builds them as `run_analyze` does, but the
 /// output is the same only for the same `resolved`.
-/// Since engine-switch S6 its callers (fingerprint, prove, diff, and the
-/// `--single-app` modes of events, policy and digest) pass a program-backed
+/// Since engine-switch S6 its callers (prove and the `--single-app` modes of
+/// events, policy and digest; fingerprint and diff read their `View`'s run
+/// through [`analyzer_diagnostics_of_view`], #160) pass a program-backed
 /// single-app model
 /// (`program_calls::assemble_and_resolve_workspace_program`), the kind
 /// `run_analyze` builds for `--single-app`. The workspace (1), dependency (2)
@@ -1060,13 +1063,28 @@ pub fn compute_analyzer_diagnostics(
 /// `<severity>: <message>` lines, the stderr form `alsem events` and
 /// `alsem policy` print (and match `error:` against under `--strict`).
 pub fn analyzer_diagnostic_lines(target: &AnalysisTarget) -> Vec<String> {
-    match target {
+    diagnostic_lines(&match target {
         AnalysisTarget::SingleApp(r) => compute_analyzer_diagnostics(r),
         AnalysisTarget::CrossApp(b) => compute_analyzer_diagnostics_cross_app(b),
-    }
-    .iter()
-    .map(|d| format!("{}: {}", d.severity, d.message))
-    .collect()
+    })
+}
+
+/// Diagnostics as `<severity>: <message>` lines.
+pub(crate) fn diagnostic_lines(diags: &[crate::engine::l5::registry::Diagnostic]) -> Vec<String> {
+    diags
+        .iter()
+        .map(|d| format!("{}: {}", d.severity, d.message))
+        .collect()
+}
+
+/// [`analyzer_diagnostics_of_run`] over the run `key` of a prepared `View`
+/// (#160 §4.4.4): what `fingerprint` and `diff --strict` report, from the
+/// view's own run instead of a context of their own.
+pub(crate) fn analyzer_diagnostics_of_view(
+    view: &View,
+    key: &RunKey,
+) -> Vec<crate::engine::l5::registry::Diagnostic> {
+    analyzer_diagnostics_of_run(view.model(), &view.run(key))
 }
 
 /// [`compute_analyzer_diagnostics`] for a cross-app base (`alsem digest`'s
