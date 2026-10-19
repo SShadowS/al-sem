@@ -1,0 +1,69 @@
+# The benchmarks, in their own workspace package (2026-10-20).
+#
+# WHY a package of their own: as `[[bench]]` targets of `al-sem`, `criterion` was an
+# `al-sem` dev-dependency, and edition 2024 unifies dev-dependency features into every
+# `al-sem` TEST build. Through criterion's `ciborium` -> `half` and its `itertools`,
+# that turned on `zerocopy/derive` and `either/use_std`, which reach `rayon` and
+# `al-sem` itself. So `cargo build --release` and `cargo test --release --test
+# perf_bounds` (scripts/ci-steps, CI) never shared the `al-sem` LTO build: measured on
+# 2026-10-20, the perf-bounds step recompiled 30 crates, `al-sem` included (5m27).
+# Here criterion is a normal dependency of a package no `al-sem` build selects.
+#
+# The bench sources stay in `benches/` (their `#[path = "../tests/perf_support/…"]`
+# includes resolve as before). Run them with `cargo bench -p al-sem-benches --bench <name>`.
+[package]
+name = "al-sem-benches"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = ["telemetry"]
+# `telemetry_hot_path.rs` is `#![cfg(feature = "telemetry")]`: this package's feature,
+# forwarded to `al-sem`'s (on by default, as it was when the bench lived in al-sem).
+telemetry = ["al-sem/telemetry"]
+
+[dependencies]
+al-sem = { path = "..", default-features = false }
+blake3 = "1"
+criterion = "0.8"
+rayon = "1.12"
+tempfile = "3"
+
+[[bench]]
+name = "telemetry_hot_path"
+path = "telemetry_hot_path.rs"
+harness = false
+
+# T0.5: the legacy LSP call-hierarchy pipeline (initial index, the 3
+# call-hierarchy query handlers, single-file reindex) — the surface
+# CLAUDE.md's Performance Targets table describes.
+[[bench]]
+name = "lsp_pipeline"
+path = "lsp_pipeline.rs"
+harness = false
+
+# T3 (LSP-migration arc) Task 3: program-engine stage split (snapshot / parse
+# / build(graph) / ResolveIndex::build / BodyMap::build) over the perf
+# corpus — pins the rung-1/rung-2 incremental-updater budgets.
+[[bench]]
+name = "engine_stages"
+path = "engine_stages.rs"
+harness = false
+
+# The dependency pack format's go/no-go gate (spec §13). `harness = false`: a
+# plain `main` measuring the hit-path SHAPE end to end, not a criterion
+# micro-benchmark. Needs `PACK_BENCH_WS` pointed at a real BC workspace and
+# exits non-zero without it.
+[[bench]]
+name = "dep_pack_roundtrip"
+path = "dep_pack_roundtrip.rs"
+harness = false
+# `test = false` is LOAD-BEARING, not tidiness. `cargo test` builds and RUNS every
+# `harness = false` bench target, and this one exits 2 when `PACK_BENCH_WS` is unset —
+# deliberately, so a missing workspace can never read as a passing gate. Without this
+# line every CI run fails, because CI never has that variable. The sibling criterion
+# benches survive `cargo test` only because criterion detects it and self-limits to one
+# iteration; this bench is a plain `fn main`, so it cannot.
+# `clippy --all-targets` still lints it, so the `-D warnings` bar is unaffected.
+test = false

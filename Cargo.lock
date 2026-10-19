@@ -36,7 +36,6 @@ dependencies = [
  "anyhow",
  "blake3",
  "clap",
- "criterion",
  "dirs",
  "env_logger",
  "flate2",
@@ -75,6 +74,17 @@ dependencies = [
  "tracing-opentelemetry",
  "walkdir",
  "zip",
+]
+
+[[package]]
+name = "al-sem-benches"
+version = "0.1.0"
+dependencies = [
+ "al-sem",
+ "blake3",
+ "criterion",
+ "rayon",
+ "tempfile",
 ]
 
 [[package]]

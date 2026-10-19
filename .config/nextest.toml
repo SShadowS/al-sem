@@ -1,6 +1,6 @@
 # cargo-nextest configuration.
 #
-# Why nextest here: this crate has ~151 integration-test binaries, and several
+# Why nextest here: this crate has ~20 integration-test binaries (umbrella crates), and several
 # mutate process-global state (std::env::set_var in the cli_a/cli_b differential
 # tests). nextest's process-per-test execution model makes those safe by
 # construction (no shared address space) while giving much better parallelism
@@ -18,6 +18,15 @@ test-threads = "num-cpus"
 fail-fast = true
 # Surface slow tests (parse-heavy differentials) without killing them.
 slow-timeout = { period = "60s" }
+
+# Start the slow binaries first. The r3 oracle tests (~10-12 s each, every one
+# re-resolves every fixture) and the cli cross-app contract tests (15-19 s) used to
+# be scheduled last, so the suite ended with a ~10 s tail of a few busy slots
+# (measured 2026-10-19: 56-63 s wall for ~43 s of CPU per slot). Priority only
+# reorders; every test still runs.
+[[profile.default.overrides]]
+filter = 'binary(r3) | binary(cli) | binary(r4)'
+priority = 50
 
 # A golden gate reports every stale family in one pass (scripts/check-goldens).
 [profile.goldens]

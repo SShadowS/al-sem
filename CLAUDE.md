@@ -32,7 +32,9 @@ directory is still `U:/Git/al-call-hierarchy`; renaming the GitHub repo does not
 
 ```bash
 cargo build                    # Debug build
-cargo build --release          # Optimized release (full LTO, cu=1 — ~4 min for alsem; SLOW)
+cargo build --release          # Optimized release (full LTO, cu=1 — ~4 min for alsem; SLOW). Unwinds on panic,
+                               # so the gates' release build and `perf_bounds` share artifacts; the SHIPPED
+                               # binaries are `--profile release-ship` (= release + panic = "abort")
 cargo build --profile release-fast  # Thin LTO — USE THIS for measurement/triage loops (alsem/aldump on DO);
                                     # full --release only for the SHA-pinned north-star measure, perf_bounds, benches
 cargo build --profile cdo --bin aldump  # No LTO, incremental — for CORRECTNESS loops only (the CDO
@@ -45,6 +47,8 @@ rustfmt path/to/file.rs        # Format a file (NEVER `cargo fmt` — whole-crat
 scripts/ci-steps clippy        # Lint — CI's EXACT bar (release + -D warnings)
 scripts/check-goldens          # Run ALL byte-compared golden families at once (see Testing Philosophy & Goldens)
 scripts/ci-steps task          # The per-task gate (see Test tiers below)
+scripts/ci-steps task-affected # `task` with only the tests the changed paths reach (agent inner loop)
+cargo bench -p al-sem-benches --bench lsp_pipeline  # Benches are their own package (benches/Cargo.toml)
 scripts/sweep-builds           # Delete build output unused for 7 days (main + al-sem-issue-* worktrees;
                                # needs `cargo install cargo-sweep`). Run after an issue, before a release,
                                # or when `df -h /u` is low: U: has filled up three times
@@ -60,7 +64,7 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
 
 | Tier | When | Command | What it runs |
 |------|------|---------|--------------|
-| 1. Inner loop | while editing | `cargo test -p al-sem --lib <module>`, `cargo test --test <umbrella> <member>::` | only what you touched |
+| 1. Inner loop | while editing | `cargo test -p al-sem --lib <module>`, `cargo test --test <umbrella> <member>::`; per agent task `scripts/ci-steps task-affected` | only what you touched (`task-affected`: fmt, dev clippy, gen-syntax, the lib tests and the test binaries the changed paths reach; an unmapped path runs the whole suite) |
 | 2. Task gate | before every commit / per task | `scripts/ci-steps task` | `fmt`, clippy in the dev profile (`-D warnings`), `gen-syntax`, the WHOLE suite once — which already includes every `check-goldens` target |
 | 3. Branch gate | once, before a merge | `scripts/ci-steps all` + `scripts/cdo-gate <CDO_WS>` | CI's exact bar (release clippy, release build, `perf_bounds`) plus the CDO suite |
 
@@ -344,7 +348,7 @@ Testing Philosophy & Goldens below).
 
 ## Performance Targets
 
-Measured by `cargo bench --bench lsp_pipeline` (Criterion; `benches/lsp_pipeline.rs`,
+Measured by `cargo bench -p al-sem-benches --bench lsp_pipeline` (Criterion; `benches/lsp_pipeline.rs`,
 rewritten for the engine-backed LSP surface at T3 Task 16) against a deterministic
 synthetic corpus (`tests/perf_support/`) — 1000 codeunits with real cross-file call
 fan-in/fan-out for the query rows, exercising `LspSnapshot`/`lsp::handlers`/

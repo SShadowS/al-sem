@@ -191,6 +191,20 @@ if [[ "${1:-}" == "--regen" ]]; then
     echo "check-goldens: regenerating (REGEN_TEMP_GOLDENS=1) — INSPECT the diff before committing"
     REGEN_TEMP_GOLDENS=1 cargo nextest run --profile goldens "${targets[@]}" || exit 1
     echo "check-goldens: re-running WITHOUT regen to confirm green"
+elif [[ "${CHECK_GOLDENS_FORCE:-}" != "1" ]]; then
+    # ⟨2026-10-20⟩ The same skip the pre-commit hook makes: when the tracked working
+    # tree is EXACTLY a tree `scripts/ci-steps test` just passed, every target below
+    # already ran green on it (that run is the whole suite, `REGEN_TEMP_GOLDENS`
+    # unset), so a second run proves nothing. In a branch gate `ci-steps all` runs
+    # first, so this saves its 25-41 s. Any edit since that run changes the stamp and
+    # the targets run as before. `CHECK_GOLDENS_FORCE=1` always runs them;
+    # `--verify-coverage` above and `--regen` never skip.
+    tree_stamp="$(dirname "${BASH_SOURCE[0]}")/tree-stamp"
+    stamp_file="$("$tree_stamp" --path)"
+    if [ -f "$stamp_file" ] && [ "$(cat "$stamp_file")" = "$("$tree_stamp")" ]; then
+        echo "check-goldens: this exact tree passed 'scripts/ci-steps test' -- goldens already verified (CHECK_GOLDENS_FORCE=1 runs them)"
+        exit 0
+    fi
 fi
 
 env -u REGEN_TEMP_GOLDENS cargo nextest run --profile goldens "${targets[@]}"

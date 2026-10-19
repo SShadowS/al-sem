@@ -12,6 +12,7 @@ _INERT_REF = re.compile("|".join([re.escape(GATE_INERT_DIR), r'"docs"', *(re.esc
 # Lines that NAME an inert path without reading it, each with its reason.
 _MENTIONS_ONLY = {
     ("src/server.rs", "docs/OUTSTANDING.md"): "a warn! message points the reader at the doc",
+    ("scripts/ci-steps", "docs/*|*.md) ;;"): "task-affected's path map SKIPS prose paths; it reads none",
 }
 
 
@@ -42,7 +43,8 @@ def test_no_gate_reads_a_gate_inert_path():
                 hits.append(f"{rel}:{n}: {line.strip()}")
     for s in GATE_SCRIPTS:
         for n, line in enumerate((REPO / s).read_text(encoding="utf-8").splitlines(), 1):
-            if not line.lstrip().startswith("#") and _INERT_REF.search(line):
+            if (not line.lstrip().startswith("#") and _INERT_REF.search(line)
+                    and not any(f == s and m in line for f, m in _MENTIONS_ONLY)):
                 hits.append(f"{s}:{n}: {line.strip()}")
     assert hits == []
 

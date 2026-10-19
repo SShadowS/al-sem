@@ -11,12 +11,16 @@ authors = ["SShadowS"]
 description = "Whole-program semantic analysis engine for AL (Microsoft Dynamics 365 Business Central): call-graph resolution, an LSP server, and a code-quality analyzer"
 license = "GPL-3.0"
 repository = "https://github.com/SShadowS/al-sem"
+# `benches/` is its own package (`al-sem-benches`, benches/Cargo.toml); without this,
+# cargo would also auto-discover `benches/*.rs` as bench targets of THIS package, which
+# has no `criterion` dependency.
+autobenches = false
 
 # Owned-syntax-IR migration (Phase 5 — SEALED): `al-syntax` is the ONLY crate that
 # compiles + links the tree-sitter grammar. This engine/CLI crate consumes the owned
 # IR (`al_syntax::parse`) exclusively and no longer depends on `tree-sitter`.
 [workspace]
-members = ["crates/al-syntax", "crates/xtask"]
+members = ["crates/al-syntax", "crates/xtask", "benches"]
 
 [dependencies]
 # The grammar boundary crate (FFI + generated raw layer / lowerer / owned IR).
@@ -169,7 +173,7 @@ telemetry = [
 test-runtime = ["telemetry"]
 
 [dev-dependencies]
-criterion = "0.8"
+# No `criterion` here: the benches are their own package (`benches/Cargo.toml`).
 # Dual-run parity harness (owned-syntax-IR migration): integration tests link only
 # the crate + dev-deps, so the IR crate + a dir walker are listed here too.
 al-syntax = { path = "crates/al-syntax" }
@@ -216,39 +220,10 @@ path = "src/bin/alsem.rs"
 name = "mint-goldens"
 path = "src/bin/mint-goldens.rs"
 
-[[bench]]
-name = "telemetry_hot_path"
-harness = false
-
-# T0.5: the legacy LSP call-hierarchy pipeline (initial index, the 3
-# call-hierarchy query handlers, single-file reindex) — the surface
-# CLAUDE.md's Performance Targets table describes.
-[[bench]]
-name = "lsp_pipeline"
-harness = false
-
-# T3 (LSP-migration arc) Task 3: program-engine stage split (snapshot / parse
-# / build(graph) / ResolveIndex::build / BodyMap::build) over the perf
-# corpus — pins the rung-1/rung-2 incremental-updater budgets.
-[[bench]]
-name = "engine_stages"
-harness = false
-
-# The dependency pack format's go/no-go gate (spec §13). `harness = false`: a
-# plain `main` measuring the hit-path SHAPE end to end, not a criterion
-# micro-benchmark. Needs `PACK_BENCH_WS` pointed at a real BC workspace and
-# exits non-zero without it.
-[[bench]]
-name = "dep_pack_roundtrip"
-harness = false
-# `test = false` is LOAD-BEARING, not tidiness. `cargo test` builds and RUNS every
-# `harness = false` bench target, and this one exits 2 when `PACK_BENCH_WS` is unset —
-# deliberately, so a missing workspace can never read as a passing gate. Without this
-# line every CI run fails, because CI never has that variable. The sibling criterion
-# benches survive `cargo test` only because criterion detects it and self-limits to one
-# iteration; this bench is a plain `fn main`, so it cannot.
-# `clippy --all-targets` still lints it, so the `-D warnings` bar is unaffected.
-test = false
+# The benchmarks live in their own workspace package, `benches/Cargo.toml`
+# (`al-sem-benches`), so `criterion` is not an `al-sem` dev-dependency: its features
+# made every `al-sem` test build differ from the release build (see that file).
+# Run them with `cargo bench -p al-sem-benches --bench <name>`.
 
 # Dev and test builds keep file:line debug info (panics and backtraces still name the
 # line) but not full variable info, and dependencies keep none. Full debug info for
@@ -262,11 +237,22 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# No `panic = "abort"` here: cargo ignores it for test targets, so with it the gates'
+# `cargo build --release` and `cargo test --release --test perf_bounds` (scripts/ci-steps)
+# shared no artifacts and the release dependency tree was built twice per `ci-steps all`
+# (and twice in CI). The shipped binaries keep abort through `release-ship` below.
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true
+
+# What the deploy workflows build and upload (`build-and-deploy.yml`, `release.yml`):
+# `release` plus `panic = "abort"`, as the shipped binaries always were. The detector
+# loop's `catch_unwind` backstop is debug-only by design (`src/engine/l5/registry.rs`),
+# so nothing in the engine depends on the panic strategy.
+[profile.release-ship]
+inherits = "release"
+panic = "abort"
 
 [profile.release-fast]
 inherits = "release"

@@ -22,6 +22,7 @@
 # Usage: scripts/ci-steps <step>
 #   fmt | clippy | clippy-dev | gen-syntax | test | build | perf-bounds
 #   task   — the per-task gate: fmt, clippy-dev, gen-syntax, test
+#   task-affected — `task` with only the tests the changed paths can reach (inner loop)
 #   all    — exactly what CI runs; with scripts/cdo-gate it is the branch gate
 set -uo pipefail
 
@@ -59,9 +60,14 @@ require_nextest() {
     return 1
 }
 
-run_fmt() { cargo fmt --check; }
+# `-p al-sem -p al-sem-benches`: the root package and the benches, which moved to
+# their own package on 2026-10-20 (`benches/Cargo.toml`). Without the second `-p`
+# a root-package run would no longer format or lint the bench sources.
+LINT_PKGS=(-p al-sem -p al-sem-benches)
 
-run_clippy() { require_grammar || return 1; cargo clippy --release --all-targets --all-features -- -D warnings; }
+run_fmt() { cargo fmt --check "${LINT_PKGS[@]}"; }
+
+run_clippy() { require_grammar || return 1; cargo clippy "${LINT_PKGS[@]}" --release --all-targets --all-features -- -D warnings; }
 
 # The task-gate lint: the SAME lints and `-D warnings` as `run_clippy`, but in
 # the dev profile. The release profile disables incremental compilation, so every
@@ -75,7 +81,7 @@ run_clippy() { require_grammar || return 1; cargo clippy --release --all-targets
 # the exact release bar.
 run_clippy_dev() {
     require_grammar || return 1
-    CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false cargo clippy --all-targets --all-features -- -D warnings
+    CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false cargo clippy "${LINT_PKGS[@]}" --all-targets --all-features -- -D warnings
 }
 
 # NOTE: cannot run from a git worktree with no grammar checkout — the grammar
@@ -116,6 +122,55 @@ run_test() {
     fi
 }
 
+# ⟨2026-10-20⟩ The per-TASK inner loop: the nextest filterset the changed paths can
+# reach, from a coarse, explicit map. The al-sem lib tests always run. Any path the
+# map does not know (tests/common, a fixture or golden dir, Cargo.*, scripts, src/
+# outside the mapped modules, ...) selects the WHOLE suite, the safe direction.
+# Prose (docs/, *.md) selects nothing. Changed = against the merge base with
+# origin/master, plus staged, unstaged and untracked files.
+# This is NOT a gate: the whole suite still runs in `task` (before the final panel)
+# and `all` (before the merge), and only those write the gate stamp.
+affected_filter() {
+    local f expr="" all=0
+    add() { case "|$expr|" in *"|$1|"*) ;; *) expr="${expr:+$expr|}$1" ;; esac; }
+    while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        case "$f" in
+            docs/*|*.md) ;;
+            crates/al-syntax/*) add 'binary(l2_ir)'; add 'binary(gap)'; add 'package(al-syntax)'; add 'binary(differential)' ;;
+            src/program/resolve/*|src/program/build*|src/snapshot/*)
+                add 'binary(program_resolve_harness)'; add 'binary(differential)'; add 'binary(lsp)'; add 'binary(r3)'; add 'binary(r4)' ;;
+            src/engine/l4/*|src/engine/l5/*)
+                add 'binary(r4)'; add 'binary(r3)'; add 'binary(cli)'; add 'binary(l4_summary_differential)' ;;
+            src/bin/*|src/engine/gate/*) add 'binary(cli)' ;;
+            src/lsp/*|src/server.rs|src/watcher.rs) add 'binary(lsp)' ;;
+            tests/cli/*|tests/gap/*|tests/l2_ir/*|tests/lsp/*|tests/r25_abi/*|tests/r3/*|tests/r4/*|tests/temp_state/*)
+                f="${f#tests/}"; add "binary(${f%%/*})" ;;
+            tests/differential.rs|tests/l4_summary_differential.rs|tests/program_resolve_harness.rs|tests/perf_bounds.rs)
+                f="${f#tests/}"; add "binary(${f%.rs})" ;;
+            benches/*) ;;
+            *) all=1 ;;
+        esac
+    done
+    if [ "$all" = 1 ]; then echo "ALL"; else echo "$expr"; fi
+}
+
+run_task_affected() {
+    require_grammar || return 1
+    require_nextest || return 1
+    local base filter
+    base="$(git merge-base HEAD origin/master 2>/dev/null)" || base="HEAD"
+    filter="$( { git diff --name-only "$base"; git diff --name-only --cached; git ls-files --others --exclude-standard; } | sort -u | affected_filter)"
+    if [ "$filter" = "ALL" ]; then
+        echo "ci-steps: task-affected: a change outside the map -> the whole suite"
+        env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run --workspace
+        return
+    fi
+    filter="package(al-sem) & kind(lib)${filter:+ | $filter}"
+    echo "ci-steps: task-affected: $filter"
+    env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run --workspace -E "$filter"
+}
+
 run_build() { require_grammar || return 1; cargo build --release; }
 
 run_perf_bounds() { require_grammar || return 1; cargo test --release --test perf_bounds; }
@@ -132,6 +187,20 @@ case "$step" in
     # normal change, fast. No release builds; dev-profile clippy; the whole test
     # suite once (it includes every golden target, so `check-goldens` is not a
     # separate step). Run before every commit/task.
+    task-affected-tests) run_task_affected ;;
+    # The per-task inner loop (`/issue` step 8): `task` with only the tests the
+    # change can reach. The whole suite still runs in `task` and `all`.
+    task-affected)
+        rc=0
+        for s in fmt clippy-dev gen-syntax task-affected-tests; do
+            echo "=== ci-steps: $s ==="
+            if ! "$0" "$s"; then
+                echo "ci-steps: FAILED at '$s'" >&2
+                rc=1
+            fi
+        done
+        exit "$rc"
+        ;;
     task)
         rc=0
         for s in fmt clippy-dev gen-syntax test; do
@@ -145,19 +214,49 @@ case "$step" in
         ;;
     # Exactly what CI runs. Part of the branch gate (with `scripts/cdo-gate`),
     # run once before a merge, not on every task.
+    #
+    # ⟨2026-10-20⟩ `build` (release, LTO, mostly a single-threaded link) runs in the
+    # background WHILE `test` (dev, all cores) runs; `perf-bounds` then runs alone,
+    # after both, so its timings see an idle machine. The release pair uses its own
+    # target dir (`<target>/gate-release`): two cargo builds in one target dir would
+    # wait on each other's lock. Every step still runs and still decides `rc`; the
+    # build's output is printed after the test output, under its own header.
     all)
         rc=0
-        for s in fmt clippy gen-syntax test build perf-bounds; do
+        for s in fmt clippy gen-syntax; do
             echo "=== ci-steps: $s ==="
             if ! "$0" "$s"; then
                 echo "ci-steps: FAILED at '$s'" >&2
                 rc=1
             fi
         done
+        gate_release="${CARGO_TARGET_DIR:-$(git rev-parse --show-toplevel)/target}/gate-release"
+        build_log="$(mktemp)"
+        CARGO_TARGET_DIR="$gate_release" "$0" build > "$build_log" 2>&1 &
+        build_pid=$!
+        echo "=== ci-steps: test (release build running alongside) ==="
+        if ! "$0" test; then
+            echo "ci-steps: FAILED at 'test'" >&2
+            rc=1
+        fi
+        build_rc=0
+        wait "$build_pid" || build_rc=$?
+        echo "=== ci-steps: build ==="
+        cat "$build_log"
+        rm -f "$build_log"
+        if [[ "$build_rc" -ne 0 ]]; then
+            echo "ci-steps: FAILED at 'build'" >&2
+            rc=1
+        fi
+        echo "=== ci-steps: perf-bounds ==="
+        if ! CARGO_TARGET_DIR="$gate_release" "$0" perf-bounds; then
+            echo "ci-steps: FAILED at 'perf-bounds'" >&2
+            rc=1
+        fi
         exit "$rc"
         ;;
     *)
-        echo "usage: scripts/ci-steps <fmt|clippy|clippy-dev|gen-syntax|test|build|perf-bounds|task|all>" >&2
+        echo "usage: scripts/ci-steps <fmt|clippy|clippy-dev|gen-syntax|test|build|perf-bounds|task|task-affected|all>" >&2
         exit 2
         ;;
 esac

@@ -33,6 +33,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wording and records included; later rounds only verify the fixes. A panel fix that
   touches only gate-inert prose and the evidence after step 11's gates needs no new
   gate run.
+- Faster gates (2026-10-20; a survey of the gate logs, then each change measured):
+  - **One release build per gate run instead of two.** `cargo build --release` and
+    `cargo test --release --test perf_bounds` shared nothing, for two reasons:
+    - `[profile.release]` had `panic = "abort"`, which cargo ignores for tests. It is
+      gone from `release`; the shipped binaries keep it through a new `release-ship`
+      profile, which `build-and-deploy.yml` and `release.yml` now build and upload
+      (`target/release-ship/`).
+    - `criterion`, a dev-dependency, changed the features of shared crates
+      (`zerocopy`, `either`, hence `rayon` and `al-sem`). The benches moved to their own
+      workspace package, `al-sem-benches` (`benches/Cargo.toml`), and the root package
+      sets `autobenches = false`. Run them with `cargo bench -p al-sem-benches --bench <name>`.
+
+    Measured: the perf-bounds step went from recompiling 30 crates, `al-sem` included
+    (5m27), to compiling only the `perf_bounds` test target (45 s).
+  - `scripts/ci-steps all` runs the release build in the background while the test
+    suite runs, in its own target dir (`target/gate-release`); `perf-bounds` then runs
+    alone, so its timings see an idle machine.
+  - `scripts/ci-steps task-affected`: `task` with only the tests the changed paths can
+    reach (an explicit path map; the lib tests always; an unmapped path runs the whole
+    suite). It is the per-task inner loop of `/issue` step 8; the whole suite still runs
+    before the final panel and before the merge.
+  - `scripts/check-goldens` skips when the tracked tree is exactly one `ci-steps test`
+    just passed, the same skip the pre-commit hook makes (`CHECK_GOLDENS_FORCE=1` runs
+    it anyway).
+  - nextest starts the slow `r3`, `cli` and `r4` binaries first (`priority = 50`), so
+    the suite no longer ends on a tail of a few long tests.
+  - `scripts/cdo-gate` runs `program_resolve_harness` on 4 threads instead of 1
+    (measured on CDO: 17-18 s against 36-38 s; the harness shares one CDO context
+    and writes nothing outside regen mode or its own tempdir).
+  - CI caches cargo builds (`Swatinem/rust-cache@v2` in `ci.yml`).
+  - agentflow: a `bench` run (`agentflow run --name bench -- python scripts/bench_ab.py …`)
+    takes every gate slot, so no gate builds beside a measurement. `pr-create --draft`
+    and `pr-ready --pr N [--body-file F]` (it replaces the body, scanned like
+    `pr-create`'s, then marks it ready); `merge-gate` refuses a draft (`pr-draft`).
+  - `/issue`:
+    - step 9 opens a draft PR after the first green task gate, so CI runs during the
+      final panel; that CI is the Linux check (no ad hoc WSL clone);
+    - one CDO bench per issue, after the panel converges, under the `bench` lock;
+    - step 8 sends review findings back to the same implementer agent (no cold
+      review-fix agent), and two small tasks may share one review;
+    - the spec panel's round 1 asks for every finding at once.
 
 - #160 step 2: every `alsem` command builds its detector context and its L4 solve once, through one `View` (`src/engine/session.rs`). Some builds stay outside the `View`:
   - `policy check`'s command-local raw-facts build (step 6 removes it);

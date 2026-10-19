@@ -48,8 +48,13 @@ profile=(--profile cdo)
 
 status=0
 
-echo "cdo-gate: running program_resolve_harness (--test-threads=1)..."
-if ! cargo test "${profile[@]}" --test program_resolve_harness -- --test-threads=1; then
+# ⟨2026-10-20⟩ 4 threads, not 1: measured on CDO, cdo profile, warm, two runs each:
+# 35.7-37.5 s at 1 thread against 17.3-18.4 s at 4, 201 passed every time. The
+# harness shares ONE CDO context (`CDO_SHARED`, a `OnceLock`), calls no `set_var`, and
+# writes only in regen mode (one golden per test) or into its own tempdir; the `=1`
+# came with the script's first version (9d10a290) with no reason recorded.
+echo "cdo-gate: running program_resolve_harness (--test-threads=4)..."
+if ! cargo test "${profile[@]}" --test program_resolve_harness -- --test-threads=4; then
     status=1
 fi
 

@@ -36,6 +36,14 @@ jobs:
         # so that file stays the single source of truth.
         uses: dtolnay/rust-toolchain@stable
 
+      # Caches the registry and the dependency builds of every profile CI uses
+      # (dev for lint/test, release for build/perf-bounds), keyed on Cargo.lock and
+      # the toolchain. Without it every PR rebuilt the whole dependency tree several
+      # times (Lint 1m24, Build 3m39, Perf bounds 3m38 on #174). Workspace crates are
+      # never cached, so the code under test is always built fresh.
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
+
       - name: Check formatting
         run: scripts/ci-steps fmt
 
