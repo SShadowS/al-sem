@@ -43,7 +43,7 @@
       "parse-incomplete": 1,
       "unresolved-call": 13
     },
-    "parameterRolesWithCrossCallExitEffect": 44,
+    "parameterRolesWithCrossCallExitEffect": 52,
     "recursiveSccCount": 3,
     "recursiveSccsRequiring2PlusIterations": 2,
     "maxRecursiveSccIterations": 4
@@ -1446,7 +1446,7 @@
         "unresolvedCallRoutines": 0,
         "opaqueCalleeUncertainties": 0,
         "uncertaintyKinds": {},
-        "parameterRolesWithCrossCallExitEffect": 2,
+        "parameterRolesWithCrossCallExitEffect": 4,
         "recursiveSccCount": 0,
         "recursiveSccsRequiring2PlusIterations": 0,
         "maxRecursiveSccIterations": 0
@@ -1519,7 +1519,7 @@
         "unresolvedCallRoutines": 0,
         "opaqueCalleeUncertainties": 0,
         "uncertaintyKinds": {},
-        "parameterRolesWithCrossCallExitEffect": 0,
+        "parameterRolesWithCrossCallExitEffect": 2,
         "recursiveSccCount": 0,
         "recursiveSccsRequiring2PlusIterations": 0,
         "maxRecursiveSccIterations": 0
@@ -1720,7 +1720,7 @@
         "unresolvedCallRoutines": 0,
         "opaqueCalleeUncertainties": 0,
         "uncertaintyKinds": {},
-        "parameterRolesWithCrossCallExitEffect": 2,
+        "parameterRolesWithCrossCallExitEffect": 4,
         "recursiveSccCount": 0,
         "recursiveSccsRequiring2PlusIterations": 0,
         "maxRecursiveSccIterations": 0
@@ -1747,7 +1747,7 @@
         "unresolvedCallRoutines": 0,
         "opaqueCalleeUncertainties": 0,
         "uncertaintyKinds": {},
-        "parameterRolesWithCrossCallExitEffect": 1,
+        "parameterRolesWithCrossCallExitEffect": 3,
         "recursiveSccCount": 0,
         "recursiveSccsRequiring2PlusIterations": 0,
         "maxRecursiveSccIterations": 0

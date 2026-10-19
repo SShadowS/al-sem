@@ -29,6 +29,7 @@ use super::db_effect_solver::{build_rvid_by_opid, seed_fixed_leaf_rows, solve_sc
 use super::effect_lattice::{EffectPresence, effect_key_of, join_presence};
 use super::effect_store::{SummaryBundle, SummaryBundleBuilder};
 use super::effect_universe::GrowingEffectUniverse;
+use super::event_dispatch::{DispatchKind, ParamDispatch, dispatch_bindings, optional_load};
 use super::routine_interner::RoutineInterner;
 use super::scc::SccResult;
 use super::summary::{
@@ -622,6 +623,7 @@ fn compose_roles_only(
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     graph: &CombinedGraph,
     body_avail_by_id: &HashMap<String, bool>,
+    dispatch: &[ParamDispatch],
 ) -> Vec<RecordRoleSummary> {
     // For non-recursive SCCs `snapshot` is empty; reads fall through to `final_map`.
     let lookup =
@@ -694,54 +696,18 @@ fn compose_roles_only(
                 Some(p) => p,
                 None => continue,
             };
-            let callee_mutates = if opaque {
-                p.persists_current_record =
-                    join_presence(p.persists_current_record, EffectPresence::Unknown);
-                p.set_based_db_writes =
-                    join_presence(p.set_based_db_writes, EffectPresence::Unknown);
-                p.validates_param = join_presence(p.validates_param, EffectPresence::Unknown);
-                p.copies_into_param = join_presence(p.copies_into_param, EffectPresence::Unknown);
-                p.resets_filters_on_param =
-                    join_presence(p.resets_filters_on_param, EffectPresence::Unknown);
-                p.loads_from_db_param =
-                    join_presence(p.loads_from_db_param, EffectPresence::Unknown);
-                p.initialises_param = join_presence(p.initialises_param, EffectPresence::Unknown);
-                // `derived` below already joins `unknown` from the facts above.
-                EffectPresence::No
-            } else {
-                let cr = callee_role.unwrap();
-                p.persists_current_record =
-                    join_presence(p.persists_current_record, cr.persists_current_record);
-                p.set_based_db_writes =
-                    join_presence(p.set_based_db_writes, cr.set_based_db_writes);
-                p.validates_param = join_presence(p.validates_param, cr.validates_param);
-                p.copies_into_param = join_presence(p.copies_into_param, cr.copies_into_param);
-                p.resets_filters_on_param =
-                    join_presence(p.resets_filters_on_param, cr.resets_filters_on_param);
-                // A helper that loads its `var` record loads the forwarder's too.
-                // A MAY fact (loads on some path), but its readers take it as MUST
-                // ("loaded after the call"): the walker's c1b (entry requirements,
-                // read by d40 and d42) and d39 (a load point resets the dirt, via
-                // `record_load_points`). That is lenient for all of them: it can
-                // only drop an entry requirement or a d39 finding, never invent one.
-                p.loads_from_db_param =
-                    join_presence(p.loads_from_db_param, cr.loads_from_db_param);
-                p.initialises_param = join_presence(p.initialises_param, cr.initialises_param);
-                cr.mutates_param
-            };
-            // Accumulate across call sites (a join, so independent of call order)
-            // instead of recomputing per binding. For every callee today
-            // `cr.mutates_param` equals the derivation over facts already joined
-            // into `p`, so no call site moves; it carries an unmasked mutation
-            // through forwarders (#107 Design 3, R3-1).
-            let derived = join_presence(
-                join_presence(p.persists_current_record, p.validates_param),
-                p.copies_into_param,
-            );
-            p.mutates_param =
-                join_presence(join_presence(p.mutates_param, derived), callee_mutates);
+            fold_callee_presence(p, if opaque { None } else { callee_role }, false);
         }
     }
+
+    // The event dispatch (#107 Design 3): the subscribers' presence facts.
+    fold_dispatch_presence(
+        &mut parameter_roles,
+        dispatch,
+        snapshot,
+        final_map,
+        body_avail_by_id,
+    );
 
     // Path-aware entry-requirement + exit-effect composition (spec §(c1a)/(c1b)).
     // Mirrors al-sem summary-runner.ts lines 310-325: after cross-call c1b, run
@@ -785,6 +751,98 @@ fn compose_roles_only(
     }
 
     parameter_roles
+}
+
+/// The c1b fold of one callee's presence facts into the caller's role `p`
+/// (`None` = an opaque callee: every fact joins `unknown`). `optional` (a
+/// subscriber that may not run, #107 Design 3): the callee's load trio goes
+/// through [`optional_load`] first, so it neither gains nor destroys a load.
+/// Every MAY fact, `mutates_param` included, joins the UNMASKED callee value.
+fn fold_callee_presence(
+    p: &mut RecordRoleSummary,
+    callee_role: Option<&RecordRoleSummary>,
+    optional: bool,
+) {
+    let callee_mutates = match callee_role {
+        None => {
+            p.persists_current_record =
+                join_presence(p.persists_current_record, EffectPresence::Unknown);
+            p.set_based_db_writes = join_presence(p.set_based_db_writes, EffectPresence::Unknown);
+            p.validates_param = join_presence(p.validates_param, EffectPresence::Unknown);
+            p.copies_into_param = join_presence(p.copies_into_param, EffectPresence::Unknown);
+            p.resets_filters_on_param =
+                join_presence(p.resets_filters_on_param, EffectPresence::Unknown);
+            p.loads_from_db_param = join_presence(p.loads_from_db_param, EffectPresence::Unknown);
+            p.initialises_param = join_presence(p.initialises_param, EffectPresence::Unknown);
+            // `derived` below already joins `unknown` from the facts above.
+            EffectPresence::No
+        }
+        Some(cr) => {
+            let trio = |v: EffectPresence| if optional { optional_load(v) } else { v };
+            p.persists_current_record =
+                join_presence(p.persists_current_record, cr.persists_current_record);
+            p.set_based_db_writes = join_presence(p.set_based_db_writes, cr.set_based_db_writes);
+            p.validates_param = join_presence(p.validates_param, cr.validates_param);
+            p.copies_into_param = join_presence(p.copies_into_param, trio(cr.copies_into_param));
+            p.resets_filters_on_param =
+                join_presence(p.resets_filters_on_param, cr.resets_filters_on_param);
+            // A helper that loads its `var` record loads the forwarder's too.
+            // A MAY fact (loads on some path), but its readers take it as MUST
+            // ("loaded after the call"): the walker's c1b (entry requirements,
+            // read by d40 and d42) and d39 (a load point resets the dirt, via
+            // `record_load_points`). That is lenient for all of them: it can
+            // only drop an entry requirement or a d39 finding, never invent one.
+            p.loads_from_db_param =
+                join_presence(p.loads_from_db_param, trio(cr.loads_from_db_param));
+            p.initialises_param = join_presence(p.initialises_param, trio(cr.initialises_param));
+            // Unmasked: every role's `mutates_param` covers its own copies.
+            cr.mutates_param
+        }
+    };
+    // Accumulate across call sites (a join, so independent of call order)
+    // instead of recomputing per binding. For every callee today
+    // `cr.mutates_param` equals the derivation over facts already joined
+    // into `p`, so no call site moves; it carries an unmasked mutation
+    // through forwarders (#107 Design 3, R3-1).
+    let derived = join_presence(
+        join_presence(p.persists_current_record, p.validates_param),
+        p.copies_into_param,
+    );
+    p.mutates_param = join_presence(join_presence(p.mutates_param, derived), callee_mutates);
+}
+
+/// Fold an event publisher's dispatch into its roles (#107 Design 3): only for
+/// a `var` publisher parameter. An unseen dispatch is ONE opaque fold; an exact
+/// one folds each `var` subscriber parameter's role, or `None` for the c1b
+/// opaque reasons (no summary, no role for `q`, no body).
+fn fold_dispatch_presence(
+    roles: &mut [RecordRoleSummary],
+    dispatch: &[ParamDispatch],
+    snapshot: &HashMap<String, RoutineSummary>,
+    final_map: &HashMap<String, RoutineSummary>,
+    body_avail_by_id: &HashMap<String, bool>,
+) {
+    for d in dispatch.iter().filter(|d| d.caller_is_var) {
+        let Some(p) = roles
+            .iter_mut()
+            .find(|r| r.parameter_index == d.param_index)
+        else {
+            continue;
+        };
+        match &d.kind {
+            DispatchKind::Unseen => fold_callee_presence(p, None, false),
+            DispatchKind::Exact(bindings) => {
+                for b in bindings.iter().filter(|b| b.callee_is_var) {
+                    let role = snapshot
+                        .get(&b.subscriber)
+                        .or_else(|| final_map.get(&b.subscriber))
+                        .filter(|_| body_avail_by_id.get(&b.subscriber).copied() == Some(true))
+                        .and_then(|s| s.parameter_roles.iter().find(|r| r.parameter_index == b.q));
+                    fold_callee_presence(p, role, b.optional);
+                }
+            }
+        }
+    }
 }
 
 /// Substitute a callee effect's `ParameterDependent(callee_param_index)` temp
@@ -1120,6 +1178,16 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         .collect();
     summaries_census::add_since(&summaries_census::BODY_AVAIL_NANOS, _t);
 
+    // Each event publisher's dispatch bindings (#107 Design 2), once per solve.
+    let dispatch_by_id: HashMap<String, Vec<ParamDispatch>> = routines
+        .iter()
+        .filter_map(|r| {
+            let edges = graph.edges_by_from.get(&r.id)?;
+            let d = dispatch_bindings(r, edges, &routines_by_id);
+            (!d.is_empty()).then(|| (r.id.clone(), d))
+        })
+        .collect();
+
     // Base intraprocedural summaries for NON-LEAF routines only (a leaf carries
     // its own summary; its EMPTY merged features must never overwrite it).
     let _t = summaries_census::start();
@@ -1205,6 +1273,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         leaf_summaries,
         fixed_roles,
         uncertainty_edges_by_from: &uncertainty_edges_by_from,
+        dispatch_by_id: &dispatch_by_id,
     };
 
     // One workspace-wide interned effect universe, threaded across every SCC
@@ -1508,6 +1577,9 @@ pub struct SccComputeCtx<'a> {
     /// lookup of "this routine's uncertainty edges" instead of scanning the whole
     /// workspace list per routine. Same edges, same order, byte-identical.
     pub uncertainty_edges_by_from: &'a HashMap<String, Vec<usize>>,
+    /// Each event publisher's dispatch bindings (#107), only for routines with
+    /// a non-empty result.
+    pub(crate) dispatch_by_id: &'a HashMap<String, Vec<ParamDispatch>>,
 }
 
 /// A diagnostic surfaced by the L4 summarize stage — presently just the JACOBI
@@ -1526,7 +1598,8 @@ pub struct SummarizeDiagnostic {
 }
 
 /// One member's roles for a pass: [`compose_roles_only`], or, for a
-/// `fixed_roles` member, its base roles unchanged (#70).
+/// `fixed_roles` member, its base roles (#70) with only its dispatch's presence
+/// facts folded in (#107 Design 6; no walker, so its path facts stay unknown).
 fn member_roles(
     ctx: &SccComputeCtx,
     routine: &ModelRoutine,
@@ -1534,8 +1607,20 @@ fn member_roles(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
 ) -> Vec<RecordRoleSummary> {
+    let dispatch = ctx
+        .dispatch_by_id
+        .get(&routine.id)
+        .map_or(&[][..], Vec::as_slice);
     if ctx.fixed_roles.contains(&routine.id) {
-        return base_roles.iter().map(clone_role).collect();
+        let mut roles: Vec<RecordRoleSummary> = base_roles.iter().map(clone_role).collect();
+        fold_dispatch_presence(
+            &mut roles,
+            dispatch,
+            snapshot,
+            final_map,
+            ctx.body_avail_by_id,
+        );
+        return roles;
     }
     compose_roles_only(
         routine,
@@ -1545,6 +1630,7 @@ fn member_roles(
         ctx.upgraded_bindings,
         ctx.graph,
         ctx.body_avail_by_id,
+        dispatch,
     )
 }
 

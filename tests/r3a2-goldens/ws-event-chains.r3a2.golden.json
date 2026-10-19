@@ -40,14 +40,14 @@
           "requiresLoadedAtEntry": "no",
           "requiredLoadedFieldsAtEntry": [],
           "mutatesBeforeLoad": "no",
-          "persistsCurrentRecord": "no",
+          "persistsCurrentRecord": "yes",
           "setBasedDbWrites": "no",
           "validatesParam": "no",
           "copiesIntoParam": "no",
           "resetsFiltersOnParam": "no",
           "dirtyAtExit": "no",
           "currentLoadedFieldsAtExit": "full",
-          "mutatesParam": "no",
+          "mutatesParam": "yes",
           "loadsFromDbParam": "no",
           "initialisesParam": "no"
         }
@@ -95,14 +95,14 @@
           "requiresLoadedAtEntry": "no",
           "requiredLoadedFieldsAtEntry": [],
           "mutatesBeforeLoad": "no",
-          "persistsCurrentRecord": "no",
+          "persistsCurrentRecord": "yes",
           "setBasedDbWrites": "no",
           "validatesParam": "no",
           "copiesIntoParam": "no",
           "resetsFiltersOnParam": "no",
           "dirtyAtExit": "no",
           "currentLoadedFieldsAtExit": "full",
-          "mutatesParam": "no",
+          "mutatesParam": "yes",
           "loadsFromDbParam": "no",
           "initialisesParam": "no"
         }

@@ -5021,4 +5021,315 @@ codeunit 13 "Dep Rec Sub"
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
+
+    // -----------------------------------------------------------------------
+    // #107: a dependency publisher's presence facts compose its subscribers.
+    // -----------------------------------------------------------------------
+
+    const DEP_AL_107: &str = r#"codeunit 12 "Dep Rec Lib"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnDepRec(var Rec: Record Customer)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnDepRec2(var Rec: Record Customer)
+    begin
+    end;
+}
+
+codeunit 13 "Dep Rec Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Rec Lib", 'OnDepRec', '', false, false)]
+    local procedure HandleRec(var Rec: Record Customer)
+    begin
+        Rec.Modify();
+    end;
+}
+"#;
+
+    const WS_AL_107: &str = r#"codeunit 50180 "Ws Fwd"
+{
+    procedure Fwd(var Rec: Record Customer)
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.OnDepRec(Rec);
+    end;
+
+    procedure Fwd2(var Rec: Record Customer)
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.OnDepRec2(Rec);
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Rec Lib", 'OnDepRec2', '', false, false)]
+    local procedure HandleWs(var Rec: Record Customer)
+    begin
+        Rec.Modify();
+    end;
+}
+"#;
+
+    /// The `probes/gen/mkdep.py` fixture: `OnDepRec` (dependency subscriber
+    /// `Modify`), `OnDepRec2` (WORKSPACE subscriber `HandleWs` doing `Modify`),
+    /// workspace forwarders `Fwd`/`Fwd2`. `with_src = false` is the symbol-only
+    /// dependency (`ws-dep-sym`): no embedded source, so both publishers are
+    /// bodyless.
+    fn write_fixture_107(ws: &std::path::Path, with_src: bool) {
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::write(
+            ws.join("app.json"),
+            format!(
+                r#"{{"id":"{WS_GUID}","name":"Ws107","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50100,"to":50199}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XRec","publisher":"probe","version":"1.0.0.0"}}]}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(ws.join("src/Fwd.al"), WS_AL_107).unwrap();
+
+        let manifest = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{DEP_GUID}" Name="XRec" Publisher="probe" Version="1.0.0.0" Runtime="13.0" /></Package>"#
+        );
+        let rec_param = r#"{"Name":"Rec","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}"#;
+        let ev =
+            r#"[{"Name":"IntegrationEvent","Arguments":[{"Value":"False"},{"Value":"False"}]}]"#;
+        let symbols = format!(
+            r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":18,"Name":"Customer","Fields":[{{"Id":1,"Name":"No.","TypeDefinition":{{"Name":"Code"}}}}]}}],"Codeunits":[{{"Id":12,"Name":"Dep Rec Lib","Methods":[{{"Name":"OnDepRec","Parameters":[{rec_param}],"Attributes":{ev}}},{{"Name":"OnDepRec2","Parameters":[{rec_param}],"Attributes":{ev}}}]}},{{"Id":13,"Name":"Dep Rec Sub","Methods":[]}}],"AppId":"{DEP_GUID}","Name":"XRec","Publisher":"probe","Version":"1.0.0.0"}}"#
+        );
+        let customer = "table 18 Customer\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20])\n        {\n        }\n    }\n}\n";
+        let mut entries: Vec<(&str, &str)> = vec![
+            ("NavxManifest.xml", manifest.as_str()),
+            ("SymbolReference.json", symbols.as_str()),
+        ];
+        if with_src {
+            entries.push(("src/Customer.al", customer));
+            entries.push(("src/Lib.al", DEP_AL_107));
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut bytes);
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, text) in entries {
+                zip.start_file(name, opts).unwrap();
+                zip.write_all(text.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let pkgs = ws.join(".alpackages");
+        std::fs::create_dir_all(&pkgs).unwrap();
+        let mut out = std::fs::File::create(pkgs.join("probe_XRec_1.0.0.0.app")).unwrap();
+        out.write_all(&[0u8; 40]).unwrap();
+        out.write_all(bytes.get_ref()).unwrap();
+    }
+
+    /// One role field of an INTERNAL role, by its projected JSON key, in the
+    /// projection's spelling (`yes`/`no`/`unknown`; a field list `unknown`/`full`).
+    fn internal_fact(r: &crate::engine::l4::summary::RecordRoleSummary, key: &str) -> String {
+        let field_list = |l: &FieldList| match l {
+            FieldList::Unknown => "unknown".to_string(),
+            FieldList::Full => "full".to_string(),
+            FieldList::Known(v) => format!("{v:?}"),
+        };
+        let p = |e: EffectPresence| format!("{e:?}").to_lowercase();
+        match key {
+            "persistsCurrentRecord" => p(r.persists_current_record),
+            "validatesParam" => p(r.validates_param),
+            "copiesIntoParam" => p(r.copies_into_param),
+            "resetsFiltersOnParam" => p(r.resets_filters_on_param),
+            "loadsFromDbParam" => p(r.loads_from_db_param),
+            "initialisesParam" => p(r.initialises_param),
+            "mutatesParam" => p(r.mutates_param),
+            "requiresLoadedAtEntry" => p(r.requires_loaded_at_entry),
+            "requiredLoadedFieldsAtEntry" => field_list(&r.required_loaded_fields_at_entry),
+            "mutatesBeforeLoad" => p(r.mutates_before_load),
+            "dirtyAtExit" => p(r.dirty_at_exit),
+            "currentLoadedFieldsAtExit" => field_list(&r.current_loaded_fields_at_exit),
+            other => panic!("unknown key {other}"),
+        }
+    }
+
+    /// One role field of a PROJECTED role, by its JSON key.
+    fn projected_fact(r: &crate::engine::l4::summary::PRecordRoleSummary, key: &str) -> String {
+        serde_json::to_value(r).unwrap()[key]
+            .as_str()
+            .unwrap_or("<not a string>")
+            .to_string()
+    }
+
+    /// `(routine name, source, json key -> value)`.
+    type RoleRow = (String, &'static str, Vec<(String, String)>);
+
+    /// Each named routine's single role, through the detector context
+    /// (`ctx.parameter_roles_by_routine`) and through `project_r3a5_cross_app`,
+    /// as `(name, source, json key -> value)` for the keys asked.
+    fn roles_both_paths(
+        ws: &std::path::Path,
+        base: &R3a5CrossAppBase,
+        names: &[&str],
+        keys: &[&str],
+    ) -> Vec<RoleRow> {
+        let ctx = crate::engine::l5::detector_context::build_detector_context_with(
+            &base.resolved,
+            crate::engine::l5::registry::substrate::ALL,
+            Some(base.cross_app_inputs()),
+        );
+        let proj = project_r3a5_cross_app(ws, "r0", "issue107");
+        let mut out = Vec::new();
+        for name in names {
+            let id = routine_id(base, name);
+            match ctx
+                .parameter_roles_by_routine
+                .get(&id)
+                .map(|v| v.as_slice())
+            {
+                Some([role]) => {
+                    out.push((
+                        name.to_string(),
+                        "ctx",
+                        keys.iter()
+                            .map(|k| (k.to_string(), internal_fact(role, k)))
+                            .collect(),
+                    ));
+                }
+                other => out.push((
+                    name.to_string(),
+                    "ctx",
+                    vec![("<roles>".to_string(), format!("{other:?}"))],
+                )),
+            }
+            let stable = base
+                .ws_routines()
+                .iter()
+                .find(|r| &r.name == name)
+                .map(|r| r.stable_routine_id.clone())
+                .unwrap();
+            match proj
+                .summaries
+                .iter()
+                .find(|s| s.routine_id == stable)
+                .map(|s| s.parameter_roles.as_slice())
+            {
+                Some([role]) => out.push((
+                    name.to_string(),
+                    "r3a5",
+                    keys.iter()
+                        .map(|k| (k.to_string(), projected_fact(role, k)))
+                        .collect(),
+                )),
+                other => out.push((
+                    name.to_string(),
+                    "r3a5",
+                    vec![("<roles>".to_string(), format!("{other:?}"))],
+                )),
+            }
+        }
+        out
+    }
+
+    /// #107 acceptance item 2 ("... and dependency publishers alike"), cross-app.
+    /// `OnDepRec` (dependency subscriber `Modify`) and `OnDepRec2` (WORKSPACE
+    /// subscriber `HandleWs` doing `Modify`) are source-bearing `fixed_roles`
+    /// publishers: their presence facts compose the subscriber
+    /// (`persistsCurrentRecord yes`, `mutatesParam yes`) while their five
+    /// path-sensitive fields stay `unknown` (#70 row 3c unchanged); the
+    /// forwarders `Fwd`/`Fwd2` inherit `persistsCurrentRecord yes` and keep
+    /// `dirtyAtExit no` (Persisted is not dirty). Checked through both the
+    /// detector context and `project_r3a5_cross_app`.
+    ///
+    /// Mutation to record at implementation (with #70's two): "skip the
+    /// dispatch fold for `fixed_roles` members" -> this test fails.
+    #[test]
+    fn issue107_dependency_publisher_presence_composes_subscribers() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture_107(&ws, true);
+        let base = build_cross_app_base(&ws, "r0").expect("cross-app base");
+        for p in ["OnDepRec", "OnDepRec2"] {
+            assert!(
+                base.dep_routine_ids.contains(&routine_id(&base, p)),
+                "precondition: {p} is a dependency routine"
+            );
+            assert!(
+                base.fixed_roles.contains(&routine_id(&base, p)),
+                "precondition: {p} is a fixed_roles publisher"
+            );
+        }
+        let keys = [
+            "persistsCurrentRecord",
+            "mutatesParam",
+            "requiresLoadedAtEntry",
+            "requiredLoadedFieldsAtEntry",
+            "mutatesBeforeLoad",
+            "dirtyAtExit",
+            "currentLoadedFieldsAtExit",
+        ];
+        let want_pub = [
+            "yes", "yes", "unknown", "unknown", "unknown", "unknown", "unknown",
+        ];
+        let mut failures = Vec::new();
+        for (name, src, got) in
+            roles_both_paths(&ws, &base, &["OnDepRec", "OnDepRec2", "Fwd", "Fwd2"], &keys)
+        {
+            let is_pub = name.starts_with("On");
+            for (i, (k, v)) in got.iter().enumerate() {
+                let want = if is_pub {
+                    want_pub.get(i).copied()
+                } else {
+                    match k.as_str() {
+                        "persistsCurrentRecord" | "mutatesParam" => Some("yes"),
+                        "dirtyAtExit" => Some("no"),
+                        _ => None,
+                    }
+                };
+                if k == "<roles>" {
+                    failures.push(format!("({src}) {name}: want one role, got {v}"));
+                } else if let Some(w) = want
+                    && v != w
+                {
+                    failures.push(format!("({src}) {name}.{k}: want {w}, got {v}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// #107 row 8 (Design 6): a symbol-only (bodyless) dependency publisher is
+    /// skipped by both composition steps, so its own role and its callers'
+    /// roles stay what base gives (pinned from the base `8405f96d` output,
+    /// probe b2): the publishers carry their all-`no` presence facts, and the
+    /// forwarders see an opaque callee (presence `unknown`).
+    #[test]
+    fn issue107_symbol_only_dependency_publisher_roles_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture_107(&ws, false);
+        let base = build_cross_app_base(&ws, "r0").expect("cross-app base");
+        let keys = [
+            "persistsCurrentRecord",
+            "validatesParam",
+            "copiesIntoParam",
+            "resetsFiltersOnParam",
+            "loadsFromDbParam",
+            "initialisesParam",
+            "mutatesParam",
+        ];
+        let mut failures = Vec::new();
+        for (name, src, got) in
+            roles_both_paths(&ws, &base, &["OnDepRec", "OnDepRec2", "Fwd", "Fwd2"], &keys)
+        {
+            let want = if name.starts_with("On") {
+                "no"
+            } else {
+                "unknown"
+            };
+            for (k, v) in got {
+                if v != want {
+                    failures.push(format!("({src}) {name}.{k}: want {want}, got {v}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
 }
