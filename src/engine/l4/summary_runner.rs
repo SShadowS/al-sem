@@ -693,7 +693,7 @@ fn compose_roles_only(
                 Some(p) => p,
                 None => continue,
             };
-            if opaque {
+            let callee_mutates = if opaque {
                 p.persists_current_record =
                     join_presence(p.persists_current_record, EffectPresence::Unknown);
                 p.set_based_db_writes =
@@ -705,6 +705,8 @@ fn compose_roles_only(
                 p.loads_from_db_param =
                     join_presence(p.loads_from_db_param, EffectPresence::Unknown);
                 p.initialises_param = join_presence(p.initialises_param, EffectPresence::Unknown);
+                // `derived` below already joins `unknown` from the facts above.
+                EffectPresence::No
             } else {
                 let cr = callee_role.unwrap();
                 p.persists_current_record =
@@ -724,11 +726,19 @@ fn compose_roles_only(
                 p.loads_from_db_param =
                     join_presence(p.loads_from_db_param, cr.loads_from_db_param);
                 p.initialises_param = join_presence(p.initialises_param, cr.initialises_param);
-            }
-            p.mutates_param = join_presence(
+                cr.mutates_param
+            };
+            // Accumulate across call sites (a join, so independent of call order)
+            // instead of recomputing per binding. For every callee today
+            // `cr.mutates_param` equals the derivation over facts already joined
+            // into `p`, so no call site moves; it carries an unmasked mutation
+            // through forwarders (#107 Design 3, R3-1).
+            let derived = join_presence(
                 join_presence(p.persists_current_record, p.validates_param),
                 p.copies_into_param,
             );
+            p.mutates_param =
+                join_presence(join_presence(p.mutates_param, derived), callee_mutates);
         }
     }
 
