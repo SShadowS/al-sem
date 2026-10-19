@@ -319,7 +319,9 @@ impl InputSet {
 
     /// #160 §4.1.5 / A1b.5: the `inputs` census bucket. It owns the workspace
     /// `.al` texts (the snapshot shares them by `Arc`). Every owned buffer by
-    /// `len`; an `io::Error` in a slot is not walked (an OS error holds no heap).
+    /// `len`; an `io::Error` in a slot is not walked: the census runs after a
+    /// successful build, where every held error is an OS error from a read
+    /// (no heap) — a failed `al_walk` fails the build first.
     #[must_use]
     pub fn census(&self) -> crate::engine::census::Tally {
         use crate::engine::census::Tally;

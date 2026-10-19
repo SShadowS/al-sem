@@ -200,10 +200,10 @@ pub fn export_workspace(
 pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, String> {
     let pm = &program.meta;
     let inputs = &pm.inputs;
-    if pm.scope != ProgramScope::CrossApp {
+    if pm.scope() != ProgramScope::CrossApp {
         return Err(format!(
             "the call-graph export needs a cross-app program build; this one is {:?}",
-            pm.scope
+            pm.scope()
         ));
     }
     // The gate's identity rule (#73): `app.json` needs a non-empty string `id`.

@@ -68,8 +68,9 @@ pub struct ResolvedProgram {
 pub struct ProgramMeta {
     /// The set the build read (shared with the command's own `Arc`).
     pub inputs: Arc<InputSet>,
-    /// What the build resolved.
-    pub scope: ProgramScope,
+    /// What the build resolved. Private: only [`ResolvedProgram::build`] sets it,
+    /// so a reader that gates on it (the call-graph export) cannot be talked past.
+    scope: ProgramScope,
     pub recovered_files: Vec<String>,
     /// Carries `files_without_object` (§4.2.4).
     pub coverage: FreshCoverage,
@@ -95,6 +96,20 @@ pub struct ProgramBody {
     pub site_facts: HashMap<ObligationId, SiteFacts>,
     /// Both sets' parens-less calls, merged.
     pub parenless_calls: ParenlessCalls,
+}
+
+impl ProgramMeta {
+    /// What the build resolved. A caller cannot change it (final panel F2-3):
+    ///
+    /// ```compile_fail,E0616
+    /// fn widen(p: &mut al_sem::program::resolved::ResolvedProgram) {
+    ///     p.meta.scope = al_sem::program::resolved::ProgramScope::CrossApp;
+    /// }
+    /// ```
+    #[must_use]
+    pub fn scope(&self) -> ProgramScope {
+        self.scope
+    }
 }
 
 impl ProgramBody {

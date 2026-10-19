@@ -20,6 +20,8 @@ Steps 2-5 are carried. The specs were panel-converged in attempt 2 and are on ma
 
 ## Base/Head SHAs
 
+Base `576dd29685e426ad2780e5c3700f4bd66ec5212b`. Head: filled at freeze.
+
 ## Timeline
 
 - Claim attempt 4 + make-worktree at `576dd296`; preflight ok (one other live lease: #107). Heartbeat loop every 8 min. `plan_tasks` charged 3 (tasks 16-18).
@@ -69,9 +71,27 @@ Every break was made with the Edit tool and applied exactly once, then reverted 
 
 After all reverts: `git diff -- src/ tests/` empty; the five tests above plus `all_edges_is_edges_then_dependency_bodies`: 6 passed.
 
+**Final panel r1 fixes**
+
+| finding | test | break | fail output (1 line) | revert |
+|---|---|---|---|---|
+| F2-3 | doctest `program::resolved::ProgramMeta::scope` (`compile_fail,E0616`: setting `p.meta.scope` from outside the crate) | `scope` made `pub` again (grep count 1) | `Test compiled successfully, but it's marked compile_fail` | green |
+
 ## Findings register summary
 
+- Code review r1 (`code-review` built-in skill, high): F1-CR1..CR14. 13 fixed (`b8b59b5a`), CR10 refuted by re-measurement (r1 + r2, 14 pairs).
+- Final panel r1 (`gpt-6.1-sol`, `claude-opus-5.5` via `pi_ask`; files `.agent/runs/20261019-085626-fcb498/final-r1-{briefing,sol,opus}.md`): sol accepted 13, re-raised CR4; opus accepted 13, re-raised CR13. New: F2-1..F2-6. CR4 fixed at the definition (census.rs), CR13's evidence replaced by a direct CDO oracle comparison.
+
 ## Gate results
+
+On `933e4f41` (the review-fix head plus register), all through `agentflow run`, logs under `.agent/runs/20261019-085626-fcb498/logs/`:
+
+| gate | exit | seconds |
+|---|--:|--:|
+| `ci-steps all` | 0 | 612.4 (queued 180 behind #107); 3481 passed, 8 skipped |
+| `check-goldens --verify-coverage` | 0 | 0.3 (36 golden dirs declared) |
+| `check-goldens` | 0 | 27.2 |
+| `cdo-gate` | 0 | 225.7 (`cdo-gate: PASS`, 2122 lib tests) |
 
 ## Discoveries
 

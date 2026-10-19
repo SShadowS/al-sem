@@ -141,7 +141,8 @@ fn switch_compare_cmd(args: &[String]) -> ExitCode {
 }
 
 /// `aldump --compiler-oracle <graph.jsonl> <workspace> [--all-apps]`
-/// (engine-switch S9.0): compare the program resolver (FULL build) with the AL
+/// (engine-switch S9.0): compare the program resolver (a `ResolvedProgram`:
+/// `ProgramScope::CrossApp` with `--all-apps`, else `Workspace`) with the AL
 /// compiler's call graph from `altool graph extract-whole`, site by site. Writes
 /// the JSON report to stdout; the summary goes to stderr. Default scope: callers
 /// in the workspace app; `--all-apps` compares every app's callers.

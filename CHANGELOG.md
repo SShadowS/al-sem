@@ -92,10 +92,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the stderr writer, so a closed stderr does not turn the exit code into a panic.
 - #160 step 1b: the program build is one `ResolvedProgram` (`src/program/resolved.rs`):
   the build's facts (`ProgramMeta`) apart from its body (`ProgramBody`), with the
-  workspace's own edges and the dependency bodies' edges kept as two sets and read in
+  resolver's edges (the workspace's routines, plus the event-flow edges of publishers in
+  every app) and the dependency bodies' call-site edges kept as two sets and read in
   that order through one `EdgeView` (both sets private to `resolved.rs`).
   `build_cross_app_program` is replaced by `ResolvedProgram::build(inputs, scope)`: a
-  `ProgramScope` (`Workspace`: the Summary profile, no dependency edges; `CrossApp`:
+  `ProgramScope` (`Workspace`: the Summary profile, no dependency call-site edges; `CrossApp`:
   `FULL` plus every dependency body resolved) states what is resolved, not only what is
   kept, and the program records it. The body is not optional: `alsem graph` borrows the
   program, and `attach_program_calls(rows, program)` consumes it and hands back the
@@ -105,7 +106,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns an error for a `Workspace` program instead of a graph without dependency
   edges), and its projection reads both edge sets through the `EdgeView`; its output is
   byte-identical. `aldump --compiler-oracle` builds the same way (`Workspace`, or
-  `CrossApp` under `--all-apps`). The retained census gains an `inputs` bucket (the
+  `CrossApp` under `--all-apps`); without `--all-apps` that is the Summary profile
+  where it was `FULL`, and its CDO report is byte-identical in both modes. The scope is
+  readable only (`ProgramMeta::scope()`). Library API: `build_cross_app_program` is
+  gone; `attach_program_calls(inputs, rows, ctx, report, coverage) -> Model` is now
+  `attach_program_calls(rows, program) -> (Model, ProgramMeta)`; `site_census` and
+  `SiteLinks::build` take an `EdgeView` instead of a `&ProgramReport`; and
+  `Histogram::of_edges` takes any iterator of `&Edge`. The retained census gains an `inputs` bucket (the
   command's `InputSet`, 5.30 MB on CDO), `program.snapshot_texts` now counts the
   dependency units only, and `program.report` still counts the coverage contract's
   `missing`/`extra` and the recovered files. No output byte moves. The CDO numbers:
