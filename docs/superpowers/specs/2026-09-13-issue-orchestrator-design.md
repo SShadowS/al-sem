@@ -791,8 +791,12 @@ render of the ledger becomes the PR body.
     per-task check cannot see the commits that steps 10 and 11 add, so this is
     the only thing stopping a panel-fix edit from landing a protected path inside
     the approved diff. The only commits allowed after `H` are evidence commits
-    touching nothing but the two `.agent/issue-N/` files; the executor asserts
-    `git diff H..HEAD --name-only` is a subset of those two paths, so recording the
+    touching nothing but the two `.agent/issue-N/` files, plus gate-inert prose:
+    `CHANGELOG.md` and `docs/**/*.md`, which no gate reads (`protect.gate_inert`;
+    `test_no_gate_reads_a_gate_inert_path` scans every Rust source and gate
+    script to keep that true; added 2026-10-20 after #160 step 2 spent two full
+    gate runs on panel wording fixes). The executor asserts
+    `git diff H..HEAD --name-only` is a subset of those paths, so recording the
     approval cannot invalidate it. The committed ledger records `B` and `H` only;
     `final_head` (the evidence commit) lives solely in the attestation
     `{issue, B, H, final_head, register_hash, register_path, gates, body_hash}`,

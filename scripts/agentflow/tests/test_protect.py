@@ -1,4 +1,50 @@
-from agentflow.protect import cargo_version_changed, check_diff, forbidden_additions, protected_violations
+import re
+from pathlib import Path
+
+from agentflow.protect import (GATE_INERT_DIR, GATE_INERT_EXACT, cargo_version_changed, check_diff,
+                               forbidden_additions, gate_inert, protected_violations)
+
+REPO = Path(__file__).resolve().parents[3]
+GATE_SCRIPTS = ("scripts/ci-steps", "scripts/check-goldens", "scripts/cdo-gate")
+# `docs/…`, a `"docs"` path segment (`.join("docs")`), or `CHANGELOG`.
+_INERT_REF = re.compile("|".join([re.escape(GATE_INERT_DIR), r'"docs"', *(re.escape(s.split(".")[0])
+                                                                        for s in GATE_INERT_EXACT)]))
+# Lines that NAME an inert path without reading it, each with its reason.
+_MENTIONS_ONLY = {
+    ("src/server.rs", "docs/OUTSTANDING.md"): "a warn! message points the reader at the doc",
+}
+
+
+def test_gate_inert_is_prose_no_gate_reads():
+    assert gate_inert("CHANGELOG.md") and gate_inert("docs/superpowers/specs/x.md")
+    assert gate_inert("docs\\measurements\\n.md")
+    for p in ("docs/tool.py", "README.md", "CLAUDE.md", "tests/cli-a-goldens/a.prsummary.md", "docs.md",
+              "src/docs/x.md", ".agent/issue-8/ledger.md"):
+        assert not gate_inert(p), p
+
+
+def test_no_gate_reads_a_gate_inert_path():
+    """`gate_inert` paths may change after the gates ran (`freeze_violations`),
+    which is sound only while nothing a gate runs opens them. Every Rust source
+    the gates build (the crate, its tests, benches, workspace crates and tools,
+    build scripts included) and the gate scripts themselves are scanned for a
+    non-comment line naming one. A hit means a gate may read prose: take the
+    path out of `GATE_INERT_*` or stop reading it."""
+    hits = []
+    sources = [p for d in ("src", "tests", "benches", "crates", "tools")
+               for p in (REPO / d).rglob("*.rs") if "target" not in p.parts]
+    assert len(sources) > 100, "precondition: the scan found the Rust sources"
+    for p in sources:
+        for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            code = line.split("//", 1)[0]
+            rel = p.relative_to(REPO).as_posix()
+            if _INERT_REF.search(code) and not any(f == rel and s in code for f, s in _MENTIONS_ONLY):
+                hits.append(f"{rel}:{n}: {line.strip()}")
+    for s in GATE_SCRIPTS:
+        for n, line in enumerate((REPO / s).read_text(encoding="utf-8").splitlines(), 1):
+            if not line.lstrip().startswith("#") and _INERT_REF.search(line):
+                hits.append(f"{s}:{n}: {line.strip()}")
+    assert hits == []
 
 DIFF = """\
 diff --git a/src/lib.rs b/src/lib.rs

@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import pytest
 
@@ -19,6 +20,27 @@ def test_freeze_allows_only_own_evidence_files(repo_pair):
     assert mergeops.freeze_violations(g, H, e2, issue=8) == ["src/y.rs"]
     e3 = commit_file(clone, ".agent/issue-9/ledger.md", "z\n", "wrong issue")
     assert ".agent/issue-9/ledger.md" in mergeops.freeze_violations(g, H, e3, issue=8)
+
+
+def test_freeze_lets_gate_inert_prose_follow_H(repo_pair):
+    """A wording fix in the CHANGELOG or a doc after the gates ran is not a new
+    head: no gate reads those files (`protect.GATE_INERT`, pinned by
+    `test_protect.test_no_gate_reads_a_gate_inert_path`). Anything else still is."""
+    _, clone = repo_pair
+    g = Git(clone)
+    H = commit_file(clone, "src/x.rs", "x\n", "code")
+    d1 = commit_file(clone, "CHANGELOG.md", "c\n", "changelog wording")
+    d2 = commit_file(clone, "docs/measurements/n.md", "n\n", "numbers wording")
+    assert mergeops.freeze_violations(g, H, d2, issue=8) == []
+    assert d1  # both prose commits sit between H and d2
+    for path in ("docs/tool.py", "README.md", "tests/x-goldens/a.prsummary.md", "docs.md"):
+        bad = commit_file(clone, path, "z\n", f"not inert: {path}")
+        assert mergeops.freeze_violations(g, H, bad, issue=8) == [path], path
+        _git_reset(clone, d2)
+
+
+def _git_reset(clone, sha):
+    subprocess.run(["git", "-C", str(clone), "reset", "-q", "--hard", sha], check=True)
 
 
 def test_attestation_round_trip(ctx):

@@ -60,6 +60,24 @@ def test_cmd_run_records_a_dirty_tree(capsys, repo_pair):
     assert rec["clean_before"] is False
 
 
+def test_evidence_edits_during_a_run_leave_the_record_clean(capsys, repo_pair):
+    """The conductor writes the ledger and register while gates run; no gate
+    reads `.agent/`, so that is not dirt (post-merge refused its skip on
+    `record-dirty` for exactly this on #160 step 2). A tracked file outside
+    `.agent/` still is: the run below edits one too, in a second run."""
+    _, clone = repo_pair
+    commit_file(clone, ".agent/issue-8/ledger.md", "l\n", "ledger")
+    (clone / ".agent/issue-8/ledger.md").write_text("edited before\n")
+    edit = "from pathlib import Path; Path('.agent/issue-8/ledger.md').write_text('edited during\\n')"
+    _run(capsys, clone, "noop", sys.executable, "-c", edit, run_id="solo-run")
+    rec = json.loads(_records_file(clone, "solo-run").read_text().splitlines()[-1])
+    assert rec["clean_before"] is True and rec["clean_after"] is True
+    _run(capsys, clone, "noop", sys.executable, "-c", "from pathlib import Path; Path('README.md').write_text('x')",
+         run_id="solo-run")
+    rec = json.loads(_records_file(clone, "solo-run").read_text().splitlines()[-1])
+    assert rec["clean_before"] is True and rec["clean_after"] is False
+
+
 def test_latest_record_wins(capsys, repo_pair):
     _, clone = repo_pair
     _run(capsys, clone, "g", sys.executable, "-c", "raise SystemExit(1)", run_id="solo-run")

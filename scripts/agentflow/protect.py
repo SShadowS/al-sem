@@ -25,6 +25,22 @@ def evidence_files(issue: int) -> set[str]:
     return {f".agent/issue-{issue}/ledger.md", f".agent/issue-{issue}/findings.json"}
 
 
+# Paths no gate reads: prose the build, the tests, the goldens and the gate
+# scripts never open. A change to one after `H` cannot change what the gates
+# verified, so it is not a new head (`mergeops.freeze_violations`). On #160 step
+# 2, CHANGELOG and numbers-file wording fixes from the final panel moved `H`
+# twice and cost two full gate runs. `tests/**/*.md` is NOT inert: the
+# prsummary goldens are Markdown the tests read byte for byte.
+# test_protect.test_no_gate_reads_a_gate_inert_path keeps this list true.
+GATE_INERT_EXACT = ("CHANGELOG.md",)
+GATE_INERT_DIR, GATE_INERT_SUFFIX = "docs/", ".md"
+
+
+def gate_inert(path: str) -> bool:
+    path = path.replace("\\", "/")
+    return path in GATE_INERT_EXACT or (path.startswith(GATE_INERT_DIR) and path.endswith(GATE_INERT_SUFFIX))
+
+
 def protected_violations(changed_files: list[str], issue: int) -> list[str]:
     allowed = evidence_files(issue)
     out = []

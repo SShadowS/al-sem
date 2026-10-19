@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   post-rebase gates needed a fix; before, any rebase onto new code added a round.
   On #107 the full set ran 7 times (~15 min each) and two review rounds checked
   only code from other merges.
+- agentflow: `CHANGELOG.md` and `docs/**/*.md` may change after the attested head
+  `H` without a new gate run. No gate reads them (`protect.gate_inert`), so
+  `freeze-check` and the post-merge identity check accept them beside the two
+  evidence files. `test_no_gate_reads_a_gate_inert_path` scans every Rust source and
+  the gate scripts, and fails if anything starts to read them. On #160 step 2,
+  final-panel wording fixes in the CHANGELOG and the numbers file moved `H` twice and
+  cost two full gate runs.
+- agentflow: a gate record's `clean_before` / `clean_after` ignore uncommitted changes
+  under `.agent/`, so writing the ledger and register while a gate runs no longer
+  refuses the post-merge identity skip (`record-dirty`). A commit during the run still
+  voids the record. On #160 step 2 that edit alone made post-merge rerun all its gates.
+- `/issue`: the final panel's round 1 asks each reviewer for every finding at once,
+  wording and records included; later rounds only verify the fixes. A panel fix that
+  touches only gate-inert prose and the evidence after step 11's gates needs no new
+  gate run.
 
 - #160 step 2: every `alsem` command builds its detector context and its L4 solve once, through one `View` (`src/engine/session.rs`). Some builds stay outside the `View`:
   - `policy check`'s command-local raw-facts build (step 6 removes it);

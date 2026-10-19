@@ -1,7 +1,8 @@
 """Freeze boundary, attestation, and the merge gate.
 
 `H` is the head the gates and the final panel passed on, AFTER the final
-rebase. Only evidence commits (the two `.agent/issue-N/` files) may follow it.
+rebase. Only evidence commits (the two `.agent/issue-N/` files) and gate-inert
+prose (`protect.gate_inert`: `CHANGELOG.md`, `docs/**/*.md`) may follow it.
 The attestation binds base `B`, `H`, the final head, the findings-register
 hash, the gate results, and the issue body hash. Immediately before merging,
 all of base, head, and body are re-checked; the merge itself uses
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from .gh import Gh
 from .gitops import Git
-from .protect import evidence_files
+from .protect import evidence_files, gate_inert
 from .state import Ctx, read_json, write_json
 
 
@@ -59,7 +60,7 @@ def register_hash(path: Path) -> str:
 
 
 def freeze_violations(git: Git, H: str, head: str, issue: int) -> list[str]:
-    return [f for f in git.changed_files(H, head) if f not in evidence_files(issue)]
+    return [f for f in git.changed_files(H, head) if f not in evidence_files(issue) and not gate_inert(f)]
 
 
 def write_attestation(ctx: Ctx, att: Attestation) -> Path:

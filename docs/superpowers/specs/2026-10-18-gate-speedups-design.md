@@ -70,8 +70,13 @@ The evidence is this run's attestation (`.agent/runs/<run>/attestation.json`, wr
    base the gates were run against, so `origin/master` had not moved).
 3. The merge commit's tree equals `final_head`'s tree, byte for byte (`git rev-parse
    <sha>^{tree}`). A squash of the branch onto an unmoved base produces exactly that.
-4. `H..final_head` changes only evidence files (the same rule `freeze-check` applies;
-   it already passed before `attest`, and is re-checked here, not trusted).
+4. `H..final_head` changes only evidence files and gate-inert prose (`CHANGELOG.md`,
+   `docs/**/*.md`; the same rule `freeze-check` applies; it already passed before
+   `attest`, and is re-checked here, not trusted). Since 2026-10-20 a gate record's
+   `clean_before` / `clean_after` ignore changes under `.agent/`: no gate reads them, and
+   the conductor writes the ledger and register while gates run (on #160 step 2 that
+   edit alone refused the skip, `record-dirty:cdo-gate`). A COMMIT during a run still
+   voids the record, because the record's tree is HEAD's.
 5. The environment the gates ran in is the same one post-merge would use: the
    `tree-sitter-al` grammar commit (a dirty grammar clone refuses the skip), the
    `rustc --version`, and, when `cdo-gate` is required, the CDO workspace identity

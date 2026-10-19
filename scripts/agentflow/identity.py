@@ -34,13 +34,22 @@ def _rustc(cwd: Path) -> str | None:
     return r.stdout.strip() or None if r.returncode == 0 else None
 
 
-def _tree(cwd: Path) -> tuple[str | None, str | None, bool]:
-    """(HEAD, HEAD's tree, clean) -- (None, None, False) outside a git tree."""
+def _tree(cwd: Path, ignore: tuple[str, ...] = ()) -> tuple[str | None, str | None, bool]:
+    """(HEAD, HEAD's tree, clean) -- (None, None, False) outside a git tree.
+    `clean` ignores changed paths under the `ignore` prefixes."""
     try:
         g = Git(cwd)
-        return g.rev("HEAD"), g.rev("HEAD^{tree}"), not g.tree_state(refresh=False).semantic
+        dirt = [p for p in g.tree_state(refresh=False).semantic_paths if not p.startswith(ignore)]
+        return g.rev("HEAD"), g.rev("HEAD^{tree}"), not dirt
     except (GitError, OSError):
         return None, None, False
+
+
+# No gate reads `.agent/` (the issue's ledger and register live there, and the
+# conductor writes them while gates run). Edits there say nothing about what a
+# gate built, so they are not dirt in a gate record. The record's `tree` is
+# HEAD's tree, so a COMMITTED evidence change during a run still voids it.
+GATE_IGNORED = (".agent/",)
 
 
 def _grammar(ctx: Ctx) -> dict:
@@ -85,7 +94,7 @@ def environment(ctx: Ctx, cwd: Path, *, cdo: bool) -> dict:
 def probe(ctx: Ctx, cwd: Path, *, cdo: bool) -> dict:
     """The tree and environment at one instant. Taken before AND after a gate:
     only what did not move while the child ran names what it built."""
-    head, tree, clean = _tree(cwd)
+    head, tree, clean = _tree(cwd, ignore=GATE_IGNORED)
     return {"head": head, "tree": tree, "clean": clean, "env": environment(ctx, cwd, cdo=cdo)}
 
 

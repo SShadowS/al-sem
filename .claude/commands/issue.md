@@ -175,6 +175,10 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    this excludes the issue's own `.agent/issue-N/ledger.md` and
    `.agent/issue-N/findings.json`, which are written as you go and stay
    uncommitted until step 12, so the gates only assert that nothing ELSE moved.
+   Editing those two files WHILE a gate runs is fine: a gate record's
+   `clean_before` / `clean_after` ignore `.agent/`, so the post-merge identity
+   skip still holds. COMMITTING them during a run is not: the record's tree is
+   HEAD's, and a moved HEAD leaves the record naming no tree.
    Each `run` result carries `"supervised": true|false`; it must be `true` here
    (this run holds the claim's lock) — `false` means the lock was lost or never
    held and the gate did not run under supervision, which is `blocked lock-lost`,
@@ -222,6 +226,20 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     Source-verify every reviewer code claim before editing. Every fix passes
     step 9's TASK gate (`ci-steps-task`) before the next round; the full set
     waits for step 11.
+
+    **Ask for everything in round 1; later rounds verify.** Round 1's briefing
+    asks each reviewer for EVERY finding at once (code, tests, the numbers file,
+    the CHANGELOG, spec wording, stale docs), not only blocking ones. Later
+    rounds' briefings send the fix diff and ask each reviewer to mark the
+    entries, and to raise a NEW finding only for a real defect the fixes
+    introduced. On #160 step 2 rounds 2-4 were wording and record fixes that
+    round 1 could have named.
+
+    **Prose after the gates is free.** `CHANGELOG.md` and `docs/**/*.md` are
+    gate-inert (no gate reads them; `protect.gate_inert`), so `freeze-check` lets
+    them follow `H`: a panel fix that touches ONLY those files (and the evidence)
+    after step 11's gates needs no new gate run and no new `H`. A fix that
+    touches anything else, a test included, goes back through step 11.
 11. **Rebase and gate.** Only once the panel has converged. Note the old base
     (`git merge-base HEAD origin/master`) and the old head, then
     `git fetch origin && git rebase origin/master` in the worktree (the fetch
@@ -260,7 +278,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     working directory, which per Invocation above is the main checkout, not the
     worktree; a violation is `blocked sanitize-failed`). Then
     `python scripts/agentflow freeze-check --H <H> --issue N --cwd <worktree>` must be
-    empty. `python scripts/agentflow attest --issue N --B <B> --H <H> --final-head
+    empty (after `H` it allows only the two evidence files and gate-inert prose:
+    `CHANGELOG.md`, `docs/**/*.md`). `python scripts/agentflow attest --issue N --B <B> --H <H> --final-head
     <HEAD> --register <worktree>/.agent/issue-N/findings.json --gates '<json of
     step 9 exit codes>' --body-hash <claim body_hash>` — `attest` cross-checks
     `--body-hash` against this run's `claim.json` and refuses (`error`: body-hash
