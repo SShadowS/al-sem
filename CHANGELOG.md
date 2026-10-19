@@ -115,6 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `alsem diff` of a snapshot made before this change against one made after reports
     `CapabilityLost` for each removed read.
   - A user policy matching capability `op: read` matches fewer facts.
+  - d44 (event multi-subscriber overlap) loses a read-after-write finding when the
+    reader subscriber's only read of that table was a `TestField`. Measured on CDO:
+    one removed at `--scope all` (Sales Header on `OnBeforePostSalesDoc`), none at
+    `--scope primary`; 46 required `TableData R` rows removed.
   - d1/d2 prune a callee whose cone no longer touches a table; a callee that only did
     `TestField` is now pruned, which can free walk budget and ADD a d2 finding that
     the budget used to cut off.
@@ -141,8 +145,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because its temporary terminals are deliberate. The bit reads cone facts, which can
   disagree with d2's own terminal filter in three stated cases: (e) a routine passes its
   own `Temporary` record to a `var` parameter that is written; the write is temporary in
-  that caller's frame, so that path's d2 finding (a false positive) is removed; (f) dead
-  code, whose ops the cone drops, gives no finding; (g) a `Rename`/`LockTable`-only
+  that caller's frame, so that path's d2 finding (a false positive) is removed; (f) a
+  routine whose complete cone holds only known-temporary non-read table facts, and
+  whose physical op is unreachable (the cone drops dead code), is now pruned, so that
+  dead op gives no finding (a reachable temporary read keeps the routine walked); (g) a `Rename`/`LockTable`-only
   branch on a virtual/system table is now walked with no terminal (meaningless AL; left
   open).
 - One table op map serves L2 and the L4 cone: the cone's pass-through wrapper
