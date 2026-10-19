@@ -314,12 +314,13 @@ impl View {
         }
         if need_det && det.is_none() {
             let g = graph.as_ref().expect("graph filled above");
-            // (c) `CoreSummaries` is a local of the det fill's own solve.
+            // (c) `CoreSummaries` is a local of the det fill's own solve, so a
+            // det fill that needs `l4` builds it in the same call.
             assert!(
-                !core || l4.is_none(),
-                "L4 already filled; a det fill at CORE_SUMMARIES builds l4 in the same call"
+                !need_l4 || l4.is_none(),
+                "L4 already filled; a det fill that needs l4 builds it in the same call"
             );
-            let req = (core || (plan.need_l4 && l4.is_none())).then(|| L4Request {
+            let req = need_l4.then(|| L4Request {
                 scc: scc.clone(),
                 extra_diagnostics: std::mem::take(&mut extra_diagnostics),
             });
@@ -331,10 +332,11 @@ impl View {
                 target.cross_app_inputs(),
             );
             *det = Some(art);
-            if solved.is_some() {
+            if need_l4 {
                 *l4 = solved;
             }
         }
+        // A plan with no run (query) fills `l4` alone.
         if need_l4 && l4.is_none() {
             let g = graph.as_ref().expect("graph filled above");
             let req = L4Request {
@@ -531,6 +533,8 @@ mod tests {
             concat!("Ato", "mic"),
             concat!("thread", "_local"),
             concat!("static", " mut"),
+            // A `use std::cell::RefCell as R;` alias hides `Cell<`.
+            concat!("cell", "::"),
         ] {
             assert!(!src.contains(needle), "session.rs contains {needle}");
         }
@@ -581,7 +585,7 @@ mod tests {
                 v.prepare(&narrow);
             })),
         );
-        assert!(msg.contains("Det"), "{msg}");
+        assert!(msg.contains("Det released"), "{msg}");
         let msg = panic_text(
             "(b) a wider plan",
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -591,6 +595,64 @@ mod tests {
             })),
         );
         assert!(msg.contains("TRANSACTION_SPANS"), "{msg}");
+    }
+
+    /// Rule 1 (c): a det fill that needs `l4` while `l4` is filled panics,
+    /// with CORE and without it (spec §4.4.3 rule 1). DISCRIMINATION:
+    /// deleting assert (c) fails the CORE case (no panic); the non-CORE case
+    /// was red against Task 22's narrower `!core || l4.is_none()`.
+    #[test]
+    fn a_det_fill_needing_l4_never_finds_l4_filled() {
+        for (name, requires, need_l4) in [
+            ("CORE", substrate::CORE_SUMMARIES, false),
+            ("need_l4 without CORE", substrate::SUMMARIES, true),
+        ] {
+            let plan = Plan::for_test(vec![vec![probe(requires, noop)]], true, need_l4, 0);
+            let msg = panic_text(
+                name,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut v = view();
+                    v.prepare(&query_plan());
+                    v.prepare(&plan);
+                })),
+            );
+            assert!(msg.contains("L4 already filled"), "{name}: {msg}");
+        }
+    }
+
+    /// Rule 1: a det cell never carries the RAW bit. DISCRIMINATION: deleting
+    /// the RAW assert fails this (no panic).
+    #[test]
+    #[should_panic(expected = "a det cell never carries RAW_INHERITED_FACTS")]
+    fn a_det_cell_never_carries_raw_inherited_facts() {
+        let plan = Plan::for_test(
+            vec![vec![probe(
+                substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS,
+                noop,
+            )]],
+            true,
+            false,
+            0,
+        );
+        view().prepare(&plan);
+    }
+
+    /// A2.10's "naming the missing bit" for every bit. DISCRIMINATION:
+    /// deleting one arm of `substrate_bit_name` fails this.
+    #[test]
+    fn every_substrate_bit_has_a_name() {
+        let all = substrate::ALL
+            | substrate::RAW_INHERITED_FACTS
+            | substrate::DB_EFFECT_REVERSE_INDEX
+            | substrate::ORDERING_FACTS;
+        assert_eq!(all.count_ones(), 7, "precondition: seven bits");
+        for i in 0..u32::BITS {
+            let bit = 1u32 << i;
+            if all & bit != 0 {
+                let name = substrate_bit_name(bit);
+                assert!(!name.contains("unnamed"), "bit {i}: {name}");
+            }
+        }
     }
 
     /// Rule 3. `d` is hand-stated: no fixture makes the solver cap (§4.4.7),
