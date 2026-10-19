@@ -27,7 +27,8 @@ use super::capability_cone::{
 use super::param_guard::{FrameGuards, Req, across_edge, conjoin};
 use super::summary::TempState;
 use super::summary_runner::{
-    event_param_temp_state, pd_temp_state_at_callsite, trigger_receiver_temp_state,
+    event_param_temp_state, event_publisher_param, pd_temp_state_at_callsite,
+    trigger_receiver_temp_state,
 };
 use crate::engine::census::Tally;
 use crate::program::model::workspace::ModelRoutine;
@@ -170,16 +171,7 @@ pub(crate) fn carry_reqs(
         // A subscriber's guard re-anchors on the same-named publisher
         // parameter, when that one is a usable guard there.
         for &(j, v) in reqs {
-            let mapped = subscriber
-                .parameters
-                .iter()
-                .find(|p| p.index == j)
-                .and_then(|sp| {
-                    publisher
-                        .parameters
-                        .iter()
-                        .find(|pp| pp.name.eq_ignore_ascii_case(&sp.name))
-                })
+            let mapped = event_publisher_param(publisher, subscriber, j)
                 .map(|pp| pp.index)
                 .filter(|i| caller_frame.is_some_and(|f| f.usable.contains(i)));
             if let Some(i) = mapped {
@@ -744,6 +736,37 @@ mod tests {
                 &[]
             ),
             Some((TempState::Unknown, vec![]))
+        );
+    }
+
+    /// #107 row 13 (Design 1): one parameter mapping, quotes ignored. A
+    /// subscriber whose parameter name is `"Rec"` (quoted, as an ABI-derived
+    /// name can be) re-anchors its guard on the publisher's `Rec`, exactly as
+    /// `event_param_temp_state` already binds it. Hand-stated: publisher
+    /// param 0 `Rec` is a usable guard parameter in the caller frame; the
+    /// subscriber requires its param 0 to be true.
+    #[test]
+    fn carry_reqs_event_dispatch_ignores_quotes_in_parameter_names() {
+        let mut publisher = pd_routine("Pub");
+        publisher.parameters = vec![param(0, "Rec")];
+        let mut subscriber = pd_routine("Sub");
+        subscriber.parameters = vec![param(0, "\"Rec\"")];
+        let e = edge("event-dispatch", None, "Sub");
+        let frame = FrameGuards {
+            usable: vec![0],
+            by_site: HashMap::new(),
+        };
+        assert_eq!(
+            carry_reqs(
+                &[(0, true)],
+                &e,
+                Some(&publisher),
+                Some(&subscriber),
+                Some(&frame),
+                &[]
+            ),
+            Some(vec![(0, true)]),
+            "the quoted subscriber name must bind to the publisher's Rec"
         );
     }
 

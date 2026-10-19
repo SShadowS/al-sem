@@ -37,7 +37,7 @@ use super::summary::{
 };
 use crate::engine::perf_trace as pt;
 use crate::program::model::calls::UpgradedBinding;
-use crate::program::model::workspace::ModelRoutine;
+use crate::program::model::workspace::{ModelParameter, ModelRoutine};
 use serde_json::json;
 
 const MAX_FIXED_POINT_ITERATIONS: usize = 1000;
@@ -907,30 +907,41 @@ fn record_op_by_id<'r>(
         .or_else(|| ops.iter().find(|op| op.id == op_id))
 }
 
+/// The publisher parameter an event subscriber's parameter `sub_param` binds to:
+/// AL binds by NAME, case-insensitively, quotes ignored; a subscriber may
+/// declare any subset. `None`: the subscriber has no parameter `sub_param`, or
+/// no publisher parameter has its name. The ONE subscriber-to-publisher
+/// parameter mapping (#107 Design 1).
+pub(crate) fn event_publisher_param<'p>(
+    publisher: &'p ModelRoutine,
+    subscriber: &ModelRoutine,
+    sub_param: u32,
+) -> Option<&'p ModelParameter> {
+    let name = subscriber
+        .parameters
+        .iter()
+        .find(|p| p.index == sub_param)?
+        .name
+        .trim()
+        .trim_matches('"');
+    publisher
+        .parameters
+        .iter()
+        .find(|p| p.name.trim().trim_matches('"').eq_ignore_ascii_case(name))
+}
+
 /// The temp state an event subscriber's parameter `sub_param` has in its
-/// PUBLISHER's frame. AL binds a subscriber's parameters to the publisher's by
-/// NAME (a subscriber may declare any subset), so the publisher parameter of the
-/// same name decides: its own record-variable temp state (`temporary` keyword ->
-/// `Known(true)`, keyword-less `var` -> `ParameterDependent(i)`, resolved further
-/// at the raiser's call site). No same-named record parameter -> `Unknown`.
+/// PUBLISHER's frame. The publisher parameter it binds to
+/// ([`event_publisher_param`]) decides: its own record-variable temp state
+/// (`temporary` keyword -> `Known(true)`, keyword-less `var` ->
+/// `ParameterDependent(i)`, resolved further at the raiser's call site). No
+/// same-named record parameter -> `Unknown`.
 pub(crate) fn event_param_temp_state(
     publisher: &ModelRoutine,
     subscriber: &ModelRoutine,
     sub_param: u32,
 ) -> TempState {
-    let Some(name) = subscriber
-        .parameters
-        .iter()
-        .find(|p| p.index == sub_param)
-        .map(|p| p.name.trim().trim_matches('"'))
-    else {
-        return TempState::Unknown;
-    };
-    let Some(pp) = publisher
-        .parameters
-        .iter()
-        .find(|p| p.name.trim().trim_matches('"').eq_ignore_ascii_case(name))
-    else {
+    let Some(pp) = event_publisher_param(publisher, subscriber, sub_param) else {
         return TempState::Unknown;
     };
     publisher
@@ -1851,4 +1862,72 @@ fn project_summary_to_stable(
     stable_map: &HashMap<String, String>,
 ) -> PRoutineSummaryCore {
     project_routine_summary_core_internal(routine_id, s, stable_map)
+}
+
+/// Issue #107 acceptance tests that name symbols the spec adds. The behaviour
+/// rows live in `tests/gap/gap_issue107_publisher_roles.rs`.
+#[cfg(test)]
+mod issue107_pending_tests {
+    use super::*;
+    use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
+    use crate::program::model::workspace::Model;
+
+    const APP: &str = "11111111-0000-0000-0000-000000107108";
+
+    fn param(index: u32, name: &str, is_record: bool) -> ModelParameter {
+        ModelParameter {
+            index,
+            name: name.to_string(),
+            type_text: if is_record { "Record Cust" } else { "Integer" }.to_string(),
+            is_var: true,
+            is_record,
+            table_name: is_record.then(|| "Cust".to_string()),
+        }
+    }
+
+    /// Row 13 (Design 1): ONE by-name mapping, case-insensitive, quotes
+    /// ignored, any subset. A hand-built subscriber whose parameter is `"Rec"`
+    /// (quoted, as an ABI name could be) binds to the publisher's `Rec`; `REC`
+    /// binds too; `Qty` binds by name, not position; an unknown name binds to
+    /// nothing. (`pd_solve::carry_reqs` uses the same mapping: its quoted-name
+    /// row is `carry_reqs_event_dispatch_ignores_quotes_in_parameter_names`.)
+    #[test]
+    fn row13_event_publisher_param_binds_by_name_quotes_ignored() {
+        // Any model routine; only `parameters` is read, and it is hand-stated.
+        let m = model("codeunit 50100 X\n{\n    procedure P()\n    begin\n    end;\n}\n");
+        let mut publisher = m.workspace.routines[0].clone();
+        publisher.parameters = vec![param(0, "Rec", true), param(1, "Qty", false)];
+        let mut subscriber = publisher.clone();
+        subscriber.parameters = vec![
+            param(0, "Qty", false),
+            param(1, "\"Rec\"", true),
+            param(2, "REC", true),
+            param(3, "Other", true),
+        ];
+        let got: Vec<Option<u32>> = (0..4)
+            .map(|q| event_publisher_param(&publisher, &subscriber, q).map(|p| p.index))
+            .collect();
+        assert_eq!(got, vec![Some(1), Some(0), Some(0), None]);
+    }
+
+    fn model(src: &str) -> Model {
+        let table = r#"
+table 50100 Cust
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Name; Text[50]) { }
+    }
+    keys { key(PK; "No.") { } }
+}
+"#;
+        assemble_and_resolve_inline_program_default(
+            &[
+                ("src/Tab.al".to_string(), table.to_string()),
+                ("src/Code.al".to_string(), src.to_string()),
+            ],
+            APP,
+        )
+    }
 }
