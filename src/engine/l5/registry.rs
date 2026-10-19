@@ -74,7 +74,8 @@ pub mod substrate {
     /// silently serving a direct-only view (R6).
     pub const RAW_INHERITED_FACTS: u32 = 1 << 4;
     /// ⟨Task 6⟩ The [`crate::engine::l4::reverse_index::ReverseEffectIndex`]
-    /// transpose over `db_effect_bundle`, exposed as `ctx.reverse_effect_index`.
+    /// transpose over the solve's bundle (`L4Analysis::bundle`), exposed as
+    /// `ctx.reverse_effect_index`.
     ///
     /// **QUERY-ONLY, deliberately NOT part of [`ALL`], and — unlike every other
     /// bit here — NOT a substrate a detector may declare in `requires`.** Same
@@ -105,25 +106,24 @@ pub mod substrate {
     /// without it) — set both.
     pub const DB_EFFECT_REVERSE_INDEX: u32 = 1 << 5;
     /// ⟨2026-10-04⟩ The L4.5 ordering facts (`ctx.get_ordering_facts()`, read by
-    /// d47/d49/d51). Unlike every other bit, `build_detector_context` ignores it:
-    /// the facts stay lazy there, so the non-registry callers keep paying nothing.
-    /// `run_each` reads it instead and computes the facts ONCE, BEFORE its parallel
-    /// detector loop, when any selected detector declares it.
+    /// d47/d49/d51). #160 step 2: the context's builder fills the ordering slot
+    /// (`detector_context::fill_ordering`) ONCE, BEFORE the parallel detector
+    /// loop, iff the mask has this bit; without it the slot stays empty.
     ///
     /// Computing them lazily INSIDE that loop deadlocked (`r4_differential` hung
-    /// for 10 minutes at 0 % CPU; a dump confirmed it). The thread filling the
-    /// `OnceLock` runs a rayon `par_iter`; while it waits for its halves, rayon
-    /// makes it steal queued jobs — including a half of the OUTER detector
-    /// loop. That half's other half sits on another thread running d49, which
-    /// blocks on the same `OnceLock`. Neither can finish. Declaring the bit is
-    /// what keeps a detector out of that cycle; `get_ordering_facts` refuses
-    /// (in debug builds) to fill the slot from inside the loop. That guard sees a
-    /// missing declaration only when no OTHER selected detector declares the bit,
-    /// so the registry test `every_detector_alone_declares_what_it_reads` runs
-    /// each registered detector by itself.
+    /// for 10 minutes at 0 % CPU; a dump confirmed it). The thread filling a
+    /// `OnceLock` ran a rayon `par_iter`; while it waited for its halves, rayon
+    /// made it steal queued jobs — including a half of the OUTER detector
+    /// loop. That half's other half sat on another thread running d49, which
+    /// blocked on the same `OnceLock`. Neither could finish. There is no lazy
+    /// fill any more: `get_ordering_facts` panics on an empty slot, in every
+    /// build. That shows a missing declaration only when no OTHER selected
+    /// detector declares the bit, so the registry test
+    /// `every_detector_alone_declares_what_it_reads` runs each registered
+    /// detector by itself.
     ///
-    /// Not in [`ALL`]: it builds nothing in the context, and the substrate-parity
-    /// test calls detectors directly, where the lazy path is safe.
+    /// Not in [`ALL`]: the non-registry callers that pass `ALL` read no ordering
+    /// facts and so never pay for them.
     pub const ORDERING_FACTS: u32 = 1 << 6;
     /// Every substrate — the eager, pre-W1.0 behavior. Full/preset/all-detector runs
     /// and every non-registry `build_detector_context` caller pass this.
@@ -393,10 +393,11 @@ pub fn run_detectors(resolved: &Model, detectors: &[Detector]) -> RunOutput {
     // spans internally, but they do not tile it — a 4-run 8020 profile left
     // 9.3 % of the whole run (≈ 7.1 s) in `l4_l5.run_detectors`' self time with
     // nothing naming it.
-    let ctx = {
+    let owned = {
         let _s = pt::span("context", "context.build_total");
         build_detector_context(resolved, demanded)
     };
+    let ctx = owned.ctx();
     let summarize_diagnostics: Vec<Diagnostic> = ctx
         .summarize_diagnostics
         .iter()
@@ -414,6 +415,7 @@ pub fn run_detectors(resolved: &Model, detectors: &[Detector]) -> RunOutput {
     {
         let _s = pt::span("context", "context.ctx_drop");
         drop(ctx);
+        drop(owned);
     }
 
     // Role-scoping filter (registry.ts:161-172). Source-only: every routine's role
@@ -453,7 +455,7 @@ pub(crate) fn run_detectors_cross_app(
     // One builder for both modes (engine-switch S8.1), demand-gated like
     // `run_detectors`.
     let demanded = detectors.iter().fold(0u32, |acc, d| acc | d.requires);
-    let ctx = {
+    let owned = {
         let _s = pt::span("crossapp", "crossapp.context_build");
         crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
@@ -461,6 +463,7 @@ pub(crate) fn run_detectors_cross_app(
             Some(base.cross_app_inputs()),
         )
     };
+    let ctx = owned.ctx();
     let summarize_diagnostics: Vec<Diagnostic> = ctx
         .summarize_diagnostics
         .iter()
@@ -527,6 +530,7 @@ pub(crate) fn run_detectors_cross_app(
     {
         let _s = pt::span("crossapp", "crossapp.ctx_drop");
         drop(ctx);
+        drop(owned);
     }
 
     RunOutput {
@@ -605,22 +609,8 @@ fn run_each(
     // (`crate::big_stack`).
     let pool = crate::big_stack::big_stack_pool();
 
-    // Fill every lazy substrate BEFORE the parallel loop — see
-    // `substrate::ORDERING_FACTS` for the deadlock this prevents. On the same
-    // big-stack pool the detectors use: the fill recurses over statement trees
-    // (`compute_return_summaries`), and it ran on a big-stack worker before this
-    // moved it out of the loop. No detector job exists yet, so a waiting thread
-    // in here has nothing from the loop to steal.
-    if detectors
-        .iter()
-        .any(|d| d.requires & substrate::ORDERING_FACTS != 0)
-    {
-        let _s = pt::span("context", "context.ordering_facts");
-        pool.install(|| {
-            ctx.get_ordering_facts();
-        });
-    }
-
+    // The ordering slot was filled by the context's builder, before this loop
+    // (`substrate::ORDERING_FACTS`); nothing is filled in here.
     type RunOutcome = std::thread::Result<Result<DetectorOutput, DetectorError>>;
     let outcomes: Vec<RunOutcome> = pool.install(|| {
         detectors
@@ -889,23 +879,7 @@ mod tests {
         Ok(ordering_output("fast"))
     }
 
-    /// Stands in for d47/d49/d51: reports, from INSIDE the parallel loop, whether
-    /// the ordering facts were already filled when it ran.
-    fn ordering_facts_probe(
-        _r: &Model,
-        c: &DetectorContext,
-    ) -> Result<DetectorOutput, DetectorError> {
-        let state = if c.ordering_facts.get().is_some() {
-            "filled"
-        } else {
-            "empty"
-        };
-        Ok(ordering_output(state))
-    }
-
-    /// Reads the facts the way d47/d49/d51 do. Only the debug-only guard test
-    /// uses it, so it is debug-only too (CI lints in release).
-    #[cfg(debug_assertions)]
+    /// Reads the facts the way d47/d49/d51 do.
     fn ordering_facts_reader(
         _r: &Model,
         c: &DetectorContext,
@@ -914,58 +888,19 @@ mod tests {
         Ok(ordering_output("read"))
     }
 
-    /// A detector declaring `substrate::ORDERING_FACTS` must find the facts
-    /// ALREADY filled when it runs: filling them inside the parallel loop is
-    /// what deadlocked `r4_differential` (see the bit's doc).
+    /// A detector that READS the ordering facts without declaring
+    /// `substrate::ORDERING_FACTS` fails loudly, in every build: at mask 0 the
+    /// shim fills no ordering slot, `get_ordering_facts` panics with a text
+    /// naming the bit, and `run_each` turns that into the diagnostic.
     ///
-    /// PRECONDITION, hand-stated: the context is built with the slot EMPTY, and
-    /// the probe only LOOKS at the slot (it never fills it), so "filled" can only
-    /// come from `run_each` itself.
-    ///
-    /// DISCRIMINATION PROOF (recorded 2026-10-04): deleting the
-    /// `ctx.get_ordering_facts()` call before `pool.install` in `run_each` makes
-    /// this FAIL with `["empty"]`; restoring it passes.
-    #[test]
-    fn declared_ordering_facts_are_filled_before_the_parallel_loop() {
-        let resolved = empty_resolved();
-        let ctx = build_detector_context(&resolved, 0);
-        assert!(
-            ctx.ordering_facts.get().is_none(),
-            "precondition: slot empty"
-        );
-        let detectors = vec![Detector {
-            name: "probe".to_string(),
-            run: ordering_facts_probe,
-            requires: substrate::ORDERING_FACTS,
-            rule_name: "Probe",
-            short_description: "test probe",
-        }];
-
-        let (_findings, diagnostics, _stats, _idx) = run_each(&resolved, &ctx, &detectors);
-
-        assert_eq!(
-            diagnostics
-                .iter()
-                .map(|d| d.message.as_str())
-                .collect::<Vec<_>>(),
-            ["filled"]
-        );
-    }
-
-    /// The other half of the contract: a detector that READS the facts without
-    /// declaring the bit fails loudly (debug builds) instead of deadlocking
-    /// sometimes. Without the guard this run would succeed here (one detector
-    /// cannot deadlock alone) and the missing declaration would only show up
-    /// as a rare hang in a full parallel run.
-    ///
-    /// DISCRIMINATION PROOF (recorded 2026-10-04): deleting the `debug_assert!`
-    /// in `DetectorContext::get_ordering_facts` makes this FAIL (the reader
-    /// returns "read"); restoring it passes.
-    #[cfg(debug_assertions)]
+    /// DISCRIMINATION PROOF (#160 Task 21): replacing the `expect` in
+    /// `DetectorContext::get_ordering_facts` with a fall-back to an empty map
+    /// makes this FAIL (the reader returns "read"); restoring it passes.
     #[test]
     fn undeclared_ordering_facts_read_inside_the_loop_fails_loudly() {
         let resolved = empty_resolved();
-        let ctx = build_detector_context(&resolved, 0);
+        let owned = build_detector_context(&resolved, 0);
+        let ctx = owned.ctx();
         let detectors = vec![Detector {
             name: "reader".to_string(),
             run: ordering_facts_reader,
@@ -986,22 +921,24 @@ mod tests {
 
     /// Pins the REAL declarations, not just the mechanism: every registered
     /// detector runs ALONE through `run_each`, so no other detector's `requires`
-    /// can trigger the pre-fill on its behalf. A detector that reads the ordering
-    /// facts without declaring `substrate::ORDERING_FACTS` trips the
-    /// `get_ordering_facts` guard and shows up as a "threw" diagnostic. d47/d49/d51
-    /// read the facts on their first line, so an empty workspace is enough to
-    /// reach the read.
+    /// can trigger the fill on its behalf. A detector that reads the ordering
+    /// facts without declaring `substrate::ORDERING_FACTS` finds the slot empty,
+    /// panics in `get_ordering_facts` and shows up as a "threw" diagnostic.
+    /// d47/d49/d51 read the facts on their first line, so an empty workspace is
+    /// enough to reach the read.
     ///
     /// DISCRIMINATION PROOF (recorded 2026-10-04): setting d47's `requires` back
     /// to `0` in `detectors/mod.rs` makes this FAIL naming d47; restoring it
-    /// passes.
+    /// passes. (#160 Task 21: skipping `fill_ordering` in the shim makes it fail
+    /// naming d47/d49/d51.)
     #[cfg(debug_assertions)]
     #[test]
     fn every_detector_alone_declares_what_it_reads() {
         let resolved = empty_resolved();
         let mut offenders = Vec::new();
         for detector in crate::engine::l5::detectors::registered_detectors() {
-            let ctx = build_detector_context(&resolved, detector.requires);
+            let owned = build_detector_context(&resolved, detector.requires);
+            let ctx = owned.ctx();
             let name = detector.name.clone();
             let (_f, diagnostics, _s, _i) = run_each(&resolved, &ctx, &[detector]);
             if diagnostics
@@ -1045,7 +982,8 @@ mod tests {
     #[test]
     fn detector_results_fold_in_detector_order_not_completion_order() {
         let resolved = empty_resolved();
-        let ctx = build_detector_context(&resolved, 0);
+        let owned = build_detector_context(&resolved, 0);
+        let ctx = owned.ctx();
         let detectors = vec![
             Detector {
                 name: "slow".to_string(),
@@ -1084,25 +1022,8 @@ mod tests {
     }
 
     use crate::engine::l5::finding::{Finding, FindingConfidence, SourceAnchor};
-    use crate::program::model::workspace::ModelEntities;
+    use crate::engine::l5::test_support::empty_resolved;
     use std::cmp::Ordering;
-
-    fn empty_resolved() -> Model {
-        Model {
-            workspace: ModelEntities {
-                objects: vec![],
-                tables: vec![],
-                routines: vec![],
-            },
-            root_classifications: vec![],
-            primary_app: None,
-            infra_diagnostics: vec![],
-            workspace_diagnostics: vec![],
-            dependency_diagnostics: vec![],
-            calls: Default::default(),
-            events: Default::default(),
-        }
-    }
 
     fn test_finding(id: &str) -> Finding {
         Finding {

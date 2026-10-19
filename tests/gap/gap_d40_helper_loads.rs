@@ -344,7 +344,8 @@ codeunit 50402 "D40 Opaque"
     );
     let files = vec![("src/D40Opaque.al".to_string(), src)];
     let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
-    let ctx = build_detector_context(&resolved, substrate::ALL);
+    let owned = build_detector_context(&resolved, substrate::ALL);
+    let ctx = owned.ctx();
     let forward = resolved
         .workspace
         .routines

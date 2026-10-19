@@ -794,6 +794,26 @@ fn retained_census_counts_the_filled_ordering_cell() {
     );
 }
 
+/// #160 A4: a single-app analyze computes its own SCC in `build_l4`, so the
+/// `l4.scc` bucket is printed, and exactly once (one solve).
+#[test]
+fn retained_census_counts_the_single_app_scc_once() {
+    let ws = r0("ws-d8-commit-in-tx");
+    let (out, _) = spawn_traced(
+        &[
+            "analyze",
+            ws.to_str().unwrap(),
+            "--single-app",
+            "--format",
+            "json",
+        ],
+        &[("ALSEM_RETAINED_CENSUS", "1")],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let lines = err.lines().filter(|l| l.contains("bucket=l4.scc ")).count();
+    assert_eq!(lines, 1, "l4.scc lines:\n{err}");
+}
+
 /// Spec §4.1.5 / A0.5 on the fixture: `ALSEM_RETAINED_CENSUS=1` changes no
 /// stdout byte, prints tagged bucket lines on stderr, and the old
 /// `[C1_CONE_CENSUS]` report it replaces is gone. Spawned, because
@@ -824,7 +844,12 @@ fn retained_census_changes_no_output() {
     );
     assert_eq!(off.stdout, on.stdout, "census changed stdout");
     let err = String::from_utf8_lossy(&on.stderr);
-    for b in ["bucket=model ", "bucket=program.report ", "bucket=context."] {
+    for b in [
+        "bucket=model ",
+        "bucket=program.report ",
+        "bucket=context.",
+        "bucket=l4.",
+    ] {
         assert!(err.contains(b), "missing {b}:\n{err}");
     }
     assert!(

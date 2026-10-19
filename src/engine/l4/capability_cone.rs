@@ -4962,11 +4962,12 @@ codeunit 13 "Dep Rec Sub"
         );
 
         // (ii) The detector context analyze uses.
-        let ctx = crate::engine::l5::detector_context::build_detector_context_with(
+        let owned = crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
             crate::engine::l5::registry::substrate::ALL,
             Some(base.cross_app_inputs()),
         );
+        let ctx = owned.ctx();
         for (name, id, want) in [
             ("OnDepRec", &publisher, &all_unknown),
             ("Fwd", &fwd, &fwd_want),
@@ -5172,11 +5173,12 @@ codeunit 13 "Dep Rec Sub"
         names: &[&str],
         keys: &[&str],
     ) -> Vec<RoleRow> {
-        let ctx = crate::engine::l5::detector_context::build_detector_context_with(
+        let owned = crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
             crate::engine::l5::registry::substrate::ALL,
             Some(base.cross_app_inputs()),
         );
+        let ctx = owned.ctx();
         let proj = project_r3a5_cross_app(ws, "r0", "issue107");
         let mut out = Vec::new();
         for name in names {

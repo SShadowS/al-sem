@@ -439,18 +439,20 @@ pub fn detect_d50(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeSet, HashMap};
+    use std::collections::HashMap;
 
     use super::*;
     use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
     use crate::engine::l4::combined_graph::CombinedGraph;
-    use crate::engine::l5::detector_context::DetectorContext;
-    use crate::engine::l5::event_flow::EventFlowIndexes;
+    use crate::engine::l5::detector_context::{
+        DetectorArtifacts, DetectorContext, detector_context,
+    };
     use crate::engine::l5::full_summary::FullRoutineSummary;
-    use crate::engine::l5::test_support::{cone_store_of, fact, routine, summary, ts_known};
+    use crate::engine::l5::test_support::{
+        MinimalCtx, cone_store_of, empty_artifacts, fact, routine, summary, ts_known,
+    };
     use crate::engine::root_classification::RootClassification;
     use crate::program::attributes::{AttributeArg, AttributeInfo};
-    use crate::program::model::events::EventGraph;
     use crate::program::model::workspace::{Model, ModelEntities, ModelObject, ModelRoutine};
 
     // -----------------------------------------------------------------------
@@ -568,65 +570,14 @@ mod tests {
     fn minimal_ctx<'a>(
         routines: &'a [crate::program::model::workspace::ModelRoutine],
         root_classes: Vec<RootClassification>,
-    ) -> DetectorContext<'a> {
-        let routine_by_id: HashMap<&'a str, &'a crate::program::model::workspace::ModelRoutine> =
-            routines.iter().map(|r| (r.id.as_str(), r)).collect();
-
-        let root_classifications_by_routine: HashMap<String, RootClassification> = root_classes
+    ) -> MinimalCtx<'a> {
+        let mut owned =
+            crate::engine::l5::test_support::minimal_ctx(routines, HashMap::new(), HashMap::new());
+        owned.art_mut().root_classifications_by_routine = root_classes
             .into_iter()
             .map(|rc| (rc.routine_id.clone(), rc))
             .collect();
-
-        let empty_graph = CombinedGraph {
-            nodes: vec![],
-            edges_by_from: HashMap::new(),
-            edges_from_order: vec![],
-            uncertainty_edges: vec![],
-            typed_edges: vec![],
-        };
-
-        DetectorContext {
-            graph: empty_graph,
-            event_graph: EventGraph {
-                events: vec![],
-                edges: vec![],
-            },
-            routine_by_id,
-            objects_by_id: HashMap::new(),
-            table_by_id: HashMap::new(),
-            reverse_call_graph: std::collections::BTreeMap::new(),
-            entry_points: BTreeSet::new(),
-            transaction_spans: vec![],
-            resolved_call_edge_by_callsite: HashMap::new(),
-            uncertainty_edges_by_from: HashMap::new(),
-            uncertainties_by_node: HashMap::new(),
-            uncertainties: Default::default(),
-            call_site_by_id: HashMap::new(),
-            summaries: HashMap::new(),
-            // ⟨C1⟩ No summaries ⇒ no derived cone rows.
-            cone_derived: Default::default(),
-            event_flow_indexes: EventFlowIndexes::default(),
-            parameter_roles_by_routine: HashMap::new(),
-            upgraded_bindings_by_callsite: HashMap::new(),
-            reachable_roots: BTreeSet::new(),
-            internal_reachable_externally: false,
-            dep_routine_ids: BTreeSet::new(),
-            declared_dependencies: Vec::new(),
-            app_versions: HashMap::new(),
-            friends: HashMap::new(),
-            root_classifications_by_routine,
-            ordering_facts: std::sync::OnceLock::new(),
-            ordering_source: None,
-            closed_world_temp_params: Default::default(),
-            summarize_diagnostics: Vec::new(),
-            db_effect_bundle: None,
-            reverse_effect_index: None,
-            fingerprint_index: crate::engine::l5::fingerprint::FingerprintIndex::build(
-                routines,
-                &[],
-            ),
-            cross_extension_subscribers: std::collections::BTreeMap::new(),
-        }
+        owned
     }
 
     // -----------------------------------------------------------------------
@@ -688,19 +639,13 @@ mod tests {
         let obj_committer = mk_object("obj-committer", None);
         let ws_objects = vec![obj_committer.clone()];
 
-        // Manually build the DetectorContext, pre-populating only the fields
+        // Manually build the DetectorArtifacts, pre-populating only the fields
         // detect_d50 actually reads:
         //   - transaction_spans (pre-built below)
-        //   - routine_by_id
         //   - root_classifications_by_routine (empty → all caps pass for r_committer)
-        //   - call_site_by_id (empty → fallback to routine header anchor)
         //   - summaries (empty → is_transaction_managing falls back to name match)
-        let routine_by_id: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = [
-            (r_seed.id.as_str(), &r_seed),
-            (r_manager.id.as_str(), &r_manager),
-            (r_committer.id.as_str(), &r_committer),
-        ]
-        .into();
+        // The context's borrowed maps (`routine_by_id`, `call_site_by_id`, …)
+        // come from the model below.
 
         // Pre-build the transaction spans:
         //   1. CheckedRunImplicit span: seed=r_seed, routines_in_span includes all 3.
@@ -742,68 +687,27 @@ mod tests {
             },
         ];
 
-        let empty_graph = CombinedGraph {
-            nodes: vec![],
-            edges_by_from: HashMap::new(),
-            edges_from_order: vec![],
-            uncertainty_edges: vec![],
-            typed_edges: vec![],
-        };
-
-        let ctx = DetectorContext {
-            graph: empty_graph,
-            event_graph: EventGraph {
-                events: vec![],
-                edges: vec![],
-            },
-            routine_by_id,
-            objects_by_id: HashMap::new(), // detect_d50 builds its own from ws.objects
-            table_by_id: HashMap::new(),
-            reverse_call_graph: std::collections::BTreeMap::new(),
-            entry_points: BTreeSet::new(),
+        let art = DetectorArtifacts {
             transaction_spans: spans,
-            resolved_call_edge_by_callsite: HashMap::new(),
-            uncertainty_edges_by_from: HashMap::new(),
-            uncertainties_by_node: HashMap::new(),
-            uncertainties: Default::default(),
-            call_site_by_id: HashMap::new(),
-            summaries: HashMap::new(),
-            // ⟨C1⟩ No summaries ⇒ no derived cone rows.
-            cone_derived: Default::default(),
-            event_flow_indexes: EventFlowIndexes::default(),
-            parameter_roles_by_routine: HashMap::new(),
-            upgraded_bindings_by_callsite: HashMap::new(),
-            reachable_roots: BTreeSet::new(),
-            internal_reachable_externally: false,
-            dep_routine_ids: BTreeSet::new(),
-            declared_dependencies: Vec::new(),
-            app_versions: HashMap::new(),
-            friends: HashMap::new(),
-            root_classifications_by_routine: HashMap::new(),
-            ordering_facts: std::sync::OnceLock::new(),
-            ordering_source: None,
-            closed_world_temp_params: Default::default(),
-            summarize_diagnostics: Vec::new(),
-            db_effect_bundle: None,
-            reverse_effect_index: None,
-            // Borrows routines_slice/ws_objects (not yet moved — resolved.workspace
-            // below is built from CLONES of both so this borrow stays valid for the
-            // ctx's lifetime through the detect_d50 call).
-            fingerprint_index: crate::engine::l5::fingerprint::FingerprintIndex::build(
-                &routines_slice,
-                &ws_objects,
-            ),
-            cross_extension_subscribers: std::collections::BTreeMap::new(),
+            ..empty_artifacts(
+                CombinedGraph {
+                    nodes: vec![],
+                    edges_by_from: HashMap::new(),
+                    edges_from_order: vec![],
+                    uncertainty_edges: vec![],
+                    typed_edges: vec![],
+                },
+                HashMap::new(),
+            )
         };
 
         // Build a minimal Model for detect_d50 (it uses ws.routines and ws.objects
-        // to build its objects_by_id map internally). Clones of routines_slice/ws_objects
-        // — the originals stay borrowed by ctx.fingerprint_index above.
+        // to build its objects_by_id map internally); the context borrows it.
         let resolved = Model {
             workspace: ModelEntities {
-                objects: ws_objects.clone(),
+                objects: ws_objects,
                 tables: vec![],
-                routines: routines_slice.clone(),
+                routines: routines_slice,
             },
             root_classifications: vec![],
             primary_app: None,
@@ -813,6 +717,7 @@ mod tests {
             calls: Default::default(),
             events: Default::default(),
         };
+        let ctx = detector_context(&resolved, &art, None);
 
         let output = detect_d50(&resolved, &ctx).unwrap();
 
@@ -846,7 +751,8 @@ mod tests {
         let mut r = routine("r1", "procedure");
         r.body_available = false;
         let routines = vec![r];
-        let ctx = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![]);
+        let ctx = owned.ctx();
         let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r1", &ctx, &objects));
     }
@@ -861,7 +767,8 @@ mod tests {
         let r = routine("r2a", "procedure");
         let routines = vec![r];
         let rc = mk_root_class("r2a", &["public-procedure"]);
-        let ctx = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc]);
+        let ctx = owned.ctx();
         let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r2a", &ctx, &objects));
     }
@@ -871,7 +778,8 @@ mod tests {
         let r = routine("r2b", "procedure");
         let routines = vec![r];
         let rc = mk_root_class("r2b", &["event-subscriber"]);
-        let ctx = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc]);
+        let ctx = owned.ctx();
         let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r2b", &ctx, &objects));
     }
@@ -887,7 +795,8 @@ mod tests {
         let r = routine("r2c", "trigger");
         let routines = vec![r];
         let rc = mk_root_class("r2c", &["onrun-codeunit"]);
-        let ctx = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc]);
+        let ctx = owned.ctx();
         let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r2c", &ctx, &objects));
     }
@@ -900,7 +809,8 @@ mod tests {
         let r = routine("r2d", "trigger");
         let routines = vec![r];
         let rc = mk_root_class("r2d", &["job-queue-entrypoint", "onrun-codeunit"]);
-        let ctx = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc]);
+        let ctx = owned.ctx();
         let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r2d", &ctx, &objects));
     }
@@ -912,7 +822,8 @@ mod tests {
         let r = routine("r2e", "trigger");
         let routines = vec![r];
         let rc = mk_root_class("r2e", &["job-queue-entrypoint"]);
-        let ctx = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc]);
+        let ctx = owned.ctx();
         let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(is_explicit_commit_proven_effective("r2e", &ctx, &objects));
     }
@@ -925,7 +836,8 @@ mod tests {
         let mut r = routine("r3", "procedure");
         r.attributes_parsed = vec![try_fn_attr()];
         let routines = vec![r];
-        let ctx = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![]);
+        let ctx = owned.ctx();
         let objects: HashMap<&str, &ModelObject> = HashMap::new();
         assert!(!is_explicit_commit_proven_effective("r3", &ctx, &objects));
     }
@@ -940,7 +852,8 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_qualified("Ignore")];
         r.object_id = "obj-4a".to_string();
         let routines = vec![r];
-        let ctx = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![]);
+        let ctx = owned.ctx();
         let obj = mk_object("obj-4a", None);
         let objects: HashMap<&str, &ModelObject> = [("obj-4a", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4a", &ctx, &objects));
@@ -952,7 +865,8 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_qualified("Error")];
         r.object_id = "obj-4b".to_string();
         let routines = vec![r];
-        let ctx = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![]);
+        let ctx = owned.ctx();
         let obj = mk_object("obj-4b", None);
         let objects: HashMap<&str, &ModelObject> = [("obj-4b", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4b", &ctx, &objects));
@@ -967,7 +881,8 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_plain("Ignore")];
         r.object_id = "obj-4c".to_string();
         let routines = vec![r];
-        let ctx = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![]);
+        let ctx = owned.ctx();
         let obj = mk_object("obj-4c", None);
         let objects: HashMap<&str, &ModelObject> = [("obj-4c", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4c", &ctx, &objects));
@@ -982,7 +897,8 @@ mod tests {
         let mut r = routine("r4d", "procedure");
         r.object_id = "obj-4d".to_string();
         let routines = vec![r];
-        let ctx = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![]);
+        let ctx = owned.ctx();
         let obj = mk_object("obj-4d", Some("ignore"));
         let objects: HashMap<&str, &ModelObject> = [("obj-4d", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4d", &ctx, &objects));
@@ -993,7 +909,8 @@ mod tests {
         let mut r = routine("r4e", "procedure");
         r.object_id = "obj-4e".to_string();
         let routines = vec![r];
-        let ctx = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![]);
+        let ctx = owned.ctx();
         let obj = mk_object("obj-4e", Some("error"));
         let objects: HashMap<&str, &ModelObject> = [("obj-4e", &obj)].into();
         assert!(!is_explicit_commit_proven_effective("r4e", &ctx, &objects));
@@ -1013,7 +930,8 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_argless()]; // [CommitBehavior] — argless
         r.object_id = "obj-fix1a".to_string();
         let routines = vec![r];
-        let ctx = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![]);
+        let ctx = owned.ctx();
         let obj = mk_object("obj-fix1a", Some("ignore")); // ICB = ignore, but irrelevant
         let objects: HashMap<&str, &ModelObject> = [("obj-fix1a", &obj)].into();
         // FIX 1b: routine attr present → object ICB NOT consulted → TRUE.
@@ -1037,7 +955,8 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_miscased_ignore()]; // [Commitbehavior(...)] — miscased
         r.object_id = "obj-fix1b".to_string();
         let routines = vec![r];
-        let ctx = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![]);
+        let ctx = owned.ctx();
         let obj = mk_object("obj-fix1b", None); // no object ICB
         let objects: HashMap<&str, &ModelObject> = [("obj-fix1b", &obj)].into();
         // FIX 1a: case-sensitive match misses → no object ICB → TRUE.
@@ -1090,16 +1009,16 @@ mod tests {
         routines: &'a [ModelRoutine],
         routine_id: &str,
         facts: Vec<CapabilityFact>,
-    ) -> DetectorContext<'a> {
+    ) -> MinimalCtx<'a> {
         let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
         summaries.insert(
             routine_id.to_string(),
             summary(routine_id, facts, vec![], None),
         );
-        let mut ctx = minimal_ctx(routines, vec![]);
-        ctx.cone_derived = cone_store_of(&summaries);
-        ctx.summaries = summaries;
-        ctx
+        let mut owned = minimal_ctx(routines, vec![]);
+        owned.art_mut().cone_derived = cone_store_of(&summaries);
+        owned.art_mut().summaries = summaries;
+        owned
     }
 
     /// Assert the preconditions that make a COUNT-branch case non-vacuous: the
@@ -1144,7 +1063,7 @@ mod tests {
              short-circuits and the COUNT branch under test is never consulted"
         );
         let routines = vec![r];
-        let ctx = ctx_with_write_summary(
+        let owned = ctx_with_write_summary(
             &routines,
             ID,
             vec![
@@ -1153,6 +1072,7 @@ mod tests {
                 table_insert_fact("t3", true),
             ],
         );
+        let ctx = owned.ctx();
         assert_counts(&ctx, ID, 3, 0);
         assert!(
             ctx.cone_derived.writes_tables_count_of(ID) >= TRANSACTION_THRESHOLD_TABLES,
@@ -1177,7 +1097,7 @@ mod tests {
         let r = routine(ID, "procedure");
         assert!(!posting_name_matches(&r.name));
         let routines = vec![r];
-        let ctx = ctx_with_write_summary(
+        let owned = ctx_with_write_summary(
             &routines,
             ID,
             vec![
@@ -1186,6 +1106,7 @@ mod tests {
                 table_insert_fact("t3", true),
             ],
         );
+        let ctx = owned.ctx();
         assert_counts(&ctx, ID, 3, 2);
 
         assert!(
@@ -1205,7 +1126,7 @@ mod tests {
         let r = routine(ID, "procedure");
         assert!(!posting_name_matches(&r.name));
         let routines = vec![r];
-        let ctx = ctx_with_write_summary(
+        let owned = ctx_with_write_summary(
             &routines,
             ID,
             vec![
@@ -1214,6 +1135,7 @@ mod tests {
                 table_insert_fact("t3", false),
             ],
         );
+        let ctx = owned.ctx();
         assert_counts(&ctx, ID, 3, 3);
 
         assert!(

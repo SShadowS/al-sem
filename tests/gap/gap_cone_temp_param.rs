@@ -232,7 +232,8 @@ fn rid(resolved: &Model, object_name: &str, routine_name: &str) -> String {
 
 /// Table names (not ids) of `routine`'s physical write set.
 fn physical_writes(resolved: &Model, object_name: &str, routine_name: &str) -> Vec<String> {
-    let ctx = build_detector_context(resolved, substrate::ALL);
+    let owned = build_detector_context(resolved, substrate::ALL);
+    let ctx = owned.ctx();
     let id = rid(resolved, object_name, routine_name);
     let names = |set: Vec<String>| -> Vec<String> {
         set.iter()

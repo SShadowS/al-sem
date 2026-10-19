@@ -840,7 +840,8 @@ fn compute_tx_context_map(resolved: &Model) -> HashMap<String, &'static str> {
     // `RAW_INHERITED_FACTS`. Same shape as `digest_cli::compute_tx_context_map` —
     // only `ctx.transaction_spans` is read, and spans are derived-substrate-backed
     // since Task 2.
-    let ctx = build_detector_context(resolved, crate::engine::l5::registry::substrate::ALL);
+    let owned = build_detector_context(resolved, crate::engine::l5::registry::substrate::ALL);
+    let ctx = owned.ctx();
     let mut map: HashMap<String, &'static str> = HashMap::new();
     for span in &ctx.transaction_spans {
         if span.seed_kind != SeedKind::ExplicitCommit {

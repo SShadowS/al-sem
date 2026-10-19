@@ -535,8 +535,9 @@ fn compute_tx_context_map(
     // `compute_transaction_spans` sources its `writes_tables` / `publishes_events`
     // from `ctx.cone_derived` (Task 2) and its completeness from
     // `reachable_coverage` — never from a fact Vec.
-    let ctx =
+    let owned =
         build_detector_context_with(resolved, crate::engine::l5::registry::substrate::ALL, cross);
+    let ctx = owned.ctx();
     let mut map: HashMap<String, TransactionContext> = HashMap::new();
     for span in &ctx.transaction_spans {
         if span.seed_kind != SeedKind::ExplicitCommit {

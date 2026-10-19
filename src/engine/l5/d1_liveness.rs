@@ -294,7 +294,8 @@ mod tests {
         a.call_sites = vec![a_cs];
 
         let routines = vec![a, b, t];
-        let ctx = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let owned = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let ctx = owned.ctx();
 
         let mut node_ix = HashMap::new();
         for (i, id) in ["A", "B", "T"].iter().enumerate() {
@@ -368,7 +369,8 @@ mod tests {
         b.call_sites = vec![call_site("B/cs0", "H", vec![])];
 
         let routines = vec![a, b, h];
-        let ctx = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let owned = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let ctx = owned.ctx();
 
         let mut node_ix = HashMap::new();
         for (i, id) in ["A", "B", "H"].iter().enumerate() {
@@ -435,7 +437,8 @@ mod tests {
         a.call_sites = vec![a_cs];
 
         let routines = vec![a, h];
-        let ctx = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let owned = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let ctx = owned.ctx();
 
         let mut node_ix = HashMap::new();
         node_ix.insert("A", 0u32);
@@ -526,7 +529,8 @@ mod tests {
         b.call_sites = vec![b_cs];
 
         let routines = vec![a, b, h];
-        let ctx = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let owned = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let ctx = owned.ctx();
 
         let mut node_ix = HashMap::new();
         for (i, id) in ["A", "B", "H"].iter().enumerate() {
@@ -650,7 +654,8 @@ mod tests {
         f.record_operations = vec![fop];
 
         let routines = vec![r, f, t];
-        let ctx = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let owned = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let ctx = owned.ctx();
         let mut node_ix = HashMap::new();
         for (i, id) in ["R", "F", "T"].iter().enumerate() {
             node_ix.insert(*id, i as u32);

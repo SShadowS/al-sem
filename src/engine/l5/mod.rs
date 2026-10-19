@@ -157,4 +157,4 @@ pub mod fingerprint_query;
 pub mod fingerprint_cli;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;

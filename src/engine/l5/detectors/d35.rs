@@ -305,7 +305,8 @@ mod tests {
     ) -> Finding {
         let mut routines = vec![routine("sub", "event-subscriber")];
         routines.extend_from_slice(extra);
-        let ctx = minimal_ctx(&routines, HashMap::new(), summaries);
+        let owned = minimal_ctx(&routines, HashMap::new(), summaries);
+        let ctx = owned.ctx();
         let mut out = detect_d35(&model_of(&routines), &ctx).unwrap().findings;
         assert_eq!(out.len(), 1, "expected one d35 finding, got {out:#?}");
         out.remove(0)
@@ -403,8 +404,8 @@ mod tests {
     #[test]
     fn unknown_confidence_reads_the_subscriber_uncertainties() {
         let routines = vec![routine("sub", "event-subscriber")];
-        let mut ctx = minimal_ctx(&routines, HashMap::new(), HashMap::new());
-        ctx.set_uncertainties_for_test(
+        let mut owned = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        owned.art_mut().set_uncertainties_for_test(
             "sub",
             vec![Uncertainty {
                 kind: "unresolved-call".to_string(),
@@ -414,6 +415,7 @@ mod tests {
                 interface_name: None,
             }],
         );
+        let ctx = owned.ctx();
         let out = detect_d35(&model_of(&routines), &ctx).unwrap().findings;
         assert_eq!(out.len(), 1);
         let c = &out[0].confidence;

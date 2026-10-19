@@ -684,7 +684,8 @@ mod tests {
     #[test]
     fn deep_reach_witness_last_m_omitted() {
         let (routines, graph_edges, summaries) = deep_reach_chain_fixture(9);
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -741,7 +742,8 @@ mod tests {
     #[test]
     fn shallow_reach_witness_whole_chain_no_omission() {
         let (routines, graph_edges, summaries) = deep_reach_chain_fixture(1);
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -799,7 +801,8 @@ mod tests {
     #[test]
     fn reach_witness_total_hops_equals_m_last_no_omission() {
         let (routines, graph_edges, summaries) = deep_reach_chain_fixture(2);
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -854,7 +857,8 @@ mod tests {
     #[test]
     fn deep_value_witness_crosses_hop_from_reach() {
         let (routines, graph_edges, summaries) = deep_value_chain_fixture();
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);

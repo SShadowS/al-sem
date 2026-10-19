@@ -49,8 +49,6 @@ pub struct L4Request {
 // The span names keep the detector context's (`context.*`) on purpose, so
 // traces stay comparable; query and digest report them too (and the summaries
 // census) once they call this (Tasks 25-27).
-// Only tests call it until Task 21 wires the detector context through it.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn build_l4(
     model: &Model,
     graph: &CombinedGraph,
@@ -211,8 +209,6 @@ pub(crate) fn emit_scc_stats(graph: &CombinedGraph, scc: &SccResult) {
 /// #160 §4.1.5: the `l4.*` buckets, shallow. `l4.scc` only when [`build_l4`]
 /// computed the SCC: one handed in is the cross-app base's, counted by
 /// `base.combined_scc` (a shared allocation once).
-// Dead outside tests until Task 21, like `build_l4`.
-#[cfg_attr(not(test), allow(dead_code))]
 fn census_l4(l4: &L4Analysis, computed_scc: bool) {
     use crate::engine::census::{Kind, Tally};
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);

@@ -403,11 +403,12 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
     // reads `sum.coverage.as_ref().map(|c| c.inherited_status)` and NOTHING else
     // off the summary (`l5/event_flow.rs`'s `capabilityComposition` roll-up) —
     // coverage is composed under every output mode. No fact Vec is touched.
-    let ctx = build_detector_context_with(
+    let owned = build_detector_context_with(
         target.resolved(),
         crate::engine::l5::registry::substrate::ALL,
         target.cross_app_inputs(),
     );
+    let ctx = owned.ctx();
     let ix = &ctx.event_flow_indexes;
 
     let mut report = compute_fanout_report(&ctx.event_graph, ix, &ctx.summaries, opts.scope);
@@ -532,11 +533,12 @@ pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
     // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`. The
     // chain report reads ONLY `ctx.event_flow_indexes`; `ctx.summaries` is never
     // consulted on this path at all.
-    let ctx = build_detector_context_with(
+    let owned = build_detector_context_with(
         target.resolved(),
         crate::engine::l5::registry::substrate::ALL,
         target.cross_app_inputs(),
     );
+    let ctx = owned.ctx();
     let ix = &ctx.event_flow_indexes;
 
     let walk_opts = ChainWalkOptions {

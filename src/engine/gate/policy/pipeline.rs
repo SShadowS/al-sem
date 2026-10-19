@@ -247,12 +247,13 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             // (`gate/events.rs`, `l5/digest_cli.rs`, `l5/prove.rs`) reads only
             // coverage / spans / the derived substrate, and folding it into `ALL`
             // would re-materialize ~10.9 GB of cone Vecs on all of them.
-            let ctx = build_detector_context_with(
+            let owned = build_detector_context_with(
                 resolved,
                 crate::engine::l5::registry::substrate::ALL
                     | crate::engine::l5::registry::substrate::RAW_INHERITED_FACTS,
                 target.cross_app_inputs(),
             );
+            let ctx = owned.ctx();
             let root_classifications = classify_roots(&resolved.workspace);
             let ws = &resolved.workspace;
             // #70: rules evaluate WORKSPACE routines only; the dependency routines

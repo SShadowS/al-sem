@@ -139,7 +139,8 @@ fn d44_sees_workspace_subscribers_of_a_dependency_event() {
 
     // The dependency publisher is a symbol with no model routine, and the
     // routine with two attributes has one edge per subscription.
-    let ctx = build_detector_context(&resolved, 0);
+    let owned = build_detector_context(&resolved, 0);
+    let ctx = owned.ctx();
     let symbol = ctx
         .event_graph
         .events
@@ -211,7 +212,8 @@ codeunit 50581 "Ev Ws Sub"
     );
     let resolved =
         assemble_and_resolve_workspace_with_program_calls(dir.path()).expect("workspace resolves");
-    let ctx = build_detector_context(&resolved, 0);
+    let owned = build_detector_context(&resolved, 0);
+    let ctx = owned.ctx();
     let edges: Vec<&str> = ctx
         .event_graph
         .edges

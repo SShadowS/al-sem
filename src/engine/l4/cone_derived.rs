@@ -419,8 +419,8 @@ static EMPTY_ROW: ConeDerivedRow = ConeDerivedRow {
 };
 
 /// The workspace-wide derived cone substrate: one row per routine plus the shared
-/// id pools and the interner. Parked on `DetectorContext` next to
-/// `db_effect_bundle` — never referenced from inside a row.
+/// id pools and the interner. Parked on `DetectorArtifacts` — never referenced
+/// from inside a row.
 #[derive(Debug, Default)]
 pub struct ConeDerivedStore {
     interner: ResInterner,

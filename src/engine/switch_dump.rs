@@ -127,7 +127,8 @@ pub fn dump_lines(ws: &Path) -> Dump {
     }
     {
         // demanded = 0: the event graph is built unconditionally; no substrate.
-        let ctx = build_detector_context(&resolved, 0);
+        let owned = build_detector_context(&resolved, 0);
+        let ctx = owned.ctx();
         d.insert("events.symbols".into(), rows(&ctx.event_graph.events));
         d.insert("events.edges".into(), rows(&ctx.event_graph.edges));
     }
