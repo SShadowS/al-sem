@@ -96,10 +96,9 @@ pub mod substrate {
     ///
     /// **The one-line unlock**, when a detector genuinely needs this: change
     /// that test's full context to `substrate::ALL | det.requires`. Do that
-    /// FIRST; do not add the bit to `ALL` (that would charge the four
-    /// `ALL`-passing non-registry callers — `gate/events.rs` ×2,
-    /// `l5/digest_cli.rs`, `l5/prove.rs`, plus `gate/policy/pipeline.rs` — for a
-    /// transpose none of them reads).
+    /// FIRST; do not add the bit to `ALL` (that would charge every `ALL`
+    /// caller — the parity tests' full contexts and `tools/census-probe` — for
+    /// a transpose none of them reads).
     ///
     /// Today's consumer is `alsem query`, which owns its own pipeline and never
     /// builds a `DetectorContext` at all — so this bit costs the analyze path
@@ -124,19 +123,19 @@ pub mod substrate {
     /// `every_detector_alone_declares_what_it_reads` runs each registered
     /// detector by itself.
     ///
-    /// Not in [`ALL`]: the non-registry callers that pass `ALL` read no ordering
-    /// facts and so never pay for them.
+    /// Not in [`ALL`]: a context built from `ALL` reads no ordering facts and
+    /// so never pays for them.
     pub const ORDERING_FACTS: u32 = 1 << 6;
-    /// Every substrate — the eager, pre-W1.0 behavior. Full/preset/all-detector runs
-    /// and every non-registry `build_detector_context` caller pass this.
+    /// Every substrate — the eager, pre-W1.0 behavior. Since #160 step 2 no
+    /// command passes it: each builds its context in a `View` at the union of
+    /// its runs' `requires`. The callers left are the parity tests' "full"
+    /// contexts and `tools/census-probe`.
     ///
     /// ⟨C1 Task 3 — R2⟩ This is an EXPLICIT OR list, not "all bits set", and
-    /// [`RAW_INHERITED_FACTS`] is deliberately **excluded** from it. `ALL` is
-    /// passed verbatim by every non-registry caller (`gate/events.rs`,
-    /// `l5/digest_cli.rs`, `l5/prove.rs`, `gate/policy/pipeline.rs`); folding the
-    /// raw-cone bit in here would re-materialize the whole 10.9 GB on all of
-    /// them. Anything that needs the raw facts ORs the bit in at its own call
-    /// site.
+    /// [`RAW_INHERITED_FACTS`] is deliberately **excluded** from it: folding the
+    /// raw-cone bit in here would re-materialize the whole 10.9 GB on every
+    /// `ALL` caller. Anything that needs the raw facts ORs the bit in at its
+    /// own call site (policy check's RAW build).
     ///
     /// ⟨Task 6⟩ [`DB_EFFECT_REVERSE_INDEX`] is excluded for the same reason plus
     /// one more (the detector-parity trap) — see its own doc.

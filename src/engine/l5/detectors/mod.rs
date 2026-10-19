@@ -1227,8 +1227,8 @@ pub fn registered_detectors() -> Vec<Detector> {
 }
 
 /// The DEFAULT detector set: what `alsem analyze` runs with no `--detector` or
-/// `--preset`, and what digest, prove, fingerprint, events and policy check run
-/// (through `gate::run::compute_analyzer_diagnostics` and its cross-app sibling).
+/// `--preset`, and what digest, prove, fingerprint, `diff --strict`, events and
+/// policy check run (on their `View`, #160).
 /// Which function a detector sits in IS its class: demote one by moving its
 /// entry to [`opt_in_detectors`].
 pub fn default_detectors() -> Vec<Detector> {

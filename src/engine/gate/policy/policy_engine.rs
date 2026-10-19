@@ -98,7 +98,7 @@ fn fact_sort_key(f: &CapabilityFact) -> String {
 /// ⟨C1 Task 3⟩ This is the ONE consumer that genuinely needs the RAW inherited
 /// `CapabilityFact` objects (it matches their `op`/`resource_kind`/`resource_id`/
 /// `confidence`/… fields against the rule predicate), so the `policy` pipeline
-/// builds its context with `substrate::ALL | substrate::RAW_INHERITED_FACTS`.
+/// builds its RAW context with `substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS`.
 ///
 /// # Panics
 /// The `inherited` / `any` modes panic (via `FullRoutineSummary::inherited_raw`)

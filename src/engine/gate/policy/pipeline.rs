@@ -241,7 +241,7 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
     // build reads the graph.
     view.release_all_but(&[Cell::Graph]);
     let resolved = view.model();
-    let target = &view.target;
+    let target = view.target();
 
     // Run the engine (runPolicy wrapper: disabled → empty result, version 0).
     let result: PolicyRunResult = match &policy_opt {

@@ -491,7 +491,7 @@ pub(crate) fn events_fanout_with(
         _ => {} // "warn" (default): pass through unchanged.
     }
 
-    let dependencies = view.target.dependencies();
+    let dependencies = view.target().dependencies();
     let text = match opts.format {
         "json" => format_fanout_json(
             &report,
@@ -572,7 +572,7 @@ pub(crate) fn events_chains_with(
     let report = compute_chain_report(&view.det().event_flow_indexes, &walk_opts, opts.scope);
     release_cells(&mut view);
 
-    let dependencies = view.target.dependencies();
+    let dependencies = view.target().dependencies();
     let text = match opts.format {
         "json" => format_chains_json(
             &report,

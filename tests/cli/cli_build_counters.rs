@@ -718,6 +718,90 @@ fn diff_ends_each_sides_phase() {
     );
 }
 
+/// The trace of `alsem <args>` as tokens, in order: `ctx` per
+/// `build.detector_context`, `snap` per `build.snapshot`, `rel:<Cell>` per
+/// `view.release` (`View::release`'s instant).
+fn release_sequence(args: &[&str]) -> Vec<String> {
+    let (out, events) = spawn_trace_events(env!("CARGO_BIN_EXE_alsem"), args, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "alsem {args:?}\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    events
+        .iter()
+        .filter_map(|e| {
+            let ph = e.get("ph").and_then(Value::as_str);
+            match (ph, e.get("name").and_then(Value::as_str)) {
+                (Some("C"), Some("build.detector_context")) => Some("ctx".to_string()),
+                (Some("C"), Some("build.snapshot")) => Some("snap".to_string()),
+                (Some("i"), Some("view.release")) => Some(format!(
+                    "rel:{}",
+                    e["args"]["cell"].as_str().unwrap_or("<no cell>")
+                )),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// #160 final panel P1-5: each command drops its cells where the code says,
+/// read off the shipped binary's trace. Policy check releases `det`, `l4`
+/// and the ordering facts BEFORE its second (RAW) context build, and the
+/// graph after it; fingerprint and each `diff --strict` side release every
+/// cell before snapshot composition; events releases `l4` right after the run
+/// and the rest after the report.
+///
+/// DISCRIMINATION: deleting policy check's `release_all_but(&[Cell::Graph])`
+/// before the RAW build fails the policy case.
+#[test]
+fn views_release_their_cells_before_the_next_build() {
+    let (_d, ws) = ws_dep();
+    let policy = policy_yaml();
+    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Graph"];
+    let per_side: Vec<&str> = [&["ctx"][..], &all, &["snap"]].concat();
+    let cases: [(&str, Vec<&str>, Vec<&str>); 4] = [
+        (
+            "policy check",
+            vec![
+                "policy", "check", &ws, "--policy", &policy, "--format", "json",
+            ],
+            vec![
+                "ctx",
+                "rel:Det",
+                "rel:L4",
+                "rel:Ordering",
+                "ctx",
+                "rel:Graph",
+            ],
+        ),
+        (
+            "fingerprint",
+            vec!["fingerprint", &ws, "--format", "json"],
+            per_side.clone(),
+        ),
+        (
+            "diff --strict",
+            vec!["diff", &ws, &ws, "--format", "json", "--strict"],
+            [&per_side[..], &per_side].concat(),
+        ),
+        (
+            "events fanout",
+            vec!["events", "fanout", &ws, "--format", "json"],
+            [&["ctx", "rel:L4"][..], &all].concat(),
+        ),
+    ];
+    let mut bad = Vec::new();
+    for (name, args, want) in cases {
+        let got = release_sequence(&args);
+        if got != want {
+            bad.push(format!("{name}: got {got:?}, want {want:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
 /// Spec §4.1.4: `ALSEM_TRACE_EXIT_AFTER` exits from a span guard, where the
 /// run guard never drops; both peaks must still reach the trace (code-review
 /// CR6). Presence, not value: both are 0 off Windows.
@@ -1180,10 +1264,11 @@ fn run_no_id_row_runs_one_build_and_keeps_the_text() {
         )],
         "stderr: {err}"
     );
-    // Not captured off Windows: the OS error text is the platform's own.
-    #[cfg(not(windows))]
-    assert!(
-        warning.len() == 1 && warning[0].starts_with(&prefix),
+    // Linux: captured in WSL at 8e8d2c9f (final panel P1-2).
+    #[cfg(unix)]
+    assert_eq!(
+        warning,
+        [format!("{prefix}Permission denied (os error 13)")],
         "stderr: {err}"
     );
 }

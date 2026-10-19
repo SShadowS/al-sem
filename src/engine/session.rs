@@ -22,7 +22,9 @@ use crate::program::model::workspace::Model;
 
 /// One command's model and the cells built over it (spec §4.4.3).
 pub struct View {
-    pub target: AnalysisTarget,
+    /// Private: the cells describe this target, so it never changes after
+    /// `new` (read it through [`View::target`]).
+    target: AnalysisTarget,
     /// One graph per view; cross-app `Arc::clone(&base.graph)`.
     graph: Option<Arc<CombinedGraph>>,
     l4: Option<L4Analysis>,
@@ -373,8 +375,15 @@ impl View {
         }
     }
 
-    /// Drop a cell for good: a later `prepare` that needs it panics.
+    /// Drop a cell for good: a later `prepare` that needs it panics. Each
+    /// release is one `view.release` trace instant naming the cell, so a CLI
+    /// test can see when a command drops what.
     pub fn release(&mut self, cell: Cell) {
+        pt::instant_lazy(
+            "view",
+            "view.release",
+            || serde_json::json!({ "cell": format!("{cell:?}") }),
+        );
         self.released |= cell.bit();
         match cell {
             Cell::Det => self.det = None,
@@ -393,6 +402,10 @@ impl View {
                 self.release(cell);
             }
         }
+    }
+
+    pub fn target(&self) -> &AnalysisTarget {
+        &self.target
     }
 
     pub fn model(&self) -> &Model {

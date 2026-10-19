@@ -1033,10 +1033,9 @@ fn range_extent_cmp(
 /// This is the source for the cli-b capability-snapshot envelope's `diagnostics`
 /// channel (`projectDiagnostics`). It builds them as `run_analyze` does, but the
 /// output is the same only for the same `resolved`.
-/// Since engine-switch S6 its callers (prove and the `--single-app` modes of
-/// events, policy and digest; fingerprint and diff read their `View`'s run
-/// through [`analyzer_diagnostics_of_view`], #160) pass a program-backed
-/// single-app model
+/// Since #160 step 2 no command calls it: every command reads its `View`'s
+/// run through [`analyzer_diagnostics_of_view`]. Its one caller is the cli-b
+/// snapshot differential test, which passes a program-backed single-app model
 /// (`program_calls::assemble_and_resolve_workspace_program`), the kind
 /// `run_analyze` builds for `--single-app`. The workspace (1), dependency (2)
 /// and overlay (5) sources therefore agree with `alsem analyze --single-app`
@@ -1077,7 +1076,7 @@ pub(crate) fn analyzer_diagnostics_of_view(
 }
 
 /// [`compute_analyzer_diagnostics`] for a cross-app base (its one caller is
-/// `tools/census-probe`; `alsem digest` reads its View's run): the default
+/// `tools/census-probe`; every command reads its View's run): the default
 /// set run by the cross-app runner, the
 /// combination `alsem analyze` runs by default.
 pub fn compute_analyzer_diagnostics_cross_app(

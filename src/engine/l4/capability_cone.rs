@@ -5042,6 +5042,58 @@ codeunit 13 "Dep Rec Sub"
         );
     }
 
+    /// #160 final panel P1-1: (ii) through the `View`, the path every command
+    /// takes since step 2. A cross-app `View` prepared with a plan whose probe
+    /// demands `CORE_SUMMARIES` keeps `OnDepRec`'s five path-sensitive role
+    /// fields `unknown` in `view.det()`, as (ii) does through the shim.
+    ///
+    /// DISCRIMINATION: passing `None` instead of `target.cross_app_inputs()`
+    /// to the det fill in `View::prepare` fails this, while the shim-path
+    /// tests above stay green.
+    #[test]
+    fn dependency_publisher_roles_stay_unknown_through_the_view() {
+        use crate::engine::l5::registry::{Detector, DetectorOutput, DetectorStats, substrate};
+        use crate::engine::session::{Plan, View};
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture(&ws);
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+        let publisher = routine_id(&base, "OnDepRec");
+        let probe = Detector {
+            name: "probe".to_string(),
+            run: |_, _| {
+                Ok(DetectorOutput::no_diag(
+                    vec![],
+                    DetectorStats::new("probe", 0, 0),
+                ))
+            },
+            requires: substrate::CORE_SUMMARIES,
+            rule_name: "Probe",
+            short_description: "test probe",
+        };
+        let mut view = View::new(crate::engine::gate::run::AnalysisTarget::CrossApp(
+            Box::new(base),
+        ));
+        view.prepare(&Plan::for_test(vec![vec![probe]], true, false, 0));
+        let all_unknown = (
+            EffectPresence::Unknown,
+            FieldList::Unknown,
+            EffectPresence::Unknown,
+            EffectPresence::Unknown,
+            FieldList::Unknown,
+        );
+        match view
+            .det()
+            .parameter_roles_by_routine
+            .get(&publisher)
+            .map(|v| v.as_slice())
+        {
+            Some([role]) => assert_eq!(five(role), all_unknown, "OnDepRec through the View"),
+            other => panic!("OnDepRec: want one role, got {other:?}"),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // #107: a dependency publisher's presence facts compose its subscribers.
     // -----------------------------------------------------------------------

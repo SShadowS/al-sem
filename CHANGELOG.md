@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- #160 step 2: every `alsem` command builds its detector context and its L4 solve once, through one `View` (`src/engine/session.rs`). Two builds stay outside the `View`: `policy check`'s command-local raw-facts build, and the fold solve (`compute_uncertainty_coverage_reasons`) that the snapshot composition of `digest`, `prove` and `fingerprint` still runs on its own, until step 3.
+- #160 step 2: every `alsem` command builds its detector context and its L4 solve once, through one `View` (`src/engine/session.rs`). Some builds stay outside the `View`, until step 3:
+  - `policy check`'s command-local raw-facts build;
+  - the fold solve (`compute_uncertainty_coverage_reasons`) that snapshot composition runs on its own: in `digest`, `prove` and `fingerprint`, and in each side of `diff`;
+  - for a plan with d47, d49 or d51, the whole snapshot that `fill_ordering` composes for the ordering facts, with its own cone, `pd_solve`, Tarjan and fold solve.
   - **The pieces.**
     - `View`, `Plan` and `RunKey` hold four cells: ordering, graph, det and `l4`. Each cell is filled once, by `prepare`, never lazily.
     - `L4Analysis` / `build_l4` (`src/engine/l4/analysis.rs`) is the one solve.
@@ -23,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       - The peak and 1.7 s of the time come from computing effects for its one root, not for every root.
       - 0.3 s comes from the deleted context.
       - About 0.7 s comes from the deleted private bundle solve; that part has no span, so it is not isolated.
-    - analyze's post-attach peak is 99 MiB lower, digest's 380 MiB lower. Their process peak is set during attach (about 2.84 GiB) and does not move.
+    - analyze's post-attach peak is 99 MiB lower, digest's 380 MiB lower. Their process peak is set during attach (about 2835 MiB) and does not move.
     - `digest --single-app`'s post-attach peak is 11 MiB higher, inside its 3 % bound. The solve's retained output (`l4.bundle` + `l4.scc`, 2.2 MB on CDO) now stays alive through snapshot composition; the rest of the 11 MiB is not attributed.
   - **Commands.**
     - `digest`, `prove` and `events fanout|chains` no longer build a second context with every substrate.
@@ -47,8 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `digest.tx_context_map` and `prove.tx_context_map` are gone.
     - `context.build_total` / `crossapp.context_build` now also open on the `View` paths.
   - **Library API.**
-    - `build_detector_context*` return an `OwnedContext`; read the context with `.ctx()`.
-    - `build_cross_app_base` and `assemble_and_resolve_cross_app_program` return `Result<_, CrossAppFailure>` instead of `Option`.
+    - `build_detector_context` returns an `OwnedContext`; read the context with `.ctx()`.
+    - `assemble_and_resolve_cross_app_program` returns `Result<_, CrossAppFailure>` instead of `Option`.
     - `R3a5CrossAppBase.graph` / `.combined_scc` are `Arc`s, and its `injected_typed_edges` field is gone. Those edges were a second copy of what `graph` holds, about 16 MB on CDO.
     - `R3a5CrossAppBase.upgraded_bindings` is gone: it was a second copy of `resolved.calls.upgraded_bindings`, about 15.5 MB on CDO. A cross-app `build_l4` reads the base's `field_index` (through `CrossAppInputs`) instead of building its own.
     - `DetectorOutput` derives `Debug, PartialEq, Eq`; the superset-mask parity test compares the whole output.

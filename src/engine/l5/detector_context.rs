@@ -1585,8 +1585,8 @@ pub(crate) fn build_detector_artifacts(
     };
 
     // ⟨Task 6⟩ The reverse transpose — built ONLY on explicit demand. Not in
-    // `substrate::ALL`, so the four `ALL`-passing non-registry callers never pay
-    // it, and `run_detectors` (which passes `demanded`, the fold of the selected
+    // `substrate::ALL`, so an `ALL` caller (the parity tests, census-probe)
+    // never pays it, and a run (which passes `demanded`, the fold of the selected
     // detectors' `requires`) can never reach it either, since no detector may
     // declare the bit. Unset ⇒ this is one `None` write: no allocation, no pass,
     // and — because the span is INSIDE the branch — not even a trace entry.
