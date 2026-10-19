@@ -31,6 +31,13 @@ fn unq(s: &str) -> &str {
     s.trim().trim_matches('"')
 }
 
+/// The ONE event-parameter name match (#107 Design 1): AL binds publisher and
+/// subscriber parameters by NAME, ASCII case-insensitively, quotes and
+/// surrounding whitespace ignored. Both directions of the mapping call this.
+pub(crate) fn event_param_names_match(a: &str, b: &str) -> bool {
+    unq(a).eq_ignore_ascii_case(unq(b))
+}
+
 fn is_pd(ts: &PTempState, j: u32) -> bool {
     ts.kind == "parameter-dependent" && ts.parameter_index == Some(j)
 }
@@ -124,7 +131,7 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
                     let Some(sp) = s
                         .parameters
                         .iter()
-                        .find(|sp| unq(&sp.name).eq_ignore_ascii_case(unq(&pv.name)))
+                        .find(|sp| event_param_names_match(&sp.name, &pv.name))
                     else {
                         continue;
                     };

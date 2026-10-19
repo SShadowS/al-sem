@@ -37,6 +37,7 @@ use super::summary::{
 };
 use crate::engine::perf_trace as pt;
 use crate::program::model::calls::UpgradedBinding;
+use crate::program::model::event_param_temp::event_param_names_match;
 use crate::program::model::workspace::{ModelParameter, ModelRoutine};
 use serde_json::json;
 
@@ -922,12 +923,11 @@ pub(crate) fn event_publisher_param<'p>(
         .iter()
         .find(|p| p.index == sub_param)?
         .name
-        .trim()
-        .trim_matches('"');
+        .as_str();
     publisher
         .parameters
         .iter()
-        .find(|p| p.name.trim().trim_matches('"').eq_ignore_ascii_case(name))
+        .find(|p| event_param_names_match(&p.name, name))
 }
 
 /// The temp state an event subscriber's parameter `sub_param` has in its
