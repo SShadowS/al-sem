@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use super::effect_lattice::{EffectPresence, TempStateKind, effect_key_of};
 use super::summary_runner::compute_summaries_v2_with_leaves_core;
 use crate::engine::l4::combined_graph::build_combined_graph;
-use crate::engine::l4::scc::{SccInputGraph, tarjan_scc};
 use crate::program::model::workspace::Model;
 
 // ---------------------------------------------------------------------------
@@ -851,31 +850,12 @@ fn run_and_project(resolved: &Model) -> Vec<PRoutineSummaryCore> {
     let graph = build_combined_graph(ws, calls, event_graph);
 
     // Tarjan SCC over the combined graph.
-    let mut adjacency: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
-    for (from, list) in &graph.edges_by_from {
-        adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
-    }
-    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
-    let scc = tarjan_scc(&SccInputGraph {
-        nodes: &graph.nodes,
-        edges_by_from: &adjacency,
-    });
+    let scc = crate::engine::l4::analysis::graph_scc(&graph);
 
-    // Build the field-resolution index from the resolved tables (extension
-    // fields are already merged into each base table's `fields` at L3) so the
-    // parameterRoles readsFields/writesFields resolve to FieldIds — mirroring
-    // al-sem's `resolveField` against `ctx.tableById`. Keyed (tableId,
-    // lowercased field name).
-    let mut field_index: crate::engine::l4::summary_runner::FieldIndex =
-        std::collections::HashMap::new();
-    for table in &ws.tables {
-        for field in &table.fields {
-            field_index
-                .entry((table.id.clone(), field.name.to_lowercase()))
-                .or_insert_with(|| field.id.clone());
-        }
-    }
+    // The field-resolution index (extension fields are already merged into
+    // each base table's `fields`) so the parameterRoles readsFields/writesFields
+    // resolve to FieldIds. Untimed: the summaries census counts `build_l4`'s.
+    let field_index = crate::engine::l4::analysis::field_index(ws);
 
     // Run the v2 closed-form `EffectStore` solver (no fixed leaves — this is the
     // source-only R3a-2 projection). Byte-identical `RoutineSummary` output to

@@ -3247,29 +3247,15 @@ fn compute_uncertainty_coverage_reasons(
     graph: &CombinedGraph,
     calls: &crate::program::model::calls::ResolvedCalls,
 ) -> HashMap<String, BTreeSet<String>> {
-    use crate::engine::l4::summary_runner::{FieldIndex, compute_summaries_v2};
+    use crate::engine::l4::summary_runner::compute_summaries_v2;
 
     // Tarjan SCC over the COMBINED graph (summary substrate — distinct from the
     // typed-edge SCC the cone walks).
-    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-    for (from, list) in &graph.edges_by_from {
-        adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
-    }
-    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
-    let scc = tarjan_scc(&SccInputGraph {
-        nodes: &graph.nodes,
-        edges_by_from: &adjacency,
-    });
+    let scc = crate::engine::l4::analysis::graph_scc(graph);
 
-    // Field-resolution index (parameterRoles need it; harmless here).
-    let mut field_index: FieldIndex = HashMap::new();
-    for table in &ws.tables {
-        for field in &table.fields {
-            field_index
-                .entry((table.id.clone(), field.name.to_lowercase()))
-                .or_insert_with(|| field.id.clone());
-        }
-    }
+    // Field-resolution index (parameterRoles need it; harmless here). Untimed:
+    // the summaries census counts `build_l4`'s.
+    let field_index = crate::engine::l4::analysis::field_index(ws);
 
     // v2 db-effect solver. Only `uncertainties` are read below; the roles-cap
     // diagnostics are printed here, the solver itself no longer prints
@@ -3401,8 +3387,9 @@ pub struct R3a5CrossAppBase {
     pub graph: std::sync::Arc<CombinedGraph>,
     /// The ONE cross-app SCC; `build_l4` takes it by pointer (#160 §4.4.1).
     pub combined_scc: std::sync::Arc<SccResult>,
+    /// The solver field index: the leaf summaries' and every cross-app
+    /// `build_l4` solve's (through [`Self::cross_app_inputs`]), built once.
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
-    pub upgraded_bindings: HashMap<String, Vec<crate::program::model::calls::UpgradedBinding>>,
     pub event_graph: EventGraph,
     /// Fixed-leaf (dep) RETAINED summaries: every source-bearing dependency
     /// routine with no out-edge in [`Self::graph`].
@@ -3456,6 +3443,7 @@ impl R3a5CrossAppBase {
             declared_dependencies: &self.declared_dependencies,
             app_versions: &self.resolved_app_versions,
             friends: &self.friends,
+            field_index: &self.field_index,
         }
     }
 }
@@ -3499,7 +3487,7 @@ pub(crate) fn build_cross_app_base(
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
 ) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
-    use crate::engine::l4::summary_runner::{FieldIndex, base_intraprocedural_summary};
+    use crate::engine::l4::summary_runner::base_intraprocedural_summary;
     let mut x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
         inputs,
         model_instance_id,
@@ -3538,23 +3526,9 @@ pub(crate) fn build_cross_app_base(
     let mut graph = build_combined_graph(ws, &calls, &event_graph);
 
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
-    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-    for (from, list) in &graph.edges_by_from {
-        adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
-    }
-    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
-    let combined_scc = tarjan_scc(&SccInputGraph {
-        nodes: &graph.nodes,
-        edges_by_from: &adjacency,
-    });
-    let mut field_index: FieldIndex = HashMap::new();
-    for table in &ws.tables {
-        for field in &table.fields {
-            field_index
-                .entry((table.id.clone(), field.name.to_lowercase()))
-                .or_insert_with(|| field.id.clone());
-        }
-    }
+    let combined_scc = crate::engine::l4::analysis::graph_scc(&graph);
+    // The solve's index (summaries-census counted here, not in `build_l4`).
+    let field_index = crate::engine::l4::analysis::solver_field_index(ws);
 
     drop(_s_graph);
     let _s_facts = crate::engine::perf_trace::span("crossapp", "crossapp.base_artifacts_facts");
@@ -3621,7 +3595,6 @@ pub(crate) fn build_cross_app_base(
         direct_full.insert(r.id.clone(), facts);
     }
 
-    let upgraded_bindings = calls.upgraded_bindings.clone();
     let declared_dependencies = std::mem::take(&mut x.declared_dependencies);
     let resolved_app_versions = x
         .dependency_apps
@@ -3640,7 +3613,6 @@ pub(crate) fn build_cross_app_base(
         graph: std::sync::Arc::new(graph),
         combined_scc: std::sync::Arc::new(combined_scc),
         field_index,
-        upgraded_bindings,
         event_graph: event_graph.clone(),
         leaf_summaries,
         fixed_roles,
@@ -3665,7 +3637,6 @@ pub(crate) fn build_cross_app_base(
 /// charged apart, so nothing the model still owns is missing from the base.
 fn census_cross_app_base(b: &R3a5CrossAppBase) {
     use crate::engine::census::{Kind, Tally, combined_graph, event_graph};
-    use crate::program::model::calls::UpgradedBinding;
     use crate::program::model::program_calls::{census_calls, census_model_rows};
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
     emit(
@@ -3710,13 +3681,6 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
                     .iter()
                     .flat_map(|((t, f), id)| [t.as_str(), f.as_str(), id.as_str()]),
             ),
-    );
-    emit(
-        "base.upgraded_bindings",
-        Tally::default()
-            .buf::<(String, Vec<UpgradedBinding>)>(b.upgraded_bindings.len())
-            .strs(b.upgraded_bindings.keys())
-            .bufs(b.upgraded_bindings.values()),
     );
     emit("base.event_graph", &mut event_graph(&b.event_graph));
     emit(
@@ -3811,7 +3775,7 @@ pub fn project_r3a5_cross_app(
         ws_routines,
         graph,
         &base.combined_scc,
-        &base.upgraded_bindings,
+        &base.resolved.calls.upgraded_bindings,
         &base.field_index,
         &base.leaf_summaries,
         &base.fixed_roles,

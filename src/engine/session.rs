@@ -64,6 +64,8 @@ pub enum Cell {
 }
 
 impl Cell {
+    const ALL: [Cell; 4] = [Cell::Det, Cell::L4, Cell::Ordering, Cell::Graph];
+
     fn bit(self) -> u8 {
         1 << self as u8
     }
@@ -90,8 +92,9 @@ pub fn digest_plan(detectors: Vec<Detector>) -> Plan {
     }
 }
 
-/// `alsem fingerprint`.
-pub fn fingerprint_plan(detectors: Vec<Detector>) -> Plan {
+/// One run at primary scope, with nothing read after it: fingerprint,
+/// `diff --strict` and policy check.
+fn run_only_plan(detectors: Vec<Detector>) -> Plan {
     Plan {
         runs: vec![detectors],
         scope_primary: true,
@@ -100,14 +103,14 @@ pub fn fingerprint_plan(detectors: Vec<Detector>) -> Plan {
     }
 }
 
+/// `alsem fingerprint`.
+pub fn fingerprint_plan(detectors: Vec<Detector>) -> Plan {
+    run_only_plan(detectors)
+}
+
 /// `alsem diff --strict`, per side.
 pub fn diff_strict_plan(detectors: Vec<Detector>) -> Plan {
-    Plan {
-        runs: vec![detectors],
-        scope_primary: true,
-        need_l4: false,
-        after_run: 0,
-    }
+    run_only_plan(detectors)
 }
 
 /// `alsem events fanout` / `chains`: the run, then the report off
@@ -123,12 +126,7 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
 
 /// `alsem policy check`.
 pub fn policy_plan(detectors: Vec<Detector>) -> Plan {
-    Plan {
-        runs: vec![detectors],
-        scope_primary: true,
-        need_l4: false,
-        after_run: 0,
-    }
+    run_only_plan(detectors)
 }
 
 /// `alsem query`: no run, `l4` alone.
@@ -386,6 +384,17 @@ impl View {
         }
     }
 
+    /// [`View::release`] every cell except `keep`: the one way a command
+    /// drops what it no longer reads, so no cell (`Ordering` included) is
+    /// kept alive by a forgotten line.
+    pub fn release_all_but(&mut self, keep: &[Cell]) {
+        for cell in Cell::ALL {
+            if !keep.contains(&cell) {
+                self.release(cell);
+            }
+        }
+    }
+
     pub fn model(&self) -> &Model {
         self.target.resolved()
     }
@@ -400,10 +409,6 @@ impl View {
 
     pub fn det(&self) -> &DetectorArtifacts {
         self.det.as_ref().expect("det cell not filled")
-    }
-
-    pub fn detector_context(&self) -> DetectorContext<'_> {
-        dc::detector_context(self.model(), self.det(), self.ordering.as_ref())
     }
 
     /// The stored output of a run `prepare` ran. An `Arc`: a caller may
@@ -694,6 +699,36 @@ mod tests {
             );
             assert!(msg.contains("\"probe\""), "{name}: {msg}");
         }
+    }
+
+    /// `release_all_but` drops every filled cell but the kept ones, Ordering
+    /// included. DISCRIMINATION: leaving `Cell::Ordering` out of `Cell::ALL`
+    /// fails the ordering assertion.
+    #[test]
+    fn release_all_but_keeps_only_the_named_cells() {
+        let plan = Plan::for_test(
+            vec![vec![probe(substrate::ORDERING_FACTS, noop)]],
+            true,
+            true,
+            0,
+        );
+        let mut v = view();
+        v.prepare(&plan);
+        assert!(
+            v.ordering.is_some() && v.det.is_some() && v.l4.is_some() && v.graph.is_some(),
+            "precondition: all four cells filled"
+        );
+        v.release_all_but(&[Cell::L4]);
+        assert!(v.ordering.is_none(), "ordering released");
+        assert!(
+            v.det.is_none() && v.graph.is_none(),
+            "det and graph released"
+        );
+        assert!(v.l4.is_some(), "the kept cell stays");
+        assert_eq!(
+            v.released,
+            Cell::Det.bit() | Cell::Ordering.bit() | Cell::Graph.bit()
+        );
     }
 
     /// A2.10's "naming the missing bit" for every bit. DISCRIMINATION:

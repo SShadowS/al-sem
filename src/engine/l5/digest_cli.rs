@@ -56,9 +56,7 @@ pub(crate) fn finish_default_run(
     let diagnostics = diagnostics_json(&analyzer_diagnostics_of_view(view, key));
     let tx_ctx_map = tx_context_map(&view.det().transaction_spans);
     drop(view.take_run(key));
-    view.release(Cell::Det);
-    view.release(Cell::Graph);
-    view.release(Cell::Ordering);
+    view.release_all_but(&[Cell::L4]);
     (diagnostics, tx_ctx_map)
 }
 

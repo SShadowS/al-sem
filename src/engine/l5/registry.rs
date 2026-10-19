@@ -67,7 +67,9 @@ pub mod substrate {
     /// needs the fact objects themselves is `gate::policy`'s `select_facts`
     /// (rule `facts: inherited | any` iterates real `CapabilityFact`s and matches
     /// their fields), so `gate/policy/pipeline.rs` passes
-    /// `substrate::ALL | substrate::RAW_INHERITED_FACTS` explicitly.
+    /// `substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS` explicitly, to a
+    /// command-local `build_detector_artifacts` with no `l4` request (never a
+    /// `View` cell).
     ///
     /// A summary built WITHOUT this bit carries `capability_facts_inherited:
     /// None`; `FullRoutineSummary::inherited_raw` then panics rather than

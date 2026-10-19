@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- #160 step 2: every `alsem` command builds ONE detector context and ONE L4 solve, through one `View` (`src/engine/session.rs`).
+- #160 step 2: every `alsem` command builds its detector context and its L4 solve once, through one `View` (`src/engine/session.rs`). Two builds stay outside the `View`: `policy check`'s command-local raw-facts build, and the fold solve (`compute_uncertainty_coverage_reasons`) that the snapshot composition of `digest`, `prove` and `fingerprint` still runs on its own, until step 3.
   - **The pieces.**
     - `View`, `Plan` and `RunKey` hold four cells: ordering, graph, det and `l4`. Each cell is filled once, by `prepare`, never lazily.
     - `L4Analysis` / `build_l4` (`src/engine/l4/analysis.rs`) is the one solve.
@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Cross-app analyze failure.** A failed cross-app `analyze` build is classified from its own result; no second, single-app build runs.
     - When the program build fails, the failure line carries that build's error. Before, if the single-app rerun succeeded, it said `the cross-app model could not be built`.
     - When the model assembly fails, analyze gives the empty output with the `coverage could not be verified` warning (exit 0), as a single-app assembly failure always did. Before, a succeeding single-app rerun turned it into the `could not be built` failure.
+    - `digest`, `events fanout|chains`, `policy check` and `query` now add the program build's error to their `the cross-app model could not be built (--single-app analyses the workspace alone)` line, as `: program engine build failed: <error>`. Before, they dropped it. An assembly failure keeps the bare line.
   - **The non-convergence warning** (`warning: summarize: Summary fixed-point did not converge for SCC [...]`) has one print site per solve, `build_l4`, plus the snapshot fold's own.
     - So a capped SCC prints fewer duplicate lines: digest and prove print 2 instead of 4, events and policy 1 instead of 2.
     - `aldump --r3a2` and `--r3a5-cross-app-summary` no longer print it.
@@ -37,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - new `l4.bundle`, `l4.scc` (only when `build_l4` computed the SCC), `l4.summarize_diagnostics` and `l4.warnings` buckets;
     - `context.db_effect_bundle` becomes `l4.bundle`;
     - cross-app, `context.graph` is not printed, because the base's bucket counts the shared graph;
-    - `base.injected_typed_edges` and `context.ordering_source` are gone.
+    - `base.injected_typed_edges`, `base.upgraded_bindings` and `context.ordering_source` are gone.
   - **Trace.**
     - `digest.tx_context_map` and `prove.tx_context_map` are gone.
     - `context.build_total` / `crossapp.context_build` now also open on the `View` paths.
@@ -45,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `build_detector_context*` return an `OwnedContext`; read the context with `.ctx()`.
     - `build_cross_app_base` and `assemble_and_resolve_cross_app_program` return `Result<_, CrossAppFailure>` instead of `Option`.
     - `R3a5CrossAppBase.graph` / `.combined_scc` are `Arc`s, and its `injected_typed_edges` field is gone. Those edges were a second copy of what `graph` holds, about 16 MB on CDO.
+    - `R3a5CrossAppBase.upgraded_bindings` is gone: it was a second copy of `resolved.calls.upgraded_bindings`, about 15.5 MB on CDO. A cross-app `build_l4` reads the base's `field_index` (through `CrossAppInputs`) instead of building its own.
     - `DetectorOutput` derives `Debug, PartialEq, Eq`; the superset-mask parity test compares the whole output.
 
 ### Removed

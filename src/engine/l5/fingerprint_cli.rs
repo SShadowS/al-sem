@@ -38,7 +38,7 @@ use crate::engine::l5::snapshot_full::{
     EnvelopeDiagnostic, FullSnapshotOptions, build_inventory_envelope, compose_full_snapshot,
     serialize_cbor, serialize_cbor_gz, serialize_envelope, serialize_sharded,
 };
-use crate::engine::session::{Cell, RunKey, View, fingerprint_plan};
+use crate::engine::session::{RunKey, View, fingerprint_plan};
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
 /// The format the fingerprint command outputs.
@@ -389,9 +389,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     view.prepare(&plan);
     let analyzer_diags = analyzer_diags_for(&view, &key);
     drop(view.take_run(&key));
-    view.release(Cell::Det);
-    view.release(Cell::L4);
-    view.release(Cell::Graph);
+    view.release_all_but(&[]);
     let resolved = view.model();
 
     // --strict gate (fingerprint.ts:187): BEFORE composeSnapshot. If any analyzer

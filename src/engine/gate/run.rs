@@ -39,7 +39,7 @@ use crate::engine::gate::presets::resolve_analyze_detectors;
 use crate::engine::gate::projection::{ProjectionIndex, project_finding};
 use crate::engine::l5::registry::run_detectors;
 use crate::engine::perf_trace as pt;
-use crate::engine::session::{Cell, RunKey, View, analyze_plan};
+use crate::engine::session::{RunKey, View, analyze_plan};
 use crate::program::inputs::{InputNeeds, InputSet};
 use crate::program::model::coverage::AnalysisCoverage;
 use crate::program::model::workspace::{Model, assemble_and_resolve_workspace_from_program};
@@ -196,12 +196,24 @@ impl AnalysisTarget {
         } else {
             crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
                 .map(|b| AnalysisTarget::CrossApp(Box::new(b)))
-                .map_err(|_| {
-                    format!(
-                        "{command}: the cross-app model could not be built \
-                         (--single-app analyses the workspace alone)"
-                    )
-                })
+                .map_err(|e| Self::cross_app_failure_message(command, &e))
+        }
+    }
+
+    /// The error line of a command whose cross-app build failed. A failed program
+    /// build carries its own error, as `alsem analyze`'s Build row does.
+    pub(crate) fn cross_app_failure_message(
+        command: &str,
+        failure: &crate::program::model::program_calls::CrossAppFailure,
+    ) -> String {
+        use crate::program::model::program_calls::CrossAppFailure;
+        let head = format!(
+            "{command}: the cross-app model could not be built \
+         (--single-app analyses the workspace alone)"
+        );
+        match failure {
+            CrossAppFailure::Build(why) => format!("{head}: program engine build failed: {why}"),
+            CrossAppFailure::Assembly { .. } | CrossAppFailure::NoPrimaryApp { .. } => head,
         }
     }
 
@@ -510,10 +522,7 @@ pub fn run_analyze_with_exit(
     };
     // Today's context died inside the runner, before any projection: the view
     // holds none of its cells longer.
-    view.release(Cell::Det);
-    view.release(Cell::L4);
-    view.release(Cell::Ordering);
-    view.release(Cell::Graph);
+    view.release_all_but(&[]);
     let resolved = view.model();
     // Capture diagnostics + detector stats for the Json formatter (consumed after
     // filtering), through the aggregation every other command uses, over THIS

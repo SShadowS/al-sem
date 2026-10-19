@@ -20,7 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
+use super::scc::{Scc, SccResult};
 use crate::engine::ids::to_stable_object_id;
 use crate::program::body::features::PCallee;
 use crate::program::model::calls::{CallEdge, ResolvedCalls};
@@ -1142,15 +1142,7 @@ impl Model {
         let graph = build_combined_graph(ws, &self.calls, &self.events.graph);
 
         // Tarjan over the combined graph's adjacency (internal ids, pre-sorted).
-        let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-        for (from, list) in &graph.edges_by_from {
-            adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
-        }
-        crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
-        let scc = tarjan_scc(&SccInputGraph {
-            nodes: &graph.nodes,
-            edges_by_from: &adjacency,
-        });
+        let scc = crate::engine::l4::analysis::graph_scc(&graph);
 
         project_r3a1(&ws.routines, &self.events.graph, &graph, &scc)
     }

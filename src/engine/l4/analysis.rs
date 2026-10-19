@@ -20,8 +20,8 @@ use crate::engine::perf_trace as pt;
 use crate::program::model::workspace::{Model, ModelEntities};
 
 /// What outlives `det` in digest and prove: the SCC, the compact db-effect
-/// store and the solver's diagnostics. The field index is a solver input only,
-/// so it is a local of [`build_l4`].
+/// store and the solver's diagnostics. The field index is a solver input only:
+/// a local of [`build_l4`] single-app, the cross-app base's otherwise.
 pub struct L4Analysis {
     /// The ONE SCC owner: computed by [`build_l4`] (counter `build.graph_scc`),
     /// or the cross-app base's `combined_scc`, shared by pointer.
@@ -72,17 +72,23 @@ pub(crate) fn build_l4(
     let leaf_summaries = cross.map_or(&no_leaves, |c| c.leaf_summaries);
     let fixed_roles = cross.map_or(&no_fixed_roles, |c| c.fixed_roles);
     let summaries_span = pt::span("context", "context.compute_summaries");
-    let field_index = solver_field_index(ws);
+    // Cross-app the base built (and census-counted) the field index over the
+    // same model; single-app it is a local of this solve.
+    let own_field_index = cross.is_none().then(|| solver_field_index(ws));
+    let field_index = own_field_index
+        .as_ref()
+        .or(cross.map(|c| c.field_index))
+        .expect("a field index: the solve's own, or the cross-app base's");
     let (bundle, core_summaries, diagnostics) = compute_summaries_v2_bundle_with_leaves(
         &ws.routines,
         graph,
         &scc,
         &model.calls.upgraded_bindings,
-        &field_index,
+        field_index,
         leaf_summaries,
         fixed_roles,
     );
-    drop(field_index);
+    drop(own_field_index);
     drop(summaries_span);
     summaries_census::report();
     // The LEAN entry point leaves the solved summaries' `db_effects` empty (the
@@ -130,8 +136,9 @@ pub fn render_warnings(diagnostics: &[SummarizeDiagnostic]) -> Vec<String> {
         .collect()
 }
 
-/// Tarjan over `graph.edges_by_from` (counter `build.graph_scc`).
-fn graph_scc(graph: &CombinedGraph) -> SccResult {
+/// Tarjan over `graph.edges_by_from` (counter `build.graph_scc`): the one
+/// copy, also behind the cross-app base's SCC and the snapshot fold's.
+pub(crate) fn graph_scc(graph: &CombinedGraph) -> SccResult {
     let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &graph.edges_by_from {
         scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
@@ -144,9 +151,8 @@ fn graph_scc(graph: &CombinedGraph) -> SccResult {
 }
 
 /// The solver's field-resolution index (keyed (tableId, lowercased field
-/// name)), timed by the summaries census. `parameterRoles` need it.
-fn solver_field_index(ws: &ModelEntities) -> FieldIndex {
-    let t = summaries_census::start();
+/// name)). `parameterRoles` need it.
+pub(crate) fn field_index(ws: &ModelEntities) -> FieldIndex {
     let mut field_index: FieldIndex = HashMap::new();
     for table in &ws.tables {
         for field in &table.fields {
@@ -155,6 +161,14 @@ fn solver_field_index(ws: &ModelEntities) -> FieldIndex {
                 .or_insert_with(|| field.id.clone());
         }
     }
+    field_index
+}
+
+/// [`field_index`], timed and counted by the summaries census: the index a
+/// [`build_l4`] solve reads (single-app its own, cross-app the base's).
+pub(crate) fn solver_field_index(ws: &ModelEntities) -> FieldIndex {
+    let t = summaries_census::start();
+    let field_index = field_index(ws);
     summaries_census::add_since(&summaries_census::FIELD_INDEX_NANOS, t);
     summaries_census::add(
         &summaries_census::FIELD_INDEX_ENTRIES,

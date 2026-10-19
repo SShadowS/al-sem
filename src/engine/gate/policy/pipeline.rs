@@ -236,10 +236,10 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             };
         }
     };
-    // Nothing after the run reads `det` or `l4` (the RAW build below takes no
-    // `l4`): neither is held through the raw cone.
-    view.release(Cell::Det);
-    view.release(Cell::L4);
+    // Nothing after the run reads `det`, `l4` or the ordering facts (the RAW
+    // build below takes no `l4`): none is held through the raw cone. The RAW
+    // build reads the graph.
+    view.release_all_but(&[Cell::Graph]);
     let resolved = view.model();
     let target = &view.target;
 

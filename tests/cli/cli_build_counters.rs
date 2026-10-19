@@ -1107,6 +1107,34 @@ fn run_build_failed_row_runs_one_build() {
     );
 }
 
+/// The same build-failed row through `AnalysisTarget::build` (digest; events,
+/// policy check and query share its message): the failure line carries the
+/// program build's own error. DISCRIMINATION: `.map_err(|_| ..)` with the bare
+/// line fails this (no `reading source `).
+#[test]
+fn digest_build_failed_row_carries_the_build_error() {
+    let Some((d, _g)) = unreadable_ws(
+        r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#,
+    ) else {
+        return;
+    };
+    let diff = write_diff(d.path(), "A.al", 1, "codeunit 50100 A { }");
+    let (out, m) = spawn_traced(
+        &["digest", d.path().to_str().unwrap(), "--diff", &diff],
+        &[],
+    );
+    assert_eq!(count(&m, "build.program"), 1, "{m:?}");
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(
+            "digest: the cross-app model could not be built \
+             (--single-app analyses the workspace alone): program engine build failed: "
+        ) && err.contains("reading source "),
+        "{err}"
+    );
+}
+
 /// Spec §4.4.5 row 1 (A2.7): no id, one `Workspace` build, and the warning
 /// text captured from the binary before step 2 (Windows: the sharing
 /// violation's OS text). The text is the same under both profiles (the

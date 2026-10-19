@@ -144,11 +144,7 @@ impl QuerySubstrate {
         } else {
             let base =
                 crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
-                    .map_err(|_| {
-                        "query: the cross-app model could not be built \
-                 (--single-app analyses the workspace alone)"
-                            .to_string()
-                    })?;
+                    .map_err(|e| AnalysisTarget::cross_app_failure_message("query", &e))?;
             AnalysisTarget::CrossApp(Box::new(base))
         };
         let dependencies = target.dependencies();

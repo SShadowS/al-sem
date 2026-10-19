@@ -385,14 +385,10 @@ fn events_view(
     Ok((view, diag_lines))
 }
 
-/// After the report, its last reader: `det` holds the graph's `Arc`, so both go
-/// together. `Ordering` too, so a future default detector demanding
-/// `ORDERING_FACTS` does not keep it alive silently. (`l4` went right after the
-/// run, in [`events_view`].)
+/// After the report, its last reader: `det` holds the graph's `Arc`, so every
+/// cell goes together. (`l4` went right after the run, in [`events_view`].)
 fn release_cells(view: &mut View) {
-    view.release(Cell::Det);
-    view.release(Cell::Ordering);
-    view.release(Cell::Graph);
+    view.release_all_but(&[]);
 }
 
 // ---------------------------------------------------------------------------

@@ -1068,6 +1068,9 @@ pub(crate) struct CrossAppInputs<'b> {
     pub declared_dependencies: &'b [crate::program::model::workspace::DeclaredDependencyDecl],
     pub app_versions: &'b HashMap<String, String>,
     pub friends: &'b HashMap<String, BTreeSet<String>>,
+    /// The base's solver field index: `build_l4` reads it instead of
+    /// rebuilding it.
+    pub field_index: &'b crate::engine::l4::summary_runner::FieldIndex,
 }
 
 /// [`build_detector_context`], single-app (`base: None`) or cross-app (`resolved`

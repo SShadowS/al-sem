@@ -96,7 +96,7 @@ fn load_snapshot_from_workspace(
     };
     use crate::engine::l5::detectors::default_detectors;
     use crate::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
-    use crate::engine::session::{Cell, View, diff_strict_plan};
+    use crate::engine::session::{View, diff_strict_plan};
     use crate::program::inputs::{InputNeeds, InputSet};
     use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
@@ -126,9 +126,7 @@ fn load_snapshot_from_workspace(
         view.prepare(&plan);
         let lines = diagnostic_lines(&analyzer_diagnostics_of_view(&view, &key));
         drop(view.take_run(&key));
-        view.release(Cell::Det);
-        view.release(Cell::L4);
-        view.release(Cell::Graph);
+        view.release_all_but(&[]);
         lines
     } else {
         Vec::new()
