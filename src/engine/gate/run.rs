@@ -363,19 +363,8 @@ fn program_build_failure(inputs: &InputSet, why: String) -> ModelFailure {
 fn build_cross_app_analysis_model(inputs: &Arc<InputSet>) -> AnalysisModel {
     use crate::program::model::program_calls::CrossAppFailure;
     let Some(mi) = inputs.model_instance_id.as_deref() else {
-        // The id is known before any build: one build under the single-app
-        // profile, never `FULL`'s dependency bodies for an empty output.
-        let program = {
-            let _s = pt::span("preflight", "preflight.fresh_program");
-            crate::program::resolved::ResolvedProgram::build(
-                inputs,
-                crate::program::resolved::ProgramScope::Workspace,
-            )
-        };
-        return failed_model(
-            program.map(|p| p.into_parts().0.coverage),
-            ModelFailure::NoModelInstanceId,
-        );
+        // No id: one build under the single-app profile, never `FULL`'s dependency bodies.
+        return build_analysis_model(inputs, true);
     };
     let base = {
         let _s = pt::span("crossapp", "crossapp.base_total");

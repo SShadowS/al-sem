@@ -1102,6 +1102,45 @@ fn run_no_id_row_runs_one_build_and_keeps_the_text() {
     );
 }
 
+/// Spec §4.4.5 row 3: the cross-app build succeeds, the model assembles to
+/// nothing (an `.al` file with no object). One build, and the warning reads
+/// the build's own `Ok` coverage (`files_without_object`).
+#[test]
+fn run_assembly_row_runs_one_build_and_reads_its_coverage() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("app.json"),
+        r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(d.path().join("A.al"), "// no object\n").unwrap();
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["analyze", d.path().to_str().unwrap(), "--format", "json"],
+        &[],
+    );
+    let m = last_counters(&events);
+    assert_eq!(count(&m, "build.program"), 1, "{m:?}");
+    // Precondition: the build succeeded and the assembly ran.
+    assert!(
+        events
+            .iter()
+            .any(|e| e.get("name").and_then(Value::as_str) == Some("crossapp.model_assembly")),
+        "the cross-app build reached its assembly"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    let warning: Vec<&str> = err
+        .lines()
+        .filter(|l| l.starts_with("al-sem: warning: "))
+        .collect();
+    assert_eq!(
+        warning,
+        ["al-sem: warning: coverage could not be verified: No object declaration found in A.al"],
+        "stderr: {err}"
+    );
+}
+
 #[test]
 fn graph() {
     let (_d, ws) = ws_dep();
