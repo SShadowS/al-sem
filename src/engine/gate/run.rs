@@ -195,7 +195,7 @@ impl AnalysisTarget {
         } else {
             crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
                 .map(|b| AnalysisTarget::CrossApp(Box::new(b)))
-                .ok_or_else(|| {
+                .map_err(|_| {
                     format!(
                         "{command}: the cross-app model could not be built \
                          (--single-app analyses the workspace alone)"
@@ -282,33 +282,18 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
     let program = match program {
         Ok(program) => program,
         Err(why) => {
-            // A workspace with no app-scoped AL file is the empty-output case;
-            // otherwise the failed program build is an error. (Engine-switch S9.1:
-            // this used to assemble L3's model from disk only to tell the two
-            // apart.) The same rule as the `NestedApps::Skip` walk it replaces: a
-            // failed walk left `al_files` empty, so it does not assemble either.
             // A missing model-instance id is reported first, as before.
             let model = if inputs.model_instance_id.is_none() {
-                Err(ModelFailure::NoModelInstanceId)
-            } else if inputs.app_scoped_files().next().is_some() {
-                Err(ModelFailure::ProgramBuildFailed(why.clone()))
+                ModelFailure::NoModelInstanceId
             } else {
-                Err(ModelFailure::AssemblyFailed)
+                program_build_failure(inputs, why.clone())
             };
-            return AnalysisModel {
-                fresh: Err(why),
-                model,
-                physical: None,
-                object_facts: None,
-            };
+            return failed_model(Err(why), model);
         }
     };
     // The build's coverage, moved out once the program is done with (#91).
-    let failed = |program: crate::program::resolved::ResolvedProgram, model| AnalysisModel {
-        fresh: Ok(program.into_parts().0.coverage),
-        model: Err(model),
-        physical: None,
-        object_facts: None,
+    let failed = |program: crate::program::resolved::ResolvedProgram, model| {
+        failed_model(Ok(program.into_parts().0.coverage), model)
     };
     // The id `InputSet::read` computed (#160): no second disk walk.
     let Some(model_instance_id) = inputs.model_instance_id.as_deref() else {
@@ -346,37 +331,74 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
     }
 }
 
-/// [`build_analysis_model`]'s cross-app half. A workspace whose cross-app build
-/// fails is classified as the single-app build would classify it; when that build
-/// succeeds, the cross-app failure is a program-build failure (never a quiet
-/// single-app run).
+/// A model that was not built, and why.
+fn failed_model(
+    fresh: Result<crate::program::resolve::full::FreshCoverage, String>,
+    model: ModelFailure,
+) -> AnalysisModel {
+    AnalysisModel {
+        fresh,
+        model: Err(model),
+        physical: None,
+        object_facts: None,
+    }
+}
+
+/// A failed program build with an id: an error, unless the workspace has no
+/// app-scoped AL file (the empty-output case). (Engine-switch S9.1: this used to
+/// assemble L3's model from disk only to tell the two apart.) The same rule as
+/// the `NestedApps::Skip` walk it replaces: a failed walk left `al_files` empty,
+/// so it does not assemble either.
+fn program_build_failure(inputs: &InputSet, why: String) -> ModelFailure {
+    if inputs.app_scoped_files().next().is_some() {
+        ModelFailure::ProgramBuildFailed(why)
+    } else {
+        ModelFailure::AssemblyFailed
+    }
+}
+
+/// [`build_analysis_model`]'s cross-app half. A failed cross-app build is
+/// classified from its own `Result` (#160 spec §4.4.5), with no second build.
 fn build_cross_app_analysis_model(inputs: &Arc<InputSet>) -> AnalysisModel {
-    let base = inputs.model_instance_id.as_deref().and_then(|mi| {
+    use crate::program::model::program_calls::CrossAppFailure;
+    let Some(mi) = inputs.model_instance_id.as_deref() else {
+        // The id is known before any build: one build under the single-app
+        // profile, never `FULL`'s dependency bodies for an empty output.
+        let program = {
+            let _s = pt::span("preflight", "preflight.fresh_program");
+            crate::program::resolved::ResolvedProgram::build(
+                inputs,
+                crate::program::resolved::ProgramScope::Workspace,
+            )
+        };
+        return failed_model(
+            program.map(|p| p.into_parts().0.coverage),
+            ModelFailure::NoModelInstanceId,
+        );
+    };
+    let base = {
         let _s = pt::span("crossapp", "crossapp.base_total");
         crate::engine::l4::capability_cone::build_cross_app_base(inputs, mi)
-    });
+    };
     match base {
-        Some(base) => AnalysisModel {
+        Ok(base) => AnalysisModel {
             fresh: Ok(base.coverage.clone()),
             model: Ok(AnalysisTarget::CrossApp(Box::new(base))),
             physical: None,
             object_facts: None,
         },
-        None => {
-            let single = build_analysis_model(inputs, true);
-            let model = match single.model {
-                Ok(_) => Err(ModelFailure::ProgramBuildFailed(
-                    "the cross-app model could not be built".to_string(),
-                )),
-                Err(e) => Err(e),
-            };
-            AnalysisModel {
-                fresh: single.fresh,
-                model,
-                physical: None,
-                object_facts: None,
-            }
+        Err(CrossAppFailure::Build(why)) => {
+            failed_model(Err(why.clone()), program_build_failure(inputs, why))
         }
+        Err(CrossAppFailure::Assembly { fresh }) => {
+            failed_model(Ok(*fresh), ModelFailure::AssemblyFailed)
+        }
+        // Unreachable from step 1 (the id and `primary_app` share one read);
+        // fail closed with today's outcome.
+        Err(CrossAppFailure::NoPrimaryApp { fresh }) => failed_model(
+            Ok(*fresh),
+            ModelFailure::ProgramBuildFailed("the cross-app model could not be built".to_string()),
+        ),
     }
 }
 

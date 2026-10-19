@@ -988,6 +988,99 @@ fn inputs_relative_workspace_path_runs() {
     assert_eq!(findings(&out), findings(&abs));
 }
 
+/// One `.al` file `alsem` cannot read, beside `app_json`; `None` = skip.
+fn unreadable_ws(app_json: &str) -> Option<(tempfile::TempDir, crate::unreadable::Guard)> {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("app.json"), app_json).unwrap();
+    let f = d.path().join("A.al");
+    std::fs::write(&f, "codeunit 50100 A { }").unwrap();
+    let Some(g) = crate::unreadable::unreadable(&f) else {
+        eprintln!("skipped: cannot make {} unreadable here", f.display());
+        return None;
+    };
+    Some((d, g))
+}
+
+/// Spec §4.4.5 row 2: a failed cross-app build is classified from its own
+/// error; the single-app rerun is gone.
+#[test]
+fn run_build_failed_row_runs_one_build() {
+    let Some((d, _g)) = unreadable_ws(
+        r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#,
+    ) else {
+        return;
+    };
+    let (out, m) = spawn_traced(
+        &["analyze", d.path().to_str().unwrap(), "--format", "json"],
+        &[],
+    );
+    assert_eq!(
+        count(&m, "build.program"),
+        1,
+        "the single-app rerun is gone\n{m:?}"
+    );
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("analysis failure — program engine build failed: ")
+            && err.contains("reading source "),
+        "{err}"
+    );
+}
+
+/// Spec §4.4.5 row 1 (A2.7): no id, one `Workspace` build, and the warning
+/// text captured from the binary before step 2 (Windows: the sharing
+/// violation's OS text). The text is the same under both profiles (the
+/// snapshot fails first), so the profile is pinned by the trace: a `CrossApp`
+/// build opens `crossapp.program_build_full`.
+#[test]
+fn run_no_id_row_runs_one_build_and_keeps_the_text() {
+    let Some((d, _g)) = unreadable_ws(r#"{"name":"A","publisher":"p","version":"1.0.0.0"}"#) else {
+        return;
+    };
+    let ws = d.path().to_str().unwrap();
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["analyze", ws, "--format", "json"],
+        &[],
+    );
+    let m = last_counters(&events);
+    assert_eq!(count(&m, "build.program"), 1, "{m:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.get("name").and_then(Value::as_str) == Some("crossapp.program_build_full")),
+        "the no-id row builds under the single-app profile"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let warning: Vec<&str> = err
+        .lines()
+        .filter(|l| l.starts_with("al-sem: warning: "))
+        .collect();
+    // Captured from the binary at 77577a4b, before this classification
+    // change (Windows).
+    let prefix = format!(
+        "al-sem: warning: coverage could not be verified: snapshot build failed: \
+         workspace source provider: reading source {}: ",
+        d.path().join("A.al").display()
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        warning,
+        [format!(
+            "{prefix}The process cannot access the file because it is being used by \
+             another process. (os error 32)"
+        )],
+        "stderr: {err}"
+    );
+    // Not captured off Windows: the OS error text is the platform's own.
+    #[cfg(not(windows))]
+    assert!(
+        warning.len() == 1 && warning[0].starts_with(&prefix),
+        "stderr: {err}"
+    );
+}
+
 #[test]
 fn graph() {
     let (_d, ws) = ws_dep();

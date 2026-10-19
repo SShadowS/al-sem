@@ -21,6 +21,9 @@ mod temp_state_probe;
 #[path = "../common/dep_dispatch_fixture.rs"]
 mod dep_dispatch_fixture;
 
+#[path = "../common/unreadable.rs"]
+mod unreadable;
+
 pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Hold this for the entire set-var → run → remove-var span of any test that

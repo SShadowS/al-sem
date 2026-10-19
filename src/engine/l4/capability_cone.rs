@@ -3463,8 +3463,8 @@ impl R3a5CrossAppBase {
 /// The cross-app L4 BASE (engine-switch S7.4): every intermediate the R3a-5
 /// projection and the cross-app detectors read, from ONE program-backed model
 /// (`assemble_and_resolve_cross_app_program`): the workspace and every dependency,
-/// each body's calls and the event graph from the program engine. Returns `None`
-/// for a fail-closed workspace.
+/// each body's calls and the event graph from the program engine. Returns `Err`
+/// for a fail-closed workspace, naming why (#160 §4.4.5).
 ///
 /// Before S7.4 there were two bases, both L3: a symbol-only one (r3a5) whose
 /// source-bearing dependency routines were empty rows with `body_available`
@@ -3498,20 +3498,22 @@ impl R3a5CrossAppBase {
 pub(crate) fn build_cross_app_base(
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
-) -> Option<R3a5CrossAppBase> {
+) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
     use crate::engine::l4::summary_runner::{FieldIndex, base_intraprocedural_summary};
     let mut x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
         inputs,
         model_instance_id,
         false,
     )?;
+    let Some(primary) = x.resolved.primary_app.as_ref() else {
+        return Err(
+            crate::program::model::program_calls::CrossAppFailure::NoPrimaryApp {
+                fresh: Box::new(x.coverage),
+            },
+        );
+    };
+    let primary = primary.app_guid.to_ascii_lowercase();
     let ws: &ModelEntities = &x.resolved.workspace;
-    let primary = x
-        .resolved
-        .primary_app
-        .as_ref()?
-        .app_guid
-        .to_ascii_lowercase();
     let dep_routine_ids: BTreeSet<String> = ws
         .routines
         .iter()
@@ -3654,7 +3656,7 @@ pub(crate) fn build_cross_app_base(
         crate::census_hook::mark("census.base");
         census_cross_app_base(&base);
     }
-    Some(base)
+    Ok(base)
 }
 
 /// #160 §4.1.5: one `base.<field>` bucket per field of [`R3a5CrossAppBase`],
@@ -3797,7 +3799,7 @@ pub fn project_r3a5_cross_app(
     };
 
     let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
-    let Some(base) = build_cross_app_base(&inputs, model_instance_id) else {
+    let Some(base) = build_cross_app_base(&inputs, model_instance_id).ok() else {
         return empty;
     };
     let ws_routines = base.ws_routines();
@@ -4324,7 +4326,8 @@ pub fn issue160_full_graph_timings(
     let Some(base) = build_cross_app_base(
         &crate::program::inputs::InputSet::read(workspace, &Default::default()),
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-    ) else {
+    )
+    .ok() else {
         return Ok(None);
     };
     let cone_nanos = || {

@@ -1031,6 +1031,7 @@ pub fn project_r4_findings_cross_app(
             &crate::program::inputs::InputSet::read(workspace, &Default::default()),
             model_instance_id,
         )
+        .ok()
     };
     let Some(base) = base else {
         return R4FindingsProjection {

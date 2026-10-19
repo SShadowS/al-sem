@@ -137,7 +137,7 @@ impl QuerySubstrate {
         if !single_app {
             let base =
                 crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
-                    .ok_or_else(|| {
+                    .map_err(|_| {
                         "query: the cross-app model could not be built \
                  (--single-app analyses the workspace alone)"
                             .to_string()

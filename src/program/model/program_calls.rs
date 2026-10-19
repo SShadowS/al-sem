@@ -871,20 +871,37 @@ pub struct CrossAppProgram {
     pub loaded_apps: Vec<serde_json::Value>,
 }
 
+/// Why a cross-app build gave no model (#160 spec §4.4.5), so `alsem analyze`
+/// classifies the failure without a second build. The coverage is boxed so the
+/// `Err` stays small (`clippy::result_large_err`).
+#[derive(Debug)]
+pub enum CrossAppFailure {
+    /// The program build's own `Err`.
+    Build(String),
+    /// Build `Ok`, assembly `None`: the build's coverage.
+    Assembly {
+        fresh: Box<crate::program::resolve::full::FreshCoverage>,
+    },
+    /// Build and assembly `Ok`, `primary_app` `None`.
+    NoPrimaryApp {
+        fresh: Box<crate::program::resolve::full::FreshCoverage>,
+    },
+}
+
 /// The CROSS-APP detector model (engine-switch S7.3): the workspace and every
 /// dependency in the snapshot (`assemble_and_resolve_cross_app_from_program`), from
 /// one `FULL` program build, with the program engine's calls attached for EVERY
 /// body in it — the workspace's, and each dependency's resolved from its own app
 /// (`ProgramContext::resolve_dependency_bodies`) — and its event graph over all of
-/// them. `None` when the program build or the model assembly fails.
-#[must_use]
+/// them. `Err` when the program build or the model assembly fails.
 pub fn assemble_and_resolve_cross_app_program(
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
     skip_roots_config: bool,
-) -> Option<CrossAppProgram> {
+) -> Result<CrossAppProgram, CrossAppFailure> {
     use crate::engine::perf_trace as pt;
-    let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp).ok()?;
+    let program =
+        ResolvedProgram::build(inputs, ProgramScope::CrossApp).map_err(CrossAppFailure::Build)?;
     let body = program.body();
     let ctx = &body.ctx;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
@@ -909,7 +926,7 @@ pub fn assemble_and_resolve_cross_app_program(
             body.all_edges(),
         )
     };
-    let (rows, abi_rows) = {
+    let assembled = {
         let _s = pt::span("crossapp", "crossapp.model_assembly");
         crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
             inputs,
@@ -918,7 +935,13 @@ pub fn assemble_and_resolve_cross_app_program(
             ctx,
             Some(&demand),
             &body.parenless_calls,
-        )?
+        )
+    };
+    let Some((rows, abi_rows)) = assembled else {
+        // The `body()` borrow has ended: the coverage moves out (#91).
+        return Err(CrossAppFailure::Assembly {
+            fresh: Box::new(program.into_parts().0.coverage),
+        });
     };
     let snap = ctx.snapshot();
     let declared_dependencies = snap
@@ -963,7 +986,7 @@ pub fn assemble_and_resolve_cross_app_program(
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
         attach_program_calls_with(rows, program, Some(&abi_rows))
     };
-    Some(CrossAppProgram {
+    Ok(CrossAppProgram {
         resolved,
         declared_dependencies,
         dependency_apps,
