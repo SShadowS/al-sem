@@ -28,7 +28,7 @@ use crate::program::body::features::{PAnchor, PCFNNode, PCallSite, PFieldAccess}
 use crate::program::model::calls::UpgradedBinding;
 use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
-use super::summary_runner::record_flow_role;
+use super::summary_runner::{record_flow_role, summaries_census};
 
 // ---------------------------------------------------------------------------
 // Lattice element types (mirror control-flow-walker.ts).
@@ -1436,14 +1436,16 @@ fn apply_dispatch(state: PerParamState, pd: &ParamDispatch, look: &CalleeLookup)
         out
     };
     let bindings = match &pd.kind {
-        DispatchKind::Unseen => return opaque(state, true),
+        DispatchKind::Unseen { .. } => return opaque(state, true),
         DispatchKind::Exact(b) if b.iter().any(|b| b.path_opaque) => {
             return opaque(state, b.iter().any(|b| b.callee_is_var));
         }
         DispatchKind::Exact(b) => b,
     };
+    let sequences = dispatch_sequences(bindings);
+    summaries_census::sequences_enumerated(sequences.len());
     let mut joined: Option<PerParamState> = None;
-    for run in dispatch_sequences(bindings) {
+    for run in sequences {
         let s = run.iter().fold(state.clone(), |s, &i| {
             let b = &bindings[i];
             apply_callee_role(

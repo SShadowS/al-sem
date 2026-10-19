@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use super::combined_graph::CombinedEdge;
 use super::effect_lattice::EffectPresence;
-use super::summary_runner::event_publisher_param;
+use super::summary_runner::{event_publisher_param, summaries_census};
 use crate::program::model::event_param_temp::event_param_names_match;
 use crate::program::model::workspace::ModelRoutine;
 
@@ -31,8 +31,11 @@ pub(crate) struct ExactBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DispatchKind {
     /// An opaque subscriber (non-resolved edge, unknown subscriber, or an
-    /// overload collision), or more than [`EXACT_DISPATCH_MAX`] bindings.
-    Unseen,
+    /// overload collision), or (`too_many`) more than [`EXACT_DISPATCH_MAX`]
+    /// bindings. The two read alike; only the census tells them apart.
+    Unseen {
+        too_many: bool,
+    },
     Exact(Vec<ExactBinding>),
 }
 
@@ -90,7 +93,7 @@ pub(crate) fn dispatch_bindings(
     let mut out = Vec::new();
     for p in routine.parameters.iter().filter(|p| p.is_record) {
         let kind = if unseen {
-            DispatchKind::Unseen
+            DispatchKind::Unseen { too_many: false }
         } else {
             let mut bindings: Vec<ExactBinding> = Vec::new();
             for e in &dispatch {
@@ -122,9 +125,13 @@ pub(crate) fn dispatch_bindings(
                     }
                 }
             }
-            match bindings.len() {
+            let n = bindings.len();
+            if n > 0 {
+                summaries_census::bindings_per_param(n);
+            }
+            match n {
                 0 => continue,
-                n if n > EXACT_DISPATCH_MAX => DispatchKind::Unseen,
+                n if n > EXACT_DISPATCH_MAX => DispatchKind::Unseen { too_many: true },
                 _ => DispatchKind::Exact(bindings),
             }
         };

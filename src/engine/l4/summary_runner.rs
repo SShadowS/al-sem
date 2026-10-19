@@ -44,6 +44,36 @@ use serde_json::json;
 
 const MAX_FIXED_POINT_ITERATIONS: usize = 1000;
 
+#[cfg(test)]
+thread_local! {
+    static ROLES_CAP_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The roles Jacobi round cap: `MAX_FIXED_POINT_ITERATIONS`, or the test
+/// override set by [`with_roles_iteration_cap`].
+fn roles_iteration_cap() -> usize {
+    #[cfg(test)]
+    if let Some(cap) = ROLES_CAP_OVERRIDE.with(|c| c.get()) {
+        return cap;
+    }
+    MAX_FIXED_POINT_ITERATIONS
+}
+
+/// Run `f` with the roles round cap forced to `cap` (#107 Design 5: no corpus
+/// SCC caps, so the capped branch is reachable only this way). A thread-local
+/// restored on exit by a drop guard; the solver runs on the calling thread.
+#[cfg(test)]
+pub(crate) fn with_roles_iteration_cap<R>(cap: usize, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<usize>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ROLES_CAP_OVERRIDE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(ROLES_CAP_OVERRIDE.with(|c| c.replace(Some(cap))));
+    f()
+}
+
 /// `ALSEM_SUMMARIES_CENSUS=1` — attribution inside the
 /// `context.compute_summaries` span (~9.9 s of ~66 s on BC Base App 8020, and
 /// the largest span in the run with NO attribution at all).
@@ -145,6 +175,80 @@ pub(crate) mod summaries_census {
     pub(crate) static BASE_SUMMARIES_BUILT: AtomicU64 = AtomicU64::new(0);
     pub(crate) static RVID_ENTRIES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static FIELD_INDEX_ENTRIES: AtomicU64 = AtomicU64::new(0);
+
+    // --- Event dispatch (#107 Measurement step 6). Counted only when on. ---
+    static DISPATCH_PUBLISHERS: AtomicU64 = AtomicU64::new(0);
+    /// Dispatching publishers with their own body (expected 0, Design 6).
+    static DISPATCH_NONEMPTY_BODY: AtomicU64 = AtomicU64::new(0);
+    /// Bindings per (publisher, record parameter): 1, 2, 3, 4, more than 4.
+    /// A parameter made unseen by an opaque subscriber is not counted here.
+    static BINDINGS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+    static BINDINGS_MAX: AtomicU64 = AtomicU64::new(0);
+    static PATH_EXACT: AtomicU64 = AtomicU64::new(0);
+    static PATH_UNSEEN_OPAQUE: AtomicU64 = AtomicU64::new(0);
+    static PATH_UNSEEN_TOO_MANY: AtomicU64 = AtomicU64::new(0);
+    static PATH_ISOLATED: AtomicU64 = AtomicU64::new(0);
+    static SEQUENCES: AtomicU64 = AtomicU64::new(0);
+    static SEQUENCES_MAX: AtomicU64 = AtomicU64::new(0);
+    /// Roles Jacobi rounds in recursive SCCs with a dispatching member.
+    static DISPATCH_SCC_ROUNDS: AtomicU64 = AtomicU64::new(0);
+    static DISPATCH_SCCS: AtomicU64 = AtomicU64::new(0);
+    /// Subscriptions whose `conditional_any != !conditions.is_empty()`.
+    static MIXED_READINGS: AtomicU64 = AtomicU64::new(0);
+
+    fn count(c: &AtomicU64, v: u64) {
+        if enabled() {
+            c.fetch_add(v, Ordering::Relaxed);
+        }
+    }
+
+    fn count_max(total: &AtomicU64, add: u64, max: &AtomicU64, v: u64) {
+        if enabled() {
+            total.fetch_add(add, Ordering::Relaxed);
+            max.fetch_max(v, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn bindings_per_param(n: usize) {
+        count_max(&BINDINGS[n.clamp(1, 5) - 1], 1, &BINDINGS_MAX, n as u64);
+    }
+
+    pub(crate) fn sequences_enumerated(n: usize) {
+        count_max(&SEQUENCES, n as u64, &SEQUENCES_MAX, n as u64);
+    }
+
+    pub(crate) fn mixed_readings() {
+        count(&MIXED_READINGS, 1);
+    }
+
+    pub(crate) fn dispatch_scc_rounds(rounds: usize) {
+        count(&DISPATCH_SCCS, 1);
+        count(&DISPATCH_SCC_ROUNDS, rounds as u64);
+    }
+
+    /// One solve's dispatching publishers: how many, how many have a body,
+    /// and which path each `ParamDispatch` takes.
+    pub(crate) fn dispatch_publishers<'a>(
+        publishers: impl Iterator<Item = (bool, &'a [super::ParamDispatch])>,
+    ) {
+        use super::DispatchKind;
+        if !enabled() {
+            return;
+        }
+        for (has_body, pds) in publishers {
+            count(&DISPATCH_PUBLISHERS, 1);
+            count(&DISPATCH_NONEMPTY_BODY, u64::from(has_body));
+            for pd in pds {
+                let c = match &pd.kind {
+                    DispatchKind::Unseen { too_many: true } => &PATH_UNSEEN_TOO_MANY,
+                    DispatchKind::Unseen { too_many: false } => &PATH_UNSEEN_OPAQUE,
+                    DispatchKind::Exact(b) if b.iter().any(|b| b.path_opaque) => &PATH_ISOLATED,
+                    DispatchKind::Exact(_) => &PATH_EXACT,
+                };
+                count(c, 1);
+            }
+        }
+    }
 
     pub(crate) fn enabled() -> bool {
         static E: OnceLock<bool> = OnceLock::new();
@@ -299,6 +403,41 @@ pub(crate) mod summaries_census {
         eprintln!(
             "[summaries-census]   field_index entries={}",
             g(&FIELD_INDEX_ENTRIES),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: publishers={} nonempty_body={} (expected 0)",
+            g(&DISPATCH_PUBLISHERS),
+            g(&DISPATCH_NONEMPTY_BODY),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: bindings_per_param 1={} 2={} 3={} 4={} >4={} max={}",
+            g(&BINDINGS[0]),
+            g(&BINDINGS[1]),
+            g(&BINDINGS[2]),
+            g(&BINDINGS[3]),
+            g(&BINDINGS[4]),
+            g(&BINDINGS_MAX),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: params exact={} unseen_opaque={} unseen_too_many={} isolated_path_opaque={}",
+            g(&PATH_EXACT),
+            g(&PATH_UNSEEN_OPAQUE),
+            g(&PATH_UNSEEN_TOO_MANY),
+            g(&PATH_ISOLATED),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: sequences total={} max_per_walk={}",
+            g(&SEQUENCES),
+            g(&SEQUENCES_MAX),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: roles_rounds={} in recursive_sccs={}",
+            g(&DISPATCH_SCC_ROUNDS),
+            g(&DISPATCH_SCCS),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: mixed_readings={}",
+            g(&MIXED_READINGS),
         );
     }
 }
@@ -833,7 +972,7 @@ fn fold_dispatch_presence(
             continue;
         };
         match &d.kind {
-            DispatchKind::Unseen => fold_callee_presence(p, None, false),
+            DispatchKind::Unseen { .. } => fold_callee_presence(p, None, false),
             DispatchKind::Exact(bindings) => {
                 for b in bindings.iter().filter(|b| b.callee_is_var) {
                     let role = snapshot
@@ -1094,6 +1233,29 @@ fn clone_role(r: &RecordRoleSummary) -> RecordRoleSummary {
     }
 }
 
+/// The role a reader treats as "cannot see" (#107 Design 5): every presence
+/// fact `Unknown` and both loaded-field lists `Unknown`; identity and the
+/// syntactic fields are kept.
+fn opaque_role(r: &RecordRoleSummary) -> RecordRoleSummary {
+    let u = EffectPresence::Unknown;
+    RecordRoleSummary {
+        requires_loaded_at_entry: u,
+        required_loaded_fields_at_entry: FieldList::Unknown,
+        mutates_before_load: u,
+        persists_current_record: u,
+        set_based_db_writes: u,
+        validates_param: u,
+        copies_into_param: u,
+        resets_filters_on_param: u,
+        dirty_at_exit: u,
+        current_loaded_fields_at_exit: FieldList::Unknown,
+        mutates_param: u,
+        loads_from_db_param: u,
+        initialises_param: u,
+        ..clone_role(r)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // compute_summaries_v2 — the new-solver seam (l4-summary-fixpoint-redesign).
 // ---------------------------------------------------------------------------
@@ -1190,6 +1352,13 @@ pub fn compute_summaries_v2_bundle_with_leaves(
             (!d.is_empty()).then(|| (r.id.clone(), d))
         })
         .collect();
+    summaries_census::dispatch_publishers(dispatch_by_id.iter().map(|(id, pds)| {
+        let r = routines_by_id[id];
+        (
+            !r.record_operations.is_empty() || !r.call_sites.is_empty(),
+            pds.as_slice(),
+        )
+    }));
 
     // Base intraprocedural summaries for NON-LEAF routines only (a leaf carries
     // its own summary; its EMPTY merged features must never overwrite it).
@@ -1897,7 +2066,7 @@ fn run_one_scc_roles(
         in_progress = merged;
         dirty = next_dirty;
 
-        if iterations >= MAX_FIXED_POINT_ITERATIONS {
+        if iterations >= roles_iteration_cap() {
             // Same cap the retired run_one_scc used. Roles-only convergence
             // cannot outlast the
             // old whole-summary fixpoint (roles are one of its components), so a
@@ -1928,10 +2097,27 @@ fn run_one_scc_roles(
         }
     }
 
+    if scc_entry
+        .members
+        .iter()
+        .any(|m| ctx.dispatch_by_id.contains_key(m))
+    {
+        summaries_census::dispatch_scc_rounds(iterations);
+    }
+
+    // Design 5 guard: the roles transfer is not monotone, so a capped SCC's
+    // round-cap roles may be any point of an oscillation. Publish the opaque
+    // role instead, which every reader already treats as "cannot see".
+    let capped = cap_hit_stable_members.is_some();
     let mut out: Vec<(String, Vec<RecordRoleSummary>)> = Vec::new();
     for id in &scc_entry.members {
         if let Some(s) = in_progress.remove(id) {
-            out.push((id.clone(), s.parameter_roles));
+            let roles = if capped {
+                s.parameter_roles.iter().map(opaque_role).collect()
+            } else {
+                s.parameter_roles
+            };
+            out.push((id.clone(), roles));
         }
     }
     RolesSccOut {
@@ -1959,6 +2145,7 @@ fn project_summary_to_stable(
 mod issue107_pending_tests {
     use super::*;
     use crate::engine::l4::combined_graph::build_combined_graph;
+    use crate::engine::l4::scc::{SccInputGraph, tarjan_scc};
     use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
     use crate::program::model::workspace::Model;
 
@@ -2117,6 +2304,114 @@ codeunit 50101 Sub
                 failures.push(format!(
                     "CombinedEdge {publisher} -> {sub}: want [Some(({conditional}, {isolated}))], got {got:?}"
                 ));
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// Plan notes / Design 5 guard, forced: 0 cap hits on the fixtures and CDO
+    /// never exercises the replacement, so the cap is forced to ONE round
+    /// (`with_roles_iteration_cap`, a test-only override of
+    /// `MAX_FIXED_POINT_ITERATIONS`; the name is this test's proposal, the spec
+    /// names none). The `ws-cycle` SCC `{OnCyc, HandleCyc}` then caps, and every
+    /// capped member's roles are the OPAQUE role: every presence fact and every
+    /// path fact `unknown`, field lists `Unknown`; the `fixpoint-capped`
+    /// diagnostic stays. On base the capped SCC keeps its round-1 roles.
+    #[test]
+    fn forced_roles_cap_publishes_the_opaque_role() {
+        let m = model(
+            r#"
+codeunit 50102 Cyc
+{
+    [IntegrationEvent(false, false)]
+    procedure OnCyc(var Rec: Record Cust; Depth: Integer)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Cyc, 'OnCyc', '', false, false)]
+    local procedure HandleCyc(var Rec: Record Cust; Depth: Integer)
+    begin
+        if Depth > 0 then
+            OnCyc(Rec, Depth - 1);
+        Rec.Modify();
+    end;
+}
+"#,
+        );
+        let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
+        let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+        for (from, list) in &graph.edges_by_from {
+            adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
+        }
+        let scc = tarjan_scc(&SccInputGraph {
+            nodes: &graph.nodes,
+            edges_by_from: &adjacency,
+        });
+        let (pid, hid) = (id_of(&m, "OnCyc"), id_of(&m, "HandleCyc"));
+        assert!(
+            scc.sccs
+                .iter()
+                .any(|s| s.recursive && s.members.contains(&pid) && s.members.contains(&hid)),
+            "precondition: OnCyc and HandleCyc form one recursive SCC"
+        );
+        let mut fields: FieldIndex = HashMap::new();
+        for t in &m.workspace.tables {
+            for f in &t.fields {
+                fields
+                    .entry((t.id.clone(), f.name.to_lowercase()))
+                    .or_insert_with(|| f.id.clone());
+            }
+        }
+        let (map, diags) = with_roles_iteration_cap(1, || {
+            compute_summaries_v2(
+                &m.workspace.routines,
+                &graph,
+                &scc,
+                &m.calls.upgraded_bindings,
+                &fields,
+            )
+        });
+        assert!(!diags.is_empty(), "precondition: the forced cap fires");
+        let mut failures = Vec::new();
+        for (name, id) in [("OnCyc", &pid), ("HandleCyc", &hid)] {
+            let Some(r) = map
+                .get(id)
+                .and_then(|s| s.parameter_roles.iter().find(|r| r.parameter_index == 0))
+            else {
+                failures.push(format!("{name}: no role for Rec"));
+                continue;
+            };
+            let presences = [
+                ("persistsCurrentRecord", r.persists_current_record),
+                ("setBasedDbWrites", r.set_based_db_writes),
+                ("validatesParam", r.validates_param),
+                ("copiesIntoParam", r.copies_into_param),
+                ("resetsFiltersOnParam", r.resets_filters_on_param),
+                ("loadsFromDbParam", r.loads_from_db_param),
+                ("initialisesParam", r.initialises_param),
+                ("mutatesParam", r.mutates_param),
+                ("requiresLoadedAtEntry", r.requires_loaded_at_entry),
+                ("mutatesBeforeLoad", r.mutates_before_load),
+                ("dirtyAtExit", r.dirty_at_exit),
+            ];
+            for (k, v) in presences {
+                if v != EffectPresence::Unknown {
+                    failures.push(format!("{name}.{k}: want Unknown, got {v:?}"));
+                }
+            }
+            for (k, v) in [
+                (
+                    "requiredLoadedFieldsAtEntry",
+                    &r.required_loaded_fields_at_entry,
+                ),
+                (
+                    "currentLoadedFieldsAtExit",
+                    &r.current_loaded_fields_at_exit,
+                ),
+            ] {
+                if *v != crate::engine::l4::summary::FieldList::Unknown {
+                    failures.push(format!("{name}.{k}: want Unknown, got {v:?}"));
+                }
             }
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));

@@ -548,6 +548,11 @@ pub fn program_event_graph(
                     (id, "unknown")
                 }
             };
+            // #107 census: readings that disagree on a dispatch condition
+            // (`conditional_any` set while the intersected `conditions` is empty).
+            if s.conditional_any == s.conditions.is_empty() {
+                crate::engine::l4::summary_runner::summaries_census::mixed_readings();
+            }
             edges.push(EventEdge {
                 event_id,
                 subscriber_routine_id: r.id.clone(),
