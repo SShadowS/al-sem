@@ -20,7 +20,8 @@ use std::collections::HashMap;
 use crate::program::body::features::PAnchor;
 use crate::program::node::AppRef;
 use crate::program::resolve::edge::CanonicalSpan;
-use crate::program::resolve::full::{ClassifiedEdge, ObligationId, ProgramReport};
+use crate::program::resolve::full::{ClassifiedEdge, ObligationId};
+use crate::program::resolved::EdgeView;
 
 /// `(virtual path, start row, start col, end row, end col)`.
 pub type SpanKey = (String, u32, u32, u32, u32);
@@ -59,11 +60,11 @@ pub struct SiteLinks<'r> {
 }
 
 impl<'r> SiteLinks<'r> {
-    /// Index every call-site obligation's edge, in report order.
+    /// Index every call-site obligation's edge, in `view.all_edges()` order.
     #[must_use]
-    pub fn build(report: &'r ProgramReport) -> Self {
+    pub fn build(view: EdgeView<'r>) -> Self {
         let mut by_site: HashMap<(AppRef, SpanKey), Vec<&'r ClassifiedEdge>> = HashMap::new();
-        for ce in &report.edges {
+        for ce in view.all_edges() {
             if !matches!(ce.obligation_id, ObligationId::CallSite { .. }) {
                 continue;
             }
@@ -119,7 +120,7 @@ mod tests {
             })
             .unwrap();
         let key = program_key(&report.edges[i].edge.site.span);
-        let before = SiteLinks::build(&report).at(primary, &key).len();
+        let before = SiteLinks::build(report.edge_view()).at(primary, &key).len();
 
         let copy = |ce: &ClassifiedEdge| ClassifiedEdge {
             obligation_id: ce.obligation_id.clone(),
@@ -131,7 +132,7 @@ mod tests {
         other_app.edge.from.object.app = AppRef(primary.0 + 1000);
         report.edges.push(other_app);
 
-        let links = SiteLinks::build(&report);
+        let links = SiteLinks::build(report.edge_view());
         assert_eq!(links.at(primary, &key).len(), before + 1);
         assert_eq!(links.at(AppRef(primary.0 + 1000), &key).len(), 1);
         assert_eq!(

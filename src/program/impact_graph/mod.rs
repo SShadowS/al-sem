@@ -185,13 +185,24 @@ impl ImpactGraph {
 }
 
 /// Build the export for a workspace: the cross-app program
-/// ([`crate::program::resolve::full::build_cross_app_program`]), its source
+/// ([`crate::program::resolved::ResolvedProgram::build`] under `FULL`), its source
 /// facts, the projection and `meta`.
 pub fn export_workspace(
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
 ) -> Result<ImpactGraph, String> {
     let workspace_root = inputs.workspace.as_path();
-    let (ctx, report, coverage) = crate::program::resolve::full::build_cross_app_program(inputs)?;
+    let mut program = crate::program::resolved::ResolvedProgram::build(
+        inputs,
+        crate::program::profile::BuildProfile::FULL,
+    )?;
+    let mut body = program.body.take().expect("built once");
+    // #160 step 1b: the projection still reads one merged list, in the
+    // `all_edges` order (edges, then dependency bodies), until it reads an
+    // `EdgeView`. Moved, not copied.
+    let dependency_body_edges = std::mem::take(&mut body.dependency_body_edges);
+    body.edges.extend(dependency_body_edges);
+    let pm = &program.meta;
+    let ctx = &body.ctx;
     // The gate's identity rule (#73): `app.json` needs a non-empty string `id`.
     // Checked on the snapshot's own reading of it (`guid` is "" exactly when the
     // `id` is missing, not a string, or empty, `snapshot.rs:199-208`), so the id
@@ -207,31 +218,31 @@ pub fn export_workspace(
     let index = crate::program::resolve::index::ResolveIndex::build(graph);
     let facts = extract_source_facts(graph, &index, &ctx.all_units());
     let surface = ctx.decl_surface();
-    let recovered: HashSet<String> = report.recovered_files.iter().cloned().collect();
+    let recovered: HashSet<String> = pm.recovered_files.iter().cloned().collect();
     let projection = project(&Inputs {
         graph,
         index: &index,
         surface: &surface,
-        primary: report.primary_app_ref,
-        edges: &report.edges,
-        site_facts: &report.site_facts,
+        primary: pm.primary_app_ref,
+        edges: &body.edges,
+        site_facts: &body.site_facts,
         facts: &facts,
-        missing_obligations: &report.coverage.missing,
+        missing_obligations: &pm.coverage_contract.missing,
         recovered_files: &recovered,
     });
 
-    let dependency_edges: Vec<EngineEdge> = report
+    let dependency_edges: Vec<EngineEdge> = body
         .edges
         .iter()
         .filter(|ce| {
-            ce.edge.from.object.app != report.primary_app_ref
+            ce.edge.from.object.app != pm.primary_app_ref
                 && matches!(ce.obligation_id, ObligationId::CallSite { .. })
         })
         .map(|ce| ce.edge.clone())
         .collect();
     let snap = ctx.snapshot();
     let ws = snap.apps.first();
-    let apps = crate::program::resolve::full::loaded_apps(&ctx, &coverage);
+    let apps = &pm.loaded_apps;
     let meta = json!({
         "schema": SCHEMA,
         "version": VERSION,
@@ -246,8 +257,8 @@ pub fn export_workspace(
         },
         "apps": apps,
         "assumptions": ["opaqueCodeRunsNoObjectsById", "platformEntryPointsNotModelled"],
-        "recoveredFiles": report.recovered_files,
-        "coverageHolds": crate::program::resolve::full::coverage_holds(&report.coverage),
+        "recoveredFiles": pm.recovered_files,
+        "coverageHolds": crate::program::resolve::full::coverage_holds(&pm.coverage_contract),
         "counts": {
             "nodes": projection.nodes.len(),
             "edges": projection.edges.len(),
@@ -255,16 +266,16 @@ pub fn export_workspace(
             "universalCallers": projection.universal_callers,
         },
         "histogram": {
-            "primaryScoped": histogram_json(&report.primary_histogram),
-            "wholeProgram": histogram_json(&report.histogram),
+            "primaryScoped": histogram_json(&pm.primary_histogram),
+            "wholeProgram": histogram_json(&pm.histogram),
             "dependencyBodies": histogram_json(&Histogram::of_edges(&dependency_edges)),
         },
     });
-    if !crate::program::resolve::full::coverage_holds(&report.coverage) {
+    if !crate::program::resolve::full::coverage_holds(&pm.coverage_contract) {
         eprintln!(
             "al-sem graph: warning: the coverage contract does not hold ({} obligations without an edge); \
              their routines are linked to the universal hub",
-            report.coverage.missing.len()
+            pm.coverage_contract.missing.len()
         );
     }
     Ok(ImpactGraph {

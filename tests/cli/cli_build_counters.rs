@@ -801,6 +801,19 @@ fn retained_census_counts_the_filled_ordering_cell() {
 #[test]
 fn retained_census_changes_no_output() {
     let (_d, ws) = ws_dep();
+    // A1b.5's precondition, hand-stated: one workspace `.al` file carries a
+    // 64 KiB comment, so the workspace texts outweigh every other input the
+    // `inputs` bucket counts (paths, `app.json`, the closure list).
+    let al_files: Vec<std::path::PathBuf> = walkdir::WalkDir::new(&ws)
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(walkdir::DirEntry::into_path)
+        .filter(|p| p.extension().is_some_and(|x| x == "al"))
+        .collect();
+    let padded = al_files.first().expect("the workspace has an .al file");
+    let mut text = std::fs::read_to_string(padded).unwrap();
+    text.push_str(&format!("\n// {}\n", "x".repeat(64 * 1024)));
+    std::fs::write(padded, text).unwrap();
     let args = ["analyze", ws.as_str(), "--format", "sarif"];
     let (off, _) = spawn_traced(&args, &[]);
     let (on, _) = spawn_traced(&args, &[("ALSEM_RETAINED_CENSUS", "1")]);
@@ -834,6 +847,17 @@ fn retained_census_changes_no_output() {
             .and_then(|r| r.split(' ').next()?.parse().ok())
             .unwrap_or_else(|| panic!("missing {tag}:\n{err}"))
     };
+    // #160 A1b.5: the `inputs` bucket owns the workspace `.al` texts, so it is
+    // at least their bytes on disk (the dependency's are `.app` packages).
+    let al_bytes: u64 = al_files
+        .iter()
+        .map(|p| std::fs::metadata(p).unwrap().len())
+        .sum();
+    assert!(
+        bytes("inputs") >= al_bytes,
+        "inputs {} < .al bytes {al_bytes}:\n{err}",
+        bytes("inputs")
+    );
     let rows = bytes("base.resolved.rows");
     assert!(
         rows > 0 && rows < bytes("model"),

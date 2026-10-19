@@ -274,8 +274,13 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
     }
     let (fresh, program) = {
         let _s = pt::span("preflight", "preflight.fresh_program");
-        match crate::program::resolve::full::build_program_with_coverage(inputs) {
-            Ok((ctx, report, fc)) => (Ok(fc), Some((ctx, report))),
+        match crate::program::resolved::ResolvedProgram::build(
+            inputs,
+            crate::program::profile::BuildProfile {
+                dependency_bodies: crate::program::profile::DependencyBodies::Summary,
+            },
+        ) {
+            Ok(program) => (Ok(program.meta.coverage.clone()), Some(program)),
             Err(e) => (Err(e), None),
         }
     };
@@ -288,7 +293,7 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
             object_facts: None,
         };
     };
-    let Some((ctx, report)) = program else {
+    let Some(mut program) = program else {
         // A workspace with no app-scoped AL file is the empty-output case;
         // otherwise the failed program build is an error. (Engine-switch S9.1:
         // this used to assemble L3's model from disk only to tell the two apart.)
@@ -308,6 +313,7 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
             object_facts: None,
         };
     };
+    let body = program.body.take().expect("built once");
     // Engine-switch S2a: the model is projected from the program engine's parse.
     let resolved = {
         let _s = pt::span("l3", "l3.assemble_resolve");
@@ -315,8 +321,8 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
             inputs,
             model_instance_id,
             false,
-            &ctx,
-            &report.parenless_calls,
+            &body.ctx,
+            &body.parenless_calls,
         )
     };
     let Some(rows) = resolved else {
@@ -328,17 +334,17 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
         };
     };
     // Taken before the adapter consumes (and drops) the program context.
-    let physical = Some(ctx.graph().workspace_rows.clone());
+    let physical = Some(body.ctx.graph().workspace_rows.clone());
     let object_facts = Some(crate::program::model::census::object_fact_census(
         &rows.workspace,
-        ctx.graph(),
+        body.ctx.graph(),
     ));
-    // The same build's coverage (#91): `program` is `Some` exactly when `fresh` is `Ok`.
-    let coverage = fresh
-        .as_ref()
-        .expect("a built program carries its coverage");
+    // The same build's coverage (#91).
     let resolved = crate::program::model::program_calls::attach_program_calls(
-        inputs, rows, ctx, report, coverage,
+        &program.meta.inputs,
+        rows,
+        body,
+        &program.meta.coverage,
     );
     AnalysisModel {
         fresh,

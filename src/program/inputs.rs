@@ -317,6 +317,117 @@ impl InputSet {
         v.get("id")?.as_str().filter(|id| !id.is_empty())
     }
 
+    /// #160 §4.1.5 / A1b.5: the `inputs` census bucket. It owns the workspace
+    /// `.al` texts (the snapshot shares them by `Arc`). Every owned buffer by
+    /// `len`; an `io::Error` in a slot is not walked (an OS error holds no heap).
+    #[must_use]
+    pub fn census(&self) -> crate::engine::census::Tally {
+        use crate::engine::census::Tally;
+        fn path(t: &mut Tally, p: &Path) {
+            let n = p.as_os_str().len();
+            if n > 0 {
+                t.bytes += n;
+                t.allocs += 1;
+            }
+        }
+        fn file(t: &mut Tally, f: &FileInput) {
+            path(t, &f.path);
+            if let Ok(b) = &f.bytes {
+                t.buf::<u8>(b.len());
+            }
+        }
+        fn json(t: &mut Tally, v: &serde_json::Value) {
+            match v {
+                serde_json::Value::String(s) => {
+                    t.strs([s]);
+                }
+                serde_json::Value::Array(a) => {
+                    t.buf::<serde_json::Value>(a.len());
+                    a.iter().for_each(|v| json(t, v));
+                }
+                serde_json::Value::Object(m) => {
+                    t.buf::<(String, serde_json::Value)>(m.len()).strs(m.keys());
+                    m.values().for_each(|v| json(t, v));
+                }
+                _ => {}
+            }
+        }
+        let mut t = Tally::default();
+        t.arc::<InputSet>();
+        path(&mut t, &self.workspace);
+        file(&mut t, &self.app_json);
+        match &self.app_json_value {
+            Some(Ok(v)) => json(&mut t, v),
+            Some(Err(e)) => {
+                t.strs([e]);
+            }
+            None => {}
+        }
+        t.buf::<PathBuf>(self.app_json_paths.len());
+        self.app_json_paths.iter().for_each(|p| path(&mut t, p));
+        match &self.roots_config {
+            Some(Ok(b)) => {
+                t.buf::<u8>(b.len());
+            }
+            Some(Err(e)) => {
+                t.strs([e]);
+            }
+            None => {}
+        }
+        if let Some(b) = &self.coverage_yaml {
+            t.buf::<u8>(b.len());
+        }
+        if let Some(p) = &self.policy_file {
+            file(&mut t, &p.file);
+        }
+        if let PolicyRequest::Path(p) = &self.policy_request {
+            path(&mut t, p);
+        }
+        if let Some(b) = &self.baseline {
+            file(&mut t, b);
+        }
+        t.buf::<DiscoveredAppFile>(self.closure.files.len());
+        for f in &self.closure.files {
+            path(&mut t, &f.folder);
+            path(&mut t, &f.path);
+        }
+        t.buf::<(PathBuf, std::io::Error)>(self.closure.unreadable.len());
+        self.closure
+            .unreadable
+            .iter()
+            .for_each(|(p, _)| path(&mut t, p));
+        if let Some(rows) = &self.snapshot_inputs {
+            t.buf::<SnapshotInput>(rows.len());
+            for r in rows {
+                t.strs([&r.kind, &r.path, &r.content_hash]);
+            }
+        }
+        t.buf::<WsFile>(self.al_files.len());
+        for f in &self.al_files {
+            t.strs([&f.rel_posix]);
+            path(&mut t, &f.abs_path);
+            match &f.text {
+                // `ArcInner<str>`: the two counts, then the bytes, padded to
+                // the counts' alignment (as `program.snapshot_texts` counts it).
+                Ok(text) => {
+                    t.bytes += (2 * std::mem::size_of::<usize>() + text.len())
+                        .next_multiple_of(std::mem::align_of::<usize>());
+                    t.allocs += 1;
+                }
+                Err(e) => {
+                    t.strs([e]);
+                }
+            }
+        }
+        t.strs([&self.driver_version]);
+        if let Some(id) = &self.model_instance_id {
+            t.strs([id]);
+        }
+        t.buf::<(String, usize)>(self.index.len())
+            .strs(self.index.keys());
+        t
+    }
+
     /// `roots.config.json` exists and loads and validates.
     pub fn roots_config_loaded(&self) -> bool {
         assert!(
