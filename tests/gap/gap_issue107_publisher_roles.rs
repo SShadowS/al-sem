@@ -870,3 +870,175 @@ codeunit 50101 Sub
     );
     done(f);
 }
+
+// ---------------------------------------------------------------------------
+// Task 4 review fix: the branches of the presence fold.
+// ---------------------------------------------------------------------------
+
+const SIMPLE: &str = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnSimple(var Rec: Record Cust)
+    begin
+    end;
+}
+"#;
+
+const SIMPLE_ISOLATED: &str = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false, true)]
+    procedure OnSimple(var Rec: Record Cust)
+    begin
+    end;
+}
+"#;
+
+const GET_SUB: &str = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnSimple', '', false, false)]
+    local procedure HandleSimple(var Rec: Record Cust)
+    begin
+        Rec.Get('A');
+    end;
+}
+"#;
+
+/// `OnSimple`'s single dispatch edge (precondition: one, resolved).
+fn simple_edge(
+    m: &Model,
+    graph: &CombinedGraph,
+) -> al_sem::engine::l4::combined_graph::CombinedEdge {
+    let p = rid(m, "OnSimple");
+    let es: Vec<_> = graph.edges_by_from[&p]
+        .iter()
+        .filter(|e| e.kind == "event-dispatch")
+        .cloned()
+        .collect();
+    assert_eq!(es.len(), 1, "precondition: one dispatch edge from OnSimple");
+    assert_eq!(es[0].resolution, "resolved", "precondition: resolved");
+    es[0].clone()
+}
+
+/// An isolated subscriber may not run to completion (its work is rolled back),
+/// so its load is masked in the publisher's presence facts: `loadsFromDbParam
+/// no`. The same subscriber on a plain event is a proven `yes` (control).
+#[test]
+fn review_isolated_loader_is_masked() {
+    let plain = model(&[SIMPLE, GET_SUB]);
+    let iso = model(&[SIMPLE_ISOLATED, GET_SUB]);
+    let g = graph_of(&iso);
+    let e = simple_edge(&iso, &g);
+    assert!(
+        e.dispatch.as_ref().is_some_and(|d| d.isolated),
+        "precondition: the dispatch edge is isolated"
+    );
+    let mut f = Vec::new();
+    expect(
+        &mut f,
+        "plain OnSimple",
+        role(&plain, &ctx_roles(&plain), "OnSimple", 0),
+        &[("loadsFromDbParam", "Yes")],
+    );
+    expect(
+        &mut f,
+        "isolated OnSimple",
+        role(&iso, &ctx_roles(&iso), "OnSimple", 0),
+        &[("loadsFromDbParam", "No")],
+    );
+    done(f);
+}
+
+/// Two edges to one subscriber (hand-stated: the second is conditional) are one
+/// binding whose flags are OR-ed: the load is masked. First-wins would keep the
+/// unconditional edge's `Yes`.
+#[test]
+fn review_duplicate_edges_or_their_flags() {
+    let m = model(&[SIMPLE, GET_SUB]);
+    let mut graph = graph_of(&m);
+    let mut e = simple_edge(&m, &graph);
+    e.dispatch = Some(al_sem::engine::l4::combined_graph::DispatchMeta {
+        conditional: true,
+        isolated: false,
+    });
+    graph.edges_by_from.get_mut(&e.from).unwrap().push(e);
+    let roles = solve(&m, &m.workspace.routines, &graph);
+    let mut f = Vec::new();
+    expect(
+        &mut f,
+        "OnSimple",
+        role(&m, &roles, "OnSimple", 0),
+        &[("loadsFromDbParam", "No")],
+    );
+    done(f);
+}
+
+fn four_subs() -> String {
+    let mut s = String::from("codeunit 50101 Sub\n{\n");
+    for i in 0..4 {
+        s.push_str(&format!(
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnSimple', '', false, false)]\n    local procedure Handle{i}(var Rec: Record Cust)\n    begin\n        Rec.Modify();\n    end;\n\n"
+        ));
+    }
+    s.push_str("}\n");
+    s
+}
+
+/// The bound is `EXACT_DISPATCH_MAX` = 4: exactly four subscribers stay exact,
+/// and a duplicate edge to one of them (5 edges, 4 subscribers) is still four.
+#[test]
+fn review_four_subscribers_stay_exact_even_with_a_duplicate_edge() {
+    let subs = four_subs();
+    let m = model(&[SIMPLE, &subs]);
+    let mut graph = graph_of(&m);
+    let p = rid(&m, "OnSimple");
+    let dispatch: Vec<_> = graph.edges_by_from[&p]
+        .iter()
+        .filter(|e| e.kind == "event-dispatch")
+        .cloned()
+        .collect();
+    assert_eq!(dispatch.len(), 4, "precondition: four dispatch edges");
+    let mut f = Vec::new();
+    let want = [("persistsCurrentRecord", "Yes"), ("mutatesParam", "Yes")];
+    expect(
+        &mut f,
+        "four",
+        role(&m, &solve(&m, &m.workspace.routines, &graph), "OnSimple", 0),
+        &want,
+    );
+    graph
+        .edges_by_from
+        .get_mut(&p)
+        .unwrap()
+        .push(dispatch[0].clone());
+    expect(
+        &mut f,
+        "four + duplicate",
+        role(&m, &solve(&m, &m.workspace.routines, &graph), "OnSimple", 0),
+        &want,
+    );
+    done(f);
+}
+
+/// A dispatch edge whose subscriber is not in the routine set (hand-stated)
+/// leaves the dispatch unseen: every presence fact `unknown`.
+#[test]
+fn review_unknown_subscriber_routine_is_unseen() {
+    let m = model(&[SIMPLE, GET_SUB]);
+    let mut graph = graph_of(&m);
+    let mut e = simple_edge(&m, &graph);
+    e.to = "no-such-routine".to_string();
+    graph.edges_by_from.get_mut(&e.from).unwrap().push(e);
+    let roles = solve(&m, &m.workspace.routines, &graph);
+    let mut f = Vec::new();
+    expect_all(
+        &mut f,
+        "OnSimple",
+        role(&m, &roles, "OnSimple", 0),
+        &PRESENCE,
+        "Unknown",
+    );
+    done(f);
+}
