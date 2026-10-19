@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-19
+
+A major version, because some changes break existing users. Each one is described in full below:
+
+- **Library API** (#160 step 1b): `build_cross_app_program` is gone (use
+  `ResolvedProgram::build`), and `attach_program_calls` now takes `(rows, program)` and
+  returns `(Model, ProgramMeta)`. `site_census`, `SiteLinks::build` and
+  `resolved_calls_from_program` take an `EdgeView`. `cross_app_demand` and
+  `Histogram::of_edges` take iterators.
+- **Analysis results** (#100): `Record.TestField` is no longer a table `read`.
+  `alsem diff` of an older snapshot against a new one therefore reports
+  `CapabilityLost` for each read that was removed. `Rename` and `LockTable` now
+  produce table facts (op `rename` / `lock`), and a policy on `resourceKind: table`
+  with no `op` filter now matches them.
+- **Exit code:** `alsem analyze` exits 2 when it fails to write its output.
+- **Diagnostics:** `C1_CONE_CENSUS=1` is replaced by `ALSEM_RETAINED_CENSUS=1`, and the
+  trace span `r3a3.calls_graph` is split into two.
+
 ### Added
 
 - `scripts/bench_ab.py`: an A/B bench of two binaries in interleaved rounds (side
