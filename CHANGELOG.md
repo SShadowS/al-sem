@@ -90,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `alsem.rs`. `analyze` now exits 2 on it (on a closed pipe it aborted before); every
   other command keeps exit 1 (before, with four different texts). The message goes
   through the stderr writer, so a closed stderr does not turn the exit code into a panic.
+- #160 step 1b: the program build is one `ResolvedProgram` (`src/program/resolved.rs`):
+  the build's facts (`ProgramMeta`) apart from its body (`ProgramBody`), with the
+  workspace's own edges and the dependency bodies' edges kept as two sets and read in
+  that order through one `EdgeView`. `build_cross_app_program` is replaced by
+  `ResolvedProgram::build(inputs, profile)`.
+  `alsem graph` reuses that program build (`ResolvedProgram::build` under `FULL`, then
+  `export_from_program`), and its projection reads both edge sets through the `EdgeView`;
+  its output is byte-identical. The retained census gains an `inputs` bucket (the
+  command's `InputSet`, 5.30 MB on CDO), and `program.snapshot_texts` now counts the
+  dependency units only. No output byte moves. The CDO numbers:
+  `docs/measurements/2026-10-19-issue-160-step1b.md`.
 - `C1_CONE_CENSUS=1` is replaced by `ALSEM_RETAINED_CENSUS=1`; the old
   `[C1_CONE_CENSUS]` report is gone (its structures are covered by the `context.*`
   buckets).
