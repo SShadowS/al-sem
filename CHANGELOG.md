@@ -151,7 +151,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - One subscriber that always runs gives the publisher exactly what a direct call to that
     subscriber gives. Two to four subscribers are composed over every order of those that
     always run and every subset of the optional ones; more than four, or a subscriber that
-    cannot be seen, makes the publisher behave like an unknown callee.
+    cannot be seen, makes the publisher behave like an unknown callee. A visible subscriber
+    with no body or no role is opaque in its run, and makes the publisher's required entry
+    fields `unknown`. Two edges to one subscriber are one subscriber, optional only if every
+    edge is.
   - A subscriber that may not run (manual binding, a license/permission condition in ANY build
     reading, an isolated event, or an edge that is not `resolved`) still contributes its MAY
     facts (persists, validates, may mutate), but never adds or removes a load a caller treats
@@ -163,9 +166,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Source-bearing dependency publishers (cross-app) gain the presence facts of their
     subscribers, workspace subscribers included; their path facts stay `unknown` (#70).
     Symbol-only dependency publishers are unchanged.
-  - A roles SCC that hits the iteration cap now publishes the opaque role for its members.
+  - A roles SCC that hits the iteration cap now publishes the opaque role for its members,
+    except `fixed_roles` members, which keep their base roles plus dispatch presence facts.
   - Model event edges carry `conditional` (from the subscription's conditions in any build
-    reading) and `isolated`; not projected.
+    reading), `mixed_readings` (census only) and `isolated`; not projected. The summaries
+    census (`ALSEM_SUMMARIES_CENSUS=1`) splits exact parameters into walker and
+    `fixed_roles` publishers and counts dispatch sequences once per walk.
   - Goldens: r3a2 summary-core roles of event publishers and their raisers, and d40/d42
     skip-reason counts in `cli-a`; no finding added or removed by the fixtures.
 - A routine can carry several readings of one event attribute, one per `#if` build path

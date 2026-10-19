@@ -184,7 +184,11 @@ pub(crate) mod summaries_census {
     /// A parameter made unseen by an opaque subscriber is not counted here.
     static BINDINGS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
     static BINDINGS_MAX: AtomicU64 = AtomicU64::new(0);
-    static PATH_EXACT: AtomicU64 = AtomicU64::new(0);
+    /// Exact parameters of a publisher the walker composes (Design 4).
+    static PATH_EXACT_WALKER: AtomicU64 = AtomicU64::new(0);
+    /// Exact parameters of a `fixed_roles` publisher: presence facts only
+    /// (Design 6), no walker.
+    static PATH_EXACT_FIXED: AtomicU64 = AtomicU64::new(0);
     static PATH_UNSEEN_OPAQUE: AtomicU64 = AtomicU64::new(0);
     static PATH_UNSEEN_TOO_MANY: AtomicU64 = AtomicU64::new(0);
     static PATH_ISOLATED: AtomicU64 = AtomicU64::new(0);
@@ -193,7 +197,8 @@ pub(crate) mod summaries_census {
     /// Roles Jacobi rounds in recursive SCCs with a dispatching member.
     static DISPATCH_SCC_ROUNDS: AtomicU64 = AtomicU64::new(0);
     static DISPATCH_SCCS: AtomicU64 = AtomicU64::new(0);
-    /// Subscriptions whose `conditional_any != !conditions.is_empty()`.
+    /// `event-dispatch` edges whose merged readings disagree on a condition
+    /// (`EventEdge::mixed_readings`), per combined-graph build.
     static MIXED_READINGS: AtomicU64 = AtomicU64::new(0);
 
     fn count(c: &AtomicU64, v: u64) {
@@ -226,16 +231,17 @@ pub(crate) mod summaries_census {
         count(&DISPATCH_SCC_ROUNDS, rounds as u64);
     }
 
-    /// One solve's dispatching publishers: how many, how many have a body,
-    /// and which path each `ParamDispatch` takes.
+    /// One solve's dispatching publishers, as `(has_body, fixed_roles, pds)`:
+    /// how many, how many have a body, and which path each `ParamDispatch`
+    /// takes.
     pub(crate) fn dispatch_publishers<'a>(
-        publishers: impl Iterator<Item = (bool, &'a [super::ParamDispatch])>,
+        publishers: impl Iterator<Item = (bool, bool, &'a [super::ParamDispatch])>,
     ) {
         use super::DispatchKind;
         if !enabled() {
             return;
         }
-        for (has_body, pds) in publishers {
+        for (has_body, fixed, pds) in publishers {
             count(&DISPATCH_PUBLISHERS, 1);
             count(&DISPATCH_NONEMPTY_BODY, u64::from(has_body));
             for pd in pds {
@@ -243,7 +249,8 @@ pub(crate) mod summaries_census {
                     DispatchKind::Unseen { too_many: true } => &PATH_UNSEEN_TOO_MANY,
                     DispatchKind::Unseen { too_many: false } => &PATH_UNSEEN_OPAQUE,
                     DispatchKind::Exact(b) if b.iter().any(|b| b.path_opaque) => &PATH_ISOLATED,
-                    DispatchKind::Exact(_) => &PATH_EXACT,
+                    DispatchKind::Exact(_) if fixed => &PATH_EXACT_FIXED,
+                    DispatchKind::Exact(_) => &PATH_EXACT_WALKER,
                 };
                 count(c, 1);
             }
@@ -419,8 +426,9 @@ pub(crate) mod summaries_census {
             g(&BINDINGS_MAX),
         );
         eprintln!(
-            "[summaries-census]   dispatch: params exact={} unseen_opaque={} unseen_too_many={} isolated_path_opaque={}",
-            g(&PATH_EXACT),
+            "[summaries-census]   dispatch: params exact_walker={} exact_fixed_roles={} unseen_opaque={} unseen_too_many={} isolated_path_opaque={}",
+            g(&PATH_EXACT_WALKER),
+            g(&PATH_EXACT_FIXED),
             g(&PATH_UNSEEN_OPAQUE),
             g(&PATH_UNSEEN_TOO_MANY),
             g(&PATH_ISOLATED),
@@ -1304,12 +1312,13 @@ fn opaque_role(r: &RecordRoleSummary) -> RecordRoleSummary {
 /// module doc for why materialized `Vec<DbEffect>` feed-forward survives
 /// through A2).
 ///
-/// `fixed_roles` (#70): routines solved for their db-effect ROWS only. Each keeps
-/// its base summary's parameter roles for the whole solve, as a fixed leaf's: the
-/// five path-sensitive fields unknown, the body-local fields
+/// `fixed_roles` (#70): routines solved for their db-effect ROWS, whose roles no
+/// walker computes. Each keeps its base summary's parameter roles, as a fixed
+/// leaf's: the five path-sensitive fields unknown, the body-local fields
 /// (`persistsCurrentRecord`, `writesFields`, `validatesParam`, …) from its own
-/// body. Role composition does not follow the
-/// synthetic event-dispatch edges a dependency publisher is solved through.
+/// body. A dependency publisher among them also composes its event dispatch's
+/// PRESENCE facts (#107 Design 6, `fold_dispatch_presence`); its path facts
+/// stay unknown.
 /// Empty everywhere but the cross-app solves: the base, the db-effect bundle and
 /// the digest's transaction spans.
 pub fn compute_summaries_v2_bundle_with_leaves(
@@ -1356,6 +1365,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         let r = routines_by_id[id];
         (
             !r.record_operations.is_empty() || !r.call_sites.is_empty(),
+            fixed_roles.contains(id),
             pds.as_slice(),
         )
     }));
@@ -1741,8 +1751,8 @@ pub struct SccComputeCtx<'a> {
     pub body_avail_by_id: &'a HashMap<String, bool>,
     pub stable_map: &'a HashMap<String, String>,
     pub leaf_summaries: &'a HashMap<String, RoutineSummary>,
-    /// Members that keep their base roles (see
-    /// [`compute_summaries_v2_bundle_with_leaves`]).
+    /// Members that keep their base roles plus their dispatch's presence facts
+    /// (see [`compute_summaries_v2_bundle_with_leaves`]).
     pub fixed_roles: &'a HashSet<String>,
     /// `graph.uncertainty_edges` indexed by source routine id (indices into
     /// `graph.uncertainty_edges`, pushed in GLOBAL order) — an O(1) per-routine
@@ -2109,12 +2119,13 @@ fn run_one_scc_roles(
     // Design 5 guard: the roles transfer is not monotone, so a capped SCC's
     // round-cap roles may be any point of an oscillation. Publish the opaque
     // role instead, which every reader already treats as "cannot see".
-    // (Members in `fixed_roles` are not in `in_progress`, so they keep theirs.)
+    // A `fixed_roles` member keeps its own roles (its base roles with its
+    // dispatch's presence facts, Design 6): no walker computes them.
     let capped = cap_hit_stable_members.is_some();
     let mut out: Vec<(String, Vec<RecordRoleSummary>)> = Vec::new();
     for id in &scc_entry.members {
         if let Some(s) = in_progress.remove(id) {
-            let roles = if capped {
+            let roles = if capped && !ctx.fixed_roles.contains(id) {
                 s.parameter_roles.iter().map(opaque_role).collect()
             } else {
                 s.parameter_roles
@@ -2141,10 +2152,11 @@ fn project_summary_to_stable(
     project_routine_summary_core_internal(routine_id, s, stable_map)
 }
 
-/// Issue #107 acceptance tests that name symbols the spec adds. The behaviour
-/// rows live in `tests/gap/gap_issue107_publisher_roles.rs`.
+/// Issue #107 tests that need crate-private symbols (the binding mapping, edge
+/// metadata, the roles round cap). The behaviour rows live in
+/// `tests/gap/gap_issue107_publisher_roles.rs`.
 #[cfg(test)]
-mod issue107_pending_tests {
+mod issue107_tests {
     use super::*;
     use crate::engine::l4::combined_graph::build_combined_graph;
     use crate::engine::l4::scc::{SccInputGraph, tarjan_scc};
@@ -2261,9 +2273,10 @@ codeunit 50101 Sub
 
     /// Row 5c (edge half, Design 2): a subscriber that skips on a missing
     /// license in one `#if` reading and not in the other has a model
-    /// `EventEdge` with `conditional == true` and a combined `event-dispatch`
-    /// edge whose `dispatch` metadata is conditional; a plain subscriber's are
-    /// not; an isolated event's edge carries `isolated`. (The
+    /// `EventEdge` with `conditional == true` (and `mixed_readings`, the census
+    /// flag) and a combined `event-dispatch` edge whose `dispatch` metadata is
+    /// conditional; a plain subscriber's are not; an isolated event's edge
+    /// carries `isolated`. (The
     /// `Subscription.conditions` empty / `conditional_any` true half is
     /// `program::resolve::index` test
     /// `issue107_mixed_readings_set_conditional_any`.)
@@ -2273,16 +2286,18 @@ codeunit 50101 Sub
         let mut failures = Vec::new();
         for (sub, want) in [("HandleMixRead", true), ("HandlePlain", false)] {
             let sid = id_of(&m, sub);
-            let edges: Vec<bool> = m
+            let edges: Vec<(bool, bool)> = m
                 .events
                 .graph
                 .edges
                 .iter()
                 .filter(|e| e.subscriber_routine_id == sid)
-                .map(|e| e.conditional)
+                .map(|e| (e.conditional, e.mixed_readings))
                 .collect();
-            if edges != vec![want] {
-                failures.push(format!("EventEdge {sub}: want [{want}], got {edges:?}"));
+            if edges != vec![(want, want)] {
+                failures.push(format!(
+                    "EventEdge {sub}: want [({want}, {want})], got {edges:?}"
+                ));
             }
         }
         let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
@@ -2311,16 +2326,29 @@ codeunit 50101 Sub
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 
-    /// Plan notes / Design 5 guard, forced: 0 cap hits on the fixtures and CDO
+    /// Design 5 guard, forced: 0 cap hits on the fixtures and CDO
     /// never exercises the replacement, so the cap is forced to ONE round
     /// (`with_roles_iteration_cap`, a test-only override of
-    /// `MAX_FIXED_POINT_ITERATIONS`; the name is this test's proposal, the spec
-    /// names none). The `ws-cycle` SCC `{OnCyc, HandleCyc}` then caps, and every
-    /// capped member's roles are the OPAQUE role: every presence fact and every
-    /// path fact `unknown`, field lists `Unknown`; the `fixpoint-capped`
-    /// diagnostic stays. On base the capped SCC keeps its round-1 roles.
+    /// `MAX_FIXED_POINT_ITERATIONS`). The `ws-cycle` SCC `{OnCyc, HandleCyc}`
+    /// then caps, and every capped member's roles are the OPAQUE role: every
+    /// presence fact and every path fact `unknown`, field lists `Unknown`; the
+    /// `fixpoint-capped` diagnostic stays. A `fixed_roles` member is the
+    /// exception: it keeps its base roles with its dispatch's presence facts.
     fn cyc_run(
         cap: Option<usize>,
+    ) -> (
+        String,
+        String,
+        HashMap<String, RoutineSummary>,
+        Vec<SummarizeDiagnostic>,
+    ) {
+        cyc_run_fixed(cap, false)
+    }
+
+    /// [`cyc_run`], with `OnCyc` in `fixed_roles` when `fix_publisher`.
+    fn cyc_run_fixed(
+        cap: Option<usize>,
+        fix_publisher: bool,
     ) -> (
         String,
         String,
@@ -2370,13 +2398,20 @@ codeunit 50102 Cyc
                     .or_insert_with(|| f.id.clone());
             }
         }
+        let fixed: HashSet<String> = if fix_publisher {
+            HashSet::from([pid.clone()])
+        } else {
+            HashSet::new()
+        };
         let run = || {
-            compute_summaries_v2(
+            compute_summaries_v2_with_leaves_core(
                 &m.workspace.routines,
                 &graph,
                 &scc,
                 &m.calls.upgraded_bindings,
                 &fields,
+                &HashMap::new(),
+                &fixed,
             )
         };
         let (map, diags) = match cap {
@@ -2464,5 +2499,24 @@ codeunit 50102 Cyc
                 "cap {cap}: real role, not opaque"
             );
         }
+    }
+
+    /// A capped SCC replaces only its walker-computed members' roles: a
+    /// `fixed_roles` member (here `OnCyc`, hand-stated) keeps its base roles
+    /// with its dispatch's presence facts, so `HandleCyc`'s `Modify` stays a
+    /// `yes`, not the opaque `unknown`. `HandleCyc` itself is opaque.
+    #[test]
+    fn forced_roles_cap_keeps_a_fixed_roles_members_roles() {
+        let (pid, hid, map, diags) = cyc_run_fixed(Some(1), true);
+        assert!(!diags.is_empty(), "precondition: the forced cap fires");
+        let rec = |id: &String| map[id].parameter_roles[0].clone();
+        let (p, h) = (rec(&pid), rec(&hid));
+        assert_eq!(p.persists_current_record, EffectPresence::Yes, "OnCyc");
+        assert_eq!(p.loads_from_db_param, EffectPresence::No, "OnCyc");
+        assert_eq!(
+            h.persists_current_record,
+            EffectPresence::Unknown,
+            "HandleCyc stays opaque"
+        );
     }
 }

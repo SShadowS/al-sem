@@ -93,6 +93,10 @@ pub struct EventEdge {
     /// a condition (`Subscription::conditional_any`, #107 Design 2). Not
     /// projected (`PEventEdge` has no such field).
     pub conditional: bool,
+    /// The merged readings disagree on a dispatch condition: `conditional` is
+    /// set while the intersected `Subscription::conditions` is empty. Read only
+    /// by the l4 summaries census (#107). Not projected.
+    pub mixed_readings: bool,
 }
 
 /// The internal event graph.
@@ -548,11 +552,6 @@ pub fn program_event_graph(
                     (id, "unknown")
                 }
             };
-            // #107 census: readings that disagree on a dispatch condition
-            // (`conditional_any` set while the intersected `conditions` is empty).
-            if s.conditional_any == s.conditions.is_empty() {
-                crate::engine::l4::summary_runner::summaries_census::mixed_readings();
-            }
             edges.push(EventEdge {
                 event_id,
                 subscriber_routine_id: r.id.clone(),
@@ -561,6 +560,7 @@ pub fn program_event_graph(
                 resolution: resolution.to_string(),
                 provenance: vec![Evidence::tree_sitter()],
                 conditional: s.conditional_any,
+                mixed_readings: s.conditional_any && s.conditions.is_empty(),
             });
         }
     }

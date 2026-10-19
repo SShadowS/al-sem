@@ -45,6 +45,10 @@ pub(crate) struct ParamDispatch {
     pub param_index: u32,
     pub caller_is_var: bool,
     pub kind: DispatchKind,
+    /// The walker's runs ([`dispatch_sequences`]) of an exact dispatch with no
+    /// isolated binding, built once per solve; empty otherwise (the walker
+    /// takes the opaque transfer then).
+    pub sequences: Vec<Vec<usize>>,
 }
 
 /// A subscriber whose effects cannot be seen: the edge is not `resolved`, the
@@ -106,13 +110,15 @@ pub(crate) fn dispatch_bindings(
                     {
                         continue;
                     }
-                    // Two edges to one subscriber are one subscriber.
+                    // Two edges to one subscriber are one subscriber: it may be
+                    // skipped only if every edge may skip it, and it is isolated
+                    // if any edge is.
                     match bindings
                         .iter_mut()
                         .find(|b| b.subscriber == s.id && b.q == q.index)
                     {
                         Some(b) => {
-                            b.optional |= optional;
+                            b.optional &= optional;
                             b.path_opaque |= isolated;
                         }
                         None => bindings.push(ExactBinding {
@@ -135,10 +141,15 @@ pub(crate) fn dispatch_bindings(
                 _ => DispatchKind::Exact(bindings),
             }
         };
+        let sequences = match &kind {
+            DispatchKind::Exact(b) if !b.iter().any(|b| b.path_opaque) => dispatch_sequences(b),
+            _ => Vec::new(),
+        };
         out.push(ParamDispatch {
             param_index: p.index,
             caller_is_var: p.is_var,
             kind,
+            sequences,
         });
     }
     out

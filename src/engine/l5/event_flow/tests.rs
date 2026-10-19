@@ -44,6 +44,7 @@ fn edge(event_id: &str, subscriber: &str, resolution: &str) -> EventEdge {
             note: None,
         }],
         conditional: false,
+        mixed_readings: false,
     }
 }
 

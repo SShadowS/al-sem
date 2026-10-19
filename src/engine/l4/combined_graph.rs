@@ -377,6 +377,9 @@ pub fn build_combined_graph(
         };
         if let Some(list) = subs_by_event.get(&sym.id) {
             for ee in list {
+                if ee.mixed_readings {
+                    super::summary_runner::summaries_census::mixed_readings();
+                }
                 edges.push(CombinedEdge {
                     from: publisher_routine_id.clone(),
                     to: ee.subscriber_routine_id.clone(),

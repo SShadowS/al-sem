@@ -3408,7 +3408,8 @@ pub struct R3a5CrossAppBase {
     /// `mutatesBeforeLoad`, `dirtyAtExit`, `currentLoadedFieldsAtExit`) unknown,
     /// the body-local ones (`persistsCurrentRecord`, `writesFields`,
     /// `validatesParam`, …) from the publisher's own body, exactly as for every
-    /// dependency leaf. Role composition does not follow the dispatch edges.
+    /// dependency leaf, plus the presence facts their dispatch composes (#107
+    /// Design 6). The path facts do not follow the dispatch edges.
     pub fixed_roles: HashSet<String>,
     /// The dependency-internal edges the cone follows (R3a-4 intra-app edges as
     /// `direct-call` typed edges); also folded into [`Self::graph`].
@@ -3476,7 +3477,9 @@ impl R3a5CrossAppBase {
 ///   event publisher's subscriber dispatches (#70): such a publisher is solved,
 ///   so the store follows its dispatch as the cone does, but it keeps the leaf's
 ///   parameter roles (`fixed_roles`: the five path-sensitive fields unknown, the
-///   body-local fields from its own body, as for every dependency leaf);
+///   body-local fields from its own body, as for every dependency leaf), plus
+///   the presence facts its dispatch composes (#107 Design 6; path facts stay
+///   unknown);
 /// - a symbol-only dependency routine is no leaf: its summary is the `opaque-body`
 ///   self-uncertainty;
 /// - every routine's direct capability facts and coverage come from

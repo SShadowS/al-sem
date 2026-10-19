@@ -1504,10 +1504,11 @@ fn review_isolated_loader_is_masked() {
 }
 
 /// Two edges to one subscriber (hand-stated: the second is conditional) are one
-/// binding whose flags are OR-ed: the load is masked. First-wins would keep the
-/// unconditional edge's `Yes`.
+/// binding. It is optional only if EVERY edge may skip it, so the unconditional
+/// edge keeps the load: `loadsFromDbParam yes`. OR-ing `optional` would mask it
+/// (`no`). (`path_opaque` is OR-ed: an isolated edge on any copy isolates it.)
 #[test]
-fn review_duplicate_edges_or_their_flags() {
+fn review_duplicate_edges_merge_their_flags() {
     let m = model(&[SIMPLE, GET_SUB]);
     let mut graph = graph_of(&m);
     let mut e = simple_edge(&m, &graph);
@@ -1522,7 +1523,7 @@ fn review_duplicate_edges_or_their_flags() {
         &mut f,
         "OnSimple",
         role(&m, &roles, "OnSimple", 0),
-        &[("loadsFromDbParam", "No")],
+        &[("loadsFromDbParam", "Yes")],
     );
     done(f);
 }
@@ -1869,7 +1870,8 @@ codeunit 50101 Sub
 
 /// Review Focus 3: a resolved subscriber without a body (hand-stated:
 /// `body_available = false`) is visible but opaque: the publisher's facts are
-/// `unknown`, never `no`.
+/// `unknown`, never `no`, and so are its required entry fields (the opaque
+/// subscriber may read any field, as in an unseen dispatch).
 #[test]
 fn review_bodyless_subscriber_is_opaque() {
     let m = model(&[SIMPLE, SIMPLE_SUB]);
@@ -1889,6 +1891,7 @@ fn review_bodyless_subscriber_is_opaque() {
         &[
             ("persistsCurrentRecord", "Unknown"),
             ("requiresLoadedAtEntry", "Unknown"),
+            ("requiredLoadedFieldsAtEntry", "Unknown"),
         ],
     );
     done(f);

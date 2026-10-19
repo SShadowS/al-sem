@@ -988,6 +988,7 @@ mod tests {
             resolution: "resolved".to_string(),
             provenance: vec![],
             conditional: false,
+            mixed_readings: false,
         }
     }
 
