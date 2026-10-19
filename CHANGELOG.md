@@ -9,10 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- #160 step 2: every `alsem` command builds its detector context and its L4 solve once, through one `View` (`src/engine/session.rs`). Some builds stay outside the `View`, until step 3:
-  - `policy check`'s command-local raw-facts build;
-  - the fold solve (`compute_uncertainty_coverage_reasons`) that snapshot composition runs on its own: in `digest`, `prove` and `fingerprint`, and in each side of `diff`;
-  - for a plan with d47, d49 or d51, the whole snapshot that `fill_ordering` composes for the ordering facts, with its own cone, `pd_solve`, Tarjan and fold solve.
+- #160 step 2: every `alsem` command builds its detector context and its L4 solve once, through one `View` (`src/engine/session.rs`). Some builds stay outside the `View`:
+  - `policy check`'s command-local raw-facts build (step 6 removes it);
+  - the fold solve (`compute_uncertainty_coverage_reasons`) that snapshot composition runs on its own: in `digest`, `prove` and `fingerprint`, and in each side of `diff` (step 3 removes it);
+  - for a plan with d47, d49 or d51, the whole snapshot that `fill_ordering` composes for the ordering facts, with its own cone, `pd_solve`, Tarjan and fold solve (step 3 removes that snapshot's fold solve; the rest stays).
   - **The pieces.**
     - `View`, `Plan` and `RunKey` hold four cells: ordering, graph, det and `l4`. Each cell is filled once, by `prepare`, never lazily.
     - `L4Analysis` / `build_l4` (`src/engine/l4/analysis.rs`) is the one solve.
@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Trace.**
     - `digest.tx_context_map` and `prove.tx_context_map` are gone.
     - `context.build_total` / `crossapp.context_build` now also open on the `View` paths.
+    - New instant event `view.release`: one per cell a `View` releases, named by the cell.
   - **Library API.**
     - `build_detector_context` returns an `OwnedContext`; read the context with `.ctx()`.
     - `assemble_and_resolve_cross_app_program` returns `Result<_, CrossAppFailure>` instead of `Option`.
