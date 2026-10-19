@@ -5248,7 +5248,8 @@ codeunit 13 "Dep Rec Sub"
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         write_fixture_107(&ws, true);
-        let base = build_cross_app_base(&ws, "r0").expect("cross-app base");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
         for p in ["OnDepRec", "OnDepRec2"] {
             assert!(
                 base.dep_routine_ids.contains(&routine_id(&base, p)),
@@ -5308,7 +5309,8 @@ codeunit 13 "Dep Rec Sub"
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         write_fixture_107(&ws, false);
-        let base = build_cross_app_base(&ws, "r0").expect("cross-app base");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
         let keys = [
             "persistsCurrentRecord",
             "validatesParam",
