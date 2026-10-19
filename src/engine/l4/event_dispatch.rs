@@ -22,6 +22,10 @@ pub(crate) struct ExactBinding {
     /// The subscriber may not run (a conditional subscription or an isolated
     /// event).
     pub optional: bool,
+    /// An isolated event: the subscriber is visible, but a failure rolls its
+    /// database work back while its in-memory changes stay, so the walker
+    /// takes the opaque transfer (Design 4).
+    pub path_opaque: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,10 +95,8 @@ pub(crate) fn dispatch_bindings(
             let mut bindings: Vec<ExactBinding> = Vec::new();
             for e in &dispatch {
                 let s = routines_by_id[&e.to];
-                let optional = e
-                    .dispatch
-                    .as_ref()
-                    .is_some_and(|d| d.conditional || d.isolated);
+                let isolated = e.dispatch.as_ref().is_some_and(|d| d.isolated);
+                let optional = isolated || e.dispatch.as_ref().is_some_and(|d| d.conditional);
                 for q in &s.parameters {
                     if event_publisher_param(routine, s, q.index).map(|pp| pp.index)
                         != Some(p.index)
@@ -106,12 +108,16 @@ pub(crate) fn dispatch_bindings(
                         .iter_mut()
                         .find(|b| b.subscriber == s.id && b.q == q.index)
                     {
-                        Some(b) => b.optional |= optional,
+                        Some(b) => {
+                            b.optional |= optional;
+                            b.path_opaque |= isolated;
+                        }
                         None => bindings.push(ExactBinding {
                             subscriber: s.id.clone(),
                             q: q.index,
                             callee_is_var: q.is_var,
                             optional,
+                            path_opaque: isolated,
                         }),
                     }
                 }
@@ -137,5 +143,88 @@ pub(crate) fn optional_load(v: EffectPresence) -> EffectPresence {
     match v {
         EffectPresence::Yes => EffectPresence::No,
         other => other,
+    }
+}
+
+/// The runs of an exact dispatch (Design 4), as binding indices in run order:
+/// for every subset of the optional bindings, every order of (unconditional
+/// bindings ∪ subset). The empty sequence appears only when no binding always
+/// runs. At most 65 sequences for [`EXACT_DISPATCH_MAX`] bindings.
+pub(crate) fn dispatch_sequences(bindings: &[ExactBinding]) -> Vec<Vec<usize>> {
+    let (optional, always): (Vec<usize>, Vec<usize>) =
+        (0..bindings.len()).partition(|&i| bindings[i].optional);
+    let mut out = Vec::new();
+    for mask in 0..1u32 << optional.len() {
+        let mut run = always.clone();
+        run.extend(
+            optional
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| mask >> k & 1 == 1)
+                .map(|(_, &i)| i),
+        );
+        permute(&mut run, 0, &mut out);
+    }
+    out
+}
+
+/// Push every order of `v[k..]` (behind the fixed prefix `v[..k]`) to `out`.
+fn permute(v: &mut [usize], k: usize, out: &mut Vec<Vec<usize>>) {
+    if k == v.len() {
+        out.push(v.to_vec());
+        return;
+    }
+    for i in k..v.len() {
+        v.swap(k, i);
+        permute(v, k + 1, out);
+        v.swap(k, i);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    fn b(optional: bool) -> ExactBinding {
+        ExactBinding {
+            subscriber: "S".to_string(),
+            q: 0,
+            callee_is_var: true,
+            optional,
+            path_opaque: false,
+        }
+    }
+
+    fn set(v: Vec<Vec<usize>>) -> HashSet<Vec<usize>> {
+        let n = v.len();
+        let s: HashSet<Vec<usize>> = v.into_iter().collect();
+        assert_eq!(s.len(), n, "sequences must be distinct");
+        s
+    }
+
+    /// Design 4: every subset of the optional bindings x every order of
+    /// (unconditional ∪ subset); the empty sequence only without an
+    /// unconditional binding.
+    #[test]
+    fn dispatch_sequences_cover_every_subset_and_order() {
+        // 4 optional: 1 + 4 + 12 + 24 + 24.
+        let s = set(dispatch_sequences(&[b(true), b(true), b(true), b(true)]));
+        assert_eq!(s.len(), 65);
+        // 4 unconditional: every order, each of length 4.
+        let s = dispatch_sequences(&[b(false), b(false), b(false), b(false)]);
+        assert!(s.iter().all(|q| q.len() == 4));
+        assert_eq!(set(s).len(), 24);
+        assert_eq!(dispatch_sequences(&[b(false)]), vec![vec![0]]);
+        // Row 4b: no empty sequence when one binding always runs.
+        assert_eq!(
+            set(dispatch_sequences(&[b(false), b(true)])),
+            HashSet::from([vec![0], vec![0, 1], vec![1, 0]])
+        );
+        assert_eq!(
+            set(dispatch_sequences(&[b(true)])),
+            HashSet::from([vec![], vec![0]])
+        );
     }
 }

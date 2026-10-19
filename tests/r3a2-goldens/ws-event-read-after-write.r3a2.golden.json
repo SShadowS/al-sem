@@ -37,9 +37,11 @@
           "mayChangeLoadFields": false,
           "mayAssignRecord": false,
           "mayUseRecordRef": false,
-          "requiresLoadedAtEntry": "no",
-          "requiredLoadedFieldsAtEntry": [],
-          "mutatesBeforeLoad": "no",
+          "requiresLoadedAtEntry": "yes",
+          "requiredLoadedFieldsAtEntry": [
+            "Qty"
+          ],
+          "mutatesBeforeLoad": "yes",
           "persistsCurrentRecord": "yes",
           "setBasedDbWrites": "no",
           "validatesParam": "no",
@@ -92,9 +94,11 @@
           "mayChangeLoadFields": false,
           "mayAssignRecord": false,
           "mayUseRecordRef": false,
-          "requiresLoadedAtEntry": "no",
-          "requiredLoadedFieldsAtEntry": [],
-          "mutatesBeforeLoad": "no",
+          "requiresLoadedAtEntry": "yes",
+          "requiredLoadedFieldsAtEntry": [
+            "Qty"
+          ],
+          "mutatesBeforeLoad": "yes",
           "persistsCurrentRecord": "yes",
           "setBasedDbWrites": "no",
           "validatesParam": "no",

@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use al_sem::engine::l4::combined_graph::{CombinedGraph, build_combined_graph};
 use al_sem::engine::l4::scc::{SccInputGraph, tarjan_scc};
-use al_sem::engine::l4::summary::RecordRoleSummary;
+use al_sem::engine::l4::summary::{FieldList, RecordRoleSummary};
 use al_sem::engine::l4::summary_runner::{FieldIndex, compute_summaries_v2};
 use al_sem::engine::l5::detector_context::build_detector_context;
 use al_sem::engine::l5::detectors::registered_detectors;
@@ -50,6 +50,15 @@ const PRESENCE: [&str; 8] = [
     "loadsFromDbParam",
     "initialisesParam",
     "mutatesParam",
+];
+
+/// The five path-sensitive facts (the walker's output).
+const PATH: [&str; 5] = [
+    "requiresLoadedAtEntry",
+    "requiredLoadedFieldsAtEntry",
+    "mutatesBeforeLoad",
+    "dirtyAtExit",
+    "currentLoadedFieldsAtExit",
 ];
 
 fn model_of(files: &[(&str, String)]) -> Model {
@@ -209,6 +218,119 @@ fn blamed(m: &Model, detector: &str) -> Vec<String> {
     out
 }
 
+/// What a DIRECT call to a `Rec.Modify()` helper gives its caller (probe a'):
+/// the oracle for "the publisher reflects its `Modify` subscriber".
+const MODIFY_ORACLE: [(&str, &str); 5] = [
+    ("persistsCurrentRecord", "Yes"),
+    ("mutatesParam", "Yes"),
+    ("requiresLoadedAtEntry", "Yes"),
+    ("mutatesBeforeLoad", "Yes"),
+    ("dirtyAtExit", "No"),
+];
+
+// ---------------------------------------------------------------------------
+// Acceptance item 1 + rows 1, 2: a Modify / a Validate subscriber.
+// ---------------------------------------------------------------------------
+
+const PUB_1_2: &str = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnRecModify(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnRecValidate(var Rec: Record Cust)
+    begin
+    end;
+
+    procedure ForwardModify(var Rec: Record Cust)
+    begin
+        OnRecModify(Rec);
+    end;
+
+    procedure ForwardValidate(var Rec: Record Cust)
+    begin
+        OnRecValidate(Rec);
+    end;
+
+    procedure ControlDirect(var Rec: Record Cust)
+    begin
+        DoModify(Rec);
+    end;
+
+    procedure DoModify(var Rec: Record Cust)
+    begin
+        Rec.Modify();
+    end;
+}
+"#;
+
+const SUB_1_2: &str = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnRecModify', '', false, false)]
+    local procedure HandleModify(var Rec: Record Cust)
+    begin
+        Rec.Modify();
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnRecValidate', '', false, false)]
+    local procedure HandleValidate(var Rec: Record Cust)
+    begin
+        Rec.Validate(Name, 'x');
+    end;
+}
+"#;
+
+/// Row 1 (and acceptance item 1, workspace): one `Modify` subscriber. The
+/// publisher's role for `Rec` equals what a direct call to the subscriber gives
+/// its caller (`ControlDirect`, probe a'), and `ForwardModify` inherits it.
+#[test]
+fn row1_modify_subscriber_equals_a_direct_call() {
+    let m = model(&[PUB_1_2, SUB_1_2]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    // The oracle itself, so a change to the call-site rules shows here first.
+    expect(
+        &mut f,
+        "ControlDirect",
+        role(&m, &roles, "ControlDirect", 0),
+        &MODIFY_ORACLE,
+    );
+    for name in ["OnRecModify", "ForwardModify"] {
+        expect(&mut f, name, role(&m, &roles, name, 0), &MODIFY_ORACLE);
+    }
+    done(f);
+}
+
+/// Row 2: one `Validate` subscriber -> the publisher is `dirtyAtExit yes`,
+/// `validatesParam yes`; `ForwardValidate` inherits `dirtyAtExit yes`.
+#[test]
+fn row2_validate_subscriber_dirties_the_publisher() {
+    let m = model(&[PUB_1_2, SUB_1_2]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    expect(
+        &mut f,
+        "OnRecValidate",
+        role(&m, &roles, "OnRecValidate", 0),
+        &[
+            ("validatesParam", "Yes"),
+            ("mutatesParam", "Yes"),
+            ("dirtyAtExit", "Yes"),
+        ],
+    );
+    expect(
+        &mut f,
+        "ForwardValidate",
+        role(&m, &roles, "ForwardValidate", 0),
+        &[("validatesParam", "Yes"), ("dirtyAtExit", "Yes")],
+    );
+    done(f);
+}
+
 // ---------------------------------------------------------------------------
 // Row 3: two subscribers, every order persists.
 // ---------------------------------------------------------------------------
@@ -257,6 +379,170 @@ codeunit 50101 Sub
             ("mutatesParam", "Yes"),
             ("dirtyAtExit", "No"),
         ],
+    );
+    done(f);
+}
+
+// ---------------------------------------------------------------------------
+// Rows 4, 4b: unconditional loaders.
+// ---------------------------------------------------------------------------
+
+/// Row 4: two unconditional `Get` subscribers -> the publisher
+/// `loadsFromDbParam yes`, and the walker's `loaded` stays `Yes` after the
+/// dispatch: a caller `F(var R) { OnLoad2(R); R.Modify() }` does not require a
+/// loaded record. Adding a no-op subscriber (`OnLoad3`) changes no role fact.
+#[test]
+fn row4_two_unconditional_loaders() {
+    let pubs = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnLoad2(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnLoad3(var Rec: Record Cust)
+    begin
+    end;
+
+    procedure F2(var R: Record Cust)
+    begin
+        OnLoad2(R);
+        R.Modify();
+    end;
+
+    procedure F3(var R: Record Cust)
+    begin
+        OnLoad3(R);
+        R.Modify();
+    end;
+}
+"#;
+    let subs = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnLoad2', '', false, false)]
+    local procedure HandleLoad2A(var Rec: Record Cust)
+    begin
+        Rec.Get('A');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnLoad2', '', false, false)]
+    local procedure HandleLoad2B(var Rec: Record Cust)
+    begin
+        Rec.Get('B');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnLoad3', '', false, false)]
+    local procedure HandleLoad3A(var Rec: Record Cust)
+    begin
+        Rec.Get('A');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnLoad3', '', false, false)]
+    local procedure HandleLoad3B(var Rec: Record Cust)
+    begin
+        Rec.Get('B');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnLoad3', '', false, false)]
+    local procedure HandleLoad3NoOp(var Rec: Record Cust)
+    begin
+    end;
+}
+"#;
+    let m = model(&[pubs, subs]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    for p in ["OnLoad2", "OnLoad3"] {
+        expect(
+            &mut f,
+            p,
+            role(&m, &roles, p, 0),
+            &[("loadsFromDbParam", "Yes")],
+        );
+    }
+    for c in ["F2", "F3"] {
+        expect(
+            &mut f,
+            c,
+            role(&m, &roles, c, 0),
+            &[("requiresLoadedAtEntry", "No")],
+        );
+    }
+    let (r2, r3) = (
+        role(&m, &roles, "OnLoad2", 0),
+        role(&m, &roles, "OnLoad3", 0),
+    );
+    for name in PRESENCE.iter().chain(PATH.iter()) {
+        if fact(r2, name) != fact(r3, name) {
+            f.push(format!(
+                "a no-op subscriber moved {name}: OnLoad2 {} vs OnLoad3 {}",
+                fact(r2, name),
+                fact(r3, name)
+            ));
+        }
+    }
+    done(f);
+}
+
+/// Row 4b (mixed `U`/`O`): an unconditional `Get` subscriber plus a MANUAL
+/// no-op subscriber. Every run executes the `Get`, so the incoming unloaded
+/// state is never an outcome: the publisher `loadsFromDbParam yes`, and a
+/// caller `F(var R) { OnMixed(R); R.Modify() }` gets `requiresLoadedAtEntry no`.
+#[test]
+fn row4b_unconditional_loader_plus_manual_noop() {
+    let pubs = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnMixed(var Rec: Record Cust)
+    begin
+    end;
+
+    procedure F(var R: Record Cust)
+    begin
+        OnMixed(R);
+        R.Modify();
+    end;
+}
+"#;
+    let subs = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnMixed', '', false, false)]
+    local procedure HandleMixedGet(var Rec: Record Cust)
+    begin
+        Rec.Get('A');
+    end;
+}
+"#;
+    let manual = r#"
+codeunit 50102 ManualSub
+{
+    EventSubscriberInstance = Manual;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnMixed', '', false, false)]
+    local procedure HandleMixedNoOp(var Rec: Record Cust)
+    begin
+    end;
+}
+"#;
+    let m = model(&[pubs, subs, manual]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    expect(
+        &mut f,
+        "OnMixed",
+        role(&m, &roles, "OnMixed", 0),
+        &[("loadsFromDbParam", "Yes")],
+    );
+    expect(
+        &mut f,
+        "F",
+        role(&m, &roles, "F", 0),
+        &[("requiresLoadedAtEntry", "No")],
     );
     done(f);
 }
@@ -538,6 +824,37 @@ codeunit 50102 ManualSub
 }
 "#;
 
+/// Row 5d (and the plan-notes `OnManualCopy` regression): a sole MANUAL
+/// subscriber doing `Rec.Copy(Other)`. The mask touches only the published
+/// trio: the publisher `copiesIntoParam no` (masked), `mutatesParam yes`
+/// (unmasked), `dirtyAtExit yes` (the run branch is `DirtyV`). A forwarder
+/// `Fwd(var R) { OnManualCopy(R) }` and a second level `FwdTwoLevels(var R) {
+/// Fwd(R) }`: `mutatesParam yes`, `copiesIntoParam no`, `dirtyAtExit yes`, no
+/// load point.
+#[test]
+fn row5d_manual_copy_mutates_without_loading() {
+    let m = model(&[COPY_PUB, COPY_MANUAL]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    for name in ["OnManualCopy", "Fwd", "FwdTwoLevels"] {
+        let r = role(&m, &roles, name, 0);
+        expect(
+            &mut f,
+            name,
+            r,
+            &[
+                ("copiesIntoParam", "No"),
+                ("mutatesParam", "Yes"),
+                ("dirtyAtExit", "Yes"),
+            ],
+        );
+        if r.puts_in_loaded_state() {
+            f.push(format!("{name} is a load point (puts_in_loaded_state)"));
+        }
+    }
+    done(f);
+}
+
 /// Rows 5d' and 5d'': c1b ACCUMULATES `mutates_param` across call sites.
 /// `FwdThenNoOp(var R) { OnManualCopy(R); NoOp(R) }` and the reversed order
 /// `NoOpThenFwd` both keep `mutatesParam yes` (an overwrite per call site
@@ -583,7 +900,7 @@ fn plan_manual_copy_then_opaque_helper_keeps_the_mutation() {
 }
 
 // ---------------------------------------------------------------------------
-// Row 6b: isolated events.
+// Rows 6, 6b: isolated events.
 // ---------------------------------------------------------------------------
 
 const ISO_PUB: &str = r#"
@@ -631,6 +948,38 @@ codeunit 50101 Sub
 }
 "#;
 
+/// Row 6: an isolated event whose subscriber does `Validate; Modify; Error`.
+/// Presence is visible MAY information (`persistsCurrentRecord yes`,
+/// `validatesParam yes`); the trio is masked (`loadsFromDbParam no`); the five
+/// path facts are `unknown` (a failure rolls the database work back). A
+/// forwarder `Fwd(var R) { OnIso(R) }` gets `dirtyAtExit no` (persist rule
+/// first, the stated leniency).
+#[test]
+fn row6_isolated_validate_modify_error() {
+    let m = model(&[ISO_PUB, ISO_SUB]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    let p = role(&m, &roles, "OnIso", 0);
+    expect(
+        &mut f,
+        "OnIso",
+        p,
+        &[
+            ("persistsCurrentRecord", "Yes"),
+            ("validatesParam", "Yes"),
+            ("loadsFromDbParam", "No"),
+        ],
+    );
+    expect_all(&mut f, "OnIso", p, &PATH, "Unknown");
+    expect(
+        &mut f,
+        "Fwd",
+        role(&m, &roles, "Fwd", 0),
+        &[("dirtyAtExit", "No"), ("persistsCurrentRecord", "Yes")],
+    );
+    done(f);
+}
+
 /// Row 6b: an isolated `Validate; Error` subscriber -> the publisher
 /// `validatesParam yes`, `persistsCurrentRecord no`; `FwdValidate` gets
 /// `dirtyAtExit yes` (validated, then failed: fields changed and unsaved).
@@ -650,6 +999,149 @@ fn row6b_isolated_validate_error() {
         "FwdValidate",
         role(&m, &roles, "FwdValidate", 0),
         &[("dirtyAtExit", "Yes")],
+    );
+    done(f);
+}
+
+// ---------------------------------------------------------------------------
+// Rows 7, 7b, 7c: event-id collisions and duplicate edges.
+// ---------------------------------------------------------------------------
+
+/// Row 7: an ambiguous subscription to an overloaded publisher (same object,
+/// same event name, so the same event id) is an `ambiguous` dispatch edge, an
+/// `Opaque` binding: the dispatch of `Rec` is unseen, every presence and path
+/// fact of the publisher `unknown`, and no `yes` from the other (resolved,
+/// `Validate` / `Get`) subscribers survives next to it.
+///
+/// Measured while writing this test: `HandleOverAmbiguous(var Rec)` and
+/// `HandleOverQty(var Rec; Qty)` are both bound `resolved`, and because both
+/// overloads share one event id, EACH overload carries a `resolved` dispatch
+/// edge to BOTH of them. Only the parameterless `HandleOverNone()` gets the
+/// `ambiguous` edge this row needs.
+#[test]
+fn row7_event_id_collision_is_unseen() {
+    let pubs = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnOver(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnOver(var Rec: Record Cust; Qty: Integer)
+    begin
+    end;
+}
+"#;
+    let subs = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnOver', '', false, false)]
+    local procedure HandleOverAmbiguous(var Rec: Record Cust)
+    begin
+        Rec.Validate(Name, 'x');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnOver', '', false, false)]
+    local procedure HandleOverQty(var Rec: Record Cust; Qty: Integer)
+    begin
+        Rec.Get('A');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnOver', '', false, false)]
+    local procedure HandleOverNone()
+    begin
+    end;
+}
+"#;
+    let m = model(&[pubs, subs]);
+    let graph = graph_of(&m);
+    // Precondition: the publisher(s) carry an `ambiguous` dispatch edge.
+    let overloads: Vec<&ModelRoutine> = m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.name == "OnOver")
+        .collect();
+    assert_eq!(overloads.len(), 2, "precondition: two OnOver overloads");
+    let with_ambiguous: Vec<&ModelRoutine> = overloads
+        .iter()
+        .copied()
+        .filter(|r| {
+            graph.edges_by_from.get(&r.id).is_some_and(|es| {
+                es.iter()
+                    .any(|e| e.kind == "event-dispatch" && e.resolution == "ambiguous")
+            })
+        })
+        .collect();
+    assert!(
+        !with_ambiguous.is_empty(),
+        "precondition: an ambiguous dispatch edge from an OnOver overload; edges: {:?}",
+        overloads
+            .iter()
+            .map(|r| graph.edges_by_from.get(&r.id))
+            .collect::<Vec<_>>()
+    );
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    for r in with_ambiguous {
+        let role = roles
+            .get(&r.id)
+            .and_then(|v| v.iter().find(|x| x.parameter_index == 0))
+            .expect("precondition: a role for Rec");
+        let label = format!("OnOver/{}", r.parameters.len());
+        expect_all(&mut f, &label, role, &PRESENCE, "Unknown");
+        expect_all(&mut f, &label, role, &PATH, "Unknown");
+    }
+    done(f);
+}
+
+const SIMPLE_SUB: &str = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnSimple', '', false, false)]
+    local procedure HandleSimple(var Rec: Record Cust)
+    begin
+        Rec.Modify();
+    end;
+}
+"#;
+
+/// Row 7b: one resolved and one ambiguous edge to the SAME subscriber
+/// (hand-stated: the ambiguous copy is pushed onto the solver's graph). The
+/// `Opaque` copy absorbs the `Exact` one: the dispatch is unseen, every
+/// presence and path fact `unknown`.
+#[test]
+fn row7b_opaque_copy_absorbs_exact_edge() {
+    let m = model(&[SIMPLE, SIMPLE_SUB]);
+    let mut graph = graph_of(&m);
+    let mut e = simple_edge(&m, &graph);
+    e.resolution = "ambiguous".to_string();
+    graph.edges_by_from.get_mut(&e.from).unwrap().push(e);
+    let roles = solve(&m, &m.workspace.routines, &graph);
+    let r = role(&m, &roles, "OnSimple", 0);
+    let mut f = Vec::new();
+    expect_all(&mut f, "OnSimple", r, &PRESENCE, "Unknown");
+    expect_all(&mut f, "OnSimple", r, &PATH, "Unknown");
+    done(f);
+}
+
+/// Row 7c: a duplicate resolved (subscriber, q) edge counts once (n = 1,
+/// exact): `OnSimple` equals the direct-call oracle.
+#[test]
+fn row7c_duplicate_resolved_edge_counts_once() {
+    let m = model(&[SIMPLE, SIMPLE_SUB]);
+    let mut graph = graph_of(&m);
+    let e = simple_edge(&m, &graph);
+    graph.edges_by_from.get_mut(&e.from).unwrap().push(e);
+    let roles = solve(&m, &m.workspace.routines, &graph);
+    let mut f = Vec::new();
+    expect(
+        &mut f,
+        "OnSimple",
+        role(&m, &roles, "OnSimple", 0),
+        &MODIFY_ORACLE,
     );
     done(f);
 }
@@ -718,7 +1210,10 @@ codeunit 50101 Sub
             .expect("precondition: a role for Rec");
         let label = format!("OnPair/{}", r.parameters.len());
         match r.parameters.len() {
-            1 => expect_all(&mut f, &label, role, &PRESENCE, "Unknown"),
+            1 => {
+                expect_all(&mut f, &label, role, &PRESENCE, "Unknown");
+                expect_all(&mut f, &label, role, &PATH, "Unknown");
+            }
             _ => expect(
                 &mut f,
                 &label,
@@ -726,6 +1221,63 @@ codeunit 50101 Sub
                 &[("validatesParam", "Yes"), ("mutatesParam", "Yes")],
             ),
         }
+    }
+    done(f);
+}
+
+// ---------------------------------------------------------------------------
+// Row 9: trigger raisers (non-goal pinned).
+// ---------------------------------------------------------------------------
+
+/// Row 9: a table trigger raising `OnBeforeCustModify(Rec)` passes its implicit
+/// `Rec`, which is not a declared record parameter: the trigger gains no role.
+/// Control: the publisher itself does compose its `Validate` subscriber.
+#[test]
+fn row9_trigger_raiser_gains_no_role() {
+    let table = r#"
+table 50100 Cust
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Name; Text[50]) { }
+    }
+    keys { key(PK; "No.") { } }
+
+    trigger OnModify()
+    begin
+        OnBeforeCustModify(Rec);
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnBeforeCustModify(var Cust: Record Cust)
+    begin
+    end;
+}
+"#;
+    let subs = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Table, Database::Cust, 'OnBeforeCustModify', '', false, false)]
+    local procedure HandleBeforeCustModify(var Cust: Record Cust)
+    begin
+        Cust.Validate(Name, 'x');
+    end;
+}
+"#;
+    let m = model_of(&[("Tab", table.to_string()), ("Sub", subs.to_string())]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    expect(
+        &mut f,
+        "OnBeforeCustModify (control)",
+        role(&m, &roles, "OnBeforeCustModify", 0),
+        &[("validatesParam", "Yes"), ("dirtyAtExit", "Yes")],
+    );
+    let trigger = rid(&m, "OnModify");
+    let trigger_roles = roles.get(&trigger).cloned().unwrap_or_default();
+    if !trigger_roles.is_empty() {
+        f.push(format!("the OnModify trigger has roles: {trigger_roles:?}"));
     }
     done(f);
 }
@@ -1039,6 +1591,344 @@ fn review_unknown_subscriber_routine_is_unseen() {
         role(&m, &roles, "OnSimple", 0),
         &PRESENCE,
         "Unknown",
+    );
+    done(f);
+}
+
+// ---------------------------------------------------------------------------
+// Row 11: a subscriber that omits the parameter / takes it by value.
+// ---------------------------------------------------------------------------
+
+/// Row 11: `HandleOmitted(Flag)` cannot touch `Rec` (the publisher's presence
+/// facts stay `no`); `HandleByValue(Rec)` doing `Modify` adds the entry
+/// requirement only (`requiresLoadedAtEntry yes`; exit effects need `var` on
+/// both sides: `persistsCurrentRecord no`, `mutatesParam no`, `dirtyAtExit no`).
+#[test]
+fn row11_omitted_and_by_value_subscribers() {
+    let pubs = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnRecByValue(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnRecOmitted(var Rec: Record Cust; Flag: Boolean)
+    begin
+    end;
+}
+"#;
+    let subs = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnRecByValue', '', false, false)]
+    local procedure HandleByValue(Rec: Record Cust)
+    begin
+        Rec.Modify();
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnRecOmitted', '', false, false)]
+    local procedure HandleOmitted(Flag: Boolean)
+    begin
+    end;
+}
+"#;
+    let m = model(&[pubs, subs]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    expect_all(
+        &mut f,
+        "OnRecOmitted",
+        role(&m, &roles, "OnRecOmitted", 0),
+        &PRESENCE,
+        "No",
+    );
+    expect(
+        &mut f,
+        "OnRecByValue",
+        role(&m, &roles, "OnRecByValue", 0),
+        &[
+            ("requiresLoadedAtEntry", "Yes"),
+            ("persistsCurrentRecord", "No"),
+            ("mutatesParam", "No"),
+            ("dirtyAtExit", "No"),
+        ],
+    );
+    done(f);
+}
+
+// ---------------------------------------------------------------------------
+// Rows 12, 12b: more than EXACT_DISPATCH_MAX bindings.
+// ---------------------------------------------------------------------------
+
+const FIVE_PUB: &str = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnFive(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnFiveVal(Rec: Record Cust)
+    begin
+    end;
+
+    procedure Fwd(var R: Record Cust)
+    begin
+        OnFive(R);
+    end;
+
+    procedure G(var R: Record Cust)
+    var
+        X: Code[20];
+    begin
+        R.SetLoadFields(Name);
+        OnFive(R);
+        R.Get('A');
+        X := R."No.";
+    end;
+
+    procedure H(var R: Record Cust)
+    begin
+        R.Validate(Name, 'x');
+        OnFive(R);
+    end;
+
+    procedure GVal(var R: Record Cust)
+    var
+        X: Code[20];
+    begin
+        R.SetLoadFields(Name);
+        OnFiveVal(R);
+        R.Get('A');
+        X := R."No.";
+    end;
+
+    procedure GControl(var R: Record Cust)
+    var
+        X: Code[20];
+    begin
+        R.SetLoadFields(Name);
+        R.Get('A');
+        X := R."No.";
+    end;
+}
+"#;
+
+/// Five subscribers of `OnFive` (one `Get`, one `Validate`, three no-ops) and
+/// five of the by-value `OnFiveVal`, all binding `Rec` by name.
+fn five_subs() -> String {
+    let mut s = String::from("codeunit 50101 Sub\n{\n");
+    for (event, var) in [("OnFive", "var "), ("OnFiveVal", "")] {
+        for i in 0..5 {
+            let body = match i {
+                0 => "        Rec.Get('A');\n",
+                1 => "        Rec.Validate(Name, 'x');\n",
+                _ => "",
+            };
+            s.push_str(&format!(
+                "    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, '{event}', '', false, false)]\n    local procedure Handle{event}{i}({var}Rec: Record Cust)\n    begin\n{body}    end;\n\n"
+            ));
+        }
+    }
+    s.push_str("}\n");
+    s
+}
+
+/// Row 12: five subscribers (over the exact bound), one `Get` and one
+/// `Validate` -> unseen dispatch: every presence and path fact of the
+/// publisher `unknown` (no `loadsFromDbParam yes`, no `validatesParam yes`).
+/// Through `Fwd(var R) { OnFive(R) }`: no proven load, no `dirtyAtExit yes`
+/// from the subscribers, no load point. By-value publisher parameter
+/// (`OnFiveVal(Rec)`, plan notes): no presence change (all `no`), and its
+/// caller `GVal` keeps its loaded state and narrowing (loaded fields equal to
+/// the same body without the call, `GControl`).
+#[test]
+fn row12_five_subscribers_are_unseen() {
+    let subs = five_subs();
+    let m = model(&[FIVE_PUB, &subs]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    let p = role(&m, &roles, "OnFive", 0);
+    expect_all(&mut f, "OnFive", p, &PRESENCE, "Unknown");
+    expect_all(&mut f, "OnFive", p, &PATH, "Unknown");
+    let fwd = role(&m, &roles, "Fwd", 0);
+    for (name, bad) in [("loadsFromDbParam", "Yes"), ("dirtyAtExit", "Yes")] {
+        if fact(fwd, name) == bad {
+            f.push(format!("Fwd.{name}: {bad} from the subscribers"));
+        }
+    }
+    if fwd.puts_in_loaded_state() {
+        f.push("Fwd is a load point (puts_in_loaded_state)".to_string());
+    }
+    expect_all(
+        &mut f,
+        "OnFiveVal",
+        role(&m, &roles, "OnFiveVal", 0),
+        &PRESENCE,
+        "No",
+    );
+    let (gv, gc) = (role(&m, &roles, "GVal", 0), role(&m, &roles, "GControl", 0));
+    if gv.current_loaded_fields_at_exit != gc.current_loaded_fields_at_exit {
+        f.push(format!(
+            "GVal lost its narrowing: {:?} vs GControl {:?}",
+            gv.current_loaded_fields_at_exit, gc.current_loaded_fields_at_exit
+        ));
+    }
+    done(f);
+}
+
+/// Row 12b: `G(var R) { R.SetLoadFields(Name); OnFive(R); R.Get('A'); X :=
+/// R."No." }` -> after the unseen dispatch the narrowing is `Unknown` (not
+/// kept), so `G`'s loaded fields after the `Get` are `Unknown` (with the
+/// narrowing kept they would be `[Name]`). `H(var R) { R.Validate(..);
+/// OnFive(R) }` keeps its own `DirtyV`: `dirtyAtExit yes` from `H`'s own
+/// `Validate`, not from the subscribers.
+#[test]
+fn row12b_unseen_dispatch_drops_the_callers_narrowing() {
+    let subs = five_subs();
+    let m = model(&[FIVE_PUB, &subs]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    let g = role(&m, &roles, "G", 0);
+    if g.current_loaded_fields_at_exit != FieldList::Unknown {
+        f.push(format!(
+            "G.currentLoadedFieldsAtExit: want Unknown, got {:?}",
+            g.current_loaded_fields_at_exit
+        ));
+    }
+    expect(
+        &mut f,
+        "H",
+        role(&m, &roles, "H", 0),
+        &[("dirtyAtExit", "Yes")],
+    );
+    done(f);
+}
+
+// ---------------------------------------------------------------------------
+// Plan notes: a subscriber that raises another event.
+// ---------------------------------------------------------------------------
+
+/// Plan notes: `HandleOuter` (a subscriber of `OnOuter`) raises `OnInner`, whose
+/// subscriber does `Modify`. The effect travels two dispatches: `OnOuter` and
+/// its forwarder equal the direct-call oracle.
+#[test]
+fn plan_subscriber_forwarding_another_event() {
+    let pubs = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnOuter(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnInner(var Rec: Record Cust)
+    begin
+    end;
+
+    procedure ForwardOuter(var R: Record Cust)
+    begin
+        OnOuter(R);
+    end;
+}
+"#;
+    let subs = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnOuter', '', false, false)]
+    local procedure HandleOuter(var Rec: Record Cust)
+    var
+        P: Codeunit Pub;
+    begin
+        P.OnInner(Rec);
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnInner', '', false, false)]
+    local procedure HandleInner(var Rec: Record Cust)
+    begin
+        Rec.Modify();
+    end;
+}
+"#;
+    let m = model(&[pubs, subs]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    for name in ["OnInner", "HandleOuter", "OnOuter", "ForwardOuter"] {
+        expect(&mut f, name, role(&m, &roles, name, 0), &MODIFY_ORACLE);
+    }
+    done(f);
+}
+
+// ---------------------------------------------------------------------------
+// Review Focus 3, 5.
+// ---------------------------------------------------------------------------
+
+/// Review Focus 3: a resolved subscriber without a body (hand-stated:
+/// `body_available = false`) is visible but opaque: the publisher's facts are
+/// `unknown`, never `no`.
+#[test]
+fn review_bodyless_subscriber_is_opaque() {
+    let m = model(&[SIMPLE, SIMPLE_SUB]);
+    let graph = graph_of(&m);
+    simple_edge(&m, &graph);
+    let handler = rid(&m, "HandleSimple");
+    let mut routines = m.workspace.routines.clone();
+    for r in routines.iter_mut().filter(|r| r.id == handler) {
+        r.body_available = false;
+    }
+    let roles = solve(&m, &routines, &graph);
+    let mut f = Vec::new();
+    expect(
+        &mut f,
+        "OnSimple",
+        role(&m, &roles, "OnSimple", 0),
+        &[
+            ("persistsCurrentRecord", "Unknown"),
+            ("requiresLoadedAtEntry", "Unknown"),
+        ],
+    );
+    done(f);
+}
+
+/// Review Focus 5: a by-value publisher parameter composes the entry
+/// requirement only (c1a), no presence fact.
+#[test]
+fn review_by_value_publisher_param_composes_entry_only() {
+    let pubs = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnVal(Rec: Record Cust)
+    begin
+    end;
+}
+"#;
+    let subs = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnVal', '', false, false)]
+    local procedure HandleVal(var Rec: Record Cust)
+    begin
+        Rec.Modify();
+    end;
+}
+"#;
+    let m = model(&[pubs, subs]);
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    expect(
+        &mut f,
+        "OnVal",
+        role(&m, &roles, "OnVal", 0),
+        &[
+            ("persistsCurrentRecord", "No"),
+            ("mutatesParam", "No"),
+            ("requiresLoadedAtEntry", "Yes"),
+        ],
     );
     done(f);
 }

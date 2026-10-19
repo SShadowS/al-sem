@@ -360,7 +360,7 @@
           "detector": "d42-cross-call-wrong-setloadfields",
           "findingsEmitted": 0,
           "skipped": {
-            "calleeRequiresNone": 1
+            "callerFull": 1
           }
         },
         {

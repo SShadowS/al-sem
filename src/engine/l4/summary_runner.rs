@@ -741,6 +741,9 @@ fn compose_roles_only(
                 graph,
                 body_avail_by_id,
                 &walk_indexes,
+                dispatch
+                    .iter()
+                    .find(|d| d.param_index == param_role.parameter_index),
             );
             param_role.requires_loaded_at_entry = f.requires_loaded_at_entry;
             param_role.mutates_before_load = f.mutates_before_load;

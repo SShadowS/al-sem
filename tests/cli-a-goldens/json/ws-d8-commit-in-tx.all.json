@@ -348,7 +348,7 @@
           "detector": "d42-cross-call-wrong-setloadfields",
           "findingsEmitted": 0,
           "skipped": {
-            "calleeRequiresNone": 1
+            "callerFull": 1
           }
         },
         {
@@ -420,10 +420,12 @@
           "skipped": {}
         },
         {
-          "candidatesConsidered": 0,
+          "candidatesConsidered": 1,
           "detector": "d40-transitive-load-missing",
           "findingsEmitted": 0,
-          "skipped": {}
+          "skipped": {
+            "callerLoaded": 1
+          }
         },
         {
           "candidatesConsidered": 0,
