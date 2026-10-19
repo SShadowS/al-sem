@@ -180,8 +180,8 @@ fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let ctx = &built.body.ctx;
-    let mut edges: Vec<_> = built.body.all_edges().map(|ce| ce.edge.clone()).collect();
+    let ctx = &built.body().ctx;
+    let mut edges: Vec<_> = built.body().all_edges().map(|ce| ce.edge.clone()).collect();
     al_sem::program::resolve::compiler_oracle::reclassify_entry_runs(&mut edges, ctx.graph());
     let program = program_sites(&project_fresh(&edges, &ctx.graph().apps));
     let mut apps = std::collections::BTreeSet::new();

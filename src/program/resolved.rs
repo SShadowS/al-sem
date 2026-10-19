@@ -57,10 +57,20 @@ impl ProgramScope {
     }
 }
 
-/// One program build: [`ProgramMeta`] and the body.
+/// One program build: [`ProgramMeta`] and the body. Both are private and read
+/// through [`ResolvedProgram::meta`] / [`ResolvedProgram::body`], so the meta that
+/// describes a body (its scope above all) cannot be swapped onto another build's
+/// body (final panel F2-3):
+///
+/// ```compile_fail,E0616
+/// use al_sem::program::resolved::ResolvedProgram;
+/// fn swap(a: &mut ResolvedProgram, b: &mut ResolvedProgram) {
+///     std::mem::swap(&mut a.meta, &mut b.meta);
+/// }
+/// ```
 pub struct ResolvedProgram {
-    pub meta: ProgramMeta,
-    pub body: ProgramBody,
+    meta: ProgramMeta,
+    body: ProgramBody,
 }
 
 /// What a step 0-2 reader reads of a build besides the body (spec §4.3.1), and
@@ -99,11 +109,13 @@ pub struct ProgramBody {
 }
 
 impl ProgramMeta {
-    /// What the build resolved. A caller cannot change it (final panel F2-3):
+    /// What the build resolved. A caller cannot change it, even on a meta it owns
+    /// (final panel F2-3):
     ///
     /// ```compile_fail,E0616
-    /// fn widen(p: &mut al_sem::program::resolved::ResolvedProgram) {
-    ///     p.meta.scope = al_sem::program::resolved::ProgramScope::CrossApp;
+    /// use al_sem::program::resolved::{ProgramMeta, ProgramScope};
+    /// fn widen(m: &mut ProgramMeta) {
+    ///     m.scope = ProgramScope::CrossApp;
     /// }
     /// ```
     #[must_use]
@@ -276,6 +288,25 @@ impl ResolvedProgram {
                 parenless_calls,
             },
         })
+    }
+
+    /// What the build read and resolved, besides the body.
+    #[must_use]
+    pub fn meta(&self) -> &ProgramMeta {
+        &self.meta
+    }
+
+    /// The context and the resolver's per-site output.
+    #[must_use]
+    pub fn body(&self) -> &ProgramBody {
+        &self.body
+    }
+
+    /// The meta and the body, apart: for the one consumer that releases the body
+    /// and keeps the meta (`attach_program_calls`), and for a caller that is done
+    /// with the build.
+    pub(crate) fn into_parts(self) -> (ProgramMeta, ProgramBody) {
+        (self.meta, self.body)
     }
 
     /// [`crate::program::resolve::full::loaded_apps`] of this build (it reads

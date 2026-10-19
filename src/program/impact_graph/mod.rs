@@ -198,7 +198,7 @@ pub fn export_workspace(
 /// The program must be [`ProgramScope::CrossApp`]: a workspace-scoped build has
 /// no dependency call-site edges, so its graph would lose them silently.
 pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, String> {
-    let pm = &program.meta;
+    let pm = program.meta();
     let inputs = &pm.inputs;
     if pm.scope() != ProgramScope::CrossApp {
         return Err(format!(
@@ -216,7 +216,7 @@ pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, Str
             inputs.workspace.display()
         ));
     }
-    let body = &program.body;
+    let body = program.body();
     let ctx = &body.ctx;
     let graph = ctx.graph();
     let index = crate::program::resolve::index::ResolveIndex::build(graph);

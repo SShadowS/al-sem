@@ -75,12 +75,15 @@ After all reverts: `git diff -- src/ tests/` empty; the five tests above plus `a
 
 | finding | test | break | fail output (1 line) | revert |
 |---|---|---|---|---|
-| F2-3 | doctest `program::resolved::ProgramMeta::scope` (`compile_fail,E0616`: setting `p.meta.scope` from outside the crate) | `scope` made `pub` again (grep count 1) | `Test compiled successfully, but it's marked compile_fail` | green |
+| F2-3 (r1) | doctest `program::resolved::ProgramMeta::scope` (`compile_fail,E0616`: setting `p.meta.scope` from outside the crate) | `scope` made `pub` again (grep count 1) | `Test compiled successfully, but it's marked compile_fail` | green |
+| F2-3 (r2: meta/body sealed) | doctest `program::resolved::ResolvedProgram` (`compile_fail,E0616`: `std::mem::swap(&mut a.meta, &mut b.meta)`) | `meta` made `pub` (grep count 1) | that doctest FAILED `Test compiled successfully…`; the scope doctest stayed ok | green |
+| F2-3 (r2) | doctest `ProgramMeta::scope`, retargeted to an owned `&mut ProgramMeta` (so it tests `scope`, not the now-private `meta`) | `scope` made `pub` (grep count 1; `pub meta` count 0) | that doctest FAILED `Test compiled successfully…`; the swap doctest stayed ok | green (both: 2 passed) |
 
 ## Findings register summary
 
 - Code review r1 (`code-review` built-in skill, high): F1-CR1..CR14. 13 fixed (`b8b59b5a`), CR10 refuted by re-measurement (r1 + r2, 14 pairs).
 - Final panel r1 (`gpt-6.1-sol`, `claude-opus-5.5` via `pi_ask`; files `.agent/runs/20261019-085626-fcb498/final-r1-{briefing,sol,opus}.md`): sol accepted 13, re-raised CR4; opus accepted 13, re-raised CR13. New: F2-1..F2-6. CR4 fixed at the definition (census.rs), CR13's evidence replaced by a direct CDO oracle comparison.
+- Final panel r2 (`final-r2-{briefing,sol,opus}.md`, same threads): opus accepted all 8; sol accepted 7 and re-raised F2-3 (the public `meta`/`body` still let one build's meta be swapped onto another's body; opus raised the same as a nit). Fixed by sealing both fields (`meta()`, `body()`, crate-only `into_parts()`), pinned by a second doctest. Opus's two other minors: F2-7 (the numbers file's branch gate), F2-8 (two more API changes for the CHANGELOG).
 
 ## Gate results
 

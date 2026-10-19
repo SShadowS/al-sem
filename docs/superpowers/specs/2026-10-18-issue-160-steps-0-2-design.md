@@ -830,7 +830,10 @@ and the holder keeps the returned `ProgramMeta` (epic §5.9 rule 3's order). The
 takes a `ProgramScope` (`Workspace` = Summary, no dependency edges; `CrossApp` = FULL +
 `resolve_dependency_bodies`) instead of a `BuildProfile`, so retention and meaning
 cannot be chosen apart; `meta.scope` (private, read through `ProgramMeta::scope()`,
-final panel F2-3) records it and `export_from_program` refuses a `Workspace` program. `ProgramMeta` loses `primary_app_ref` (the body's
+final panel F2-3) records it and `export_from_program` refuses a `Workspace` program.
+`ResolvedProgram`'s `meta` and `body` are private too (`meta()`, `body()`, and the
+crate-only `into_parts()` for the consumers that split a build), so no caller can pair
+one build's meta with another's body. `ProgramMeta` loses `primary_app_ref` (the body's
 `ctx.primary_app_ref` is the one source; `edge_view()` takes no argument) and
 `loaded_apps` (`ResolvedProgram::loaded_apps()` computes it while the body is alive, for
 the two readers that need it). `ProgramBody` loses `builtin_dispatch_audit` and

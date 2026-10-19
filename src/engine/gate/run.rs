@@ -305,7 +305,7 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
     };
     // The build's coverage, moved out once the program is done with (#91).
     let failed = |program: crate::program::resolved::ResolvedProgram, model| AnalysisModel {
-        fresh: Ok(program.meta.coverage),
+        fresh: Ok(program.into_parts().0.coverage),
         model: Err(model),
         physical: None,
         object_facts: None,
@@ -321,18 +321,18 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
             inputs,
             model_instance_id,
             false,
-            &program.body.ctx,
-            &program.body.parenless_calls,
+            &program.body().ctx,
+            &program.body().parenless_calls,
         )
     };
     let Some(rows) = resolved else {
         return failed(program, ModelFailure::AssemblyFailed);
     };
     // Taken before the adapter consumes (and drops) the program context.
-    let physical = Some(program.body.ctx.graph().workspace_rows.clone());
+    let physical = Some(program.body().ctx.graph().workspace_rows.clone());
     let object_facts = Some(crate::program::model::census::object_fact_census(
         &rows.workspace,
-        program.body.ctx.graph(),
+        program.body().ctx.graph(),
     ));
     // The same build's coverage (#91).
     let (resolved, meta) =

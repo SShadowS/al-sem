@@ -660,19 +660,19 @@ fn attach_program_calls_with(
     use crate::engine::perf_trace as pt;
     let calls = {
         let _s = pt::span("b3", "b3.adapter");
-        let body = &program.body;
+        let body = program.body();
         adapter(body.edge_view(), &body.ctx, &rows.workspace, true, abi_rows).0
     };
     // Engine-switch S4.2: the detector event graph, from the same program build.
     let events = {
         let _s = pt::span("b3", "b3.events");
-        crate::program::model::events::program_event_graph(&program.body.ctx, &rows.workspace)
+        crate::program::model::events::program_event_graph(&program.body().ctx, &rows.workspace)
     };
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.program");
         program.census();
     }
-    let ResolvedProgram { meta, body } = program;
+    let (meta, body) = program.into_parts();
     body.release();
     // #160 §4.1.4: everything retained from here on is post-attach.
     pt::mark_phase_start("post_attach");
@@ -782,8 +782,8 @@ pub fn assemble_and_resolve_workspace_program(
         inputs,
         model_instance_id,
         skip_roots_config,
-        &program.body.ctx,
-        &program.body.parenless_calls,
+        &program.body().ctx,
+        &program.body().parenless_calls,
     )?;
     Some(attach_program_calls(rows, program).0)
 }
@@ -885,7 +885,7 @@ pub fn assemble_and_resolve_cross_app_program(
 ) -> Option<CrossAppProgram> {
     use crate::engine::perf_trace as pt;
     let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp).ok()?;
-    let body = &program.body;
+    let body = program.body();
     let ctx = &body.ctx;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
         std::collections::HashMap::new();
