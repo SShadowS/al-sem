@@ -155,7 +155,19 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    Before each task's commit: `python scripts/agentflow check-diff --base master
    --head HEAD --issue N --cwd <worktree>`; any reason is `blocked <reason>`.
 9. **Repo gates.** `halt-check` first; if halted, write the ledger and return
-   `blocked halted`. From the worktree, each through the supervisor:
+   `blocked halted`.
+
+   **The full set below runs ONCE, in step 11, on the rebased head you will
+   attest.** Here, before the final panel, and again after every panel fix, run
+   only the task gate:
+   `python scripts/agentflow run --name ci-steps-task --timeout 45 --cwd <worktree> -- bash scripts/ci-steps task`
+   (fmt, dev clippy, gen-syntax, the whole suite including every golden target).
+   Exit 0 and a clean tree (as below) let the branch go to the panel. Do the
+   golden triage, `/triage-wave` and the CHANGELOG entry from this step now, not
+   in step 11. Running the full set before the panel only verifies a head that
+   is never attested: on #107 it ran 7 times for one issue.
+
+   The full set, each through the supervisor, from the worktree:
    `python scripts/agentflow run --name ci-steps-all --timeout 45 --cwd <worktree> -- bash scripts/ci-steps all`
    `python scripts/agentflow run --name check-goldens-coverage --timeout 5 --cwd <worktree> -- bash scripts/check-goldens --verify-coverage`
    `python scripts/agentflow run --name check-goldens --timeout 45 --cwd <worktree> -- bash scripts/check-goldens`
@@ -207,14 +219,31 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     mark EVERY carried entry against the current hash: a carried `re-raised`
     is still unresolved, and `attest` refuses until both reviewers have
     accepted every entry.
-    Source-verify every reviewer code claim before editing. Every fix returns to
-    step 9's gates.
-11. **Rebase and re-gate.** `git fetch origin && git rebase origin/master` in the
-    worktree (the fetch updates refs every session shares: on `cannot lock
-    ref`, another session is fetching — retry the fetch once). Conflicts: resolve once (`charge rebase_regate`), else `blocked
-    rebase-conflict`. After ANY rebase rerun step 9. If `git diff <the pre-rebase
-    HEAD> HEAD` on non-evidence files is non-empty, run one more final-panel
-    round. Record `B = origin/master` and `H = HEAD` in the ledger.
+    Source-verify every reviewer code claim before editing. Every fix passes
+    step 9's TASK gate (`ci-steps-task`) before the next round; the full set
+    waits for step 11.
+11. **Rebase and gate.** Only once the panel has converged. Note the old base
+    (`git merge-base HEAD origin/master`) and the old head, then
+    `git fetch origin && git rebase origin/master` in the worktree (the fetch
+    updates refs every session shares: on `cannot lock ref`, another session is
+    fetching — retry the fetch once). Conflicts: resolve once (`charge
+    rebase_regate`), else `blocked rebase-conflict`; a clean rebase charges
+    nothing. Commit messages that start with `#` are read as comments by git, so
+    rebase with `git -c core.commentChar=';' rebase origin/master`.
+    Then run step 9's FULL set at once on the rebased head, and go straight on
+    to step 12: the less time between the rebase and `attest`, the less chance
+    `master` moves again. If `origin/master` has moved by the time of step 12's
+    `check-diff`, do this step again (no charge if the rebase is clean).
+
+    **One more final-panel round only if the BRANCH's own change moved:** a
+    conflict was resolved, the post-rebase gates needed a fix, or
+    `git range-diff <old base>..<old head> origin/master..HEAD` shows a branch
+    commit whose diff changed anywhere except CHANGELOG context lines and
+    `.agent/` evidence. Code that `master` brought in does not count: the gates
+    cover how it combines with the branch, and the register is about the
+    branch. Record the range-diff verdict in the ledger either way. A red gate
+    here: fix it, run one panel round over the fix, then the full set again.
+    Record `B = origin/master` and `H = HEAD` in the ledger.
 12. **Freeze.** `halt-check` first; if halted, write the ledger and return
     `blocked halted`. First re-run the protected-path check over the WHOLE
     approved diff:

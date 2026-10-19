@@ -757,15 +757,33 @@ render of the ledger becomes the PR body.
    changes are covered), and the north-star numbers in CLAUDE.md "Resolution Coverage"
    must hold. A new detector that would ship DEFAULT runs `/triage-wave` first and
    ships opt-in above 30% false positives. A CHANGELOG entry is required.
+   **The full set runs ONCE, on the head that will be attested** (step 11, after
+   the rebase), not after every change. Before the final panel, and after each
+   panel fix, the branch passes the task gate instead (`scripts/ci-steps task`:
+   fmt, dev clippy, gen-syntax, the whole suite including every golden target),
+   run under the supervisor as `ci-steps-task`. Golden triage, the CHANGELOG entry
+   and `/triage-wave` still happen here, before the panel. Why: on #107 the full
+   set ran 7 times (~15 min each), once per panel fix and once per moved
+   `master`; every run but the last verified a head that was never attested.
+   (Added 2026-10-19.)
 10. **Final panel.** `code-review` skill at high on the diff (its findings enter the
     register); then `gpt-6-astra` and `gemini-3.8-flash` in parallel over the diff,
     spec, and ledger, against the head SHA recorded in the register. Same
     convergence rule and cap. Every reviewer claim about code is source-verified
     before an edit.
-11. **Rebase and re-gate** (executor). Fetch, rebase onto `origin/master`. After
-    **any** rebase the gates rerun (a clean rebase can still change behaviour
-    through untouched files); the panel reruns one round only if the code diff
-    changed. One rebase re-gate is budgeted. The validated pair is `(B, H)`: `B` the
+11. **Rebase and gate** (executor). Once the panel has converged, fetch and rebase
+    onto `origin/master`, then run the full step-9 set at once on the result, and
+    go straight on to step 12, so `master` has as little time as possible to
+    move. After **any** rebase the gates rerun (a clean rebase can still change
+    behaviour through untouched files). The panel reruns one round only if the
+    BRANCH's own change moved: a conflict was resolved, the post-rebase gates
+    needed a fix, or `git range-diff <old base>..<old head> <new base>..HEAD`
+    shows a branch commit whose diff changed outside CHANGELOG context lines and
+    evidence files. Code that `master` brought in is not the branch's change: the
+    gates cover how it combines with the branch, and the panel's register is
+    about the branch. Record the range-diff verdict in the ledger. A red gate
+    here is fixed, gets one panel round over the fix, and the full set runs
+    again. A clean rebase is not charged; one conflict resolution is budgeted. The validated pair is `(B, H)`: `B` the
     `origin/master` commit rebased onto, `H` the head the gates and panel passed on.
 12. **Freeze.** The freeze boundary is set **after** step 11, so `H` is post-rebase.
     The protected-path check runs once more over the whole approved diff (`B..H`)
@@ -975,7 +993,8 @@ can be reproduced after cleanup. Nothing in that directory is ever pushed.
 - Crashed session: stale-heartbeat recovery above; the worktree is preserved, never
   deleted by recovery.
 - pi unreachable: retry once after `pi_cleanup`, then `blocked`.
-- Moved `master`: rebase, gates rerun always, panel rerun if the diff changed; the
+- Moved `master`: rebase, gates rerun always, panel rerun only if the branch's own
+  change moved (step 11's range-diff rule); the
   rebased issue branch is re-pushed with `git push --force-with-lease` — the only
   permitted force form, used only on the issue branch, never on `master`; the
   merge requires `origin/master == B` and `--match-head-commit`, so neither a

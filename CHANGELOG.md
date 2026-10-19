@@ -136,6 +136,15 @@ A major version, because some changes break existing users. Each one is describe
 
 ### Changed
 
+- `/issue` runs the full gate set (`ci-steps all`, both `check-goldens` runs,
+  `cdo-gate`) once per issue instead of after every change: before the final
+  panel and after each panel fix it runs only the task gate (`ci-steps task`),
+  and the full set runs in step 11, right after the rebase, on the head that is
+  attested. A rebase onto a moved `master` adds a final-panel round only when the
+  branch's own commits changed (`git range-diff`), a conflict was resolved, or the
+  post-rebase gates needed a fix; before, any rebase onto new code added a round.
+  On #107 the full set ran 7 times (~15 min each) and two review rounds checked
+  only code from other merges.
 - agentflow can keep build output off the worktrees' drive: `target_root` in
   `.agent/config.json` (default empty: unchanged). `make-worktree` then makes the issue
   worktree's `target/` a junction into `<target_root>/<worktree name>` (still one build
