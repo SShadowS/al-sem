@@ -17,47 +17,44 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::gate::run::{
-    compute_analyzer_diagnostics, compute_analyzer_diagnostics_cross_app,
-};
+use crate::engine::gate::run::analyzer_diagnostics_of_view;
 use crate::engine::l4::effect_lattice::TempStateKind;
-use crate::engine::l4::effect_query_cli::{
-    build_db_effect_bundle, cross_app_db_effect_bundle, temp_state_str,
-};
+use crate::engine::l4::effect_query_cli::temp_state_str;
 use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::RoutineIx;
 use crate::engine::l5::conditionality::EffectConditionality;
-use crate::engine::l5::detector_context::{CrossAppInputs, build_detector_context_with};
 use crate::engine::l5::diff_parser::{DiffFileKind, HunkChange, parse_unified_diff};
 use crate::engine::l5::digest::{
     DigestEntryResult, compute_digest_effects_cli, is_known_temp_state,
 };
 use crate::engine::l5::snapshot::{CapabilitySnapshot, compose_snapshot};
-use crate::engine::l5::transaction_spans::SeedKind;
+use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use crate::engine::l5::unresolved_cone::{
     DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
 };
+use crate::engine::session::{Cell, RunKey, View};
 use crate::program::model::workspace::Model;
 
 // ---------------------------------------------------------------------------
 // Shared envelope-diagnostics projection
 // ---------------------------------------------------------------------------
 
-/// Build the envelope `diagnostics` JSON array (the analyzer's per-stage diagnostics
-/// over the registry's default detector set). Shared by the digest AND prove CLI pipelines
-/// so they cannot desync. Each entry is `{code: "DIAG-<stage>", message, severity}`.
-pub fn build_envelope_diagnostics_json(resolved: &Model) -> serde_json::Value {
-    diagnostics_json(&compute_analyzer_diagnostics(resolved))
-}
-
-/// [`build_envelope_diagnostics_json`] for the cross-app digest (#66): the detectors
-/// run with the cross-app runner over the cross-app base, the combination
-/// `alsem analyze` runs by default (never the single-app runner over a cross-app
-/// model, which nothing else runs).
-fn build_envelope_diagnostics_json_cross_app(
-    base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
-) -> serde_json::Value {
-    diagnostics_json(&compute_analyzer_diagnostics_cross_app(base))
+/// What digest AND prove read off a prepared [`View`] before composing their
+/// snapshot (#160 §4.4.4), so the two cannot desync: the envelope
+/// `diagnostics` JSON array of the run `key` (each entry `{code:
+/// "DIAG-<stage>", message, severity}`) and the tx map off
+/// `det.transaction_spans`. Then the run is taken and dropped, and `det` and
+/// the graph released: only `l4` stays alive through snapshot composition.
+pub(crate) fn envelope_and_tx_map(
+    view: &mut View,
+    key: &RunKey,
+) -> (serde_json::Value, HashMap<String, TransactionContext>) {
+    let diagnostics = diagnostics_json(&analyzer_diagnostics_of_view(view, key));
+    let tx_ctx_map = tx_context_map(&view.det().transaction_spans);
+    drop(view.take_run(key));
+    view.release(Cell::Det);
+    view.release(Cell::Graph);
+    (diagnostics, tx_ctx_map)
 }
 
 fn diagnostics_json(diag_vec: &[crate::engine::l5::registry::Diagnostic]) -> serde_json::Value {
@@ -523,23 +520,13 @@ const TX_SPAN_KNOWN_WRITES: TransactionContext = "span-has-known-writes";
 const TX_SPAN_NO_WRITES: TransactionContext = "span-has-no-known-writes";
 const TX_UNKNOWN: TransactionContext = "unknown";
 
-/// Compute the transaction-context map: `commit_operation_id → TransactionContext`.
-/// Uses the full detector-context substrate (combined graph → summaries → spans).
+/// The transaction-context map: `commit_operation_id → TransactionContext`, over
+/// the spans of a `det` cell whose run demanded `TRANSACTION_SPANS` (digest and
+/// prove's plan asserts it, #160 A2.10).
 /// Mirrors TS: `computeTransactionSpans` + `transactionContextByOperationId` build.
-fn compute_tx_context_map(
-    resolved: &Model,
-    cross: Option<CrossAppInputs<'_>>,
-) -> HashMap<String, TransactionContext> {
-    // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`, no
-    // `RAW_INHERITED_FACTS`. This path reads ONLY `ctx.transaction_spans`, and
-    // `compute_transaction_spans` sources its `writes_tables` / `publishes_events`
-    // from `ctx.cone_derived` (Task 2) and its completeness from
-    // `reachable_coverage` — never from a fact Vec.
-    let owned =
-        build_detector_context_with(resolved, crate::engine::l5::registry::substrate::ALL, cross);
-    let ctx = owned.ctx();
+pub(crate) fn tx_context_map(spans: &[TransactionSpan]) -> HashMap<String, TransactionContext> {
     let mut map: HashMap<String, TransactionContext> = HashMap::new();
-    for span in &ctx.transaction_spans {
+    for span in spans {
         if span.seed_kind != SeedKind::ExplicitCommit {
             continue;
         }
@@ -1558,31 +1545,46 @@ pub fn run_digest_pipeline(
     diff_text: Option<String>,
     alsem_ver: &str,
     deterministic: bool,
+    max_paths_override: Option<usize>,
+    single_app: bool,
+) -> Result<DigestRunResult, String> {
+    digest_pipeline_with(
+        crate::engine::l5::detectors::default_detectors(),
+        inputs,
+        changed_files,
+        changed_routines,
+        diff_text,
+        alsem_ver,
+        deterministic,
+        max_paths_override,
+        single_app,
+    )
+}
+
+/// [`run_digest_pipeline`] over a given detector set (#160 §4.4.4): the plan
+/// is built from `detectors` by `digest_plan`, so a set without
+/// `TRANSACTION_SPANS` makes `prepare` panic (A2.10).
+#[allow(clippy::too_many_arguments)] // CLI flags, one each
+pub(crate) fn digest_pipeline_with(
+    detectors: Vec<crate::engine::l5::registry::Detector>,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    changed_files: Option<Vec<String>>,
+    changed_routines: Option<Vec<String>>,
+    diff_text: Option<String>,
+    alsem_ver: &str,
+    deterministic: bool,
     _max_paths_override: Option<usize>,
     single_app: bool,
 ) -> Result<DigestRunResult, String> {
     use crate::engine::gate::run::AnalysisTarget;
+    use crate::engine::session::digest_plan;
     // Assemble workspace (no model-instance id: `digest: could not compute
     // modelInstanceId`, `AnalysisTarget::build`).
     let target = AnalysisTarget::build(inputs, single_app, "digest")?;
-    let resolved = target.resolved();
     let dependencies = target.dependencies();
 
-    // Compose snapshot ONCE. The workspace fingerprint is computed directly via the
-    // shared helper (no second full-snapshot composition just to fish it out) (#19).
-    // Cross-app: over the base's model (calls cut to workspace callers), the same
-    // snapshot `alsem analyze`'s ordering facts read.
-    let snap = compose_snapshot(resolved);
-    let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
-
-    // Resolve changed roots
-    let changed_input = ChangedInput {
-        files: changed_files.clone(),
-        routines: changed_routines.clone(),
-        diff_text: diff_text.clone(),
-    };
-
+    // The no-input check runs right after the target build (an id or build
+    // error still wins), before any detector run or solve (#160 §4.4.4).
     let has_input = changed_files
         .as_ref()
         .map(|f| !f.is_empty())
@@ -1603,28 +1605,40 @@ pub fn run_digest_pipeline(
         );
     }
 
+    // One View: the default run (the envelope diagnostics), the tx map off its
+    // `det`, and the L4 store off its `l4` (#160 §4.4.4).
+    let mut view = View::new(target);
+    let plan = digest_plan(detectors);
+    let key = plan.keys().remove(0);
+    view.prepare(&plan);
+    let (diagnostics_json, tx_ctx_map) = envelope_and_tx_map(&mut view, &key);
+    let resolved = view.model();
+
+    // Compose snapshot ONCE. The workspace fingerprint is computed directly via the
+    // shared helper (no second full-snapshot composition just to fish it out) (#19).
+    // Cross-app: over the base's model (calls cut to workspace callers), the same
+    // snapshot `alsem analyze`'s ordering facts read.
+    let snap = compose_snapshot(resolved);
+    let workspace_fp =
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
+
+    // Resolve changed roots
+    let changed_input = ChangedInput {
+        files: changed_files.clone(),
+        routines: changed_routines.clone(),
+        diff_text: diff_text.clone(),
+    };
     let changed_roots =
         resolve_changed_roots(&snap, resolved, &changed_input, primary_guid_of(resolved));
-
-    // Compute transaction context map (for COMMIT effects).
-    // Mirrors TS pipeline: computeTransactionSpans → transactionContextByOperationId.
-    let tx_ctx_map = {
-        let _s = crate::engine::perf_trace::span("digest", "digest.tx_context_map");
-        compute_tx_context_map(resolved, target.cross_app_inputs())
-    };
 
     // Compute S4 ordering effects for the changed roots alone (each root's pass is
     // independent, so this equals computing every reportable root and filtering).
     // Use compute_digest_effects_cli which matches TS runDigestPipeline (no routineReturnSummaries).
     let all_s4_entries = compute_digest_effects_cli(&snap, resolved, Some(&changed_roots.roots));
 
-    // The L4 db-effect store, for DB_* `detail.tempState` (#65): the same
-    // assembly `query effects` uses in the same mode (#66).
-    let bundle = match &target {
-        AnalysisTarget::SingleApp(_) => build_db_effect_bundle(resolved).2,
-        AnalysisTarget::CrossApp(base) => cross_app_db_effect_bundle(base),
-    };
-    let temp_states = DbTempStates::new(resolved, &bundle);
+    // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's
+    // `l4`, solved the way `query effects` solves it in the same mode (#66).
+    let temp_states = DbTempStates::new(resolved, &view.l4().bundle);
 
     // Run full digest query for the resolved roots
     let query_full = run_digest_query_full_from_entries(
@@ -1639,21 +1653,15 @@ pub fn run_digest_pipeline(
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;
     // #69 D1.4: the query's inputs (the snapshot with its producer-solve arena,
-    // the S4 entries, the L4 store) are dead here. Free them before the
-    // envelope's detector run and the JSON projection, which set the peak.
+    // the S4 entries, the L4 store) are dead here. Free them before the JSON
+    // projection.
     drop(snap);
     drop(all_s4_entries);
     drop(temp_states);
-    drop(bundle);
     drop(tx_ctx_map);
+    view.release(Cell::L4);
 
     let exit_code: u8 = if changed_roots.roots.is_empty() { 2 } else { 0 };
-
-    // Build envelope diagnostics (the analyze default detector set, shared with prove).
-    let diagnostics_json = match &target {
-        AnalysisTarget::SingleApp(r) => build_envelope_diagnostics_json(r),
-        AnalysisTarget::CrossApp(base) => build_envelope_diagnostics_json_cross_app(base),
-    };
 
     let changed_input_contract = ChangedInputContract {
         files: changed_files,
@@ -1685,9 +1693,67 @@ pub fn run_digest_pipeline(
     })
 }
 
+/// A2.10's use test, shared by digest and prove: `pipeline` runs over the
+/// default set minus every detector demanding `TRANSACTION_SPANS`, on
+/// `ws-d8-commit-in-tx`, and must hit `prepare`'s panic naming the bit. Not
+/// `#[should_panic]`: a failed precondition assert would also "pass" one.
+#[cfg(test)]
+pub(crate) fn assert_refuses_a_set_without_tx_spans(
+    pipeline: impl FnOnce(
+        Vec<crate::engine::l5::registry::Detector>,
+        &std::sync::Arc<crate::program::inputs::InputSet>,
+    ),
+) {
+    use crate::engine::l5::registry::substrate;
+    let set: Vec<_> = crate::engine::l5::detectors::default_detectors()
+        .into_iter()
+        .filter(|d| d.requires & substrate::TRANSACTION_SPANS == 0)
+        .collect();
+    assert_eq!(
+        set.iter().fold(0, |m, d| m | d.requires) & substrate::TRANSACTION_SPANS,
+        0,
+        "precondition: the reduced union lacks the bit"
+    );
+    let ws =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d8-commit-in-tx");
+    let inputs = crate::program::inputs::InputSet::read(
+        &ws,
+        &crate::program::inputs::InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        },
+    );
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pipeline(set, &inputs)));
+    let err = r.expect_err("prepare must refuse a plan whose union lacks TRANSACTION_SPANS");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(msg.contains("TRANSACTION_SPANS"), "{msg}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A2.10: digest builds its plan from the set it is given.
+    #[test]
+    fn tx_context_without_d9() {
+        assert_refuses_a_set_without_tx_spans(|set, inputs| {
+            let _ = digest_pipeline_with(
+                set,
+                inputs,
+                None,
+                Some(vec!["PostSalesDoc".to_string()]),
+                None,
+                "test",
+                true,
+                None,
+                false,
+            );
+        });
+    }
 
     // The #6 resolveSelector-cascade + normalize_display_key unit tests now live
     // in `selector_index::tests` (shared implementation, shared tests).

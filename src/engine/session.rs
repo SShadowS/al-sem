@@ -407,7 +407,19 @@ impl View {
     /// The stored output of a run `prepare` ran. An `Arc`: a caller may
     /// `release(..)` while it still holds the output.
     pub fn run(&self, key: &RunKey) -> Arc<RunOutput> {
-        Arc::clone(self.runs.get(key).expect("run not prepared"))
+        Arc::clone(
+            self.runs
+                .get(key)
+                .unwrap_or_else(|| panic!("run {key:?} not prepared")),
+        )
+    }
+
+    /// Remove a run's stored output, so it dies with the caller's `Arc`:
+    /// digest and prove drop it before snapshot composition (§4.4.4).
+    pub fn take_run(&mut self, key: &RunKey) -> Arc<RunOutput> {
+        self.runs
+            .remove(key)
+            .unwrap_or_else(|| panic!("run {key:?} not prepared or already taken"))
     }
 }
 
@@ -635,6 +647,32 @@ mod tests {
             0,
         );
         view().prepare(&plan);
+    }
+
+    /// `take_run` removes the stored output: a second take, or a `run` of the
+    /// key, panics naming it. DISCRIMINATION: `take_run` returning a clone
+    /// (`self.run(key)`) without removing the entry fails both cases.
+    #[test]
+    fn a_taken_run_is_gone() {
+        type After = fn(&mut View, &RunKey);
+        let plan = Plan::for_test(vec![vec![probe(0, noop)]], true, false, 0);
+        let key = plan.keys()[0].clone();
+        let cases: [(&str, After); 2] = [
+            ("a second take", |v, k| drop(v.take_run(k))),
+            ("run", |v, k| drop(v.run(k))),
+        ];
+        for (name, after) in cases {
+            let msg = panic_text(
+                name,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut v = view();
+                    v.prepare(&plan);
+                    drop(v.take_run(&key));
+                    after(&mut v, &key);
+                })),
+            );
+            assert!(msg.contains("\"probe\""), "{name}: {msg}");
+        }
     }
 
     /// A2.10's "naming the missing bit" for every bit. DISCRIMINATION:

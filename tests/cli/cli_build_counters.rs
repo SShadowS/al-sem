@@ -262,12 +262,12 @@ fn digest_cross_app() {
         &m,
         Row {
             program: 1,
-            bcg: 5,
-            cone: 3,
-            v2: 4,
-            scc: 7,
-            pd: 3,
-            ctx: 2,
+            bcg: 3,
+            cone: 2,
+            v2: 2,
+            scc: 4,
+            pd: 2,
+            ctx: 1,
             snap: 1,
         },
     );
@@ -295,12 +295,12 @@ fn digest_single_app() {
         &m,
         Row {
             program: 1,
-            bcg: 4,
-            cone: 3,
-            v2: 4,
-            scc: 7,
-            pd: 3,
-            ctx: 2,
+            bcg: 2,
+            cone: 2,
+            v2: 2,
+            scc: 4,
+            pd: 2,
+            ctx: 1,
             snap: 1,
         },
     );
@@ -315,15 +315,38 @@ fn prove() {
         &m,
         Row {
             program: 1,
-            bcg: 4,
-            cone: 3,
-            v2: 4,
-            scc: 7,
-            pd: 3,
-            ctx: 2,
+            bcg: 2,
+            cone: 2,
+            v2: 2,
+            scc: 4,
+            pd: 2,
+            ctx: 1,
             snap: 1,
         },
     );
+}
+
+/// Spec §4.4.4 (A8): digest's no-input check runs right after the target
+/// build, before `prepare` and before `compose_snapshot` (whose fold solve
+/// counts a `build.summaries_v2`).
+#[test]
+fn run_digest_empty_diff_builds_no_context() {
+    let d = tempfile::tempdir().unwrap();
+    let diff = d.path().join("empty.diff");
+    std::fs::write(&diff, "  \n").unwrap();
+    let (out, m) = spawn_traced(&["digest", &ws_a(), "--diff", diff.to_str().unwrap()], &[]);
+    assert_ne!(out.status.code(), Some(0));
+    assert_eq!(
+        count(&m, "build.program"),
+        1,
+        "precondition: the target was built\n{m:?}"
+    );
+    assert_eq!(
+        count(&m, "build.detector_context"),
+        0,
+        "the no-input check must run before prepare\n{m:?}"
+    );
+    assert_eq!(count(&m, "build.summaries_v2"), 0, "{m:?}");
 }
 
 const FINGERPRINT_ROW: Row = Row {
