@@ -2066,7 +2066,8 @@ fn run_one_scc_roles(
         in_progress = merged;
         dirty = next_dirty;
 
-        if iterations >= roles_iteration_cap() {
+        // A TRUE cap only: a round that converged on the cap round is not capped.
+        if changed && iterations >= roles_iteration_cap() {
             // Same cap the retired run_one_scc used. Roles-only convergence
             // cannot outlast the
             // old whole-summary fixpoint (roles are one of its components), so a
@@ -2108,6 +2109,7 @@ fn run_one_scc_roles(
     // Design 5 guard: the roles transfer is not monotone, so a capped SCC's
     // round-cap roles may be any point of an oscillation. Publish the opaque
     // role instead, which every reader already treats as "cannot see".
+    // (Members in `fixed_roles` are not in `in_progress`, so they keep theirs.)
     let capped = cap_hit_stable_members.is_some();
     let mut out: Vec<(String, Vec<RecordRoleSummary>)> = Vec::new();
     for id in &scc_entry.members {
@@ -2317,8 +2319,14 @@ codeunit 50101 Sub
     /// capped member's roles are the OPAQUE role: every presence fact and every
     /// path fact `unknown`, field lists `Unknown`; the `fixpoint-capped`
     /// diagnostic stays. On base the capped SCC keeps its round-1 roles.
-    #[test]
-    fn forced_roles_cap_publishes_the_opaque_role() {
+    fn cyc_run(
+        cap: Option<usize>,
+    ) -> (
+        String,
+        String,
+        HashMap<String, RoutineSummary>,
+        Vec<SummarizeDiagnostic>,
+    ) {
         let m = model(
             r#"
 codeunit 50102 Cyc
@@ -2362,7 +2370,7 @@ codeunit 50102 Cyc
                     .or_insert_with(|| f.id.clone());
             }
         }
-        let (map, diags) = with_roles_iteration_cap(1, || {
+        let run = || {
             compute_summaries_v2(
                 &m.workspace.routines,
                 &graph,
@@ -2370,7 +2378,17 @@ codeunit 50102 Cyc
                 &m.calls.upgraded_bindings,
                 &fields,
             )
-        });
+        };
+        let (map, diags) = match cap {
+            Some(c) => with_roles_iteration_cap(c, run),
+            None => run(),
+        };
+        (pid, hid, map, diags)
+    }
+
+    #[test]
+    fn forced_roles_cap_publishes_the_opaque_role() {
+        let (pid, hid, map, diags) = cyc_run(Some(1));
         assert!(!diags.is_empty(), "precondition: the forced cap fires");
         let mut failures = Vec::new();
         for (name, id) in [("OnCyc", &pid), ("HandleCyc", &hid)] {
@@ -2415,5 +2433,36 @@ codeunit 50102 Cyc
             }
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// Negative control for the guard above: the same SCC with a cap that it
+    /// converges within is NOT capped. `n` is the round it converges on; at
+    /// `cap == n` the last round did not change, so it must keep its real
+    /// roles and record no cap.
+    #[test]
+    fn converged_roles_scc_is_never_treated_as_capped() {
+        // Measured: the last round changes nothing on round 3 (cap 2 still caps).
+        let n = 3;
+        assert!(
+            !cyc_run(Some(n - 1)).3.is_empty(),
+            "precondition: one round fewer really caps this SCC"
+        );
+        let uncapped = cyc_run(None);
+        assert!(uncapped.3.is_empty(), "no override: no cap");
+        for cap in [n, 1000] {
+            let (pid, hid, map, diags) = cyc_run(Some(cap));
+            assert!(diags.is_empty(), "cap {cap}: converged SCC records no cap");
+            for id in [&pid, &hid] {
+                assert_eq!(
+                    map[id].parameter_roles, uncapped.2[id].parameter_roles,
+                    "cap {cap}: roles equal the uncapped roles"
+                );
+            }
+            assert_eq!(
+                map[&hid].parameter_roles[0].persists_current_record,
+                EffectPresence::Yes,
+                "cap {cap}: real role, not opaque"
+            );
+        }
     }
 }
