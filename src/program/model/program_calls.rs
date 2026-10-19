@@ -772,6 +772,7 @@ pub(crate) fn census_model_rows(
         .buf::<w::ModelRoutine>(m.workspace.routines.len())
         .buf::<crate::engine::root_classification::RootClassification>(m.root_classifications.len())
         .buf::<crate::engine::root_classification::InfraDiagnostic>(m.infra_diagnostics.len())
+        .buf::<crate::engine::l5::registry::Diagnostic>(m.workspace_diagnostics.len())
         .buf::<crate::engine::l5::registry::Diagnostic>(m.dependency_diagnostics.len())
         .arc::<crate::program::model::events::ProgramEvents>();
     let eg = event_graph(&m.events.graph);
@@ -2056,6 +2057,40 @@ pub(crate) fn build_models_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Final panel r1 (F2-7): the `model` census charges the workspace
+    /// diagnostics buffer (#160 §4.2.4). Two models that differ only in it.
+    #[test]
+    fn census_model_rows_counts_the_workspace_diagnostics() {
+        use crate::engine::l5::registry::Diagnostic;
+        use crate::program::model::workspace::{Model, ModelEntities};
+        let model = |n: usize| Model {
+            workspace: ModelEntities {
+                objects: vec![],
+                tables: vec![],
+                routines: vec![],
+            },
+            root_classifications: vec![],
+            primary_app: None,
+            infra_diagnostics: vec![],
+            workspace_diagnostics: vec![
+                Diagnostic {
+                    severity: "info".to_string(),
+                    stage: "discover".to_string(),
+                    message: "m".to_string(),
+                };
+                n
+            ],
+            dependency_diagnostics: vec![],
+            calls: Default::default(),
+            events: Default::default(),
+        };
+        let (none, three) = (census_model_rows(&model(0)), census_model_rows(&model(3)));
+        assert_eq!(
+            three.bytes - none.bytes,
+            3 * std::mem::size_of::<Diagnostic>()
+        );
+    }
 
     /// #96: every record op the program resolver emits an `ImplicitTrigger` edge
     /// for passes the adapter's gate, the bulk `ModifyAll`/`DeleteAll` included

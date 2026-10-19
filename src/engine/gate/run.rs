@@ -37,7 +37,6 @@ use crate::engine::gate::inline_suppression::{apply_inline_suppressions, build_s
 use crate::engine::gate::preflight::evaluate_preflight;
 use crate::engine::gate::presets::resolve_analyze_detectors;
 use crate::engine::gate::projection::{ProjectionIndex, project_finding};
-use crate::engine::gate::version::driver_version;
 use crate::engine::l5::registry::run_detectors;
 use crate::engine::perf_trace as pt;
 use crate::program::inputs::{InputNeeds, InputSet};
@@ -664,7 +663,7 @@ pub fn run_analyze_with_exit(
                     detector_stats: &run_detector_stats,
                     coverage: &coverage,
                     deterministic: args.deterministic,
-                    driver_version: driver_version(),
+                    driver_version: inputs.driver_version.clone(),
                     evidence: evidence.as_deref(),
                 })
             }
@@ -816,7 +815,7 @@ pub(crate) fn empty_output_result(
                 detector_stats: &[],
                 coverage: &empty_coverage,
                 deterministic: args.deterministic,
-                driver_version: driver_version(),
+                driver_version: inputs.driver_version.clone(),
                 evidence: if args.with_evidence {
                     Some(&empty_evidence)
                 } else {

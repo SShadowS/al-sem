@@ -46,20 +46,25 @@ pub(crate) fn walk_al_source(
             text: text.into(),
         });
     }
+    Ok(source_root(files, tier))
+}
+
+/// The files as one root, content-hashed over their texts in order (the walk
+/// sorts) for determinism; `None` if there are none (symbol-only).
+fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
     if files.is_empty() {
-        return Ok(None);
+        return None;
     }
-    // Hash over sorted file texts (the walk sorts) for determinism.
     let mut hasher = blake3::Hasher::new();
     for f in &files {
         hasher.update(f.text.as_bytes());
     }
     let content_hash = hasher.finalize().to_hex().to_string();
-    Ok(Some(SourceRoot {
+    Some(SourceRoot {
         files: Arc::new(files),
         tier,
         content_hash,
-    }))
+    })
 }
 
 /// The workspace app's source from the frozen [`InputSet`] (#160 step 1, spec
@@ -88,19 +93,7 @@ pub fn workspace_source_from_inputs(inputs: &InputSet) -> Result<Option<SourceRo
             text,
         });
     }
-    if files.is_empty() {
-        return Ok(None);
-    }
-    let mut hasher = blake3::Hasher::new();
-    for f in &files {
-        hasher.update(f.text.as_bytes());
-    }
-    let content_hash = hasher.finalize().to_hex().to_string();
-    Ok(Some(SourceRoot {
-        files: Arc::new(files),
-        tier: TrustTier::Workspace,
-        content_hash,
-    }))
+    Ok(source_root(files, TrustTier::Workspace))
 }
 
 /// The app under development — source on disk is truth.

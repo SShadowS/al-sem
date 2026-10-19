@@ -76,7 +76,8 @@ use al_sem::engine::l5::digest_cli::{ChangedAutoDetect, auto_detect_changed, run
 use al_sem::engine::l5::event_flow::Scope as EventScope;
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintOptions, FingerprintOutput, ShardMode, SpecifiedFlags, default_format,
-    normalize_witness, reject_illegal_combos, run_fingerprint_pipeline, validate_roots,
+    normalize_witness, reject_illegal_combos, reject_inventory_only_combos,
+    run_fingerprint_pipeline, validate_roots,
 };
 use al_sem::engine::l5::prove::{parse_question, question_ids, run_prove_pipeline};
 use al_sem::program::inputs::{InputNeeds, InputSet};
@@ -1302,6 +1303,16 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
     };
 
     let is_query_requested = specified.is_query_requested();
+    // A usage error is found before the workspace is read (final panel r1).
+    if let Err(msg) = reject_inventory_only_combos(
+        f.inventory_only,
+        shard_mode.is_some(),
+        &format,
+        is_query_requested,
+    ) {
+        eprintln!("{msg}");
+        return ExitCode::from(1);
+    }
     let inputs = InputSet::read(
         std::path::Path::new(&f.workspace),
         &InputNeeds {

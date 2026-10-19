@@ -50,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the hash rows, the loader still opens each `.app`), and `policy explain`, which
   builds nothing. `InputSet::read` charges the trace counter `inputs.read` (1 per
   command; `diff ws ws` reads one set per side) and is timed by the span `inputs.read`.
-  `analyze` checks `--preset` / `--detector` before the read.
+  `analyze` checks `--preset` / `--detector`, and `fingerprint` its `--inventory-only`
+  combinations, before the read. `analyze --format json` takes `alsemVersion` from the set.
   `tests/common/unreadable.rs` makes a file or folder unreadable for tests.
   The step 1 CDO numbers: `docs/measurements/2026-10-19-issue-160-step1.md`.
 

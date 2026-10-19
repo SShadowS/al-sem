@@ -113,6 +113,8 @@ pub(crate) fn assert_row(case: &str, m: &BTreeMap<String, u64>, r: Row) {
         ("build.pd_solve", r.pd),
         ("build.detector_context", r.ctx),
         ("build.snapshot", r.snap),
+        // A1.1: one workspace read per program build (final panel r1, F2-3).
+        ("inputs.read", r.program),
     ];
     let bad: Vec<String> = want
         .iter()
@@ -868,6 +870,30 @@ fn analyze_bad_preset_reads_no_inputs() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(3), "stderr: {err}");
     assert_eq!(count(&m, "inputs.read"), 0, "{m:?}\nstderr: {err}");
+}
+
+/// Final panel r1 (F2-2): `fingerprint --inventory-only`'s usage errors are
+/// found before the workspace is read, as they were before step 1.
+#[test]
+fn fingerprint_inventory_only_usage_errors_read_no_inputs() {
+    let ws = ws_a();
+    let ws = ws.as_str();
+    for (args, want) in [
+        (vec!["--shard", "all"], "cannot be combined with --shard"),
+        (vec!["--format", "human"], "requires --format=json"),
+        (
+            vec!["--format", "json", "--routine", "X"],
+            "cannot be combined with query selectors",
+        ),
+    ] {
+        let mut argv = vec!["fingerprint", ws, "--inventory-only"];
+        argv.extend(args);
+        let (out, m) = spawn_traced(&argv, &[]);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{argv:?} stderr: {err}");
+        assert!(err.contains(want), "{argv:?} stderr: {err}");
+        assert_eq!(count(&m, "inputs.read"), 0, "{argv:?} {m:?}\nstderr: {err}");
+    }
 }
 
 /// Review focus 1: a relative workspace path runs as the absolute one does

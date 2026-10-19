@@ -1,9 +1,9 @@
 //! Inline `// al-sem-ignore <detectorId>[: reason]` suppression — faithful port of
 //! al-sem `src/cli/inline-suppression.ts`.
 //!
-//! The parse tree is not retained after indexing, so directives are scanned by
-//! RE-READING the workspace `.al` source from disk. A workspace source unit's id is
-//! `ws:<relpath>`; given the workspace root the absolute path is `<root>/<relpath>`.
+//! The parse tree is not retained after indexing, so directives are scanned in the
+//! workspace `.al` text the command's `InputSet` read (#160), never the disk again.
+//! A workspace source unit's id is `ws:<relpath>`; `<relpath>` keys the set's file.
 //!
 //! DIRECTIVE SYNTAX: `// al-sem-ignore <detector-id>[: <reason>]`.
 //!

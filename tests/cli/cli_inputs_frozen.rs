@@ -465,3 +465,23 @@ fn update_baseline_applies_the_set_just_written() {
         assert_eq!(findings(&out).len(), 0, "{case}");
     }
 }
+
+/// Final panel r1 (F2-1): analyze's JSON `alsemVersion` is the version the set
+/// captured (`inputs.driver_version`, §4.2.1), never a second environment read.
+/// The precondition is stated by assignment: the set's version differs from any
+/// version the environment could give. Both JSON paths: findings (a model) and
+/// the empty output (no `app.json`, so no model instance id).
+#[test]
+fn analyze_json_reports_the_captured_driver_version() {
+    let empty = tempfile::tempdir().unwrap();
+    for (case, ws) in [
+        ("findings", r0("ws-d1-multi-caller")),
+        ("empty", empty.path().to_path_buf()),
+    ] {
+        let mut inputs = read(&ws);
+        Arc::get_mut(&mut inputs).expect("one owner").driver_version = "captured-160".to_string();
+        let v: serde_json::Value =
+            serde_json::from_str(&analyze_json(&inputs)).expect("analyze json");
+        assert_eq!(v["alsemVersion"], "captured-160", "{case}");
+    }
+}
