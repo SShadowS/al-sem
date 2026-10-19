@@ -23,7 +23,8 @@ Steps 2-5 are carried. The epic spec and the steps 0-2 spec were designed and pa
 - make-worktree base: `5f096af9`. Rebase 1, onto `214a7879` (nextest + gate speed-ups): one CHANGELOG conflict, both sides kept.
 - Rebase 2, onto `8405f96d` (#100 / #167): clean textually, but #167 added `tests/gap/gap_issue100_testfield_capability.rs` against the pre-step-1 `FullSnapshotOptions`/`PolicyCheckOptions` fields, and `ci-steps all` failed to compile (log `ci-steps-all/20261019T071250-ab9e7011.log`). Fixed in `ce7db1ed`: the test reads its inputs through `InputSet`, 14/14 pass. No assertion changed. `rebase_regate` is exhausted after this rebase.
 - First freeze: B = `8405f96d`, H = `ce7db1ed` (attested; PR #170). CI (ubuntu) then failed to compile a `#[cfg(unix)]` test arm (E0282, `src/program/inputs.rs:443`). The fix is `12dcf2d1` (`ci_fix` charged), and final round 4 accepted it.
-- **B = `8405f96dd6ef849a37ee3cce327185174abec537`** (origin/master), **H = `12dcf2d1ecb1ef4fb8157e4b25d2d1168a43f68e`**.
+- Second freeze: H = `12dcf2d1`. CI then failed on Linux clippy (`non_octal_unix_permissions`, `tests/common/unreadable.rs:42`). The owner authorised a second CI fix beyond the `ci_fix` budget, on the condition that CI's exact Linux steps run first. They ran in a fresh WSL2 Ubuntu ext4 clone (clippy release `-D warnings` exit 0, `cargo test --no-run` exit 0, unix-sensitive tests green), and the fix is `d8412569`. Final round 5 accepted it.
+- **B = `8405f96dd6ef849a37ee3cce327185174abec537`** (origin/master), **H = `d84125694f4a9fed1bcd8917958286da9daff45e`**.
 
 ## Timeline
 
@@ -131,7 +132,8 @@ Every gate ran supervised under run `20261018-222527-440f4b`. Logs are under `.a
 | c670d966 (final r1 fixes) | 0 (382 s) | 0 | 0 (27 s) | 0 (149 s) | an earlier run was stopped on low memory and re-run |
 | beb4d531 (after rebase 2) | **1** | 0 | 0 | 0 | the #167 test does not compile against step 1's API (see Base/Head) |
 | ce7db1ed (first freeze) | 0 (266.6 s) | 0 | 0 (33.2 s) | 0 (82.9 s) | CI on ubuntu then failed: the unix test arm does not compile |
-| **H = 12dcf2d1** (CI fix) | **0** (504.4 s, `20261019T074140-8ec327f8.log`) | **0** (`20261019T075005-002f513a.log`) | **0** (30.7 s, `20261019T075006-62293fed.log`) | **0** (122.3 s, `20261019T075037-18a844c0.log`) | final; the tree was clean after; the unix arm compiled and ran under WSL2 Ubuntu before the commit |
+| 12dcf2d1 (CI fix 1) | 0 (504.4 s) | 0 | 0 (30.7 s) | 0 (122.3 s) | CI on ubuntu then failed on clippy `non_octal_unix_permissions` |
+| **H = d8412569** (CI fix 2) | **0** (264.3 s, `20261019T080335-f97495d5.log`) | **0** (`20261019T080800-0b6409f4.log`) | **0** (29.2 s, `20261019T080801-27261cd6.log`) | **0** (77.7 s, `20261019T080831-38a6d7d0.log`) | final; the tree was clean after; CI's Linux clippy and test build were clean in WSL2 Ubuntu before the commit |
 
 No golden moved in step 1. Toolchain: Rust 1.96.0. Grammar: tree-sitter-al `main` at the committed `node-types.sha256`. CDO_WS: the pinned baseline, enforced by cdo-gate's stamp checks.
 
