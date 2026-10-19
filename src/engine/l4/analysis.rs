@@ -1,6 +1,6 @@
 //! #160 step 2 (spec §4.4.1): the L4 analysis as one value. [`build_l4`] is
-//! the SCC and the v2 solve that the detector context, query's two bundle
-//! builders and digest each ran for themselves.
+//! the SCC and the v2 solve that the detector context and query's two bundle
+//! builders (digest calls one of them) each ran for themselves.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -46,6 +46,9 @@ pub struct L4Request {
 
 /// The SCC (unless `req.scc` hands one in) and the v2 solve over `graph`, with
 /// the dependency leaves and fixed roles from `cross`.
+// The span names keep the detector context's (`context.*`) on purpose, so
+// traces stay comparable; query and digest report them too (and the summaries
+// census) once they call this (Tasks 25-27).
 // Only tests call it until Task 21 wires the detector context through it.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn build_l4(
@@ -208,6 +211,7 @@ pub(crate) fn emit_scc_stats(graph: &CombinedGraph, scc: &SccResult) {
 /// #160 §4.1.5: the `l4.*` buckets, shallow. `l4.scc` only when [`build_l4`]
 /// computed the SCC: one handed in is the cross-app base's, counted by
 /// `base.combined_scc` (a shared allocation once).
+// Dead outside tests until Task 21, like `build_l4`.
 #[cfg_attr(not(test), allow(dead_code))]
 fn census_l4(l4: &L4Analysis, computed_scc: bool) {
     use crate::engine::census::{Kind, Tally};
@@ -232,8 +236,6 @@ fn census_l4(l4: &L4Analysis, computed_scc: bool) {
 mod tests {
     use super::*;
     use crate::engine::l4::combined_graph::build_combined_graph;
-    use crate::engine::l4::summary_runner::SummarizeDiagnostic;
-    use std::sync::Arc;
 
     /// TRANSIENT (spec §5): `build_l4` against the two builders it replaces.
     /// Deleted in Task 27 with `build_db_effect_bundle` and
@@ -282,7 +284,7 @@ mod tests {
             "precondition: the fixture has a fixed-roles publisher and a leaf"
         );
         let old = crate::engine::l4::effect_query_cli::cross_app_db_effect_bundle(&base);
-        let (new, _) = build_l4(
+        let (new, core) = build_l4(
             &base.resolved,
             &base.graph,
             L4Request {
@@ -292,12 +294,42 @@ mod tests {
             Some(&base.cross_app_inputs()),
         );
         assert!(Arc::ptr_eq(&new.scc, &base.combined_scc), "SCC by pointer");
+        assert!(
+            !old.rows_for_test().is_empty(),
+            "precondition: cross-app rows"
+        );
         assert_eq!(new.bundle.rows_for_test(), old.rows_for_test(), "cross-app");
+        // Rows cannot see `cross` (fixed roles change ROLES only): the
+        // dependency publisher's path-sensitive role fields stay Unknown only
+        // when `build_l4` passes `cross`'s fixed roles (as issue70 (ii)).
+        use crate::engine::l4::capability_cone::issue70_publisher_roles_tests::{five, routine_id};
+        use crate::engine::l4::effect_lattice::EffectPresence;
+        use crate::engine::l4::summary::FieldList;
+        let publisher = routine_id(&base, "OnDepRec");
+        let roles = &core
+            .0
+            .get(&publisher)
+            .expect("OnDepRec solved")
+            .parameter_roles;
+        let [role] = roles.as_slice() else {
+            panic!("OnDepRec: want one role, got {roles:?}");
+        };
+        assert_eq!(
+            five(role),
+            (
+                EffectPresence::Unknown,
+                FieldList::Unknown,
+                EffectPresence::Unknown,
+                EffectPresence::Unknown,
+                FieldList::Unknown,
+            ),
+            "OnDepRec's role must stay Unknown (cross's fixed roles)"
+        );
     }
 
     #[test]
     fn warning_text_is_rendered_once() {
-        let d = SummarizeDiagnostic::non_convergence_for_test(vec!["a".into(), "b".into()]);
+        let d = SummarizeDiagnostic::non_convergence(&["a", "b"]);
         assert_eq!(
             render_warnings(&[d]),
             ["warning: summarize: Summary fixed-point did not converge for SCC [a, b]"]

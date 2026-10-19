@@ -4852,7 +4852,7 @@ codeunit 13 "Dep Rec Sub"
         out.write_all(bytes.get_ref()).unwrap();
     }
 
-    fn routine_id(base: &R3a5CrossAppBase, name: &str) -> String {
+    pub(crate) fn routine_id(base: &R3a5CrossAppBase, name: &str) -> String {
         let ids: Vec<&ModelRoutine> = base
             .ws_routines()
             .iter()
@@ -4865,7 +4865,7 @@ codeunit 13 "Dep Rec Sub"
     /// The five path-sensitive role fields of a CORE role, as
     /// (requiresLoadedAtEntry, requiredLoadedFieldsAtEntry, mutatesBeforeLoad,
     /// dirtyAtExit, currentLoadedFieldsAtExit).
-    fn five(
+    pub(crate) fn five(
         r: &crate::engine::l4::summary::RecordRoleSummary,
     ) -> (
         EffectPresence,

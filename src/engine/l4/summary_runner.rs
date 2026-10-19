@@ -1533,14 +1533,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         // byte-identical to the OLD solver's message shape (severity/stage/text).
         // Never fires on the corpus (roles converge); preserves the honesty signal.
         if let Some(members) = &cap_hit_stable_members {
-            diagnostics.push(SummarizeDiagnostic {
-                severity: "warning".to_string(),
-                stage: "summarize".to_string(),
-                message: format!(
-                    "Summary fixed-point did not converge for SCC [{}]{NON_CONVERGENCE_TAIL}",
-                    members.join(", ")
-                ),
-            });
+            diagnostics.push(SummarizeDiagnostic::non_convergence(members));
         }
 
         // New db-effect solve. Reads the SAME predecessor view (`v2_map`) for
@@ -1790,10 +1783,11 @@ pub struct SummarizeDiagnostic {
 /// line, and renders nothing for a message without it (#160 §4.4.7).
 pub(crate) const NON_CONVERGENCE_TAIL: &str = "; its facts are lower-confidence";
 
-#[cfg(test)]
 impl SummarizeDiagnostic {
-    /// A cap diagnostic for `members`, built by hand (not by the solver).
-    pub(crate) fn non_convergence_for_test(members: Vec<String>) -> Self {
+    /// The roles fixpoint's cap-hit diagnostic for the SCC `members`,
+    /// byte-identical to the OLD solver's message shape (severity/stage/text).
+    pub(crate) fn non_convergence(members: &[impl AsRef<str>]) -> Self {
+        let members: Vec<&str> = members.iter().map(AsRef::as_ref).collect();
         SummarizeDiagnostic {
             severity: "warning".to_string(),
             stage: "summarize".to_string(),
