@@ -122,6 +122,10 @@ pub struct Subscription {
     pub element: Option<String>,
     /// Dispatch conditions (manual binding, skip-on-missing-license/permission).
     pub conditions: Vec<Condition>,
+    /// True when ANY merged entry carries any condition (the union; #107
+    /// Design 2). `conditions` is the intersection, so an empty `conditions`
+    /// does not mean "always runs": one reading may skip while another does not.
+    pub conditional_any: bool,
     pub outcome: SubscriptionOutcome,
     /// The bound publisher routine is a synthetic platform publisher
     /// (`PublisherKind::Platform`); false when unbound.
@@ -446,11 +450,14 @@ impl SubscriberIndex {
                 };
                 let args = &sub_routine.event_subscribers[ordinal];
                 let mut entry = build_entry(sub_routine, args);
+                // OR, taken before the `retain` below narrows `conditions`.
+                let mut conditional_any = !entry.conditions.is_empty();
                 // AND the skip flags: a condition holds for the one edge only
                 // when every entry carries it. If some build does not skip, the
                 // edge may run without the license/permission.
                 for &other in &group[1..] {
                     let other = build_entry(sub_routine, &sub_routine.event_subscribers[other]);
+                    conditional_any |= !other.conditions.is_empty();
                     entry.conditions.retain(|c| other.conditions.contains(c));
                 }
                 let bound = match &outcome {
@@ -466,6 +473,7 @@ impl SubscriberIndex {
                     event_name_lc: keys[ordinal].1.clone(),
                     element: entry.element.clone(),
                     conditions: entry.conditions.clone(),
+                    conditional_any,
                     outcome,
                     platform,
                 });
@@ -2727,6 +2735,45 @@ mod tests {
             .map(|s| (s.ordinal, s.conditions.clone()))
             .collect();
         assert_eq!(all, [(0, vec![])], "(ordinal, conditions) per Subscription");
+    }
+
+    /// #107 row 5c (Design 2): `conditions` stays the INTERSECTION over the
+    /// readings (empty here, unchanged), and `conditional_any` is the UNION:
+    /// true when any reading carries any condition. A single unconditional
+    /// reading is `conditional_any == false`; a single skipping reading is
+    /// true.
+    #[test]
+    fn issue107_mixed_readings_set_conditional_any() {
+        for (readings, want_conditions, want_any) in [
+            (
+                vec![reading(true, false), reading(false, false)],
+                vec![],
+                true,
+            ),
+            (
+                vec![reading(false, true), reading(false, false)],
+                vec![],
+                true,
+            ),
+            (vec![reading(false, false)], vec![], false),
+            (
+                vec![reading(true, false)],
+                vec![Condition::SkipOnMissingLicense],
+                true,
+            ),
+        ] {
+            let (idx, _) = index_of_readings(readings);
+            let all = idx.subscriptions();
+            assert_eq!(all.len(), 1, "one Subscription");
+            assert_eq!(
+                all[0].conditions, want_conditions,
+                "Subscription.conditions"
+            );
+            assert_eq!(
+                all[0].conditional_any, want_any,
+                "Subscription.conditional_any"
+            );
+        }
     }
 
     /// Fixture of publishers `OnAfterX`/`OnAfterY` (arity 0, Integration) and a

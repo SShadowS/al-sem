@@ -22,12 +22,13 @@ use std::collections::HashMap;
 
 use super::combined_graph::CombinedGraph;
 use super::effect_lattice::{EffectPresence, join_presence};
+use super::event_dispatch::{DispatchKind, ParamDispatch};
 use super::summary::{FieldList, RoutineSummary};
 use crate::program::body::features::{PAnchor, PCFNNode, PCallSite, PFieldAccess};
 use crate::program::model::calls::UpgradedBinding;
 use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
-use super::summary_runner::record_flow_role;
+use super::summary_runner::{record_flow_role, summaries_census};
 
 // ---------------------------------------------------------------------------
 // Lattice element types (mirror control-flow-walker.ts).
@@ -227,8 +228,10 @@ pub struct PathAwareFacts {
 /// the SAME routine reused the identical op/call/fa index, so building it once per
 /// routine instead of once per parameter is behaviour-preserving, not a semantic
 /// change).
+/// `dispatch` is the routine's event dispatch of this parameter (#107 Design
+/// 4), applied to every exit and fallthrough state.
 #[allow(clippy::too_many_arguments)]
-pub fn walk_param(
+pub(crate) fn walk_param(
     routine: &ModelRoutine,
     rec_var_name_lc: &str,
     rec_var_id: Option<&str>,
@@ -238,6 +241,7 @@ pub fn walk_param(
     graph: &CombinedGraph,
     body_avail_by_id: &HashMap<String, bool>,
     indexes: &WalkIndexes,
+    dispatch: Option<&ParamDispatch>,
 ) -> PathAwareFacts {
     let param = ParamCtx {
         name_lc: rec_var_name_lc,
@@ -280,9 +284,23 @@ pub fn walk_param(
         )
     };
 
-    // Aggregate exit + fallthrough states.
+    // Aggregate exit + fallthrough states, each followed by the event dispatch.
     let mut all_states = exit_states;
     all_states.push(final_state);
+    if let Some(pd) = dispatch {
+        if !pd.sequences.is_empty() {
+            summaries_census::sequences_enumerated(pd.sequences.len());
+        }
+        let look = CalleeLookup {
+            snapshot,
+            final_map,
+            body_avail_by_id,
+        };
+        all_states = all_states
+            .into_iter()
+            .map(|s| apply_dispatch(s, pd, &look))
+            .collect();
+    }
 
     let dirty_at_exit = compute_dirty_at_exit(&all_states);
     let current_loaded_fields_at_exit = compute_current_loaded_at_exit(&all_states);
@@ -1201,9 +1219,6 @@ fn apply_call(
     graph: &CombinedGraph,
     body_avail_by_id: &HashMap<String, bool>,
 ) -> PerParamState {
-    let lookup =
-        |id: &str| -> Option<&RoutineSummary> { snapshot.get(id).or_else(|| final_map.get(id)) };
-
     // Find the binding that forwards THIS param to the callee (resolved only).
     let upgraded = upgraded_bindings.get(&cs.id);
     let binding_idx = cs.argument_bindings.iter().enumerate().find(|(i, b)| {
@@ -1244,52 +1259,98 @@ fn apply_call(
             .find(|e| e.callsite_id.as_deref() == Some(cs.id.as_str()))
             .map(|e| e.to.as_str())
     });
-    let callee_summary = callee_id.and_then(lookup);
+    let look = CalleeLookup {
+        snapshot,
+        final_map,
+        body_avail_by_id,
+    };
+    apply_callee_role(
+        state,
+        callee_id,
+        binding.parameter_index,
+        caller_is_var,
+        callee_is_var,
+        false,
+        &look,
+    )
+}
 
+/// The read-only callee lookups of the walker's call transfer.
+pub(crate) struct CalleeLookup<'a> {
+    pub snapshot: &'a HashMap<String, RoutineSummary>,
+    pub final_map: &'a HashMap<String, RoutineSummary>,
+    pub body_avail_by_id: &'a HashMap<String, bool>,
+}
+
+/// The transfer of a callee with no visible role: entry requirements join
+/// `unknown` when not loaded yet; for `var`/`var` the record state is lost.
+///
+/// In an event `dispatch` the required entry fields become `unknown` too when
+/// not loaded yet, so EVERY path fact of the publisher is `unknown` (Design 4;
+/// without it they stay `Known([])`, a claim that an unseen subscriber needs no
+/// field). Call sites keep the plain opaque transfer.
+fn opaque_transfer(
+    state: PerParamState,
+    caller_is_var: bool,
+    callee_is_var: bool,
+    dispatch: bool,
+) -> PerParamState {
+    let mut out = state;
+    if out.loaded != Loaded::Yes {
+        out.requires_loaded_at_entry =
+            join_presence(out.requires_loaded_at_entry, EffectPresence::Unknown);
+        out.mutates_before_load = join_presence(out.mutates_before_load, EffectPresence::Unknown);
+        if dispatch {
+            out.required_fields = RequiredFields::Unknown;
+        }
+    }
+    if caller_is_var && callee_is_var {
+        out.loaded = Loaded::Unknown;
+        out.dirty = Dirty::Unknown;
+        out.pending_narrow = PendingNarrow::Unknown;
+        out.current_loaded_fields = LoadedFields::Unknown;
+    }
+    out
+}
+
+/// The transfer of one call to `callee_id` that passes this parameter as the
+/// callee's parameter `callee_param_index`. `dispatch`: the callee is an event
+/// subscriber run by the publisher's dispatch ([`opaque_transfer`]).
+fn apply_callee_role(
+    state: PerParamState,
+    callee_id: Option<&str>,
+    callee_param_index: u32,
+    caller_is_var: bool,
+    callee_is_var: bool,
+    dispatch: bool,
+    look: &CalleeLookup,
+) -> PerParamState {
     // Opaque callee: undefined edge OR bodyAvailable == false (FIX 2 — al-sem
     // control-flow-walker.ts:957). Join "unknown" for entry-req; lose state if var/var.
-    let callee_opaque = match callee_id {
-        None => true,
-        Some(id) => !body_avail_by_id.get(id).copied().unwrap_or(false),
+    let Some(callee_id) = callee_id else {
+        return opaque_transfer(state, caller_is_var, callee_is_var, dispatch);
     };
-    if callee_opaque {
-        let mut out = state;
-        if out.loaded != Loaded::Yes {
-            out.requires_loaded_at_entry =
-                join_presence(out.requires_loaded_at_entry, EffectPresence::Unknown);
-            out.mutates_before_load =
-                join_presence(out.mutates_before_load, EffectPresence::Unknown);
-        }
-        if caller_is_var && callee_is_var {
-            out.loaded = Loaded::Unknown;
-            out.dirty = Dirty::Unknown;
-            out.pending_narrow = PendingNarrow::Unknown;
-            out.current_loaded_fields = LoadedFields::Unknown;
-        }
-        return out;
+    if !look
+        .body_avail_by_id
+        .get(callee_id)
+        .copied()
+        .unwrap_or(false)
+    {
+        return opaque_transfer(state, caller_is_var, callee_is_var, dispatch);
     }
 
-    let callee_role = callee_summary.and_then(|s| {
-        s.parameter_roles
-            .iter()
-            .find(|r| r.parameter_index == binding.parameter_index)
-    });
+    let callee_role = look
+        .snapshot
+        .get(callee_id)
+        .or_else(|| look.final_map.get(callee_id))
+        .and_then(|s| {
+            s.parameter_roles
+                .iter()
+                .find(|r| r.parameter_index == callee_param_index)
+        });
     let Some(cr) = callee_role else {
         // Callee body available but no role for this param — treat as opaque-ish.
-        let mut out = state;
-        if out.loaded != Loaded::Yes {
-            out.requires_loaded_at_entry =
-                join_presence(out.requires_loaded_at_entry, EffectPresence::Unknown);
-            out.mutates_before_load =
-                join_presence(out.mutates_before_load, EffectPresence::Unknown);
-        }
-        if caller_is_var && callee_is_var {
-            out.loaded = Loaded::Unknown;
-            out.dirty = Dirty::Unknown;
-            out.pending_narrow = PendingNarrow::Unknown;
-            out.current_loaded_fields = LoadedFields::Unknown;
-        }
-        return out;
+        return opaque_transfer(state, caller_is_var, callee_is_var, dispatch);
     };
 
     let mut out = state;
@@ -1368,6 +1429,46 @@ fn apply_call(
     }
 
     out
+}
+
+/// An event publisher's dispatch of one parameter (#107 Design 4). Unseen, or
+/// any isolated (path-opaque) binding: one opaque transfer. Otherwise the join
+/// over every run [`super::event_dispatch::dispatch_sequences`] lists
+/// (`pd.sequences`), each run the
+/// subscribers' transfers in order, with no join inside a run. Every opaque
+/// transfer here is a dispatch one ([`opaque_transfer`]), including a visible
+/// subscriber with no body or no role.
+fn apply_dispatch(state: PerParamState, pd: &ParamDispatch, look: &CalleeLookup) -> PerParamState {
+    let bindings = match &pd.kind {
+        DispatchKind::Unseen { .. } => {
+            return opaque_transfer(state, pd.caller_is_var, true, true);
+        }
+        DispatchKind::Exact(b) if b.iter().any(|b| b.path_opaque) => {
+            let callee_is_var = b.iter().any(|b| b.callee_is_var);
+            return opaque_transfer(state, pd.caller_is_var, callee_is_var, true);
+        }
+        DispatchKind::Exact(b) => b,
+    };
+    let mut joined: Option<PerParamState> = None;
+    for run in &pd.sequences {
+        let s = run.iter().fold(state.clone(), |s, &i| {
+            let b = &bindings[i];
+            apply_callee_role(
+                s,
+                Some(&b.subscriber),
+                b.q,
+                pd.caller_is_var,
+                b.callee_is_var,
+                true,
+                look,
+            )
+        });
+        joined = Some(match joined {
+            Some(j) => join_states(&j, &s),
+            None => s,
+        });
+    }
+    joined.unwrap_or(state)
 }
 
 fn field_list_to_loaded(fl: &FieldList) -> LoadedFields {
@@ -1879,6 +1980,7 @@ mod tests {
                         &graph,
                         &body_avail_by_id,
                         &indexes,
+                        None,
                     )
                 })
                 .expect("spawn small-stack worker")

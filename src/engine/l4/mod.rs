@@ -34,6 +34,7 @@ pub mod effect_query;
 pub mod effect_query_cli;
 pub mod effect_store;
 pub mod effect_universe;
+pub(crate) mod event_dispatch;
 pub(crate) mod param_guard;
 // #69 D1 — the transitive producer solve: parameter-dependent writes resolved
 // in every routine's own frame, outside the shared capability cone.

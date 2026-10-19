@@ -26,8 +26,10 @@
           "mayChangeLoadFields": false,
           "mayAssignRecord": false,
           "mayUseRecordRef": false,
-          "requiresLoadedAtEntry": "no",
-          "requiredLoadedFieldsAtEntry": [],
+          "requiresLoadedAtEntry": "yes",
+          "requiredLoadedFieldsAtEntry": [
+            "No."
+          ],
           "mutatesBeforeLoad": "no",
           "persistsCurrentRecord": "no",
           "setBasedDbWrites": "no",
@@ -70,8 +72,10 @@
           "mayChangeLoadFields": false,
           "mayAssignRecord": false,
           "mayUseRecordRef": false,
-          "requiresLoadedAtEntry": "no",
-          "requiredLoadedFieldsAtEntry": [],
+          "requiresLoadedAtEntry": "yes",
+          "requiredLoadedFieldsAtEntry": [
+            "No."
+          ],
           "mutatesBeforeLoad": "no",
           "persistsCurrentRecord": "no",
           "setBasedDbWrites": "no",

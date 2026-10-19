@@ -1,0 +1,658 @@
+[
+ {
+  "id": "R1-1",
+  "source": "both",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 80,
+  "severity": "important",
+  "text": "Unifying the event-parameter mapping with quote trimming changes carry_reqs, which feeds db-effect guards (cross_edge) and the cone's substitute_entry, contradicting 'db effects and the cone do not move'.",
+  "disposition": "fixed",
+  "evidence": "Design 1 'Decision: unify, with quote trimming, and name what that can move' names cross_edge and substitute_entry, explains movement is limited to quoted ABI names (probe f8), adds unit row 13; Design 7 lists the guard outputs; Measurement step 5 checks cone/db-effect projections byte-identical.",
+  "hash": "fce35befdfaa45af",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-2",
+  "source": "both",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 240,
+  "severity": "important",
+  "text": "Folding subscribers into a symbol-only publisher moves d41 and record_load_points, which read a bodyless callee's role without a body_available guard, so 'no caller output moves' was false.",
+  "disposition": "fixed",
+  "evidence": "Design 6 now skips both steps for bodyless publishers (roles stay base) with the reason stated; probe b2 corrected; the guard gap is a Non-goal and listed under 'Discoveries to file'; unit row 8 pins identical-to-base.",
+  "hash": "2203749b879db594",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-3",
+  "source": "both",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 140,
+  "severity": "important",
+  "text": "Callers read the load trio (puts_in_loaded_state) as MUST, so a MAY join over optional or partial subscribers becomes a proven load that drops d40/d42 requirements and creates d39 load-point findings.",
+  "disposition": "fixed",
+  "evidence": "Round 2: Design 3 'MAY facts join; the MUST-read trio neither gains nor destroys a load': optional_load maps yes->no (unknown stays unknown) for optional bindings, with a per-reader table (caller walker, c1b, load points, d40/d42) showing `no` is the identity while `unknown` destroys Loaded::Yes; Design 4 enumeration includes the identity (empty) sequence; FP 'MAY loads read as MUST (rounds 1 and 2)'; unit rows 4, 5, 5b (caller regression), 5c.",
+  "hash": "b59cfc1dea8e4939",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-4",
+  "source": "sol",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 167,
+  "severity": "important",
+  "text": "The n>=2 closure from X_0 invents dirtyAtExit yes: subscribers 'Validate; Modify' and 'Modify' persist in every order, yet Pristine join Persisted gives Unknown and f_A(Unknown) gives DirtyV.",
+  "disposition": "fixed",
+  "evidence": "Design 4 replaces the closure with exact enumeration over every order of the always-running bindings and every subset of optional ones (n <= 4, at most 65 sequences, no join inside a sequence), and the opaque transfer above that bound or with any Opaque binding; the counterexample is worked through; unit row 3.",
+  "hash": "f20ebe0c62274328",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-5",
+  "source": "opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 167,
+  "severity": "minor",
+  "text": "saturate_unknown on closure overshoot lowers DirtyV to Unknown and drops required_fields, contradicting 'keeps MAY facts'.",
+  "disposition": "fixed",
+  "evidence": "Design 4: 'No closure, LOOP_BOUND or saturate_unknown is used, so nothing lowers DirtyV to Unknown'; the only route to Unknown is the opaque transfer, which suppresses.",
+  "hash": "f9bc7e380cd23597",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-6",
+  "source": "sol",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 216,
+  "severity": "important",
+  "text": "Reusing the call-site transfer does not make the roles transfer monotone (loadsFromDbParam no->yes can flip a downstream requirement yes->no), and cap termination is not convergence.",
+  "disposition": "fixed",
+  "evidence": "Design 5 'Convergence: no monotonicity claim' states the transfer is not monotone (before and after), adds a guard (a capped SCC's members get the opaque role) and a measurement (cap hits 0 before/after, Measurement step 4); unit row 10 asserts ws-cycle converges without a cap.",
+  "hash": "6bb4c73bf09f433b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-7",
+  "source": "both",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 36,
+  "severity": "important",
+  "text": "'Every dispatch edge of a real publisher is resolved' is false: synth keeps an existing real symbol's id, so an ambiguous overload subscription becomes an unfiltered dispatch edge, and duplicate (publisher, subscriber) edges can make n=1 look like n=2.",
+  "disposition": "fixed",
+  "evidence": "Probe f2 corrected (events.rs:340-342, combined_graph.rs:359-376); Design 2 makes non-resolved edges Opaque and optional and dedupes bindings by (subscriber, q); FP section 'Event-id collisions'; unit row 7.",
+  "hash": "88804d1c7267eda1",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-8",
+  "source": "sol",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 313,
+  "severity": "important",
+  "text": "Default analyze never runs d40, so the plan's d40 churn/triage would measure nothing, and by-value entry propagation and new d41 findings were not named.",
+  "disposition": "fixed",
+  "evidence": "Probe f7 records d40 as opt-in; Measurement step 1 adds an explicit 'alsem analyze <ws> --detector d40-transitive-load-missing' run and lists the default set; Design 7 names by-value (c1a) propagation and d41.",
+  "hash": "f12aed7a0bc20b66",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-9",
+  "source": "both",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 167,
+  "severity": "important",
+  "text": "Isolated-event subscribers were treated like ordinary calls, although a failing one is rolled back in the database while the publisher continues and its in-memory var changes stay.",
+  "disposition": "fixed",
+  "evidence": "Round 2: Design 2 separates visibility (Exact/Opaque) from the flags optional and path_opaque; an isolated subscriber is Exact, optional and path_opaque. Design 3 folds its presence facts as visible MAY facts (trio via optional_load); Design 4 'Isolated events' takes the opaque path for path facts only and states what a forwarding caller sees; unit rows 6 and 6b.",
+  "hash": "e9a09825b01b7355",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-10",
+  "source": "both",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 313,
+  "severity": "minor",
+  "text": "'Noise-level' performance was asserted, not measured, with no attribution for the busiest event, closure rounds or recursive recomputation.",
+  "disposition": "fixed",
+  "evidence": "Measurement step 6: census of dispatching publishers, bindings-per-parameter histogram and max, exact vs opaque path counts, sequences enumerated (total and max), Jacobi rounds in SCCs with a dispatch edge, plus wall time and peak memory; unit row 12 covers the over-bound case.",
+  "hash": "003be9c12696866d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-11",
+  "source": "both",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 167,
+  "severity": "minor",
+  "text": "The spec described a non-empty publisher body as a runtime case, but AL rejects code in an event publisher body.",
+  "disposition": "fixed",
+  "evidence": "Probe f5 states the AL restriction (0 of 190 CDO publishers have code); Design 4 defines malformed-source handling (body then dispatch) and Measurement step 6 counts such publishers (expected 0).",
+  "hash": "51155da42aa0dcbc",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-12",
+  "source": "opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 258,
+  "severity": "minor",
+  "text": "d3 was listed as a mover, but it escapes every event-publisher callee and reads only may_* fields that no composition step touches.",
+  "disposition": "fixed",
+  "evidence": "Probe c (d3.rs:392-399) and Design 7 'Not moved' list d3; Measurement step 1 expects d3 byte-identical; acceptance row 'no unrelated movement' drops d3.",
+  "hash": "cd776c44e586b831",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-13",
+  "source": "opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 167,
+  "severity": "minor",
+  "text": "Including X_0 for n>=2 loses MUST precision that n=1 keeps, so adding a no-op second subscriber changes the role.",
+  "disposition": "fixed",
+  "evidence": "Round 3: Design 4 exact enumeration now states that skipping every optional subscriber leaves the sequences of U alone, which is the identity ONLY when U is empty; always-running subscribers run in every sequence; unit rows 4 (two unconditional Get) and 4b (unconditional Get + manual no-op: the incoming unloaded state is never an outcome, through a caller).",
+  "hash": "09ebdacf5aeb5294",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-14",
+  "source": "opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 281,
+  "severity": "minor",
+  "text": "On a table event with IncludeSender, Sender is the raising record, so 'Sender matches no publisher parameter' hides a real, silently dropped effect.",
+  "disposition": "fixed",
+  "evidence": "Non-goals 'Receiver flow through Sender' states it is not modelled and its effects are lost as before; FP section 'Name collisions' distinguishes codeunit and table events.",
+  "hash": "4f478556187f9120",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-15",
+  "source": "both",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 44,
+  "severity": "minor",
+  "text": "The result for a table trigger that raises an event (implicit Rec, c1b needs caller_source_parameter_is_var) was not stated.",
+  "disposition": "fixed",
+  "evidence": "Non-goals 'Trigger RAISERS': no role change, same as any helper called with Rec from a trigger (summary_runner.rs:663, compute_record_roles); unit row 9 pins it.",
+  "hash": "8786e4a40c05b56a",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R1-16",
+  "source": "opus",
+  "round": 1,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 69,
+  "severity": "minor",
+  "text": "The new persistsCurrentRecord assertions on OnDepRec change what #70's recorded mutations prove, and no mutation covers skipping the dispatch fold for fixed_roles.",
+  "disposition": "fixed",
+  "evidence": "Acceptance row 'dependency publishers alike': re-run #70's two mutations and record outcomes, and add the mutation 'skip the dispatch fold for fixed_roles members' -> new rows fail.",
+  "hash": "132e2fad327bb5c3",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-1",
+  "source": "sol",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 155,
+  "severity": "important",
+  "text": "Publishing an optional loader's trio as unknown destroys an earlier proven load in the caller's walker (cfg_walker.rs:1330-1334), so F(var R) { R.Get; OptionalGetEvent(R); R.Modify } gains requiresLoadedAtEntry yes and its caller a false d40 finding.",
+  "disposition": "fixed",
+  "evidence": "Design 3: optional_load publishes yes->no; per-reader table shows `no` is the identity in the walker, c1b, load points and d40/d42; Design 4 enumeration's empty sequence keeps the incoming state; unit row 5b runs the regression through F and its caller.",
+  "hash": "6250b99c0bd77f02",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-2",
+  "source": "sol",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 109,
+  "severity": "important",
+  "text": "conditional = !Subscription.conditions.is_empty() reads the intersection of build-specific conditions (index.rs:449-456) as a must-run guarantee, although one reading may skip on a missing license while another does not.",
+  "disposition": "fixed",
+  "evidence": "Design 2 'Edge metadata first': Subscription gains conditional_any (the union over readings) computed in the same merge loop, existing conditions/intersection consumers unchanged; EventEdge.conditional = conditional_any; unit row 5c (mixed readings); Measurement step 6 counts mixed-reading subscriptions.",
+  "hash": "87766adf13e67ea7",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-3",
+  "source": "sol",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 185,
+  "severity": "important",
+  "text": "The opaque fallback (n>4 or an Opaque binding) made only path facts unknown while visible subscribers' presence facts survived, so a forwarding caller could recover a load or DirtyV, and 'only suppresses' was false.",
+  "disposition": "fixed",
+  "evidence": "Round 3: Design 3 'Unseen dispatch': one fold_callee_presence(p, None) and no per-subscriber fold, so every presence fact of p is unknown (the c1b opaque branch). Design 4 'What a caller sees after an UNSEEN dispatch' is scoped to Opaque/n>4 (isolated points to 'Isolated events', whose MAY facts stay visible) and states the reader effects from the source: for a var publisher parameter loaded, loaded fields AND pending_narrow become Unknown (cfg_walker.rs:1330-1337), so a preceding SetLoadFields is not kept; the only difference from the opaque branch is that the caller's own earlier DirtyV is kept. Unit rows 12 (forwarding caller) and 12b (preceding SetLoadFields; own DirtyV kept).",
+  "hash": "d95c15bea786cfbe",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-4",
+  "source": "both",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 119,
+  "severity": "important",
+  "text": "Design 2 made an isolated binding Opaque and Design 3 folded Opaque as None (every presence fact unknown), contradicting Design 4 and row 6, which expected persistsCurrentRecord yes.",
+  "disposition": "fixed",
+  "evidence": "Design 2 splits Kind (visibility) from the path_opaque flag; isolated = Exact + optional + path_opaque; Design 3 folds it as a visible binding; Design 4 'Isolated events' applies the opaque transfer to path facts only; rows 6 and 6b state the consistent oracle.",
+  "hash": "de846072cbd2d106",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-5",
+  "source": "opus",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 131,
+  "severity": "minor",
+  "text": "Dedupe did not say that one Opaque edge to a subscriber absorbs that subscriber's resolved Exact binding and collapses the dispatch.",
+  "disposition": "fixed",
+  "evidence": "Design 2 'Dedupe': an Opaque copy of S absorbs every Exact binding of S; unit row 7b (one resolved and one ambiguous edge to the same subscriber -> unseen).",
+  "hash": "998a984e9b010df9",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-6",
+  "source": "opus",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 109,
+  "severity": "minor",
+  "text": "Adding conditional to EventEdge breaks five other struct-literal sites that the spec did not list.",
+  "disposition": "fixed",
+  "evidence": "Design 2 lists src/engine/gate/events.rs:634, src/engine/gate/format_html.rs:983, src/engine/l5/event_flow/tests.rs:36, tests/cli/cli_c_events_differential.rs:668,676, each gaining conditional: false, with no projection field.",
+  "hash": "87749823a2efb126",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R2-7",
+  "source": "opus",
+  "round": 2,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 404,
+  "severity": "minor",
+  "text": "Measurement step 6 had landed under 'Discoveries to file', so R1-10 and R1-11 cited a step that was not in the Measurement plan.",
+  "disposition": "fixed",
+  "evidence": "Step 6 (census) moved back into the Measurement plan list, before 'Discoveries to file'.",
+  "hash": "d2d61f351f0fe85e",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "R3-1",
+  "source": "sol",
+  "round": 3,
+  "file": "docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md",
+  "line": 198,
+  "severity": "important",
+  "text": "Masking an optional Copy subscriber's copies_into_param yes->no makes the unchanged derivation (summary_runner.rs:728-731) publish mutatesParam no although the copier may mutate the record.",
+  "disposition": "fixed",
+  "evidence": "Design 3 'One rule for the mask (round 3)': optional_load applies only to the three trio fields of the published role; every MAY fact is computed from unmasked subscriber effects and travels in a MAY field. Table of every place a trio value feeds a MAY fact: publisher mutates_param from an unmasked copies shadow; a forwarding caller's c1b joins the callee's mutates_param (a no-op for every existing call site); copier dirt reaches callers through the publisher's dirtyAtExit (unmasked path walk), with a stated leniency where there is no path walk; loads/initialises feed no MAY fact. Unit row 5d (sole manual copier through a forwarding caller). Round 4 (sol re-raised: per-binding recompute loses accumulated mutation, F(var R){OnManualCopy(R); NoOp(R)}): Design 3 table now ACCUMULATES: p.mutates_param = join(p.mutates_param, derived, cr.mutates_param), order-independent; rows 5d' (OnManualCopy; NoOp), 5d'' (reversed) and a two-level forwarder.",
+  "hash": "2d2183121154a697",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR1",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/cfg_walker.rs",
+  "line": 1451,
+  "severity": "important",
+  "text": "In an exact dispatch, a per-binding opaque subscriber (no body/summary/role) left required_fields Known([]), a confident 'no field needed' the opaque rule forbids.",
+  "disposition": "fixed",
+  "evidence": "Fixed in final-fix-1: required_fields Unknown for a per-binding opaque subscriber, as the Unseen branch; test extended to assert requiredLoadedFieldsAtEntry Unknown, proved.",
+  "hash": "b96ce453ca73268f",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR2",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/event_dispatch.rs",
+  "line": 115,
+  "severity": "important",
+  "text": "Duplicate edges to one subscriber merged `optional` with OR; a subscriber is skipped only if every edge may skip it, so it must be AND.",
+  "disposition": "fixed",
+  "evidence": "Fixed in final-fix-1: optional = AND, path_opaque stays OR; review_duplicate_edges_or_their_flags updated to the correct expectation, proved. Final round 1 (sol re-raised: AND optional / OR path_opaque allowed {optional:false, path_opaque:true}, so a plain + isolated duplicate edge to a Get subscriber published loadsFromDbParam yes): fixed in 0f6300ba, path_opaque => optional after the merge; mixed-duplicate test, proved.",
+  "hash": "bbea76e21be04b85",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR3",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/summary_runner.rs",
+  "line": 2112,
+  "severity": "important",
+  "text": "A capped roles SCC replaced fixed_roles members' roles with the opaque role, contrary to the comment; fixed_roles members are not Jacobi-computed.",
+  "disposition": "fixed",
+  "evidence": "Fixed in final-fix-1: fixed_roles members keep their roles on a cap; new test via with_roles_iteration_cap, proved. Final round 1 (sol re-raised: fixed_roles members compose presence from the unconverged Jacobi snapshot, so exempting them on a cap can publish an incomplete No): fixed in 0f6300ba, on a cap a fixed_roles member keeps its body-local base facts and its dispatch-derived presence is widened as an unseen dispatch (unknown); sol's delayed-propagation control (publisher -> subscriber -> helper -> publisher, only the helper modifies, cap after round 1) added and proved; forced_roles_cap_keeps_a_fixed_roles_members_roles moved to a three-routine source with an extra parameter (on the old source the widened role equals the opaque role).",
+  "hash": "32cc0f7755c9f115",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR4",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/summary_runner.rs",
+  "line": 1311,
+  "severity": "minor",
+  "text": "Stale docs (compute_summaries_v2_bundle_with_leaves; capability_cone build_cross_app_base) said dependency publishers keep base roles exactly.",
+  "disposition": "fixed",
+  "evidence": "Fixed in final-fix-1: both docs say fixed_roles publishers compose their dispatch's presence facts (Design 6), path facts unknown.",
+  "hash": "4d18af77a34c1089",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR5",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/event_dispatch.rs",
+  "line": 90,
+  "severity": "minor",
+  "text": "One opaque subscriber makes every record parameter of the publisher Unseen, even ones it cannot bind.",
+  "disposition": "refuted",
+  "evidence": "Spec rule (Design 2, R1/R2 rounds, accepted by both spec reviewers): a subscriber the engine cannot see may touch any record parameter; Unseen is the conservative choice and only suppresses (all-unknown, the existing opaque-callee contract). Narrowing by name is a possible later precision gain, not a soundness issue.",
+  "hash": "e5419be2c79e8754",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR6",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/cfg_walker.rs",
+  "line": 1446,
+  "severity": "minor",
+  "text": "dispatch_sequences was rebuilt per exit state and per round, inflating the census.",
+  "disposition": "fixed",
+  "evidence": "Fixed in final-fix-1: built once per ParamDispatch; census counted once per walk.",
+  "hash": "7257f1cd6e5e0a0c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR7",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/program/model/events.rs",
+  "line": 554,
+  "severity": "minor",
+  "text": "program::model called the engine::l4 census (an upward dependency) and counted mixed readings per model build.",
+  "disposition": "fixed",
+  "evidence": "Fixed in final-fix-1: mixed readings counted inside l4 from the dispatch metadata; census also splits fixed_roles (presence only) from walker publishers.",
+  "hash": "24116e8b342c5508",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR8",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/cfg_walker.rs",
+  "line": 1429,
+  "severity": "minor",
+  "text": "An isolated subscriber's presence facts (persists) fold exactly while its path facts are opaque, so persists may overstate a rolled-back Modify.",
+  "disposition": "refuted",
+  "evidence": "Spec decision R1-9/R2-4 (accepted by both spec reviewers): an isolated subscriber is visible and may not run; its MAY facts stay visible, its path is opaque. persistsCurrentRecord yes is a MAY fact; its only reader effect is to suppress (e.g. d37 validate-without-persist), the documented lenient direction, never an invented finding.",
+  "hash": "b6fe4d3db0577c78",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR9",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/summary_runner.rs",
+  "line": 2141,
+  "severity": "minor",
+  "text": "The live test module was named issue107_pending_tests with planning-stage remarks.",
+  "disposition": "fixed",
+  "evidence": "Fixed in final-fix-1: renamed issue107_tests; planning remarks dropped.",
+  "hash": "c62066a1c9a43909",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-1",
+  "source": "sol",
+  "round": "F2",
+  "file": ".agent/issue-107/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "Overload protection was one-way: a subscriber resolved to OnPair(Rec) is also attached (shared event id) to OnPair(Rec, Qty), where all its names bind, so it composed exactly into the larger overload.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 0f6300ba: every binding of a publisher whose event id is raised by more than one publisher routine (event_dispatch::shared_event_ids) is optional and path-opaque, never exact; rows 7d/7e; the step-6 overload Ruling revised (ledger); spec Design 2 Overloads sentence. Final round 2 (sol re-raised: optional + path-opaque masks only the load trio; a foreign overload subscriber's MAY Reset still published resetsFiltersOnParam yes -> false d41): fixed in 0712660d, overload-sibling publishers dispatch as UNSEEN for every record parameter (every fact unknown); rows 7d/7e updated; new row 7f through d41 failed on 0f6300ba (false finding on Caller) and passes; Ruling revised again (ledger).",
+  "hash": "18e8fcf40994fb21",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-2",
+  "source": "sol",
+  "round": "F2",
+  "file": ".agent/issue-107/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "CHANGELOG: the load-trio wording omitted that unknown stays unknown, and named the wrong owner of `isolated` (model EventEdge vs DispatchMeta).",
+  "disposition": "fixed",
+  "evidence": "Fixed in 0f6300ba: `yes -> no`, `unknown` unchanged; EventEdge vs DispatchMeta distinguished.",
+  "hash": "b6037061cbc01f3e",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-3",
+  "source": "opus",
+  "round": "F2",
+  "file": ".agent/issue-107/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "Gates and the CDO measurement ran on 238d5ba9, before 603b514a changed outputs; they must cover the final head.",
+  "disposition": "fixed",
+  "evidence": "Re-run on the final head after round-1 fixes: see ledger Gate results ('final head').",
+  "hash": "9e07a43664afcd38",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-4",
+  "source": "opus",
+  "round": "F2",
+  "file": ".agent/issue-107/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The spec's dedupe sentence said OR-ing the flags; the code ANDs optional and ORs path_opaque.",
+  "disposition": "fixed",
+  "evidence": "Fixed in e1d8fc23 (spec), and 0f6300ba adds path_opaque => optional.",
+  "hash": "7f16b385b1b41ce2",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-5",
+  "source": "opus",
+  "round": "F2",
+  "file": ".agent/issue-107/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The step-6 overload Ruling exempted the element parameter, the code only `sender`.",
+  "disposition": "fixed",
+  "evidence": "Ruling wording fixed (element parameters exist only on platform publishers, which build no dispatch edge), then superseded by the revised Ruling.",
+  "hash": "43c5e565a3debba2",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F2-6",
+  "source": "opus",
+  "round": "F2",
+  "file": ".agent/issue-107/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The ledger's census line was pre-split and called the fixed_roles split a future minor though CR7 implemented it.",
+  "disposition": "fixed",
+  "evidence": "Census line refreshed with the final-head re-measure (exact_walker / exact_fixed_roles).",
+  "hash": "b3d4e3dacf3f83d4",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F3-1",
+  "source": "opus",
+  "round": "F3",
+  "file": "src/engine/l4/summary_runner.rs",
+  "line": 0,
+  "severity": "minor",
+  "text": "The census counter isolated_path_opaque also counted overload bindings after the round-1 fix.",
+  "disposition": "fixed",
+  "evidence": "Fixed in 0712660d: overload parameters count under unseen_opaque; isolated_path_opaque counts isolated bindings only.",
+  "hash": "88c56b430d9d52c9",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F4-1",
+  "source": "conductor",
+  "round": "F4",
+  "file": "src/engine/l4/capability_cone.rs",
+  "line": 5251,
+  "severity": "important",
+  "text": "After rebasing onto #160 step 1, the two new cross-app role tests did not compile: build_cross_app_base now takes &Arc<InputSet> (E0308 in ci-steps-all and cdo-gate).",
+  "disposition": "fixed",
+  "evidence": "Fixed in 8336e494: both tests build InputSet::read(&ws, &Default::default()) first, as #160 adapted its own callers (capability_cone.rs:4928); the rebase's only other change is the CHANGELOG conflict (both entries kept); all four gates exit 0 on 8336e494 (ledger, step 11).",
+  "hash": "ce38f368b2ccc13c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]

@@ -29,6 +29,9 @@ use super::db_effect_solver::{build_rvid_by_opid, seed_fixed_leaf_rows, solve_sc
 use super::effect_lattice::{EffectPresence, effect_key_of, join_presence};
 use super::effect_store::{SummaryBundle, SummaryBundleBuilder};
 use super::effect_universe::GrowingEffectUniverse;
+use super::event_dispatch::{
+    DispatchKind, ParamDispatch, dispatch_bindings, optional_load, shared_event_ids,
+};
 use super::routine_interner::RoutineInterner;
 use super::scc::SccResult;
 use super::summary::{
@@ -37,10 +40,41 @@ use super::summary::{
 };
 use crate::engine::perf_trace as pt;
 use crate::program::model::calls::UpgradedBinding;
-use crate::program::model::workspace::ModelRoutine;
+use crate::program::model::event_param_temp::event_param_names_match;
+use crate::program::model::workspace::{ModelParameter, ModelRoutine};
 use serde_json::json;
 
 const MAX_FIXED_POINT_ITERATIONS: usize = 1000;
+
+#[cfg(test)]
+thread_local! {
+    static ROLES_CAP_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The roles Jacobi round cap: `MAX_FIXED_POINT_ITERATIONS`, or the test
+/// override set by [`with_roles_iteration_cap`].
+fn roles_iteration_cap() -> usize {
+    #[cfg(test)]
+    if let Some(cap) = ROLES_CAP_OVERRIDE.with(|c| c.get()) {
+        return cap;
+    }
+    MAX_FIXED_POINT_ITERATIONS
+}
+
+/// Run `f` with the roles round cap forced to `cap` (#107 Design 5: no corpus
+/// SCC caps, so the capped branch is reachable only this way). A thread-local
+/// restored on exit by a drop guard; the solver runs on the calling thread.
+#[cfg(test)]
+pub(crate) fn with_roles_iteration_cap<R>(cap: usize, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<usize>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ROLES_CAP_OVERRIDE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(ROLES_CAP_OVERRIDE.with(|c| c.replace(Some(cap))));
+    f()
+}
 
 /// `ALSEM_SUMMARIES_CENSUS=1` — attribution inside the
 /// `context.compute_summaries` span (~9.9 s of ~66 s on BC Base App 8020, and
@@ -143,6 +177,90 @@ pub(crate) mod summaries_census {
     pub(crate) static BASE_SUMMARIES_BUILT: AtomicU64 = AtomicU64::new(0);
     pub(crate) static RVID_ENTRIES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static FIELD_INDEX_ENTRIES: AtomicU64 = AtomicU64::new(0);
+
+    // --- Event dispatch (#107 Measurement step 6). Counted only when on. ---
+    static DISPATCH_PUBLISHERS: AtomicU64 = AtomicU64::new(0);
+    /// Dispatching publishers with their own body (expected 0, Design 6).
+    static DISPATCH_NONEMPTY_BODY: AtomicU64 = AtomicU64::new(0);
+    /// Bindings per (publisher, record parameter): 1, 2, 3, 4, more than 4.
+    /// A parameter made unseen by an opaque subscriber is not counted here.
+    static BINDINGS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+    static BINDINGS_MAX: AtomicU64 = AtomicU64::new(0);
+    /// Exact parameters of a publisher the walker composes (Design 4).
+    static PATH_EXACT_WALKER: AtomicU64 = AtomicU64::new(0);
+    /// Exact parameters of a `fixed_roles` publisher: presence facts only
+    /// (Design 6), no walker.
+    static PATH_EXACT_FIXED: AtomicU64 = AtomicU64::new(0);
+    /// Unseen parameters of a publisher with an opaque subscriber or an event
+    /// id another publisher shares (an overload sibling).
+    static PATH_UNSEEN_OPAQUE: AtomicU64 = AtomicU64::new(0);
+    static PATH_UNSEEN_TOO_MANY: AtomicU64 = AtomicU64::new(0);
+    /// Exact parameters with an isolated binding (path-opaque, no walker).
+    static PATH_ISOLATED: AtomicU64 = AtomicU64::new(0);
+    static SEQUENCES: AtomicU64 = AtomicU64::new(0);
+    static SEQUENCES_MAX: AtomicU64 = AtomicU64::new(0);
+    /// Roles Jacobi rounds in recursive SCCs with a dispatching member.
+    static DISPATCH_SCC_ROUNDS: AtomicU64 = AtomicU64::new(0);
+    static DISPATCH_SCCS: AtomicU64 = AtomicU64::new(0);
+    /// `event-dispatch` edges whose merged readings disagree on a condition
+    /// (`EventEdge::mixed_readings`), per combined-graph build.
+    static MIXED_READINGS: AtomicU64 = AtomicU64::new(0);
+
+    fn count(c: &AtomicU64, v: u64) {
+        if enabled() {
+            c.fetch_add(v, Ordering::Relaxed);
+        }
+    }
+
+    fn count_max(total: &AtomicU64, add: u64, max: &AtomicU64, v: u64) {
+        if enabled() {
+            total.fetch_add(add, Ordering::Relaxed);
+            max.fetch_max(v, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn bindings_per_param(n: usize) {
+        count_max(&BINDINGS[n.clamp(1, 5) - 1], 1, &BINDINGS_MAX, n as u64);
+    }
+
+    pub(crate) fn sequences_enumerated(n: usize) {
+        count_max(&SEQUENCES, n as u64, &SEQUENCES_MAX, n as u64);
+    }
+
+    pub(crate) fn mixed_readings() {
+        count(&MIXED_READINGS, 1);
+    }
+
+    pub(crate) fn dispatch_scc_rounds(rounds: usize) {
+        count(&DISPATCH_SCCS, 1);
+        count(&DISPATCH_SCC_ROUNDS, rounds as u64);
+    }
+
+    /// One solve's dispatching publishers, as `(has_body, fixed_roles, pds)`:
+    /// how many, how many have a body, and which path each `ParamDispatch`
+    /// takes.
+    pub(crate) fn dispatch_publishers<'a>(
+        publishers: impl Iterator<Item = (bool, bool, &'a [super::ParamDispatch])>,
+    ) {
+        use super::DispatchKind;
+        if !enabled() {
+            return;
+        }
+        for (has_body, fixed, pds) in publishers {
+            count(&DISPATCH_PUBLISHERS, 1);
+            count(&DISPATCH_NONEMPTY_BODY, u64::from(has_body));
+            for pd in pds {
+                let c = match &pd.kind {
+                    DispatchKind::Unseen { too_many: true } => &PATH_UNSEEN_TOO_MANY,
+                    DispatchKind::Unseen { too_many: false } => &PATH_UNSEEN_OPAQUE,
+                    DispatchKind::Exact(b) if b.iter().any(|b| b.path_opaque) => &PATH_ISOLATED,
+                    DispatchKind::Exact(_) if fixed => &PATH_EXACT_FIXED,
+                    DispatchKind::Exact(_) => &PATH_EXACT_WALKER,
+                };
+                count(c, 1);
+            }
+        }
+    }
 
     pub(crate) fn enabled() -> bool {
         static E: OnceLock<bool> = OnceLock::new();
@@ -297,6 +415,42 @@ pub(crate) mod summaries_census {
         eprintln!(
             "[summaries-census]   field_index entries={}",
             g(&FIELD_INDEX_ENTRIES),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: publishers={} nonempty_body={} (expected 0)",
+            g(&DISPATCH_PUBLISHERS),
+            g(&DISPATCH_NONEMPTY_BODY),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: bindings_per_param 1={} 2={} 3={} 4={} >4={} max={}",
+            g(&BINDINGS[0]),
+            g(&BINDINGS[1]),
+            g(&BINDINGS[2]),
+            g(&BINDINGS[3]),
+            g(&BINDINGS[4]),
+            g(&BINDINGS_MAX),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: params exact_walker={} exact_fixed_roles={} unseen_opaque={} unseen_too_many={} isolated_path_opaque={}",
+            g(&PATH_EXACT_WALKER),
+            g(&PATH_EXACT_FIXED),
+            g(&PATH_UNSEEN_OPAQUE),
+            g(&PATH_UNSEEN_TOO_MANY),
+            g(&PATH_ISOLATED),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: sequences total={} max_per_walk={}",
+            g(&SEQUENCES),
+            g(&SEQUENCES_MAX),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: roles_rounds={} in recursive_sccs={}",
+            g(&DISPATCH_SCC_ROUNDS),
+            g(&DISPATCH_SCCS),
+        );
+        eprintln!(
+            "[summaries-census]   dispatch: mixed_readings={}",
+            g(&MIXED_READINGS),
         );
     }
 }
@@ -621,6 +775,7 @@ fn compose_roles_only(
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     graph: &CombinedGraph,
     body_avail_by_id: &HashMap<String, bool>,
+    dispatch: &[ParamDispatch],
 ) -> Vec<RecordRoleSummary> {
     // For non-recursive SCCs `snapshot` is empty; reads fall through to `final_map`.
     let lookup =
@@ -693,44 +848,18 @@ fn compose_roles_only(
                 Some(p) => p,
                 None => continue,
             };
-            if opaque {
-                p.persists_current_record =
-                    join_presence(p.persists_current_record, EffectPresence::Unknown);
-                p.set_based_db_writes =
-                    join_presence(p.set_based_db_writes, EffectPresence::Unknown);
-                p.validates_param = join_presence(p.validates_param, EffectPresence::Unknown);
-                p.copies_into_param = join_presence(p.copies_into_param, EffectPresence::Unknown);
-                p.resets_filters_on_param =
-                    join_presence(p.resets_filters_on_param, EffectPresence::Unknown);
-                p.loads_from_db_param =
-                    join_presence(p.loads_from_db_param, EffectPresence::Unknown);
-                p.initialises_param = join_presence(p.initialises_param, EffectPresence::Unknown);
-            } else {
-                let cr = callee_role.unwrap();
-                p.persists_current_record =
-                    join_presence(p.persists_current_record, cr.persists_current_record);
-                p.set_based_db_writes =
-                    join_presence(p.set_based_db_writes, cr.set_based_db_writes);
-                p.validates_param = join_presence(p.validates_param, cr.validates_param);
-                p.copies_into_param = join_presence(p.copies_into_param, cr.copies_into_param);
-                p.resets_filters_on_param =
-                    join_presence(p.resets_filters_on_param, cr.resets_filters_on_param);
-                // A helper that loads its `var` record loads the forwarder's too.
-                // A MAY fact (loads on some path), but its readers take it as MUST
-                // ("loaded after the call"): the walker's c1b (entry requirements,
-                // read by d40 and d42) and d39 (a load point resets the dirt, via
-                // `record_load_points`). That is lenient for all of them: it can
-                // only drop an entry requirement or a d39 finding, never invent one.
-                p.loads_from_db_param =
-                    join_presence(p.loads_from_db_param, cr.loads_from_db_param);
-                p.initialises_param = join_presence(p.initialises_param, cr.initialises_param);
-            }
-            p.mutates_param = join_presence(
-                join_presence(p.persists_current_record, p.validates_param),
-                p.copies_into_param,
-            );
+            fold_callee_presence(p, if opaque { None } else { callee_role }, false);
         }
     }
+
+    // The event dispatch (#107 Design 3): the subscribers' presence facts.
+    fold_dispatch_presence(
+        &mut parameter_roles,
+        dispatch,
+        snapshot,
+        final_map,
+        body_avail_by_id,
+    );
 
     // Path-aware entry-requirement + exit-effect composition (spec §(c1a)/(c1b)).
     // Mirrors al-sem summary-runner.ts lines 310-325: after cross-call c1b, run
@@ -764,6 +893,9 @@ fn compose_roles_only(
                 graph,
                 body_avail_by_id,
                 &walk_indexes,
+                dispatch
+                    .iter()
+                    .find(|d| d.param_index == param_role.parameter_index),
             );
             param_role.requires_loaded_at_entry = f.requires_loaded_at_entry;
             param_role.mutates_before_load = f.mutates_before_load;
@@ -774,6 +906,98 @@ fn compose_roles_only(
     }
 
     parameter_roles
+}
+
+/// The c1b fold of one callee's presence facts into the caller's role `p`
+/// (`None` = an opaque callee: every fact joins `unknown`). `optional` (a
+/// subscriber that may not run, #107 Design 3): the callee's load trio goes
+/// through [`optional_load`] first, so it neither gains nor destroys a load.
+/// Every MAY fact, `mutates_param` included, joins the UNMASKED callee value.
+fn fold_callee_presence(
+    p: &mut RecordRoleSummary,
+    callee_role: Option<&RecordRoleSummary>,
+    optional: bool,
+) {
+    let callee_mutates = match callee_role {
+        None => {
+            p.persists_current_record =
+                join_presence(p.persists_current_record, EffectPresence::Unknown);
+            p.set_based_db_writes = join_presence(p.set_based_db_writes, EffectPresence::Unknown);
+            p.validates_param = join_presence(p.validates_param, EffectPresence::Unknown);
+            p.copies_into_param = join_presence(p.copies_into_param, EffectPresence::Unknown);
+            p.resets_filters_on_param =
+                join_presence(p.resets_filters_on_param, EffectPresence::Unknown);
+            p.loads_from_db_param = join_presence(p.loads_from_db_param, EffectPresence::Unknown);
+            p.initialises_param = join_presence(p.initialises_param, EffectPresence::Unknown);
+            // `derived` below already joins `unknown` from the facts above.
+            EffectPresence::No
+        }
+        Some(cr) => {
+            let trio = |v: EffectPresence| if optional { optional_load(v) } else { v };
+            p.persists_current_record =
+                join_presence(p.persists_current_record, cr.persists_current_record);
+            p.set_based_db_writes = join_presence(p.set_based_db_writes, cr.set_based_db_writes);
+            p.validates_param = join_presence(p.validates_param, cr.validates_param);
+            p.copies_into_param = join_presence(p.copies_into_param, trio(cr.copies_into_param));
+            p.resets_filters_on_param =
+                join_presence(p.resets_filters_on_param, cr.resets_filters_on_param);
+            // A helper that loads its `var` record loads the forwarder's too.
+            // A MAY fact (loads on some path), but its readers take it as MUST
+            // ("loaded after the call"): the walker's c1b (entry requirements,
+            // read by d40 and d42) and d39 (a load point resets the dirt, via
+            // `record_load_points`). That is lenient for all of them: it can
+            // only drop an entry requirement or a d39 finding, never invent one.
+            p.loads_from_db_param =
+                join_presence(p.loads_from_db_param, trio(cr.loads_from_db_param));
+            p.initialises_param = join_presence(p.initialises_param, trio(cr.initialises_param));
+            // Unmasked: every role's `mutates_param` covers its own copies.
+            cr.mutates_param
+        }
+    };
+    // Accumulate across call sites (a join, so independent of call order)
+    // instead of recomputing per binding. For every callee today
+    // `cr.mutates_param` equals the derivation over facts already joined
+    // into `p`, so no call site moves; it carries an unmasked mutation
+    // through forwarders (#107 Design 3, R3-1).
+    let derived = join_presence(
+        join_presence(p.persists_current_record, p.validates_param),
+        p.copies_into_param,
+    );
+    p.mutates_param = join_presence(join_presence(p.mutates_param, derived), callee_mutates);
+}
+
+/// Fold an event publisher's dispatch into its roles (#107 Design 3): only for
+/// a `var` publisher parameter. An unseen dispatch is ONE opaque fold; an exact
+/// one folds each `var` subscriber parameter's role, or `None` for the c1b
+/// opaque reasons (no summary, no role for `q`, no body).
+fn fold_dispatch_presence(
+    roles: &mut [RecordRoleSummary],
+    dispatch: &[ParamDispatch],
+    snapshot: &HashMap<String, RoutineSummary>,
+    final_map: &HashMap<String, RoutineSummary>,
+    body_avail_by_id: &HashMap<String, bool>,
+) {
+    for d in dispatch.iter().filter(|d| d.caller_is_var) {
+        let Some(p) = roles
+            .iter_mut()
+            .find(|r| r.parameter_index == d.param_index)
+        else {
+            continue;
+        };
+        match &d.kind {
+            DispatchKind::Unseen { .. } => fold_callee_presence(p, None, false),
+            DispatchKind::Exact(bindings) => {
+                for b in bindings.iter().filter(|b| b.callee_is_var) {
+                    let role = snapshot
+                        .get(&b.subscriber)
+                        .or_else(|| final_map.get(&b.subscriber))
+                        .filter(|_| body_avail_by_id.get(&b.subscriber).copied() == Some(true))
+                        .and_then(|s| s.parameter_roles.iter().find(|r| r.parameter_index == b.q));
+                    fold_callee_presence(p, role, b.optional);
+                }
+            }
+        }
+    }
 }
 
 /// Substitute a callee effect's `ParameterDependent(callee_param_index)` temp
@@ -897,30 +1121,40 @@ fn record_op_by_id<'r>(
         .or_else(|| ops.iter().find(|op| op.id == op_id))
 }
 
+/// The publisher parameter an event subscriber's parameter `sub_param` binds to:
+/// AL binds by NAME, case-insensitively, quotes ignored; a subscriber may
+/// declare any subset. `None`: the subscriber has no parameter `sub_param`, or
+/// no publisher parameter has its name. The ONE subscriber-to-publisher
+/// parameter mapping (#107 Design 1).
+pub(crate) fn event_publisher_param<'p>(
+    publisher: &'p ModelRoutine,
+    subscriber: &ModelRoutine,
+    sub_param: u32,
+) -> Option<&'p ModelParameter> {
+    let name = subscriber
+        .parameters
+        .iter()
+        .find(|p| p.index == sub_param)?
+        .name
+        .as_str();
+    publisher
+        .parameters
+        .iter()
+        .find(|p| event_param_names_match(&p.name, name))
+}
+
 /// The temp state an event subscriber's parameter `sub_param` has in its
-/// PUBLISHER's frame. AL binds a subscriber's parameters to the publisher's by
-/// NAME (a subscriber may declare any subset), so the publisher parameter of the
-/// same name decides: its own record-variable temp state (`temporary` keyword ->
-/// `Known(true)`, keyword-less `var` -> `ParameterDependent(i)`, resolved further
-/// at the raiser's call site). No same-named record parameter -> `Unknown`.
+/// PUBLISHER's frame. The publisher parameter it binds to
+/// ([`event_publisher_param`]) decides: its own record-variable temp state
+/// (`temporary` keyword -> `Known(true)`, keyword-less `var` ->
+/// `ParameterDependent(i)`, resolved further at the raiser's call site). No
+/// same-named record parameter -> `Unknown`.
 pub(crate) fn event_param_temp_state(
     publisher: &ModelRoutine,
     subscriber: &ModelRoutine,
     sub_param: u32,
 ) -> TempState {
-    let Some(name) = subscriber
-        .parameters
-        .iter()
-        .find(|p| p.index == sub_param)
-        .map(|p| p.name.trim().trim_matches('"'))
-    else {
-        return TempState::Unknown;
-    };
-    let Some(pp) = publisher
-        .parameters
-        .iter()
-        .find(|p| p.name.trim().trim_matches('"').eq_ignore_ascii_case(name))
-    else {
+    let Some(pp) = event_publisher_param(publisher, subscriber, sub_param) else {
         return TempState::Unknown;
     };
     publisher
@@ -1012,6 +1246,29 @@ fn clone_role(r: &RecordRoleSummary) -> RecordRoleSummary {
     }
 }
 
+/// The role a reader treats as "cannot see" (#107 Design 5): every presence
+/// fact `Unknown` and both loaded-field lists `Unknown`; identity and the
+/// syntactic fields are kept.
+fn opaque_role(r: &RecordRoleSummary) -> RecordRoleSummary {
+    let u = EffectPresence::Unknown;
+    RecordRoleSummary {
+        requires_loaded_at_entry: u,
+        required_loaded_fields_at_entry: FieldList::Unknown,
+        mutates_before_load: u,
+        persists_current_record: u,
+        set_based_db_writes: u,
+        validates_param: u,
+        copies_into_param: u,
+        resets_filters_on_param: u,
+        dirty_at_exit: u,
+        current_loaded_fields_at_exit: FieldList::Unknown,
+        mutates_param: u,
+        loads_from_db_param: u,
+        initialises_param: u,
+        ..clone_role(r)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // compute_summaries_v2 — the new-solver seam (l4-summary-fixpoint-redesign).
 // ---------------------------------------------------------------------------
@@ -1060,12 +1317,13 @@ fn clone_role(r: &RecordRoleSummary) -> RecordRoleSummary {
 /// module doc for why materialized `Vec<DbEffect>` feed-forward survives
 /// through A2).
 ///
-/// `fixed_roles` (#70): routines solved for their db-effect ROWS only. Each keeps
-/// its base summary's parameter roles for the whole solve, as a fixed leaf's: the
-/// five path-sensitive fields unknown, the body-local fields
+/// `fixed_roles` (#70): routines solved for their db-effect ROWS, whose roles no
+/// walker computes. Each keeps its base summary's parameter roles, as a fixed
+/// leaf's: the five path-sensitive fields unknown, the body-local fields
 /// (`persistsCurrentRecord`, `writesFields`, `validatesParam`, …) from its own
-/// body. Role composition does not follow the
-/// synthetic event-dispatch edges a dependency publisher is solved through.
+/// body. A dependency publisher among them also composes its event dispatch's
+/// PRESENCE facts (#107 Design 6, `fold_dispatch_presence`); its path facts
+/// stay unknown.
 /// Empty everywhere but the cross-app solves: the base, the db-effect bundle and
 /// the digest's transaction spans.
 pub fn compute_summaries_v2_bundle_with_leaves(
@@ -1098,6 +1356,25 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         .map(|r| (r.id.clone(), r.body_available))
         .collect();
     summaries_census::add_since(&summaries_census::BODY_AVAIL_NANOS, _t);
+
+    // Each event publisher's dispatch bindings (#107 Design 2), once per solve.
+    let shared_events = shared_event_ids(graph);
+    let dispatch_by_id: HashMap<String, Vec<ParamDispatch>> = routines
+        .iter()
+        .filter_map(|r| {
+            let edges = graph.edges_by_from.get(&r.id)?;
+            let d = dispatch_bindings(r, edges, &routines_by_id, &shared_events);
+            (!d.is_empty()).then(|| (r.id.clone(), d))
+        })
+        .collect();
+    summaries_census::dispatch_publishers(dispatch_by_id.iter().map(|(id, pds)| {
+        let r = routines_by_id[id];
+        (
+            !r.record_operations.is_empty() || !r.call_sites.is_empty(),
+            fixed_roles.contains(id),
+            pds.as_slice(),
+        )
+    }));
 
     // Base intraprocedural summaries for NON-LEAF routines only (a leaf carries
     // its own summary; its EMPTY merged features must never overwrite it).
@@ -1184,6 +1461,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         leaf_summaries,
         fixed_roles,
         uncertainty_edges_by_from: &uncertainty_edges_by_from,
+        dispatch_by_id: &dispatch_by_id,
     };
 
     // One workspace-wide interned effect universe, threaded across every SCC
@@ -1479,14 +1757,17 @@ pub struct SccComputeCtx<'a> {
     pub body_avail_by_id: &'a HashMap<String, bool>,
     pub stable_map: &'a HashMap<String, String>,
     pub leaf_summaries: &'a HashMap<String, RoutineSummary>,
-    /// Members that keep their base roles (see
-    /// [`compute_summaries_v2_bundle_with_leaves`]).
+    /// Members that keep their base roles plus their dispatch's presence facts
+    /// (see [`compute_summaries_v2_bundle_with_leaves`]).
     pub fixed_roles: &'a HashSet<String>,
     /// `graph.uncertainty_edges` indexed by source routine id (indices into
     /// `graph.uncertainty_edges`, pushed in GLOBAL order) — an O(1) per-routine
     /// lookup of "this routine's uncertainty edges" instead of scanning the whole
     /// workspace list per routine. Same edges, same order, byte-identical.
     pub uncertainty_edges_by_from: &'a HashMap<String, Vec<usize>>,
+    /// Each event publisher's dispatch bindings (#107), only for routines with
+    /// a non-empty result.
+    pub(crate) dispatch_by_id: &'a HashMap<String, Vec<ParamDispatch>>,
 }
 
 /// A diagnostic surfaced by the L4 summarize stage — presently just the JACOBI
@@ -1505,7 +1786,8 @@ pub struct SummarizeDiagnostic {
 }
 
 /// One member's roles for a pass: [`compose_roles_only`], or, for a
-/// `fixed_roles` member, its base roles unchanged (#70).
+/// `fixed_roles` member, its base roles (#70) with only its dispatch's presence
+/// facts folded in (#107 Design 6; no walker, so its path facts stay unknown).
 fn member_roles(
     ctx: &SccComputeCtx,
     routine: &ModelRoutine,
@@ -1513,8 +1795,20 @@ fn member_roles(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
 ) -> Vec<RecordRoleSummary> {
+    let dispatch = ctx
+        .dispatch_by_id
+        .get(&routine.id)
+        .map_or(&[][..], Vec::as_slice);
     if ctx.fixed_roles.contains(&routine.id) {
-        return base_roles.iter().map(clone_role).collect();
+        let mut roles: Vec<RecordRoleSummary> = base_roles.iter().map(clone_role).collect();
+        fold_dispatch_presence(
+            &mut roles,
+            dispatch,
+            snapshot,
+            final_map,
+            ctx.body_avail_by_id,
+        );
+        return roles;
     }
     compose_roles_only(
         routine,
@@ -1524,7 +1818,35 @@ fn member_roles(
         ctx.upgraded_bindings,
         ctx.graph,
         ctx.body_avail_by_id,
+        dispatch,
     )
+}
+
+/// A capped `fixed_roles` member's roles (F1-CR3): its base roles, with every
+/// dispatch of a record parameter folded as UNSEEN, since the round-cap
+/// snapshot its exact dispatch was folded from had not converged.
+fn fixed_roles_on_cap(ctx: &SccComputeCtx, id: &str) -> Vec<RecordRoleSummary> {
+    let mut roles: Vec<RecordRoleSummary> = ctx
+        .base_summaries
+        .get(id)
+        .map_or(&[][..], |b| b.parameter_roles.as_slice())
+        .iter()
+        .map(clone_role)
+        .collect();
+    let unseen: Vec<ParamDispatch> = ctx
+        .dispatch_by_id
+        .get(id)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .map(|d| ParamDispatch {
+            kind: DispatchKind::Unseen { too_many: false },
+            sequences: Vec::new(),
+            ..d.clone()
+        })
+        .collect();
+    let none = HashMap::new();
+    fold_dispatch_presence(&mut roles, &unseen, &none, &none, ctx.body_avail_by_id);
+    roles
 }
 
 // ---------------------------------------------------------------------------
@@ -1787,7 +2109,8 @@ fn run_one_scc_roles(
         in_progress = merged;
         dirty = next_dirty;
 
-        if iterations >= MAX_FIXED_POINT_ITERATIONS {
+        // A TRUE cap only: a round that converged on the cap round is not capped.
+        if changed && iterations >= roles_iteration_cap() {
             // Same cap the retired run_one_scc used. Roles-only convergence
             // cannot outlast the
             // old whole-summary fixpoint (roles are one of its components), so a
@@ -1818,10 +2141,32 @@ fn run_one_scc_roles(
         }
     }
 
+    if scc_entry
+        .members
+        .iter()
+        .any(|m| ctx.dispatch_by_id.contains_key(m))
+    {
+        summaries_census::dispatch_scc_rounds(iterations);
+    }
+
+    // Design 5 guard: the roles transfer is not monotone, so a capped SCC's
+    // round-cap roles may be any point of an oscillation. Publish the opaque
+    // role instead, which every reader already treats as "cannot see".
+    // A `fixed_roles` member keeps its body-local base roles (Design 6: no
+    // walker computes them), but its dispatch presence was folded from the
+    // unconverged snapshot, so it is widened as an unseen dispatch.
+    let capped = cap_hit_stable_members.is_some();
     let mut out: Vec<(String, Vec<RecordRoleSummary>)> = Vec::new();
     for id in &scc_entry.members {
         if let Some(s) = in_progress.remove(id) {
-            out.push((id.clone(), s.parameter_roles));
+            let roles = if !capped {
+                s.parameter_roles
+            } else if ctx.fixed_roles.contains(id) {
+                fixed_roles_on_cap(ctx, id)
+            } else {
+                s.parameter_roles.iter().map(opaque_role).collect()
+            };
+            out.push((id.clone(), roles));
         }
     }
     RolesSccOut {
@@ -1841,4 +2186,444 @@ fn project_summary_to_stable(
     stable_map: &HashMap<String, String>,
 ) -> PRoutineSummaryCore {
     project_routine_summary_core_internal(routine_id, s, stable_map)
+}
+
+/// Issue #107 tests that need crate-private symbols (the binding mapping, edge
+/// metadata, the roles round cap). The behaviour rows live in
+/// `tests/gap/gap_issue107_publisher_roles.rs`.
+#[cfg(test)]
+mod issue107_tests {
+    use super::*;
+    use crate::engine::l4::combined_graph::build_combined_graph;
+    use crate::engine::l4::scc::{SccInputGraph, tarjan_scc};
+    use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
+    use crate::program::model::workspace::Model;
+
+    const APP: &str = "11111111-0000-0000-0000-000000107108";
+
+    fn param(index: u32, name: &str, is_record: bool) -> ModelParameter {
+        ModelParameter {
+            index,
+            name: name.to_string(),
+            type_text: if is_record { "Record Cust" } else { "Integer" }.to_string(),
+            is_var: true,
+            is_record,
+            table_name: is_record.then(|| "Cust".to_string()),
+        }
+    }
+
+    /// Row 13 (Design 1): ONE by-name mapping, case-insensitive, quotes
+    /// ignored, any subset. A hand-built subscriber whose parameter is `"Rec"`
+    /// (quoted, as an ABI name could be) binds to the publisher's `Rec`; `REC`
+    /// binds too; `Qty` binds by name, not position; an unknown name binds to
+    /// nothing. (`pd_solve::carry_reqs` uses the same mapping: its quoted-name
+    /// row is `carry_reqs_event_dispatch_ignores_quotes_in_parameter_names`.)
+    #[test]
+    fn row13_event_publisher_param_binds_by_name_quotes_ignored() {
+        // Any model routine; only `parameters` is read, and it is hand-stated.
+        let m = model("codeunit 50100 X\n{\n    procedure P()\n    begin\n    end;\n}\n");
+        let mut publisher = m.workspace.routines[0].clone();
+        publisher.parameters = vec![param(0, "Rec", true), param(1, "Qty", false)];
+        let mut subscriber = publisher.clone();
+        subscriber.parameters = vec![
+            param(0, "Qty", false),
+            param(1, "\"Rec\"", true),
+            param(2, "REC", true),
+            param(3, "Other", true),
+        ];
+        let got: Vec<Option<u32>> = (0..4)
+            .map(|q| event_publisher_param(&publisher, &subscriber, q).map(|p| p.index))
+            .collect();
+        assert_eq!(got, vec![Some(1), Some(0), Some(0), None]);
+    }
+
+    fn model(src: &str) -> Model {
+        let table = r#"
+table 50100 Cust
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Name; Text[50]) { }
+    }
+    keys { key(PK; "No.") { } }
+}
+"#;
+        assemble_and_resolve_inline_program_default(
+            &[
+                ("src/Tab.al".to_string(), table.to_string()),
+                ("src/Code.al".to_string(), src.to_string()),
+            ],
+            APP,
+        )
+    }
+
+    fn id_of(m: &Model, name: &str) -> String {
+        let hits: Vec<&ModelRoutine> = m
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name == name)
+            .collect();
+        assert_eq!(hits.len(), 1, "precondition: one routine {name}");
+        hits[0].id.clone()
+    }
+
+    const EDGE_SRC: &str = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnMixRead(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false, true)]
+    procedure OnIso(var Rec: Record Cust)
+    begin
+    end;
+}
+
+codeunit 50101 Sub
+{
+#if CLEAN
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnMixRead', '', true, false)]
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnMixRead', '', false, false)]
+#endif
+    local procedure HandleMixRead(var Rec: Record Cust)
+    begin
+        Rec.Get('A');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnMixRead', '', false, false)]
+    local procedure HandlePlain(var Rec: Record Cust)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnIso', '', false, false)]
+    local procedure HandleIso(var Rec: Record Cust)
+    begin
+    end;
+}
+"#;
+
+    /// Row 5c (edge half, Design 2): a subscriber that skips on a missing
+    /// license in one `#if` reading and not in the other has a model
+    /// `EventEdge` with `conditional == true` (and `mixed_readings`, the census
+    /// flag) and a combined `event-dispatch` edge whose `dispatch` metadata is
+    /// conditional; a plain subscriber's are not; an isolated event's edge
+    /// carries `isolated`. (The
+    /// `Subscription.conditions` empty / `conditional_any` true half is
+    /// `program::resolve::index` test
+    /// `issue107_mixed_readings_set_conditional_any`.)
+    #[test]
+    fn row5c_edge_metadata_marks_mixed_readings_conditional() {
+        let m = model(EDGE_SRC);
+        let mut failures = Vec::new();
+        for (sub, want) in [("HandleMixRead", true), ("HandlePlain", false)] {
+            let sid = id_of(&m, sub);
+            let edges: Vec<(bool, bool)> = m
+                .events
+                .graph
+                .edges
+                .iter()
+                .filter(|e| e.subscriber_routine_id == sid)
+                .map(|e| (e.conditional, e.mixed_readings))
+                .collect();
+            if edges != vec![(want, want)] {
+                failures.push(format!(
+                    "EventEdge {sub}: want [({want}, {want})], got {edges:?}"
+                ));
+            }
+        }
+        let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
+        for (publisher, sub, conditional, isolated) in [
+            ("OnMixRead", "HandleMixRead", true, false),
+            ("OnMixRead", "HandlePlain", false, false),
+            ("OnIso", "HandleIso", false, true),
+        ] {
+            let (pid, sid) = (id_of(&m, publisher), id_of(&m, sub));
+            let got: Vec<Option<(bool, bool)>> = graph
+                .edges_by_from
+                .get(&pid)
+                .map(|es| {
+                    es.iter()
+                        .filter(|e| e.kind == "event-dispatch" && e.to == sid)
+                        .map(|e| e.dispatch.as_ref().map(|d| (d.conditional, d.isolated)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if got != vec![Some((conditional, isolated))] {
+                failures.push(format!(
+                    "CombinedEdge {publisher} -> {sub}: want [Some(({conditional}, {isolated}))], got {got:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// Design 5 guard, forced: 0 cap hits on the fixtures and CDO
+    /// never exercises the replacement, so the cap is forced to ONE round
+    /// (`with_roles_iteration_cap`, a test-only override of
+    /// `MAX_FIXED_POINT_ITERATIONS`). The `ws-cycle` SCC `{OnCyc, HandleCyc}`
+    /// then caps, and every capped member's roles are the OPAQUE role: every
+    /// presence fact and every path fact `unknown`, field lists `Unknown`; the
+    /// `fixpoint-capped` diagnostic stays. A `fixed_roles` member is the
+    /// exception: it keeps its base roles with its dispatch's presence facts.
+    fn cyc_run(
+        cap: Option<usize>,
+    ) -> (
+        String,
+        String,
+        HashMap<String, RoutineSummary>,
+        Vec<SummarizeDiagnostic>,
+    ) {
+        cyc_run_fixed(CYC_SRC, cap, false)
+    }
+
+    const CYC_SRC: &str = r#"
+codeunit 50102 Cyc
+{
+    [IntegrationEvent(false, false)]
+    procedure OnCyc(var Rec: Record Cust; Depth: Integer)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Cyc, 'OnCyc', '', false, false)]
+    local procedure HandleCyc(var Rec: Record Cust; Depth: Integer)
+    begin
+        if Depth > 0 then
+            OnCyc(Rec, Depth - 1);
+        Rec.Modify();
+    end;
+}
+"#;
+
+    /// `OnCyc -> HandleCyc -> Helper -> OnCyc`: only `Helper` modifies, so the
+    /// `Modify` reaches `OnCyc` only in round 2 (round 1 reads `HandleCyc`'s
+    /// base roles, which have none). `Other` binds no subscriber parameter, so
+    /// it has no dispatch.
+    const CYC_HELPER_SRC: &str = r#"
+codeunit 50102 Cyc
+{
+    [IntegrationEvent(false, false)]
+    procedure OnCyc(var Rec: Record Cust; var Other: Record Cust; Depth: Integer)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Cyc, 'OnCyc', '', false, false)]
+    local procedure HandleCyc(var Rec: Record Cust; Depth: Integer)
+    begin
+        Helper(Rec, Depth);
+    end;
+
+    local procedure Helper(var Rec: Record Cust; Depth: Integer)
+    begin
+        if Depth > 0 then
+            OnCyc(Rec, Rec, Depth - 1);
+        Rec.Modify();
+    end;
+}
+"#;
+
+    /// [`cyc_run`] over `src`, with `OnCyc` in `fixed_roles` when
+    /// `fix_publisher`.
+    fn cyc_run_fixed(
+        src: &str,
+        cap: Option<usize>,
+        fix_publisher: bool,
+    ) -> (
+        String,
+        String,
+        HashMap<String, RoutineSummary>,
+        Vec<SummarizeDiagnostic>,
+    ) {
+        let m = model(src);
+        let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
+        let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+        for (from, list) in &graph.edges_by_from {
+            adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
+        }
+        let scc = tarjan_scc(&SccInputGraph {
+            nodes: &graph.nodes,
+            edges_by_from: &adjacency,
+        });
+        let (pid, hid) = (id_of(&m, "OnCyc"), id_of(&m, "HandleCyc"));
+        assert!(
+            scc.sccs
+                .iter()
+                .any(|s| s.recursive && s.members.contains(&pid) && s.members.contains(&hid)),
+            "precondition: OnCyc and HandleCyc form one recursive SCC"
+        );
+        let mut fields: FieldIndex = HashMap::new();
+        for t in &m.workspace.tables {
+            for f in &t.fields {
+                fields
+                    .entry((t.id.clone(), f.name.to_lowercase()))
+                    .or_insert_with(|| f.id.clone());
+            }
+        }
+        let fixed: HashSet<String> = if fix_publisher {
+            HashSet::from([pid.clone()])
+        } else {
+            HashSet::new()
+        };
+        let run = || {
+            compute_summaries_v2_with_leaves_core(
+                &m.workspace.routines,
+                &graph,
+                &scc,
+                &m.calls.upgraded_bindings,
+                &fields,
+                &HashMap::new(),
+                &fixed,
+            )
+        };
+        let (map, diags) = match cap {
+            Some(c) => with_roles_iteration_cap(c, run),
+            None => run(),
+        };
+        (pid, hid, map, diags)
+    }
+
+    #[test]
+    fn forced_roles_cap_publishes_the_opaque_role() {
+        let (pid, hid, map, diags) = cyc_run(Some(1));
+        assert!(!diags.is_empty(), "precondition: the forced cap fires");
+        let mut failures = Vec::new();
+        for (name, id) in [("OnCyc", &pid), ("HandleCyc", &hid)] {
+            let Some(r) = map
+                .get(id)
+                .and_then(|s| s.parameter_roles.iter().find(|r| r.parameter_index == 0))
+            else {
+                failures.push(format!("{name}: no role for Rec"));
+                continue;
+            };
+            let presences = [
+                ("persistsCurrentRecord", r.persists_current_record),
+                ("setBasedDbWrites", r.set_based_db_writes),
+                ("validatesParam", r.validates_param),
+                ("copiesIntoParam", r.copies_into_param),
+                ("resetsFiltersOnParam", r.resets_filters_on_param),
+                ("loadsFromDbParam", r.loads_from_db_param),
+                ("initialisesParam", r.initialises_param),
+                ("mutatesParam", r.mutates_param),
+                ("requiresLoadedAtEntry", r.requires_loaded_at_entry),
+                ("mutatesBeforeLoad", r.mutates_before_load),
+                ("dirtyAtExit", r.dirty_at_exit),
+            ];
+            for (k, v) in presences {
+                if v != EffectPresence::Unknown {
+                    failures.push(format!("{name}.{k}: want Unknown, got {v:?}"));
+                }
+            }
+            for (k, v) in [
+                (
+                    "requiredLoadedFieldsAtEntry",
+                    &r.required_loaded_fields_at_entry,
+                ),
+                (
+                    "currentLoadedFieldsAtExit",
+                    &r.current_loaded_fields_at_exit,
+                ),
+            ] {
+                if *v != crate::engine::l4::summary::FieldList::Unknown {
+                    failures.push(format!("{name}.{k}: want Unknown, got {v:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// Negative control for the guard above: the same SCC with a cap that it
+    /// converges within is NOT capped. `n` is the round it converges on; at
+    /// `cap == n` the last round did not change, so it must keep its real
+    /// roles and record no cap.
+    #[test]
+    fn converged_roles_scc_is_never_treated_as_capped() {
+        // Measured: the last round changes nothing on round 3 (cap 2 still caps).
+        let n = 3;
+        assert!(
+            !cyc_run(Some(n - 1)).3.is_empty(),
+            "precondition: one round fewer really caps this SCC"
+        );
+        let uncapped = cyc_run(None);
+        assert!(uncapped.3.is_empty(), "no override: no cap");
+        for cap in [n, 1000] {
+            let (pid, hid, map, diags) = cyc_run(Some(cap));
+            assert!(diags.is_empty(), "cap {cap}: converged SCC records no cap");
+            for id in [&pid, &hid] {
+                assert_eq!(
+                    map[id].parameter_roles, uncapped.2[id].parameter_roles,
+                    "cap {cap}: roles equal the uncapped roles"
+                );
+            }
+            assert_eq!(
+                map[&hid].parameter_roles[0].persists_current_record,
+                EffectPresence::Yes,
+                "cap {cap}: real role, not opaque"
+            );
+        }
+    }
+
+    /// A capped SCC replaces its walker-computed members' roles with the
+    /// opaque role (`HandleCyc`). A `fixed_roles` member (here `OnCyc`,
+    /// hand-stated) is not opaque: a parameter with no dispatch (`Other`) keeps
+    /// its base role exactly (the uncapped one, not the opaque one), while a
+    /// dispatched parameter's (`Rec`) presence, folded from the unconverged
+    /// snapshot, is widened as an unseen dispatch (F1-CR3):
+    /// `persistsCurrentRecord` and `loadsFromDbParam` `unknown`. (Before
+    /// F1-CR3 this test pinned `OnCyc`'s round-1 `yes` / `no` on `CYC_SRC`;
+    /// an empty publisher's dispatched parameter widened is the opaque role,
+    /// so the test moved to `CYC_HELPER_SRC`, whose `Other` shows the base
+    /// facts staying.)
+    #[test]
+    fn forced_roles_cap_keeps_a_fixed_roles_members_roles() {
+        let (pid, _, uncapped, _) = cyc_run_fixed(CYC_HELPER_SRC, None, true);
+        let (pid2, hid, map, diags) = cyc_run_fixed(CYC_HELPER_SRC, Some(1), true);
+        assert_eq!(pid, pid2);
+        assert!(!diags.is_empty(), "precondition: the forced cap fires");
+        let role = |m: &HashMap<String, RoutineSummary>, id: &String, i: u32| {
+            m[id]
+                .parameter_roles
+                .iter()
+                .find(|r| r.parameter_index == i)
+                .cloned()
+                .expect("a role")
+        };
+        let rec = role(&map, &pid, 0);
+        assert_eq!(rec.persists_current_record, EffectPresence::Unknown, "Rec");
+        assert_eq!(rec.loads_from_db_param, EffectPresence::Unknown, "Rec");
+        let other = role(&map, &pid, 1);
+        assert_eq!(other, role(&uncapped, &pid, 1), "Other keeps its base role");
+        assert_ne!(other, opaque_role(&other), "Other is not the opaque role");
+        assert_eq!(
+            role(&map, &hid, 0).persists_current_record,
+            EffectPresence::Unknown,
+            "HandleCyc stays opaque"
+        );
+    }
+
+    /// F1-CR3: a `fixed_roles` member's dispatch presence is composed from the
+    /// unconverged snapshot, so on a cap it is widened as an unseen dispatch.
+    /// `OnCyc -> HandleCyc -> Helper -> OnCyc`, only `Helper` modifies: after
+    /// round 1 `OnCyc` has folded `HandleCyc`'s base roles only (`No`). Capped
+    /// there, `OnCyc`'s persistence must not be that `No`.
+    #[test]
+    fn forced_roles_cap_widens_a_fixed_members_unconverged_dispatch() {
+        let (pid, _, uncapped, diags) = cyc_run_fixed(CYC_HELPER_SRC, None, true);
+        assert!(diags.is_empty(), "precondition: converges uncapped");
+        assert_eq!(
+            uncapped[&pid].parameter_roles[0].persists_current_record,
+            EffectPresence::Yes,
+            "precondition: the converged OnCyc persists"
+        );
+        let (pid, _, map, diags) = cyc_run_fixed(CYC_HELPER_SRC, Some(1), true);
+        assert!(!diags.is_empty(), "precondition: the forced cap fires");
+        assert_ne!(
+            map[&pid].parameter_roles[0].persists_current_record,
+            EffectPresence::No,
+            "capped OnCyc must not publish an incomplete No"
+        );
+    }
 }

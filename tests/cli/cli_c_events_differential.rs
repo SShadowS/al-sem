@@ -672,6 +672,8 @@ fn cycle_native_oracle() {
                 subscriber_app_id: "app".to_string(),
                 resolution: "resolved".to_string(),
                 provenance: vec![],
+                conditional: false,
+                mixed_readings: false,
             },
             EventEdge {
                 event_id: "E2".to_string(),
@@ -680,6 +682,8 @@ fn cycle_native_oracle() {
                 subscriber_app_id: "app".to_string(),
                 resolution: "resolved".to_string(),
                 provenance: vec![],
+                conditional: false,
+                mixed_readings: false,
             },
         ],
     };

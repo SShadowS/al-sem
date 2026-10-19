@@ -75,6 +75,7 @@ pub fn edge(from: &str, to: &str, callsite_id: &str) -> CombinedEdge {
         operation_id: None,
         event_id: None,
         subscriber_app_id: None,
+        dispatch: None,
         resolution: "resolved".to_string(),
     }
 }
@@ -328,6 +329,7 @@ pub fn edge_kind(from: &str, to: &str, callsite_id: &str, kind: &str) -> Combine
         operation_id: None,
         event_id: None,
         subscriber_app_id: None,
+        dispatch: None,
         resolution: "resolved".to_string(),
     }
 }

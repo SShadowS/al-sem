@@ -978,6 +978,7 @@ mod tests {
                     operation_id: None,
                     event_id: None,
                     subscriber_app_id: None,
+                    dispatch: None,
                     resolution: "resolved".to_string(),
                 });
         }

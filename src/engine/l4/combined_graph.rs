@@ -45,6 +45,18 @@ pub struct CombinedEdge {
     pub event_id: Option<String>,
     pub subscriber_app_id: Option<String>,
     pub resolution: String,
+    /// `Some` only on `event-dispatch` edges (#107 Design 2).
+    pub dispatch: Option<DispatchMeta>,
+}
+
+/// How an `event-dispatch` edge may run (#107 Design 2).
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct DispatchMeta {
+    /// The subscription may be skipped (`EventEdge::conditional`).
+    pub conditional: bool,
+    /// The event is isolated (`EventSymbol::isolated == Some(true)`): a failing
+    /// subscriber's database work is rolled back and the publisher continues.
+    pub isolated: bool,
 }
 
 /// An uncertainty attached to a routine whose call site had no resolved target.
@@ -273,6 +285,7 @@ pub fn build_combined_graph(
                     event_id: None,
                     subscriber_app_id: None,
                     resolution: ce.resolution.as_str().to_string(),
+                    dispatch: None,
                 });
             }
             // Resolved interface dispatch ("maybe"): open-world uncertainty, once.
@@ -364,6 +377,9 @@ pub fn build_combined_graph(
         };
         if let Some(list) = subs_by_event.get(&sym.id) {
             for ee in list {
+                if ee.mixed_readings {
+                    super::summary_runner::summaries_census::mixed_readings();
+                }
                 edges.push(CombinedEdge {
                     from: publisher_routine_id.clone(),
                     to: ee.subscriber_routine_id.clone(),
@@ -373,6 +389,10 @@ pub fn build_combined_graph(
                     event_id: Some(sym.id.clone()),
                     subscriber_app_id: Some(ee.subscriber_app_id.clone()),
                     resolution: ee.resolution.clone(),
+                    dispatch: Some(DispatchMeta {
+                        conditional: ee.conditional,
+                        isolated: sym.isolated == Some(true),
+                    }),
                 });
             }
         }
