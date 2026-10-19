@@ -321,10 +321,20 @@ pub fn load_policy_from_string(yaml: &str) -> LoadResult {
 
 /// Load a policy from a file path. al-sem `loadPolicyFromFile`.
 pub fn load_policy_from_file(path: &std::path::Path) -> LoadResult {
-    match std::fs::read_to_string(path) {
-        Ok(yaml) => load_policy_from_string(&yaml),
+    load_policy_from_input(&crate::program::inputs::FileInput {
+        path: path.to_path_buf(),
+        bytes: std::fs::read(path),
+    })
+}
+
+/// [`load_policy_from_file`] over a file already read (the command's
+/// `InputSet`, #160). Reads `text()`, so a read error and a non-UTF-8 file both
+/// keep the `failed to read <path>: <e>` text.
+pub fn load_policy_from_input(file: &crate::program::inputs::FileInput) -> LoadResult {
+    match file.text() {
+        Ok(yaml) => load_policy_from_string(yaml),
         Err(e) => LoadResult::Err {
-            errors: vec![format!("failed to read {}: {}", path.display(), e)],
+            errors: vec![format!("failed to read {}: {}", file.path.display(), e)],
             warnings: Vec::new(),
         },
     }

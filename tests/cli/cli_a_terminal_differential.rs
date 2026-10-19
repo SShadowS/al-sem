@@ -187,7 +187,7 @@ fn run_terminal(fixture: &str, detector_csv: &str, group_by: Option<&str>) -> St
         with_evidence: false,
         single_app: false,
     };
-    match run_analyze_with_exit(&args, "engine-default") {
+    match run_analyze_with_exit(&args.read_inputs(), &args, "engine-default") {
         Ok((out, _, _)) => format!("{out}\n"),
         Err(e) => panic!("{TEST_NAME}: run_analyze failed for {fixture}: {e}"),
     }

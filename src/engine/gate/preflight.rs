@@ -138,6 +138,7 @@ mod tests {
             ledger: vec![],
             unidentified_packages: vec![],
             unbound_subscriptions: 0,
+            files_without_object: vec![],
         }
     }
 
@@ -215,6 +216,7 @@ mod tests {
             ledger: vec![entry("Broken", None, Some("bad zip"))],
             unidentified_packages: vec![],
             unbound_subscriptions: 3,
+            files_without_object: vec![],
         };
         let pf = evaluate_preflight(&Ok(fc), false);
         assert_eq!(

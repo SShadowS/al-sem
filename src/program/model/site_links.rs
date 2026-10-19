@@ -106,8 +106,9 @@ mod tests {
     fn links_keep_every_edge_and_qualify_by_app() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
         let (_ctx, mut report, _) =
-            crate::program::resolve::full::build_program_with_coverage(&ws).unwrap();
+            crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let primary = report.primary_app_ref;
         let i = report
             .edges

@@ -275,6 +275,17 @@ pub struct ClosureEntries {
 /// [`crate::dependencies::discover_app_files`] (the loader's own walk).
 #[must_use]
 pub fn dependency_closure_entries(workspace_root: &Path) -> ClosureEntries {
+    let (files, unreadable) = crate::dependencies::discover_app_files(workspace_root);
+    dependency_closure_entries_from(workspace_root, &files, &unreadable)
+}
+
+/// [`dependency_closure_entries`] over a discovery already made (the
+/// `InputSet`'s closure lists).
+pub(crate) fn dependency_closure_entries_from(
+    workspace_root: &Path,
+    files: &[crate::dependencies::DiscoveredAppFile],
+    unreadable: &[(std::path::PathBuf, std::io::Error)],
+) -> ClosureEntries {
     // How many levels above `workspace_root` a cache folder sits (0 = its own).
     // Every discovered folder should be `<ancestor>/.alpackages`; one that is
     // not is an explicit `OutsideWalk` error, never silently keyed as the own cache.
@@ -291,10 +302,9 @@ pub fn dependency_closure_entries(workspace_root: &Path) -> ClosureEntries {
                 )
             })
     };
-    let (files, unreadable) = crate::dependencies::discover_app_files(workspace_root);
     let mut out = ClosureEntries::default();
     for (folder, e) in unreadable {
-        match folder_key(&folder) {
+        match folder_key(folder) {
             Ok(key) => out
                 .errors
                 .push((key, ClosureErrorKind::ListingFailed, e.to_string())),
@@ -313,7 +323,7 @@ pub fn dependency_closure_entries(workspace_root: &Path) -> ClosureEntries {
             }
         };
         match std::fs::File::open(&f.path).and_then(|h| h.metadata()) {
-            Ok(m) if m.is_file() => out.entries.push((key, f.path)),
+            Ok(m) if m.is_file() => out.entries.push((key, f.path.clone())),
             Ok(_) => out
                 .errors
                 .push((key, ClosureErrorKind::ReadFailed, "not a file".to_string())),

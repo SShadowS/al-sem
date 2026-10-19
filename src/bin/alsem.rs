@@ -66,7 +66,7 @@ use al_sem::engine::gate::events::{
 };
 use al_sem::engine::gate::exit_code::{exit, parse_fail_on};
 use al_sem::engine::gate::filter::Scope;
-use al_sem::engine::gate::presets::preset_names;
+use al_sem::engine::gate::presets::{preset_names, resolve_analyze_detectors};
 use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit};
 use al_sem::engine::gate::version::driver_version;
 use al_sem::engine::l4::effect_query_cli::{
@@ -76,10 +76,11 @@ use al_sem::engine::l5::digest_cli::{ChangedAutoDetect, auto_detect_changed, run
 use al_sem::engine::l5::event_flow::Scope as EventScope;
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintOptions, FingerprintOutput, ShardMode, SpecifiedFlags, default_format,
-    normalize_witness, reject_illegal_combos, run_fingerprint_pipeline, validate_roots,
-    write_fingerprint_output,
+    normalize_witness, reject_illegal_combos, reject_inventory_only_combos,
+    run_fingerprint_pipeline, validate_roots,
 };
 use al_sem::engine::l5::prove::{parse_question, question_ids, run_prove_pipeline};
+use al_sem::program::inputs::{InputNeeds, InputSet};
 use clap::{Parser, Subcommand};
 
 const SEVERITY_VALUES: &[&str] = &["critical", "high", "medium", "low", "info"];
@@ -711,56 +712,90 @@ fn main() -> ExitCode {
     code
 }
 
+// ── output writers (#160 spec §4.2.5) ────────────────────────────────────────
+//
+// One text and one rule for a failed write: `al-sem: write error: <stdout|path>:
+// <OS message>` on stderr, and the command's own failure code (`fail`: 2 for
+// analyze, 1 for every other command). A closed pipe never aborts the process,
+// and neither does a closed stderr under it: the message goes through
+// `write_stderr`, never a panicking `eprintln!`.
+
+/// Report a failed write of `target` and return `fail`.
+fn write_error(target: &str, e: &std::io::Error, fail: ExitCode) -> ExitCode {
+    let _ = write_stderr(
+        format!("al-sem: write error: {target}: {e}\n").as_bytes(),
+        fail,
+    );
+    fail
+}
+
+/// Write `bytes` to stdout and flush.
+fn write_stdout(bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    out.write_all(bytes)
+        .and_then(|()| out.flush())
+        .map_err(|e| write_error("stdout", &e, fail))
+}
+
+/// Write `bytes` to the file at `path`.
+fn write_file(path: &str, bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
+    std::fs::write(path, bytes).map_err(|e| write_error(path, &e, fail))
+}
+
+/// Write `bytes` to stderr. No message on failure: the stream is gone.
+fn write_stderr(bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
+    use std::io::Write;
+    let mut err = std::io::stderr().lock();
+    err.write_all(bytes)
+        .and_then(|()| err.flush())
+        .map_err(|_| fail)
+}
+
+/// Write `bytes` to `--out` when given, else stdout.
+fn write_out(out: Option<&str>, bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
+    match out {
+        Some(path) => write_file(path, bytes, fail),
+        None => write_stdout(bytes, fail),
+    }
+}
+
+/// Write each line plus `\n` to stderr (the lines a command prints after its output).
+fn write_stderr_lines(lines: &[String], fail: ExitCode) -> Result<(), ExitCode> {
+    lines
+        .iter()
+        .try_for_each(|line| write_stderr(format!("{line}\n").as_bytes(), fail))
+}
+
 // ── graph command ────────────────────────────────────────────────────────────
 
 fn run_graph_cmd(g: GraphCli) -> ExitCode {
-    let graph =
-        match al_sem::program::impact_graph::export_workspace(std::path::Path::new(&g.workspace)) {
-            Ok(graph) => graph,
-            Err(msg) => {
-                eprintln!("al-sem graph: {msg}");
-                return ExitCode::from(1);
-            }
-        };
-    let text = graph.to_jsonl();
-    let written = match g.out {
-        Some(path) => std::fs::write(&path, &text).map_err(|e| format!("{path}: {e}")),
-        None => {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(text.as_bytes())
-                .map_err(|e| e.to_string())
+    let inputs = InputSet::read(std::path::Path::new(&g.workspace), &InputNeeds::default());
+    let graph = match al_sem::program::impact_graph::export_workspace(&inputs) {
+        Ok(graph) => graph,
+        Err(msg) => {
+            eprintln!("al-sem graph: {msg}");
+            return ExitCode::from(1);
         }
     };
-    match written {
+    let text = graph.to_jsonl();
+    match write_out(g.out.as_deref(), text.as_bytes(), ExitCode::from(1)) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("al-sem graph: write error: {e}");
-            ExitCode::from(1)
-        }
+        Err(code) => code,
     }
 }
 
 // ── query commands ───────────────────────────────────────────────────────────
 
 /// Write a query result to `--out` or stdout, returning its exit code.
-fn emit_query(label: &str, result: QueryRunResult, format: &str, out: Option<&str>) -> ExitCode {
+fn emit_query(result: QueryRunResult, format: &str, out: Option<&str>) -> ExitCode {
     let output = if format == "json" {
         result.json_text
     } else {
         result.human_text
     };
-    let write_result = if let Some(out_path) = out {
-        std::fs::write(out_path, &output).map_err(|e| format!("{e}"))
-    } else {
-        use std::io::Write;
-        std::io::stdout()
-            .write_all(output.as_bytes())
-            .map_err(|e| format!("{e}"))
-    };
-    if let Err(e) = write_result {
-        eprintln!("al-sem: {label}: write error: {e}");
-        return ExitCode::from(1);
+    if let Err(code) = write_out(out, output.as_bytes(), ExitCode::from(1)) {
+        return code;
     }
     ExitCode::from(result.exit_code)
 }
@@ -785,14 +820,13 @@ fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
     // `--direction down` without `--from` is rejected by `render_query_touches`
     // itself, not duplicated here: one rule in one place, and the golden family
     // covers it end to end (a second copy could drift and would test nothing).
-    let workspace = std::path::Path::new(&t.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(std::path::Path::new(&t.workspace), &InputNeeds::default());
     match run_query_touches_pipeline(
-        workspace,
+        &inputs,
         &t.table,
         t.from.as_deref(),
         direction,
-        &version,
+        &inputs.driver_version,
         t.deterministic,
         t.single_app,
     ) {
@@ -800,7 +834,7 @@ fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
             eprintln!("{msg}");
             ExitCode::from(1)
         }
-        Ok(result) => emit_query("query touches", result, &t.format, t.out.as_deref()),
+        Ok(result) => emit_query(result, &t.format, t.out.as_deref()),
     }
 }
 
@@ -812,12 +846,11 @@ fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    let workspace = std::path::Path::new(&e.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(std::path::Path::new(&e.workspace), &InputNeeds::default());
     match run_query_effects_pipeline(
-        workspace,
+        &inputs,
         &e.routine,
-        &version,
+        &inputs.driver_version,
         e.deterministic,
         e.single_app,
     ) {
@@ -825,14 +858,16 @@ fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
             eprintln!("{msg}");
             ExitCode::from(1)
         }
-        Ok(result) => emit_query("query effects", result, &e.format, e.out.as_deref()),
+        Ok(result) => emit_query(result, &e.format, e.out.as_deref()),
     }
 }
 
 // ── policy check command ─────────────────────────────────────────────────────
 
 fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
-    use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
+    use al_sem::engine::gate::policy::pipeline::{
+        PolicyCheckOptions, policy_request, run_policy_check,
+    };
 
     // Validate --format (human | json | sarif). al-sem writes the message + exit 1.
     const VALID_FORMATS: &[&str] = &["human", "json", "sarif"];
@@ -841,17 +876,20 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let workspace = std::path::Path::new(&c.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(
+        std::path::Path::new(&c.workspace),
+        &InputNeeds {
+            policy: policy_request(c.policy.as_deref(), c.no_policy),
+            ..InputNeeds::default()
+        },
+    );
     let opts = PolicyCheckOptions {
-        workspace,
-        policy_path: c.policy.as_deref(),
-        no_policy: c.no_policy,
+        inputs: &inputs,
         format: &c.format,
         out: c.out.as_deref(),
         deterministic: c.deterministic,
         strict: c.strict,
-        driver_version: &version,
+        driver_version: &inputs.driver_version,
         single_app: c.single_app,
     };
 
@@ -866,25 +904,20 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         return ExitCode::from(outcome.exit_code);
     }
 
-    if let Some(text) = &outcome.text {
-        let write_result = if let Some(ref out_path) = outcome.out_path {
-            std::fs::write(out_path, text).map_err(|e| format!("{e}"))
-        } else {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(text.as_bytes())
-                .map_err(|e| format!("{e}"))
-        };
-        if let Err(e) = write_result {
-            eprintln!("failed to write: {e}");
-            return ExitCode::from(1);
-        }
+    if let Some(text) = &outcome.text
+        && let Err(code) = write_out(
+            outcome.out_path.as_deref(),
+            text.as_bytes(),
+            ExitCode::from(1),
+        )
+    {
+        return code;
     }
 
     // Analyzer diagnostics go to stderr AFTER the output (al-sem's
     // `for (const d of diagnostics) process.stderr.write(...)` at the tail).
-    for line in &outcome.stderr_lines {
-        eprintln!("{line}");
+    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, ExitCode::from(1)) {
+        return code;
     }
 
     ExitCode::from(outcome.exit_code)
@@ -911,15 +944,13 @@ fn run_policy_explain_cmd(e: PolicyExplainCli) -> ExitCode {
 
     let outcome = run_policy_explain(&opts);
 
-    if let Some(stdout) = &outcome.stdout {
-        use std::io::Write;
-        if std::io::stdout().write_all(stdout.as_bytes()).is_err() {
-            eprintln!("failed to write");
-            return ExitCode::from(1);
-        }
+    if let Some(stdout) = &outcome.stdout
+        && let Err(code) = write_stdout(stdout.as_bytes(), ExitCode::from(1))
+    {
+        return code;
     }
-    for line in &outcome.stderr_lines {
-        eprintln!("{line}");
+    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, ExitCode::from(1)) {
+        return code;
     }
     ExitCode::from(outcome.exit_code)
 }
@@ -986,23 +1017,14 @@ fn run_diff_cmd(d: DiffCli) -> ExitCode {
         return ExitCode::from(outcome.exit_code);
     }
 
-    if let Some(text) = outcome.output {
-        let write_result = if let Some(ref out_path) = d.out {
-            std::fs::write(out_path, &text).map_err(|e| format!("{e}"))
-        } else {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(text.as_bytes())
-                .map_err(|e| format!("{e}"))
-        };
-        if let Err(e) = write_result {
-            eprintln!("failed to write: {e}");
-            return ExitCode::from(1);
-        }
+    if let Some(text) = outcome.output
+        && let Err(code) = write_out(d.out.as_deref(), text.as_bytes(), ExitCode::from(1))
+    {
+        return code;
     }
 
-    for line in &outcome.stderr_lines {
-        eprintln!("{line}");
+    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, ExitCode::from(1)) {
+        return code;
     }
 
     ExitCode::from(outcome.exit_code)
@@ -1098,15 +1120,20 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         Some(routine_inputs)
     };
 
-    let workspace = std::path::Path::new(&d.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(
+        std::path::Path::new(&d.workspace),
+        &InputNeeds {
+            fingerprint_rows: true,
+            ..InputNeeds::default()
+        },
+    );
 
     match run_digest_pipeline(
-        workspace,
+        &inputs,
         changed_files,
         changed_routines,
         diff_text,
-        &version,
+        &inputs.driver_version,
         d.deterministic,
         d.max_paths,
         d.single_app,
@@ -1125,19 +1152,8 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
                 result.json_text
             };
 
-            // Write output
-            let write_result = if let Some(ref out_path) = d.out {
-                std::fs::write(out_path, &output).map_err(|e| format!("{e}"))
-            } else {
-                use std::io::Write;
-                std::io::stdout()
-                    .write_all(output.as_bytes())
-                    .map_err(|e| format!("{e}"))
-            };
-
-            if let Err(e) = write_result {
-                eprintln!("al-sem: digest: write error: {e}");
-                return ExitCode::from(1);
+            if let Err(code) = write_out(d.out.as_deref(), output.as_bytes(), ExitCode::from(1)) {
+                return code;
             }
 
             ExitCode::from(result.exit_code)
@@ -1173,14 +1189,19 @@ fn run_prove_cmd(p: ProveCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let workspace = std::path::Path::new(&p.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(
+        std::path::Path::new(&p.workspace),
+        &InputNeeds {
+            fingerprint_rows: true,
+            ..InputNeeds::default()
+        },
+    );
 
     match run_prove_pipeline(
-        workspace,
+        &inputs,
         &p.routine,
         &p.question,
-        &version,
+        &inputs.driver_version,
         p.deterministic,
     ) {
         Err(msg) => {
@@ -1194,18 +1215,8 @@ fn run_prove_cmd(p: ProveCli) -> ExitCode {
                 result.json_text
             };
 
-            let write_result = if let Some(ref out_path) = p.out {
-                std::fs::write(out_path, &output).map_err(|e| format!("{e}"))
-            } else {
-                use std::io::Write;
-                std::io::stdout()
-                    .write_all(output.as_bytes())
-                    .map_err(|e| format!("{e}"))
-            };
-
-            if let Err(e) = write_result {
-                eprintln!("al-sem: prove: write error: {e}");
-                return ExitCode::from(1);
+            if let Err(code) = write_out(p.out.as_deref(), output.as_bytes(), ExitCode::from(1)) {
+                return code;
             }
 
             ExitCode::from(result.exit_code)
@@ -1292,12 +1303,27 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
     };
 
     let is_query_requested = specified.is_query_requested();
-    let workspace = std::path::Path::new(&f.workspace);
-    let version = driver_version();
+    // A usage error is found before the workspace is read (final panel r1).
+    if let Err(msg) = reject_inventory_only_combos(
+        f.inventory_only,
+        shard_mode.is_some(),
+        &format,
+        is_query_requested,
+    ) {
+        eprintln!("{msg}");
+        return ExitCode::from(1);
+    }
+    let inputs = InputSet::read(
+        std::path::Path::new(&f.workspace),
+        &InputNeeds {
+            fingerprint_rows: true,
+            ..InputNeeds::default()
+        },
+    );
 
     let opts = FingerprintOptions {
-        workspace,
-        driver_version: &version,
+        inputs: &inputs,
+        driver_version: &inputs.driver_version,
         format,
         out: f.out.as_deref(),
         shard: shard_mode,
@@ -1340,18 +1366,45 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
                 _ => true,
             };
             if should_write
-                && let Err(e) = write_fingerprint_output(&result.output, f.out.as_deref())
+                && let Err(code) =
+                    write_fingerprint_output(&result.output, f.out.as_deref(), ExitCode::from(1))
             {
-                eprintln!("{e}");
-                return ExitCode::from(1);
+                return code;
             }
 
             // Per-mode stderr diagnostics AFTER writing output (human/base-json/cbor).
-            for line in &result.stderr_diagnostics {
-                eprintln!("{line}");
+            if let Err(code) = write_stderr_lines(&result.stderr_diagnostics, ExitCode::from(1)) {
+                return code;
             }
 
             ExitCode::from(result.exit_code)
+        }
+    }
+}
+
+/// Write the fingerprint output to `--out` or stdout; shards go into the `--out`
+/// directory (the current directory when absent).
+fn write_fingerprint_output(
+    output: &FingerprintOutput,
+    out: Option<&str>,
+    fail: ExitCode,
+) -> Result<(), ExitCode> {
+    match output {
+        FingerprintOutput::Text(text) => write_out(out, text.as_bytes(), fail),
+        FingerprintOutput::Binary(bytes) => write_out(out, bytes, fail),
+        FingerprintOutput::Shards(shards) => {
+            let dir = out.unwrap_or(".");
+            let dir_path = std::path::Path::new(dir);
+            if !dir_path.exists()
+                && let Err(e) = std::fs::create_dir_all(dir_path)
+            {
+                return Err(write_error(dir, &e, fail));
+            }
+            for (filename, content) in shards {
+                let file_path = dir_path.join(filename);
+                write_file(&file_path.to_string_lossy(), content, fail)?;
+            }
+            Ok(())
         }
     }
 }
@@ -1383,41 +1436,39 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
         }
     };
 
-    let workspace = std::path::Path::new(&f.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(std::path::Path::new(&f.workspace), &InputNeeds::default());
     let opts = EventsFanoutOptions {
-        workspace,
+        inputs: &inputs,
         format: &f.format,
         scope,
         coverage_policy: &f.coverage_policy,
-        driver_version: &version,
+        driver_version: &inputs.driver_version,
         deterministic: f.deterministic,
         strict: f.strict,
         single_app: f.single_app,
     };
 
     let result = run_events_fanout(&opts);
+    emit_events(
+        &result.text,
+        &result.stderr_lines,
+        result.exit_code,
+        f.out.as_deref(),
+    )
+}
 
-    if !result.text.is_empty() {
-        let write_result = if let Some(ref out_path) = f.out {
-            std::fs::write(out_path, &result.text).map_err(|e| format!("{e}"))
-        } else {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(result.text.as_bytes())
-                .map_err(|e| format!("{e}"))
-        };
-        if let Err(e) = write_result {
-            eprintln!("failed to write: {e}");
-            return ExitCode::from(1);
-        }
+/// Write an events command's text (when non-empty) to `--out` or stdout, then its
+/// stderr lines, returning its exit code.
+fn emit_events(text: &str, stderr_lines: &[String], exit_code: u8, out: Option<&str>) -> ExitCode {
+    if !text.is_empty()
+        && let Err(code) = write_out(out, text.as_bytes(), ExitCode::from(1))
+    {
+        return code;
     }
-
-    for line in &result.stderr_lines {
-        eprintln!("{line}");
+    if let Err(code) = write_stderr_lines(stderr_lines, ExitCode::from(1)) {
+        return code;
     }
-
-    ExitCode::from(result.exit_code)
+    ExitCode::from(exit_code)
 }
 
 // ── events chains command ───────────────────────────────────────────────────
@@ -1454,43 +1505,27 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let workspace = std::path::Path::new(&c.workspace);
-    let version = driver_version();
+    let inputs = InputSet::read(std::path::Path::new(&c.workspace), &InputNeeds::default());
     let opts = EventsChainsOptions {
-        workspace,
+        inputs: &inputs,
         format: &c.format,
         scope,
         coverage_policy: &c.coverage_policy,
         max_depth: c.max_depth,
         max_nodes: c.max_nodes,
-        driver_version: &version,
+        driver_version: &inputs.driver_version,
         deterministic: c.deterministic,
         strict: c.strict,
         single_app: c.single_app,
     };
 
     let result = run_events_chains(&opts);
-
-    if !result.text.is_empty() {
-        let write_result = if let Some(ref out_path) = c.out {
-            std::fs::write(out_path, &result.text).map_err(|e| format!("{e}"))
-        } else {
-            use std::io::Write;
-            std::io::stdout()
-                .write_all(result.text.as_bytes())
-                .map_err(|e| format!("{e}"))
-        };
-        if let Err(e) = write_result {
-            eprintln!("failed to write: {e}");
-            return ExitCode::from(1);
-        }
-    }
-
-    for line in &result.stderr_lines {
-        eprintln!("{line}");
-    }
-
-    ExitCode::from(result.exit_code)
+    emit_events(
+        &result.text,
+        &result.stderr_lines,
+        result.exit_code,
+        c.out.as_deref(),
+    )
 }
 
 // ── cache prune command ─────────────────────────────────────────────────────
@@ -1498,12 +1533,10 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
 fn run_cache_prune_cmd(c: CachePruneCli) -> ExitCode {
     let result = prune_cache(c.dep_cache_dir.as_deref(), c.dry_run);
     let report = format_prune_report(&result, c.dry_run);
-    use std::io::Write;
-    if std::io::stdout().write_all(report.as_bytes()).is_err() {
-        eprintln!("al-sem: cache prune: write error");
-        return ExitCode::from(1);
+    match write_stdout(report.as_bytes(), ExitCode::from(1)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(code) => code,
     }
-    ExitCode::SUCCESS
 }
 
 /// Resolve `--format auto` (or omitted) to a concrete `OutputFormat`.
@@ -1611,17 +1644,28 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
     // `default_version` is the engine's default (unpinned) SARIF `driver.version`.
     // The differential always pins via `--sarif-version-override gate-sarif-v1`;
     // this is only the fallback for a real, unpinned invocation.
-    match run_analyze_with_exit(&args, &driver_version()) {
-        Ok((out, exit_code, stderr_warning)) => {
+    // A bad `--preset` / `--detector` is a usage error found before the
+    // workspace is read (`run_analyze_with_exit` resolves the set again).
+    if let Err(msg) = resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref()) {
+        eprintln!("al-sem: {msg}");
+        return ExitCode::from(3);
+    }
+    let inputs = args.read_inputs();
+    match run_analyze_with_exit(&inputs, &args, &inputs.driver_version) {
+        Ok((mut out, exit_code, stderr_warning)) => {
             // F2: emit the preflight degraded warning to stderr (the "no silent clean"
             // contract). Matches al-sem index.ts:263-264:
             //   `if (pf.degraded) process.stderr.write(`al-sem: warning: ${pf.message}\n`)`.
             if let Some(msg) = stderr_warning {
                 eprintln!("al-sem: warning: {msg}");
             }
-            // al-sem appends a trailing newline to the formatted output.
-            println!("{out}");
-            ExitCode::from(exit_code)
+            // al-sem appends a trailing newline to the formatted output. A failed
+            // write is an analysis failure (exit 2), never an abort (#160 §4.2.5).
+            out.push('\n');
+            match write_stdout(out.as_bytes(), ExitCode::from(exit::ANALYSIS_FAILURE)) {
+                Ok(()) => ExitCode::from(exit_code),
+                Err(code) => code,
+            }
         }
         Err(msg) => {
             // "analysis failure — …" is tagged by run.rs for errors that al-sem maps to
@@ -1701,7 +1745,8 @@ mod tests {
                 with_evidence: false,
                 single_app: false,
             };
-            let result = run_analyze_with_exit(&args, "test");
+            let inputs = args.read_inputs();
+            let result = run_analyze_with_exit(&inputs, &args, "test");
             assert!(
                 result.is_ok(),
                 "Terminal format must succeed (Stage A3 implemented); got: {result:?}"
@@ -1728,7 +1773,8 @@ mod tests {
                 with_evidence: false,
                 single_app: false,
             };
-            let result = run_analyze_with_exit(&args, "test");
+            let inputs = args.read_inputs();
+            let result = run_analyze_with_exit(&inputs, &args, "test");
             assert!(
                 result.is_ok(),
                 "Html format must succeed (Stage A4 implemented); got: {result:?}"

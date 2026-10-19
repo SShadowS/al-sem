@@ -288,36 +288,33 @@ impl Model {
         )
     }
 
-    /// Disk-backed coverage capture (the emitter + differential entry point):
-    /// re-discover the workspace's `.al` files as `ws:<relPosix>` source units,
-    /// then build the coverage over the resolved model. SOURCE-ONLY: no index-stage
-    /// warnings are produced (the discovery already skipped unreadable files, and
-    /// tree-sitter never throws here), so `index_diagnostics` is empty and parsed ==
-    /// total. Mirrors `assemble_and_resolve_workspace`'s discovery so the unit ids +
-    /// order match `project_workspace` byte-for-byte.
-    pub fn project_coverage_disk(&self, workspace: &std::path::Path) -> AnalysisCoverage {
-        let units = coverage_source_units_for_workspace(workspace);
+    /// The coverage capture (the emitter + differential entry point): the
+    /// workspace's `.al` files, as the command's `InputSet` listed them, as
+    /// `ws:<relPosix>` source units, then the coverage over the resolved model.
+    /// SOURCE-ONLY: no index-stage warnings are produced, so `index_diagnostics`
+    /// is empty and parsed == total. The unit ids + order match
+    /// `project_workspace` byte-for-byte.
+    pub fn project_coverage_inputs(
+        &self,
+        inputs: &crate::program::inputs::InputSet,
+    ) -> AnalysisCoverage {
+        let units = coverage_source_units(inputs);
         let diagnostics: Vec<CoverageDiagnostic> = Vec::new();
         self.project_coverage(&units, &diagnostics)
     }
 }
 
-/// Re-discover a workspace's `.al` files as `ws:<relPosix>` source units, in the
-/// rel-posix-sorted discovery order. Used by the disk-backed coverage capture so
-/// `sourceUnitsTotal` matches al-sem's unit count. Returns an empty list on any
-/// discovery failure (fail-closed — never throws).
+/// A workspace's `.al` files as `ws:<relPosix>` source units, in rel-posix
+/// order. `sourceUnitsTotal` matches al-sem's unit count. Empty when the walk
+/// failed (`InputSet.al_files` is then empty: fail-closed — never throws).
 ///
 /// App-scoped (engine-switch S5.1): a child directory with its own `app.json` is
 /// another app, and the model analyses only the root app's files
-/// (`select_program_files`, the disk L3 path). Counting the nested app's files here
-/// reported them as parsed although no routine of theirs was analysed.
-pub fn coverage_source_units_for_workspace(workspace: &std::path::Path) -> Vec<CoverageUnit> {
-    use crate::program::body::l2_workspace::discover_al_files_app_scoped;
-    let Ok(discovered) = discover_al_files_app_scoped(workspace) else {
-        return Vec::new();
-    };
-    discovered
-        .iter()
+/// (`select_program_files`). Counting the nested app's files here reported them
+/// as parsed although no routine of theirs was analysed.
+pub fn coverage_source_units(inputs: &crate::program::inputs::InputSet) -> Vec<CoverageUnit> {
+    inputs
+        .app_scoped_files()
         .map(|f| CoverageUnit {
             id: format!("ws:{}", f.rel_posix),
             kind: "source".to_string(),

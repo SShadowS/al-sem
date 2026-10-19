@@ -1,383 +1,15 @@
 [
   {
-    "id": "P1-1",
-    "source": "sol+opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1355,
-    "severity": "important",
-    "text": "Step 2's 'never raises the peak' claim misses a new overlap: after step 2 l4 (bundle, scc, field_index) is alive during compose_snapshot in digest and prove, both universes; today the bundle is built after composition. 'For prove that is today's state' is false. field_index has no step-2 reader. prove is not in the peak gate.",
-    "disposition": "fixed",
-    "evidence": "Verified digest_cli.rs:1580 vs :1625-1628, prove.rs:897 vs :964; DbTempStates borrows the bundle (digest_cli.rs:744-761), so l4 cannot be released before composition. Child §4.4.4 now states the overlap and budgets it from the l4 bucket; field_index removed from L4Analysis (§4.4.1, a build_l4 local); A2.4 and §6.3 add prove.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-2",
-    "source": "sol+opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1740,
-    "severity": "important",
-    "text": "The frozen-input tests do not cover every input class and reader: al-sem.coverage.yaml and the app.json path list have no after-read mutation; the app.json test edits only `name` and pins only read_workspace_apps, so restoring model_instance_id, primary_app, the diagnostics id read or the derive_inputs hash stays green.",
-    "disposition": "fixed",
-    "evidence": "Verified readers at run.rs:122-157, model_instance_id.rs:75-96, workspace.rs:1789-1800, workspace_diagnostics.rs:44,:145-155, snapshot_full.rs:819-827,:868-878. §8.2: app_json_edit_after_read rewrites app.json to {} and compares analyze json, pr-summary and fingerprint bytes with one break per reader; new app_json_paths_edit_after_read and coverage_yaml_edit_after_read rows.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-3",
-    "source": "sol",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1632,
-    "severity": "minor",
-    "text": "The peak allowance has two definitions: the epic uses a 3% band, the child uses the observed max - min band(peak).",
-    "disposition": "fixed",
-    "evidence": "Epic §5.12 (3%, ~85 MB) and I6 ('Peak: both numbers of §5.12'). Child §6.1 now says a peak's band is 3% of the parent median; max - min applies to walls and timers only.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-4",
-    "source": "sol",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 951,
-    "severity": "minor",
-    "text": "ProgramMeta has no specified surviving owner: §4.4.3 says commands hold it through AnalysisModel.fresh, but §4.3.3 keeps fresh as Result<FreshCoverage, String> and the builders keep their return shapes.",
-    "disposition": "fixed",
-    "evidence": "§4.3.3 (builders build inside, keep return types; fresh = meta.coverage.clone()); run.rs:251-261. §4.3.4 now says ProgramMeta is a builder local at steps 1b-2 and the process retains the command's Arc<InputSet>; §4.4.3, §5, §6.3 and §9 G-6 aligned.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-5",
-    "source": "sol",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1751,
-    "severity": "minor",
-    "text": "Step 1's walk-error test calls ResolvedProgram::build, which is introduced only at step 1b, so step 1 cannot land it as written.",
-    "disposition": "fixed",
-    "evidence": "ResolvedProgram is §4.3.1 (step 1b); the step-1 entry is build_program_with_coverage (full.rs:2123-2153). §8.2 row now calls build_program_with_coverage(&inputs); step 1b's commit switches the call.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-6",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 390,
-    "severity": "important",
-    "text": "'Last report line = process total' does not hold: cones_census::report() is called only at the end of the detector context's cone block; the snapshot's cone never prints. After step 2 digest/prove compose the snapshot after det, so its cone and pd_solve reach no printed line; fingerprint already loses it, diff never prints.",
-    "disposition": "fixed",
-    "evidence": "Verified: the only call is detector_context.rs:1150; none in capability_cone.rs:2764-2906, :4015-4101. §4.1.7 now deletes that call and prints once at process exit from alsem's and aldump's main.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-7",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 96,
-    "severity": "important",
-    "text": "The digest bound '>= 21 s - band' uses an absolute P5 number from a loaded machine, against I6 and Decisions 20/44 (every wall bound relative to the parent's sub-phase median).",
-    "disposition": "fixed",
-    "evidence": "Round 2 (opus re-raise, held): the saving is a difference of two whole-command digest walls (P5 runs 63.70 vs 66.81 s) and the head has no tx_context_map span, so subtracting only band(span) omitted the wall noise. A2.3, child §6.2/§6.3, epic step-2 row, E15 and I6 now bound: parent median(digest wall) - head median >= parent median(digest.tx_context_map) - band(span) - band(digest wall), band(digest wall) = max - min of the parent's digest wall runs; I6 states the rule for any deleted sub-phase.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-8",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1763,
-    "severity": "important",
-    "text": "A1b.3 tests the helpers (all_edges, Builder::add), not the call sites: if the projection read dependency_body_edges first, every test and the golden would stay green; a cross-set tie is reachable.",
-    "disposition": "fixed",
-    "evidence": "Tie verified: project.rs:325 from = Key::Routine for both; publisher unknown edge -> (Hub::Any, Direct, Open, 'unresolved') at :444-452; a DynamicOpen site with an OpenBound::Any -> same key with 'dynamic' at :408-441 (opus's 'no bounds' example was wrong: that gives 'unresolved'). project's Inputs.edges becomes an EdgeView read only via all_edges (§4.3.3); new project::cross_set_tie_keeps_the_first_sets_via on the test builder (:1351-1383); all_edges test also covers edge_view.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-9",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1713,
-    "severity": "important",
-    "text": "The walk-error proof (case b, the only one that fails break 2) is Unix-only, while the dev and measurement machine is Windows and a skip is never a pass.",
-    "disposition": "fixed",
-    "evidence": "Old recipe: 'A folder: returns None' on Windows. §8 recipe now adds a Windows folder recipe (icacls <dir> /deny *S-1-1-0:(RD), restored with /remove:d, checked by read_dir failing); A1.7 and the §8.2 row say case (b) runs on Windows and Linux.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-10",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1784,
-    "severity": "minor",
-    "text": "A2.10 tests the assertion inside prepare, not that digest/prove/events declare after_run; the default set's union already holds TRANSACTION_SPANS (d9) and SUMMARIES (d1).",
-    "disposition": "fixed",
-    "evidence": "Round 2 (sol re-raise, held): a factory-only test misses a command that builds an equal plan with after_run 0, since the default union holds both bits and a missing span map reads 'unknown' (digest_cli.rs:906-914). Child §4.4.4: Plan's fields private to session.rs (literal plan outside it does not compile); run_digest_pipeline (digest_cli.rs:1558), run_prove_pipeline (prove.rs:880), run_events_fanout/chains (gate/events.rs:369,:520) become wrappers over pub(crate) *_with(detectors, ...) forms; new --lib use tests digest_cli::tx_context_without_d9, prove::tx_context_without_d9, events::{fanout,chains}_without_d1_d9 run the inner form with a reduced set (union asserted to lack the bit) and expect prepare's panic; break = a temporary no-after_run factory called from the command with digest_plan unchanged (§8.4, A2.10).",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-11",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1700,
-    "severity": "minor",
-    "text": "The given #[path = \"../tests/common/unreadable.rs\"] resolves to the wrong place from most modules (e.g. src/tests/common from src/program/inputs.rs).",
-    "disposition": "fixed",
-    "evidence": "Rust Reference, path attribute. §8 recipe states the rule (top level, not inside mod tests; one ../ per directory) with worked paths for src/program/inputs.rs and src/engine/gate/run.rs.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-12",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1766,
-    "severity": "minor",
-    "text": "dependency_bodies_histogram_equals_merged_filter is unclear: comparing two computations inside the test checks nothing in production, and the break's location is not named.",
-    "disposition": "fixed",
-    "evidence": "impact_graph/mod.rs:222-230 (the production filter). Row replaced by dependency_bodies_histogram_is_the_dependency_call_sites: export_from_program's dependencyBodies vs a hand-stated count; the break drops from.app != primary in the production filter.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-13",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1826,
-    "severity": "minor",
-    "text": "InputSet carries per-request inputs (policy_file, baseline, snapshot_inputs, build_only) that the epic's §5.1 does not list; step 12's batch views keyed by workspace cannot share one InputSet. Record as an open item.",
-    "disposition": "fixed",
-    "evidence": "Child §4.2.1 fields; epic §2, §5.1, step 12. Added child §10 item 5 and epic open question 15.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-14",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-analysis-session-design.md",
-    "line": 110,
-    "severity": "minor",
-    "text": "Epic §4 credits #161 to lifetime; lifetime explains only #160's duplicate work. #161 comes from each consumer building its own relation and fold.",
-    "disposition": "fixed",
-    "evidence": "capability_cone.rs:4019-4021 (own graph, no injection), :4036-4055 (fold); detector_context.rs:935-946 (injection). Epic §4 gains a paragraph naming the two causes and the fix for #161 (§5.5 Transfer::Cone, §6 fold policy).",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P1-15",
-    "source": "opus",
-    "round": 1,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1678,
-    "severity": "minor",
-    "text": "No step edits a protected path, but protected CLAUDE.md goes stale: Key Modules lacks inputs.rs, resolved.rs, session.rs, census.rs; the tests/common list lacks unreadable.rs. Add as user follow-ups.",
-    "disposition": "fixed",
-    "evidence": "CLAUDE.md Key Modules and Testing sections. Child §7 gains a 'Protected docs that go stale' paragraph listing the lines for the user; no protected path is edited; scripts/check-goldens needs no edit.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P2-1",
-    "source": "sol+opus",
-    "round": 2,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-analysis-session-design.md",
-    "line": 269,
-    "severity": "important",
-    "text": "The P1-1 fix was made in the child only: epic §5.8 still lists field index in L4Analysis, and §5.9 rule 3, Decision 56 and the G-2 row still claim no new co-residency / a flat step-2 phase peak; the child says the epic wins on disagreement.",
-    "disposition": "fixed",
-    "evidence": "Child §4.4.1 (field_index a build_l4 local), §4.4.4 (l4 overlap); digest_cli.rs:744-761 (DbTempStates borrows the bundle). Epic §5.8 drops field index; §5.9 rule 3, Decision 56 and the G-2 row now state the l4 (bundle, SCC) overlap during composition in digest and prove, sized by the l4 bucket and bounded by the step-2 peak bound; epic Round 13.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P2-2",
-    "source": "opus",
-    "round": 2,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 392,
-    "severity": "minor",
-    "text": "main cannot call cones_census::report(): the module is pub(crate) and alsem/aldump are separate binary crates; perf_trace::maybe_exit_after exits with process::exit, skipping the exit-time report.",
-    "disposition": "fixed",
-    "evidence": "detector_context.rs:344 (pub(crate) mod cones_census); src/engine/l5/mod.rs:54 (pub mod detector_context); src/engine/perf_trace.rs:622-629 (process::exit(0)); no other process::exit in src/ outside main.rs. Child §4.1.7: pub fn report_cones_census() wrapper in detector_context; maybe_exit_after calls cones_census::report() before exit.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P2-3",
-    "source": "opus",
-    "round": 2,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 88,
-    "severity": "minor",
-    "text": "A1.7 case (b) runs on Windows and Linux but asks for one FULL literal, whose OS error text differs by platform.",
-    "disposition": "fixed",
-    "evidence": "Windows 'Access is denied. (os error 5)' vs Unix 'Permission denied (os error 13)'. A1.7 and the §8.2 walk_error_fails_the_build row: one #[cfg(windows)] / #[cfg(unix)] literal per platform, each captured from today's code on that platform at the parent commit and recorded in the ledger.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P2-4",
-    "source": "opus",
-    "round": 2,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 939,
-    "severity": "minor",
-    "text": "Inputs.edges becomes an EdgeView carrying primary_app_ref and site_facts, but Inputs keeps its own primary and site_facts fields; two sources for the same data.",
-    "disposition": "fixed",
-    "evidence": "project.rs:24-39 (Inputs fields primary :29, site_facts :33), readers :385, :402, :1025; impact_graph/mod.rs:210-220. Child §4.3.3: Inputs.primary and Inputs.site_facts deleted; project reads inp.edges.primary_app_ref and inp.edges.site_facts.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P2-5",
-    "source": "opus",
-    "round": 2,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1778,
-    "severity": "minor",
-    "text": "dependency_bodies_histogram_is_the_dependency_call_sites: 'call sites counted in that source' has no stated counting rule, so the literal would be copied from production output.",
-    "disposition": "fixed",
-    "evidence": "cli_digest_query_dependencies.rs:89-110 (shared fixture's only dependency call site is a record Insert); impact_graph/mod.rs:222-230. Child §8.3 row: the test writes its own dependency (A calls B twice, nothing else makes a call site; the workspace calls A once); literal total 2, resolvedSource 2, others 0; the break makes total 3.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P3-1",
-    "source": "sol",
-    "round": 3,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1234,
-    "severity": "minor",
-    "text": "Plan's code block in §4.4.3 declares all four fields pub, contradicting §4.4.4's rule that the fields are private to session.rs and a literal Plan outside it does not compile.",
-    "disposition": "fixed",
-    "evidence": "Child §4.4.3 Plan block now declares runs/scope_primary/need_l4/after_run without pub, with a note that they are private to session.rs and built only by the factories; every field read in the spec (plan.need_l4, plan.after_run) is inside session.rs (prepare).",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P3-2",
-    "source": "opus",
-    "round": 3,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-analysis-session-design.md",
-    "line": 467,
-    "severity": "minor",
-    "text": "Epic I6 gives two definitions of a whole-command wall band: '8 % of the command median ... for whole-command bounds' and 'max - min of the parent's wall runs' (which child A2.3/§6.3 use).",
-    "disposition": "fixed",
-    "evidence": "Epic I6 now withdraws the 8 % band for every bound; a whole-command wall's band is max - min of the parent's wall runs, matching child A2.3 and §6.3. P5 digest walls 63.70 vs 66.81 s (3.1 s spread vs ~5 s at 8 %). Epic Round 14 records it.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "P3-3",
-    "source": "opus",
-    "round": 3,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 1776,
-    "severity": "minor",
-    "text": "The Linux literal of walk_error_fails_the_build must be captured on Linux at the parent commit, but the dev machine is Windows (§6.1); no capture route is named, so the literal could be written by reasoning.",
-    "disposition": "fixed",
-    "evidence": "Child §8.2 row names the route: WSL2 Ubuntu on the dev machine (wsl -l -v: Ubuntu, version 2; cargo 1.96.0; default user uid 1000 so chmod is enforced), parent-commit clone and target/ on ext4 (not /mnt/u drvfs), tempdir under /tmp, an uncommitted scratch capture test printing {e:#}; CI ubuntu-latest (.github/workflows/ci.yml:22) runs the cfg(unix) arm per PR. No protected path edited.",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
     "id": "F1-CR1",
     "source": "code-review",
     "round": 1,
-    "file": "tools/census-probe/src/main.rs",
-    "line": 1501,
-    "severity": "important",
-    "text": "The `model` probe mode now sets `HOOK = on_mark` and `ALSEM_RETAINED_CENSUS=1` for ALL of q6, not just the new `q6_retained_census`. `on_mark` calls `reset_peak()`, so every engine mark inside the old Q6 `phase()` closures resets PEAK in the middle of the phase. The result: every Q6 peak reads low, and the census walks inflate the seconds column. Before this branch, `model` mode set no hook.",
+    "file": "src/bin/alsem.rs",
+    "line": 1633,
+    "severity": "minor",
+    "text": "`args.read_inputs()` reads the whole workspace (every .al text, the closure discovery, the app.json walk, the model-id hash) before `run_analyze_with_exit` opens `analyze.total` and before `resolve_analyze_detectors` validates --preset/--detector.\n- `alsem analyze <ws> --preset bogus` now reads the whole tree before it exits 3.\n- The read time sits outside every trace span (it used to be inside preflight.snapshot_build), so the step-1 doc's analyze.total comparison measures two different scopes.",
     "disposition": "fixed",
-    "evidence": "| CR1 | important | fixed | a32d0519 | `tools/census-probe/src/main.rs:1497-1502` (before): `model` set `ALSEM_RETAINED_CENSUS=1` and `HOOK = on_mark` for all of q6; `on_mark` (`:275-286`) calls `reset_peak()`, so every engine mark reset PEAK inside q6's `phase()` closures (`:1017-1030`), and the census walks ran inside q6's timed phases. Both are process `OnceLock`s (`census.rs` `enabled()`, `census_hook::HOOK`), so they cannot be scoped inside one mode. Fix: the census moves to its own mode `census-probe retained <ws>`; `model` sets neither and no longer calls `q6_retained_census`. CHANGELOG and the numbers file name the new mode (the numbers file's census figures came from the census part, which ran first, so they stand) | no test target (the probe is its own workspace, not in CI; `cargo check --manifest-path tools/census-probe/Cargo.toml` green). Behaviour is by construction: `model` no longer touches either `OnceLock` |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| CR1 | minor | fixed | 8cd6d98d | Real. `run_analyze_cmd` called `args.read_inputs()` (alsem.rs:1633 at 376ef31b) before `run_analyze_with_exit` opened `analyze.total` and ran `resolve_analyze_detectors` (run.rs:464-465). Fix: alsem.rs:1638 checks `--preset`/`--detector` first and exits 3 with the same `al-sem: <msg>` text. inputs.rs:186 adds the span `inputs.read`. The step 1 numbers file now says `analyze.total` covers different work on the two sides, and that the process wall (which covers both) moved by the same −1.9 s. Spec §4.2.6 keeps the read in `alsem.rs` before the pipeline, and so does the fix. | Test `cli_build_counters::analyze_bad_preset_reads_no_inputs` (exit 3, `inputs.read` 0). Before the fix: FAILED (`inputs.read` 1). Break (Edit, grep count 1: the early return replaced by `let _ = msg;`): FAILED left 1 right 0. Reverted: ok. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -387,13 +19,13 @@
     "id": "F1-CR2",
     "source": "code-review",
     "round": 1,
-    "file": "src/program/model/program_calls.rs",
-    "line": 682,
-    "severity": "important",
-    "text": "`mark_phase_start(\"post_attach\")` runs on every `attach_program_calls_with` call. Each call restarts the sampler and throws away the earlier maximum. So in a command that builds two models (`alsem diff ws ws`, program=2), `peak.post_attach_mb` reports only the LAST model's phase.",
+    "file": "src/bin/alsem.rs",
+    "line": 727,
+    "severity": "minor",
+    "text": "The writer block promises \"a closed pipe never aborts the process\", but write_stdout/write_file report errors with `eprintln!`, which panics when stderr is closed. The same applies to the analyze warning (:1640), policy check (:897) and fingerprint (:1337/:1343).",
     "disposition": "fixed",
-    "evidence": "| CR2 | important | fixed | a32d0519 | `perf_trace.rs` `mark_phase_start` (before) called `finish_phase()` and dropped its result; diff builds a model per side (`diff/cli.rs:103`). Note: simply keeping the max over continuous phases would be wrong, because side 1's phase would run through side 2's parse and attach (the process peak). Fix: `PhaseState` keeps `ended_max` = max over every ended phase; new `pt::end_phase` is called in `load_workspace_side` after the side's model is dropped, so side 2's build is in no phase; `peak.post_attach_mb` = max over all phases. Spec §4.1.4 bullet and CHANGELOG updated | unit `perf_trace::tests::phase_peak_is_the_max_over_every_phase` (first phase's max hand-stated as 2^50). Break: `PhaseState::end` `self.ended_max = self.ended_max.max(s.finish())` -> `self.ended_max = s.finish()`. Fail: `perf_trace.rs:1110 left: Some(Some(9826304)) right: Some(Some(1125899906842624))`. Use pin `cli_build_counters::diff_ends_each_sides_phase`: red before the fix and under the break \"delete the `end_phase` call in `diff/cli.rs`\": `cli_build_counters.rs:681 left: [\"phase.start\", \"phase.start\"] right: [\"phase.start\", \"phase.end\", \"phase.start\", \"phase.end\"]`. Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| CR2 | minor | fixed (writer); refuted (other sites) | 8cd6d98d | Real for the writer. `write_stdout`/`write_file` and the shard-dir branch printed with `eprintln!`, which panics when stderr is closed: exit 101 in dev, an abort under release `panic = \"abort\"`. That contradicted the comment \"a closed pipe never aborts\". Fix: `write_error` (alsem.rs:723) sends the message through `write_stderr` and ignores its result. Refuted for the other sites the finding names (the analyze warning, `policy check`'s stderr-only error lines, fingerprint's selector and strict lines). They are error paths with no output that already used `eprintln!` before step 1. Spec §4.2.5 reroutes only the stderr lines that FOLLOW the output, and it does not reroute a library `eprintln!` (§5). | Test `cli_write_failure::analyze_closed_stdout_and_stderr_exits_2`. Before the fix: FAILED (`Some(101)`). The first break attempt did not apply (rustfmt had reflowed the text; grep count 0, test green, so it proved nothing). Re-applied on the reflowed text (grep count 1, `write_error` back to `eprintln!`): FAILED left `Some(101)`. Reverted: ok. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -403,13 +35,13 @@
     "id": "F1-CR3",
     "source": "code-review",
     "round": 1,
-    "file": "src/engine/l5/detector_context.rs",
-    "line": 1864,
+    "file": "src/program/inputs.rs",
+    "line": 334,
     "severity": "important",
-    "text": "The `context.ordering_facts` bucket is measured when the context is built. At that moment `ordering_facts` is always an empty `OnceLock`, so the bucket always reads 0 bytes. d47 fills it later, and the filled map is never counted.",
-    "disposition": "fixed",
-    "evidence": "| CR3 | important | fixed | a32d0519 | `detector_context.rs:1864` (before) read `c.ordering_facts.get()` in `census_context`, run at the end of the context build (`:1701-1704`), while the cell is filled later by `get_ordering_facts` (`registry.rs:617-619`). Fix: the bucket is printed (shallow, with a `census.ordering_facts` probe mark first) inside `get_ordering_facts`' `get_or_init`, i.e. at the fill; `census_context` no longer prints it | `cli_build_counters::retained_census_counts_the_filled_ordering_cell` (d47 positive fixture `ws-txn-d47-pos-http-nocommit`). Red before the fix (on the dep fixture): `cli_build_counters.rs:752 ordering bucket [0]`. Break: delete `census_ordering_facts(&facts);` in the fill. Fail: `cli_build_counters.rs:785 ordering bucket []`. Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "text": "The frozen set does not cover the dependency .app files. `compute_snapshot_inputs` hashes them inside InputSet::read, and then `load_all_apps_from` (dependencies.rs:622) reads them from disk again. If a .app is replaced between the two reads, the `inputs[]` rows and the workspaceFingerprint describe old bytes while the model is built from new ones. That is the two-views result the CHANGELOG claims is ruled out.",
+    "disposition": "refuted",
+    "evidence": "| CR3 | important | refuted (code, spec §4.2.2); fixed (over-claim in docs) | 8cd6d98d | Spec §4.2.2 says: \"The `.alpackages` `.app` files themselves are still opened by the loader … as today\". So a `.app` hashed in `InputSet::read` and loaded again by `load_all_apps_from` is the design. But the CHANGELOG `Fixed` entry and the inputs.rs module doc claimed that no two-views case was left. Both now state the exception: the CHANGELOG (Added and Fixed entries) and inputs.rs:6-10. | Docs only. No behaviour change, so there is no test. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -419,13 +51,13 @@
     "id": "F1-CR4",
     "source": "code-review",
     "round": 1,
-    "file": "src/engine/l5/detector_context.rs",
-    "line": 1773,
+    "file": "src/program/model/program_calls.rs",
+    "line": 2008,
     "severity": "minor",
-    "text": "`context.summaries` is tagged `kind=exact`, but `summaries_tally` counts only one alloc for each non-empty facts Vec. It misses the owned String allocations inside each fact (`facts_bytes` does count their bytes), and it does not model hash-table control bytes or slack. So it is not exact as census.rs defines the word.",
+    "text": "`build_models` still reads the workspace twice: once in `build_snapshot_res` (its own build_only InputSet), then in a second InputSet::read for `assemble_and_resolve_workspace_from_program`. This contradicts workspace.rs:1638's doc. A file added between the two reads gives ProgramFiles::Missing.",
     "disposition": "fixed",
-    "evidence": "| CR4 | minor | fixed (allocs) / refuted (control bytes) | a32d0519 | Real: `cone_census.rs:180-190` (before) counted one alloc per non-empty facts Vec while `facts_bytes` counted the bytes of every owned string and `ConstantVar` box inside. Fix: the per-fact accounting is now ONE Tally-based walk (`capability_fact_heap`, `value_source_heap`, `capability_extra_heap`) that counts bytes and allocations together; `capability_fact_heap_bytes` keeps its byte result (same bytes for pd_solve and capability_cone callers); `summaries_tally` uses `facts_tally` for direct and inherited facts (`FullRoutineSummary::census_inherited_facts`). Refuted part: hash-table control bytes and slack are not modeled for ANY bucket by the stated convention (`census.rs` Tally doc; spec §4.1.5 \"heap bytes by len, allocator overhead excluded\"; `cone_census.rs:43-50`); the `census.rs` module doc now says so in the `exact` definition. The numbers file notes that its `context.summaries` allocs predate the fix | unit `cone_census::tests::summaries_tally_counts_every_fact_allocation` (hand-built summary, allocs 11, bytes exact). Break: delete `t.allocs += h.allocs;` in `facts_tally`. Fail: `cone_census.rs:270 left: 5 right: 11` (5 = the old count). Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| CR4 | minor | fixed | 8cd6d98d | Real. `build_models` (program_calls.rs, a test and census helper; its callers are `--lib` tests and `adapter_census_for_workspace` ← `tests/program_resolve_harness.rs`) built the snapshot through `build_snapshot_res` (its own `build_only` read) and then did a second `InputSet::read` for the model. Fix: `build_models_with(&Arc<InputSet>)` (program_calls.rs:2015) builds the snapshot with `SnapshotBuilder::build_with_inputs` and builds the model from the same set. `build_models` is now one read plus that call. | Test `program_calls::tests::build_models_reads_the_workspace_once`: read the set, delete `B.al`, expect `Ok`. Break (Edit, grep count 1: the snapshot from `build_snapshot_res(workspace)` again): FAILED with `L3 model: fail-closed/empty layout` (the `Missing` arm). Reverted: ok. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -435,13 +67,13 @@
     "id": "F1-CR5",
     "source": "code-review",
     "round": 1,
-    "file": "src/engine/perf_trace.rs",
-    "line": 657,
-    "severity": "minor",
-    "text": "`mark_phase_start` is not atomic: it calls finish_phase (lock, take, unlock), starts a sampler, then locks again to store it. Two overlapping callers each start a sampler. The second store overwrites the first, which is never stopped or joined, so a thread is orphaned and its maximum is lost.",
+    "file": "src/engine/gate/policy/pipeline.rs",
+    "line": 65,
+    "severity": "important",
+    "text": "`PolicyCheckOptions.no_policy` duplicates the PolicyRequest that the InputSet was read with. `inputs.policy_file` is None both for \"not found\" and for \"not requested\", so the two cases cannot be told apart, and a caller can silently ignore the workspace policy. The policy mode should come from the set alone.",
     "disposition": "fixed",
-    "evidence": "| CR5 | minor | fixed | a32d0519 | `perf_trace.rs:657-667` (before): lock/take/unlock, `PhaseSampler::start()` unlocked, then a second lock to store, so two racing callers could overwrite a running sampler (never stopped). Fix: all phase state is one `Mutex<PhaseState>`; `start` ends the old sampler and stores the new one under the same lock | unit `perf_trace::tests::racing_phase_starts_orphan_no_sampler` (8 threads x 25 starts behind a barrier; every started sampler's stop flag must be set after finish). Break: `start_phase` rewritten to the old shape (end under one lock, start unlocked, store under a second lock). Fail, 3 runs of 3: `perf_trace.rs:1154 samplers never stopped left: 8 / 9 / 7 right: 0`. Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| CR5 | important | fixed (spec amended) | 8cd6d98d | Real. `PolicyCheckOptions.no_policy` repeated the `PolicyRequest`, and `policy_file: None` meant both \"disabled\" and \"not found or not asked for\". A set read with `PolicyRequest::None` made `policy check` run the bundled default and silently ignore the workspace's `al-sem.policy.yaml`. The spec §4.2.1 type had the same gap, so I fixed both: `InputSet.policy_request` (inputs.rs:57) holds the request. `resolve_policy_check` reads `Disabled` from it (pipeline.rs:66). `run_policy_check` asserts the request is not `None` (pipeline.rs:182). `no_policy` is removed from `PolicyCheckOptions` and its 5 callers. Spec §4.2.1 gains the field. | (a) The golden `cli_c_policy_differential::no_policy_json_byte_match` now carries `--no-policy` through the set alone. Break (Edit, `== Disabled` changed to `== None`): FAILED. (b) New test `cli_inputs_frozen::policy_check_refuses_a_set_read_without_a_policy_request` (should_panic). Break (Edit, assert removed): FAILED. Both reverted: ok. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -451,13 +83,13 @@
     "id": "F1-CR6",
     "source": "code-review",
     "round": 1,
-    "file": "src/engine/perf_trace.rs",
-    "line": 700,
+    "file": "src/program/inputs.rs",
+    "line": 356,
     "severity": "minor",
-    "text": "`maybe_exit_after` prints the cone census before `process::exit(0)`, but the `RunGuard` never drops on that path. `peak.process_mb` and `peak.post_attach_mb` are therefore never written, and the sampler is never stopped.",
+    "text": "`is_nested_app` rebuilds folder paths from the lossy `rel_posix`. A folder name that is not valid UTF-8 (Unix) then points to a path that does not exist, so a nested app's files are flagged non-nested. Walk `abs_path.ancestors()` instead.",
     "disposition": "fixed",
-    "evidence": "| CR6 | minor | fixed | a32d0519 | `perf_trace.rs:700-711` (before): `maybe_exit_after` flushed and `process::exit(0)` without the `RunGuard` drop, so neither peak counter was written and the sampler was never stopped. Fix: `Tracer::report_peaks` (shared with `RunGuard::drop`, reports once, only when armed) is called before the flush | `cli_build_counters::exit_after_still_reports_both_peaks` (`ALSEM_TRACE_EXIT_AFTER=context.capability_cones`). Red before the fix and under the break \"delete `t.report_peaks();` in `maybe_exit_after`\": `cli_build_counters.rs:703 peak.process_mb missing: {\"build.combined_graph\": 1, ...}`. Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| CR6 | minor | fixed | 8cd6d98d | Real. `is_nested_app` rebuilt folder paths from `rel_posix`, which `discover_al_files` builds with `to_string_lossy` (source_text.rs:91-95). A folder name that is not valid Unicode then named a path that does not exist, so the file was flagged non-nested. Fix (inputs.rs:371): walk `abs_path.ancestors()` up to the root. | Test `inputs::tests::nested_app_under_a_non_unicode_folder_is_flagged`. It uses a lone-surrogate folder name on Windows and `\\xff` on Unix, and asserts the precondition that the name is not valid Unicode. Break (Edit, grep count 1: `dir_has_app_json(Path::new(&*dir.to_string_lossy()))`): FAILED at the `nested_app` assert (the folder was printed as `�x/B.al`). Reverted: ok. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -467,13 +99,13 @@
     "id": "F1-CR7",
     "source": "code-review",
     "round": 1,
-    "file": "src/engine/l4/capability_cone.rs",
-    "line": 1898,
+    "file": "src/engine/gate/policy/pipeline.rs",
+    "line": 324,
     "severity": "minor",
-    "text": "`SGL_CONE_ENTRIES` (printed as `cone_entries=`) keeps its name, but it now counts only CLOSED entries. A comparison with an earlier figure (docs/2026-07-31-cone-singleton-census.md) would wrongly look like a drop. The old total is now cone+open+own, and nothing in the output line says so.",
-    "disposition": "fixed",
-    "evidence": "| CR7 | minor | fixed | a32d0519 | `capability_cone.rs:1898` adds `c_scanned - c_open` (closed entries only) to `SGL_CONE_ENTRIES`, printed as `cone_entries=` (`detector_context.rs:591`), the name the old all-entries total had (CHANGELOG:5986 cites the old figure). Fix: renamed `SGL_CLOSED_ENTRIES`, printed `closed_entries=`; the static's doc and CHANGELOG [Unreleased] say the old `cone_entries=` = closed + open + own. Round 2 rework (opus re-raise: the numbers file DID cite it, `docs/measurements/2026-10-18-issue-160-step0.md:137` headed the closed-only column `SGL_CONE_ENTRIES`): the row now reads `SGL_CLOSED_ENTRIES` / `SGL_OPEN_ENTRIES` / `SGL_OWN_ENTRIES`, and a note under the table says these runs printed the column as `cone_entries=` before the rename, that it counts closed entries only, and that an old `cone_entries=` figure compares with the sum of the three columns (analyze 15,070,006). `grep -rn \"SGL_CONE_ENTRIES\\|cone_entries=\" src tests docs/measurements CHANGELOG.md` now finds only text that explains the old name (that note, `detector_context.rs:409`, CHANGELOG:19) | rename and docs only, no behaviour; checked by the build (task gate) |",
-    "hash": "1c327b36bf780baa",
+    "text": "`run_policy_explain` keeps its own copy of the explicit/auto-detect policy resolution and reads from disk, bypassing the InputSet. The two resolvers can drift apart, and this contradicts the CHANGELOG line \"every alsem command reads its workspace inputs once\".",
+    "disposition": "refuted",
+    "evidence": "| CR7 | minor | refuted (code, spec §4.2.3); fixed (CHANGELOG wording) | 8cd6d98d | Spec §4.2.3 (the `resolve_policy_check` row) says: \"`load_policy_from_file` stays for `policy explain` (`pipeline.rs:341-369`), which runs no semantic build and is not rewired\". `run_policy_explain` (pipeline.rs:330) is out of scope by design. The CHANGELOG line \"every `alsem` command reads its workspace inputs once\" over-claimed. It now says \"every `alsem` command that builds the program\" and names `policy explain` as outside the set. | Docs only. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -483,13 +115,13 @@
     "id": "F1-CR8",
     "source": "code-review",
     "round": 1,
-    "file": "src/engine/l4/capability_cone.rs",
-    "line": 4228,
+    "file": "src/bin/alsem.rs",
+    "line": 1644,
     "severity": "minor",
-    "text": "The span `r3a3.calls_graph` is opened twice per build: once in the wrapper, around the graph build, and once in `_over`, around only the clones. Span counts double. Give the inner span its own name.",
+    "text": "`write_stdout(format!(\"{out}\\n\").as_bytes(), …)` copies a report of several MB just to add a newline.",
     "disposition": "fixed",
-    "evidence": "| CR8 | minor | fixed | a32d0519 | `capability_cone.rs:4215` and `:4228` both opened `r3a3.calls_graph` on the wrapper path. Fix: the inner span (input clones) is `r3a3.clone_inputs`; CHANGELOG lists it | `cli_build_counters::r3a3_spans_open_once_per_base` (fingerprint: `r3a3.calls_graph` B events == `r3a3.direct_facts` B events). Break: inner span name back to `r3a3.calls_graph`. Fail: `cli_build_counters.rs:757 left: 2 right: 1`. Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| CR8 | minor | fixed | 8cd6d98d | Real but small: `format!(\"{out}\\n\")` copied the whole report. Now `out.push('\\n')` adds the newline to the String the command already owns (alsem.rs, the analyze `Ok` arm). The bytes are the same. | Behaviour-preserving. The output bytes are pinned by the existing in-process and spawned analyze tests (the whole suite is green). No new test: there is nothing new to pin. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -499,13 +131,13 @@
     "id": "F1-CR9",
     "source": "code-review",
     "round": 1,
-    "file": "docs/OUTSTANDING.md",
-    "line": 686,
+    "file": "src/program/inputs.rs",
+    "line": 182,
     "severity": "minor",
-    "text": ".claude/skills/byte-census/SKILL.md:46 and .claude/skills/perf-probe/SKILL.md:46 still tell the reader to set `C1_CONE_CENSUS`, and docs/OUTSTANDING.md:686 still names it. The branch deleted that flag; its replacement is `ALSEM_RETAINED_CENSUS=1`.",
-    "disposition": "fixed",
-    "evidence": "| CR9 | minor | fixed (docs) / deferred (skills, owner) | a32d0519 | `docs/OUTSTANDING.md:686` now reads \"`C1_CONE_CENSUS=1` byte census (since #160 step 0: `ALSEM_RETAINED_CENSUS=1`)\" (a DONE item describing a past run, so the old name stays with the new one beside it). OWNER FOLLOW-UP (`.claude/` is protected): `.claude/skills/byte-census/SKILL.md:46` and `.claude/skills/perf-probe/SKILL.md:46` in the main checkout still say `C1_CONE_CENSUS`; replace with `ALSEM_RETAINED_CENSUS=1` (and, for the probe, `census-probe retained <ws>`). Spec §7 step 0 already lists both | docs only |",
-    "hash": "1c327b36bf780baa",
+    "text": "Every non-build_only read (graph, query, events and the test helpers) pays for the app.json walk, the nested-flag read_dirs, the model-id hash and the roots/coverage reads, even when the command uses none of them. `attach_program_calls` also now runs `compute_workspace_diagnostics` for every model.",
+    "disposition": "refuted",
+    "evidence": "| CR9 | minor | refuted (spec §4.2.6, §4.2.4) | — | Spec §4.2.6: \"Every other caller reads `InputSet::read(path, &InputNeeds::default())` … `InputNeeds::default()` is NOT the build-only set: a command states its needs\". Only `SnapshotBuilder::build*` takes `build_only`. Spec §4.2.4 puts `workspace_diagnostics` on every `Model`, built in `attach_program_calls_with` (now program_calls.rs:691). Cost measured: the step 1 numbers show no time regression on analyze, digest or fingerprint, and the LSP `build_full` bench is flat. | n/a |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -515,13 +147,13 @@
     "id": "F1-CR10",
     "source": "code-review",
     "round": 1,
-    "file": "src/engine/perf_trace.rs",
-    "line": 657,
+    "file": "",
+    "line": 0,
     "severity": "minor",
-    "text": "`mark_phase_start` starts a 10 ms sampler thread whenever tracing is on, even in binaries that never create a `RunGuard` (aldump, tests, library callers). There the thread is never stopped and nothing reports its peak.",
+    "text": "",
     "disposition": "fixed",
-    "evidence": "| CR10 | minor | fixed | a32d0519 | `mark_phase_start` (before) spawned a sampler whenever tracing was on, also in `aldump` and library callers that never open `pt::run`. Fix: `pt::run` arms `PhaseState`; `start` returns false unarmed, so no sampler and no `phase.start` event | unit `perf_trace::tests::unarmed_phase_starts_no_sampler` and `cli_build_counters::aldump_starts_no_phase_sampler` (`aldump --r4-findings`, traced). aldump test red before the fix: `cli_build_counters.rs:722 [\"phase.start\"]`. Break: delete the `if !self.armed { return false; }` guard. Fail: `unarmed_phase_starts_no_sampler` at `perf_trace.rs:1117`, and `aldump_starts_no_phase_sampler` `cli_build_counters.rs:722 [\"phase.start\"]`; `phase_peak_is_reported` and `diff_ends_each_sides_phase` stayed green. Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| CR10 | minor | fixed | 8cd6d98d | Real. `648723d3` is not an ancestor of HEAD (`merge-base --is-ancestor` exit 1). `a8d281aa` has the same `git patch-id` (`bc32285a`), and the two trees differ only in master's scripts/.github/.claude/.config/docs files from the rebase, no `src/`. The numbers file now names `a8d281aa` and says it was measured as its pre-rebase twin `648723d3`. | Docs only. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -529,15 +161,15 @@
   },
   {
     "id": "F2-1",
-    "source": "sol",
+    "source": "final-r1 sol NEW-1 + opus N5",
     "round": 2,
-    "file": "docs/measurements/2026-10-18-issue-160-step0.md",
-    "line": 245,
-    "severity": "important",
-    "text": "The residual reconciliation omits the surviving model. From `census.base` on, the sum counts `base.*` but not the model's rows and events, which the base still owns (`base.resolved`); `census_cross_app_base` charged only the replacement calls. The residuals therefore include already-measured model allocations and A0.5's reconciliation is incomplete.",
+    "file": "src/engine/gate/run.rs",
+    "line": 667,
+    "severity": "minor",
+    "text": "analyze's JSON success path (run.rs:667) and empty-output path (:819) call driver_version() (an env read) instead of the captured inputs.driver_version (spec §4.2.1, §4.2.3 row `driver_version()`). Opus also names run_diff_cmd's `let version = driver_version()`.",
     "disposition": "fixed",
-    "evidence": "Verified: `build_cross_app_base` moves the model in (`let mut resolved = x.resolved; resolved.calls = Arc::new(calls)`, capability_cone.rs:3629-3630) and the old `census_cross_app_base` emitted only `base.resolved.calls`. Fix: `census_model` is split into `census_model_rows` (rows + events, program_calls.rs:756) and `census_calls` (program_calls.rs:777); the `model` bucket is their sum (bytes unchanged, 84,670,336 on CDO); the base emits `base.resolved.rows` (capability_cone.rs:3689) and `base.resolved.calls` through the same `census_calls` (no double count: the model's full calls are replaced and never charged to the base). The context owns clones of its graph, bindings and id sets (detector_context.rs:705-827), so base + context counts nothing twice. CDO re-run (release-fast, SARIF prefix f23abcb680ae8a28 unchanged): `base.resolved.rows` 41,363,280 B; `base.*` 169.1 MiB (was 129.7); every residual row from `census.base` on recomputed in the numbers file (e.g. `census.base` 886.9 -> 847.4 MiB), Sigma <= live still holds at all 7 marks | Test `cli_build_counters::retained_census_changes_no_output` now requires `bucket=base.resolved.rows` with 0 < bytes < `model` bytes (cli_build_counters.rs:835). Break: replace the `base.resolved.rows` emit with `let _ = census_model_rows;` (Edit applied once). Fail: `cli_build_counters.rs:833 missing bucket=base.resolved.rows bytes=`. Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| F2-1 | minor | fixed (analyze); refuted (diff) | c670d966 | Real for analyze: both JsonFormatInputs now take `inputs.driver_version.clone()`; the `driver_version` import left run.rs. Refuted for diff: `run_diff_cmd` reads the env ONCE per command (alsem.rs `let version = driver_version()`), shared by both sides and the output; a side may be a snapshot file with no InputSet, and two sides' sets are two reads, so the one command-level read is the §4.2.3 'read once' rule. | Test `cli_inputs_frozen::analyze_json_reports_the_captured_driver_version` (set version assigned 'captured-160'; findings + empty cases). Break A (Edit, applied once: :667 back to `driver_version()`): FAILED `findings` left \"1.7.2\" right \"captured-160\". Break E (:819): FAILED `empty` left \"1.7.2\". Reverted: ok. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -545,15 +177,15 @@
   },
   {
     "id": "F2-2",
-    "source": "sol",
+    "source": "final-r1 opus N2",
     "round": 2,
-    "file": "src/engine/l4/pd_solve.rs",
-    "line": 449,
+    "file": "src/bin/alsem.rs",
+    "line": 1305,
     "severity": "minor",
-    "text": "Both arena buckets print `kind=exact` but their allocation counts miss allocations their bytes count: `arena_allocs` charged three per producer and none for a fact's strings or an edge's strings; `working_allocs` charged one per rep and none for the rep fact's owned heap (`rep_for` deep-clones the fact).",
+    "text": "The CR1 defect in fingerprint: --inventory-only with --shard, a non-json format, or a query selector used to fail before any disk read (run_fingerprint_pipeline's first lines); now the full InputSet::read with fingerprint_rows runs first.",
     "disposition": "fixed",
-    "evidence": "Verified at pd_solve.rs:449-482 (before). Fix: `arena_bytes`/`working_bytes` become `arena_tally`/`working_tally` (pd_solve.rs:515, :552), ONE walk each that returns bytes and allocations together (helpers `block`, `vec_block`, `map_block`, `arc_fact`; a fact's heap through `cone_census::capability_fact_heap`, now `pub(crate)`). Bytes are identical by construction (same terms) and on CDO (431,440,999 / 119,222,473); allocs on CDO now 179,774 / 57,454 (were 91,504 / 22,591), recorded in the numbers file. The `PD_SOLVE_BYTES_*` counters read `.bytes` | Unit `pd_solve::tests::tallies_count_every_owned_allocation` (hand-stated arena: one producer, one edge; arena allocs 13, working allocs 8, each allocation named in the test). Break: in `arc_fact`, `t.allocs += h.allocs;` -> `let _ = h.allocs;` (Edit applied once). Fail: `pd_solve.rs:691 left: 9 right: 13`. Revert: green. The old formula would give 5 and 4 |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| F2-2 | minor | fixed | c670d966 | Real: alsem.rs read the set before `run_fingerprint_pipeline` ran its inventory-only checks (fingerprint_cli.rs:328-344 at 8cd6d98d). Fix: the checks move to `pub fn reject_inventory_only_combos` (fingerprint_cli.rs), called by alsem before `InputSet::read` (exit 1, same text) and again by the pipeline for library callers. | Test `cli_build_counters::fingerprint_inventory_only_usage_errors_read_no_inputs` (3 cases: exit 1, the message, `inputs.read` 0). Break C (Edit, applied once: `false && f.inventory_only`): FAILED `--shard all` case left 1 right 0 (`inputs.read`: 1). Reverted: ok. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -561,15 +193,15 @@
   },
   {
     "id": "F2-3",
-    "source": "sol",
+    "source": "final-r1 sol NEW-3 + opus N3",
     "round": 2,
-    "file": "src/engine/l4/capability_cone.rs",
-    "line": 4358,
-    "severity": "important",
-    "text": "The full-graph timings mode prints only the inherited-fact count. Spec 4.1.6 asks for the raw population AND its bytes by the census; the numbers file's cut/full table has counts only, and the smoke test checks only the existing prefixes.",
+    "file": "tests/cli/cli_build_counters.rs",
+    "line": 846,
+    "severity": "minor",
+    "text": "inputs_read_once covers analyze, fingerprint, query touches, events fanout and diff only; digest, prove, graph, policy check, query effects and events chains have no read-count pin, and assert_row omits inputs.read.",
     "disposition": "fixed",
-    "evidence": "Verified against spec 4.1.6 item 4 (`the raw population (inherited facts summed, bytes by the census)`). Fix: the mode prints `<side> inherited_bytes=` = sum over `sb.cones` of `cone_census::facts_tally(&c.inherited).bytes` (capability_cone.rs:4359-4365). CDO re-run: cut 82,173,274 B, full 10,039,612,389 B (122.2x), fact counts equal to the first run; added to the numbers file's table with a note that the timing rows stay the first run's (the re-run shared the machine with a build). CHANGELOG entry updated | `aldump_smoke::issue160_full_graph_timings_prints_four_numbers` now requires `inherited_bytes=` on both sides and nonzero bytes exactly when facts are nonzero (aldump_smoke.rs:119, :139). Break: format key `inherited_bytes=` -> `inherited_bytez=` (Edit applied once). Fail: `aldump_smoke.rs:122 missing cut inherited_bytes=` (stdout shows `cut inherited_facts=1`, `cut inherited_bytez=756`). Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| F2-3 | minor | fixed | c670d966 | Real. `assert_row` now checks `(\"inputs.read\", r.program)`: every §4.1.3 row builds one program per read (diff: 2 and 2), so all 20 rows (analyze x3, digest x2, prove, fingerprint x3, diff x2, events x3, policy check x2, query x3, graph) pin A1.1. | Break B (Edit, applied once: a second `InputSet::read` in `run_digest_cmd`): `digest_cross_app` and `digest_single_app` FAILED `[digest …] inputs.read: got 2, want 1`. Reverted: all 33 cli_build_counters tests ok. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -577,15 +209,15 @@
   },
   {
     "id": "F2-4",
-    "source": "sol+opus",
+    "source": "final-r1 opus N4",
     "round": 2,
-    "file": ".agent/issue-160/ledger.md",
-    "line": 62,
-    "severity": "important",
-    "text": "The ledger's Discrimination proofs section is empty: no record of the nine build-counter proofs (A0.3, plan Task 1 step 5), the transient byte-split oracle's SHA and red/revert (Task 3 step 5), or the other step 0 proofs (Tasks 2, 5, 6, 7). Green tests are not discrimination evidence.",
-    "disposition": "fixed",
-    "evidence": "Verified: ledger.md:60-64 empty; the step 0 commit messages carry no proof either. Fix: every step 0 proof was RUN in this round, breaks made with Edit and each Edit confirmed applied once, and recorded with outputs in U:/Git/al-call-hierarchy/.agent/runs/20261018-125302-fa1912/final-r1-dispositions.md (Discrimination proofs table), ready for the conductor to copy into the ledger (this agent may edit no .agent/ file but the register). Results: (Task 1) at the 8 single-site counters the delta 1 -> 2, and for `build.graph_scc` a counter added inside the solver's inner Tarjan path (`db_effect_solver.rs:98`): every row test failed naming each of the 9 counters (e.g. `[analyze single-app] build.graph_scc: got 6, want 2`, `[digest single-app] build.snapshot: got 2, want 1`, `[analyze cross-app d47] build.ordering_facts left: 2 right: 1`, `[analyze single-app] build.detector_context: got 2, want 1`); (Task 2) SINGLETON_NANOS charged twice plus the whole compose elapsed at exit: `negative compose remainder: rest=-0.384ms`; (Task 3) in a temporary worktree at 6632fa74 (an ancestor of a32d0519): `cargo test -p al-sem --lib pd_solve::tests::bytes_split_sums_to_the_old_total` green, break `drop reps from working_bytes` -> `pd_solve.rs:1139 left: 1305 right: 1834`, revert green, worktree removed; (Task 5) `mark_phase_start` returns at once -> `phase_peak_is_reported: post_attach=0 process=22`, `diff_ends_each_sides_phase left: []`; (Task 6) `bucket` prints to stdout -> `census changed stdout`; `model` emit removed -> `missing bucket=model`; Task 6 break (3) is moot (the old `emit_full_census` is deleted, pinned by `!err.contains([C1_CONE_CENSUS])`); (Task 7) the wrapper passes an emptied graph (`edges_by_from`/`typed_edges` cleared) -> `--test r3` 3 failed (`oracle_r3a3_inherited_keys_trace_to_a_direct_producer`, `pd_arena_links_are_snapshot_edges`, `a5_cone_l4_class_parity_per_producer`). All reverted; the same tests green after | see the dispositions file | | r2 rework: ledger Task 1 rows now cite the original second-builder-call proofs run at 7ce88bab (spec design.md:1759), not the round-1 delta mutations.",
-    "hash": "1c327b36bf780baa",
+    "file": "src/engine/gate/run.rs",
+    "line": 577,
+    "severity": "minor",
+    "text": "AnalyzeArgs.baseline and AnalyzeArgs.workspace duplicate the InputSet (as CR5 fixed for policy); save writes args.baseline, load reads inputs.baseline, nothing checks they agree; a set read without the baseline hits an expect panic.",
+    "disposition": "refuted",
+    "evidence": "| F2-4 | minor | refuted | - | Spec §10 item 5 (`2026-10-18-issue-160-steps-0-2-design.md:1868-1873`) records the request-vs-workspace split (`policy_file`, `baseline`, …) for step 12, so step 1 keeps `AnalyzeArgs` as the request. The two cannot diverge on any production path: the only reader is `AnalyzeArgs::read_inputs` (run.rs:120-128), which derives `InputNeeds.baseline` from `args.baseline` and `workspace` from `args.workspace`; `run_analyze_cmd` (alsem.rs:1653) and every test harness call it. `args.baseline` is also the WRITE target of `--update-baseline`, which the set does not hold. The `expect` is the stated invariant guard for a library caller that breaks that contract, as CR5's refusal is for policy. Unlike CR5's `no_policy`, there is no second copy of a decision that can differ. | - |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -593,15 +225,15 @@
   },
   {
     "id": "F2-5",
-    "source": "opus",
+    "source": "final-r1 opus N6",
     "round": 2,
-    "file": "src/engine/l5/full_summary.rs",
-    "line": 99,
+    "file": "src/engine/gate/inline_suppression.rs",
+    "line": 4,
     "severity": "minor",
-    "text": "`census_inherited_facts` is a new crate-visible accessor that returns an EMPTY slice when the raw inherited facts were never built: the silent empty-cone answer R6 forbids, reopening the door M-3 closed by making `has_inherited_raw` test-only.",
+    "text": "The module doc says directives are scanned by RE-READING the .al source from disk; build_suppression_map reads inputs.file(rel).text.",
     "disposition": "fixed",
-    "evidence": "Verified (full_summary.rs:99-106 before, `.as_deref().unwrap_or_default()`; sole caller `cone_census::summaries_tally`). Fix: the accessor is gone; `FullRoutineSummary::census_facts_tally(&self) -> Tally` (full_summary.rs:103) returns the bytes and allocations of the direct facts plus the inherited ones when kept. It returns numbers, never facts, so no caller can branch on presence or read a silently empty half. `summaries_tally` calls it | Unit `cone_census::tests::summaries_tally_counts_every_fact_allocation` (hand-stated summary WITH inherited facts, allocs 11). Break: `if let Some(inherited) = &self.capability_facts_inherited` -> `if let Some(inherited) = None::<&Vec<CapabilityFact>>` (Edit applied once). Fail: `cone_census.rs:269 left: 9 right: 11`. Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| F2-5 | minor | fixed | c670d966 | Real (inline_suppression.rs:4-6 vs :197). The doc now says the directives are scanned in the text the command's InputSet read, never the disk again. | Doc only; the behaviour is pinned by `cli_inputs_frozen::al_text_edit_after_read` (ledger task 12 row). |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -609,15 +241,15 @@
   },
   {
     "id": "F2-6",
-    "source": "opus",
+    "source": "final-r1 opus N8",
     "round": 2,
-    "file": "src/engine/l4/capability_cone.rs",
-    "line": 4215,
+    "file": "docs/measurements/2026-10-19-issue-160-step1.md",
+    "line": 16,
     "severity": "minor",
-    "text": "The CR8 fix narrowed `r3a3.calls_graph` (it now covers only the graph build; the clones moved to `r3a3.clone_inputs`) without renaming it, against spec 4.1.1's rule that a changed span gets a new name. A comparison with an older trace shows a false drop.",
+    "text": "The numbers are at a8d281aa, not HEAD (the CR fixes changed production code after it); the post-attach peak rose +9 to +18 MB against the spec's expected +5 MB and the extra is not measured.",
     "disposition": "fixed",
-    "evidence": "Verified: base 60522971 opened `r3a3.calls_graph` around the clones and the graph build; a32d0519 around the graph build only. Fix: the span is `r3a3.graph_build` (capability_cone.rs:4213, with a comment); CHANGELOG [Unreleased] states old `r3a3.calls_graph` = `r3a3.clone_inputs` + `r3a3.graph_build`. No other reader of the name (`grep -rn r3a3.calls_graph` finds only the comment, the CHANGELOG note and the test's absence check) | `cli_build_counters::r3a3_spans_open_once_per_base` now asserts `r3a3.graph_build` == `r3a3.clone_inputs` == `r3a3.direct_facts` B events and zero `r3a3.calls_graph` (cli_build_counters.rs:759-761). Break: span name back to `r3a3.calls_graph` (Edit applied once). Fail: `cli_build_counters.rs:759 left: 0 right: 1`. Revert: green |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| F2-6 | minor | fixed (HEAD note); refuted (peak) | c670d966 | Real that the file did not say so: the Head row now lists the post-a8d281aa fixes (usage-error checks before the read, the `inputs.read` span, the stderr writer, the policy request, the JSON version, a census row with census off) and says they were not re-measured and change nothing a successful run builds or keeps. Refuted for the peak: spec §6.3 row 1 sets NO bound for step 1 (`Bound: none`), every peak is inside its band, and the file already states the rise, its candidate holders and that step 1b's A1b.4 bound reads against this head. | Docs only. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -625,15 +257,15 @@
   },
   {
     "id": "F2-7",
-    "source": "opus",
+    "source": "final-r1 opus N7",
     "round": 2,
-    "file": "docs/superpowers/specs/2026-10-18-issue-160-steps-0-2-design.md",
-    "line": 79,
+    "file": "src/program/model/program_calls.rs",
+    "line": 770,
     "severity": "minor",
-    "text": "The spec still says A0.5's ground truth is one `census-probe model` run and that step 0 extends the probe's `model` mode; after CR1 the census runs only under `census-probe retained`.",
+    "text": "census_model_rows does not count the new Model.workspace_diagnostics buffer.",
     "disposition": "fixed",
-    "evidence": "Verified: spec :79 and :285 (before); `tools/census-probe/src/main.rs:1497-1516` has the separate `retained` mode. Fix: A0.5 reads `one census-probe retained run`; 4.1.5 says step 0 adds the `census-probe retained <ws>` mode, apart from `model` (q6) so the marks never skew `model`'s phase peaks (CR1). The numbers file's heading is `census-probe retained` too (its text keeps that the run was made as `model` before the split) | docs only |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| F2-7 | minor | fixed | c670d966 | Real. `census_model_rows` now adds `.buf::<Diagnostic>(m.workspace_diagnostics.len())`, beside `dependency_diagnostics`. | Test `program_calls::tests::census_model_rows_counts_the_workspace_diagnostics` (two hand-built models, 0 vs 3 diagnostics; bytes differ by 3 x size_of). Break D (Edit, applied once: the line removed): FAILED left 0 right 216. Reverted: ok. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -641,15 +273,15 @@
   },
   {
     "id": "F2-8",
-    "source": "opus",
+    "source": "final-r1 opus N9",
     "round": 2,
-    "file": ".agent/issue-160/ledger.md",
-    "line": 79,
+    "file": "src/snapshot/provider.rs",
+    "line": 72,
     "severity": "minor",
-    "text": "The numbers file says the scc_stats inconsistency (31,658 nodes in 31,656 SCCs with max_scc 1, against the cone walk's max_scc_members 479) is recorded as a discovery, but the ledger's Discoveries section is empty, and epic 7a's stop rule depends on the number.",
+    "text": "workspace_source_from_inputs copies walk_al_source's SourceRoot assembly and blake3 content_hash loop.",
     "disposition": "fixed",
-    "evidence": "Verified: ledger.md Discoveries empty; numbers file SCC section says `recorded as a discovery`. Fix: the discovery entry, in the exact `{subsystem, locator, symptom, kind, origin_issue, reproducer, pre_existing, capability, acceptance}` shape `/orchestrate` step 10 files, is written in final-r1-dispositions.md for the conductor to put under the ledger's `## Discoveries` (this agent may not edit the ledger). Source facts in it: the event reports `graph.nodes.len()` and `tarjan_scc` over the context graph's `edges_by_from` only (detector_context.rs:1392-1400, :1445); the cone walk's 479 comes from `scc_entry.members` over a graph that also carries the injected dependency typed edges. Both causes are hypotheses; the entry says so | n/a (a record, not code) |",
-    "hash": "1c327b36bf780baa",
+    "evidence": "| F2-8 | minor | fixed | c670d966 | Real. One private `source_root(files, tier) -> Option<SourceRoot>` (empty -> None, blake3 over the texts in order) now serves both. | Behaviour-preserving refactor: `inputs::tests::workspace_root_equals_walk_al_source` and the full task gate (`scripts/ci-steps task`, exit 0) and pre-commit goldens (893 passed) green. |",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -657,95 +289,47 @@
   },
   {
     "id": "F2-9",
-    "source": "opus",
-    "round": 2,
-    "file": ".agent/issue-160/findings.json",
-    "line": 0,
-    "severity": "minor",
-    "text": "Register entry F1-CR9 has empty text and file and line 0, so the register does not say what was found.",
-    "disposition": "fixed",
-    "evidence": "Verified. Fix: F1-CR9 now carries the finding text from code-review-r1.md:19 (`.claude/skills/byte-census/SKILL.md:46 and perf-probe SKILL.md:46 ... and docs/OUTSTANDING.md:686 still names it`), file `docs/OUTSTANDING.md`, line 686. Its evidence and disposition are unchanged | n/a (register record) |",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    }
-  },
-  {
-    "id": "F2-10",
-    "source": "opus",
+    "source": "final-r1 sol NEW-2 + opus N1",
     "round": 2,
     "file": ".agent/issue-160/ledger.md",
-    "line": 68,
-    "severity": "minor",
-    "text": "Gate results cover HEAD b68a7845 only; a32d0519 changed production files and its only recorded gate is `ci-steps task`. No cdo-gate or check-goldens run is recorded for the final HEAD.",
-    "disposition": "refuted",
-    "evidence": "Not a defect of the diff, and not yet due. `.claude/commands/issue.md:210-211` (step 10, final panel): `Every fix returns to step 9's gates`; step 11 reruns step 9 after the rebase, and step 12 freezes B/H only after that. The branch gate (ci-steps all, check-goldens --verify-coverage, check-goldens, cdo-gate) is the conductor's supervised step and runs on the head this round produces (which adds commits after a32d0519), so a gate recorded for a32d0519 would be stale on arrival. This round ran `scripts/ci-steps task` on its own head (see dispositions). The conductor records the step 9 results for the final head in the ledger's Gate results before attest | n/a |",
-    "hash": "1c327b36bf780baa",
+    "line": 33,
+    "severity": "important",
+    "text": "The ledger's Discrimination proofs, Base/Head SHAs and Gate results sections are empty: no step-1 proof (incl. the five app_json reader breaks and the per-platform walk-error captures) and no record that the A1.7 literals were captured from the parent's code.",
+    "disposition": "fixed",
+    "evidence": "| F2-9 | important | fixed | - (ledger, conductor) | The ledger now carries the task 9-14 proof table. Sol's named asks are in it: app_json_edit_after_read readers (1),(2),(3),(5) (task 12) and (4) (task 13); walk_error_fails_the_build on Windows and WSL2 with both spec breaks, plus walk_loop on WSL (task 10). A1.7 provenance: the literals were captured at Task 9's commit `007c0205` (pre-rebase `a47d9094`), whose build path is the parent's (`git diff 214a7879 007c0205` touches no `src/snapshot/` file, no `resolve/full.rs`, and of `discover_al_files` only its helper's visibility). New executable parity proof (Windows): with the build's provider put back to the parent's disk walk (`walk_al_source(&inputs.workspace, Workspace)` in snapshot.rs:274, Edit, applied once), `walk_error_fails_the_build` PASSES with `--nocapture` and no skip line, so the committed Windows literal is the old code's text; reverted. Base `214a7879`, head and gate results remain the conductor's sections. | parity row for the ledger, see final-r1-dispositions.md | | r2 rework: ledger Base/Head (B 8405f96d, H ce7db1ed, both rebases) and Gate results (per-head table, final H all green) filled.",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
     }
   },
   {
-    "source": "opus",
-    "round": 3,
-    "disposition": "fixed",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    },
     "id": "F3-1",
-    "file": ".agent/issue-160/ledger.md",
-    "line": 66,
-    "severity": "minor",
-    "text": "Task 1 proof row said '26 of 29 failed / green 29/29' for a module with 28 tests where only the 20 assert_row tests can fail on build.* breaks.",
-    "evidence": "ledger Task 1 rows rewritten: the 20 row tests named, the other 8 stated as unable to fail, per-counter second-call proofs."
-  },
-  {
-    "source": "opus",
+    "source": "ci",
     "round": 3,
+    "file": "src/program/inputs.rs",
+    "line": 443,
+    "severity": "important",
+    "text": "CI (ubuntu) failed to compile the lib tests: E0282 type annotations needed at the #[cfg(unix)] arm of nested_app_under_a_non_unicode_folder_is_flagged (std::os::unix::ffi::OsStrExt::from_bytes without a receiver type). The Windows gates cannot compile that arm.",
     "disposition": "fixed",
-    "hash": "1c327b36bf780baa",
-    "reviews": {
-      "sol": "accepted",
-      "opus": "accepted"
-    },
-    "id": "F3-2",
-    "file": "src/engine/census.rs",
-    "line": 9,
-    "severity": "minor",
-    "text": "census.rs and spec §4.1.5 said bytes by len with no hash control bytes for any kind, but the arena.* buckets count Vec/hash tables at capacity with one control byte per slot.",
-    "evidence": "census.rs module doc and spec §4.1.5 now state the arena.* capacity exception and why (match pd_solve arena_bytes/working_bytes). | r3 rework: the exception now also names snapshot.pd_solution (pd_arena_bytes), cites arena_tally/working_tally, and gives the solve_bytes comparability reason."
-  },
-  {
-    "id": "F4-1",
-    "source": "opus",
-    "round": 4,
-    "file": "src/engine/census.rs",
-    "line": 11,
-    "severity": "minor",
-    "text": "The census.rs and spec reason for the capacity exception cited arena_bytes/working_bytes, which were renamed arena_tally/working_tally in 0d2ea47c, and the reason was circular. detector_context.rs PD_SOLVE_BYTES_* docs cited the old names too.",
-    "disposition": "fixed",
-    "evidence": "census.rs, spec section 4.1.5 and detector_context.rs:455-457 now cite arena_tally/working_tally; the stated reason is keeping the pre-#160 solve_bytes accounting (525 MiB, epic section 3) comparable.",
-    "hash": "1c327b36bf780baa",
+    "evidence": "12dcf2d1 names the type: <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b\"ÿx\").to_owned(); the expression compiled and ran ('ok', to_str() is None) under WSL2 Ubuntu rustc 1.96 before the commit; CI run 39205470434 shows it was the only error.",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
     }
   },
   {
-    "id": "F5-1",
-    "source": "opus",
-    "round": 5,
-    "file": "src/engine/l5/snapshot.rs",
-    "line": 1691,
-    "severity": "minor",
-    "text": "The pd_arena_bytes doc comment still said 'counted like pd_solve::arena_bytes'; that function was renamed arena_tally in 0d2ea47c.",
+    "id": "F3-2",
+    "source": "ci",
+    "round": 3,
+    "file": "tests/common/unreadable.rs",
+    "line": 42,
+    "severity": "important",
+    "text": "CI (ubuntu) clippy -D warnings failed: non_octal_unix_permissions at the unix arm of unreadable() (Permissions::from_mode(0)). Like F3-1, the Windows gates never compile that arm.",
     "disposition": "fixed",
-    "evidence": "snapshot.rs:1691 now cites pd_solve::arena_tally; a grep of src/ for the old arena_bytes/working_bytes names finds no other reference.",
-    "hash": "1c327b36bf780baa",
+    "evidence": "from_mode(0o000). Owner-authorised second CI fix. Before the commit, CI's exact `cargo clippy --release --all-targets --all-features -- -D warnings` and `cargo test --workspace --no-run` ran clean in a fresh WSL2 Ubuntu ext4 clone (grammar 8682cb5f); program::inputs 12/12, cli_inputs_frozen 13/13, cli_write_failure 4/4 passed there.",
+    "hash": "08dd59af89d8aa59",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"

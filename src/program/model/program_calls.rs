@@ -637,19 +637,22 @@ pub fn resolved_calls_from_program(
 ///
 /// `coverage` is the same build's `FreshCoverage`; its dependency-ledger warnings
 /// go on the model (#91). It is required, so no program-backed model can be built
-/// without them.
+/// without them. `inputs` is the set the build read: the model's workspace
+/// diagnostics come from it and `coverage.files_without_object` (#160 §4.2.4).
 pub fn attach_program_calls(
+    inputs: &crate::program::inputs::InputSet,
     rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
     coverage: &crate::program::resolve::full::FreshCoverage,
 ) -> crate::program::model::workspace::Model {
-    attach_program_calls_with(rows, ctx, report, coverage, None)
+    attach_program_calls_with(inputs, rows, ctx, report, coverage, None)
 }
 
 /// [`attach_program_calls`] for a cross-app model (engine-switch S7.3): `abi_rows`
 /// joins a symbol-only dependency routine to its model row.
 fn attach_program_calls_with(
+    inputs: &crate::program::inputs::InputSet,
     rows: crate::program::model::workspace::ModelRows,
     ctx: ProgramContext,
     report: ProgramReport,
@@ -685,6 +688,11 @@ fn attach_program_calls_with(
         root_classifications: rows.root_classifications,
         primary_app: rows.primary_app,
         infra_diagnostics: rows.infra_diagnostics,
+        workspace_diagnostics:
+            crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(
+                inputs,
+                Some(&coverage.files_without_object),
+            ),
         dependency_diagnostics: coverage.dependency_diagnostics(),
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
@@ -764,6 +772,7 @@ pub(crate) fn census_model_rows(
         .buf::<w::ModelRoutine>(m.workspace.routines.len())
         .buf::<crate::engine::root_classification::RootClassification>(m.root_classifications.len())
         .buf::<crate::engine::root_classification::InfraDiagnostic>(m.infra_diagnostics.len())
+        .buf::<crate::engine::l5::registry::Diagnostic>(m.workspace_diagnostics.len())
         .buf::<crate::engine::l5::registry::Diagnostic>(m.dependency_diagnostics.len())
         .arc::<crate::program::model::events::ProgramEvents>();
     let eg = event_graph(&m.events.graph);
@@ -798,7 +807,7 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
     workspace: &std::path::Path,
 ) -> Option<crate::program::model::workspace::Model> {
     assemble_and_resolve_workspace_program(
-        workspace,
+        &crate::program::inputs::InputSet::read(workspace, &Default::default()),
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
@@ -808,22 +817,23 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
 /// model projected from one program build (as `alsem analyze` builds it,
 /// `gate::run::build_analysis_model`), with the program engine's calls and event
 /// graph attached. `None` when the program build or the model assembly fails.
+/// Every workspace input comes from `inputs`, the command's one read (#160).
 #[must_use]
 pub fn assemble_and_resolve_workspace_program(
-    workspace: &std::path::Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<crate::program::model::workspace::Model> {
     let (ctx, report, coverage) =
-        crate::program::resolve::full::build_program_with_coverage(workspace).ok()?;
+        crate::program::resolve::full::build_program_with_coverage(inputs).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
-        workspace,
+        inputs,
         model_instance_id,
         skip_roots_config,
         &ctx,
         &report.parenless_calls,
     )?;
-    Some(attach_program_calls(rows, ctx, report, &coverage))
+    Some(attach_program_calls(inputs, rows, ctx, report, &coverage))
 }
 
 /// [`assemble_and_resolve_workspace_program`] over inline `(relative path, source)`
@@ -868,8 +878,12 @@ pub fn assemble_and_resolve_inline_program(
         std::fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("write {name}: {e}"));
     }
-    assemble_and_resolve_workspace_program(dir.path(), model_instance_id, true)
-        .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
+    assemble_and_resolve_workspace_program(
+        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        model_instance_id,
+        true,
+    )
+    .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
 }
 
 /// [`assemble_and_resolve_inline_program`] with the default model-instance id.
@@ -913,13 +927,13 @@ pub struct CrossAppProgram {
 /// them. `None` when the program build or the model assembly fails.
 #[must_use]
 pub fn assemble_and_resolve_cross_app_program(
-    workspace: &std::path::Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<CrossAppProgram> {
     use crate::engine::perf_trace as pt;
     let (ctx, report, coverage) =
-        crate::program::resolve::full::build_cross_app_program(workspace).ok()?;
+        crate::program::resolve::full::build_cross_app_program(inputs).ok()?;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
         std::collections::HashMap::new();
     for u in &ctx.snapshot().apps {
@@ -945,7 +959,7 @@ pub fn assemble_and_resolve_cross_app_program(
     let (rows, abi_rows) = {
         let _s = pt::span("crossapp", "crossapp.model_assembly");
         crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
-            workspace,
+            inputs,
             model_instance_id,
             skip_roots_config,
             &ctx,
@@ -994,7 +1008,7 @@ pub fn assemble_and_resolve_cross_app_program(
     let loaded_apps = crate::program::resolve::full::loaded_apps(&ctx, &coverage);
     let resolved = {
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
-        attach_program_calls_with(rows, ctx, report, &coverage, Some(&abi_rows))
+        attach_program_calls_with(inputs, rows, ctx, report, &coverage, Some(&abi_rows))
     };
     Some(CrossAppProgram {
         resolved,
@@ -1991,12 +2005,41 @@ pub(crate) fn build_models(
     ),
     String,
 > {
-    use crate::program::resolve::full::{build_snapshot_res, fresh_program_from_snapshot};
-    let (ctx, report) = fresh_program_from_snapshot(build_snapshot_res(workspace)?)?;
+    build_models_with(&crate::program::inputs::InputSet::read(
+        workspace,
+        &Default::default(),
+    ))
+}
+
+/// [`build_models`] over one already-read `InputSet`: the snapshot and the
+/// model's file selection read the same set, so the workspace is read once.
+pub(crate) fn build_models_with(
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+) -> Result<
+    (
+        ProgramContext,
+        ProgramReport,
+        crate::program::model::workspace::ModelRows,
+    ),
+    String,
+> {
+    use crate::program::resolve::full::fresh_program_from_snapshot;
+    let workspace = inputs.workspace.as_path();
+    let (snap, _load) = crate::snapshot::SnapshotBuilder {
+        workspace_root: workspace.to_path_buf(),
+        local_providers: vec![],
+    }
+    .build_with_inputs(
+        inputs,
+        crate::snapshot::DependencySource::default(),
+        &crate::program::dep_cache::DepCache::default(),
+    )
+    .map_err(|e| format!("snapshot build failed: {e:#}"))?;
+    let (ctx, report) = fresh_program_from_snapshot(snap)?;
     // The production model (`assemble_and_resolve_workspace_program`), built from
     // the same program parse and resolution.
     let l3 = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
-        workspace,
+        inputs,
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         &ctx,
@@ -2014,6 +2057,40 @@ pub(crate) fn build_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Final panel r1 (F2-7): the `model` census charges the workspace
+    /// diagnostics buffer (#160 §4.2.4). Two models that differ only in it.
+    #[test]
+    fn census_model_rows_counts_the_workspace_diagnostics() {
+        use crate::engine::l5::registry::Diagnostic;
+        use crate::program::model::workspace::{Model, ModelEntities};
+        let model = |n: usize| Model {
+            workspace: ModelEntities {
+                objects: vec![],
+                tables: vec![],
+                routines: vec![],
+            },
+            root_classifications: vec![],
+            primary_app: None,
+            infra_diagnostics: vec![],
+            workspace_diagnostics: vec![
+                Diagnostic {
+                    severity: "info".to_string(),
+                    stage: "discover".to_string(),
+                    message: "m".to_string(),
+                };
+                n
+            ],
+            dependency_diagnostics: vec![],
+            calls: Default::default(),
+            events: Default::default(),
+        };
+        let (none, three) = (census_model_rows(&model(0)), census_model_rows(&model(3)));
+        assert_eq!(
+            three.bytes - none.bytes,
+            3 * std::mem::size_of::<Diagnostic>()
+        );
+    }
 
     /// #96: every record op the program resolver emits an `ImplicitTrigger` edge
     /// for passes the adapter's gate, the bulk `ModifyAll`/`DeleteAll` included
@@ -2099,7 +2176,8 @@ mod tests {
                 || manifest.get("platform").is_some()
                 || manifest.get("application").is_some();
             let must_warn = declares && !ws.join(".alpackages").exists();
-            let disk = assemble_and_resolve_workspace_program(&ws, "r0", true).expect("disk");
+            let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+            let disk = assemble_and_resolve_workspace_program(&inputs, "r0", true).expect("disk");
             let inline = assemble_and_resolve_inline_program(&files, guid, "r0");
             let mut disk_text = model_text(&disk);
             let inline_text = model_text(&inline);
@@ -2174,6 +2252,22 @@ mod tests {
     /// `app.json`, then run the census.
     fn census(files: &[(&str, &[u8])]) -> SiteCensus {
         census_with(files, |_| {})
+    }
+
+    /// Code review CR4: `build_models` reads the workspace once. A file removed
+    /// after the read is still in the snapshot AND the model's selection (both
+    /// read the set); a second disk read for the snapshot would lack it and the
+    /// model would fail closed (`ProgramFiles::Missing`).
+    #[test]
+    fn build_models_reads_the_workspace_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.json"), APP_JSON).unwrap();
+        std::fs::write(dir.path().join("A.al"), "codeunit 50100 A { }").unwrap();
+        std::fs::write(dir.path().join("B.al"), "codeunit 50101 B { }").unwrap();
+        let inputs = crate::program::inputs::InputSet::read(dir.path(), &Default::default());
+        std::fs::remove_file(dir.path().join("B.al")).unwrap();
+        let built = build_models_with(&inputs);
+        assert!(built.is_ok(), "{:?}", built.err());
     }
 
     /// [`census`], with `mutate` applied to the L3 model before the census:

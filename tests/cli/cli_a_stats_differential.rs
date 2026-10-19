@@ -158,7 +158,8 @@ fn run_stats(fixture: &str, names: &[&str]) -> String {
         .filter(|d| name_set.contains(d.name.as_str()))
         .collect();
 
-    match assemble_and_resolve_workspace_program(&fixture_dir, MODEL_INSTANCE_ID_DEFAULT, false) {
+    let inputs = al_sem::program::inputs::InputSet::read(&fixture_dir, &Default::default());
+    match assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false) {
         Some(resolved) => {
             let output = run_detectors(&resolved, &selected);
             serialize_detector_stats(&output.detector_stats)

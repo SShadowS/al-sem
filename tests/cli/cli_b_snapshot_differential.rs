@@ -48,8 +48,8 @@ use crate::regen;
 /// shape (`code = "DIAG-<stage>"`), over the registry's default detector set
 /// (`compute_analyzer_diagnostics` runs it itself). versionDiagnostic() is None
 /// under the version override, so it is not prepended.
-fn envelope_diagnostics(ws_path: &std::path::Path, resolved: &Model) -> Vec<EnvelopeDiagnostic> {
-    compute_analyzer_diagnostics(ws_path, resolved)
+fn envelope_diagnostics(resolved: &Model) -> Vec<EnvelopeDiagnostic> {
+    compute_analyzer_diagnostics(resolved)
         .into_iter()
         .map(|d| EnvelopeDiagnostic {
             code: format!("DIAG-{}", d.stage),
@@ -151,10 +151,17 @@ fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, Model, 
     let model_instance_id = compute_gate_model_instance_id(&fixture_dir)
         .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
     // Engine-switch S6.4: the model `alsem diff`'s workspace mode builds.
-    let resolved = assemble_and_resolve_workspace_program(&fixture_dir, &model_instance_id, false)
+    let inputs = al_sem::program::inputs::InputSet::read(
+        &fixture_dir,
+        &al_sem::program::inputs::InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        },
+    );
+    let resolved = assemble_and_resolve_workspace_program(&inputs, &model_instance_id, false)
         .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
     let opts = FullSnapshotOptions {
-        workspace_dir: &fixture_dir,
+        inputs: &inputs,
         driver_version: VERSION_OVERRIDE,
         deterministic: true,
         roots_config_ignored: false,
@@ -201,10 +208,10 @@ fn raw_json_matches_goldens() {
 #[test]
 fn envelope_json_matches_goldens() {
     for fixture in SNAPSHOT_CORPUS {
-        let (tree, resolved, ws_dir) = compose_for(fixture);
+        let (tree, resolved, _ws_dir) = compose_for(fixture);
         // versionDiagnostic() is None under the version override; the diagnostics
         // channel is the analyzer diagnostics (workspace + roots-overlay + detect).
-        let diags = envelope_diagnostics(&ws_dir, &resolved);
+        let diags = envelope_diagnostics(&resolved);
         let got = serialize_envelope(&tree, VERSION_OVERRIDE, true, &diags);
         let golden_path = goldens_dir().join(format!("{fixture}.envelope.json"));
         check_or_regen(

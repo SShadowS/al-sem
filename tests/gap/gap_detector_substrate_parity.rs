@@ -133,9 +133,12 @@ fn every_detector_parity_between_full_and_minimal_ctx() {
 
     for fixture in PARITY_FIXTURES {
         let dir = corpus_dir(fixture);
-        let resolved =
-            assemble_and_resolve_workspace_program(&dir, MODEL_INSTANCE_ID_DEFAULT, false)
-                .unwrap_or_else(|| panic!("fixture {fixture} must assemble"));
+        let resolved = assemble_and_resolve_workspace_program(
+            &al_sem::program::inputs::InputSet::read(&dir, &Default::default()),
+            MODEL_INSTANCE_ID_DEFAULT,
+            false,
+        )
+        .unwrap_or_else(|| panic!("fixture {fixture} must assemble"));
         assert_parity(&resolved, &detectors, fixture);
     }
 

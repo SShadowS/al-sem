@@ -78,7 +78,7 @@ fn args_for(ws: &Path, with_evidence: bool) -> AnalyzeArgs {
 
 fn run_json(ws: &Path, with_evidence: bool) -> String {
     let args = args_for(ws, with_evidence);
-    match run_analyze_with_exit(&args, "e3-test") {
+    match run_analyze_with_exit(&args.read_inputs(), &args, "e3-test") {
         Ok((out, _, _)) => out,
         Err(e) => panic!("run_analyze failed: {e}"),
     }

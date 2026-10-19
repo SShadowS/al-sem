@@ -1076,14 +1076,13 @@ fn q6_retained_census(ws: &std::path::Path) {
     );
     MARKS.lock().unwrap().clear();
     let (b0, a0) = live();
-    let mi = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(ws)
-        .expect("model instance id");
-    let target = AnalysisTarget::build(ws, &mi, false, "census-probe").expect("cross-app base");
+    let inputs = al_sem::program::inputs::InputSet::read(ws, &Default::default());
+    let target = AnalysisTarget::build(&inputs, false, "census-probe").expect("cross-app base");
     on_mark("probe.base_returned");
     if let AnalysisTarget::CrossApp(base) = &target {
         // The default detector set, run by the cross-app runner: builds one
         // detector context (its `census.context` mark fires inside).
-        let diags = al_sem::engine::gate::run::compute_analyzer_diagnostics_cross_app(ws, base);
+        let diags = al_sem::engine::gate::run::compute_analyzer_diagnostics_cross_app(base);
         println!("    analyzer diagnostics: {}", diags.len());
     }
     on_mark("probe.context_dropped");
@@ -1117,7 +1116,8 @@ fn q6(ws: PathBuf) {
     use al_sem::program::model::workspace::{Model, ModelEntities, ModelRoutine};
     println!("==== Q6: alsem analyze pipeline on {} ====", ws.display());
     let fresh = phase("fresh_coverage", || {
-        al_sem::program::resolve::full::build_program_with_coverage(&ws).map(|(_, _, fc)| fc)
+        let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+        al_sem::program::resolve::full::build_program_with_coverage(&inputs).map(|(_, _, fc)| fc)
     });
     println!("    fresh_coverage ok: {}", fresh.is_ok());
     drop(fresh);
@@ -1128,7 +1128,11 @@ fn q6(ws: PathBuf) {
     // The production model (engine-switch S6/S9): one program build, the model
     // projected from its parse, the program engine's calls and events attached.
     let resolved = phase("assemble_and_resolve_workspace_program", || {
-        assemble_and_resolve_workspace_program(&ws, &id, false)
+        assemble_and_resolve_workspace_program(
+            &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
+            &id,
+            false,
+        )
     })
     .expect("assemble");
     settle();
@@ -1173,6 +1177,7 @@ fn q6(ws: PathBuf) {
         root_classifications,
         primary_app,
         infra_diagnostics,
+        workspace_diagnostics,
         dependency_diagnostics,
         calls,
         events,
@@ -1264,6 +1269,7 @@ fn q6(ws: PathBuf) {
     top.drop_as("root_classifications", root_classifications);
     top.drop_as("primary_app", primary_app);
     top.drop_as("infra_diagnostics", infra_diagnostics);
+    top.drop_as("workspace_diagnostics", workspace_diagnostics);
     top.drop_as("dependency_diagnostics", dependency_diagnostics);
     top.drop_as("calls (program engine)", calls);
     top.drop_as("events (program engine)", events);

@@ -36,7 +36,6 @@
 //! elided list is not.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
@@ -131,26 +130,24 @@ impl QuerySubstrate {
     /// base instead ([`Self::from_cross_app_base`]), so a dependency's tables
     /// resolve and are selectable.
     pub fn build(
-        workspace: &Path,
+        inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
         model_instance_id: &str,
         single_app: bool,
     ) -> Result<Self, String> {
         if !single_app {
-            let base = crate::engine::l4::capability_cone::build_cross_app_base(
-                workspace,
-                model_instance_id,
-            )
-            .ok_or_else(|| {
-                "query: the cross-app model could not be built \
+            let base =
+                crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
+                    .ok_or_else(|| {
+                        "query: the cross-app model could not be built \
                  (--single-app analyses the workspace alone)"
-                    .to_string()
-            })?;
+                            .to_string()
+                    })?;
             return Ok(Self::from_cross_app_base(base));
         }
         // Engine-switch S6.7: the program-backed model (program calls and events).
         let resolved =
             crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-                workspace,
+                inputs,
                 model_instance_id,
                 false,
             )
@@ -725,7 +722,7 @@ fn selector_failure_doc<T>(
 ///   does not touch T.
 /// - no `--from` — the workspace-global list, count first, uncapped.
 pub fn run_query_touches_pipeline(
-    workspace: &Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     table_selector: &str,
     from: Option<&str>,
     direction: Direction,
@@ -733,10 +730,11 @@ pub fn run_query_touches_pipeline(
     deterministic: bool,
     single_app: bool,
 ) -> Result<QueryRunResult, String> {
-    use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
-    let model_id = compute_gate_model_instance_id(workspace)
+    let model_id = inputs
+        .model_instance_id
+        .as_deref()
         .ok_or_else(|| "query: could not compute modelInstanceId".to_string())?;
-    let substrate = QuerySubstrate::build(workspace, &model_id, single_app)?;
+    let substrate = QuerySubstrate::build(inputs, model_id, single_app)?;
     Ok(render_query_touches(
         &substrate,
         table_selector,
@@ -1098,16 +1096,17 @@ fn render_query_touches_body(
 /// down-list for one routine, WITH `via` (which the posting lists drop and
 /// `ConeDerivedStore` never carried).
 pub fn run_query_effects_pipeline(
-    workspace: &Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     routine_selector: &str,
     alsem_ver: &str,
     deterministic: bool,
     single_app: bool,
 ) -> Result<QueryRunResult, String> {
-    use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
-    let model_id = compute_gate_model_instance_id(workspace)
+    let model_id = inputs
+        .model_instance_id
+        .as_deref()
         .ok_or_else(|| "query: could not compute modelInstanceId".to_string())?;
-    let substrate = QuerySubstrate::build(workspace, &model_id, single_app)?;
+    let substrate = QuerySubstrate::build(inputs, model_id, single_app)?;
     Ok(render_query_effects(
         &substrate,
         routine_selector,

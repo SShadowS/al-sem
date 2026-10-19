@@ -5,7 +5,7 @@
 //!   - `src/model/root-classification.ts` — [`RootKind`], [`ROOT_KIND_VALUES`],
 //!     [`is_externally_reachable_kind`], [`RootClassification`].
 //!   - `src/engine/root-classifier.ts` — [`classify_roots`] (AST-only pass).
-//!   - `src/config/roots-config.ts` — [`load_roots_config`] (file → validated config).
+//!   - `src/config/roots-config.ts` — `roots_config_from_bytes` (file bytes → validated config).
 //!   - `src/engine/root-classifier-overlay.ts` — [`overlay_config_roots`] (config merge).
 //!
 //! Determinism (R4-F spec Rev 2):
@@ -18,7 +18,6 @@
 //!     `String` matches al-sem's `a < b` on its `RoutineId` string.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use crate::program::model::workspace::{ModelEntities, ModelObject, ModelRoutine};
 
@@ -322,7 +321,7 @@ pub fn classify_roots(workspace: &ModelEntities) -> Vec<RootClassification> {
 }
 
 // ---------------------------------------------------------------------------
-// roots.config.json loader — load_roots_config (roots-config.ts).
+// roots.config.json loader — roots_config_from_bytes (roots-config.ts).
 // ---------------------------------------------------------------------------
 
 /// A validated roots.config target (al-sem `RootsConfigTarget`).
@@ -436,26 +435,23 @@ fn validate_roots_config(parsed: &serde_json::Value) -> Option<RootsConfig> {
     Some(RootsConfig { roots: entries })
 }
 
-/// True when `<workspaceRoot>/roots.config.json` exists AND loads+validates —
-/// i.e. al-sem's `model.identity.rootsConfig !== undefined`. The cli-b snapshot
-/// `deriveInputs` includes a `roots-config` input iff this holds. Engine-never-
-/// throws (the inner loader is total).
-pub fn roots_config_was_loaded(workspace_root: &Path) -> bool {
-    load_roots_config(workspace_root).is_some()
+/// True when the `roots.config.json` bytes (as the command's `InputSet` read
+/// them, #160) load+validate — i.e. al-sem's `model.identity.rootsConfig !==
+/// undefined`. The cli-b snapshot `deriveInputs` includes a `roots-config`
+/// input iff this holds (`InputSet::roots_config_loaded`).
+pub(crate) fn roots_config_bytes_load(bytes: &[u8]) -> bool {
+    roots_config_from_bytes(bytes).is_some()
 }
 
-/// Load + validate `<workspaceRoot>/roots.config.json` (al-sem `loadRootsConfig`).
-/// Missing file ⇒ `None` (clean empty, the common case). Parse / validation
-/// failure ⇒ `None`. Never throws / panics.
-fn load_roots_config(workspace_root: &Path) -> Option<RootsConfig> {
-    let path = workspace_root.join("roots.config.json");
-    let bytes = std::fs::read(&path).ok()?;
+/// Load + validate the `roots.config.json` bytes (al-sem `loadRootsConfig`).
+/// Parse / validation failure ⇒ `None`. Never throws / panics.
+fn roots_config_from_bytes(bytes: &[u8]) -> Option<RootsConfig> {
     // Strip a leading UTF-8 BOM (EF BB BF) before JSON parse — mirrors the
     // `charCodeAt(0) === 0xFEFF` slice in al-sem (here on the byte form).
     let slice: &[u8] = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         &bytes[3..]
     } else {
-        &bytes[..]
+        bytes
     };
     let text = std::str::from_utf8(slice).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(text).ok()?;
@@ -638,20 +634,25 @@ fn overlay_config_roots(
 // Top-level entry — mirror src/index.ts ~lines 255-271.
 // ---------------------------------------------------------------------------
 
-/// Compute `model.rootClassifications`: classify the AST roots, load any
-/// `<workspace>/roots.config.json`, then overlay the config on the AST roots.
-/// `workspace_root` is `None` for the inline/cross-app paths that have no disk
-/// config (⇒ AST-only). Mirrors al-sem's index.ts wiring.
+/// Compute `model.rootClassifications`: classify the AST roots, validate the
+/// `<workspace>/roots.config.json` bytes, then overlay the config on the AST
+/// roots. `roots_config` is `None` when the config is skipped or absent
+/// (⇒ AST-only). Mirrors al-sem's index.ts wiring.
 ///
 /// Returns `(classifications, infra_diagnostics)`. Infrastructure diagnostics
 /// (e.g. `kinds-mismatch` warnings) are threaded up to the caller for inclusion
 /// in the JSON envelope.
 pub fn compute_root_classifications(
     workspace: &ModelEntities,
-    workspace_root: Option<&Path>,
+    roots_config: Option<&Result<Vec<u8>, String>>,
 ) -> (Vec<RootClassification>, Vec<InfraDiagnostic>) {
     let ast_roots = classify_roots(workspace);
-    let config = workspace_root.and_then(load_roots_config);
+    // `roots_config` is the file's bytes as `InputSet::read` read them (#160):
+    // `None` = no file (or skipped), `Some(Err)` = unreadable, which loads no
+    // config, as a failed disk read did.
+    let config = roots_config
+        .and_then(|r| r.as_ref().ok())
+        .and_then(|b| roots_config_from_bytes(b));
     overlay_config_roots(ast_roots, config.as_ref(), workspace)
 }
 
@@ -1248,7 +1249,8 @@ mod tests {
         )
         .expect("write roots.config.json");
 
-        let (roots, diags) = compute_root_classifications(&ws, Some(dir.path()));
+        let bytes = std::fs::read(dir.path().join("roots.config.json")).map_err(|e| e.to_string());
+        let (roots, diags) = compute_root_classifications(&ws, Some(&bytes));
         assert_eq!(roots.len(), 1, "one routine in, one classification out");
         assert_eq!(
             roots[0].source, "ast+config",

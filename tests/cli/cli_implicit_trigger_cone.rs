@@ -211,9 +211,14 @@ fn fixture_is_where_the_literals_say() {
 // Pipelines (each run once, shared by every test).
 // ---------------------------------------------------------------------------
 
+/// The command's one read of `ws` (#160).
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
+    al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs())
+}
+
 fn digest(ws: &Path, file: &str, single_app: bool) -> Value {
     let result = run_digest_pipeline(
-        ws,
+        &read(ws),
         Some(vec![file.to_string()]),
         None,
         None,
@@ -243,7 +248,7 @@ fn model() -> &'static Model {
     MODEL.get_or_init(|| {
         let tmp = write_workspace();
         let id = compute_gate_model_instance_id(tmp.path()).expect("model id");
-        assemble_and_resolve_workspace_program(tmp.path(), &id, false).expect("model")
+        assemble_and_resolve_workspace_program(&read(tmp.path()), &id, false).expect("model")
     })
 }
 
@@ -254,7 +259,7 @@ fn query_effects(routine: &str) -> Vec<Value> {
     let (_, substrate) = WS.get_or_init(|| {
         let tmp = write_workspace();
         let id = compute_gate_model_instance_id(tmp.path()).expect("model id");
-        let s = QuerySubstrate::build(tmp.path(), &id, true).expect("query substrate");
+        let s = QuerySubstrate::build(&read(tmp.path()), &id, true).expect("query substrate");
         (tmp, s)
     });
     let q = render_query_effects(substrate, &format!("Trig Caller.{routine}"), "t", true);
@@ -267,7 +272,8 @@ fn query_effects(routine: &str) -> Vec<Value> {
 
 fn prove(routine: &str, question: &str) -> Value {
     let tmp = write_workspace();
-    let r = run_prove_pipeline(tmp.path(), routine, question, "t", true).expect("prove runs");
+    let r =
+        run_prove_pipeline(&read(tmp.path()), routine, question, "t", true).expect("prove runs");
     serde_json::from_str(&r.json_text).expect("prove json")
 }
 
@@ -1028,7 +1034,7 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
     let mut f = Vec::new();
 
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
-    let substrate = QuerySubstrate::build(ws, &model_id, false).expect("query substrate");
+    let substrate = QuerySubstrate::build(&read(ws), &model_id, false).expect("query substrate");
     let q = render_query_effects(&substrate, "Ws Caller.ValidateDep", "t", true);
     let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");
     let l4: Vec<(String, String)> = qdoc["payload"]["effects"]
@@ -1102,7 +1108,9 @@ rules:
 /// see `.agent/issue-96/t8.md`, "F1 root cause", and the ledger's discovery).
 #[test]
 fn a6_dependency_origin_trigger_reaches_the_workspace_cone() {
-    use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
+    use al_sem::engine::gate::policy::pipeline::{
+        PolicyCheckOptions, policy_request, run_policy_check,
+    };
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("ws");
     write_cross_app_workspace(&ws);
@@ -1112,9 +1120,13 @@ fn a6_dependency_origin_trigger_reaches_the_workspace_cone() {
 
     let run = |single_app: bool| -> Vec<u64> {
         let out = run_policy_check(&PolicyCheckOptions {
-            workspace: &ws,
-            policy_path: Some(&policy),
-            no_policy: false,
+            inputs: &al_sem::program::inputs::InputSet::read(
+                &ws,
+                &al_sem::program::inputs::InputNeeds {
+                    policy: policy_request(Some(&policy), false),
+                    ..Default::default()
+                },
+            ),
             format: "json",
             out: None,
             deterministic: true,

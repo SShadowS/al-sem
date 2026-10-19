@@ -138,7 +138,7 @@ fn analyze(ws: &Path, detector: Option<&str>) -> Value {
         single_app: false,
         with_evidence: true,
     };
-    let out = match run_analyze_with_exit(&args, "i148-test") {
+    let out = match run_analyze_with_exit(&args.read_inputs(), &args, "i148-test") {
         Ok((out, _, _)) => out,
         Err(e) => panic!("run_analyze failed: {e}"),
     };

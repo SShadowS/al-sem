@@ -179,7 +179,8 @@ fn hunk_on_assignment_line_is_a_changed_root() {
     d8_workspace(dir.path(), &posting);
 
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
-    let model = assemble_and_resolve_workspace_program(dir.path(), &model_id, false).unwrap();
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
+    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
     let snap = compose_snapshot(&model);
     let on_row_8 =
         |file: &str, row: u32| file.to_lowercase().ends_with("src/posting.al") && row == 8;
@@ -1655,7 +1656,8 @@ fn file_with_only_opless_routines_is_matched() {
     write(&dir.path().join("src/Pure.al"), pure);
 
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
-    let model = assemble_and_resolve_workspace_program(dir.path(), &model_id, false).unwrap();
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
+    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
     let snap = compose_snapshot(&model);
     assert!(
         snap.operation_index.is_empty() && snap.callsite_index.is_empty(),
@@ -1966,7 +1968,7 @@ fn entry_anchor_is_the_declaration() {
 
     // (e) prove reads the same anchor; its schema stays 1.3.0.
     let prove = run_prove_pipeline(
-        &corpus("ws-d34"),
+        &al_sem::program::inputs::InputSet::read(&corpus("ws-d34"), &crate::fingerprint_needs()),
         "Persist",
         "may-commit",
         VERSION_OVERRIDE,
@@ -2087,7 +2089,8 @@ fn model_routine_declaration_start_includes_attributes() {
     let dir = tempfile::tempdir().unwrap();
     d8_workspace(dir.path(), &d8_posting());
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
-    let model = assemble_and_resolve_workspace_program(dir.path(), &model_id, false).unwrap();
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
+    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
     let r = |name: &str| {
         model
             .workspace
@@ -2122,7 +2125,8 @@ fn declaration_start_line_claims_separated_and_multi_line_attributes() {
         "codeunit 50120 AttrsCu\n{\n    [IntegrationEvent(false, false)]\n    // note\n    procedure Commented()\n    begin\n    end;\n\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::AttrsCu,\n        'Commented', '', false, false)]\n    local procedure MultiLine()\n    begin\n    end;\n}\n",
     );
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
-    let model = assemble_and_resolve_workspace_program(dir.path(), &model_id, false).unwrap();
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
+    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
     let r = |name: &str| {
         model
             .workspace
@@ -2196,7 +2200,8 @@ fn quoted_interface_name_is_unescaped_in_the_id() {
         "interface \"I\"\"Foo\"\n{\n    procedure Bar();\n}\n",
     );
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
-    let model = assemble_and_resolve_workspace_program(dir.path(), &model_id, false).unwrap();
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
+    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
     let quoted = model
         .workspace
         .objects
@@ -2220,7 +2225,8 @@ fn interface_object_rows_carry_declaration_only_routines() {
     let dir = tempfile::tempdir().unwrap();
     decl_only_workspace(dir.path());
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
-    let model = assemble_and_resolve_workspace_program(dir.path(), &model_id, false).unwrap();
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &crate::fingerprint_needs());
+    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
     let obj = |name: &str| {
         model
             .workspace

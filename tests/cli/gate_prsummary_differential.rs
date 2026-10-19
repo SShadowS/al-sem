@@ -213,7 +213,7 @@ fn run_prsummary(fixture: &str, preset: Option<&str>, detector: Option<&str>) ->
         None,
         false,
     );
-    run_analyze_with_exit(&args, "engine-default")
+    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
         .expect("run_analyze_with_exit")
         .0
 }
@@ -234,7 +234,8 @@ fn run_prsummary_full(
         fail_on,
         require_dependencies,
     );
-    run_analyze_with_exit(&args, "engine-default").expect("run_analyze_with_exit")
+    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
+        .expect("run_analyze_with_exit")
 }
 
 /// Run the exit-code path for one slot for a `--fail-on` key (no `--require-dependencies`).
@@ -258,7 +259,7 @@ fn run_exit_fail_on(
         fail_on,
         false,
     );
-    run_analyze_with_exit(&args, "engine-default")
+    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
         .expect("run_analyze_with_exit")
         .1
 }
@@ -273,7 +274,7 @@ fn run_exit_require_deps(fixture: &str, preset: Option<&str>, detector: Option<&
         None,
         true,
     );
-    run_analyze_with_exit(&args, "engine-default")
+    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
         .expect("run_analyze_with_exit")
         .1
 }
@@ -721,7 +722,11 @@ fn oracle_parse_fail_on_error_is_err() {
     // However compute_finding_exit with an unknown severity falls back to sev_rank=0,
     // so it would exit CLEAN (not an Err). The CONFIG_ERROR (3) path is the BIN's
     // responsibility. Confirm the pipeline runs (does not panic) with an unknown value.
-    let result = al_sem::engine::gate::run::run_analyze_with_exit(&args, "engine-default");
+    let result = al_sem::engine::gate::run::run_analyze_with_exit(
+        &args.read_inputs(),
+        &args,
+        "engine-default",
+    );
     assert!(
         result.is_ok(),
         "pipeline must not Err on an unknown fail_on string (validation is the bin's job)"
@@ -765,7 +770,8 @@ fn run_analyze_fixture_json(
         None,
         require_dependencies,
     );
-    run_analyze_with_exit(&args, "engine-default").expect("run_analyze_with_exit")
+    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
+        .expect("run_analyze_with_exit")
 }
 
 /// Fresh-clean workspace (no deps, resolves fully) → NO warning, exit driven by
@@ -861,7 +867,8 @@ fn run_analyze_path(ws: &Path, require_dependencies: bool) -> (String, u8, Optio
         with_evidence: false,
         single_app: false,
     };
-    run_analyze_with_exit(&args, "engine-default").expect("run_analyze_with_exit")
+    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
+        .expect("run_analyze_with_exit")
 }
 
 /// Fail-closed workspace (unanalyzable — root `app.json` missing `id`) →

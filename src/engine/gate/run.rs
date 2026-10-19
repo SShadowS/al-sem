@@ -22,9 +22,10 @@
 //! "primary", so the scope=primary filter keeps everything.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::engine::gate::app_attribution::App;
-use crate::engine::gate::baseline::{apply_baseline, load_baseline, save_baseline};
+use crate::engine::gate::baseline::{apply_baseline, load_baseline_bytes, save_baseline};
 use crate::engine::gate::exit_code::{compute_finding_exit, exit};
 use crate::engine::gate::filter::{FilterOptions, Scope, filter_findings, scope_filter};
 use crate::engine::gate::format_html::{HtmlFormatInputs, format_html};
@@ -33,13 +34,12 @@ use crate::engine::gate::format_pr_summary::format_pr_summary;
 use crate::engine::gate::format_sarif::format_sarif;
 use crate::engine::gate::format_terminal::{GroupBy, format_terminal, format_terminal_grouped};
 use crate::engine::gate::inline_suppression::{apply_inline_suppressions, build_suppression_map};
-use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::preflight::evaluate_preflight;
 use crate::engine::gate::presets::resolve_analyze_detectors;
 use crate::engine::gate::projection::{ProjectionIndex, project_finding};
-use crate::engine::gate::version::driver_version;
 use crate::engine::l5::registry::run_detectors;
 use crate::engine::perf_trace as pt;
+use crate::program::inputs::{InputNeeds, InputSet};
 use crate::program::model::coverage::AnalysisCoverage;
 use crate::program::model::workspace::{Model, assemble_and_resolve_workspace_from_program};
 
@@ -112,6 +112,21 @@ pub struct AnalyzeArgs {
     pub single_app: bool,
 }
 
+impl AnalyzeArgs {
+    /// The command's one read of `workspace` (#160 §4.2.6), with what `analyze`
+    /// reads besides the build's inputs: the `--baseline` file.
+    #[must_use]
+    pub fn read_inputs(&self) -> Arc<InputSet> {
+        InputSet::read(
+            Path::new(&self.workspace),
+            &InputNeeds {
+                baseline: self.baseline.as_ref().map(std::path::PathBuf::from),
+                ..InputNeeds::default()
+            },
+        )
+    }
+}
+
 /// Read the workspace root `app.json` identity (`id` / `publisher` / `name` / `version`)
 /// into the gate `App` registry. Mirrors al-sem `WorkspaceProvider.collect`:
 ///   - defaults: `publisher = "unknown"`, `name = "unknown"`, `version = "0.0.0.0"`.
@@ -119,41 +134,11 @@ pub struct AnalyzeArgs {
 ///
 /// SOURCE-ONLY: exactly one app per run. Returns an empty registry if `app.json` is
 /// unreadable (engine-never-throws; attribution then falls back to "(unknown app)").
-fn read_workspace_apps(ws: &Path) -> Vec<App> {
-    let Ok(text) = std::fs::read_to_string(ws.join("app.json")) else {
-        return Vec::new();
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Vec::new();
-    };
-    let Some(app_guid) = v
-        .get("id")
-        .and_then(|x| x.as_str())
-        .filter(|s| !s.is_empty())
-    else {
-        return Vec::new();
-    };
-    let publisher = v
-        .get("publisher")
-        .and_then(|x| x.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let name = v
-        .get("name")
-        .and_then(|x| x.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let version = v
-        .get("version")
-        .and_then(|x| x.as_str())
-        .unwrap_or("0.0.0.0")
-        .to_string();
-    vec![App {
-        app_guid: app_guid.to_string(),
-        publisher,
-        name,
-        version,
-    }]
+/// Reads the `app.json` the command's `InputSet` read (#160).
+fn read_workspace_apps(inputs: &InputSet) -> Vec<App> {
+    crate::program::model::workspace::read_primary_app(inputs)
+        .into_iter()
+        .collect()
 }
 
 /// Why [`build_analysis_model`] produced no model.
@@ -188,22 +173,27 @@ impl AnalysisTarget {
     /// Build the model `alsem events` / `alsem policy check` read (#70): the
     /// workspace alone (`single_app`), or the cross-app base `alsem analyze`
     /// builds by default. `command` prefixes the error line.
+    /// The model-instance id is `inputs.model_instance_id`; a caller that has its
+    /// own message for a missing id checks it first.
     pub fn build(
-        workspace: &Path,
-        model_instance_id: &str,
+        inputs: &Arc<InputSet>,
         single_app: bool,
         command: &str,
     ) -> Result<AnalysisTarget, String> {
+        let model_instance_id = inputs
+            .model_instance_id
+            .as_deref()
+            .ok_or_else(|| format!("{command}: could not compute modelInstanceId"))?;
         if single_app {
             crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-                workspace,
+                inputs,
                 model_instance_id,
                 false,
             )
             .map(|r| AnalysisTarget::SingleApp(Box::new(r)))
             .ok_or_else(|| format!("{command}: workspace did not resolve"))
         } else {
-            crate::engine::l4::capability_cone::build_cross_app_base(workspace, model_instance_id)
+            crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
                 .map(|b| AnalysisTarget::CrossApp(Box::new(b)))
                 .ok_or_else(|| {
                     format!(
@@ -278,26 +268,19 @@ pub struct AnalysisModel {
 /// dependency code it demands. The switch harness dumps the single-app model (it
 /// needs the physical rows); the cross-app side is measured with
 /// `aldump --r4-findings-cross-app`.
-pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
+pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> AnalysisModel {
     if !single_app {
-        return build_cross_app_analysis_model(ws_path);
+        return build_cross_app_analysis_model(inputs);
     }
     let (fresh, program) = {
         let _s = pt::span("preflight", "preflight.fresh_program");
-        match crate::program::resolve::full::build_program_with_coverage(ws_path) {
+        match crate::program::resolve::full::build_program_with_coverage(inputs) {
             Ok((ctx, report, fc)) => (Ok(fc), Some((ctx, report))),
             Err(e) => (Err(e), None),
         }
     };
-    // Its own span: this is a SECOND full `discover_al_files` disk walk of the
-    // workspace (plus a sort + SHA-256 over one `ws:<rel>` string per file), and
-    // it sat inside `analyze.total`'s unattributed self time until it was
-    // measured — see `run_analyze_with_exit`'s `gate.teardown` note.
-    let model_instance_id = {
-        let _s = pt::span("gate", "gate.model_instance_id");
-        compute_gate_model_instance_id(ws_path)
-    };
-    let Some(model_instance_id) = model_instance_id else {
+    // The id `InputSet::read` computed (#160): no second disk walk.
+    let Some(model_instance_id) = inputs.model_instance_id.as_deref() else {
         return AnalysisModel {
             fresh,
             model: Err(ModelFailure::NoModelInstanceId),
@@ -309,8 +292,9 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
         // A workspace with no app-scoped AL file is the empty-output case;
         // otherwise the failed program build is an error. (Engine-switch S9.1:
         // this used to assemble L3's model from disk only to tell the two apart.)
-        let assembles = crate::program::body::l2_workspace::discover_al_files_app_scoped(ws_path)
-            .is_ok_and(|files| !files.is_empty());
+        // The same rule as the `NestedApps::Skip` walk it replaces: a failed walk
+        // left `al_files` empty, so it does not assemble either.
+        let assembles = inputs.app_scoped_files().next().is_some();
         let model = if assembles {
             let why = fresh.as_ref().err().cloned().unwrap_or_default();
             Err(ModelFailure::ProgramBuildFailed(why))
@@ -328,8 +312,8 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
     let resolved = {
         let _s = pt::span("l3", "l3.assemble_resolve");
         assemble_and_resolve_workspace_from_program(
-            ws_path,
-            &model_instance_id,
+            inputs,
+            model_instance_id,
             false,
             &ctx,
             &report.parenless_calls,
@@ -353,8 +337,9 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
     let coverage = fresh
         .as_ref()
         .expect("a built program carries its coverage");
-    let resolved =
-        crate::program::model::program_calls::attach_program_calls(rows, ctx, report, coverage);
+    let resolved = crate::program::model::program_calls::attach_program_calls(
+        inputs, rows, ctx, report, coverage,
+    );
     AnalysisModel {
         fresh,
         model: Ok(AnalysisTarget::SingleApp(Box::new(resolved))),
@@ -367,14 +352,10 @@ pub fn build_analysis_model(ws_path: &Path, single_app: bool) -> AnalysisModel {
 /// fails is classified as the single-app build would classify it; when that build
 /// succeeds, the cross-app failure is a program-build failure (never a quiet
 /// single-app run).
-fn build_cross_app_analysis_model(ws_path: &Path) -> AnalysisModel {
-    let model_instance_id = {
-        let _s = pt::span("gate", "gate.model_instance_id");
-        compute_gate_model_instance_id(ws_path)
-    };
-    let base = model_instance_id.as_deref().and_then(|mi| {
+fn build_cross_app_analysis_model(inputs: &Arc<InputSet>) -> AnalysisModel {
+    let base = inputs.model_instance_id.as_deref().and_then(|mi| {
         let _s = pt::span("crossapp", "crossapp.base_total");
-        crate::engine::l4::capability_cone::build_cross_app_base(ws_path, mi)
+        crate::engine::l4::capability_cone::build_cross_app_base(inputs, mi)
     });
     match base {
         Some(base) => AnalysisModel {
@@ -384,7 +365,7 @@ fn build_cross_app_analysis_model(ws_path: &Path) -> AnalysisModel {
             object_facts: None,
         },
         None => {
-            let single = build_analysis_model(ws_path, true);
+            let single = build_analysis_model(inputs, true);
             let model = match single.model {
                 Ok(_) => Err(ModelFailure::ProgramBuildFailed(
                     "the cross-app model could not be built".to_string(),
@@ -426,10 +407,10 @@ pub fn dependency_object_predicate<'a>(
 /// leaving it would let stderr say "N symbol-only apps" while JSON says [].
 pub fn analysis_coverage(
     resolved: &Model,
-    ws_path: &Path,
+    inputs: &InputSet,
     fresh: &Result<crate::program::resolve::full::FreshCoverage, String>,
 ) -> AnalysisCoverage {
-    let mut c = resolved.project_coverage_disk(ws_path);
+    let mut c = resolved.project_coverage_inputs(inputs);
     if let Ok(fc) = fresh {
         c.opaque_apps = fc.opaque_apps.clone();
     }
@@ -442,8 +423,12 @@ pub fn analysis_coverage(
 ///
 /// Backwards-compatible Stage-1 entry: SARIF only, no exit code. Prefer
 /// `run_analyze_with_exit` for the full gate (pr-summary + exit code).
-pub fn run_analyze(args: &AnalyzeArgs, default_version: &str) -> Result<String, String> {
-    run_analyze_with_exit(args, default_version).map(|(out, _exit, _warn)| out)
+pub fn run_analyze(
+    inputs: &Arc<InputSet>,
+    args: &AnalyzeArgs,
+    default_version: &str,
+) -> Result<String, String> {
+    run_analyze_with_exit(inputs, args, default_version).map(|(out, _exit, _warn)| out)
 }
 
 /// Run the gate `analyze` pipeline, returning `(stdout, exit_code, stderr_warning)`.
@@ -462,12 +447,16 @@ pub fn run_analyze(args: &AnalyzeArgs, default_version: &str) -> Result<String, 
 ///
 /// `default_version` is the engine's real version, used when no SARIF override is given.
 ///
+/// `inputs` is the command's one read of the workspace (#160 §4.2.6): every reader
+/// below reads it, never the disk. `inputs.workspace` is `args.workspace`.
+///
 /// Errors: detector/preset resolution failures (e.g. unknown preset, `--preset` +
 /// `--detector` together). A workspace that fails to assemble (fail-closed / unreadable)
 /// yields EMPTY findings (engine-never-throws) — empty SARIF / "no findings" PR-summary,
 /// a could-not-verify preflight WARNING (never a fabricated clean — spec §3), and exit
 /// CLEAN unless `--require-dependencies` is set, in which case exit PREFLIGHT_FAILED (4).
 pub fn run_analyze_with_exit(
+    inputs: &Arc<InputSet>,
     args: &AnalyzeArgs,
     default_version: &str,
 ) -> Result<(String, u8, Option<String>), String> {
@@ -482,14 +471,13 @@ pub fn run_analyze_with_exit(
     // Assemble with the al-sem GATE modelInstanceId (content-derived, UNPINNED) so the
     // internal RoutineIds embedded in each finding's rootCauseKey — and therefore the
     // SARIF fingerprint hashed over them — byte-match the al-sem `analyze` CLI goldens.
-    let ws_path = Path::new(&args.workspace);
-    let AnalysisModel { fresh, model, .. } = build_analysis_model(ws_path, args.single_app);
+    let AnalysisModel { fresh, model, .. } = build_analysis_model(inputs, args.single_app);
     let target = match model {
         Ok(t) => t,
         // Fail-closed layout / unreadable workspace → empty output; preflight says
         // could-not-verify (never a fabricated clean — spec §3), gated on `fresh`.
         Err(ModelFailure::NoModelInstanceId | ModelFailure::AssemblyFailed) => {
-            return empty_output_result(args, &version, &fresh);
+            return empty_output_result(inputs, args, &version, &fresh);
         }
         Err(ModelFailure::ProgramBuildFailed(why)) => {
             return Err(format!(
@@ -521,7 +509,7 @@ pub fn run_analyze_with_exit(
     // run (the selected detectors), so analyze and the rest report one set (#91).
     let run_diagnostics: Vec<crate::engine::l5::registry::Diagnostic> = {
         let _s = pt::span("gate", "gate.workspace_diagnostics");
-        analyzer_diagnostics_of_run(ws_path, resolved, &run)
+        analyzer_diagnostics_of_run(resolved, &run)
     };
     let run_detector_stats = run.detector_stats.clone();
 
@@ -582,21 +570,29 @@ pub fn run_analyze_with_exit(
     // whose fingerprint is in it. --update-baseline saves the CURRENT (post-limit) set —
     // the new floor — BEFORE the drop, matching al-sem (`saveBaseline(path, limited)`).
     if let Some(path) = &args.baseline {
-        if args.update_baseline {
-            let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
+        let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
+        let baseline = if args.update_baseline {
             // Engine-never-throws: a write failure is surfaced as Err to the caller,
             // which the bin maps to a config/IO error message.
             save_baseline(Path::new(path), &summaries)
                 .map_err(|e| format!("failed to write baseline '{path}': {e}"))?;
-        }
-        // A malformed baseline (exists but not valid JSON / non-array fingerprints) is
-        // an analysis-failure, not a config error: al-sem's loadBaseline throws and the
-        // CLI catch emits "al-sem: analysis failure — <msg>" + exits 2.  We surface
-        // this as an Err tagged with the "analysis failure — " prefix so the bin can
-        // distinguish it from config errors (exit 3) and use exit 2 instead.
-        let baseline =
-            load_baseline(Path::new(path)).map_err(|e| format!("analysis failure — {e}"))?;
-        let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
+            // The set applied is the set just written: every current finding. The
+            // old file (`inputs.baseline`) is never read, so a malformed one never
+            // errors, as when the file was overwritten before being read back (#160).
+            summaries.iter().map(|s| s.fingerprint.clone()).collect()
+        } else {
+            // A malformed baseline (exists but not valid JSON / non-array
+            // fingerprints) is an analysis-failure, not a config error: al-sem's
+            // loadBaseline throws and the CLI catch emits "al-sem: analysis failure —
+            // <msg>" + exits 2. We surface this as an Err tagged with the "analysis
+            // failure — " prefix so the bin can distinguish it from config errors
+            // (exit 3) and use exit 2 instead. The bytes are the ones the command's
+            // `InputSet` read (#160).
+            let file = inputs.baseline.as_ref().expect(
+                "--baseline set but the InputSet was read without it (AnalyzeArgs::read_inputs)",
+            );
+            load_baseline_bytes(file).map_err(|e| format!("analysis failure — {e}"))?
+        };
         let kept_ids: std::collections::HashSet<String> = apply_baseline(&summaries, &baseline)
             .into_iter()
             .map(|s| s.id)
@@ -605,14 +601,15 @@ pub fn run_analyze_with_exit(
     }
 
     // --- inline al-sem-ignore suppression (default-ON, al-sem index.ts:304-319) ---
-    // Parsed from workspace source files on disk; only ws: units are scanned. The kept
-    // set after this is `newFindings` — the set the exit gate and all formats use.
+    // Parsed from the workspace source texts the `InputSet` read; only ws: units are
+    // scanned. The kept set after this is `newFindings` — the set the exit gate and
+    // all formats use.
     if !args.disable_inline_suppression {
         let unit_ids: std::collections::HashSet<String> = paired
             .iter()
             .map(|(s, _)| s.primary_location.file.clone())
             .collect();
-        let suppression_map = build_suppression_map(ws_path, unit_ids.iter().map(|s| s.as_str()));
+        let suppression_map = build_suppression_map(inputs, unit_ids.iter().map(|s| s.as_str()));
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
         let outcome = apply_inline_suppressions(&summaries, &suppression_map);
         // outcome.kept holds indices into `summaries` (= into `paired`); retain them.
@@ -631,9 +628,8 @@ pub fn run_analyze_with_exit(
     // to the Json formatter. The preflight evaluation + exit-code gate follow below.
     let coverage = {
         let _s = pt::span("gate", "gate.coverage");
-        analysis_coverage(resolved, ws_path, &fresh)
+        analysis_coverage(resolved, inputs, &fresh)
     };
-
     // --- format ---
     let output = {
         let _s = pt::span("gate", "gate.format");
@@ -645,7 +641,7 @@ pub fn run_analyze_with_exit(
                 format_sarif(&summaries, &raws, &version)
             }
             OutputFormat::PrSummary => {
-                let apps = read_workspace_apps(ws_path);
+                let apps = read_workspace_apps(inputs);
                 format_pr_summary(&paired, &resolved.workspace.routines, &apps)
             }
             OutputFormat::Json => {
@@ -667,7 +663,7 @@ pub fn run_analyze_with_exit(
                     detector_stats: &run_detector_stats,
                     coverage: &coverage,
                     deterministic: args.deterministic,
-                    driver_version: driver_version(),
+                    driver_version: inputs.driver_version.clone(),
                     evidence: evidence.as_deref(),
                 })
             }
@@ -774,18 +770,24 @@ pub fn run_analyze_with_exit(
 /// (zero findings, zero coverage), the same shape Sarif/PrSummary/Json produce here —
 /// every arm returns `Ok`, never `Err`.
 pub(crate) fn empty_output_result(
+    inputs: &InputSet,
     args: &AnalyzeArgs,
     version: &str,
     fresh: &Result<crate::program::resolve::full::FreshCoverage, String>,
 ) -> Result<(String, u8, Option<String>), String> {
-    let ws_path = Path::new(&args.workspace);
     // Computed ONCE and reused by every arm below (Json/Terminal) AND by the
     // could-not-verify `reason` derivation past the format switch — these are the
     // real provider/index diagnostics for this workspace (spec §3: the fail-closed
     // reason should be the actual diagnostic text, not a generic fallback, whenever
-    // one is available).
-    let diagnostics =
-        crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(ws_path);
+    // one is available). The index rows come from the program build's parse; a
+    // failed build parsed nothing and gives none (#160 §4.2.4: no fallback parse).
+    let diagnostics = crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(
+        inputs,
+        fresh
+            .as_ref()
+            .ok()
+            .map(|f| f.files_without_object.as_slice()),
+    );
 
     let out = match args.format {
         OutputFormat::Sarif => format_sarif(&[], &[], version),
@@ -813,7 +815,7 @@ pub(crate) fn empty_output_result(
                 detector_stats: &[],
                 coverage: &empty_coverage,
                 deterministic: args.deterministic,
-                driver_version: driver_version(),
+                driver_version: inputs.driver_version.clone(),
                 evidence: if args.with_evidence {
                     Some(&empty_evidence)
                 } else {
@@ -849,7 +851,7 @@ pub(crate) fn empty_output_result(
             };
             // For fail-closed HTML, we need an empty resolved model.
             // The assemble_and_resolve_workspace failed, so build a minimal one.
-            let primary_app = read_workspace_apps(ws_path).into_iter().next();
+            let primary_app = read_workspace_apps(inputs).into_iter().next();
             // Build an empty Model for the HTML formatter.
             let empty_resolved = crate::program::model::workspace::Model {
                 workspace: crate::program::model::workspace::ModelEntities {
@@ -860,6 +862,7 @@ pub(crate) fn empty_output_result(
                 root_classifications: vec![],
                 primary_app: primary_app.clone(),
                 infra_diagnostics: vec![],
+                workspace_diagnostics: vec![],
                 dependency_diagnostics: vec![],
                 calls: Default::default(),
                 events: Default::default(),
@@ -1026,21 +1029,20 @@ fn range_extent_cmp(
 /// `alsem analyze` runs with no `--detector`/`--preset`) itself. There is no
 /// detector parameter, so no caller outside this module can pick another set (#68).
 pub fn compute_analyzer_diagnostics(
-    ws_path: &Path,
     resolved: &crate::program::model::workspace::Model,
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let run = run_detectors(resolved, &crate::engine::l5::detectors::default_detectors());
-    analyzer_diagnostics_of_run(ws_path, resolved, &run)
+    analyzer_diagnostics_of_run(resolved, &run)
 }
 
 /// The target's analyzer diagnostics ([`compute_analyzer_diagnostics`] or, for a
 /// cross-app base, [`compute_analyzer_diagnostics_cross_app`]) as
 /// `<severity>: <message>` lines, the stderr form `alsem events` and
 /// `alsem policy` print (and match `error:` against under `--strict`).
-pub fn analyzer_diagnostic_lines(ws_path: &Path, target: &AnalysisTarget) -> Vec<String> {
+pub fn analyzer_diagnostic_lines(target: &AnalysisTarget) -> Vec<String> {
     match target {
-        AnalysisTarget::SingleApp(r) => compute_analyzer_diagnostics(ws_path, r),
-        AnalysisTarget::CrossApp(b) => compute_analyzer_diagnostics_cross_app(ws_path, b),
+        AnalysisTarget::SingleApp(r) => compute_analyzer_diagnostics(r),
+        AnalysisTarget::CrossApp(b) => compute_analyzer_diagnostics_cross_app(b),
     }
     .iter()
     .map(|d| format!("{}: {}", d.severity, d.message))
@@ -1051,7 +1053,6 @@ pub fn analyzer_diagnostic_lines(ws_path: &Path, target: &AnalysisTarget) -> Vec
 /// default mode, #66): the default set run by the cross-app runner, the
 /// combination `alsem analyze` runs by default.
 pub fn compute_analyzer_diagnostics_cross_app(
-    ws_path: &Path,
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let run = crate::engine::l5::registry::run_detectors_cross_app(
@@ -1059,7 +1060,7 @@ pub fn compute_analyzer_diagnostics_cross_app(
         &crate::engine::l5::detectors::default_detectors(),
         true,
     );
-    analyzer_diagnostics_of_run(ws_path, &base.resolved, &run)
+    analyzer_diagnostics_of_run(&base.resolved, &run)
 }
 
 /// THE analyzer-diagnostics aggregation, over a detector run: `alsem analyze`
@@ -1083,13 +1084,14 @@ pub fn compute_analyzer_diagnostics_cross_app(
 /// `infra_diagnostics` the OVERLAY source (5), `run.diagnostics` DETECT (6). The
 /// TS-order #1 (workspace) goes FIRST so it precedes overlay.
 fn analyzer_diagnostics_of_run(
-    ws_path: &Path,
     resolved: &crate::program::model::workspace::Model,
     run: &crate::engine::l5::registry::RunOutput,
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let mut all: Vec<crate::engine::l5::registry::Diagnostic> = Vec::new();
-    // (1) workspace.diagnostics — provider (discover) + index, computed from disk.
-    all.extend(crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(ws_path));
+    // (1) workspace.diagnostics — provider (discover) + index, kept on the model
+    //     by `attach_program_calls` from the command's `InputSet` and the build's
+    //     objectless-file list (#160 §4.2.4).
+    all.extend(resolved.workspace_diagnostics.iter().cloned());
     // (2) dependency diagnostics — the program build's dependency ledger
     //     (engine-switch S5.2b): missing, older-than-declared, unreadable and
     //     unidentified dependency packages, kept on the model by
@@ -1123,8 +1125,9 @@ mod tests {
 
     /// #91: the shared aggregation returns every source, in analyze's order:
     /// (1) workspace, (2) dependency, (3) summarize, (5) overlay, (6) detect.
-    /// The workspace has no `app.json`, so (1) is the fail-closed `discover`
-    /// error. Mutation: drop (2) from `analyzer_diagnostics_of_run` -> this fails.
+    /// Every source is a hand-stated row; (1) is the model's
+    /// `workspace_diagnostics` (#160 §4.2.4). Mutation: drop (2) from
+    /// `analyzer_diagnostics_of_run` -> this fails.
     #[test]
     fn analyzer_diagnostics_of_run_keeps_every_source_in_order() {
         let d = |stage: &str| Diagnostic {
@@ -1132,7 +1135,6 @@ mod tests {
             stage: stage.to_string(),
             message: format!("{stage} message"),
         };
-        let ws = tempfile::tempdir().expect("tempdir");
         let model = Model {
             workspace: ModelEntities {
                 objects: vec![],
@@ -1146,6 +1148,7 @@ mod tests {
                 stage: "overlay".to_string(),
                 message: "overlay message".to_string(),
             }],
+            workspace_diagnostics: vec![d("discover")],
             dependency_diagnostics: vec![d("dependencies")],
             calls: Default::default(),
             events: Default::default(),
@@ -1157,7 +1160,7 @@ mod tests {
             summarize_diagnostics: vec![d("summarize")],
             d1_cohort_index: None,
         };
-        let stages: Vec<String> = super::analyzer_diagnostics_of_run(ws.path(), &model, &run)
+        let stages: Vec<String> = super::analyzer_diagnostics_of_run(&model, &run)
             .into_iter()
             .map(|d| d.stage)
             .collect();
@@ -1171,7 +1174,8 @@ mod tests {
     /// aggregation, not an inline copy of it. Its output cannot tell the two
     /// apart, so the call itself is pinned. Mutation: restore the inline
     /// `compute_workspace_diagnostics(` / `dependency_diagnostics(` block in
-    /// `run_analyze_with_exit` -> this fails.
+    /// `run_analyze_with_exit`, or read `.workspace_diagnostics` there (#160:
+    /// source (1) is now a model field) -> this fails.
     #[test]
     fn run_analyze_with_exit_uses_the_shared_aggregation() {
         let src = include_str!("run.rs");
@@ -1186,7 +1190,11 @@ mod tests {
             .filter_map(|m| body[1..].find(m))
             .min()
             .expect("an item after run_analyze_with_exit");
-        let body = &body[..end + 1];
+        // The trace span's NAME holds `.workspace_diagnostics` too; it is a
+        // label, not a read of the field, so it is cut out before the scan.
+        let span = "\"gate.workspace_diagnostics\"";
+        assert_eq!(body[..end + 1].matches(span).count(), 1, "the span label");
+        let body = &body[..end + 1].replace(span, "");
         // An anchor from the function's last statement proves the cut did not
         // stop early.
         assert!(
@@ -1199,6 +1207,7 @@ mod tests {
         );
         for banned in [
             "compute_workspace_diagnostics(",
+            ".workspace_diagnostics",
             "dependency_diagnostics(",
             "summarize_diagnostics",
             "infra_diagnostics",

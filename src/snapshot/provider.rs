@@ -2,6 +2,7 @@
 
 use crate::dependencies::AppFileStamp;
 use crate::program::dep_cache::DepCache;
+use crate::program::inputs::InputSet;
 use crate::snapshot::cache::cached_source;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::identity::{AppId, TrustTier};
@@ -30,7 +31,10 @@ pub trait SourceProvider {
 /// Read `root`'s `.al` source (the shared walk, `crate::source_text`, nested
 /// apps included), sorted + content-hashed for determinism. `Ok(None)` if no
 /// `.al` files.
-fn walk_al_source(root: &std::path::Path, tier: TrustTier) -> Result<Option<SourceRoot>> {
+pub(crate) fn walk_al_source(
+    root: &std::path::Path,
+    tier: TrustTier,
+) -> Result<Option<SourceRoot>> {
     let found = discover_al_files(root, NestedApps::Walk)
         .with_context(|| format!("walking source {}", root.display()))?;
     let mut files: Vec<SourceFile> = Vec::with_capacity(found.len());
@@ -42,20 +46,54 @@ fn walk_al_source(root: &std::path::Path, tier: TrustTier) -> Result<Option<Sour
             text: text.into(),
         });
     }
+    Ok(source_root(files, tier))
+}
+
+/// The files as one root, content-hashed over their texts in order (the walk
+/// sorts) for determinism; `None` if there are none (symbol-only).
+fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
     if files.is_empty() {
-        return Ok(None);
+        return None;
     }
-    // Hash over sorted file texts (the walk sorts) for determinism.
     let mut hasher = blake3::Hasher::new();
     for f in &files {
         hasher.update(f.text.as_bytes());
     }
     let content_hash = hasher.finalize().to_hex().to_string();
-    Ok(Some(SourceRoot {
+    Some(SourceRoot {
         files: Arc::new(files),
         tier,
         content_hash,
-    }))
+    })
+}
+
+/// The workspace app's source from the frozen [`InputSet`] (#160 step 1, spec
+/// §4.2.3 row 1): [`walk_al_source`]'s rules over the set's `.al` list instead
+/// of the disk. Every `al_files` entry in `rel_posix` order (nested apps
+/// included), the SAME `Arc<str>` texts, blake3 over the texts in that order;
+/// no file is `Ok(None)` (symbol-only). A failed walk or an unreadable file
+/// fails with `walk_al_source`'s text, the walk's stored `io::Error` keeping
+/// its whole `source()` chain.
+pub fn workspace_source_from_inputs(inputs: &InputSet) -> Result<Option<SourceRoot>> {
+    if let Err(e) = &inputs.al_walk {
+        return Err(anyhow::Error::new(Arc::clone(e)))
+            .with_context(|| format!("walking source {}", inputs.workspace.display()));
+    }
+    let mut files: Vec<SourceFile> = Vec::with_capacity(inputs.al_files.len());
+    for f in &inputs.al_files {
+        let text = match &f.text {
+            Ok(t) => Arc::clone(t),
+            Err(msg) => {
+                return Err(anyhow::anyhow!("{msg}"))
+                    .with_context(|| format!("reading source {}", f.abs_path.display()));
+            }
+        };
+        files.push(SourceFile {
+            virtual_path: f.rel_posix.clone(),
+            text,
+        });
+    }
+    Ok(source_root(files, TrustTier::Workspace))
 }
 
 /// The app under development — source on disk is truth.

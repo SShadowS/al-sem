@@ -310,7 +310,8 @@ mod tests {
     fn analyze_model_maps_one_to_one_onto_physical_rows() {
         let ws =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-cross-object-chain");
-        let built = crate::engine::gate::run::build_analysis_model(&ws, true);
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let built = crate::engine::gate::run::build_analysis_model(&inputs, true);
         let model = match built.model.expect("fixture builds") {
             crate::engine::gate::run::AnalysisTarget::SingleApp(r) => *r,
             crate::engine::gate::run::AnalysisTarget::CrossApp(_) => {
@@ -341,7 +342,8 @@ mod tests {
         use crate::program::physical::{PhysicalRoutineRow, Pos};
         let ws =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-cross-object-chain");
-        let built = crate::engine::gate::run::build_analysis_model(&ws, true);
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let built = crate::engine::gate::run::build_analysis_model(&inputs, true);
         let model = match built.model.unwrap() {
             crate::engine::gate::run::AnalysisTarget::SingleApp(r) => r.workspace,
             crate::engine::gate::run::AnalysisTarget::CrossApp(_) => {

@@ -42,6 +42,7 @@ use crate::program::build::{DepInput, DepLayer, assemble_program_graph, build_de
 use crate::program::dep_cache::{DepCache, DepKey};
 use crate::program::dep_summary::parse_for_build;
 use crate::program::graph::ProgramGraph;
+use crate::program::inputs::InputSet;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::profile::{BuildProfile, DependencyBodies};
@@ -1934,6 +1935,11 @@ pub struct FreshCoverage {
     /// S5.2b). Such a subscriber's dispatch is unknown, yet it is no call edge,
     /// so `unknown` does not count it.
     pub unbound_subscriptions: usize,
+    /// The workspace files (`rel_posix`, sorted) whose parse in this build
+    /// declared no object: the source of the `No object declaration found in
+    /// <rel>` index diagnostic (#160 §4.2.4), so the diagnostics never parse a
+    /// second time.
+    pub files_without_object: Vec<String>,
 }
 
 impl FreshCoverage {
@@ -2121,10 +2127,10 @@ pub fn fresh_program_from_snapshot_with(
 /// cached verdict cannot give (the B3 removal of the preflight cache, see
 /// CHANGELOG).
 pub fn build_program_with_coverage(
-    workspace_root: &Path,
+    inputs: &Arc<InputSet>,
 ) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
     build_program_with_coverage_profiled(
-        workspace_root,
+        inputs,
         BuildProfile {
             dependency_bodies: DependencyBodies::Summary,
         },
@@ -2134,17 +2140,17 @@ pub fn build_program_with_coverage(
 /// [`build_program_with_coverage`] under a stated profile (engine-switch S7.3: the
 /// cross-app model reads dependency bodies, so it builds `FULL`).
 pub fn build_program_with_coverage_profiled(
-    workspace_root: &Path,
+    inputs: &Arc<InputSet>,
     profile: BuildProfile,
 ) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
     pt::counter_delta("build.program", 1);
     let (snap, load) = {
         let _s = pt::span("preflight", "preflight.snapshot_build");
         (SnapshotBuilder {
-            workspace_root: workspace_root.to_path_buf(),
+            workspace_root: inputs.workspace.clone(),
             local_providers: vec![],
         })
-        .build_with_diagnostics()
+        .build_with_inputs(inputs, DependencySource::default(), &DepCache::default())
         .map_err(|e| format!("snapshot build failed: {e:#}"))?
     };
     // #160 §4.1.5: the probe's `program.parsed_ir` is the growth from here to
@@ -2167,11 +2173,11 @@ pub fn build_program_with_coverage_profiled(
 /// must not apply it (it would remove dependency code reachable only through
 /// interface implementations, extension triggers or run hubs).
 pub fn build_cross_app_program(
-    workspace_root: &Path,
+    inputs: &Arc<InputSet>,
 ) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
     let (ctx, mut report, coverage) = {
         let _s = pt::span("crossapp", "crossapp.program_build_full");
-        build_program_with_coverage_profiled(workspace_root, BuildProfile::FULL)?
+        build_program_with_coverage_profiled(inputs, BuildProfile::FULL)?
     };
     let dependency = {
         let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
@@ -2316,7 +2322,17 @@ pub fn reduce_fresh_coverage(
             })
             .count()
     };
+    let mut files_without_object: Vec<String> = ctx
+        .parsed()
+        .iter()
+        .filter(|u| u.app == ctx.snap.workspace_app)
+        .flat_map(|u| &u.files)
+        .filter(|f| f.file.objects.is_empty())
+        .map(|f| f.virtual_path.clone())
+        .collect();
+    files_without_object.sort();
     FreshCoverage {
+        files_without_object,
         unbound_subscriptions,
         unknown: report.primary_histogram.unknown,
         coverage_holds: coverage_holds(&report.coverage),
@@ -4437,7 +4453,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn fresh_coverage(ws: &Path) -> Result<FreshCoverage, String> {
-        build_program_with_coverage(ws).map(|(_, _, fc)| fc)
+        let inputs = crate::program::inputs::InputSet::read(
+            ws,
+            &crate::program::inputs::InputNeeds::default(),
+        );
+        build_program_with_coverage(&inputs).map(|(_, _, fc)| fc)
     }
 
     #[test]

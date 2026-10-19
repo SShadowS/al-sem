@@ -462,6 +462,11 @@ pub struct InputSet {
     /// `absolutize` of it (`:72-75`). An unreadable `.yaml` is stored as `Err`; it
     /// does not fall through to `.yml`. `FileInput.path` is that ABSOLUTIZED path.
     pub policy_file: Option<PolicyInput>,
+    /// The `PolicyRequest` the set was read with (code review r1 CR5). `policy_file`
+    /// is `None` both under `--no-policy` and when auto-detect finds no file, so
+    /// `policy check` reads `--no-policy` from here and `PolicyCheckOptions` has no
+    /// `no_policy` of its own; a set read with `PolicyRequest::None` is refused.
+    pub policy_request: PolicyRequest,
     /// `--baseline <path>` (analyze): `None` = no flag; `Some(Err(NotFound))` is
     /// the "no baseline yet" case `load_baseline` treats as empty
     /// (`src/engine/gate/baseline.rs:40-43`).

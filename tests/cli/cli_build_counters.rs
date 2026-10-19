@@ -113,6 +113,8 @@ pub(crate) fn assert_row(case: &str, m: &BTreeMap<String, u64>, r: Row) {
         ("build.pd_solve", r.pd),
         ("build.detector_context", r.ctx),
         ("build.snapshot", r.snap),
+        // A1.1: one workspace read per program build (final panel r1, F2-3).
+        ("inputs.read", r.program),
     ];
     let bad: Vec<String> = want
         .iter()
@@ -142,7 +144,7 @@ fn ws_dep() -> (tempfile::TempDir, String) {
 }
 
 /// A one-line unified diff (shape of `cli_digest_changed_spans.rs`'s `one_line_diff`).
-fn write_diff(dir: &Path, path: &str, n: usize, text: &str) -> String {
+pub(crate) fn write_diff(dir: &Path, path: &str, n: usize, text: &str) -> String {
     let p = dir.join("change.diff");
     std::fs::write(
         &p,
@@ -837,6 +839,94 @@ fn retained_census_changes_no_output() {
         rows > 0 && rows < bytes("model"),
         "base.resolved.rows {rows}:\n{err}"
     );
+}
+
+/// Spec §8.2 `inputs::read_once`: every command reads the workspace ONCE
+/// (`inputs.read` 1), `diff ws ws` once per side. Spawned: the counter lives
+/// only in the trace file.
+#[test]
+fn inputs_read_once() {
+    let (_d, ws) = ws_dep();
+    let ws = ws.as_str();
+    for args in [
+        vec!["analyze", ws, "--format", "json"],
+        vec!["fingerprint", ws, "--format", "json"],
+        vec!["query", "touches", ws, "--table", "18", "--format", "json"],
+        // Builds through `AnalysisTarget::build` (as digest and policy check do).
+        vec!["events", "fanout", ws, "--format", "json"],
+    ] {
+        let m = run(&args);
+        assert_eq!(count(&m, "inputs.read"), 1, "{args:?}\n{m:?}");
+    }
+    let m = run(&["diff", ws, ws, "--format", "json", "--deterministic"]);
+    assert_eq!(count(&m, "inputs.read"), 2, "diff: one per side\n{m:?}");
+}
+
+/// Code review CR1: a bad `--preset` is a usage error (exit 3) found BEFORE the
+/// workspace is read, as it was before step 1 moved the read out of the pipeline.
+#[test]
+fn analyze_bad_preset_reads_no_inputs() {
+    let (out, m) = spawn_traced(&["analyze", &ws_a(), "--preset", "bogus"], &[]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "stderr: {err}");
+    assert_eq!(count(&m, "inputs.read"), 0, "{m:?}\nstderr: {err}");
+}
+
+/// Final panel r1 (F2-2): `fingerprint --inventory-only`'s usage errors are
+/// found before the workspace is read, as they were before step 1.
+#[test]
+fn fingerprint_inventory_only_usage_errors_read_no_inputs() {
+    let ws = ws_a();
+    let ws = ws.as_str();
+    for (args, want) in [
+        (vec!["--shard", "all"], "cannot be combined with --shard"),
+        (vec!["--format", "human"], "requires --format=json"),
+        (
+            vec!["--format", "json", "--routine", "X"],
+            "cannot be combined with query selectors",
+        ),
+    ] {
+        let mut argv = vec!["fingerprint", ws, "--inventory-only"];
+        argv.extend(args);
+        let (out, m) = spawn_traced(&argv, &[]);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{argv:?} stderr: {err}");
+        assert!(err.contains(want), "{argv:?} stderr: {err}");
+        assert_eq!(count(&m, "inputs.read"), 0, "{argv:?} {m:?}\nstderr: {err}");
+    }
+}
+
+/// Review focus 1: a relative workspace path runs as the absolute one does
+/// (`InputSet.workspace` is the path as spelled, and the build asserts it
+/// equals the builder's root).
+#[test]
+fn inputs_relative_workspace_path_runs() {
+    let rel = "tests/r0-corpus/ws-d1-multi-caller";
+    let analyze = |ws: &str| {
+        Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .args(["analyze", ws, "--format", "json", "--single-app"])
+            .output()
+            .expect("spawn alsem")
+    };
+    let out = analyze(rel);
+    let abs = analyze(&ws_a());
+    assert_eq!(
+        out.status.code(),
+        abs.status.code(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let findings = |o: &Output| {
+        serde_json::from_slice::<Value>(&o.stdout).expect("json")["payload"]["findings"]
+            .as_array()
+            .map(Vec::len)
+    };
+    assert!(
+        findings(&abs).is_some_and(|n| n > 0),
+        "precondition: findings"
+    );
+    assert_eq!(findings(&out), findings(&abs));
 }
 
 #[test]

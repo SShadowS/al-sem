@@ -42,13 +42,23 @@ fn rows<T: std::fmt::Debug>(items: impl IntoIterator<Item = T>) -> Vec<String> {
 /// Render what `alsem analyze` builds and finds for `ws` (see the module doc).
 pub fn dump_lines(ws: &Path) -> Dump {
     let mut d = Dump::new();
+    // The dependency registry's body states (S2b.5). Nothing in production reads
+    // the registry yet, so it comes from its own program build. The workspace
+    // diagnostics' index rows come from that build's parse (#160 §4.2.4): none
+    // when it fails.
+    let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+    let built = crate::program::resolve::full::build_program_with_coverage(&inputs);
     d.insert(
         "diagnostics.workspace".into(),
-        rows(compute_workspace_diagnostics(ws)),
+        rows(compute_workspace_diagnostics(
+            &inputs,
+            built
+                .as_ref()
+                .ok()
+                .map(|(_, _, fc)| fc.files_without_object.as_slice()),
+        )),
     );
-    // The dependency registry's body states (S2b.5). Nothing in production reads
-    // the registry yet, so it comes from its own program build.
-    if let Ok((ctx, _, _)) = crate::program::resolve::full::build_program_with_coverage(ws) {
+    if let Ok((ctx, _, _)) = built {
         d.insert(
             "registry.census".into(),
             ctx.registry()
@@ -58,7 +68,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
                 .collect(),
         );
     }
-    let built = build_analysis_model(ws, true);
+    let built = build_analysis_model(&inputs, true);
     if let Ok(fc) = &built.fresh {
         d.insert("ledger".into(), rows(&fc.ledger));
     }
@@ -132,7 +142,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
         rows(&run.summarize_diagnostics),
     );
 
-    let coverage = analysis_coverage(&resolved, ws, &built.fresh);
+    let coverage = analysis_coverage(&resolved, &inputs, &built.fresh);
     d.insert(
         "coverage".into(),
         vec![serde_json::to_string(&coverage).expect("coverage serializes")],
@@ -367,7 +377,7 @@ mod tests {
             "assemble_and_resolve_workspace",
             "attach_program_calls",
             "build_program_with_coverage",
-            "project_coverage_disk",
+            "project_coverage_inputs",
         ] {
             assert!(
                 !body.contains(banned),
@@ -410,8 +420,9 @@ mod tests {
         )
         .unwrap();
 
+        let inputs = crate::program::inputs::InputSet::read(&root, &Default::default());
         let (ctx, _report, _) =
-            crate::program::resolve::full::build_program_with_coverage(&root).unwrap();
+            crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let program_paths: Vec<&str> = ctx
             .parsed()
             .iter()
@@ -421,7 +432,7 @@ mod tests {
             program_paths.contains(&"nested/src/Inner.al"),
             "precondition: the program parse walks the nested app, got {program_paths:?}"
         );
-        let selected: Vec<String> = match select_program_files(&root, &ctx) {
+        let selected: Vec<String> = match select_program_files(&inputs, &ctx) {
             Some(ProgramFiles::Selected { files, .. }) => {
                 files.iter().map(|(p, _)| p.to_string()).collect()
             }

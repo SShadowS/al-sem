@@ -141,10 +141,11 @@ fn compose_full_for(
     );
     let model_id = compute_gate_model_instance_id(&ws)
         .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
-    let resolved = assemble_and_resolve_workspace_program(&ws, &model_id, false)
+    let inputs = read(&ws);
+    let resolved = assemble_and_resolve_workspace_program(&inputs, &model_id, false)
         .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
     let opts = FullSnapshotOptions {
-        workspace_dir: &ws,
+        inputs: &inputs,
         driver_version: VERSION_OVERRIDE,
         deterministic: true,
         roots_config_ignored: false,
@@ -208,7 +209,7 @@ fn query_json_matches_goldens() {
     for fixture in FINGERPRINT_CORPUS {
         let ws = fixture_dir(fixture);
         let opts = FingerprintOptions {
-            workspace: &ws,
+            inputs: &read(&ws),
             driver_version: VERSION_OVERRIDE,
             format: FingerprintFormat::Json,
             out: None,
@@ -252,7 +253,7 @@ fn human_compact_matches_goldens() {
     for fixture in FINGERPRINT_CORPUS {
         let ws = fixture_dir(fixture);
         let opts = FingerprintOptions {
-            workspace: &ws,
+            inputs: &read(&ws),
             driver_version: VERSION_OVERRIDE,
             format: FingerprintFormat::Human,
             out: None,
@@ -295,7 +296,7 @@ fn human_compact_matches_goldens() {
 fn witness_all_matches_golden() {
     let ws = fixture_dir(WITNESS_FIXTURE);
     let opts = FingerprintOptions {
-        workspace: &ws,
+        inputs: &read(&ws),
         driver_version: VERSION_OVERRIDE,
         format: FingerprintFormat::Json,
         out: None,
@@ -333,7 +334,7 @@ fn witness_all_matches_golden() {
 fn witness_zero_matches_golden() {
     let ws = fixture_dir(WITNESS_FIXTURE);
     let opts = FingerprintOptions {
-        workspace: &ws,
+        inputs: &read(&ws),
         driver_version: VERSION_OVERRIDE,
         format: FingerprintFormat::Json,
         out: None,
@@ -371,7 +372,7 @@ fn witness_zero_matches_golden() {
 fn witness_false_matches_golden() {
     let ws = fixture_dir(WITNESS_FIXTURE);
     let opts = FingerprintOptions {
-        workspace: &ws,
+        inputs: &read(&ws),
         driver_version: VERSION_OVERRIDE,
         format: FingerprintFormat::Json,
         out: None,
@@ -413,7 +414,7 @@ fn witness_false_matches_golden() {
 fn selector_error_json_matches_golden_and_exits_2() {
     let ws = fixture_dir(ERROR_FIXTURE);
     let opts = FingerprintOptions {
-        workspace: &ws,
+        inputs: &read(&ws),
         driver_version: VERSION_OVERRIDE,
         format: FingerprintFormat::Json,
         out: None,
@@ -456,7 +457,7 @@ fn selector_error_json_matches_golden_and_exits_2() {
 fn human_full_matches_golden() {
     let ws = fixture_dir(WITNESS_FIXTURE);
     let opts = FingerprintOptions {
-        workspace: &ws,
+        inputs: &read(&ws),
         driver_version: VERSION_OVERRIDE,
         format: FingerprintFormat::Human,
         out: None,
@@ -539,15 +540,27 @@ fn shard_output_matches_goldens() {
 // diagnostic is severity "warning" (DIAG-detect), so the strict gate PASSES.
 // ===========================================================================
 
+/// The command's one read of `ws` (#160), with what `fingerprint` reads: the
+/// hash rows too.
+fn read(ws: &std::path::Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
+    al_sem::program::inputs::InputSet::read(
+        ws,
+        &al_sem::program::inputs::InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        },
+    )
+}
+
 fn opts_for<'a>(
-    ws: &'a std::path::Path,
+    ws: &'a std::sync::Arc<al_sem::program::inputs::InputSet>,
     format: FingerprintFormat,
     shard: Option<ShardMode>,
     strict: bool,
     is_query: bool,
 ) -> FingerprintOptions<'a> {
     FingerprintOptions {
-        workspace: ws,
+        inputs: ws,
         driver_version: VERSION_OVERRIDE,
         format,
         out: None,
@@ -568,7 +581,7 @@ fn opts_for<'a>(
 #[test]
 fn item15_human_mode_routes_warning_to_stderr() {
     // Human mode prints analyze diagnostics to stderr at exit (fingerprint.ts:331).
-    let ws = fixture_dir("ws-d8-commit-in-tx");
+    let ws = read(&fixture_dir("ws-d8-commit-in-tx"));
     let opts = opts_for(&ws, FingerprintFormat::Human, None, false, false);
     let r = run_fingerprint_pipeline(&opts).expect("pipeline");
     assert_eq!(r.exit_code, 0);
@@ -586,7 +599,7 @@ fn item15_human_mode_routes_warning_to_stderr() {
 fn item15_json_query_mode_embeds_diags_no_stderr() {
     // JSON-query mode embeds analyze diagnostics in payload.diagnostics + NO stderr
     // (fingerprint.ts:281-297).
-    let ws = fixture_dir("ws-d8-commit-in-tx");
+    let ws = read(&fixture_dir("ws-d8-commit-in-tx"));
     let opts = opts_for(&ws, FingerprintFormat::Json, None, false, true);
     let r = run_fingerprint_pipeline(&opts).expect("pipeline");
     assert_eq!(r.exit_code, 0);
@@ -605,7 +618,7 @@ fn item15_json_query_mode_embeds_diags_no_stderr() {
 #[test]
 fn item15_shard_mode_no_stderr_diags() {
     // Shard path returns BEFORE the stderr loop (fingerprint.ts:223) → no stderr.
-    let ws = fixture_dir("ws-d8-commit-in-tx");
+    let ws = read(&fixture_dir("ws-d8-commit-in-tx"));
     let mut opts = opts_for(
         &ws,
         FingerprintFormat::Json,
@@ -623,7 +636,7 @@ fn item15_shard_mode_no_stderr_diags() {
 #[test]
 fn item17_shard_without_out_errors_exit1() {
     // --shard requires --out <directory> (fingerprint.ts:210) → exit 1, message to stderr.
-    let ws = fixture_dir("ws-d8-commit-in-tx");
+    let ws = read(&fixture_dir("ws-d8-commit-in-tx"));
     let opts = opts_for(
         &ws,
         FingerprintFormat::Json,
@@ -642,7 +655,7 @@ fn item17_shard_without_out_errors_exit1() {
 #[test]
 fn item5_strict_passes_on_warning_only_fixture() {
     // ws-d8 has only a warning → strict gate does NOT trip; normal output proceeds.
-    let ws = fixture_dir("ws-d8-commit-in-tx");
+    let ws = read(&fixture_dir("ws-d8-commit-in-tx"));
     let opts = opts_for(&ws, FingerprintFormat::Json, None, true, false);
     let r = run_fingerprint_pipeline(&opts).expect("pipeline");
     assert_eq!(

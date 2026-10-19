@@ -303,7 +303,8 @@ fn resolved_edge_to_bodyless_dep_callee_yields_opaque_uncertainty() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/r2-5b-fixtures/cross-app-resolution");
-    let cross = assemble_and_resolve_cross_app_program(&fixture, "r2.5b", false)
+    let inputs = al_sem::program::inputs::InputSet::read(&fixture, &Default::default());
+    let cross = assemble_and_resolve_cross_app_program(&inputs, "r2.5b", false)
         .expect("the cross-app model builds over the `.app`-bearing workspace");
 
     let proj = project_r3a2(&cross.resolved);

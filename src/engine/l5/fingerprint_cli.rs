@@ -27,7 +27,6 @@
 //!   - `--format cbor` + query    → exit 1 (error).
 //!   - `--format cbor.gz` + query → exit 1 (error).
 
-use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::compute_analyzer_diagnostics;
 use crate::engine::l5::fingerprint_query::{
     FingerprintFilters, FingerprintQueryDiagnostic, WitnessLimit, fingerprint_query,
@@ -225,8 +224,9 @@ pub enum ShardMode {
 
 /// Options for `run_fingerprint_pipeline`.
 pub struct FingerprintOptions<'a> {
-    /// Workspace path.
-    pub workspace: &'a std::path::Path,
+    /// The command's one read of the workspace (#160); the path is
+    /// `inputs.workspace`.
+    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
     /// al-sem version string (e.g. `"cli-b-v1"`).
     pub driver_version: &'a str,
     /// Output format.
@@ -315,53 +315,73 @@ pub fn format_selector_errors_human(diags: &[FingerprintQueryDiagnostic]) -> Str
     out
 }
 
+/// `--inventory-only`: json-only; reject binary formats, shard mode, and query
+/// selectors. The selector rejection is load-bearing: a query selector makes
+/// `is_query_requested` true, which would route past the B0 inventory branch into
+/// the QUERY path (silently ignoring --inventory-only). Reject up front instead.
+/// The CLI calls this before it reads the workspace (#160 final panel r1), so a
+/// usage error reads nothing; the pipeline checks again for library callers.
+pub fn reject_inventory_only_combos(
+    inventory_only: bool,
+    shard: bool,
+    format: &FingerprintFormat,
+    is_query_requested: bool,
+) -> Result<(), String> {
+    if !inventory_only {
+        return Ok(());
+    }
+    if shard {
+        return Err("--inventory-only cannot be combined with --shard".to_string());
+    }
+    if *format != FingerprintFormat::Json {
+        return Err(format!(
+            "--inventory-only requires --format=json (got {format:?})"
+        ));
+    }
+    if is_query_requested {
+        return Err(
+            "--inventory-only cannot be combined with query selectors (--routine/--roots/--witness/--no-include-inherited)"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Run the full fingerprint pipeline.
 ///
 /// Combo validation (`--shard`/cbor + query flags, `--format` value) is performed
 /// upstream by the CLI (`default_format` + `reject_illegal_combos`) so the exact
 /// TS exit codes / stderr land; this function assumes a legal invocation.
 pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<FingerprintRunResult, String> {
-    // --inventory-only: json-only; reject binary formats, shard mode, and query
-    // selectors. The selector rejection is load-bearing: a query selector makes
-    // `is_query_requested` true, which would route past the B0 inventory branch into
-    // the QUERY path (silently ignoring --inventory-only). Reject up front instead.
-    if opts.inventory_only {
-        if opts.shard.is_some() {
-            return Err("--inventory-only cannot be combined with --shard".to_string());
-        }
-        if opts.format != FingerprintFormat::Json {
-            return Err(format!(
-                "--inventory-only requires --format=json (got {:?})",
-                opts.format
-            ));
-        }
-        if opts.is_query_requested {
-            return Err(
-                "--inventory-only cannot be combined with query selectors (--routine/--roots/--witness/--no-include-inherited)"
-                    .to_string(),
-            );
-        }
-    }
+    reject_inventory_only_combos(
+        opts.inventory_only,
+        opts.shard.is_some(),
+        &opts.format,
+        opts.is_query_requested,
+    )?;
 
     // Assemble workspace.
-    let model_id = compute_gate_model_instance_id(opts.workspace)
+    let workspace = opts.inputs.workspace.as_path();
+    let model_id = opts
+        .inputs
+        .model_instance_id
+        .as_deref()
         .ok_or_else(|| "fingerprint: could not compute modelInstanceId".to_string())?;
     // Engine-switch S6.3: the program-backed model (program calls and events).
     let resolved =
-        assemble_and_resolve_workspace_program(opts.workspace, &model_id, opts.no_roots_config)
+        assemble_and_resolve_workspace_program(opts.inputs, model_id, opts.no_roots_config)
             .ok_or_else(|| "fingerprint: workspace did not resolve".to_string())?;
 
     // Honest `rootsConfigIgnored`: true only when a `roots.config.json` actually
     // existed (and would have loaded+validated) AND --no-roots-config skipped it.
     // Passing --no-roots-config in a workspace with no such file is a no-op, not
     // a lie — it must report `false`, same as never having passed the flag.
-    let roots_config_ignored = opts.no_roots_config
-        && crate::engine::root_classification::roots_config_was_loaded(opts.workspace);
+    let roots_config_ignored = opts.no_roots_config && opts.inputs.roots_config_loaded();
 
     // --strict gate (fingerprint.ts:187): BEFORE composeSnapshot. If any analyzer
     // diagnostic is severity "error", print ALL analyzer diagnostics to stderr +
     // exit 1, before any output / sharding.
-    let analyzer_diags = analyzer_diags_for(opts.workspace, &resolved);
+    let analyzer_diags = analyzer_diags_for(&resolved);
     if opts.strict {
         let fatal = analyzer_diags.iter().any(|(_, sev, _)| sev == "error");
         if fatal {
@@ -395,7 +415,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             .collect();
 
         let full_opts = FullSnapshotOptions {
-            workspace_dir: opts.workspace,
+            inputs: opts.inputs,
             driver_version: opts.driver_version,
             deterministic: opts.deterministic,
             roots_config_ignored,
@@ -463,7 +483,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // Compose the consumed-core snapshot (not the full CBOR tree).
     let snap = compose_snapshot(&resolved);
     let workspace_fp = crate::engine::l5::snapshot_full::workspace_fingerprint_of(
-        opts.workspace,
+        opts.inputs,
         opts.driver_version,
     );
 
@@ -526,7 +546,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     let json_text = project_fingerprint_query_full(
         &result,
         &snap,
-        &opts.workspace.to_string_lossy(),
+        &workspace.to_string_lossy(),
         &filters,
         opts.deterministic,
         &analyzer_diags,
@@ -545,56 +565,10 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
 /// Build the analyzer diagnostics list as `(code, severity, message)` tuples,
 /// shared by the strict gate, the B0 envelope path, and the query JSON envelope.
 fn analyzer_diags_for(
-    workspace: &std::path::Path,
     resolved: &crate::program::model::workspace::Model,
 ) -> Vec<(String, String, String)> {
-    compute_analyzer_diagnostics(workspace, resolved)
+    compute_analyzer_diagnostics(resolved)
         .into_iter()
         .map(|d| (format!("DIAG-{}", d.stage), d.severity, d.message))
         .collect()
-}
-
-/// Write the fingerprint output to a file or stdout.
-pub fn write_fingerprint_output(
-    output: &FingerprintOutput,
-    out: Option<&str>,
-) -> Result<(), String> {
-    match output {
-        FingerprintOutput::Text(text) => {
-            if let Some(path) = out {
-                std::fs::write(path, text).map_err(|e| format!("fingerprint: write error: {e}"))
-            } else {
-                use std::io::Write;
-                std::io::stdout()
-                    .write_all(text.as_bytes())
-                    .map_err(|e| format!("fingerprint: stdout write error: {e}"))
-            }
-        }
-        FingerprintOutput::Binary(bytes) => {
-            if let Some(path) = out {
-                std::fs::write(path, bytes).map_err(|e| format!("fingerprint: write error: {e}"))
-            } else {
-                use std::io::Write;
-                std::io::stdout()
-                    .write_all(bytes)
-                    .map_err(|e| format!("fingerprint: stdout write error: {e}"))
-            }
-        }
-        FingerprintOutput::Shards(shards) => {
-            // For shards, `out` is treated as the output directory.
-            // When None, use the current directory.
-            let dir = out.unwrap_or(".");
-            let dir_path = std::path::Path::new(dir);
-            if !dir_path.exists() {
-                std::fs::create_dir_all(dir_path)
-                    .map_err(|e| format!("fingerprint: create dir error: {e}"))?;
-            }
-            for (filename, content) in shards {
-                let file_path = dir_path.join(filename);
-                std::fs::write(&file_path, content)
-                    .map_err(|e| format!("fingerprint: write shard {filename}: {e}"))?;
-            }
-            Ok(())
-        }
-    }
 }

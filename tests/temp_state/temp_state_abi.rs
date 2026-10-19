@@ -157,10 +157,14 @@ fn project_and_resolve() -> al_sem::program::model::workspace::ModelEntities {
         "1.0.0.0",
         SYMBOL_REFERENCE,
     );
-    assemble_and_resolve_cross_app_program(dir.path(), MI, false)
-        .expect("cross-app model")
-        .resolved
-        .workspace
+    assemble_and_resolve_cross_app_program(
+        &al_sem::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        MI,
+        false,
+    )
+    .expect("cross-app model")
+    .resolved
+    .workspace
 }
 
 fn temp_kind(

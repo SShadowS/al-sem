@@ -17,7 +17,6 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use crate::engine::gate::run::{
     compute_analyzer_diagnostics, compute_analyzer_diagnostics_cross_app,
 };
@@ -47,11 +46,8 @@ use crate::program::model::workspace::Model;
 /// Build the envelope `diagnostics` JSON array (the analyzer's per-stage diagnostics
 /// over the registry's default detector set). Shared by the digest AND prove CLI pipelines
 /// so they cannot desync. Each entry is `{code: "DIAG-<stage>", message, severity}`.
-pub fn build_envelope_diagnostics_json(
-    workspace: &std::path::Path,
-    resolved: &Model,
-) -> serde_json::Value {
-    diagnostics_json(&compute_analyzer_diagnostics(workspace, resolved))
+pub fn build_envelope_diagnostics_json(resolved: &Model) -> serde_json::Value {
+    diagnostics_json(&compute_analyzer_diagnostics(resolved))
 }
 
 /// [`build_envelope_diagnostics_json`] for the cross-app digest (#66): the detectors
@@ -59,10 +55,9 @@ pub fn build_envelope_diagnostics_json(
 /// `alsem analyze` runs by default (never the single-app runner over a cross-app
 /// model, which nothing else runs).
 fn build_envelope_diagnostics_json_cross_app(
-    workspace: &std::path::Path,
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
 ) -> serde_json::Value {
-    diagnostics_json(&compute_analyzer_diagnostics_cross_app(workspace, base))
+    diagnostics_json(&compute_analyzer_diagnostics_cross_app(base))
 }
 
 fn diagnostics_json(diag_vec: &[crate::engine::l5::registry::Diagnostic]) -> serde_json::Value {
@@ -1556,7 +1551,7 @@ pub struct DigestRunResult {
 /// from `payload.dependencies.mode` (a contract test).
 #[allow(clippy::too_many_arguments)] // CLI flags, one each
 pub fn run_digest_pipeline(
-    workspace: &std::path::Path,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     changed_files: Option<Vec<String>>,
     changed_routines: Option<Vec<String>>,
     diff_text: Option<String>,
@@ -1566,10 +1561,9 @@ pub fn run_digest_pipeline(
     single_app: bool,
 ) -> Result<DigestRunResult, String> {
     use crate::engine::gate::run::AnalysisTarget;
-    // Assemble workspace
-    let model_id = compute_gate_model_instance_id(workspace)
-        .ok_or_else(|| "digest: could not compute modelInstanceId".to_string())?;
-    let target = AnalysisTarget::build(workspace, &model_id, single_app, "digest")?;
+    // Assemble workspace (no model-instance id: `digest: could not compute
+    // modelInstanceId`, `AnalysisTarget::build`).
+    let target = AnalysisTarget::build(inputs, single_app, "digest")?;
     let resolved = target.resolved();
     let dependencies = target.dependencies();
 
@@ -1579,7 +1573,7 @@ pub fn run_digest_pipeline(
     // snapshot `alsem analyze`'s ordering facts read.
     let snap = compose_snapshot(resolved);
     let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(workspace, alsem_ver);
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
 
     // Resolve changed roots
     let changed_input = ChangedInput {
@@ -1656,10 +1650,8 @@ pub fn run_digest_pipeline(
 
     // Build envelope diagnostics (the analyze default detector set, shared with prove).
     let diagnostics_json = match &target {
-        AnalysisTarget::SingleApp(r) => build_envelope_diagnostics_json(workspace, r),
-        AnalysisTarget::CrossApp(base) => {
-            build_envelope_diagnostics_json_cross_app(workspace, base)
-        }
+        AnalysisTarget::SingleApp(r) => build_envelope_diagnostics_json(r),
+        AnalysisTarget::CrossApp(base) => build_envelope_diagnostics_json_cross_app(base),
     };
 
     let changed_input_contract = ChangedInputContract {

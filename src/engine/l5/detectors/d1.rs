@@ -3191,6 +3191,7 @@ mod shadow_tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: vec![],
+            workspace_diagnostics: vec![],
             dependency_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
@@ -3407,7 +3408,7 @@ mod shadow_tests {
 
         let resolved =
             crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-                &ws_path,
+                &crate::program::inputs::InputSet::read(&ws_path, &Default::default()),
                 crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                 false,
             )
@@ -4274,6 +4275,7 @@ mod assembly_tests {
             root_classifications: vec![],
             primary_app: None,
             infra_diagnostics: vec![],
+            workspace_diagnostics: vec![],
             dependency_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),

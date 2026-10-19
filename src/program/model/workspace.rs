@@ -1429,14 +1429,14 @@ fn project_ir(
 /// `parenless` is the resolution's [`crate::program::resolve::full::ParenlessCalls`]
 /// (`ProgramReport::parenless_calls`): the body walk takes those reads as calls.
 pub fn assemble_and_resolve_workspace_from_program(
-    workspace: &std::path::Path,
+    inputs: &crate::program::inputs::InputSet,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
 ) -> Option<ModelRows> {
-    let ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx, parenless)?;
-    finish_resolved(ws, workspace, skip_roots_config)
+    let ws = assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
+    finish_resolved(ws, inputs, skip_roots_config)
 }
 
 /// The CROSS-APP detector model (engine-switch S7.2): the workspace's rows exactly as
@@ -1455,16 +1455,16 @@ pub fn assemble_and_resolve_workspace_from_program(
 /// `demand` (engine-switch S8.2, `program::resolve::demand`): when given, a
 /// source-bearing dependency file keeps every object but only the routines in it.
 pub fn assemble_and_resolve_cross_app_from_program(
-    workspace: &std::path::Path,
+    inputs: &crate::program::inputs::InputSet,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
 ) -> Option<(ModelRows, AbiRowIds)> {
-    let mut ws = assemble_l3_workspace_from_program(workspace, model_instance_id, ctx, parenless)?;
+    let mut ws = assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
     let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx, demand, parenless);
-    Some((finish_resolved(ws, workspace, skip_roots_config)?, abi_rows))
+    Some((finish_resolved(ws, inputs, skip_roots_config)?, abi_rows))
 }
 
 /// One dependency app in a cross-app model's snapshot (engine-switch S7.4).
@@ -1631,25 +1631,28 @@ pub enum ProgramFiles<'c> {
     Missing(String),
 }
 
-/// Select L3's app-scoped file set from `ctx`'s parse. `None` on the disk path's
-/// fail-closed conditions (no root `app.json` id, unreadable workspace).
+/// Select L3's app-scoped file set from `ctx`'s parse. `None` on the fail-closed
+/// conditions (no root `app.json` id, a failed `.al` walk).
+///
+/// The list is the command's `InputSet` (#160 §4.2.3): the build parsed exactly
+/// that set's files, so `Missing` can no longer come from a disk change between
+/// two walks; it stays as the guard against a parse that dropped a file.
 pub fn select_program_files<'c>(
-    workspace: &std::path::Path,
+    inputs: &crate::program::inputs::InputSet,
     ctx: &'c crate::program::resolve::full::ProgramContext,
 ) -> Option<ProgramFiles<'c>> {
-    use crate::program::body::l2_workspace::{discover_al_files_app_scoped, read_root_app_guid};
     use crate::snapshot::parse::ParsedFile;
 
-    let app_guid = read_root_app_guid(workspace)?;
-    let discovered = discover_al_files_app_scoped(workspace).ok()?;
+    let app_guid = inputs.app_id()?.to_string();
+    inputs.al_walk.as_ref().ok()?;
     let by_path: std::collections::HashMap<&str, &ParsedFile> = ctx
         .parsed()
         .iter()
         .flat_map(|u| u.files.iter())
         .map(|f| (f.virtual_path.as_str(), f))
         .collect();
-    let mut files = Vec::with_capacity(discovered.len());
-    for f in &discovered {
+    let mut files = Vec::new();
+    for f in inputs.app_scoped_files() {
         match by_path.get(f.rel_posix.as_str()) {
             // `virtual_path == rel_posix` (the lookup key): both come from
             // `source_text::discover_al_files`.
@@ -1661,14 +1664,14 @@ pub fn select_program_files<'c>(
 }
 
 fn assemble_l3_workspace_from_program(
-    workspace: &std::path::Path,
+    inputs: &crate::program::inputs::InputSet,
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
 ) -> Option<ModelEntities> {
     let selected = {
         let _s = pt::span("l3", "l3.select_program_parse");
-        select_program_files(workspace, ctx)?
+        select_program_files(inputs, ctx)?
     };
     let (app_guid, files) = match selected {
         ProgramFiles::Selected { app_guid, files } => (app_guid, files),
@@ -1750,28 +1753,25 @@ fn assemble_l3_workspace_from_program(
 /// classify roots, read the primary app, and refuse an empty model.
 fn finish_resolved(
     mut ws: ModelEntities,
-    workspace: &std::path::Path,
+    inputs: &crate::program::inputs::InputSet,
     skip_roots_config: bool,
 ) -> Option<ModelRows> {
     let resolved = {
         resolve(&mut ws);
-        // R4-F: classify AST roots, then overlay `<workspace>/roots.config.json`.
-        // `workspace` is the root where the config lives (mirrors al-sem's
+        // R4-F: classify AST roots, then overlay `<workspace>/roots.config.json`,
+        // from the bytes the command's `InputSet` read (mirrors al-sem's
         // index.ts: `loadRootsConfig(workspaceRoot)`).
-        let roots_config_root = if skip_roots_config {
+        let roots_config = if skip_roots_config {
             None
         } else {
-            Some(workspace)
+            inputs.roots_config.as_ref()
         };
         let (root_classifications, infra_diagnostics) =
-            crate::engine::root_classification::compute_root_classifications(
-                &ws,
-                roots_config_root,
-            );
-        // Disk-backed path: read the primary app's identity from `app.json`.
-        // Mirrors al-sem `model.identity.primaryApp`. Never throws — returns None
-        // on unreadable / malformed app.json (fail-closed / engine-never-throws).
-        let primary_app = read_primary_app_from_disk(workspace);
+            crate::engine::root_classification::compute_root_classifications(&ws, roots_config);
+        // The primary app's identity from `app.json`. Mirrors al-sem
+        // `model.identity.primaryApp`. Never throws — returns None on unreadable /
+        // malformed app.json (fail-closed / engine-never-throws).
+        let primary_app = read_primary_app(inputs);
         ModelRows {
             workspace: ws,
             root_classifications,
@@ -1786,14 +1786,15 @@ fn finish_resolved(
     Some(resolved)
 }
 
-/// Read the primary app's identity from the workspace root `app.json`.
-/// Mirrors `run::read_workspace_apps` but returns `Option<App>` instead of `Vec<App>`.
+/// The primary app's identity from the workspace root `app.json`, as the
+/// command's `InputSet` read it (#160); `run::read_workspace_apps` reads it too.
 /// Engine-never-throws: returns `None` on any read/parse failure.
-fn read_primary_app_from_disk(
-    workspace: &std::path::Path,
+pub(crate) fn read_primary_app(
+    inputs: &crate::program::inputs::InputSet,
 ) -> Option<crate::engine::gate::app_attribution::App> {
-    let text = std::fs::read_to_string(workspace.join("app.json")).ok()?;
-    let v = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let Some(Ok(v)) = &inputs.app_json_value else {
+        return None;
+    };
     let app_guid = v
         .get("id")
         .and_then(|x| x.as_str())
@@ -1903,6 +1904,11 @@ pub struct Model {
     /// `kinds-mismatch` warnings from `roots.config.json`). Propagated to the JSON
     /// envelope.
     pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
+    /// al-sem's `workspace.diagnostics` (provider + index rows,
+    /// `gate::workspace_diagnostics::compute_workspace_diagnostics`), from the
+    /// command's `InputSet` and the program build's objectless-file list (#160
+    /// §4.2.4). Source (1) of every command's analyzer diagnostics.
+    pub workspace_diagnostics: Vec<crate::engine::l5::registry::Diagnostic>,
     /// The program build's dependency-ledger warnings
     /// (`FreshCoverage::dependency_diagnostics`), in ledger order: missing,
     /// older-than-declared, unreadable and unidentified dependency packages. Kept
@@ -2834,11 +2840,17 @@ mod population_tests {
     fn model_population_follows_the_physical_rows() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
         let (mut ctx, _report, _) =
-            crate::program::resolve::full::build_program_with_coverage(&ws).unwrap();
-        let full =
-            assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx, &Default::default())
-                .unwrap();
+            crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
+        let full = assemble_and_resolve_workspace_from_program(
+            &inputs,
+            "r0",
+            true,
+            &ctx,
+            &Default::default(),
+        )
+        .unwrap();
 
         // Drop the first codeunit routine row (interfaces are skipped anyway).
         let k = ctx
@@ -2849,9 +2861,14 @@ mod population_tests {
             .position(|r| r.node.object.kind == al_syntax::ir::ObjectKind::Codeunit)
             .unwrap();
         let dropped = ctx.graph.workspace_rows.routines.remove(k);
-        let fewer =
-            assemble_and_resolve_workspace_from_program(&ws, "r0", true, &ctx, &Default::default())
-                .unwrap();
+        let fewer = assemble_and_resolve_workspace_from_program(
+            &inputs,
+            "r0",
+            true,
+            &ctx,
+            &Default::default(),
+        )
+        .unwrap();
 
         assert_eq!(
             fewer.workspace.routines.len() + 1,
@@ -2881,8 +2898,9 @@ mod population_tests {
     fn declaration_only_routines_follow_the_population() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
         let (mut ctx, _report, _) =
-            crate::program::resolve::full::build_program_with_coverage(&ws).unwrap();
+            crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let decls = |m: &ModelRows| -> Vec<(String, u32)> {
             m.workspace
                 .objects
@@ -2898,7 +2916,7 @@ mod population_tests {
         };
         let full = decls(
             &assemble_and_resolve_workspace_from_program(
-                &ws,
+                &inputs,
                 "r0",
                 true,
                 &ctx,
@@ -2918,7 +2936,7 @@ mod population_tests {
         let dropped = ctx.graph.workspace_rows.routines.remove(k);
         let fewer = decls(
             &assemble_and_resolve_workspace_from_program(
-                &ws,
+                &inputs,
                 "r0",
                 true,
                 &ctx,

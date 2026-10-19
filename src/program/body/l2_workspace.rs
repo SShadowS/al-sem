@@ -58,17 +58,6 @@ pub(crate) fn discover_al_files(workspace: &Path) -> std::io::Result<Vec<AlFile>
     crate::source_text::discover_al_files(workspace, NestedApps::Walk)
 }
 
-/// Like [`discover_al_files`] but scoped to ONE app: a child directory that carries
-/// its own `app.json` is a separate AL project (the AL compiler treats each
-/// `app.json` as a project root), so discovery does NOT descend into it. The
-/// `workspace` root's own `app.json` does not stop the walk (it IS this app). This
-/// lets a root app whose tree contains nested sub-apps (a monorepo / `Modules/`
-/// layout) be analyzed in isolation, and lets each nested app be analyzed by
-/// pointing at its own root. Otherwise the same walk as [`discover_al_files`].
-pub(crate) fn discover_al_files_app_scoped(workspace: &Path) -> std::io::Result<Vec<AlFile>> {
-    crate::source_text::discover_al_files(workspace, NestedApps::Skip)
-}
-
 /// The shared `.al` decoder: L2/L3 must see the same text as the program engine.
 pub(crate) use crate::source_text::read_al_source;
 

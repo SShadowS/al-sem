@@ -31,7 +31,7 @@ use crate::engine::ids::{
 use crate::engine::l4::capability_cone::{CapabilityFact, build_r3a3_source_only_base};
 use crate::engine::l5::snapshot::compose_snapshot_from_base;
 use crate::program::model::workspace::Model;
-use crate::program::resolve::semantic_golden::{ClosureErrorKind, dependency_closure_entries};
+use crate::program::resolve::semantic_golden::ClosureErrorKind;
 
 mod to_cbor;
 pub use to_cbor::to_cbor_value;
@@ -41,8 +41,9 @@ pub const SNAPSHOT_SCHEMA_VERSION: i64 = 3;
 
 /// Options for composing the full cli-b snapshot.
 pub struct FullSnapshotOptions<'a> {
-    /// The workspace directory (for the inputs walk + relative paths).
-    pub workspace_dir: &'a std::path::Path,
+    /// The command's one read of the workspace (#160), read with
+    /// `fingerprint_rows`: the `inputs[]` rows come from it.
+    pub inputs: &'a crate::program::inputs::InputSet,
     /// The al-sem version string (`alsemVersion`; e.g. `cli-b-v1`).
     pub driver_version: &'a str,
     /// When true, `generatedAt` is pinned to the Unix epoch for byte-stable output.
@@ -59,9 +60,21 @@ pub struct FullSnapshotOptions<'a> {
 /// a full snapshot tree. Used by the digest pipeline so it doesn't pay for a second
 /// `compose_snapshot` (which `compose_full_snapshot` calls internally) just to fish
 /// the fingerprint out of a CBOR map (#19).
-pub fn workspace_fingerprint_of(workspace_dir: &std::path::Path, driver_version: &str) -> String {
-    let inputs = derive_inputs(workspace_dir);
-    compute_workspace_fingerprint(&inputs, driver_version)
+pub fn workspace_fingerprint_of(
+    inputs: &crate::program::inputs::InputSet,
+    driver_version: &str,
+) -> String {
+    compute_workspace_fingerprint(snapshot_rows(inputs), driver_version)
+}
+
+/// The reproducibility input rows the command's `InputSet` hashed when it was
+/// read (`derive_inputs`' rows, #160). The command declares the need
+/// (`InputNeeds::fingerprint_rows`); a set read without it is a wiring bug.
+fn snapshot_rows(inputs: &crate::program::inputs::InputSet) -> &[SnapshotInput] {
+    inputs
+        .snapshot_inputs
+        .as_deref()
+        .expect("fingerprint rows were not requested")
 }
 
 pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> CborValue {
@@ -71,8 +84,8 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     let base = build_r3a3_source_only_base(resolved);
     let core = compose_snapshot_from_base(resolved, &base);
 
-    let inputs = derive_inputs(opts.workspace_dir);
-    let workspace_fingerprint = compute_workspace_fingerprint(&inputs, opts.driver_version);
+    let inputs = snapshot_rows(opts.inputs);
+    let workspace_fingerprint = compute_workspace_fingerprint(inputs, opts.driver_version);
 
     let apps = project_apps(resolved);
     let contract_facts = derive_contracts(resolved);
@@ -125,7 +138,7 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     m.insert("callsiteResolutions".into(), callsite_resolutions);
     m.insert("analysisGaps".into(), analysis_gaps);
     m.insert("coverage".into(), coverage);
-    m.insert("inputs".into(), to_cbor_inputs(&inputs));
+    m.insert("inputs".into(), to_cbor_inputs(inputs));
     m.insert("eventDeclarations".into(), event_declarations);
 
     // inputsMetadata + routineOrderFrames are attached AFTER ⇒ LAST (and only when
@@ -804,27 +817,34 @@ pub struct SnapshotInput {
     pub content_hash: String,
 }
 
-/// Walk the workspace for the inputs that contribute to snapshot identity:
-///   app.json → "app-json"; every dependency-closure `.app` the loader reads
-///   (own and ancestor `.alpackages`) → "dep-package", keyed
-///   `.alpackages/x.app` / `../.alpackages/y.app`; a closure entry that
-///   cannot be listed or read → "dep-package-unreadable";
-///   roots.config.json (if loaded) → "roots-config";
-///   al-sem.coverage.yaml (if present) → "policy".
-/// Paths workspace-relative, forward-slash normalized. Sorted by (kind|path).
-fn derive_inputs(workspace_dir: &std::path::Path) -> Vec<SnapshotInput> {
+/// The inputs that contribute to snapshot identity, over the files the
+/// command's `InputSet` read (#160; `InputSet::read` calls this once, under
+/// `InputNeeds::fingerprint_rows`):
+///   app.json (readable bytes, parse or no parse) → "app-json"; every
+///   dependency-closure `.app` the loader reads (own and ancestor
+///   `.alpackages`) → "dep-package", keyed `.alpackages/x.app` /
+///   `../.alpackages/y.app`; a closure entry that cannot be listed or read →
+///   "dep-package-unreadable"; roots.config.json (only when it loads and
+///   validates) → "roots-config"; al-sem.coverage.yaml (if present) → "policy".
+/// `None` = no row. The closure `.app` files are hashed here. Paths
+/// workspace-relative, forward-slash normalized. Sorted by (kind|path).
+pub(crate) fn derive_inputs_from_parts(
+    workspace_dir: &std::path::Path,
+    app_json: Option<&[u8]>,
+    closure: crate::program::resolve::semantic_golden::ClosureEntries,
+    roots_config: Option<&[u8]>,
+    coverage_yaml: Option<&[u8]>,
+) -> Vec<SnapshotInput> {
     let mut out: Vec<SnapshotInput> = Vec::new();
+    let row = |kind: &str, name: &str, bytes: &[u8]| SnapshotInput {
+        kind: kind.into(),
+        path: rel(workspace_dir, &workspace_dir.join(name)),
+        content_hash: crate::engine::ids::sha256_bytes_hex(bytes),
+    };
 
     // app.json.
-    let app_json = workspace_dir.join("app.json");
-    if app_json.exists()
-        && let Some(hash) = hash_file(&app_json)
-    {
-        out.push(SnapshotInput {
-            kind: "app-json".into(),
-            path: rel(workspace_dir, &app_json),
-            content_hash: hash,
-        });
+    if let Some(bytes) = app_json {
+        out.push(row("app-json", "app.json", bytes));
     }
 
     // The dependency closure the loader reads (own AND ancestor caches, up to
@@ -836,7 +856,6 @@ fn derive_inputs(workspace_dir: &std::path::Path) -> Vec<SnapshotInput> {
         path: key,
         content_hash: crate::engine::ids::sha256_bytes_hex(kind.as_str().as_bytes()),
     };
-    let closure = dependency_closure_entries(workspace_dir);
     for (key, path) in closure.entries {
         match hash_file(&path) {
             Some(hash) => out.push(SnapshotInput {
@@ -853,27 +872,12 @@ fn derive_inputs(workspace_dir: &std::path::Path) -> Vec<SnapshotInput> {
 
     // roots.config.json — included iff it loads+validates (al-sem reads
     // model.identity.rootsConfig, set only when the config was actually loaded).
-    let roots_path = workspace_dir.join("roots.config.json");
-    if roots_path.exists()
-        && crate::engine::root_classification::roots_config_was_loaded(workspace_dir)
-        && let Some(hash) = hash_file(&roots_path)
-    {
-        out.push(SnapshotInput {
-            kind: "roots-config".into(),
-            path: rel(workspace_dir, &roots_path),
-            content_hash: hash,
-        });
+    if let Some(bytes) = roots_config {
+        out.push(row("roots-config", "roots.config.json", bytes));
     }
     // al-sem.coverage.yaml → "policy".
-    let coverage_policy = workspace_dir.join("al-sem.coverage.yaml");
-    if coverage_policy.exists()
-        && let Some(hash) = hash_file(&coverage_policy)
-    {
-        out.push(SnapshotInput {
-            kind: "policy".into(),
-            path: rel(workspace_dir, &coverage_policy),
-            content_hash: hash,
-        });
+    if let Some(bytes) = coverage_yaml {
+        out.push(row("policy", "al-sem.coverage.yaml", bytes));
     }
 
     // al-sem `deriveInputs`: `.sort((a,b) => `${a.kind}|${a.path}`.localeCompare(…))`.
@@ -1625,10 +1629,15 @@ mod tests {
         std::fs::write(ws.join(".alpackages").join("a.app"), b"own package").unwrap();
         std::fs::write(ws.join("app.json"), b"{}").unwrap();
 
-        let mut got: Vec<String> = derive_inputs(&ws)
-            .into_iter()
+        let needs = crate::program::inputs::InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        };
+        let inputs = crate::program::inputs::InputSet::read(&ws, &needs);
+        let mut got: Vec<String> = snapshot_rows(&inputs)
+            .iter()
             .filter(|i| i.kind == "dep-package")
-            .map(|i| i.path)
+            .map(|i| i.path.clone())
             .collect();
         got.sort();
         assert_eq!(

@@ -72,7 +72,7 @@ pub(crate) fn workspace(dir: &Path, call_lib: bool) {
 }
 
 /// A symbol-only dependency declaring table 18 "Customer".
-fn symbol_only_dependency(dir: &Path) {
+pub(crate) fn symbol_only_dependency(dir: &Path) {
     crate::symbol_app::write_symbol_app(
         &dir.join(".alpackages/probe_XBase_1.0.0.0.app"),
         DEP_GUID,

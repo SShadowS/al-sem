@@ -32,7 +32,7 @@ use al_sem::program::body::l2_workspace::project_workspace;
 /// under the default model-instance id.
 fn program_model(workspace: &std::path::Path) -> Option<al_sem::program::model::workspace::Model> {
     al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
-        workspace,
+        &al_sem::program::inputs::InputSet::read(workspace, &Default::default()),
         al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
@@ -161,9 +161,13 @@ fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let inputs = al_sem::program::inputs::InputSet::read(
+        std::path::Path::new(ws),
+        &al_sem::program::inputs::InputNeeds::default(),
+    );
     let (ctx, report, _) =
         match al_sem::program::resolve::full::build_program_with_coverage_profiled(
-            std::path::Path::new(ws),
+            &inputs,
             BuildProfile::FULL,
         ) {
             Ok(x) => x,

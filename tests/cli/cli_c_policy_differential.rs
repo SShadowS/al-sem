@@ -123,9 +123,13 @@ const DEFAULT_CORPUS: &[&str] = &[
 fn check_text(fixture: &str, format: &str, no_policy: bool) -> String {
     let ws = fixtures_dir().join(fixture);
     let opts = PolicyCheckOptions {
-        workspace: &ws,
-        policy_path: None,
-        no_policy,
+        inputs: &al_sem::program::inputs::InputSet::read(
+            &ws,
+            &al_sem::program::inputs::InputNeeds {
+                policy: al_sem::engine::gate::policy::pipeline::policy_request(None, no_policy),
+                ..Default::default()
+            },
+        ),
         format,
         out: None,
         deterministic: true,

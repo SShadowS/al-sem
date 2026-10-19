@@ -16,6 +16,11 @@ fn write(path: &Path, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
+/// The command's one read of `ws` (#160).
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
+    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+}
+
 fn app_json(guid: &str, name: &str) -> String {
     format!(
         r#"{{"id":"{guid}","name":"{name}","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50000,"to":59999}}]}}"#
@@ -46,7 +51,8 @@ fn coverage_counts_only_the_files_the_model_analysed() {
         "codeunit 50001 \"Nested Cu\"\n{\n    procedure B()\n    begin\n    end;\n}\n",
     );
 
-    let built = build_analysis_model(ws, true);
+    let inputs = read(ws);
+    let built = build_analysis_model(&inputs, true);
     let resolved = built.model.as_ref().expect("root app assembles").resolved();
     let names: Vec<&str> = resolved
         .workspace
@@ -56,7 +62,7 @@ fn coverage_counts_only_the_files_the_model_analysed() {
         .collect();
     assert_eq!(names, vec!["A"], "the model analyses the root app only");
 
-    let c = analysis_coverage(resolved, ws, &built.fresh);
+    let c = analysis_coverage(resolved, &inputs, &built.fresh);
     assert_eq!(
         (c.source_units_total, c.source_units_parsed),
         (1, 1),
@@ -113,7 +119,7 @@ fn ledger_workspace(ws: &Path) {
 fn ledger_records_missing_older_and_unreadable_dependencies() {
     let dir = tempfile::tempdir().unwrap();
     ledger_workspace(dir.path());
-    let built = build_analysis_model(dir.path(), true);
+    let built = build_analysis_model(&read(dir.path()), true);
     let fc = built.fresh.as_ref().expect("program builds");
     // (guid, found, below declared version, unreadable on disk)
     let rows: Vec<(&str, bool, bool, bool)> = fc
@@ -168,8 +174,9 @@ fn analyze_args(ws: &Path) -> AnalyzeArgs {
 fn analyze_degrades_on_an_unreadable_dependency_and_reports_the_others() {
     let dir = tempfile::tempdir().unwrap();
     ledger_workspace(dir.path());
+    let args = analyze_args(dir.path());
     let (out, exit, warning) =
-        run_analyze_with_exit(&analyze_args(dir.path()), "test").expect("analyze runs");
+        run_analyze_with_exit(&args.read_inputs(), &args, "test").expect("analyze runs");
     let warning = warning.expect("degraded");
     assert!(
         warning.contains("1 unreadable dependency app(s): LedgerBroken"),
@@ -218,7 +225,9 @@ fn analyze_degrades_on_an_unbound_event_subscription() {
 }
 "#,
     );
-    let (_, _, warning) = run_analyze_with_exit(&analyze_args(ws), "test").expect("analyze runs");
+    let args = analyze_args(ws);
+    let (_, _, warning) =
+        run_analyze_with_exit(&args.read_inputs(), &args, "test").expect("analyze runs");
     let warning = warning.expect("degraded");
     assert!(
         warning.contains("1 unbound event subscription(s)"),
@@ -248,7 +257,7 @@ fn scope_primary_drops_a_finding_on_another_apps_object() {
         "codeunit 50004 \"Own Cu\"\n{\n    procedure A()\n    begin\n    end;\n}\n\
          codeunit 50005 \"Dep Cu\"\n{\n    procedure B()\n    begin\n    end;\n}\n",
     );
-    let mut resolved = match build_analysis_model(ws, true).model.expect("model") {
+    let mut resolved = match build_analysis_model(&read(ws), true).model.expect("model") {
         al_sem::engine::gate::run::AnalysisTarget::SingleApp(r) => *r,
         al_sem::engine::gate::run::AnalysisTarget::CrossApp(_) => unreachable!("single-app build"),
     };
@@ -334,7 +343,7 @@ report 50009 "Facts Report" { }
 reportextension 50010 "Facts Report Ext" extends "Facts Report" { }
 "#,
     );
-    let built = build_analysis_model(ws, true);
+    let built = build_analysis_model(&read(ws), true);
     let objects = &built
         .model
         .as_ref()
