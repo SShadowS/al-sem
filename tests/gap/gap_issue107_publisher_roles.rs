@@ -1152,7 +1152,8 @@ fn row7c_duplicate_resolved_edge_counts_once() {
 
 /// Ruling (step 6): two overloads share one event id, so `OnPair(var Rec)`
 /// also gets a RESOLVED edge to `HandlePairQty(var Rec; Qty)`, whose `Qty`
-/// binds no parameter of that overload: opaque there, exact on the other.
+/// binds no parameter of that overload. A shared event id makes the dispatch
+/// unseen on BOTH overloads (final panel round 2, F2-1).
 #[test]
 fn row7d_overload_collision_resolved_edge_is_opaque() {
     let pubs = r#"
@@ -1209,18 +1210,8 @@ codeunit 50101 Sub
             .and_then(|v| v.iter().find(|x| x.parameter_index == 0))
             .expect("precondition: a role for Rec");
         let label = format!("OnPair/{}", r.parameters.len());
-        match r.parameters.len() {
-            1 => {
-                expect_all(&mut f, &label, role, &PRESENCE, "Unknown");
-                expect_all(&mut f, &label, role, &PATH, "Unknown");
-            }
-            _ => expect(
-                &mut f,
-                &label,
-                role,
-                &[("validatesParam", "Yes"), ("mutatesParam", "Yes")],
-            ),
-        }
+        expect_all(&mut f, &label, role, &PRESENCE, "Unknown");
+        expect_all(&mut f, &label, role, &PATH, "Unknown");
     }
     done(f);
 }
@@ -1228,10 +1219,10 @@ codeunit 50101 Sub
 /// Ruling (step 6, revised): overloads share one event id, so a subscriber
 /// resolved to ONE overload gets a dispatch edge from EVERY overload, and a
 /// smaller subscriber's names (`Rec`) all bind the larger overload too. The
-/// engine does not keep which overload the subscription selected, so every
-/// binding of a publisher whose event id another publisher shares is optional
-/// and path-opaque: `HandlePair`'s `Get` is no proven load on either overload
-/// (`loadsFromDbParam no`). Control: the same subscriber on a single,
+/// engine does not keep which overload the subscription selected, so the
+/// dispatch of a publisher whose event id another publisher shares is unseen
+/// for every record parameter: every presence and path fact of `Rec` is
+/// `Unknown` on both overloads. Control: the same subscriber on a single,
 /// unshared `OnSimple` is a proven `yes` (`review_isolated_loader_is_masked`).
 #[test]
 fn row7e_overload_shared_event_id_bindings_are_never_exact() {
@@ -1295,9 +1286,116 @@ codeunit 50101 Sub
             .and_then(|v| v.iter().find(|x| x.parameter_index == 0))
             .expect("precondition: a role for Rec");
         let label = format!("OnPair/{}", r.parameters.len());
-        expect(&mut f, &label, role, &[("loadsFromDbParam", "No")]);
+        expect_all(&mut f, &label, role, &PRESENCE, "Unknown");
+        expect_all(&mut f, &label, role, &PATH, "Unknown");
     }
     done(f);
+}
+
+/// Final panel round 2 (F2-1): a MAY fact of a subscriber that selected the
+/// OTHER overload must not reach a caller. `HandlePair(var Rec)` resets `Rec`
+/// and selected `OnPair(var Rec)`, but the shared event id attaches it to
+/// `OnPair(var Rec; Qty)` too. A caller that filters `Rec`, raises the larger
+/// overload and then runs `FindSet` gets no d41 finding. Control: the same
+/// caller over a single, unshared `OnOne` is a d41 finding.
+#[test]
+fn row7f_overload_sibling_reset_is_no_d41_finding() {
+    let caller = |raise: &str| {
+        format!(
+            r#"
+codeunit 50102 Caller
+{{
+    procedure Caller()
+    var
+        Rec: Record Cust;
+        Pub: Codeunit Pub;
+    begin
+        Rec.SetRange(Name, 'x');
+        {raise};
+        Rec.FindSet();
+    end;
+}}
+"#
+        )
+    };
+    let shared = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnPair(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnPair(var Rec: Record Cust; Qty: Integer)
+    begin
+    end;
+}
+"#;
+    let shared_sub = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnPair', '', false, false)]
+    local procedure HandlePair(var Rec: Record Cust)
+    begin
+        Rec.Reset();
+    end;
+}
+"#;
+    let single = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnOne(var Rec: Record Cust)
+    begin
+    end;
+}
+"#;
+    let single_sub = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnOne', '', false, false)]
+    local procedure HandleOne(var Rec: Record Cust)
+    begin
+        Rec.Reset();
+    end;
+}
+"#;
+    let control = model(&[single, single_sub, &caller("Pub.OnOne(Rec)")]);
+    assert_eq!(
+        blamed(&control, "d41-transitive-filter-loss").len(),
+        1,
+        "control: an unshared Reset subscriber is a d41 finding"
+    );
+    let m = model(&[shared, shared_sub, &caller("Pub.OnPair(Rec, 1)")]);
+    let graph = graph_of(&m);
+    let handler = rid(&m, "HandlePair");
+    let larger = m
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "OnPair" && r.parameters.len() == 2)
+        .expect("precondition: OnPair(Rec; Qty)");
+    let caller_calls: Vec<String> = graph
+        .edges_by_from
+        .get(&rid(&m, "Caller"))
+        .map(|v| v.iter().map(|e| e.to.clone()).collect())
+        .unwrap_or_default();
+    assert!(
+        caller_calls.contains(&larger.id),
+        "precondition: Caller raises the larger overload: {caller_calls:?}"
+    );
+    assert!(
+        graph.edges_by_from[&larger.id]
+            .iter()
+            .any(|e| e.kind == "event-dispatch" && e.to == handler && e.resolution == "resolved"),
+        "precondition: the larger overload dispatches HandlePair"
+    );
+    assert_eq!(
+        blamed(&m, "d41-transitive-filter-loss"),
+        Vec::<String>::new(),
+        "an overload sibling's Reset is no d41 finding"
+    );
 }
 
 // ---------------------------------------------------------------------------

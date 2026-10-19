@@ -19,20 +19,20 @@ pub(crate) struct ExactBinding {
     pub subscriber: String,
     pub q: u32,
     pub callee_is_var: bool,
-    /// The subscriber may not run (a conditional subscription, an isolated
-    /// event, or a shared overload event id). Always true when `path_opaque`.
+    /// The subscriber may not run (a conditional subscription or an isolated
+    /// event). Always true when `path_opaque`.
     pub optional: bool,
     /// An isolated event (the subscriber is visible, but a failure rolls its
-    /// database work back while its in-memory changes stay) or a shared
-    /// overload event id (the binding may belong to another overload): the
-    /// walker takes the opaque transfer (Design 4).
+    /// database work back while its in-memory changes stay): the walker takes
+    /// the opaque transfer (Design 4).
     pub path_opaque: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DispatchKind {
-    /// An opaque subscriber (non-resolved edge, unknown subscriber, or an
-    /// overload collision), or (`too_many`) more than [`EXACT_DISPATCH_MAX`]
+    /// An opaque subscriber (non-resolved edge, unknown subscriber, an
+    /// overload collision, or an event id another publisher shares), or
+    /// (`too_many`) more than [`EXACT_DISPATCH_MAX`]
     /// bindings. The two read alike; only the census tells them apart.
     Unseen {
         too_many: bool,
@@ -92,9 +92,9 @@ fn opaque_subscriber(
 /// `routine`'s dispatch bindings, one entry per record parameter with at least
 /// one binding, in parameter order. Empty when `routine` has no
 /// `event-dispatch` edge or no body (a symbol-only publisher keeps its base
-/// roles, Design 6). A binding over a `shared_events` id is optional and
-/// path-opaque: the engine does not keep which overload a subscriber selected,
-/// so it may not run for this one, and its names may bind the wrong overload.
+/// roles, Design 6). An edge over a `shared_events` id makes every record
+/// parameter unseen: the engine does not keep which overload a subscriber
+/// selected, so none of its facts, MAY or MUST, can be credited to this one.
 pub(crate) fn dispatch_bindings(
     routine: &ModelRoutine,
     edges: &[CombinedEdge],
@@ -111,10 +111,14 @@ pub(crate) fn dispatch_bindings(
     if dispatch.is_empty() {
         return Vec::new();
     }
-    // Any opaque subscriber makes every record parameter unseen.
-    let unseen = dispatch
-        .iter()
-        .any(|e| opaque_subscriber(routine, e, routines_by_id));
+    // Any opaque subscriber or shared event id makes every record parameter
+    // unseen.
+    let unseen = dispatch.iter().any(|e| {
+        opaque_subscriber(routine, e, routines_by_id)
+            || e.event_id
+                .as_ref()
+                .is_some_and(|ev| shared_events.contains(ev))
+    });
     let mut out = Vec::new();
     for p in routine.parameters.iter().filter(|p| p.is_record) {
         let kind = if unseen {
@@ -123,11 +127,7 @@ pub(crate) fn dispatch_bindings(
             let mut bindings: Vec<ExactBinding> = Vec::new();
             for e in &dispatch {
                 let s = routines_by_id[&e.to];
-                let overload = e
-                    .event_id
-                    .as_ref()
-                    .is_some_and(|ev| shared_events.contains(ev));
-                let isolated = overload || e.dispatch.as_ref().is_some_and(|d| d.isolated);
+                let isolated = e.dispatch.as_ref().is_some_and(|d| d.isolated);
                 let optional = isolated || e.dispatch.as_ref().is_some_and(|d| d.conditional);
                 for q in &s.parameters {
                     if event_publisher_param(routine, s, q.index).map(|pp| pp.index)

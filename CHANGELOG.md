@@ -156,13 +156,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     fields `unknown`. Two edges to one subscriber are one subscriber: isolated if any edge is,
     and optional if every edge is or if it is isolated.
   - A subscriber that may not run (manual binding, a license/permission condition in ANY build
-    reading, an isolated event, or an event id that several overloads share) still contributes
-    its MAY facts (persists, validates, may mutate), but never adds or removes a load a caller
-    treats as proven: its load facts (`loadsFromDbParam`, `copiesIntoParam`,
-    `initialisesParam`) go `yes -> no`, and an `unknown` stays `unknown`. An edge that is not
-    `resolved` makes the whole dispatch unseen. The effect on the record's state of an isolated
-    subscriber, or of any subscriber of an overloaded event (the engine does not keep which
-    overload a subscription selected), is not followed.
+    reading, or an isolated event) still contributes its MAY facts (persists, validates, may
+    mutate), but never adds or removes a load a caller treats as proven: its load facts
+    (`loadsFromDbParam`, `copiesIntoParam`, `initialisesParam`) go `yes -> no`, and an
+    `unknown` stays `unknown`. An edge that is not `resolved` makes the whole dispatch unseen.
+    The effect on the record's state of an isolated subscriber is not followed.
+  - A publisher whose event id another publisher also raises (overloads share one event id,
+    and the engine does not keep which overload a subscription selected) dispatches as unseen:
+    every presence and path fact of each record parameter is `unknown`, like an unknown callee.
+    So a subscriber that selected the other overload adds nothing, not even a MAY fact such as
+    a `Reset` that d41 would report.
   - Event-subscriber parameters bind to the publisher's by name in one place
     (`event_param_names_match`), quotes ignored; `pd_solve::carry_reqs` used a second copy that
     did not trim quotes.

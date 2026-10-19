@@ -132,18 +132,19 @@ what the subscriber does (presence), and can we follow its effect on the record'
     a different overload) or a subscriber not in `routines_by_id`. Nothing about it is visible.
 - **Flags.**
   - `optional = conditional || path_opaque || resolution != "resolved"`: it may not run.
-  - `path_opaque = isolated || overload`: it runs, it is visible, but a failure rolls its
-    database work back while its in-memory changes stay (probe f6), or it may belong to another
-    overload, so its effect on the record's state is not one the role describes.
-    `path_opaque` always implies `optional`.
-  - **Overloads (step-6 Ruling, final-panel round 1).** Overloads of one event share one event
-    id, so a subscriber that AL binds to ONE overload gets a dispatch edge from EVERY overload,
-    and a smaller subscriber's parameter names all bind the larger overload too. The engine does
-    not keep which overload a subscription selected. So `overload` is true on every edge whose
-    event id more than one publisher routine raises (`shared_event_ids`, over the combined
-    graph's `event-dispatch` edges): every binding of such a publisher is optional and
-    path-opaque, never exact. A subscriber with a parameter (other than `Sender`) that binds no
-    parameter of this overload is still `Opaque`.
+  - `path_opaque = isolated`: it runs, it is visible, but a failure rolls its database work
+    back while its in-memory changes stay (probe f6), so its effect on the record's state is
+    not one the role describes. `path_opaque` always implies `optional`.
+  - **Overloads (step-6 Ruling, final-panel rounds 1 and 2).** Overloads of one event share one
+    event id, so a subscriber that AL binds to ONE overload gets a dispatch edge from EVERY
+    overload, and a smaller subscriber's parameter names all bind the larger overload too. The
+    engine does not keep which overload a subscription selected. So a publisher with an edge
+    whose event id more than one publisher routine raises (`shared_event_ids`, over the combined
+    graph's `event-dispatch` edges) dispatches as UNSEEN for every record parameter, exactly
+    like an `Opaque` subscriber: every presence and path fact is `unknown`. Optional and
+    path-opaque bindings were not enough: they mask only the load trio, so a MAY fact of a
+    subscriber that selected the other overload (a `Reset`) still reached the caller as `yes`
+    and gave a false d41 finding (round 2, F2-1).
 - **Parameters.** For `Exact`, every subscriber parameter `q` with
   `event_publisher_param(P, S, q) = Some(p)` and `p` a record parameter of `P` gives a binding
   for `p`, with `caller_is_var = p.is_var`, `callee_is_var = q.is_var`. An `Opaque` binding

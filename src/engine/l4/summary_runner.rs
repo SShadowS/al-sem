@@ -191,8 +191,11 @@ pub(crate) mod summaries_census {
     /// Exact parameters of a `fixed_roles` publisher: presence facts only
     /// (Design 6), no walker.
     static PATH_EXACT_FIXED: AtomicU64 = AtomicU64::new(0);
+    /// Unseen parameters of a publisher with an opaque subscriber or an event
+    /// id another publisher shares (an overload sibling).
     static PATH_UNSEEN_OPAQUE: AtomicU64 = AtomicU64::new(0);
     static PATH_UNSEEN_TOO_MANY: AtomicU64 = AtomicU64::new(0);
+    /// Exact parameters with an isolated binding (path-opaque, no walker).
     static PATH_ISOLATED: AtomicU64 = AtomicU64::new(0);
     static SEQUENCES: AtomicU64 = AtomicU64::new(0);
     static SEQUENCES_MAX: AtomicU64 = AtomicU64::new(0);
