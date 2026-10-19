@@ -401,9 +401,12 @@ pub fn detect_d2(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 // (temp reads keep the bit: a temp host's FlowField reads physical
                 // tables). d1 keeps the coarser `touches_db_derived`, because its
                 // temporary terminals are deliberate (`d1_graph.rs`). The bit is
-                // still unaware of the other structural suppression signals
-                // (terminator-Next, virtual/system table, caller-frame temp) that
-                // the D2Policy `terminals_at` filters out (mirroring d1). Run the
+                // unaware of the other structural suppression signals
+                // (terminator-Next, virtual/system table) that the D2Policy
+                // `terminals_at` filters out (mirroring d1). It DOES see a
+                // temporary record this subscriber passes to a `var` parameter:
+                // cone facts are resolved in the reaching routine's frame (pd_solve
+                // specialises it to known-temp; issue #100 mechanism (e)). Run the
                 // supplementary walk FIRST and only count
                 // this subscriber as a real db subscriber when it yields a Complete
                 // path to a SURVIVING (non-suppressed) db op — so a subscriber whose

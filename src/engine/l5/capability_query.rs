@@ -476,10 +476,7 @@ mod issue100_physical_table_bit_tests {
                 raw == EffectPresence::Yes,
                 "{id}: store accessor vs raw"
             );
-            let predicate = d
-                .iter()
-                .chain(i.iter())
-                .any(|f| f.resource_kind == "table" && fact_sets_physical_table_bit(f));
+            let predicate = d.iter().chain(i.iter()).any(fact_sets_physical_table_bit);
             assert_eq!(predicate, raw == EffectPresence::Yes, "{id}: predicate");
         }
         // The tri-state arms: absent + partial is Unknown, absent + complete No.

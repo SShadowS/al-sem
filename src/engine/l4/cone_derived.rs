@@ -19,7 +19,9 @@
 //! A row is a fold over the routine's REACHABLE cone — `own direct ∪ inherited
 //! representatives`, i.e. the sequence the retired `FullRoutineSummary::
 //! reachable_iter` used to yield:
-//!   - `flags` — presence bits OR-merged over the cone (table / commit / http / file).
+//!   - `flags` — presence bits OR-merged over the cone (table / commit / http / file,
+//!     plus `TOUCHES_PHYSICAL_TABLE`, the table bit minus known-temp non-reads, which
+//!     d2 prunes on, issue #100).
 //!   - `table_writes_all` — insert|modify|delete on `resource_kind == "table"`
 //!     with a `resource_id`, INCLUDING known-temp. Backs `writes_tables_of`.
 //!   - `physical_table_writes` — the same, EXCLUDING [`fact_is_known_temp`], each
@@ -207,9 +209,16 @@ pub fn fact_is_known_temp(f: &CapabilityFact) -> bool {
 /// `op` and the temp class, both IN `inherited_fact_key`, so it is
 /// dedup-invariant (an `op_subtype` test would not be: a shorter temp `Count`
 /// can win the key over a `CalcFields`). The fold and the raw oracle
-/// `capability_query::touches_physical_table_of` both call this.
+/// `capability_query::touches_physical_table_of` both go through
+/// [`physical_table_bit`], the fold with its temp class already computed.
 pub fn fact_sets_physical_table_bit(f: &CapabilityFact) -> bool {
-    f.resource_kind == "table" && !(fact_is_known_temp(f) && f.op != "read")
+    f.resource_kind == "table" && physical_table_bit(fact_is_known_temp(f), f.op)
+}
+
+/// The rule of [`fact_sets_physical_table_bit`] for a `table` fact whose temp
+/// class the caller has already computed (the fold evaluates it once per fact).
+fn physical_table_bit(is_known_temp: bool, op: &str) -> bool {
+    !(is_known_temp && op != "read")
 }
 
 // ---------------------------------------------------------------------------
@@ -717,14 +726,14 @@ impl ConeDerivedBuilder {
         match f.resource_kind {
             "table" => {
                 self.flags |= TOUCHES_TABLE;
+                let is_temp = fact_is_known_temp(f);
                 // Before the unresolved-id return, like TOUCHES_TABLE.
-                if fact_sets_physical_table_bit(f) {
+                if physical_table_bit(is_temp, f.op) {
                     self.flags |= TOUCHES_PHYSICAL_TABLE;
                 }
                 let Some(rid) = f.resource_id.as_deref() else {
                     return;
                 };
-                let is_temp = fact_is_known_temp(f);
                 if let Some(bit) = write_op_bit(f.op) {
                     let id = self.store.interner.intern(rid);
                     self.s_writes_all.push(id);
