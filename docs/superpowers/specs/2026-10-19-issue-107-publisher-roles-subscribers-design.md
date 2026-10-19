@@ -142,7 +142,9 @@ what the subscriber does (presence), and can we follow its effect on the record'
   `callee_is_var = true` (we cannot see what the subscriber declares).
 - **Dedupe** per subscriber `S`: if any edge to `S` gives an `Opaque` binding, it absorbs every
   `Exact` binding of `S` (one resolved and one ambiguous edge to `S` = `Opaque`). Otherwise dedupe
-  by `(S, q)`, OR-ing the flags. Two edges to one subscriber are one subscriber.
+  by `(S, q)`: `optional` is the AND of the edges' flags (the subscriber is skipped only when
+  every edge may skip it) and `path_opaque` the OR (isolated on any edge); code review F1-CR2.
+  Two edges to one subscriber are one subscriber.
 
 `compose_roles_only` gains `routines_by_id` (already in `SccComputeCtx`). Routines without
 dispatch edges pay one map lookup.
