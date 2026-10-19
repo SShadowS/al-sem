@@ -228,7 +228,7 @@ Re-measurement on the post-fix head `04b644e0` against the parent (`bench_ab.py`
 - A2.4 met again for all five commands.
 - Every stdout, the histogram and the census SARIF are identical.
 - The census differs from `19c421ec`'s only by `base.upgraded_bindings` (15 519 744 B) gone.
-- The walls were noisy this run (another load), so A2.3 stays on the 5-round bench; the fixes do not touch digest's context path.
+- The walls were noisy this run (another load). The fixes DO touch the path A2.3 measures (CR2 moves the field index into `build_l4`'s cross-app solve; CR5 changes `finish_default_run`), so A2.3 was re-measured on the final code (`42349a8d`, below; final panel P1-3).
 
 Intermediate-commit notes (no code change): M-1, from `344369f0` until the View path (Task 24) the analyze shim keeps the `L4Analysis` (bundle AND SCC) alive through the detector loop, so a peak measured on an intermediate commit is not a step 2 result; M-2, the `context.ordering_facts` span now nests inside `context.build_total` / `crossapp.context_build` (it ran after the build before), so a Task 28 trace comparison of `context.build_total` moves by the ordering time on plans with d47/d49/d51.
 
@@ -263,6 +263,10 @@ Final panel r1 fixes: `42349a8d` (`final-r1-fix-report.md`; `ci-steps task` exit
 | capability_cone::dependency_publisher_roles_stay_unknown_through_the_view (NEW, P1-1) | the View's det fill passes `None` for the cross inputs | `OnDepRec through the View; left: (Yes, Known([]), Yes, No, Full)`; the shim-path tests stay green under the same break | green |
 | cli_build_counters::views_release_their_cells_before_the_next_build (NEW, P1-5) | policy's `release_all_but` before the RAW build deleted | `policy check: got [ctx, ctx, rel:Graph], want [ctx, rel:Det, rel:L4, rel:Ordering, ctx, rel:Graph]` | green |
 | same | fingerprint's release and events' early `l4` release deleted | `fingerprint: got [ctx, snap]`; `events fanout: got [ctx, rel:Det, …]` | green |
+
+Gates on `96c7967d` (the r1 fixes, numbers, ledger): `ci-steps all` exit 0 (609.5 s, `logs/ci-steps-all/20261019T221651-a0b165f6.log`), `check-goldens --verify-coverage` 0 (0.5 s), `check-goldens` 0 (31.1 s), `cdo-gate` 0 (154.8 s, `logs/cdo-gate/20261019T222735-f7d2ff27.log`), all supervised. WSL Linux check on `96c7967d`: clippy release `-D warnings` 0, `--no-run` 0, 42 CLI tests passed; `run_no_id_row_runs_one_build_and_keeps_the_text` run alone with `--nocapture` on Linux: ok, no `skipped:` line, so the new `cfg(unix)` literal executed (`H:/al-sem-160-step2/wsl-linux3.log`).
+
+Final panel r2 (same threads; `final-r2-{briefing,sol,opus}.md`): no critical, important or code-defect finding. Both accepted P1-1, P1-3, P1-4, P1-5, P1-6, P1-8, P1-9, P1-10, P1-11; P1-2 accepted with the condition of a recorded Linux run (met above). sol re-raised P1-7 (record `largest_scc`'s anatomy) and both re-raised F1-CR6 (the headline's "until step 3" is wrong for policy's RAW build, which step 6 removes). opus new minors: R2-1 `view.release` is not listed as a trace change; R2-2 the release-sequence test omits digest and prove; R2-3 two stale records (this ledger's "do not touch" sentence, P1-2's evidence). All fixed in the r2 commit (docs + `final-r2-fix-report.md` for the test).
 
 P1-3: A2.3 re-measured on `42349a8d` (bench3, 5 rounds, d + ds): saving 23.35 s ≥ bound 10.68 s, met. The machine was loaded (parent wall band 8.2 s), so the first bench's 17.33 s bound stays the tighter evidence. P1-7: `scc_stats` recorded (head once per digest, parent twice, identical payload). Both are in the numbers file.
 
