@@ -86,6 +86,7 @@ After all reverts: `git diff -- src/ tests/` empty; the five tests above plus `a
 - Final panel r2 (`final-r2-{briefing,sol,opus}.md`, same threads): opus accepted all 8; sol accepted 7 and re-raised F2-3 (the public `meta`/`body` still let one build's meta be swapped onto another's body; opus raised the same as a nit). Fixed by sealing both fields (`meta()`, `body()`, crate-only `into_parts()`), pinned by a second doctest. Opus's two other minors: F2-7 (the numbers file's branch gate), F2-8 (two more API changes for the CHANGELOG).
 - Final panel r3 (`final-r3-*.md`, `778972ce`): both accepted F2-3 and F2-8, no new findings; opus accepted F2-7, sol re-raised it (the frozen-head gates not yet recorded). The four gates then ran on H = `778972ce`, all exit 0, recorded above. r4 asks both for F2-7 only.
 - Final panel r4 (`final-r4-*.md`): both accepted F2-7, no new findings. Converged: all 22 entries accepted by both. `final_rounds` used 4 of 5.
+- Reviewers: the operator's standing instruction (also used for step 1, PR #170) replaces the `/issue` roster: `gpt-6.1-sol` and `claude-opus-5.5`, marks under `reviews.sol` / `reviews.opus`, attested with `--substitute astra=sol --substitute flash=opus`.
 
 ## Gate results
 
