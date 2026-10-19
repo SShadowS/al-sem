@@ -389,7 +389,8 @@ fn policy_check_resolves_a_dependency_table_name() {
 /// Row 1c, second mutation: the bundled default policy's
 /// `no-commit-in-event-subscribers` finds `HandleCommit`, whose `Commit` is in
 /// the dependency's `Inner`, reached only through `Outer`; the cone sees it only
-/// when the cross-app detector context's `injected_typed_edges` reach it.
+/// when the cross-app detector context takes the base's graph, which carries
+/// the dependency-internal typed edges.
 ///   cross-app:  evaluated 5, matched 1 (HandleCommit), passed 1 (HandleInWs), findings 1
 ///   single-app: evaluated 5, matched 0, passed 2, findings 0 (precondition)
 ///

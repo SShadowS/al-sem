@@ -175,7 +175,9 @@ fn run(args: &[&str]) -> BTreeMap<String, u64> {
 }
 
 // ---------------------------------------------------------------------------
-// §4.1.3 rows
+// §4.4.8 rows (after step 2; every row equals that table, checked 2026-10-19.
+// The query rows equal §4.1.3's too: query now reuses the `l4` cell, with the
+// same one solve and one Tarjan its private builders ran.)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -187,10 +189,10 @@ fn analyze_cross_app_default() {
         &m,
         Row {
             program: 1,
-            bcg: 3,
+            bcg: 2,
             cone: 1,
             v2: 1,
-            scc: 3,
+            scc: 2,
             pd: 1,
             ctx: 1,
             snap: 0,
@@ -222,7 +224,7 @@ fn analyze_cross_app_d47() {
         &m,
         Row {
             program: 1,
-            bcg: 4,
+            bcg: 3,
             cone: 1,
             v2: 1,
             scc: 3,
@@ -262,12 +264,12 @@ fn digest_cross_app() {
         &m,
         Row {
             program: 1,
-            bcg: 5,
-            cone: 3,
-            v2: 4,
-            scc: 7,
-            pd: 3,
-            ctx: 2,
+            bcg: 3,
+            cone: 2,
+            v2: 2,
+            scc: 4,
+            pd: 2,
+            ctx: 1,
             snap: 1,
         },
     );
@@ -295,12 +297,12 @@ fn digest_single_app() {
         &m,
         Row {
             program: 1,
-            bcg: 4,
-            cone: 3,
-            v2: 4,
-            scc: 7,
-            pd: 3,
-            ctx: 2,
+            bcg: 2,
+            cone: 2,
+            v2: 2,
+            scc: 4,
+            pd: 2,
+            ctx: 1,
             snap: 1,
         },
     );
@@ -315,15 +317,45 @@ fn prove() {
         &m,
         Row {
             program: 1,
-            bcg: 4,
-            cone: 3,
-            v2: 4,
-            scc: 7,
-            pd: 3,
-            ctx: 2,
+            bcg: 2,
+            cone: 2,
+            v2: 2,
+            scc: 4,
+            pd: 2,
+            ctx: 1,
             snap: 1,
         },
     );
+}
+
+/// Spec §4.4.4 (A8): digest's no-input check runs right after the target
+/// build, before `prepare` and before `compose_snapshot` (whose fold solve
+/// counts a `build.summaries_v2`).
+#[test]
+fn run_digest_empty_diff_builds_no_context() {
+    let d = tempfile::tempdir().unwrap();
+    let diff = d.path().join("empty.diff");
+    std::fs::write(&diff, "  \n").unwrap();
+    let (out, m) = spawn_traced(&["digest", &ws_a(), "--diff", diff.to_str().unwrap()], &[]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "digest: at least one of changedFiles, changedRoutines, or diffText is required"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(
+        count(&m, "build.program"),
+        1,
+        "precondition: the target was built\n{m:?}"
+    );
+    assert_eq!(
+        count(&m, "build.detector_context"),
+        0,
+        "the no-input check must run before prepare\n{m:?}"
+    );
+    assert_eq!(count(&m, "build.summaries_v2"), 0, "{m:?}");
 }
 
 const FINGERPRINT_ROW: Row = Row {
@@ -425,12 +457,12 @@ fn diff_ws_ws_strict() {
 
 const EVENTS_CROSS_ROW: Row = Row {
     program: 1,
-    bcg: 4,
-    cone: 2,
-    v2: 2,
-    scc: 5,
-    pd: 2,
-    ctx: 2,
+    bcg: 2,
+    cone: 1,
+    v2: 1,
+    scc: 2,
+    pd: 1,
+    ctx: 1,
     snap: 0,
 };
 
@@ -478,12 +510,12 @@ fn events_single_app() {
         &m,
         Row {
             program: 1,
-            bcg: 2,
-            cone: 2,
-            v2: 2,
-            scc: 4,
-            pd: 2,
-            ctx: 2,
+            bcg: 1,
+            cone: 1,
+            v2: 1,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
             snap: 0,
         },
     );
@@ -508,10 +540,10 @@ fn policy_check_cross_app() {
         &m,
         Row {
             program: 1,
-            bcg: 4,
+            bcg: 2,
             cone: 2,
-            v2: 2,
-            scc: 5,
+            v2: 1,
+            scc: 3,
             pd: 2,
             ctx: 2,
             snap: 0,
@@ -538,10 +570,10 @@ fn policy_check_single_app() {
         &m,
         Row {
             program: 1,
-            bcg: 2,
+            bcg: 1,
             cone: 2,
-            v2: 2,
-            scc: 4,
+            v2: 1,
+            scc: 3,
             pd: 2,
             ctx: 2,
             snap: 0,
@@ -686,6 +718,115 @@ fn diff_ends_each_sides_phase() {
     );
 }
 
+/// The trace of `alsem <args>` as tokens, in order: `ctx` per
+/// `build.detector_context`, `snap` per `build.snapshot`, `rel:<Cell>` per
+/// `view.release` (`View::release`'s instant).
+fn release_sequence(args: &[&str]) -> Vec<String> {
+    let (out, events) = spawn_trace_events(env!("CARGO_BIN_EXE_alsem"), args, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "alsem {args:?}\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    events
+        .iter()
+        .filter_map(|e| {
+            let ph = e.get("ph").and_then(Value::as_str);
+            match (ph, e.get("name").and_then(Value::as_str)) {
+                (Some("C"), Some("build.detector_context")) => Some("ctx".to_string()),
+                (Some("C"), Some("build.snapshot")) => Some("snap".to_string()),
+                (Some("i"), Some("view.release")) => Some(format!(
+                    "rel:{}",
+                    e["args"]["cell"].as_str().unwrap_or("<no cell>")
+                )),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// #160 final panel P1-5: each command drops its cells where the code says,
+/// read off the shipped binary's trace. Policy check releases `det`, `l4`
+/// and the ordering facts BEFORE its second (RAW) context build, and the
+/// graph after it; fingerprint and each `diff --strict` side release every
+/// cell before snapshot composition; events releases `l4` right after the run
+/// and the rest after the report. Digest and prove (`finish_default_run`)
+/// release `det`, the ordering facts and the graph before the snapshot and
+/// `l4` after the query (§4.4.4).
+///
+/// DISCRIMINATION: deleting policy check's `release_all_but(&[Cell::Graph])`
+/// before the RAW build fails the policy case; deleting
+/// `finish_default_run`'s `release_all_but(&[Cell::L4])` fails digest and
+/// prove.
+#[test]
+fn views_release_their_cells_before_the_next_build() {
+    let (d, ws) = ws_dep();
+    let policy = policy_yaml();
+    let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
+    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Graph"];
+    let per_side: Vec<&str> = [&["ctx"][..], &all, &["snap"]].concat();
+    // `finish_default_run`: every cell but `l4` before the snapshot, `l4`
+    // after the query.
+    let default_run = vec![
+        "ctx",
+        "rel:Det",
+        "rel:Ordering",
+        "rel:Graph",
+        "snap",
+        "rel:L4",
+    ];
+    let cases: [(&str, Vec<&str>, Vec<&str>); 6] = [
+        (
+            "policy check",
+            vec![
+                "policy", "check", &ws, "--policy", &policy, "--format", "json",
+            ],
+            vec![
+                "ctx",
+                "rel:Det",
+                "rel:L4",
+                "rel:Ordering",
+                "ctx",
+                "rel:Graph",
+            ],
+        ),
+        (
+            "fingerprint",
+            vec!["fingerprint", &ws, "--format", "json"],
+            per_side.clone(),
+        ),
+        (
+            "diff --strict",
+            vec!["diff", &ws, &ws, "--format", "json", "--strict"],
+            [&per_side[..], &per_side].concat(),
+        ),
+        (
+            "events fanout",
+            vec!["events", "fanout", &ws, "--format", "json"],
+            [&["ctx", "rel:L4"][..], &all].concat(),
+        ),
+        (
+            "digest",
+            vec!["digest", &ws, "--diff", &diff, "--deterministic"],
+            default_run.clone(),
+        ),
+        (
+            "prove",
+            vec!["prove", &ws, "CallLib", "may-commit", "--deterministic"],
+            default_run,
+        ),
+    ];
+    let mut bad = Vec::new();
+    for (name, args, want) in cases {
+        let got = release_sequence(&args);
+        if got != want {
+            bad.push(format!("{name}: got {got:?}, want {want:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
 /// Spec §4.1.4: `ALSEM_TRACE_EXIT_AFTER` exits from a span guard, where the
 /// run guard never drops; both peaks must still reach the trace (code-review
 /// CR6). Presence, not value: both are 0 off Windows.
@@ -794,6 +935,73 @@ fn retained_census_counts_the_filled_ordering_cell() {
     );
 }
 
+/// #160 A4: a single-app analyze computes its own SCC in `build_l4`, so the
+/// `l4.scc` bucket is printed, and exactly once (one solve).
+#[test]
+fn retained_census_counts_the_single_app_scc_once() {
+    let ws = r0("ws-d8-commit-in-tx");
+    let (out, _) = spawn_traced(
+        &[
+            "analyze",
+            ws.to_str().unwrap(),
+            "--single-app",
+            "--format",
+            "json",
+        ],
+        &[("ALSEM_RETAINED_CENSUS", "1")],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let lines = err.lines().filter(|l| l.contains("bucket=l4.scc ")).count();
+    assert_eq!(lines, 1, "l4.scc lines:\n{err}");
+}
+
+/// #160 A4, the cross-app half: the `View` takes the base's graph and SCC
+/// (`Arc::clone`), so `base.graph` / `base.combined_scc` count them and no
+/// `context.graph` or `l4.scc` line is printed for the alias.
+#[test]
+fn retained_census_counts_the_cross_app_graph_and_scc_on_the_base() {
+    let (_d, ws) = ws_dep();
+    let (out, _) = spawn_traced(
+        &["analyze", &ws, "--format", "json"],
+        &[("ALSEM_RETAINED_CENSUS", "1")],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let lines = |b: &str| err.lines().filter(|l| l.contains(b)).count();
+    assert_eq!(lines("bucket=base.graph "), 1, "base.graph lines:\n{err}");
+    assert_eq!(
+        lines("bucket=base.combined_scc "),
+        1,
+        "base.combined_scc lines:\n{err}"
+    );
+    assert_eq!(lines("bucket=l4.scc "), 0, "l4.scc lines:\n{err}");
+    assert_eq!(
+        lines("bucket=context.graph "),
+        0,
+        "context.graph lines:\n{err}"
+    );
+}
+
+/// #160 §4.4.4: `View::prepare`'s det fill opens the span the context build
+/// had before the View, once per analyze: `crossapp.context_build` by
+/// default, `context.build_total` under `--single-app`.
+#[test]
+fn analyze_det_fill_keeps_the_context_build_span() {
+    let (_d, ws) = ws_dep();
+    for (extra, span) in [
+        (None, "crossapp.context_build"),
+        (Some("--single-app"), "context.build_total"),
+    ] {
+        let mut args = vec!["analyze", ws.as_str(), "--format", "json"];
+        args.extend(extra);
+        let (_, events) = spawn_trace_events(env!("CARGO_BIN_EXE_alsem"), &args, &[]);
+        let begins = events
+            .iter()
+            .filter(|e| e["ph"] == "B" && e["name"] == span)
+            .count();
+        assert_eq!(begins, 1, "{args:?}: `{span}` spans");
+    }
+}
+
 /// Spec §4.1.5 / A0.5 on the fixture: `ALSEM_RETAINED_CENSUS=1` changes no
 /// stdout byte, prints tagged bucket lines on stderr, and the old
 /// `[C1_CONE_CENSUS]` report it replaces is gone. Spawned, because
@@ -824,7 +1032,14 @@ fn retained_census_changes_no_output() {
     );
     assert_eq!(off.stdout, on.stdout, "census changed stdout");
     let err = String::from_utf8_lossy(&on.stderr);
-    for b in ["bucket=model ", "bucket=program.report ", "bucket=context."] {
+    for b in [
+        "bucket=model ",
+        "bucket=program.report ",
+        "bucket=context.",
+        // The borrowed maps of the detector context (#160 task 21 review I-1).
+        "bucket=context.fingerprint_index ",
+        "bucket=l4.",
+    ] {
         assert!(err.contains(b), "missing {b}:\n{err}");
     }
     assert!(
@@ -959,6 +1174,167 @@ fn inputs_relative_workspace_path_runs() {
         "precondition: findings"
     );
     assert_eq!(findings(&out), findings(&abs));
+}
+
+/// One `.al` file `alsem` cannot read, beside `app_json`; `None` = skip.
+fn unreadable_ws(app_json: &str) -> Option<(tempfile::TempDir, crate::unreadable::Guard)> {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("app.json"), app_json).unwrap();
+    let f = d.path().join("A.al");
+    std::fs::write(&f, "codeunit 50100 A { }").unwrap();
+    let Some(g) = crate::unreadable::unreadable(&f) else {
+        eprintln!("skipped: cannot make {} unreadable here", f.display());
+        return None;
+    };
+    Some((d, g))
+}
+
+/// Spec §4.4.5 row 2: a failed cross-app build is classified from its own
+/// error; the single-app rerun is gone.
+#[test]
+fn run_build_failed_row_runs_one_build() {
+    let Some((d, _g)) = unreadable_ws(
+        r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#,
+    ) else {
+        return;
+    };
+    let (out, m) = spawn_traced(
+        &["analyze", d.path().to_str().unwrap(), "--format", "json"],
+        &[],
+    );
+    assert_eq!(
+        count(&m, "build.program"),
+        1,
+        "the single-app rerun is gone\n{m:?}"
+    );
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("analysis failure — program engine build failed: ")
+            && err.contains("reading source "),
+        "{err}"
+    );
+}
+
+/// The same build-failed row through `AnalysisTarget::build` (digest; events,
+/// policy check and query share its message): the failure line carries the
+/// program build's own error. DISCRIMINATION: `.map_err(|_| ..)` with the bare
+/// line fails this (no `reading source `).
+#[test]
+fn digest_build_failed_row_carries_the_build_error() {
+    let Some((d, _g)) = unreadable_ws(
+        r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#,
+    ) else {
+        return;
+    };
+    let diff = write_diff(d.path(), "A.al", 1, "codeunit 50100 A { }");
+    let (out, m) = spawn_traced(
+        &["digest", d.path().to_str().unwrap(), "--diff", &diff],
+        &[],
+    );
+    assert_eq!(count(&m, "build.program"), 1, "{m:?}");
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(
+            "digest: the cross-app model could not be built \
+             (--single-app analyses the workspace alone): program engine build failed: "
+        ) && err.contains("reading source "),
+        "{err}"
+    );
+}
+
+/// Spec §4.4.5 row 1 (A2.7): no id, one `Workspace` build, and the warning
+/// text captured from the binary before step 2 (Windows: the sharing
+/// violation's OS text). The text is the same under both profiles (the
+/// snapshot fails first), so the profile is pinned by the trace: a `CrossApp`
+/// build opens `crossapp.program_build_full`.
+#[test]
+fn run_no_id_row_runs_one_build_and_keeps_the_text() {
+    let Some((d, _g)) = unreadable_ws(r#"{"name":"A","publisher":"p","version":"1.0.0.0"}"#) else {
+        return;
+    };
+    let ws = d.path().to_str().unwrap();
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["analyze", ws, "--format", "json"],
+        &[],
+    );
+    let m = last_counters(&events);
+    assert_eq!(count(&m, "build.program"), 1, "{m:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.get("name").and_then(Value::as_str) == Some("crossapp.program_build_full")),
+        "the no-id row builds under the single-app profile"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let warning: Vec<&str> = err
+        .lines()
+        .filter(|l| l.starts_with("al-sem: warning: "))
+        .collect();
+    // Captured from the binary at 77577a4b, before this classification
+    // change (Windows).
+    let prefix = format!(
+        "al-sem: warning: coverage could not be verified: snapshot build failed: \
+         workspace source provider: reading source {}: ",
+        d.path().join("A.al").display()
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        warning,
+        [format!(
+            "{prefix}The process cannot access the file because it is being used by \
+             another process. (os error 32)"
+        )],
+        "stderr: {err}"
+    );
+    // Linux: captured in WSL at 8e8d2c9f (final panel P1-2).
+    #[cfg(unix)]
+    assert_eq!(
+        warning,
+        [format!("{prefix}Permission denied (os error 13)")],
+        "stderr: {err}"
+    );
+}
+
+/// Spec §4.4.5 row 3: the cross-app build succeeds, the model assembles to
+/// nothing (an `.al` file with no object). One build, and the warning reads
+/// the build's own `Ok` coverage (`files_without_object`).
+#[test]
+fn run_assembly_row_runs_one_build_and_reads_its_coverage() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("app.json"),
+        r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(d.path().join("A.al"), "// no object\n").unwrap();
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["analyze", d.path().to_str().unwrap(), "--format", "json"],
+        &[],
+    );
+    let m = last_counters(&events);
+    assert_eq!(count(&m, "build.program"), 1, "{m:?}");
+    // Precondition: the build succeeded and the assembly ran.
+    assert!(
+        events
+            .iter()
+            .any(|e| e.get("name").and_then(Value::as_str) == Some("crossapp.model_assembly")),
+        "the cross-app build reached its assembly"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    let warning: Vec<&str> = err
+        .lines()
+        .filter(|l| l.starts_with("al-sem: warning: "))
+        .collect();
+    assert_eq!(
+        warning,
+        ["al-sem: warning: coverage could not be verified: No object declaration found in A.al"],
+        "stderr: {err}"
+    );
 }
 
 #[test]

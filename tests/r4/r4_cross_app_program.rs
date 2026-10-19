@@ -1008,6 +1008,10 @@ fn transitive_dep_write_workspace_with(dir: &Path, dep_a: &str, dep_b: &str) {
 /// Discrimination (2026-10-06): not extending `graph.typed_edges` with
 /// `injected_typed_edges` in `build_detector_context_with` loses the finding
 /// (`left: 0`); restored, it passes.
+///
+/// Discrimination (2026-10-19): since #160 Task 27 the context takes the base's
+/// graph, so the extend lives only in `build_cross_app_base`. Not extending
+/// `graph.typed_edges` there fails this test (`left: 0`); restored, it passes.
 #[test]
 fn a_dependency_internal_edge_reaches_the_cone() {
     use al_sem::engine::l5::detectors::registered_detectors;

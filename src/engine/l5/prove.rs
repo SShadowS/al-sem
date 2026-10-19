@@ -21,27 +21,18 @@
 //! ## Blocker sort
 //!   Deterministic: (kind, anchor file, anchor line, detail) ascending NUL-delimited.
 
-use std::collections::HashMap;
-
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::l4::effect_query_cli::build_db_effect_bundle;
+use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l5::conditionality::UNCONDITIONAL;
-use crate::engine::l5::detector_context::build_detector_context;
 use crate::engine::l5::digest::compute_digest_effects_cli;
 use crate::engine::l5::digest_cli::{
-    ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor,
-    build_envelope_diagnostics_json, primary_guid_of, resolve_changed_roots,
-    run_digest_query_full_from_entries,
+    ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, finish_default_run,
+    primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::snapshot::compose_snapshot;
-use crate::engine::l5::transaction_spans::SeedKind;
 use crate::engine::l5::unresolved_cone::unresolved_cone;
+use crate::engine::session::{Cell, View, digest_plan};
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
-use crate::program::model::workspace::Model;
-
-const TX_SPAN_KNOWN_WRITES: &str = "span-has-known-writes";
-const TX_SPAN_NO_WRITES: &str = "span-has-no-known-writes";
-const TX_UNKNOWN: &str = "unknown";
 
 // ---------------------------------------------------------------------------
 // ProveQuestion
@@ -832,33 +823,6 @@ pub fn format_prove_human(
 }
 
 // ---------------------------------------------------------------------------
-// Transaction context (mirrors digest_cli's compute_tx_context_map)
-// ---------------------------------------------------------------------------
-
-fn compute_tx_context_map(resolved: &Model) -> HashMap<String, &'static str> {
-    // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`, no
-    // `RAW_INHERITED_FACTS`. Same shape as `digest_cli::compute_tx_context_map` —
-    // only `ctx.transaction_spans` is read, and spans are derived-substrate-backed
-    // since Task 2.
-    let ctx = build_detector_context(resolved, crate::engine::l5::registry::substrate::ALL);
-    let mut map: HashMap<String, &'static str> = HashMap::new();
-    for span in &ctx.transaction_spans {
-        if span.seed_kind != SeedKind::ExplicitCommit {
-            continue;
-        }
-        let tc: &'static str = if !span.coverage_complete {
-            TX_UNKNOWN
-        } else if !span.writes_tables.is_empty() {
-            TX_SPAN_KNOWN_WRITES
-        } else {
-            TX_SPAN_NO_WRITES
-        };
-        map.insert(span.commit_operation_id.clone(), tc);
-    }
-    map
-}
-
-// ---------------------------------------------------------------------------
 // ProveRunResult
 // ---------------------------------------------------------------------------
 
@@ -884,6 +848,26 @@ pub fn run_prove_pipeline(
     alsem_ver: &str,
     deterministic: bool,
 ) -> Result<ProveRunResult, String> {
+    prove_pipeline_with(
+        crate::engine::l5::detectors::default_detectors(),
+        inputs,
+        routine_selector,
+        question_text,
+        alsem_ver,
+        deterministic,
+    )
+}
+
+/// [`run_prove_pipeline`] over a given detector set: the plan is digest's,
+/// built from `detectors` (#160 §4.4.4, A2.10).
+pub(crate) fn prove_pipeline_with(
+    detectors: Vec<crate::engine::l5::registry::Detector>,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    routine_selector: &str,
+    question_text: &str,
+    alsem_ver: &str,
+    deterministic: bool,
+) -> Result<ProveRunResult, String> {
     // Assemble workspace
     let model_id = inputs
         .model_instance_id
@@ -893,13 +877,19 @@ pub fn run_prove_pipeline(
     let resolved = assemble_and_resolve_workspace_program(inputs, model_id, false)
         .ok_or_else(|| "prove: workspace did not resolve".to_string())?;
 
+    // One View, digest's plan (#160 §4.4.4): the envelope diagnostics of the
+    // default run and the tx map, read before the snapshot is composed.
+    let mut view = View::new(AnalysisTarget::SingleApp(Box::new(resolved)));
+    let plan = digest_plan(detectors);
+    let key = plan.keys().remove(0);
+    view.prepare(&plan);
+    let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
+    let resolved = view.model();
+
     // Compose snapshot
-    let snap = compose_snapshot(&resolved);
+    let snap = compose_snapshot(resolved);
     let workspace_fp =
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
-
-    // Build envelope diagnostics (the registry's 40-detector default set, shared with digest).
-    let diagnostics_json = build_envelope_diagnostics_json(&resolved);
 
     // Resolve the routine selector → root IDs
     let changed_input = ChangedInput {
@@ -908,7 +898,7 @@ pub fn run_prove_pipeline(
         diff_text: None,
     };
     let changed_roots =
-        resolve_changed_roots(&snap, &resolved, &changed_input, primary_guid_of(&resolved));
+        resolve_changed_roots(&snap, resolved, &changed_input, primary_guid_of(resolved));
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
     if changed_roots.roots.is_empty() {
@@ -954,18 +944,13 @@ pub fn run_prove_pipeline(
     // Use first root (prove always passes a single routine selector)
     let root_id = &changed_roots.roots[0];
 
-    // Compute transaction context map
-    let tx_ctx_map = {
-        let _s = crate::engine::perf_trace::span("prove", "prove.tx_context_map");
-        compute_tx_context_map(&resolved)
-    };
+    // Compute S4 ordering effects for the root alone (each root's pass is
+    // independent, so this equals computing every routine and picking it).
+    let all_s4_entries =
+        compute_digest_effects_cli(&snap, resolved, Some(std::slice::from_ref(root_id)));
 
-    // Compute S4 ordering effects for all routines
-    let all_s4_entries = compute_digest_effects_cli(&snap, &resolved, None);
-
-    // The L4 db-effect store, for DB_* `detail.tempState` (#65).
-    let (_graph, _scc, bundle) = build_db_effect_bundle(&resolved);
-    let temp_states = DbTempStates::new(&resolved, &bundle);
+    // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's `l4`.
+    let temp_states = DbTempStates::new(resolved, &view.l4().bundle);
 
     // Run full digest query for this single root
     let query_full = run_digest_query_full_from_entries(
@@ -977,6 +962,9 @@ pub fn run_prove_pipeline(
         &changed_roots.spans,
         &changed_roots.touched,
     );
+    // The bundle's only borrower is dead: release `l4` before the cone walk.
+    drop(temp_states);
+    view.release(Cell::L4);
 
     if query_full.entries.is_empty() {
         return Err("prove: internal error — entry missing after resolution".to_string());
@@ -1050,6 +1038,20 @@ mod tests {
         DigestEffectFull, DigestEntryFull, EntryDiagnostic, FullAnchor,
     };
     use crate::engine::l5::unresolved_cone::{UnresolvedConeItem, UnresolvedTraversal};
+
+    /// A2.10: prove builds digest's plan from the set it is given.
+    #[test]
+    fn tx_context_without_d9() {
+        crate::engine::l5::digest_cli::assert_prepare_refuses_a_reduced_set(
+            crate::engine::l5::registry::substrate::TRANSACTION_SPANS,
+            "TRANSACTION_SPANS",
+            "ws-d8-commit-in-tx",
+            |set, inputs| {
+                let _ =
+                    prove_pipeline_with(set, inputs, "PostSalesDoc", "may-commit", "test", true);
+            },
+        );
+    }
 
     /// Build a minimal DigestEntryFull for oracle tests.
     fn minimal_entry(

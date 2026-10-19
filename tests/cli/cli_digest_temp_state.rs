@@ -21,11 +21,8 @@
 //! equal on it. #70 adds `cross_app_digest_reads_the_cross_app_store`, which runs
 //! on a workspace that raises a dependency PUBLISHER
 //! (`tests/common/dep_dispatch_fixture.rs`) and pins that digest and query agree
-//! on the dependency dispatch, with temp state. It cannot tell WHICH builder made
-//! digest's cross-app store: digest holds no single-app model in cross-app mode,
-//! and `build_db_effect_bundle(base.resolved)` over the base's edges equals the
-//! cross-app store once dependency publishers are solved (spec row 3b, a stated
-//! relaxation).
+//! on the dependency dispatch, with temp state. Since #160 step 2 both read the
+//! one store `build_l4` makes over the cross-app base.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;

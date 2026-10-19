@@ -226,7 +226,8 @@ fn finding_at<'f>(resolved: &Model, findings: &'f [Finding], seed_routine_id: &s
 #[test]
 fn issue18_codeunit_b_onrun_is_an_explicit_committer_on_its_own_checked_span() {
     let resolved = resolve_fixture();
-    let ctx = build_detector_context(&resolved, substrate::ALL);
+    let owned = build_detector_context(&resolved, substrate::ALL);
+    let ctx = owned.ctx();
 
     let b_onrun = routine_id(&resolved, OBJ_B, "OnRun");
     let b_post = routine_id(&resolved, OBJ_B, "PostDoc");
@@ -363,7 +364,8 @@ fn issue18_codeunit_b_onrun_is_an_explicit_committer_on_its_own_checked_span() {
 #[test]
 fn issue18_the_witness_is_present_and_codeunit_b_is_still_demoted_to_info() {
     let resolved = resolve_fixture();
-    let ctx = build_detector_context(&resolved, substrate::ALL);
+    let owned = build_detector_context(&resolved, substrate::ALL);
+    let ctx = owned.ctx();
 
     let a_seed = routine_id(&resolved, OBJ_A, "RunChecked");
     let b_onrun = routine_id(&resolved, OBJ_B, "OnRun");

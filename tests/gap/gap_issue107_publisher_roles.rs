@@ -94,7 +94,8 @@ fn rid(m: &Model, name: &str) -> String {
 
 /// Routine name -> roles, through the detector context `alsem analyze` builds.
 fn ctx_roles(m: &Model) -> HashMap<String, Vec<RecordRoleSummary>> {
-    let ctx = build_detector_context(m, substrate::ALL);
+    let owned = build_detector_context(m, substrate::ALL);
+    let ctx = owned.ctx();
     let mut out = HashMap::new();
     for r in &m.workspace.routines {
         if let Some(v) = ctx.parameter_roles_by_routine.get(&r.id) {
@@ -1489,7 +1490,8 @@ codeunit 50102 Cyc
 }
 "#;
     let m = model(&[cyc]);
-    let ctx = build_detector_context(&m, substrate::ALL);
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
     let mut f = Vec::new();
     if !ctx.summarize_diagnostics.is_empty() {
         f.push(format!("roles capped: {:?}", ctx.summarize_diagnostics));

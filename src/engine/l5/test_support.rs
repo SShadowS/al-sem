@@ -13,12 +13,14 @@ use std::collections::HashMap;
 use crate::engine::l4::capability_cone::{CapabilityFact, CoverageRecord};
 use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
 use crate::engine::l4::cone_derived::{ConeDerivedBuilder, ConeDerivedStore};
-use crate::engine::l5::detector_context::DetectorContext;
+use crate::engine::l5::detector_context::{DetectorArtifacts, DetectorContext};
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::program::body::features::{
     PAnchor, PCallArgumentBinding, PCallSite, PCallee, PLoop, POperationSite, PTempState,
 };
-use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine, RoutineVariables};
+use crate::program::model::workspace::{
+    Model, ModelEntities, ModelRecordOperation, ModelRoutine, RoutineVariables,
+};
 
 /// ⟨C1⟩ The derived cone substrate for a set of hand-built summaries — each
 /// routine's literal `reachable()` sequence folded into a row. Fixture summaries
@@ -361,7 +363,43 @@ pub fn record_op(
     }
 }
 
-/// A minimal `DetectorContext` sufficient for `build_d1_graph` / `search_loops`:
+/// A model with nothing in it.
+pub fn empty_resolved() -> Model {
+    Model {
+        workspace: ModelEntities {
+            objects: vec![],
+            tables: vec![],
+            routines: vec![],
+        },
+        root_classifications: vec![],
+        primary_app: None,
+        infra_diagnostics: vec![],
+        workspace_diagnostics: vec![],
+        dependency_diagnostics: vec![],
+        calls: Default::default(),
+        events: Default::default(),
+    }
+}
+
+/// The owner [`minimal_ctx`] returns: a routine slice and the artifacts a
+/// [`DetectorContext`] borrows. Call sites do `let ctx = owned.ctx();`.
+pub struct MinimalCtx<'a> {
+    routines: &'a [ModelRoutine],
+    art: DetectorArtifacts,
+}
+
+impl MinimalCtx<'_> {
+    pub fn ctx(&self) -> DetectorContext<'_> {
+        DetectorContext::new(self.routines, &[], &[], &self.art, None)
+    }
+
+    /// Mutate the artifacts BEFORE borrowing a context.
+    pub fn art_mut(&mut self) -> &mut DetectorArtifacts {
+        &mut self.art
+    }
+}
+
+/// A minimal context owner sufficient for `build_d1_graph` / `search_loops`:
 /// `routine_by_id` / `graph.edges_by_from` / `summaries` are populated from the
 /// args, and `call_site_by_id` is built from every routine's own call sites (so
 /// `D1Edge.loop_depth` derives non-zero when an edge's callsite carries a
@@ -370,29 +408,33 @@ pub fn minimal_ctx<'a>(
     routines: &'a [ModelRoutine],
     graph_edges: HashMap<String, Vec<CombinedEdge>>,
     summaries: HashMap<String, FullRoutineSummary>,
-) -> DetectorContext<'a> {
-    let routine_by_id: HashMap<&'a str, &'a ModelRoutine> =
-        routines.iter().map(|r| (r.id.as_str(), r)).collect();
-    let call_site_by_id: HashMap<&'a str, &'a PCallSite> = routines
-        .iter()
-        .flat_map(|r| r.call_sites.iter().map(|cs| (cs.id.as_str(), cs)))
-        .collect();
-    let graph = crate::engine::l4::combined_graph::CombinedGraph {
+) -> MinimalCtx<'a> {
+    let graph = CombinedGraph {
         nodes: vec![],
         edges_by_from: graph_edges,
         edges_from_order: vec![],
         uncertainty_edges: vec![],
         typed_edges: vec![],
     };
-    DetectorContext {
-        graph,
+    MinimalCtx {
+        routines,
+        art: empty_artifacts(graph, summaries),
+    }
+}
+
+/// Artifacts with `graph` and `summaries` (and the derived cone store folded
+/// from them) and every other field empty / default.
+pub fn empty_artifacts(
+    graph: CombinedGraph,
+    summaries: HashMap<String, FullRoutineSummary>,
+) -> DetectorArtifacts {
+    DetectorArtifacts {
+        demanded: 0,
+        graph: std::sync::Arc::new(graph),
         event_graph: crate::program::model::events::EventGraph {
             events: vec![],
             edges: vec![],
         },
-        routine_by_id,
-        objects_by_id: HashMap::new(),
-        table_by_id: HashMap::new(),
         reverse_call_graph: std::collections::BTreeMap::new(),
         entry_points: std::collections::BTreeSet::new(),
         transaction_spans: vec![],
@@ -400,7 +442,6 @@ pub fn minimal_ctx<'a>(
         uncertainty_edges_by_from: HashMap::new(),
         uncertainties_by_node: HashMap::new(),
         uncertainties: Default::default(),
-        call_site_by_id,
         // ⟨C1⟩ Fold BEFORE the move so the derived substrate always mirrors this
         // context's own summaries.
         cone_derived: cone_store_of(&summaries),
@@ -415,13 +456,9 @@ pub fn minimal_ctx<'a>(
         app_versions: HashMap::new(),
         friends: HashMap::new(),
         root_classifications_by_routine: HashMap::new(),
-        ordering_facts: std::sync::OnceLock::new(),
-        ordering_source: None,
         closed_world_temp_params: Default::default(),
         summarize_diagnostics: Vec::new(),
-        db_effect_bundle: None,
         reverse_effect_index: None,
-        fingerprint_index: crate::engine::l5::fingerprint::FingerprintIndex::build(routines, &[]),
         cross_extension_subscribers: std::collections::BTreeMap::new(),
     }
 }

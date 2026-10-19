@@ -230,7 +230,8 @@ fn span_of<'c>(ctx: &'c DetectorContext<'_>, routine_id: &str) -> &'c Transactio
 #[test]
 fn a5_count_path_is_reached_and_counts_three_distinct_tables() {
     let resolved = resolve_fixture();
-    let ctx = build_detector_context(&resolved, substrate::ALL);
+    let owned = build_detector_context(&resolved, substrate::ALL);
+    let ctx = owned.ctx();
 
     for (name, inclusive, physical) in WRITERS {
         let id = routine_id(&resolved, name);
@@ -311,7 +312,8 @@ fn a5_count_path_is_reached_and_counts_three_distinct_tables() {
 #[test]
 fn a9_each_checked_span_holds_exactly_its_own_writer() {
     let resolved = resolve_fixture();
-    let ctx = build_detector_context(&resolved, substrate::ALL);
+    let owned = build_detector_context(&resolved, substrate::ALL);
+    let ctx = owned.ctx();
 
     let checked: Vec<&TransactionSpan> = ctx
         .transaction_spans
@@ -354,7 +356,8 @@ fn a9_each_checked_span_holds_exactly_its_own_writer() {
 #[test]
 fn a2_temp_only_writer_produces_no_finding() {
     let resolved = resolve_fixture();
-    let ctx = build_detector_context(&resolved, substrate::ALL);
+    let owned = build_detector_context(&resolved, substrate::ALL);
+    let ctx = owned.ctx();
     let id = routine_id(&resolved, "BufferRows");
 
     // Non-vacuity: the seed EXISTS. An absent finding must be the gate's
@@ -400,7 +403,8 @@ fn a2_temp_only_writer_produces_no_finding() {
 #[test]
 fn a7_mixed_writer_below_physical_threshold_produces_no_finding() {
     let resolved = resolve_fixture();
-    let ctx = build_detector_context(&resolved, substrate::ALL);
+    let owned = build_detector_context(&resolved, substrate::ALL);
+    let ctx = owned.ctx();
     let id = routine_id(&resolved, "StageMixedRows");
 
     let span = span_of(&ctx, &id);
@@ -446,7 +450,8 @@ fn a7_mixed_writer_below_physical_threshold_produces_no_finding() {
 #[test]
 fn a3_physical_writer_still_reports() {
     let resolved = resolve_fixture();
-    let ctx = build_detector_context(&resolved, substrate::ALL);
+    let owned = build_detector_context(&resolved, substrate::ALL);
+    let ctx = owned.ctx();
     let id = routine_id(&resolved, "StageRows");
 
     assert_eq!(
@@ -473,7 +478,8 @@ fn a3_physical_writer_still_reports() {
 #[test]
 fn a6_posting_named_temp_only_writer_still_reports_via_the_name_branch() {
     let resolved = resolve_fixture();
-    let ctx = build_detector_context(&resolved, substrate::ALL);
+    let owned = build_detector_context(&resolved, substrate::ALL);
+    let ctx = owned.ctx();
     let id = routine_id(&resolved, "PostBuffers");
 
     assert_eq!(

@@ -9,7 +9,8 @@
 //!
 //! DEFERRED to later waves (TODO):
 //!   - the lazy `get_event_flow_indexes()` hook (D43/D44/D45)
-//!   - the lazy `get_ordering_facts()` hook (D47)
+//!   - the ordering facts (D47; since #160 step 2 a slot filled before the
+//!     detectors run, `get_ordering_facts()`)
 //!
 //! d4 reads none of these; later detector waves add them as they land.
 //!
@@ -19,20 +20,17 @@
 //! `internal_reachable_externally` DEFAULTS to `false` (see field doc).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
+use crate::engine::l4::analysis::{CoreSummaries, L4Analysis, L4Request, build_l4};
 use crate::engine::l4::capability_cone::{
     CapabilityFact, compose_cone_over_graph, direct_facts_for_routine,
 };
 use crate::engine::l4::combined_graph::{CombinedGraph, build_combined_graph};
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeOutput};
-use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::reverse_index::ReverseEffectIndex;
-use crate::engine::l4::scc::{SccInputGraph, tarjan_scc};
 use crate::engine::l4::summary::{
     RecordRoleSummary, Uncertainty, dedupe_uncertainties, uncertainty_key,
-};
-use crate::engine::l4::summary_runner::{
-    FieldIndex, compute_summaries_v2_bundle_with_leaves, summaries_census,
 };
 use crate::engine::l5::confidence::UncertaintyLite;
 use crate::engine::l5::entry_points::AccessModifier;
@@ -45,7 +43,6 @@ use crate::program::body::features::PCallSite;
 use crate::program::model::calls::{CallEdge, UpgradedBinding};
 use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::workspace::{Model, ModelObject, ModelRoutine, ModelTable};
-use serde_json::json;
 
 /// A declared workspace dependency (`model.identity.primaryDependencies[]`): the
 /// `appGuid` / `name` / `minVersion` triple d17 iterates. Mirrors al-sem's
@@ -694,18 +691,21 @@ impl<'a> UncertaintyView<'a> {
     }
 }
 
-/// Shared context threaded into every detector.
-pub struct DetectorContext<'a> {
+/// #160 step 2 (spec §4.4.2): the OWNED substrates every detector reads, built
+/// once by [`build_detector_artifacts`] at the union of the runs' masks. A
+/// [`DetectorContext`] borrows them (`Deref`), so `ctx.<field>` reads compile
+/// unchanged.
+pub struct DetectorArtifacts {
+    /// The substrate bits this was built with (`registry::substrate`).
+    pub demanded: u32,
     /// The combined graph (al-sem passes this as the detector's `graph` arg;
-    /// detectors read it from the ctx here).
-    pub graph: CombinedGraph,
+    /// detectors read it from the ctx here). An `Arc`: the caller that built
+    /// it may share it.
+    pub graph: Arc<CombinedGraph>,
     /// The raw L3 event graph (al-sem `model.eventGraph`). d12/d38 read its
     /// `events`/`edges`; the combined-graph build already constructs it, so it is
     /// captured here rather than recomputed.
     pub event_graph: EventGraph,
-    pub routine_by_id: HashMap<&'a str, &'a ModelRoutine>,
-    pub objects_by_id: HashMap<&'a str, &'a ModelObject>,
-    pub table_by_id: HashMap<&'a str, &'a ModelTable>,
     pub reverse_call_graph: ReverseCallGraph,
     /// Trigger + event-subscriber roots — transaction-span boundaries.
     pub entry_points: BTreeSet<String>,
@@ -749,8 +749,6 @@ pub struct DetectorContext<'a> {
     /// [`DetectorContext::uncertainty_view`] rather than directly — an id is
     /// meaningless without this index.
     pub uncertainties: UncertaintyIndex,
-    /// Every call site indexed by id.
-    pub call_site_by_id: HashMap<&'a str, &'a PCallSite>,
     /// Per-routine `FullRoutineSummary` (direct + inherited facts + coverage).
     pub summaries: HashMap<String, FullRoutineSummary>,
     /// ⟨C1⟩ The compact DERIVED capability-cone substrate — per-routine presence
@@ -760,8 +758,7 @@ pub struct DetectorContext<'a> {
     /// off it, so this row REPLACES that Vec outright: since C1 Task 3 the analyze
     /// path composes under `ConeOutput::DerivedOnly` and the raw Vec is never
     /// built (`summaries[*].inherited_raw()` panics there — see
-    /// `FullRoutineSummary`). Parked here — next to `db_effect_bundle` — because
-    /// the rows are `Range<u32>` windows into pools this store owns; a row alone
+    /// `FullRoutineSummary`). Parked here because the rows are `Range<u32>` windows into pools this store owns; a row alone
     /// is meaningless. EMPTY when the `SUMMARIES` substrate was not demanded.
     pub cone_derived: ConeDerivedStore,
     /// The shared event-flow indexes (publisher/subscriber lookup tables) the
@@ -825,19 +822,6 @@ pub struct DetectorContext<'a> {
     /// `internalsVisibleTo`, lower-case app guids: exposing app -> its friend apps
     /// (engine-switch S8.5). Empty single-app.
     pub friends: HashMap<String, BTreeSet<String>>,
-    /// R4-F Stage-5b — the L4.5 ordering facts the d47/d49/d51 detectors consume,
-    /// keyed by `StableRoutineId`. Computed LAZILY on first `get_ordering_facts()`
-    /// access and memoized — exactly al-sem's `ctx.getOrderingFacts()` semantics.
-    /// Only d47/d49/d51 (opt-in detectors) read it, so a default `analyze` run
-    /// never pays the snapshot→digest→ordering cost (measured 43.6 s+ on CDO —
-    /// the "alsem never completes" hang; see
-    /// `.superpowers/sdd/alsem-parallel/investigation.md`).
-    pub ordering_facts:
-        std::sync::OnceLock<HashMap<String, crate::engine::l5::ordering_facts::OrderingFacts>>,
-    /// The resolved model `get_ordering_facts()` computes from. `None` for the
-    /// cross-app context (whose ordering facts are ALWAYS empty — d13/d16/d17
-    /// never read them; matches the previous eager `HashMap::new()`).
-    pub ordering_source: Option<&'a Model>,
     /// G-19 — the closed-world proven-temp `(routineId, paramIndex)` set: a
     /// keyword-less by-var record param of a `local` procedure ALL of whose
     /// resolved callers (and the routine's complete, fully-resolved same-object
@@ -849,26 +833,17 @@ pub struct DetectorContext<'a> {
     /// L4 summarize-stage diagnostics — presently just the roles-fixpoint
     /// cap-hit raised by `summary_runner::run_one_scc_roles` (the roles-only
     /// fixpoint that replaced the retired Jacobi `run_one_scc` at `b4181d8`).
-    /// Harvested from the SAME `compute_summaries*` call this module already makes for
-    /// `uncertainties_by_node`/`parameter_roles_by_routine` — not recomputed.
+    /// Cloned from `L4Analysis::summarize_diagnostics`, the SAME `build_l4` solve
+    /// whose core summaries fill `uncertainties_by_node`/`parameter_roles_by_routine`
+    /// — not recomputed.
     /// Empty for every workspace whose SCCs converge, which is the overwhelming
     /// common case (additive: `run_detectors` folds this into the "summarize"
     /// slot of the analyze/detect diagnostics envelope).
     pub summarize_diagnostics: Vec<crate::engine::l4::summary_runner::SummarizeDiagnostic>,
-    /// ⟨Task B1⟩ The workspace-complete compact db-effect store the analyze path's
-    /// v2 solve produced, held HERE instead of eagerly re-materialized into
-    /// per-routine `Vec<DbEffect>`. No current detector reads `RoutineSummary.db_effects`
-    /// (the analyze path consumes only `.uncertainties` / `.parameter_roles`), so the
-    /// old compat-shim materialization was pure waste (~24 GB / ~74 s on 8020). The
-    /// rows stay QUERYABLE on demand — `bundle.db_effects(rix)` (lazy projection) or an
-    /// `l4::reverse_index::ReverseEffectIndex` built from this bundle — so a future
-    /// db-effect-reading detector/hover can query them lazily WITHOUT resurrecting the
-    /// eager expansion. `None` when the `CORE_SUMMARIES` substrate was not demanded
-    /// (the summary solve is skipped entirely — no bundle exists to hold).
-    pub db_effect_bundle: Option<SummaryBundle>,
-    /// ⟨Task 6⟩ The [`ReverseEffectIndex`] transpose over [`Self::db_effect_bundle`]
-    /// — the routine <-> table/effect inverted index a db-effect-reading detector
-    /// or the planned LSP hover would query.
+    /// ⟨Task 6⟩ The [`ReverseEffectIndex`] transpose over the solve's compact
+    /// db-effect store (`L4Analysis::bundle`, which [`build_detector_artifacts`]
+    /// returns beside these artifacts) — the routine <-> table/effect inverted
+    /// index a db-effect-reading detector or the planned LSP hover would query.
     ///
     /// `Some` **only** when `demanded` carried
     /// [`substrate::DB_EFFECT_REVERSE_INDEX`], which is deliberately outside
@@ -882,10 +857,6 @@ pub struct DetectorContext<'a> {
     /// charge `analyze` even accidentally. This field is the seam for the
     /// eventual in-context consumer.
     pub reverse_effect_index: Option<ReverseEffectIndex>,
-    /// The shared finding-fingerprint index (routine/object id maps + the
-    /// internal→stable routine-id substitution map). Built ONCE per run —
-    /// previously every detector rebuilt it (54 × ~2 String clones per routine).
-    pub fingerprint_index: crate::engine::l5::fingerprint::FingerprintIndex<'a>,
     /// event id → cross-extension subscriber routine ids (subscribers living in a
     /// DIFFERENT app than the publisher object). Previously rebuilt identically by
     /// d43, d44 AND d45 each run; built once here (same sharing pattern as
@@ -893,55 +864,157 @@ pub struct DetectorContext<'a> {
     pub cross_extension_subscribers: std::collections::BTreeMap<String, Vec<String>>,
 }
 
-impl DetectorContext<'_> {
-    /// The uncertainty substrate as one borrowed view — the id map and the index
-    /// its ids resolve against, which are meaningless apart.
-    /// Test-only: intern `set` and attach it to `node` on this context.
+impl DetectorArtifacts {
+    /// Test-only: intern `set` and attach it to `node`.
     #[cfg(test)]
     pub(crate) fn set_uncertainties_for_test(&mut self, node: &str, set: Vec<Uncertainty>) {
         let sid = self.uncertainties.intern_set(set);
         self.uncertainties_by_node.insert(node.to_string(), sid);
     }
 
+    /// The uncertainty substrate as one borrowed view — the id map and the index
+    /// its ids resolve against, which are meaningless apart.
     pub fn uncertainty_view(&self) -> UncertaintyView<'_> {
         UncertaintyView {
             index: &self.uncertainties,
             by_node: &self.uncertainties_by_node,
         }
     }
+}
 
-    /// The L4.5 ordering facts, keyed by `StableRoutineId`. Lazily computed on
-    /// first access and memoized via `OnceLock`. d47/d49/d51 look up their
-    /// reportable routine's facts here exactly as al-sem's `ctx.getOrderingFacts()`.
-    ///
-    /// Thread-safe is NOT the same as safe inside the parallel detector loop:
-    /// filling the slot there can deadlock (see `substrate::ORDERING_FACTS`). A
-    /// detector that reads this must declare that bit, so `run_each` fills the
-    /// slot first; in debug builds an undeclared read panics here instead of
-    /// hanging sometimes.
-    pub fn get_ordering_facts(
-        &self,
-    ) -> &HashMap<String, crate::engine::l5::ordering_facts::OrderingFacts> {
-        debug_assert!(
-            self.ordering_facts.get().is_some() || !crate::engine::l5::registry::in_detector_loop(),
-            "a detector read ctx.get_ordering_facts() inside the parallel detector \
-             loop without declaring substrate::ORDERING_FACTS in its `requires`"
-        );
-        self.ordering_facts.get_or_init(|| {
-            let facts = match self.ordering_source {
-                Some(resolved) => {
-                    crate::engine::l5::ordering_facts::compute_ordering_facts(resolved)
-                }
-                None => HashMap::new(),
-            };
-            // #160 §4.1.5: the cell is empty when the context is built, so
-            // its bucket is printed here, at the fill.
-            if crate::engine::census::enabled() {
-                crate::census_hook::mark("census.ordering_facts");
-                census_ordering_facts(&facts);
+/// The ordering facts (R4-F Stage-5b), keyed by `StableRoutineId`.
+pub type OrderingFactsMap = HashMap<String, crate::engine::l5::ordering_facts::OrderingFacts>;
+
+/// Shared context threaded into every detector: the owned [`DetectorArtifacts`]
+/// (through `Deref`), the filled ordering slot, and the maps that borrow the
+/// model's rows. Cheap to build; one per command.
+pub struct DetectorContext<'v> {
+    pub art: &'v DetectorArtifacts,
+    /// The L4.5 ordering facts d47/d49/d51 consume. `Some` only when the
+    /// builder demanded `substrate::ORDERING_FACTS` and filled it BEFORE the
+    /// parallel detector loop (filling inside it can deadlock, see that bit).
+    pub ordering: Option<&'v OrderingFactsMap>,
+    pub routine_by_id: HashMap<&'v str, &'v ModelRoutine>,
+    pub objects_by_id: HashMap<&'v str, &'v ModelObject>,
+    pub table_by_id: HashMap<&'v str, &'v ModelTable>,
+    /// Every call site indexed by id.
+    pub call_site_by_id: HashMap<&'v str, &'v PCallSite>,
+    /// The shared finding-fingerprint index (routine/object id maps + the
+    /// internal→stable routine-id substitution map). Built ONCE per run —
+    /// previously every detector rebuilt it (54 × ~2 String clones per routine).
+    pub fingerprint_index: crate::engine::l5::fingerprint::FingerprintIndex<'v>,
+}
+
+impl std::ops::Deref for DetectorContext<'_> {
+    type Target = DetectorArtifacts;
+    fn deref(&self) -> &DetectorArtifacts {
+        self.art
+    }
+}
+
+impl<'v> DetectorContext<'v> {
+    /// The borrowed maps over the rows given. Takes slices, not a `Model`, so
+    /// a test with routines alone can build one.
+    pub fn new(
+        routines: &'v [ModelRoutine],
+        objects: &'v [ModelObject],
+        tables: &'v [ModelTable],
+        art: &'v DetectorArtifacts,
+        ordering: Option<&'v OrderingFactsMap>,
+    ) -> Self {
+        let _s = pt::span("context", "context.final_indexes");
+        let routine_by_id = routines.iter().map(|r| (r.id.as_str(), r)).collect();
+        let objects_by_id = objects.iter().map(|o| (o.id.as_str(), o)).collect();
+        // G-5: REAL table wins an id collision with a tableextension stub (the stub's
+        // id reuses the extension's own object number) — otherwise rootCause text
+        // renders the EXTENSION's name for ops on the real table.
+        let table_by_id = crate::program::model::workspace::table_by_id_preferring_real(tables);
+        let mut call_site_by_id: HashMap<&str, &PCallSite> = HashMap::new();
+        for r in routines {
+            for cs in &r.call_sites {
+                call_site_by_id.insert(cs.id.as_str(), cs);
             }
-            facts
-        })
+        }
+        let fingerprint_index =
+            crate::engine::l5::fingerprint::FingerprintIndex::build(routines, objects);
+        let ctx = DetectorContext {
+            art,
+            ordering,
+            routine_by_id,
+            objects_by_id,
+            table_by_id,
+            call_site_by_id,
+            fingerprint_index,
+        };
+        // #160 §4.1.5: the borrowed maps print as `context.*` here, under the
+        // same names as step 0, so parent and head line up one to one.
+        if crate::engine::census::enabled() {
+            crate::census_hook::mark("census.detector_context");
+            census_borrowed_maps(&ctx);
+        }
+        ctx
+    }
+
+    /// The L4.5 ordering facts, keyed by `StableRoutineId`. d47/d49/d51 look up
+    /// their reportable routine's facts here exactly as al-sem's
+    /// `ctx.getOrderingFacts()`. The slot is filled before the detectors run;
+    /// a detector that reads it without declaring `substrate::ORDERING_FACTS`
+    /// panics here, in every build.
+    pub fn get_ordering_facts(&self) -> &'v OrderingFactsMap {
+        self.ordering
+            .expect("ordering cell not filled: declare substrate::ORDERING_FACTS")
+    }
+}
+
+/// The context over `model`'s rows.
+pub fn detector_context<'v>(
+    model: &'v Model,
+    art: &'v DetectorArtifacts,
+    ordering: Option<&'v OrderingFactsMap>,
+) -> DetectorContext<'v> {
+    let ws = &model.workspace;
+    DetectorContext::new(&ws.routines, &ws.objects, &ws.tables, art, ordering)
+}
+
+/// The ordering facts of `model`, computed on the big-stack pool (the fill
+/// recurses over statement trees, `compute_return_summaries`). Call it BEFORE
+/// the parallel detector loop, never inside it (`substrate::ORDERING_FACTS`).
+pub(crate) fn fill_ordering(model: &Model) -> OrderingFactsMap {
+    assert!(
+        !crate::engine::l5::registry::in_detector_loop(),
+        "the ordering slot is filled before the detector loop, never inside it"
+    );
+    let _s = pt::span("context", "context.ordering_facts");
+    let facts = crate::big_stack::big_stack_pool()
+        .install(|| crate::engine::l5::ordering_facts::compute_ordering_facts(model));
+    // #160 §4.1.5: the cell's bucket is printed at the fill.
+    if crate::engine::census::enabled() {
+        crate::census_hook::mark("census.ordering_facts");
+        census_ordering_facts(&facts);
+    }
+    facts
+}
+
+/// Owner for the shims below (tests and `aldump`; no `alsem` command): a
+/// [`DetectorContext`] borrows its artifacts, so a function that builds them
+/// cannot also return the context. Call sites do
+/// `let owned = build_detector_context(..); let ctx = owned.ctx();`.
+pub struct OwnedContext<'m> {
+    model: &'m Model,
+    art: DetectorArtifacts,
+    ordering: Option<OrderingFactsMap>,
+    /// The solve the shim ran (`Some` iff the mask held `CORE_SUMMARIES`).
+    l4: Option<L4Analysis>,
+}
+
+impl OwnedContext<'_> {
+    pub fn ctx(&self) -> DetectorContext<'_> {
+        detector_context(self.model, &self.art, self.ordering.as_ref())
+    }
+
+    /// The `L4Analysis` this shim built, if any.
+    pub fn l4(&self) -> Option<&L4Analysis> {
+        self.l4.as_ref()
     }
 }
 
@@ -971,44 +1044,105 @@ impl DetectorContext<'_> {
 /// and every summary carries `capability_facts_inherited: None`. With it the cone
 /// composes under [`ConeOutput::Both`] — the derived substrate AND the raw Vecs,
 /// byte-identical to the pre-Task-3 build.
-pub fn build_detector_context(resolved: &Model, demanded: u32) -> DetectorContext<'_> {
+///
+/// #160 step 2: a SHIM (tests and `aldump`; no `alsem` command) over
+/// [`build_detector_artifacts`]. It fills the ordering slot FIRST when the mask
+/// has `ORDERING_FACTS`, builds the graph, and runs the solve iff the mask has
+/// `CORE_SUMMARIES`.
+pub fn build_detector_context(resolved: &Model, demanded: u32) -> OwnedContext<'_> {
     build_detector_context_with(resolved, demanded, None)
 }
 
 /// What a CROSS-APP context adds to the model (engine-switch S8.1): the dependency
-/// routines (never primary roots or entry points), their fixed solver leaves, the
+/// routines (never primary roots or entry points), their fixed solver leaves, and
+/// d17's declared dependencies and resolved versions. The model is the cross-app
+/// base's (`R3a5CrossAppBase::resolved`), its calls cut to workspace callers. The
 /// dependency-internal edges the cone follows (`direct-call` typed edges from the
-/// R3a-4 artifacts), and d17's declared dependencies and resolved versions. The
-/// model is the cross-app base's (`R3a5CrossAppBase::resolved`), its calls cut to
-/// workspace callers.
+/// R3a-4 artifacts) are in the base's graph, which a cross-app context takes
+/// ([`context_graph`]).
 pub(crate) struct CrossAppInputs<'b> {
     pub dep_routine_ids: &'b BTreeSet<String>,
     pub leaf_summaries: &'b HashMap<String, crate::engine::l4::summary::RoutineSummary>,
     /// Dependency publishers solved for rows only (`R3a5CrossAppBase::fixed_roles`).
     pub fixed_roles: &'b std::collections::HashSet<String>,
-    pub injected_typed_edges: &'b [crate::engine::l4::combined_graph::TypedEdge],
     pub declared_dependencies: &'b [crate::program::model::workspace::DeclaredDependencyDecl],
     pub app_versions: &'b HashMap<String, String>,
     pub friends: &'b HashMap<String, BTreeSet<String>>,
+    /// The base's solver field index: `build_l4` reads it instead of
+    /// rebuilding it.
+    pub field_index: &'b crate::engine::l4::summary_runner::FieldIndex,
 }
 
-/// [`build_detector_context`], single-app (`cross: None`) or cross-app. One builder
-/// for both since engine-switch S8.1; the cross-app one (which built every
+/// [`build_detector_context`], single-app (`base: None`) or cross-app (`resolved`
+/// is `base.resolved`; the base's graph and cross-app inputs). One builder for
+/// both since engine-switch S8.1; the cross-app one (which built every
 /// substrate whatever the detectors asked for) is gone.
 pub(crate) fn build_detector_context_with<'a>(
     resolved: &'a Model,
     demanded: u32,
-    cross: Option<CrossAppInputs<'_>>,
-) -> DetectorContext<'a> {
+    base: Option<&crate::engine::l4::capability_cone::R3a5CrossAppBase>,
+) -> OwnedContext<'a> {
     use crate::engine::l5::registry::substrate;
+    let ordering = (demanded & substrate::ORDERING_FACTS != 0).then(|| fill_ordering(resolved));
+    let graph = context_graph(resolved, base);
+    // Cross-app the graph is the base's, so its SCC is too (no second Tarjan).
+    let l4 = (demanded & substrate::CORE_SUMMARIES != 0).then(|| L4Request {
+        scc: base.map(|b| Arc::clone(&b.combined_scc)),
+        extra_diagnostics: vec![],
+    });
+    let cross = base.map(|b| b.cross_app_inputs());
+    let (art, l4) = build_detector_artifacts(resolved, demanded, graph, l4, cross);
+    OwnedContext {
+        model: resolved,
+        art,
+        ordering,
+        l4,
+    }
+}
+
+/// The context's combined graph: cross-app the base's own (its
+/// dependency-internal typed edges folded in), shared by pointer; single-app
+/// built here over the model's calls and events.
+///
+/// #160 A4: whoever builds the graph prints its `context.graph` bucket, so the
+/// single-app arm prints it and a graph taken from the base prints nothing
+/// (`base.graph` counts it).
+pub(crate) fn context_graph(
+    resolved: &Model,
+    base: Option<&crate::engine::l4::capability_cone::R3a5CrossAppBase>,
+) -> Arc<CombinedGraph> {
+    if let Some(b) = base {
+        return Arc::clone(&b.graph);
+    }
+    let _graph_span = pt::span("context", "context.event_combined_graph");
+    let graph = build_combined_graph(&resolved.workspace, &resolved.calls, &resolved.events.graph);
+    if crate::engine::census::enabled() {
+        crate::engine::census::combined_graph(&graph)
+            .emit("context.graph", crate::engine::census::Kind::Shallow);
+    }
+    Arc::new(graph)
+}
+
+/// The owned detector substrates over `graph`, at mask `demanded`: the cone
+/// first, then (when `l4` is `Some`) ONE [`build_l4`] solve, then the harvest
+/// of its core summaries. Returns the solve's [`L4Analysis`] beside the
+/// artifacts. `l4: None` = no solve.
+pub(crate) fn build_detector_artifacts(
+    resolved: &Model,
+    demanded: u32,
+    graph: Arc<CombinedGraph>,
+    l4: Option<L4Request>,
+    cross: Option<CrossAppInputs<'_>>,
+) -> (DetectorArtifacts, Option<L4Analysis>) {
+    use crate::engine::l5::registry::substrate;
+    assert!(
+        demanded & substrate::CORE_SUMMARIES == 0 || l4.is_some(),
+        "CORE_SUMMARIES demanded without an l4 request: the uncertainty/roles harvest would be silently empty"
+    );
     pt::counter_delta("build.detector_context", 1);
     let ws = &resolved.workspace;
     let no_deps: BTreeSet<String> = BTreeSet::new();
-    let no_leaves: HashMap<String, crate::engine::l4::summary::RoutineSummary> = HashMap::new();
     let dep_routine_ids = cross.as_ref().map_or(&no_deps, |c| c.dep_routine_ids);
-    let leaf_summaries = cross.as_ref().map_or(&no_leaves, |c| c.leaf_summaries);
-    let no_fixed_roles = std::collections::HashSet::new();
-    let fixed_roles = cross.as_ref().map_or(&no_fixed_roles, |c| c.fixed_roles);
     // TRANSACTION_SPANS folds over the summaries map, so demand summaries whenever
     // either bit is set (see `compute_transaction_spans`).
     let need_summaries = demanded & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
@@ -1034,16 +1168,7 @@ pub(crate) fn build_detector_context_with<'a>(
     // Owned: the body below drains `calls.edges`/`upgraded_bindings` by move.
     let mut calls = (*resolved.calls).clone();
     drop(_symbols_span);
-
-    let _graph_span = pt::span("context", "context.event_combined_graph");
     let event_graph = resolved.events.graph.clone();
-    let mut graph = build_combined_graph(ws, &calls, &event_graph);
-    if let Some(c) = &cross {
-        graph
-            .typed_edges
-            .extend(c.injected_typed_edges.iter().cloned());
-    }
-    drop(_graph_span);
 
     // Per-routine direct facts + direct coverage, then the inherited cone over
     // the combined graph — the same assembly project_r3a3 does inline, here via
@@ -1254,16 +1379,6 @@ pub(crate) fn build_detector_context_with<'a>(
     drop(_cones_span);
 
     // --- Eager indexes -----------------------------------------------------
-    let routine_by_id: HashMap<&str, &ModelRoutine> =
-        ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
-    let objects_by_id: HashMap<&str, &ModelObject> =
-        ws.objects.iter().map(|o| (o.id.as_str(), o)).collect();
-    // G-5: REAL table wins an id collision with a tableextension stub (the stub's
-    // id reuses the extension's own object number) — otherwise rootCause text
-    // renders the EXTENSION's name for ops on the real table.
-    let table_by_id: HashMap<&str, &ModelTable> =
-        crate::program::model::workspace::table_by_id_preferring_real(&ws.tables);
-
     let reverse_call_graph = build_reverse_call_graph(&graph);
 
     let entry_points: BTreeSet<String> =
@@ -1368,155 +1483,28 @@ pub(crate) fn build_detector_context_with<'a>(
     // This is the only place that needs the core uncertainties; the union is
     // assembled once and exposed on `uncertainties_by_node`.
     //
-    // SUBSTRATE-GATED on CORE_SUMMARIES. This is the second Tarjan + v2-solver
-    // pass — the most expensive substrate. Skipped ⇒ `uncertainties_by_node` /
-    // `parameter_roles_by_routine` / `summarize_diagnostics` are all empty, which by
-    // decision (a) means a substrate-skipping run emits no summarize cap-hit
-    // diagnostics (they are only ever produced by this `compute_summaries_v2` call).
-    #[allow(clippy::type_complexity)]
-    let (
-        uncertainties_by_node,
-        uncertainties,
-        parameter_roles_by_routine,
-        summarize_diagnostics,
-        db_effect_bundle,
-    ): (
+    // The second Tarjan + v2-solver pass — the most expensive substrate — is ONE
+    // `build_l4` call, here, after the cone (#160 §4.4.1), when the caller asked
+    // for it. Its core summaries (lean: their `db_effects` are empty, the rows
+    // live in `l4.bundle`) are harvested below iff the mask has CORE_SUMMARIES.
+    // Skipped ⇒ `uncertainties_by_node` / `parameter_roles_by_routine` /
+    // `summarize_diagnostics` are all empty, which by decision (a) means a
+    // substrate-skipping run emits no summarize cap-hit diagnostics.
+    let (l4, core_summaries) = match l4.map(|req| build_l4(resolved, &graph, req, cross.as_ref())) {
+        Some((l4, core)) => (Some(l4), Some(core)),
+        None => (None, None),
+    };
+    let summarize_diagnostics = match &l4 {
+        Some(l4) if demanded & substrate::CORE_SUMMARIES != 0 => l4.summarize_diagnostics.clone(),
+        _ => Vec::new(),
+    };
+    let (uncertainties_by_node, uncertainties, parameter_roles_by_routine): (
         HashMap<String, UncertaintySetId>,
         UncertaintyIndex,
         HashMap<String, Vec<RecordRoleSummary>>,
-        Vec<crate::engine::l4::summary_runner::SummarizeDiagnostic>,
-        Option<SummaryBundle>,
-    ) = if demanded & substrate::CORE_SUMMARIES != 0 {
-        let scc = {
-            let _s = pt::span("context", "context.core_scc_tarjan");
-            let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
-            for (from, list) in &graph.edges_by_from {
-                scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
-            }
-            pt::counter_delta("build.graph_scc", 1);
-            tarjan_scc(&SccInputGraph {
-                nodes: &graph.nodes,
-                edges_by_from: &scc_adjacency,
-            })
-        };
-
-        // STRUCTS one-shot: SCC population stats + the largest-SCC's intra-edge
-        // anatomy (which edge KIND fuses the biggest component, member outdegree).
-        // Reimplements the historical `SCCSTATS`/`SCCANATOMY` eprintln probe
-        // (`git show c8836e7^:src/engine/l5/detector_context.rs`) as one lazy JSON
-        // payload — `build` below only runs when tracing is actually enabled.
-        pt::instant_lazy("l4", "scc_stats", || {
-            let max_scc = scc.sccs.iter().map(|s| s.members.len()).max().unwrap_or(0);
-            let recursive_sccs = scc.sccs.iter().filter(|s| s.recursive).count();
-            let recursive_members: usize = scc
-                .sccs
-                .iter()
-                .filter(|s| s.recursive)
-                .map(|s| s.members.len())
-                .sum();
-            let largest_scc = scc.sccs.iter().max_by_key(|s| s.members.len()).map(|big| {
-                let member_set: std::collections::HashSet<&str> =
-                    big.members.iter().map(|s| s.as_str()).collect();
-                let mut kind_counts: std::collections::BTreeMap<&str, usize> =
-                    std::collections::BTreeMap::new();
-                let mut intra_edges = 0usize;
-                let mut max_intra_outdegree = 0usize;
-                for m in &big.members {
-                    let mut out_here = 0usize;
-                    if let Some(edges) = graph.edges_by_from.get(m) {
-                        for e in edges {
-                            if member_set.contains(e.to.as_str()) {
-                                intra_edges += 1;
-                                out_here += 1;
-                                *kind_counts.entry(e.kind.as_str()).or_insert(0) += 1;
-                            }
-                        }
-                    }
-                    max_intra_outdegree = max_intra_outdegree.max(out_here);
-                }
-                json!({
-                    "members": big.members.len(),
-                    "intra_edges": intra_edges,
-                    "max_intra_outdegree": max_intra_outdegree,
-                    "kinds": kind_counts,
-                })
-            });
-            json!({
-                "nodes": graph.nodes.len(),
-                "sccs": scc.sccs.len(),
-                "recursive_sccs": recursive_sccs,
-                "recursive_members": recursive_members,
-                "max_scc": max_scc,
-                "largest_scc": largest_scc,
-            })
-        });
-
-        let _summaries_span = pt::span("context", "context.compute_summaries");
-        // Field-resolution index (keyed (tableId, lowercased field name)) — mirrors
-        // summary.rs `run_and_project`; parameterRoles need it, uncertainties don't,
-        // but `compute_summaries_v2` takes it.
-        let _fi_t = summaries_census::start();
-        let mut field_index: FieldIndex = HashMap::new();
-        for table in &ws.tables {
-            for field in &table.fields {
-                field_index
-                    .entry((table.id.clone(), field.name.to_lowercase()))
-                    .or_insert_with(|| field.id.clone());
-            }
-        }
-        summaries_census::add_since(&summaries_census::FIELD_INDEX_NANOS, _fi_t);
-        summaries_census::add(
-            &summaries_census::FIELD_INDEX_ENTRIES,
-            field_index.len() as u64,
-        );
-        // v2 db-effect solver — ⟨Task B1⟩ the LEAN bundle entry point: it returns the
-        // compact `SummaryBundle` PLUS a `core_summaries` map whose `db_effects` are
-        // EMPTY (never re-materialized) while `.uncertainties` / `.parameter_roles` are
-        // fully populated — the only fields this path reads below. The db-effect rows
-        // stay queryable on demand via `db_effect_bundle` (held on the ctx). This drops
-        // the compat shim's ~24 GB / ~74 s per-routine `Vec<DbEffect>` expansion that no
-        // detector consumed. `summarize_diagnostics` carries the ROLES fixpoint's
-        // cap-hit backstop (empty on the corpus — roles converge); the db_effects path
-        // is closed-form and never caps.
-        let (db_effect_bundle, mut core_summaries, summarize_diagnostics) =
-            compute_summaries_v2_bundle_with_leaves(
-                &ws.routines,
-                &graph,
-                &scc,
-                &calls.upgraded_bindings,
-                &field_index,
-                leaf_summaries,
-                fixed_roles,
-            );
-        drop(_summaries_span);
-        // ⟨substrate census⟩ `ALSEM_SUMMARIES_CENSUS=1` — the phase split inside the
-        // span that just closed. Emitted here, at the span boundary, so the report
-        // and the span it attributes are read together.
-        summaries_census::report();
-
-        // ⟨fix wave finding 2⟩ `compute_summaries_v2_bundle` is the LEAN entry point
-        // (⟨Task B1⟩ — see its own doc): `core_summaries`' `db_effects` field stays
-        // EMPTY, with the real rows living compactly in `db_effect_bundle` instead.
-        // Neither `perf_bounds.rs` L4 gate would notice this call site regressing to
-        // a materializing entry point (`compute_summaries_v2` /
-        // `compute_summaries_v2_with_leaves_core`, or an inline rebuild of their
-        // db_effects-filling loop) — both gates call `compute_summaries_v2_bundle`
-        // directly, bypassing this call site entirely. This assert is what catches
-        // THAT regression: deterministic, machine-independent, no timing involved.
-        // See `core_summaries_stay_lean_while_the_bundle_carries_the_db_effect_rows`
-        // (this module's test module) for the corpus that exercises it for real.
-        // A cross-app fixed leaf is handed in WITH its own direct rows (S8.1); only
-        // the summaries the solver computes must be lean.
-        debug_assert!(
-            core_summaries
-                .iter()
-                .all(|(id, s)| s.db_effects.is_empty() || leaf_summaries.contains_key(id)),
-            "build_detector_context's core_summaries must carry EMPTY db_effects — a \
-             non-empty row means this call site regressed to a materializing summary \
-             entry point, reintroducing the ~24 GB / ~74 s per-routine Vec<DbEffect> \
-             re-materialization ⟨Task B1⟩ (commit a0cd348) removed"
-        );
-
+    ) = if let Some(CoreSummaries(mut core_summaries)) =
+        core_summaries.filter(|_| demanded & substrate::CORE_SUMMARIES != 0)
+    {
         // uncertaintiesAt(node) per routine: [...fromSummary, ...fromEdges], deduped.
         // Union ORDER mirrors al-sem `[...fromSummary, ...fromEdges]` — core summary
         // uncertainties FIRST, then the combined-graph edge uncertainties (converted
@@ -1591,22 +1579,14 @@ pub(crate) fn build_detector_context_with<'a>(
             uncertainties_by_node,
             uncertainties,
             parameter_roles_by_routine,
-            summarize_diagnostics,
-            Some(db_effect_bundle),
         )
     } else {
-        (
-            HashMap::new(),
-            UncertaintyIndex::default(),
-            HashMap::new(),
-            Vec::new(),
-            None,
-        )
+        (HashMap::new(), UncertaintyIndex::default(), HashMap::new())
     };
 
     // ⟨Task 6⟩ The reverse transpose — built ONLY on explicit demand. Not in
-    // `substrate::ALL`, so the four `ALL`-passing non-registry callers never pay
-    // it, and `run_detectors` (which passes `demanded`, the fold of the selected
+    // `substrate::ALL`, so an `ALL` caller (the parity tests, census-probe)
+    // never pays it, and a run (which passes `demanded`, the fold of the selected
     // detectors' `requires`) can never reach it either, since no detector may
     // declare the bit. Unset ⇒ this is one `None` write: no allocation, no pass,
     // and — because the span is INSIDE the branch — not even a trace entry.
@@ -1614,23 +1594,16 @@ pub(crate) fn build_detector_context_with<'a>(
     // trace beside every other substrate rather than being guessed at.
     let reverse_effect_index = if demanded & substrate::DB_EFFECT_REVERSE_INDEX != 0 {
         let _s = pt::span("context", "context.reverse_effect_index");
-        db_effect_bundle.as_ref().map(ReverseEffectIndex::build)
+        l4.as_ref().map(|l4| ReverseEffectIndex::build(&l4.bundle))
     } else {
         None
     };
 
-    let _final_indexes_span = pt::span("context", "context.final_indexes");
-    let mut call_site_by_id: HashMap<&str, &PCallSite> = HashMap::new();
-    for r in &ws.routines {
-        for cs in &r.call_sites {
-            call_site_by_id.insert(cs.id.as_str(), cs);
-        }
-    }
-
     // Expose the resolver's post-upgrade bindings (the `upgradeBindings` side
     // table) keyed by callsite id — the join target for d37/d39 which read
-    // `binding.bindingResolution` / `binding.calleeParameterIsVar`. `compute_summaries_v2`
-    // above was the last reader of `calls.upgraded_bindings`, so move it out here.
+    // `binding.bindingResolution` / `binding.calleeParameterIsVar`. `build_l4` reads
+    // `resolved.calls.upgraded_bindings`, not this local clone, and nothing else reads
+    // the clone's bindings, so move them out here.
     let upgraded_bindings_by_callsite: HashMap<String, Vec<UpgradedBinding>> =
         std::mem::take(&mut calls.upgraded_bindings);
 
@@ -1644,23 +1617,13 @@ pub(crate) fn build_detector_context_with<'a>(
         .map(|rc| (rc.routine_id.clone(), rc.clone()))
         .collect();
 
-    // R4-F Stage-5b ordering facts — computed lazily on first
-    // `get_ordering_facts()` access (see field doc). Keyed by StableRoutineId;
-    // d47/d49/d51 read it via `get_ordering_facts()`.
-
-    let fingerprint_index =
-        crate::engine::l5::fingerprint::FingerprintIndex::build(&ws.routines, &ws.objects);
-    drop(_final_indexes_span);
-
     // ⟨substrate census⟩ `ALSEM_UNCERTAINTY_CENSUS=1` — see `UncertaintyIndex::emit_census`.
     uncertainties.emit_census(&uncertainties_by_node);
 
-    let ctx = DetectorContext {
+    let art = DetectorArtifacts {
+        demanded,
         graph,
         event_graph,
-        routine_by_id,
-        objects_by_id,
-        table_by_id,
         reverse_call_graph,
         entry_points,
         transaction_spans,
@@ -1668,7 +1631,6 @@ pub(crate) fn build_detector_context_with<'a>(
         uncertainty_edges_by_from,
         uncertainties_by_node,
         uncertainties,
-        call_site_by_id,
         summaries,
         cone_derived,
         event_flow_indexes,
@@ -1699,45 +1661,29 @@ pub(crate) fn build_detector_context_with<'a>(
             .map(|c| c.friends.clone())
             .unwrap_or_default(),
         root_classifications_by_routine,
-        ordering_facts: std::sync::OnceLock::new(),
-        ordering_source: Some(resolved),
         closed_world_temp_params,
         summarize_diagnostics,
-        db_effect_bundle,
         reverse_effect_index,
-        fingerprint_index,
         cross_extension_subscribers,
     };
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.context");
-        census_context(&ctx);
+        census_context(&art);
     }
-    ctx
+    (art, l4)
 }
 
-/// #160 §4.1.5: one `context.<field>` bucket per field of [`DetectorContext`]
-/// (it replaced the old `[C1_CONE_CENSUS]` report of `summaries` +
-/// `cone_derived`). `summaries` uses the per-fact accounting (exact); the
-/// rest is shallow. Borrowed fields (`ordering_source`, the `&str`-keyed
-/// indexes' targets) own nothing but their tables.
-fn census_context(c: &DetectorContext<'_>) {
-    use crate::engine::census::{Kind, Tally, combined_graph, event_graph};
+/// #160 §4.1.5: one `context.<field>` bucket per heap-owning field of
+/// [`DetectorArtifacts`] (it replaced the old `[C1_CONE_CENSUS]` report of
+/// `summaries` + `cone_derived`). `summaries` uses the per-fact accounting
+/// (exact); the rest is shallow. `graph` is counted by whoever built it
+/// (#160 A4), the solve by `build_l4`'s `l4.*` buckets, and the borrowed maps
+/// of a [`DetectorContext`] by [`census_borrowed_maps`] when it is built.
+fn census_context(c: &DetectorArtifacts) {
+    use crate::engine::census::{Kind, Tally, event_graph};
     use crate::engine::l4::combined_graph::{CombinedEdge, Uncertainty};
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
-    emit("context.graph", &mut combined_graph(&c.graph));
     emit("context.event_graph", &mut event_graph(&c.event_graph));
-    emit(
-        "context.routine_by_id",
-        Tally::default().buf::<(&str, &ModelRoutine)>(c.routine_by_id.len()),
-    );
-    emit(
-        "context.objects_by_id",
-        Tally::default().buf::<(&str, &ModelObject)>(c.objects_by_id.len()),
-    );
-    emit(
-        "context.table_by_id",
-        Tally::default().buf::<(&str, &ModelTable)>(c.table_by_id.len()),
-    );
     emit(
         "context.reverse_call_graph",
         Tally::default()
@@ -1775,10 +1721,6 @@ fn census_context(c: &DetectorContext<'_>) {
             .strs(c.uncertainties_by_node.keys()),
     );
     emit("context.uncertainties", &mut c.uncertainties.census_tally());
-    emit(
-        "context.call_site_by_id",
-        Tally::default().buf::<(&str, &PCallSite)>(c.call_site_by_id.len()),
-    );
     crate::engine::l4::cone_census::summaries_tally(&c.summaries)
         .emit("context.summaries", Kind::Exact);
     let cd = c.cone_derived.census();
@@ -1870,9 +1812,8 @@ fn census_context(c: &DetectorContext<'_>) {
             .strs(c.friends.keys())
             .strs(c.friends.values().flatten()),
     );
-    // `context.ordering_facts` is printed when the cell is filled
-    // (`get_ordering_facts`); here it is always empty.
-    emit("context.ordering_source", &mut Tally::default());
+    // `context.ordering_facts` is printed when the slot is filled
+    // (`fill_ordering`).
     emit(
         "context.closed_world_temp_params",
         Tally::default()
@@ -1886,14 +1827,6 @@ fn census_context(c: &DetectorContext<'_>) {
         ),
     );
     emit(
-        "context.db_effect_bundle",
-        &mut c
-            .db_effect_bundle
-            .as_ref()
-            .map(SummaryBundle::census_tally)
-            .unwrap_or_default(),
-    );
-    emit(
         "context.reverse_effect_index",
         &mut c
             .reverse_effect_index
@@ -1902,16 +1835,38 @@ fn census_context(c: &DetectorContext<'_>) {
             .unwrap_or_default(),
     );
     emit(
-        "context.fingerprint_index",
-        &mut c.fingerprint_index.census_tally(),
-    );
-    emit(
         "context.cross_extension_subscribers",
         Tally::default()
             .buf::<(String, Vec<String>)>(c.cross_extension_subscribers.len())
             .strs(c.cross_extension_subscribers.keys())
             .bufs(c.cross_extension_subscribers.values())
             .strs(c.cross_extension_subscribers.values().flatten()),
+    );
+}
+
+/// The borrowed maps of a [`DetectorContext`], shallow, under step 0's names.
+fn census_borrowed_maps(c: &DetectorContext<'_>) {
+    use crate::engine::census::{Kind, Tally};
+    let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
+    emit(
+        "context.routine_by_id",
+        Tally::default().buf::<(&str, &ModelRoutine)>(c.routine_by_id.len()),
+    );
+    emit(
+        "context.objects_by_id",
+        Tally::default().buf::<(&str, &ModelObject)>(c.objects_by_id.len()),
+    );
+    emit(
+        "context.table_by_id",
+        Tally::default().buf::<(&str, &ModelTable)>(c.table_by_id.len()),
+    );
+    emit(
+        "context.call_site_by_id",
+        Tally::default().buf::<(&str, &PCallSite)>(c.call_site_by_id.len()),
+    );
+    emit(
+        "context.fingerprint_index",
+        &mut c.fingerprint_index.census_tally(),
     );
 }
 
@@ -2004,40 +1959,6 @@ mod tests {
         assert_eq!(map["cs1"].to.as_deref(), Some("a"));
     }
 
-    /// Laziness contract: `build_detector_context` must NOT compute ordering facts
-    /// (the OnceLock starts empty); first `get_ordering_facts()` call computes and
-    /// memoizes a map EQUAL to a direct `compute_ordering_facts(resolved)` run.
-    #[test]
-    fn ordering_facts_are_lazy_and_parity_with_direct_compute() {
-        // Empty workspace: cheap, and exercises the full lazy path end-to-end.
-        let resolved = crate::program::model::workspace::Model {
-            workspace: crate::program::model::workspace::ModelEntities {
-                objects: Vec::new(),
-                tables: Vec::new(),
-                routines: Vec::new(),
-            },
-            root_classifications: Vec::new(),
-            primary_app: None,
-            infra_diagnostics: Vec::new(),
-            workspace_diagnostics: Vec::new(),
-            dependency_diagnostics: Vec::new(),
-            calls: Default::default(),
-            events: Default::default(),
-        };
-        let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
-        assert!(
-            ctx.ordering_facts.get().is_none(),
-            "ordering facts must not be computed eagerly"
-        );
-        let via_ctx = ctx.get_ordering_facts();
-        let direct = crate::engine::l5::ordering_facts::compute_ordering_facts(&resolved);
-        assert_eq!(via_ctx.len(), direct.len());
-        assert!(
-            ctx.ordering_facts.get().is_some(),
-            "first access must memoize"
-        );
-    }
-
     /// The model's calls are USED, not just present: a hand-made `ResolvedCalls` on
     /// an empty workspace must show up in the detector context, the ordering-facts
     /// substrate (`compose_snapshot` → `build_r3a3_source_only_base`) and coverage.
@@ -2071,7 +1992,8 @@ mod tests {
             }),
             events: Default::default(),
         };
-        let ctx = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
+        let owned = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
+        let ctx = owned.ctx();
         assert!(
             ctx.resolved_call_edge_by_callsite
                 .contains_key("distinct-callsite"),
@@ -2167,7 +2089,8 @@ page 50811 "CP Wizard"
             &files,
             "11111111-0000-0000-0000-0000000cp001",
         );
-        let ctx = build_detector_context(&resolved, substrate::SUMMARIES);
+        let owned = build_detector_context(&resolved, substrate::SUMMARIES);
+        let ctx = owned.ctx();
 
         // Without this the whole test would pass identically on an EMPTY store —
         // every `flags_of` would read the empty row for the trivial reason.
@@ -2307,7 +2230,8 @@ page 50812 "CP2 Wizard"
             "fixture precondition: both OnAction trigger bodies must be in the model"
         );
 
-        let ctx = build_detector_context(&resolved, substrate::SUMMARIES);
+        let owned = build_detector_context(&resolved, substrate::SUMMARIES);
+        let ctx = owned.ctx();
 
         let summary = ctx
             .summaries
@@ -2330,7 +2254,7 @@ page 50812 "CP2 Wizard"
     /// produce a REAL db-effect population (`Setup.Insert()` — `Insert` is
     /// db-touching, `summary_runner::is_db_touching`), this test proves the bundle
     /// side of the B1 invariant is populated; the production `debug_assert!` right
-    /// after `compute_summaries_v2_bundle` in `build_detector_context` proves the
+    /// after the solve in `build_l4` (which the shim calls) proves the
     /// `core_summaries` side stays empty — and is exercised for REAL here (not
     /// vacuously, the way it would be against an empty workspace). If the call
     /// site ever regresses to a materializing entry point, that debug_assert
@@ -2367,12 +2291,12 @@ codeunit 50900 "FX1 Touch"
         // CORE_SUMMARIES alone is enough to reach the `compute_summaries_v2_bundle`
         // call (gated independently of SUMMARIES — see `build_detector_context`'s
         // own doc), so this test does not need the cone/SUMMARIES substrate at all.
-        let ctx = build_detector_context(&resolved, substrate::CORE_SUMMARIES);
+        let owned = build_detector_context(&resolved, substrate::CORE_SUMMARIES);
 
-        let bundle = ctx
-            .db_effect_bundle
-            .as_ref()
-            .expect("CORE_SUMMARIES was demanded — the bundle must exist");
+        let bundle = &owned
+            .l4()
+            .expect("CORE_SUMMARIES was demanded — the bundle must exist")
+            .bundle;
         let any_row_has_effects = bundle
             .routines_with_rows()
             .any(|rix| bundle.db_effects(rix).next().is_some());
@@ -2439,9 +2363,10 @@ codeunit 50901 "FX2 Touch"
 
         // NEGATIVE: the full `ALL` substrate — everything analyze can ever ask
         // for — leaves the index unbuilt.
-        let ctx_all = build_detector_context(&resolved, substrate::ALL);
+        let owned_all = build_detector_context(&resolved, substrate::ALL);
+        let ctx_all = owned_all.ctx();
         assert!(
-            ctx_all.db_effect_bundle.is_some(),
+            owned_all.l4().is_some(),
             "ALL includes CORE_SUMMARIES, so the bundle IS built — which is what \
              makes the next assertion meaningful rather than vacuous"
         );
@@ -2451,14 +2376,12 @@ codeunit 50901 "FX2 Touch"
         );
 
         // POSITIVE: ask for it explicitly and it appears, correct and populated.
-        let ctx = build_detector_context(
+        let owned = build_detector_context(
             &resolved,
             substrate::CORE_SUMMARIES | substrate::DB_EFFECT_REVERSE_INDEX,
         );
-        let bundle = ctx
-            .db_effect_bundle
-            .as_ref()
-            .expect("CORE_SUMMARIES demanded");
+        let ctx = owned.ctx();
+        let bundle = &owned.l4().expect("CORE_SUMMARIES demanded").bundle;
         let index = ctx
             .reverse_effect_index
             .as_ref()
@@ -2533,7 +2456,8 @@ codeunit 50914 "HC Ring"
             &files,
             "44444444-0000-0000-0000-0000000hc001",
         );
-        let ctx = build_detector_context(&resolved, substrate::CORE_SUMMARIES);
+        let owned = build_detector_context(&resolved, substrate::CORE_SUMMARIES);
+        let ctx = owned.ctx();
 
         let id_of = |name: &str| -> String {
             resolved
@@ -2676,7 +2600,8 @@ page 50813 "CP3 Wizard"
             .id
             .clone();
 
-        let ctx = build_detector_context(&resolved, substrate::CORE_SUMMARIES);
+        let owned = build_detector_context(&resolved, substrate::CORE_SUMMARIES);
+        let ctx = owned.ctx();
 
         let edges = ctx
             .uncertainty_edges_by_from
@@ -2839,5 +2764,28 @@ page 50813 "CP3 Wizard"
         assert_eq!(ix.elements(e), &[] as &[UncertaintyId]);
         let n = ix.intern_set(vec![u_iow("IAlpha")]);
         assert!(!ix.is_empty_set(n));
+    }
+
+    /// #160 task 21 review I-2: a `CORE_SUMMARIES` mask with `l4: None` would
+    /// leave the uncertainty/roles harvest silently empty. It must panic, in
+    /// every build.
+    #[test]
+    fn core_summaries_without_an_l4_request_panics() {
+        use crate::engine::l5::registry::substrate;
+        let model = crate::engine::l5::test_support::empty_resolved();
+        let graph = context_graph(&model, None);
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_detector_artifacts(&model, substrate::CORE_SUMMARIES, graph, None, None);
+        }))
+        .expect_err("CORE_SUMMARIES with l4: None must panic");
+        let msg = err
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| err.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(
+            msg.contains("CORE_SUMMARIES demanded without an l4 request"),
+            "wrong panic: {msg}"
+        );
     }
 }

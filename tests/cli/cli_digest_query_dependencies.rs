@@ -253,6 +253,8 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
 /// routine's calls are cut from the combined graph, so its solved summary is its
 /// own direct effects, the same as its leaf; a leaf differs only where an event
 /// edge would feed the dependency routine more, which this fixture does not have.
+/// (2026-10-19: `from_cross_app_base` is gone; query's leaves now reach its store
+/// through `build_l4`'s cross-app inputs; the limit was not re-measured there.)
 #[test]
 fn embedded_dependency_leaf_effects_and_workspace_scoped_selectors() {
     let dir = tempfile::tempdir().unwrap();
@@ -459,6 +461,17 @@ fn dependency_publisher_dispatch_reaches_the_store() {
 /// Discrimination (2026-10-15): `run_digest_pipeline` passing `None` instead of
 /// `target.cross_app_inputs()` to `compute_tx_context_map` fails this test with
 /// `["span-has-no-known-writes"]`; restored, it passes.
+///
+/// Discrimination (2026-10-19): `compute_tx_context_map` is gone. Passing
+/// `None` instead of `target.cross_app_inputs()` into
+/// `build_detector_artifacts` in `View::prepare` now stays GREEN: those inputs
+/// only pick which routines seed spans and feed the l4 solve. The dependency
+/// writes reach the span through the graph, so the live seam is `View::prepare`'s
+/// cross-app graph fill: building `cross_app_context_graph(model, None)` there
+/// instead of taking `base.graph` (which carries the dependency-internal typed
+/// edges) fails this test with `["span-has-no-known-writes"]`; restored, it
+/// passes. (Task 27 folded that fill into `detector_context::context_graph`,
+/// whose cross-app arm returns `base.graph`.)
 #[test]
 fn cross_app_commit_span_sees_dependency_writes() {
     use crate::dep_dispatch_fixture::{DEP_GUID as XDEP, write_own};

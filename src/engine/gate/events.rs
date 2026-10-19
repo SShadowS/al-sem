@@ -32,13 +32,16 @@
 //! `--deterministic` pins `generated_at = "0"` and reads the version override from
 //! the caller rather than the live version. Used by every differential test.
 
-use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
-use crate::engine::l5::detector_context::build_detector_context_with;
+use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view, diagnostic_lines};
 use crate::engine::l5::event_flow::{
     ChainNode, ChainReport, ChainWalkOptions, FanoutCoverage, FanoutReport, Scope,
     compute_chain_report, compute_fanout_report,
 };
+use crate::engine::l5::registry::Detector;
+use crate::engine::session::{Cell, Plan, View, events_plan};
+use crate::program::inputs::InputSet;
 use crate::program::resolve::full::LoadedDependencies;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // JSON insertion-order serializer — the shared `gate::ordered_json` module (one
@@ -342,6 +345,52 @@ pub struct EventsRunResult {
     pub stderr_lines: Vec<String>,
 }
 
+/// Both events commands' start (#160 §4.4.4): the target, a [`View`] prepared
+/// with `plan` (each command builds it with `events_plan`), and the analyzer
+/// diagnostic lines of its one run, which is taken once read. `Err` is the
+/// command's early result: no model-instance id (`<cmd>: could not compute
+/// modelInstanceId`, exit 1, `AnalysisTarget::build`), or `--strict` with an
+/// error-severity diagnostic.
+///
+/// The lines are `analyzeWorkspace`'s diagnostics: workspace + dependency-ledger
+/// warnings + overlay + the default detectors' (e.g. `d43-event-ishandled-skip`).
+/// events-fanout.ts emits them to stderr at the end; `infra_diagnostics` alone
+/// omits the detector-stage ones the goldens' `.stderr.txt` capture.
+fn events_view(
+    plan: Plan,
+    inputs: &Arc<InputSet>,
+    single_app: bool,
+    strict: bool,
+    cmd: &str,
+) -> Result<(View, Vec<String>), EventsRunResult> {
+    let early = |stderr_lines| EventsRunResult {
+        text: String::new(),
+        exit_code: 1,
+        stderr_lines,
+    };
+    // #70: the cross-app base by default (a workspace subscriber to a dependency
+    // event is BC's main events case), the workspace alone under `--single-app`.
+    let target = AnalysisTarget::build(inputs, single_app, cmd).map_err(|e| early(vec![e]))?;
+    let mut view = View::new(target);
+    let key = plan.keys().remove(0);
+    view.prepare(&plan);
+    let diag_lines = diagnostic_lines(&analyzer_diagnostics_of_view(&view, &key));
+    drop(view.take_run(&key));
+    // `l4` is filled when the run demands `CORE_SUMMARIES`; nothing after the
+    // run reads it (as in policy check).
+    view.release(Cell::L4);
+    if strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
+        return Err(early(diag_lines));
+    }
+    Ok((view, diag_lines))
+}
+
+/// After the report, its last reader: `det` holds the graph's `Arc`, so every
+/// cell goes together. (`l4` went right after the run, in [`events_view`].)
+fn release_cells(view: &mut View) {
+    view.release_all_but(&[]);
+}
+
 // ---------------------------------------------------------------------------
 // Events fanout pipeline
 // ---------------------------------------------------------------------------
@@ -349,7 +398,7 @@ pub struct EventsRunResult {
 /// Options for `run_events_fanout`.
 pub struct EventsFanoutOptions<'a> {
     /// The command's one read of the workspace (#160).
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
+    pub inputs: &'a Arc<InputSet>,
     pub format: &'a str, // "human" | "json"
     pub scope: Scope,
     /// "warn" (default) | "strict" | "ignore". Mirrors `--coverage-policy` in
@@ -367,50 +416,39 @@ pub struct EventsFanoutOptions<'a> {
 /// Run the fanout pipeline: load the workspace, compute indexes, compute the
 /// report, format it, return the result. Mirrors `runEventsFanout` in al-sem.
 pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
-    // #70: the cross-app base by default (a workspace subscriber to a dependency
-    // event is BC's main events case), the workspace alone under `--single-app`.
-    // No model-instance id is `al-sem events fanout: could not compute
-    // modelInstanceId`, exit 1 (`AnalysisTarget::build`).
-    let target = match AnalysisTarget::build(opts.inputs, opts.single_app, "al-sem events fanout") {
-        Ok(t) => t,
-        Err(e) => {
-            return EventsRunResult {
-                text: String::new(),
-                exit_code: 1,
-                stderr_lines: vec![e],
-            };
-        }
+    events_fanout_with(crate::engine::l5::detectors::default_detectors(), opts)
+}
+
+/// [`run_events_fanout`] over a given detector set (#160 §4.4.4): the plan is
+/// built from `detectors` by `events_plan`, so a set without `SUMMARIES` makes
+/// `prepare` panic (A2.10).
+pub(crate) fn events_fanout_with(
+    detectors: Vec<Detector>,
+    opts: &EventsFanoutOptions,
+) -> EventsRunResult {
+    let (mut view, diag_lines) = match events_view(
+        events_plan(detectors),
+        opts.inputs,
+        opts.single_app,
+        opts.strict,
+        "al-sem events fanout",
+    ) {
+        Ok(v) => v,
+        Err(early) => return early,
     };
 
-    // `analyzeWorkspace` diagnostics: workspace + dependency-ledger warnings +
-    // overlay + ALL default-detector diagnostics (e.g. `d43-event-ishandled-skip`).
-    // events-fanout.ts emits these
-    // to stderr at the end. `infra_diagnostics` alone is NOT enough — it omits the
-    // detector-stage diagnostics that the goldens' `.stderr.txt` capture.
-    let diag_lines = analyzer_diagnostic_lines(&target);
-
-    if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
-        return EventsRunResult {
-            text: String::new(),
-            exit_code: 1,
-            stderr_lines: diag_lines,
-        };
-    }
-
-    // Build detector context to get event_flow_indexes + summaries + event_graph.
-    // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`, no
-    // `RAW_INHERITED_FACTS`. `ctx.summaries` reaches only `compute_fanout`, which
-    // reads `sum.coverage.as_ref().map(|c| c.inherited_status)` and NOTHING else
-    // off the summary (`l5/event_flow.rs`'s `capabilityComposition` roll-up) —
-    // coverage is composed under every output mode. No fact Vec is touched.
-    let ctx = build_detector_context_with(
-        target.resolved(),
-        crate::engine::l5::registry::substrate::ALL,
-        target.cross_app_inputs(),
+    // The report reads `det.summaries` (which `events_plan` declares), and of
+    // each summary only `sum.coverage.as_ref().map(|c| c.inherited_status)`
+    // (`l5/event_flow.rs`'s `capabilityComposition` roll-up). No fact Vec is
+    // touched, so the derived-only cone the run built is enough.
+    let det = view.det();
+    let mut report = compute_fanout_report(
+        &det.event_graph,
+        &det.event_flow_indexes,
+        &det.summaries,
+        opts.scope,
     );
-    let ix = &ctx.event_flow_indexes;
-
-    let mut report = compute_fanout_report(&ctx.event_graph, ix, &ctx.summaries, opts.scope);
+    release_cells(&mut view);
 
     // --- --coverage-policy application (fanout only; chains validates but no-ops) ---
     //
@@ -453,7 +491,7 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
         _ => {} // "warn" (default): pass through unchanged.
     }
 
-    let dependencies = target.dependencies();
+    let dependencies = view.target().dependencies();
     let text = match opts.format {
         "json" => format_fanout_json(
             &report,
@@ -483,7 +521,7 @@ pub fn run_events_fanout(opts: &EventsFanoutOptions) -> EventsRunResult {
 /// Options for `run_events_chains`.
 pub struct EventsChainsOptions<'a> {
     /// The command's one read of the workspace (#160).
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
+    pub inputs: &'a Arc<InputSet>,
     pub format: &'a str,
     pub scope: Scope,
     /// "warn" | "strict" | "ignore". al-sem `events-chains.ts` VALIDATES this flag
@@ -503,50 +541,38 @@ pub struct EventsChainsOptions<'a> {
 /// Run the chains pipeline: load the workspace, compute indexes, walk chains,
 /// format result, return. Mirrors `runEventsChains` in al-sem.
 pub fn run_events_chains(opts: &EventsChainsOptions) -> EventsRunResult {
-    // #70: cross-app by default, as `run_events_fanout` (and its message when
-    // there is no model-instance id).
-    let target = match AnalysisTarget::build(opts.inputs, opts.single_app, "al-sem events chains") {
-        Ok(t) => t,
-        Err(e) => {
-            return EventsRunResult {
-                text: String::new(),
-                exit_code: 1,
-                stderr_lines: vec![e],
-            };
-        }
+    events_chains_with(crate::engine::l5::detectors::default_detectors(), opts)
+}
+
+/// [`run_events_chains`] over a given detector set: the same plan as
+/// [`events_fanout_with`] (A2.10).
+pub(crate) fn events_chains_with(
+    detectors: Vec<Detector>,
+    opts: &EventsChainsOptions,
+) -> EventsRunResult {
+    let (mut view, diag_lines) = match events_view(
+        events_plan(detectors),
+        opts.inputs,
+        opts.single_app,
+        opts.strict,
+        "al-sem events chains",
+    ) {
+        Ok(v) => v,
+        Err(early) => return early,
     };
-
-    let diag_lines = analyzer_diagnostic_lines(&target);
-
-    if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
-        return EventsRunResult {
-            text: String::new(),
-            exit_code: 1,
-            stderr_lines: diag_lines,
-        };
-    }
 
     // NOTE: `opts.coverage_policy` is intentionally UNUSED here — al-sem
     // `events-chains.ts` validates it but never applies it to the chain report.
 
-    // ⟨C1 Task 3 — R2/R3 caller classification⟩ DERIVED-ONLY: plain `ALL`. The
-    // chain report reads ONLY `ctx.event_flow_indexes`; `ctx.summaries` is never
-    // consulted on this path at all.
-    let ctx = build_detector_context_with(
-        target.resolved(),
-        crate::engine::l5::registry::substrate::ALL,
-        target.cross_app_inputs(),
-    );
-    let ix = &ctx.event_flow_indexes;
-
+    // The chain report reads ONLY `det.event_flow_indexes`.
     let walk_opts = ChainWalkOptions {
         max_depth: opts.max_depth,
         max_nodes: opts.max_nodes,
     };
+    let report = compute_chain_report(&view.det().event_flow_indexes, &walk_opts, opts.scope);
+    release_cells(&mut view);
 
-    let report = compute_chain_report(ix, &walk_opts, opts.scope);
-
-    let dependencies = target.dependencies();
+    let dependencies = view.target().dependencies();
     let text = match opts.format {
         "json" => format_chains_json(
             &report,
@@ -577,6 +603,63 @@ mod tests {
     };
     use crate::program::model::events::{EventEdge, EventGraph, EventSymbol, Evidence};
     use std::collections::{BTreeSet, HashMap};
+
+    /// A2.10: the bits the events report reads off `det` (`SUMMARIES`), and the
+    /// one that also builds summaries (`TRANSACTION_SPANS`): d1 and d9 today.
+    const DROPPED: u32 = crate::engine::l5::registry::substrate::SUMMARIES
+        | crate::engine::l5::registry::substrate::TRANSACTION_SPANS;
+
+    /// A2.10: fanout builds its plan from the set it is given.
+    #[test]
+    fn fanout_without_d1_d9() {
+        crate::engine::l5::digest_cli::assert_prepare_refuses_a_reduced_set(
+            DROPPED,
+            "SUMMARIES",
+            "ws-event-fanout",
+            |set, inputs| {
+                let _ = events_fanout_with(
+                    set,
+                    &EventsFanoutOptions {
+                        inputs,
+                        format: "json",
+                        scope: Scope::Primary,
+                        coverage_policy: "warn",
+                        driver_version: "test",
+                        deterministic: true,
+                        strict: false,
+                        single_app: false,
+                    },
+                );
+            },
+        );
+    }
+
+    /// A2.10: chains builds its plan from the set it is given.
+    #[test]
+    fn chains_without_d1_d9() {
+        crate::engine::l5::digest_cli::assert_prepare_refuses_a_reduced_set(
+            DROPPED,
+            "SUMMARIES",
+            "ws-event-fanout",
+            |set, inputs| {
+                let _ = events_chains_with(
+                    set,
+                    &EventsChainsOptions {
+                        inputs,
+                        format: "json",
+                        scope: Scope::Primary,
+                        coverage_policy: "warn",
+                        max_depth: None,
+                        max_nodes: None,
+                        driver_version: "test",
+                        deterministic: true,
+                        strict: false,
+                        single_app: false,
+                    },
+                );
+            },
+        );
+    }
 
     fn ev_sym(id: &str, pub_routine: Option<&str>, name: &str) -> EventSymbol {
         EventSymbol {

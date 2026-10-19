@@ -421,7 +421,8 @@ pub fn project_r3a4_from_workspace(workspace: &Path, fixture_name: &str) -> R3a4
         &crate::program::inputs::InputSet::read(workspace, &Default::default()),
         R3A4_MODEL_INSTANCE_ID,
         false,
-    );
+    )
+    .ok();
     let (artifacts, routine_ids, pairs): (
         Vec<DependencyArtifactL4>,
         Vec<String>,

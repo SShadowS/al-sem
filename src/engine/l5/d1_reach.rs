@@ -1025,7 +1025,8 @@ mod tests {
         );
         graph_edges.insert("A".to_string(), a_edges);
 
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -1105,7 +1106,8 @@ mod tests {
             .map(|id| (id.to_string(), db_summary(id, &format!("t/{id}"))))
             .collect();
 
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -1168,7 +1170,8 @@ mod tests {
     #[test]
     fn physical_route_beats_temp_route_same_severity_inputs() {
         let (routines, graph_edges, summaries) = temp_vs_physical_fixture();
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -1240,7 +1243,8 @@ mod tests {
         .into_iter()
         .collect();
 
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -1295,7 +1299,8 @@ mod tests {
         .into_iter()
         .collect();
 
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -1338,12 +1343,14 @@ mod tests {
         let workspace = ws(&routines);
         let cw = ClosedWorldTempParams::new();
 
-        let ctx1 = minimal_ctx(&routines, graph_edges.clone(), summaries.clone());
+        let owned1 = minimal_ctx(&routines, graph_edges.clone(), summaries.clone());
+        let ctx1 = owned1.ctx();
         let mut memo1 = HashMap::new();
         let (graph1, seeds1) = build_d1_graph(&ctx1, &workspace, &mut memo1);
         let aggs1 = search_loops(&graph1, &seeds1, &[], &ctx1, &cw);
 
-        let ctx2 = minimal_ctx(&routines, graph_edges, summaries);
+        let owned2 = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx2 = owned2.ctx();
         let mut memo2 = HashMap::new();
         let (graph2, seeds2) = build_d1_graph(&ctx2, &workspace, &mut memo2);
         let aggs2 = search_loops(&graph2, &seeds2, &[], &ctx2, &cw);
@@ -1496,7 +1503,8 @@ mod tests {
     #[test]
     fn parallel_matches_serial_reference_and_is_deterministic() {
         let (routines, graph_edges, summaries) = multi_group_fixture();
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -1929,7 +1937,8 @@ mod tests {
         // (a) The existing multi-group fixture (single batch): direct + transitive.
         {
             let (routines, graph_edges, summaries) = multi_group_fixture();
-            let ctx = minimal_ctx(&routines, graph_edges, summaries);
+            let owned = minimal_ctx(&routines, graph_edges, summaries);
+            let ctx = owned.ctx();
             let workspace = ws(&routines);
             let mut memo = HashMap::new();
             let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -1947,7 +1956,8 @@ mod tests {
         // overlapping on a shared recursive SCC — exercises the chunking glue.
         {
             let (routines, graph_edges, summaries) = many_groups_fixture(80);
-            let ctx = minimal_ctx(&routines, graph_edges, summaries);
+            let owned = minimal_ctx(&routines, graph_edges, summaries);
+            let ctx = owned.ctx();
             let workspace = ws(&routines);
             let mut memo = HashMap::new();
             let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);

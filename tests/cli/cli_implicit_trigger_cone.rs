@@ -583,7 +583,8 @@ fn a1_precondition_l4_sees_the_trigger_writes() {
 #[test]
 fn a2_cone_and_prove_see_the_trigger_write() {
     let m = model();
-    let ctx = build_detector_context(m, substrate::ALL);
+    let owned = build_detector_context(m, substrate::ALL);
+    let ctx = owned.ctx();
     let mut f = Vec::new();
     let on_validate = ctx
         .cone_derived
@@ -627,7 +628,8 @@ fn a2_cone_and_prove_see_the_trigger_write() {
 #[test]
 fn a3_temporary_receiver_stays_non_physical() {
     let m = model();
-    let ctx = build_detector_context(m, substrate::ALL);
+    let owned = build_detector_context(m, substrate::ALL);
+    let ctx = owned.ctx();
     let mut f = Vec::new();
 
     for (routine, want) in [
@@ -789,7 +791,8 @@ fn a4_bindings_and_keys_are_per_operation() {
         ));
     }
 
-    let ctx = build_detector_context(m, substrate::ALL);
+    let owned = build_detector_context(m, substrate::ALL);
+    let ctx = owned.ctx();
     let phys = ctx.cone_derived.writes_physical_tables_of(&mixed);
     if !phys.iter().any(|t| t == TRIG_ROW_ID) {
         f.push(format!(
@@ -847,7 +850,8 @@ fn a4_bindings_and_keys_are_per_operation() {
 #[test]
 fn a5_forwarded_receiver_binds_through_the_parameter() {
     let m = model();
-    let ctx = build_detector_context(m, substrate::ALL);
+    let owned = build_detector_context(m, substrate::ALL);
+    let ctx = owned.ctx();
     let mut f = Vec::new();
 
     for (routine, want) in [
@@ -1245,7 +1249,8 @@ codeunit 50332 "G Caller"
 #[test]
 fn caller_guard_on_the_firing_op_reaches_the_trigger_facts() {
     let m = inline_model(GUARD_SRC);
-    let ctx = build_detector_context(&m, substrate::ALL);
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
     let log = format!("{INLINE_GUID}/table/50330");
     let trig = format!("{INLINE_GUID}/table/50331");
     let writes = |name: &str| {

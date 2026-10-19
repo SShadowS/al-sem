@@ -117,6 +117,15 @@ pub fn combined_graph(g: &crate::engine::l4::combined_graph::CombinedGraph) -> T
     t
 }
 
+/// [`crate::engine::l4::scc::SccResult`], shallow (the base's and `l4.scc`).
+pub fn scc(s: &crate::engine::l4::scc::SccResult) -> Tally {
+    let mut t = Tally::default();
+    t.buf::<crate::engine::l4::scc::Scc>(s.sccs.len())
+        .buf::<(String, usize)>(s.scc_id_by_routine.len())
+        .strs(s.scc_id_by_routine.keys());
+    t
+}
+
 /// [`crate::program::model::events::EventGraph`], shallow.
 pub fn event_graph(g: &crate::program::model::events::EventGraph) -> Tally {
     let mut t = Tally::default();

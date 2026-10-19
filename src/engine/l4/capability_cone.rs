@@ -3247,39 +3247,29 @@ fn compute_uncertainty_coverage_reasons(
     graph: &CombinedGraph,
     calls: &crate::program::model::calls::ResolvedCalls,
 ) -> HashMap<String, BTreeSet<String>> {
-    use crate::engine::l4::summary_runner::{FieldIndex, compute_summaries_v2};
+    use crate::engine::l4::summary_runner::compute_summaries_v2;
 
     // Tarjan SCC over the COMBINED graph (summary substrate — distinct from the
     // typed-edge SCC the cone walks).
-    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-    for (from, list) in &graph.edges_by_from {
-        adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
-    }
-    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
-    let scc = tarjan_scc(&SccInputGraph {
-        nodes: &graph.nodes,
-        edges_by_from: &adjacency,
-    });
+    let scc = crate::engine::l4::analysis::graph_scc(graph);
 
-    // Field-resolution index (parameterRoles need it; harmless here).
-    let mut field_index: FieldIndex = HashMap::new();
-    for table in &ws.tables {
-        for field in &table.fields {
-            field_index
-                .entry((table.id.clone(), field.name.to_lowercase()))
-                .or_insert_with(|| field.id.clone());
-        }
-    }
+    // Field-resolution index (parameterRoles need it; harmless here). Untimed:
+    // the summaries census counts `build_l4`'s.
+    let field_index = crate::engine::l4::analysis::field_index(ws);
 
-    // v2 db-effect solver (roles-cap diagnostics ignored here). Only
-    // `uncertainties` are read below.
-    let (summaries, _) = compute_summaries_v2(
+    // v2 db-effect solver. Only `uncertainties` are read below; the roles-cap
+    // diagnostics are printed here, the solver itself no longer prints
+    // (#160 §4.4.7).
+    let (summaries, diags) = compute_summaries_v2(
         &ws.routines,
         graph,
         &scc,
         &calls.upgraded_bindings,
         &field_index,
     );
+    for w in crate::engine::l4::analysis::render_warnings(&diags) {
+        eprintln!("{w}");
+    }
 
     let mut out: HashMap<String, BTreeSet<String>> = HashMap::new();
     for (rid, summary) in &summaries {
@@ -3393,10 +3383,13 @@ pub struct R3a5CrossAppBase {
     /// The combined graph WITH the injected dep intra-app typed edges folded in
     /// (the cone substrate). The combined `edges_by_from` / `uncertainty_edges`
     /// drive the JACOBI; the `typed_edges` (incl. injected) drive the cone.
-    pub graph: CombinedGraph,
-    pub combined_scc: SccResult,
+    /// Behind an `Arc` (#160 step 2) so an `L4Analysis` can share it by pointer.
+    pub graph: std::sync::Arc<CombinedGraph>,
+    /// The ONE cross-app SCC; `build_l4` takes it by pointer (#160 §4.4.1).
+    pub combined_scc: std::sync::Arc<SccResult>,
+    /// The solver field index: the leaf summaries' and every cross-app
+    /// `build_l4` solve's (through [`Self::cross_app_inputs`]), built once.
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
-    pub upgraded_bindings: HashMap<String, Vec<crate::program::model::calls::UpgradedBinding>>,
     pub event_graph: EventGraph,
     /// Fixed-leaf (dep) RETAINED summaries: every source-bearing dependency
     /// routine with no out-edge in [`Self::graph`].
@@ -3411,9 +3404,6 @@ pub struct R3a5CrossAppBase {
     /// dependency leaf, plus the presence facts their dispatch composes (#107
     /// Design 6). The path facts do not follow the dispatch edges.
     pub fixed_roles: HashSet<String>,
-    /// The dependency-internal edges the cone follows (R3a-4 intra-app edges as
-    /// `direct-call` typed edges); also folded into [`Self::graph`].
-    pub injected_typed_edges: Vec<TypedEdge>,
     /// Per-routine direct capability facts (full, ordered).
     pub direct_full: HashMap<String, Vec<CapabilityFact>>,
     /// Per-routine direct coverage `(status, reasons)`.
@@ -3450,10 +3440,10 @@ impl R3a5CrossAppBase {
             dep_routine_ids: &self.dep_routine_ids,
             leaf_summaries: &self.leaf_summaries,
             fixed_roles: &self.fixed_roles,
-            injected_typed_edges: &self.injected_typed_edges,
             declared_dependencies: &self.declared_dependencies,
             app_versions: &self.resolved_app_versions,
             friends: &self.friends,
+            field_index: &self.field_index,
         }
     }
 }
@@ -3461,8 +3451,8 @@ impl R3a5CrossAppBase {
 /// The cross-app L4 BASE (engine-switch S7.4): every intermediate the R3a-5
 /// projection and the cross-app detectors read, from ONE program-backed model
 /// (`assemble_and_resolve_cross_app_program`): the workspace and every dependency,
-/// each body's calls and the event graph from the program engine. Returns `None`
-/// for a fail-closed workspace.
+/// each body's calls and the event graph from the program engine. Returns `Err`
+/// for a fail-closed workspace, naming why (#160 §4.4.5).
 ///
 /// Before S7.4 there were two bases, both L3: a symbol-only one (r3a5) whose
 /// source-bearing dependency routines were empty rows with `body_available`
@@ -3496,20 +3486,22 @@ impl R3a5CrossAppBase {
 pub(crate) fn build_cross_app_base(
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
-) -> Option<R3a5CrossAppBase> {
-    use crate::engine::l4::summary_runner::{FieldIndex, base_intraprocedural_summary};
+) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
+    use crate::engine::l4::summary_runner::base_intraprocedural_summary;
     let mut x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
         inputs,
         model_instance_id,
         false,
     )?;
+    let Some(primary) = x.resolved.primary_app.as_ref() else {
+        return Err(
+            crate::program::model::program_calls::CrossAppFailure::NoPrimaryApp {
+                fresh: Box::new(x.coverage),
+            },
+        );
+    };
+    let primary = primary.app_guid.to_ascii_lowercase();
     let ws: &ModelEntities = &x.resolved.workspace;
-    let primary = x
-        .resolved
-        .primary_app
-        .as_ref()?
-        .app_guid
-        .to_ascii_lowercase();
     let dep_routine_ids: BTreeSet<String> = ws
         .routines
         .iter()
@@ -3534,23 +3526,9 @@ pub(crate) fn build_cross_app_base(
     let mut graph = build_combined_graph(ws, &calls, &event_graph);
 
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
-    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-    for (from, list) in &graph.edges_by_from {
-        adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
-    }
-    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
-    let combined_scc = tarjan_scc(&SccInputGraph {
-        nodes: &graph.nodes,
-        edges_by_from: &adjacency,
-    });
-    let mut field_index: FieldIndex = HashMap::new();
-    for table in &ws.tables {
-        for field in &table.fields {
-            field_index
-                .entry((table.id.clone(), field.name.to_lowercase()))
-                .or_insert_with(|| field.id.clone());
-        }
-    }
+    let combined_scc = crate::engine::l4::analysis::graph_scc(&graph);
+    // The solve's index (summaries-census counted here, not in `build_l4`).
+    let field_index = crate::engine::l4::analysis::solver_field_index(ws);
 
     drop(_s_graph);
     let _s_facts = crate::engine::perf_trace::span("crossapp", "crossapp.base_artifacts_facts");
@@ -3573,11 +3551,11 @@ pub(crate) fn build_cross_app_base(
         events: Vec::new(),
         edges: Vec::new(),
     };
-    let injected_typed_edges: Vec<TypedEdge> =
-        build_combined_graph(ws, &dep_calls, &no_events).typed_edges;
+    // The dependency-internal edges the cone follows (R3a-4 intra-app edges as
+    // `direct-call` typed edges), moved into the graph: the base keeps no copy.
     graph
         .typed_edges
-        .extend(injected_typed_edges.iter().cloned());
+        .extend(build_combined_graph(ws, &dep_calls, &no_events).typed_edges);
 
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
     for evt in &event_graph.events {
@@ -3617,7 +3595,6 @@ pub(crate) fn build_cross_app_base(
         direct_full.insert(r.id.clone(), facts);
     }
 
-    let upgraded_bindings = calls.upgraded_bindings.clone();
     let declared_dependencies = std::mem::take(&mut x.declared_dependencies);
     let resolved_app_versions = x
         .dependency_apps
@@ -3633,14 +3610,12 @@ pub(crate) fn build_cross_app_base(
         friends: x.friends.clone(),
         resolved,
         dep_routine_ids,
-        graph,
-        combined_scc,
+        graph: std::sync::Arc::new(graph),
+        combined_scc: std::sync::Arc::new(combined_scc),
         field_index,
-        upgraded_bindings,
         event_graph: event_graph.clone(),
         leaf_summaries,
         fixed_roles,
-        injected_typed_edges,
         direct_full,
         direct_coverage,
         nodes,
@@ -3652,7 +3627,7 @@ pub(crate) fn build_cross_app_base(
         crate::census_hook::mark("census.base");
         census_cross_app_base(&base);
     }
-    Some(base)
+    Ok(base)
 }
 
 /// #160 §4.1.5: one `base.<field>` bucket per field of [`R3a5CrossAppBase`],
@@ -3662,7 +3637,6 @@ pub(crate) fn build_cross_app_base(
 /// charged apart, so nothing the model still owns is missing from the base.
 fn census_cross_app_base(b: &R3a5CrossAppBase) {
     use crate::engine::census::{Kind, Tally, combined_graph, event_graph};
-    use crate::program::model::calls::UpgradedBinding;
     use crate::program::model::program_calls::{census_calls, census_model_rows};
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
     emit(
@@ -3696,10 +3670,7 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
     emit("base.graph", &mut combined_graph(&b.graph));
     emit(
         "base.combined_scc",
-        Tally::default()
-            .buf::<crate::engine::l4::scc::Scc>(b.combined_scc.sccs.len())
-            .buf::<(String, usize)>(b.combined_scc.scc_id_by_routine.len())
-            .strs(b.combined_scc.scc_id_by_routine.keys()),
+        &mut crate::engine::census::scc(&b.combined_scc),
     );
     emit(
         "base.field_index",
@@ -3710,13 +3681,6 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
                     .iter()
                     .flat_map(|((t, f), id)| [t.as_str(), f.as_str(), id.as_str()]),
             ),
-    );
-    emit(
-        "base.upgraded_bindings",
-        Tally::default()
-            .buf::<(String, Vec<UpgradedBinding>)>(b.upgraded_bindings.len())
-            .strs(b.upgraded_bindings.keys())
-            .bufs(b.upgraded_bindings.values()),
     );
     emit("base.event_graph", &mut event_graph(&b.event_graph));
     emit(
@@ -3730,10 +3694,6 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
         Tally::default()
             .buf::<String>(b.fixed_roles.len())
             .strs(&b.fixed_roles),
-    );
-    emit(
-        "base.injected_typed_edges",
-        Tally::default().buf::<TypedEdge>(b.injected_typed_edges.len()),
     );
     let mut direct = Tally::default();
     direct
@@ -3798,7 +3758,7 @@ pub fn project_r3a5_cross_app(
     };
 
     let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
-    let Some(base) = build_cross_app_base(&inputs, model_instance_id) else {
+    let Some(base) = build_cross_app_base(&inputs, model_instance_id).ok() else {
         return empty;
     };
     let ws_routines = base.ws_routines();
@@ -3808,12 +3768,14 @@ pub fn project_r3a5_cross_app(
     let direct_full = &base.direct_full;
 
     // From-scratch core (v2 db-effect solver, Phase-1-parity) + cone over the
-    // assembled base. Trace + roles-cap diagnostics ignored here.
+    // assembled base. Trace + roles-cap diagnostics ignored here, so since #160
+    // step 2 (§4.4.7) `aldump --r3a5-cross-app-summary` prints no
+    // non-convergence line (only `build_l4` prints).
     let (core_summaries, _) = compute_summaries_v2_with_leaves_core(
         ws_routines,
         graph,
         &base.combined_scc,
-        &base.upgraded_bindings,
+        &base.resolved.calls.upgraded_bindings,
         &base.field_index,
         &base.leaf_summaries,
         &base.fixed_roles,
@@ -4325,7 +4287,8 @@ pub fn issue160_full_graph_timings(
     let Some(base) = build_cross_app_base(
         &crate::program::inputs::InputSet::read(workspace, &Default::default()),
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-    ) else {
+    )
+    .ok() else {
         return Ok(None);
     };
     let cone_nanos = || {
@@ -4346,7 +4309,7 @@ pub fn issue160_full_graph_timings(
         let sb = if side == "cut" {
             build_r3a3_source_only_base(&base.resolved)
         } else {
-            build_r3a3_source_only_base_over(&base.resolved, base.graph.clone())
+            build_r3a3_source_only_base_over(&base.resolved, (*base.graph).clone())
         };
         let (cone1, pd1) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
         let t = std::time::Instant::now();
@@ -4902,7 +4865,7 @@ codeunit 13 "Dep Rec Sub"
     /// forwarder `Fwd(var Rec)` whose body is ONLY `Lib.OnDepRec(Rec)`.
     /// Hand-stated expectations, checked through the production paths that
     /// expose each fact:
-    ///   (i)   DB rows, through the store `cross_app_db_effect_bundle` builds:
+    ///   (i)   DB rows, through the store `build_l4` builds cross-app:
     ///         `OnDepRec` has its subscriber's `Modify` row;
     ///   (ii)  parameter roles, through the detector context analyze uses
     ///         (`build_detector_context_with` + the base's cross-app inputs,
@@ -4920,6 +4883,13 @@ codeunit 13 "Dep Rec Sub"
     ///
     /// (ii) takes its inputs from `base.cross_app_inputs()`, the one
     /// constructor every cross-app caller uses, so mutation (b) reaches it.
+    ///
+    /// (i) since #160 Task 27 (2026-10-19): `build_l4` called the cross-app
+    /// way. Removing `edges_by_from` for the `fixed_roles` members inside
+    /// `build_l4` fails (i) (`[]`); restored, it passes. Stated limit: passing
+    /// `None` instead of the cross-app inputs to (i)'s `build_l4` stays GREEN.
+    /// Fixed roles change roles only, and the one leaf (`HandleRec`, no
+    /// out-edge) equals its solved direct rows, so the rows do not see it.
     #[test]
     fn dependency_publisher_roles_stay_unknown() {
         let dir = tempfile::tempdir().unwrap();
@@ -4935,8 +4905,18 @@ codeunit 13 "Dep Rec Sub"
         );
         let mut failures: Vec<String> = Vec::new();
 
-        // (i) DB rows through the store.
-        let bundle = crate::engine::l4::effect_query_cli::cross_app_db_effect_bundle(&base);
+        // (i) DB rows through the store, solved the cross-app way (the base's
+        // SCC and cross-app inputs, so the leaves and fixed roles are in).
+        let (l4, _) = crate::engine::l4::analysis::build_l4(
+            &base.resolved,
+            &base.graph,
+            crate::engine::l4::analysis::L4Request {
+                scc: Some(std::sync::Arc::clone(&base.combined_scc)),
+                extra_diagnostics: vec![],
+            },
+            Some(&base.cross_app_inputs()),
+        );
+        let bundle = l4.bundle;
         let ops: Vec<String> = bundle
             .routine_ix(&publisher)
             .map(|ix| bundle.db_effects(ix).map(|e| e.op.to_string()).collect())
@@ -4963,11 +4943,12 @@ codeunit 13 "Dep Rec Sub"
         );
 
         // (ii) The detector context analyze uses.
-        let ctx = crate::engine::l5::detector_context::build_detector_context_with(
+        let owned = crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
             crate::engine::l5::registry::substrate::ALL,
-            Some(base.cross_app_inputs()),
+            Some(&base),
         );
+        let ctx = owned.ctx();
         for (name, id, want) in [
             ("OnDepRec", &publisher, &all_unknown),
             ("Fwd", &fwd, &fwd_want),
@@ -5023,6 +5004,94 @@ codeunit 13 "Dep Rec Sub"
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// #160 Task 27 review I1: cross-app `alsem query` keeps the model, the
+    /// graph and the `l4` analysis, and drops the rest of the base before the
+    /// query and the render. The base holds its own `graph` and `combined_scc`
+    /// handles, so a live base shows as a second owner of each.
+    #[test]
+    fn cross_app_query_drops_the_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture(&ws);
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let q = crate::engine::l4::effect_query_cli::QuerySubstrate::build(&inputs, "r0", false)
+            .expect("cross-app query substrate");
+        assert_eq!(q.shared_owners(), (1, 1), "(graph, scc) owners");
+    }
+
+    /// #160 Task 27 review #2: the cross-app shim solves over the base's
+    /// graph, so it takes the base's SCC instead of running a second Tarjan.
+    #[test]
+    fn cross_app_shim_reuses_the_base_scc() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture(&ws);
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+        let owned = crate::engine::l5::detector_context::build_detector_context_with(
+            &base.resolved,
+            crate::engine::l5::registry::substrate::CORE_SUMMARIES,
+            Some(&base),
+        );
+        let l4 = owned.l4().expect("CORE_SUMMARIES solves");
+        assert!(
+            std::sync::Arc::ptr_eq(&l4.scc, &base.combined_scc),
+            "the shim computed its own SCC"
+        );
+    }
+
+    /// #160 final panel P1-1: (ii) through the `View`, the path every command
+    /// takes since step 2. A cross-app `View` prepared with a plan whose probe
+    /// demands `CORE_SUMMARIES` keeps `OnDepRec`'s five path-sensitive role
+    /// fields `unknown` in `view.det()`, as (ii) does through the shim.
+    ///
+    /// DISCRIMINATION: passing `None` instead of `target.cross_app_inputs()`
+    /// to the det fill in `View::prepare` fails this, while the shim-path
+    /// tests above stay green.
+    #[test]
+    fn dependency_publisher_roles_stay_unknown_through_the_view() {
+        use crate::engine::l5::registry::{Detector, DetectorOutput, DetectorStats, substrate};
+        use crate::engine::session::{Plan, View};
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture(&ws);
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+        let publisher = routine_id(&base, "OnDepRec");
+        let probe = Detector {
+            name: "probe".to_string(),
+            run: |_, _| {
+                Ok(DetectorOutput::no_diag(
+                    vec![],
+                    DetectorStats::new("probe", 0, 0),
+                ))
+            },
+            requires: substrate::CORE_SUMMARIES,
+            rule_name: "Probe",
+            short_description: "test probe",
+        };
+        let mut view = View::new(crate::engine::gate::run::AnalysisTarget::CrossApp(
+            Box::new(base),
+        ));
+        view.prepare(&Plan::for_test(vec![vec![probe]], true, false, 0));
+        let all_unknown = (
+            EffectPresence::Unknown,
+            FieldList::Unknown,
+            EffectPresence::Unknown,
+            EffectPresence::Unknown,
+            FieldList::Unknown,
+        );
+        match view
+            .det()
+            .parameter_roles_by_routine
+            .get(&publisher)
+            .map(|v| v.as_slice())
+        {
+            Some([role]) => assert_eq!(five(role), all_unknown, "OnDepRec through the View"),
+            other => panic!("OnDepRec: want one role, got {other:?}"),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5173,11 +5242,12 @@ codeunit 13 "Dep Rec Sub"
         names: &[&str],
         keys: &[&str],
     ) -> Vec<RoleRow> {
-        let ctx = crate::engine::l5::detector_context::build_detector_context_with(
+        let owned = crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
             crate::engine::l5::registry::substrate::ALL,
-            Some(base.cross_app_inputs()),
+            Some(base),
         );
+        let ctx = owned.ctx();
         let proj = project_r3a5_cross_app(ws, "r0", "issue107");
         let mut out = Vec::new();
         for name in names {

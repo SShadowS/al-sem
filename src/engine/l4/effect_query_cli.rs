@@ -18,10 +18,10 @@
 //!
 //! ## Pipeline ownership
 //!
-//! Like `digest` and `prove`, this owns its own one-shot pipeline (assemble →
-//! the model's calls and event graph → combined graph → Tarjan →
+//! It builds a `View` with query's plan (#160 §4.4.4): no detector run, the
+//! `l4` cell alone (assemble → combined graph → `build_l4`: Tarjan and
 //! `compute_summaries_v2_bundle_with_leaves` → `DbEffectQuery`). It never
-//! touches a `DetectorContext`, so it costs `alsem analyze` exactly nothing
+//! builds a `DetectorContext`, so it costs `alsem analyze` exactly nothing
 //! **by construction** — not by a flag that could be set wrong. The
 //! `substrate::DB_EFFECT_REVERSE_INDEX` bit exists for the eventual
 //! detector/LSP path, not for this CLI.
@@ -40,15 +40,12 @@ use std::collections::HashMap;
 use serde_json::{Map, Value, json};
 
 use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document_value};
-use crate::engine::l4::combined_graph::{CombinedGraph, build_combined_graph};
+use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query::{
     AncestorTouch, DbEffectQuery, TableTouch, UNKNOWN_TABLE_ID, is_unknown_table,
 };
-use crate::engine::l4::effect_store::SummaryBundle;
-use crate::engine::l4::scc::{SccInputGraph, SccResult, tarjan_scc};
-use crate::engine::l4::summary::RoutineSummary;
-use crate::engine::l4::summary_runner::{FieldIndex, compute_summaries_v2_bundle_with_leaves};
+use crate::engine::session::{View, query_plan};
 use crate::program::model::workspace::{
     Model, ModelRecordOperation, ModelRoutine, table_by_id_preferring_real,
 };
@@ -108,154 +105,78 @@ pub struct QueryRunResult {
 // The owned substrate (one workspace load per invocation).
 // ---------------------------------------------------------------------------
 
-/// The owned inputs a [`DbEffectQuery`] borrows. Held by value because the
-/// query surface borrows the bundle AND the Tarjan result, and both must
-/// outlive it.
+/// What a [`DbEffectQuery`] borrows: the parts of a [`View`] whose `l4` cell
+/// query's plan filled (no detector run, #160 §4.4.4): the model, the graph
+/// and the `l4` analysis (the bundle and its SCC). The cross-app base's other
+/// fields drop before the query is built ([`View::into_query_parts`]).
 pub struct QuerySubstrate {
-    pub resolved: Model,
-    pub graph: CombinedGraph,
-    pub scc: SccResult,
-    pub bundle: SummaryBundle,
+    model: Model,
+    graph: std::sync::Arc<crate::engine::l4::combined_graph::CombinedGraph>,
+    l4: crate::engine::l4::analysis::L4Analysis,
     /// Which dependencies the model holds (#66), stated in every document.
     pub dependencies: LoadedDependencies,
 }
 
 impl QuerySubstrate {
-    /// Assemble the workspace and run the L3→L4 substrate this query needs.
-    /// The same assembly `cdo_whole_program_v2_matches_frozen_digest` uses,
-    /// swapped to the BUNDLE entry point so the compact rows survive (the
-    /// materializing `_core` shim would expand and then discard them).
+    /// Assemble the target and fill its `l4` cell: `build_l4` over the target's
+    /// graph, the BUNDLE entry point so the compact rows survive.
     ///
     /// `single_app == false` (the default, #66) builds `alsem analyze`'s cross-app
-    /// base instead ([`Self::from_cross_app_base`]), so a dependency's tables
-    /// resolve and are selectable.
+    /// base instead: its graph and SCC, with every source-bearing dependency
+    /// routine a FIXED leaf holding its own direct db effects, so a dependency's
+    /// tables resolve and are selectable. With no dependency there are no leaves
+    /// and the same graph, so the two modes agree.
     pub fn build(
         inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
         model_instance_id: &str,
         single_app: bool,
     ) -> Result<Self, String> {
-        if !single_app {
+        let target = if single_app {
+            // Engine-switch S6.7: the program-backed model (program calls and events).
+            let resolved =
+                crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+                    inputs,
+                    model_instance_id,
+                    false,
+                )
+                .ok_or_else(|| "query: workspace did not resolve".to_string())?;
+            AnalysisTarget::SingleApp(Box::new(resolved))
+        } else {
             let base =
                 crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
-                    .ok_or_else(|| {
-                        "query: the cross-app model could not be built \
-                 (--single-app analyses the workspace alone)"
-                            .to_string()
-                    })?;
-            return Ok(Self::from_cross_app_base(base));
-        }
-        // Engine-switch S6.7: the program-backed model (program calls and events).
-        let resolved =
-            crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-                inputs,
-                model_instance_id,
-                false,
-            )
-            .ok_or_else(|| "query: workspace did not resolve".to_string())?;
-        Ok(Self::from_resolved(resolved))
-    }
-
-    /// The substrate over `alsem analyze`'s cross-app base (#66): its combined
-    /// graph (workspace callers' calls and the event graph) and SCC, with every
-    /// source-bearing dependency routine a FIXED leaf holding its own direct db
-    /// effects — the bundle form of `project_r3a5_cross_app`'s core. With no
-    /// dependency there are no leaves and the same graph, so this equals
-    /// [`Self::from_resolved`].
-    pub fn from_cross_app_base(base: crate::engine::l4::capability_cone::R3a5CrossAppBase) -> Self {
-        let bundle = cross_app_db_effect_bundle(&base);
-        QuerySubstrate {
-            resolved: base.resolved,
-            graph: base.graph,
-            scc: base.combined_scc,
-            bundle,
-            dependencies: LoadedDependencies {
-                cross_app: true,
-                apps: base.loaded_apps,
-            },
-        }
-    }
-
-    /// The substrate steps alone, over an already-assembled workspace — the
-    /// seam the differential reuses so it exercises this exact assembly rather
-    /// than a parallel copy of it.
-    pub fn from_resolved(resolved: Model) -> Self {
-        let (graph, scc, bundle) = build_db_effect_bundle(&resolved);
-        QuerySubstrate {
-            resolved,
+                    .map_err(|e| AnalysisTarget::cross_app_failure_message("query", &e))?;
+            AnalysisTarget::CrossApp(Box::new(base))
+        };
+        let dependencies = target.dependencies();
+        let mut view = View::new(target);
+        view.prepare(&query_plan());
+        let (model, graph, l4) = view.into_query_parts();
+        Ok(QuerySubstrate {
+            model,
             graph,
-            scc,
-            bundle,
-            dependencies: LoadedDependencies::default(),
-        }
+            l4,
+            dependencies,
+        })
+    }
+
+    /// The model the selectors and joins read.
+    pub fn resolved(&self) -> &Model {
+        &self.model
     }
 
     /// The query surface over this substrate.
     pub fn query(&self) -> DbEffectQuery<'_> {
-        DbEffectQuery::build(&self.bundle, &self.scc, &self.graph)
+        DbEffectQuery::build(&self.l4.bundle, &self.l4.scc, &self.graph)
     }
-}
 
-/// The L4 db-effect store over `alsem analyze`'s cross-app base (#66): its
-/// combined graph and SCC, every source-bearing dependency routine without an
-/// out-edge a FIXED leaf, and a dependency publisher solved through its
-/// subscriber dispatch (#70). The cross-app twin of [`build_db_effect_bundle`];
-/// `query` and `digest` both read it in cross-app mode, so their `tempState`
-/// agrees (#65).
-pub fn cross_app_db_effect_bundle(
-    base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
-) -> SummaryBundle {
-    compute_summaries_v2_bundle_with_leaves(
-        &base.resolved.workspace.routines,
-        &base.graph,
-        &base.combined_scc,
-        &base.upgraded_bindings,
-        &base.field_index,
-        &base.leaf_summaries,
-        &base.fixed_roles,
-    )
-    .0
-}
-
-/// The L4 db-effect store over a single-app resolved model: combined graph →
-/// Tarjan → `compute_summaries_v2_bundle_with_leaves`. The ONE single-app
-/// assembly behind `query`, `digest` and `prove`'s `tempState` (#65), so the
-/// commands cannot disagree about a record's temp state.
-pub fn build_db_effect_bundle(resolved: &Model) -> (CombinedGraph, SccResult, SummaryBundle) {
-    let ws = &resolved.workspace;
-    // The model's own calls and event graph (the program engine's).
-    let calls = &resolved.calls;
-    let event_graph = &resolved.events.graph;
-    let graph = build_combined_graph(ws, calls, event_graph);
-
-    let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
-    for (from, list) in &graph.edges_by_from {
-        scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
+    /// How many owners the graph and the SCC have (#160 Task 27 review I1).
+    #[cfg(test)]
+    pub(crate) fn shared_owners(&self) -> (usize, usize) {
+        (
+            std::sync::Arc::strong_count(&self.graph),
+            std::sync::Arc::strong_count(&self.l4.scc),
+        )
     }
-    crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
-    let scc = tarjan_scc(&SccInputGraph {
-        nodes: &graph.nodes,
-        edges_by_from: &scc_adjacency,
-    });
-
-    let mut field_index: FieldIndex = HashMap::new();
-    for table in &ws.tables {
-        for field in &table.fields {
-            field_index
-                .entry((table.id.clone(), field.name.to_lowercase()))
-                .or_insert_with(|| field.id.clone());
-        }
-    }
-    let no_leaves: HashMap<String, RoutineSummary> = HashMap::new();
-    let (bundle, _map, _diags) = compute_summaries_v2_bundle_with_leaves(
-        &ws.routines,
-        &graph,
-        &scc,
-        &calls.upgraded_bindings,
-        &field_index,
-        &no_leaves,
-        &std::collections::HashSet::new(),
-    );
-    (graph, scc, bundle)
 }
 
 // ---------------------------------------------------------------------------
@@ -811,7 +732,7 @@ fn render_query_touches_body(
             exit_code: 2,
         };
     }
-    let table = match resolve_table_selector(&substrate.resolved, table_selector) {
+    let table = match resolve_table_selector(substrate.resolved(), table_selector) {
         Resolution::Resolved(t) => t,
         other => {
             return selector_failure_doc(
@@ -828,7 +749,7 @@ fn render_query_touches_body(
 
     let from_routine = match from {
         None => None,
-        Some(sel) => match resolve_routine_selector(&substrate.resolved, sel) {
+        Some(sel) => match resolve_routine_selector(substrate.resolved(), sel) {
             Resolution::Resolved(r) => Some(r),
             other => {
                 return selector_failure_doc(
@@ -845,8 +766,8 @@ fn render_query_touches_body(
     };
 
     let query = substrate.query();
-    let join = RoutineJoin::build(&substrate.resolved);
-    let ops = OperationJoin::build(&substrate.resolved);
+    let join = RoutineJoin::build(substrate.resolved());
+    let ops = OperationJoin::build(substrate.resolved());
 
     let mut payload = Map::new();
     payload.insert(
@@ -882,7 +803,7 @@ fn render_query_touches_body(
                 .into_iter()
                 .filter(|&ix| {
                     join.routine(query.bundle().routine_id(ix))
-                        .is_none_or(|r| is_primary_routine(&substrate.resolved, r))
+                        .is_none_or(|r| is_primary_routine(substrate.resolved(), r))
                 })
                 .collect();
             let rows: Vec<Value> = routines
@@ -1135,7 +1056,7 @@ fn render_query_effects_body(
     deterministic: bool,
 ) -> QueryRunResult {
     let deps = &substrate.dependencies;
-    let routine = match resolve_routine_selector(&substrate.resolved, routine_selector) {
+    let routine = match resolve_routine_selector(substrate.resolved(), routine_selector) {
         Resolution::Resolved(r) => r,
         other => {
             return selector_failure_doc(
@@ -1151,9 +1072,9 @@ fn render_query_effects_body(
     };
 
     let query = substrate.query();
-    let join = RoutineJoin::build(&substrate.resolved);
-    let ops = OperationJoin::build(&substrate.resolved);
-    let tables = TableNames::build(&substrate.resolved);
+    let join = RoutineJoin::build(substrate.resolved());
+    let ops = OperationJoin::build(substrate.resolved());
+    let tables = TableNames::build(substrate.resolved());
     let rr = join.of(routine);
 
     let Some(rix) = query.routine_ix(&routine.id) else {

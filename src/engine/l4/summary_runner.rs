@@ -1533,14 +1533,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         // byte-identical to the OLD solver's message shape (severity/stage/text).
         // Never fires on the corpus (roles converge); preserves the honesty signal.
         if let Some(members) = &cap_hit_stable_members {
-            diagnostics.push(SummarizeDiagnostic {
-                severity: "warning".to_string(),
-                stage: "summarize".to_string(),
-                message: format!(
-                    "Summary fixed-point did not converge for SCC [{}]; its facts are lower-confidence",
-                    members.join(", ")
-                ),
-            });
+            diagnostics.push(SummarizeDiagnostic::non_convergence(members));
         }
 
         // New db-effect solve. Reads the SAME predecessor view (`v2_map`) for
@@ -1783,6 +1776,27 @@ pub struct SummarizeDiagnostic {
     pub severity: String,
     pub stage: String,
     pub message: String,
+}
+
+/// The tail a non-convergence diagnostic's message carries after the line
+/// `l4::analysis::build_l4` prints. `l4::analysis::render_warnings` strips it to render that
+/// line, and renders nothing for a message without it (#160 §4.4.7).
+pub(crate) const NON_CONVERGENCE_TAIL: &str = "; its facts are lower-confidence";
+
+impl SummarizeDiagnostic {
+    /// The roles fixpoint's cap-hit diagnostic for the SCC `members`,
+    /// byte-identical to the OLD solver's message shape (severity/stage/text).
+    pub(crate) fn non_convergence(members: &[impl AsRef<str>]) -> Self {
+        let members: Vec<&str> = members.iter().map(AsRef::as_ref).collect();
+        SummarizeDiagnostic {
+            severity: "warning".to_string(),
+            stage: "summarize".to_string(),
+            message: format!(
+                "Summary fixed-point did not converge for SCC [{}]{NON_CONVERGENCE_TAIL}",
+                members.join(", ")
+            ),
+        }
+    }
 }
 
 /// One member's roles for a pass: [`compose_roles_only`], or, for a
@@ -2117,10 +2131,12 @@ fn run_one_scc_roles(
             // cap-hit here mirrors a cap-hit there with the same round-MAX roles.
             // Record the honesty signal EXACTLY as the old `run_one_scc` did
             // (summary_runner.rs FIX 4): a deterministic, modelInstanceId-
-            // independent, sorted stable-id member list, plus the same stderr
-            // warning. The caller (`compute_summaries_v2_with_leaves_core`) turns
-            // this into the `SummarizeDiagnostic` + per-member `fixpoint-capped`
-            // uncertainty so the v2 path is byte-identical to old on a cap.
+            // independent, sorted stable-id member list. The caller
+            // (`compute_summaries_v2_with_leaves_core`) turns this into the
+            // `SummarizeDiagnostic` + per-member `fixpoint-capped` uncertainty
+            // so the v2 path is byte-identical to old on a cap. The stderr
+            // warning is no longer printed here: the solve's caller prints
+            // `render_warnings` of the diagnostic (#160 §4.4.7).
             let mut members: Vec<&str> = scc_entry
                 .members
                 .iter()
@@ -2132,10 +2148,6 @@ fn run_one_scc_roles(
                 })
                 .collect();
             members.sort_unstable();
-            eprintln!(
-                "warning: summarize: Summary fixed-point did not converge for SCC [{}]",
-                members.join(", ")
-            );
             cap_hit_stable_members = Some(members.into_iter().map(str::to_string).collect());
             break;
         }
@@ -2533,6 +2545,69 @@ codeunit 50102 Cyc
             }
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// #160 §4.4.7: a REAL cap's diagnostic renders the line the solver printed
+    /// for that SCC before step 2 (`run_one_scc_roles`' deleted `eprintln!`),
+    /// so the producer's message and `render_warnings` cannot drift apart. The
+    /// literal is the line that `eprintln!` printed on this run (captured
+    /// 2026-10-19, before Task 27 deleted it); `build_l4` now prints it.
+    #[test]
+    fn forced_roles_cap_renders_the_printed_warning() {
+        let (_, _, _, diags) = cyc_run(Some(1));
+        assert_eq!(
+            crate::engine::l4::analysis::render_warnings(&diags),
+            [CYC_CAPPED_LINE]
+        );
+    }
+
+    /// The line a forced cap (1 round) on [`CYC_SRC`]'s SCC prints.
+    const CYC_CAPPED_LINE: &str = "warning: summarize: Summary fixed-point did not converge for SCC \
+         [11111111-0000-0000-0000-000000107108:Codeunit:50102#2e36a9e68f534bbc0875318b65eccb1c08e5e1b650dfc5a41b0bda18e6d609d4, \
+         11111111-0000-0000-0000-000000107108:Codeunit:50102#d6aaac084552537da4ab830ae0a027d3c33b3a4e9773a712e0ceb0922f73890c]";
+
+    /// #160 §4.4.7: `build_l4` is the ONE print site. A child copy of this
+    /// test binary (the env var below) runs `build_l4` on [`CYC_SRC`] under a
+    /// forced cap with `--nocapture`; its stderr must hold the capped line
+    /// exactly once (the solver itself no longer prints). The child is the
+    /// only way to read the print: libtest's capture is not readable from a
+    /// test. DISCRIMINATION (2026-10-19): `build_l4` not printing fails with
+    /// `left: []`; printing each line twice fails with two lines; restored, it
+    /// passes.
+    #[test]
+    fn build_l4_prints_the_capped_line_once() {
+        const CHILD: &str = "AL_SEM_BUILD_L4_PRINT_CHILD";
+        const NAME: &str =
+            "engine::l4::summary_runner::issue107_tests::build_l4_prints_the_capped_line_once";
+        if std::env::var_os(CHILD).is_some() {
+            let m = model(CYC_SRC);
+            let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
+            let req = crate::engine::l4::analysis::L4Request {
+                scc: None,
+                extra_diagnostics: vec![],
+            };
+            let (l4, _) = with_roles_iteration_cap(1, || {
+                crate::engine::l4::analysis::build_l4(&m, &graph, req, None)
+            });
+            assert_eq!(l4.warnings, [CYC_CAPPED_LINE], "precondition: capped");
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "the child ran the test\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        let printed: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("warning: summarize:"))
+            .collect();
+        assert_eq!(printed, [CYC_CAPPED_LINE], "stderr: {stderr}");
     }
 
     /// Negative control for the guard above: the same SCC with a cap that it

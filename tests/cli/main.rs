@@ -21,6 +21,9 @@ mod temp_state_probe;
 #[path = "../common/dep_dispatch_fixture.rs"]
 mod dep_dispatch_fixture;
 
+#[path = "../common/unreadable.rs"]
+mod unreadable;
+
 pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Hold this for the entire set-var → run → remove-var span of any test that
@@ -93,6 +96,7 @@ mod cli_query_differential;
 mod cli_s6_consumers;
 mod cli_sarif_rule_catalog;
 mod cli_stderr_logger;
+mod cli_strict_events_policy;
 mod cli_workspace_fingerprint_closure;
 mod cli_workspace_source;
 mod cli_write_failure;

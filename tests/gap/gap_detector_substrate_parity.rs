@@ -110,17 +110,22 @@ fn assert_parity(
     label: &str,
 ) {
     // Build the full context ONCE; each detector's minimal context is rebuilt from
-    // its own declared `requires`.
-    let full_ctx = build_detector_context(resolved, substrate::ALL);
+    // its own declared `requires`. `ALL` carries no ordering bit, and a read of an
+    // unfilled ordering slot panics, so the full context also fills it.
+    let full_owned = build_detector_context(resolved, substrate::ALL | substrate::ORDERING_FACTS);
+    let full_ctx = full_owned.ctx();
     for det in detectors {
-        let min_ctx = build_detector_context(resolved, det.requires);
+        let min = build_detector_context(resolved, det.requires);
+        let min_ctx = min.ctx();
         let full = (det.run)(resolved, &full_ctx)
             .unwrap_or_else(|e| panic!("detector {} failed on full ctx ({label}): {e}", det.name));
         let minimal = (det.run)(resolved, &min_ctx).unwrap_or_else(|e| {
             panic!("detector {} failed on minimal ctx ({label}): {e}", det.name)
         });
+        // The WHOLE output, not only `findings`: stats, diagnostics and d1's cohort
+        // index must not depend on substrate the detector did not declare either.
         assert_eq!(
-            full.findings, minimal.findings,
+            full, minimal,
             "detector {} under-declares its substrate requirements ({label})",
             det.name
         );
@@ -171,11 +176,8 @@ fn every_detector_parity_between_full_and_minimal_ctx() {
         .iter()
         .find(|d| d.name == "d35-commit-in-event-subscriber")
         .expect("d35 registered");
-    let fired = (d35.run)(
-        &d35_unknown,
-        &build_detector_context(&d35_unknown, substrate::ALL),
-    )
-    .expect("d35 runs");
+    let owned = build_detector_context(&d35_unknown, substrate::ALL);
+    let fired = (d35.run)(&d35_unknown, &owned.ctx()).expect("d35 runs");
     assert_eq!(
         fired.findings.len(),
         1,

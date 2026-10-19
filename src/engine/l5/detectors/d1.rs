@@ -3173,7 +3173,8 @@ mod shadow_tests {
         graph_edges: HashMap<String, Vec<CombinedEdge>>,
         summaries: HashMap<String, FullRoutineSummary>,
     ) -> ShadowCase {
-        let ctx = minimal_ctx(routines, graph_edges, summaries);
+        let owned = minimal_ctx(routines, graph_edges, summaries);
+        let ctx = owned.ctx();
 
         // OLD: the still-live PW-0 premerge walk, over its OWN (separately
         // owned) `Model`/`ModelEntities` clone — `detect_d1_premerge`
@@ -3413,12 +3414,13 @@ mod shadow_tests {
                 false,
             )
             .expect("assemble_and_resolve_workspace_program failed for DO_WS");
-        let ctx = crate::engine::l5::detector_context::build_detector_context(
+        let owned = crate::engine::l5::detector_context::build_detector_context(
             &resolved,
             crate::engine::l5::registry::substrate::SUMMARIES
                 | crate::engine::l5::registry::substrate::CORE_SUMMARIES
                 | crate::engine::l5::registry::substrate::CLOSED_WORLD_TEMP,
         );
+        let ctx = owned.ctx();
         let ws = &resolved.workspace;
 
         let premerge = detect_d1_premerge(&resolved, &ctx);
@@ -3547,7 +3549,8 @@ mod assembly_tests {
     use crate::engine::l5::d1_reach::search_loops;
     use crate::engine::l5::full_summary::FullRoutineSummary;
     use crate::engine::l5::test_support::{
-        call_site, coverage, edge_kind, fact, loop_def, minimal_ctx, record_op, routine, summary,
+        MinimalCtx, call_site, coverage, edge_kind, fact, loop_def, minimal_ctx, record_op,
+        routine, summary,
     };
     use crate::program::model::workspace::{Model, ModelEntities};
 
@@ -3626,7 +3629,8 @@ mod assembly_tests {
         edges: HashMap<String, Vec<CombinedEdge>>,
         summaries: HashMap<String, FullRoutineSummary>,
     ) -> Vec<(Finding, Vec<LoopContext>)> {
-        let ctx = minimal_ctx(routines, edges, summaries);
+        let owned = minimal_ctx(routines, edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);
@@ -3764,7 +3768,8 @@ mod assembly_tests {
         edges: HashMap<String, Vec<CombinedEdge>>,
         summaries: HashMap<String, FullRoutineSummary>,
     ) -> Vec<Finding> {
-        let ctx = minimal_ctx_with_uncertainties(routines, edges, summaries, Vec::new());
+        let owned = minimal_ctx_with_uncertainties(routines, edges, summaries, Vec::new());
+        let ctx = owned.ctx();
         cohort_findings(&ctx, routines)
     }
 
@@ -3775,12 +3780,12 @@ mod assembly_tests {
         edges: HashMap<String, Vec<CombinedEdge>>,
         summaries: HashMap<String, FullRoutineSummary>,
         uncertainties: Vec<(String, Vec<Uncertainty>)>,
-    ) -> DetectorContext<'a> {
-        let mut ctx = minimal_ctx(routines, edges, summaries);
+    ) -> MinimalCtx<'a> {
+        let mut owned = minimal_ctx(routines, edges, summaries);
         for (node, set) in uncertainties {
-            ctx.set_uncertainties_for_test(&node, set);
+            owned.art_mut().set_uncertainties_for_test(&node, set);
         }
-        ctx
+        owned
     }
 
     /// The production cohort path over an already-built context.
@@ -3923,7 +3928,8 @@ mod assembly_tests {
         .into_iter()
         .collect();
 
-        let ctx = minimal_ctx_with_uncertainties(&routines, edges, summaries, uncertainties);
+        let owned = minimal_ctx_with_uncertainties(&routines, edges, summaries, uncertainties);
+        let ctx = owned.ctx();
         let findings = cohort_findings(&ctx, &routines);
 
         assert_eq!(findings.len(), 1, "one terminal -> one finding");
@@ -4124,7 +4130,8 @@ mod assembly_tests {
             vec![unc("dynamic-dispatch", None, Some("Y"))],
         )];
 
-        let ctx = minimal_ctx_with_uncertainties(&routines, edges, summaries, uncertainties);
+        let owned = minimal_ctx_with_uncertainties(&routines, edges, summaries, uncertainties);
+        let ctx = owned.ctx();
         let findings = cohort_findings(&ctx, &routines);
 
         assert_eq!(findings.len(), 2, "two terminals -> two findings");
@@ -4255,7 +4262,8 @@ mod assembly_tests {
     #[test]
     fn terminal_based_id_and_stable_fingerprint_inputs() {
         let (routines, edges, summaries) = two_loops_one_terminal();
-        let ctx = minimal_ctx(&routines, edges, summaries);
+        let owned = minimal_ctx(&routines, edges, summaries);
+        let ctx = owned.ctx();
         let workspace = ws(&routines);
         let mut memo = HashMap::new();
         let (graph, seeds) = build_d1_graph(&ctx, &workspace, &mut memo);

@@ -257,10 +257,9 @@ mod tests {
 
     use super::{cmp_version, detect_d17};
     use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
-    use crate::engine::l5::detector_context::{DeclaredDep, DetectorContext};
-    use crate::engine::l5::event_flow::EventFlowIndexes;
+    use crate::engine::l5::detector_context::{DeclaredDep, DetectorArtifacts, detector_context};
+    use crate::engine::l5::test_support::empty_artifacts;
     use crate::program::body::features::PAnchor;
-    use crate::program::model::events::EventGraph;
     use crate::program::model::workspace::{
         Model, ModelEntities, ModelObject, ModelRoutine, RoutineVariables,
     };
@@ -435,19 +434,13 @@ mod tests {
         }
     }
 
-    fn make_ctx<'a>(
-        routines: &'a [ModelRoutine],
-        objects: &'a [ModelObject],
+    fn make_art(
+        routines: &[ModelRoutine],
         edges: Vec<CombinedEdge>,
         dep_routine_ids: BTreeSet<String>,
         declared: Vec<DeclaredDep>,
         app_versions: HashMap<String, String>,
-    ) -> DetectorContext<'a> {
-        let routine_by_id: HashMap<&'a str, &'a ModelRoutine> =
-            routines.iter().map(|r| (r.id.as_str(), r)).collect();
-        let objects_by_id: HashMap<&'a str, &'a ModelObject> =
-            objects.iter().map(|o| (o.id.as_str(), o)).collect();
-
+    ) -> DetectorArtifacts {
         // Build edges_by_from + edges_from_order in edge-slice order (mirrors
         // al-sem buildCombinedGraph insertion order).
         let mut edges_by_from: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
@@ -465,52 +458,20 @@ mod tests {
         let mut nodes: Vec<String> = routines.iter().map(|r| r.id.clone()).collect();
         nodes.sort();
 
-        DetectorContext {
-            graph: CombinedGraph {
-                nodes,
-                edges_by_from,
-                edges_from_order,
-                uncertainty_edges: Vec::new(),
-                typed_edges: Vec::new(),
-            },
-            event_graph: EventGraph {
-                events: Vec::new(),
-                edges: Vec::new(),
-            },
-            routine_by_id,
-            objects_by_id,
-            table_by_id: HashMap::new(),
-            reverse_call_graph: std::collections::BTreeMap::new(),
-            entry_points: BTreeSet::new(),
-            transaction_spans: Vec::new(),
-            resolved_call_edge_by_callsite: HashMap::new(),
-            uncertainty_edges_by_from: HashMap::new(),
-            uncertainties_by_node: HashMap::new(),
-            uncertainties: Default::default(),
-            call_site_by_id: HashMap::new(),
-            summaries: HashMap::new(),
-            // ⟨C1⟩ No summaries ⇒ no derived cone rows.
-            cone_derived: Default::default(),
-            event_flow_indexes: EventFlowIndexes::default(),
-            parameter_roles_by_routine: HashMap::new(),
-            upgraded_bindings_by_callsite: HashMap::new(),
-            reachable_roots: BTreeSet::new(),
-            internal_reachable_externally: false,
+        DetectorArtifacts {
             dep_routine_ids,
             declared_dependencies: declared,
             app_versions,
-            friends: HashMap::new(),
-            root_classifications_by_routine: HashMap::new(),
-            ordering_facts: std::sync::OnceLock::new(),
-            ordering_source: None,
-            closed_world_temp_params: Default::default(),
-            summarize_diagnostics: Vec::new(),
-            db_effect_bundle: None,
-            reverse_effect_index: None,
-            fingerprint_index: crate::engine::l5::fingerprint::FingerprintIndex::build(
-                routines, objects,
-            ),
-            cross_extension_subscribers: std::collections::BTreeMap::new(),
+            ..empty_artifacts(
+                CombinedGraph {
+                    nodes,
+                    edges_by_from,
+                    edges_from_order,
+                    uncertainty_edges: Vec::new(),
+                    typed_edges: Vec::new(),
+                },
+                HashMap::new(),
+            )
         }
     }
 
@@ -568,15 +529,9 @@ mod tests {
         let mut app_versions = HashMap::new();
         app_versions.insert(dep_guid.to_string(), "2.0.0.0".to_string());
 
-        let ctx = make_ctx(
-            &routines,
-            &objects,
-            edges,
-            dep_routine_ids,
-            declared,
-            app_versions,
-        );
+        let art = make_art(&routines, edges, dep_routine_ids, declared, app_versions);
         let resolved = empty_resolved_for(&routines, &objects);
+        let ctx = detector_context(&resolved, &art, None);
 
         let output = detect_d17(&resolved, &ctx).unwrap();
         assert_eq!(output.findings.len(), 1, "should emit 1 finding");
@@ -629,15 +584,9 @@ mod tests {
         let mut app_versions = HashMap::new();
         app_versions.insert(dep_guid.to_string(), "2.0.0.0".to_string());
 
-        let ctx = make_ctx(
-            &routines,
-            &objects,
-            edges,
-            dep_routine_ids,
-            declared,
-            app_versions,
-        );
+        let art = make_art(&routines, edges, dep_routine_ids, declared, app_versions);
         let resolved = empty_resolved_for(&routines, &objects);
+        let ctx = detector_context(&resolved, &art, None);
 
         let output = detect_d17(&resolved, &ctx).unwrap();
         assert_eq!(output.findings.len(), 1, "should emit 1 finding");

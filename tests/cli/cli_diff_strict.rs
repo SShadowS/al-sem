@@ -19,7 +19,7 @@ use crate::copy_dir;
 use al_sem::engine::gate::diff::CoveragePolicy;
 use al_sem::engine::gate::diff::cli::{DiffCliOptions, WORKSPACE_MODE_NOTE, run_diff};
 
-const MULTI_APP_ERROR: &str = "error: multi-app source workspace unsupported";
+pub(crate) const MULTI_APP_ERROR: &str = "error: multi-app source workspace unsupported";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -45,7 +45,8 @@ fn clean_ws(root: &Path, name: &str) -> PathBuf {
 }
 
 /// A clean workspace plus a nested second `app.json` (no `.al` beside it).
-fn error_ws(root: &Path, name: &str) -> PathBuf {
+/// Also `cli_strict_events_policy`'s error workspace.
+pub(crate) fn error_ws(root: &Path, name: &str) -> PathBuf {
     let ws = clean_ws(root, name);
     let sub = ws.join("sub");
     std::fs::create_dir_all(&sub).expect("mkdir sub");

@@ -27,11 +27,15 @@ use crate::engine::gate::policy::policy_loader::{
     load_policy_from_string,
 };
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
-use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostic_lines};
-use crate::engine::l5::detector_context::build_detector_context_with;
+use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view, diagnostic_lines};
+use crate::engine::l5::detector_context::build_detector_artifacts;
+use crate::engine::l5::detectors::default_detectors;
+use crate::engine::l5::registry::substrate;
 use crate::engine::root_classification::classify_roots;
+use crate::engine::session::{Cell, View, policy_plan};
 use crate::program::inputs::{InputSet, PolicyOrigin, PolicyRequest};
 use crate::program::model::workspace::ModelRoutine;
+use std::sync::Arc;
 
 /// How the effective policy was resolved.
 enum ResolvedPolicy {
@@ -198,11 +202,15 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             };
         }
     };
-    let resolved = target.resolved();
-
-    // analyzeWorkspace diagnostics (run the default detector set so detector-stage
-    // diagnostics surface exactly as al-sem does).
-    let diag_lines = analyzer_diagnostic_lines(&target);
+    // #160 §4.4.4: one `View`. analyzeWorkspace diagnostics come off its run
+    // of the default detector set, so detector-stage diagnostics surface
+    // exactly as al-sem does; the run is taken once read.
+    let mut view = View::new(target);
+    let plan = policy_plan(default_detectors());
+    let key = plan.keys().remove(0);
+    view.prepare(&plan);
+    let diag_lines = diagnostic_lines(&analyzer_diagnostics_of_view(&view, &key));
+    drop(view.take_run(&key));
 
     // --strict: any error-severity diagnostic → exit 1 (stderr the diagnostics).
     if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
@@ -228,6 +236,12 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             };
         }
     };
+    // Nothing after the run reads `det`, `l4` or the ordering facts (the RAW
+    // build below takes no `l4`): none is held through the raw cone. The RAW
+    // build reads the graph.
+    view.release_all_but(&[Cell::Graph]);
+    let resolved = view.model();
+    let target = view.target();
 
     // Run the engine (runPolicy wrapper: disabled → empty result, version 0).
     let result: PolicyRunResult = match &policy_opt {
@@ -243,14 +257,18 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             // `policy_engine::select_facts` iterates the real inherited
             // `CapabilityFact` objects for `facts: inherited | any` rules, so this
             // path must compose the cone under `ConeOutput::Both`. The bit is
-            // deliberately NOT in `substrate::ALL` — every other `ALL` caller
-            // (`gate/events.rs`, `l5/digest_cli.rs`, `l5/prove.rs`) reads only
-            // coverage / spans / the derived substrate, and folding it into `ALL`
-            // would re-materialize ~10.9 GB of cone Vecs on all of them.
-            let ctx = build_detector_context_with(
+            // deliberately NOT in `substrate::ALL`: folding it in would
+            // re-materialize ~10.9 GB of cone Vecs on every other caller.
+            //
+            // #160 §4.4.4: a command LOCAL, not a `View` cell, so no `det` ever
+            // carries the bit, and the raw cone is alive only after the run. It
+            // shares the view's graph. `SUMMARIES` is all `PolicyModel` reads
+            // beside `event_graph` (built under every mask), so it is enough.
+            let (raw, _) = build_detector_artifacts(
                 resolved,
-                crate::engine::l5::registry::substrate::ALL
-                    | crate::engine::l5::registry::substrate::RAW_INHERITED_FACTS,
+                substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS,
+                Arc::clone(view.graph()),
+                None,
                 target.cross_app_inputs(),
             );
             let root_classifications = classify_roots(&resolved.workspace);
@@ -271,11 +289,12 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
                 &routines,
                 &ws.objects,
                 &ws.tables,
-                &ctx.event_graph.events,
+                &raw.event_graph.events,
                 &root_classifications,
-                &ctx.summaries,
+                &raw.summaries,
             );
             let out = run_policy_engine(&model, policy);
+            // `raw` dies with this arm.
             PolicyRunResult {
                 policy_source: source,
                 policy_version: policy.version,
@@ -285,8 +304,10 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             }
         }
     };
-
     let dependencies = target.dependencies();
+    // The RAW build was the graph's last reader.
+    view.release(Cell::Graph);
+
     let text = match opts.format {
         "json" => format_policy_json(
             &result,

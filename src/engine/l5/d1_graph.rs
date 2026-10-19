@@ -415,7 +415,8 @@ mod tests {
         .into_iter()
         .collect();
 
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let ws = ModelEntities {
             objects: vec![],
             tables: vec![],
@@ -496,7 +497,8 @@ mod tests {
         .into_iter()
         .collect();
 
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let ws = ModelEntities {
             objects: vec![],
             tables: vec![],
@@ -562,7 +564,8 @@ mod tests {
         .into_iter()
         .collect();
 
-        let ctx = minimal_ctx(&routines, graph_edges, summaries);
+        let owned = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx = owned.ctx();
         let ws = ModelEntities {
             objects: vec![],
             tables: vec![],
@@ -641,11 +644,13 @@ mod tests {
             routines: routines.clone(),
         };
 
-        let ctx1 = minimal_ctx(&routines, graph_edges.clone(), summaries.clone());
+        let owned1 = minimal_ctx(&routines, graph_edges.clone(), summaries.clone());
+        let ctx1 = owned1.ctx();
         let mut memo1 = HashMap::new();
         let (graph1, _seeds1) = build_d1_graph(&ctx1, &ws, &mut memo1);
 
-        let ctx2 = minimal_ctx(&routines, graph_edges, summaries);
+        let owned2 = minimal_ctx(&routines, graph_edges, summaries);
+        let ctx2 = owned2.ctx();
         let mut memo2 = HashMap::new();
         let (graph2, _seeds2) = build_d1_graph(&ctx2, &ws, &mut memo2);
 

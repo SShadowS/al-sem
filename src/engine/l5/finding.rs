@@ -210,7 +210,7 @@ pub struct LoopContext {
 /// projection so a consumer can expand each cohort's `loop_set` back to per-loop
 /// identities via [`decompress_cohort_context`]. Every non-d1 detector leaves it
 /// `None`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct D1CohortIndex {
     pub catalog: Vec<LoopCatalogEntry>,
     pub registry: LoopSetRegistry,
@@ -1031,6 +1031,7 @@ pub fn project_r4_findings_cross_app(
             &crate::program::inputs::InputSet::read(workspace, &Default::default()),
             model_instance_id,
         )
+        .ok()
     };
     let Some(base) = base else {
         return R4FindingsProjection {

@@ -39,6 +39,7 @@ use crate::engine::gate::presets::resolve_analyze_detectors;
 use crate::engine::gate::projection::{ProjectionIndex, project_finding};
 use crate::engine::l5::registry::run_detectors;
 use crate::engine::perf_trace as pt;
+use crate::engine::session::{RunKey, View, analyze_plan};
 use crate::program::inputs::{InputNeeds, InputSet};
 use crate::program::model::coverage::AnalysisCoverage;
 use crate::program::model::workspace::{Model, assemble_and_resolve_workspace_from_program};
@@ -195,12 +196,24 @@ impl AnalysisTarget {
         } else {
             crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
                 .map(|b| AnalysisTarget::CrossApp(Box::new(b)))
-                .ok_or_else(|| {
-                    format!(
-                        "{command}: the cross-app model could not be built \
-                         (--single-app analyses the workspace alone)"
-                    )
-                })
+                .map_err(|e| Self::cross_app_failure_message(command, &e))
+        }
+    }
+
+    /// The error line of a command whose cross-app build failed. A failed program
+    /// build carries its own error, as `alsem analyze`'s Build row does.
+    pub(crate) fn cross_app_failure_message(
+        command: &str,
+        failure: &crate::program::model::program_calls::CrossAppFailure,
+    ) -> String {
+        use crate::program::model::program_calls::CrossAppFailure;
+        let head = format!(
+            "{command}: the cross-app model could not be built \
+         (--single-app analyses the workspace alone)"
+        );
+        match failure {
+            CrossAppFailure::Build(why) => format!("{head}: program engine build failed: {why}"),
+            CrossAppFailure::Assembly { .. } | CrossAppFailure::NoPrimaryApp { .. } => head,
         }
     }
 
@@ -282,33 +295,18 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
     let program = match program {
         Ok(program) => program,
         Err(why) => {
-            // A workspace with no app-scoped AL file is the empty-output case;
-            // otherwise the failed program build is an error. (Engine-switch S9.1:
-            // this used to assemble L3's model from disk only to tell the two
-            // apart.) The same rule as the `NestedApps::Skip` walk it replaces: a
-            // failed walk left `al_files` empty, so it does not assemble either.
             // A missing model-instance id is reported first, as before.
             let model = if inputs.model_instance_id.is_none() {
-                Err(ModelFailure::NoModelInstanceId)
-            } else if inputs.app_scoped_files().next().is_some() {
-                Err(ModelFailure::ProgramBuildFailed(why.clone()))
+                ModelFailure::NoModelInstanceId
             } else {
-                Err(ModelFailure::AssemblyFailed)
+                program_build_failure(inputs, why.clone())
             };
-            return AnalysisModel {
-                fresh: Err(why),
-                model,
-                physical: None,
-                object_facts: None,
-            };
+            return failed_model(Err(why), model);
         }
     };
     // The build's coverage, moved out once the program is done with (#91).
-    let failed = |program: crate::program::resolved::ResolvedProgram, model| AnalysisModel {
-        fresh: Ok(program.into_parts().0.coverage),
-        model: Err(model),
-        physical: None,
-        object_facts: None,
+    let failed = |program: crate::program::resolved::ResolvedProgram, model| {
+        failed_model(Ok(program.into_parts().0.coverage), model)
     };
     // The id `InputSet::read` computed (#160): no second disk walk.
     let Some(model_instance_id) = inputs.model_instance_id.as_deref() else {
@@ -346,37 +344,63 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
     }
 }
 
-/// [`build_analysis_model`]'s cross-app half. A workspace whose cross-app build
-/// fails is classified as the single-app build would classify it; when that build
-/// succeeds, the cross-app failure is a program-build failure (never a quiet
-/// single-app run).
+/// A model that was not built, and why.
+fn failed_model(
+    fresh: Result<crate::program::resolve::full::FreshCoverage, String>,
+    model: ModelFailure,
+) -> AnalysisModel {
+    AnalysisModel {
+        fresh,
+        model: Err(model),
+        physical: None,
+        object_facts: None,
+    }
+}
+
+/// A failed program build with an id: an error, unless the workspace has no
+/// app-scoped AL file (the empty-output case). (Engine-switch S9.1: this used to
+/// assemble L3's model from disk only to tell the two apart.) The same rule as
+/// the `NestedApps::Skip` walk it replaces: a failed walk left `al_files` empty,
+/// so it does not assemble either.
+fn program_build_failure(inputs: &InputSet, why: String) -> ModelFailure {
+    if inputs.app_scoped_files().next().is_some() {
+        ModelFailure::ProgramBuildFailed(why)
+    } else {
+        ModelFailure::AssemblyFailed
+    }
+}
+
+/// [`build_analysis_model`]'s cross-app half. A failed cross-app build is
+/// classified from its own `Result` (#160 spec §4.4.5), with no second build.
 fn build_cross_app_analysis_model(inputs: &Arc<InputSet>) -> AnalysisModel {
-    let base = inputs.model_instance_id.as_deref().and_then(|mi| {
+    use crate::program::model::program_calls::CrossAppFailure;
+    let Some(mi) = inputs.model_instance_id.as_deref() else {
+        // No id: one build under the single-app profile, never `FULL`'s dependency bodies.
+        return build_analysis_model(inputs, true);
+    };
+    let base = {
         let _s = pt::span("crossapp", "crossapp.base_total");
         crate::engine::l4::capability_cone::build_cross_app_base(inputs, mi)
-    });
+    };
     match base {
-        Some(base) => AnalysisModel {
+        Ok(base) => AnalysisModel {
             fresh: Ok(base.coverage.clone()),
             model: Ok(AnalysisTarget::CrossApp(Box::new(base))),
             physical: None,
             object_facts: None,
         },
-        None => {
-            let single = build_analysis_model(inputs, true);
-            let model = match single.model {
-                Ok(_) => Err(ModelFailure::ProgramBuildFailed(
-                    "the cross-app model could not be built".to_string(),
-                )),
-                Err(e) => Err(e),
-            };
-            AnalysisModel {
-                fresh: single.fresh,
-                model,
-                physical: None,
-                object_facts: None,
-            }
+        Err(CrossAppFailure::Build(why)) => {
+            failed_model(Err(why.clone()), program_build_failure(inputs, why))
         }
+        Err(CrossAppFailure::Assembly { fresh }) => {
+            failed_model(Ok(*fresh), ModelFailure::AssemblyFailed)
+        }
+        // Unreachable from step 1 (the id and `primary_app` share one read);
+        // fail closed with today's outcome.
+        Err(CrossAppFailure::NoPrimaryApp { fresh }) => failed_model(
+            Ok(*fresh),
+            ModelFailure::ProgramBuildFailed("the cross-app model could not be built".to_string()),
+        ),
     }
 }
 
@@ -484,24 +508,22 @@ pub fn run_analyze_with_exit(
         }
     };
 
-    // L4 + L5: run the selected detectors. Findings come pre-sorted by
-    // (detector, primaryLocationKey, rootCauseKey) with dep-anchored findings already
-    // role-scoped out (source-only ⇒ no-op).
-    let resolved = target.resolved();
+    // L4 + L5: run the selected detectors on a `View` (#160 §4.4.4). Findings
+    // come pre-sorted by (detector, primaryLocationKey, rootCauseKey). Cross-app,
+    // the run drops dependency-anchored findings itself for `--scope primary`
+    // (routine, object and `dep:` location); `--scope all` keeps them for the
+    // scope filter below.
+    let mut view = View::new(target);
     let run = {
         let _s = pt::span("l4_l5", "l4_l5.run_detectors");
-        match &target {
-            AnalysisTarget::SingleApp(r) => run_detectors(r, &detectors),
-            // The cross-app runner drops dependency-anchored findings itself for
-            // `--scope primary` (routine, object and `dep:` location); `--scope all`
-            // keeps them for the scope filter below.
-            AnalysisTarget::CrossApp(base) => crate::engine::l5::registry::run_detectors_cross_app(
-                base,
-                &detectors,
-                args.scope == Scope::Primary,
-            ),
-        }
+        let plan = analyze_plan(detectors, args.scope == Scope::Primary);
+        view.prepare(&plan);
+        view.run(&plan.keys()[0])
     };
+    // Today's context died inside the runner, before any projection: the view
+    // holds none of its cells longer.
+    view.release_all_but(&[]);
+    let resolved = view.model();
     // Capture diagnostics + detector stats for the Json formatter (consumed after
     // filtering), through the aggregation every other command uses, over THIS
     // run (the selected detectors), so analyze and the rest report one set (#91).
@@ -736,7 +758,7 @@ pub fn run_analyze_with_exit(
         drop(run_diagnostics);
         drop(coverage);
         drop(run);
-        drop(target);
+        drop(view);
     }
 
     Ok((output, exit_code, stderr_warning))
@@ -1011,9 +1033,9 @@ fn range_extent_cmp(
 /// This is the source for the cli-b capability-snapshot envelope's `diagnostics`
 /// channel (`projectDiagnostics`). It builds them as `run_analyze` does, but the
 /// output is the same only for the same `resolved`.
-/// Since engine-switch S6 its callers (fingerprint, prove, diff, and the
-/// `--single-app` modes of events, policy and digest) pass a program-backed
-/// single-app model
+/// Since #160 step 2 no command calls it: every command reads its `View`'s
+/// run through [`analyzer_diagnostics_of_view`]. Its one caller is the cli-b
+/// snapshot differential test, which passes a program-backed single-app model
 /// (`program_calls::assemble_and_resolve_workspace_program`), the kind
 /// `run_analyze` builds for `--single-app`. The workspace (1), dependency (2)
 /// and overlay (5) sources therefore agree with `alsem analyze --single-app`
@@ -1033,22 +1055,29 @@ pub fn compute_analyzer_diagnostics(
     analyzer_diagnostics_of_run(resolved, &run)
 }
 
-/// The target's analyzer diagnostics ([`compute_analyzer_diagnostics`] or, for a
-/// cross-app base, [`compute_analyzer_diagnostics_cross_app`]) as
-/// `<severity>: <message>` lines, the stderr form `alsem events` and
-/// `alsem policy` print (and match `error:` against under `--strict`).
-pub fn analyzer_diagnostic_lines(target: &AnalysisTarget) -> Vec<String> {
-    match target {
-        AnalysisTarget::SingleApp(r) => compute_analyzer_diagnostics(r),
-        AnalysisTarget::CrossApp(b) => compute_analyzer_diagnostics_cross_app(b),
-    }
-    .iter()
-    .map(|d| format!("{}: {}", d.severity, d.message))
-    .collect()
+/// Diagnostics as `<severity>: <message>` lines, the stderr form `alsem events`
+/// and `alsem policy` print (and match `error:` against under `--strict`).
+pub(crate) fn diagnostic_lines(diags: &[crate::engine::l5::registry::Diagnostic]) -> Vec<String> {
+    diags
+        .iter()
+        .map(|d| format!("{}: {}", d.severity, d.message))
+        .collect()
 }
 
-/// [`compute_analyzer_diagnostics`] for a cross-app base (`alsem digest`'s
-/// default mode, #66): the default set run by the cross-app runner, the
+/// [`analyzer_diagnostics_of_run`] over the run `key` of a prepared `View`
+/// (#160 §4.4.4): what `fingerprint`, `diff --strict`, digest, prove, `events
+/// fanout` / `events chains` and `policy check` report, from the view's own run
+/// instead of a context of their own.
+pub(crate) fn analyzer_diagnostics_of_view(
+    view: &View,
+    key: &RunKey,
+) -> Vec<crate::engine::l5::registry::Diagnostic> {
+    analyzer_diagnostics_of_run(view.model(), &view.run(key))
+}
+
+/// [`compute_analyzer_diagnostics`] for a cross-app base (its one caller is
+/// `tools/census-probe`; every command reads its View's run): the default
+/// set run by the cross-app runner, the
 /// combination `alsem analyze` runs by default.
 pub fn compute_analyzer_diagnostics_cross_app(
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
@@ -1062,7 +1091,9 @@ pub fn compute_analyzer_diagnostics_cross_app(
 }
 
 /// THE analyzer-diagnostics aggregation, over a detector run: `alsem analyze`
-/// (over the run of its selected detectors), [`compute_analyzer_diagnostics`] and
+/// (over the run of its selected detectors), [`analyzer_diagnostics_of_view`]
+/// (fingerprint, `diff --strict`, digest, prove, `events fanout` / `events
+/// chains` and `policy check`, over a `View`'s default-set run), [`compute_analyzer_diagnostics`] and
 /// [`compute_analyzer_diagnostics_cross_app`] (over a default-set run) all build
 /// their diagnostics here, so every command reports the same set (#91).
 ///
@@ -1095,9 +1126,11 @@ fn analyzer_diagnostics_of_run(
     //     unidentified dependency packages, kept on the model by
     //     `attach_program_calls` (#91).
     all.extend(resolved.dependency_diagnostics.iter().cloned());
-    // (3) summarizeDiagnostics — L4 `compute_summaries*` (run inside
-    //     `run_detectors`'s `DetectorContext` build) surfaces the JACOBI
-    //     fixed-point cap-hit here. Empty whenever every SCC converges.
+    // (3) summarizeDiagnostics — L4 `compute_summaries*` surfaces the JACOBI
+    //     fixed-point cap-hit here: on a `View` run, from the `l4` cell's
+    //     `summarize_diagnostics` (`View::prepare`); on the `run_detectors`
+    //     shims, from their `DetectorContext` build. Empty whenever every SCC
+    //     converges.
     all.extend(run.summarize_diagnostics.iter().cloned());
     // (4) loadedRootsConfig.diagnostics — TRACKED GAP: the roots.config.json LOADER
     //     diagnostics (parse/schema errors) are not yet surfaced separately from the
@@ -1215,6 +1248,43 @@ mod tests {
                 "run_analyze_with_exit calls {banned} itself; aggregate through \
                  analyzer_diagnostics_of_run so every command reports the same set"
             );
+        }
+    }
+
+    /// #160 §4.4.4: fingerprint and `diff --strict` read their diagnostics off
+    /// a `View`'s run and take the run before snapshot composition. Their
+    /// counter rows match the parent's, so only a source scan sees a revert
+    /// to their own context. Comment lines are cut first.
+    ///
+    /// Stated limits: only whole `//` lines are cut, so a banned name in a
+    /// trailing or block comment trips the scan; and it checks presence, not
+    /// order, so a `take_run` moved after the snapshot composition passes.
+    #[test]
+    fn fingerprint_and_diff_read_diagnostics_off_the_view() {
+        for (name, src) in [
+            (
+                "fingerprint_cli.rs",
+                include_str!("../l5/fingerprint_cli.rs"),
+            ),
+            ("diff/cli.rs", include_str!("diff/cli.rs")),
+        ] {
+            let code: String = src
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for required in ["analyzer_diagnostics_of_view(", "take_run("] {
+                assert!(code.contains(required), "{name} must call {required}");
+            }
+            for banned in [
+                "compute_analyzer_diagnostics(",
+                "analyzer_diagnostic_lines(",
+            ] {
+                assert!(
+                    !code.contains(banned),
+                    "{name} calls {banned}; read the diagnostics off the View's run"
+                );
+            }
         }
     }
 }
