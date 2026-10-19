@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/issue` runs the full gate set (`ci-steps all`, both `check-goldens` runs,
+  `cdo-gate`) once per issue instead of after every change: before the final
+  panel and after each panel fix it runs only the task gate (`ci-steps task`),
+  and the full set runs in step 11, right after the rebase, on the head that is
+  attested. A rebase onto a moved `master` adds a final-panel round only when the
+  branch's own commits changed (`git range-diff`), a conflict was resolved, or the
+  post-rebase gates needed a fix; before, any rebase onto new code added a round.
+  On #107 the full set ran 7 times (~15 min each) and two review rounds checked
+  only code from other merges.
+
 - #160 step 2: every `alsem` command builds its detector context and its L4 solve once, through one `View` (`src/engine/session.rs`). Some builds stay outside the `View`:
   - `policy check`'s command-local raw-facts build (step 6 removes it);
   - the fold solve (`compute_uncertainty_coverage_reasons`) that snapshot composition runs on its own: in `digest`, `prove` and `fingerprint`, and in each side of `diff` (step 3 removes it);
@@ -60,6 +70,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - #160 step 2: `effect_query_cli::build_db_effect_bundle`, `cross_app_db_effect_bundle`, `QuerySubstrate::from_cross_app_base` / `from_resolved`, `run::analyzer_diagnostic_lines`, and `digest_cli` / `prove`'s `compute_tx_context_map`. Each was a second build of something the `View` now builds once.
+
+### Fixed
+
+- agentflow `post-merge` no longer reads a missing CDO workspace as a red gate. On
+  #107 it ran without `CDO_WS`. `cdo-gate` stopped at its usage error (exit 2),
+  and the executor counted that as a regression. It tried to revert a green
+  merge; the revert failed the same way, so nothing was pushed. `post-merge` now
+  refuses with `cdo-ws-unset` before it opens the verification, as `preflight`
+  already did. A new `cdo_ws` key in `.agent/config.json` names the pinned
+  workspace once, and every executor call uses it whatever the shell exported.
 
 ## [2.0.0] - 2026-10-19
 
@@ -136,15 +156,6 @@ A major version, because some changes break existing users. Each one is describe
 
 ### Changed
 
-- `/issue` runs the full gate set (`ci-steps all`, both `check-goldens` runs,
-  `cdo-gate`) once per issue instead of after every change: before the final
-  panel and after each panel fix it runs only the task gate (`ci-steps task`),
-  and the full set runs in step 11, right after the rebase, on the head that is
-  attested. A rebase onto a moved `master` adds a final-panel round only when the
-  branch's own commits changed (`git range-diff`), a conflict was resolved, or the
-  post-rebase gates needed a fix; before, any rebase onto new code added a round.
-  On #107 the full set ran 7 times (~15 min each) and two review rounds checked
-  only code from other merges.
 - agentflow can keep build output off the worktrees' drive: `target_root` in
   `.agent/config.json` (default empty: unchanged). `make-worktree` then makes the issue
   worktree's `target/` a junction into `<target_root>/<worktree name>` (still one build
@@ -216,13 +227,6 @@ A major version, because some changes break existing users. Each one is describe
 
 ### Fixed
 
-- agentflow `post-merge` no longer reads a missing CDO workspace as a red gate. On
-  #107 it ran without `CDO_WS`. `cdo-gate` stopped at its usage error (exit 2),
-  and the executor counted that as a regression. It tried to revert a green
-  merge; the revert failed the same way, so nothing was pushed. `post-merge` now
-  refuses with `cdo-ws-unset` before it opens the verification, as `preflight`
-  already did. A new `cdo_ws` key in `.agent/config.json` names the pinned
-  workspace once, and every executor call uses it whatever the shell exported.
 - #160 step 1: no `alsem` reader goes back to the disk after the program build. The
   model id, roots config, program-file selection, coverage projection, inline
   suppressions, pr-summary's app registry, the snapshot hash rows and
