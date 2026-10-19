@@ -1707,29 +1707,33 @@ pub(crate) fn digest_pipeline_with(
     })
 }
 
-/// A2.10's use test, shared by digest and prove: `pipeline` runs over the
-/// default set minus every detector demanding `TRANSACTION_SPANS`, on
-/// `ws-d8-commit-in-tx`, and must hit `prepare`'s panic naming the bit. Not
-/// `#[should_panic]`: a failed precondition assert would also "pass" one.
+/// A2.10's use test, shared by digest, prove and events: `pipeline` runs over
+/// the default set minus every detector whose `requires` holds a bit of
+/// `dropped`, on `tests/r0-corpus/<fixture>`, and must hit `prepare`'s panic
+/// naming `missing`. Not `#[should_panic]`: a failed precondition assert would
+/// also "pass" one.
 #[cfg(test)]
-pub(crate) fn assert_refuses_a_set_without_tx_spans(
+pub(crate) fn assert_prepare_refuses_a_reduced_set(
+    dropped: u32,
+    missing: &str,
+    fixture: &str,
     pipeline: impl FnOnce(
         Vec<crate::engine::l5::registry::Detector>,
         &std::sync::Arc<crate::program::inputs::InputSet>,
     ),
 ) {
-    use crate::engine::l5::registry::substrate;
     let set: Vec<_> = crate::engine::l5::detectors::default_detectors()
         .into_iter()
-        .filter(|d| d.requires & substrate::TRANSACTION_SPANS == 0)
+        .filter(|d| d.requires & dropped == 0)
         .collect();
     assert_eq!(
-        set.iter().fold(0, |m, d| m | d.requires) & substrate::TRANSACTION_SPANS,
+        set.iter().fold(0, |m, d| m | d.requires) & dropped,
         0,
-        "precondition: the reduced union lacks the bit"
+        "precondition: the reduced union lacks the bits"
     );
-    let ws =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d8-commit-in-tx");
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/r0-corpus")
+        .join(fixture);
     let inputs = crate::program::inputs::InputSet::read(
         &ws,
         &crate::program::inputs::InputNeeds {
@@ -1738,13 +1742,15 @@ pub(crate) fn assert_refuses_a_set_without_tx_spans(
         },
     );
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pipeline(set, &inputs)));
-    let err = r.expect_err("prepare must refuse a plan whose union lacks TRANSACTION_SPANS");
+    let Err(err) = r else {
+        panic!("prepare must refuse a plan whose union lacks {missing}; the run completed")
+    };
     let msg = err
         .downcast_ref::<String>()
         .cloned()
         .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_default();
-    assert!(msg.contains("TRANSACTION_SPANS"), "{msg}");
+    assert!(msg.contains(missing), "{msg}");
 }
 
 #[cfg(test)]
@@ -1754,20 +1760,25 @@ mod tests {
     /// A2.10: digest builds its plan from the set it is given.
     #[test]
     fn tx_context_without_d9() {
-        assert_refuses_a_set_without_tx_spans(|set, inputs| {
-            let _ = digest_pipeline_with(
-                set,
-                DigestRequest {
-                    inputs,
-                    changed_files: None,
-                    changed_routines: Some(vec!["PostSalesDoc".to_string()]),
-                    diff_text: None,
-                    alsem_ver: "test",
-                    deterministic: true,
-                    single_app: false,
-                },
-            );
-        });
+        assert_prepare_refuses_a_reduced_set(
+            crate::engine::l5::registry::substrate::TRANSACTION_SPANS,
+            "TRANSACTION_SPANS",
+            "ws-d8-commit-in-tx",
+            |set, inputs| {
+                let _ = digest_pipeline_with(
+                    set,
+                    DigestRequest {
+                        inputs,
+                        changed_files: None,
+                        changed_routines: Some(vec!["PostSalesDoc".to_string()]),
+                        diff_text: None,
+                        alsem_ver: "test",
+                        deterministic: true,
+                        single_app: false,
+                    },
+                );
+            },
+        );
     }
 
     // The #6 resolveSelector-cascade + normalize_display_key unit tests now live

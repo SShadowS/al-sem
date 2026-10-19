@@ -1041,9 +1041,15 @@ mod tests {
     /// A2.10: prove builds digest's plan from the set it is given.
     #[test]
     fn tx_context_without_d9() {
-        crate::engine::l5::digest_cli::assert_refuses_a_set_without_tx_spans(|set, inputs| {
-            let _ = prove_pipeline_with(set, inputs, "PostSalesDoc", "may-commit", "test", true);
-        });
+        crate::engine::l5::digest_cli::assert_prepare_refuses_a_reduced_set(
+            crate::engine::l5::registry::substrate::TRANSACTION_SPANS,
+            "TRANSACTION_SPANS",
+            "ws-d8-commit-in-tx",
+            |set, inputs| {
+                let _ =
+                    prove_pipeline_with(set, inputs, "PostSalesDoc", "may-commit", "test", true);
+            },
+        );
     }
 
     /// Build a minimal DigestEntryFull for oracle tests.
