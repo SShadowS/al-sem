@@ -16,8 +16,9 @@ use crate::program::resolve::edge::{
     AbiRoutineKey, Condition, DispatchShape, EdgeKind, EvidenceKind, OpenBound, RouteTarget,
 };
 use crate::program::resolve::event::PublisherKind;
-use crate::program::resolve::full::{ClassifiedEdge, ObligationId, SiteFacts};
+use crate::program::resolve::full::ObligationId;
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
+use crate::program::resolved::EdgeView;
 use crate::snapshot::TrustTier;
 
 /// Everything the projection reads.
@@ -25,12 +26,10 @@ pub struct Inputs<'a> {
     pub graph: &'a ProgramGraph,
     pub index: &'a ResolveIndex,
     pub surface: &'a DeclSurface,
-    /// The workspace app.
-    pub primary: AppRef,
-    /// The workspace's call-site and event-flow edges plus the dependency
-    /// bodies' call-site edges.
-    pub edges: &'a [ClassifiedEdge],
-    pub site_facts: &'a HashMap<ObligationId, SiteFacts>,
+    /// The workspace app (`primary_app_ref`), the workspace's call-site and
+    /// event-flow edges, the dependency bodies' call-site edges, and both sets'
+    /// site facts. Read only through `all_edges` (its order is a contract).
+    pub edges: EdgeView<'a>,
     pub facts: &'a SourceFacts,
     /// Obligations the coverage contract found without an edge.
     pub missing_obligations: &'a [ObligationId],
@@ -321,7 +320,7 @@ impl<'a> Builder<'a> {
 
     fn engine_edges(&mut self) {
         let inp = self.inp;
-        for ce in inp.edges {
+        for ce in inp.edges.all_edges() {
             let e = &ce.edge;
             let from = Key::Routine(e.from.clone());
             let line = match ce.obligation_id {
@@ -382,6 +381,7 @@ impl<'a> Builder<'a> {
             // A run of an object that declares no entry trigger still runs it.
             if let ObligationId::CallSite { .. } = ce.obligation_id
                 && let Some(t) = inp
+                    .edges
                     .site_facts
                     .get(&ce.obligation_id)
                     .and_then(|f| f.run_target.as_ref())
@@ -399,6 +399,7 @@ impl<'a> Builder<'a> {
             }
             let bounds: &[OpenBound] = match ce.obligation_id {
                 ObligationId::CallSite { .. } => inp
+                    .edges
                     .site_facts
                     .get(&ce.obligation_id)
                     .map(|f| f.open.as_slice())
@@ -1022,7 +1023,7 @@ pub fn project(inp: &Inputs<'_>) -> Projection {
         .graph
         .routines
         .iter()
-        .filter(|r| r.id.object.app == inp.primary)
+        .filter(|r| r.id.object.app == inp.edges.primary_app_ref)
         .map(|r| Key::Routine(r.id.clone()))
         .collect();
     let any = Key::Hub(Hub::Any);
@@ -1117,6 +1118,7 @@ mod tests {
         SiteId, SourcePos, UnknownReason, Witness,
     };
     use crate::program::resolve::event::ParsedSubscriberArgs;
+    use crate::program::resolve::full::{ClassifiedEdge, SiteFacts};
     use crate::program::topology::DependencyGraph;
     use crate::snapshot::AppId;
 
@@ -1127,6 +1129,9 @@ mod tests {
         objects: Vec<ObjectNode>,
         routines: Vec<RoutineNode>,
         edges: Vec<ClassifiedEdge>,
+        /// The second edge set (`EdgeView::dependency_body_edges`): `project`
+        /// reads it after `edges`.
+        dependency_body_edges: Vec<ClassifiedEdge>,
         site_facts: HashMap<ObligationId, SiteFacts>,
         facts: SourceFacts,
         missing: Vec<ObligationId>,
@@ -1349,6 +1354,11 @@ mod tests {
         }
 
         fn project(&self, primary: AppRef) -> Out {
+            self.with_inputs(primary, |inp| Out(project(inp)))
+        }
+
+        /// The projection's `Inputs` over this world, handed to `f`.
+        fn with_inputs<R>(&self, primary: AppRef, f: impl FnOnce(&Inputs<'_>) -> R) -> R {
             let mut objects = self.objects.clone();
             objects.sort_by(|a, b| a.id.cmp(&b.id));
             let mut routines = self.routines.clone();
@@ -1369,17 +1379,20 @@ mod tests {
             let index = ResolveIndex::build(&graph);
             let surface = DeclSurface::build(&graph, &[]);
             let recovered = HashSet::new();
-            Out(project(&Inputs {
+            f(&Inputs {
                 graph: &graph,
                 index: &index,
                 surface: &surface,
-                primary,
-                edges: &self.edges,
-                site_facts: &self.site_facts,
+                edges: EdgeView {
+                    primary_app_ref: primary,
+                    edges: &self.edges,
+                    dependency_body_edges: &self.dependency_body_edges,
+                    site_facts: &self.site_facts,
+                },
                 facts: &self.facts,
                 missing_obligations: &self.missing,
                 recovered_files: &recovered,
-            }))
+            })
         }
     }
 
@@ -1974,5 +1987,93 @@ mod tests {
         let (id1, id2) = (p1.node("a/b.c").id.clone(), p1.node("a.b/c").id.clone());
         assert_ne!(id1, id2);
         assert!(id1.starts_with("r:") && id1.len() == 26, "{id1}");
+    }
+
+    /// #160 spec §8.3: the merge on `(from, to, kind)` keeps the FIRST edge's
+    /// `via` when the two have the same `conf`. Two hand-built edges, added in
+    /// order.
+    #[test]
+    fn add_keeps_first_via_on_conf_tie() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let from = Key::Routine(w.rtn(&cu, "From"));
+        let to = Key::Hub(Hub::Any);
+        let via = w.with_inputs(a, |inp| {
+            let mut b = Builder::new(inp);
+            for via in ["first", "second"] {
+                b.add(
+                    from.clone(),
+                    to.clone(),
+                    Kind::Direct,
+                    Conf::Open,
+                    via,
+                    None,
+                    BTreeSet::new(),
+                );
+            }
+            b.edges[&(from.clone(), to.clone(), Kind::Direct)].via
+        });
+        assert_eq!(via, "first");
+    }
+
+    /// #160 spec §4.3.2 / §8.3: a tie ACROSS the two edge sets keeps the via of
+    /// the edge in `edges`, because `project` reads `edges` first. One
+    /// dependency routine R: in `edges`, its event-flow edge with an unresolved
+    /// route (a publisher has no open bounds, so `(R, h:any, Direct, Open)` via
+    /// `unresolved`); in `dependency_body_edges`, its `DynamicOpen` call site
+    /// with an `OpenBound::Any` site fact (the same key, via `dynamic`).
+    #[test]
+    fn cross_set_tie_keeps_the_first_sets_via() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let d = w.app("D");
+        w.deps.push((a, d));
+        let ws = w.obj(a, ObjectKind::Codeunit, 1, "Ws", TrustTier::Workspace);
+        let dep = w.obj(d, ObjectKind::Codeunit, 2, "Dep", TrustTier::Workspace);
+        let caller = w.rtn(&ws, "Caller");
+        let r = w.rtn(&dep, "R");
+        // The workspace reaches R, so pruning keeps it.
+        w.call(&caller, &r, 1);
+        w.edges.push(ClassifiedEdge {
+            obligation_id: ObligationId::Publisher(r.clone()),
+            edge: EngineEdge {
+                from: r.clone(),
+                site: SiteId {
+                    caller: r.clone(),
+                    span: CanonicalSpan {
+                        unit: String::new(),
+                        start: SourcePos { line: 0, col: 0 },
+                        end: SourcePos { line: 0, col: 0 },
+                    },
+                    callee_fingerprint: 0,
+                },
+                kind: EdgeKind::EventFlow,
+                shape: DispatchShape::Multicast,
+                completeness: SetCompleteness::Partial {
+                    reason: OpenWorldReason::ReverseDependentSubscribers,
+                },
+                routes: vec![unknown()],
+            },
+        });
+        let site = w.edge(
+            &r,
+            EdgeKind::Call,
+            DispatchShape::DynamicOpen,
+            vec![unknown()],
+            2,
+        );
+        // Moved into the second set by hand.
+        let moved = w.edges.pop().expect("the site just added");
+        w.dependency_body_edges.push(moved);
+        w.site_facts.insert(
+            site,
+            SiteFacts {
+                open: vec![OpenBound::Any],
+                ..Default::default()
+            },
+        );
+        let o = w.project(a);
+        assert_eq!(o.edge("Dep.R", "h:any").2, "unresolved");
     }
 }

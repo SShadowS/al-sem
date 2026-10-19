@@ -86,6 +86,7 @@ use crate::program::graphify_export::object_kind_str;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId};
 use crate::program::resolve::edge::{Edge as EngineEdge, Histogram};
 use crate::program::resolve::full::ObligationId;
+use crate::program::resolved::ResolvedProgram;
 use crate::snapshot::TrustTier;
 
 /// `meta.schema`.
@@ -185,35 +186,31 @@ impl ImpactGraph {
 }
 
 /// Build the export for a workspace: the cross-app program
-/// ([`crate::program::resolved::ResolvedProgram::build`] under `FULL`), its source
-/// facts, the projection and `meta`.
+/// ([`ResolvedProgram::build`] under `FULL`), then [`export_from_program`].
 pub fn export_workspace(
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
 ) -> Result<ImpactGraph, String> {
-    let workspace_root = inputs.workspace.as_path();
-    let mut program = crate::program::resolved::ResolvedProgram::build(
-        inputs,
-        crate::program::profile::BuildProfile::FULL,
-    )?;
-    let mut body = program.body.take().expect("built once");
-    // #160 step 1b: the projection still reads one merged list, in the
-    // `all_edges` order (edges, then dependency bodies), until it reads an
-    // `EdgeView`. Moved, not copied.
-    let dependency_body_edges = std::mem::take(&mut body.dependency_body_edges);
-    body.edges.extend(dependency_body_edges);
+    let program = ResolvedProgram::build(inputs, crate::program::profile::BuildProfile::FULL)?;
+    export_from_program(&program)
+}
+
+/// The export of a built program: its source facts, the projection and `meta`.
+/// Reads the body, so it runs before the body is released.
+pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, String> {
     let pm = &program.meta;
-    let ctx = &body.ctx;
+    let inputs = &pm.inputs;
     // The gate's identity rule (#73): `app.json` needs a non-empty string `id`.
-    // Checked on the snapshot's own reading of it (`guid` is "" exactly when the
-    // `id` is missing, not a string, or empty, `snapshot.rs:199-208`), so the id
-    // checked is the id exported, with no second read. After the build, so a
-    // missing or unparseable `app.json` keeps the build's `read`/`parse` error.
-    if ctx.snapshot().workspace_app.guid.is_empty() {
+    // Read from the input set the build read (#160 §4.3.3), so the id checked
+    // is the id exported, with no second read. After the build, so a missing or
+    // unparseable `app.json` keeps the build's `read`/`parse` error.
+    if inputs.app_id().is_none() {
         return Err(format!(
             "could not compute modelInstanceId for workspace '{}': app.json has no non-empty string id",
-            workspace_root.display()
+            inputs.workspace.display()
         ));
     }
+    let body = program.body.as_ref().expect("export reads the body");
+    let ctx = &body.ctx;
     let graph = ctx.graph();
     let index = crate::program::resolve::index::ResolveIndex::build(graph);
     let facts = extract_source_facts(graph, &index, &ctx.all_units());
@@ -223,17 +220,14 @@ pub fn export_workspace(
         graph,
         index: &index,
         surface: &surface,
-        primary: pm.primary_app_ref,
-        edges: &body.edges,
-        site_facts: &body.site_facts,
+        edges: body.edge_view(pm.primary_app_ref),
         facts: &facts,
         missing_obligations: &pm.coverage_contract.missing,
         recovered_files: &recovered,
     });
 
     let dependency_edges: Vec<EngineEdge> = body
-        .edges
-        .iter()
+        .all_edges()
         .filter(|ce| {
             ce.edge.from.object.app != pm.primary_app_ref
                 && matches!(ce.obligation_id, ObligationId::CallSite { .. })
@@ -415,7 +409,7 @@ pub(crate) fn render_node(
             },
             |x| x.name.to_string(),
         ));
-        n.dependency = Some(o.app != inp.primary);
+        n.dependency = Some(o.app != inp.edges.primary_app_ref);
         n.symbol_only = Some(obj.is_some_and(|x| x.tier == TrustTier::SymbolOnly));
     };
     match key {

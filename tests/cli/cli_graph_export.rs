@@ -478,6 +478,16 @@ codeunit 50281 \"Ws Subscribers\"
     end;
 }
 
+codeunit 50283 \"Ws Pages\"
+{
+    procedure Show()
+    var
+        W: Codeunit \"Dep Worker\";
+    begin
+        W.ShowPage();
+    end;
+}
+
 tableextension 50282 \"Dep Item Ext\" extends \"Dep Item\"
 {
     trigger OnAfterInsert()
@@ -519,7 +529,7 @@ codeunit 50290 \"Ws Tests\"
 ",
     );
     let dep_symbols = format!(
-        r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":50100,"Name":"Dep Worker","Methods":[{{"Name":"Work","Parameters":[]}}]}},{{"Id":50101,"Name":"Dep Events","Methods":[]}}],"AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+        r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":50100,"Name":"Dep Worker","Methods":[{{"Name":"Work","Parameters":[]}},{{"Name":"ShowPage","Parameters":[]}}]}},{{"Id":50101,"Name":"Dep Events","Methods":[]}}],"AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
     );
     crate::symbol_app::write_source_app(
         &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
@@ -538,6 +548,19 @@ codeunit 50290 \"Ws Tests\"
     begin
         E.OnWorked();
     end;
+
+    procedure ShowPage()
+    begin
+        Page.Run(Page::\"Dep Page\");
+    end;
+}
+",
+            ),
+            (
+                "src/Page.al",
+                "page 50120 \"Dep Page\"
+{
+    SourceTable = \"Dep Item\";
 }
 ",
             ),
@@ -695,6 +718,96 @@ fn graph_export_covers_dependencies() {
         "Dep Item.OnAfterInsertEvent".to_string(),
         "unraisedPublisher".to_string()
     )));
+
+    // #160 §8.3: a DEPENDENCY body's run of a page that declares no entry
+    // trigger. Its `run` edge comes only from the dependency's site facts
+    // (`run_target`), so it pins that `ResolvedProgram::build` merges them.
+    let runs: Vec<(&Value, &Value, &Value)> = g
+        .edges_between("Dep Worker.ShowPage", "Dep Page")
+        .iter()
+        .map(|e| (&e["kind"], &e["confidence"], &e["via"]))
+        .collect();
+    assert_eq!(
+        runs,
+        vec![(
+            &Value::from("Run"),
+            &Value::from("Resolved"),
+            &Value::from("run")
+        )]
+    );
+}
+
+/// #160 spec §4.3.2 / §8.3: `meta.histogram.dependencyBodies` counts the
+/// dependency's call sites and nothing else. The dependency's source has
+/// exactly two call sites (`A` calls its own `B` twice); the workspace's one
+/// call to `A` is not a dependency call site. Hand-stated literal.
+#[test]
+fn dependency_bodies_histogram_is_the_dependency_call_sites() {
+    const WS: &str = "aaaa1111-0000-0000-0000-000000000160";
+    const DEP: &str = "bbbb2222-0000-0000-0000-000000000160";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ws = dir.path();
+    write(
+        &ws.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS}","name":"HWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP}","name":"HDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &ws.join("src/Ws.al"),
+        "codeunit 50200 \"Ws Caller\"
+{
+    procedure Go()
+    var
+        L: Codeunit \"Dep Lib\";
+    begin
+        L.A();
+    end;
+}
+",
+    );
+    let dep_symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":50100,"Name":"Dep Lib","Methods":[{{"Name":"A","Parameters":[]}},{{"Name":"B","Parameters":[]}}]}}],"AppId":"{DEP}","Name":"HDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    crate::symbol_app::write_source_app(
+        &ws.join(".alpackages/probe_HDep_1.0.0.0.app"),
+        DEP,
+        "HDep",
+        "1.0.0.0",
+        &dep_symbols,
+        &[(
+            "src/Lib.al",
+            "codeunit 50100 \"Dep Lib\"
+{
+    procedure A()
+    begin
+        B();
+        B();
+    end;
+
+    procedure B()
+    begin
+    end;
+}
+",
+        )],
+        "",
+    );
+    let g = Graph::parse(&run_graph(ws));
+    assert_eq!(
+        g.meta["histogram"]["dependencyBodies"],
+        serde_json::json!({
+            "total": 2,
+            "resolvedSource": 2,
+            "resolvedCatalog": 0,
+            "resolvedAbiExternal": 0,
+            "conditionalResolved": 0,
+            "honestDynamic": 0,
+            "honestEmpty": 0,
+            "unknown": 0,
+            "ambiguousResolved": 0,
+        })
+    );
 }
 
 /// The byte golden: pins the wire format end to end.
