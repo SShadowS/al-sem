@@ -1478,12 +1478,15 @@ composition (fingerprint, diff `--strict`, digest and prove `--single-app`, anal
 `--single-app` through projection). Cross-app the release drops only the view's
 pointer; the base keeps its `Arc`, as today. `det` holds a second `Arc` to the same
 graph, so `release(Det)` comes first. What stays: `l4.scc` lives with `l4.bundle`
-through digest's and prove's snapshot composition (the new overlap above). It is new in
-every case: today prove's `_scc` (`prove.rs:964`) and digest's SCC (end of
+through digest's and prove's snapshot composition (the new overlap above). Single-app it
+is new: today prove's `_scc` (`prove.rs:964`) and digest's single-app SCC (end of
 `digest_cli.rs:1626`) both come into being AFTER the snapshot was composed (`prove.rs:897`,
-`digest_cli.rs:1580`). After step 2 the SCC alone (no graph) is alive during
-composition. The `l4` census bucket sizes it, and A2.4 measures prove,
-`digest --single-app` and `fingerprint` so a regression in either universe is seen.
+`digest_cli.rs:1580`), and after step 2 the SCC alone (no graph) is alive during
+composition. Cross-app it is NOT new: the SCC is the base's `combined_scc`, which the base
+keeps alive through composition today; there the new overlap is `l4.bundle` alone
+(amended in attempt 5, plan A4). The `l4` census buckets size it (`l4.scc` only where
+`build_l4` computed the SCC), and A2.4 measures prove, `digest --single-app` and
+`fingerprint` so a regression in either universe is seen.
 
 Byte-neutrality of the reorders: every artifact is a pure function of the model, so
 computing the diagnostics run before the snapshot changes no byte of stdout. What it
@@ -1735,7 +1738,7 @@ is < 2 × its band, step 10 / 11 is re-labelled non-speed before its spec is wri
 |---|---|---|
 | 1 | none; both peaks and `analyze.total` reported against the parent; LSP `build_full` (Criterion, 100 and 1000 files) recorded parent vs head (§4.2.6) | peak +5 MB (the retained texts), inside the band; `build_full` flat (a `build_only` read does today's disk work) |
 | 1b | process peak and post-attach peak ≤ parent median + band(peak) for analyze and digest | flat within the band: the retained `Arc<InputSet>` holds the workspace texts (5.09 MB on CDO, §4.3.4) and nothing else of size; the body drops where it did |
-| 2 | digest wall: parent median − head median ≥ parent median(`digest.tx_context_map`) − band(`digest.tx_context_map`) − band(digest wall) (A2.3; band(digest wall) = max − min of the parent's digest wall runs, §6.1: the saving is read off two whole-command walls, whose noise the span's band does not cover, e.g. 63.70 vs 66.81 s on P5); both peaks ≤ parent median + band(peak) for analyze, digest (cross-app) and prove, and for `fingerprint` and `digest --single-app` (A2.4); cell census printed at the first run | ≈ −21 s on digest on the P5 machine (the deleted context; indicative only, the bound is relative); peaks flat or lower: inside the `det` fill the solve still follows the cone (§4.4.4); the one new overlap is `l4` (bundle, SCC) alive during snapshot composition in digest and prove (§4.4.4), sized by the `l4` bucket and expected well below the deleted context's working set; prove deletes the same two builds as digest (an `ALL` context, `prove.rs:843`, and a bundle, `:964`), events one `ALL` context (`events.rs:422-426`, cone plus v2 solve), so each saves the same order as digest's ~21 s on CDO, not fractions of a second. Not bounded: the §4.4.8 counters pin those deletions; the prove run of §6.1 records its wall; analyze unchanged |
+| 2 | digest wall: parent median − head median ≥ parent median(`digest.tx_context_map`) − band(`digest.tx_context_map`) − band(digest wall) (A2.3; band(digest wall) = max − min of the parent's digest wall runs, §6.1: the saving is read off two whole-command walls, whose noise the span's band does not cover, e.g. 63.70 vs 66.81 s on P5); both peaks ≤ parent median + band(peak) for analyze, digest (cross-app) and prove, and for `fingerprint` and `digest --single-app` (A2.4); cell census printed when each cell is filled (A2.8 as amended) | ≈ −21 s on digest on the P5 machine (the deleted context; indicative only, the bound is relative); peaks flat or lower: inside the `det` fill the solve still follows the cone (§4.4.4); the one new overlap is `l4` alive during snapshot composition in digest and prove (§4.4.4): `l4.bundle` cross-app (the SCC is the base's), `l4.bundle` + `l4.scc` single-app; sized by the `l4` buckets and expected well below the deleted context's working set; prove deletes the same two builds as digest (an `ALL` context, `prove.rs:843`, and a bundle, `:964`), events one `ALL` context (`events.rs:422-426`, cone plus v2 solve), so each saves the same order as digest's ~21 s on CDO, not fractions of a second. Not bounded: the §4.4.8 counters pin those deletions; the prove run of §6.1 records its wall; analyze unchanged |
 
 A miss on a peak walks the epic's fallback ladder (§5.12). A miss on the digest saving
 is a stop: the deleted context is the whole claim.
