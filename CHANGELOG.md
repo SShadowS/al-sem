@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `scripts/bench_ab.py`: an A/B bench of two binaries in interleaved rounds (side
+  order flips every round). It records wall clock, the psutil peak, the trace's
+  `peak.process_mb`/`peak.post_attach_mb` and a stdout hash per run, and its
+  `summary` mode prints medians, bands and "B higher in k/n pairs" per command.
+  It replaces the one-off bench scripts that every measurement task rewrote.
+- `scripts/trace_summary.py --compare '<A glob>' '<B glob>'`: per-span medians,
+  bands, B − A and the pair count across two sets of traces, runs paired by round.
 - #160 step 0, the measurement harness (diagnostic only; no output byte moves):
   - Build counters in the trace (`build.program`, `build.combined_graph`, `build.cone`,
     `build.summaries_v2`, `build.graph_scc`, `build.pd_solve`, `build.detector_context`,
