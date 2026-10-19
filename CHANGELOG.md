@@ -153,13 +153,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     always run and every subset of the optional ones; more than four, or a subscriber that
     cannot be seen, makes the publisher behave like an unknown callee. A visible subscriber
     with no body or no role is opaque in its run, and makes the publisher's required entry
-    fields `unknown`. Two edges to one subscriber are one subscriber, optional only if every
-    edge is.
+    fields `unknown`. Two edges to one subscriber are one subscriber: isolated if any edge is,
+    and optional if every edge is or if it is isolated.
   - A subscriber that may not run (manual binding, a license/permission condition in ANY build
-    reading, an isolated event, or an edge that is not `resolved`) still contributes its MAY
-    facts (persists, validates, may mutate), but never adds or removes a load a caller treats
-    as proven: its load facts are published as `no`. Isolated subscribers' effect on the
-    record's state is not followed.
+    reading, an isolated event, or an event id that several overloads share) still contributes
+    its MAY facts (persists, validates, may mutate), but never adds or removes a load a caller
+    treats as proven: its load facts (`loadsFromDbParam`, `copiesIntoParam`,
+    `initialisesParam`) go `yes -> no`, and an `unknown` stays `unknown`. An edge that is not
+    `resolved` makes the whole dispatch unseen. The effect on the record's state of an isolated
+    subscriber, or of any subscriber of an overloaded event (the engine does not keep which
+    overload a subscription selected), is not followed.
   - Event-subscriber parameters bind to the publisher's by name in one place
     (`event_param_names_match`), quotes ignored; `pd_solve::carry_reqs` used a second copy that
     did not trim quotes.
@@ -167,9 +170,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     subscribers, workspace subscribers included; their path facts stay `unknown` (#70).
     Symbol-only dependency publishers are unchanged.
   - A roles SCC that hits the iteration cap now publishes the opaque role for its members,
-    except `fixed_roles` members, which keep their base roles plus dispatch presence facts.
-  - Model event edges carry `conditional` (from the subscription's conditions in any build
-    reading), `mixed_readings` (census only) and `isolated`; not projected. The summaries
+    except `fixed_roles` members, which keep their base roles with every dispatched
+    parameter's presence facts `unknown` (their dispatch was folded from an unconverged round).
+  - Model event edges (`EventEdge`) carry `conditional` (from the subscription's conditions in
+    any build reading) and `mixed_readings` (census only); the combined graph's
+    `event-dispatch` edges carry `DispatchMeta { conditional, isolated }`, with `isolated` from
+    the event's `EventSymbol`. Neither is projected. The summaries
     census (`ALSEM_SUMMARIES_CENSUS=1`) splits exact parameters into walker and
     `fixed_roles` publishers and counts dispatch sequences once per walk.
   - Goldens: r3a2 summary-core roles of event publishers and their raisers, and d40/d42

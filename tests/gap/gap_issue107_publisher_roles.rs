@@ -1225,6 +1225,81 @@ codeunit 50101 Sub
     done(f);
 }
 
+/// Ruling (step 6, revised): overloads share one event id, so a subscriber
+/// resolved to ONE overload gets a dispatch edge from EVERY overload, and a
+/// smaller subscriber's names (`Rec`) all bind the larger overload too. The
+/// engine does not keep which overload the subscription selected, so every
+/// binding of a publisher whose event id another publisher shares is optional
+/// and path-opaque: `HandlePair`'s `Get` is no proven load on either overload
+/// (`loadsFromDbParam no`). Control: the same subscriber on a single,
+/// unshared `OnSimple` is a proven `yes` (`review_isolated_loader_is_masked`).
+#[test]
+fn row7e_overload_shared_event_id_bindings_are_never_exact() {
+    let pubs = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnPair(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnPair(var Rec: Record Cust; Qty: Integer)
+    begin
+    end;
+}
+"#;
+    let subs = r#"
+codeunit 50101 Sub
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnPair', '', false, false)]
+    local procedure HandlePair(var Rec: Record Cust)
+    begin
+        Rec.Get('A');
+    end;
+}
+"#;
+    let m = model(&[pubs, subs]);
+    let graph = graph_of(&m);
+    let handler = rid(&m, "HandlePair");
+    let overloads: Vec<&ModelRoutine> = m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.name == "OnPair")
+        .collect();
+    assert_eq!(overloads.len(), 2, "precondition: two OnPair overloads");
+    for r in &overloads {
+        let es: Vec<_> = graph
+            .edges_by_from
+            .get(&r.id)
+            .map(|v| v.iter().filter(|e| e.kind == "event-dispatch").collect())
+            .unwrap_or_default();
+        assert!(
+            es.len() == 1
+                && es[0].to == handler
+                && es[0].resolution == "resolved"
+                && es[0]
+                    .dispatch
+                    .as_ref()
+                    .is_some_and(|d| !d.conditional && !d.isolated),
+            "precondition: OnPair/{} has one plain resolved dispatch edge to HandlePair: {es:?}",
+            r.parameters.len()
+        );
+    }
+    let roles = ctx_roles(&m);
+    let mut f = Vec::new();
+    for r in overloads {
+        let role = roles
+            .get(&r.id)
+            .and_then(|v| v.iter().find(|x| x.parameter_index == 0))
+            .expect("precondition: a role for Rec");
+        let label = format!("OnPair/{}", r.parameters.len());
+        expect(&mut f, &label, role, &[("loadsFromDbParam", "No")]);
+    }
+    done(f);
+}
+
 // ---------------------------------------------------------------------------
 // Row 9: trigger raisers (non-goal pinned).
 // ---------------------------------------------------------------------------
@@ -1524,6 +1599,32 @@ fn review_duplicate_edges_merge_their_flags() {
         "OnSimple",
         role(&m, &roles, "OnSimple", 0),
         &[("loadsFromDbParam", "Yes")],
+    );
+    done(f);
+}
+
+/// A plain (unconditional) edge and an isolated edge to one `Get` subscriber
+/// (hand-stated: the isolated copy is pushed) are one binding, and it is
+/// isolated. An isolated subscriber may not run to completion, so it is
+/// optional too (`path_opaque => optional`): `loadsFromDbParam no`, never the
+/// plain edge's proven `yes`.
+#[test]
+fn review_duplicate_plain_and_isolated_edges_mask_the_load() {
+    let m = model(&[SIMPLE, GET_SUB]);
+    let mut graph = graph_of(&m);
+    let mut e = simple_edge(&m, &graph);
+    e.dispatch = Some(al_sem::engine::l4::combined_graph::DispatchMeta {
+        conditional: false,
+        isolated: true,
+    });
+    graph.edges_by_from.get_mut(&e.from).unwrap().push(e);
+    let roles = solve(&m, &m.workspace.routines, &graph);
+    let mut f = Vec::new();
+    expect(
+        &mut f,
+        "OnSimple",
+        role(&m, &roles, "OnSimple", 0),
+        &[("loadsFromDbParam", "No")],
     );
     done(f);
 }

@@ -29,7 +29,9 @@ use super::db_effect_solver::{build_rvid_by_opid, seed_fixed_leaf_rows, solve_sc
 use super::effect_lattice::{EffectPresence, effect_key_of, join_presence};
 use super::effect_store::{SummaryBundle, SummaryBundleBuilder};
 use super::effect_universe::GrowingEffectUniverse;
-use super::event_dispatch::{DispatchKind, ParamDispatch, dispatch_bindings, optional_load};
+use super::event_dispatch::{
+    DispatchKind, ParamDispatch, dispatch_bindings, optional_load, shared_event_ids,
+};
 use super::routine_interner::RoutineInterner;
 use super::scc::SccResult;
 use super::summary::{
@@ -1353,11 +1355,12 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     summaries_census::add_since(&summaries_census::BODY_AVAIL_NANOS, _t);
 
     // Each event publisher's dispatch bindings (#107 Design 2), once per solve.
+    let shared_events = shared_event_ids(graph);
     let dispatch_by_id: HashMap<String, Vec<ParamDispatch>> = routines
         .iter()
         .filter_map(|r| {
             let edges = graph.edges_by_from.get(&r.id)?;
-            let d = dispatch_bindings(r, edges, &routines_by_id);
+            let d = dispatch_bindings(r, edges, &routines_by_id, &shared_events);
             (!d.is_empty()).then(|| (r.id.clone(), d))
         })
         .collect();
@@ -1816,6 +1819,33 @@ fn member_roles(
     )
 }
 
+/// A capped `fixed_roles` member's roles (F1-CR3): its base roles, with every
+/// dispatch of a record parameter folded as UNSEEN, since the round-cap
+/// snapshot its exact dispatch was folded from had not converged.
+fn fixed_roles_on_cap(ctx: &SccComputeCtx, id: &str) -> Vec<RecordRoleSummary> {
+    let mut roles: Vec<RecordRoleSummary> = ctx
+        .base_summaries
+        .get(id)
+        .map_or(&[][..], |b| b.parameter_roles.as_slice())
+        .iter()
+        .map(clone_role)
+        .collect();
+    let unseen: Vec<ParamDispatch> = ctx
+        .dispatch_by_id
+        .get(id)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .map(|d| ParamDispatch {
+            kind: DispatchKind::Unseen { too_many: false },
+            sequences: Vec::new(),
+            ..d.clone()
+        })
+        .collect();
+    let none = HashMap::new();
+    fold_dispatch_presence(&mut roles, &unseen, &none, &none, ctx.body_avail_by_id);
+    roles
+}
+
 // ---------------------------------------------------------------------------
 // run_one_scc_roles — the roles-ONLY per-SCC fixpoint (v2 role harvest).
 // ---------------------------------------------------------------------------
@@ -2119,16 +2149,19 @@ fn run_one_scc_roles(
     // Design 5 guard: the roles transfer is not monotone, so a capped SCC's
     // round-cap roles may be any point of an oscillation. Publish the opaque
     // role instead, which every reader already treats as "cannot see".
-    // A `fixed_roles` member keeps its own roles (its base roles with its
-    // dispatch's presence facts, Design 6): no walker computes them.
+    // A `fixed_roles` member keeps its body-local base roles (Design 6: no
+    // walker computes them), but its dispatch presence was folded from the
+    // unconverged snapshot, so it is widened as an unseen dispatch.
     let capped = cap_hit_stable_members.is_some();
     let mut out: Vec<(String, Vec<RecordRoleSummary>)> = Vec::new();
     for id in &scc_entry.members {
         if let Some(s) = in_progress.remove(id) {
-            let roles = if capped && !ctx.fixed_roles.contains(id) {
-                s.parameter_roles.iter().map(opaque_role).collect()
-            } else {
+            let roles = if !capped {
                 s.parameter_roles
+            } else if ctx.fixed_roles.contains(id) {
+                fixed_roles_on_cap(ctx, id)
+            } else {
+                s.parameter_roles.iter().map(opaque_role).collect()
             };
             out.push((id.clone(), roles));
         }
@@ -2342,21 +2375,10 @@ codeunit 50101 Sub
         HashMap<String, RoutineSummary>,
         Vec<SummarizeDiagnostic>,
     ) {
-        cyc_run_fixed(cap, false)
+        cyc_run_fixed(CYC_SRC, cap, false)
     }
 
-    /// [`cyc_run`], with `OnCyc` in `fixed_roles` when `fix_publisher`.
-    fn cyc_run_fixed(
-        cap: Option<usize>,
-        fix_publisher: bool,
-    ) -> (
-        String,
-        String,
-        HashMap<String, RoutineSummary>,
-        Vec<SummarizeDiagnostic>,
-    ) {
-        let m = model(
-            r#"
+    const CYC_SRC: &str = r#"
 codeunit 50102 Cyc
 {
     [IntegrationEvent(false, false)]
@@ -2372,8 +2394,48 @@ codeunit 50102 Cyc
         Rec.Modify();
     end;
 }
-"#,
-        );
+"#;
+
+    /// `OnCyc -> HandleCyc -> Helper -> OnCyc`: only `Helper` modifies, so the
+    /// `Modify` reaches `OnCyc` only in round 2 (round 1 reads `HandleCyc`'s
+    /// base roles, which have none). `Other` binds no subscriber parameter, so
+    /// it has no dispatch.
+    const CYC_HELPER_SRC: &str = r#"
+codeunit 50102 Cyc
+{
+    [IntegrationEvent(false, false)]
+    procedure OnCyc(var Rec: Record Cust; var Other: Record Cust; Depth: Integer)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Cyc, 'OnCyc', '', false, false)]
+    local procedure HandleCyc(var Rec: Record Cust; Depth: Integer)
+    begin
+        Helper(Rec, Depth);
+    end;
+
+    local procedure Helper(var Rec: Record Cust; Depth: Integer)
+    begin
+        if Depth > 0 then
+            OnCyc(Rec, Rec, Depth - 1);
+        Rec.Modify();
+    end;
+}
+"#;
+
+    /// [`cyc_run`] over `src`, with `OnCyc` in `fixed_roles` when
+    /// `fix_publisher`.
+    fn cyc_run_fixed(
+        src: &str,
+        cap: Option<usize>,
+        fix_publisher: bool,
+    ) -> (
+        String,
+        String,
+        HashMap<String, RoutineSummary>,
+        Vec<SummarizeDiagnostic>,
+    ) {
+        let m = model(src);
         let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
         let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
         for (from, list) in &graph.edges_by_from {
@@ -2501,22 +2563,64 @@ codeunit 50102 Cyc
         }
     }
 
-    /// A capped SCC replaces only its walker-computed members' roles: a
-    /// `fixed_roles` member (here `OnCyc`, hand-stated) keeps its base roles
-    /// with its dispatch's presence facts, so `HandleCyc`'s `Modify` stays a
-    /// `yes`, not the opaque `unknown`. `HandleCyc` itself is opaque.
+    /// A capped SCC replaces its walker-computed members' roles with the
+    /// opaque role (`HandleCyc`). A `fixed_roles` member (here `OnCyc`,
+    /// hand-stated) is not opaque: a parameter with no dispatch (`Other`) keeps
+    /// its base role exactly (the uncapped one, not the opaque one), while a
+    /// dispatched parameter's (`Rec`) presence, folded from the unconverged
+    /// snapshot, is widened as an unseen dispatch (F1-CR3):
+    /// `persistsCurrentRecord` and `loadsFromDbParam` `unknown`. (Before
+    /// F1-CR3 this test pinned `OnCyc`'s round-1 `yes` / `no` on `CYC_SRC`;
+    /// an empty publisher's dispatched parameter widened is the opaque role,
+    /// so the test moved to `CYC_HELPER_SRC`, whose `Other` shows the base
+    /// facts staying.)
     #[test]
     fn forced_roles_cap_keeps_a_fixed_roles_members_roles() {
-        let (pid, hid, map, diags) = cyc_run_fixed(Some(1), true);
+        let (pid, _, uncapped, _) = cyc_run_fixed(CYC_HELPER_SRC, None, true);
+        let (pid2, hid, map, diags) = cyc_run_fixed(CYC_HELPER_SRC, Some(1), true);
+        assert_eq!(pid, pid2);
         assert!(!diags.is_empty(), "precondition: the forced cap fires");
-        let rec = |id: &String| map[id].parameter_roles[0].clone();
-        let (p, h) = (rec(&pid), rec(&hid));
-        assert_eq!(p.persists_current_record, EffectPresence::Yes, "OnCyc");
-        assert_eq!(p.loads_from_db_param, EffectPresence::No, "OnCyc");
+        let role = |m: &HashMap<String, RoutineSummary>, id: &String, i: u32| {
+            m[id]
+                .parameter_roles
+                .iter()
+                .find(|r| r.parameter_index == i)
+                .cloned()
+                .expect("a role")
+        };
+        let rec = role(&map, &pid, 0);
+        assert_eq!(rec.persists_current_record, EffectPresence::Unknown, "Rec");
+        assert_eq!(rec.loads_from_db_param, EffectPresence::Unknown, "Rec");
+        let other = role(&map, &pid, 1);
+        assert_eq!(other, role(&uncapped, &pid, 1), "Other keeps its base role");
+        assert_ne!(other, opaque_role(&other), "Other is not the opaque role");
         assert_eq!(
-            h.persists_current_record,
+            role(&map, &hid, 0).persists_current_record,
             EffectPresence::Unknown,
             "HandleCyc stays opaque"
+        );
+    }
+
+    /// F1-CR3: a `fixed_roles` member's dispatch presence is composed from the
+    /// unconverged snapshot, so on a cap it is widened as an unseen dispatch.
+    /// `OnCyc -> HandleCyc -> Helper -> OnCyc`, only `Helper` modifies: after
+    /// round 1 `OnCyc` has folded `HandleCyc`'s base roles only (`No`). Capped
+    /// there, `OnCyc`'s persistence must not be that `No`.
+    #[test]
+    fn forced_roles_cap_widens_a_fixed_members_unconverged_dispatch() {
+        let (pid, _, uncapped, diags) = cyc_run_fixed(CYC_HELPER_SRC, None, true);
+        assert!(diags.is_empty(), "precondition: converges uncapped");
+        assert_eq!(
+            uncapped[&pid].parameter_roles[0].persists_current_record,
+            EffectPresence::Yes,
+            "precondition: the converged OnCyc persists"
+        );
+        let (pid, _, map, diags) = cyc_run_fixed(CYC_HELPER_SRC, Some(1), true);
+        assert!(!diags.is_empty(), "precondition: the forced cap fires");
+        assert_ne!(
+            map[&pid].parameter_roles[0].persists_current_record,
+            EffectPresence::No,
+            "capped OnCyc must not publish an incomplete No"
         );
     }
 }

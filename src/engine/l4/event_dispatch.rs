@@ -2,9 +2,9 @@
 //! parameter binds which record parameter of the publisher, and whether the
 //! subscriber may not run. Built once per solve, read by the roles step.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::combined_graph::CombinedEdge;
+use super::combined_graph::{CombinedEdge, CombinedGraph};
 use super::effect_lattice::EffectPresence;
 use super::summary_runner::{event_publisher_param, summaries_census};
 use crate::program::model::event_param_temp::event_param_names_match;
@@ -19,12 +19,13 @@ pub(crate) struct ExactBinding {
     pub subscriber: String,
     pub q: u32,
     pub callee_is_var: bool,
-    /// The subscriber may not run (a conditional subscription or an isolated
-    /// event).
+    /// The subscriber may not run (a conditional subscription, an isolated
+    /// event, or a shared overload event id). Always true when `path_opaque`.
     pub optional: bool,
-    /// An isolated event: the subscriber is visible, but a failure rolls its
-    /// database work back while its in-memory changes stay, so the walker
-    /// takes the opaque transfer (Design 4).
+    /// An isolated event (the subscriber is visible, but a failure rolls its
+    /// database work back while its in-memory changes stay) or a shared
+    /// overload event id (the binding may belong to another overload): the
+    /// walker takes the opaque transfer (Design 4).
     pub path_opaque: bool,
 }
 
@@ -51,6 +52,23 @@ pub(crate) struct ParamDispatch {
     pub sequences: Vec<Vec<usize>>,
 }
 
+/// The event ids that more than one publisher routine raises: overloads share
+/// one event id (step-6 Ruling), so each of their subscribers is attached to
+/// every overload, though it selected only one.
+pub(crate) fn shared_event_ids(graph: &CombinedGraph) -> HashSet<String> {
+    let mut publishers: HashMap<&str, &str> = HashMap::new();
+    let mut shared = HashSet::new();
+    for e in graph.edges_by_from.values().flatten() {
+        let Some(ev) = e.event_id.as_deref().filter(|_| e.kind == "event-dispatch") else {
+            continue;
+        };
+        if *publishers.entry(ev).or_insert(&e.from) != e.from {
+            shared.insert(ev.to_string());
+        }
+    }
+    shared
+}
+
 /// A subscriber whose effects cannot be seen: the edge is not `resolved`, the
 /// subscriber is unknown, or (step-6 Ruling, overloads share one event id) one
 /// of its parameters other than `Sender` binds no parameter of THIS overload.
@@ -74,11 +92,14 @@ fn opaque_subscriber(
 /// `routine`'s dispatch bindings, one entry per record parameter with at least
 /// one binding, in parameter order. Empty when `routine` has no
 /// `event-dispatch` edge or no body (a symbol-only publisher keeps its base
-/// roles, Design 6).
+/// roles, Design 6). A binding over a `shared_events` id is optional and
+/// path-opaque: the engine does not keep which overload a subscriber selected,
+/// so it may not run for this one, and its names may bind the wrong overload.
 pub(crate) fn dispatch_bindings(
     routine: &ModelRoutine,
     edges: &[CombinedEdge],
     routines_by_id: &HashMap<String, &ModelRoutine>,
+    shared_events: &HashSet<String>,
 ) -> Vec<ParamDispatch> {
     if !routine.body_available {
         return Vec::new();
@@ -102,7 +123,11 @@ pub(crate) fn dispatch_bindings(
             let mut bindings: Vec<ExactBinding> = Vec::new();
             for e in &dispatch {
                 let s = routines_by_id[&e.to];
-                let isolated = e.dispatch.as_ref().is_some_and(|d| d.isolated);
+                let overload = e
+                    .event_id
+                    .as_ref()
+                    .is_some_and(|ev| shared_events.contains(ev));
+                let isolated = overload || e.dispatch.as_ref().is_some_and(|d| d.isolated);
                 let optional = isolated || e.dispatch.as_ref().is_some_and(|d| d.conditional);
                 for q in &s.parameters {
                     if event_publisher_param(routine, s, q.index).map(|pp| pp.index)
@@ -112,14 +137,16 @@ pub(crate) fn dispatch_bindings(
                     }
                     // Two edges to one subscriber are one subscriber: it may be
                     // skipped only if every edge may skip it, and it is isolated
-                    // if any edge is.
+                    // if any edge is. An isolated subscriber may not run to
+                    // completion, so it stays optional (`path_opaque =>
+                    // optional`).
                     match bindings
                         .iter_mut()
                         .find(|b| b.subscriber == s.id && b.q == q.index)
                     {
                         Some(b) => {
-                            b.optional &= optional;
                             b.path_opaque |= isolated;
+                            b.optional = (b.optional && optional) || b.path_opaque;
                         }
                         None => bindings.push(ExactBinding {
                             subscriber: s.id.clone(),

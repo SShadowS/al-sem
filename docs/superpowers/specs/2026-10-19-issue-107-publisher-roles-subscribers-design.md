@@ -131,10 +131,19 @@ what the subscriber does (presence), and can we follow its effect on the record'
   - `Opaque`: a non-`resolved` edge (the event-id collision of probe f2: the subscriber may bind
     a different overload) or a subscriber not in `routines_by_id`. Nothing about it is visible.
 - **Flags.**
-  - `optional = conditional || isolated || resolution != "resolved"`: it may not run.
-  - `path_opaque = isolated`: it runs, it is visible, but a failure rolls its database work back
-    while its in-memory changes stay (probe f6), so its effect on the record's state is not one
-    the role describes.
+  - `optional = conditional || path_opaque || resolution != "resolved"`: it may not run.
+  - `path_opaque = isolated || overload`: it runs, it is visible, but a failure rolls its
+    database work back while its in-memory changes stay (probe f6), or it may belong to another
+    overload, so its effect on the record's state is not one the role describes.
+    `path_opaque` always implies `optional`.
+  - **Overloads (step-6 Ruling, final-panel round 1).** Overloads of one event share one event
+    id, so a subscriber that AL binds to ONE overload gets a dispatch edge from EVERY overload,
+    and a smaller subscriber's parameter names all bind the larger overload too. The engine does
+    not keep which overload a subscription selected. So `overload` is true on every edge whose
+    event id more than one publisher routine raises (`shared_event_ids`, over the combined
+    graph's `event-dispatch` edges): every binding of such a publisher is optional and
+    path-opaque, never exact. A subscriber with a parameter (other than `Sender`) that binds no
+    parameter of this overload is still `Opaque`.
 - **Parameters.** For `Exact`, every subscriber parameter `q` with
   `event_publisher_param(P, S, q) = Some(p)` and `p` a record parameter of `P` gives a binding
   for `p`, with `caller_is_var = p.is_var`, `callee_is_var = q.is_var`. An `Opaque` binding
@@ -144,7 +153,9 @@ what the subscriber does (presence), and can we follow its effect on the record'
   `Exact` binding of `S` (one resolved and one ambiguous edge to `S` = `Opaque`). Otherwise dedupe
   by `(S, q)`: `optional` is the AND of the edges' flags (the subscriber is skipped only when
   every edge may skip it) and `path_opaque` the OR (isolated on any edge); code review F1-CR2.
-  Two edges to one subscriber are one subscriber.
+  After the merge `path_opaque => optional` is enforced: a plain and an isolated edge to one
+  subscriber give an isolated binding, which may not run to completion, so it never publishes a
+  proven load (final-panel F1-CR2). Two edges to one subscriber are one subscriber.
 
 `compose_roles_only` gains `routines_by_id` (already in `SccComputeCtx`). Routines without
 dispatch edges pay one map lookup.
@@ -315,7 +326,10 @@ Jacobi over a finite lattice with a non-monotone transfer can oscillate, and onl
    which may be any point of an oscillation. This change replaces every capped member's roles
    with the opaque role (every presence fact `unknown`, every path fact `unknown`, field lists
    `Unknown`), the role a reader already treats as "cannot see". The `fixpoint-capped`
-   uncertainty and diagnostic stay. The guard fires only on a cap, which no corpus SCC reaches
+   uncertainty and diagnostic stay. A `fixed_roles` member (Design 6) keeps its base roles, but
+   its dispatch presence was folded from the unconverged snapshot, so on a cap it is refolded as
+   an unseen dispatch (presence `unknown` for every dispatched parameter; final-panel F1-CR3).
+   The guard fires only on a cap, which no corpus SCC reaches
    today (`RolesSccOut` doc), so it moves nothing unless a cap happens.
 2. **A measurement.** Roles cap hits on the goldens and on CDO, before and after: must stay 0
    (Measurement step 4). Unit row 10 runs `ws-cycle` (a recursive loader/persister cycle across a
