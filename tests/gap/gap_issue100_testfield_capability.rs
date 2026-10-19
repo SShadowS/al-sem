@@ -20,7 +20,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
-use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
+use al_sem::engine::gate::policy::pipeline::{
+    PolicyCheckOptions, policy_request, run_policy_check,
+};
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::op_classification::{classify_op, is_db_touching_class};
@@ -29,6 +31,7 @@ use al_sem::engine::l5::snapshot_full::{
     FullSnapshotOptions, compose_full_snapshot, serialize_json,
 };
 use al_sem::program::body::l2_workspace::project_workspace;
+use al_sem::program::inputs::{InputNeeds, InputSet};
 use al_sem::program::model::program_calls::{
     assemble_and_resolve_inline_program_default, assemble_and_resolve_workspace_program,
 };
@@ -58,14 +61,26 @@ fn write_ws(files: &[(String, String)]) -> tempfile::TempDir {
     dir
 }
 
+/// The workspace's inputs, read once (#160 step 1), with the snapshot's hash rows.
+fn read_inputs(dir: &Path) -> std::sync::Arc<InputSet> {
+    InputSet::read(
+        dir,
+        &InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        },
+    )
+}
+
 fn resolve(dir: &Path) -> Model {
     let model_id = compute_gate_model_instance_id(dir).expect("modelInstanceId");
-    assemble_and_resolve_workspace_program(dir, &model_id, true).expect("resolve")
+    assemble_and_resolve_workspace_program(&read_inputs(dir), &model_id, true).expect("resolve")
 }
 
 fn full_snapshot_json(dir: &Path, resolved: &Model) -> Value {
+    let inputs = read_inputs(dir);
     let opts = FullSnapshotOptions {
-        workspace_dir: dir,
+        inputs: &inputs,
         driver_version: "i100",
         deterministic: true,
         roots_config_ignored: false,
@@ -698,10 +713,15 @@ fn policy_hits(ws: &Path, yaml: &str) -> Result<BTreeSet<String>, String> {
     let policy = ws.join("policy.yaml");
     std::fs::write(&policy, yaml).unwrap();
     let policy = policy.to_string_lossy().to_string();
+    let inputs = InputSet::read(
+        ws,
+        &InputNeeds {
+            policy: policy_request(Some(&policy), false),
+            ..Default::default()
+        },
+    );
     let out = run_policy_check(&PolicyCheckOptions {
-        workspace: ws,
-        policy_path: Some(&policy),
-        no_policy: false,
+        inputs: &inputs,
         format: "json",
         out: None,
         deterministic: true,
