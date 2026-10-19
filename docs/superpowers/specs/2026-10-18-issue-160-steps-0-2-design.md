@@ -821,6 +821,24 @@ line. No golden moves.
 
 #### 4.3.1 Types (`src/program/resolved.rs`)
 
+**Amended by code review r1 of the implementation (2026-10-19, CR1/2/5/6/8/9/12):** the
+body is NOT an `Option`. A reader of the whole build takes `&ResolvedProgram`; the model
+builder consumes it (`attach_program_calls(rows, program) -> (Model, ProgramMeta)`), so a
+read after the release does not compile instead of panicking at a `.expect`. Steps 2 and
+12 share one program the same way: the `graph` job borrows it, the model consumes it,
+and the holder keeps the returned `ProgramMeta` (epic §5.9 rule 3's order). The build
+takes a `ProgramScope` (`Workspace` = Summary, no dependency edges; `CrossApp` = FULL +
+`resolve_dependency_bodies`) instead of a `BuildProfile`, so retention and meaning
+cannot be chosen apart; `meta.scope` records it and `export_from_program` refuses a
+`Workspace` program. `ProgramMeta` loses `primary_app_ref` (the body's
+`ctx.primary_app_ref` is the one source; `edge_view()` takes no argument) and
+`loaded_apps` (`ResolvedProgram::loaded_apps()` computes it while the body is alive, for
+the two readers that need it). `ProgramBody` loses `builtin_dispatch_audit` and
+`event_flow_dual_publisher_alias_skips` (no reader; dropped in `build`), and its two edge
+sets are private (`all_edges()`, plus `dependency_body_edges()` for the graph's
+`dependencyBodies` histogram, which reads that slice; `EdgeView`'s are private too). The
+block below is the original design, kept for the record.
+
 ```rust
 pub struct ResolvedProgram { pub meta: ProgramMeta, pub body: Option<ProgramBody> }
 pub struct ProgramMeta {           // only the fields a step 0-2 reader reads (§4.3.3)

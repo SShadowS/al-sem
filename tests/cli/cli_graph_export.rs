@@ -810,6 +810,26 @@ fn dependency_bodies_histogram_is_the_dependency_call_sites() {
     );
 }
 
+/// Code review CR2: the export of a workspace-scoped build would lose every
+/// dependency call-site edge without a word, so `export_from_program` refuses it.
+/// The same workspace built cross-app exports (the dependency has source).
+#[test]
+fn export_refuses_a_workspace_scoped_program() {
+    use al_sem::program::resolved::{ProgramScope, ResolvedProgram};
+    let dir = tempfile::tempdir().expect("tempdir");
+    cross_app_workspace(dir.path());
+    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let export = |scope| {
+        let program = ResolvedProgram::build(&inputs, scope).expect("the fixture builds");
+        al_sem::program::impact_graph::export_from_program(&program)
+    };
+    let err = export(ProgramScope::Workspace)
+        .err()
+        .expect("a workspace-scoped program is refused");
+    assert!(err.contains("cross-app"), "{err}");
+    assert!(export(ProgramScope::CrossApp).is_ok());
+}
+
 /// The byte golden: pins the wire format end to end.
 #[test]
 fn graph_export_golden() {

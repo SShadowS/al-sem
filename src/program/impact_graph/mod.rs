@@ -84,9 +84,8 @@ pub use project::{Inputs, Projection, project};
 use crate::program::graph::ProgramGraph;
 use crate::program::graphify_export::object_kind_str;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId};
-use crate::program::resolve::edge::{Edge as EngineEdge, Histogram};
-use crate::program::resolve::full::ObligationId;
-use crate::program::resolved::ResolvedProgram;
+use crate::program::resolve::edge::Histogram;
+use crate::program::resolved::{ProgramScope, ResolvedProgram};
 use crate::snapshot::TrustTier;
 
 /// `meta.schema`.
@@ -186,19 +185,27 @@ impl ImpactGraph {
 }
 
 /// Build the export for a workspace: the cross-app program
-/// ([`ResolvedProgram::build`] under `FULL`), then [`export_from_program`].
+/// ([`ResolvedProgram::build`] at [`ProgramScope::CrossApp`]), then
+/// [`export_from_program`].
 pub fn export_workspace(
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
 ) -> Result<ImpactGraph, String> {
-    let program = ResolvedProgram::build(inputs, crate::program::profile::BuildProfile::FULL)?;
+    let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp)?;
     export_from_program(&program)
 }
 
 /// The export of a built program: its source facts, the projection and `meta`.
-/// Reads the body, so it runs before the body is released.
+/// The program must be [`ProgramScope::CrossApp`]: a workspace-scoped build has
+/// no dependency call-site edges, so its graph would lose them silently.
 pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, String> {
     let pm = &program.meta;
     let inputs = &pm.inputs;
+    if pm.scope != ProgramScope::CrossApp {
+        return Err(format!(
+            "the call-graph export needs a cross-app program build; this one is {:?}",
+            pm.scope
+        ));
+    }
     // The gate's identity rule (#73): `app.json` needs a non-empty string `id`.
     // Read from the input set the build read (#160 §4.3.3), so the id checked
     // is the id exported, with no second read. After the build, so a missing or
@@ -209,7 +216,7 @@ pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, Str
             inputs.workspace.display()
         ));
     }
-    let body = program.body.as_ref().expect("export reads the body");
+    let body = &program.body;
     let ctx = &body.ctx;
     let graph = ctx.graph();
     let index = crate::program::resolve::index::ResolveIndex::build(graph);
@@ -220,23 +227,19 @@ pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, Str
         graph,
         index: &index,
         surface: &surface,
-        edges: body.edge_view(pm.primary_app_ref),
+        edges: body.edge_view(),
         facts: &facts,
         missing_obligations: &pm.coverage_contract.missing,
         recovered_files: &recovered,
     });
 
-    let dependency_edges: Vec<EngineEdge> = body
-        .all_edges()
-        .filter(|ce| {
-            ce.edge.from.object.app != pm.primary_app_ref
-                && matches!(ce.obligation_id, ObligationId::CallSite { .. })
-        })
-        .map(|ce| ce.edge.clone())
-        .collect();
+    // The dependency call sites (spec §4.3.2: over all edges, the dependency
+    // callers' `CallSite` edges are exactly this set).
+    let dependency_histogram =
+        Histogram::of_edges(body.dependency_body_edges().iter().map(|ce| &ce.edge));
     let snap = ctx.snapshot();
     let ws = snap.apps.first();
-    let apps = &pm.loaded_apps;
+    let apps = program.loaded_apps();
     let meta = json!({
         "schema": SCHEMA,
         "version": VERSION,
@@ -262,7 +265,7 @@ pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, Str
         "histogram": {
             "primaryScoped": histogram_json(&pm.primary_histogram),
             "wholeProgram": histogram_json(&pm.histogram),
-            "dependencyBodies": histogram_json(&Histogram::of_edges(&dependency_edges)),
+            "dependencyBodies": histogram_json(&dependency_histogram),
         },
     });
     if !crate::program::resolve::full::coverage_holds(&pm.coverage_contract) {

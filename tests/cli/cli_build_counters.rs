@@ -858,6 +858,14 @@ fn retained_census_changes_no_output() {
         "inputs {} < .al bytes {al_bytes}:\n{err}",
         bytes("inputs")
     );
+    // Code review CR11: and `program.snapshot_texts` leaves them to `inputs`
+    // (counted in both, the 64 KiB pad would be in both): it holds only the
+    // dependency's texts, which are far below the pad.
+    assert!(
+        bytes("program.snapshot_texts") < 64 * 1024,
+        "program.snapshot_texts {} counts the workspace texts:\n{err}",
+        bytes("program.snapshot_texts")
+    );
     let rows = bytes("base.resolved.rows");
     assert!(
         rows > 0 && rows < bytes("model"),

@@ -93,13 +93,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - #160 step 1b: the program build is one `ResolvedProgram` (`src/program/resolved.rs`):
   the build's facts (`ProgramMeta`) apart from its body (`ProgramBody`), with the
   workspace's own edges and the dependency bodies' edges kept as two sets and read in
-  that order through one `EdgeView`. `build_cross_app_program` is replaced by
-  `ResolvedProgram::build(inputs, profile)`.
-  `alsem graph` reuses that program build (`ResolvedProgram::build` under `FULL`, then
-  `export_from_program`), and its projection reads both edge sets through the `EdgeView`;
-  its output is byte-identical. The retained census gains an `inputs` bucket (the
-  command's `InputSet`, 5.30 MB on CDO), and `program.snapshot_texts` now counts the
-  dependency units only. No output byte moves. The CDO numbers:
+  that order through one `EdgeView` (both sets private to `resolved.rs`).
+  `build_cross_app_program` is replaced by `ResolvedProgram::build(inputs, scope)`: a
+  `ProgramScope` (`Workspace`: the Summary profile, no dependency edges; `CrossApp`:
+  `FULL` plus every dependency body resolved) states what is resolved, not only what is
+  kept, and the program records it. The body is not optional: `alsem graph` borrows the
+  program, and `attach_program_calls(rows, program)` consumes it and hands back the
+  `ProgramMeta`, so a second reader after the release is a compile error, not a panic,
+  and analyze's single-app arm moves the build's coverage instead of cloning it.
+  `alsem graph` reuses that program build (`CrossApp`, then `export_from_program`, which
+  returns an error for a `Workspace` program instead of a graph without dependency
+  edges), and its projection reads both edge sets through the `EdgeView`; its output is
+  byte-identical. `aldump --compiler-oracle` builds the same way (`Workspace`, or
+  `CrossApp` under `--all-apps`). The retained census gains an `inputs` bucket (the
+  command's `InputSet`, 5.30 MB on CDO), `program.snapshot_texts` now counts the
+  dependency units only, and `program.report` still counts the coverage contract's
+  `missing`/`extra` and the recovered files. No output byte moves. The CDO numbers:
   `docs/measurements/2026-10-19-issue-160-step1b.md`.
 - `C1_CONE_CENSUS=1` is replaced by `ALSEM_RETAINED_CENSUS=1`; the old
   `[C1_CONE_CENSUS]` report is gone (its structures are covered by the `context.*`

@@ -13,8 +13,14 @@
 //! `working_tally`, and `snapshot.pd_solution`, via `pd_arena_bytes`) count
 //! every `Vec`, `String` and hash table at CAPACITY with one control byte per
 //! hash slot. They keep the accounting of the pre-#160 `solve_bytes` figure
-//! (525 MiB on CDO, epic §3), so step 0's numbers stay comparable with it;
-//! `kind=shallow` means top-level buffers by `len × size_of`, plus the
+//! (525 MiB on CDO, epic §3), so step 0's numbers stay comparable with it.
+//! A second, under-counting exception: the `inputs` bucket (`InputSet::census`)
+//! charges each of `app.json`'s object maps as one buffer of `(key, value)`
+//! pairs (serde_json's `BTreeMap`: the B-tree's node allocations are not
+//! modelled, as [`Tally`] charges any B-tree), and walks no `io::Error` held in
+//! a slot (an OS error holds no heap; a custom one's boxed payload is not
+//! reached). Both are a few hundred bytes against the workspace texts that make
+//! the bucket. `kind=shallow` means top-level buffers by `len × size_of`, plus the
 //! `String` / `Vec` heap one level down and nothing deeper. Every bucket is a
 //! LOWER bound; the ground-truth live heap comes from `tools/census-probe`,
 //! which records it at the `census_hook::mark` each site sets before its walk.

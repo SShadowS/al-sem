@@ -129,7 +129,7 @@ use crate::program::resolve::edge::{
     DispatchShape, EdgeKind, Evidence, Route, RouteTarget, UnknownReason as PReason, callee_fp,
 };
 use crate::program::resolve::full::{ClassifiedEdge, ObligationId, ProgramContext, ProgramReport};
-use crate::program::resolved::{EdgeView, ProgramBody};
+use crate::program::resolved::{EdgeView, ProgramMeta, ProgramScope, ResolvedProgram};
 use crate::snapshot::TrustTier;
 use al_syntax::ir::ObjectKind;
 
@@ -638,71 +638,42 @@ pub fn resolved_calls_from_program(
 /// [`assemble_and_resolve_workspace_program`] both use it, so a test cannot
 /// drift from the production path.
 ///
-/// `coverage` is the same build's `FreshCoverage`; its dependency-ledger warnings
-/// go on the model (#91). It is required, so no program-backed model can be built
-/// without them. `inputs` is the set the build read: the model's workspace
-/// diagnostics come from it and `coverage.files_without_object` (#160 §4.2.4).
-/// `body` is the build's body (`program.body.take()`): it is dropped here.
+/// The program is the build the rows were assembled from: its body is consumed
+/// (dropped here, after the adapter), and its meta is handed back. The meta's
+/// `FreshCoverage` puts its dependency-ledger warnings on the model (#91), and its
+/// input set gives the model's workspace diagnostics, with
+/// `coverage.files_without_object` (#160 §4.2.4).
 pub fn attach_program_calls(
-    inputs: &crate::program::inputs::InputSet,
     rows: crate::program::model::workspace::ModelRows,
-    body: ProgramBody,
-    coverage: &crate::program::resolve::full::FreshCoverage,
-) -> crate::program::model::workspace::Model {
-    attach_program_calls_with(inputs, rows, body, coverage, None)
+    program: ResolvedProgram,
+) -> (crate::program::model::workspace::Model, ProgramMeta) {
+    attach_program_calls_with(rows, program, None)
 }
 
 /// [`attach_program_calls`] for a cross-app model (engine-switch S7.3): `abi_rows`
 /// joins a symbol-only dependency routine to its model row.
 fn attach_program_calls_with(
-    inputs: &crate::program::inputs::InputSet,
     rows: crate::program::model::workspace::ModelRows,
-    body: ProgramBody,
-    coverage: &crate::program::resolve::full::FreshCoverage,
+    program: ResolvedProgram,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
-) -> crate::program::model::workspace::Model {
+) -> (crate::program::model::workspace::Model, ProgramMeta) {
     use crate::engine::perf_trace as pt;
     let calls = {
         let _s = pt::span("b3", "b3.adapter");
-        let view = body.edge_view(body.ctx.primary_app_ref);
-        adapter(view, &body.ctx, &rows.workspace, true, abi_rows).0
+        let body = &program.body;
+        adapter(body.edge_view(), &body.ctx, &rows.workspace, true, abi_rows).0
     };
     // Engine-switch S4.2: the detector event graph, from the same program build.
     let events = {
         let _s = pt::span("b3", "b3.events");
-        crate::program::model::events::program_event_graph(&body.ctx, &rows.workspace)
+        crate::program::model::events::program_event_graph(&program.body.ctx, &rows.workspace)
     };
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.program");
-        census_program(&body);
-        inputs
-            .census()
-            .emit("inputs", crate::engine::census::Kind::Exact);
+        program.census();
     }
-    // The resolver's per-site output first, then the context (today's two spans).
-    let ProgramBody {
-        ctx,
-        edges,
-        dependency_body_edges,
-        site_facts,
-        parenless_calls,
-        builtin_dispatch_audit,
-        event_flow_dual_publisher_alias_skips: _,
-    } = body;
-    {
-        let _s = pt::span("b3", "b3.report_drop");
-        drop((
-            edges,
-            dependency_body_edges,
-            site_facts,
-            parenless_calls,
-            builtin_dispatch_audit,
-        ));
-    }
-    {
-        let _s = pt::span("b3", "b3.ctx_drop");
-        drop(ctx);
-    }
+    let ResolvedProgram { meta, body } = program;
+    body.release();
     // #160 §4.1.4: everything retained from here on is post-attach.
     pt::mark_phase_start("post_attach");
     let mut resolved = crate::program::model::workspace::Model {
@@ -712,10 +683,10 @@ fn attach_program_calls_with(
         infra_diagnostics: rows.infra_diagnostics,
         workspace_diagnostics:
             crate::engine::gate::workspace_diagnostics::compute_workspace_diagnostics(
-                inputs,
-                Some(&coverage.files_without_object),
+                &meta.inputs,
+                Some(&meta.coverage.files_without_object),
             ),
-        dependency_diagnostics: coverage.dependency_diagnostics(),
+        dependency_diagnostics: meta.coverage.dependency_diagnostics(),
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
     };
@@ -726,47 +697,7 @@ fn attach_program_calls_with(
         crate::census_hook::mark("census.model");
         census_model(&resolved);
     }
-    resolved
-}
-
-/// #160 §4.1.5: `program.snapshot_texts` (every source text of every
-/// DEPENDENCY app in the snapshot, each shared `Arc<str>` once: exact; the
-/// workspace texts are the `inputs` bucket's, which shares them by `Arc`) and
-/// `program.report` (shallow: the body's edge sets, site facts and parens-less
-/// calls).
-fn census_program(body: &ProgramBody) {
-    use crate::engine::census::{Kind, Tally};
-    let mut seen = std::collections::HashSet::new();
-    let mut texts = Tally::default();
-    let snap = body.ctx.snapshot();
-    for app in snap.apps.iter().filter(|u| u.id != snap.workspace_app) {
-        for f in app.source.iter().flat_map(|s| s.files.iter()) {
-            if seen.insert(std::sync::Arc::as_ptr(&f.text).cast::<u8>()) {
-                // `ArcInner<str>`: strong + weak counts, then the bytes, padded
-                // to the counts' alignment — the requested allocation size.
-                texts.bytes += (2 * std::mem::size_of::<usize>() + f.text.len())
-                    .next_multiple_of(std::mem::align_of::<usize>());
-                texts.allocs += 1;
-            }
-        }
-    }
-    texts.emit("program.snapshot_texts", Kind::Exact);
-    let mut r = Tally::default();
-    r.buf::<crate::program::resolve::full::ClassifiedEdge>(body.edges.len())
-        .buf::<crate::program::resolve::full::ClassifiedEdge>(body.dependency_body_edges.len())
-        .buf::<(
-            crate::program::resolve::full::ObligationId,
-            crate::program::resolve::full::SiteFacts,
-        )>(body.site_facts.len())
-        .buf::<(
-            (crate::program::node::AppRef, String),
-            std::collections::HashSet<al_syntax::ir::ExprId>,
-        )>(body.parenless_calls.len())
-        .strs(body.parenless_calls.keys().map(|(_, f)| f));
-    for ids in body.parenless_calls.values() {
-        r.buf::<al_syntax::ir::ExprId>(ids.len());
-    }
-    r.emit("program.report", Kind::Shallow);
+    (resolved, meta)
 }
 
 /// #160 §4.1.5: the `model` bucket, shallow: the rows' buffers, the calls and
@@ -846,27 +777,15 @@ pub fn assemble_and_resolve_workspace_program(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<crate::program::model::workspace::Model> {
-    let mut program = crate::program::resolved::ResolvedProgram::build(
-        inputs,
-        crate::program::profile::BuildProfile {
-            dependency_bodies: crate::program::profile::DependencyBodies::Summary,
-        },
-    )
-    .ok()?;
-    let body = program.body.take().expect("built once");
+    let program = ResolvedProgram::build(inputs, ProgramScope::Workspace).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
         inputs,
         model_instance_id,
         skip_roots_config,
-        &body.ctx,
-        &body.parenless_calls,
+        &program.body.ctx,
+        &program.body.parenless_calls,
     )?;
-    Some(attach_program_calls(
-        &program.meta.inputs,
-        rows,
-        body,
-        &program.meta.coverage,
-    ))
+    Some(attach_program_calls(rows, program).0)
 }
 
 /// [`assemble_and_resolve_workspace_program`] over inline `(relative path, source)`
@@ -965,12 +884,8 @@ pub fn assemble_and_resolve_cross_app_program(
     skip_roots_config: bool,
 ) -> Option<CrossAppProgram> {
     use crate::engine::perf_trace as pt;
-    let mut program = crate::program::resolved::ResolvedProgram::build(
-        inputs,
-        crate::program::profile::BuildProfile::FULL,
-    )
-    .ok()?;
-    let body = program.body.take().expect("built once");
+    let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp).ok()?;
+    let body = &program.body;
     let ctx = &body.ctx;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
         std::collections::HashMap::new();
@@ -989,7 +904,7 @@ pub fn assemble_and_resolve_cross_app_program(
     let demand = {
         let _s = pt::span("crossapp", "crossapp.demand");
         crate::program::resolve::demand::cross_app_demand(
-            program.meta.primary_app_ref,
+            ctx.primary_app_ref,
             ctx.graph(),
             body.all_edges(),
         )
@@ -1043,23 +958,18 @@ pub fn assemble_and_resolve_cross_app_program(
             has_source: u.source.is_some(),
         })
         .collect();
-    let resolved = {
+    let loaded_apps = program.loaded_apps();
+    let (resolved, meta) = {
         let _s = pt::span("crossapp", "crossapp.attach_program_calls");
-        attach_program_calls_with(
-            &program.meta.inputs,
-            rows,
-            body,
-            &program.meta.coverage,
-            Some(&abi_rows),
-        )
+        attach_program_calls_with(rows, program, Some(&abi_rows))
     };
     Some(CrossAppProgram {
         resolved,
         declared_dependencies,
         dependency_apps,
-        coverage: program.meta.coverage,
+        coverage: meta.coverage,
         friends,
-        loaded_apps: program.meta.loaded_apps,
+        loaded_apps,
     })
 }
 

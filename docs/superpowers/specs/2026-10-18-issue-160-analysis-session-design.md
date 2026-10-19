@@ -143,6 +143,12 @@ holds only the fields they read, child spec §4.3.1.) `ProgramBody` (the
 **two sets kept apart**; `site_facts`; `parenless_calls`; obligation coverage) is released
 at today's drop point: right after the model, before any graph (§5.9 rule 3 item 2).
 The typed `FileTable`/`SiteTable`/`RoutineTable` come with steps 10/11.
+(Amended 2026-10-19, step 1b code review r1: `body` is a plain `ProgramBody`, not an
+`Option`; the `graph` job borrows the program and the model builder consumes it and
+returns the `ProgramMeta`, which the holder keeps from then on. A view therefore holds
+the program until the model is built and the meta after, never a program with no body.
+The build takes a `ProgramScope` (`Workspace` | `CrossApp`) and `ProgramMeta` records it.
+Child spec §4.3.1.)
 
 **The two edge sets.** `edges` is today's `report.edges` before `build_cross_app_program`
 extends it (`src/program/resolve/full.rs:2176`): every workspace routine's edges PLUS

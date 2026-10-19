@@ -730,7 +730,7 @@ pub struct Histogram {
 }
 
 impl Histogram {
-    pub fn of_edges(edges: &[Edge]) -> Histogram {
+    pub fn of_edges<'e>(edges: impl IntoIterator<Item = &'e Edge>) -> Histogram {
         let mut h = Histogram::default();
         for e in edges {
             h.total += 1;

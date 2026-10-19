@@ -1383,12 +1383,12 @@ mod tests {
                 graph: &graph,
                 index: &index,
                 surface: &surface,
-                edges: EdgeView {
-                    primary_app_ref: primary,
-                    edges: &self.edges,
-                    dependency_body_edges: &self.dependency_body_edges,
-                    site_facts: &self.site_facts,
-                },
+                edges: EdgeView::for_test(
+                    primary,
+                    &self.edges,
+                    &self.dependency_body_edges,
+                    &self.site_facts,
+                ),
                 facts: &self.facts,
                 missing_obligations: &self.missing,
                 recovered_files: &recovered,
