@@ -751,17 +751,32 @@ fn release_sequence(args: &[&str]) -> Vec<String> {
 /// and the ordering facts BEFORE its second (RAW) context build, and the
 /// graph after it; fingerprint and each `diff --strict` side release every
 /// cell before snapshot composition; events releases `l4` right after the run
-/// and the rest after the report.
+/// and the rest after the report. Digest and prove (`finish_default_run`)
+/// release `det`, the ordering facts and the graph before the snapshot and
+/// `l4` after the query (§4.4.4).
 ///
 /// DISCRIMINATION: deleting policy check's `release_all_but(&[Cell::Graph])`
-/// before the RAW build fails the policy case.
+/// before the RAW build fails the policy case; deleting
+/// `finish_default_run`'s `release_all_but(&[Cell::L4])` fails digest and
+/// prove.
 #[test]
 fn views_release_their_cells_before_the_next_build() {
-    let (_d, ws) = ws_dep();
+    let (d, ws) = ws_dep();
     let policy = policy_yaml();
+    let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
     let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Graph"];
     let per_side: Vec<&str> = [&["ctx"][..], &all, &["snap"]].concat();
-    let cases: [(&str, Vec<&str>, Vec<&str>); 4] = [
+    // `finish_default_run`: every cell but `l4` before the snapshot, `l4`
+    // after the query.
+    let default_run = vec![
+        "ctx",
+        "rel:Det",
+        "rel:Ordering",
+        "rel:Graph",
+        "snap",
+        "rel:L4",
+    ];
+    let cases: [(&str, Vec<&str>, Vec<&str>); 6] = [
         (
             "policy check",
             vec![
@@ -790,6 +805,16 @@ fn views_release_their_cells_before_the_next_build() {
             "events fanout",
             vec!["events", "fanout", &ws, "--format", "json"],
             [&["ctx", "rel:L4"][..], &all].concat(),
+        ),
+        (
+            "digest",
+            vec!["digest", &ws, "--diff", &diff, "--deterministic"],
+            default_run.clone(),
+        ),
+        (
+            "prove",
+            vec!["prove", &ws, "CallLib", "may-commit", "--deterministic"],
+            default_run,
         ),
     ];
     let mut bad = Vec::new();
