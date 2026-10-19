@@ -20,7 +20,7 @@ Steps 2-5 are carried. The specs were panel-converged in attempt 2 and are on ma
 
 ## Base/Head SHAs
 
-Base `576dd29685e426ad2780e5c3700f4bd66ec5212b`. Head: filled at freeze.
+B = `576dd29685e426ad2780e5c3700f4bd66ec5212b` (`origin/master`, unchanged since the claim). H = `778972cef6ef192499d4af39485d6055dd9f1d15` (gated; later commits change only the ledger and the register).
 
 ## Timeline
 
@@ -84,6 +84,8 @@ After all reverts: `git diff -- src/ tests/` empty; the five tests above plus `a
 - Code review r1 (`code-review` built-in skill, high): F1-CR1..CR14. 13 fixed (`b8b59b5a`), CR10 refuted by re-measurement (r1 + r2, 14 pairs).
 - Final panel r1 (`gpt-6.1-sol`, `claude-opus-5.5` via `pi_ask`; files `.agent/runs/20261019-085626-fcb498/final-r1-{briefing,sol,opus}.md`): sol accepted 13, re-raised CR4; opus accepted 13, re-raised CR13. New: F2-1..F2-6. CR4 fixed at the definition (census.rs), CR13's evidence replaced by a direct CDO oracle comparison.
 - Final panel r2 (`final-r2-{briefing,sol,opus}.md`, same threads): opus accepted all 8; sol accepted 7 and re-raised F2-3 (the public `meta`/`body` still let one build's meta be swapped onto another's body; opus raised the same as a nit). Fixed by sealing both fields (`meta()`, `body()`, crate-only `into_parts()`), pinned by a second doctest. Opus's two other minors: F2-7 (the numbers file's branch gate), F2-8 (two more API changes for the CHANGELOG).
+- Final panel r3 (`final-r3-*.md`, `778972ce`): both accepted F2-3 and F2-8, no new findings; opus accepted F2-7, sol re-raised it (the frozen-head gates not yet recorded). The four gates then ran on H = `778972ce`, all exit 0, recorded above. r4 asks both for F2-7 only.
+- Final panel r4 (`final-r4-*.md`): both accepted F2-7, no new findings. Converged: all 22 entries accepted by both. `final_rounds` used 4 of 5.
 
 ## Gate results
 
@@ -95,6 +97,15 @@ On `933e4f41` (the review-fix head plus register), all through `agentflow run`, 
 | `check-goldens --verify-coverage` | 0 | 0.3 (36 golden dirs declared) |
 | `check-goldens` | 0 | 27.2 |
 | `cdo-gate` | 0 | 225.7 (`cdo-gate: PASS`, 2122 lib tests) |
+
+On the frozen head `778972cef6ef192499d4af39485d6055dd9f1d15` (after the final-panel r1 and r2 fixes; `origin/master` still `576dd296`, no rebase):
+
+| gate | exit | seconds | log |
+|---|--:|--:|---|
+| `ci-steps all` | 0 | 605.0 | `logs/ci-steps-all/20261019T130611-216c2047.log`: 3481 passed, 8 skipped; both `resolved.rs` `compile_fail` doctests ok |
+| `check-goldens --verify-coverage` | 0 | 0.4 | `logs/check-goldens-coverage/20261019T131617-c7e65ae5.log` (36 dirs) |
+| `check-goldens` | 0 | 31.1 | `logs/check-goldens/20261019T131618-94ddef56.log` |
+| `cdo-gate` | 0 | 204.7 | `logs/cdo-gate/20261019T131650-4dd43e04.log` (`cdo-gate: PASS`) |
 
 ## Discoveries
 
