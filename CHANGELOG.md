@@ -143,6 +143,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider rows) read the program build's list of files that parsed to no object
   (`FreshCoverage::files_without_object`) instead of walking and parsing the workspace a
   second time. When the build fails, no fallback parse runs, so those rows are absent.
+- An event publisher's parameter roles now include what its subscribers do to a `var` record
+  parameter (#107). Before, a publisher (whose body is empty) looked like a no-op to every
+  routine that raised its event, so a subscriber's `Modify`, `Validate`, `Get` or `Copy` never
+  reached the raiser's roles or the detectors that read them (d37, d39, d40, d41, d42 and their
+  load points). Spec `docs/superpowers/specs/2026-10-19-issue-107-publisher-roles-subscribers-design.md`.
+  - One subscriber that always runs gives the publisher exactly what a direct call to that
+    subscriber gives. Two to four subscribers are composed over every order of those that
+    always run and every subset of the optional ones; more than four, or a subscriber that
+    cannot be seen, makes the publisher behave like an unknown callee.
+  - A subscriber that may not run (manual binding, a license/permission condition in ANY build
+    reading, an isolated event, or an edge that is not `resolved`) still contributes its MAY
+    facts (persists, validates, may mutate), but never adds or removes a load a caller treats
+    as proven: its load facts are published as `no`. Isolated subscribers' effect on the
+    record's state is not followed.
+  - Event-subscriber parameters bind to the publisher's by name in one place
+    (`event_param_names_match`), quotes ignored; `pd_solve::carry_reqs` used a second copy that
+    did not trim quotes.
+  - Source-bearing dependency publishers (cross-app) gain the presence facts of their
+    subscribers, workspace subscribers included; their path facts stay `unknown` (#70).
+    Symbol-only dependency publishers are unchanged.
+  - A roles SCC that hits the iteration cap now publishes the opaque role for its members.
+  - Model event edges carry `conditional` (from the subscription's conditions in any build
+    reading) and `isolated`; not projected.
+  - Goldens: r3a2 summary-core roles of event publishers and their raisers, and d40/d42
+    skip-reason counts in `cli-a`; no finding added or removed by the fixtures.
 - A routine can carry several readings of one event attribute, one per `#if` build path
   that reads an `#if` group inside the attribute's arguments (since #80). The program
   engine now uses every reading, not only the first (#104):
