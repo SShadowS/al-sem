@@ -243,7 +243,7 @@ pub struct LoopSetId(pub u32);
 /// (Task C3). `get`/`iter` decompress an id back to its loop-group indices; `len`
 /// interned sets total in the (small) hundreds to low thousands on real corpora,
 /// nowhere near the 3.2M per-`(loop, terminal)` population this redesign replaces.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoopSetRegistry {
     /// Canonical (trimmed, no trailing all-zero word) word sequence per interned
     /// id — `sets[id.0]` is `id`'s bitmap. Positional: `to_stable`/

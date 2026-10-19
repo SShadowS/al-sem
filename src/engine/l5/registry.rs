@@ -252,6 +252,7 @@ pub fn serialize_detector_stats(stats: &[DetectorStats]) -> String {
 /// two-field shorthand `{ findings, stats }` — BUT note the struct is not `Default`
 /// (requires `Finding`/`DetectorStats` Default impls). For detectors that emit
 /// diagnostics (e.g. d43 substrate guard), populate the field explicitly.
+#[derive(Debug, PartialEq, Eq)]
 pub struct DetectorOutput {
     pub findings: Vec<Finding>,
     pub stats: DetectorStats,

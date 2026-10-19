@@ -119,8 +119,10 @@ fn assert_parity(
         let minimal = (det.run)(resolved, &min_ctx).unwrap_or_else(|e| {
             panic!("detector {} failed on minimal ctx ({label}): {e}", det.name)
         });
+        // The WHOLE output, not only `findings`: stats, diagnostics and d1's cohort
+        // index must not depend on substrate the detector did not declare either.
         assert_eq!(
-            full.findings, minimal.findings,
+            full, minimal,
             "detector {} under-declares its substrate requirements ({label})",
             det.name
         );
