@@ -309,16 +309,9 @@ impl View {
             *ordering = Some(dc::fill_ordering(model));
         }
         if need_graph && graph.is_none() {
-            *graph = Some(match cross_base {
-                // The view builds it, so it prints `context.graph` (A4).
-                None => {
-                    let g = dc::cross_app_context_graph(model, None);
-                    dc::census_context_graph(&g);
-                    Arc::new(g)
-                }
-                // `base.graph` counts it.
-                Some(b) => Arc::clone(&b.graph),
-            });
+            // Single-app the view builds it and prints `context.graph`;
+            // cross-app it is `base.graph`, which counts it (A4).
+            *graph = Some(dc::context_graph(model, cross_base));
         }
         if need_det && det.is_none() {
             let g = graph.as_ref().expect("graph filled above");
@@ -734,56 +727,5 @@ mod tests {
         // The seam reached the run (non-vacuity).
         assert_eq!(v.run(&k[0]).summarize_diagnostics, [converted]);
         assert!(v.run(&k[1]).summarize_diagnostics.is_empty());
-    }
-
-    /// TRANSIENT (spec §5): deleted in Task 27 with the context's own
-    /// cross-app graph build. The cross-app `View` takes `base.graph`; the
-    /// shim builds its own graph with `cross_app_context_graph`. They must be
-    /// equal. DISCRIMINATION: dropping the injected-edge extend on one side
-    /// fails the equality.
-    #[test]
-    fn base_graph_equals_context_graph() {
-        // The #70 dependency, its subscriber calling a second dependency
-        // routine, so the base injects a dependency-internal edge
-        // (precondition).
-        const DEP_AL: &str = r#"codeunit 12 "Dep Rec Lib"
-{
-    [IntegrationEvent(false, false)]
-    procedure OnDepRec(var Rec: Record Customer)
-    begin
-    end;
-}
-
-codeunit 13 "Dep Rec Sub"
-{
-    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Rec Lib", 'OnDepRec', '', false, false)]
-    local procedure HandleRec(var Rec: Record Customer)
-    begin
-        DoModify(Rec);
-    end;
-
-    local procedure DoModify(var Rec: Record Customer)
-    begin
-        Rec.Modify();
-    end;
-}
-"#;
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path().join("ws");
-        crate::engine::l4::capability_cone::issue70_publisher_roles_tests::write_fixture_with(
-            &ws, DEP_AL,
-        );
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
-        let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
-            .expect("cross-app base");
-        assert!(
-            !base.injected_typed_edges.is_empty(),
-            "precondition: the fixture has injected dependency edges"
-        );
-        let shim_graph = crate::engine::l5::detector_context::cross_app_context_graph(
-            &base.resolved,
-            Some(&base.cross_app_inputs()),
-        );
-        assert!(*base.graph == shim_graph);
     }
 }

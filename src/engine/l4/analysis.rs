@@ -28,7 +28,7 @@ pub struct L4Analysis {
     pub scc: Arc<SccResult>,
     pub bundle: SummaryBundle,
     pub summarize_diagnostics: Vec<SummarizeDiagnostic>,
-    /// The non-convergence line(s) the solver prints (§4.4.7).
+    /// The non-convergence line(s) [`build_l4`] prints (§4.4.7).
     pub warnings: Vec<String>,
 }
 
@@ -104,6 +104,11 @@ pub(crate) fn build_l4(
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.l4");
         census_l4(&l4, computed_scc);
+    }
+    // The ONE print site of a solve's non-convergence line (§4.4.7); the
+    // injected `extra_diagnostics` were never rendered, so never print.
+    for w in &l4.warnings {
+        eprintln!("{w}");
     }
     (l4, CoreSummaries(core_summaries))
 }
@@ -231,97 +236,6 @@ fn census_l4(l4: &L4Analysis, computed_scc: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l4::combined_graph::build_combined_graph;
-
-    /// TRANSIENT (spec §5): `build_l4` against the two builders it replaces.
-    /// Deleted in Task 27 with `build_db_effect_bundle` and
-    /// `cross_app_db_effect_bundle`.
-    #[test]
-    fn bundle_equals_the_old_builders() {
-        // Single-app: ws-d8-commit-in-tx.
-        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/r0-corpus/ws-d8-commit-in-tx");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
-        let model = crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-            &inputs, "r0", false,
-        )
-        .expect("ws-d8 resolves");
-        let old = crate::engine::l4::effect_query_cli::build_db_effect_bundle(&model).2;
-        let graph = build_combined_graph(&model.workspace, &model.calls, &model.events.graph);
-        let (new, _) = build_l4(
-            &model,
-            &graph,
-            L4Request {
-                scc: None,
-                extra_diagnostics: vec![],
-            },
-            None,
-        );
-        assert!(
-            !old.rows_for_test().is_empty(),
-            "precondition: single-app rows"
-        );
-        assert_eq!(
-            new.bundle.rows_for_test(),
-            old.rows_for_test(),
-            "single-app"
-        );
-
-        // Cross-app: the #70 fixture (a dependency publisher solved through
-        // its subscriber's dispatch, a dependency leaf).
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path().join("ws");
-        crate::engine::l4::capability_cone::issue70_publisher_roles_tests::write_fixture(&ws);
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
-        let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
-            .expect("cross-app base");
-        assert!(
-            !base.fixed_roles.is_empty() && !base.leaf_summaries.is_empty(),
-            "precondition: the fixture has a fixed-roles publisher and a leaf"
-        );
-        let old = crate::engine::l4::effect_query_cli::cross_app_db_effect_bundle(&base);
-        let (new, core) = build_l4(
-            &base.resolved,
-            &base.graph,
-            L4Request {
-                scc: Some(Arc::clone(&base.combined_scc)),
-                extra_diagnostics: vec![],
-            },
-            Some(&base.cross_app_inputs()),
-        );
-        assert!(Arc::ptr_eq(&new.scc, &base.combined_scc), "SCC by pointer");
-        assert!(
-            !old.rows_for_test().is_empty(),
-            "precondition: cross-app rows"
-        );
-        assert_eq!(new.bundle.rows_for_test(), old.rows_for_test(), "cross-app");
-        // Rows cannot see `cross` (fixed roles change ROLES only): the
-        // dependency publisher's path-sensitive role fields stay Unknown only
-        // when `build_l4` passes `cross`'s fixed roles (as issue70 (ii)).
-        use crate::engine::l4::capability_cone::issue70_publisher_roles_tests::{five, routine_id};
-        use crate::engine::l4::effect_lattice::EffectPresence;
-        use crate::engine::l4::summary::FieldList;
-        let publisher = routine_id(&base, "OnDepRec");
-        let roles = &core
-            .0
-            .get(&publisher)
-            .expect("OnDepRec solved")
-            .parameter_roles;
-        let [role] = roles.as_slice() else {
-            panic!("OnDepRec: want one role, got {roles:?}");
-        };
-        assert_eq!(
-            five(role),
-            (
-                EffectPresence::Unknown,
-                FieldList::Unknown,
-                EffectPresence::Unknown,
-                EffectPresence::Unknown,
-                FieldList::Unknown,
-            ),
-            "OnDepRec's role must stay Unknown (cross's fixed roles)"
-        );
-    }
 
     #[test]
     fn warning_text_is_rendered_once() {

@@ -253,6 +253,8 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
 /// routine's calls are cut from the combined graph, so its solved summary is its
 /// own direct effects, the same as its leaf; a leaf differs only where an event
 /// edge would feed the dependency routine more, which this fixture does not have.
+/// (2026-10-19: `from_cross_app_base` is gone; query's leaves now reach its store
+/// through `build_l4`'s cross-app inputs; the limit was not re-measured there.)
 #[test]
 fn embedded_dependency_leaf_effects_and_workspace_scoped_selectors() {
     let dir = tempfile::tempdir().unwrap();
@@ -468,7 +470,8 @@ fn dependency_publisher_dispatch_reaches_the_store() {
 /// cross-app graph fill: building `cross_app_context_graph(model, None)` there
 /// instead of taking `base.graph` (which carries the dependency-internal typed
 /// edges) fails this test with `["span-has-no-known-writes"]`; restored, it
-/// passes.
+/// passes. (Task 27 folded that fill into `detector_context::context_graph`,
+/// whose cross-app arm returns `base.graph`.)
 #[test]
 fn cross_app_commit_span_sees_dependency_writes() {
     use crate::dep_dispatch_fixture::{DEP_GUID as XDEP, write_own};

@@ -175,7 +175,9 @@ fn run(args: &[&str]) -> BTreeMap<String, u64> {
 }
 
 // ---------------------------------------------------------------------------
-// §4.1.3 rows
+// §4.4.8 rows (after step 2; every row equals that table, checked 2026-10-19.
+// The query rows equal §4.1.3's too: query now reuses the `l4` cell, with the
+// same one solve and one Tarjan its private builders ran.)
 // ---------------------------------------------------------------------------
 
 #[test]

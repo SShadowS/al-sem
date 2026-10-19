@@ -484,7 +484,7 @@ pub(crate) fn run_detectors_cross_app(
         crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
             demanded,
-            Some(base.cross_app_inputs()),
+            Some(base),
         )
     };
     let ctx = owned.ctx();

@@ -1054,39 +1054,40 @@ pub fn build_detector_context(resolved: &Model, demanded: u32) -> OwnedContext<'
 }
 
 /// What a CROSS-APP context adds to the model (engine-switch S8.1): the dependency
-/// routines (never primary roots or entry points), their fixed solver leaves, the
+/// routines (never primary roots or entry points), their fixed solver leaves, and
+/// d17's declared dependencies and resolved versions. The model is the cross-app
+/// base's (`R3a5CrossAppBase::resolved`), its calls cut to workspace callers. The
 /// dependency-internal edges the cone follows (`direct-call` typed edges from the
-/// R3a-4 artifacts), and d17's declared dependencies and resolved versions. The
-/// model is the cross-app base's (`R3a5CrossAppBase::resolved`), its calls cut to
-/// workspace callers.
+/// R3a-4 artifacts) are in the base's graph, which a cross-app context takes
+/// ([`context_graph`]).
 pub(crate) struct CrossAppInputs<'b> {
     pub dep_routine_ids: &'b BTreeSet<String>,
     pub leaf_summaries: &'b HashMap<String, crate::engine::l4::summary::RoutineSummary>,
     /// Dependency publishers solved for rows only (`R3a5CrossAppBase::fixed_roles`).
     pub fixed_roles: &'b std::collections::HashSet<String>,
-    pub injected_typed_edges: &'b [crate::engine::l4::combined_graph::TypedEdge],
     pub declared_dependencies: &'b [crate::program::model::workspace::DeclaredDependencyDecl],
     pub app_versions: &'b HashMap<String, String>,
     pub friends: &'b HashMap<String, BTreeSet<String>>,
 }
 
-/// [`build_detector_context`], single-app (`cross: None`) or cross-app. One builder
-/// for both since engine-switch S8.1; the cross-app one (which built every
+/// [`build_detector_context`], single-app (`base: None`) or cross-app (`resolved`
+/// is `base.resolved`; the base's graph and cross-app inputs). One builder for
+/// both since engine-switch S8.1; the cross-app one (which built every
 /// substrate whatever the detectors asked for) is gone.
 pub(crate) fn build_detector_context_with<'a>(
     resolved: &'a Model,
     demanded: u32,
-    cross: Option<CrossAppInputs<'_>>,
+    base: Option<&crate::engine::l4::capability_cone::R3a5CrossAppBase>,
 ) -> OwnedContext<'a> {
     use crate::engine::l5::registry::substrate;
     let ordering = (demanded & substrate::ORDERING_FACTS != 0).then(|| fill_ordering(resolved));
-    let graph = cross_app_context_graph(resolved, cross.as_ref());
-    census_context_graph(&graph);
+    let graph = context_graph(resolved, base);
     let l4 = (demanded & substrate::CORE_SUMMARIES != 0).then(|| L4Request {
         scc: None,
         extra_diagnostics: vec![],
     });
-    let (art, l4) = build_detector_artifacts(resolved, demanded, Arc::new(graph), l4, cross);
+    let cross = base.map(|b| b.cross_app_inputs());
+    let (art, l4) = build_detector_artifacts(resolved, demanded, graph, l4, cross);
     OwnedContext {
         model: resolved,
         art,
@@ -1095,31 +1096,27 @@ pub(crate) fn build_detector_context_with<'a>(
     }
 }
 
-/// #160 A4: whoever builds the context's graph prints its `context.graph`
-/// bucket, once the graph is complete. A graph taken from the cross-app base
-/// prints nothing (`base.graph` counts it).
-pub(crate) fn census_context_graph(graph: &CombinedGraph) {
+/// The context's combined graph: cross-app the base's own (its
+/// dependency-internal typed edges folded in), shared by pointer; single-app
+/// built here over the model's calls and events.
+///
+/// #160 A4: whoever builds the graph prints its `context.graph` bucket, so the
+/// single-app arm prints it and a graph taken from the base prints nothing
+/// (`base.graph` counts it).
+pub(crate) fn context_graph(
+    resolved: &Model,
+    base: Option<&crate::engine::l4::capability_cone::R3a5CrossAppBase>,
+) -> Arc<CombinedGraph> {
+    if let Some(b) = base {
+        return Arc::clone(&b.graph);
+    }
+    let _graph_span = pt::span("context", "context.event_combined_graph");
+    let graph = build_combined_graph(&resolved.workspace, &resolved.calls, &resolved.events.graph);
     if crate::engine::census::enabled() {
-        crate::engine::census::combined_graph(graph)
+        crate::engine::census::combined_graph(&graph)
             .emit("context.graph", crate::engine::census::Kind::Shallow);
     }
-}
-
-/// The context's combined graph over the model's calls and events, with a
-/// cross-app context's dependency-internal typed edges folded in.
-pub(crate) fn cross_app_context_graph(
-    resolved: &Model,
-    cross: Option<&CrossAppInputs<'_>>,
-) -> CombinedGraph {
-    let _graph_span = pt::span("context", "context.event_combined_graph");
-    let mut graph =
-        build_combined_graph(&resolved.workspace, &resolved.calls, &resolved.events.graph);
-    if let Some(c) = cross {
-        graph
-            .typed_edges
-            .extend(c.injected_typed_edges.iter().cloned());
-    }
-    graph
+    Arc::new(graph)
 }
 
 /// The owned detector substrates over `graph`, at mask `demanded`: the cone
@@ -2772,7 +2769,7 @@ page 50813 "CP3 Wizard"
     fn core_summaries_without_an_l4_request_panics() {
         use crate::engine::l5::registry::substrate;
         let model = crate::engine::l5::test_support::empty_resolved();
-        let graph = Arc::new(cross_app_context_graph(&model, None));
+        let graph = context_graph(&model, None);
         let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             build_detector_artifacts(&model, substrate::CORE_SUMMARIES, graph, None, None);
         }))

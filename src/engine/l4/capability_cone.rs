@@ -3271,15 +3271,19 @@ fn compute_uncertainty_coverage_reasons(
         }
     }
 
-    // v2 db-effect solver (roles-cap diagnostics ignored here). Only
-    // `uncertainties` are read below.
-    let (summaries, _) = compute_summaries_v2(
+    // v2 db-effect solver. Only `uncertainties` are read below; the roles-cap
+    // diagnostics are printed here, the solver itself no longer prints
+    // (#160 §4.4.7).
+    let (summaries, diags) = compute_summaries_v2(
         &ws.routines,
         graph,
         &scc,
         &calls.upgraded_bindings,
         &field_index,
     );
+    for w in crate::engine::l4::analysis::render_warnings(&diags) {
+        eprintln!("{w}");
+    }
 
     let mut out: HashMap<String, BTreeSet<String>> = HashMap::new();
     for (rid, summary) in &summaries {
@@ -3452,7 +3456,6 @@ impl R3a5CrossAppBase {
             dep_routine_ids: &self.dep_routine_ids,
             leaf_summaries: &self.leaf_summaries,
             fixed_roles: &self.fixed_roles,
-            injected_typed_edges: &self.injected_typed_edges,
             declared_dependencies: &self.declared_dependencies,
             app_versions: &self.resolved_app_versions,
             friends: &self.friends,
@@ -4774,7 +4777,7 @@ mod pd_uses_tests {
 
 /// #70 row 3c: a solved dependency publisher keeps UNKNOWN parameter roles.
 #[cfg(test)]
-pub(crate) mod issue70_publisher_roles_tests {
+mod issue70_publisher_roles_tests {
     use super::*;
     use crate::engine::l4::effect_lattice::EffectPresence;
     use crate::engine::l4::summary::FieldList;
@@ -4814,12 +4817,7 @@ codeunit 13 "Dep Rec Sub"
 
     /// The workspace (`Fwd` only) and its embedded-source dependency, written
     /// as `tests/common/symbol_app.rs` does (40-byte header + zip).
-    pub(crate) fn write_fixture(ws: &std::path::Path) {
-        write_fixture_with(ws, DEP_AL);
-    }
-
-    /// [`write_fixture`] with `dep_al` as the dependency's embedded source.
-    pub(crate) fn write_fixture_with(ws: &std::path::Path, dep_al: &str) {
+    fn write_fixture(ws: &std::path::Path) {
         std::fs::create_dir_all(ws.join("src")).unwrap();
         std::fs::write(
             ws.join("app.json"),
@@ -4846,7 +4844,7 @@ codeunit 13 "Dep Rec Sub"
                 ("NavxManifest.xml", manifest.as_str()),
                 ("SymbolReference.json", symbols.as_str()),
                 ("src/Customer.al", customer),
-                ("src/Lib.al", dep_al),
+                ("src/Lib.al", DEP_AL),
             ] {
                 zip.start_file(name, opts).unwrap();
                 zip.write_all(text.as_bytes()).unwrap();
@@ -4860,7 +4858,7 @@ codeunit 13 "Dep Rec Sub"
         out.write_all(bytes.get_ref()).unwrap();
     }
 
-    pub(crate) fn routine_id(base: &R3a5CrossAppBase, name: &str) -> String {
+    fn routine_id(base: &R3a5CrossAppBase, name: &str) -> String {
         let ids: Vec<&ModelRoutine> = base
             .ws_routines()
             .iter()
@@ -4873,7 +4871,7 @@ codeunit 13 "Dep Rec Sub"
     /// The five path-sensitive role fields of a CORE role, as
     /// (requiresLoadedAtEntry, requiredLoadedFieldsAtEntry, mutatesBeforeLoad,
     /// dirtyAtExit, currentLoadedFieldsAtExit).
-    pub(crate) fn five(
+    fn five(
         r: &crate::engine::l4::summary::RecordRoleSummary,
     ) -> (
         EffectPresence,
@@ -4909,7 +4907,7 @@ codeunit 13 "Dep Rec Sub"
     /// forwarder `Fwd(var Rec)` whose body is ONLY `Lib.OnDepRec(Rec)`.
     /// Hand-stated expectations, checked through the production paths that
     /// expose each fact:
-    ///   (i)   DB rows, through the store `cross_app_db_effect_bundle` builds:
+    ///   (i)   DB rows, through the store `build_l4` builds cross-app:
     ///         `OnDepRec` has its subscriber's `Modify` row;
     ///   (ii)  parameter roles, through the detector context analyze uses
     ///         (`build_detector_context_with` + the base's cross-app inputs,
@@ -4927,6 +4925,13 @@ codeunit 13 "Dep Rec Sub"
     ///
     /// (ii) takes its inputs from `base.cross_app_inputs()`, the one
     /// constructor every cross-app caller uses, so mutation (b) reaches it.
+    ///
+    /// (i) since #160 Task 27 (2026-10-19): `build_l4` called the cross-app
+    /// way. Removing `edges_by_from` for the `fixed_roles` members inside
+    /// `build_l4` fails (i) (`[]`); restored, it passes. Stated limit: passing
+    /// `None` instead of the cross-app inputs to (i)'s `build_l4` stays GREEN.
+    /// Fixed roles change roles only, and the one leaf (`HandleRec`, no
+    /// out-edge) equals its solved direct rows, so the rows do not see it.
     #[test]
     fn dependency_publisher_roles_stay_unknown() {
         let dir = tempfile::tempdir().unwrap();
@@ -4942,8 +4947,18 @@ codeunit 13 "Dep Rec Sub"
         );
         let mut failures: Vec<String> = Vec::new();
 
-        // (i) DB rows through the store.
-        let bundle = crate::engine::l4::effect_query_cli::cross_app_db_effect_bundle(&base);
+        // (i) DB rows through the store, solved the cross-app way (the base's
+        // SCC and cross-app inputs, so the leaves and fixed roles are in).
+        let (l4, _) = crate::engine::l4::analysis::build_l4(
+            &base.resolved,
+            &base.graph,
+            crate::engine::l4::analysis::L4Request {
+                scc: Some(std::sync::Arc::clone(&base.combined_scc)),
+                extra_diagnostics: vec![],
+            },
+            Some(&base.cross_app_inputs()),
+        );
+        let bundle = l4.bundle;
         let ops: Vec<String> = bundle
             .routine_ix(&publisher)
             .map(|ix| bundle.db_effects(ix).map(|e| e.op.to_string()).collect())
@@ -4973,7 +4988,7 @@ codeunit 13 "Dep Rec Sub"
         let owned = crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
             crate::engine::l5::registry::substrate::ALL,
-            Some(base.cross_app_inputs()),
+            Some(&base),
         );
         let ctx = owned.ctx();
         for (name, id, want) in [
@@ -5184,7 +5199,7 @@ codeunit 13 "Dep Rec Sub"
         let owned = crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
             crate::engine::l5::registry::substrate::ALL,
-            Some(base.cross_app_inputs()),
+            Some(base),
         );
         let ctx = owned.ctx();
         let proj = project_r3a5_cross_app(ws, "r0", "issue107");

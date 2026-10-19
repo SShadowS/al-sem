@@ -1047,18 +1047,8 @@ pub fn compute_analyzer_diagnostics(
     analyzer_diagnostics_of_run(resolved, &run)
 }
 
-/// The target's analyzer diagnostics ([`compute_analyzer_diagnostics`] or, for a
-/// cross-app base, [`compute_analyzer_diagnostics_cross_app`]) as
-/// `<severity>: <message>` lines, the stderr form `alsem events` and
-/// `alsem policy` print (and match `error:` against under `--strict`).
-pub fn analyzer_diagnostic_lines(target: &AnalysisTarget) -> Vec<String> {
-    diagnostic_lines(&match target {
-        AnalysisTarget::SingleApp(r) => compute_analyzer_diagnostics(r),
-        AnalysisTarget::CrossApp(b) => compute_analyzer_diagnostics_cross_app(b),
-    })
-}
-
-/// Diagnostics as `<severity>: <message>` lines.
+/// Diagnostics as `<severity>: <message>` lines, the stderr form `alsem events`
+/// and `alsem policy` print (and match `error:` against under `--strict`).
 pub(crate) fn diagnostic_lines(diags: &[crate::engine::l5::registry::Diagnostic]) -> Vec<String> {
     diags
         .iter()
