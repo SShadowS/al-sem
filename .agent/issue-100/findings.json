@@ -1,0 +1,882 @@
+[
+ {
+  "id": "S1-1",
+  "source": "sol+opus",
+  "round": 1,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 25,
+  "severity": "important",
+  "text": "'TestField reads no row' exceeds the evidence: engine classification is not runtime proof, and partial records can trigger a JIT load on an unloaded field (Microsoft Learn, partial records). Opus raised the measurement side as its finding 8.",
+  "disposition": "fixed",
+  "evidence": "Design now claims only that TestField as an intrinsic op issues no query, and states the JIT residual: it applies to ANY field access (none is modelled as a read) and re-reads a row whose loading Get/Find already carries a read fact. Measurement plan item 4 measures both cases in a BC container when available; otherwise the claim stays documented. Round 2: sol re-raised (platform-loaded records need no explicit load); the residual now says the earlier load USUALLY carries a read, names the platform-loaded cases (page Rec, report dataitem, table trigger Rec, subscriber parameter loaded in dependency code), and states that a read / TableData R need can go unreported there.",
+  "hash": "20a5cfd99cf66cca",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-2",
+  "source": "sol+opus",
+  "round": 1,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 45,
+  "severity": "important",
+  "text": "The impact rule ('each move traces to a routine whose only read was TestField') is wrong: direct facts disappear even alongside real reads, and inherited representatives / permission witnesses change while the read survives (capability_cone.rs:1310-1318, snapshot_full.rs:690-693); TOUCHES_TABLE changes too.",
+  "disposition": "fixed",
+  "evidence": "'Outputs that move' now has three kinds: fact removal, presence loss, witness replacement; A1's fixture adds Mixed (Get + TestField) and Caller cases; A4's triage accepts exactly the three kinds.",
+  "hash": "272976c5686d3795",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-3",
+  "source": "sol+opus",
+  "round": 1,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 76,
+  "severity": "important",
+  "text": "Triaging only added/removed d44 ids misses retained findings whose reader list changes (d44.rs:231-266), and the shared per-event cap can expose a previously hidden finding (d44.rs:297-311).",
+  "disposition": "fixed",
+  "evidence": "A3 compares complete d44 payloads at both scopes: removed, changed (same id, shorter reader list) and cap-induced additions, each triaged. Opus's 'no d44 finding can be added' is refined by sol's cap point.",
+  "hash": "57c698f4c7faf7c9",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-4",
+  "source": "sol",
+  "round": 1,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 75,
+  "severity": "important",
+  "text": "A2 proves agreement, not single ownership: two identical corrected maps would pass. Also assert TestField remains a record operation so A1's negative is not vacuous.",
+  "disposition": "fixed",
+  "evidence": "Design item 2 deletes the cone's wrapper map_table_op (call sites use table_commit::map_op); A2 is an agreement test over the whole RecordOpType vocabulary whose discrimination duplicates the CORRECTED table with one entry changed; the limit (no test proves no second table) is stated. A1 asserts TestField is still in OnlyTF's record operations.",
+  "hash": "c5d8001b3d8bdcd2",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-5",
+  "source": "sol",
+  "round": 1,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 60,
+  "severity": "minor",
+  "text": "'No other TestField => arm' is contradicted by op_classification.rs:65.",
+  "disposition": "fixed",
+  "evidence": "Probe row scoped to capability producers; op_classification.rs:65 named as an op CLASS table, digest.rs:56 as a capability-op-to-effect map returning None for read.",
+  "hash": "93a1cd864ee9862c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-O1",
+  "source": "opus",
+  "round": 1,
+  "file": "src/engine/l4/cone_derived.rs",
+  "line": 696,
+  "severity": "important",
+  "text": "TOUCHES_TABLE is set for any table fact; touches_db_derived (capability_query.rs:115) feeds d1 and d2, whose walk graph/budget can change.",
+  "disposition": "fixed",
+  "evidence": "'Outputs that move' names the d1/d2 mechanisms: (a) d2's shared 500-node budget can reach previously starved terminals (additions); (b) the TOUCHES_TABLE/classify_op mismatch, now closed unconditionally by Design item 3; (c) newly reached Rename/LockTable-only callees (additions). Measurement item 1 diffs d1/d2 payloads at both scopes; every change traced to (a) or (c); a lost finding is unexplained and blocks the merge. Round 3: sol re-raised the conditional gate; replaced by the unconditional fix (S3-1).",
+  "hash": "6c309fd918db8379",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-O4",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 74,
+  "severity": "minor",
+  "text": "A1's L2 half calls extract_table (the helper), not the L2 use at l2_workspace.rs:352.",
+  "disposition": "fixed",
+  "evidence": "A1's L2 half goes through the L2 workspace path that fills capability_facts_direct (l2_workspace.rs:352, the r1a projection).",
+  "hash": "4d9a1d8d90cd6a57",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-O5",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 51,
+  "severity": "minor",
+  "text": "The ledger never names the goldens expected to move.",
+  "disposition": "fixed",
+  "evidence": "'Expected golden moves' lists r1a ws-d21.l2 and ws-member-call-codeunit.l2, r3a3 ws-d21.r3a3 and ws-member-call-codeunit.r3a3, and those expected not to move; any other move is unexplained until traced.",
+  "hash": "8714a557b043dda5",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-O6",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 81,
+  "severity": "minor",
+  "text": "The measurement plan lacks the removed TableData R row count and the d1/d2 zero-change check.",
+  "disposition": "fixed",
+  "evidence": "Measurement plan items 1 (d1/d2 counts and payloads) and 2 (TableData R rows before/after, sample traced).",
+  "hash": "632b6e00c1853209",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S1-O7",
+  "source": "opus",
+  "round": 1,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 45,
+  "severity": "minor",
+  "text": "No CHANGELOG / compatibility note: CapabilityLost diff churn against old snapshots, fewer op=read policy matches.",
+  "disposition": "fixed",
+  "evidence": "Design 'CHANGELOG' paragraph lists both, plus the removed TableData R rows and the JIT residual; both are also under 'Outputs that move'.",
+  "hash": "f52f793d59a77643",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2-1",
+  "source": "sol",
+  "round": 2,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 126,
+  "severity": "minor",
+  "text": "A1 does not exercise inherited witness replacement: Mixed puts Get first; Caller has only the disappearing branch.",
+  "disposition": "fixed",
+  "evidence": "A1's fixture adds Both (calls OnlyTF then GetOnly) and asserts its inherited read survives with GetOnly's Get as the witness.",
+  "hash": "df02cd33a59f1809",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2-N1",
+  "source": "opus",
+  "round": 2,
+  "file": "src/engine/l4/cone_derived.rs",
+  "line": 696,
+  "severity": "important",
+  "text": "TOUCHES_TABLE comes only from capability facts, while d1/d2 terminals include Rename and LockTable, which map_op does not map; a callee with Rename/LockTable plus TestField drops to touches_db = No and a real d1/d2 finding can disappear.",
+  "disposition": "fixed",
+  "evidence": "Design item 3 fixes it unconditionally: map_op gives Rename and LockTable table capability facts (op names rename / lock), so the cone carries them transitively and TOUCHES_TABLE is set wherever d1/d2 have a terminal; invariant test map_op(op).is_some() == is_db_touching_class(classify_op(op)) over the vocabulary; acceptance row A2b (TestField+Rename, TestField+LockTable, Rename-only callees under a loop keep/gain their d1/d2 findings; discrimination removes the two arms). Round 3: both reviewers re-raised the conditional gate (S3-1).",
+  "hash": "fce19a538abed92e",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2-N2",
+  "source": "opus",
+  "round": 2,
+  "file": "src/engine/l4/capability_cone.rs",
+  "line": 115,
+  "severity": "minor",
+  "text": "Two doc comments name the wrapper the design deletes (capability_cone.rs:115, table_commit.rs:16).",
+  "disposition": "fixed",
+  "evidence": "Design item 2 updates both in the same change.",
+  "hash": "6185e4806b21a5ff",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2-N3",
+  "source": "opus",
+  "round": 2,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 41,
+  "severity": "minor",
+  "text": "The JIT paragraph claims the earlier load always has its own read fact; not when the platform loads the record.",
+  "disposition": "fixed",
+  "evidence": "Merged with S1-1's round-2 revision: 'usually', the platform-loaded cases named, possible unreported reads stated.",
+  "hash": "d3040bc0df5405dc",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S2-N4",
+  "source": "opus",
+  "round": 2,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 52,
+  "severity": "minor",
+  "text": "Wrapper line numbers are off: the function is at capability_cone.rs:169-171 and its only call at :610.",
+  "disposition": "fixed",
+  "evidence": "Design item 2 now cites :169-171 and the one call site :610.",
+  "hash": "d31aaed390ebd0c3",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3-1",
+  "source": "sol+opus",
+  "round": 3,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 100,
+  "severity": "important",
+  "text": "The conditional gate (fix touches_db only if CDO shows a loss) is unacceptable: a complete callee with TestField + Rename deterministically flips touches_db to No; one corpus not containing the shape proves nothing. Fix the flag unconditionally, classifier-compatible and transitive, with d1/d2 fixtures for Rename/LockTable with and without TestField, and expect added findings from newly reached Rename/LockTable-only callees.",
+  "disposition": "fixed",
+  "evidence": "Design item 3 (unconditional), acceptance A2b (three callee shapes + discrimination), mechanism (c) in 'Outputs that move', A4 and measurement item 1. Mechanism differs from opus's suggestion (a record-op bit folded over the cone, 'not by adding capability facts'): map_op gives Rename/LockTable their own table capability ops, carried by the existing cone. Opus's concern that such facts surface as TableData rows is refuted at snapshot_full.rs:677 and fingerprint_query.rs:510 (unknown ops are skipped); diff gains (passes.rs:809, :863), digest (digest.rs:56-77), physical read/write sets and d44 ignore them. A separate reachability pass would have to copy the cone's traversal rules. The facts do surface in r1a/r3a3 goldens and policy op matches, stated in the Design and CHANGELOG note. Round 4: sol re-raised A2b's topology (d2 fires only through event dispatch, d2.rs:329-349) and the missing LockTable-only case; A2b now has four shapes (i-iv) on physical records, a d1 loop test and a d2 event-dispatch test (publisher raised in a loop, subscriber calls the callee).",
+  "hash": "f8d3dbaf1e9a794f",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S3-2",
+  "source": "opus",
+  "round": 3,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 20,
+  "severity": "minor",
+  "text": "Classification and the 'second acceptance item' paragraph still cite capability_cone.rs:166-169.",
+  "disposition": "fixed",
+  "evidence": "Both now cite :169-171 (doc :167-168), as does the probe row.",
+  "hash": "4d5f4df0a3030ffb",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4-1",
+  "source": "sol+opus",
+  "round": 4,
+  "file": "src/engine/gate/policy/predicate_fields.rs",
+  "line": 103,
+  "severity": "important",
+  "text": "rename/lock are absent from CAPABILITY_OPS, so a policy naming them fails to compile (predicate_compiler.rs:153-166); the ledger's claim that a policy can match them was false.",
+  "disposition": "fixed",
+  "evidence": "Design item 3: CAPABILITY_OPS gains rename and lock; acceptance row A2c tests compilation and matching of op [rename] / [lock] and that existing op [read] and negated predicates still behave.",
+  "hash": "06bfd11225947390",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4-2",
+  "source": "sol",
+  "round": 4,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 132,
+  "severity": "important",
+  "text": "Newly admitted branches are not findings-monotone: a newly walked callee with no d2 terminal (e.g. Rename on a known-temp record) spends d2's shared budget and can starve an existing terminal (d2.rs:117-120; path_walker.rs:265-273).",
+  "disposition": "fixed",
+  "evidence": "'Outputs that move' mechanism (d) drops the 'additions only' claim; the exposure is the same as for every already-walked branch (temp reads set TOUCHES_TABLE too), and preventing it in general is a d2 budget redesign. Measurement item 1 traces every d1/d2 change to (a)/(c)/(d); a loss from (d) or from no cause blocks the merge until handled (most simply TOUCHES_TABLE only from non-known-temp facts, matching d2's terminals). Round 5: sol re-raised: no reverse-budget fixture is specified, and the suggested TOUCHES_TABLE temp gate would prune d1's deliberately kept temporary terminals (d1_graph.rs:151-155, :237). Direction recorded under mechanism (d): a d2-specific presence bit (non-known-temp table facts, matching d2.rs:117-118), d1 keeps touches_db, plus an adversarial d2 fixture. Cap reached before it could be reviewed. Attempt 2: implemented the recorded direction. Design item 3 \"d2 prunes on its own presence bit\": TOUCHES_PHYSICAL_TABLE (table fact, not fact_is_known_temp) with touches_physical_table_derived, used at d2.rs:136 (expand) and d2.rs:390 (subscriber pre-filter); d1 keeps touches_db_derived. Acceptance row A2d: generated adversarial fixture (temp-only Rename/LockTable branch >500 routines walked first, physical Modify after), finding asserted present; discrimination reverts d2 to touches_db_derived and the finding disappears; unit pin on the two bits. Round A2-1: sol re-raised for virtual-table Rename/LockTable branches; split out as A2-2. Round A2-2: the contradicting mechanism (d) sentence now says virtual tables are widened by (c)/(g); (g) states why it stays open (meaningless AL).",
+  "hash": "53316505937413be",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4-3",
+  "source": "sol",
+  "round": 4,
+  "file": "src/engine/gate/diff/passes.rs",
+  "line": 977,
+  "severity": "minor",
+  "text": "'Unknown ops are skipped' misses diff losses: removing a rename/lock fact emits CapabilityLost.",
+  "disposition": "fixed",
+  "evidence": "Design item 3 states the gain/loss asymmetry: no gain for the new ops, but a vanished rename/lock fact between two new snapshots is a CapabilityLost; old snapshots have none, so upgrading causes no loss churn. Named in the CHANGELOG note.",
+  "hash": "ac257625ebb28944",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4-O2",
+  "source": "opus",
+  "round": 4,
+  "file": "src/engine/l5/fingerprint_query.rs",
+  "line": 393,
+  "severity": "minor",
+  "text": "Two visible surfaces were omitted: an op-less resourceKind: table policy now matches rename/lock facts; alsem fingerprint lists every table op per resource and fact ids, so a Rename/LockTable-only routine gains a table family with no permission line.",
+  "disposition": "fixed",
+  "evidence": "Both listed under 'What DOES surface' in Design item 3 and in the CHANGELOG note.",
+  "hash": "6a4a9b97d784530e",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4-O3",
+  "source": "opus",
+  "round": 4,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 154,
+  "severity": "minor",
+  "text": "Only ws-d60 has a Rename and no fixture has LockTable; fact addition moves no r1a/r3a3 golden.",
+  "disposition": "fixed",
+  "evidence": "'Expected golden moves' now says so (grep evidence), names r4/r4f/l2_features via ws-d60 as the only possible movers, and A2b's fixtures as the only coverage of the new facts.",
+  "hash": "87559e05fc3e6e8e",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S4-O4",
+  "source": "opus",
+  "round": 4,
+  "file": "src/engine/l4/capability_cone.rs",
+  "line": 1310,
+  "severity": "minor",
+  "text": "Each lock fact is a new cone dedup key inherited by every caller; the cone store and analyze time can grow.",
+  "disposition": "fixed",
+  "evidence": "Measurement item 1 records analyze wall time and peak working set before/after at both scopes (baseline captured) and the inherited-fact count. Final round 1 (sol re-raised: peak working set not measured): measured at 725fe4a0, analyze --scope all interleaved x2, before 2.80/2.78 GB, after 2.79/2.78 GB; unchanged. Final round 2 (sol re-raised: both scopes required): --scope primary measured the same way, before 2.78/2.79 GB, after 2.78/2.79 GB; unchanged at both scopes.",
+  "hash": "4036ac5f74b14e54",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S5-1",
+  "source": "opus",
+  "round": 5,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 165,
+  "severity": "minor",
+  "text": "'the d1/d2 findings of mechanism (c) below': (c) is above.",
+  "disposition": "fixed",
+  "evidence": "Wording now says 'above'. Not marked: spec_rounds cap reached.",
+  "hash": "2142943045355def",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "S5-2",
+  "source": "sol",
+  "round": 5,
+  "file": ".agent/issue-100/ledger.md",
+  "line": 99,
+  "severity": "minor",
+  "text": "'The bundled policy always filters on op' is false: policy-default.yaml:44-50 filters only on resourceKind: http.",
+  "disposition": "fixed",
+  "evidence": "Wording now says every bundled rule excludes the new table ops by an op filter or a non-table resourceKind filter. Not marked: spec_rounds cap reached.",
+  "hash": "993ab106dd80e13a",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-1",
+  "source": "both",
+  "round": "A2-1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "The new d2 bit reads cone facts resolved in the reaching routine's frame (pd_solve.rs:221-247 rep_for rewrites a parameter-dependent temp state to the caller's), while d2's terminals read model ops in the owner's frame (d2.rs:117-118). A caller passing a local Temporary record to B(var Rec) is pruned although B's Modify is a d2 terminal: a d2 finding is lost outside mechanisms (a)/(c)/(d).",
+  "disposition": "fixed",
+  "evidence": "Design item 3 'Where the bit and d2's terminal filter disagree' declares it mechanism (e) caller-frame temp: the removed finding is a false positive on that path (the Modify runs on a temporary buffer); a physical caller keeps it. Acceptance row A2e pins both directions with discrimination; measurement item 1 records every (e) loss with its source site. Round A2-2: A2e uses two publishers/events (d2 reports per looped publish, d2.rs:13-18, :461-479); FlowField paths excluded from (e), A2f.",
+  "hash": "1e6f46f89cc5e07c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-2",
+  "source": "sol",
+  "round": "A2-1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "Virtual/system-table Rename/LockTable-only branches get the new bit (not known-temp) while d2 rejects their terminals (d2.rs:112-118, detectors/mod.rs:952-977), so newly walked no-terminal work can still exhaust d2's budget; the ledger claimed this exposure is not widened.",
+  "disposition": "fixed",
+  "evidence": "Design item 3 mechanism (g): stated as a narrow case of (d), not closed (no fact-level counterpart of op_targets_virtual_system_table). Measurement item 1 counts rename/lock facts on VIRTUAL_SYSTEM_TABLES on CDO, and any d2 loss traced to (g) blocks the merge. Round A2-2: same; (g) gives its reason (platform-computed tables: Rename is not a working operation, LockTable locks no SQL table; closing needs a declared-type test at both fact producers).",
+  "hash": "ed91c736c3b808d1",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-3",
+  "source": "opus",
+  "round": "A2-1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The new bit has no fixture-only raw oracle or derived-vs-raw parity test beside touches_db_of / may_commit (capability_query.rs:60-87; cone_derived.rs:1289, :1470-1472).",
+  "disposition": "fixed",
+  "evidence": "Design item 3: touches_physical_table_of raw oracle added to the parity tests; A2d names it.",
+  "hash": "766d51f4e8d09ca8",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-4",
+  "source": "opus",
+  "round": "A2-1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "A2d must say the temp records are LOCAL Temporary variables (a forwarded temp is a PD terminal), that the subscriber has no physical op, and that the budget counts visits (no global visited set), so '>500 routines' is not the requirement.",
+  "disposition": "fixed",
+  "evidence": "A2d rewritten accordingly (path_walker.rs:222, :265-275), cones complete, walk order recorded.",
+  "hash": "6d02e5123cc2ea26",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-5",
+  "source": "opus",
+  "round": "A2-1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "Unreachable ops are absent from the cone (capability_cone.rs:580-584) but are d2 terminals (d2.rs:103): a routine with only temp reachable facts and a physical op in dead code is now pruned, an untraced move class.",
+  "disposition": "fixed",
+  "evidence": "Design item 3 mechanism (f) dead code: intended, pre-existing for TOUCHES_TABLE; listed in 'Outputs that move' and measurement item 1.",
+  "hash": "82ff4d7a98ea7494",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-6",
+  "source": "sol",
+  "round": "A2-1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The register holds 25 entries, not 26.",
+  "disposition": "fixed",
+  "evidence": "Ledger Claim section says 25. Round A2-2: \"Not delivered\" refreshed for attempt 2.",
+  "hash": "25a6fe52b6d59390",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-7",
+  "source": "sol",
+  "round": "A2-1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "'No longer walked' needs a completeness qualifier: an incomplete cone gives Unknown, which both d2 sites still walk (capability_query.rs:128-136); and the bit must be set before the unresolved-resource-id return (cone_derived.rs:696-700).",
+  "disposition": "fixed",
+  "evidence": "Design item 3 says both; A2d pins the no-resource-id case.",
+  "hash": "d2c0c0aff56e3b4a",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-8",
+  "source": "sol",
+  "round": "A2-2",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "S -> A(local Temporary T) -> B(var Rec) with Rec.CalcFields(FlowField): producer specialization makes A's fact known-temp, the new bit prunes A, but a temporary host's FlowField still queries physical flow-target tables (d1.rs:151-166); (e) must not remove it.",
+  "disposition": "fixed",
+  "evidence": "Design item 3: the bit keeps a known-temp fact whose op_subtype is in d1's FLOWFIELD_GATED_OPS (d1.rs:133, reused); (e) restated to exclude FlowField paths; new acceptance row A2f with discrimination (drop the clause -> finding disappears); unit pin (a known-temp CalcFields fact sets the bit). d2's own terminal filter dropping temp FlowField ops is pre-existing: discovery candidate 1. Round A2-3 (sol re-raised: the op_subtype clause is not dedup-invariant): replaced by an op-level rule, the bit is clear only for a known-temp NON-read, so every read (CalcFields included) sets it whatever wins inherited_fact_key; A2f gains the competing-Count dedup variant.",
+  "hash": "381e246a9a847b9e",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-9",
+  "source": "both",
+  "round": "A2-2",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "A2e asserted per subscriber, but d2 reports one finding per looped publish; with S1 and S2 on one event, S2 keeps the finding in both versions.",
+  "disposition": "fixed",
+  "evidence": "A2e rewritten with two publishers/events E1, E2 and per-event assertions.",
+  "hash": "eafc21af88443ef1",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-10",
+  "source": "opus",
+  "round": "A2-2",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "(g) is the conditional-gate pattern S3-1 rejected; acceptable only with the reason that the shape is meaningless AL, which the ledger must state.",
+  "disposition": "fixed",
+  "evidence": "(g) now states the reason (detectors/mod.rs:925-940 tables are platform-computed) and what closing it would take.",
+  "hash": "4b57715a1a2f200c",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-11",
+  "source": "both",
+  "round": "A2-2",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The 'Not delivered' section still carried attempt 1's text (23 of 26).",
+  "disposition": "fixed",
+  "evidence": "Refreshed. Final round 1 (sol re-raised: stale again): \"Not delivered\" rewritten for the implemented state.",
+  "hash": "f70409c99148c31b",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-12",
+  "source": "sol",
+  "round": "A2-2",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "A2d should say the branch DEMANDS more than 500 visits (the cap stops at 500), and the no-resource-id pin must use a non-known-temp fact.",
+  "disposition": "fixed",
+  "evidence": "A2d reworded; pins: non-known-temp no-rid fact sets both bits, known-temp CalcFields fact sets both.",
+  "hash": "1ad220ff50c31dff",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-13",
+  "source": "sol",
+  "round": "A2-3",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "The FlowField clause read op_subtype, which inherited_fact_key (capability_cone.rs:1310-1318) does not carry, breaking the fold's dedup-invariance contract (cone_derived.rs:59-64): a distance-1 temp Count beats a distance-2 CalcFields under one key and clears the bit.",
+  "disposition": "fixed",
+  "evidence": "Design item 3: the rule now reads only op and temp state (both in the key): clear only for a known-temp non-read. A2f's second variant pins the competing-Count case.",
+  "hash": "ee9a65b9ec043cc1",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-14",
+  "source": "opus",
+  "round": "A2-3",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "Design item 3 still said a temp read is no longer walked, false once temp reads keep the bit.",
+  "disposition": "fixed",
+  "evidence": "Reworded: a callee whose only reachable facts are known-temp NON-reads is no longer walked; temp-read-only branches keep today's exposure. Round A2-4 (sol re-raised, opus raised the same): mechanism (f) now also says known-temp NON-reads.",
+  "hash": "fb076c45bd549c5a",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-15",
+  "source": "opus",
+  "round": "A2-3",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The SetAutoCalcFields half of the FlowField clause could never fire: map_op gives it no capability fact (table_commit.rs:24-38).",
+  "disposition": "fixed",
+  "evidence": "Moot: the op_subtype clause is gone; the rule is op-level (every read).",
+  "hash": "1d54a49318bde7a9",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-16",
+  "source": "opus",
+  "round": "A2-3",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The raw oracle touches_physical_table_of must apply the same rule, or the derived-vs-raw parity test disagrees.",
+  "disposition": "fixed",
+  "evidence": "A2d: the oracle applies the same rule; pins for known-temp rename/lock/modify (clear) and known-temp read (set).",
+  "hash": "c9ae1b3ebbc01012",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "A2-17",
+  "source": "opus",
+  "round": "A2-4",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "Discovery candidate 1 listed SetAutoCalcFields, which is never a d2 terminal; only CalcFields belongs there.",
+  "disposition": "fixed",
+  "evidence": "Discovery 1 reworded: CalcFields only, with a note that SetAutoCalcFields is never a d2 terminal.",
+  "hash": "151a1742de5c9168",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR1",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/cone_derived.rs",
+  "line": 130,
+  "severity": "important",
+  "text": "write_op_bit (insert/modify/delete) does not count the new rename fact as a physical write, so pending_writes and d43/d44 never see a Rename.",
+  "disposition": "refuted",
+  "evidence": "Deliberate (ledger Design item 3, 'Why new op names are safe'): cone_derived physical writes stay insert/modify/delete so no d43/d44/digest output moves; CDO confirms d44 moved only by the TestField presence loss. Counting Rename as a write is a separate capability change: filed as discovery candidate 2.",
+  "hash": "373ca1984f79fddd",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR2",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/gate/diff/passes.rs",
+  "line": 863,
+  "severity": "minor",
+  "text": "gained_kind_for maps only insert/modify/delete, so a new rename/lock fact reports no gain while its removal reports CapabilityLost.",
+  "disposition": "refuted",
+  "evidence": "Documented in the ledger (diff LOSS asymmetry, S4-1/S4-3) and the CHANGELOG; diff gains count only read and insert/modify/delete by design (passes.rs:809, :863). Part of discovery candidate 2.",
+  "hash": "99cf46236cc67356",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR3",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l5/digest.rs",
+  "line": 57,
+  "severity": "minor",
+  "text": "The digest's map_op has no rename arm, so a Rename is no DB_* write effect and WRITE_PENDING_AT_UI ignores a pending Rename.",
+  "disposition": "refuted",
+  "evidence": "Deliberate: 'digest effects map neither' (ledger Design item 3); no digest output moves in this issue. Part of discovery candidate 2.",
+  "hash": "2d239c2fd4d087c1",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR4",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l5/detectors/d2.rs",
+  "line": 114,
+  "severity": "important",
+  "text": "The bit keeps known-temp reads (FlowField on a temp host), but d2's terminals_at drops every known-temp op, temp CalcFields included: the two rules disagree.",
+  "disposition": "refuted",
+  "evidence": "Stated and intended: the bit keeps temp reads so no FlowField path is pruned (A2-8, A2-13), which leaves temp-read-only branches at today's exposure (not widened). d2's terminal filter dropping temp CalcFields is pre-existing and is discovery candidate 1; changing d2's terminals is outside this issue.",
+  "hash": "40edfd443e72de7d",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR5",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l5/detectors/d2.rs",
+  "line": 405,
+  "severity": "important",
+  "text": "The Class A/C comment said the bit is unaware of caller-frame temp; mechanism (e) and a2e_subscriber_forwarding_* show it does see it.",
+  "disposition": "fixed",
+  "evidence": "Comment rewritten: the bit reads cone facts in the reaching routine's frame, so it sees a temp record forwarded to a var parameter (mechanism (e)); unaware only of terminator-Next and virtual/system tables.",
+  "hash": "f87ecc98efe30877",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR6",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l5/fingerprint_query.rs",
+  "line": 289,
+  "severity": "minor",
+  "text": "table_op_to_right gives no permission letter for rename, so a Rename-only routine reports no TableData requirement.",
+  "disposition": "refuted",
+  "evidence": "Required by #9 (Rename's TableData right is unmeasured: Permissions Mock did not enforce); stated in the ledger and CHANGELOG. Mapping it is a measured follow-up, not a guess.",
+  "hash": "c48a62e199ca677e",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR7",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/cone_derived.rs",
+  "line": 721,
+  "severity": "minor",
+  "text": "fold_fact evaluated fact_is_known_temp twice per table fact on the hot path.",
+  "disposition": "fixed",
+  "evidence": "The rule now lives in private physical_table_bit(is_known_temp, op); fold_fact computes is_temp once and calls it; fact_sets_physical_table_bit (used by the raw oracle) calls the same function. One rule, one temp evaluation.",
+  "hash": "cd7407ec95e8aba9",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR8",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l4/cone_derived.rs",
+  "line": 22,
+  "severity": "minor",
+  "text": "The module doc listed the presence flags as table/commit/http/file, omitting TOUCHES_PHYSICAL_TABLE.",
+  "disposition": "fixed",
+  "evidence": "Module doc names the new bit and that d2 prunes on it.",
+  "hash": "deae155863d12ef2",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-CR9",
+  "source": "code-review",
+  "round": "F1",
+  "file": "src/engine/l5/capability_query.rs",
+  "line": 481,
+  "severity": "minor",
+  "text": "The parity test repeated resource_kind == table before calling the shared predicate.",
+  "disposition": "fixed",
+  "evidence": "The test now calls fact_sets_physical_table_bit directly (.any(fact_sets_physical_table_bit)).",
+  "hash": "12f5b9b9a2fb68d1",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-N1",
+  "source": "both",
+  "round": "F1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "important",
+  "text": "All four gates and the CDO measurement ran on aa54319d, but the head moved (ec5106ee changes fold_fact, capability_query.rs, d2.rs); gate and measurement evidence must be on the attested head.",
+  "disposition": "fixed",
+  "evidence": "Re-gated on 725fe4a0: ci-steps-all, check-goldens-coverage, check-goldens, cdo-gate all exit 0, supervised, tree clean (ledger Gate results, 'Re-gate on the final head'); CDO re-measured at 725fe4a0: identical deltas.",
+  "hash": "142fd52f55fa1869",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-N2",
+  "source": "opus",
+  "round": "F1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "a2d_d2_not_starved_by_temp_rename_lock_branch had no failing break (green at base and under break (ii)).",
+  "disposition": "fixed",
+  "evidence": "Proof at ec5106ee: both d2 sites back to touches_db_derived -> it fails at gap_issue100_testfield_capability.rs:840; reverted (no diff vs HEAD) -> 14 passed (ledger proof note).",
+  "hash": "7d9ca611d24704ed",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-N3",
+  "source": "opus",
+  "round": "F1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The CHANGELOG did not say a d44 read-after-write finding can disappear; CDO shows one (Sales Header, OnBeforePostSalesDoc).",
+  "disposition": "fixed",
+  "evidence": "CHANGELOG bullet added (725fe4a0): the d44 removal, its CDO count (1 at --scope all, 0 at primary) and the 46 removed TableData R rows.",
+  "hash": "2787096e55dd21b7",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ },
+ {
+  "id": "F1-N4",
+  "source": "sol",
+  "round": "F1",
+  "file": ".agent/issue-100/ledger.md",
+  "line": 0,
+  "severity": "minor",
+  "text": "The CHANGELOG's dead-code clause overstated suppression: only a complete cone of known-temp non-reads is newly pruned; a reachable temp read keeps the routine walked.",
+  "disposition": "fixed",
+  "evidence": "CHANGELOG (f) clause rewritten with that qualification (725fe4a0).",
+  "hash": "2d7ae42942a6443f",
+  "reviews": {
+   "sol": "accepted",
+   "opus": "accepted"
+  }
+ }
+]
