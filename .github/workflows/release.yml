@@ -29,6 +29,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cargo-nextest
+        # v2.87.23, pinned by commit; `ci-steps test` refuses to run without it
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7
+        with:
+          tool: cargo-nextest
+
       - name: Test
         env:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
@@ -36,7 +42,7 @@ jobs:
         # than --release. The shipped binaries are still built in release by the
         # build jobs below; this gate only needs the tests to pass.
         #
-        # `scripts/ci-steps test` (= `cargo test --workspace`), NOT
+        # `scripts/ci-steps test` (the whole workspace on nextest), NOT
         # `cargo test --all-targets`. `--all-targets` selects BENCH targets
         # explicitly, which overrides the `test = false` on
         # `benches/dep_pack_roundtrip` — that bench is a plain `fn main` and exits
