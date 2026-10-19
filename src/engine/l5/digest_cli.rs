@@ -1545,39 +1545,53 @@ pub fn run_digest_pipeline(
     diff_text: Option<String>,
     alsem_ver: &str,
     deterministic: bool,
-    max_paths_override: Option<usize>,
+    _max_paths_override: Option<usize>,
     single_app: bool,
 ) -> Result<DigestRunResult, String> {
     digest_pipeline_with(
         crate::engine::l5::detectors::default_detectors(),
+        DigestRequest {
+            inputs,
+            changed_files,
+            changed_routines,
+            diff_text,
+            alsem_ver,
+            deterministic,
+            single_app,
+        },
+    )
+}
+
+/// The CLI inputs of one digest run ([`run_digest_pipeline`]'s flags).
+/// `max_paths_override` is not here: the pipeline has never read it.
+pub(crate) struct DigestRequest<'a> {
+    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
+    pub changed_files: Option<Vec<String>>,
+    pub changed_routines: Option<Vec<String>>,
+    pub diff_text: Option<String>,
+    pub alsem_ver: &'a str,
+    pub deterministic: bool,
+    pub single_app: bool,
+}
+
+/// [`run_digest_pipeline`] over a given detector set (#160 §4.4.4): the plan
+/// is built from `detectors` by `digest_plan`, so a set without
+/// `TRANSACTION_SPANS` makes `prepare` panic (A2.10).
+pub(crate) fn digest_pipeline_with(
+    detectors: Vec<crate::engine::l5::registry::Detector>,
+    req: DigestRequest<'_>,
+) -> Result<DigestRunResult, String> {
+    use crate::engine::gate::run::AnalysisTarget;
+    use crate::engine::session::digest_plan;
+    let DigestRequest {
         inputs,
         changed_files,
         changed_routines,
         diff_text,
         alsem_ver,
         deterministic,
-        max_paths_override,
         single_app,
-    )
-}
-
-/// [`run_digest_pipeline`] over a given detector set (#160 §4.4.4): the plan
-/// is built from `detectors` by `digest_plan`, so a set without
-/// `TRANSACTION_SPANS` makes `prepare` panic (A2.10).
-#[allow(clippy::too_many_arguments)] // CLI flags, one each
-pub(crate) fn digest_pipeline_with(
-    detectors: Vec<crate::engine::l5::registry::Detector>,
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
-    changed_files: Option<Vec<String>>,
-    changed_routines: Option<Vec<String>>,
-    diff_text: Option<String>,
-    alsem_ver: &str,
-    deterministic: bool,
-    _max_paths_override: Option<usize>,
-    single_app: bool,
-) -> Result<DigestRunResult, String> {
-    use crate::engine::gate::run::AnalysisTarget;
-    use crate::engine::session::digest_plan;
+    } = req;
     // Assemble workspace (no model-instance id: `digest: could not compute
     // modelInstanceId`, `AnalysisTarget::build`).
     let target = AnalysisTarget::build(inputs, single_app, "digest")?;
@@ -1743,14 +1757,15 @@ mod tests {
         assert_refuses_a_set_without_tx_spans(|set, inputs| {
             let _ = digest_pipeline_with(
                 set,
-                inputs,
-                None,
-                Some(vec!["PostSalesDoc".to_string()]),
-                None,
-                "test",
-                true,
-                None,
-                false,
+                DigestRequest {
+                    inputs,
+                    changed_files: None,
+                    changed_routines: Some(vec!["PostSalesDoc".to_string()]),
+                    diff_text: None,
+                    alsem_ver: "test",
+                    deterministic: true,
+                    single_app: false,
+                },
             );
         });
     }
