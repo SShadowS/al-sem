@@ -938,7 +938,7 @@ def test_attest_binds_the_register_path_and_merge_refuses_a_changed_register(cap
                                      "reviews": {"astra": "accepted", "flash": "accepted"}}]))
     lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
     gh = FakeRunner({**READS,
-                     f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+                     f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft": json.dumps(
                          {"headRefOid": B, "statusCheckRollup": [
                              {"workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]})})
     code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh)
@@ -966,11 +966,28 @@ def test_merge_gate_detects_moved_head(capsys, repo_pair):
     mergeops.write_attestation(Ctx(Paths(clone), run_id="run-test"), att)
     gh = FakeRunner({
         **READS,
-        f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+        f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft": json.dumps(
             {"headRefOid": "deadbeef" * 5, "statusCheckRollup": rollup()}),
     })
     code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
     assert code == 1 and out["reasons"] == ["head-moved"]
+
+
+def test_merge_gate_names_a_draft_pr(capsys, repo_pair):
+    # The draft PR is opened before the final panel so CI runs during it
+    # (`/issue` step 9); GitHub refuses to merge a draft, so the gate says so
+    # by name instead of letting `gh pr merge` fail.
+    _, clone = repo_pair
+    write_ci_workflow(clone)
+    B = Git(clone).rev("master")
+    body_hash = mergeops.body_hash(json.loads(ISSUES)[0][0]["body"])
+    att = mergeops.Attestation(issue=8, B=B, H=B, final_head=B, register_hash="r" * 40,
+                               gates={}, body_hash=body_hash)
+    mergeops.write_attestation(Ctx(Paths(clone), run_id="run-test"), att)
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft": json.dumps(
+        {"headRefOid": B, "statusCheckRollup": rollup(), "isDraft": True})})
+    code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["reasons"] == ["pr-draft"] and out["ci_green"] is True
 
 
 def test_merge_gate_is_not_green_without_the_ci_workflows_own_checks(capsys, repo_pair):
@@ -983,7 +1000,7 @@ def test_merge_gate_is_not_green_without_the_ci_workflows_own_checks(capsys, rep
     att = mergeops.Attestation(issue=8, B=B, H=B, final_head=B, register_hash="r" * 40,
                                gates={}, body_hash=body_hash)
     mergeops.write_attestation(Ctx(Paths(clone), run_id="run-test"), att)
-    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft": json.dumps(
         {"headRefOid": B, "statusCheckRollup": rollup(workflow="Dependabot")})})
     code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
     assert code == 1 and out["ci_green"] is False and out["reasons"] == ["ci-not-green"]
@@ -999,7 +1016,7 @@ def test_merge_gate_reports_ci_workflow_unknown_when_the_workflow_file_is_missin
     att = mergeops.Attestation(issue=8, B=B, H=B, final_head=B, register_hash="r" * 40,
                                gates={}, body_hash=body_hash)
     mergeops.write_attestation(Ctx(Paths(clone), run_id="run-test"), att)
-    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft": json.dumps(
         {"headRefOid": B, "statusCheckRollup": rollup()})})
     code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
     assert code == 1 and out["ci_green"] is False and out["reasons"] == ["ci-workflow-unknown"]
@@ -1013,7 +1030,7 @@ def test_merge_gate_passes_with_the_ci_workflows_checks_green(capsys, repo_pair)
     att = mergeops.Attestation(issue=8, B=B, H=B, final_head=B, register_hash="r" * 40,
                                gates={}, body_hash=body_hash)
     mergeops.write_attestation(Ctx(Paths(clone), run_id="run-test"), att)
-    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft": json.dumps(
         {"headRefOid": B, "statusCheckRollup": rollup()})})
     code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
     assert code == 0 and out["ci_green"] is True and out["reasons"] == []
@@ -1041,7 +1058,7 @@ def test_merge_records_what_it_merged_for_post_merge_to_verify(capsys, repo_pair
     # `--repo`, while `pr_view` (gh.py:132) does. Getting either wrong yields a
     # 404 fake and a confusing GhError rather than a silent pass.
     gh = FakeRunner({**READS,
-                     f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup": json.dumps(
+                     f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft": json.dumps(
                          {"headRefOid": B, "statusCheckRollup": rollup()}),
                      f"pr merge 12 --squash --match-head-commit {B}": "",
                      f"pr view 12 --repo {REPO} --json mergeCommit": json.dumps(
@@ -1070,7 +1087,7 @@ def _lane_gh(prs, *, conclusion="SUCCESS"):
     """gh fakes for `merge-gate`/`merge` of each `pr -> (head, merged oid)`."""
     responses = dict(CLAIM_GH)
     for pr, (head, oid) in prs.items():
-        responses[f"pr view {pr} --repo {REPO} --json headRefOid,statusCheckRollup"] = json.dumps(
+        responses[f"pr view {pr} --repo {REPO} --json headRefOid,statusCheckRollup,isDraft"] = json.dumps(
             {"headRefOid": head, "statusCheckRollup": rollup(conclusion=conclusion)})
         responses[f"pr merge {pr} --squash --match-head-commit {head}"] = ""
         responses[f"pr view {pr} --repo {REPO} --json mergeCommit"] = json.dumps({"mergeCommit": {"oid": oid}})
@@ -3597,6 +3614,38 @@ def test_finish_regressed_releases_the_lock_without_relabelling(capsys, root, tm
 # sanitizer -- while the spec and CHANGELOG both claimed every mutation went
 # through the executor.
 
+def test_pr_create_draft_and_pr_ready(capsys, repo_pair):
+    _, clone = repo_pair
+    lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
+    body = clone / "body.md"
+    body.write_text("ledger\n")
+    gh = FakeRunner({"pr create*": "https://github.com/SShadowS/al-sem/pull/12\n",
+                     f"pr ready 12 --repo {REPO}": ""})
+    code, out = run(capsys, clone, "pr-create", "--title", "T", "--body-file", str(body),
+                     "--head", "issue/8-x", "--draft", gh_run=gh)
+    assert code == 0 and out == {"pr": 12}
+    assert gh.calls[-1].startswith("pr create") and gh.calls[-1].endswith("--draft")
+    code, out = run(capsys, clone, "pr-ready", "--pr", "12", gh_run=gh)
+    assert code == 0 and out == {"ready": 12} and gh.calls[-1] == f"pr ready 12 --repo {REPO}"
+    # With the final body: edited first, then ready.
+    gh.responses[f"pr edit 12 --repo {REPO} --body-file*"] = ""
+    n = len(gh.calls)
+    code, out = run(capsys, clone, "pr-ready", "--pr", "12", "--body-file", str(body), gh_run=gh)
+    assert code == 0 and gh.calls[n].startswith("pr edit 12") and gh.calls[n + 1] == f"pr ready 12 --repo {REPO}"
+    # A body the sanitizer refuses publishes nothing.
+    body.write_text("fails only against .alpackages/Microsoft_Base Application.app\n")
+    n = len(gh.calls)
+    code, out = run(capsys, clone, "pr-ready", "--pr", "12", "--body-file", str(body), gh_run=gh)
+    assert code == 1 and out["error"] == "sanitize-failed" and gh.calls[n:] == []
+
+
+def test_pr_ready_is_an_external_write(capsys, repo_pair):
+    _, clone = repo_pair
+    gh = FakeRunner(readonly=True)
+    code, out = run(capsys, clone, "pr-ready", "--pr", "12", gh_run=gh, dry=True)
+    assert code == 2 and "error" in out and gh.calls == []
+
+
 def test_pr_create_refuses_master_as_head(capsys, repo_pair):
     _, clone = repo_pair
     lock.acquire(Ctx(Paths(clone), run_id="run-test"), 8, "s", 1)
@@ -3922,6 +3971,32 @@ def test_a_queued_gate_beats_and_stops_on_halt_unless_told_not_to(ctx, monkeypat
             cli._run_gate(ticking, "check-goldens", cmd, 1, ctx.paths.root, halt_aborts=False)
         assert e.value.failure == "gate-queue-timeout"
     assert not marker.exists()
+
+
+def test_a_bench_takes_every_gate_slot(root, monkeypatch):
+    """A CDO A/B bench measures wall clock and peaks, so nothing heavy may build
+    beside it. With `heavy_gates: 2`, one held slot leaves the other free for a
+    normal gate, but a `bench` waits for BOTH, and while it runs no gate starts."""
+    import contextlib
+    from agentflow.state import mutex
+    ctx = Ctx(Paths(root), run_id="run-test")
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    ctx.paths.config.write_text(json.dumps({"heavy_gates": 2, "gate_wait_minutes": 0}), encoding="utf-8")
+    marker = ctx.paths.root / "child-ran"
+    cmd = [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"]
+    with mutex(ctx, "gate-0"):
+        with pytest.raises(cli.GateQueued):
+            cli._run_gate(ctx, "bench", cmd, 1, ctx.paths.root)
+        assert not marker.exists()
+        cli._run_gate(ctx, "check-goldens", cmd, 1, ctx.paths.root)    # gate-1 is free
+        assert marker.exists()
+    marker.unlink()
+    held = contextlib.ExitStack()
+    cli._gate_slot(ctx, "bench", True, held)                           # both slots
+    with held:
+        with pytest.raises(cli.GateQueued):
+            cli._run_gate(ctx, "check-goldens", cmd, 1, ctx.paths.root)
+        assert not marker.exists()
 
 
 def test_a_killed_holder_frees_the_gate_semaphore(root):

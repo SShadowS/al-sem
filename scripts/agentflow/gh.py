@@ -188,13 +188,19 @@ class Gh:
     def pr_comment(self, n: int, body: str) -> None:
         self._raw(["pr", "comment", str(n), "--repo", self.repo, "--body-file", self._body_file(body)], mutating=True)
 
-    def create_pr(self, title: str, body: str, head: str, base: str) -> int:
+    def create_pr(self, title: str, body: str, head: str, base: str, draft: bool = False) -> int:
         out = self._raw(["pr", "create", "--title", title, "--body-file", self._body_file(body),
-                         "--head", head, "--base", base], mutating=True)
+                         "--head", head, "--base", base, *(["--draft"] if draft else [])], mutating=True)
         m = re.search(r"/pull/(\d+)", out)
         if not m:
             raise GhError(f"could not parse PR number from: {out!r}")
         return int(m.group(1))
+
+    def pr_edit_body(self, n: int, body: str) -> None:
+        self._raw(["pr", "edit", str(n), "--repo", self.repo, "--body-file", self._body_file(body)], mutating=True)
+
+    def pr_ready(self, n: int) -> None:
+        self._raw(["pr", "ready", str(n), "--repo", self.repo], mutating=True)
 
     def merge_pr(self, n: int, head_sha: str) -> None:
         self._raw(["pr", "merge", str(n), "--squash", "--match-head-commit", head_sha], mutating=True)

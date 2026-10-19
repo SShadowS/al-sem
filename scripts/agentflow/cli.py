@@ -198,6 +198,10 @@ def _with_bash(cmd: list[str]) -> list[str]:
 # conductor already names gates with these strings and `attest` keys on them.
 # `check-goldens-coverage` (no build) and `ci-wait` stay light.
 HEAVY_GATES = frozenset({"ci-steps-all", "check-goldens", "check-goldens-regen", "cdo-gate"})
+# A measurement (`agentflow run --name bench -- python scripts/bench_ab.py run …`)
+# takes EVERY slot: its wall clock and peaks are the claim, and on #160 step 2 a
+# gate building beside a bench widened the digest wall band from 0.6 s to 8-16 s.
+EXCLUSIVE_GATES = frozenset({"bench"})
 QUEUE_POLL_S = 15.0     # how often a queued gate retries the semaphore
 QUEUE_BEAT_S = 60.0     # how often a queued gate refreshes its run's lease
 QUEUE_TIMEOUT, HALTED_WHILE_QUEUED = "gate-queue-timeout", "halted-while-queued"
@@ -214,7 +218,24 @@ class GateQueued(RuntimeError):
 
 
 def _is_heavy(name: str) -> bool:
-    return name in HEAVY_GATES or name.endswith("-on-revert")
+    return name in HEAVY_GATES or name in EXCLUSIVE_GATES or name.endswith("-on-revert")
+
+
+def _take_slots(ctx: Ctx, name: str, keys: list[int], stack: ExitStack) -> bool:
+    """Take every `gate-<k>` in `keys` into `stack`, or none of them."""
+    attempt = ExitStack()
+    try:
+        for k in keys:
+            attempt.enter_context(mutex(ctx, f"gate-{k}", timeout=0))
+    except MutexTimeout:
+        attempt.close()
+        return False
+    for k in keys:
+        info = ctx.paths.agent / "mutex" / f"gate-{k}.json"
+        write_json(ctx, info, {"run_id": ctx.run_id, "name": name, "pid": os.getpid(), "since": ctx.now()})
+        attempt.callback(info.unlink, missing_ok=True)
+    stack.enter_context(attempt)
+    return True
 
 
 def _gate_slot(ctx: Ctx, name: str, halt_aborts: bool, stack: ExitStack) -> float:
@@ -230,16 +251,12 @@ def _gate_slot(ctx: Ctx, name: str, halt_aborts: bool, stack: ExitStack) -> floa
     n = max(1, config(ctx)["heavy_gates"])
     wait_s = config(ctx)["gate_wait_minutes"] * 60
     start = last_beat = time.monotonic()
+    # An exclusive gate needs all `n` slots at once; any other heavy gate, one.
+    wanted = [list(range(n))] if name in EXCLUSIVE_GATES else [[k] for k in range(n)]
     while True:
-        for k in range(n):
-            try:
-                stack.enter_context(mutex(ctx, f"gate-{k}", timeout=0))
-            except MutexTimeout:
-                continue
-            info = ctx.paths.agent / "mutex" / f"gate-{k}.json"
-            write_json(ctx, info, {"run_id": ctx.run_id, "name": name, "pid": os.getpid(), "since": ctx.now()})
-            stack.callback(info.unlink, missing_ok=True)
-            return time.monotonic() - start
+        for keys in wanted:
+            if _take_slots(ctx, name, keys, stack):
+                return time.monotonic() - start
         waited = time.monotonic() - start
         owner = not ctx.dry_run and lock.own(ctx) is not None
         if owner and time.monotonic() - last_beat >= QUEUE_BEAT_S:
@@ -918,8 +935,10 @@ def _ci_workflow_name(ctx: Ctx) -> str | None:
 
 def _gate_reasons(ctx, gh, git, pr: int):
     att = mergeops.read_attestation(ctx)
-    pr_info = gh.pr_view(pr, "headRefOid,statusCheckRollup")
+    pr_info = gh.pr_view(pr, "headRefOid,statusCheckRollup,isDraft")
     reasons = mergeops.merge_gate(git, att, pr_info["headRefOid"], gh.issue(att.issue).body)
+    if pr_info.get("isDraft"):
+        reasons.append("pr-draft")
     if att.register_path:
         # The register was checked for convergence at attest time; re-hash the
         # same file here so an entry edited in the window between the two --
@@ -1400,7 +1419,21 @@ def cmd_pr_create(args, ctx, gh, git):
         if head.removeprefix("refs/heads/") == "master":
             raise Fail({"error": "refusing to open a PR from master"})
         _validate_branch_name(git, head)
-    return _emit({"pr": gh.create_pr(args.title, body, head, args.base)})
+    return _emit({"pr": gh.create_pr(args.title, body, head, args.base, draft=args.draft)})
+
+
+def cmd_pr_ready(args, ctx, gh, git):
+    """Mark a draft PR ready for review. `/issue` opens the PR as a draft right
+    after the first green task gate so CI runs during the final panel; GitHub
+    refuses to merge a draft, and `merge-gate` names it (`pr-draft`). The final
+    body (the sanitized ledger, and the closing-keyword decision) only exists at
+    step 13, so `--body-file` replaces the draft's body first, scanned exactly as
+    `pr-create` scans its own."""
+    _guard_external_write(ctx, "mark PR ready")
+    if args.body_file:
+        gh.pr_edit_body(args.pr, _body_or_fail(args.body_file))
+    gh.pr_ready(args.pr)
+    return _emit({"ready": args.pr})
 
 
 def cmd_pr_comment(args, ctx, gh, git):
@@ -1802,6 +1835,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--full", action="store_true", help="run the gates even when the identity check would skip them")
     s = add("pr-create", cmd_pr_create); s.add_argument("--title", required=True); s.add_argument("--body-file", required=True)
     s.add_argument("--head", required=True); s.add_argument("--base", default="master")
+    s.add_argument("--draft", action="store_true")
+    s = add("pr-ready", cmd_pr_ready); s.add_argument("--pr", type=int, required=True); s.add_argument("--body-file")
     s = add("pr-comment", cmd_pr_comment); s.add_argument("--pr", type=int, required=True); s.add_argument("--body-file", required=True)
     s = add("push-branch", cmd_push_branch); s.add_argument("--branch", required=True)
     s.add_argument("--force-with-lease", action="store_true"); s.add_argument("--cwd")

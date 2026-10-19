@@ -97,6 +97,10 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    and `important` — or an explicit `blocking: true` — as BLOCKING, which may
    not be merely `deferred`. Normalise a reviewer's own wording (a panel that
    says "High" or "Blocker") into the three words before writing the register.
+   Round 1's briefing asks for EVERY finding at once, wording and stale
+   references included, not only blocking ones; later rounds verify fixes and
+   raise a new finding only for a real defect a fix introduced (the final
+   panel's rule in step 10; on #160 step 2 the spec panel used all 5 rounds).
    Each later round
    sends the spec diff plus the register and asks each reviewer to mark every
    entry `accepted` or `re-raised`. Converged when: no `open`; every entry
@@ -142,10 +146,18 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    the ledger first.
 8. **Implement.** `superpowers:subagent-driven-development`. `halt-check` first;
    if halted, write the ledger and return `blocked halted`. Per task: implementer
-   `opus`, reviewer `sonnet`, review-fix `sonnet` — call `python scripts/agentflow
-   beat` immediately before AND immediately after each of these three dispatches
-   (not only around the pi calls above; an `opus` implementer dispatch routinely
-   runs longer than the 30-minute staleness threshold). Every task prompt
+   `opus`, then an independent reviewer `sonnet`; the review's findings go BACK
+   to the same implementer (`SendMessage` to its agent id, context intact)
+   instead of a third, cold review-fix agent, which re-read the repo from
+   scratch on every task. Two consecutive tasks the plan marks small may share
+   one reviewer dispatch over both commits. Call `python scripts/agentflow
+   beat` immediately before AND immediately after each dispatch and each
+   `SendMessage` (not only around the pi calls above; an `opus` implementer
+   dispatch routinely runs longer than the 30-minute staleness threshold).
+   The implementer's per-task gate is `scripts/ci-steps task-affected` (fmt, dev
+   clippy, gen-syntax, and the tests the changed paths can reach, from the map in
+   `scripts/ci-steps`); the WHOLE suite runs in step 9 and step 11, as before, so
+   every test still runs before the panel and before the merge. Every task prompt
    includes: TDD red then green; `discrimination-proof` for every new or changed
    test (record test, mutation patch, fail output, pass output, commit in the
    ledger's proof table); `rustfmt <file>` only; SOLID and DRY as review
@@ -166,6 +178,24 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    golden triage, `/triage-wave` and the CHANGELOG entry from this step now, not
    in step 11. Running the full set before the panel only verifies a head that
    is never attested: on #107 it ran 7 times for one issue.
+
+   **Open a DRAFT PR now, so GitHub CI runs during the final panel.** After the
+   first green task gate here: `push-branch` (step 13's command), then
+   `python scripts/agentflow pr-create --draft --title "<issue title> (#N)" --body-file <a short "final panel in progress" body> --head <branch>`.
+   CI (Linux, CI's exact bar) then runs while the panel reviews, and again on
+   each later push; a red CI is fixed like a panel finding. This replaces any ad
+   hoc Linux check (a WSL clone): CI IS the Linux check. Step 13 puts the final
+   body in place and marks it ready (`pr-ready --body-file`); `merge-gate`
+   refuses a draft (`pr-draft`).
+
+   **Measurements (a CDO A/B bench) run ONCE per issue,** after the final panel
+   has converged and before step 11's gates, through the supervisor so nothing
+   else builds meanwhile:
+   `python scripts/agentflow run --name bench --timeout 45 --cwd <worktree> -- python scripts/bench_ab.py run …`
+   A `bench` takes EVERY gate slot (no other session's gate builds beside it).
+   Re-measure only when a later fix changes a measured code path (the same
+   `range-diff` test as step 11's extra panel round). On #160 step 2 three
+   benches ran and a gate building beside one made its walls unreadable.
 
    The full set, each through the supervisor, from the worktree:
    `python scripts/agentflow run --name ci-steps-all --timeout 45 --cwd <worktree> -- bash scripts/ci-steps all`
@@ -341,9 +371,12 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     anything resolving to it whatever the casing, and pushes an explicit
     `refs/heads/<name>:refs/heads/<name>` refspec.
 
-    Create the PR with the sanitized ledger as body, title `<issue title> (#N)`,
-    and `Closes #N` ONLY if every acceptance-matrix row is met; otherwise return
-    `blocked acceptance-unmet` (no PR):
+    The final body is the sanitized ledger, with `Closes #N` ONLY if every
+    acceptance-matrix row is met; otherwise return `blocked acceptance-unmet`
+    (and leave the draft as it is). The PR already exists as a draft (step 9):
+    `python scripts/agentflow pr-ready --pr <pr> --body-file <path to the PR body>`
+    replaces its body (scanned like `pr-create`'s) and marks it ready. If no
+    draft exists (an older run), create it now instead:
     `python scripts/agentflow pr-create --title "<issue title> (#N)" --body-file <path to the PR body> --head <branch>`
     (`--base` defaults to `master`). It replies `{"pr": <n>}`.
 
