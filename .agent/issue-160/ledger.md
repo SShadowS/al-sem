@@ -22,7 +22,8 @@ Steps 2-5 are carried. The epic spec and the steps 0-2 spec were designed and pa
 
 - make-worktree base: `5f096af9`. Rebase 1, onto `214a7879` (nextest + gate speed-ups): one CHANGELOG conflict, both sides kept.
 - Rebase 2, onto `8405f96d` (#100 / #167): clean textually, but #167 added `tests/gap/gap_issue100_testfield_capability.rs` against the pre-step-1 `FullSnapshotOptions`/`PolicyCheckOptions` fields, and `ci-steps all` failed to compile (log `ci-steps-all/20261019T071250-ab9e7011.log`). Fixed in `ce7db1ed`: the test reads its inputs through `InputSet`, 14/14 pass. No assertion changed. `rebase_regate` is exhausted after this rebase.
-- **B = `8405f96dd6ef849a37ee3cce327185174abec537`** (origin/master), **H = `ce7db1ed353669fb468dbba8088b808a430b9ede`**.
+- First freeze: B = `8405f96d`, H = `ce7db1ed` (attested; PR #170). CI (ubuntu) then failed to compile a `#[cfg(unix)]` test arm (E0282, `src/program/inputs.rs:443`). The fix is `12dcf2d1` (`ci_fix` charged), and final round 4 accepted it.
+- **B = `8405f96dd6ef849a37ee3cce327185174abec537`** (origin/master), **H = `12dcf2d1ecb1ef4fb8157e4b25d2d1168a43f68e`**.
 
 ## Timeline
 
@@ -129,7 +130,8 @@ Every gate ran supervised under run `20261018-222527-440f4b`. Logs are under `.a
 | 8cd6d98d (code-review fixes) | 0 (641 s) | 0 | 0 (27 s) | 1 | the cdo-gate build saw the fix agent's uncommitted edits (`unresolved import reject_inventory_only_combos`); not a verdict on 8cd6d98d |
 | c670d966 (final r1 fixes) | 0 (382 s) | 0 | 0 (27 s) | 0 (149 s) | an earlier run was stopped on low memory and re-run |
 | beb4d531 (after rebase 2) | **1** | 0 | 0 | 0 | the #167 test does not compile against step 1's API (see Base/Head) |
-| **H = ce7db1ed** | **0** (266.6 s, `20261019T072639-01b90a6c.log`) | **0** (`20261019T073106-802efe36.log`) | **0** (33.2 s, `20261019T073107-a3a0d5f9.log`) | **0** (82.9 s, `20261019T073141-7d70e58d.log`) | final; the tree was clean after |
+| ce7db1ed (first freeze) | 0 (266.6 s) | 0 | 0 (33.2 s) | 0 (82.9 s) | CI on ubuntu then failed: the unix test arm does not compile |
+| **H = 12dcf2d1** (CI fix) | **0** (504.4 s, `20261019T074140-8ec327f8.log`) | **0** (`20261019T075005-002f513a.log`) | **0** (30.7 s, `20261019T075006-62293fed.log`) | **0** (122.3 s, `20261019T075037-18a844c0.log`) | final; the tree was clean after; the unix arm compiled and ran under WSL2 Ubuntu before the commit |
 
 No golden moved in step 1. Toolchain: Rust 1.96.0. Grammar: tree-sitter-al `main` at the committed `node-types.sha256`. CDO_WS: the pinned baseline, enforced by cdo-gate's stamp checks.
 

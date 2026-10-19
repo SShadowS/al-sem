@@ -9,7 +9,7 @@
     "text": "`args.read_inputs()` reads the whole workspace (every .al text, the closure discovery, the app.json walk, the model-id hash) before `run_analyze_with_exit` opens `analyze.total` and before `resolve_analyze_detectors` validates --preset/--detector.\n- `alsem analyze <ws> --preset bogus` now reads the whole tree before it exits 3.\n- The read time sits outside every trace span (it used to be inside preflight.snapshot_build), so the step-1 doc's analyze.total comparison measures two different scopes.",
     "disposition": "fixed",
     "evidence": "| CR1 | minor | fixed | 8cd6d98d | Real. `run_analyze_cmd` called `args.read_inputs()` (alsem.rs:1633 at 376ef31b) before `run_analyze_with_exit` opened `analyze.total` and ran `resolve_analyze_detectors` (run.rs:464-465). Fix: alsem.rs:1638 checks `--preset`/`--detector` first and exits 3 with the same `al-sem: <msg>` text. inputs.rs:186 adds the span `inputs.read`. The step 1 numbers file now says `analyze.total` covers different work on the two sides, and that the process wall (which covers both) moved by the same −1.9 s. Spec §4.2.6 keeps the read in `alsem.rs` before the pipeline, and so does the fix. | Test `cli_build_counters::analyze_bad_preset_reads_no_inputs` (exit 3, `inputs.read` 0). Before the fix: FAILED (`inputs.read` 1). Break (Edit, grep count 1: the early return replaced by `let _ = msg;`): FAILED left 1 right 0. Reverted: ok. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -25,7 +25,7 @@
     "text": "The writer block promises \"a closed pipe never aborts the process\", but write_stdout/write_file report errors with `eprintln!`, which panics when stderr is closed. The same applies to the analyze warning (:1640), policy check (:897) and fingerprint (:1337/:1343).",
     "disposition": "fixed",
     "evidence": "| CR2 | minor | fixed (writer); refuted (other sites) | 8cd6d98d | Real for the writer. `write_stdout`/`write_file` and the shard-dir branch printed with `eprintln!`, which panics when stderr is closed: exit 101 in dev, an abort under release `panic = \"abort\"`. That contradicted the comment \"a closed pipe never aborts\". Fix: `write_error` (alsem.rs:723) sends the message through `write_stderr` and ignores its result. Refuted for the other sites the finding names (the analyze warning, `policy check`'s stderr-only error lines, fingerprint's selector and strict lines). They are error paths with no output that already used `eprintln!` before step 1. Spec §4.2.5 reroutes only the stderr lines that FOLLOW the output, and it does not reroute a library `eprintln!` (§5). | Test `cli_write_failure::analyze_closed_stdout_and_stderr_exits_2`. Before the fix: FAILED (`Some(101)`). The first break attempt did not apply (rustfmt had reflowed the text; grep count 0, test green, so it proved nothing). Re-applied on the reflowed text (grep count 1, `write_error` back to `eprintln!`): FAILED left `Some(101)`. Reverted: ok. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -41,7 +41,7 @@
     "text": "The frozen set does not cover the dependency .app files. `compute_snapshot_inputs` hashes them inside InputSet::read, and then `load_all_apps_from` (dependencies.rs:622) reads them from disk again. If a .app is replaced between the two reads, the `inputs[]` rows and the workspaceFingerprint describe old bytes while the model is built from new ones. That is the two-views result the CHANGELOG claims is ruled out.",
     "disposition": "refuted",
     "evidence": "| CR3 | important | refuted (code, spec §4.2.2); fixed (over-claim in docs) | 8cd6d98d | Spec §4.2.2 says: \"The `.alpackages` `.app` files themselves are still opened by the loader … as today\". So a `.app` hashed in `InputSet::read` and loaded again by `load_all_apps_from` is the design. But the CHANGELOG `Fixed` entry and the inputs.rs module doc claimed that no two-views case was left. Both now state the exception: the CHANGELOG (Added and Fixed entries) and inputs.rs:6-10. | Docs only. No behaviour change, so there is no test. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -57,7 +57,7 @@
     "text": "`build_models` still reads the workspace twice: once in `build_snapshot_res` (its own build_only InputSet), then in a second InputSet::read for `assemble_and_resolve_workspace_from_program`. This contradicts workspace.rs:1638's doc. A file added between the two reads gives ProgramFiles::Missing.",
     "disposition": "fixed",
     "evidence": "| CR4 | minor | fixed | 8cd6d98d | Real. `build_models` (program_calls.rs, a test and census helper; its callers are `--lib` tests and `adapter_census_for_workspace` ← `tests/program_resolve_harness.rs`) built the snapshot through `build_snapshot_res` (its own `build_only` read) and then did a second `InputSet::read` for the model. Fix: `build_models_with(&Arc<InputSet>)` (program_calls.rs:2015) builds the snapshot with `SnapshotBuilder::build_with_inputs` and builds the model from the same set. `build_models` is now one read plus that call. | Test `program_calls::tests::build_models_reads_the_workspace_once`: read the set, delete `B.al`, expect `Ok`. Break (Edit, grep count 1: the snapshot from `build_snapshot_res(workspace)` again): FAILED with `L3 model: fail-closed/empty layout` (the `Missing` arm). Reverted: ok. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -73,7 +73,7 @@
     "text": "`PolicyCheckOptions.no_policy` duplicates the PolicyRequest that the InputSet was read with. `inputs.policy_file` is None both for \"not found\" and for \"not requested\", so the two cases cannot be told apart, and a caller can silently ignore the workspace policy. The policy mode should come from the set alone.",
     "disposition": "fixed",
     "evidence": "| CR5 | important | fixed (spec amended) | 8cd6d98d | Real. `PolicyCheckOptions.no_policy` repeated the `PolicyRequest`, and `policy_file: None` meant both \"disabled\" and \"not found or not asked for\". A set read with `PolicyRequest::None` made `policy check` run the bundled default and silently ignore the workspace's `al-sem.policy.yaml`. The spec §4.2.1 type had the same gap, so I fixed both: `InputSet.policy_request` (inputs.rs:57) holds the request. `resolve_policy_check` reads `Disabled` from it (pipeline.rs:66). `run_policy_check` asserts the request is not `None` (pipeline.rs:182). `no_policy` is removed from `PolicyCheckOptions` and its 5 callers. Spec §4.2.1 gains the field. | (a) The golden `cli_c_policy_differential::no_policy_json_byte_match` now carries `--no-policy` through the set alone. Break (Edit, `== Disabled` changed to `== None`): FAILED. (b) New test `cli_inputs_frozen::policy_check_refuses_a_set_read_without_a_policy_request` (should_panic). Break (Edit, assert removed): FAILED. Both reverted: ok. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -89,7 +89,7 @@
     "text": "`is_nested_app` rebuilds folder paths from the lossy `rel_posix`. A folder name that is not valid UTF-8 (Unix) then points to a path that does not exist, so a nested app's files are flagged non-nested. Walk `abs_path.ancestors()` instead.",
     "disposition": "fixed",
     "evidence": "| CR6 | minor | fixed | 8cd6d98d | Real. `is_nested_app` rebuilt folder paths from `rel_posix`, which `discover_al_files` builds with `to_string_lossy` (source_text.rs:91-95). A folder name that is not valid Unicode then named a path that does not exist, so the file was flagged non-nested. Fix (inputs.rs:371): walk `abs_path.ancestors()` up to the root. | Test `inputs::tests::nested_app_under_a_non_unicode_folder_is_flagged`. It uses a lone-surrogate folder name on Windows and `\\xff` on Unix, and asserts the precondition that the name is not valid Unicode. Break (Edit, grep count 1: `dir_has_app_json(Path::new(&*dir.to_string_lossy()))`): FAILED at the `nested_app` assert (the folder was printed as `�x/B.al`). Reverted: ok. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -105,7 +105,7 @@
     "text": "`run_policy_explain` keeps its own copy of the explicit/auto-detect policy resolution and reads from disk, bypassing the InputSet. The two resolvers can drift apart, and this contradicts the CHANGELOG line \"every alsem command reads its workspace inputs once\".",
     "disposition": "refuted",
     "evidence": "| CR7 | minor | refuted (code, spec §4.2.3); fixed (CHANGELOG wording) | 8cd6d98d | Spec §4.2.3 (the `resolve_policy_check` row) says: \"`load_policy_from_file` stays for `policy explain` (`pipeline.rs:341-369`), which runs no semantic build and is not rewired\". `run_policy_explain` (pipeline.rs:330) is out of scope by design. The CHANGELOG line \"every `alsem` command reads its workspace inputs once\" over-claimed. It now says \"every `alsem` command that builds the program\" and names `policy explain` as outside the set. | Docs only. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -121,7 +121,7 @@
     "text": "`write_stdout(format!(\"{out}\\n\").as_bytes(), …)` copies a report of several MB just to add a newline.",
     "disposition": "fixed",
     "evidence": "| CR8 | minor | fixed | 8cd6d98d | Real but small: `format!(\"{out}\\n\")` copied the whole report. Now `out.push('\\n')` adds the newline to the String the command already owns (alsem.rs, the analyze `Ok` arm). The bytes are the same. | Behaviour-preserving. The output bytes are pinned by the existing in-process and spawned analyze tests (the whole suite is green). No new test: there is nothing new to pin. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -137,7 +137,7 @@
     "text": "Every non-build_only read (graph, query, events and the test helpers) pays for the app.json walk, the nested-flag read_dirs, the model-id hash and the roots/coverage reads, even when the command uses none of them. `attach_program_calls` also now runs `compute_workspace_diagnostics` for every model.",
     "disposition": "refuted",
     "evidence": "| CR9 | minor | refuted (spec §4.2.6, §4.2.4) | — | Spec §4.2.6: \"Every other caller reads `InputSet::read(path, &InputNeeds::default())` … `InputNeeds::default()` is NOT the build-only set: a command states its needs\". Only `SnapshotBuilder::build*` takes `build_only`. Spec §4.2.4 puts `workspace_diagnostics` on every `Model`, built in `attach_program_calls_with` (now program_calls.rs:691). Cost measured: the step 1 numbers show no time regression on analyze, digest or fingerprint, and the LSP `build_full` bench is flat. | n/a |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -153,7 +153,7 @@
     "text": "",
     "disposition": "fixed",
     "evidence": "| CR10 | minor | fixed | 8cd6d98d | Real. `648723d3` is not an ancestor of HEAD (`merge-base --is-ancestor` exit 1). `a8d281aa` has the same `git patch-id` (`bc32285a`), and the two trees differ only in master's scripts/.github/.claude/.config/docs files from the rebase, no `src/`. The numbers file now names `a8d281aa` and says it was measured as its pre-rebase twin `648723d3`. | Docs only. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -169,7 +169,7 @@
     "text": "analyze's JSON success path (run.rs:667) and empty-output path (:819) call driver_version() (an env read) instead of the captured inputs.driver_version (spec §4.2.1, §4.2.3 row `driver_version()`). Opus also names run_diff_cmd's `let version = driver_version()`.",
     "disposition": "fixed",
     "evidence": "| F2-1 | minor | fixed (analyze); refuted (diff) | c670d966 | Real for analyze: both JsonFormatInputs now take `inputs.driver_version.clone()`; the `driver_version` import left run.rs. Refuted for diff: `run_diff_cmd` reads the env ONCE per command (alsem.rs `let version = driver_version()`), shared by both sides and the output; a side may be a snapshot file with no InputSet, and two sides' sets are two reads, so the one command-level read is the §4.2.3 'read once' rule. | Test `cli_inputs_frozen::analyze_json_reports_the_captured_driver_version` (set version assigned 'captured-160'; findings + empty cases). Break A (Edit, applied once: :667 back to `driver_version()`): FAILED `findings` left \"1.7.2\" right \"captured-160\". Break E (:819): FAILED `empty` left \"1.7.2\". Reverted: ok. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -185,7 +185,7 @@
     "text": "The CR1 defect in fingerprint: --inventory-only with --shard, a non-json format, or a query selector used to fail before any disk read (run_fingerprint_pipeline's first lines); now the full InputSet::read with fingerprint_rows runs first.",
     "disposition": "fixed",
     "evidence": "| F2-2 | minor | fixed | c670d966 | Real: alsem.rs read the set before `run_fingerprint_pipeline` ran its inventory-only checks (fingerprint_cli.rs:328-344 at 8cd6d98d). Fix: the checks move to `pub fn reject_inventory_only_combos` (fingerprint_cli.rs), called by alsem before `InputSet::read` (exit 1, same text) and again by the pipeline for library callers. | Test `cli_build_counters::fingerprint_inventory_only_usage_errors_read_no_inputs` (3 cases: exit 1, the message, `inputs.read` 0). Break C (Edit, applied once: `false && f.inventory_only`): FAILED `--shard all` case left 1 right 0 (`inputs.read`: 1). Reverted: ok. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -201,7 +201,7 @@
     "text": "inputs_read_once covers analyze, fingerprint, query touches, events fanout and diff only; digest, prove, graph, policy check, query effects and events chains have no read-count pin, and assert_row omits inputs.read.",
     "disposition": "fixed",
     "evidence": "| F2-3 | minor | fixed | c670d966 | Real. `assert_row` now checks `(\"inputs.read\", r.program)`: every §4.1.3 row builds one program per read (diff: 2 and 2), so all 20 rows (analyze x3, digest x2, prove, fingerprint x3, diff x2, events x3, policy check x2, query x3, graph) pin A1.1. | Break B (Edit, applied once: a second `InputSet::read` in `run_digest_cmd`): `digest_cross_app` and `digest_single_app` FAILED `[digest …] inputs.read: got 2, want 1`. Reverted: all 33 cli_build_counters tests ok. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -217,7 +217,7 @@
     "text": "AnalyzeArgs.baseline and AnalyzeArgs.workspace duplicate the InputSet (as CR5 fixed for policy); save writes args.baseline, load reads inputs.baseline, nothing checks they agree; a set read without the baseline hits an expect panic.",
     "disposition": "refuted",
     "evidence": "| F2-4 | minor | refuted | - | Spec §10 item 5 (`2026-10-18-issue-160-steps-0-2-design.md:1868-1873`) records the request-vs-workspace split (`policy_file`, `baseline`, …) for step 12, so step 1 keeps `AnalyzeArgs` as the request. The two cannot diverge on any production path: the only reader is `AnalyzeArgs::read_inputs` (run.rs:120-128), which derives `InputNeeds.baseline` from `args.baseline` and `workspace` from `args.workspace`; `run_analyze_cmd` (alsem.rs:1653) and every test harness call it. `args.baseline` is also the WRITE target of `--update-baseline`, which the set does not hold. The `expect` is the stated invariant guard for a library caller that breaks that contract, as CR5's refusal is for policy. Unlike CR5's `no_policy`, there is no second copy of a decision that can differ. | - |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -233,7 +233,7 @@
     "text": "The module doc says directives are scanned by RE-READING the .al source from disk; build_suppression_map reads inputs.file(rel).text.",
     "disposition": "fixed",
     "evidence": "| F2-5 | minor | fixed | c670d966 | Real (inline_suppression.rs:4-6 vs :197). The doc now says the directives are scanned in the text the command's InputSet read, never the disk again. | Doc only; the behaviour is pinned by `cli_inputs_frozen::al_text_edit_after_read` (ledger task 12 row). |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -249,7 +249,7 @@
     "text": "The numbers are at a8d281aa, not HEAD (the CR fixes changed production code after it); the post-attach peak rose +9 to +18 MB against the spec's expected +5 MB and the extra is not measured.",
     "disposition": "fixed",
     "evidence": "| F2-6 | minor | fixed (HEAD note); refuted (peak) | c670d966 | Real that the file did not say so: the Head row now lists the post-a8d281aa fixes (usage-error checks before the read, the `inputs.read` span, the stderr writer, the policy request, the JSON version, a census row with census off) and says they were not re-measured and change nothing a successful run builds or keeps. Refuted for the peak: spec §6.3 row 1 sets NO bound for step 1 (`Bound: none`), every peak is inside its band, and the file already states the rise, its candidate holders and that step 1b's A1b.4 bound reads against this head. | Docs only. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -265,7 +265,7 @@
     "text": "census_model_rows does not count the new Model.workspace_diagnostics buffer.",
     "disposition": "fixed",
     "evidence": "| F2-7 | minor | fixed | c670d966 | Real. `census_model_rows` now adds `.buf::<Diagnostic>(m.workspace_diagnostics.len())`, beside `dependency_diagnostics`. | Test `program_calls::tests::census_model_rows_counts_the_workspace_diagnostics` (two hand-built models, 0 vs 3 diagnostics; bytes differ by 3 x size_of). Break D (Edit, applied once: the line removed): FAILED left 0 right 216. Reverted: ok. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -281,7 +281,7 @@
     "text": "workspace_source_from_inputs copies walk_al_source's SourceRoot assembly and blake3 content_hash loop.",
     "disposition": "fixed",
     "evidence": "| F2-8 | minor | fixed | c670d966 | Real. One private `source_root(files, tier) -> Option<SourceRoot>` (empty -> None, blake3 over the texts in order) now serves both. | Behaviour-preserving refactor: `inputs::tests::workspace_root_equals_walk_al_source` and the full task gate (`scripts/ci-steps task`, exit 0) and pre-commit goldens (893 passed) green. |",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
@@ -297,7 +297,23 @@
     "text": "The ledger's Discrimination proofs, Base/Head SHAs and Gate results sections are empty: no step-1 proof (incl. the five app_json reader breaks and the per-platform walk-error captures) and no record that the A1.7 literals were captured from the parent's code.",
     "disposition": "fixed",
     "evidence": "| F2-9 | important | fixed | - (ledger, conductor) | The ledger now carries the task 9-14 proof table. Sol's named asks are in it: app_json_edit_after_read readers (1),(2),(3),(5) (task 12) and (4) (task 13); walk_error_fails_the_build on Windows and WSL2 with both spec breaks, plus walk_loop on WSL (task 10). A1.7 provenance: the literals were captured at Task 9's commit `007c0205` (pre-rebase `a47d9094`), whose build path is the parent's (`git diff 214a7879 007c0205` touches no `src/snapshot/` file, no `resolve/full.rs`, and of `discover_al_files` only its helper's visibility). New executable parity proof (Windows): with the build's provider put back to the parent's disk walk (`walk_al_source(&inputs.workspace, Workspace)` in snapshot.rs:274, Edit, applied once), `walk_error_fails_the_build` PASSES with `--nocapture` and no skip line, so the committed Windows literal is the old code's text; reverted. Base `214a7879`, head and gate results remain the conductor's sections. | parity row for the ledger, see final-r1-dispositions.md | | r2 rework: ledger Base/Head (B 8405f96d, H ce7db1ed, both rebases) and Gate results (per-head table, final H all green) filled.",
-    "hash": "8efb6d7b3bd8a10e",
+    "hash": "49df33cee51ffd3f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F3-1",
+    "source": "ci",
+    "round": 3,
+    "file": "src/program/inputs.rs",
+    "line": 443,
+    "severity": "important",
+    "text": "CI (ubuntu) failed to compile the lib tests: E0282 type annotations needed at the #[cfg(unix)] arm of nested_app_under_a_non_unicode_folder_is_flagged (std::os::unix::ffi::OsStrExt::from_bytes without a receiver type). The Windows gates cannot compile that arm.",
+    "disposition": "fixed",
+    "evidence": "12dcf2d1 names the type: <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b\"ÿx\").to_owned(); the expression compiled and ran ('ok', to_str() is None) under WSL2 Ubuntu rustc 1.96 before the commit; CI run 39205470434 shows it was the only error.",
+    "hash": "49df33cee51ffd3f",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
