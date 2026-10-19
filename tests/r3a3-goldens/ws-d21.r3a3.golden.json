@@ -20,24 +20,6 @@
 							"value": false
 						}
 					}
-				},
-				{
-					"op": "read",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "direct",
-					"via": "self",
-					"resourceId": "11111111-0000-0000-0000-00000000d210:Table:50700",
-					"witnessOperationId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#4d09051e52af2d8e6ab4ff133c2ed7e11fca0e2d8b2fd5a11b86862ab550c3fa/op1",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "TestField",
-						"recordVariableId": "r0/84032dabffe77f7fd6d55243c23dc3fc2600d36d49f6bf2f748739d2c0ae3165/rv/customer",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
 				}
 			],
 			"capabilityFactsInherited": [],
@@ -51,26 +33,7 @@
 		},
 		{
 			"routineId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#ac4892dee8fab00ea0460ff08fc9b53ce4b13997a781569302d8509d37b19241",
-			"capabilityFactsDirect": [
-				{
-					"op": "read",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "direct",
-					"via": "self",
-					"resourceId": "11111111-0000-0000-0000-00000000d210:Table:50700",
-					"witnessOperationId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#ac4892dee8fab00ea0460ff08fc9b53ce4b13997a781569302d8509d37b19241/op0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "TestField",
-						"recordVariableId": "r0/47463525768b3eee89d17c04f4929f543848c89e4b6b6f6a4c33838bc4bec321/rv/customer",
-						"tempState": {
-							"kind": "parameter-dependent",
-							"parameterIndex": 0
-						}
-					}
-				}
-			],
+			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#ac4892dee8fab00ea0460ff08fc9b53ce4b13997a781569302d8509d37b19241",
@@ -82,26 +45,7 @@
 		},
 		{
 			"routineId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#c483447967b17b04cfef9d7ca72d6728c0f402bd351f453351bcd71f83d85669",
-			"capabilityFactsDirect": [
-				{
-					"op": "read",
-					"resourceKind": "table",
-					"confidence": "static",
-					"provenance": "direct",
-					"via": "self",
-					"resourceId": "11111111-0000-0000-0000-00000000d210:Table:50700",
-					"witnessOperationId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#c483447967b17b04cfef9d7ca72d6728c0f402bd351f453351bcd71f83d85669/op0",
-					"extra": {
-						"kind": "table",
-						"opSubtype": "TestField",
-						"recordVariableId": "r0/96cba26a400043c6aa138beb0f469f9bb79ecdae38b0537e87f91b5ccdcd9839/rv/customer",
-						"tempState": {
-							"kind": "known",
-							"value": false
-						}
-					}
-				}
-			],
+			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#c483447967b17b04cfef9d7ca72d6728c0f402bd351f453351bcd71f83d85669",

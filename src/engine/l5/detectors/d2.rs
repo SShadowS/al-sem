@@ -33,7 +33,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::engine::l4::combined_graph::CombinedEdge;
 use crate::engine::l4::cone_derived::ConeDerivedStore;
 use crate::engine::l4::summary::{Uncertainty, dedupe_uncertainties};
-use crate::engine::l5::capability_query::{EffectPresence, touches_db_derived};
+use crate::engine::l5::capability_query::{EffectPresence, touches_physical_table_derived};
 use crate::engine::l5::confidence::{UncertaintyLite, to_confidence};
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
@@ -133,7 +133,9 @@ impl<'a> WalkPolicy for D2Policy<'a> {
                     return false;
                 }
                 match self.summaries.get(&e.to) {
-                    Some(s) => touches_db_derived(self.cone_derived, s) != EffectPresence::No,
+                    Some(s) => {
+                        touches_physical_table_derived(self.cone_derived, s) != EffectPresence::No
+                    }
                     None => false,
                 }
             })
@@ -387,14 +389,22 @@ pub fn detect_d2(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 let Some(sub_summary) = ctx.summaries.get(&sub_routine.id) else {
                     continue;
                 };
-                if touches_db_derived(&ctx.cone_derived, sub_summary) == EffectPresence::No {
+                if touches_physical_table_derived(&ctx.cone_derived, sub_summary)
+                    == EffectPresence::No
+                {
                     continue;
                 }
 
-                // Class A/C: the coarse `touchesDb` summary above is unaware of the
-                // structural suppression signals (terminator-Next, virtual/system
-                // table, Known(true) temp) that the D2Policy `terminals_at` filters
-                // out (mirroring d1). Run the supplementary walk FIRST and only count
+                // Class A/C: the pre-filter above (⟨issue 100⟩ d2's own
+                // `TOUCHES_PHYSICAL_TABLE` bit) already drops a subscriber whose
+                // complete cone holds only known-temporary NON-read table facts
+                // (temp reads keep the bit: a temp host's FlowField reads physical
+                // tables). d1 keeps the coarser `touches_db_derived`, because its
+                // temporary terminals are deliberate (`d1_graph.rs`). The bit is
+                // still unaware of the other structural suppression signals
+                // (terminator-Next, virtual/system table, caller-frame temp) that
+                // the D2Policy `terminals_at` filters out (mirroring d1). Run the
+                // supplementary walk FIRST and only count
                 // this subscriber as a real db subscriber when it yields a Complete
                 // path to a SURVIVING (non-suppressed) db op — so a subscriber whose
                 // ops are ALL terminator/virtual/temp does not make d2 fire.

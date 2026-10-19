@@ -105,6 +105,8 @@ const CAPABILITY_OPS: &[&str] = &[
     "insert",
     "modify",
     "delete",
+    "rename",
+    "lock",
     "execute",
     "publish",
     "subscribe",

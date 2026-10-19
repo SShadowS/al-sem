@@ -111,6 +111,10 @@ pub const TOUCHES_HTTP: u8 = 1 << 2;
 /// vocabulary — see [`io_kind_bit`], the ONE definition; `d48::is_io_resource_kind`
 /// routes through it too.
 pub const TOUCHES_FILE: u8 = 1 << 3;
+/// ⟨issue 100⟩ A reachable `table` fact that may touch a PHYSICAL table — set
+/// when [`fact_sets_physical_table_bit`] holds. d2's own pruning bit; d1 keeps
+/// [`TOUCHES_TABLE`] (its temporary terminals are deliberate).
+pub const TOUCHES_PHYSICAL_TABLE: u8 = 1 << 4;
 
 /// `op == "insert"`.
 pub const OP_INSERT: u8 = 1 << 0;
@@ -193,6 +197,19 @@ pub fn fact_is_known_temp(f: &CapabilityFact) -> bool {
         }
         _ => false,
     }
+}
+
+/// ⟨issue 100⟩ The ONE rule for [`TOUCHES_PHYSICAL_TABLE`]: a `table` fact sets
+/// it UNLESS it is known-temporary AND its op is not `read`. So every read sets
+/// it, temporary or not, and only a known-temp insert/modify/delete/rename/lock
+/// does not. Reads stay because a temporary host's FlowField is still computed
+/// against the physical flow-target tables (`CalcFields`). The rule reads only
+/// `op` and the temp class, both IN `inherited_fact_key`, so it is
+/// dedup-invariant (an `op_subtype` test would not be: a shorter temp `Count`
+/// can win the key over a `CalcFields`). The fold and the raw oracle
+/// `capability_query::touches_physical_table_of` both call this.
+pub fn fact_sets_physical_table_bit(f: &CapabilityFact) -> bool {
+    f.resource_kind == "table" && !(fact_is_known_temp(f) && f.op != "read")
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +470,12 @@ impl ConeDerivedStore {
         self.flags_of(routine_id) & TOUCHES_TABLE != 0
     }
 
+    /// ⟨issue 100⟩ Any reachable fact passing [`fact_sets_physical_table_bit`]
+    /// (the Yes arm of `touches_physical_table_of`) — d2's pruning bit.
+    pub fn touches_physical_table(&self, routine_id: &str) -> bool {
+        self.flags_of(routine_id) & TOUCHES_PHYSICAL_TABLE != 0
+    }
+
     /// Any reachable `commit` on `transaction` (the Yes arm of `may_commit`).
     pub fn may_commit_flag(&self, routine_id: &str) -> bool {
         self.flags_of(routine_id) & MAY_COMMIT != 0
@@ -694,6 +717,10 @@ impl ConeDerivedBuilder {
         match f.resource_kind {
             "table" => {
                 self.flags |= TOUCHES_TABLE;
+                // Before the unresolved-id return, like TOUCHES_TABLE.
+                if fact_sets_physical_table_bit(f) {
+                    self.flags |= TOUCHES_PHYSICAL_TABLE;
+                }
                 let Some(rid) = f.resource_id.as_deref() else {
                     return;
                 };

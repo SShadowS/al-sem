@@ -13,7 +13,8 @@ use super::{CapabilityExtra, CapabilityFact, CoverageReason, ExtractionContext, 
 
 /// Map an AL `RecordOpType` (string) to a `CapabilityOp`, or `None` for
 /// state-only / filter ops (SetRange, SetFilter, Init, SetLoadFields, ...).
-/// The ONE table op map: `capability_cone::map_table_op` calls it.
+/// The ONE table op map: L2 (`extract_table`) and the L4 cone's direct table
+/// facts (`capability_cone`) both call it, so no second table can drift (#100).
 ///
 /// `Validate`, `Copy` and `TransferFields` are NOT writes (#69 D5): `Copy`
 /// copies fields/filters/keys in memory, `TransferFields` assigns field values,
@@ -23,17 +24,28 @@ use super::{CapabilityExtra, CapabilityFact, CoverageReason, ExtractionContext, 
 pub(crate) fn map_op(op: &str) -> Option<&'static str> {
     match op {
         "Get" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "IsEmpty" | "Count"
-        | "CountApprox" | "Next" | "CalcFields" | "CalcSums" | "TestField" => Some("read"),
+        | "CountApprox" | "Next" | "CalcFields" | "CalcSums" => Some("read"),
         "Modify" | "ModifyAll" => Some("modify"),
         "Insert" => Some("insert"),
         "Delete" | "DeleteAll" => Some("delete"),
+        // Rename writes the table and LockTable locks it, so both are table
+        // facts with their own ops: d1/d2 prune callees with no table fact, and
+        // both ops are their terminals (`is_db_touching_class`). Rename still
+        // maps to NO TableData permission letter: which right it needs is not
+        // measured (#9: Permissions Mock did not enforce in the test
+        // container). Permission, digest and diff-gain consumers skip ops they
+        // do not know, so `rename`/`lock` surface only as facts (#100).
+        "Rename" => Some("rename"),
+        "LockTable" => Some("lock"),
         // Init / SetRange / SetFilter / SetLoadFields / AddLoadFields /
-        // SetCurrentKey / Reset / LockTable / Validate / Copy / TransferFields
+        // SetCurrentKey / Reset / Validate / Copy / TransferFields / TestField
         // → not capability-relevant.
-        // Rename IS a write, but which TableData permission it needs is not
-        // measured yet (#9: Permissions Mock did not enforce in the test
-        // container), so it is deliberately unmapped, and so absent from the
-        // cone's writes.
+        // TestField checks the value the record variable already holds in
+        // memory and issues no query (`op_classification.rs` classifies it
+        // `StateOnly`), so it is not a table read (#100). Residual: under
+        // partial records, touching a field that was not loaded makes the
+        // platform re-read the row (JIT loading). That holds for ANY field
+        // access, and no field access is modelled as a read.
         _ => None,
     }
 }

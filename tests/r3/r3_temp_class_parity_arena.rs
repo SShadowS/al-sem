@@ -165,8 +165,9 @@ fn a5_cone_l4_class_parity_per_producer() {
     }
     assert!(f.is_empty(), "{} mismatches:\n{}", f.len(), f.join("\n"));
     // The excluded read producers are known to exist in these fixtures; if the
-    // count is zero the verb filter is no longer reaching them.
-    for ws in ["ws-d21", "ws-d40", "ws-d42"] {
+    // count is zero the verb filter is no longer reaching them. ws-d21 left the
+    // list in #100: its only one was a `TestField`, which is no longer a read.
+    for ws in ["ws-d40", "ws-d42", "ws-path-facts"] {
         assert!(
             skipped.keys().any(|k| k.starts_with(&format!("{ws}:"))),
             "no read producer skipped in {ws}: {skipped:?}"

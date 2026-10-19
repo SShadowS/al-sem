@@ -983,25 +983,7 @@
           }
         ]
       },
-      "capabilityFactsDirect": [
-        {
-          "op": "read",
-          "resourceKind": "table",
-          "confidence": "unresolved",
-          "provenance": "direct",
-          "via": "self",
-          "witnessOperationId": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/op0",
-          "extra": {
-            "kind": "table",
-            "recordVariableId": "r0/365698b15d197a9a83c3b9fc3a58d948f873e2839c814b0740298159ba52a8ba/rv/rec",
-            "tempState": {
-              "kind": "parameter-dependent",
-              "parameterIndex": 4294967295
-            },
-            "opSubtype": "TestField"
-          }
-        }
-      ],
+      "capabilityFactsDirect": [],
       "capabilityStatus": "complete",
       "capabilityReasons": [],
       "capabilityDiagnostics": []
