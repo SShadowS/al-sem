@@ -440,7 +440,7 @@ mod tests {
             std::os::windows::ffi::OsStringExt::from_wide(&[0xD800, u16::from(b'x')]);
         #[cfg(unix)]
         let name: std::ffi::OsString =
-            std::os::unix::ffi::OsStrExt::from_bytes(b"\xffx".as_slice()).to_owned();
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"\xffx").to_owned();
         assert!(name.to_str().is_none(), "precondition: not valid Unicode");
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("app.json"), r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#).unwrap();
