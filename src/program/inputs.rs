@@ -3,6 +3,11 @@
 //! semantic build. Every reader after that reads the set, never the disk, so
 //! an edit on disk during a run cannot give two readers two answers.
 //!
+//! One exception, by design (spec §4.2.2): the dependency `.app` files. The set
+//! holds the closure's LIST (and, with `fingerprint_rows`, one hash per file),
+//! but the loader still opens each `.app` itself. A `.app` replaced between the
+//! two reads gives hash rows of the old bytes and a model of the new ones.
+//!
 //! `read` never fails: every read error is stored in its slot (the `.al` walk's
 //! in `al_walk`), and each reader decides what a missing or unreadable input
 //! means, exactly as it did when it read the disk itself.
@@ -46,6 +51,10 @@ pub struct InputSet {
     /// takes the FIRST of `al-sem.policy.yaml`, `.yml` that exists; an unreadable
     /// `.yaml` is stored as `Err` and does not fall through. The path is absolutized.
     pub policy_file: Option<PolicyInput>,
+    /// The policy request the set was read with. `policy_file` is `None` both
+    /// under `--no-policy` and when auto-detect finds no file; this tells them
+    /// apart, so the policy mode comes from the set alone.
+    pub policy_request: PolicyRequest,
     /// `--baseline <path>`: `None` = no flag; `Some` with `Err(NotFound)` is the
     /// "no baseline yet" case.
     pub baseline: Option<FileInput>,
@@ -155,7 +164,7 @@ impl InputNeeds {
 }
 
 /// Which policy file a command reads.
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PolicyRequest {
     /// The command takes no policy.
     #[default]
@@ -172,6 +181,9 @@ impl InputSet {
     /// The ONE disk reader (spec §4.2.2). Charges the `inputs.read` counter.
     pub fn read(workspace: &Path, needs: &InputNeeds) -> Arc<InputSet> {
         pt::counter_delta("inputs.read", 1);
+        // A command reads before its own top span (`analyze.total`) opens, so the
+        // read is timed here.
+        let _s = pt::span("inputs", "inputs.read");
         let build_only = needs.build_only;
 
         let app_json = FileInput::read(workspace.join("app.json"));
@@ -194,7 +206,7 @@ impl InputSet {
                     .into_iter()
                     .map(|f| WsFile {
                         nested_app: !build_only
-                            && is_nested_app(workspace, &f.rel_posix, &mut nested_dirs),
+                            && is_nested_app(workspace, &f.abs_path, &mut nested_dirs),
                         text: read_al_source(&f.abs_path)
                             .map(Arc::from)
                             .map_err(|e| e.to_string()),
@@ -263,6 +275,7 @@ impl InputSet {
             roots_config,
             coverage_yaml,
             policy_file,
+            policy_request: needs.policy.clone(),
             baseline,
             closure,
             snapshot_inputs: None,
@@ -352,21 +365,19 @@ impl InputSet {
 }
 
 /// True when a directory between `root` (exclusive) and the file holds its
-/// own `app.json`. `cache` keeps one answer per directory.
-fn is_nested_app(root: &Path, rel_posix: &str, cache: &mut HashMap<PathBuf, bool>) -> bool {
-    let mut dir = root.to_path_buf();
-    let mut parts: Vec<&str> = rel_posix.split('/').collect();
-    parts.pop(); // the file name
-    for part in parts {
-        dir.push(part);
-        let has = *cache
-            .entry(dir.clone())
-            .or_insert_with(|| dir_has_app_json(&dir));
-        if has {
-            return true;
-        }
-    }
-    false
+/// own `app.json`. `cache` keeps one answer per directory. Walks the real
+/// path's ancestors, never the lossy `rel_posix`, so a folder name that is not
+/// valid Unicode still names a folder that exists.
+fn is_nested_app(root: &Path, abs_path: &Path, cache: &mut HashMap<PathBuf, bool>) -> bool {
+    abs_path
+        .ancestors()
+        .skip(1) // the file itself
+        .take_while(|dir| *dir != root)
+        .any(|dir| {
+            *cache
+                .entry(dir.to_path_buf())
+                .or_insert_with(|| dir_has_app_json(dir))
+        })
 }
 
 #[cfg(test)]
@@ -417,6 +428,29 @@ mod tests {
             ["src/A.al"]
         );
         assert_eq!(i.app_json_paths.len(), 2);
+    }
+
+    /// Code review CR6: a nested app under a folder whose name is not valid
+    /// Unicode is still flagged. `rel_posix` spells that folder lossily, so a
+    /// path rebuilt from it names a folder that does not exist.
+    #[test]
+    fn nested_app_under_a_non_unicode_folder_is_flagged() {
+        #[cfg(windows)]
+        let name: std::ffi::OsString =
+            std::os::windows::ffi::OsStringExt::from_wide(&[0xD800, u16::from(b'x')]);
+        #[cfg(unix)]
+        let name: std::ffi::OsString =
+            std::os::unix::ffi::OsStrExt::from_bytes(b"\xffx".as_slice()).to_owned();
+        assert!(name.to_str().is_none(), "precondition: not valid Unicode");
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("app.json"), r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#).unwrap();
+        let sub = d.path().join(&name);
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("app.json"), "{}").unwrap();
+        std::fs::write(sub.join("B.al"), "codeunit 50101 B { }").unwrap();
+        let i = InputSet::read(d.path(), &InputNeeds::default());
+        assert_eq!(i.al_files.len(), 1, "precondition: the walk lists B.al");
+        assert!(i.al_files[0].nested_app, "{}", i.al_files[0].rel_posix);
     }
 
     #[test]

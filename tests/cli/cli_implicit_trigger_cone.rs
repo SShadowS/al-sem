@@ -1127,7 +1127,6 @@ fn a6_dependency_origin_trigger_reaches_the_workspace_cone() {
                     ..Default::default()
                 },
             ),
-            no_policy: false,
             format: "json",
             out: None,
             deterministic: true,

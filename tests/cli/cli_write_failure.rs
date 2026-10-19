@@ -46,6 +46,22 @@ fn analyze_closed_pipe_exits_2() {
     assert_eq!(write_error_lines(&out.stderr, "stdout"), 1, "stderr: {err}");
 }
 
+/// Code review CR2: with stderr closed too, the write-error message itself
+/// fails; that must not panic (a panicking `eprintln!`) but still exit 2.
+#[test]
+fn analyze_closed_stdout_and_stderr_exits_2() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["analyze", &ws_a(), "--format", "json", "--single-app"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn alsem");
+    drop(child.stdout.take());
+    drop(child.stderr.take());
+    let status = child.wait().expect("wait alsem");
+    assert_eq!(status.code(), Some(2), "{status:?}");
+}
+
 #[test]
 fn digest_closed_pipe_exits_1() {
     let d = tempfile::tempdir().unwrap();

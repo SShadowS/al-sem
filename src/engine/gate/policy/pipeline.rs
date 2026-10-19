@@ -62,8 +62,8 @@ pub fn policy_request(policy_path: Option<&str>, no_policy: bool) -> PolicyReque
 /// `runPolicyCheck`'s resolution block. The explicit-or-auto choice (and the
 /// exists-first auto-detect rule) was applied when the `InputSet` was read
 /// ([`policy_request`]); this loads the bytes it holds.
-fn resolve_policy_check(inputs: &InputSet, no_policy: bool) -> ResolvedPolicy {
-    if no_policy {
+fn resolve_policy_check(inputs: &InputSet) -> ResolvedPolicy {
+    if inputs.policy_request == PolicyRequest::Disabled {
         return ResolvedPolicy::Disabled;
     }
     if let Some(p) = &inputs.policy_file {
@@ -161,9 +161,9 @@ pub struct PolicyCheckOutcome {
 /// Options for `run_policy_check`.
 pub struct PolicyCheckOptions<'a> {
     /// The command's one read of the workspace (#160), read with
-    /// [`policy_request`]: it holds the `--policy` / auto-detected file.
+    /// [`policy_request`]: it holds the `--policy` / auto-detected file and the
+    /// request itself (`--no-policy` included).
     pub inputs: &'a std::sync::Arc<InputSet>,
-    pub no_policy: bool,
     pub format: &'a str, // "human" | "json" | "sarif"
     pub out: Option<&'a str>,
     pub deterministic: bool,
@@ -176,6 +176,12 @@ pub struct PolicyCheckOptions<'a> {
 /// `runPolicyCheck`. Exit: 0 on success ALWAYS (no fail-on gate); non-zero only on
 /// invalid format / strict analyzer error / policy-load error / write failure.
 pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
+    // A set read without a policy request holds no policy file even when the
+    // workspace has one: the check would silently run the bundled default.
+    assert!(
+        opts.inputs.policy_request != PolicyRequest::None,
+        "policy check: InputSet read without a policy request (use policy_request)"
+    );
     // Build the model (assemble → resolve → detector context).
     // #70: the cross-app base by default (rules see a dependency's table names and
     // the facts its code adds), the workspace alone under `--single-app`. No
@@ -209,19 +215,19 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
     }
 
     // Resolve the effective policy.
-    let (policy_opt, source): (Option<PolicyDoc>, String) =
-        match resolve_policy_check(opts.inputs, opts.no_policy) {
-            ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
-            ResolvedPolicy::Disabled => (None, "disabled".to_string()),
-            ResolvedPolicy::Error(lines) => {
-                return PolicyCheckOutcome {
-                    text: None,
-                    exit_code: 1,
-                    stderr_lines: lines,
-                    out_path: None,
-                };
-            }
-        };
+    let (policy_opt, source): (Option<PolicyDoc>, String) = match resolve_policy_check(opts.inputs)
+    {
+        ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
+        ResolvedPolicy::Disabled => (None, "disabled".to_string()),
+        ResolvedPolicy::Error(lines) => {
+            return PolicyCheckOutcome {
+                text: None,
+                exit_code: 1,
+                stderr_lines: lines,
+                out_path: None,
+            };
+        }
+    };
 
     // Run the engine (runPolicy wrapper: disabled → empty result, version 0).
     let result: PolicyRunResult = match &policy_opt {

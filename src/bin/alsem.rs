@@ -66,7 +66,7 @@ use al_sem::engine::gate::events::{
 };
 use al_sem::engine::gate::exit_code::{exit, parse_fail_on};
 use al_sem::engine::gate::filter::Scope;
-use al_sem::engine::gate::presets::preset_names;
+use al_sem::engine::gate::presets::{preset_names, resolve_analyze_detectors};
 use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit};
 use al_sem::engine::gate::version::driver_version;
 use al_sem::engine::l4::effect_query_cli::{
@@ -715,7 +715,18 @@ fn main() -> ExitCode {
 //
 // One text and one rule for a failed write: `al-sem: write error: <stdout|path>:
 // <OS message>` on stderr, and the command's own failure code (`fail`: 2 for
-// analyze, 1 for every other command). A closed pipe never aborts the process.
+// analyze, 1 for every other command). A closed pipe never aborts the process,
+// and neither does a closed stderr under it: the message goes through
+// `write_stderr`, never a panicking `eprintln!`.
+
+/// Report a failed write of `target` and return `fail`.
+fn write_error(target: &str, e: &std::io::Error, fail: ExitCode) -> ExitCode {
+    let _ = write_stderr(
+        format!("al-sem: write error: {target}: {e}\n").as_bytes(),
+        fail,
+    );
+    fail
+}
 
 /// Write `bytes` to stdout and flush.
 fn write_stdout(bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
@@ -723,18 +734,12 @@ fn write_stdout(bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
     let mut out = std::io::stdout().lock();
     out.write_all(bytes)
         .and_then(|()| out.flush())
-        .map_err(|e| {
-            eprintln!("al-sem: write error: stdout: {e}");
-            fail
-        })
+        .map_err(|e| write_error("stdout", &e, fail))
 }
 
 /// Write `bytes` to the file at `path`.
 fn write_file(path: &str, bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
-    std::fs::write(path, bytes).map_err(|e| {
-        eprintln!("al-sem: write error: {path}: {e}");
-        fail
-    })
+    std::fs::write(path, bytes).map_err(|e| write_error(path, &e, fail))
 }
 
 /// Write `bytes` to stderr. No message on failure: the stream is gone.
@@ -879,7 +884,6 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
     );
     let opts = PolicyCheckOptions {
         inputs: &inputs,
-        no_policy: c.no_policy,
         format: &c.format,
         out: c.out.as_deref(),
         deterministic: c.deterministic,
@@ -1383,8 +1387,7 @@ fn write_fingerprint_output(
             if !dir_path.exists()
                 && let Err(e) = std::fs::create_dir_all(dir_path)
             {
-                eprintln!("al-sem: write error: {dir}: {e}");
-                return Err(fail);
+                return Err(write_error(dir, &e, fail));
             }
             for (filename, content) in shards {
                 let file_path = dir_path.join(filename);
@@ -1630,9 +1633,15 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
     // `default_version` is the engine's default (unpinned) SARIF `driver.version`.
     // The differential always pins via `--sarif-version-override gate-sarif-v1`;
     // this is only the fallback for a real, unpinned invocation.
+    // A bad `--preset` / `--detector` is a usage error found before the
+    // workspace is read (`run_analyze_with_exit` resolves the set again).
+    if let Err(msg) = resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref()) {
+        eprintln!("al-sem: {msg}");
+        return ExitCode::from(3);
+    }
     let inputs = args.read_inputs();
     match run_analyze_with_exit(&inputs, &args, &inputs.driver_version) {
-        Ok((out, exit_code, stderr_warning)) => {
+        Ok((mut out, exit_code, stderr_warning)) => {
             // F2: emit the preflight degraded warning to stderr (the "no silent clean"
             // contract). Matches al-sem index.ts:263-264:
             //   `if (pf.degraded) process.stderr.write(`al-sem: warning: ${pf.message}\n`)`.
@@ -1641,10 +1650,8 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
             }
             // al-sem appends a trailing newline to the formatted output. A failed
             // write is an analysis failure (exit 2), never an abort (#160 §4.2.5).
-            match write_stdout(
-                format!("{out}\n").as_bytes(),
-                ExitCode::from(exit::ANALYSIS_FAILURE),
-            ) {
+            out.push('\n');
+            match write_stdout(out.as_bytes(), ExitCode::from(exit::ANALYSIS_FAILURE)) {
                 Ok(()) => ExitCode::from(exit_code),
                 Err(code) => code,
             }

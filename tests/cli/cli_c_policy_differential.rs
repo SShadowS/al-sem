@@ -130,7 +130,6 @@ fn check_text(fixture: &str, format: &str, no_policy: bool) -> String {
                 ..Default::default()
             },
         ),
-        no_policy,
         format,
         out: None,
         deterministic: true,

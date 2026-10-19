@@ -2004,13 +2004,41 @@ pub(crate) fn build_models(
     ),
     String,
 > {
-    use crate::program::resolve::full::{build_snapshot_res, fresh_program_from_snapshot};
-    let (ctx, report) = fresh_program_from_snapshot(build_snapshot_res(workspace)?)?;
+    build_models_with(&crate::program::inputs::InputSet::read(
+        workspace,
+        &Default::default(),
+    ))
+}
+
+/// [`build_models`] over one already-read `InputSet`: the snapshot and the
+/// model's file selection read the same set, so the workspace is read once.
+pub(crate) fn build_models_with(
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+) -> Result<
+    (
+        ProgramContext,
+        ProgramReport,
+        crate::program::model::workspace::ModelRows,
+    ),
+    String,
+> {
+    use crate::program::resolve::full::fresh_program_from_snapshot;
+    let workspace = inputs.workspace.as_path();
+    let (snap, _load) = crate::snapshot::SnapshotBuilder {
+        workspace_root: workspace.to_path_buf(),
+        local_providers: vec![],
+    }
+    .build_with_inputs(
+        inputs,
+        crate::snapshot::DependencySource::default(),
+        &crate::program::dep_cache::DepCache::default(),
+    )
+    .map_err(|e| format!("snapshot build failed: {e:#}"))?;
+    let (ctx, report) = fresh_program_from_snapshot(snap)?;
     // The production model (`assemble_and_resolve_workspace_program`), built from
     // the same program parse and resolution.
-    let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
     let l3 = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
-        &inputs,
+        inputs,
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         &ctx,
@@ -2189,6 +2217,22 @@ mod tests {
     /// `app.json`, then run the census.
     fn census(files: &[(&str, &[u8])]) -> SiteCensus {
         census_with(files, |_| {})
+    }
+
+    /// Code review CR4: `build_models` reads the workspace once. A file removed
+    /// after the read is still in the snapshot AND the model's selection (both
+    /// read the set); a second disk read for the snapshot would lack it and the
+    /// model would fail closed (`ProgramFiles::Missing`).
+    #[test]
+    fn build_models_reads_the_workspace_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.json"), APP_JSON).unwrap();
+        std::fs::write(dir.path().join("A.al"), "codeunit 50100 A { }").unwrap();
+        std::fs::write(dir.path().join("B.al"), "codeunit 50101 B { }").unwrap();
+        let inputs = crate::program::inputs::InputSet::read(dir.path(), &Default::default());
+        std::fs::remove_file(dir.path().join("B.al")).unwrap();
+        let built = build_models_with(&inputs);
+        assert!(built.is_ok(), "{:?}", built.err());
     }
 
     /// [`census`], with `mutate` applied to the L3 model before the census:

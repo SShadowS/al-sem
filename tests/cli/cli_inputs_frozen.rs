@@ -345,7 +345,6 @@ fn policy_check_json(inputs: &Arc<InputSet>) -> Option<String> {
     use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
     run_policy_check(&PolicyCheckOptions {
         inputs,
-        no_policy: false,
         format: "json",
         out: None,
         deterministic: true,
@@ -354,6 +353,18 @@ fn policy_check_json(inputs: &Arc<InputSet>) -> Option<String> {
         single_app: false,
     })
     .text
+}
+
+/// Code review CR5: the policy mode comes from the set alone. A set read with
+/// no policy request would hold no policy file although the workspace has one,
+/// and the check would silently run the bundled default: it is refused.
+#[test]
+#[should_panic(expected = "without a policy request")]
+fn policy_check_refuses_a_set_read_without_a_policy_request() {
+    let ws =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli-c-policy/ws-policy-custom");
+    assert!(ws.join("al-sem.policy.yaml").exists(), "precondition");
+    policy_check_json(&InputSet::read(&ws, &InputNeeds::default()));
 }
 
 /// Spec §8.2 `inputs::policy_edit_after_read`: the policy is loaded from the

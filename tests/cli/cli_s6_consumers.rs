@@ -295,7 +295,6 @@ codeunit 50622 "S6 Pol Sub"
     );
     let out = run_policy_check(&PolicyCheckOptions {
         inputs: &inputs,
-        no_policy: false,
         format: "json",
         out: None,
         deterministic: true,

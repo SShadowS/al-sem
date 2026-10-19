@@ -860,6 +860,16 @@ fn inputs_read_once() {
     assert_eq!(count(&m, "inputs.read"), 2, "diff: one per side\n{m:?}");
 }
 
+/// Code review CR1: a bad `--preset` is a usage error (exit 3) found BEFORE the
+/// workspace is read, as it was before step 1 moved the read out of the pipeline.
+#[test]
+fn analyze_bad_preset_reads_no_inputs() {
+    let (out, m) = spawn_traced(&["analyze", &ws_a(), "--preset", "bogus"], &[]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "stderr: {err}");
+    assert_eq!(count(&m, "inputs.read"), 0, "{m:?}\nstderr: {err}");
+}
+
 /// Review focus 1: a relative workspace path runs as the absolute one does
 /// (`InputSet.workspace` is the path as spelled, and the build asserts it
 /// equals the builder's root).
