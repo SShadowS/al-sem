@@ -398,13 +398,14 @@ pub fn run_detectors(resolved: &Model, detectors: &[Detector]) -> RunOutput {
         build_detector_context(resolved, demanded)
     };
     let ctx = owned.ctx();
-    let summarize_diagnostics: Vec<Diagnostic> = ctx
-        .summarize_diagnostics
-        .iter()
-        .map(from_summarize_diagnostic)
-        .collect();
-    let (findings, diagnostics, detector_stats, d1_cohort_index) =
-        run_each(resolved, &ctx, detectors);
+    let run = finish_run(
+        resolved,
+        &ctx,
+        detectors,
+        None,
+        true,
+        &ctx.summarize_diagnostics,
+    );
 
     // The context dies here either way — it is a local of this function and
     // borrows nothing that outlives it. Dropping it explicitly, inside a span,
@@ -417,23 +418,46 @@ pub fn run_detectors(resolved: &Model, detectors: &[Detector]) -> RunOutput {
         drop(ctx);
         drop(owned);
     }
+    run
+}
 
-    // Role-scoping filter (registry.ts:161-172). Source-only: every routine's role
-    // is "primary" (no analysisRole), so the predicate keeps everything.
-    let scoped = {
-        let _s = pt::span("l4_l5", "l4_l5.role_scope_and_sort");
-        let role_by_routine: std::collections::HashMap<&str, &str> = resolved
-            .workspace
-            .routines
-            .iter()
-            // analysisRole is not modeled on ModelRoutine (source-only ⇒ always primary).
-            .map(|r| (r.id.as_str(), "primary"))
-            .collect();
-        role_scope_and_sort(findings, &role_by_routine)
+/// #160 step 2 (spec §4.4.3 rule 3): one run over a built context —
+/// [`run_each`], then the role-scoping tail — shared by [`run_detectors`],
+/// [`run_detectors_cross_app`] and `session::View::prepare`, so the paths
+/// cannot drift. `cross` is the cross-app base (its dependency roles), `None`
+/// single-app (every routine primary; `scope_primary` is then moot).
+/// `summarize` is the run's own summarize source (rule 3: from its mask).
+pub(crate) fn finish_run(
+    resolved: &Model,
+    ctx: &DetectorContext,
+    detectors: &[Detector],
+    cross: Option<&crate::engine::l4::capability_cone::R3a5CrossAppBase>,
+    scope_primary: bool,
+    summarize: &[crate::engine::l4::summary_runner::SummarizeDiagnostic],
+) -> RunOutput {
+    let summarize_diagnostics: Vec<Diagnostic> =
+        summarize.iter().map(from_summarize_diagnostic).collect();
+    let (findings, diagnostics, detector_stats, d1_cohort_index) =
+        run_each(resolved, ctx, detectors);
+    let findings = match cross {
+        None => {
+            // Role-scoping filter (registry.ts:161-172). Source-only: every
+            // routine's role is "primary" (no analysisRole), so the predicate
+            // keeps everything.
+            let _s = pt::span("l4_l5", "l4_l5.role_scope_and_sort");
+            let role_by_routine: std::collections::HashMap<&str, &str> = resolved
+                .workspace
+                .routines
+                .iter()
+                // analysisRole is not modeled on ModelRoutine (source-only ⇒ always primary).
+                .map(|r| (r.id.as_str(), "primary"))
+                .collect();
+            role_scope_and_sort(findings, &role_by_routine)
+        }
+        Some(base) => cross_app_scope(base, findings, scope_primary),
     };
-
     RunOutput {
-        findings: scoped,
+        findings,
         diagnostics,
         detector_stats,
         summarize_diagnostics,
@@ -464,19 +488,32 @@ pub(crate) fn run_detectors_cross_app(
         )
     };
     let ctx = owned.ctx();
-    let summarize_diagnostics: Vec<Diagnostic> = ctx
-        .summarize_diagnostics
-        .iter()
-        .map(from_summarize_diagnostic)
-        .collect();
     // The detectors close over `(resolved, ctx)`: the base's own cross-app model
     // (engine-switch S7.6), with its program calls and root classifications. It
     // used to be a throwaway copy without calls, so a detector reading its calls
     // fell back to L3's resolver (deleted in engine-switch S9.6).
-    let resolved = &base.resolved;
-    let (findings, diagnostics, detector_stats, d1_cohort_index) =
-        run_each(resolved, &ctx, detectors);
+    let run = finish_run(
+        &base.resolved,
+        &ctx,
+        detectors,
+        Some(base),
+        scope_primary,
+        &ctx.summarize_diagnostics,
+    );
+    {
+        let _s = pt::span("crossapp", "crossapp.ctx_drop");
+        drop(ctx);
+        drop(owned);
+    }
+    run
+}
 
+/// The cross-app role-scoping tail of [`finish_run`].
+fn cross_app_scope(
+    base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
+    findings: Vec<Finding>,
+    scope_primary: bool,
+) -> Vec<Finding> {
     // role_by_routine: dep routines → "dependency", else "primary". An
     // object-anchored finding (d64 names its page) carries the OBJECT id there, so
     // objects are roled by their app too (engine-switch S7.4: the cross-app model
@@ -517,28 +554,13 @@ pub(crate) fn run_detectors_cross_app(
                     .is_some_and(|a| !a.source_unit_id.starts_with("dep:"))
         })
         .collect();
-    let scoped = {
-        let _s = pt::span("crossapp", "crossapp.role_scope");
-        // `--scope all` (alsem analyze) keeps dependency-anchored findings: every
-        // routine reads as primary here, so only the sort applies.
-        if scope_primary {
-            role_scope_and_sort(findings, &role_by_routine)
-        } else {
-            role_scope_and_sort(findings, &std::collections::HashMap::new())
-        }
-    };
-    {
-        let _s = pt::span("crossapp", "crossapp.ctx_drop");
-        drop(ctx);
-        drop(owned);
-    }
-
-    RunOutput {
-        findings: scoped,
-        diagnostics,
-        detector_stats,
-        summarize_diagnostics,
-        d1_cohort_index,
+    let _s = pt::span("crossapp", "crossapp.role_scope");
+    // `--scope all` (alsem analyze) keeps dependency-anchored findings: every
+    // routine reads as primary here, so only the sort applies.
+    if scope_primary {
+        role_scope_and_sort(findings, &role_by_routine)
+    } else {
+        role_scope_and_sort(findings, &std::collections::HashMap::new())
     }
 }
 

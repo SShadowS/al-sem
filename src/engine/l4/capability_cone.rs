@@ -4812,6 +4812,11 @@ codeunit 13 "Dep Rec Sub"
     /// The workspace (`Fwd` only) and its embedded-source dependency, written
     /// as `tests/common/symbol_app.rs` does (40-byte header + zip).
     pub(crate) fn write_fixture(ws: &std::path::Path) {
+        write_fixture_with(ws, DEP_AL);
+    }
+
+    /// [`write_fixture`] with `dep_al` as the dependency's embedded source.
+    pub(crate) fn write_fixture_with(ws: &std::path::Path, dep_al: &str) {
         std::fs::create_dir_all(ws.join("src")).unwrap();
         std::fs::write(
             ws.join("app.json"),
@@ -4838,7 +4843,7 @@ codeunit 13 "Dep Rec Sub"
                 ("NavxManifest.xml", manifest.as_str()),
                 ("SymbolReference.json", symbols.as_str()),
                 ("src/Customer.al", customer),
-                ("src/Lib.al", DEP_AL),
+                ("src/Lib.al", dep_al),
             ] {
                 zip.start_file(name, opts).unwrap();
                 zip.write_all(text.as_bytes()).unwrap();

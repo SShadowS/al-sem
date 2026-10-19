@@ -1081,11 +1081,7 @@ pub(crate) fn build_detector_context_with<'a>(
     use crate::engine::l5::registry::substrate;
     let ordering = (demanded & substrate::ORDERING_FACTS != 0).then(|| fill_ordering(resolved));
     let graph = cross_app_context_graph(resolved, cross.as_ref());
-    // #160 A4: whoever builds the graph prints its bucket, once it is complete.
-    if crate::engine::census::enabled() {
-        crate::engine::census::combined_graph(&graph)
-            .emit("context.graph", crate::engine::census::Kind::Shallow);
-    }
+    census_context_graph(&graph);
     let l4 = (demanded & substrate::CORE_SUMMARIES != 0).then(|| L4Request {
         scc: None,
         extra_diagnostics: vec![],
@@ -1096,6 +1092,16 @@ pub(crate) fn build_detector_context_with<'a>(
         art,
         ordering,
         l4,
+    }
+}
+
+/// #160 A4: whoever builds the context's graph prints its `context.graph`
+/// bucket, once the graph is complete. A graph taken from the cross-app base
+/// prints nothing (`base.graph` counts it).
+pub(crate) fn census_context_graph(graph: &CombinedGraph) {
+    if crate::engine::census::enabled() {
+        crate::engine::census::combined_graph(graph)
+            .emit("context.graph", crate::engine::census::Kind::Shallow);
     }
 }
 

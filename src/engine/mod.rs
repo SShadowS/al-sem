@@ -17,5 +17,7 @@ pub mod l5;
 pub mod perf_trace;
 pub mod return_summary;
 pub mod root_classification;
+/// #160 step 2: `View`, `Plan`, `RunKey` (spec §4.4.3).
+pub mod session;
 pub mod snapshot;
 pub mod switch_dump;
