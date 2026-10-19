@@ -735,6 +735,21 @@ impl SummaryBundle {
         t
     }
 
+    /// Every row as text, one line per routine (its id, then its `db_effects`),
+    /// sorted: two bundles with equal rows render equal.
+    #[cfg(test)]
+    pub fn rows_for_test(&self) -> Vec<String> {
+        let mut rows: Vec<String> = self
+            .routines_with_rows()
+            .map(|r| {
+                let effects: Vec<DbEffect> = self.db_effects(r).map(|e| e.to_owned()).collect();
+                format!("{} {effects:?}", self.routine_id(r))
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
     /// Look up the [`RoutineIx`] for a routine id, if interned.
     pub fn routine_ix(&self, routine_id: &str) -> Option<RoutineIx> {
         self.interner.get(routine_id)

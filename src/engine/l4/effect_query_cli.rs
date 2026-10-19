@@ -165,8 +165,9 @@ impl QuerySubstrate {
         let bundle = cross_app_db_effect_bundle(&base);
         QuerySubstrate {
             resolved: base.resolved,
-            graph: base.graph,
-            scc: base.combined_scc,
+            // The base is consumed here, so each refcount is 1: nothing is copied.
+            graph: std::sync::Arc::try_unwrap(base.graph).unwrap_or_else(|a| (*a).clone()),
+            scc: std::sync::Arc::try_unwrap(base.combined_scc).unwrap_or_else(|a| (*a).clone()),
             bundle,
             dependencies: LoadedDependencies {
                 cross_app: true,

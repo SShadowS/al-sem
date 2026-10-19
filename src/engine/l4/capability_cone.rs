@@ -3393,8 +3393,10 @@ pub struct R3a5CrossAppBase {
     /// The combined graph WITH the injected dep intra-app typed edges folded in
     /// (the cone substrate). The combined `edges_by_from` / `uncertainty_edges`
     /// drive the JACOBI; the `typed_edges` (incl. injected) drive the cone.
-    pub graph: CombinedGraph,
-    pub combined_scc: SccResult,
+    /// Behind an `Arc` (#160 step 2) so an `L4Analysis` can share it by pointer.
+    pub graph: std::sync::Arc<CombinedGraph>,
+    /// The ONE cross-app SCC; `build_l4` takes it by pointer (#160 §4.4.1).
+    pub combined_scc: std::sync::Arc<SccResult>,
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
     pub upgraded_bindings: HashMap<String, Vec<crate::program::model::calls::UpgradedBinding>>,
     pub event_graph: EventGraph,
@@ -3633,8 +3635,8 @@ pub(crate) fn build_cross_app_base(
         friends: x.friends.clone(),
         resolved,
         dep_routine_ids,
-        graph,
-        combined_scc,
+        graph: std::sync::Arc::new(graph),
+        combined_scc: std::sync::Arc::new(combined_scc),
         field_index,
         upgraded_bindings,
         event_graph: event_graph.clone(),
@@ -3696,10 +3698,7 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
     emit("base.graph", &mut combined_graph(&b.graph));
     emit(
         "base.combined_scc",
-        Tally::default()
-            .buf::<crate::engine::l4::scc::Scc>(b.combined_scc.sccs.len())
-            .buf::<(String, usize)>(b.combined_scc.scc_id_by_routine.len())
-            .strs(b.combined_scc.scc_id_by_routine.keys()),
+        &mut crate::engine::census::scc(&b.combined_scc),
     );
     emit(
         "base.field_index",
@@ -4346,7 +4345,7 @@ pub fn issue160_full_graph_timings(
         let sb = if side == "cut" {
             build_r3a3_source_only_base(&base.resolved)
         } else {
-            build_r3a3_source_only_base_over(&base.resolved, base.graph.clone())
+            build_r3a3_source_only_base_over(&base.resolved, (*base.graph).clone())
         };
         let (cone1, pd1) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
         let t = std::time::Instant::now();
@@ -4772,7 +4771,7 @@ mod pd_uses_tests {
 
 /// #70 row 3c: a solved dependency publisher keeps UNKNOWN parameter roles.
 #[cfg(test)]
-mod issue70_publisher_roles_tests {
+pub(crate) mod issue70_publisher_roles_tests {
     use super::*;
     use crate::engine::l4::effect_lattice::EffectPresence;
     use crate::engine::l4::summary::FieldList;
@@ -4812,7 +4811,7 @@ codeunit 13 "Dep Rec Sub"
 
     /// The workspace (`Fwd` only) and its embedded-source dependency, written
     /// as `tests/common/symbol_app.rs` does (40-byte header + zip).
-    fn write_fixture(ws: &std::path::Path) {
+    pub(crate) fn write_fixture(ws: &std::path::Path) {
         std::fs::create_dir_all(ws.join("src")).unwrap();
         std::fs::write(
             ws.join("app.json"),

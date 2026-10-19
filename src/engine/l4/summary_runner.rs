@@ -1537,7 +1537,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
                 severity: "warning".to_string(),
                 stage: "summarize".to_string(),
                 message: format!(
-                    "Summary fixed-point did not converge for SCC [{}]; its facts are lower-confidence",
+                    "Summary fixed-point did not converge for SCC [{}]{NON_CONVERGENCE_TAIL}",
                     members.join(", ")
                 ),
             });
@@ -1783,6 +1783,26 @@ pub struct SummarizeDiagnostic {
     pub severity: String,
     pub stage: String,
     pub message: String,
+}
+
+/// The tail a non-convergence diagnostic's message carries after the line the
+/// solver prints. `l4::analysis::render_warnings` strips it to render that
+/// line, and renders nothing for a message without it (#160 §4.4.7).
+pub(crate) const NON_CONVERGENCE_TAIL: &str = "; its facts are lower-confidence";
+
+#[cfg(test)]
+impl SummarizeDiagnostic {
+    /// A cap diagnostic for `members`, built by hand (not by the solver).
+    pub(crate) fn non_convergence_for_test(members: Vec<String>) -> Self {
+        SummarizeDiagnostic {
+            severity: "warning".to_string(),
+            stage: "summarize".to_string(),
+            message: format!(
+                "Summary fixed-point did not converge for SCC [{}]{NON_CONVERGENCE_TAIL}",
+                members.join(", ")
+            ),
+        }
+    }
 }
 
 /// One member's roles for a pass: [`compose_roles_only`], or, for a
@@ -2533,6 +2553,23 @@ codeunit 50102 Cyc
             }
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// #160 §4.4.7: a REAL cap's diagnostic renders the line the solver prints
+    /// for that SCC (`run_one_scc_roles`' `eprintln!`), so the producer's
+    /// message and `render_warnings` cannot drift apart. The literal is the
+    /// line this run's `eprintln!` printed (captured 2026-10-19).
+    #[test]
+    fn forced_roles_cap_renders_the_printed_warning() {
+        let (_, _, _, diags) = cyc_run(Some(1));
+        assert_eq!(
+            crate::engine::l4::analysis::render_warnings(&diags),
+            [
+                "warning: summarize: Summary fixed-point did not converge for SCC \
+                 [11111111-0000-0000-0000-000000107108:Codeunit:50102#2e36a9e68f534bbc0875318b65eccb1c08e5e1b650dfc5a41b0bda18e6d609d4, \
+                 11111111-0000-0000-0000-000000107108:Codeunit:50102#d6aaac084552537da4ab830ae0a027d3c33b3a4e9773a712e0ceb0922f73890c]"
+            ]
+        );
     }
 
     /// Negative control for the guard above: the same SCC with a cap that it

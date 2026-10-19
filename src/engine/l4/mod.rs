@@ -9,6 +9,7 @@
 //!
 //! The fixed-point summary core (R3a-2+) layers on this SCC condensation.
 
+pub mod analysis;
 pub mod capability_cone;
 pub mod cfg_walker;
 pub mod combined_graph;

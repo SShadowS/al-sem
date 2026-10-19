@@ -27,12 +27,11 @@ use crate::engine::l4::combined_graph::{CombinedGraph, build_combined_graph};
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeOutput};
 use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::reverse_index::ReverseEffectIndex;
-use crate::engine::l4::scc::{SccInputGraph, tarjan_scc};
 use crate::engine::l4::summary::{
     RecordRoleSummary, Uncertainty, dedupe_uncertainties, uncertainty_key,
 };
 use crate::engine::l4::summary_runner::{
-    FieldIndex, compute_summaries_v2_bundle_with_leaves, summaries_census,
+    compute_summaries_v2_bundle_with_leaves, summaries_census,
 };
 use crate::engine::l5::confidence::UncertaintyLite;
 use crate::engine::l5::entry_points::AccessModifier;
@@ -45,7 +44,6 @@ use crate::program::body::features::PCallSite;
 use crate::program::model::calls::{CallEdge, UpgradedBinding};
 use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::workspace::{Model, ModelObject, ModelRoutine, ModelTable};
-use serde_json::json;
 
 /// A declared workspace dependency (`model.identity.primaryDependencies[]`): the
 /// `appGuid` / `name` / `minVersion` triple d17 iterates. Mirrors al-sem's
@@ -1389,86 +1387,12 @@ pub(crate) fn build_detector_context_with<'a>(
     ) = if demanded & substrate::CORE_SUMMARIES != 0 {
         let scc = {
             let _s = pt::span("context", "context.core_scc_tarjan");
-            let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
-            for (from, list) in &graph.edges_by_from {
-                scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
-            }
-            pt::counter_delta("build.graph_scc", 1);
-            tarjan_scc(&SccInputGraph {
-                nodes: &graph.nodes,
-                edges_by_from: &scc_adjacency,
-            })
+            crate::engine::l4::analysis::graph_scc(&graph)
         };
-
-        // STRUCTS one-shot: SCC population stats + the largest-SCC's intra-edge
-        // anatomy (which edge KIND fuses the biggest component, member outdegree).
-        // Reimplements the historical `SCCSTATS`/`SCCANATOMY` eprintln probe
-        // (`git show c8836e7^:src/engine/l5/detector_context.rs`) as one lazy JSON
-        // payload — `build` below only runs when tracing is actually enabled.
-        pt::instant_lazy("l4", "scc_stats", || {
-            let max_scc = scc.sccs.iter().map(|s| s.members.len()).max().unwrap_or(0);
-            let recursive_sccs = scc.sccs.iter().filter(|s| s.recursive).count();
-            let recursive_members: usize = scc
-                .sccs
-                .iter()
-                .filter(|s| s.recursive)
-                .map(|s| s.members.len())
-                .sum();
-            let largest_scc = scc.sccs.iter().max_by_key(|s| s.members.len()).map(|big| {
-                let member_set: std::collections::HashSet<&str> =
-                    big.members.iter().map(|s| s.as_str()).collect();
-                let mut kind_counts: std::collections::BTreeMap<&str, usize> =
-                    std::collections::BTreeMap::new();
-                let mut intra_edges = 0usize;
-                let mut max_intra_outdegree = 0usize;
-                for m in &big.members {
-                    let mut out_here = 0usize;
-                    if let Some(edges) = graph.edges_by_from.get(m) {
-                        for e in edges {
-                            if member_set.contains(e.to.as_str()) {
-                                intra_edges += 1;
-                                out_here += 1;
-                                *kind_counts.entry(e.kind.as_str()).or_insert(0) += 1;
-                            }
-                        }
-                    }
-                    max_intra_outdegree = max_intra_outdegree.max(out_here);
-                }
-                json!({
-                    "members": big.members.len(),
-                    "intra_edges": intra_edges,
-                    "max_intra_outdegree": max_intra_outdegree,
-                    "kinds": kind_counts,
-                })
-            });
-            json!({
-                "nodes": graph.nodes.len(),
-                "sccs": scc.sccs.len(),
-                "recursive_sccs": recursive_sccs,
-                "recursive_members": recursive_members,
-                "max_scc": max_scc,
-                "largest_scc": largest_scc,
-            })
-        });
+        crate::engine::l4::analysis::emit_scc_stats(&graph, &scc);
 
         let _summaries_span = pt::span("context", "context.compute_summaries");
-        // Field-resolution index (keyed (tableId, lowercased field name)) — mirrors
-        // summary.rs `run_and_project`; parameterRoles need it, uncertainties don't,
-        // but `compute_summaries_v2` takes it.
-        let _fi_t = summaries_census::start();
-        let mut field_index: FieldIndex = HashMap::new();
-        for table in &ws.tables {
-            for field in &table.fields {
-                field_index
-                    .entry((table.id.clone(), field.name.to_lowercase()))
-                    .or_insert_with(|| field.id.clone());
-            }
-        }
-        summaries_census::add_since(&summaries_census::FIELD_INDEX_NANOS, _fi_t);
-        summaries_census::add(
-            &summaries_census::FIELD_INDEX_ENTRIES,
-            field_index.len() as u64,
-        );
+        let field_index = crate::engine::l4::analysis::solver_field_index(ws);
         // v2 db-effect solver — ⟨Task B1⟩ the LEAN bundle entry point: it returns the
         // compact `SummaryBundle` PLUS a `core_summaries` map whose `db_effects` are
         // EMPTY (never re-materialized) while `.uncertainties` / `.parameter_roles` are
