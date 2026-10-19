@@ -89,6 +89,10 @@ pub struct EventEdge {
     pub subscriber_app_id: String,
     pub resolution: String,
     pub provenance: Vec<Evidence>,
+    /// The subscription may be skipped at dispatch: some merged reading carries
+    /// a condition (`Subscription::conditional_any`, #107 Design 2). Not
+    /// projected (`PEventEdge` has no such field).
+    pub conditional: bool,
 }
 
 /// The internal event graph.
@@ -551,6 +555,7 @@ pub fn program_event_graph(
                 subscriber_app_id: r.app_guid.clone(),
                 resolution: resolution.to_string(),
                 provenance: vec![Evidence::tree_sitter()],
+                conditional: s.conditional_any,
             });
         }
     }

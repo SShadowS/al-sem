@@ -43,6 +43,7 @@ fn edge(event_id: &str, subscriber: &str, resolution: &str) -> EventEdge {
             source: "tree-sitter".to_string(),
             note: None,
         }],
+        conditional: false,
     }
 }
 
@@ -461,6 +462,7 @@ fn call_edge(from: &str, to: &str) -> CombinedEdge {
         operation_id: None,
         event_id: None,
         subscriber_app_id: None,
+        dispatch: None,
         resolution: "resolved".to_string(),
     }
 }

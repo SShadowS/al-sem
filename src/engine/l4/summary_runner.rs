@@ -1869,6 +1869,7 @@ fn project_summary_to_stable(
 #[cfg(test)]
 mod issue107_pending_tests {
     use super::*;
+    use crate::engine::l4::combined_graph::build_combined_graph;
     use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
     use crate::program::model::workspace::Model;
 
@@ -1929,5 +1930,106 @@ table 50100 Cust
             ],
             APP,
         )
+    }
+
+    fn id_of(m: &Model, name: &str) -> String {
+        let hits: Vec<&ModelRoutine> = m
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name == name)
+            .collect();
+        assert_eq!(hits.len(), 1, "precondition: one routine {name}");
+        hits[0].id.clone()
+    }
+
+    const EDGE_SRC: &str = r#"
+codeunit 50100 Pub
+{
+    [IntegrationEvent(false, false)]
+    procedure OnMixRead(var Rec: Record Cust)
+    begin
+    end;
+
+    [IntegrationEvent(false, false, true)]
+    procedure OnIso(var Rec: Record Cust)
+    begin
+    end;
+}
+
+codeunit 50101 Sub
+{
+#if CLEAN
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnMixRead', '', true, false)]
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnMixRead', '', false, false)]
+#endif
+    local procedure HandleMixRead(var Rec: Record Cust)
+    begin
+        Rec.Get('A');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnMixRead', '', false, false)]
+    local procedure HandlePlain(var Rec: Record Cust)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Pub, 'OnIso', '', false, false)]
+    local procedure HandleIso(var Rec: Record Cust)
+    begin
+    end;
+}
+"#;
+
+    /// Row 5c (edge half, Design 2): a subscriber that skips on a missing
+    /// license in one `#if` reading and not in the other has a model
+    /// `EventEdge` with `conditional == true` and a combined `event-dispatch`
+    /// edge whose `dispatch` metadata is conditional; a plain subscriber's are
+    /// not; an isolated event's edge carries `isolated`. (The
+    /// `Subscription.conditions` empty / `conditional_any` true half is
+    /// `program::resolve::index` test
+    /// `issue107_mixed_readings_set_conditional_any`.)
+    #[test]
+    fn row5c_edge_metadata_marks_mixed_readings_conditional() {
+        let m = model(EDGE_SRC);
+        let mut failures = Vec::new();
+        for (sub, want) in [("HandleMixRead", true), ("HandlePlain", false)] {
+            let sid = id_of(&m, sub);
+            let edges: Vec<bool> = m
+                .events
+                .graph
+                .edges
+                .iter()
+                .filter(|e| e.subscriber_routine_id == sid)
+                .map(|e| e.conditional)
+                .collect();
+            if edges != vec![want] {
+                failures.push(format!("EventEdge {sub}: want [{want}], got {edges:?}"));
+            }
+        }
+        let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
+        for (publisher, sub, conditional, isolated) in [
+            ("OnMixRead", "HandleMixRead", true, false),
+            ("OnMixRead", "HandlePlain", false, false),
+            ("OnIso", "HandleIso", false, true),
+        ] {
+            let (pid, sid) = (id_of(&m, publisher), id_of(&m, sub));
+            let got: Vec<Option<(bool, bool)>> = graph
+                .edges_by_from
+                .get(&pid)
+                .map(|es| {
+                    es.iter()
+                        .filter(|e| e.kind == "event-dispatch" && e.to == sid)
+                        .map(|e| e.dispatch.as_ref().map(|d| (d.conditional, d.isolated)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if got != vec![Some((conditional, isolated))] {
+                failures.push(format!(
+                    "CombinedEdge {publisher} -> {sub}: want [Some(({conditional}, {isolated}))], got {got:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 }

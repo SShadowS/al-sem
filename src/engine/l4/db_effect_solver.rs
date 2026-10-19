@@ -1716,6 +1716,7 @@ pub(crate) mod tests {
                     operation_id: None,
                     event_id: None,
                     subscriber_app_id: None,
+                    dispatch: None,
                     resolution: "resolved".to_string(),
                 });
         }
@@ -1941,6 +1942,7 @@ pub(crate) mod tests {
             operation_id: None,
             event_id: None,
             subscriber_app_id: None,
+            dispatch: None,
             resolution: "resolved".to_string(),
         }
     }
@@ -2736,6 +2738,7 @@ pub(crate) mod tests {
             operation_id: None,
             event_id: Some("evt".to_string()),
             subscriber_app_id: None,
+            dispatch: None,
             resolution: "resolved".to_string(),
         }
     }

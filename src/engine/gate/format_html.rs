@@ -987,6 +987,7 @@ mod tests {
             subscriber_app_id: "app1".to_string(),
             resolution: "resolved".to_string(),
             provenance: vec![],
+            conditional: false,
         }
     }
 
