@@ -26,7 +26,7 @@ use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::digest::compute_digest_effects_cli;
 use crate::engine::l5::digest_cli::{
-    ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, envelope_and_tx_map,
+    ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, finish_default_run,
     primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::snapshot::compose_snapshot;
@@ -883,7 +883,7 @@ pub(crate) fn prove_pipeline_with(
     let plan = digest_plan(detectors);
     let key = plan.keys().remove(0);
     view.prepare(&plan);
-    let (diagnostics_json, tx_ctx_map) = envelope_and_tx_map(&mut view, &key);
+    let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
     let resolved = view.model();
 
     // Compose snapshot
@@ -962,6 +962,9 @@ pub(crate) fn prove_pipeline_with(
         &changed_roots.spans,
         &changed_roots.touched,
     );
+    // The bundle's only borrower is dead: release `l4` before the cone walk.
+    drop(temp_states);
+    view.release(Cell::L4);
 
     if query_full.entries.is_empty() {
         return Err("prove: internal error — entry missing after resolution".to_string());
@@ -978,8 +981,6 @@ pub(crate) fn prove_pipeline_with(
         .map(|g| g.subject.as_str())
         .collect();
     let gaps_in_cone_count = count_gaps_in_cone(&gap_subjects, &cone_result.visited_ids);
-    drop(temp_states);
-    view.release(Cell::L4);
 
     // Parse question (already validated at CLI layer, but re-check cleanly)
     let parsed_question = parse_question(question_text)

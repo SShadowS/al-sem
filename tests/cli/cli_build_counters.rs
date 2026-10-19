@@ -335,7 +335,14 @@ fn run_digest_empty_diff_builds_no_context() {
     let diff = d.path().join("empty.diff");
     std::fs::write(&diff, "  \n").unwrap();
     let (out, m) = spawn_traced(&["digest", &ws_a(), "--diff", diff.to_str().unwrap()], &[]);
-    assert_ne!(out.status.code(), Some(0));
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "digest: at least one of changedFiles, changedRoutines, or diffText is required"
+        ),
+        "{stderr}"
+    );
     assert_eq!(
         count(&m, "build.program"),
         1,

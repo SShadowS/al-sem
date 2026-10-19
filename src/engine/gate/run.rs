@@ -1255,6 +1255,10 @@ mod tests {
     /// a `View`'s run and take the run before snapshot composition. Their
     /// counter rows match the parent's, so only a source scan sees a revert
     /// to their own context. Comment lines are cut first.
+    ///
+    /// Stated limits: only whole `//` lines are cut, so a banned name in a
+    /// trailing or block comment trips the scan; and it checks presence, not
+    /// order, so a `take_run` moved after the snapshot composition passes.
     #[test]
     fn fingerprint_and_diff_read_diagnostics_off_the_view() {
         for (name, src) in [

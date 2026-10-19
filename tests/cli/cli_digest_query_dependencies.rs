@@ -459,6 +459,16 @@ fn dependency_publisher_dispatch_reaches_the_store() {
 /// Discrimination (2026-10-15): `run_digest_pipeline` passing `None` instead of
 /// `target.cross_app_inputs()` to `compute_tx_context_map` fails this test with
 /// `["span-has-no-known-writes"]`; restored, it passes.
+///
+/// Discrimination (2026-10-19): `compute_tx_context_map` is gone. Passing
+/// `None` instead of `target.cross_app_inputs()` into
+/// `build_detector_artifacts` in `View::prepare` now stays GREEN: those inputs
+/// only pick which routines seed spans and feed the l4 solve. The dependency
+/// writes reach the span through the graph, so the live seam is `View::prepare`'s
+/// cross-app graph fill: building `cross_app_context_graph(model, None)` there
+/// instead of taking `base.graph` (which carries the dependency-internal typed
+/// edges) fails this test with `["span-has-no-known-writes"]`; restored, it
+/// passes.
 #[test]
 fn cross_app_commit_span_sees_dependency_writes() {
     use crate::dep_dispatch_fixture::{DEP_GUID as XDEP, write_own};

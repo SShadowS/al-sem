@@ -39,13 +39,17 @@ use crate::program::model::workspace::Model;
 // Shared envelope-diagnostics projection
 // ---------------------------------------------------------------------------
 
-/// What digest AND prove read off a prepared [`View`] before composing their
-/// snapshot (#160 §4.4.4), so the two cannot desync: the envelope
-/// `diagnostics` JSON array of the run `key` (each entry `{code:
-/// "DIAG-<stage>", message, severity}`) and the tx map off
-/// `det.transaction_spans`. Then the run is taken and dropped, and `det` and
-/// the graph released: only `l4` stays alive through snapshot composition.
-pub(crate) fn envelope_and_tx_map(
+/// Finishes digest's and prove's default run on a prepared [`View`]: reads
+/// the envelope diagnostics and the tx map, then takes and drops the run and
+/// releases `det`, the graph and the ordering facts (#160 §4.4.4).
+///
+/// Shared so the two cannot desync. The envelope `diagnostics` is the JSON
+/// array of the run `key` (each entry `{code: "DIAG-<stage>", message,
+/// severity}`); the tx map is read off `det.transaction_spans`. Of the view's
+/// cells only `l4` stays alive through snapshot composition. Cross-app, the
+/// base still owns its combined graph and SCC: releasing the graph cell drops
+/// only the view's `Arc`.
+pub(crate) fn finish_default_run(
     view: &mut View,
     key: &RunKey,
 ) -> (serde_json::Value, HashMap<String, TransactionContext>) {
@@ -54,6 +58,7 @@ pub(crate) fn envelope_and_tx_map(
     drop(view.take_run(key));
     view.release(Cell::Det);
     view.release(Cell::Graph);
+    view.release(Cell::Ordering);
     (diagnostics, tx_ctx_map)
 }
 
@@ -524,7 +529,7 @@ const TX_UNKNOWN: TransactionContext = "unknown";
 /// the spans of a `det` cell whose run demanded `TRANSACTION_SPANS` (digest and
 /// prove's plan asserts it, #160 A2.10).
 /// Mirrors TS: `computeTransactionSpans` + `transactionContextByOperationId` build.
-pub(crate) fn tx_context_map(spans: &[TransactionSpan]) -> HashMap<String, TransactionContext> {
+fn tx_context_map(spans: &[TransactionSpan]) -> HashMap<String, TransactionContext> {
     let mut map: HashMap<String, TransactionContext> = HashMap::new();
     for span in spans {
         if span.seed_kind != SeedKind::ExplicitCommit {
@@ -1625,7 +1630,7 @@ pub(crate) fn digest_pipeline_with(
     let plan = digest_plan(detectors);
     let key = plan.keys().remove(0);
     view.prepare(&plan);
-    let (diagnostics_json, tx_ctx_map) = envelope_and_tx_map(&mut view, &key);
+    let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
     let resolved = view.model();
 
     // Compose snapshot ONCE. The workspace fingerprint is computed directly via the
