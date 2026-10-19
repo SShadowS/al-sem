@@ -20,7 +20,7 @@ Steps 2-5 are carried. The specs were panel-converged in attempt 2 and are on ma
 
 ## Base/Head SHAs
 
-B = `1524b1fd20abc3cac3180ea9fc6d906b70368491` (claim). H = (pending).
+B = `1524b1fd20abc3cac3180ea9fc6d906b70368491` (claim; `origin/master` unchanged through the run, no rebase). H = `67a48fb990326d763f899727904b5c8714cd1370` (gated; later commits change only the ledger and the register).
 
 ## Timeline
 
@@ -264,15 +264,30 @@ Final panel r1 fixes: `42349a8d` (`final-r1-fix-report.md`; `ci-steps task` exit
 | cli_build_counters::views_release_their_cells_before_the_next_build (NEW, P1-5) | policy's `release_all_but` before the RAW build deleted | `policy check: got [ctx, ctx, rel:Graph], want [ctx, rel:Det, rel:L4, rel:Ordering, ctx, rel:Graph]` | green |
 | same | fingerprint's release and events' early `l4` release deleted | `fingerprint: got [ctx, snap]`; `events fanout: got [ctx, rel:Det, …]` | green |
 
-Gates on `96c7967d` (the r1 fixes, numbers, ledger): `ci-steps all` exit 0 (609.5 s, `logs/ci-steps-all/20261019T221651-a0b165f6.log`), `check-goldens --verify-coverage` 0 (0.5 s), `check-goldens` 0 (31.1 s), `cdo-gate` 0 (154.8 s, `logs/cdo-gate/20261019T222735-f7d2ff27.log`), all supervised. WSL Linux check on `96c7967d`: clippy release `-D warnings` 0, `--no-run` 0, 42 CLI tests passed; `run_no_id_row_runs_one_build_and_keeps_the_text` run alone with `--nocapture` on Linux: ok, no `skipped:` line, so the new `cfg(unix)` literal executed (`H:/al-sem-160-step2/wsl-linux3.log`).
+Gates on `96c7967d` (the r1 fixes, numbers, ledger): `ci-steps all` exit 0 (609.5 s, `logs/ci-steps-all/20261019T221651-a0b165f6.log`), `check-goldens --verify-coverage` 0 (0.5 s), `check-goldens` 0 (31.1 s), `cdo-gate` 0 (154.8 s, `logs/cdo-gate/20261019T222735-f7d2ff27.log`), all supervised. WSL Linux check on `96c7967d`: clippy release `-D warnings` 0, `--no-run` 0, 42 CLI tests passed; The standalone `--nocapture` run cited here at first was an inline `wsl -- bash -lc '…'` command whose variables the Windows shell expanded; it ran in the wrong directory, so it is NOT evidence (final panel r3, sol, R2-3). Re-done properly on the final head (see "Gates on `67a48fb9`").
 
 Final panel r2 (same threads; `final-r2-{briefing,sol,opus}.md`): no critical, important or code-defect finding. Both accepted P1-1, P1-3, P1-4, P1-5, P1-6, P1-8, P1-9, P1-10, P1-11; P1-2 accepted with the condition of a recorded Linux run (met above). sol re-raised P1-7 (record `largest_scc`'s anatomy) and both re-raised F1-CR6 (the headline's "until step 3" is wrong for policy's RAW build, which step 6 removes). opus new minors: R2-1 `view.release` is not listed as a trace change; R2-2 the release-sequence test omits digest and prove; R2-3 two stale records (this ledger's "do not touch" sentence, P1-2's evidence). All fixed in the r2 commit (docs + `final-r2-fix-report.md` for the test).
+
+Gates on the frozen head H = `67a48fb990326d763f899727904b5c8714cd1370` (the r2 test + docs + evidence), all through `agentflow run`, `supervised: true`, `CDO_WS` from the environment:
+
+| gate | exit | seconds | log |
+|---|--:|--:|---|
+| `ci-steps all` | 0 | 380.6 | `logs/ci-steps-all/20261019T223545-0f5d02cc.log`: 3558 passed, 8 skipped |
+| `check-goldens --verify-coverage` | 0 | 1.0 | `logs/check-goldens-coverage/20261019T224207-12d17f6c.log` |
+| `check-goldens` | 0 | 41.0 | `logs/check-goldens/20261019T224210-53769681.log` |
+| `cdo-gate` | 0 | 96.8 | `logs/cdo-gate/20261019T224253-385941df.log`: `cdo-gate: PASS`, 2155 lib tests |
+
+After H only evidence files change (this ledger, the register). WSL Linux check on `67a48fb9`: clippy release `-D warnings` 0, `--no-run` 0, 42 CLI tests passed (`H:/al-sem-160-step2/wsl-linux4.log`). The three unreadable-file tests then ran ALONE on Linux through a script (`scratchpad/noid-test-linux.sh`: `cd $HOME/ci160-step2/al-sem` at `67a48fb9`, uid 1000, `cargo test --test cli -- run_no_id_row… run_build_failed_row… run_assembly_row --nocapture --test-threads=1`): 3 passed, exit 0, no `skipped:` line, so the `cfg(unix)` exact literal executed and held. Full output: `H:/al-sem-160-step2/wsl-noid-nocapture.log`.
+
+Final panel r3 (same threads; `final-r3-{briefing,sol,opus}.md`): opus accepted F1-CR6, P1-7, R2-1, R2-2, R2-3, no new defect; sol accepted F1-CR6, P1-7, R2-1, R2-2 and re-raised R2-3 (evidence only: the cited standalone run was not in the named log), no new defect. Fixed by the scripted Linux run above.
+
+Final panel r4 (`final-r4-{briefing,sol,opus}.md`): both accepted R2-3. CONVERGED: all 46 register entries resolved (fixed, refuted with evidence, or deferred minors) and accepted by both reviewers; no blocking entry deferred. `final_rounds` used 4 of 5.
 
 P1-3: A2.3 re-measured on `42349a8d` (bench3, 5 rounds, d + ds): saving 23.35 s ≥ bound 10.68 s, met. The machine was loaded (parent wall band 8.2 s), so the first bench's 17.33 s bound stays the tighter evidence. P1-7: `scc_stats` recorded (head once per digest, parent twice, identical payload). Both are in the numbers file.
 
 ## Discoveries
 
-(none yet)
+None filed. Noted for later steps, not filed: the cross-app `scc_stats` shows `sccs` 2 below `nodes` with no multi-member SCC, identical at the parent (numbers file, step 4); the step-12 inputs F1-CR1, F1-CR4, P1-10, P1-11.
 
 ## Not delivered
 
