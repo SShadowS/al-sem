@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- #160 step 2: every `alsem` command builds ONE detector context and ONE L4 solve, through one `View` (`src/engine/session.rs`).
+  - **The pieces.**
+    - `View`, `Plan` and `RunKey` hold four cells: ordering, graph, det and `l4`. Each cell is filled once, by `prepare`, never lazily.
+    - `L4Analysis` / `build_l4` (`src/engine/l4/analysis.rs`) is the one solve.
+    - The detector context splits into owned `DetectorArtifacts` and a borrowed `DetectorContext<'v>`.
+    - Ordering facts are a filled slot. A detector that reads them without declaring `ORDERING_FACTS` panics instead of filling them lazily.
+    - Cross-app, the context shares the base's graph and SCC instead of building its own.
+  - **No output byte moves.** The CDO SARIF, digest, prove, query, fingerprint, histogram and detector baseline are identical.
+  - **CDO numbers** (`docs/measurements/2026-10-19-issue-160-step2.md`):
+    - `digest` takes 33.8 s instead of 52.7 s: its second, all-detector context is gone.
+    - `prove`'s peak is 575 MB instead of 2235 MB, and it takes 4.2 s instead of 6.9 s. Prove now computes effects for its one root, not for every root.
+    - analyze's post-attach peak is 99 MB lower, digest's 380 MB lower. `digest --single-app`'s is 11 MB higher: the solve now overlaps snapshot composition there.
+  - **Commands.**
+    - `digest`, `prove` and `events fanout|chains` no longer build a second context with every substrate.
+    - `digest`, `prove` and `query` no longer run a private bundle solve.
+    - `policy check` keeps its raw-facts build, on the view's graph.
+    - `digest` checks for an empty change set (no `--diff` content, files or routines) before any solve: exit 1 with the same message, without paying for a context.
+  - **Cross-app analyze failure.** A failed cross-app `analyze` build is classified from its own result; no second, single-app build runs.
+    - When the program build fails, the failure line carries that build's error. Before, if the single-app rerun succeeded, it said `the cross-app model could not be built`.
+    - When the model assembly fails, analyze gives the empty output with the `coverage could not be verified` warning (exit 0), as a single-app assembly failure always did. Before, a succeeding single-app rerun turned it into the `could not be built` failure.
+  - **The non-convergence warning** (`warning: summarize: Summary fixed-point did not converge for SCC [...]`) has one print site per solve, `build_l4`, plus the snapshot fold's own.
+    - So a capped SCC prints fewer duplicate lines: digest and prove print 2 instead of 4, events and policy 1 instead of 2.
+    - `aldump --r3a2` and `--r3a5-cross-app-summary` no longer print it.
+    - No CDO SCC caps, so no CDO output moved.
+  - **Retained census** (`ALSEM_RETAINED_CENSUS=1`):
+    - new `l4.bundle`, `l4.scc` (only when `build_l4` computed the SCC), `l4.summarize_diagnostics` and `l4.warnings` buckets;
+    - `context.db_effect_bundle` becomes `l4.bundle`;
+    - cross-app, `context.graph` is not printed, because the base's bucket counts the shared graph;
+    - `base.injected_typed_edges` and `context.ordering_source` are gone.
+  - **Trace.**
+    - `digest.tx_context_map` and `prove.tx_context_map` are gone.
+    - `context.build_total` / `crossapp.context_build` now also open on the `View` paths.
+  - **Library API.**
+    - `build_detector_context*` return an `OwnedContext`; read the context with `.ctx()`.
+    - `build_cross_app_base` and `assemble_and_resolve_cross_app_program` return `Result<_, CrossAppFailure>` instead of `Option`.
+    - `R3a5CrossAppBase.graph` / `.combined_scc` are `Arc`s, and its `injected_typed_edges` field is gone. Those edges were a second copy of what `graph` holds, about 16 MB on CDO.
+    - `DetectorOutput` derives `Debug, PartialEq, Eq`; the superset-mask parity test compares the whole output.
+
+### Removed
+
+- #160 step 2: `effect_query_cli::build_db_effect_bundle`, `cross_app_db_effect_bundle`, `QuerySubstrate::from_cross_app_base` / `from_resolved`, `run::analyzer_diagnostic_lines`, and `digest_cli` / `prove`'s `compute_tx_context_map`. Each was a second build of something the `View` now builds once.
+
 ## [2.0.0] - 2026-10-19
 
 A major version, because some changes break existing users. Each one is described in full below:
