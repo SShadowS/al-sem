@@ -34,7 +34,8 @@ pub struct ExecRelation {
     /// Tarjan over the Primary payload, computed in [`ExecRelation::new`].
     pub scc: Arc<SccResult>,
     /// The dependency half's uncertainty edges, in the order the half-build
-    /// sorts them. No reader until step 5.
+    /// sorts them. No production reader: kept for step 5's coverage policy,
+    /// read today only by tests and the census.
     pub dependency_uncertainty: Vec<UncertaintyEdge>,
 }
 

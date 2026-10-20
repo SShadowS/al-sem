@@ -32,8 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Counters.** `build.combined_graph` drops by one in every command that builds
     a cross-app base, since one relation counts one build: analyze cross-app 2→1,
     `analyze --detector d47-…` 3→2, digest cross-app 3→2, events, policy check and
-    query cross-app 2→1. `build.graph_scc` moves nowhere. The step 0-2 child
-    spec's §4.4.8 restates the table "after step 4".
+    query cross-app 2→1. `build.graph_scc` moves in no row pinned before this
+    step. One case gains a Tarjan: a single-app plan that fills the relation but
+    no `l4` (`analyze --single-app --detector d47-…`) now runs the relation's
+    (`scc` 2, newly pinned by `analyze_single_app_d47`; 1 before by the same
+    rule, a value no test ever pinned). The step 0-2 child
+    spec's §4.4.8 restates the table "after step 4". A new counter case,
+    `analyze_cross_app_with_a_dependency_half`, pins the one-build count on a
+    workspace whose dependency half is not empty (the other cross-app rows'
+    dependency makes no call, so their half is empty).
   - **Spans, census, cells.** New span `rel.build`; gone
     `context.event_combined_graph` and `context.core_scc_tarjan`;
     `crossapp.base_graph` / `crossapp.base_artifacts_facts` renamed

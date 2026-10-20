@@ -1116,7 +1116,7 @@ pub(crate) fn build_detector_context_with<'a>(
 pub(crate) fn build_detector_artifacts(
     resolved: &Model,
     demanded: u32,
-    rel: &Arc<ExecRelation>,
+    rel: &ExecRelation,
     l4: Option<L4Request>,
     cross: Option<CrossAppInputs<'_>>,
 ) -> (DetectorArtifacts, Option<L4Analysis>) {

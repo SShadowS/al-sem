@@ -258,6 +258,75 @@ fn analyze_single_app() {
     );
 }
 
+/// #160 step 4 (review of Tasks 4-5, finding 1): the cross-app default row on
+/// a workspace whose dependency half is NOT empty. `ws_dep`'s dependency
+/// makes no call, so `ExecRelation::new` skips its second `assemble` there;
+/// here the workspace calls the dependency's `Outer()`, which calls its
+/// `Inner()`, so the half-build runs (the typed edge it adds is what
+/// `cross_app_commit_span_sees_dependency_writes` reads). One relation still
+/// counts one `build.combined_graph`.
+///
+/// DISCRIMINATION (2026-10-20): building the dependency half through the
+/// counted `build_combined_graph` inside `new`'s non-empty guard (spec
+/// §5.5 (a), as specified) fails this with `build.combined_graph: got 2,
+/// want 1`; restored, it passes. The `ws_dep` rows stay green under that
+/// break.
+#[test]
+fn analyze_cross_app_with_a_dependency_half() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::dep_dispatch_fixture::write_own(
+        dir.path(),
+        "codeunit 50172 \"Ws Commit\"\n{\n    procedure CommitAfterDep()\n    var\n        Lib: Codeunit \"Dep Lib\";\n    begin\n        Lib.Outer();\n        Commit();\n    end;\n}\n",
+    );
+    let ws = dir.path().to_string_lossy().into_owned();
+    let m = run(&["analyze", &ws, "--format", "json"]);
+    assert_row(
+        "analyze cross-app, dependency half",
+        &m,
+        Row {
+            program: 1,
+            bcg: 1,
+            cone: 1,
+            v2: 1,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
+            snap: 0,
+        },
+    );
+}
+
+/// #160 step 4 (child spec §4.9, stated, now pinned): a single-app plan that
+/// fills the relation but no `l4` (d47 alone: no `CORE_SUMMARIES`) runs the
+/// relation's Tarjan, which before step 4 lived in `build_l4` and so did not
+/// run here. A later lazy-SCC change must move this row on purpose.
+#[test]
+fn analyze_single_app_d47() {
+    let m = run(&[
+        "analyze",
+        &ws_a(),
+        "--single-app",
+        "--format",
+        "json",
+        "--detector",
+        "d47-io-unsafe-txn",
+    ]);
+    assert_row(
+        "analyze single-app d47",
+        &m,
+        Row {
+            program: 1,
+            bcg: 2,
+            cone: 1,
+            v2: 0,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
+            snap: 1,
+        },
+    );
+}
+
 #[test]
 fn digest_cross_app() {
     let (d, ws) = ws_dep();
