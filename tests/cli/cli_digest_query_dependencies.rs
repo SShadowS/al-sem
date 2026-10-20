@@ -466,12 +466,14 @@ fn dependency_publisher_dispatch_reaches_the_store() {
 /// `None` instead of `target.cross_app_inputs()` into
 /// `build_detector_artifacts` in `View::prepare` now stays GREEN: those inputs
 /// only pick which routines seed spans and feed the l4 solve. The dependency
-/// writes reach the span through the graph, so the live seam is `View::prepare`'s
-/// cross-app graph fill: building `cross_app_context_graph(model, None)` there
-/// instead of taking `base.graph` (which carries the dependency-internal typed
-/// edges) fails this test with `["span-has-no-known-writes"]`; restored, it
-/// passes. (Task 27 folded that fill into `detector_context::context_graph`,
-/// whose cross-app arm returns `base.graph`.)
+/// writes reach the span through the graph, so the live seam was `View::prepare`'s
+/// cross-app graph fill (`base.graph`, which carried the dependency-internal
+/// typed edges).
+///
+/// Discrimination (2026-10-20, #160 step 4): the seam is now
+/// `ExecRelation::new`'s dependency typed-edge extend (the Cone payload the
+/// base's relation carries). Skipping that extend fails this test with
+/// `["span-has-no-known-writes"]`; restored, it passes.
 #[test]
 fn cross_app_commit_span_sees_dependency_writes() {
     use crate::dep_dispatch_fixture::{DEP_GUID as XDEP, write_own};

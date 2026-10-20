@@ -1,7 +1,7 @@
 //! #160 step 2 (spec §4.4.3): the `View` a command builds its detector runs
 //! and its L4 analysis on.
 //!
-//! A `View` owns its target and a few cells (`graph`, `l4`, `det`,
+//! A `View` owns its target and a few cells (`rel`, `l4`, `det`,
 //! `ordering`), each filled at most once, by [`View::prepare`] alone, from a
 //! [`Plan`] that only this module's factories build. No interior mutability:
 //! every fill is on `&mut self`, every reader takes `&self` (rule 4).
@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::analysis::{L4Analysis, L4Request, build_l4};
 use crate::engine::l4::combined_graph::CombinedGraph;
+use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::summary_runner::SummarizeDiagnostic;
 use crate::engine::l5::detector_context::{
     self as dc, DetectorArtifacts, DetectorContext, OrderingFactsMap,
@@ -25,8 +26,11 @@ pub struct View {
     /// Private: the cells describe this target, so it never changes after
     /// `new` (read it through [`View::target`]).
     target: AnalysisTarget,
-    /// One graph per view; cross-app `Arc::clone(&base.graph)`.
-    graph: Option<Arc<CombinedGraph>>,
+    /// One execution relation per view (#160 step 4): single-app built by
+    /// `prepare`, cross-app `Arc::clone(&base.rel)`. It holds the SCC too, so
+    /// single-app the SCC lives from the relation's build, before the det
+    /// fill's cone, until `release(Cell::Rel)` (spec §4.4, bounded in §7).
+    rel: Option<Arc<ExecRelation>>,
     l4: Option<L4Analysis>,
     det: Option<DetectorArtifacts>,
     /// One bit per [`Cell`] released; a released cell is never refilled.
@@ -62,11 +66,11 @@ pub enum Cell {
     Det,
     L4,
     Ordering,
-    Graph,
+    Rel,
 }
 
 impl Cell {
-    const ALL: [Cell; 4] = [Cell::Det, Cell::L4, Cell::Ordering, Cell::Graph];
+    const ALL: [Cell; 4] = [Cell::Det, Cell::L4, Cell::Ordering, Cell::Rel];
 
     fn bit(self) -> u8 {
         1 << self as u8
@@ -207,7 +211,7 @@ impl View {
     pub fn new(target: AnalysisTarget) -> View {
         View {
             target,
-            graph: None,
+            rel: None,
             l4: None,
             det: None,
             released: 0,
@@ -217,8 +221,8 @@ impl View {
     }
 
     /// Fill every cell `plan` needs that is still empty, in order: ordering,
-    /// graph, det (its cone, then `l4`, then its harvest), then the runs. A
-    /// plan with no run: graph, then `l4` alone. Rule 1's asserts (a), (b),
+    /// rel, det (its cone, then `l4`, then its harvest), then the runs. A
+    /// plan with no run: rel, then `l4` alone. Rule 1's asserts (a), (b),
     /// (c) and the `after_run` assertion hold in release builds too.
     pub fn prepare(&mut self, plan: &Plan) {
         self.prepare_inner(plan, vec![]);
@@ -246,12 +250,12 @@ impl View {
         let core = union & substrate::CORE_SUMMARIES != 0;
         let need_l4 = plan.need_l4 || core;
         let need_ordering = union & substrate::ORDERING_FACTS != 0;
-        let need_graph = need_det || need_l4;
+        let need_rel = need_det || need_l4;
         // (a) a released cell is never refilled: a refill after
         // `release(Det)` would find no `CoreSummaries`.
         for (cell, needed) in [
             (Cell::Ordering, need_ordering),
-            (Cell::Graph, need_graph),
+            (Cell::Rel, need_rel),
             (Cell::Det, need_det),
             (Cell::L4, need_l4),
         ] {
@@ -283,7 +287,7 @@ impl View {
 
         let View {
             target,
-            graph,
+            rel,
             l4,
             det,
             ordering,
@@ -292,9 +296,9 @@ impl View {
         } = self;
         let target = &*target;
         let model = target.resolved();
-        let (cross_base, scc) = match target {
-            AnalysisTarget::SingleApp(_) => (None, None),
-            AnalysisTarget::CrossApp(b) => (Some(&**b), Some(Arc::clone(&b.combined_scc))),
+        let cross_base = match target {
+            AnalysisTarget::SingleApp(_) => None,
+            AnalysisTarget::CrossApp(b) => Some(&**b),
         };
         // The det fill keeps the span the context build had before the View
         // (`run_detectors` / `run_detectors_cross_app`), so its unspanned
@@ -308,13 +312,22 @@ impl View {
         if need_ordering && ordering.is_none() {
             *ordering = Some(dc::fill_ordering(model));
         }
-        if need_graph && graph.is_none() {
-            // Single-app the view builds it and prints `context.graph`;
-            // cross-app it is `base.graph`, which counts it (A4).
-            *graph = Some(dc::context_graph(model, cross_base));
+        if need_rel && rel.is_none() {
+            // Single-app the view builds it (counted, and its `rel.*` census
+            // buckets printed, inside `ExecRelation::new`); cross-app it is the
+            // base's, built and counted with the base.
+            *rel = Some(match cross_base {
+                Some(b) => Arc::clone(&b.rel),
+                None => Arc::new(ExecRelation::new(
+                    &model.workspace,
+                    &model.calls.edges,
+                    &[],
+                    &model.events.graph,
+                )),
+            });
         }
         if need_det && det.is_none() {
-            let g = graph.as_ref().expect("graph filled above");
+            let r = rel.as_ref().expect("rel filled above");
             // (c) `CoreSummaries` is a local of the det fill's own solve, so a
             // det fill that needs `l4` builds it in the same call.
             assert!(
@@ -322,16 +335,10 @@ impl View {
                 "L4 already filled; a det fill that needs l4 builds it in the same call"
             );
             let req = need_l4.then(|| L4Request {
-                scc: scc.clone(),
                 extra_diagnostics: std::mem::take(&mut extra_diagnostics),
             });
-            let (art, solved) = dc::build_detector_artifacts(
-                model,
-                union,
-                Arc::clone(g),
-                req,
-                target.cross_app_inputs(),
-            );
+            let (art, solved) =
+                dc::build_detector_artifacts(model, union, r, req, target.cross_app_inputs());
             *det = Some(art);
             if need_l4 {
                 *l4 = solved;
@@ -340,13 +347,10 @@ impl View {
         drop(fill_span);
         // A plan with no run (query) fills `l4` alone.
         if need_l4 && l4.is_none() {
-            let g = graph.as_ref().expect("graph filled above");
-            let req = L4Request {
-                scc,
-                extra_diagnostics,
-            };
+            let r = rel.as_ref().expect("rel filled above");
+            let req = L4Request { extra_diagnostics };
             // The `CoreSummaries` die here: nothing harvests them.
-            let (solved, _core) = build_l4(model, g, req, target.cross_app_inputs().as_ref());
+            let (solved, _core) = build_l4(model, r, req, target.cross_app_inputs().as_ref());
             *l4 = Some(solved);
         }
         if !need_det {
@@ -389,7 +393,7 @@ impl View {
             Cell::Det => self.det = None,
             Cell::L4 => self.l4 = None,
             Cell::Ordering => self.ordering = None,
-            Cell::Graph => self.graph = None,
+            Cell::Rel => self.rel = None,
         }
     }
 
@@ -412,8 +416,8 @@ impl View {
         self.target.resolved()
     }
 
-    pub fn graph(&self) -> &Arc<CombinedGraph> {
-        self.graph.as_ref().expect("graph cell not filled")
+    pub fn rel(&self) -> &Arc<ExecRelation> {
+        self.rel.as_ref().expect("rel cell not filled")
     }
 
     pub fn l4(&self) -> &L4Analysis {
@@ -444,12 +448,12 @@ impl View {
     }
 
     /// Take the view apart into what `alsem query` reads once its plan is
-    /// prepared: the model, the graph and the `l4` analysis. Cross-app, the
-    /// rest of the base (its cone inputs, its own `graph` / `combined_scc`
-    /// handles) drops here, so it is not live through the query and the
+    /// prepared: the model, the relation's graph and the `l4` analysis.
+    /// Cross-app, the rest of the base (its cone inputs, its own `rel`
+    /// handle) drops here, so it is not live through the query and the
     /// render, as at `1524b1fd`.
     pub fn into_query_parts(self) -> (Model, Arc<CombinedGraph>, L4Analysis) {
-        let graph = self.graph.expect("graph cell not filled");
+        let graph = Arc::clone(&self.rel.expect("rel cell not filled").graph);
         let l4 = self.l4.expect("l4 cell not filled");
         let model = match self.target {
             AnalysisTarget::SingleApp(m) => *m,
@@ -728,19 +732,16 @@ mod tests {
         let mut v = view();
         v.prepare(&plan);
         assert!(
-            v.ordering.is_some() && v.det.is_some() && v.l4.is_some() && v.graph.is_some(),
+            v.ordering.is_some() && v.det.is_some() && v.l4.is_some() && v.rel.is_some(),
             "precondition: all four cells filled"
         );
         v.release_all_but(&[Cell::L4]);
         assert!(v.ordering.is_none(), "ordering released");
-        assert!(
-            v.det.is_none() && v.graph.is_none(),
-            "det and graph released"
-        );
+        assert!(v.det.is_none() && v.rel.is_none(), "det and rel released");
         assert!(v.l4.is_some(), "the kept cell stays");
         assert_eq!(
             v.released,
-            Cell::Det.bit() | Cell::Ordering.bit() | Cell::Graph.bit()
+            Cell::Det.bit() | Cell::Ordering.bit() | Cell::Rel.bit()
         );
     }
 

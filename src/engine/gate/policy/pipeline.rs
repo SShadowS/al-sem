@@ -35,7 +35,6 @@ use crate::engine::root_classification::classify_roots;
 use crate::engine::session::{Cell, View, policy_plan};
 use crate::program::inputs::{InputSet, PolicyOrigin, PolicyRequest};
 use crate::program::model::workspace::ModelRoutine;
-use std::sync::Arc;
 
 /// How the effective policy was resolved.
 enum ResolvedPolicy {
@@ -238,8 +237,8 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
     };
     // Nothing after the run reads `det`, `l4` or the ordering facts (the RAW
     // build below takes no `l4`): none is held through the raw cone. The RAW
-    // build reads the graph.
-    view.release_all_but(&[Cell::Graph]);
+    // build reads the relation.
+    view.release_all_but(&[Cell::Rel]);
     let resolved = view.model();
     let target = view.target();
 
@@ -262,12 +261,12 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             //
             // #160 §4.4.4: a command LOCAL, not a `View` cell, so no `det` ever
             // carries the bit, and the raw cone is alive only after the run. It
-            // shares the view's graph. `SUMMARIES` is all `PolicyModel` reads
+            // shares the view's relation. `SUMMARIES` is all `PolicyModel` reads
             // beside `event_graph` (built under every mask), so it is enough.
             let (raw, _) = build_detector_artifacts(
                 resolved,
                 substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS,
-                Arc::clone(view.graph()),
+                view.rel(),
                 None,
                 target.cross_app_inputs(),
             );
@@ -305,8 +304,8 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
         }
     };
     let dependencies = target.dependencies();
-    // The RAW build was the graph's last reader.
-    view.release(Cell::Graph);
+    // The RAW build was the relation's last reader.
+    view.release(Cell::Rel);
 
     let text = match opts.format {
         "json" => format_policy_json(

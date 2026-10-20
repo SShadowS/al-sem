@@ -26,8 +26,9 @@ use crate::engine::l4::analysis::{CoreSummaries, L4Analysis, L4Request, build_l4
 use crate::engine::l4::capability_cone::{
     CapabilityFact, compose_cone_over_graph, direct_facts_for_routine,
 };
-use crate::engine::l4::combined_graph::{CombinedGraph, build_combined_graph};
+use crate::engine::l4::combined_graph::CombinedGraph;
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeOutput};
+use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::reverse_index::ReverseEffectIndex;
 use crate::engine::l4::summary::{
     RecordRoleSummary, Uncertainty, dedupe_uncertainties, uncertainty_key,
@@ -1030,7 +1031,7 @@ impl OwnedContext<'_> {
 /// substrates are:
 ///   - `SUMMARIES` — capability cones + `summaries` (also built for `TRANSACTION_SPANS`,
 ///     which folds over the summaries map internally).
-///   - `CORE_SUMMARIES` — second Tarjan + the closed-form v2 core summaries
+///   - `CORE_SUMMARIES` — the closed-form v2 core summaries over the relation's SCC
 ///     (`db_effects`/`uncertainties` via `compute_summaries_v2`, `parameter_roles`
 ///     via its own JACOBI-disciplined roles-only fixpoint) →
 ///     `uncertainties_by_node` / `parameter_roles_by_routine` / `summarize_diagnostics`.
@@ -1047,7 +1048,7 @@ impl OwnedContext<'_> {
 ///
 /// #160 step 2: a SHIM (tests and `aldump`; no `alsem` command) over
 /// [`build_detector_artifacts`]. It fills the ordering slot FIRST when the mask
-/// has `ORDERING_FACTS`, builds the graph, and runs the solve iff the mask has
+/// has `ORDERING_FACTS`, builds the relation, and runs the solve iff the mask has
 /// `CORE_SUMMARIES`.
 pub fn build_detector_context(resolved: &Model, demanded: u32) -> OwnedContext<'_> {
     build_detector_context_with(resolved, demanded, None)
@@ -1057,9 +1058,8 @@ pub fn build_detector_context(resolved: &Model, demanded: u32) -> OwnedContext<'
 /// routines (never primary roots or entry points), their fixed solver leaves, and
 /// d17's declared dependencies and resolved versions. The model is the cross-app
 /// base's (`R3a5CrossAppBase::resolved`), its calls cut to workspace callers. The
-/// dependency-internal edges the cone follows (`direct-call` typed edges from the
-/// R3a-4 artifacts) are in the base's graph, which a cross-app context takes
-/// ([`context_graph`]).
+/// dependency-internal edges the cone follows are the Cone payload of the base's
+/// relation (`R3a5CrossAppBase::rel`), which a cross-app context takes.
 pub(crate) struct CrossAppInputs<'b> {
     pub dep_routine_ids: &'b BTreeSet<String>,
     pub leaf_summaries: &'b HashMap<String, crate::engine::l4::summary::RoutineSummary>,
@@ -1074,7 +1074,7 @@ pub(crate) struct CrossAppInputs<'b> {
 }
 
 /// [`build_detector_context`], single-app (`base: None`) or cross-app (`resolved`
-/// is `base.resolved`; the base's graph and cross-app inputs). One builder for
+/// is `base.resolved`; the base's relation and cross-app inputs). One builder for
 /// both since engine-switch S8.1; the cross-app one (which built every
 /// substrate whatever the detectors asked for) is gone.
 pub(crate) fn build_detector_context_with<'a>(
@@ -1084,14 +1084,22 @@ pub(crate) fn build_detector_context_with<'a>(
 ) -> OwnedContext<'a> {
     use crate::engine::l5::registry::substrate;
     let ordering = (demanded & substrate::ORDERING_FACTS != 0).then(|| fill_ordering(resolved));
-    let graph = context_graph(resolved, base);
-    // Cross-app the graph is the base's, so its SCC is too (no second Tarjan).
+    // Cross-app the base's relation (its SCC included, no second Tarjan);
+    // single-app one built here over every call.
+    let rel = match base {
+        Some(b) => Arc::clone(&b.rel),
+        None => Arc::new(ExecRelation::new(
+            &resolved.workspace,
+            &resolved.calls.edges,
+            &[],
+            &resolved.events.graph,
+        )),
+    };
     let l4 = (demanded & substrate::CORE_SUMMARIES != 0).then(|| L4Request {
-        scc: base.map(|b| Arc::clone(&b.combined_scc)),
         extra_diagnostics: vec![],
     });
     let cross = base.map(|b| b.cross_app_inputs());
-    let (art, l4) = build_detector_artifacts(resolved, demanded, graph, l4, cross);
+    let (art, l4) = build_detector_artifacts(resolved, demanded, &rel, l4, cross);
     OwnedContext {
         model: resolved,
         art,
@@ -1100,40 +1108,20 @@ pub(crate) fn build_detector_context_with<'a>(
     }
 }
 
-/// The context's combined graph: cross-app the base's own (its
-/// dependency-internal typed edges folded in), shared by pointer; single-app
-/// built here over the model's calls and events.
-///
-/// #160 A4: whoever builds the graph prints its `context.graph` bucket, so the
-/// single-app arm prints it and a graph taken from the base prints nothing
-/// (`base.graph` counts it).
-pub(crate) fn context_graph(
-    resolved: &Model,
-    base: Option<&crate::engine::l4::capability_cone::R3a5CrossAppBase>,
-) -> Arc<CombinedGraph> {
-    if let Some(b) = base {
-        return Arc::clone(&b.graph);
-    }
-    let _graph_span = pt::span("context", "context.event_combined_graph");
-    let graph = build_combined_graph(&resolved.workspace, &resolved.calls, &resolved.events.graph);
-    if crate::engine::census::enabled() {
-        crate::engine::census::combined_graph(&graph)
-            .emit("context.graph", crate::engine::census::Kind::Shallow);
-    }
-    Arc::new(graph)
-}
-
-/// The owned detector substrates over `graph`, at mask `demanded`: the cone
-/// first, then (when `l4` is `Some`) ONE [`build_l4`] solve, then the harvest
-/// of its core summaries. Returns the solve's [`L4Analysis`] beside the
-/// artifacts. `l4: None` = no solve.
+/// The owned detector substrates over the relation `rel`, at mask `demanded`:
+/// the cone (over `rel.cone()`) first, then (when `l4` is `Some`) ONE
+/// [`build_l4`] solve over `rel`, then the harvest of its core summaries.
+/// Returns the solve's [`L4Analysis`] beside the artifacts. `l4: None` = no
+/// solve.
 pub(crate) fn build_detector_artifacts(
     resolved: &Model,
     demanded: u32,
-    graph: Arc<CombinedGraph>,
+    rel: &Arc<ExecRelation>,
     l4: Option<L4Request>,
     cross: Option<CrossAppInputs<'_>>,
 ) -> (DetectorArtifacts, Option<L4Analysis>) {
+    // The Primary payload; `DetectorArtifacts.graph` shares it by pointer.
+    let graph: Arc<CombinedGraph> = Arc::clone(&rel.graph);
     use crate::engine::l5::registry::substrate;
     assert!(
         demanded & substrate::CORE_SUMMARIES == 0 || l4.is_some(),
@@ -1228,7 +1216,7 @@ pub(crate) fn build_detector_artifacts(
 
         let _t_walk = cones_census::start();
         let outcome = compose_cone_over_graph(
-            &graph.typed_edges,
+            rel.cone(),
             &nodes,
             &direct_full,
             &coverage_in,
@@ -1478,19 +1466,20 @@ pub(crate) fn build_detector_artifacts(
     //   uncertaintiesAt(node) = routine.summary.uncertainties ∪ uncertaintyEdgesByFrom.get(node)
     // The CORE `RoutineSummary.uncertainties` is dropped by `FullRoutineSummary`
     // (the cone path keeps only facts + coverage), so we recompute the core
-    // summaries here from the SAME combined graph the cone used: Tarjan SCC over
-    // `graph.edges_by_from`, then the closed-form v2 solver (`compute_summaries_v2`).
+    // summaries here from the SAME relation the cone used: the closed-form v2
+    // solver (`compute_summaries_v2`) over its Primary payload and its SCC
+    // (computed in `ExecRelation::new`, #160 step 4).
     // This is the only place that needs the core uncertainties; the union is
     // assembled once and exposed on `uncertainties_by_node`.
     //
-    // The second Tarjan + v2-solver pass — the most expensive substrate — is ONE
+    // The v2-solver pass — the most expensive substrate — is ONE
     // `build_l4` call, here, after the cone (#160 §4.4.1), when the caller asked
     // for it. Its core summaries (lean: their `db_effects` are empty, the rows
     // live in `l4.bundle`) are harvested below iff the mask has CORE_SUMMARIES.
     // Skipped ⇒ `uncertainties_by_node` / `parameter_roles_by_routine` /
     // `summarize_diagnostics` are all empty, which by decision (a) means a
     // substrate-skipping run emits no summarize cap-hit diagnostics.
-    let (l4, core_summaries) = match l4.map(|req| build_l4(resolved, &graph, req, cross.as_ref())) {
+    let (l4, core_summaries) = match l4.map(|req| build_l4(resolved, rel, req, cross.as_ref())) {
         Some((l4, core)) => (Some(l4), Some(core)),
         None => (None, None),
     };
@@ -2773,9 +2762,14 @@ page 50813 "CP3 Wizard"
     fn core_summaries_without_an_l4_request_panics() {
         use crate::engine::l5::registry::substrate;
         let model = crate::engine::l5::test_support::empty_resolved();
-        let graph = context_graph(&model, None);
+        let rel = Arc::new(ExecRelation::new(
+            &model.workspace,
+            &model.calls.edges,
+            &[],
+            &model.events.graph,
+        ));
         let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build_detector_artifacts(&model, substrate::CORE_SUMMARIES, graph, None, None);
+            build_detector_artifacts(&model, substrate::CORE_SUMMARIES, &rel, None, None);
         }))
         .expect_err("CORE_SUMMARIES with l4: None must panic");
         let msg = err

@@ -3435,25 +3435,23 @@ pub struct R3a5CrossAppBase {
     /// `internalsVisibleTo`, lower-case guids: exposing app -> friend apps (d13).
     pub friends: HashMap<String, BTreeSet<String>>,
     /// The cross-app model itself (engine-switch S7.6), with its calls cut to the
-    /// combined graph's (workspace callers only). The detectors get it as their
+    /// relation's primary half (workspace callers only). The detectors get it as their
     /// `resolved`, and the context reads its root classifications and ordering
     /// facts from it. [`Self::ws_routines`] and [`Self::objects`] are views onto
     /// it.
     pub resolved: crate::program::model::workspace::Model,
     pub dep_routine_ids: BTreeSet<String>,
-    /// The combined graph WITH the injected dep intra-app typed edges folded in
-    /// (the cone substrate). The combined `edges_by_from` / `uncertainty_edges`
-    /// drive the JACOBI; the `typed_edges` (incl. injected) drive the cone.
-    /// Behind an `Arc` (#160 step 2) so an `L4Analysis` can share it by pointer.
-    pub graph: std::sync::Arc<CombinedGraph>,
-    /// The ONE cross-app SCC; `build_l4` takes it by pointer (#160 §4.4.1).
-    pub combined_scc: std::sync::Arc<SccResult>,
+    /// The view's ONE execution relation (#160 step 4): the Primary payload
+    /// (workspace callers' calls plus every event dispatch) drives the solve
+    /// and the detector traversals, the Cone payload (its typed edges, the
+    /// dependency code's own calls included) drives the cone, and its SCC is
+    /// the one every cross-app `build_l4` shares by pointer.
+    pub rel: std::sync::Arc<crate::engine::l4::exec_relation::ExecRelation>,
     /// The solver field index: the leaf summaries' and every cross-app
     /// `build_l4` solve's (through [`Self::cross_app_inputs`]), built once.
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
-    pub event_graph: EventGraph,
     /// Fixed-leaf (dep) RETAINED summaries: every source-bearing dependency
-    /// routine with no out-edge in [`Self::graph`].
+    /// routine with no out-edge in the relation's Primary payload.
     pub leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary>,
     /// Source-bearing dependency routines WITH an out-edge (an event publisher's
     /// subscriber dispatch, #70): solved for their db-effect rows, but their
@@ -3469,7 +3467,6 @@ pub struct R3a5CrossAppBase {
     pub direct_full: HashMap<String, Vec<CapabilityFact>>,
     /// Per-routine direct coverage `(status, reasons)`.
     pub direct_coverage: HashMap<String, (String, Vec<String>)>,
-    pub nodes: Vec<String>,
     /// The DECLARED workspace dependencies `{appGuid, name, minVersion}` (app.json
     /// `dependencies[]`). The d17 MinVersion side. ADDITIVE — only the cross-app L5
     /// detector context reads it; NOT serialized into the r3a5 gate.
@@ -3536,8 +3533,8 @@ impl R3a5CrossAppBase {
 /// - every routine's direct capability facts and coverage come from
 ///   `direct_facts_for_routine` (a bodyless routine: `opaque-dependency`).
 ///
-/// - the combined graph (solver, SCC, detector traversals) takes the calls of
-///   WORKSPACE callers only; a dependency's own calls reach the CONE alone, as
+/// - the relation's Primary payload (solver, SCC, detector traversals) takes the
+///   calls of WORKSPACE callers only; a dependency's own calls reach the CONE alone, as
 ///   typed edges built by the same rules as the workspace's (engine-switch S8.6):
 ///   object runs and calls from one dependency into another included. S7 fed the
 ///   cone only the R3a-4 artifact's admitted own-app edges, because the whole
@@ -3570,54 +3567,42 @@ pub(crate) fn build_cross_app_base(
         .map(|r| r.id.clone())
         .collect();
 
+    // The one call split (#160 step 4), in emission order: the workspace
+    // callers' calls (the Primary payload, and the cut model's calls) and the
+    // dependency code's own calls, cone-only (see the doc above): every
+    // resolved call a dependency routine makes, typed by the same rules as the
+    // workspace's (object runs, resolved methods, interface `Maybe`, calls into
+    // another dependency). Event dispatch is in the Primary payload.
     let all_calls = &x.resolved.calls;
+    let (dependency_calls, primary_calls): (
+        Vec<crate::program::model::calls::CallEdge>,
+        Vec<crate::program::model::calls::CallEdge>,
+    ) = all_calls
+        .edges
+        .iter()
+        .cloned()
+        .partition(|e| dep_routine_ids.contains(&e.from));
+    let rel = crate::engine::l4::exec_relation::ExecRelation::new(
+        ws,
+        &primary_calls,
+        &dependency_calls,
+        &x.resolved.events.graph,
+    );
+    drop(dependency_calls);
     let calls = crate::program::model::calls::ResolvedCalls {
-        edges: all_calls
-            .edges
-            .iter()
-            .filter(|e| !dep_routine_ids.contains(&e.from))
-            .cloned()
-            .collect(),
+        edges: primary_calls,
         upgraded_bindings: all_calls.upgraded_bindings.clone(),
         diagnostics: all_calls.diagnostics.clone(),
         external_targets: all_calls.external_targets.clone(),
     };
-    let event_graph: EventGraph = x.resolved.events.graph.clone();
-    let _s_graph = crate::engine::perf_trace::span("crossapp", "crossapp.base_graph");
-    let mut graph = build_combined_graph(ws, &calls, &event_graph);
 
-    let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
-    let combined_scc = crate::engine::l4::analysis::graph_scc(&graph);
+    let _s_index = crate::engine::perf_trace::span("crossapp", "crossapp.field_index");
     // The solve's index (summaries-census counted here, not in `build_l4`).
     let field_index = crate::engine::l4::analysis::solver_field_index(ws);
+    drop(_s_index);
 
-    drop(_s_graph);
-    let _s_facts = crate::engine::perf_trace::span("crossapp", "crossapp.base_artifacts_facts");
-    // The dependency code's own calls, cone-only (see the doc above): every
-    // resolved call a dependency routine makes, typed by the same rules as the
-    // workspace's (object runs, resolved methods, interface `Maybe`, calls into
-    // another dependency). Event dispatch is already in `graph`.
-    let dep_calls = crate::program::model::calls::ResolvedCalls {
-        edges: all_calls
-            .edges
-            .iter()
-            .filter(|e| dep_routine_ids.contains(&e.from))
-            .cloned()
-            .collect(),
-        upgraded_bindings: all_calls.upgraded_bindings.clone(),
-        diagnostics: Vec::new(),
-        external_targets: all_calls.external_targets.clone(),
-    };
-    let no_events = EventGraph {
-        events: Vec::new(),
-        edges: Vec::new(),
-    };
-    // The dependency-internal edges the cone follows (R3a-4 intra-app edges as
-    // `direct-call` typed edges), moved into the graph: the base keeps no copy.
-    graph
-        .typed_edges
-        .extend(build_combined_graph(ws, &dep_calls, &no_events).typed_edges);
-
+    let _s_facts = crate::engine::perf_trace::span("crossapp", "crossapp.base_facts");
+    let event_graph = &x.resolved.events.graph;
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
     for evt in &event_graph.events {
         if let Some(pr) = &evt.publisher_routine_id {
@@ -3637,7 +3622,8 @@ pub(crate) fn build_cross_app_base(
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     for r in &ws.routines {
         if dep_routine_ids.contains(&r.id) && r.body_available {
-            let has_out_edge = graph
+            let has_out_edge = rel
+                .graph
                 .edges_by_from
                 .get(&r.id)
                 .is_some_and(|e| !e.is_empty());
@@ -3671,15 +3657,12 @@ pub(crate) fn build_cross_app_base(
         friends: x.friends.clone(),
         resolved,
         dep_routine_ids,
-        graph: std::sync::Arc::new(graph),
-        combined_scc: std::sync::Arc::new(combined_scc),
+        rel: std::sync::Arc::new(rel),
         field_index,
-        event_graph: event_graph.clone(),
         leaf_summaries,
         fixed_roles,
         direct_full,
         direct_coverage,
-        nodes,
         declared_dependencies,
         resolved_app_versions,
         loaded_apps,
@@ -3696,8 +3679,9 @@ pub(crate) fn build_cross_app_base(
 /// cut set: its rows and events (`base.resolved.rows`, the part of the `model`
 /// bucket that survives) and the replacement calls (`base.resolved.calls`) are
 /// charged apart, so nothing the model still owns is missing from the base.
+/// `rel` has no `base.*` bucket: `ExecRelation::new` prints its `rel.*` ones.
 fn census_cross_app_base(b: &R3a5CrossAppBase) {
-    use crate::engine::census::{Kind, Tally, combined_graph, event_graph};
+    use crate::engine::census::{Kind, Tally};
     use crate::program::model::program_calls::{census_calls, census_model_rows};
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
     emit(
@@ -3728,11 +3712,6 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
             .buf::<String>(b.dep_routine_ids.len())
             .strs(&b.dep_routine_ids),
     );
-    emit("base.graph", &mut combined_graph(&b.graph));
-    emit(
-        "base.combined_scc",
-        &mut crate::engine::census::scc(&b.combined_scc),
-    );
     emit(
         "base.field_index",
         Tally::default()
@@ -3743,7 +3722,6 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
                     .flat_map(|((t, f), id)| [t.as_str(), f.as_str(), id.as_str()]),
             ),
     );
-    emit("base.event_graph", &mut event_graph(&b.event_graph));
     emit(
         "base.leaf_summaries",
         Tally::default()
@@ -3774,10 +3752,6 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
             .strs(b.direct_coverage.values().map(|(s, _)| s))
             .bufs(b.direct_coverage.values().map(|(_, r)| r))
             .strs(b.direct_coverage.values().flat_map(|(_, r)| r)),
-    );
-    emit(
-        "base.nodes",
-        Tally::default().buf::<String>(b.nodes.len()).strs(&b.nodes),
     );
     emit(
         "base.declared_dependencies",
@@ -3824,9 +3798,11 @@ pub fn project_r3a5_cross_app(
     };
     let ws_routines = base.ws_routines();
     let dep_routine_ids = &base.dep_routine_ids;
-    let graph = &base.graph;
-    let event_graph = &base.event_graph;
+    let graph = &base.rel.graph;
+    let event_graph = &base.resolved.events.graph;
     let direct_full = &base.direct_full;
+    // The cone's routine universe, in row order (the cone sorts it).
+    let nodes: Vec<String> = ws_routines.iter().map(|r| r.id.clone()).collect();
 
     // From-scratch core (v2 db-effect solver, Phase-1-parity) + cone over the
     // assembled base. Trace + roles-cap diagnostics ignored here, so since #160
@@ -3835,7 +3811,7 @@ pub fn project_r3a5_cross_app(
     let (core_summaries, _) = compute_summaries_v2_with_leaves_core(
         ws_routines,
         graph,
-        &base.combined_scc,
+        &base.rel.scc,
         &base.resolved.calls.upgraded_bindings,
         &base.field_index,
         &base.leaf_summaries,
@@ -3847,8 +3823,8 @@ pub fn project_r3a5_cross_app(
     // was build-then-drop; `RawOnly` skips the fold outright. The raw Vec and its
     // ordering are untouched.
     let cones = compose_cone_over_graph(
-        &graph.typed_edges,
-        &base.nodes,
+        base.rel.cone(),
+        &nodes,
         &base.direct_full,
         &base.direct_coverage,
         base.ws_routines(),
@@ -4215,6 +4191,11 @@ pub struct R3a3SourceBase {
 /// Assemble the RAW source-only cone/graph base (mirrors `project_r3a3`'s inline
 /// assembly, returning the parts). Fail-closed callers get an empty base via the
 /// resolved workspace having zero routines.
+///
+/// The LEGACY CUT (#160 step 4, amendment M9): this base builds its own graph
+/// over `resolved.calls`, which cross-app is the primary half only, without
+/// the dependency typed edges the view's `ExecRelation` carries. The snapshot
+/// stays on it until step 6 deletes it.
 pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
     // Not `r3a3.calls_graph`: that span also covered the input clones, now
@@ -4347,7 +4328,7 @@ pub fn issue160_full_graph_timings(
         let sb = if side == "cut" {
             build_r3a3_source_only_base(&base.resolved)
         } else {
-            build_r3a3_source_only_base_over(&base.resolved, (*base.graph).clone())
+            build_r3a3_source_only_base_over(&base.resolved, (*base.rel.graph).clone())
         };
         let (cone1, pd1) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
         let t = std::time::Instant::now();
@@ -4944,12 +4925,11 @@ codeunit 13 "Dep Rec Sub"
         let mut failures: Vec<String> = Vec::new();
 
         // (i) DB rows through the store, solved the cross-app way (the base's
-        // SCC and cross-app inputs, so the leaves and fixed roles are in).
+        // relation and cross-app inputs, so the leaves and fixed roles are in).
         let (l4, _) = crate::engine::l4::analysis::build_l4(
             &base.resolved,
-            &base.graph,
+            &base.rel,
             crate::engine::l4::analysis::L4Request {
-                scc: Some(std::sync::Arc::clone(&base.combined_scc)),
                 extra_diagnostics: vec![],
             },
             Some(&base.cross_app_inputs()),
@@ -5046,8 +5026,9 @@ codeunit 13 "Dep Rec Sub"
 
     /// #160 Task 27 review I1: cross-app `alsem query` keeps the model, the
     /// graph and the `l4` analysis, and drops the rest of the base before the
-    /// query and the render. The base holds its own `graph` and `combined_scc`
-    /// handles, so a live base shows as a second owner of each.
+    /// query and the render. The base holds the relation (`base.rel`), which
+    /// owns the graph and the SCC, so a live base (or view cell) shows as a
+    /// second owner of each (#160 step 4).
     #[test]
     fn cross_app_query_drops_the_base() {
         let dir = tempfile::tempdir().unwrap();
@@ -5060,7 +5041,8 @@ codeunit 13 "Dep Rec Sub"
     }
 
     /// #160 Task 27 review #2: the cross-app shim solves over the base's
-    /// graph, so it takes the base's SCC instead of running a second Tarjan.
+    /// relation, so it takes the relation's SCC instead of running a second
+    /// Tarjan.
     #[test]
     fn cross_app_shim_reuses_the_base_scc() {
         let dir = tempfile::tempdir().unwrap();
@@ -5075,7 +5057,7 @@ codeunit 13 "Dep Rec Sub"
         );
         let l4 = owned.l4().expect("CORE_SUMMARIES solves");
         assert!(
-            std::sync::Arc::ptr_eq(&l4.scc, &base.combined_scc),
+            std::sync::Arc::ptr_eq(&l4.scc, &base.rel.scc),
             "the shim computed its own SCC"
         );
     }
@@ -5669,8 +5651,11 @@ mod step4_tests {
         );
     }
 
-    /// Spec §5.4, part 1: a dependency routine's to-less call is not a
-    /// Primary uncertainty: neither the base's graph nor the detector
+    /// Spec §5.4: a dependency routine's to-less call is kept, apart from
+    /// the Primary payload. (1) `rel.dependency_uncertainty` holds exactly
+    /// one edge from `DepCaller`, the `unresolved-call` its to-less edge
+    /// maps to (observed on the base `c554b704`), at that edge's call site;
+    /// (2) neither `rel.primary().uncertainty_edges` nor the detector
     /// context (a plan holding d1, so the context is built) carries it.
     #[test]
     fn step4_dependency_uncertainty_stays_out_of_primary() {
@@ -5684,21 +5669,51 @@ mod step4_tests {
             "precondition: DepCaller is a dependency routine"
         );
         let dep = dependency_half(&ws);
-        assert!(
-            dep.iter().any(|e| e.from == dep_caller && e.to.is_none()),
-            "precondition: the dependency half holds a to-less edge from DepCaller: {dep:?}"
+        let to_less: Vec<&crate::program::model::calls::CallEdge> = dep
+            .iter()
+            .filter(|e| e.from == dep_caller && e.to.is_none())
+            .collect();
+        assert_eq!(
+            to_less.len(),
+            1,
+            "precondition: the dependency half holds one to-less edge from DepCaller: {dep:?}"
         );
-        // Both checked and reported together.
+        // All checked and reported together.
         let mut failures: Vec<String> = Vec::new();
+        // (1)
+        let kept: Vec<(&str, &str, Option<&str>)> = base
+            .rel
+            .dependency_uncertainty
+            .iter()
+            .map(|u| {
+                (
+                    u.from.as_str(),
+                    u.uncertainty.kind.as_str(),
+                    u.uncertainty.callsite_id.as_deref(),
+                )
+            })
+            .collect();
+        let want = vec![(
+            dep_caller.as_str(),
+            "unresolved-call",
+            Some(to_less[0].callsite_id.as_str()),
+        )];
+        if kept != want {
+            failures.push(format!(
+                "(1) rel.dependency_uncertainty: want {want:?}, got {kept:?}"
+            ));
+        }
+        // (2)
         let in_graph: Vec<&crate::engine::l4::combined_graph::UncertaintyEdge> = base
-            .graph
+            .rel
+            .primary()
             .uncertainty_edges
             .iter()
             .filter(|u| u.from == dep_caller)
             .collect();
         if !in_graph.is_empty() {
             failures.push(format!(
-                "graph uncertainty_edges from DepCaller: {in_graph:?}"
+                "(2) rel.primary().uncertainty_edges from DepCaller: {in_graph:?}"
             ));
         }
         let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
@@ -5708,7 +5723,7 @@ mod step4_tests {
         ));
         if let Some(u) = view.det().uncertainty_edges_by_from.get(&dep_caller) {
             failures.push(format!(
-                "context uncertainty_edges_by_from[DepCaller]: {u:?}"
+                "(2) context uncertainty_edges_by_from[DepCaller]: {u:?}"
             ));
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
