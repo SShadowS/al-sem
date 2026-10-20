@@ -18,8 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `Both` (policy's raw build); the per-member walk now runs only for the raw half
   (`RawOnly`, `Both`), whose output is unchanged. `fold_row` is not part of 7a (spec
   D7a-2). Spec: `docs/superpowers/specs/2026-10-20-issue-160-step7a-scc-membership-design.md`.
-  - **Byte identity.** No golden moved in any commit. The CDO SARIF, histogram and
-    retained-bytes checks are the §8 bench's: `<bench>`. Numbers:
+  - **Headline.** On CDO (`cdo_ws`, cross-app `analyze`, server1, `release-fast`,
+    parent `d37e8634` against head `7bb9f90c`, 5 interleaved rounds per side) the cone
+    span `context.capability_cones` drops from 18.8 s to 10.1 s (median 18,782.9 →
+    10,104.4 ms, −8,678.5 ms, head lower in 5/5), and the per-member walk no longer
+    runs (`bfs_walk` 8.3 s → 0).
+  - **Byte identity.** No golden moved in any commit. On CDO the SARIF is
+    byte-identical at `--scope primary` and `--scope all`, the
+    `--program-call-graph-stats` SHA-256 is `c032c8db…` on both sides (as at step 4),
+    and the retained `context.cone_derived` (65,273,122 B) and `context.summaries`
+    (36,400,882 B) are equal on both sides. Numbers:
     `docs/measurements/2026-10-20-issue-160-step7a.md`.
   - **The old path is test-only.** `RecursiveMembership::PerMemberWalk` is
     `#[cfg(test)]`; it is the oracle of T7 (fixtures) and T8 (CDO, in
@@ -53,8 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Tarjan starts only from `nodes`, so an SCC with no member in `nodes` is always
     reached from outside and is never a root.
     `scc_set_none_for_an_scc_with_no_emitted_member` pins the non-root case instead.
-  - **Speed.** The stop rule (§6) passed on server1 before the switch. The bounded
-    `bfs_walk` ≤ 1 s and the cone saving are the §8 bench's: `<bench>`.
+  - **Speed.** The stop rule (§6) passed on server1 before the switch. A7a.4 met: head
+    `bfs_walk` median 0.0 ms ≤ 1,000 ms. A7a.5 met and not void (void check 6,745.7 ≥
+    1,808.6): the cone saving 8,678.5 ms ≥ 5,841.4 ms (amendment 7A-1), and ≥ 6,745.7
+    ms in the literal form. `bfs_fold` (reported) 747.1 → 394.4 ms. Reported, no bound:
+    `analyze --single-app` wall 3.8 s on both sides (+0.1 s, inside the 0.5 s band);
+    cross-app `policy check` (`Both`, which folds the set and still walks) 85.0 → 76.9 s,
+    head lower in 5/5, so `Both` has no regression. Polled RSS unchanged within the band
+    (693.3 / 699.1 MB and 13,806.9 / 13,816.1 MB).
 - #160 step 4: one execution relation per view. `ExecRelation`
   (`src/engine/l4/exec_relation.rs`) is built once from one split of the calls:
   workspace callers' calls plus every event dispatch (the Primary payload, in
