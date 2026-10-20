@@ -4,6 +4,9 @@ The spec is the converged design in `.agent/issue-160/ledger.md` (attempt 6, des
 `b26a93a8acc688be`): sections Assumption probes, Design, Acceptance matrix (A3.1-A3.10).
 Epic: `docs/superpowers/specs/2026-10-18-issue-160-analysis-session-design.md` §9 row 3.
 
+As delivered: two deviations, recorded in the ledger's Timeline. The A3.2 counter rows moved
+into Task 1, and the `cdo` include is one shared lib module (`crate::cdo`), not a second include.
+
 Every test below is written red first and given a discrimination proof (break, watch it
 fail, revert, watch it pass; record both in the ledger's proof table). Format with
 `rustfmt <file>` only. Per-task gate: `scripts/ci-steps task-affected`.

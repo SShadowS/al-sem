@@ -824,7 +824,7 @@ pub fn reconstruct_via(
 /// never be attributed to a caller of the routine that owns that callsite.
 /// Every real producer of these 4 kinds is a to-less
 /// [`UncertaintyEdge`](crate::engine::l4::combined_graph::UncertaintyEdge)
-/// (`combined_graph.rs:260,272,299,304`) — folded into its OWN routine's
+/// (emitted by `combined_graph::build_combined_graph`) — folded into its OWN routine's
 /// uncertainties unconditionally (no kind filter on the way IN, in that same
 /// retired fold) — so a routine that owns one of these always keeps
 /// it in its own final `uncertainties`; it simply never propagates further
