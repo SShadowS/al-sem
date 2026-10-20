@@ -24,7 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   payload). The r3a5 projection reads the relation and the model's own event graph.
   The snapshot stays on its own legacy-cut graph until step 6.
   - **Byte identity.** No golden moved. The CDO detector baseline and the
-    `--program-call-graph-stats` histogram are unchanged: `<Task 7>`.
+    `--program-call-graph-stats` histogram are unchanged (CDO `bc3ccb18`, parent
+    `c554b704` against head `0729f7f7`, `release-fast`): findings 2277 → 2277 at
+    `--scope primary` and 30712 → 30712 at `--scope all`, no detector changed,
+    fingerprints 0 added and 0 removed; histogram SHA-256 `c032c8db…` on both
+    sides; SARIF byte-identical in both universes. Numbers:
+    `docs/measurements/2026-10-20-issue-160-step4.md`.
   - **Dependency uncertainty kept.** The dependency half's uncertainty edges,
     dropped before, are kept in `rel.dependency_uncertainty`. Nothing reads them
     yet (step 5 decides); they stay out of the Primary payload, the detector
@@ -47,13 +52,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `crossapp.field_index` / `crossapp.base_facts`. Census buckets `rel.graph`,
     `rel.scc`, `rel.dependency_uncertainty` replace `base.graph`,
     `base.combined_scc`, `base.event_graph`, `base.nodes`, `context.graph` and
-    `l4.scc`: `<Task 7>`. The `view.release` trace instant names `Rel` where it
+    `l4.scc`. On CDO the renamed graph and SCC buckets keep their bytes
+    (cross-app 26 294 162 B and 4 590 120 B, single-app 6 349 073 B and
+    794 455 B); `base.event_graph` (2 830 824 B) and `base.nodes` (3 324 090 B)
+    are gone and `rel.dependency_uncertainty` is new (77 904 B cross-app, 0
+    single-app), −6 077 010 B net cross-app. The `view.release` trace instant names `Rel` where it
     named `Graph`.
   - **Single-app SCC lifetime.** The single-app SCC is now built before the det
     fill's cone and lives in `Cell::Rel` until it is released, longer than `l4`
     held it (through the cone walk; in `events --single-app` and `policy check
     --single-app` until their last release). About 0.8 MB on CDO, bounded by three
-    single-app peak bounds: `<Task 7>`.
+    single-app peak bounds, all met on CDO (5 interleaved rounds, band 3 % of
+    each metric's parent median): `analyze --single-app` process 578 → 577 MiB,
+    post-attach 297 → 296; `policy check --single-app` 576 → 577, 455 → 458;
+    `events fanout --single-app` 575 → 576, 297 → 294; stdout equal. Reported
+    cross-app peaks are flat or lower: `analyze` 2835 → 2834 / 2139 → 2136,
+    `digest` 2837 → 2835 / 2160 → 2118 (post-attach lower in 5/5; the deleted
+    transient copies of the calls, not in the retained census).
   - **Tests.** New: three behaviour pins on the base code (a dependency caller of
     a dependency publisher stays out of the subscriber's reverse graph and commit
     span, and a dependency `local` helper is never proven temporary; d17 samples
