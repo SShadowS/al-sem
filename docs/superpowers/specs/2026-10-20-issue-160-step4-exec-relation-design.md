@@ -1,7 +1,10 @@
 # #160 child spec: step 4 — `ExecRelation`
 
-Status: implementable design, pre-implementation; revised after spec panel round 1
-(`.agent/runs/20261020-034103-38ab8c/spec-r1-dispositions.json`, items S1-1 to S1-18).
+Status: as delivered (2026-10-20), converged at spec panel round 3; the epic took
+the amendments M1-M9. Where delivery differed from the design text, a dated
+"As delivered" note says so in place (§4.1 M2, §4.8, §4.9, §5.5). Earlier: revised
+after spec panel round 1 (`.agent/runs/20261020-034103-38ab8c/spec-r1-dispositions.json`,
+items S1-1 to S1-18).
 Child of `2026-10-18-issue-160-analysis-session-design.md` (the epic): §5.5, §9 row
 **4**, E1, E2, E14, E17. Follows the structure of
 `2026-10-18-issue-160-steps-0-2-design.md` ("child 0-2" below). Where this document and
@@ -126,6 +129,12 @@ matched in one place per rule. The type guarantee is ONE-directional:
 Primary payload**. The reverse is a naming convention until step 11 splits the container:
 `primary()` returns the whole carrier, typed edges included, and d43 legitimately reads
 the Cone payload through `ctx.graph.typed_edges` (`d43.rs:85`).
+
+As delivered (2026-10-20, final panel F1-1/F1-2): the fields are PRIVATE, so every
+reader names its rule through `cone()`, `primary()`, `scc()` or
+`dependency_uncertainty()`; `ExecRelation::single_app(model)` builds the single-app
+relation (`View::prepare`, the shim, tests); and `new` prints no census: the owner calls
+`emit_census()` (cross-app the base's census, single-app `single_app`).
 
 ### 4.2 Construction (byte identity)
 
@@ -307,7 +316,9 @@ edges (#161's part 1, epic §4).
   changed span gets a new name", child 0-2 §4.1.1) they become `crossapp.field_index`
   and `crossapp.base_facts`. No test or script reads the old names (P27).
 - **Census buckets:** `rel.graph`, `rel.scc`, `rel.dependency_uncertainty`, printed once
-  by `new` in both universes. Gone: `base.graph`, `base.combined_scc`,
+  per relation in both universes (as delivered, final panel F1-9: by the owner, not by
+  `new`: cross-app with the base's census after `census.base`, single-app by
+  `ExecRelation::single_app`, where `base.graph` / `context.graph` printed). Gone: `base.graph`, `base.combined_scc`,
   `base.event_graph`, `base.nodes`, single-app `context.graph`, `l4.scc`.
 - **`view.release` instant:** `"cell": "Rel"` where it was `"Graph"`.
 
@@ -354,8 +365,12 @@ Epic row 4's "`graph_scc` 2 per view" is therefore not a general rule: query cou
 policy 3, `diff` without `--strict` 1 per side.
 
 Not in the table, stated: a single-app plan that fills the relation but no `l4` (e.g.
-`analyze --single-app --detector d47-…`) now runs one Tarjan more (the relation's). No
-row pins it.
+`analyze --single-app --detector d47-…`) now runs one Tarjan more (the relation's).
+As delivered (2026-10-20, task review t45 #4): `cli_build_counters::analyze_single_app_d47`
+pins that row (`bcg` 2, `scc` 2), and `analyze_cross_app_with_a_dependency_half` pins
+the cross-app default row on a workspace whose dependency half is not empty (every row
+above runs on a fixture whose dependency makes no call, so its half is empty); both are
+in child 0-2 §4.4.8's "After step 4" table.
 
 ## 5. Test plan
 
@@ -559,6 +574,11 @@ same commit (four `Row` literals plus `EVENTS_CROSS_ROW` and `QUERY_CROSS_ROW`, 
 tests). Discriminations: (a) build the dependency half through the counted
 `build_combined_graph` → `analyze cross-app` reads `bcg` 2 and fails; (b) keep a Tarjan
 in `build_l4` (ignore `rel.scc`) → `analyze single-app` reads `scc` 3 and fails.
+
+As delivered (2026-10-20): break (a) as worded stays GREEN on the `ws_dep` rows, whose
+dependency makes no call, so `new` skips the half-build. It fails (`build.combined_graph:
+got 2, want 1`) on the added `analyze_cross_app_with_a_dependency_half` case, whose
+dependency half is not empty (task review t45 #1; the ledger records both runs).
 
 `cross_app_commit_span_sees_dependency_writes`: skip the dependency typed-edge extend in
 `new` → expected `["span-has-no-known-writes"]`; reverted, green; recorded in its doc

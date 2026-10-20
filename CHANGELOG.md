@@ -59,13 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     span, and a dependency `local` helper is never proven temporary; d17 samples
     the first caller in emission order; dependency uncertainty stays out of
     Primary and is kept), and a per-field parity oracle against today's cross-app
-    recipe on 251 app dirs (both models each), two inline fixtures and CDO. The
+    recipe on 249 corpus app dirs plus two inline fixtures (both models each) and
+    CDO. The
     oracle first ran against a COPY of the assembler (independent code, with two
     assembler-internal mutations caught), then `build_combined_graph` was made to
     delegate to the one assembler after a text-identity check. Rewritten with the
     code: the census and release-order counter tests (`rel.*`, `Cell::Rel`), the
-    SCC-sharing test (`base.rel.scc`), and `build_l4` / `build_detector_artifacts`
-    call sites.
+    SCC-sharing test (`base.rel.scc()`), and `build_l4` / `build_detector_artifacts`
+    call sites. The relation's fields are private (readers name their rule through
+    `primary()` / `cone()` / `scc()`), the cross-app base splits the calls by move
+    (no `CallEdge` held twice), and the `rel.*` census buckets print where the old
+    `base.*` / `context.graph` buckets printed.
 - #160 step 3: the capability snapshot and `project_r3a3` no longer run an L4
   solve to get their call-site-local coverage reasons. Before, each snapshot base
   (and each `project_r3a3`) ran its own `compute_summaries_v2` over a fresh Tarjan

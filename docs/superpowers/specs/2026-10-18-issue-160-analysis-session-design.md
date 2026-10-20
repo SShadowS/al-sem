@@ -232,9 +232,10 @@ The struct above is the target; what step 4 built differs as follows:
   `typed_edges`). Separate `typed` / `combined` / `from_order` vectors move to step 11,
   with the `RoutineIx` keys.
 - **M2, the accessors.** `Transfer` is two accessors, `rel.cone()` and `rel.primary()`,
-  plus the cone's `&[TypedEdge]` parameter, not an enum value. The guarantee is
-  one-directional until step 11: the cone cannot read the Primary payload, but
-  `primary()` returns the whole carrier.
+  plus the cone's `&[TypedEdge]` parameter, not an enum value. The relation's fields are
+  private, so every reader goes through `cone()`, `primary()`, `scc()` or
+  `dependency_uncertainty()`. The guarantee is one-directional until step 11: the cone
+  cannot read the Primary payload, but `primary()` returns the whole carrier.
 - **M3, the Cone pair deferred.** The Cone adjacency and SCC stay inside the cone. A
   tradeoff: `policy check` builds the pair twice (the det cone and its RAW build's cone),
   while holding it in the relation would keep the typed graph alive through every run and
@@ -242,8 +243,12 @@ The struct above is the target; what step 4 built differs as follows:
   snapshot the pair's second permanent reader, so the pair joins the relation at step 6
   (or 7a, whichever spec lands it first).
 - **M5, the uncertainty split.** "Every caller" is two fields: the primary half in
-  `rel.graph.uncertainty_edges` (the context and the L4 solve stay Primary until §6.3 at
-  step 5), the dependency half in `rel.dependency_uncertainty` (kept, no reader yet).
+  `rel.primary().uncertainty_edges`, the dependency half in `rel.dependency_uncertainty()`
+  (kept, no production reader yet). The context's Primary indexes
+  (`uncertainty_edges_by_from`, `uncertainties_by_node`) and the L4 solve REMAIN Primary,
+  at step 5 too; what step 5 (§6.3) widens is the coverage fold alone, which then
+  consumes uncertainty from every caller. Step 5 decides whether one list with a role
+  filter replaces the two fields.
 - **M6, no copies.** No `events`, `upgraded_bindings` or `external_targets` in the
   relation: readers use `model.events.graph` and `model.calls`, the same bytes; the base's
   event-graph clone is deleted instead.
@@ -439,7 +444,11 @@ Every peak bound is **two numbers, both relative**: the process peak and the
 exit), each ≤ the parent-commit interleaved median + the peak noise band (3 %, about
 85 MB on CDO). 2.85 GB is a reported ceiling, never a bound (Decisions 22, 33). The process
 peak is set in attach (2,847 MB) about 1.3 GB above the live set that follows, so it alone
-cannot fail a late retention. Steps with a peak bound: 1b, 2, 6, 9, 10, 12; steps 2, 6, 9
+cannot fail a late retention. Steps with a peak bound: 1b, 2, 4, 6, 9, 10, 12 (step 4,
+amended there: three single-app bounds, `analyze`, `policy check` and `events fanout`
+`--single-app`, for the single-app SCC's longer life in `Cell::Rel`; cross-app `analyze`
+and `digest` peaks are reported only; child spec
+`2026-10-20-issue-160-step4-exec-relation-design.md` §7); steps 2, 6, 9
 also take a cell byte census at the first detector run. Fallback ladder for a miss: (1) a
 census at the serializer shows no `det`, `caps`, `model`, `rel`, `l4` bytes; (2) name the
 miss (runs vs serialization spike); (3) stream the serializer (Decision 51). Four workers

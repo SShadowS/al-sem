@@ -1652,10 +1652,13 @@ step 4.
 
 **After step 4** (epic §9 row 4, 2026-10-20; child spec
 `2026-10-20-issue-160-step4-exec-relation-design.md` §4.9, restated per epic I1).
-One `ExecRelation` per view. Only `bcg` moves, and only in the rows that build a
-cross-app base: the base built two counted graphs, the relation counts one. `scc`
-moves in no row: the base's Tarjan and single-app `build_l4`'s both moved into
-`ExecRelation::new` (moved cells in bold):
+One `ExecRelation` per view. Among the rows of the "after step 3" table, only `bcg`
+moves, and only in the rows that build a cross-app base: the base built two counted
+graphs, the relation counts one. No `scc` cell of those rows moves: the base's Tarjan
+and single-app `build_l4`'s both moved into `ExecRelation::new`. The one `scc` that
+moves is in a row new to this table, `analyze --single-app --detector d47-…` (`scc` 2:
+it fills the relation but no `l4`, so the relation's Tarjan is new there). Moved cells
+in bold:
 
 | Command | program | bcg | cone | v2 | scc | pd_solve | ctx | snap |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
