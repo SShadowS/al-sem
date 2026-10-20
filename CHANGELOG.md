@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- #160 step 7a: one inherited set per Cone-SCC (part of #160). In
+  `compose_inherited_cones`, a recursive Cone-SCC member's derived row is now folded
+  from ONE set per SCC (its fact cone) plus the member's own producer-solve entries and
+  its self half, instead of a per-member breadth-first walk. A non-root SCC borrows the
+  fact cone the cone already builds; a root SCC gets the same `fact_cone_for_scc` build,
+  dropped after its members are emitted. This holds under `DerivedOnly` (`analyze`)
+  and `Both` (policy's raw build); the per-member walk now runs only for the raw half
+  (`RawOnly`, `Both`), whose output is unchanged. `fold_row` is not part of 7a (spec
+  D7a-2). Spec: `docs/superpowers/specs/2026-10-20-issue-160-step7a-scc-membership-design.md`.
+  - **Byte identity.** No golden moved in any commit. The CDO SARIF, histogram and
+    retained-bytes checks are the §8 bench's: `<bench>`. Numbers:
+    `docs/measurements/2026-10-20-issue-160-step7a.md`.
+  - **The old path is test-only.** `RecursiveMembership::PerMemberWalk` is
+    `#[cfg(test)]`; it is the oracle of T7 (fixtures) and T8 (CDO, in
+    `scripts/cdo-gate`). It is deleted by step 7b's last commit once 7b's CDO oracle
+    passes; if 7b is dropped, by the next step that edits `compose_inherited_cones`
+    (step 6 at the latest).
+  - **Census.** A new `cone_scc:` line after `compose:` (recursive SCCs, members all
+    and emitted, roots, self-loops, max, size histogram, member walks, own entries,
+    sets borrowed and built, set entries, `walk_total`), fed from a per-call
+    `ComposeStats`. `bfs_walk` now holds each set's build or borrow plus the member
+    walks that still run; `walk_total` holds the member walks only (0 under
+    `DerivedOnly`). `BFS_PICKS` is 0 under `DerivedOnly`. `MERGE_CALLS` and
+    `MERGE_TIEBREAKS` rise by the root-set builds' merges (none on CDO, which has no
+    recursive root). `direct=` covers the per-routine direct-fact loop only, as at
+    step 0.
+  - **M3 deferred to step 6.** The Cone pair joins `ExecRelation` at step 6, its
+    second permanent reader (spec §4.6).
+  - **Coverage limits.** CDO has no recursive ROOT SCC, so the root-set build never
+    runs on CDO: root recursive SCCs are not oracle-checked on CDO (roots 0). The
+    build is covered only by T2, T10 and the census CLI test
+    (`census_cone_scc_line_counts_the_recursive_sccs`). T7's 249 fixture dirs reach
+    only multi-member SCCs (4) and roots (4) per mode, so T8 on CDO is the only
+    real-code oracle for SCCs with successors (64), guarded successors (11) and
+    own entries (671 members); the hand tests T1, T3, T3b and T4 cover them in small.
+    `tests/gap` keeps its scenarios inline and cannot call the lib oracle (the step 3
+    deviation). The plan's test "a root SCC with no emitted member" cannot occur:
+    Tarjan starts only from `nodes`, so an SCC with no member in `nodes` is always
+    reached from outside and is never a root.
+    `scc_set_none_for_an_scc_with_no_emitted_member` pins the non-root case instead.
+  - **Speed.** The stop rule (§6) passed on server1 before the switch. The bounded
+    `bfs_walk` ≤ 1 s and the cone saving are the §8 bench's: `<bench>`.
 - #160 step 4: one execution relation per view. `ExecRelation`
   (`src/engine/l4/exec_relation.rs`) is built once from one split of the calls:
   workspace callers' calls plus every event dispatch (the Primary payload, in
