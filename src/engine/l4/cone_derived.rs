@@ -37,10 +37,14 @@
 //! `retag` (`capability_cone.rs`) rewrites ONLY `subject` / `provenance` / `via` /
 //! `witness_callsite_id` and the two first-hop ids (`witness_first_hop_operation_id`,
 //! `witness_first_hop_event_id`). No derived predicate above reads any of them, so
-//! folding the PRE-retag representative is equivalent by construction. The fold
-//! therefore runs at the exact `retag` call sites, over the exact same
-//! representatives (the singleton path's key-winner `best.values()`, the BFS
-//! path's `seen`-deduped reps), plus the routine's own RAW direct facts.
+//! folding the PRE-retag representative is equivalent by construction. For a
+//! singleton SCC the fold runs at the `retag` call site, over the same
+//! representatives (the key-winner `best.values()`). For a recursive member
+//! (#160 step 7a) the raw half retags the BFS walk's `seen`-deduped picks, while
+//! the derived row folds the member's Cone-SCC set (the SCC's fact cone) plus its
+//! own producer-solve entries; the fold is a function of the key and a union, so
+//! it equals the fold of the picks (spec §4.1; the test-only `PerMemberWalk`
+//! oracle checks it). Every routine also folds its own RAW direct facts.
 //!
 //! **The dedup asymmetry.** The cone dedups inherited facts by
 //! `inherited_fact_key = op|resource_kind|resource_id|confidence|tempClass`, so
@@ -444,6 +448,13 @@ impl ConeDerivedStore {
     /// True when no row was folded (e.g. a `RawOnly` composition).
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
+    }
+
+    /// Every routine id that has a row, empty rows included (#160 step 7a
+    /// §5.1: the accessors cannot tell an absent row from an empty one).
+    #[cfg(test)]
+    pub(crate) fn row_ids(&self) -> std::collections::BTreeSet<&str> {
+        self.rows.keys().map(String::as_str).collect()
     }
 
     // ⟨T1⟩ `forget(routine_id)` — DELETED, not merely unused.
@@ -855,17 +866,15 @@ fn freeze_masked(scratch: &mut [(ResId, u8)], pool: &mut Vec<(ResId, u8)>) -> Ra
     start as u32..pool.len() as u32
 }
 
+/// Hand-built facts and edges, shared by this module's tests and the
+/// capability cone's (#160 step 7a §5.6).
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_facts {
     use super::*;
-    use crate::engine::l4::capability_cone::compose_cone_over_graph;
-    use crate::engine::l4::combined_graph::{CombinedGraph, TypedEdge};
+    use crate::engine::l4::combined_graph::TypedEdge;
     use crate::program::body::features::PTempState;
-    use std::collections::HashMap;
 
-    // -- fixture constructors -------------------------------------------------
-
-    fn fact(
+    pub(crate) fn fact(
         subject: &str,
         op: &'static str,
         kind: &'static str,
@@ -889,7 +898,7 @@ mod tests {
     }
 
     /// A table fact carrying an explicit `temp_state` (the physical/temp gate).
-    fn temp_fact(
+    pub(crate) fn temp_fact(
         subject: &str,
         op: &'static str,
         rid: &str,
@@ -909,7 +918,7 @@ mod tests {
         f
     }
 
-    fn call_edge(from: &str, to: &str, callsite: &str) -> TypedEdge {
+    pub(crate) fn call_edge(from: &str, to: &str, callsite: &str) -> TypedEdge {
         TypedEdge {
             kind: "direct-call".to_string(),
             from: from.to_string(),
@@ -927,6 +936,18 @@ mod tests {
             fires: None,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_facts::{call_edge, fact, temp_fact};
+    use super::*;
+    use crate::engine::l4::capability_cone::compose_cone_over_graph;
+    use crate::engine::l4::combined_graph::{CombinedGraph, TypedEdge};
+    use crate::program::body::features::PTempState;
+    use std::collections::HashMap;
+
+    // -- fixture constructors -------------------------------------------------
 
     fn graph_of(edges: Vec<TypedEdge>) -> CombinedGraph {
         CombinedGraph {

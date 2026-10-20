@@ -9,6 +9,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Grammar: tree-sitter-al `main` at `4d75846c`** (B7b-3; package version still 4.4.1; was
+  `8682cb5f`). The `node-types.json` hash guard had made CI red. 499 -> 500 named kinds, no
+  field name added or removed; the `target` field of the four move hosts
+  (`moveafter`/`movebefore`/`movefirst`/`movelast` modifications) became optional.
+  `preproc_conditional_move_args` (a move header whose target or `;` comes from an `#if`
+  group) is `Structural`, and the lowerer reads no move modification, so neither needs an
+  arm. Shape changes: a `call_statement` no longer holds its `;`, and every bare name in
+  statement position is a `call_statement` (`Bar` before `end`/`else`/`until` too, and the
+  body of `asserterror Foo;`), which the lowerer now lowers as a parenless call: it skipped
+  the bare identifier before. A case group arm may hold `empty_statement` and nested groups,
+  and a branch may carry a directive-only group before its `;`. Two lowerer arms (see
+  Fixed). `CACHE_VERSION_GRAMMAR` is now `tree-sitter-al-v4.4.1-4d75846c-native`. Measured
+  old vs new at the bump: per-test outcomes identical apart from the two new lowerer tests
+  (3,584 -> 3,586, all pass), zero goldens moved (the stamp kept its length, so
+  `dry-run.txt` did not move), CDO `--program-call-graph-stats` byte-identical (SHA-256
+  `c032c8db…94ef`). Limits: only a `call_statement` named `else` is skipped. In a file that
+  already has an ERROR, a name the parser recovers in statement position may now be a
+  `call_statement`, and is lowered as a call; so is a half-typed name before `end`
+  (`begin Fo end`) and a misread or recovered `begin`/`end` (grammar deferred item 43).
+  This is deliberate (`bare_name_before_end_lowers_as_call`).
+
+- #160 step 7a: one inherited set per Cone-SCC (part of #160). In
+  `compose_inherited_cones`, a recursive Cone-SCC member's derived row is now folded
+  from ONE set per SCC (its fact cone) plus the member's own producer-solve entries and
+  its self half, instead of a per-member breadth-first walk. A non-root SCC borrows the
+  fact cone the cone already builds; a root SCC gets the same `fact_cone_for_scc` build,
+  dropped after its members are emitted. This holds under `DerivedOnly` (`analyze`)
+  and `Both` (policy's raw build); the per-member walk now runs only for the raw half
+  (`RawOnly`, `Both`), whose output is unchanged. `fold_row` is not part of 7a (spec
+  D7a-2). Spec: `docs/superpowers/specs/2026-10-20-issue-160-step7a-scc-membership-design.md`.
+  - **Headline.** On CDO (`cdo_ws`, cross-app `analyze`, server1, `release-fast`,
+    parent `d37e8634` against head `7bb9f90c`, 5 interleaved rounds per side) the cone
+    span `context.capability_cones` drops from 18.8 s to 10.1 s (median 18,782.9 →
+    10,104.4 ms, −8,678.5 ms, head lower in 5/5), and the per-member walk no longer
+    runs (`bfs_walk` 8.3 s → 0).
+  - **Byte identity.** No golden moved in any commit. On CDO the SARIF is
+    byte-identical at `--scope primary` and `--scope all`, the
+    `--program-call-graph-stats` SHA-256 is `c032c8db…` on both sides (as at step 4),
+    and the retained `context.cone_derived` (65,273,122 B) and `context.summaries`
+    (36,400,882 B) are equal on both sides. Numbers:
+    `docs/measurements/2026-10-20-issue-160-step7a.md`.
+  - **The old path is test-only.** `RecursiveMembership::PerMemberWalk` is
+    `#[cfg(test)]`; it is the oracle of T7 (fixtures) and T8 (CDO, in
+    `scripts/cdo-gate`). It is deleted by step 7b's last commit once 7b's CDO oracle
+    passes; if 7b is dropped, by the next step that edits `compose_inherited_cones`
+    (step 6 at the latest).
+  - **Census.** A new `cone_scc:` line after `compose:` (recursive SCCs, members all
+    and emitted, roots, self-loops, max, size histogram, member walks, own entries,
+    sets borrowed and built, set entries, `walk_total`), fed from a per-call
+    `ComposeStats`, ending with the oracle classes (`own_entry_members`,
+    `with_successor`, `with_guarded_successor`) that T7 and T8 now read from the
+    same stats instead of recomputing them. `bfs_walk` now holds each set's build or borrow plus the member
+    walks that still run; `walk_total` holds the member walks only (0 under
+    `DerivedOnly`). `BFS_PICKS` is 0 under `DerivedOnly`. `MERGE_CALLS` and
+    `MERGE_TIEBREAKS` rise by the root-set builds' merges (none on CDO, which has no
+    recursive root). `direct=` covers the per-routine direct-fact loop only, as at
+    step 0.
+  - **M3 deferred to step 6.** The Cone pair joins `ExecRelation` at step 6, its
+    second permanent reader (spec §4.6).
+  - **Coverage limits.** CDO has no recursive ROOT SCC, so the root-set build never
+    runs on CDO: root recursive SCCs are not oracle-checked on CDO (roots 0). The
+    build is covered by the hand graphs, whose recursive SCCs are roots in T1, T2,
+    T3, T3b, T4, T5, T6(a), T10 and T11 (T2's break, an empty root set, is the one
+    that targets it), by T7's 4 fixture roots per mode, and by the census CLI test
+    (`census_cone_scc_line_counts_the_recursive_sccs`). T7's 249 fixture dirs reach
+    only multi-member SCCs (4) and roots (4) per mode, so T8 on CDO is the only
+    real-code oracle for SCCs with successors (64), guarded successors (11) and
+    own entries (671 members); the hand tests T1, T3, T3b and T4 cover them in small.
+    `tests/gap` keeps its scenarios inline and cannot call the lib oracle (the step 3
+    deviation). The plan's test "a root SCC with no emitted member" cannot occur:
+    Tarjan starts only from `nodes`, so an SCC with no member in `nodes` is always
+    reached from outside and is never a root.
+    `scc_set_none_for_an_scc_with_no_emitted_member` pins the non-root case instead.
+  - **Speed.** The stop rule (§6) passed on server1 before the switch. A7a.4 met: head
+    `bfs_walk` median 0.0 ms ≤ 1,000 ms. A7a.5 met and not void (void check 6,745.7 ≥
+    1,808.6): the cone saving 8,678.5 ms ≥ 5,841.4 ms (amendment 7A-1), and ≥ 6,745.7
+    ms in the literal form. `bfs_fold` (reported) 747.1 → 394.4 ms. Reported, no bound:
+    `analyze --single-app` wall 3.8 s on both sides (+0.1 s, inside the 0.5 s band);
+    cross-app `policy check` (`Both`, which folds the set and still walks) 85.0 → 76.9 s,
+    head lower in 5/5, so `Both` has no regression. Polled RSS unchanged within the band
+    (693.3 / 699.1 MB and 13,806.9 / 13,816.1 MB).
 - #160 step 4: one execution relation per view. `ExecRelation`
   (`src/engine/l4/exec_relation.rs`) is built once from one split of the calls:
   workspace callers' calls plus every event dispatch (the Primary payload, in
@@ -261,6 +342,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - #160 step 2: `effect_query_cli::build_db_effect_bundle`, `cross_app_db_effect_bundle`, `QuerySubstrate::from_cross_app_base` / `from_resolved`, `run::analyzer_diagnostic_lines`, and `digest_cli` / `prove`'s `compute_tx_context_map`. Each was a second build of something the `View` now builds once.
 
 ### Fixed
+
+- **The lowerer reads two new shapes of the `4d75846c` grammar** (see Changed;
+  `crates/al-syntax/src/lower/mod.rs`):
+  - A `preproc_split_case_extended` arm may hold a nested `preproc_conditional_case`
+    with whole branches in it. The arm read only its direct `case_branch` children, so
+    such a branch was dropped with its calls; the arm is now read like a case group's.
+    So a `case_else_branch` in such a nested group (it parses clean) becomes the case's
+    else, first-match-wins; before, it was dropped.
+  - A split terminator (`if C then Bar #if X ; #endif else Baz;`, valid AL) leaves the
+    `else` as `(call_statement function: (identifier))` (grammar deferred item 43). It
+    was lowered as a call to `else`; it is now skipped, and `Bar` and `Baz` keep their
+    calls.
+  Tests `split_case_extended_nested_group_branch_is_kept` (also an `#else` arm with a
+  branch and a nested group of `;` items), `split_case_extended_nested_group_else_is_the_case_else`
+  and `split_terminator_else_is_not_a_call`: each fails when its arm is broken and passes
+  after the revert.
+
+- **Nested `#if` case groups no longer recurse without a bound.** `collect_case_branches_in`
+  recursed once per nested `preproc_conditional_case` or `preproc_split_case_extended`
+  arm with the depth unchanged, and only statements and expressions checked
+  `MAX_LOWER_DEPTH`. Each nested level now adds one to the depth, and past the budget the
+  lowerer records a `SyntaxIssue` and drops the deeper branches.
+  `deep_nested_case_groups_degrade_instead_of_overflowing_small_stack` (300 levels, 1 MiB
+  stack) fails with the check removed and passes with it.
 
 - agentflow `post-merge` no longer reads a missing CDO workspace as a red gate. On
   #107 it ran without `CDO_WS`. `cdo-gate` stopped at its usage error (exit 2),

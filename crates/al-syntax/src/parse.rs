@@ -168,4 +168,34 @@ mod tests {
             f.issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }
+
+    #[test]
+    fn deep_nested_case_groups_degrade_instead_of_overflowing_small_stack() {
+        // 300 nested `#if` case groups (`preproc_conditional_case` in
+        // `preproc_conditional_case`) recurse `collect_case_branches_in` once per
+        // level; past `MAX_LOWER_DEPTH` it must stop and say so.
+        let mut src = String::from(
+            "codeunit 50002 DeepCase\n{\n    procedure P(I: Integer)\n    begin\n        \
+             case I of\n",
+        );
+        src.push_str(&"#if A\n".repeat(300));
+        src.push_str("1: Foo();\n");
+        src.push_str(&"#endif\n".repeat(300));
+        src.push_str("        end;\n    end;\n}\n");
+
+        let handle = std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(move || parse(&src))
+            .expect("spawn small-stack worker");
+        let f = handle.join().expect("lowering must not crash the thread");
+
+        assert_eq!(f.objects.len(), 1);
+        assert!(
+            f.issues
+                .iter()
+                .any(|i| i.message.contains("case-group nesting exceeds")),
+            "expected a case-group depth-budget SyntaxIssue, got: {:?}",
+            f.issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
 }

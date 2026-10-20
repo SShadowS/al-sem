@@ -2424,21 +2424,32 @@ fn lower_block_child(
     ) {
         return;
     }
-    // A bare identifier in statement position is NOT a confident call: it is either
-    // ERROR-recovery debris (a token rescued after a syntax error) or a parenless call
-    // that omitted its `;` (a semicolon-less final statement). A real parenless call
-    // owns its `;` and reduces to `call_statement` (handled in lower_stmt). We do not
-    // fabricate a call edge from a bare identifier — that would manufacture spurious
-    // `unknown` edges from parse-error debris (the moat-polluting case the grammar's
-    // `call_statement` node was added to prevent). The residual (a genuine parenless
-    // call written without a trailing `;`) is rare, never produces a FALSE edge, and is
-    // still no worse than the legacy walk, which captured no parenless calls at all.
+    // A bare identifier in statement position is not a call. Since grammar B7b-3
+    // (`main` 4d75846c) every bare name in statement position — `Bar;`, and `Bar`
+    // before `end`/`else`/`until` — is a `call_statement` (lowered in `lower_stmt`), so
+    // one reaching here is ERROR-recovery debris. Limit: in a file that already has
+    // an ERROR, a name the parser recovers in statement position may now be a
+    // `call_statement`, and is lowered as a call like any other. So is a half-typed
+    // name before `end` (`begin Fo end`) and a misread or recovered `begin`/`end`
+    // (grammar item 43): only `else` is skipped below, deliberately (pinned by
+    // `bare_name_before_end_lowers_as_call`).
     if matches!(node.kind(), RawKind::Identifier | RawKind::QuotedIdentifier) {
         return;
     }
     // A `call_statement` whose subtree carries a parse error (e.g. tree-sitter
-    // synthesized a MISSING `;`) is not a confident call either — skip it.
+    // synthesized a MISSING name) is not a confident call either — skip it.
     if node.kind() == RawKind::CallStatement && node.has_error() {
+        return;
+    }
+    // B7b-3: a split terminator (`if C then Bar #if X ; #endif else Baz;`, valid AL)
+    // leaves the `else` as `(call_statement function: (identifier))` (grammar
+    // deferred item 43). `else` is reserved, never a callee; `Baz` follows as its own
+    // statement and keeps its call.
+    if node.kind() == RawKind::CallStatement
+        && let Some(f) = node.field(FieldName::Function)
+        && f.kind() == RawKind::Identifier
+        && f.text(source).eq_ignore_ascii_case("else")
+    {
         return;
     }
     let sid = lower_stmt(node, ir, issues, source, depth + 1);
@@ -2472,10 +2483,10 @@ fn lower_stmt(
             origin,
         });
     }
-    // A parenless no-arg call statement (`Initialize;`) — the grammar wraps a bare
-    // identifier that owns its `;` in a `call_statement` (distinct from ERROR-recovery
-    // debris, which lacks a terminator and stays a raw identifier — never reaching here,
-    // see `lower_block_child`). Lower its `function` to a Call with empty args, ANCHORED
+    // A parenless no-arg call statement (`Initialize;`, or `Initialize` before `end`) —
+    // the grammar wraps a bare name in statement position in a `call_statement`; since
+    // B7b-3 the `;` is the host's, not the call's (see `lower_block_child` for the
+    // skipped forms). Lower its `function` to a Call with empty args, ANCHORED
     // on the callee identifier (NOT the wrapper) so the call's source anchor
     // (endColumn/syntaxKind) is byte-identical to a parenless call's bare identifier —
     // preserving golden parity with the pre-grammar form.
@@ -2882,6 +2893,22 @@ fn collect_case_branches_in(
     else_block: &mut Option<BlockId>,
     depth: u32,
 ) {
+    // Depth budget (as in `lower_stmt`): nested `#if` case groups recurse here once
+    // per level, so pathological nesting must stop instead of overflowing the stack.
+    if depth > MAX_LOWER_DEPTH {
+        if let Some(first) = children.first() {
+            issues.push(SyntaxIssue {
+                message: format!(
+                    "case-group nesting exceeds the {MAX_LOWER_DEPTH}-level lowering depth \
+                     budget at `{}` — dropping the deeper branches rather than recursing \
+                     further (pathological input, not real AL source)",
+                    first.kind_str()
+                ),
+                origin: origin_of(*first),
+            });
+        }
+        return;
+    }
     for child in children {
         match child.kind() {
             RawKind::CaseBranch => push_case_branch(child, ir, issues, source, branches, depth),
@@ -2902,7 +2929,13 @@ fn collect_case_branches_in(
                     if live {
                         with_build_context(&syms, ir, |ir| {
                             collect_case_branches_in(
-                                arm, ir, issues, source, branches, else_block, depth,
+                                arm,
+                                ir,
+                                issues,
+                                source,
+                                branches,
+                                else_block,
+                                depth + 1,
                             );
                         });
                     }
@@ -2916,13 +2949,23 @@ fn collect_case_branches_in(
             // pattern) plus its single shared `body` field make ONE more branch, compiled
             // in every build. Previously unmatched here (same silent-skip as above).
             RawKind::PreprocSplitCaseExtended => {
+                // An arm's items are a case group's (B7b-3): branches, nested groups
+                // (which may hold branches) and `;` separators, read like a group's arm.
+                // So a `case_else_branch` reached here (in a nested group) becomes the
+                // case's else, first-match-wins, as in a plain group; before B7b-3's
+                // full read it was dropped with its calls.
                 for (syms, live, arm) in preproc_branches(child, source, &build_context()) {
                     if live {
                         with_build_context(&syms, ir, |ir| {
-                            for extra in arm.into_iter().filter(|c| c.kind() == RawKind::CaseBranch)
-                            {
-                                push_case_branch(extra, ir, issues, source, branches, depth);
-                            }
+                            collect_case_branches_in(
+                                arm,
+                                ir,
+                                issues,
+                                source,
+                                branches,
+                                else_block,
+                                depth + 1,
+                            );
                         });
                     }
                 }
@@ -5200,6 +5243,138 @@ codeunit 50103 T
             call_reachable(&af, branches[0].body, "DoWork"),
             "the split branch's shared body call must not be fabricated as an empty block"
         );
+    }
+
+    /// Grammar B7b-3 (`main` 4d75846c): a `preproc_split_case_extended` arm may hold a
+    /// nested `preproc_conditional_case`, and that group may hold whole branches
+    /// (VERIFIED with `tree-sitter parse`). The extended arm read only its direct
+    /// `case_branch` children, so `5: DoFive()` was dropped with its call. The `#else`
+    /// arm holds a branch and a nested group of `;` `empty_statement`s (skipped).
+    #[test]
+    fn split_case_extended_nested_group_branch_is_kept() {
+        let src = r#"
+codeunit 50105 T
+{
+    procedure P(I: Integer)
+    begin
+        case I of
+#if X
+            1: DoOne();
+#if Y
+            5: DoFive();
+#endif
+            2:
+#else
+            6: DoSix()
+#if Y
+            ;
+#else
+            ;
+#endif
+            2:
+#endif
+                DoTwo();
+        end;
+    end;
+}
+"#;
+        let af = parse(src);
+        let (branches, else_block) = first_case(&af);
+        assert_eq!(branches.len(), 4, "1, 5, 6 and the shared 2");
+        assert!(else_block.is_none());
+        for name in ["DoOne", "DoFive", "DoSix", "DoTwo"] {
+            assert!(
+                branches.iter().any(|b| call_reachable(&af, b.body, name)),
+                "the branch calling {name} must be lowered"
+            );
+        }
+    }
+
+    /// Grammar B7b-3: a `case_else_branch` in a nested group inside a
+    /// `preproc_split_case_extended` arm parses clean (VERIFIED with `tree-sitter
+    /// parse`). The arm is read like a case group's, so it becomes the case's else
+    /// (it was dropped with its call when the arm read only `case_branch`).
+    #[test]
+    fn split_case_extended_nested_group_else_is_the_case_else() {
+        let src = r#"
+codeunit 50107 T
+{
+    procedure P(I: Integer)
+    begin
+        case I of
+#if X
+            1: DoOne();
+#if Y
+            else
+                DoElse();
+#endif
+            2:
+#else
+            2:
+#endif
+                DoTwo();
+        end;
+    end;
+}
+"#;
+        let af = parse(src);
+        let (_branches, else_block) = first_case(&af);
+        let else_block = else_block.expect("the nested-group else is the case's else");
+        assert!(call_reachable(&af, else_block, "DoElse"));
+    }
+
+    /// Grammar B7b-3 (`main` 4d75846c): every bare name in statement position is a
+    /// `call_statement`, and a split terminator can leave the `else` of a valid
+    /// `if C then Bar #if X ; #endif else Baz;` as `(call_statement function:
+    /// (identifier))` (grammar deferred item 43; VERIFIED with `tree-sitter parse`).
+    /// `else` is a reserved word, never a callee: no call to it may be lowered, while
+    /// `Bar` (a parenless call) and `Baz` keep theirs.
+    #[test]
+    fn split_terminator_else_is_not_a_call() {
+        let src = r#"
+codeunit 50106 T
+{
+    procedure P(C: Boolean)
+    begin
+        if C then Bar
+#if X
+        ;
+#endif
+        else Baz;
+    end;
+}
+"#;
+        let callees = stmt_callees(&parse(src));
+        assert!(callees.contains(&"bar".to_string()), "{callees:?}");
+        assert!(callees.contains(&"baz".to_string()), "{callees:?}");
+        assert!(!callees.contains(&"else".to_string()), "{callees:?}");
+    }
+
+    /// Grammar B7b-3: a bare name before `end` is a `call_statement`, so a half-typed
+    /// name (or a misread `begin`/`end`, grammar item 43) lowers as a call. This is
+    /// deliberate: only `else` is skipped (see `lower_block_child`).
+    #[test]
+    fn bare_name_before_end_lowers_as_call() {
+        let src = "codeunit 50108 T\n{\n    procedure P()\n    begin\n        Fo\n    end;\n}\n";
+        let callees = stmt_callees(&parse(src));
+        assert_eq!(callees, vec!["fo".to_string()]);
+    }
+
+    /// Lowercased names of every `StmtKind::Call` whose callee is a plain identifier.
+    fn stmt_callees(af: &crate::ir::AlFile) -> Vec<String> {
+        af.ir
+            .iter_stmts()
+            .filter_map(|s| match &s.kind {
+                StmtKind::Call(e) => match &af.ir.expr(*e).kind {
+                    ExprKind::Call { function, .. } => match &af.ir.expr(*function).kind {
+                        ExprKind::Identifier(n) => Some(n.to_ascii_lowercase()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
     }
 
     /// H-7: statement-position `#if` (`preproc_split_if_statement`) — the `if`'s
