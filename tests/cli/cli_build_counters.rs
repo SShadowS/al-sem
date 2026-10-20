@@ -877,6 +877,26 @@ fn aldump_starts_no_phase_sampler() {
     );
 }
 
+/// #160 step 3: `project_r3a3` (`aldump --r3a3-cone-coverage`) takes its
+/// coverage reasons from a scan, so it runs no L4 solve; its one Tarjan is the
+/// cone's typed-edge SCC.
+#[test]
+fn aldump_r3a3_runs_no_solve() {
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_aldump"),
+        &["--r3a3-cone-coverage", &ws_a()],
+        &[],
+    );
+    let m = last_counters(&events);
+    assert!(
+        out.status.success() && count(&m, "build.program") > 0,
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(count(&m, "build.summaries_v2"), 0, "{m:?}");
+    assert_eq!(count(&m, "build.graph_scc"), 1, "{m:?}");
+}
+
 /// Code-review CR8: one snapshot base build opens `r3a3.graph_build` and
 /// `r3a3.clone_inputs` once each, as it opens `r3a3.direct_facts_scan` once; a
 /// span count is a build count. Final panel F2-6: the narrowed graph span has a

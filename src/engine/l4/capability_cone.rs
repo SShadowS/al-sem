@@ -4022,7 +4022,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         }
     }
 
-    // Per-routine UNCERTAINTY-DERIVED coverage reasons (summary-runner.ts:565-596).
+    // Per-routine UNCERTAINTY-DERIVED coverage reasons.
     // A scan of the combined graph's uncertainty edges for the four call-site-local
     // kinds (ambiguous-overload / member-not-found / external-target /
     // interface-open-world); no L4 solve (#160 step 3). A routine carrying any of
@@ -4234,8 +4234,7 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
         }
     }
 
-    // Per-routine UNCERTAINTY-DERIVED coverage reasons (summary-runner.ts:565-596):
-    // a scan of `graph`'s uncertainty edges, no L4 solve (#160 step 3).
+    // Per-routine UNCERTAINTY-DERIVED coverage reasons: a scan of `graph`'s uncertainty edges, no L4 solve (#160 step 3).
     let uncertainty_reasons = callsite_local_coverage_reasons(&graph);
 
     // Per-routine direct facts (full) + uncertainty-folded direct coverage.
@@ -5593,7 +5592,10 @@ codeunit 50111 "Cell Calls"
         cells: BTreeMap<(String, &'static str), usize>,
     }
 
-    const SHAPES: [&str; 3] = ["non-recursive", "self-loop", "multi-member"];
+    const NON_RECURSIVE: &str = "non-recursive";
+    const SELF_LOOP: &str = "self-loop";
+    const MULTI_MEMBER: &str = "multi-member";
+    const SHAPES: [&str; 3] = [NON_RECURSIVE, SELF_LOOP, MULTI_MEMBER];
 
     /// One model: build the graph as both callers do, run the old fold and the
     /// new scan, compare per distinct `ws.routines` id (absence = empty), and
@@ -5612,9 +5614,9 @@ codeunit 50111 "Cell Calls"
                 failures.push(format!("{where_} {id}: old {o:?}, new {n:?}"));
             }
             let shape = match scc.scc_id_by_routine.get(*id).map(|&i| &scc.sccs[i]) {
-                Some(s) if s.members.len() > 1 => SHAPES[2],
-                Some(s) if s.recursive => SHAPES[1],
-                _ => SHAPES[0],
+                Some(s) if s.members.len() > 1 => MULTI_MEMBER,
+                Some(s) if s.recursive => SELF_LOOP,
+                _ => NON_RECURSIVE,
             };
             for kind in o {
                 *stats.cells.entry((kind.clone(), shape)).or_default() += 1;
@@ -5626,6 +5628,8 @@ codeunit 50111 "Cell Calls"
     }
 
     /// The four kinds the fold maps, written out (not read from the classifier).
+    /// A deliberate hand-stated copy of `is_callsite_local_kind`'s list: the
+    /// test's expectation must not come from the code under test.
     const KINDS: [&str; 4] = [
         "ambiguous-overload",
         "external-target",
@@ -5636,7 +5640,7 @@ codeunit 50111 "Cell Calls"
     fn cell_table(stats: &OracleStats) -> String {
         let mut out = format!(
             "{:<22} {:>14} {:>10} {:>13}\n",
-            "kind", SHAPES[0], SHAPES[1], SHAPES[2]
+            "kind", NON_RECURSIVE, SELF_LOOP, MULTI_MEMBER
         );
         for kind in KINDS {
             let c = |s: &'static str| {
@@ -5648,16 +5652,17 @@ codeunit 50111 "Cell Calls"
             };
             out += &format!(
                 "{kind:<22} {:>14} {:>10} {:>13}\n",
-                c(SHAPES[0]),
-                c(SHAPES[1]),
-                c(SHAPES[2])
+                c(NON_RECURSIVE),
+                c(SELF_LOOP),
+                c(MULTI_MEMBER)
             );
         }
         out
     }
 
-    fn app_dirs(root: &Path, recursive: bool) -> Vec<PathBuf> {
-        let walk = walkdir::WalkDir::new(root).max_depth(if recursive { usize::MAX } else { 1 });
+    /// Sorted dirs at most `max_depth` levels under `root` holding an `app.json`.
+    fn app_dirs(root: &Path, max_depth: usize) -> Vec<PathBuf> {
+        let walk = walkdir::WalkDir::new(root).max_depth(max_depth);
         let mut dirs: Vec<PathBuf> = walk
             .into_iter()
             .map(|e| e.unwrap().into_path())
@@ -5732,7 +5737,7 @@ codeunit 50111 "Cell Calls"
         let mut stats = OracleStats::default();
         let mut failures = Vec::new();
 
-        let r0 = app_dirs(&tests.join("r0-corpus"), false);
+        let r0 = app_dirs(&tests.join("r0-corpus"), 1);
         let fixtures: Vec<PathBuf> = [
             "fixtures",
             "r3a4-fixtures",
@@ -5740,13 +5745,17 @@ codeunit 50111 "Cell Calls"
             "r2-5b-fixtures",
         ]
         .iter()
-        .flat_map(|d| app_dirs(&tests.join(d), true))
+        .flat_map(|d| app_dirs(&tests.join(d), usize::MAX))
         .collect();
         for (set, dirs) in [("r0-corpus", &r0), ("fixtures", &fixtures)] {
             let before = stats.workspaces;
             for dir in dirs {
-                if let Some(m) = workspace_model(dir) {
-                    check_oracle(&m, &dir.display().to_string(), &mut stats, &mut failures);
+                match workspace_model(dir) {
+                    Some(m) => {
+                        check_oracle(&m, &dir.display().to_string(), &mut stats, &mut failures)
+                    }
+                    // No dir is silently skipped: every one must build a model.
+                    None => failures.push(format!("{}: no model built", dir.display())),
                 }
             }
             assert!(stats.workspaces > before, "{set}: no workspace ran");
