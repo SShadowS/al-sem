@@ -1626,6 +1626,29 @@ dependency edges, step 4), and policy's RAW build (its own cone, `pd_solve` and 
 cone's Tarjan at `capability_cone.rs:2783`; step 6, Decision 16). `ctx` counts
 `build_detector_artifacts` entries (§4.1.2).
 
+**After step 3** (epic §9 row 3, 2026-10-20; restated per epic I1). The snapshot's
+coverage fold is a scan of the graph's uncertainty edges, so each snapshot builds
+one `v2` solve and one `scc` fewer. Only rows with `snap` > 0 move, and only in those
+two columns (moved cells in bold):
+
+| Command | program | bcg | cone | v2 | scc | pd_solve | ctx | snap |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| analyze, cross-app, default | 1 | 2 | 1 | 1 | 2 | 1 | 1 | 0 |
+| analyze, cross-app, `--detector d47-…` | 1 | 3 | 1 | **0** | **2** | 1 | 1 | 1 |
+| analyze `--single-app` | 1 | 1 | 1 | 1 | 2 | 1 | 1 | 0 |
+| digest, cross-app | 1 | 3 | 2 | **1** | **3** | 2 | 1 | 1 |
+| digest `--single-app` | 1 | 2 | 2 | **1** | **3** | 2 | 1 | 1 |
+| prove | 1 | 2 | 2 | **1** | **3** | 2 | 1 | 1 |
+| fingerprint (all modes) | 1 | 2 | 2 | **1** | **3** | 2 | 1 | 1 |
+| diff ws ws, per side (`--strict`: ctx 1, bcg 2, cone 2, v2 **1**, scc **3**, pd 2) | 1 | 1 | 1 | **0** | **1** | 1 | 0 | 1 |
+| events, cross-app / single-app | 1 | 2 / 1 | 1 | 1 | 2 | 1 | 1 | 0 |
+| policy check, cross-app / single-app, policy loaded | 1 | 2 / 1 | 2 | 1 | 3 | 2 | 2 | 0 |
+| query, cross-app / single-app | 1 | 2 / 1 | 0 | 1 | 1 | 0 | 0 | 0 |
+| graph | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+What remains above 1 from the snapshot is its own graph, cone, the cone's Tarjan
+and `pd_solve` (step 6). `tests/cli/cli_build_counters.rs` pins this table.
+
 ## 5. False-positive and failure shapes
 
 - **A probe that changes bytes.** The census and the counters run under flags; A0.5 and

@@ -175,9 +175,11 @@ fn run(args: &[&str]) -> BTreeMap<String, u64> {
 }
 
 // ---------------------------------------------------------------------------
-// §4.4.8 rows (after step 2; every row equals that table, checked 2026-10-19.
-// The query rows equal §4.1.3's too: query now reuses the `l4` cell, with the
-// same one solve and one Tarjan its private builders ran.)
+// §4.4.8 rows (after step 3; every row equals that spec's "after step 3"
+// table, checked 2026-10-20: each snapshot lost its coverage-fold solve, so
+// -1 summaries_v2 and -1 graph_scc per snapshot. The query rows equal
+// §4.1.3's too: query reuses the `l4` cell, with the same one solve and one
+// Tarjan its private builders ran.)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -329,8 +331,9 @@ fn prove() {
 }
 
 /// Spec §4.4.4 (A8): digest's no-input check runs right after the target
-/// build, before `prepare` and before `compose_snapshot` (whose fold solve
-/// counts a `build.summaries_v2`).
+/// build, before `prepare` and before `compose_snapshot`. `build.snapshot`
+/// witnesses the snapshot directly: since #160 step 3 the snapshot's coverage
+/// fold no longer solves, so `build.summaries_v2` no longer witnesses it.
 #[test]
 fn run_digest_empty_diff_builds_no_context() {
     let d = tempfile::tempdir().unwrap();
@@ -354,6 +357,11 @@ fn run_digest_empty_diff_builds_no_context() {
         count(&m, "build.detector_context"),
         0,
         "the no-input check must run before prepare\n{m:?}"
+    );
+    assert_eq!(
+        count(&m, "build.snapshot"),
+        0,
+        "the no-input check must run before compose_snapshot\n{m:?}"
     );
     assert_eq!(count(&m, "build.summaries_v2"), 0, "{m:?}");
 }
