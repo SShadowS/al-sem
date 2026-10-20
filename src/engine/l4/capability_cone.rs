@@ -7284,6 +7284,18 @@ codeunit 50100 C
                     "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls; a \
                      different number means the input moved and the spec's numbers are stale"
                 );
+                // T8 is the only real-code oracle for these classes (T7's fixtures
+                // reach none of them), so a moved baseline must not drop them
+                // silently. Roots are 0 on CDO: T2, T10 and the census CLI test
+                // carry the root-set build.
+                for (class, n) in [
+                    ("multi-member", classes.multi_member),
+                    ("with-successor", classes.with_successor),
+                    ("with-guarded-successor", classes.with_guarded_successor),
+                    ("members-with-own-entry", classes.members_with_own_entry),
+                ] {
+                    assert!(n >= 1, "CDO cross-app: no {class} class");
+                }
             }
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
