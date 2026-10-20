@@ -1660,8 +1660,10 @@ moves in no row: the base's Tarjan and single-app `build_l4`'s both moved into
 | Command | program | bcg | cone | v2 | scc | pd_solve | ctx | snap |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
 | analyze, cross-app, default | 1 | **1** | 1 | 1 | 2 | 1 | 1 | 0 |
+| analyze, cross-app, default, dependency half NOT empty (new case: the workspace calls a dependency routine that calls on; the row above's dependency makes no call) | 1 | 1 | 1 | 1 | 2 | 1 | 1 | 0 |
 | analyze, cross-app, `--detector d47-…` | 1 | **2** | 1 | 0 | 2 | 1 | 1 | 1 |
 | analyze `--single-app` | 1 | 1 | 1 | 1 | 2 | 1 | 1 | 0 |
+| analyze `--single-app --detector d47-…` (new row, pinned at step 4: the relation's Tarjan runs with no `l4` fill; by the same rule it was `scc` 1 before, never pinned) | 1 | 2 | 1 | 0 | **2** | 1 | 1 | 1 |
 | digest, cross-app | 1 | **2** | 2 | 1 | 3 | 2 | 1 | 1 |
 | digest `--single-app` | 1 | 2 | 2 | 1 | 3 | 2 | 1 | 1 |
 | prove | 1 | 2 | 2 | 1 | 3 | 2 | 1 | 1 |
