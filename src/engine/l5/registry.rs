@@ -45,7 +45,8 @@ use rayon::prelude::*;
 pub mod substrate {
     /// Capability cones + the per-routine `FullRoutineSummary` map (`ctx.summaries`).
     pub const SUMMARIES: u32 = 1 << 0;
-    /// The second Tarjan SCC + the closed-form v2 CORE summaries →
+    /// The closed-form v2 CORE summaries over the relation's SCC (no Tarjan of
+    /// its own since #160 step 4: `ExecRelation::new` computes the SCC) →
     /// `ctx.uncertainties_by_node`, `ctx.parameter_roles_by_routine`, and the
     /// `summarize_diagnostics` cap-hit set (from the `parameter_roles`-only
     /// JACOBI fixpoint — the only fixpoint remaining since Task B1).

@@ -19,8 +19,8 @@
 //! ## Pipeline ownership
 //!
 //! It builds a `View` with query's plan (#160 §4.4.4): no detector run, the
-//! `l4` cell alone (assemble → combined graph → `build_l4`: Tarjan and
-//! `compute_summaries_v2_bundle_with_leaves` → `DbEffectQuery`). It never
+//! `rel` and `l4` cells alone (assemble → `ExecRelation` with its SCC →
+//! `build_l4`: `compute_summaries_v2_bundle_with_leaves` → `DbEffectQuery`). It never
 //! builds a `DetectorContext`, so it costs `alsem analyze` exactly nothing
 //! **by construction** — not by a flag that could be set wrong. The
 //! `substrate::DB_EFFECT_REVERSE_INDEX` bit exists for the eventual

@@ -2581,12 +2581,7 @@ codeunit 50102 Cyc
             "engine::l4::summary_runner::issue107_tests::build_l4_prints_the_capped_line_once";
         if std::env::var_os(CHILD).is_some() {
             let m = model(CYC_SRC);
-            let rel = crate::engine::l4::exec_relation::ExecRelation::new(
-                &m.workspace,
-                &m.calls.edges,
-                &[],
-                &m.events.graph,
-            );
+            let rel = crate::engine::l4::exec_relation::ExecRelation::single_app(&m);
             let req = crate::engine::l4::analysis::L4Request {
                 extra_diagnostics: vec![],
             };

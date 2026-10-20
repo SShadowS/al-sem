@@ -102,8 +102,8 @@ impl Tally {
     }
 }
 
-/// [`crate::engine::l4::combined_graph::CombinedGraph`], shallow (the base and
-/// the detector context each hold one).
+/// [`crate::engine::l4::combined_graph::CombinedGraph`], shallow (`rel.graph`:
+/// the view's `ExecRelation` holds the one graph since #160 step 4).
 pub fn combined_graph(g: &crate::engine::l4::combined_graph::CombinedGraph) -> Tally {
     let mut t = Tally::default();
     t.buf::<String>(g.nodes.len()).strs(&g.nodes);
@@ -117,7 +117,7 @@ pub fn combined_graph(g: &crate::engine::l4::combined_graph::CombinedGraph) -> T
     t
 }
 
-/// [`crate::engine::l4::scc::SccResult`], shallow (the base's and `l4.scc`).
+/// [`crate::engine::l4::scc::SccResult`], shallow (`rel.scc`, the relation's).
 pub fn scc(s: &crate::engine::l4::scc::SccResult) -> Tally {
     let mut t = Tally::default();
     t.buf::<crate::engine::l4::scc::Scc>(s.sccs.len())

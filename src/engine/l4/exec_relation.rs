@@ -9,7 +9,7 @@ use super::scc::SccResult;
 use crate::engine::perf_trace as pt;
 use crate::program::model::calls::CallEdge;
 use crate::program::model::events::EventGraph;
-use crate::program::model::workspace::ModelEntities;
+use crate::program::model::workspace::{Model, ModelEntities};
 
 /// One view's execution relation (#160 step 4, epic §5.5). The two transfer
 /// rules are the two accessors; spec §4.3's field table says which consumer
@@ -21,25 +21,42 @@ use crate::program::model::workspace::ModelEntities;
 /// `RoutineIx`.
 ///
 /// The transfer rules are two accessors, not an `enum Transfer` value (M2):
-/// each consumer's rule is fixed. The type guarantee is ONE-directional: the
-/// cone takes `&[TypedEdge]`, so it cannot read the Primary payload. The
-/// reverse is a naming convention until step 11 splits the container:
-/// [`ExecRelation::primary`] returns the whole carrier, typed edges included
-/// (d43 reads the Cone payload through `ctx.graph.typed_edges`).
+/// each consumer's rule is fixed. The fields are private, so every reader
+/// names its rule: [`ExecRelation::cone`] or [`ExecRelation::primary`] (plus
+/// [`ExecRelation::scc`] and [`ExecRelation::dependency_uncertainty`]). The
+/// type guarantee is ONE-directional: the cone takes `&[TypedEdge]`, so it
+/// cannot read the Primary payload. The reverse is a naming convention until
+/// step 11 splits the container: `primary()` returns the whole carrier, typed
+/// edges included (d43 reads the Cone payload through `ctx.graph.typed_edges`).
 pub struct ExecRelation {
     /// Primary payload in `edges_by_from` / `edges_from_order` /
     /// `uncertainty_edges` / `nodes`; Cone payload in `typed_edges` (primary
     /// half with event dispatch, then the dependency half, in that order).
-    pub graph: Arc<CombinedGraph>,
+    graph: Arc<CombinedGraph>,
     /// Tarjan over the Primary payload, computed in [`ExecRelation::new`].
-    pub scc: Arc<SccResult>,
+    scc: Arc<SccResult>,
     /// The dependency half's uncertainty edges, in the order the half-build
     /// sorts them. No production reader: kept for step 5's coverage policy,
     /// read today only by tests and the census.
-    pub dependency_uncertainty: Vec<UncertaintyEdge>,
+    dependency_uncertainty: Vec<UncertaintyEdge>,
 }
 
 impl ExecRelation {
+    /// The single-app relation over `model`: every call is a workspace
+    /// caller's, so the dependency half is empty. Prints its `rel.*` census
+    /// buckets here, where the single-app context graph's `context.graph`
+    /// bucket printed before step 4.
+    pub fn single_app(model: &Model) -> ExecRelation {
+        let rel = ExecRelation::new(
+            &model.workspace,
+            &model.calls.edges,
+            &[],
+            &model.events.graph,
+        );
+        rel.emit_census();
+        rel
+    }
+
     /// Build the relation from one call split (spec §4.2). `primary` holds the
     /// calls of WORKSPACE callers, `dependency` the calls dependency routines
     /// make (empty single-app). The Primary payload is assembled over
@@ -66,19 +83,27 @@ impl ExecRelation {
         // `graph_scc` reads `nodes` and `edges_by_from` only, so the typed-edge
         // extend above cannot move it.
         let scc = super::analysis::graph_scc(&graph);
-        if crate::engine::census::enabled() {
-            use crate::engine::census::{Kind, Tally, combined_graph, scc as scc_tally};
-            combined_graph(&graph).emit("rel.graph", Kind::Shallow);
-            scc_tally(&scc).emit("rel.scc", Kind::Shallow);
-            Tally::default()
-                .buf::<UncertaintyEdge>(dependency_uncertainty.len())
-                .emit("rel.dependency_uncertainty", Kind::Shallow);
-        }
         ExecRelation {
             graph: Arc::new(graph),
             scc: Arc::new(scc),
             dependency_uncertainty,
         }
+    }
+
+    /// The `rel.graph` / `rel.scc` / `rel.dependency_uncertainty` census
+    /// buckets, shallow, when the census is on. Not printed by `new`: the
+    /// owner prints them at the phase its old buckets printed (cross-app the
+    /// base, after `census.base`; single-app [`ExecRelation::single_app`]).
+    pub fn emit_census(&self) {
+        if !crate::engine::census::enabled() {
+            return;
+        }
+        use crate::engine::census::{Kind, Tally, combined_graph, scc as scc_tally};
+        combined_graph(&self.graph).emit("rel.graph", Kind::Shallow);
+        scc_tally(&self.scc).emit("rel.scc", Kind::Shallow);
+        Tally::default()
+            .buf::<UncertaintyEdge>(self.dependency_uncertainty.len())
+            .emit("rel.dependency_uncertainty", Kind::Shallow);
     }
 
     /// `Transfer::Cone`: every typed edge, every caller.
@@ -90,6 +115,16 @@ impl ExecRelation {
     /// from any publisher.
     pub fn primary(&self) -> &Arc<CombinedGraph> {
         &self.graph
+    }
+
+    /// The Primary payload's SCC, shared by pointer with every `build_l4`.
+    pub fn scc(&self) -> &Arc<SccResult> {
+        &self.scc
+    }
+
+    /// The dependency half's uncertainty edges (no production reader yet).
+    pub fn dependency_uncertainty(&self) -> &[UncertaintyEdge] {
+        &self.dependency_uncertainty
     }
 }
 
@@ -392,8 +427,13 @@ mod tests {
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 
-    /// Spec §5.1 (S2-1): the dir the `isolated` discrimination runs on keeps
-    /// an isolated publisher WITH a subscriber. Fails, never skips.
+    /// Spec §5.1 (S2-1): `ws-txn-d47-event-neg-isolated` keeps an isolated
+    /// publisher WITH a subscriber. Fails, never skips. The `isolated`
+    /// discrimination (`DispatchMeta.isolated` forced to `false` fails the
+    /// parity test's `edges_by_from` on this dir) was run while the assembler
+    /// was a copy; on the final tree the oracle shares the assembler, so it
+    /// cannot be repeated here. This test keeps the fixture shape alive for
+    /// the goldens that still see it.
     #[test]
     fn isolated_dispatch_precondition() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))

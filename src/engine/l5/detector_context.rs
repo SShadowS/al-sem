@@ -699,9 +699,10 @@ impl<'a> UncertaintyView<'a> {
 pub struct DetectorArtifacts {
     /// The substrate bits this was built with (`registry::substrate`).
     pub demanded: u32,
-    /// The combined graph (al-sem passes this as the detector's `graph` arg;
-    /// detectors read it from the ctx here). An `Arc`: the caller that built
-    /// it may share it.
+    /// The view's `ExecRelation` graph (`rel.primary()`, shared by pointer;
+    /// #160 step 4): detectors read the Primary payload (`edges_by_from`, …)
+    /// and d43 the Cone payload (`typed_edges`) from the ctx here (al-sem
+    /// passed it as the detector's `graph` arg).
     pub graph: Arc<CombinedGraph>,
     /// The raw L3 event graph (al-sem `model.eventGraph`). d12/d38 read its
     /// `events`/`edges`; the combined-graph build already constructs it, so it is
@@ -1088,12 +1089,7 @@ pub(crate) fn build_detector_context_with<'a>(
     // single-app one built here over every call.
     let rel = match base {
         Some(b) => Arc::clone(&b.rel),
-        None => Arc::new(ExecRelation::new(
-            &resolved.workspace,
-            &resolved.calls.edges,
-            &[],
-            &resolved.events.graph,
-        )),
+        None => Arc::new(ExecRelation::single_app(resolved)),
     };
     let l4 = (demanded & substrate::CORE_SUMMARIES != 0).then(|| L4Request {
         extra_diagnostics: vec![],
@@ -1121,7 +1117,7 @@ pub(crate) fn build_detector_artifacts(
     cross: Option<CrossAppInputs<'_>>,
 ) -> (DetectorArtifacts, Option<L4Analysis>) {
     // The Primary payload; `DetectorArtifacts.graph` shares it by pointer.
-    let graph: Arc<CombinedGraph> = Arc::clone(&rel.graph);
+    let graph: Arc<CombinedGraph> = Arc::clone(rel.primary());
     use crate::engine::l5::registry::substrate;
     assert!(
         demanded & substrate::CORE_SUMMARIES == 0 || l4.is_some(),
@@ -2762,12 +2758,7 @@ page 50813 "CP3 Wizard"
     fn core_summaries_without_an_l4_request_panics() {
         use crate::engine::l5::registry::substrate;
         let model = crate::engine::l5::test_support::empty_resolved();
-        let rel = Arc::new(ExecRelation::new(
-            &model.workspace,
-            &model.calls.edges,
-            &[],
-            &model.events.graph,
-        ));
+        let rel = ExecRelation::single_app(&model);
         let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             build_detector_artifacts(&model, substrate::CORE_SUMMARIES, &rel, None, None);
         }))

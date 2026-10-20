@@ -1,6 +1,6 @@
 //! #160 step 2 (spec §4.4.1): the L4 analysis as one value. [`build_l4`] is
-//! the one SCC and v2 solve that the detector context, digest, prove and
-//! query all take.
+//! the one v2 solve that the detector context, digest, prove and query all
+//! take, over the view's `ExecRelation` and its SCC (#160 step 4).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -60,7 +60,7 @@ pub(crate) fn build_l4(
     cross: Option<&CrossAppInputs<'_>>,
 ) -> (L4Analysis, CoreSummaries) {
     let graph: &CombinedGraph = rel.primary();
-    let scc = Arc::clone(&rel.scc);
+    let scc = Arc::clone(rel.scc());
     emit_scc_stats(graph, &scc);
 
     let ws = &model.workspace;
@@ -134,8 +134,9 @@ pub fn render_warnings(diagnostics: &[SummarizeDiagnostic]) -> Vec<String> {
 }
 
 /// Tarjan over `graph.edges_by_from` (counter `build.graph_scc`): the one
-/// copy, also behind the cross-app base's SCC. The snapshot's coverage fold no
-/// longer solves, so it no longer calls this (#160 step 3).
+/// copy, called by `ExecRelation::new` for every view's SCC (#160 step 4). The
+/// snapshot's coverage fold no longer solves, so it no longer calls this
+/// (#160 step 3).
 pub(crate) fn graph_scc(graph: &CombinedGraph) -> SccResult {
     let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &graph.edges_by_from {

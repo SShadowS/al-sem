@@ -313,17 +313,12 @@ impl View {
             *ordering = Some(dc::fill_ordering(model));
         }
         if need_rel && rel.is_none() {
-            // Single-app the view builds it (counted, and its `rel.*` census
-            // buckets printed, inside `ExecRelation::new`); cross-app it is the
-            // base's, built and counted with the base.
+            // Single-app the view builds it (counted in `ExecRelation::new`,
+            // its `rel.*` census buckets printed by `single_app`); cross-app it
+            // is the base's, built, counted and census-printed with the base.
             *rel = Some(match cross_base {
                 Some(b) => Arc::clone(&b.rel),
-                None => Arc::new(ExecRelation::new(
-                    &model.workspace,
-                    &model.calls.edges,
-                    &[],
-                    &model.events.graph,
-                )),
+                None => Arc::new(ExecRelation::single_app(model)),
             });
         }
         if need_det && det.is_none() {
@@ -453,7 +448,7 @@ impl View {
     /// handle) drops here, so it is not live through the query and the
     /// render, as at `1524b1fd`.
     pub fn into_query_parts(self) -> (Model, Arc<CombinedGraph>, L4Analysis) {
-        let graph = Arc::clone(&self.rel.expect("rel cell not filled").graph);
+        let graph = Arc::clone(self.rel.expect("rel cell not filled").primary());
         let l4 = self.l4.expect("l4 cell not filled");
         let model = match self.target {
             AnalysisTarget::SingleApp(m) => *m,

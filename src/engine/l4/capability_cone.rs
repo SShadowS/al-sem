@@ -2779,7 +2779,8 @@ fn compose_inherited_cones(
 // ===========================================================================
 // R3b WRAP SEAM — a public cone entry the Salsa `inherited_facts`/`coverage`
 // queries call. WRAPS the full cone (typed-edge graph build + Tarjan SCC +
-// `compose_inherited_cones`) over a CombinedGraph + per-routine direct facts +
+// `compose_inherited_cones`) over the typed edges (`&[TypedEdge]`, the Cone
+// payload; #160 step 4) + per-routine direct facts +
 // direct coverage. Byte-identical to the cone path inside `project_r3a3` /
 // `project_r3a5_cross_app` (it IS that path, factored out). No re-port.
 // ===========================================================================
@@ -3573,15 +3574,24 @@ pub(crate) fn build_cross_app_base(
     // resolved call a dependency routine makes, typed by the same rules as the
     // workspace's (object runs, resolved methods, interface `Maybe`, calls into
     // another dependency). Event dispatch is in the Primary payload.
-    let all_calls = &x.resolved.calls;
+    //
+    // The split MOVES the model's calls out (a clone only if another owner
+    // shares them), so no `CallEdge` exists twice; `partition` keeps each
+    // half in emission order.
+    let crate::program::model::calls::ResolvedCalls {
+        edges: all_edges,
+        upgraded_bindings,
+        diagnostics,
+        external_targets,
+    } = std::sync::Arc::try_unwrap(std::mem::take(&mut x.resolved.calls))
+        .unwrap_or_else(|shared| (*shared).clone());
     let (dependency_calls, primary_calls): (
         Vec<crate::program::model::calls::CallEdge>,
         Vec<crate::program::model::calls::CallEdge>,
-    ) = all_calls
-        .edges
-        .iter()
-        .cloned()
+    ) = all_edges
+        .into_iter()
         .partition(|e| dep_routine_ids.contains(&e.from));
+    let ws: &ModelEntities = &x.resolved.workspace;
     let rel = crate::engine::l4::exec_relation::ExecRelation::new(
         ws,
         &primary_calls,
@@ -3591,9 +3601,9 @@ pub(crate) fn build_cross_app_base(
     drop(dependency_calls);
     let calls = crate::program::model::calls::ResolvedCalls {
         edges: primary_calls,
-        upgraded_bindings: all_calls.upgraded_bindings.clone(),
-        diagnostics: all_calls.diagnostics.clone(),
-        external_targets: all_calls.external_targets.clone(),
+        upgraded_bindings,
+        diagnostics,
+        external_targets,
     };
 
     let _s_index = crate::engine::perf_trace::span("crossapp", "crossapp.field_index");
@@ -3623,7 +3633,7 @@ pub(crate) fn build_cross_app_base(
     for r in &ws.routines {
         if dep_routine_ids.contains(&r.id) && r.body_available {
             let has_out_edge = rel
-                .graph
+                .primary()
                 .edges_by_from
                 .get(&r.id)
                 .is_some_and(|e| !e.is_empty());
@@ -3679,10 +3689,12 @@ pub(crate) fn build_cross_app_base(
 /// cut set: its rows and events (`base.resolved.rows`, the part of the `model`
 /// bucket that survives) and the replacement calls (`base.resolved.calls`) are
 /// charged apart, so nothing the model still owns is missing from the base.
-/// `rel` has no `base.*` bucket: `ExecRelation::new` prints its `rel.*` ones.
+/// `rel` prints its own `rel.*` buckets here, after `census.base`, where
+/// `base.graph` / `base.combined_scc` printed before #160 step 4.
 fn census_cross_app_base(b: &R3a5CrossAppBase) {
     use crate::engine::census::{Kind, Tally};
     use crate::program::model::program_calls::{census_calls, census_model_rows};
+    b.rel.emit_census();
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
     emit(
         "base.primary_app_guid",
@@ -3798,11 +3810,14 @@ pub fn project_r3a5_cross_app(
     };
     let ws_routines = base.ws_routines();
     let dep_routine_ids = &base.dep_routine_ids;
-    let graph = &base.rel.graph;
+    let graph = base.rel.primary();
     let event_graph = &base.resolved.events.graph;
     let direct_full = &base.direct_full;
-    // The cone's routine universe, in row order (the cone sorts it).
-    let nodes: Vec<String> = ws_routines.iter().map(|r| r.id.clone()).collect();
+    // The cone's routine universe: the relation's node ids, every model
+    // routine's id, sorted. The cone sorts its graph's nodes itself and reads
+    // the list otherwise only into a set and keyed maps, so the order cannot
+    // move its output (the r3a5 goldens pin it).
+    let nodes = &graph.nodes;
 
     // From-scratch core (v2 db-effect solver, Phase-1-parity) + cone over the
     // assembled base. Trace + roles-cap diagnostics ignored here, so since #160
@@ -3811,7 +3826,7 @@ pub fn project_r3a5_cross_app(
     let (core_summaries, _) = compute_summaries_v2_with_leaves_core(
         ws_routines,
         graph,
-        &base.rel.scc,
+        base.rel.scc(),
         &base.resolved.calls.upgraded_bindings,
         &base.field_index,
         &base.leaf_summaries,
@@ -3824,7 +3839,7 @@ pub fn project_r3a5_cross_app(
     // ordering are untouched.
     let cones = compose_cone_over_graph(
         base.rel.cone(),
-        &nodes,
+        nodes,
         &base.direct_full,
         &base.direct_coverage,
         base.ws_routines(),
@@ -4328,7 +4343,7 @@ pub fn issue160_full_graph_timings(
         let sb = if side == "cut" {
             build_r3a3_source_only_base(&base.resolved)
         } else {
-            build_r3a3_source_only_base_over(&base.resolved, (*base.rel.graph).clone())
+            build_r3a3_source_only_base_over(&base.resolved, (**base.rel.primary()).clone())
         };
         let (cone1, pd1) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
         let t = std::time::Instant::now();
@@ -5057,7 +5072,7 @@ codeunit 13 "Dep Rec Sub"
         );
         let l4 = owned.l4().expect("CORE_SUMMARIES solves");
         assert!(
-            std::sync::Arc::ptr_eq(&l4.scc, &base.rel.scc),
+            std::sync::Arc::ptr_eq(&l4.scc, base.rel.scc()),
             "the shim computed its own SCC"
         );
     }
@@ -5683,7 +5698,7 @@ mod step4_tests {
         // (1)
         let kept: Vec<(&str, &str, Option<&str>)> = base
             .rel
-            .dependency_uncertainty
+            .dependency_uncertainty()
             .iter()
             .map(|u| {
                 (

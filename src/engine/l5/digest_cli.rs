@@ -41,14 +41,15 @@ use crate::program::model::workspace::Model;
 
 /// Finishes digest's and prove's default run on a prepared [`View`]: reads
 /// the envelope diagnostics and the tx map, then takes and drops the run and
-/// releases `det`, the graph and the ordering facts (#160 §4.4.4).
+/// releases `det`, the relation (`Cell::Rel`) and the ordering facts (#160
+/// §4.4.4).
 ///
 /// Shared so the two cannot desync. The envelope `diagnostics` is the JSON
 /// array of the run `key` (each entry `{code: "DIAG-<stage>", message,
 /// severity}`); the tx map is read off `det.transaction_spans`. Of the view's
 /// cells only `l4` stays alive through snapshot composition. Cross-app, the
-/// base still owns its combined graph and SCC: releasing the graph cell drops
-/// only the view's `Arc`.
+/// base still owns the relation (its graph and SCC): releasing `Cell::Rel`
+/// drops only the view's `Arc`.
 pub(crate) fn finish_default_run(
     view: &mut View,
     key: &RunKey,

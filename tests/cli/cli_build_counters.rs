@@ -1032,8 +1032,14 @@ fn retained_census_counts_the_filled_ordering_cell() {
 }
 
 /// #160 A4, after step 4: a single-app analyze computes its SCC once, in the
-/// view's `ExecRelation::new`, so one `rel.scc` bucket is printed and no
+/// view's `ExecRelation::new`, so one `rel.scc` bucket is printed (by
+/// `ExecRelation::single_app`, where `context.graph` printed before) and no
 /// `l4.scc` (`build_l4` shares the relation's SCC).
+///
+/// DISCRIMINATION (2026-10-20, final panel F1-9): dropping `single_app`'s
+/// `emit_census` call fails this with `rel.scc lines: left 0, right 1`. The
+/// stderr ORDER is not pinned: the `rel.*` lines sit right after `model`
+/// whether `new` or the owner prints them.
 #[test]
 fn retained_census_counts_the_single_app_scc_once() {
     let ws = r0("ws-d8-commit-in-tx");
@@ -1054,9 +1060,13 @@ fn retained_census_counts_the_single_app_scc_once() {
 }
 
 /// #160 A4, the cross-app half, after step 4: the base builds the one
-/// relation, whose `new` prints `rel.graph` / `rel.scc` once; the `View`
-/// takes it by `Arc::clone`, so no `base.graph`, `base.combined_scc`,
+/// relation and prints its `rel.graph` / `rel.scc` once, with the base's
+/// census (after `census.base`, where `base.graph` printed before); the
+/// `View` takes it by `Arc::clone`, so no `base.graph`, `base.combined_scc`,
 /// `context.graph` or `l4.scc` line is printed.
+///
+/// DISCRIMINATION (2026-10-20, final panel F1-9): dropping the base census's
+/// `b.rel.emit_census()` fails this with `rel.graph lines: left 0, right 1`.
 #[test]
 fn retained_census_counts_the_cross_app_graph_and_scc_on_the_relation() {
     let (_d, ws) = ws_dep();
