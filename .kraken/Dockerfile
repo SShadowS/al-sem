@@ -25,8 +25,16 @@ RUN mkdir -p /tmp/build-home && export HOME=/tmp/build-home \
     && dotnet tool install microsoft.dynamics.businesscentral.development.tools \
       --version $AL_TOOL_VERSION --tool-path /opt/al-tool \
     && al --version && rm -rf /tmp/build-home
+# Node for the pi coding agent and pi-mcp (/orchestrate's reviewer models), as in LethAL's image.
+# pi's login and state go on the config volume (PI_CODING_AGENT_DIR) so a recreation keeps them.
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+RUN HOME=/tmp/build-home npm install -g --cache /tmp/npm-cache @earendil-works/pi-coding-agent \
+    && HOME=/tmp/build-home pi --version && rm -rf /tmp/npm-cache /tmp/build-home
+ENV PI_CODING_AGENT_DIR=/home/dev/.config/pi
 # Login shells (bash -l: kraken's setup, ssh sessions) rebuild PATH from /etc/profile, so ENV alone is not enough
 RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:/opt/al-tool:$PATH' 'export DOTNET_ROOT=/opt/dotnet' \
-      'export RUSTUP_HOME=/opt/rustup' 'export DOTNET_CLI_TELEMETRY_OPTOUT=1' > /etc/profile.d/al-sem-tools.sh \
+      'export RUSTUP_HOME=/opt/rustup' 'export DOTNET_CLI_TELEMETRY_OPTOUT=1' \
+      'export PI_CODING_AGENT_DIR=/home/dev/.config/pi' > /etc/profile.d/al-sem-tools.sh \
     && chown -R dev:dev /opt/rustup /opt/cargo
 # ends as root: the base entrypoint drops to dev

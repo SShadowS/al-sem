@@ -5,16 +5,15 @@ image: .kraken/Dockerfile
 ssh_port: 2210 # server1's sshPorts range 2210-2299
 mem_limit: 16g # with the bc sidecar (3g + 6g + 4g tmpfs) 29g, inside server1's maxMemory (32g)
 agents:
+  # one agent: agentflow's issue leases live in this checkout's .agent/, so a second
+  # /orchestrate in another worktree would not see them
   - name: main
     branch: master
     model: opus
     session_name: alsem-main
-    start: [/coord-join]
-  - name: worker
-    branch: kraken/worker
-    model: opus
-    session_name: alsem-worker
-    start: [/coord-join]
+    start:
+      - "Run `kraken tentacle ack` and report its output in one line. Do nothing else."
+      - /loop /orchestrate
 setup:
   - bash scripts/kraken-setup.sh
 env:
@@ -22,7 +21,8 @@ env:
   # agents pass /work/src/cdo-baseline to scripts/cdo-gate themselves
   TREE_SITTER_AL_PATH: /work/src/tree-sitter-al
 secret_files:
-  # bc-dev-mcp against the bc sidecar (http://bc, instance BC); the API is on 7052 in this image
+  # bc-dev-mcp against the bc sidecar (http://bc, instance BC; the API is on 7052 in this image),
+  # and pi for /orchestrate's reviewer models
   - { from: mcp.json, to: .mcp.json }
 sidecars:
   # BC 28.4 on Linux (StefanMaron/MsDyn365Bc.On.Linux), kraken spec 5 section 7.
