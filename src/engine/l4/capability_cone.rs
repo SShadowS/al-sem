@@ -1224,13 +1224,13 @@ fn callsite_id_for_edge(e: &TypedEdge) -> Option<String> {
     }
 }
 
-/// Build the typed-edge graph from the combined graph's typed edges + the node
-/// list. Mirrors al-sem `buildTypedEdgeGraph`.
-fn build_typed_edge_graph(graph: &CombinedGraph, nodes: &[String]) -> TypedEdgeGraph {
+/// Build the typed-edge graph from the typed edges (the Cone payload,
+/// `Transfer::Cone`) + the node list. Mirrors al-sem `buildTypedEdgeGraph`.
+fn build_typed_edge_graph(typed: &[TypedEdge], nodes: &[String]) -> TypedEdgeGraph {
     let mut outgoing: HashMap<String, Vec<TypedOutEdge>> = HashMap::new();
     let mut unresolved_sources: BTreeSet<String> = BTreeSet::new();
 
-    for edge in &graph.typed_edges {
+    for edge in typed {
         if edge.kind == "object-run-unresolved" {
             unresolved_sources.insert(edge.from.clone());
             continue;
@@ -2807,8 +2807,10 @@ pub struct ConeOutcome {
 }
 
 /// Compute every routine's `capabilityFactsInherited` + `coverage` over the given
-/// combined graph (typed edges already folded, incl. any injected intra-app dep
-/// edges) + the per-routine direct facts + direct coverage. The `nodes` list is
+/// typed edges (incl. any injected intra-app dep edges) + the per-routine direct
+/// facts + direct coverage. `typed` is the Cone payload (`Transfer::Cone`,
+/// [`crate::engine::l4::exec_relation::ExecRelation::cone`]): the cone reads
+/// nothing else of the graph, so it cannot read the Primary payload. The `nodes` list is
 /// the routine universe; `direct_in` maps routineId → its direct facts (ordered),
 /// `coverage_in` maps routineId → `(direct_status, reasons)`.
 ///
@@ -2820,7 +2822,7 @@ pub struct ConeOutcome {
 /// on `FullRoutineSummary.capability_facts_direct` (verified at all three call
 /// sites), which is exactly the self half of the reachable sequence.
 pub fn compose_cone_over_graph(
-    graph: &CombinedGraph,
+    typed: &[TypedEdge],
     nodes: &[String],
     direct_in: &HashMap<String, Vec<CapabilityFact>>,
     coverage_in: &HashMap<String, (String, Vec<String>)>,
@@ -2829,7 +2831,7 @@ pub fn compose_cone_over_graph(
 ) -> ConeOutcome {
     crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
-    let g = build_typed_edge_graph(graph, nodes);
+    let g = build_typed_edge_graph(typed, nodes);
     let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &g.outgoing {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
@@ -3845,7 +3847,7 @@ pub fn project_r3a5_cross_app(
     // was build-then-drop; `RawOnly` skips the fold outright. The raw Vec and its
     // ordering are untouched.
     let cones = compose_cone_over_graph(
-        graph,
+        &graph.typed_edges,
         &base.nodes,
         &base.direct_full,
         &base.direct_coverage,
@@ -4030,7 +4032,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
 
     // Typed-edge graph (cone substrate) + Tarjan SCC over it.
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
-    let g = build_typed_edge_graph(&graph, &nodes);
+    let g = build_typed_edge_graph(&graph.typed_edges, &nodes);
     let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &g.outgoing {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
@@ -4279,7 +4281,7 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
     let ConeOutcome {
         cones, pd_solution, ..
     } = compose_cone_over_graph(
-        &graph,
+        &graph.typed_edges,
         &nodes,
         &direct_full,
         &direct_coverage,
@@ -4401,7 +4403,7 @@ pub fn compute_r3a3_real_matrix(resolved: &Model) -> R3a3RealMatrix {
     let graph = build_combined_graph(ws, calls, event_graph);
 
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
-    let g = build_typed_edge_graph(&graph, &nodes);
+    let g = build_typed_edge_graph(&graph.typed_edges, &nodes);
 
     // Publisher events for the direct-fact key set.
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();

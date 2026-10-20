@@ -1228,7 +1228,7 @@ pub(crate) fn build_detector_artifacts(
 
         let _t_walk = cones_census::start();
         let outcome = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_full,
             &coverage_in,

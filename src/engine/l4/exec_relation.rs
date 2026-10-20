@@ -93,11 +93,12 @@ impl ExecRelation {
 }
 
 /// Spec §5.1: the relation equals today's cross-app base recipe field by
-/// field. Since commit B the oracle ([`tests::legacy_relation`], over
-/// `build_combined_graph`) and the relation share one assembler, so this
-/// guards the COMPOSITION (the split, the order of the halves, which events
-/// each half sees, the halves kept apart); commit A (`43221921`) ran it with
-/// the assembler copied, independent code, on the corpus and on CDO.
+/// field. The oracle ([`tests::legacy_relation`], over `build_combined_graph`)
+/// and the relation share one assembler, so this guards the COMPOSITION (the
+/// split, the order of the halves, which events each half sees, the halves
+/// kept apart), not the assembler itself. The independent-code comparison,
+/// with the assembler copied, ran on the corpus and on CDO before the
+/// assembler was shared (the issue ledger records it).
 #[cfg(test)]
 mod tests {
     use super::*;
