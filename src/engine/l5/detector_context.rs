@@ -1197,12 +1197,15 @@ pub(crate) fn det_cone_inputs(resolved: &Model) -> DetConeInputs {
     let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
     let mut coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
+    // `direct=` times the per-routine extraction only, as at step 0.
+    let t_direct = cones_census::start();
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
         coverage_in.insert(r.id.clone(), (status, reasons));
         direct_full.insert(r.id.clone(), facts);
     }
+    cones_census::add_since(&cones_census::DIRECT_NANOS, t_direct);
     DetConeInputs {
         nodes,
         direct_full,
@@ -1281,7 +1284,6 @@ pub(crate) fn build_detector_artifacts(
         // site — `project_r3a3`, `project_r3a5_cross_app`,
         // `build_detector_context_cross_app` — already passed its `direct_full`
         // directly; this was the one straggler.)
-        let _t_direct = cones_census::start();
         let DetConeInputs {
             nodes,
             mut direct_full,
@@ -1295,7 +1297,6 @@ pub(crate) fn build_detector_artifacts(
         } else {
             ConeOutput::DerivedOnly
         };
-        cones_census::add_since(&cones_census::DIRECT_NANOS, _t_direct);
         cones_census::add(&cones_census::ROUTINES, ws.routines.len() as u64);
         cones_census::add(
             &cones_census::DIRECT_FACTS,

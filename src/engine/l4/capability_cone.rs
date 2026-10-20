@@ -6751,6 +6751,10 @@ codeunit 50100 C
             0,
             "precondition: P's Q(false) contradicts W's guard"
         );
+        assert_eq!(
+            new.stats.own_entries_recursive, 1,
+            "own entries of the recursive members (Q's state of W's producer)"
+        );
         assert_eq!(new.derived.writes_physical_tables_of(&q), [cust], "Q's row");
         assert_eq!(
             new.derived.writes_physical_tables_of(&p),
@@ -6892,6 +6896,9 @@ codeunit 50100 C
         assert_eq!(s.recursive_roots, 1, "recursive_roots");
         assert_eq!(s.self_loops, 1, "self_loops");
         assert_eq!(s.size_hist, [1, 0, 1, 0, 0], "size_hist");
+        assert_eq!(s.recursive_members_emitted, 4, "recursive_members_emitted");
+        assert_eq!(s.max_recursive_members, 3, "max_recursive_members");
+        assert_eq!(s.member_walks, 4, "member_walks");
     }
 
     // -- T7, T8: the oracle over fixtures and CDO ------------------------------

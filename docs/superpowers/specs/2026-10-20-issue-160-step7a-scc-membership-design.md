@@ -10,7 +10,10 @@ amendments of §9 (7A-1 to 7A-4), each with its reason; until the epic takes the
 are open questions for the panel.
 
 Base: master `d37e8634` (step 4 merged at `c186f4d1`, then three `.kraken` commits that
-touch no `src/`, `tests/` or `crates/` file), worktree `/work/al-sem-issue-160-a1`.
+touch no `src/`, `tests/` or `crates/` file), worktree `/work/al-sem-issue-160-a1` (attempt 1,
+where this spec was written). Attempt 2 implements it in `/work/al-sem-issue-160-a2` on base
+`68253a8e`, which is source-identical to `d37e8634` (`git diff --stat d37e8634 68253a8e -- src
+crates tests Cargo.toml Cargo.lock` is empty); the bench scripts below use the a2 worktree.
 Every `file:line` is in that tree and was read before it was cited. Every fact the design
 rests on is a row of the ledger's `## Assumption probes` table
 (`.agent/issue-160/ledger.md`, P1-P24).
@@ -622,7 +625,7 @@ set -euo pipefail
 export TREE_SITTER_AL_PATH=/work/src/tree-sitter-al
 S=/work/bench/160-7a-t1; WS=$(jq -er .cdo_ws /work/alsem/.agent/config.json); mkdir -p $S/t1
 T1=${1:?usage: stoprule.sh <Task-1 commit sha>}
-cd /work/al-sem-issue-160-a1
+cd /work/al-sem-issue-160-a2
 # build only the expected commit, from a clean source tree (.agent/ edits are allowed)
 test "$(git rev-parse HEAD)" = "$(git rev-parse "$T1^{commit}")" || { echo "FAIL worktree HEAD $(git rev-parse HEAD) is not $T1"; exit 1; }
 dirty=$(git status --porcelain -- src crates Cargo.toml Cargo.lock) || { echo "FAIL git status failed in the worktree"; exit 1; }
@@ -807,7 +810,7 @@ check() {
 EOF
 . $B/check.sh
 H=${1:?usage: part1.sh <head commit sha>}
-HW=/work/al-sem-issue-160-a1
+HW=/work/al-sem-issue-160-a2
 # head: build only the expected commit from a clean source tree (.agent/ edits are allowed)
 head_ok() {
   test "$(git -C $HW rev-parse HEAD)" = "$(git -C $HW rev-parse "$H^{commit}")" || { echo "FAIL head worktree HEAD $(git -C $HW rev-parse HEAD) is not $H"; exit 1; }
@@ -825,7 +828,7 @@ head_ok
 (cd $HW && cargo build --profile release-fast --bin alsem --bin aldump) > $B/build-head.log 2>&1
 printf 'parent %s\nhead %s\n' "$(git -C $B/parent-wt rev-parse HEAD)" "$(git -C $HW rev-parse HEAD)" > $B/shas.txt   # recorded next to the readings
 cp $B/parent-wt/target/release-fast/{alsem,aldump} $B/parent/
-cp /work/al-sem-issue-160-a1/target/release-fast/{alsem,aldump} $B/head/
+cp /work/al-sem-issue-160-a2/target/release-fast/{alsem,aldump} $B/head/
 for s in parent head; do
   $B/$s/alsem analyze $WS --format sarif --scope primary > $B/sarif-$s-primary.sarif
   $B/$s/alsem analyze $WS --format sarif --scope all     > $B/sarif-$s-all.sarif
@@ -864,7 +867,7 @@ process:
 ```bash
 set -euo pipefail
 B=/work/bench/160-7a; WS=$(jq -er .cdo_ws /work/alsem/.agent/config.json)
-cd /work/al-sem-issue-160-a1   # scripts/bench_ab.py and scripts/trace_summary.py are relative
+cd /work/al-sem-issue-160-a2   # scripts/bench_ab.py and scripts/trace_summary.py are relative
 . $B/check.sh
 for s in parent head; do
   printf '#!/bin/sh\nALSEM_CONES_CENSUS=1 exec %s/%s/alsem "$@"\n' $B $s > $B/$s-cc.sh; chmod +x $B/$s-cc.sh
@@ -916,9 +919,9 @@ run `a` and only the walk/fold timers read run `c`.
 ```bash
 set -euo pipefail
 B=/work/bench/160-7a; WS=$(jq -er .cdo_ws /work/alsem/.agent/config.json)
-cd /work/al-sem-issue-160-a1   # scripts/bench_ab.py is relative
+cd /work/al-sem-issue-160-a2   # scripts/bench_ab.py is relative
 . $B/check.sh
-python3 scripts/bench_ab.py run --out $B/bench-r --a parent=$B/parent/alsem --b head=$B/head/alsem --rounds 5 --cmd as="analyze $WS --single-app --format sarif" --cmd px="policy check $WS --policy /work/al-sem-issue-160-a1/tests/fixtures/cli-c-policy/ws-policy-custom/al-sem.policy.yaml --format json --deterministic" > $B/bench-r.log 2>&1
+python3 scripts/bench_ab.py run --out $B/bench-r --a parent=$B/parent/alsem --b head=$B/head/alsem --rounds 5 --cmd as="analyze $WS --single-app --format sarif" --cmd px="policy check $WS --policy /work/al-sem-issue-160-a2/tests/fixtures/cli-c-policy/ws-policy-custom/al-sem.policy.yaml --format json --deterministic" > $B/bench-r.log 2>&1
 check $B/bench-r parent head 5 as px || exit 1
 python3 scripts/bench_ab.py summary $B/bench-r/runs.jsonl > $B/bench-r-summary.txt
 # the part's exit status is check's, not summary's: summary returns 0 on any input

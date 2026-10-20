@@ -755,6 +755,55 @@ fn census_rest_is_never_negative() {
     );
 }
 
+/// #160 step 7a §4.5/§6: the census `cone_scc:` line (the stop rule's S1
+/// instrument) is fed from `compose_inherited_cones`' `ComposeStats`.
+/// `ws-d7-event-cycle` holds one recursive 6-member root SCC.
+#[test]
+fn census_cone_scc_line_counts_the_recursive_sccs() {
+    let (out, _) = spawn_traced(
+        &[
+            "analyze",
+            &r0("ws-d7-event-cycle").to_string_lossy(),
+            "--single-app",
+            "--format",
+            "json",
+        ],
+        &[("ALSEM_CONES_CENSUS", "1")],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let scc: Vec<&str> = err
+        .lines()
+        .filter(|l| l.starts_with("[cones-census]   cone_scc: "))
+        .collect();
+    assert_eq!(scc.len(), 1, "one cone_scc line:\n{err}");
+    assert!(
+        scc[0].starts_with(
+            "[cones-census]   cone_scc: recursive=1 members_all=6 members_emitted=6 roots=1 \
+             self_loops=0 max=6 sizes=1:0 2:0 3-9:1 10-99:0 100+:0 member_walks=6 own_entries=0 \
+             sets_borrowed=0 sets_built=0 set_entries=0 "
+        ),
+        "{}",
+        scc[0]
+    );
+    // S1: members_emitted equals the compose line's recursive emission count.
+    let compose = err
+        .lines()
+        .find(|l| l.starts_with("[cones-census]   compose: "))
+        .unwrap_or_else(|| panic!("no compose line:\n{err}"));
+    let field = |line: &str, key: &str| -> String {
+        let rest = line
+            .split(key)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{key} in {line}"));
+        rest.split(' ').next().unwrap().to_string()
+    };
+    assert_eq!(
+        field(scc[0], " members_emitted="),
+        field(compose, "ms x"),
+        "{compose}"
+    );
+}
+
 /// Spec §4.1.4 / §8.1: both peaks reach the trace. Windows only, because
 /// `read_rss()` is `None` elsewhere and both counters are then 0. Spawned,
 /// because the tracer is a process `OnceLock` read from the environment.
