@@ -202,14 +202,21 @@ mod tests {
             .iter()
             .cloned()
             .partition(|e| dep_ids.contains(&e.from));
+        // The preconditions count the ORACLE's output, never the relation's,
+        // so a break in `new` shows as a field diff below.
         stats.cases += 1;
-        if !dependency.is_empty() && !events.edges.is_empty() {
+        let oracle_dispatches = lg
+            .edges_by_from
+            .values()
+            .flatten()
+            .any(|e| e.kind == "event-dispatch");
+        if !dependency.is_empty() && oracle_dispatches {
             stats.dep_half_with_dispatch += 1;
         }
-        let rel = ExecRelation::new(ws, &primary, &dependency, events);
-        if !rel.dependency_uncertainty.is_empty() {
+        if !lunc.is_empty() {
             stats.dep_uncertainty += 1;
         }
+        let rel = ExecRelation::new(ws, &primary, &dependency, events);
         let g = &*rel.graph;
         let mut diffs: Vec<String> = Vec::new();
         diffs.extend(diff_vec("nodes", &g.nodes, &lg.nodes));
@@ -335,7 +342,9 @@ mod tests {
         let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
         let mut stats = Stats::default();
         let mut failures = Vec::new();
-        // The count each root holds today: a dir that stops being visited fails.
+        // The count each root holds today, an intentional tripwire: a dir that
+        // stops being visited fails here (and the case count below). A NEW
+        // corpus dir fails it too: bump the count here when you add one.
         for (root, want) in [
             ("r0-corpus", 217),
             ("fixtures", 29),

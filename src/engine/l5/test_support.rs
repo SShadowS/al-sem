@@ -475,6 +475,9 @@ const STEP4_DEP_GUID: &str = "bbbb1604-0000-0000-0000-000000000160";
 /// `XRec` (table 18 `Customer` plus `src/Lib.al` = `lib_al`), whose
 /// `SymbolReference.json` lists codeunit 12 `Dep Rec Lib` with `methods_json`.
 /// Written as `capability_cone`'s `write_fixture_107` does (40-byte header + zip).
+/// The two are intentional siblings, not one writer: `write_fixture_107` has its
+/// own guids, a second dependency codeunit and a symbol-only variant, which a
+/// shared writer would have to grow parameters for.
 fn write_ws_with_dep(ws: &std::path::Path, ws_al: &str, methods_json: &str, lib_al: &str) {
     use std::io::Write;
     std::fs::create_dir_all(ws.join("src")).unwrap();

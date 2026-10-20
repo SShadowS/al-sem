@@ -35,9 +35,9 @@ pub mod effect_query;
 pub mod effect_query_cli;
 pub mod effect_store;
 pub mod effect_universe;
+pub(crate) mod event_dispatch;
 // #160 step 4: the one execution relation a view builds (graph, SCC, the
 // dependency half's uncertainty), from one call split.
-pub(crate) mod event_dispatch;
 pub mod exec_relation;
 pub(crate) mod param_guard;
 // #69 D1 — the transitive producer solve: parameter-dependent writes resolved
