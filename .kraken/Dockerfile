@@ -2,15 +2,16 @@ FROM kraken/tentacle-base
 USER root
 ARG DEBIAN_FRONTEND=noninteractive
 # build-essential: the tree-sitter grammar's C build (crates/al-syntax/build.rs); cmake: libz-ng-sys
-# (CI's runner has it preinstalled); python3: the bench and trace scripts; libicu: .NET aborts without it
+# (CI's runner has it preinstalled); python3: the bench and trace scripts; python-is-python3: the
+# commands and hooks call `python` (agentflow, run-timer); libicu: .NET aborts without it
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake pkg-config python3 jq libicu-dev ca-certificates curl \
+      build-essential cmake pkg-config python3 python-is-python3 jq libicu-dev ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 # Rust as rust-toolchain.toml pins it, outside the cache volume (the base points CARGO_HOME at ~/.cache
 # for the registry). A toolchain bump in the repo makes rustup install the new one on first use.
 ENV RUSTUP_HOME=/opt/rustup
 RUN curl -fsSL https://sh.rustup.rs | CARGO_HOME=/opt/cargo sh -s -- -y --profile minimal \
-      --default-toolchain 1.96.0 --component rustfmt,clippy --no-modify-path
+      --default-toolchain 1.96.0 --component rustfmt,clippy,rust-analyzer --no-modify-path
 ENV PATH=/opt/cargo/bin:$PATH
 # cargo-nextest: ci-steps test, check-goldens and the pre-commit hook refuse to run without it (prebuilt binary)
 RUN curl -fsSL https://get.nexte.st/latest/linux | tar -xzf - -C /opt/cargo/bin && cargo-nextest nextest --version

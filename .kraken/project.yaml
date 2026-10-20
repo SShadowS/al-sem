@@ -25,12 +25,16 @@ secret_files:
   # bc-dev-mcp against the bc sidecar (http://bc, instance BC; the API is on 7052 in this image),
   # and pi for /orchestrate's reviewer models
   - { from: mcp.json, to: .mcp.json }
+  # the owner's gitignored Claude setup, Linux-adapted: settings (hooks, env) and a tar that
+  # kraken-setup.sh unpacks (this checkout's agents, skills, hooks; the user CLAUDE.md and skills)
+  - { from: claude-settings.local.json, to: .claude/settings.local.json }
+  - { from: claude.tar, to: .claude/kraken-claude.tar }
 sidecars:
   # BC 28.4 on Linux (StefanMaron/MsDyn365Bc.On.Linux), kraken spec 5 section 7.
   # Start it with `kraken siphon start bc --no-wait`, then `kraken siphon status bc` until ready.
   bc:
     start: on-demand
-    idle_stop_minutes: 15 # the live idle-stop check; back to 60 afterwards
+    idle_stop_minutes: 60
     ready_timeout_minutes: 15
     services:
       sql:
