@@ -140,8 +140,9 @@ T5, T6 and T9 are parked outside the repo during this task (Step 1) and come bac
   &fact_cones, direct, None)`, add its `len()` to `ROOT_SET_ENTRIES`, time it into
   `ROOT_SET_PROBE_NANOS`, drop it. Print one line right after the `compose:` line
   (`detector_context.rs:566`), exact text from spec §4.5 at Task 1 (*as executed,* Task 2
-  deletes the two `root_set_*` fields; the delivered line ends at `walk_total=`,
-  is the `cone_scc:` format string in `cones_census::report`, and is pinned by
+  deletes the two `root_set_*` fields, and the final panel's F1-7 appends
+  `own_entry_members= with_successor= with_guarded_successor=` after `walk_total=`;
+  the delivered line is the `cone_scc:` format string in `cones_census::report`, and is pinned by
   `census_cone_scc_line_counts_the_recursive_sccs` in `tests/cli/cli_build_counters.rs`):
   `[cones-census]   cone_scc: recursive={} members_all={} members_emitted={} roots={} self_loops={} max={} sizes=1:{} 2:{} 3-9:{} 10-99:{} 100+:{} member_walks={} own_entries={} sets_borrowed={} sets_built={} set_entries={} walk_total={:.1}ms root_set_probe={:.1}ms root_set_entries={}`.
   No new timing is added to a component (spec §4.5 overlap rule); the probe adds to

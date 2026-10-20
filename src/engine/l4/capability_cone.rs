@@ -2568,9 +2568,11 @@ fn compose_inherited_cones(
         // decremented once per predecessor as that predecessor finishes. Tarjan
         // emits callees before callers, so none of `i`'s predecessors has run
         // yet when `i` is reached: `remaining_uses[i] == 0` here means `i` is a
-        // call-graph ROOT (nothing calls it) and NOTHING will ever read its
-        // cone. Building it is pure waste — on the 8020 corpus that was 17,864
-        // root SCCs holding 2,224,901 fact entries (~1,599 MB) alive for the
+        // call-graph ROOT (nothing calls it) and no predecessor will ever read
+        // its cone from the cached `fact_cones` map, so caching it is pure
+        // waste. (A recursive root's set is built locally instead, for its own
+        // members, and dropped after them: #160 step 7a §4.2.) On the 8020
+        // corpus caching was 17,864 root SCCs holding 2,224,901 fact entries (~1,599 MB) alive for the
         // whole walk, because the refcount-free below fires only for a
         // successor and a root is nobody's successor. (Even if the emission
         // order were ever NOT reverse-topological, a zero here would still mean
@@ -2648,11 +2650,15 @@ fn compose_inherited_cones(
                 _ => 4,
             }] += 1;
             stats.with_successor += u64::from(!succ_ids.is_empty());
-            stats.with_guarded_successor += u64::from(succ_ids.iter().any(|y| {
-                fact_cones
-                    .get(y)
-                    .is_some_and(|c| c.values().any(frame_bound))
-            }));
+            // A scan of every successor cone: only where it is read (the census,
+            // and T7/T8 in tests), not on every production compose.
+            if cfg!(test) || crate::engine::l5::detector_context::cones_census::enabled() {
+                stats.with_guarded_successor += u64::from(succ_ids.iter().any(|y| {
+                    fact_cones
+                        .get(y)
+                        .is_some_and(|c| c.values().any(frame_bound))
+                }));
+            }
             emitted
         } else {
             0
