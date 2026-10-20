@@ -225,6 +225,40 @@ cut (`:3459-3469`), the injection (`:3496-3515`), the context's rebuild
 both rules give today's adjacency. The snapshot asks for `Transfer::Cone`: the structural
 fix for #161.
 
+**Amended at step 4** (child spec `2026-10-20-issue-160-step4-exec-relation-design.md` §9).
+The struct above is the target; what step 4 built differs as follows:
+- **M1, the carrier.** `CombinedGraph` carries both payloads (`rel.graph`: Primary in
+  `edges_by_from` / `edges_from_order` / `uncertainty_edges` / `nodes`, Cone in
+  `typed_edges`). Separate `typed` / `combined` / `from_order` vectors move to step 11,
+  with the `RoutineIx` keys.
+- **M2, the accessors.** `Transfer` is two accessors, `rel.cone()` and `rel.primary()`,
+  plus the cone's `&[TypedEdge]` parameter, not an enum value. The relation's fields are
+  private, so every reader goes through `cone()`, `primary()`, `scc()` or
+  `dependency_uncertainty()`. The guarantee is one-directional until step 11: the cone
+  cannot read the Primary payload, but `primary()` returns the whole carrier.
+- **M3, the Cone pair deferred.** The Cone adjacency and SCC stay inside the cone. A
+  tradeoff: `policy check` builds the pair twice (the det cone and its RAW build's cone),
+  while holding it in the relation would keep the typed graph alive through every run and
+  add a Tarjan to views that build no cone. Step 6 deletes the RAW build and makes the
+  snapshot the pair's second permanent reader, so the pair joins the relation at step 6
+  (or 7a, whichever spec lands it first).
+- **M5, the uncertainty split.** "Every caller" is two fields: the primary half in
+  `rel.primary().uncertainty_edges`, the dependency half in `rel.dependency_uncertainty()`
+  (kept, no production reader yet). The context's Primary indexes
+  (`uncertainty_edges_by_from`, `uncertainties_by_node`) and the L4 solve REMAIN Primary,
+  at step 5 too; what step 5 (§6.3) widens is the coverage fold alone, which then
+  consumes uncertainty from every caller. Step 5 decides whether one list with a role
+  filter replaces the two fields.
+- **M6, no copies.** No `events`, `upgraded_bindings` or `external_targets` in the
+  relation: readers use `model.events.graph` and `model.calls`, the same bytes; the base's
+  event-graph clone is deleted instead.
+- **M7, no `role`.** `Role` is step 8 and `RoutineIx` step 11; the halves split on
+  `dep_routine_ids`, keyed by string id (Decision 25).
+- **M8, no `dependency_calls` yet.** Its one reader is step 6's call-site ledger; holding
+  the raw dependency `CallEdge`s from step 4 would retain them with no reader. Step 6 adds
+  `rel.dependency_calls` (Decision 18).
+- The eager Primary SCC is computed in `ExecRelation::new` (`rel.scc`).
+
 ### 5.6 Capability analysis: membership separate from witnesses (steps 7a, 7b, 6)
 
 `CapabilityAnalysis { pd: Option<PdArena>, coverage: Vec<CoverageRecord>, derived:
@@ -295,6 +329,12 @@ pub struct View {
                                            //   through the view; step 2 has no such reader and
                                            //   holds the target alone (child spec §4.4.3, I3)
     pub rel: ExecRelation,                 // step 4; step 2 holds today's cross-app base here
+                                           //   (amended at step 4, child spec §4.4: a
+                                           //   `prepare`-filled cell `Cell::Rel`, not an eager
+                                           //   field, since `diff` without `--strict` fills
+                                           //   nothing; single-app it holds the SCC from the
+                                           //   relation's build to `release(Cell::Rel)`, longer
+                                           //   than `l4` held it, a stated and bounded overlap)
     caps: Option<CapabilityAnalysis>, l4: Option<L4Analysis>,
     det: Option<DetectorArtifacts>,        // owned half of today's context, ONE per view,
                                            //   built at the union of the plan's masks, never raw facts
@@ -404,7 +444,11 @@ Every peak bound is **two numbers, both relative**: the process peak and the
 exit), each ≤ the parent-commit interleaved median + the peak noise band (3 %, about
 85 MB on CDO). 2.85 GB is a reported ceiling, never a bound (Decisions 22, 33). The process
 peak is set in attach (2,847 MB) about 1.3 GB above the live set that follows, so it alone
-cannot fail a late retention. Steps with a peak bound: 1b, 2, 6, 9, 10, 12; steps 2, 6, 9
+cannot fail a late retention. Steps with a peak bound: 1b, 2, 4, 6, 9, 10, 12 (step 4,
+amended there: three single-app bounds, `analyze`, `policy check` and `events fanout`
+`--single-app`, for the single-app SCC's longer life in `Cell::Rel`; cross-app `analyze`
+and `digest` peaks are reported only; child spec
+`2026-10-20-issue-160-step4-exec-relation-design.md` §7); steps 2, 6, 9
 also take a cell byte census at the first detector run. Fallback ladder for a miss: (1) a
 census at the serializer shows no `det`, `caps`, `model`, `rel`, `l4` bytes; (2) name the
 miss (runs vs serialization spike); (3) stream the serializer (Decision 51). Four workers
@@ -512,7 +556,7 @@ reopens them without new evidence. Numbers are stable across rounds.
 15. The witness pass runs before `det`, in every plan; the retained-tree cost is budgeted (re-opened by G-2 for digest: carried to step 6).
 16. `RAW_INHERITED_FACTS` deleted; policy reads the witness pass.
 17. In-memory identity table unfiltered; serialized key = inventory plus referenced dependency rows.
-18. Dependency callers' raw `CallEdge`s live in `rel.dependency_calls` (the ledger needs `resolution`, `calls.rs:101-107`).
+18. Dependency callers' raw `CallEdge`s live in `rel.dependency_calls` (the ledger needs `resolution`, `calls.rs:101-107`). (Placement in time amended at step 4, M8: the field arrives with its reader at step 6.)
 19. `from_order` is a recorded field (d17, `d17.rs:96-104`).
 20. A bound's baseline is its parent commit, measured in the same session.
 21. The build-counter table has a column per universe; the SCC counter sits at the top-level call sites, never inside `tarjan_scc`.
@@ -571,7 +615,7 @@ contract. Later steps are contract only.
 | **1b** `ResolvedProgram` | retained program, two edge sets apart, `graph` reads it, `export_workspace`'s private build deleted; body released at today's point | `alsem graph` byte golden; the body dropped at today's `b3.ctx_drop` span (`program_calls.rs:674-676`; `body.is_none()` after a `take()` is true by construction and pins nothing, child spec A1b.2 / review A7) with the post-attach peak as the measurement; both peaks ≤ parent + band on CDO analyze and digest; `InputSet` bytes in the census | drop `dependency_body_edges` / `site_facts` from the projection input → `graph_export_covers_dependencies` fails | none |
 | **2** Owned artifacts, borrowed context, one context per command | `DetectorArtifacts` + `L4Analysis` + borrowed `DetectorContext<'v>`; driver-owned `View` with `prepare`/`release`, `!in_detector_loop()` at `prepare`; ordering cell; `det` at the union of masks (policy's RAW build a command-local, not a cell, until step 6: I5, Decision 50), parity test over the whole `DetectorOutput`; digest/prove/events/policy/query reuse; prove `Some(root)`; analyze's failure classification; the warning on `l4` | counters read the child spec's table exactly; goldens byte-identical; CDO digest saving ≥ parent median of the deleted context's span (`digest.tx_context_map`, step 0) − its band − band(digest wall) (I6; the saving is read off two whole-command walls, so their noise is subtracted too; ≈ 21 s on P5, indicative only); both peaks ≤ parent + band for analyze, digest and prove; cell census at the first run | one discrimination per counter; `Some(root)` moves no cli-b prove golden | none |
 | **3** Fold from uncertainty edges | per-routine scan replaces the snapshot's fold solve; still only where the fold applies today, over the cut graph | r3a3, cli-b, r4f byte-identical on stdout; −1 `compute_summaries_v2*`, −1 `graph_scc` per snapshot; stderr: one non-convergence line fewer on a capped SCC, stated | oracle old == new on r0, gap, CDO with all four kinds in an SCC and a singleton; two discriminations (old kind list; new scan's kind list against hand-stated records). As delivered (2026-10-20): the gap half was substituted by the 32 fixture dirs plus hand-stated inline fixtures, since `tests/gap`'s inline scenarios cannot reach a test-only lib oracle (see the CHANGELOG's #160 step 3 entry) | none |
-| **4** `ExecRelation` | `Transfer::{Cone, Primary}`, two payloads, eager adjacency/SCC; base, context, r3a5, L4 read §5.5's table; snapshot on `LegacyCut`; dependency uncertainty edges kept | byte-identical everywhere; CDO detector baseline identical; counters: `build_combined_graph` 1, `graph_scc` 2 per view (+ snapshot's own until step 6) | dependency-publisher fixture (span, temp proof, reverse callers unchanged; discrimination "Primary callers only"); two-caller `from_order` fixture (reverse it; d17's sample flips) | none |
+| **4** `ExecRelation` | `Transfer::{Cone, Primary}`, two payloads, eager adjacency/SCC; base, context, r3a5, L4 read §5.5's table; snapshot on `LegacyCut`; dependency uncertainty edges kept | byte-identical everywhere; CDO detector baseline identical; counters: `build_combined_graph` 1, `graph_scc` 2 per view (+ snapshot's own until step 6). Amended at step 4 (child spec §9): **M4**, the counters read as the child spec §4.9 rule: `bcg` = one per constructed relation + one per legacy-cut graph; `scc` = one per constructed relation + one per cone composition (query 1, policy 3, `diff` without `--strict` 1 per side; not "2 per view"). **M9**, "snapshot on `LegacyCut`" is a name, not a type: the snapshot path is unchanged and its docs call its graph the legacy cut until step 6 deletes it | dependency-publisher fixture (span, temp proof, reverse callers unchanged; discrimination "Primary callers only"); two-caller `from_order` fixture (reverse it; d17's sample flips) | none |
 | **7a** Membership: one inherited set per SCC | `DerivedOnly` reads one set per Cone-SCC; old path test-only until CDO passes | goldens unchanged; `bfs.walk` ≤ 1 s on CDO (absolute floor; expected ≈ 0) **and** cone saving ≥ parent `bfs.walk` median − 1 s − band(bfs.walk); retained ≤ 98 MB. The fold half (`bfs.fold`, G-3) is NOT in 7a's bound unless `fold_row` moves into 7a; the child spec states which | derived-row oracle on r0, gap, r4, CDO; scaling fixtures (chain, fan-out, 479-SCC, guard-heavy, producer blow-up); stop rule from step 0's SCC distribution | none |
 | **7b** Membership: closed-class sets, fold memo | `FactKeyInterner`, hash-consed `SetArena`, closed/open split, per-`SetId` memo, `fold_row` | goldens unchanged; (scan + fold + set-building) saving ≥ X − band and cone saving ≥ X − band, X re-derived at step 0 from the cone/own split and written down before code; X ≥ 2 × band or the step is dropped | 7a's oracle; a shared-callee-set fixture where the census counts one fold (disable the memo → two) | none |
 | **10** `SiteIx`, delete the span join | `SiteIx` on edges, call sites, ops; join by key with the span as a debug assertion; then delete J1, `texts`, J4 | `losses() == []` both universes on r0 + CDO; `edge_order_is_call_sites_then_triggers` green; attach saving ≥ parent `b3.adapter.join` − band(join) (only if join's step 0 median ≥ 2 × band, else a non-speed step); both peaks ≤ parent + band | debug span assertion on the whole suite before deletion; mis-pair one dependency site → the loss gate fails | none |

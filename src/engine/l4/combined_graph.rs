@@ -262,6 +262,19 @@ pub fn build_combined_graph(
     event_graph: &EventGraph,
 ) -> CombinedGraph {
     crate::engine::perf_trace::counter_delta("build.combined_graph", 1);
+    assemble(workspace, &resolved.edges, event_graph)
+}
+
+/// The combined graph over `call_edges` and `event_graph`, uncounted: the one
+/// assembler behind [`build_combined_graph`] (the legacy cut) and
+/// [`crate::engine::l4::exec_relation::ExecRelation::new`] (#160 step 4). It
+/// reads only the call edges and the event graph, never the rest of a
+/// `ResolvedCalls`.
+pub(crate) fn assemble(
+    workspace: &ModelEntities,
+    call_edges: &[CallEdge],
+    event_graph: &EventGraph,
+) -> CombinedGraph {
     let mut edges: Vec<CombinedEdge> = Vec::new();
     let mut uncertainty_edges: Vec<UncertaintyEdge> = Vec::new();
 
@@ -270,7 +283,7 @@ pub fn build_combined_graph(
     let mut interface_open_world_emitted: HashSet<String> = HashSet::new();
 
     // --- call-derived edges + uncertainty records ---
-    for ce in &resolved.edges {
+    for ce in call_edges {
         // event-dispatch dispatchKind never appears in the model's calls; al-sem
         // skips it here regardless (event hops come from the event graph), so no
         // check is needed.
@@ -419,7 +432,7 @@ pub fn build_combined_graph(
 
     uncertainty_edges.sort_by_key(uncertainty_sort_key);
 
-    let typed_edges = build_typed_edges(workspace, resolved, event_graph);
+    let typed_edges = build_typed_edges(workspace, call_edges, event_graph);
 
     CombinedGraph {
         nodes,
@@ -518,7 +531,7 @@ fn object_run_target_object(
 
 fn build_typed_edges(
     workspace: &ModelEntities,
-    resolved: &ResolvedCalls,
+    call_edges: &[CallEdge],
     event_graph: &EventGraph,
 ) -> Vec<TypedEdge> {
     // One pass over the routines:
@@ -558,7 +571,7 @@ fn build_typed_edges(
     // interfaceName), mirroring al-sem `interfaceEdgesByCallsite`. Preserve order.
     let mut interface_order: Vec<String> = Vec::new();
     let mut interface_edges_by_callsite: HashMap<String, Vec<&CallEdge>> = HashMap::new();
-    for ce in &resolved.edges {
+    for ce in call_edges {
         if ce.dispatch_kind == DispatchKind::Interface
             && ce.resolution == Resolution::Maybe
             && ce.to.is_some()
@@ -576,7 +589,7 @@ fn build_typed_edges(
     let mut interface_typed_emitted: HashSet<String> = HashSet::new();
     let mut typed_edges: Vec<TypedEdge> = Vec::new();
 
-    for ce in &resolved.edges {
+    for ce in call_edges {
         // An implicit-trigger edge (#96) is keyed by its RECORD OPERATION
         // (`callsite_id` = `operation_id` = `"{routine}/opN"`), never a
         // `PCallSite` id, so it is built before the callsite lookup below, which

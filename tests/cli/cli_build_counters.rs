@@ -175,11 +175,17 @@ fn run(args: &[&str]) -> BTreeMap<String, u64> {
 }
 
 // ---------------------------------------------------------------------------
-// §4.4.8 rows (after step 3; every row equals that spec's "after step 3"
-// table, checked 2026-10-20: each snapshot lost its coverage-fold solve, so
-// -1 summaries_v2 and -1 graph_scc per snapshot. The query rows equal
-// §4.1.3's too: query reuses the `l4` cell, with the same one solve and one
-// Tarjan its private builders ran.)
+// §4.4.8 rows (after step 4; every row equals child 0-2 §4.4.8's "After step
+// 4" table, 2026-10-20). Among the rows pinned before step 4, only `bcg`
+// moved, and only in the rows that build a cross-app base, -1 each: the base's
+// dependency half-build is no longer a counted `build_combined_graph`, so a
+// relation counts one; no `scc` of those rows moved (the Tarjan moved into
+// `ExecRelation::new`). Two rows are new at step 4:
+// `analyze_cross_app_with_a_dependency_half` (bcg 1, scc 2) and
+// `analyze_single_app_d47`, whose `scc` 2 includes the relation's Tarjan, new
+// there because that plan fills no `l4`. The rule (M4): `bcg` = one per
+// constructed relation + one per legacy-cut graph; `scc` = one per
+// constructed relation + one per cone composition.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -191,7 +197,7 @@ fn analyze_cross_app_default() {
         &m,
         Row {
             program: 1,
-            bcg: 2,
+            bcg: 1,
             cone: 1,
             v2: 1,
             scc: 2,
@@ -226,7 +232,7 @@ fn analyze_cross_app_d47() {
         &m,
         Row {
             program: 1,
-            bcg: 3,
+            bcg: 2,
             cone: 1,
             v2: 0,
             scc: 2,
@@ -256,6 +262,75 @@ fn analyze_single_app() {
     );
 }
 
+/// #160 step 4 (review of Tasks 4-5, finding 1): the cross-app default row on
+/// a workspace whose dependency half is NOT empty. `ws_dep`'s dependency
+/// makes no call, so `ExecRelation::new` skips its second `assemble` there;
+/// here the workspace calls the dependency's `Outer()`, which calls its
+/// `Inner()`, so the half-build runs (the typed edge it adds is what
+/// `cross_app_commit_span_sees_dependency_writes` reads). One relation still
+/// counts one `build.combined_graph`.
+///
+/// DISCRIMINATION (2026-10-20): building the dependency half through the
+/// counted `build_combined_graph` inside `new`'s non-empty guard (spec
+/// §5.5 (a), as specified) fails this with `build.combined_graph: got 2,
+/// want 1`; restored, it passes. The `ws_dep` rows stay green under that
+/// break.
+#[test]
+fn analyze_cross_app_with_a_dependency_half() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::dep_dispatch_fixture::write_own(
+        dir.path(),
+        "codeunit 50172 \"Ws Commit\"\n{\n    procedure CommitAfterDep()\n    var\n        Lib: Codeunit \"Dep Lib\";\n    begin\n        Lib.Outer();\n        Commit();\n    end;\n}\n",
+    );
+    let ws = dir.path().to_string_lossy().into_owned();
+    let m = run(&["analyze", &ws, "--format", "json"]);
+    assert_row(
+        "analyze cross-app, dependency half",
+        &m,
+        Row {
+            program: 1,
+            bcg: 1,
+            cone: 1,
+            v2: 1,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
+            snap: 0,
+        },
+    );
+}
+
+/// #160 step 4 (child spec §4.9, stated, now pinned): a single-app plan that
+/// fills the relation but no `l4` (d47 alone: no `CORE_SUMMARIES`) runs the
+/// relation's Tarjan, which before step 4 lived in `build_l4` and so did not
+/// run here. A later lazy-SCC change must move this row on purpose.
+#[test]
+fn analyze_single_app_d47() {
+    let m = run(&[
+        "analyze",
+        &ws_a(),
+        "--single-app",
+        "--format",
+        "json",
+        "--detector",
+        "d47-io-unsafe-txn",
+    ]);
+    assert_row(
+        "analyze single-app d47",
+        &m,
+        Row {
+            program: 1,
+            bcg: 2,
+            cone: 1,
+            v2: 0,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
+            snap: 1,
+        },
+    );
+}
+
 #[test]
 fn digest_cross_app() {
     let (d, ws) = ws_dep();
@@ -266,7 +341,7 @@ fn digest_cross_app() {
         &m,
         Row {
             program: 1,
-            bcg: 3,
+            bcg: 2,
             cone: 2,
             v2: 1,
             scc: 3,
@@ -465,7 +540,7 @@ fn diff_ws_ws_strict() {
 
 const EVENTS_CROSS_ROW: Row = Row {
     program: 1,
-    bcg: 2,
+    bcg: 1,
     cone: 1,
     v2: 1,
     scc: 2,
@@ -548,7 +623,7 @@ fn policy_check_cross_app() {
         &m,
         Row {
             program: 1,
-            bcg: 2,
+            bcg: 1,
             cone: 2,
             v2: 1,
             scc: 3,
@@ -591,7 +666,7 @@ fn policy_check_single_app() {
 
 const QUERY_CROSS_ROW: Row = Row {
     program: 1,
-    bcg: 2,
+    bcg: 1,
     cone: 0,
     v2: 1,
     scc: 1,
@@ -757,13 +832,14 @@ fn release_sequence(args: &[&str]) -> Vec<String> {
 /// #160 final panel P1-5: each command drops its cells where the code says,
 /// read off the shipped binary's trace. Policy check releases `det`, `l4`
 /// and the ordering facts BEFORE its second (RAW) context build, and the
-/// graph after it; fingerprint and each `diff --strict` side release every
+/// relation after it; fingerprint and each `diff --strict` side release every
 /// cell before snapshot composition; events releases `l4` right after the run
 /// and the rest after the report. Digest and prove (`finish_default_run`)
-/// release `det`, the ordering facts and the graph before the snapshot and
-/// `l4` after the query (§4.4.4).
+/// release `det`, the ordering facts and the relation before the snapshot and
+/// `l4` after the query (§4.4.4). The relation's cell is `Cell::Rel` since
+/// #160 step 4 (it was `Cell::Graph`).
 ///
-/// DISCRIMINATION: deleting policy check's `release_all_but(&[Cell::Graph])`
+/// DISCRIMINATION: deleting policy check's `release_all_but(&[Cell::Rel])`
 /// before the RAW build fails the policy case; deleting
 /// `finish_default_run`'s `release_all_but(&[Cell::L4])` fails digest and
 /// prove.
@@ -772,7 +848,7 @@ fn views_release_their_cells_before_the_next_build() {
     let (d, ws) = ws_dep();
     let policy = policy_yaml();
     let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
-    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Graph"];
+    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Rel"];
     let per_side: Vec<&str> = [&["ctx"][..], &all, &["snap"]].concat();
     // `finish_default_run`: every cell but `l4` before the snapshot, `l4`
     // after the query.
@@ -780,7 +856,7 @@ fn views_release_their_cells_before_the_next_build() {
         "ctx",
         "rel:Det",
         "rel:Ordering",
-        "rel:Graph",
+        "rel:Rel",
         "snap",
         "rel:L4",
     ];
@@ -790,14 +866,7 @@ fn views_release_their_cells_before_the_next_build() {
             vec![
                 "policy", "check", &ws, "--policy", &policy, "--format", "json",
             ],
-            vec![
-                "ctx",
-                "rel:Det",
-                "rel:L4",
-                "rel:Ordering",
-                "ctx",
-                "rel:Graph",
-            ],
+            vec!["ctx", "rel:Det", "rel:L4", "rel:Ordering", "ctx", "rel:Rel"],
         ),
         (
             "fingerprint",
@@ -966,8 +1035,15 @@ fn retained_census_counts_the_filled_ordering_cell() {
     );
 }
 
-/// #160 A4: a single-app analyze computes its own SCC in `build_l4`, so the
-/// `l4.scc` bucket is printed, and exactly once (one solve).
+/// #160 A4, after step 4: a single-app analyze computes its SCC once, in the
+/// view's `ExecRelation::new`, so one `rel.scc` bucket is printed (by
+/// `ExecRelation::single_app`, where `context.graph` printed before) and no
+/// `l4.scc` (`build_l4` shares the relation's SCC).
+///
+/// DISCRIMINATION (2026-10-20, final panel F1-9): dropping `single_app`'s
+/// `emit_census` call fails this with `rel.scc lines: left 0, right 1`. The
+/// stderr ORDER is not pinned: the `rel.*` lines sit right after `model`
+/// whether `new` or the owner prints them.
 #[test]
 fn retained_census_counts_the_single_app_scc_once() {
     let ws = r0("ws-d8-commit-in-tx");
@@ -982,15 +1058,21 @@ fn retained_census_counts_the_single_app_scc_once() {
         &[("ALSEM_RETAINED_CENSUS", "1")],
     );
     let err = String::from_utf8_lossy(&out.stderr);
-    let lines = err.lines().filter(|l| l.contains("bucket=l4.scc ")).count();
-    assert_eq!(lines, 1, "l4.scc lines:\n{err}");
+    let lines = |b: &str| err.lines().filter(|l| l.contains(b)).count();
+    assert_eq!(lines("bucket=rel.scc "), 1, "rel.scc lines:\n{err}");
+    assert_eq!(lines("bucket=l4.scc "), 0, "l4.scc lines:\n{err}");
 }
 
-/// #160 A4, the cross-app half: the `View` takes the base's graph and SCC
-/// (`Arc::clone`), so `base.graph` / `base.combined_scc` count them and no
-/// `context.graph` or `l4.scc` line is printed for the alias.
+/// #160 A4, the cross-app half, after step 4: the base builds the one
+/// relation and prints its `rel.graph` / `rel.scc` once, with the base's
+/// census (after `census.base`, where `base.graph` printed before); the
+/// `View` takes it by `Arc::clone`, so no `base.graph`, `base.combined_scc`,
+/// `context.graph` or `l4.scc` line is printed.
+///
+/// DISCRIMINATION (2026-10-20, final panel F1-9): dropping the base census's
+/// `b.rel.emit_census()` fails this with `rel.graph lines: left 0, right 1`.
 #[test]
-fn retained_census_counts_the_cross_app_graph_and_scc_on_the_base() {
+fn retained_census_counts_the_cross_app_graph_and_scc_on_the_relation() {
     let (_d, ws) = ws_dep();
     let (out, _) = spawn_traced(
         &["analyze", &ws, "--format", "json"],
@@ -998,10 +1080,12 @@ fn retained_census_counts_the_cross_app_graph_and_scc_on_the_base() {
     );
     let err = String::from_utf8_lossy(&out.stderr);
     let lines = |b: &str| err.lines().filter(|l| l.contains(b)).count();
-    assert_eq!(lines("bucket=base.graph "), 1, "base.graph lines:\n{err}");
+    assert_eq!(lines("bucket=rel.graph "), 1, "rel.graph lines:\n{err}");
+    assert_eq!(lines("bucket=rel.scc "), 1, "rel.scc lines:\n{err}");
+    assert_eq!(lines("bucket=base.graph "), 0, "base.graph lines:\n{err}");
     assert_eq!(
         lines("bucket=base.combined_scc "),
-        1,
+        0,
         "base.combined_scc lines:\n{err}"
     );
     assert_eq!(lines("bucket=l4.scc "), 0, "l4.scc lines:\n{err}");

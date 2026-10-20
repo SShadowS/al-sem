@@ -1068,7 +1068,7 @@ mod tests {
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
         let out = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,
@@ -1179,7 +1179,7 @@ mod tests {
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
         let out = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,
@@ -1240,7 +1240,7 @@ mod tests {
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
         let out = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,
@@ -1305,7 +1305,7 @@ mod tests {
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
         let out = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,
@@ -1346,7 +1346,7 @@ mod tests {
         coverage_in.insert("r/partial".to_string(), ("partial".to_string(), vec![]));
 
         let out = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,
@@ -1457,7 +1457,7 @@ mod tests {
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
         let both = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,
@@ -1465,7 +1465,7 @@ mod tests {
             ConeOutput::Both,
         );
         let derived_only = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,
@@ -1473,7 +1473,7 @@ mod tests {
             ConeOutput::DerivedOnly,
         );
         let raw_only = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,
@@ -1565,7 +1565,7 @@ mod tests {
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
         let out = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,
@@ -1644,7 +1644,7 @@ mod tests {
         let coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
         let out = compose_cone_over_graph(
-            &graph,
+            &graph.typed_edges,
             &nodes,
             &direct_in,
             &coverage_in,

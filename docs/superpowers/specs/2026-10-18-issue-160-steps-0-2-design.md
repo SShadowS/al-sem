@@ -1647,7 +1647,47 @@ two columns (moved cells in bold):
 | graph | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 What remains above 1 from the snapshot is its own graph, cone, the cone's Tarjan
-and `pd_solve` (step 6). `tests/cli/cli_build_counters.rs` pins this table.
+and `pd_solve` (step 6). `tests/cli/cli_build_counters.rs` pinned this table until
+step 4.
+
+**After step 4** (epic §9 row 4, 2026-10-20; child spec
+`2026-10-20-issue-160-step4-exec-relation-design.md` §4.9, restated per epic I1).
+One `ExecRelation` per view. Among the rows of the "after step 3" table, only `bcg`
+moves, and only in the rows that build a cross-app base: the base built two counted
+graphs, the relation counts one. No `scc` cell of those rows moves: the base's Tarjan
+and single-app `build_l4`'s both moved into `ExecRelation::new`. The one `scc` that
+moves is in a row new to this table, `analyze --single-app --detector d47-…` (`scc` 2:
+it fills the relation but no `l4`, so the relation's Tarjan is new there). Moved cells
+in bold:
+
+| Command | program | bcg | cone | v2 | scc | pd_solve | ctx | snap |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| analyze, cross-app, default | 1 | **1** | 1 | 1 | 2 | 1 | 1 | 0 |
+| analyze, cross-app, default, dependency half NOT empty (new case: the workspace calls a dependency routine that calls on; the row above's dependency makes no call) | 1 | 1 | 1 | 1 | 2 | 1 | 1 | 0 |
+| analyze, cross-app, `--detector d47-…` | 1 | **2** | 1 | 0 | 2 | 1 | 1 | 1 |
+| analyze `--single-app` | 1 | 1 | 1 | 1 | 2 | 1 | 1 | 0 |
+| analyze `--single-app --detector d47-…` (new row, pinned at step 4: the relation's Tarjan runs with no `l4` fill; by the same rule it was `scc` 1 before, never pinned) | 1 | 2 | 1 | 0 | **2** | 1 | 1 | 1 |
+| digest, cross-app | 1 | **2** | 2 | 1 | 3 | 2 | 1 | 1 |
+| digest `--single-app` | 1 | 2 | 2 | 1 | 3 | 2 | 1 | 1 |
+| prove | 1 | 2 | 2 | 1 | 3 | 2 | 1 | 1 |
+| fingerprint (all modes) | 1 | 2 | 2 | 1 | 3 | 2 | 1 | 1 |
+| diff ws ws, per side (`--strict`: ctx 1, bcg 2, cone 2, v2 1, scc 3, pd 2) | 1 | 1 | 1 | 0 | 1 | 1 | 0 | 1 |
+| events, cross-app / single-app | 1 | **1** / 1 | 1 | 1 | 2 | 1 | 1 | 0 |
+| policy check, cross-app / single-app, policy loaded | 1 | **1** / 1 | 2 | 1 | 3 | 2 | 2 | 0 |
+| query, cross-app / single-app | 1 | **1** / 1 | 0 | 1 | 1 | 0 | 0 | 0 |
+| graph | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+The rule (step-4 amendment M4): `bcg` = one per constructed relation + one per
+legacy-cut graph (the snapshot's, the ordering cell's snapshot's); `scc` = one per
+constructed relation + one per cone composition. Cross-app the relation is built
+inside `build_cross_app_base`; single-app `prepare` builds it when it fills `det` or
+`l4`. Renamed with it: census buckets `rel.graph` / `rel.scc` /
+`rel.dependency_uncertainty` replace `base.graph`, `base.combined_scc`,
+`base.event_graph`, `base.nodes`, `context.graph` and `l4.scc`; span `rel.build` is
+new, `context.event_combined_graph` and `context.core_scc_tarjan` are gone, and
+`crossapp.base_graph` / `crossapp.base_artifacts_facts` became `crossapp.field_index`
+/ `crossapp.base_facts`; the view cell `Graph` is `Rel`.
+`tests/cli/cli_build_counters.rs` pins this table.
 
 ## 5. False-positive and failure shapes
 

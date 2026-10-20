@@ -1,6 +1,6 @@
 //! #160 step 2 (spec §4.4.1): the L4 analysis as one value. [`build_l4`] is
-//! the one SCC and v2 solve that the detector context, digest, prove and
-//! query all take.
+//! the one v2 solve that the detector context, digest, prove and query all
+//! take, over the view's `ExecRelation` and its SCC (#160 step 4).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -9,6 +9,7 @@ use serde_json::json;
 
 use crate::engine::l4::combined_graph::CombinedGraph;
 use crate::engine::l4::effect_store::SummaryBundle;
+use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::scc::{SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::l4::summary::RoutineSummary;
 use crate::engine::l4::summary_runner::{
@@ -23,8 +24,8 @@ use crate::program::model::workspace::{Model, ModelEntities};
 /// store and the solver's diagnostics. The field index is a solver input only:
 /// a local of [`build_l4`] single-app, the cross-app base's otherwise.
 pub struct L4Analysis {
-    /// The ONE SCC owner: computed by [`build_l4`] (counter `build.graph_scc`),
-    /// or the cross-app base's `combined_scc`, shared by pointer.
+    /// The relation's SCC ([`ExecRelation::scc`], computed in
+    /// [`ExecRelation::new`]), shared by pointer: [`build_l4`] runs no Tarjan.
     pub scc: Arc<SccResult>,
     pub bundle: SummaryBundle,
     pub summarize_diagnostics: Vec<SummarizeDiagnostic>,
@@ -40,12 +41,11 @@ pub struct CoreSummaries(pub HashMap<String, RoutineSummary>);
 /// `summarize_diagnostics` AFTER `warnings` are rendered, so an injected row is
 /// never printed; it is empty in every production caller.
 pub struct L4Request {
-    pub scc: Option<Arc<SccResult>>,
     pub extra_diagnostics: Vec<SummarizeDiagnostic>,
 }
 
-/// The SCC (unless `req.scc` hands one in) and the v2 solve over `graph`, with
-/// the dependency leaves and fixed roles from `cross`. `cross`'s leaf
+/// The v2 solve over the relation's Primary payload, on the relation's SCC,
+/// with the dependency leaves and fixed roles from `cross`. `cross`'s leaf
 /// summaries change no output on any fixture (a leaf is a dependency routine
 /// with no out-edge, so the solver recomputes its direct rows); `fixed_roles`
 /// is pinned by `dependency_publisher_roles_stay_unknown` (ii) and
@@ -55,15 +55,12 @@ pub struct L4Request {
 // summaries census.
 pub(crate) fn build_l4(
     model: &Model,
-    graph: &CombinedGraph,
+    rel: &ExecRelation,
     req: L4Request,
     cross: Option<&CrossAppInputs<'_>>,
 ) -> (L4Analysis, CoreSummaries) {
-    let computed_scc = req.scc.is_none();
-    let scc = req.scc.unwrap_or_else(|| {
-        let _s = pt::span("context", "context.core_scc_tarjan");
-        Arc::new(graph_scc(graph))
-    });
+    let graph: &CombinedGraph = rel.primary();
+    let scc = Arc::clone(rel.scc());
     emit_scc_stats(graph, &scc);
 
     let ws = &model.workspace;
@@ -113,7 +110,7 @@ pub(crate) fn build_l4(
     };
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.l4");
-        census_l4(&l4, computed_scc);
+        census_l4(&l4);
     }
     // The ONE print site of a solve's non-convergence line (§4.4.7); the
     // injected `extra_diagnostics` were never rendered, so never print.
@@ -137,8 +134,9 @@ pub fn render_warnings(diagnostics: &[SummarizeDiagnostic]) -> Vec<String> {
 }
 
 /// Tarjan over `graph.edges_by_from` (counter `build.graph_scc`): the one
-/// copy, also behind the cross-app base's SCC. The snapshot's coverage fold no
-/// longer solves, so it no longer calls this (#160 step 3).
+/// copy, called by `ExecRelation::new` for every view's SCC (#160 step 4). The
+/// snapshot's coverage fold no longer solves, so it no longer calls this
+/// (#160 step 3).
 pub(crate) fn graph_scc(graph: &CombinedGraph) -> SccResult {
     let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &graph.edges_by_from {
@@ -230,16 +228,12 @@ fn emit_scc_stats(graph: &CombinedGraph, scc: &SccResult) {
     });
 }
 
-/// #160 §4.1.5: the `l4.*` buckets, shallow. `l4.scc` only when [`build_l4`]
-/// computed the SCC: one handed in is the cross-app base's, counted by
-/// `base.combined_scc` (a shared allocation once).
-fn census_l4(l4: &L4Analysis, computed_scc: bool) {
+/// #160 §4.1.5: the `l4.*` buckets, shallow. No `l4.scc`: the SCC is the
+/// relation's, counted once by `rel.scc` (#160 step 4).
+fn census_l4(l4: &L4Analysis) {
     use crate::engine::census::{Kind, Tally};
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
     emit("l4.bundle", &mut l4.bundle.census_tally());
-    if computed_scc {
-        emit("l4.scc", &mut crate::engine::census::scc(&l4.scc));
-    }
     emit(
         "l4.summarize_diagnostics",
         Tally::default().buf::<SummarizeDiagnostic>(l4.summarize_diagnostics.len()),

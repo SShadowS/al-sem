@@ -2581,13 +2581,12 @@ codeunit 50102 Cyc
             "engine::l4::summary_runner::issue107_tests::build_l4_prints_the_capped_line_once";
         if std::env::var_os(CHILD).is_some() {
             let m = model(CYC_SRC);
-            let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
+            let rel = crate::engine::l4::exec_relation::ExecRelation::single_app(&m);
             let req = crate::engine::l4::analysis::L4Request {
-                scc: None,
                 extra_diagnostics: vec![],
             };
             let (l4, _) = with_roles_iteration_cap(1, || {
-                crate::engine::l4::analysis::build_l4(&m, &graph, req, None)
+                crate::engine::l4::analysis::build_l4(&m, &rel, req, None)
             });
             assert_eq!(l4.warnings, [CYC_CAPPED_LINE], "precondition: capped");
             return;
