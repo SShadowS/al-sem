@@ -11,19 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Grammar: tree-sitter-al `main` at `4d75846c`** (B7b-3; package version still 4.4.1; was
   `8682cb5f`). The `node-types.json` hash guard had made CI red. 499 -> 500 named kinds, no
-  field change: `preproc_conditional_move_args` (a move header whose target or `;` comes from
-  an `#if` group) is `Structural`, and the lowerer reads no move modification, so it needs no
+  field name added or removed; the `target` field of the four move hosts
+  (`moveafter`/`movebefore`/`movefirst`/`movelast` modifications) became optional.
+  `preproc_conditional_move_args` (a move header whose target or `;` comes from an `#if`
+  group) is `Structural`, and the lowerer reads no move modification, so neither needs an
   arm. Shape changes: a `call_statement` no longer holds its `;`, and every bare name in
-  statement position is a `call_statement` (`Bar` before `end`/`else`/`until` too, which the
-  lowerer now lowers as a parenless call: it skipped the bare identifier before); a case
-  group arm may hold `empty_statement` and nested groups, and a branch may carry a
-  directive-only group before its `;`. Two lowerer arms (see Fixed). `CACHE_VERSION_GRAMMAR`
-  is now `tree-sitter-al-v4.4.1-4d75846c-native`. Measured old vs new: per-test outcomes
-  identical apart from the two new lowerer tests (3,584 -> 3,586, all pass), zero goldens
-  moved (the stamp kept its length, so `dry-run.txt` did not move), CDO
-  `--program-call-graph-stats` byte-identical (SHA-256 `c032c8db…94ef`). Limit: in a file
-  that already has an ERROR, a name the parser recovers in statement position may now be a
-  `call_statement`, and is lowered as a call.
+  statement position is a `call_statement` (`Bar` before `end`/`else`/`until` too, and the
+  body of `asserterror Foo;`), which the lowerer now lowers as a parenless call: it skipped
+  the bare identifier before. A case group arm may hold `empty_statement` and nested groups,
+  and a branch may carry a directive-only group before its `;`. Two lowerer arms (see
+  Fixed). `CACHE_VERSION_GRAMMAR` is now `tree-sitter-al-v4.4.1-4d75846c-native`. Measured
+  old vs new at the bump: per-test outcomes identical apart from the two new lowerer tests
+  (3,584 -> 3,586, all pass), zero goldens moved (the stamp kept its length, so
+  `dry-run.txt` did not move), CDO `--program-call-graph-stats` byte-identical (SHA-256
+  `c032c8db…94ef`). Limits: only a `call_statement` named `else` is skipped. In a file that
+  already has an ERROR, a name the parser recovers in statement position may now be a
+  `call_statement`, and is lowered as a call; so is a half-typed name before `end`
+  (`begin Fo end`) and a misread or recovered `begin`/`end` (grammar deferred item 43).
+  This is deliberate (`bare_name_before_end_lowers_as_call`).
 
 - #160 step 7a: one inherited set per Cone-SCC (part of #160). In
   `compose_inherited_cones`, a recursive Cone-SCC member's derived row is now folded
@@ -343,13 +348,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A `preproc_split_case_extended` arm may hold a nested `preproc_conditional_case`
     with whole branches in it. The arm read only its direct `case_branch` children, so
     such a branch was dropped with its calls; the arm is now read like a case group's.
+    So a `case_else_branch` in such a nested group (it parses clean) becomes the case's
+    else, first-match-wins; before, it was dropped.
   - A split terminator (`if C then Bar #if X ; #endif else Baz;`, valid AL) leaves the
     `else` as `(call_statement function: (identifier))` (grammar deferred item 43). It
     was lowered as a call to `else`; it is now skipped, and `Bar` and `Baz` keep their
     calls.
-  Tests `split_case_extended_nested_group_branch_is_kept` and
-  `split_terminator_else_is_not_a_call`: each failed before its arm and fails again
-  when its arm is broken.
+  Tests `split_case_extended_nested_group_branch_is_kept` (also an `#else` arm with a
+  branch and a nested group of `;` items), `split_case_extended_nested_group_else_is_the_case_else`
+  and `split_terminator_else_is_not_a_call`: each fails when its arm is broken and passes
+  after the revert.
+
+- **Nested `#if` case groups no longer recurse without a bound.** `collect_case_branches_in`
+  recursed once per nested `preproc_conditional_case` or `preproc_split_case_extended`
+  arm with the depth unchanged, and only statements and expressions checked
+  `MAX_LOWER_DEPTH`. Each nested level now adds one to the depth, and past the budget the
+  lowerer records a `SyntaxIssue` and drops the deeper branches.
+  `deep_nested_case_groups_degrade_instead_of_overflowing_small_stack` (300 levels, 1 MiB
+  stack) fails with the check removed and passes with it.
 
 - agentflow `post-merge` no longer reads a missing CDO workspace as a red gate. On
   #107 it ran without `CDO_WS`. `cdo-gate` stopped at its usage error (exit 2),
