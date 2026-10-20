@@ -482,12 +482,9 @@ pub(crate) mod cones_census {
     pub(crate) static CONE_SCC_SETS_BORROWED: AtomicU64 = AtomicU64::new(0);
     pub(crate) static CONE_SCC_SETS_BUILT: AtomicU64 = AtomicU64::new(0);
     pub(crate) static CONE_SCC_SET_ENTRIES: AtomicU64 = AtomicU64::new(0);
-    /// REPORT values, never components (the §4.5 overlap rule): the per-member
-    /// walk time (the same readings as `BFS_WALK_NANOS`), and the census-only
-    /// `root_set_probe` (build each root recursive SCC's set, count, drop).
+    /// A REPORT value, never a component (the §4.5 overlap rule): the
+    /// per-member walk time, from the same readings as `BFS_WALK_NANOS`.
     pub(crate) static WALK_TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
-    pub(crate) static ROOT_SET_PROBE_NANOS: AtomicU64 = AtomicU64::new(0);
-    pub(crate) static ROOT_SET_ENTRIES: AtomicU64 = AtomicU64::new(0);
 
     /// Fold one compose call's stats into the Cone-SCC census, if it is on.
     pub(crate) fn add_compose_stats(s: &crate::engine::l4::capability_cone::ComposeStats) {
@@ -617,7 +614,7 @@ pub(crate) mod cones_census {
             .each_ref()
             .map(|c| c.load(Ordering::Relaxed));
         eprintln!(
-            "[cones-census]   cone_scc: recursive={} members_all={} members_emitted={} roots={} self_loops={} max={} sizes=1:{} 2:{} 3-9:{} 10-99:{} 100+:{} member_walks={} own_entries={} sets_borrowed={} sets_built={} set_entries={} walk_total={:.1}ms root_set_probe={:.1}ms root_set_entries={}",
+            "[cones-census]   cone_scc: recursive={} members_all={} members_emitted={} roots={} self_loops={} max={} sizes=1:{} 2:{} 3-9:{} 10-99:{} 100+:{} member_walks={} own_entries={} sets_borrowed={} sets_built={} set_entries={} walk_total={:.1}ms",
             CONE_SCC_RECURSIVE.load(Ordering::Relaxed),
             CONE_SCC_MEMBERS_ALL.load(Ordering::Relaxed),
             CONE_SCC_MEMBERS_EMITTED.load(Ordering::Relaxed),
@@ -635,8 +632,6 @@ pub(crate) mod cones_census {
             CONE_SCC_SETS_BUILT.load(Ordering::Relaxed),
             CONE_SCC_SET_ENTRIES.load(Ordering::Relaxed),
             ms(WALK_TOTAL_NANOS.load(Ordering::Relaxed)),
-            ms(ROOT_SET_PROBE_NANOS.load(Ordering::Relaxed)),
-            ROOT_SET_ENTRIES.load(Ordering::Relaxed),
         );
         eprintln!(
             "[cones-census]   singleton: subst={:.1}ms scan_cone={:.1}ms scan_own={:.1}ms fold={:.1}ms raw={:.1}ms",

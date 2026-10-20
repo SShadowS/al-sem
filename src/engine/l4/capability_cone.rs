@@ -2087,16 +2087,18 @@ fn inherited_facts_by_bfs<'g>(
         .collect()
 }
 
-/// A recursive member's inherited output from its BFS picks: the raw push and
-/// the derived fold consume the SAME picks. Under [`ConeOutput::DerivedOnly`]
-/// the `retag` clones and `sort_inherited` are skipped; the fold is unchanged.
+/// A recursive member's inherited output from its BFS picks: the raw push and,
+/// when `derived` is given (only under `RecursiveMembership::PerMemberWalk`,
+/// #160 step 7a), the derived fold of the SAME picks. Under
+/// [`ConeOutput::DerivedOnly`] the `retag` clones and `sort_inherited` are
+/// skipped.
 fn emit_picks(
     subject: &str,
     picks: Vec<(&CapabilityFact, &TypedOutEdge)>,
     mode: ConeOutput,
-    derived: &mut ConeDerivedBuilder,
+    derived: Option<&mut ConeDerivedBuilder>,
 ) -> Vec<CapabilityFact> {
-    if mode.wants_derived() {
+    if let Some(derived) = derived.filter(|_| mode.wants_derived()) {
         for (rep, _) in &picks {
             derived.fold_fact(rep);
         }
@@ -2457,8 +2459,7 @@ fn compose_inherited_cones(
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, super::param_guard::FrameGuards>,
     mode: ConeOutput,
-    // shortcut: red-phase stub, both arms still run the per-member walk.
-    _membership: RecursiveMembership,
+    membership: RecursiveMembership,
 ) -> (
     HashMap<String, InheritedConeResult>,
     ConeDerivedStore,
@@ -2610,13 +2611,13 @@ fn compose_inherited_cones(
             scc_entry.members.len() as u64,
         );
         let recursive = scc_entry.recursive;
+        let emitted = scc_entry
+            .members
+            .iter()
+            .filter(|m| routine_ids.contains(*m))
+            .count() as u64;
         if recursive {
             let n = scc_entry.members.len() as u64;
-            let emitted = scc_entry
-                .members
-                .iter()
-                .filter(|m| routine_ids.contains(*m))
-                .count() as u64;
             stats.recursive_sccs += 1;
             stats.recursive_members_all += n;
             stats.recursive_members_emitted += emitted;
@@ -2630,25 +2631,34 @@ fn compose_inherited_cones(
                 10..=99 => 3,
                 _ => 4,
             }] += 1;
-            // §4.5 root_set_probe: build a root's set the way the switch will,
-            // count and time it, drop it. A census report, not a component.
-            if root_scc
-                && emitted > 0
-                && crate::engine::l5::detector_context::cones_census::enabled()
-            {
-                let t = std::time::Instant::now();
-                let set =
-                    fact_cone_for_scc(&scc_entry.members, succ_ids, &fact_cones, direct, None);
-                crate::engine::l5::detector_context::cones_census::add(
-                    &crate::engine::l5::detector_context::cones_census::ROOT_SET_PROBE_NANOS,
-                    t.elapsed().as_nanos() as u64,
-                );
-                crate::engine::l5::detector_context::cones_census::add(
-                    &crate::engine::l5::detector_context::cones_census::ROOT_SET_ENTRIES,
-                    set.len() as u64,
-                );
-            }
         }
+        // §4.2 step 1: ONE set per recursive SCC with an emitted member, read
+        // by every member's derived fold. A non-root borrows its fact cone
+        // (built above, freed after the member loop); a root, whose cone is
+        // never built, gets the same build here, dropped after the loop.
+        let use_set = recursive
+            && emitted > 0
+            && mode.wants_derived()
+            && membership == RecursiveMembership::PerScc;
+        let _t_set = use_set
+            .then(crate::engine::l5::detector_context::cones_census::start)
+            .flatten();
+        let root_set = (use_set && root_scc)
+            .then(|| fact_cone_for_scc(&scc_entry.members, succ_ids, &fact_cones, direct, None));
+        let scc_set: Option<&ConeFacts> = use_set.then(|| match &root_set {
+            Some(set) => {
+                stats.scc_sets_built += 1;
+                set
+            }
+            None => {
+                stats.scc_sets_borrowed += 1;
+                &fact_cones[&i]
+            }
+        });
+        crate::engine::l5::detector_context::cones_census::add_since(
+            &crate::engine::l5::detector_context::cones_census::BFS_WALK_NANOS,
+            _t_set,
+        );
         for m in &scc_entry.members {
             if !routine_ids.contains(m) {
                 continue;
@@ -2663,34 +2673,54 @@ fn compose_inherited_cones(
             }
             let _t_walk = crate::engine::l5::detector_context::cones_census::start();
             let inherited = if recursive {
-                stats.member_walks += 1;
                 stats.own_entries_recursive += own_entries(m).len() as u64;
-                let picks = inherited_facts_by_bfs(
-                    m,
-                    g,
-                    direct,
-                    &scc.scc_id_by_routine,
-                    &fact_cones,
-                    own_entries(m),
-                );
-                // One reading feeds the component and the `walk_total` report.
-                if let Some(t) = _t_walk {
-                    let ns = t.elapsed().as_nanos() as u64;
-                    crate::engine::l5::detector_context::cones_census::add(
-                        &crate::engine::l5::detector_context::cones_census::BFS_WALK_NANOS,
-                        ns,
+                // The walk runs only for the raw half, or as the derived
+                // oracle (`PerMemberWalk`): never under `PerScc` + `DerivedOnly`.
+                let picks = (scc_set.is_none() || mode.wants_raw()).then(|| {
+                    stats.member_walks += 1;
+                    let picks = inherited_facts_by_bfs(
+                        m,
+                        g,
+                        direct,
+                        &scc.scc_id_by_routine,
+                        &fact_cones,
+                        own_entries(m),
                     );
-                    crate::engine::l5::detector_context::cones_census::add(
-                        &crate::engine::l5::detector_context::cones_census::WALK_TOTAL_NANOS,
-                        ns,
+                    // One reading feeds the component and the `walk_total` report.
+                    if let Some(t) = _t_walk {
+                        let ns = t.elapsed().as_nanos() as u64;
+                        crate::engine::l5::detector_context::cones_census::add(
+                            &crate::engine::l5::detector_context::cones_census::BFS_WALK_NANOS,
+                            ns,
+                        );
+                        crate::engine::l5::detector_context::cones_census::add(
+                            &crate::engine::l5::detector_context::cones_census::WALK_TOTAL_NANOS,
+                            ns,
+                        );
+                    }
+                    crate::engine::l5::detector_context::cones_census::add_gated(
+                        &crate::engine::l5::detector_context::cones_census::BFS_PICKS,
+                        picks.len() as u64,
                     );
-                }
-                crate::engine::l5::detector_context::cones_census::add_gated(
-                    &crate::engine::l5::detector_context::cones_census::BFS_PICKS,
-                    picks.len() as u64,
-                );
+                    picks
+                });
                 let _t_fold = crate::engine::l5::detector_context::cones_census::start();
-                let out = emit_picks(m, picks, mode, &mut derived);
+                // §4.2 step 2: the SCC set, then the member's own entries.
+                if let Some(set) = scc_set {
+                    for entry in set.values() {
+                        derived.fold_fact(&entry.rep);
+                    }
+                    for entry in own_entries(m) {
+                        derived.fold_fact(&entry.rep);
+                    }
+                    stats.scc_set_entries_folded += set.len() as u64;
+                }
+                let out = match picks {
+                    Some(picks) => {
+                        emit_picks(m, picks, mode, scc_set.is_none().then_some(&mut derived))
+                    }
+                    None => Vec::new(),
+                };
                 crate::engine::l5::detector_context::cones_census::add_since(
                     &crate::engine::l5::detector_context::cones_census::BFS_FOLD_NANOS,
                     _t_fold,
@@ -5891,6 +5921,26 @@ mod callsite_local_scan_tests {
         )
     }
 
+    /// [`model`] with one table per name instead of `Cust`, in the same text
+    /// shape, ids 50101.. (#160 step 7a §5.4).
+    pub(super) fn model_with_tables(names: &[&str], src: &str) -> Model {
+        let mut files: Vec<(String, String)> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                (
+                    format!("src/Tab{}.al", i + 1),
+                    format!(
+                        "table {} {name}\n{{\n    fields\n    {{\n        field(1; \"No.\"; Code[20]) {{ }}\n    }}\n    keys {{ key(PK; \"No.\") {{ }} }}\n}}\n",
+                        50101 + i
+                    ),
+                )
+            })
+            .collect();
+        files.push(("src/Code.al".to_string(), src.to_string()));
+        assemble_and_resolve_inline_program_default(&files, APP)
+    }
+
     pub(super) fn workspace_model(dir: &Path) -> Option<Model> {
         assemble_and_resolve_workspace_program(
             &crate::program::inputs::InputSet::read(dir, &Default::default()),
@@ -6413,10 +6463,10 @@ codeunit 50111 "Cell Calls"
 /// its main assertions; the oracle is [`RecursiveMembership::PerMemberWalk`].
 #[cfg(test)]
 mod scc_set_tests {
-    use super::callsite_local_scan_tests::{app_dirs, model, workspace_model};
+    use super::callsite_local_scan_tests::{app_dirs, model, model_with_tables, workspace_model};
     use super::*;
     use crate::engine::l4::cone_derived::test_facts::{call_edge, fact, temp_fact};
-    use crate::engine::l4::cone_derived::{TOUCHES_PHYSICAL_TABLE, TOUCHES_TABLE};
+    use crate::engine::l4::cone_derived::{MAY_COMMIT, TOUCHES_PHYSICAL_TABLE, TOUCHES_TABLE};
     use crate::engine::l4::exec_relation::ExecRelation;
     use crate::engine::l5::detector_context::det_cone_inputs;
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -6898,7 +6948,15 @@ codeunit 50100 C
         assert_eq!(s.size_hist, [1, 0, 1, 0, 0], "size_hist");
         assert_eq!(s.recursive_members_emitted, 4, "recursive_members_emitted");
         assert_eq!(s.max_recursive_members, 3, "max_recursive_members");
-        assert_eq!(s.member_walks, 4, "member_walks");
+        assert_eq!(
+            s.member_walks, 0,
+            "member_walks (DerivedOnly folds the sets)"
+        );
+        assert_eq!(
+            (s.scc_sets_built, s.scc_sets_borrowed),
+            (1, 1),
+            "one set built (the root), one borrowed (the self-loop)"
+        );
     }
 
     // -- T7, T8: the oracle over fixtures and CDO ------------------------------
@@ -7207,5 +7265,303 @@ codeunit 50100 C
             }
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// T5's graph: a 479-member cycle M000 -> ... -> M478 -> M000, each member
+    /// one distinct write `t/Mi`, plus the chain M000 -> C1 -> C2 -> C3, each
+    /// writing `t/Ck`: 482 tables.
+    fn t5_graph() -> (Vec<TypedEdge>, Vec<String>, Direct) {
+        let m = |i: usize| format!("M{i:03}");
+        let mut typed: Vec<TypedEdge> = (0..479)
+            .map(|i| call_edge(&m(i), &m((i + 1) % 479), &format!("cs/{}", m(i))))
+            .collect();
+        typed.push(call_edge("M000", "C1", "cs/M000-C1"));
+        typed.push(call_edge("C1", "C2", "cs/C1"));
+        typed.push(call_edge("C2", "C3", "cs/C2"));
+        let mut nodes: Vec<String> = (0..479).map(m).collect();
+        nodes.extend(strs(&["C1", "C2", "C3"]));
+        let direct: Direct = nodes
+            .iter()
+            .map(|n| (n.clone(), vec![insert(n, &format!("t/{n}"))]))
+            .collect();
+        (typed, nodes, direct)
+    }
+
+    /// T3b's source: M1 -> ... -> M8 -> M1; Mi calls `Wi(R)` on a local
+    /// physical `Record Ti` and `Commit()`; `Wi` inserts into its parameter.
+    fn t3b_src() -> String {
+        let mut s = String::from("codeunit 50100 C\n{\n");
+        for i in 1..=8 {
+            let next = i % 8 + 1;
+            s += &format!(
+                "    procedure M{i}()\n    var\n        R: Record T{i};\n    begin\n        W{i}(R);\n        Commit();\n        M{next}();\n    end;\n\n    procedure W{i}(var R: Record T{i})\n    begin\n        R.Insert();\n    end;\n\n"
+            );
+        }
+        s + "}\n"
+    }
+
+    /// One raw fact as `(op, kind, resource id, via, witness call site)`.
+    fn raw_row(f: &CapabilityFact) -> (&str, &str, Option<&str>, &str, Option<&str>) {
+        (
+            f.op,
+            f.resource_kind,
+            f.resource_id.as_deref(),
+            f.via,
+            f.witness_callsite_id.as_deref(),
+        )
+    }
+
+    // -- T2 -------------------------------------------------------------------
+
+    /// §5.3 T2: a root two-member SCC {X, Y} (X -> S) and a non-root
+    /// self-loop R (R -> R, R -> S2) called by the singleton U.
+    #[test]
+    fn scc_set_root_and_self_loop() {
+        let typed = vec![
+            call_edge("X", "Y", "cs/XY"),
+            call_edge("Y", "X", "cs/YX"),
+            call_edge("X", "S", "cs/XS"),
+            call_edge("R", "R", "cs/RR"),
+            call_edge("R", "S2", "cs/RS2"),
+            call_edge("U", "R", "cs/UR"),
+        ];
+        let nodes = strs(&["X", "Y", "S", "R", "S2", "U"]);
+        let direct: Direct = [
+            ("S".to_string(), vec![insert("S", "t/S")]),
+            ("S2".to_string(), vec![insert("S2", "t/S2")]),
+        ]
+        .into();
+        let (new, old) = both_paths(&typed, &nodes, &direct);
+        assert_eq!(
+            new.stats.recursive_roots, 1,
+            "precondition: one root ({{X, Y}})"
+        );
+        assert_eq!(new.stats.self_loops, 1, "precondition: one self-loop (R)");
+        let d = &new.derived;
+        for m in ["X", "Y", "S"] {
+            assert_eq!(d.writes_tables_of(m), ["t/S"], "{m}: writes");
+        }
+        for m in ["R", "U", "S2"] {
+            assert_eq!(d.writes_tables_of(m), ["t/S2"], "{m}: writes");
+        }
+        assert_rows_equal("T2", d, &old.derived);
+        assert_eq!(new.stats.scc_sets_built, 1, "the root's set is built once");
+        assert_eq!(
+            new.stats.scc_sets_borrowed, 1,
+            "the self-loop's set is its fact cone"
+        );
+    }
+
+    /// §5.4 T3b: the producer blow-up, callers inside the cycle.
+    #[test]
+    fn scc_set_own_entries_scale() {
+        let names: Vec<String> = (1..=8).map(|i| format!("T{i}")).collect();
+        let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let m = model_with_tables(&name_refs, &t3b_src());
+        let rel = ExecRelation::single_app(&m);
+        let mut tables: Vec<String> = names.iter().map(|n| table_id(&m, n)).collect();
+        tables.sort();
+        let members: Vec<String> = (1..=8).map(|i| routine_id(&m, &format!("M{i}"))).collect();
+        let (new, old) = both_paths_model(&m, &rel);
+        for (i, mi) in members.iter().enumerate() {
+            assert_eq!(
+                non_seed_states(&new.pd_solution, mi),
+                8,
+                "precondition: M{} holds one state per producer",
+                i + 1
+            );
+        }
+        assert_eq!(
+            new.stats.own_entries_recursive, 64,
+            "precondition: 8 members x 8 own entries"
+        );
+        assert_eq!(
+            new.stats.scc_set_entries_folded, 8,
+            "precondition: the set holds one entry (the commit), folded by 8 members"
+        );
+        for (i, mi) in members.iter().enumerate() {
+            assert!(
+                new.derived.flags_of(mi) & MAY_COMMIT != 0,
+                "precondition: M{} may commit",
+                i + 1
+            );
+        }
+        for (i, mi) in members.iter().enumerate() {
+            assert_eq!(
+                new.derived.writes_physical_tables_of(mi),
+                tables,
+                "M{}'s row",
+                i + 1
+            );
+        }
+        assert_rows_equal("T3b", &new.derived, &old.derived);
+    }
+
+    // -- T5, T6 ---------------------------------------------------------------
+
+    /// §5.6 T5: a 479-member cycle with a successor chain of 3.
+    #[test]
+    fn scc_set_479_cycle_scales() {
+        let (typed, nodes, direct) = t5_graph();
+        let (new, old) = both_paths(&typed, &nodes, &direct);
+        let mut all: Vec<String> = nodes.iter().map(|n| format!("t/{n}")).collect();
+        all.sort();
+        assert_eq!(all.len(), 482);
+        for n in nodes.iter().filter(|n| n.starts_with('M')) {
+            assert_eq!(new.derived.writes_tables_of(n), all, "{n}: all 482 tables");
+        }
+        assert_rows_equal("T5", &new.derived, &old.derived);
+        assert_eq!(old.stats.member_walks, 479, "the oracle walks every member");
+        assert_eq!(
+            new.stats.member_walks, 0,
+            "no per-member walk under DerivedOnly"
+        );
+        assert_eq!(
+            new.stats.scc_sets_borrowed + new.stats.scc_sets_built,
+            1,
+            "one set for the one SCC"
+        );
+        assert_eq!(
+            new.stats.scc_set_entries_folded,
+            479 * 482,
+            "one pass per member over one set"
+        );
+    }
+
+    /// §5.6 T6: (a) a chain of 20 two-member SCCs, (b) a three-member SCC with
+    /// 200 successor singletons; one set per SCC in each.
+    #[test]
+    fn scc_set_chain_and_fan_out() {
+        // (a) P_k <-> Q_k, Q_k -> P_{k+1}; P_k writes t/k.
+        let mut typed = Vec::new();
+        let mut nodes = Vec::new();
+        let mut direct: Direct = HashMap::new();
+        for k in 0..20 {
+            let (p, q) = (format!("P{k:02}"), format!("Q{k:02}"));
+            typed.push(call_edge(&p, &q, &format!("cs/{p}")));
+            typed.push(call_edge(&q, &p, &format!("cs/{q}")));
+            if k < 19 {
+                typed.push(call_edge(
+                    &q,
+                    &format!("P{:02}", k + 1),
+                    &format!("cs/{q}-next"),
+                ));
+            }
+            direct.insert(p.clone(), vec![insert(&p, &format!("t/{k}"))]);
+            nodes.push(p);
+            nodes.push(q);
+        }
+        let (new, old) = both_paths(&typed, &nodes, &direct);
+        assert_rows_equal("T6 chain", &new.derived, &old.derived);
+        assert_eq!(
+            new.stats.scc_sets_borrowed + new.stats.scc_sets_built,
+            20,
+            "chain: one set per SCC"
+        );
+
+        // (b) A -> B -> C -> A, A -> S_j for 200 singletons, each writing t/S_j.
+        let mut typed = vec![
+            call_edge("A", "B", "cs/AB"),
+            call_edge("B", "C", "cs/BC"),
+            call_edge("C", "A", "cs/CA"),
+        ];
+        let mut nodes = strs(&["A", "B", "C"]);
+        let mut direct: Direct = HashMap::new();
+        for j in 0..200 {
+            let s = format!("S{j:03}");
+            typed.push(call_edge("A", &s, &format!("cs/A-{s}")));
+            direct.insert(s.clone(), vec![insert(&s, &format!("t/{s}"))]);
+            nodes.push(s);
+        }
+        let (new, old) = both_paths(&typed, &nodes, &direct);
+        assert_rows_equal("T6 fan-out", &new.derived, &old.derived);
+        assert_eq!(
+            new.stats.scc_sets_borrowed + new.stats.scc_sets_built,
+            1,
+            "fan-out: one set for the one SCC"
+        );
+    }
+
+    // -- T9 -------------------------------------------------------------------
+
+    /// §5.7 T9: the production entry `compose_cone_over_graph` uses the new
+    /// path (derived), and the raw half is unchanged (raw, recursive members).
+    #[test]
+    fn derived_only_runs_no_member_walk() {
+        let run = |g: &(Vec<TypedEdge>, Vec<String>, Direct), mode| {
+            compose_cone_over_graph(&g.0, &g.1, &g.2, &HashMap::new(), &[], mode)
+        };
+        let t1 = t1_graph();
+        let t5 = t5_graph();
+
+        // Raw: A's raw inherited Vec on T1, literal, under Both and RawOnly.
+        let want = vec![
+            ("insert", "table", Some("t/C"), "call", Some("cs/AB")),
+            ("publish", "event", Some("e/B"), "call", Some("cs/AB")),
+        ];
+        for (label, g, walks) in [("T1", &t1, 2), ("T5", &t5, 479)] {
+            let both = run(g, ConeOutput::Both);
+            let raw = run(g, ConeOutput::RawOnly);
+            if label == "T1" {
+                for (mode, out) in [("Both", &both), ("RawOnly", &raw)] {
+                    let got: Vec<_> = out.cones["A"].inherited.iter().map(raw_row).collect();
+                    assert_eq!(got, want, "T1 {mode}: A's raw inherited Vec");
+                }
+            }
+            for n in &g.1 {
+                assert_eq!(
+                    both.cones[n].inherited, raw.cones[n].inherited,
+                    "{label} {n}: Both's raw Vec equals RawOnly's"
+                );
+            }
+            assert_eq!(both.stats.member_walks, walks, "{label}: Both walks");
+            assert_eq!(raw.stats.member_walks, walks, "{label}: RawOnly walks");
+            let derived = run(g, ConeOutput::DerivedOnly);
+            assert_rows_equal(label, &both.derived, &derived.derived);
+        }
+
+        // Derived: on T5 under DerivedOnly, no member walk runs.
+        let out = run(&t5, ConeOutput::DerivedOnly);
+        assert_eq!(
+            out.stats.member_walks, 0,
+            "compose_cone_over_graph runs a per-member walk under DerivedOnly"
+        );
+        assert_eq!(out.stats.recursive_members_emitted, 479);
+    }
+
+    /// Plan Review Focus 2: no set for a recursive SCC with no member in
+    /// `nodes`. `nodes = [A, C]`, edges A -> X, X -> Y, Y -> X, X -> C. Tarjan
+    /// starts only from `nodes`, so such an SCC is always reached from a
+    /// node outside it and is never a root: the case is a non-root one.
+    #[test]
+    fn scc_set_none_for_an_scc_with_no_emitted_member() {
+        let typed = vec![
+            call_edge("A", "X", "cs/AX"),
+            call_edge("X", "Y", "cs/XY"),
+            call_edge("Y", "X", "cs/YX"),
+            call_edge("X", "C", "cs/XC"),
+        ];
+        let nodes = strs(&["A", "C"]);
+        let direct: Direct = [("C".to_string(), vec![insert("C", "t/C")])].into();
+        let (new, old) = both_paths(&typed, &nodes, &direct);
+        assert_eq!(
+            (
+                new.stats.recursive_sccs,
+                new.stats.recursive_members_emitted
+            ),
+            (1, 0),
+            "precondition: one recursive SCC, {{X, Y}}, with no member in nodes"
+        );
+        assert_eq!(
+            new.stats.scc_sets_borrowed + new.stats.scc_sets_built,
+            0,
+            "no set for an SCC with no emitted member"
+        );
+        assert_eq!(
+            new.derived.row_ids(),
+            ["A", "C"].into_iter().collect::<BTreeSet<&str>>()
+        );
+        assert_eq!(new.derived.writes_tables_of("A"), ["t/C"], "A reaches t/C");
+        assert_rows_equal("no emitted member", &new.derived, &old.derived);
     }
 }
