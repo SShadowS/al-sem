@@ -824,7 +824,7 @@ pub fn reconstruct_via(
 /// never be attributed to a caller of the routine that owns that callsite.
 /// Every real producer of these 4 kinds is a to-less
 /// [`UncertaintyEdge`](crate::engine::l4::combined_graph::UncertaintyEdge)
-/// (`combined_graph.rs:260,272,299,304`) — folded into its OWN routine's
+/// (emitted by `combined_graph::build_combined_graph`) — folded into its OWN routine's
 /// uncertainties unconditionally (no kind filter on the way IN, in that same
 /// retired fold) — so a routine that owns one of these always keeps
 /// it in its own final `uncertainties`; it simply never propagates further
@@ -832,7 +832,13 @@ pub fn reconstruct_via(
 /// here (matching that retired fold's own `matches!`), not by assuming only
 /// uncertainty-edges ever produce these kinds, so a future producer is still
 /// filtered correctly on the inherited side without touching this function.
-fn is_callsite_local_kind(kind: &str) -> bool {
+///
+/// The same list also defines the coverage-reason kinds (#160 step 3):
+/// `capability_cone::callsite_local_coverage_reasons` maps exactly these kinds
+/// to reasons. Until step 3 the solver's filter and the coverage fold's `match`
+/// were two equal lists; they are now one on purpose (epic §6), so adding a
+/// kind here also adds a coverage reason.
+pub(crate) fn is_callsite_local_kind(kind: &str) -> bool {
     matches!(
         kind,
         "member-not-found" | "external-target" | "ambiguous-overload" | "interface-open-world"
@@ -1090,10 +1096,10 @@ pub fn solve_side_facts(
             for &i in idxs {
                 let ue = &graph.uncertainty_edges[i];
                 let u = Uncertainty::from(&ue.uncertainty);
-                // Empirically always one of the 4 filtered kinds (every real
-                // `UncertaintyEdge` producer is — see this fn's own doc), but
-                // apply the SAME generic filter check here rather than
-                // hardcoding that fact.
+                // Usually one of the 4 filtered kinds, but uncertainty edges
+                // also carry `dynamic-dispatch` and `unresolved-call`
+                // (`combined_graph::build_combined_graph`), which do fold into
+                // `shared`; hence the same generic filter check here.
                 if !is_callsite_local_kind(&u.kind) {
                     fold_shared(&mut shared, &mut keybuf, &u, &mut c_key_conflicts);
                     c_shared_inserts += 1;

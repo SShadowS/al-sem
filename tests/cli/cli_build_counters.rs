@@ -175,9 +175,11 @@ fn run(args: &[&str]) -> BTreeMap<String, u64> {
 }
 
 // ---------------------------------------------------------------------------
-// §4.4.8 rows (after step 2; every row equals that table, checked 2026-10-19.
-// The query rows equal §4.1.3's too: query now reuses the `l4` cell, with the
-// same one solve and one Tarjan its private builders ran.)
+// §4.4.8 rows (after step 3; every row equals that spec's "after step 3"
+// table, checked 2026-10-20: each snapshot lost its coverage-fold solve, so
+// -1 summaries_v2 and -1 graph_scc per snapshot. The query rows equal
+// §4.1.3's too: query reuses the `l4` cell, with the same one solve and one
+// Tarjan its private builders ran.)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -226,8 +228,8 @@ fn analyze_cross_app_d47() {
             program: 1,
             bcg: 3,
             cone: 1,
-            v2: 1,
-            scc: 3,
+            v2: 0,
+            scc: 2,
             pd: 1,
             ctx: 1,
             snap: 1,
@@ -266,8 +268,8 @@ fn digest_cross_app() {
             program: 1,
             bcg: 3,
             cone: 2,
-            v2: 2,
-            scc: 4,
+            v2: 1,
+            scc: 3,
             pd: 2,
             ctx: 1,
             snap: 1,
@@ -299,8 +301,8 @@ fn digest_single_app() {
             program: 1,
             bcg: 2,
             cone: 2,
-            v2: 2,
-            scc: 4,
+            v2: 1,
+            scc: 3,
             pd: 2,
             ctx: 1,
             snap: 1,
@@ -319,8 +321,8 @@ fn prove() {
             program: 1,
             bcg: 2,
             cone: 2,
-            v2: 2,
-            scc: 4,
+            v2: 1,
+            scc: 3,
             pd: 2,
             ctx: 1,
             snap: 1,
@@ -329,8 +331,9 @@ fn prove() {
 }
 
 /// Spec §4.4.4 (A8): digest's no-input check runs right after the target
-/// build, before `prepare` and before `compose_snapshot` (whose fold solve
-/// counts a `build.summaries_v2`).
+/// build, before `prepare` and before `compose_snapshot`. `build.snapshot`
+/// witnesses the snapshot directly: since #160 step 3 the snapshot's coverage
+/// fold no longer solves, so `build.summaries_v2` no longer witnesses it.
 #[test]
 fn run_digest_empty_diff_builds_no_context() {
     let d = tempfile::tempdir().unwrap();
@@ -355,6 +358,11 @@ fn run_digest_empty_diff_builds_no_context() {
         0,
         "the no-input check must run before prepare\n{m:?}"
     );
+    assert_eq!(
+        count(&m, "build.snapshot"),
+        0,
+        "the no-input check must run before compose_snapshot\n{m:?}"
+    );
     assert_eq!(count(&m, "build.summaries_v2"), 0, "{m:?}");
 }
 
@@ -362,8 +370,8 @@ const FINGERPRINT_ROW: Row = Row {
     program: 1,
     bcg: 2,
     cone: 2,
-    v2: 2,
-    scc: 4,
+    v2: 1,
+    scc: 3,
     pd: 2,
     ctx: 1,
     snap: 1,
@@ -417,8 +425,8 @@ fn diff_ws_ws() {
             program: 2,
             bcg: 2,
             cone: 2,
-            v2: 2,
-            scc: 4,
+            v2: 0,
+            scc: 2,
             pd: 2,
             ctx: 0,
             snap: 2,
@@ -446,8 +454,8 @@ fn diff_ws_ws_strict() {
             program: 2,
             bcg: 4,
             cone: 4,
-            v2: 4,
-            scc: 8,
+            v2: 2,
+            scc: 6,
             pd: 4,
             ctx: 2,
             snap: 2,
@@ -869,10 +877,32 @@ fn aldump_starts_no_phase_sampler() {
     );
 }
 
+/// #160 step 3: `project_r3a3` (`aldump --r3a3-cone-coverage`) takes its
+/// coverage reasons from a scan, so it runs no L4 solve; its one Tarjan is the
+/// cone's typed-edge SCC.
+#[test]
+fn aldump_r3a3_runs_no_solve() {
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_aldump"),
+        &["--r3a3-cone-coverage", &ws_a()],
+        &[],
+    );
+    let m = last_counters(&events);
+    assert!(
+        out.status.success() && count(&m, "build.program") > 0,
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(count(&m, "build.summaries_v2"), 0, "{m:?}");
+    assert_eq!(count(&m, "build.graph_scc"), 1, "{m:?}");
+}
+
 /// Code-review CR8: one snapshot base build opens `r3a3.graph_build` and
-/// `r3a3.clone_inputs` once each, as it opens `r3a3.direct_facts` once; a span
-/// count is a build count. Final panel F2-6: the narrowed graph span has a new
-/// name, so no `r3a3.calls_graph` (which covered the clones too) is left.
+/// `r3a3.clone_inputs` once each, as it opens `r3a3.direct_facts_scan` once; a
+/// span count is a build count. Final panel F2-6: the narrowed graph span has a
+/// new name, so no `r3a3.calls_graph` (which covered the clones too) is left.
+/// #160 step 3: likewise no `r3a3.direct_facts`, which also covered the
+/// coverage fold's L4 solve.
 #[test]
 fn r3a3_spans_open_once_per_base() {
     let (out, events) = spawn_trace_events(
@@ -897,11 +927,12 @@ fn r3a3_spans_open_once_per_base() {
             .filter(|e| e["ph"] == "B" && e["name"] == name)
             .count()
     };
-    let bases = opened("r3a3.direct_facts");
+    let bases = opened("r3a3.direct_facts_scan");
     assert!(bases > 0, "no snapshot base built");
     assert_eq!(opened("r3a3.graph_build"), bases);
     assert_eq!(opened("r3a3.clone_inputs"), bases);
     assert_eq!(opened("r3a3.calls_graph"), 0, "the old span name is back");
+    assert_eq!(opened("r3a3.direct_facts"), 0, "the old span name is back");
 }
 
 /// Spec §4.1.5: d47 fills the ordering cell after the context is built, so its

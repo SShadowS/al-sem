@@ -9,6 +9,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- #160 step 3: the capability snapshot and `project_r3a3` no longer run an L4
+  solve to get their call-site-local coverage reasons. Before, each snapshot base
+  (and each `project_r3a3`) ran its own `compute_summaries_v2` over a fresh Tarjan
+  SCC and kept only the four call-site-local uncertainty kinds (`ambiguous-overload`,
+  `member-not-found`, `external-target`, `interface-open-world`). Those kinds never
+  move from a callee to a caller, so a routine's set is exactly its own uncertainty
+  edges'. Now one pass over the combined graph's uncertainty edges
+  (`callsite_local_coverage_reasons`) gives the same reasons for every workspace
+  routine. It filters with the
+  solver's own `is_callsite_local_kind`, so the solver's propagation filter and the
+  coverage kinds are one list on purpose. No output changes: r3a3, cli-b and r4f
+  goldens are unchanged, and CDO's ratchets and histogram are unchanged.
+  - **Proof.** The old solve-and-fold stays as a test-only oracle. The new scan
+    equals it per workspace routine, with no extra key, on every app dir (at any
+    depth) under `tests/r0-corpus` (217), `tests/fixtures` (29),
+    `tests/r3a4-fixtures`, `tests/r3a5-fixtures` and `tests/r2-5b-fixtures` (1
+    each), each over both its single-app and its cross-app model (the cross-app
+    commands build the snapshot over the latter, whose routines include the
+    dependency routines with bodies), plus an inline fixture, a forced roles cap,
+    and CDO in both modes (5479 routines single-app, 31656 cross-app). The inline
+    fixture puts each kind in a non-recursive routine, a self-loop and a
+    two-member cycle, because the inputs miss those cells. On CDO every recursive
+    cell is 0 single-app, and only a few are not 0 cross-app:
+
+    | kind | single-app: non-recursive | self-loop | multi-member | cross-app: non-recursive | self-loop | multi-member |
+    |---|--:|--:|--:|--:|--:|--:|
+    | ambiguous-overload | 18 | 0 | 0 | 119 | 1 | 5 |
+    | external-target | 393 | 0 | 0 | 19 | 0 | 0 |
+    | interface-open-world | 15 | 0 | 0 | 149 | 0 | 19 |
+    | member-not-found | 0 | 0 | 0 | 0 | 0 | 0 |
+
+  - **Gap deviation.** `tests/gap` keeps its scenarios as inline AL strings inside
+    the integration crate, which a lib test cannot reach, and an integration test
+    cannot call the test-only oracle. The 32 app dirs under the four fixture roots
+    and the inline fixtures stand in for it.
+  - **Counters.** Each snapshot builds one `build.summaries_v2` and one
+    `build.graph_scc` fewer (process totals): `analyze --detector d47-…` v2 1→0,
+    scc 3→2; `digest` (cross-app and `--single-app`), `prove` and `fingerprint`
+    (every mode) v2 2→1, scc 4→3; `diff ws ws` v2 2→0, scc 4→2; `diff ws ws
+    --strict` v2 4→2, scc 8→6. The child spec's §4.4.8 restates the table "after
+    step 3". `run_digest_empty_diff_builds_no_context` now checks
+    `build.snapshot == 0` directly, since `build.summaries_v2` no longer witnesses a
+    snapshot.
+  - **stderr.** The snapshot's private solve printed a roles-cap non-convergence
+    line for its own graph. Commands with no L4 solve lose that line entirely:
+    `diff ws ws` without `--strict`, `analyze --detector d47-…` (no `l4` fill),
+    `aldump --r3a3-cone-coverage` and the aldump snapshot modes. Commands with an
+    L4 solve keep only L4's own line (`build_l4`, now truly the one print site),
+    which reports L4's graph; in cross-app commands that is the base's graph, not
+    the snapshot's cut graph. The dropped line reported the convergence of roles nothing read: the
+    fold read only the four selected kinds, and a cap appends `fixpoint-capped`
+    without changing that set.
+  - **Census and trace.** The removed solve no longer adds to the
+    `ALSEM_SUMMARIES_CENSUS=1` totals or emits a `compute_summaries_v2_phase_split`
+    trace instant per snapshot.
+  - **Span.** `r3a3.direct_facts` is renamed `r3a3.direct_facts_scan`, since it no
+    longer contains a solve.
 - `/issue` runs the full gate set (`ci-steps all`, both `check-goldens` runs,
   `cdo-gate`) once per issue instead of after every change: before the final
   panel and after each panel fix it runs only the task gate (`ci-steps task`),

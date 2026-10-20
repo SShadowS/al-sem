@@ -294,12 +294,6 @@ impl DepKey {
     }
 }
 
-/// The shared `CDO_WS` gate (skips without it, panics under
-/// `ENFORCE_CDO_WS=1`), included verbatim like the integration tests do.
-#[cfg(test)]
-#[path = "../../tests/common/cdo.rs"]
-mod cdo;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1402,7 +1396,7 @@ mod tests {
     fn cdo_light_and_full_profiles_give_the_same_report_and_answers() {
         use crate::program::dep_summary::tests::report_text;
         use crate::program::resolve::full::build_context_with;
-        let Some(ws) = super::cdo::cdo_ws_or_enforce() else {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
             return;
         };
         // One profile at a time: each CDO build is dropped before the next

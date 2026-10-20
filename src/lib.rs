@@ -24,6 +24,13 @@ pub mod big_stack;
 /// Bounded-read helper shared by every zip/gzip decompression site (Task
 /// T2.2, DoS hardening) — see the module doc.
 pub mod capped_io;
+/// The shared `CDO_WS` gate (skips without it, panics under
+/// `ENFORCE_CDO_WS=1`), included verbatim like the integration tests do. The
+/// lib's one copy: a second `#[path]` include of the same file is a clippy
+/// error, so every lib test reaches it as `crate::cdo`.
+#[cfg(test)]
+#[path = "../tests/common/cdo.rs"]
+pub(crate) mod cdo;
 /// No-op phase marks for the out-of-tree byte-census probe — see the module doc.
 pub mod census_hook;
 pub mod config;

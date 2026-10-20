@@ -3229,6 +3229,10 @@ pub(crate) fn capability_fact_sort_key(f: &PCapabilityFact) -> String {
     .join("|")
 }
 
+/// TEST-ONLY ORACLE (#160 step 3): the retired solve-and-fold that
+/// [`callsite_local_coverage_reasons`] replaced, kept with its body unchanged
+/// as the old side of `callsite_local_scan_tests`.
+///
 /// Map a routine's L4 fixed-point `uncertainties` to coverage reasons, faithful
 /// to summary-runner.ts:565-596. Only the four call-resolution uncertainty kinds
 /// that imply incomplete call resolution map to reasons:
@@ -3242,6 +3246,7 @@ pub(crate) fn capability_fact_sort_key(f: &PCapabilityFact) -> String {
 /// Runs the L4 JACOBI fixed point over the COMBINED-graph SCC (the same inputs
 /// `project_r3a2` uses) — the cone reads only the typed-edge SCC, but the
 /// uncertainties are a property of the call-resolution fixed point.
+#[cfg(test)]
 fn compute_uncertainty_coverage_reasons(
     ws: &ModelEntities,
     graph: &CombinedGraph,
@@ -3296,6 +3301,60 @@ fn compute_uncertainty_coverage_reasons(
         }
     }
     out
+}
+
+/// Per-routine coverage reasons from call-site-local uncertainty (#160 step 3):
+/// the kind of every uncertainty edge whose kind
+/// [`is_callsite_local_kind`](super::db_effect_solver::is_callsite_local_kind)
+/// selects, keyed by the edge's `from`. The reason text is the kind text.
+///
+/// Equal, for every workspace routine, to mapping that routine's solved L4
+/// `uncertainties` (the retired, now test-only
+/// `compute_uncertainty_coverage_reasons`), for two reasons:
+/// - a base summary never carries these kinds:
+///   `summary_runner::base_intraprocedural_summary` emits only `opaque-body` or
+///   `parse-incomplete`;
+/// - the solve never moves them from a callee to a caller or between SCC
+///   members: `db_effect_solver::solve_side_facts` folds an entry into the
+///   shared set only behind `!is_callsite_local_kind`, and a member keeps its
+///   own uncertainty edges.
+///
+/// So a routine's solved set of these kinds is exactly its own uncertainty
+/// edges'. A `from` that is no workspace routine may get a key; readers look up
+/// workspace routine ids only. The map borrows from `graph`.
+fn callsite_local_coverage_reasons(graph: &CombinedGraph) -> HashMap<&str, BTreeSet<&str>> {
+    let mut out: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+    for ue in &graph.uncertainty_edges {
+        let kind = ue.uncertainty.kind.as_str();
+        if super::db_effect_solver::is_callsite_local_kind(kind) {
+            out.entry(ue.from.as_str()).or_default().insert(kind);
+        }
+    }
+    out
+}
+
+/// Fold a routine's call-site-local coverage reasons (`extra`, from
+/// [`callsite_local_coverage_reasons`]) into its direct coverage. A reason that
+/// is new implies incomplete resolution, so `complete` drops to `partial` and
+/// the reasons come back sorted; with nothing new, both come back unchanged.
+fn fold_uncertainty_reasons(
+    mut status: String,
+    reasons: Vec<String>,
+    extra: Option<&BTreeSet<&str>>,
+) -> (String, Vec<String>) {
+    let mut reason_set: BTreeSet<String> = reasons.iter().cloned().collect();
+    let base_len = reason_set.len();
+    for rr in extra.into_iter().flatten() {
+        reason_set.insert((*rr).to_string());
+    }
+    if reason_set.len() > base_len {
+        if status == "complete" {
+            status = "partial".to_string();
+        }
+        (status, reason_set.into_iter().collect())
+    } else {
+        (status, reasons)
+    }
 }
 
 // ===========================================================================
@@ -3993,15 +4052,15 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         }
     }
 
-    // Per-routine UNCERTAINTY-DERIVED coverage reasons (summary-runner.ts:565-596).
-    // Run the L4 fixed-point summary (over the COMBINED-graph SCC) to obtain each
-    // routine's `uncertainties`, then map the four call-resolution uncertainty kinds
-    // (ambiguous-overload / member-not-found / external-target / interface-open-world)
-    // to coverage reasons. A routine carrying any of these has its directStatus
-    // downgraded complete→partial so the coverage cone forwards the reason (+ adds
-    // the routine to unknownTargets). Source-only `interfaceImplsKnowledgePartial`
-    // is false, so the `interface-impls-unknown-in-deps` add-on never fires.
-    let uncertainty_reasons = compute_uncertainty_coverage_reasons(ws, &graph, calls);
+    // Per-routine UNCERTAINTY-DERIVED coverage reasons.
+    // A scan of the combined graph's uncertainty edges for the four call-site-local
+    // kinds (ambiguous-overload / member-not-found / external-target /
+    // interface-open-world); no L4 solve (#160 step 3). A routine carrying any of
+    // these has its directStatus downgraded complete→partial so the coverage cone
+    // forwards the reason (+ adds the routine to unknownTargets). Source-only
+    // `interfaceImplsKnowledgePartial` is false, so the
+    // `interface-impls-unknown-in-deps` add-on never fires.
+    let uncertainty_reasons = callsite_local_coverage_reasons(&graph);
 
     // Per-routine direct facts (full) + direct coverage + the dedup-keyed map.
     let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
@@ -4013,7 +4072,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     for r in &ws.routines {
         routine_ids.insert(r.id.clone());
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
-        let (facts, mut status, reasons) = direct_facts_for_routine(r, pubs);
+        let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
 
         // Canonical rep per dedup key (min repKey wins) — the
         // composeInheritedCones direct-fact dedup.
@@ -4022,23 +4081,9 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
             direct.insert(r.id.clone(), byk);
         }
 
-        // Fold uncertainty-derived coverage reasons (summary-runner.ts:565-596).
-        let mut reason_set: BTreeSet<String> = reasons.iter().cloned().collect();
-        let base_len = reason_set.len();
-        if let Some(extra_reasons) = uncertainty_reasons.get(&r.id) {
-            for rr in extra_reasons {
-                reason_set.insert(rr.clone());
-            }
-        }
-        let final_reasons: Vec<String> = if reason_set.len() > base_len {
-            // Uncertainty-derived reasons imply incomplete resolution → downgrade.
-            if status == "complete" {
-                status = "partial".to_string();
-            }
-            reason_set.into_iter().collect()
-        } else {
-            reasons.clone()
-        };
+        // Fold uncertainty-derived coverage reasons (identical to the snapshot base).
+        let (status, final_reasons) =
+            fold_uncertainty_reasons(status, reasons, uncertainty_reasons.get(r.id.as_str()));
 
         cov.insert(
             r.id.clone(),
@@ -4180,7 +4225,8 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
 
 /// [`build_r3a3_source_only_base`] with the graph taken as a parameter (#160
 /// §4.1.6): calls and event graph still cloned from `resolved`, the direct facts,
-/// the uncertainty fold and the cone computed over `graph`. Only the full-graph
+/// the uncertainty fold (a scan of `graph`'s uncertainty edges, no L4 solve) and
+/// the cone computed over `graph`. Only the full-graph
 /// timings mode passes a graph other than the one the wrapper builds.
 pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
@@ -4189,7 +4235,9 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
     let calls = (*resolved.calls).clone();
     let event_graph: EventGraph = resolved.events.graph.clone();
     drop(_s0);
-    let _s1 = pt::span("r3a3", "r3a3.direct_facts");
+    // Not `r3a3.direct_facts`: that span also covered the coverage fold's L4
+    // solve, now a scan (a changed span gets a new name, #160 step 3).
+    let _s1 = pt::span("r3a3", "r3a3.direct_facts_scan");
 
     // Publisher events indexed by routine (for the publisher-fact injection).
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
@@ -4202,8 +4250,9 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
         }
     }
 
-    // Per-routine UNCERTAINTY-DERIVED coverage reasons (summary-runner.ts:565-596).
-    let uncertainty_reasons = compute_uncertainty_coverage_reasons(ws, &graph, &calls);
+    // Per-routine UNCERTAINTY-DERIVED coverage reasons: a scan of `graph`'s
+    // uncertainty edges, no L4 solve (#160 step 3).
+    let uncertainty_reasons = callsite_local_coverage_reasons(&graph);
 
     // Per-routine direct facts (full) + uncertainty-folded direct coverage.
     let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
@@ -4211,24 +4260,11 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
-        let (facts, mut status, reasons) = direct_facts_for_routine(r, pubs);
+        let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
 
         // Fold uncertainty-derived coverage reasons (identical to project_r3a3).
-        let mut reason_set: BTreeSet<String> = reasons.iter().cloned().collect();
-        let base_len = reason_set.len();
-        if let Some(extra_reasons) = uncertainty_reasons.get(&r.id) {
-            for rr in extra_reasons {
-                reason_set.insert(rr.clone());
-            }
-        }
-        let final_reasons: Vec<String> = if reason_set.len() > base_len {
-            if status == "complete" {
-                status = "partial".to_string();
-            }
-            reason_set.into_iter().collect()
-        } else {
-            reasons.clone()
-        };
+        let (status, final_reasons) =
+            fold_uncertainty_reasons(status, reasons, uncertainty_reasons.get(r.id.as_str()));
 
         direct_coverage.insert(r.id.clone(), (status, final_reasons));
         direct_full.insert(r.id.clone(), facts);
@@ -5406,5 +5442,549 @@ codeunit 13 "Dep Rec Sub"
             }
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+}
+
+/// #160 step 3: the coverage reasons come from a scan of the combined graph's
+/// uncertainty edges, proven equal to the retired solve-and-fold
+/// ([`compute_uncertainty_coverage_reasons`], kept as this oracle's old side).
+#[cfg(test)]
+mod callsite_local_scan_tests {
+    use super::*;
+    use crate::engine::l4::combined_graph::{Uncertainty, UncertaintyEdge};
+    use crate::engine::l4::summary_runner::with_roles_iteration_cap;
+    use crate::program::model::program_calls::{
+        assemble_and_resolve_cross_app_program, assemble_and_resolve_inline_program_default,
+        assemble_and_resolve_workspace_program,
+    };
+    use std::path::{Path, PathBuf};
+
+    const APP: &str = "11111111-0000-0000-0000-000000160003";
+
+    /// `table` + `src`, the shape of `summary_runner`'s private test `model`.
+    fn model(src: &str) -> Model {
+        let table = "table 50100 Cust\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n    keys { key(PK; \"No.\") { } }\n}\n";
+        assemble_and_resolve_inline_program_default(
+            &[
+                ("src/Tab.al".to_string(), table.to_string()),
+                ("src/Code.al".to_string(), src.to_string()),
+            ],
+            APP,
+        )
+    }
+
+    fn workspace_model(dir: &Path) -> Option<Model> {
+        assemble_and_resolve_workspace_program(
+            &crate::program::inputs::InputSet::read(dir, &Default::default()),
+            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+            false,
+        )
+    }
+
+    /// The cross-app model the cross-app commands (digest, prove, fingerprint,
+    /// `analyze --detector d47-…`) build their snapshot base over: its
+    /// `workspace.routines` also hold the dependency routines with bodies.
+    fn cross_app_model(dir: &Path) -> Option<Model> {
+        assemble_and_resolve_cross_app_program(
+            &crate::program::inputs::InputSet::read(dir, &Default::default()),
+            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+            false,
+        )
+        .ok()
+        .map(|p| p.resolved)
+    }
+
+    /// The scan's borrowed map, owned, to compare with the old fold's.
+    fn owned(m: HashMap<&str, BTreeSet<&str>>) -> HashMap<String, BTreeSet<String>> {
+        m.into_iter()
+            .map(|(k, v)| (k.to_string(), v.into_iter().map(str::to_string).collect()))
+            .collect()
+    }
+
+    /// A copy of `summary_runner`'s `CYC_SRC` (the SCC `{OnCyc, HandleCyc}`
+    /// caps at one roles round) whose `HandleCyc` also makes an
+    /// `external-target` call (the `ws-r2b-external` shape) and a
+    /// `member-not-found` call. Neither adds a resolved edge.
+    const CAP_SRC: &str = r#"
+codeunit 50103 "Cyc Other"
+{
+    procedure Known()
+    begin
+    end;
+}
+
+codeunit 50102 Cyc
+{
+    var
+        Ext: Codeunit "External Dep Helper";
+        Other: Codeunit "Cyc Other";
+
+    [IntegrationEvent(false, false)]
+    procedure OnCyc(var Rec: Record Cust; Depth: Integer)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::Cyc, 'OnCyc', '', false, false)]
+    local procedure HandleCyc(var Rec: Record Cust; Depth: Integer)
+    begin
+        if Depth > 0 then
+            OnCyc(Rec, Depth - 1);
+        Ext.RunIt();
+        Other.Missing();
+        Rec.Modify();
+    end;
+}
+"#;
+
+    /// Each of the four kinds in a non-recursive routine (`Plain`), a
+    /// self-loop (`Loop`) and a two-member cycle (`Ping`/`Pong`), so no cell of
+    /// the oracle's (kind x SCC shape) table depends on corpus luck.
+    const CELLS_SRC: &str = r#"
+interface "Cell IFace"
+{
+    procedure Touch();
+}
+
+codeunit 50110 "Cell Target"
+{
+    procedure P(N: Integer): Integer
+    begin
+        exit(1);
+    end;
+
+    procedure P(S: Text): Integer
+    begin
+        exit(0);
+    end;
+}
+
+codeunit 50111 "Cell Calls"
+{
+    var
+        Ext: Codeunit "External Dep Helper";
+        Face: Interface "Cell IFace";
+
+    procedure Plain(Depth: Integer; C: Char)
+    var
+        T: Codeunit "Cell Target";
+    begin
+        Ext.RunIt();
+        T.Missing();
+        T.P(C);
+        Face.Touch();
+    end;
+
+    procedure Loop(Depth: Integer; C: Char)
+    var
+        T: Codeunit "Cell Target";
+    begin
+        if Depth > 0 then
+            Loop(Depth - 1, C);
+        Ext.RunIt();
+        T.Missing();
+        T.P(C);
+        Face.Touch();
+    end;
+
+    procedure Ping(Depth: Integer; C: Char)
+    var
+        T: Codeunit "Cell Target";
+    begin
+        if Depth > 0 then
+            Pong(Depth - 1, C);
+        Ext.RunIt();
+        T.Missing();
+        T.P(C);
+        Face.Touch();
+    end;
+
+    procedure Pong(Depth: Integer; C: Char)
+    begin
+        if Depth > 0 then
+            Ping(Depth - 1, C);
+    end;
+}
+"#;
+
+    /// What the oracle saw over its inputs.
+    #[derive(Default, Debug)]
+    struct OracleStats {
+        workspaces: usize,
+        routines: usize,
+        /// Keys of the new map that are not `ws.routines` ids (each is also a
+        /// failure: the oracle claims none on its inputs).
+        extra_new_keys: usize,
+        /// Routines per (reason kind, SCC shape of the routine).
+        cells: BTreeMap<(String, &'static str), usize>,
+    }
+
+    const NON_RECURSIVE: &str = "non-recursive";
+    const SELF_LOOP: &str = "self-loop";
+    const MULTI_MEMBER: &str = "multi-member";
+    const SHAPES: [&str; 3] = [NON_RECURSIVE, SELF_LOOP, MULTI_MEMBER];
+
+    /// One model: build the graph as both callers do, run the old fold and the
+    /// new scan, compare per distinct `ws.routines` id (absence = empty), and
+    /// count each routine's reasons per SCC shape of the combined graph.
+    fn check_oracle(m: &Model, where_: &str, stats: &mut OracleStats, failures: &mut Vec<String>) {
+        let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
+        let old = compute_uncertainty_coverage_reasons(&m.workspace, &graph, &m.calls);
+        let new = owned(callsite_local_coverage_reasons(&graph));
+        let scc = crate::engine::l4::analysis::graph_scc(&graph);
+        let ids: BTreeSet<&str> = m.workspace.routines.iter().map(|r| r.id.as_str()).collect();
+        let empty = BTreeSet::new();
+        for id in &ids {
+            let o = old.get(*id).unwrap_or(&empty);
+            let n = new.get(*id).unwrap_or(&empty);
+            if o != n {
+                failures.push(format!("{where_} {id}: old {o:?}, new {n:?}"));
+            }
+            let shape = match scc.scc_id_by_routine.get(*id).map(|&i| &scc.sccs[i]) {
+                Some(s) if s.members.len() > 1 => MULTI_MEMBER,
+                Some(s) if s.recursive => SELF_LOOP,
+                _ => NON_RECURSIVE,
+            };
+            for kind in o {
+                *stats.cells.entry((kind.clone(), shape)).or_default() += 1;
+            }
+        }
+        for k in new.keys().filter(|k| !ids.contains(k.as_str())) {
+            failures.push(format!("{where_}: new key {k} is no workspace routine"));
+            stats.extra_new_keys += 1;
+        }
+        stats.routines += ids.len();
+        stats.workspaces += 1;
+    }
+
+    /// The four kinds the fold maps, written out (not read from the classifier).
+    /// A deliberate hand-stated copy of `is_callsite_local_kind`'s list: the
+    /// test's expectation must not come from the code under test.
+    const KINDS: [&str; 4] = [
+        "ambiguous-overload",
+        "external-target",
+        "interface-open-world",
+        "member-not-found",
+    ];
+
+    fn cell_table(stats: &OracleStats) -> String {
+        let mut out = format!(
+            "{:<22} {:>14} {:>10} {:>13}\n",
+            "kind", NON_RECURSIVE, SELF_LOOP, MULTI_MEMBER
+        );
+        for kind in KINDS {
+            let c = |s: &'static str| {
+                stats
+                    .cells
+                    .get(&(kind.to_string(), s))
+                    .copied()
+                    .unwrap_or(0)
+            };
+            out += &format!(
+                "{kind:<22} {:>14} {:>10} {:>13}\n",
+                c(NON_RECURSIVE),
+                c(SELF_LOOP),
+                c(MULTI_MEMBER)
+            );
+        }
+        out
+    }
+
+    /// Sorted dirs at most `max_depth` levels under `root` holding an `app.json`.
+    fn app_dirs(root: &Path, max_depth: usize) -> Vec<PathBuf> {
+        let walk = walkdir::WalkDir::new(root).max_depth(max_depth);
+        let mut dirs: Vec<PathBuf> = walk
+            .into_iter()
+            .map(|e| e.unwrap().into_path())
+            .filter(|p| p.join("app.json").is_file())
+            .collect();
+        dirs.sort();
+        dirs
+    }
+
+    /// A3.7: the scan against a hand-built graph. `A` carries all six kinds
+    /// the builder emits (`member-not-found` at two call sites), `B` one
+    /// `external-target`, and an id that is no workspace routine one
+    /// `ambiguous-overload`. The expected map is written literally.
+    #[test]
+    fn callsite_local_scan_hand_stated() {
+        let ue = |from: &str, kind: &str, cs: &str| UncertaintyEdge {
+            from: from.to_string(),
+            uncertainty: Uncertainty {
+                kind: kind.to_string(),
+                callsite_id: Some(cs.to_string()),
+                operation_id: None,
+                routine_id: None,
+                interface_name: None,
+            },
+        };
+        let graph = CombinedGraph {
+            nodes: vec!["A".to_string(), "B".to_string()],
+            edges_by_from: HashMap::new(),
+            edges_from_order: Vec::new(),
+            uncertainty_edges: vec![
+                ue("A", "interface-open-world", "a1"),
+                ue("A", "dynamic-dispatch", "a2"),
+                ue("A", "ambiguous-overload", "a3"),
+                ue("A", "member-not-found", "a4"),
+                ue("A", "member-not-found", "a5"),
+                ue("A", "external-target", "a6"),
+                ue("A", "unresolved-call", "a7"),
+                ue("B", "external-target", "b1"),
+                ue("Orphan", "ambiguous-overload", "o1"),
+            ],
+            typed_edges: Vec::new(),
+        };
+        let set = |ks: &[&str]| {
+            ks.iter()
+                .map(|k| k.to_string())
+                .collect::<BTreeSet<String>>()
+        };
+        let want: HashMap<String, BTreeSet<String>> = HashMap::from([
+            (
+                "A".to_string(),
+                set(&[
+                    "ambiguous-overload",
+                    "external-target",
+                    "interface-open-world",
+                    "member-not-found",
+                ]),
+            ),
+            ("B".to_string(), set(&["external-target"])),
+            ("Orphan".to_string(), set(&["ambiguous-overload"])),
+        ]);
+        assert_eq!(owned(callsite_local_coverage_reasons(&graph)), want);
+    }
+
+    /// A3.4-A3.6, A3.10: old fold == new scan on every app dir (any depth) under
+    /// `tests/r0-corpus` (217), `tests/fixtures` (29), `tests/r3a4-fixtures`,
+    /// `tests/r3a5-fixtures` and `tests/r2-5b-fixtures` (1 each), each over both
+    /// its single-app and its cross-app model, and on [`CELLS_SRC`]; every
+    /// (kind x SCC shape) cell occurs. Prints the cells and its wall time.
+    #[test]
+    fn callsite_local_scan_matches_the_fold_on_fixtures() {
+        let start = std::time::Instant::now();
+        let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let mut stats = OracleStats::default();
+        let mut cross = OracleStats::default();
+        let mut failures = Vec::new();
+
+        // Every app dir under each root, at any depth, with the count each
+        // root holds today: a dir that stops being visited fails here.
+        for (root, want) in [
+            ("r0-corpus", 217),
+            ("fixtures", 29),
+            ("r3a4-fixtures", 1),
+            ("r3a5-fixtures", 1),
+            ("r2-5b-fixtures", 1),
+        ] {
+            let dirs = app_dirs(&tests.join(root), usize::MAX);
+            assert_eq!(dirs.len(), want, "{root}: app dirs");
+            let (single_before, cross_before) = (stats.workspaces, cross.workspaces);
+            for dir in &dirs {
+                let where_ = dir.display().to_string();
+                // No dir is silently skipped: every one must build both models.
+                match workspace_model(dir) {
+                    Some(m) => check_oracle(&m, &where_, &mut stats, &mut failures),
+                    None => failures.push(format!("{where_}: no single-app model built")),
+                }
+                match cross_app_model(dir) {
+                    Some(m) => check_oracle(
+                        &m,
+                        &format!("{where_} (cross-app)"),
+                        &mut cross,
+                        &mut failures,
+                    ),
+                    None => failures.push(format!("{where_}: no cross-app model built")),
+                }
+            }
+            assert_eq!(
+                stats.workspaces - single_before,
+                want,
+                "{root}: single-app runs"
+            );
+            assert_eq!(
+                cross.workspaces - cross_before,
+                want,
+                "{root}: cross-app runs"
+            );
+        }
+        let before = stats.workspaces;
+        check_oracle(&model(CELLS_SRC), "CELLS_SRC", &mut stats, &mut failures);
+        assert_eq!(stats.workspaces - before, 1, "CELLS_SRC did not run");
+
+        let table = cell_table(&stats);
+        println!(
+            "callsite-local oracle, single-app: {} workspaces (incl. 1 inline), {} routines, {} extra new keys\n{table}\ncross-app: {} workspaces, {} routines, {} extra new keys\n{}{:.1?}",
+            stats.workspaces,
+            stats.routines,
+            stats.extra_new_keys,
+            cross.workspaces,
+            cross.routines,
+            cross.extra_new_keys,
+            cell_table(&cross),
+            start.elapsed()
+        );
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+        let external: usize = SHAPES
+            .iter()
+            .map(|s| {
+                stats
+                    .cells
+                    .get(&("external-target".to_string(), *s))
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .sum();
+        assert!(
+            external > 0,
+            "no external-target reason on these inputs\n{table}"
+        );
+        for kind in KINDS {
+            for shape in SHAPES {
+                assert!(
+                    stats
+                        .cells
+                        .get(&(kind.to_string(), shape))
+                        .copied()
+                        .unwrap_or(0)
+                        > 0,
+                    "cell ({kind}, {shape}) is empty\n{table}"
+                );
+            }
+        }
+    }
+
+    /// A3.4/A3.5, the CDO half (skips without `CDO_WS`, panics under
+    /// `ENFORCE_CDO_WS=1`), over CDO's single-app and its cross-app model.
+    /// Prints each 12-cell table.
+    #[test]
+    fn callsite_local_scan_matches_the_fold_on_cdo() {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+            return;
+        };
+        let mut failures = Vec::new();
+        for (mode, build) in [
+            ("single-app", workspace_model as fn(&Path) -> Option<Model>),
+            ("cross-app", cross_app_model),
+        ] {
+            let start = std::time::Instant::now();
+            let mut stats = OracleStats::default();
+            let m = build(&ws).unwrap_or_else(|| panic!("the CDO workspace builds a {mode} model"));
+            check_oracle(&m, &format!("CDO {mode}"), &mut stats, &mut failures);
+            println!(
+                "callsite-local oracle on CDO, {mode}: {} routines, {} extra new keys, {:.1?}\n{}",
+                stats.routines,
+                stats.extra_new_keys,
+                start.elapsed(),
+                cell_table(&stats)
+            );
+            assert_eq!(stats.workspaces, 1);
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// The snapshot base USES the scan: built by production code on
+    /// [`CELLS_SRC`], each routine that makes the four call-site-local calls
+    /// has all four as direct coverage reasons and a `partial` direct status.
+    #[test]
+    fn snapshot_base_folds_the_scan_into_direct_coverage() {
+        let m = model(CELLS_SRC);
+        let base = build_r3a3_source_only_base(&m);
+        let mut failures = Vec::new();
+        for name in ["Plain", "Loop", "Ping"] {
+            let ids: Vec<&str> = m
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| r.name == name)
+                .map(|r| r.id.as_str())
+                .collect();
+            assert_eq!(ids.len(), 1, "precondition: one routine {name}");
+            let coverage = &base.cones[ids[0]].coverage;
+            if coverage.direct_status != "partial" {
+                failures.push(format!("{name}: direct status {}", coverage.direct_status));
+            }
+            for kind in KINDS {
+                if !coverage.reasons.iter().any(|r| r == kind) {
+                    failures.push(format!(
+                        "{name}: no reason {kind} in {:?}",
+                        coverage.reasons
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// A3.3 (i): a roles cap changes no coverage reason. Under a forced cap of
+    /// one round, [`CAP_SRC`]'s cycle caps (asserted through the solve itself)
+    /// and the old fold still equals the scan, both non-empty.
+    #[test]
+    fn callsite_local_scan_matches_the_fold_under_a_roles_cap() {
+        let m = model(CAP_SRC);
+        let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
+        let scc = crate::engine::l4::analysis::graph_scc(&graph);
+        let fields = crate::engine::l4::analysis::field_index(&m.workspace);
+        let (summaries, diags) = with_roles_iteration_cap(1, || {
+            crate::engine::l4::summary_runner::compute_summaries_v2(
+                &m.workspace.routines,
+                &graph,
+                &scc,
+                &m.calls.upgraded_bindings,
+                &fields,
+            )
+        });
+        assert!(!diags.is_empty(), "precondition: the cap fires");
+        assert!(
+            summaries
+                .values()
+                .any(|s| s.uncertainties.iter().any(|u| u.kind == "fixpoint-capped")),
+            "precondition: a cycle member carries fixpoint-capped"
+        );
+        let old = with_roles_iteration_cap(1, || {
+            compute_uncertainty_coverage_reasons(&m.workspace, &graph, &m.calls)
+        });
+        let new = owned(callsite_local_coverage_reasons(&graph));
+        assert!(
+            !old.is_empty() && !new.is_empty(),
+            "old {old:?}, new {new:?}"
+        );
+        assert_eq!(old, new);
+    }
+
+    /// A3.3 (ii): the snapshot base prints no non-convergence line. A child
+    /// copy of this test binary builds the base on [`CAP_SRC`] under a forced
+    /// cap with `--nocapture` (the pattern of `summary_runner`'s
+    /// `build_l4_prints_the_capped_line_once`); its stderr must hold zero
+    /// `warning: summarize:` lines.
+    #[test]
+    fn snapshot_base_prints_no_capped_line() {
+        const CHILD: &str = "AL_SEM_SNAPSHOT_BASE_PRINT_CHILD";
+        const NAME: &str = "engine::l4::capability_cone::callsite_local_scan_tests::snapshot_base_prints_no_capped_line";
+        if std::env::var_os(CHILD).is_some() {
+            let m = model(CAP_SRC);
+            let base = with_roles_iteration_cap(1, || build_r3a3_source_only_base(&m));
+            assert!(
+                !base.ws_routines.is_empty(),
+                "precondition: a base was built"
+            );
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "the child ran the test\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        let printed: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("warning: summarize:"))
+            .collect();
+        assert_eq!(printed, Vec::<&str>::new(), "stderr: {stderr}");
     }
 }
