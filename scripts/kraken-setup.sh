@@ -8,6 +8,9 @@ if [ ! -d /work/src/tree-sitter-al/.git ]; then
 fi
 # agentflow's preflight looks only at <checkout>/tree-sitter-al (gitignored), not TREE_SITTER_AL_PATH
 [ -e tree-sitter-al ] || ln -s /work/src/tree-sitter-al tree-sitter-al
+# .gitignore's `/tree-sitter-al/` matches only a directory, not this symlink
+ex="$(git rev-parse --git-common-dir)/info/exclude"
+grep -qx '/tree-sitter-al' "$ex" 2>/dev/null || echo '/tree-sitter-al' >> "$ex"
 # pi-mcp: /orchestrate's reviewer models (.mcp.json runs /work/src/pi-mcp/src/pi-server.ts)
 if [ ! -d /work/src/pi-mcp/.git ]; then
   git clone https://github.com/SShadowS/pi-mcp.git /work/src/pi-mcp
