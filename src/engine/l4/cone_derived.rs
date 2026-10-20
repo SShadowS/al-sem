@@ -446,6 +446,13 @@ impl ConeDerivedStore {
         self.rows.is_empty()
     }
 
+    /// Every routine id that has a row, empty rows included (#160 step 7a
+    /// §5.1: the accessors cannot tell an absent row from an empty one).
+    #[cfg(test)]
+    pub(crate) fn row_ids(&self) -> std::collections::BTreeSet<&str> {
+        self.rows.keys().map(String::as_str).collect()
+    }
+
     // ⟨T1⟩ `forget(routine_id)` — DELETED, not merely unused.
     //
     // It existed for exactly one caller and one reason: `build_detector_context`
@@ -855,17 +862,15 @@ fn freeze_masked(scratch: &mut [(ResId, u8)], pool: &mut Vec<(ResId, u8)>) -> Ra
     start as u32..pool.len() as u32
 }
 
+/// Hand-built facts and edges, shared by this module's tests and the
+/// capability cone's (#160 step 7a §5.6).
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_facts {
     use super::*;
-    use crate::engine::l4::capability_cone::compose_cone_over_graph;
-    use crate::engine::l4::combined_graph::{CombinedGraph, TypedEdge};
+    use crate::engine::l4::combined_graph::TypedEdge;
     use crate::program::body::features::PTempState;
-    use std::collections::HashMap;
 
-    // -- fixture constructors -------------------------------------------------
-
-    fn fact(
+    pub(crate) fn fact(
         subject: &str,
         op: &'static str,
         kind: &'static str,
@@ -889,7 +894,7 @@ mod tests {
     }
 
     /// A table fact carrying an explicit `temp_state` (the physical/temp gate).
-    fn temp_fact(
+    pub(crate) fn temp_fact(
         subject: &str,
         op: &'static str,
         rid: &str,
@@ -909,7 +914,7 @@ mod tests {
         f
     }
 
-    fn call_edge(from: &str, to: &str, callsite: &str) -> TypedEdge {
+    pub(crate) fn call_edge(from: &str, to: &str, callsite: &str) -> TypedEdge {
         TypedEdge {
             kind: "direct-call".to_string(),
             from: from.to_string(),
@@ -927,6 +932,18 @@ mod tests {
             fires: None,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_facts::{call_edge, fact, temp_fact};
+    use super::*;
+    use crate::engine::l4::capability_cone::compose_cone_over_graph;
+    use crate::engine::l4::combined_graph::{CombinedGraph, TypedEdge};
+    use crate::program::body::features::PTempState;
+    use std::collections::HashMap;
+
+    // -- fixture constructors -------------------------------------------------
 
     fn graph_of(edges: Vec<TypedEdge>) -> CombinedGraph {
         CombinedGraph {

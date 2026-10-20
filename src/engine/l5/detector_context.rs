@@ -468,6 +468,47 @@ pub(crate) mod cones_census {
     /// charged PER CALL as `elapsed - Σ(component delta)` in `i64`. The one
     /// signed counter: a negative total means two component timers overlap.
     pub(crate) static COMPOSE_REST_NANOS: AtomicI64 = AtomicI64::new(0);
+    /// #160 step 7a §4.5: the Cone-SCC census, summed from each compose call's
+    /// [`ComposeStats`](crate::engine::l4::capability_cone::ComposeStats).
+    pub(crate) static CONE_SCC_RECURSIVE: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_MEMBERS_ALL: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_MEMBERS_EMITTED: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_ROOTS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_SELF_LOOPS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_MAX: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_SIZE_HIST: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+    pub(crate) static CONE_SCC_MEMBER_WALKS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_OWN_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_SETS_BORROWED: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_SETS_BUILT: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_SET_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    /// REPORT values, never components (the §4.5 overlap rule): the per-member
+    /// walk time (the same readings as `BFS_WALK_NANOS`), and the census-only
+    /// `root_set_probe` (build each root recursive SCC's set, count, drop).
+    pub(crate) static WALK_TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static ROOT_SET_PROBE_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static ROOT_SET_ENTRIES: AtomicU64 = AtomicU64::new(0);
+
+    /// Fold one compose call's stats into the Cone-SCC census, if it is on.
+    pub(crate) fn add_compose_stats(s: &crate::engine::l4::capability_cone::ComposeStats) {
+        if !enabled() {
+            return;
+        }
+        add(&CONE_SCC_RECURSIVE, s.recursive_sccs);
+        add(&CONE_SCC_MEMBERS_ALL, s.recursive_members_all);
+        add(&CONE_SCC_MEMBERS_EMITTED, s.recursive_members_emitted);
+        add(&CONE_SCC_ROOTS, s.recursive_roots);
+        add(&CONE_SCC_SELF_LOOPS, s.self_loops);
+        max(&CONE_SCC_MAX, s.max_recursive_members);
+        for (c, v) in CONE_SCC_SIZE_HIST.iter().zip(s.size_hist) {
+            add(c, v);
+        }
+        add(&CONE_SCC_MEMBER_WALKS, s.member_walks);
+        add(&CONE_SCC_OWN_ENTRIES, s.own_entries_recursive);
+        add(&CONE_SCC_SETS_BORROWED, s.scc_sets_borrowed);
+        add(&CONE_SCC_SETS_BUILT, s.scc_sets_built);
+        add(&CONE_SCC_SET_ENTRIES, s.scc_set_entries_folded);
+    }
 
     /// The eight components of compose that [`COMPOSE_REST_NANOS`] subtracts.
     /// Read only under [`enabled`].
@@ -571,6 +612,31 @@ pub(crate) mod cones_census {
             ms(SINGLETON_NANOS.load(Ordering::Relaxed)),
             SINGLETON_CALLS.load(Ordering::Relaxed),
             MAX_SCC_MEMBERS.load(Ordering::Relaxed),
+        );
+        let h = CONE_SCC_SIZE_HIST
+            .each_ref()
+            .map(|c| c.load(Ordering::Relaxed));
+        eprintln!(
+            "[cones-census]   cone_scc: recursive={} members_all={} members_emitted={} roots={} self_loops={} max={} sizes=1:{} 2:{} 3-9:{} 10-99:{} 100+:{} member_walks={} own_entries={} sets_borrowed={} sets_built={} set_entries={} walk_total={:.1}ms root_set_probe={:.1}ms root_set_entries={}",
+            CONE_SCC_RECURSIVE.load(Ordering::Relaxed),
+            CONE_SCC_MEMBERS_ALL.load(Ordering::Relaxed),
+            CONE_SCC_MEMBERS_EMITTED.load(Ordering::Relaxed),
+            CONE_SCC_ROOTS.load(Ordering::Relaxed),
+            CONE_SCC_SELF_LOOPS.load(Ordering::Relaxed),
+            CONE_SCC_MAX.load(Ordering::Relaxed),
+            h[0],
+            h[1],
+            h[2],
+            h[3],
+            h[4],
+            CONE_SCC_MEMBER_WALKS.load(Ordering::Relaxed),
+            CONE_SCC_OWN_ENTRIES.load(Ordering::Relaxed),
+            CONE_SCC_SETS_BORROWED.load(Ordering::Relaxed),
+            CONE_SCC_SETS_BUILT.load(Ordering::Relaxed),
+            CONE_SCC_SET_ENTRIES.load(Ordering::Relaxed),
+            ms(WALK_TOTAL_NANOS.load(Ordering::Relaxed)),
+            ms(ROOT_SET_PROBE_NANOS.load(Ordering::Relaxed)),
+            ROOT_SET_ENTRIES.load(Ordering::Relaxed),
         );
         eprintln!(
             "[cones-census]   singleton: subst={:.1}ms scan_cone={:.1}ms scan_own={:.1}ms fold={:.1}ms raw={:.1}ms",
@@ -1104,6 +1170,46 @@ pub(crate) fn build_detector_context_with<'a>(
     }
 }
 
+/// The det cone's inputs over `resolved` (#160 step 7a §5.8): the routine
+/// universe, every routine's raw direct facts and its direct coverage. The
+/// cone's typed edges are `rel.cone()` and its routines
+/// `resolved.workspace.routines`.
+pub(crate) struct DetConeInputs {
+    pub nodes: Vec<String>,
+    pub direct_full: HashMap<String, Vec<CapabilityFact>>,
+    pub coverage_in: HashMap<String, (String, Vec<String>)>,
+}
+
+/// Builds [`DetConeInputs`]: the one assembly [`build_detector_artifacts`]
+/// and the step 7a oracle both compose over.
+pub(crate) fn det_cone_inputs(resolved: &Model) -> DetConeInputs {
+    let ws = &resolved.workspace;
+    let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
+    for evt in &resolved.events.graph.events {
+        if let Some(pr) = &evt.publisher_routine_id {
+            publisher_events_by_routine
+                .entry(pr.clone())
+                .or_default()
+                .push(evt);
+        }
+    }
+    let empty_pub: Vec<&EventSymbol> = Vec::new();
+    let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
+    let mut coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
+    let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
+    for r in &ws.routines {
+        let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
+        let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
+        coverage_in.insert(r.id.clone(), (status, reasons));
+        direct_full.insert(r.id.clone(), facts);
+    }
+    DetConeInputs {
+        nodes,
+        direct_full,
+        coverage_in,
+    }
+}
+
 /// The owned detector substrates over the relation `rel`, at mask `demanded`:
 /// the cone (over `rel.cone()`) first, then (when `l4` is `Some`) ONE
 /// [`build_l4`] solve over `rel`, then the harvest of its core summaries.
@@ -1164,16 +1270,6 @@ pub(crate) fn build_detector_artifacts(
     // cone-assembly block stays at its original indentation).
     let mut cone_derived = ConeDerivedStore::default();
     let summaries: HashMap<String, FullRoutineSummary> = if need_summaries {
-        let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
-        for evt in &event_graph.events {
-            if let Some(pr) = &evt.publisher_routine_id {
-                publisher_events_by_routine
-                    .entry(pr.clone())
-                    .or_default()
-                    .push(evt);
-            }
-        }
-        let empty_pub: Vec<&EventSymbol> = Vec::new();
         // ⟨C1 Task 4⟩ ONE direct-facts map, not two. This used to build a
         // second, byte-identical `direct_in` (a `facts.clone()` per routine)
         // purely to hand to the cone walk, which takes it by shared reference
@@ -1185,16 +1281,12 @@ pub(crate) fn build_detector_artifacts(
         // site — `project_r3a3`, `project_r3a5_cross_app`,
         // `build_detector_context_cross_app` — already passed its `direct_full`
         // directly; this was the one straggler.)
-        let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
-        let mut coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
-        let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
         let _t_direct = cones_census::start();
-        for r in &ws.routines {
-            let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
-            let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
-            coverage_in.insert(r.id.clone(), (status, reasons));
-            direct_full.insert(r.id.clone(), facts);
-        }
+        let DetConeInputs {
+            nodes,
+            mut direct_full,
+            coverage_in,
+        } = det_cone_inputs(resolved);
         // ⟨C1 Task 3⟩ `DerivedOnly` — the compact substrate only; the per-routine
         // raw inherited `Vec<CapabilityFact>` is never allocated. `Both` only when
         // the policy-only `RAW_INHERITED_FACTS` bit is demanded.
