@@ -159,6 +159,18 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
     lands there, so testing an edit from the worktree that authored it does not
     exercise the copy that will actually run.
 
+### In a kraken tentacle (server1)
+
+`.kraken/` runs al-sem remotely; `/work/src` holds the grammar and the CDO baseline
+(`/work/src/cdo-baseline`). BC there is a **BC 28.4 on Linux sidecar**, reached as
+`http://bc` (instance `BC`) through `bc-dev` in `.mcp.json`.
+- **It is for checks and probes.** An engine fact recorded as "measured on BC 28" is still
+  confirmed on a Windows Cronus: the image's `KNOWN-LIMITATIONS.md` lists real differences
+  (RDLC, ICU collation, the hub test runner's resets).
+- **Start it** with `kraken siphon start bc --no-wait`, then `kraken siphon status bc` until
+  ready. A cold BC takes about 3 minutes, longer than the Bash tool's 120 s default. It
+  stops itself after a quiet spell.
+
 ## Architecture
 
 This repo is **one engine, two consumers** — not two independent pipelines. The

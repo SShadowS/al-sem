@@ -1,0 +1,78 @@
+schema: 1
+name: alsem
+repo: https://github.com/SShadowS/al-sem.git
+image: .kraken/Dockerfile
+ssh_port: 2210 # server1's sshPorts range 2210-2299
+mem_limit: 16g # with the bc sidecar (3g + 6g + 4g tmpfs) 29g, inside server1's maxMemory (32g)
+agents:
+  - name: main
+    branch: master
+    model: opus
+    session_name: alsem-main
+    start: [/coord-join]
+  - name: worker
+    branch: kraken/worker
+    model: opus
+    session_name: alsem-worker
+    start: [/coord-join]
+setup:
+  - bash scripts/kraken-setup.sh
+env:
+  # not CDO_WS: set globally it turns every cargo test into a CDO run (al-sem CLAUDE.md);
+  # agents pass /work/src/cdo-baseline to scripts/cdo-gate themselves
+  TREE_SITTER_AL_PATH: /work/src/tree-sitter-al
+secret_files:
+  # bc-dev-mcp against the bc sidecar (http://bc, instance BC); the API is on 7052 in this image
+  - { from: mcp.json, to: .mcp.json }
+sidecars:
+  # BC 28.4 on Linux (StefanMaron/MsDyn365Bc.On.Linux), kraken spec 5 section 7.
+  # Start it with `kraken siphon start bc --no-wait`, then `kraken siphon status bc` until ready.
+  bc:
+    start: on-demand
+    idle_stop_minutes: 15 # the live idle-stop check; back to 60 afterwards
+    ready_timeout_minutes: 15
+    services:
+      sql:
+        image: ghcr.io/stefanmaron/msdyn365bc.on.linux/mssql@sha256:6476ec91822702f6031eebd890269bf70190028cafc9a6e706aa1d196d04de24
+        mem_limit: 3g
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_MEMORY_LIMIT_MB: "2048"
+        secret_env:
+          SA_PASSWORD: bc-sa-password
+        tmpfs:
+          - { path: /var/opt/mssql/data, size: 4g, uid: 10001, gid: 10001 }
+        volumes:
+          artifacts: { path: /bc/artifacts, read_only: true }
+        healthcheck:
+          test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$SA_PASSWORD\" -C -No -Q 'SELECT 1'"]
+          interval_seconds: 5
+          retries: 20
+          start_period_seconds: 20
+      bc:
+        image: ghcr.io/stefanmaron/msdyn365bc.on.linux/bc-runner@sha256:172409879d6a14f9b347671d34c6a6082afd40a75a01e195dfaece41d813697a
+        mem_limit: 6g
+        depends_on: [sql]
+        env:
+          BC_VERSION: "28.4"
+          SQL_SERVER: sql
+          BC_SERVER_USERNAME: BCRUNNER
+        secret_env:
+          SA_PASSWORD: bc-sa-password
+          BC_SERVER_PASSWORD: bc-password
+        volumes:
+          artifacts: { path: /bc/artifacts }
+          service: { path: /bc/service }
+          assembly-cache: { path: /bc/assembly-cache }
+        healthcheck:
+          test: ["CMD-SHELL", "test -f /tmp/bc-ready && curl -sf -o /dev/null -u \"BCRUNNER:$BC_SERVER_PASSWORD\" http://localhost:7048/BC/ODataV4/Company"]
+          interval_seconds: 2
+          retries: 900
+          start_period_seconds: 60
+          timeout_seconds: 5
+reaper:
+  grace_minutes: 10
+  disposable: []
+  protect: []
+needs: {}
+permissions: requested
