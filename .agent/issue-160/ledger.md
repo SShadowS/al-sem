@@ -448,6 +448,80 @@ the child spec as stated.
   after H). `sanitize` on the ledger, the register and the numbers file → `{"violations": {}}`. Evidence and that line
   committed after H, then `freeze-check` and `attest` (`--substitute astra=sol --substitute flash=opus`, the
   operator's instruction for this loop; the claim's `handoff.reviewers` records astra = sol, flash = opus).
+  Evidence committed as `9b0474bc8798d98a0b7d99f45a69a2044c72a883` (final head). `freeze-check --H 91a66203…` →
+  `{"violations": []}`. `attest` (B `68253a8e…`, H `91a66203…`, final head `9b0474bc…`, gates
+  `{"ci-steps-all":0,"check-goldens-coverage":0,"check-goldens":0,"cdo-gate":0}`, the claim's body hash verbatim,
+  `--substitute astra=sol --substitute flash=opus`) → `{"path": ".agent/runs/20261020-113707-ad56ee/attestation.json"}`;
+  the attestation records `reviewers: {astra: sol, flash: opus}`. Do not edit `findings.json` from here on.
+- **[a2]** step 13 HELD: `gh auth status` still reports the token in `hosts.yml` invalid (the infra fault since
+  ~11:37 UTC), so push, `pr-create`/`pr-ready`, CI and merge cannot run. PR body prepared from this ledger
+  (`.agent/runs/20261020-113707-ad56ee/pr-body.md`, 58,581 bytes, `sanitize` clean, no closing keyword for #160).
+  The lease is kept alive by the heartbeat; the operator is asked to run `gh auth refresh -h github.com`.
+- **[a2]** The operator refreshed the token (`gh auth status` ✓, scopes repo/workflow). `push-branch` then failed again:
+  `{"error": "push of issue/160-alsem-batch-build-the-model-onc-a2 was rejected"}`. Cause: **branch-name collision**.
+  `origin` already holds `issue/160-alsem-batch-build-the-model-onc-a2` .. `-a7` from the owner PC's earlier #160
+  claims (`-a2` = step 0's branch, tip `20b1631b` "#160 step 0: ledger and findings register", squash-merged as PR #165
+  `5f096af9`, so not an ancestor of master). server1's fresh `.agent/` restarted the attempt counter (handoff note §1), so
+  this run's `-a2` names the PC's. A force push over a branch this run did not create is outside the flow's one
+  permitted force form, so the conductor asked; the operator chose to delete the stale remote `-a2` .. `-a7` branches
+  (steps 0-4, all squash-merged) themselves, after which the conductor pushes normally. Candidate discovery: the
+  attempt counter is per-checkout, so a second host collides with the first host's remote branch names.
+- **[a2]** step 13: the operator deleted remote `-a2` .. `-a7`. `halt-check` → not halted; `push-branch` →
+  `{"pushed": "issue/160-alsem-batch-build-the-model-onc-a2", "head": "9b0474bc8798d98a0b7d99f45a69a2044c72a883"}`.
+  No draft existed (blocked at step 9), so `pr-create` with the final body (this ledger, sanitized; "Part of #160", no
+  closing keyword) → `{"pr": 181}`. CI watched through `agentflow run --name ci-wait`.
+- **[a2]** CI red: `ci-wait` → exit 1 after 43.4 s (`logs/ci-wait/20261020T172939-08944266.log`); job `test` failed in
+  Lint: `al-syntax` build.rs panicked `node-types.json hash mismatch` (`ci-fail.log`). Cause, not this branch: upstream
+  `tree-sitter-al` `main` moved `8682cb5f` → `4d75846c` (`6104f002` "feat(b7b-3): statement terminators, case
+  separators and the move header from #if groups"; `4d75846c` docs), and CI builds against `main`, so every branch,
+  master included, fails CI the same way (master's last green CI predates the move). The operator chose to do the
+  grammar upgrade on #181 as its one CI fix: `charge ci_fix` → remaining 0 (a second red CI blocks the issue). Opus
+  implementer dispatched for CLAUDE.md's "Upgrading the grammar" checklist steps 1-5 (pull, `gen-syntax`, kind triage
+  and `NAMED_KIND_COUNT`, lowerer arms with tests and proofs, `CACHE_VERSION_GRAMMAR` + mirror + fixture stamps and the
+  `cafecafe` rehash, both-sides per-test diff, CDO histogram SHA); step 6 (CLAUDE.md text) is protected for the flow and
+  goes to the owner as proposed text. `charge subagents` → 43. After it: one final-panel round over the fix, the full
+  gate set again, a new attestation, push, CI.
+- **[a2]** Grammar bump committed `80c1e231` (11 files: CHANGELOG, lower/mod.rs, raw/generated/{node-types.sha256,
+  nodes.rs,raw_kind.rs}, raw/mod.rs, schema/kind_policy.rs, cache_prune.rs, cli_c_cache_differential.rs, the two
+  cache fixtures). Grammar `8682cb5f` → `4d75846c` (461 commits past the v4.4.1 tag, conductor verified with
+  `git rev-list --count 7819df5..4d75846c`). Named kinds 499 → 500 (`preproc_conditional_move_args`, Structural; nothing
+  reads move modifications), no field change. Two lowerer arms (nested `preproc_conditional_case` inside a
+  `preproc_split_case_extended` arm; a split terminator's `else` parsed as `call_statement` is skipped), each red →
+  green → red under its break → green. Cache stamp `tree-sitter-al-v4.4.1-4d75846c-native` (+ mirror, both fixtures;
+  `cafecafe` hash d758a942… → c58b497d…, method reproduced the old hash first; same length, `dry-run.txt` unmoved).
+  Both sides (`ci-steps test`): old grammar 3,584 pass, new 3,586 pass, the only difference the 2 new tests
+  (`outcomes-{old,new}.tsv`); zero goldens moved; CDO histogram SHA-256 `c032c8db…` byte-identical
+  (`grammar-new-hist.json`). Gate `ci-steps task` exit 0 (`grammar-task-gate.log`). `check-diff --base origin/master` →
+  `{"reasons": []}`. Stated limit: in a file with an ERROR, a recovered bare name may now lower as a call (not in CDO).
+  CLAUDE.md text proposed to the owner (step 6, protected for the flow).
+- **[a2]** Final panel round 4 over the fix (`grammar-fix.diff`, 364 lines): `charge final_rounds` → remaining 1;
+  `charge pi_calls` → 16; `charge subagents` → 42, 41. Briefing `final-panel-r4-briefing.md` (G1-G5). Reviewers: sol
+  (`pi-sol-final-r4.md`), opus (`opus-final-r4.md`), and the project's `lowerer-reviewer` agent (a lowerer change).
+  Outcome: the lowerer reviewer (dumping real 4d75846c parses through a scratch build) and opus found the lowering
+  shape-correct with no field pollution; sol rejected G1/G2/G3/G5 on its findings. New entries: F4-1 important
+  (nested case groups recurse with `depth` unchanged and no `MAX_LOWER_DEPTH` check, at both the new and the existing
+  nested-case arm; conductor verified), F4-2 important (the two new lowerer tests' proofs were not recorded), F4-3 to
+  F4-5 minor (CHANGELOG field wording and `asserterror`; the keyword-callee residual; the else in an extended arm and
+  fixture coverage), F4-6 minor (CLAUDE.md step 6 text, fixed by the conductor in the ledger's "Owner action at merge"
+  section). `charge subagents` → 40 for the fix.
+- **[a2]** Round-4 fixes committed `5b8cb327` (CHANGELOG.md, lower/mod.rs, parse.rs): the case-group descent is bounded
+  (`depth + 1` at both nested-case recursions, a `MAX_LOWER_DEPTH` check with its SyntaxIssue), proofs recorded for every
+  new lowerer test, the residual stated and pinned (`bare_name_before_end_lowers_as_call`), the else-in-extended-arm
+  behaviour pinned and the fixture extended. Gate `ci-steps task` exit 0, 3589 pass (`grammar-r4-task-gate.log`); the
+  supervised `ci-steps-task` → exit 0, 46.4 s, 3589/3589. `check-diff --base origin/master` → `{"reasons": []}`.
+- **[a2]** Final panel round 5 (the last): `charge final_rounds` → remaining 0; `charge pi_calls` → 15; `charge
+  subagents` → 39. Briefing `final-panel-r5-briefing.md` (fix diff `grammar-r4-fixes.diff`, 301 lines) → sol
+  (`pi-sol-final-r5.md`), opus (`opus-final-r5.md`).
+  Outcome: both accepted F4-1 .. F4-6, confirmed the grammar fix breaks none of the 48 step-7a entries, CONFIRMED G1-G5,
+  no new finding. **Final panel converged**: 54 entries, all accepted by both reviewers; 50 fixed, 4 refuted.
+- **[a2]** No re-bench: the grammar fix touches no measured code path (only `crates/al-syntax`, the cache stamp and its
+  fixtures, CHANGELOG), and the CDO histogram is byte-identical on the new grammar (`grammar-new-hist.json`,
+  `c032c8db…`). step 11 again: `origin/master` still `68253a8e` (no rebase, range-diff empty). **B =
+  `68253a8e15b7cb1856f9f6536dabbe6b02702b23`, H = `5b8cb327f932ba5f8499944af6f093ea43883b8c`.** Full gate set: all four
+  exit 0, supervised (Gate results, "Current").
+- **[a2]** step 12 again: `halt-check` → not halted; `check-diff --base 68253a8e… --head 5b8cb327…` →
+  `{"reasons": []}`; evidence sanitized and committed after H; `freeze-check`; a new `attest` replaces the one at
+  `91a66203` (same substitutions). Then push (fast-forward over the pushed `9b0474bc`), PR #181's body refreshed, CI.
 
 ## Acceptance matrix
 
@@ -480,6 +554,10 @@ the child spec as stated.
 | the moved oracle fold (T1's old-vs-new) | delete the fold loop in the `PerMemberWalk` arm (grep 0) | T1: `A: writes_tables_of differs` | `scc_set_tests` 14/14 (`t3-proof-revert.log`) | 5db93bd6 |
 | T8 on CDO (§5.8, T3 break 2) | delete the `for entry in own_entries(m)` fold after the set fold (grep 0) | `CDO (cross-app): r0/00f472ff…: writes_tables_of differs`, exit 101 (`t4-cdo-proof-break.log`) | 1 passed, same two lines (`t4-cdo-proof-revert.log`) | no commit (Task 4) |
 | T8 on CDO, guard path (T4's break) | `if anchor.is_some() && frame_bound(entry)` → `if frame_bound(entry)` (grep 0) | `CDO (cross-app): r0/00f472ff…: writes_tables_of differs`, exit 101 (`t4r-cdo-T4break.log`) | 1 passed (`t4r-cdo-revert.log`) | 683b024e |
+| F4-1 `deep_nested_case_groups_degrade_instead_of_overflowing_small_stack` | `if false && depth > MAX_LOWER_DEPTH` in collect_case_branches_in (grep 1) | FAILED: expected a case-group depth-budget SyntaxIssue (`g-proof-f4-1-depth-break.log`) | 1 passed (`g-proof-f4-1-depth-revert.log`) | 5b8cb327 |
+| F4-2 extended-arm tests | the `.filter(\|c\| c.kind() == RawKind::CaseBranch)` restored on the extended arm (grep 1) | `…_nested_group_branch_is_kept` ('1, 5, 6 and the shared 2') and `…_nested_group_else_is_the_case_else` fail (`g-proof-f4-2-extended-break.log`) | 2 passed (`…-revert.log`) | 5b8cb327 |
+| F4-2 `split_terminator_else_is_not_a_call` | `else` guard deleted (grep 0) | callees `["bar","else","baz"]` (`g-proof-f4-2-else-break.log`) | 2 passed (`…-revert.log`) | 5b8cb327 |
+| F4-4 `bare_name_before_end_lowers_as_call` | skip widened to every bare call (grep 1) | left `[]`, right `["fo"]` (`g-proof-f4-4-widen-break.log`) | al-syntax lib 128 passed (`…-revert.log`) | 5b8cb327 |
 | T8 new class asserts | remove `c.with_guarded_successor += 1` from `count_classes` (grep 0) | `CDO cross-app: no with-guarded-successor class`, printed `with-guarded-successor 0`, exit 101 (`t4r-cdo-classbreak.log`) | 1 passed, cross-app `… with-guarded-successor 11 members-with-own-entry 671, 63.4s` (`t4r-cdo-revert.log`) | 683b024e |
 
 ## Findings register summary
@@ -490,6 +568,18 @@ and 14 minor, all `fixed`. Marks (sol / opus): 26 accepted / accepted; S4-1 and 
 and `opus-spec-r{1..5}.md`.
 
 ## Gate results
+
+**Current (after the grammar-bump CI fix)**, step 11 on H `5b8cb327f932ba5f8499944af6f093ea43883b8c` (B `68253a8e`),
+each `supervised: true`, `queued_s` 0.0, grammar `tree-sitter-al` `4d75846c`:
+
+| gate | exit | seconds | log | notes |
+|---|--:|--:|---|---|
+| `ci-steps-all` | 0 | 247.4 | `ci-steps-all/20261020T181122-774c122e.log` | nextest 3589 run / 3589 passed / 8 skipped |
+| `check-goldens-coverage` | 0 | 0.0 | `check-goldens-coverage/20261020T181530-72c55da5.log` | coverage OK |
+| `check-goldens` | 0 | 0.1 | `check-goldens/20261020T181530-8a0ac018.log` | tree stamp from `ci-steps-all`'s own test step on H |
+| `cdo-gate` | 0 | 207.0 | `cdo-gate/20261020T181530-f961b8d6.log` | `ENFORCE_CDO_WS=1`; al-sem `--lib` 2178 passed, 0 failed, 4 ignored; `cdo-gate: PASS` |
+
+The earlier set on `91a66203` (grammar `8682cb5f`) follows; it was attested once, then superseded by the CI fix.
 
 Attempt 2, step 11, on H `91a66203a99e4d8901fc8b64477cbf4f564bb5c6` (B `68253a8e`), each through `agentflow run`,
 `supervised: true`, `queued_s` 0.0 (logs under `/work/alsem/.agent/runs/20261020-113707-ad56ee/logs/`):
@@ -506,6 +596,32 @@ Tree clean outside `.agent/` after the gates. Toolchain `rustc 1.96.0 (ac68faa20
 itself kept out of git). Earlier task gates (attempt 2): `ci-steps-task` exit 0 on `683b024e`, `9445588b` and
 `7bb9f90c` (3584/3584 each). CDO bench: see Timeline (all three parts exit 0; A7a.3-A7a.6 met). The head's whole
 `cdo-gate` wall, for the numbers file's step-11 line: 193.5 s.
+
+## Owner action at merge: CLAUDE.md for the grammar bump (checklist step 6)
+
+The flow may not edit `CLAUDE.md`, so CLAUDE.md's "Upgrading the grammar" step 6 is the owner's. This PR moves the
+pinned grammar from `main` `8682cb5f` to `4d75846c` (B7b-3). Proposed text (verify the count with
+`git -C tree-sitter-al rev-list --count 7819df5..4d75846c` → 461):
+
+1. Section title: `## Grammar (tree-sitter-al v4.4.1 + main `4d75846c`)`.
+2. Prerequisites line: "currently **v4.4.1 + `main` at `4d75846c`**, see the Grammar section — the package version
+   did not move for 461 commits, many of them shape changes".
+3. Grammar section, first paragraph: "the committed `node-types.sha256` matches `main` at **`4d75846c`** (2026-10-08),
+   461 commits past the v4.4.1 tag commit (`7819df5`) …".
+4. New paragraph after the `8682cb5f` one: "**`main` at `4d75846c` (B7b-3, 2026-10-08, still "v4.4.1", 2 commits past
+   `8682cb5f`) moved the vocabulary 499 -> 500 named kinds; no field name added or removed (the four move hosts'
+   `target` became optional).** New: `preproc_conditional_move_args` (a move* header whose target or `;` comes from an
+   `#if` group; nothing reads move modifications, so no arm). Shape changes: a `call_statement` no longer holds its `;`
+   (the lowerer anchors on the callee, so no span moved), and every bare name in statement position is a
+   `call_statement`, `Bar` before `end`/`else`/`until` included, now lowered as a parenless call (limits: a recovered
+   name in an ERROR tree, or a misread `begin`/`end`, lowers as a call too). A case group arm may hold
+   `empty_statement` and nested groups. Two shapes needed lowerer arms: a nested `preproc_conditional_case` inside a
+   `preproc_split_case_extended` arm, and a split terminator's `else` parsed as `(call_statement function:
+   (identifier))` (skipped). Nested case-group descent is now bounded by `MAX_LOWER_DEPTH`. Measured: per-test outcomes
+   identical apart from the new lowerer tests, zero goldens moved, CDO histogram byte-identical (`c032c8db…`), same-length
+   stamp left `dry-run.txt` alone."
+5. Checklist header: "(the checklist the v4.3.0, v4.4.0, v4.4.1, `bf72a2d0`, `8682cb5f` and `4d75846c` bumps followed)".
+6. Step 4's stamp example: `tree-sitter-al-v4.4.1-4d75846c-native`.
 
 ## Discoveries
 
