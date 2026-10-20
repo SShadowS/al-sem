@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Census.** A new `cone_scc:` line after `compose:` (recursive SCCs, members all
     and emitted, roots, self-loops, max, size histogram, member walks, own entries,
     sets borrowed and built, set entries, `walk_total`), fed from a per-call
-    `ComposeStats`. `bfs_walk` now holds each set's build or borrow plus the member
+    `ComposeStats`, ending with the oracle classes (`own_entry_members`,
+    `with_successor`, `with_guarded_successor`) that T7 and T8 now read from the
+    same stats instead of recomputing them. `bfs_walk` now holds each set's build or borrow plus the member
     walks that still run; `walk_total` holds the member walks only (0 under
     `DerivedOnly`). `BFS_PICKS` is 0 under `DerivedOnly`. `MERGE_CALLS` and
     `MERGE_TIEBREAKS` rise by the root-set builds' merges (none on CDO, which has no
@@ -39,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     second permanent reader (spec §4.6).
   - **Coverage limits.** CDO has no recursive ROOT SCC, so the root-set build never
     runs on CDO: root recursive SCCs are not oracle-checked on CDO (roots 0). The
-    build is covered only by T2, T10 and the census CLI test
+    build is covered by the hand graphs, whose recursive SCCs are roots in T1, T2,
+    T3, T3b, T4, T5, T6(a), T10 and T11 (T2's break, an empty root set, is the one
+    that targets it), by T7's 4 fixture roots per mode, and by the census CLI test
     (`census_cone_scc_line_counts_the_recursive_sccs`). T7's 249 fixture dirs reach
     only multi-member SCCs (4) and roots (4) per mode, so T8 on CDO is the only
     real-code oracle for SCCs with successors (64), guarded successors (11) and

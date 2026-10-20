@@ -485,6 +485,11 @@ pub(crate) mod cones_census {
     pub(crate) static CONE_SCC_SETS_BORROWED: AtomicU64 = AtomicU64::new(0);
     pub(crate) static CONE_SCC_SETS_BUILT: AtomicU64 = AtomicU64::new(0);
     pub(crate) static CONE_SCC_SET_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    /// The oracle classes (spec §5.8): members with an own entry, SCCs with a
+    /// successor, SCCs with a guarded (frame-bound) successor entry.
+    pub(crate) static CONE_SCC_OWN_ENTRY_MEMBERS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_WITH_SUCCESSOR: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CONE_SCC_WITH_GUARDED_SUCCESSOR: AtomicU64 = AtomicU64::new(0);
     /// A REPORT value, never a component (the §4.5 overlap rule): the time of
     /// the per-member walks only, from the same readings `BFS_WALK_NANOS`
     /// adds. `BFS_WALK_NANOS` also holds the set builds and borrows, so
@@ -510,6 +515,9 @@ pub(crate) mod cones_census {
         add(&CONE_SCC_SETS_BORROWED, s.scc_sets_borrowed);
         add(&CONE_SCC_SETS_BUILT, s.scc_sets_built);
         add(&CONE_SCC_SET_ENTRIES, s.scc_set_entries_folded);
+        add(&CONE_SCC_OWN_ENTRY_MEMBERS, s.members_with_own_entry);
+        add(&CONE_SCC_WITH_SUCCESSOR, s.with_successor);
+        add(&CONE_SCC_WITH_GUARDED_SUCCESSOR, s.with_guarded_successor);
     }
 
     /// The eight components of compose that [`COMPOSE_REST_NANOS`] subtracts.
@@ -619,7 +627,7 @@ pub(crate) mod cones_census {
             .each_ref()
             .map(|c| c.load(Ordering::Relaxed));
         eprintln!(
-            "[cones-census]   cone_scc: recursive={} members_all={} members_emitted={} roots={} self_loops={} max={} sizes=1:{} 2:{} 3-9:{} 10-99:{} 100+:{} member_walks={} own_entries={} sets_borrowed={} sets_built={} set_entries={} walk_total={:.1}ms",
+            "[cones-census]   cone_scc: recursive={} members_all={} members_emitted={} roots={} self_loops={} max={} sizes=1:{} 2:{} 3-9:{} 10-99:{} 100+:{} member_walks={} own_entries={} sets_borrowed={} sets_built={} set_entries={} walk_total={:.1}ms own_entry_members={} with_successor={} with_guarded_successor={}",
             CONE_SCC_RECURSIVE.load(Ordering::Relaxed),
             CONE_SCC_MEMBERS_ALL.load(Ordering::Relaxed),
             CONE_SCC_MEMBERS_EMITTED.load(Ordering::Relaxed),
@@ -637,6 +645,9 @@ pub(crate) mod cones_census {
             CONE_SCC_SETS_BUILT.load(Ordering::Relaxed),
             CONE_SCC_SET_ENTRIES.load(Ordering::Relaxed),
             ms(WALK_TOTAL_NANOS.load(Ordering::Relaxed)),
+            CONE_SCC_OWN_ENTRY_MEMBERS.load(Ordering::Relaxed),
+            CONE_SCC_WITH_SUCCESSOR.load(Ordering::Relaxed),
+            CONE_SCC_WITH_GUARDED_SUCCESSOR.load(Ordering::Relaxed),
         );
         eprintln!(
             "[cones-census]   singleton: subst={:.1}ms scan_cone={:.1}ms scan_own={:.1}ms fold={:.1}ms raw={:.1}ms",

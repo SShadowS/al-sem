@@ -1960,16 +1960,18 @@ fn inherited_facts_for_singleton<'g>(
 /// Set-correct path for routines in recursive SCCs. Mirrors
 /// `inheritedFactsByBfs`.
 ///
-/// ⟨C1⟩ The `seen`-deduped representatives this walk visits are the derived
-/// fold's inherited source. Note the asymmetry: a SIBLING member's facts come
-/// from the key-deduped `direct` map (not its raw Vec), while a downstream SCC
-/// contributes its cone entries. ⟨issue 33⟩ R3 used to *pin* that asymmetry
-/// because the two inputs gave different answers; with the temp class in
-/// [`inherited_fact_key`] the derived fold is dedup-invariant and they agree, so
-/// this is now a cost choice rather than a correctness one (see
-/// `cone_derived`'s module docs). The walk returns its picks, one
+/// #160 step 7a: this walk feeds the RAW half only (`RawOnly`, `Both`) and the
+/// test-only `RecursiveMembership::PerMemberWalk` oracle. In production the
+/// derived row of a recursive member is folded from its Cone-SCC's set (the
+/// SCC's fact cone) plus its own entries, never from these picks.
+///
+/// ⟨C1⟩ Note the asymmetry: a SIBLING member's facts come from the key-deduped
+/// `direct` map (not its raw Vec), while a downstream SCC contributes its cone
+/// entries. ⟨issue 33⟩ With the temp class in [`inherited_fact_key`] the fold
+/// is dedup-invariant, so the oracle's fold of these picks and the set fold
+/// agree (see `cone_derived`'s module docs). The walk returns its picks, one
 /// `(representative, first hop)` per key in emission order; [`emit_picks`]
-/// folds and retags them.
+/// retags and sorts them into the raw output.
 ///
 /// #69 D1.3 use (a): after the walk, the subject's own producer-solve entries
 /// (`own`) compete per key with the walk's picks under [`candidate_wins`]
@@ -2428,6 +2430,13 @@ pub(crate) struct ComposeStats {
     pub(crate) member_walks: u64,
     /// Own (producer-solve) entries of the emitted recursive members.
     pub(crate) own_entries_recursive: u64,
+    /// Emitted recursive members with at least one own entry (§4.1 point 6).
+    pub(crate) members_with_own_entry: u64,
+    /// Recursive SCCs with at least one successor SCC.
+    pub(crate) with_successor: u64,
+    /// Recursive SCCs with a successor whose fact cone holds a frame-bound
+    /// entry, which the set takes with its base key (§4.1 point 4).
+    pub(crate) with_guarded_successor: u64,
     /// Sets taken from a non-root SCC's fact cone.
     pub(crate) scc_sets_borrowed: u64,
     /// Sets built for a root SCC (its fact cone is never built).
@@ -2541,16 +2550,19 @@ fn compose_inherited_cones(
         let scc_entry = &scc.sccs[i];
         let succ_ids = succ_sccs.get(i).unwrap_or(&empty_succ);
 
-        // ⟨C1 Task 4⟩ An SCC's cone is read by exactly ONE kind of consumer: a
-        // PREDECESSOR of that SCC. `fact_cone_for_scc` reads `fact_cones[y]`
-        // only for `y ∈ succ_sccs[j]`, and both per-routine walks
-        // (`inherited_facts_for_singleton` / `inherited_facts_by_bfs`) read a
-        // cone only for a routine whose SCC differs from the subject's — never
-        // the subject's own (`build_succ_sccs` excludes self, and the BFS
-        // treats a same-SCC hop as a sibling and expands it instead of pulling
-        // a cone; a non-recursive singleton has no self-edge by `tarjan_scc`'s
-        // `recursive` rule, so it cannot reach its own id either). So SCC `i`'s
-        // cone is never read while `i` itself is being processed.
+        // ⟨C1 Task 4⟩ An SCC's cone has two readers. (1) Its PREDECESSORS:
+        // `fact_cone_for_scc` reads `fact_cones[y]` only for `y ∈ succ_sccs[j]`,
+        // and both per-routine walks (`inherited_facts_for_singleton` /
+        // `inherited_facts_by_bfs`, the raw half and the test oracle) read a
+        // cone only for a routine whose SCC differs from the subject's
+        // (`build_succ_sccs` excludes self, and the BFS treats a same-SCC hop
+        // as a sibling and expands it instead of pulling a cone; a
+        // non-recursive singleton has no self-edge by `tarjan_scc`'s
+        // `recursive` rule). (2) Since #160 step 7a, a non-root RECURSIVE SCC's
+        // own members, which fold `fact_cones[i]` as their Cone-SCC set during
+        // `i`'s member loop. Both readers are done before `i`'s cone is freed:
+        // the free below runs after the member loop, and only once every
+        // predecessor has run.
         //
         // `remaining_uses[i]` is the number of SCCs holding `i` as a successor,
         // decremented once per predecessor as that predecessor finishes. Tarjan
@@ -2614,18 +2626,14 @@ fn compose_inherited_cones(
             scc_entry.members.len() as u64,
         );
         let recursive = scc_entry.recursive;
-        // Read only for a recursive SCC; a singleton pays no lookup.
+        // The shape counts; a singleton SCC pays no `routine_ids` lookup.
         let emitted = if recursive {
-            scc_entry
+            let n = scc_entry.members.len() as u64;
+            let emitted = scc_entry
                 .members
                 .iter()
                 .filter(|m| routine_ids.contains(*m))
-                .count() as u64
-        } else {
-            0
-        };
-        if recursive {
-            let n = scc_entry.members.len() as u64;
+                .count() as u64;
             stats.recursive_sccs += 1;
             stats.recursive_members_all += n;
             stats.recursive_members_emitted += emitted;
@@ -2639,7 +2647,16 @@ fn compose_inherited_cones(
                 10..=99 => 3,
                 _ => 4,
             }] += 1;
-        }
+            stats.with_successor += u64::from(!succ_ids.is_empty());
+            stats.with_guarded_successor += u64::from(succ_ids.iter().any(|y| {
+                fact_cones
+                    .get(y)
+                    .is_some_and(|c| c.values().any(frame_bound))
+            }));
+            emitted
+        } else {
+            0
+        };
         // §4.2 step 1: ONE set per recursive SCC with an emitted member, read
         // by every member's derived fold. A non-root borrows its fact cone
         // (built above, freed after the member loop); a root, whose cone is
@@ -2653,16 +2670,15 @@ fn compose_inherited_cones(
             .flatten();
         let root_set = (use_set && root_scc)
             .then(|| fact_cone_for_scc(&scc_entry.members, succ_ids, &fact_cones, direct, None));
-        let scc_set: Option<&ConeFacts> = use_set.then(|| match &root_set {
-            Some(set) => {
-                stats.scc_sets_built += 1;
-                set
-            }
-            None => {
-                stats.scc_sets_borrowed += 1;
-                &fact_cones[&i]
-            }
-        });
+        let scc_set: Option<&ConeFacts> = if !use_set {
+            None
+        } else if let Some(set) = &root_set {
+            stats.scc_sets_built += 1;
+            Some(set)
+        } else {
+            stats.scc_sets_borrowed += 1;
+            Some(&fact_cones[&i])
+        };
         crate::engine::l5::detector_context::cones_census::add_since(
             &crate::engine::l5::detector_context::cones_census::BFS_WALK_NANOS,
             _t_set,
@@ -2682,9 +2698,10 @@ fn compose_inherited_cones(
             let _t_walk = crate::engine::l5::detector_context::cones_census::start();
             let inherited = if recursive {
                 stats.own_entries_recursive += own_entries(m).len() as u64;
+                stats.members_with_own_entry += u64::from(!own_entries(m).is_empty());
                 // The walk runs only for the raw half, or as the derived
                 // oracle (`PerMemberWalk`): never under `PerScc` + `DerivedOnly`.
-                let picks = (scc_set.is_none() || mode.wants_raw()).then(|| {
+                let picks = if scc_set.is_none() || mode.wants_raw() {
                     stats.member_walks += 1;
                     let picks = inherited_facts_by_bfs(
                         m,
@@ -2710,8 +2727,10 @@ fn compose_inherited_cones(
                         &crate::engine::l5::detector_context::cones_census::BFS_PICKS,
                         picks.len() as u64,
                     );
-                    picks
-                });
+                    Some(picks)
+                } else {
+                    None
+                };
                 let _t_fold = crate::engine::l5::detector_context::cones_census::start();
                 // §4.2 step 2: the SCC set, then the member's own entries.
                 if let Some(set) = scc_set {
@@ -6179,6 +6198,17 @@ codeunit 50111 "Cell Calls"
         out
     }
 
+    /// The fixture roots under `tests/` the fixture oracles visit, with the app
+    /// dirs each holds today: a dir that stops being visited fails its oracle,
+    /// and a new fixture changes this one list.
+    pub(super) const FIXTURE_ROOTS: [(&str, usize); 5] = [
+        ("r0-corpus", 217),
+        ("fixtures", 29),
+        ("r3a4-fixtures", 1),
+        ("r3a5-fixtures", 1),
+        ("r2-5b-fixtures", 1),
+    ];
+
     /// Sorted dirs at most `max_depth` levels under `root` holding an `app.json`.
     pub(super) fn app_dirs(root: &Path, max_depth: usize) -> Vec<PathBuf> {
         let walk = walkdir::WalkDir::new(root).max_depth(max_depth);
@@ -6260,13 +6290,7 @@ codeunit 50111 "Cell Calls"
 
         // Every app dir under each root, at any depth, with the count each
         // root holds today: a dir that stops being visited fails here.
-        for (root, want) in [
-            ("r0-corpus", 217),
-            ("fixtures", 29),
-            ("r3a4-fixtures", 1),
-            ("r3a5-fixtures", 1),
-            ("r2-5b-fixtures", 1),
-        ] {
+        for (root, want) in FIXTURE_ROOTS {
             let dirs = app_dirs(&tests.join(root), usize::MAX);
             assert_eq!(dirs.len(), want, "{root}: app dirs");
             let (single_before, cross_before) = (stats.workspaces, cross.workspaces);
@@ -6485,7 +6509,9 @@ codeunit 50111 "Cell Calls"
 /// its main assertions; the oracle is [`RecursiveMembership::PerMemberWalk`].
 #[cfg(test)]
 mod scc_set_tests {
-    use super::callsite_local_scan_tests::{app_dirs, model, model_with_tables, workspace_model};
+    use super::callsite_local_scan_tests::{
+        FIXTURE_ROOTS, app_dirs, model, model_with_tables, workspace_model,
+    };
     use super::*;
     use crate::engine::l4::cone_derived::test_facts::{call_edge, fact, temp_fact};
     use crate::engine::l4::cone_derived::{MAY_COMMIT, TOUCHES_PHYSICAL_TABLE, TOUCHES_TABLE};
@@ -6600,7 +6626,8 @@ mod scc_set_tests {
             // Positive control: each side equals its own rebuild.
             assert_rows_equal("control", &sa, &store(a));
             assert_rows_equal("control", &sb, &store(b));
-            let msg = catch_unwind(AssertUnwindSafe(|| assert_rows_equal(field, &sa, &sb)))
+            // A neutral label: the field must come from the diagnostic itself.
+            let msg = catch_unwind(AssertUnwindSafe(|| assert_rows_equal("pair", &sa, &sb)))
                 .err()
                 .map(|p| {
                     p.downcast_ref::<String>()
@@ -6610,8 +6637,11 @@ mod scc_set_tests {
                 });
             match msg {
                 Some(m) => assert!(
-                    m.contains(&format!("{field}: ")) && m.ends_with("differs")
-                        || *field == "row ids" && m.contains("row ids:"),
+                    if *field == "row ids" {
+                        m.starts_with("pair: row ids: ")
+                    } else {
+                        m == format!("pair: X: {field} differs")
+                    },
                     "pair {field}: the comparator panicked naming something else: {m}"
                 ),
                 None => panic!("pair {field}: the comparator did not panic"),
@@ -6983,24 +7013,34 @@ codeunit 50100 C
 
     // -- T7, T8: the oracle over fixtures and CDO ------------------------------
 
-    /// T7/T8's classes, over the compositions checked (§5.8).
+    /// T7/T8's classes, summed over the compositions checked (§5.8), from the
+    /// new path's [`ComposeStats`]: the cone's own counts, no second walk.
     #[derive(Default, Debug)]
     struct Classes {
         compositions: usize,
         routines: usize,
-        self_loops: usize,
-        multi_member: usize,
-        roots: usize,
-        non_roots: usize,
-        /// Recursive SCCs with at least one successor SCC.
-        with_successor: usize,
-        /// Recursive SCCs with a successor whose cone holds a frame-bound entry.
-        with_guarded_successor: usize,
-        /// Recursive members (in `nodes`) with at least one own entry.
-        members_with_own_entry: usize,
+        self_loops: u64,
+        multi_member: u64,
+        roots: u64,
+        non_roots: u64,
+        with_successor: u64,
+        with_guarded_successor: u64,
+        members_with_own_entry: u64,
     }
 
     impl Classes {
+        fn add(&mut self, s: &ComposeStats, routines: usize) {
+            self.compositions += 1;
+            self.routines += routines;
+            self.self_loops += s.self_loops;
+            self.multi_member += s.recursive_sccs - s.self_loops;
+            self.roots += s.recursive_roots;
+            self.non_roots += s.recursive_sccs - s.recursive_roots;
+            self.with_successor += s.with_successor;
+            self.with_guarded_successor += s.with_guarded_successor;
+            self.members_with_own_entry += s.members_with_own_entry;
+        }
+
         fn line(&self) -> String {
             format!(
                 "self-loops {} multi-member {} roots {} non-roots {} with-successor {} with-guarded-successor {} members-with-own-entry {}",
@@ -7012,120 +7052,6 @@ codeunit 50100 C
                 self.with_guarded_successor,
                 self.members_with_own_entry
             )
-        }
-    }
-
-    /// The SCCs whose fact cone holds a frame-bound entry, built the way
-    /// `compose_inherited_cones` builds them (same order, anchors and
-    /// refcount free). Counts a class; never an expected row.
-    fn sccs_with_frame_bound_cone(
-        g: &TypedEdgeGraph,
-        scc: &SccResult,
-        succ: &[BTreeSet<usize>],
-        direct_in: &Direct,
-        routines: &[ModelRoutine],
-    ) -> BTreeSet<usize> {
-        let mut direct: RoutineDirectFacts = HashMap::new();
-        for id in &g.nodes {
-            if let Some(f) = direct_in.get(id) {
-                let byk = dedup_direct(f);
-                if !byk.is_empty() {
-                    direct.insert(id.clone(), byk);
-                }
-            }
-        }
-        let routines_by_id: HashMap<&str, &ModelRoutine> =
-            routines.iter().map(|r| (r.id.as_str(), r)).collect();
-        let frames = guard_frames(g, routines, &routines_by_id);
-        let mut remaining: Vec<usize> = vec![0; scc.sccs.len()];
-        for s in succ {
-            for y in s {
-                remaining[*y] += 1;
-            }
-        }
-        let mut cones: HashMap<usize, ConeFacts> = HashMap::new();
-        let mut out = BTreeSet::new();
-        for (i, s) in scc.sccs.iter().enumerate() {
-            if remaining[i] > 0 {
-                let anchor = match s.members.as_slice() {
-                    [m] if !s.recursive => Some(GuardAnchor {
-                        direct_raw: direct_in.get(m).map_or(&[][..], Vec::as_slice),
-                        out_edges: g.outgoing.get(m).map_or(&[][..], Vec::as_slice),
-                        scc_id_by_routine: &scc.scc_id_by_routine,
-                        caller: routines_by_id.get(m.as_str()).copied(),
-                        frame: frames.get(m),
-                        routines_by_id: &routines_by_id,
-                    }),
-                    _ => None,
-                };
-                let c = fact_cone_for_scc(&s.members, &succ[i], &cones, &direct, anchor);
-                if c.values().any(frame_bound) {
-                    out.insert(i);
-                }
-                cones.insert(i, c);
-            }
-            for y in &succ[i] {
-                remaining[*y] -= 1;
-                if remaining[*y] == 0 {
-                    cones.remove(y);
-                }
-            }
-        }
-        out
-    }
-
-    fn count_classes(
-        typed: &[TypedEdge],
-        nodes: &[String],
-        direct_in: &Direct,
-        routines: &[ModelRoutine],
-        pd: &super::super::pd_solve::ConeArena,
-        c: &mut Classes,
-    ) {
-        let g = build_typed_edge_graph(typed, nodes);
-        let adjacency: HashMap<String, Vec<String>> = g
-            .outgoing
-            .iter()
-            .map(|(f, l)| (f.clone(), l.iter().map(|e| e.to.clone()).collect()))
-            .collect();
-        let scc = tarjan_scc(&SccInputGraph {
-            nodes: &g.nodes,
-            edges_by_from: &adjacency,
-        });
-        let succ = build_succ_sccs(&g, &scc.sccs, &scc.scc_id_by_routine);
-        let mut preds = vec![0usize; scc.sccs.len()];
-        for s in &succ {
-            for y in s {
-                preds[*y] += 1;
-            }
-        }
-        let guarded = sccs_with_frame_bound_cone(&g, &scc, &succ, direct_in, routines);
-        let in_nodes: BTreeSet<&str> = nodes.iter().map(String::as_str).collect();
-        for (i, s) in scc.sccs.iter().enumerate() {
-            if !s.recursive {
-                continue;
-            }
-            if s.members.len() == 1 {
-                c.self_loops += 1;
-            } else {
-                c.multi_member += 1;
-            }
-            if preds[i] == 0 {
-                c.roots += 1;
-            } else {
-                c.non_roots += 1;
-            }
-            if !succ[i].is_empty() {
-                c.with_successor += 1;
-            }
-            if succ[i].iter().any(|y| guarded.contains(y)) {
-                c.with_guarded_successor += 1;
-            }
-            c.members_with_own_entry += s
-                .members
-                .iter()
-                .filter(|m| in_nodes.contains(m.as_str()) && non_seed_states(pd, m) > 0)
-                .count();
         }
     }
 
@@ -7155,16 +7081,7 @@ codeunit 50100 C
         if let Some(d) = rows_diff(&new.derived, &old.derived) {
             failures.push(format!("{where_}: {d}"));
         }
-        count_classes(
-            rel.cone(),
-            &i.nodes,
-            &i.direct_full,
-            &m.workspace.routines,
-            &new.pd_solution,
-            classes,
-        );
-        classes.compositions += 1;
-        classes.routines += i.nodes.len();
+        classes.add(&new.stats, i.nodes.len());
         new.stats
     }
 
@@ -7204,13 +7121,7 @@ codeunit 50100 C
         let mut single = Classes::default();
         let mut cross = Classes::default();
         let mut failures = Vec::new();
-        for (root, want) in [
-            ("r0-corpus", 217),
-            ("fixtures", 29),
-            ("r3a4-fixtures", 1),
-            ("r3a5-fixtures", 1),
-            ("r2-5b-fixtures", 1),
-        ] {
+        for (root, want) in FIXTURE_ROOTS {
             let dirs = app_dirs(&tests.join(root), usize::MAX);
             assert_eq!(dirs.len(), want, "{root}: app dirs");
             for dir in &dirs {
@@ -7236,8 +7147,9 @@ codeunit 50100 C
             cross.line()
         );
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
-        assert_eq!(single.compositions, 249, "single-app compositions");
-        assert_eq!(cross.compositions, 249, "cross-app compositions");
+        let dirs: usize = FIXTURE_ROOTS.iter().map(|(_, n)| n).sum();
+        assert_eq!(single.compositions, dirs, "single-app compositions");
+        assert_eq!(cross.compositions, dirs, "cross-app compositions");
         // The first run's non-zero classes (2026-10-20: 4 multi-member roots in
         // each mode). Every other class is 0 over the fixtures, a stated LIMIT:
         // self-loops, non-roots, successors, guarded successors and own
@@ -7286,8 +7198,9 @@ codeunit 50100 C
                 );
                 // T8 is the only real-code oracle for these classes (T7's fixtures
                 // reach none of them), so a moved baseline must not drop them
-                // silently. Roots are 0 on CDO: T2, T10 and the census CLI test
-                // carry the root-set build.
+                // silently. Roots are 0 on CDO, so the root-set build is carried
+                // by the hand graphs (T1-T6, T10, T11 all have a recursive root;
+                // T2's break targets it) and the census CLI test.
                 for (class, n) in [
                     ("multi-member", classes.multi_member),
                     ("with-successor", classes.with_successor),

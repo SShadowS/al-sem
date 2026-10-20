@@ -37,10 +37,14 @@
 //! `retag` (`capability_cone.rs`) rewrites ONLY `subject` / `provenance` / `via` /
 //! `witness_callsite_id` and the two first-hop ids (`witness_first_hop_operation_id`,
 //! `witness_first_hop_event_id`). No derived predicate above reads any of them, so
-//! folding the PRE-retag representative is equivalent by construction. The fold
-//! therefore runs at the exact `retag` call sites, over the exact same
-//! representatives (the singleton path's key-winner `best.values()`, the BFS
-//! path's `seen`-deduped reps), plus the routine's own RAW direct facts.
+//! folding the PRE-retag representative is equivalent by construction. For a
+//! singleton SCC the fold runs at the `retag` call site, over the same
+//! representatives (the key-winner `best.values()`). For a recursive member
+//! (#160 step 7a) the raw half retags the BFS walk's `seen`-deduped picks, while
+//! the derived row folds the member's Cone-SCC set (the SCC's fact cone) plus its
+//! own producer-solve entries; the fold is a function of the key and a union, so
+//! it equals the fold of the picks (spec §4.1; the test-only `PerMemberWalk`
+//! oracle checks it). Every routine also folds its own RAW direct facts.
 //!
 //! **The dedup asymmetry.** The cone dedups inherited facts by
 //! `inherited_fact_key = op|resource_kind|resource_id|confidence|tempClass`, so

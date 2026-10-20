@@ -758,7 +758,8 @@ fn census_rest_is_never_negative() {
 /// #160 step 7a §4.5/§6: the census `cone_scc:` line (the stop rule's S1
 /// instrument) is fed from `compose_inherited_cones`' `ComposeStats`.
 /// `ws-d7-event-cycle` holds one recursive 6-member root SCC: its set (3
-/// entries) is built once and folded by each of the 6 members, with no walk.
+/// entries) is built once and folded by each of the 6 members, with no walk, so
+/// `walk_total` is exactly 0.0 ms. The SCC has no successor and no own entry.
 #[test]
 fn census_cone_scc_line_counts_the_recursive_sccs() {
     let (out, _) = spawn_traced(
@@ -777,14 +778,12 @@ fn census_cone_scc_line_counts_the_recursive_sccs() {
         .filter(|l| l.starts_with("[cones-census]   cone_scc: "))
         .collect();
     assert_eq!(scc.len(), 1, "one cone_scc line:\n{err}");
-    assert!(
-        scc[0].starts_with(
-            "[cones-census]   cone_scc: recursive=1 members_all=6 members_emitted=6 roots=1 \
-             self_loops=0 max=6 sizes=1:0 2:0 3-9:1 10-99:0 100+:0 member_walks=0 own_entries=0 \
-             sets_borrowed=0 sets_built=1 set_entries=18 "
-        ),
-        "{}",
-        scc[0]
+    assert_eq!(
+        scc[0],
+        "[cones-census]   cone_scc: recursive=1 members_all=6 members_emitted=6 roots=1 \
+         self_loops=0 max=6 sizes=1:0 2:0 3-9:1 10-99:0 100+:0 member_walks=0 own_entries=0 \
+         sets_borrowed=0 sets_built=1 set_entries=18 walk_total=0.0ms own_entry_members=0 \
+         with_successor=0 with_guarded_successor=0"
     );
     // S1: members_emitted equals the compose line's recursive emission count.
     let compose = err
