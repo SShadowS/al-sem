@@ -65,7 +65,11 @@ byte-neutral: **no golden may move in any commit** (spec A7a.3, epic I2).
    own-entry count.
 2. **A recursive SCC that is a root and has no member in `routine_ids`**: no set should be
    built for it (spec §4.2: "with at least one member in `routine_ids`"). Task 2 adds
-   `scc_set_root_with_no_emitted_member_builds_nothing` (below).
+   `scc_set_root_with_no_emitted_member_builds_nothing` (below). *As executed:* that
+   fixture is impossible. Tarjan starts only from `nodes`, so an SCC with no member in
+   `nodes` is always reached from a node outside it and is never a root. It was replaced
+   by `scc_set_none_for_an_scc_with_no_emitted_member` (a NON-root SCC with no emitted
+   member: no set; in `scc_set_tests`).
 3. **`Both` mode** (policy's RAW build): the raw `Vec` must stay byte-identical while the
    derived row now comes from the set. T9's raw half pins it.
 4. **Census `rest=` going negative** when a new timing is counted under two components:
@@ -82,11 +86,14 @@ Spec §4.5 ("New, added by plan Task 1"), §5.9, §6. Not small.
 
 **Files:** `src/engine/l4/capability_cone.rs` (`ComposeStats`, `compose_inherited_cones`,
 `ConeOutcome`), `src/engine/l5/detector_context.rs` (`cones_census`: new atomics and the
-`cone_scc:` line), and the five switch-dependent tests' attributes in `scc_set_tests`.
+`cone_scc:` line); the five switch-dependent tests are moved out of `scc_set_tests` (the
+tests' own module, not `capability_cone::tests`) to a file outside the repo (Step 1).
 
 **Interfaces:**
 - Produces: `pub(crate) struct ComposeStats` (the 12 stub fields, now `pub(crate)`),
-  `ConeOutcome.stats: ComposeStats` (`pub(crate)`), counted on every call;
+  `ConeOutcome.stats: ComposeStats` (`pub(crate)`; *as executed* `#[cfg(test)]
+  pub(crate)` on `ConeOutcome`: production reads the counts only through
+  the census), counted on every call;
   census atomics `CONE_SCC_RECURSIVE`, `CONE_SCC_MEMBERS_ALL`, `CONE_SCC_MEMBERS_EMITTED`,
   `CONE_SCC_ROOTS`, `CONE_SCC_SELF_LOOPS`, `CONE_SCC_MAX` (`max`), `CONE_SCC_SIZE_HIST:
   [AtomicU64; 5]`, `CONE_SCC_OWN_ENTRIES`, `CONE_SCC_SETS_BORROWED`,
@@ -110,7 +117,8 @@ T5, T6 and T9 are parked outside the repo during this task (Step 1) and come bac
   no caller, dev clippy `-D warnings` fails; then the helper moves with its test, placed
   before the tests in the parked file. Record in the ledger Timeline the parked file's
   `sha256sum` and its `grep -c '#\[test\]'` count (5). The conductor holds the file between
-  tasks. Task 1 commits without these five tests.
+  tasks. Task 1 commits without these five tests. *As executed:* done; the five were
+  parked between Tasks 1 and 2 and restored byte for byte in Task 2 Step 1.
 - [ ] **Step 2: Run red.** `cargo test -p al-sem --lib scc_set_tests` → T1 fails on
   `recursive_sccs` (0 ≠ 1), T10 on `recursive_sccs` (0 ≠ 2), T11 on
   `recursive_members_all` (0 ≠ 2); every other test in the module passes.
@@ -131,7 +139,10 @@ T5, T6 and T9 are parked outside the repo during this task (Step 1) and come bac
   recursive SCC with an emitted member, `fact_cone_for_scc(&members, succ_ids,
   &fact_cones, direct, None)`, add its `len()` to `ROOT_SET_ENTRIES`, time it into
   `ROOT_SET_PROBE_NANOS`, drop it. Print one line right after the `compose:` line
-  (`detector_context.rs:566`), exact text from spec §4.5:
+  (`detector_context.rs:566`), exact text from spec §4.5 at Task 1 (*as executed,* Task 2
+  deletes the two `root_set_*` fields; the delivered line ends at `walk_total=`,
+  is the `cone_scc:` format string in `cones_census::report`, and is pinned by
+  `census_cone_scc_line_counts_the_recursive_sccs` in `tests/cli/cli_build_counters.rs`):
   `[cones-census]   cone_scc: recursive={} members_all={} members_emitted={} roots={} self_loops={} max={} sizes=1:{} 2:{} 3-9:{} 10-99:{} 100+:{} member_walks={} own_entries={} sets_borrowed={} sets_built={} set_entries={} walk_total={:.1}ms root_set_probe={:.1}ms root_set_entries={}`.
   No new timing is added to a component (spec §4.5 overlap rule); the probe adds to
   `rest=`, which stays non-negative.
@@ -189,7 +200,11 @@ Red tests it turns green: **T2, T3b, T5, T6, T9** (and the Review Focus test bel
   `scc_set_tests` module with one Edit. Then prove the copy is byte-identical: write the
   inserted lines to a scratch file (a line-range read of `capability_cone.rs`, from the
   first inserted line to the last) and `cmp` it with the parked file. `cmp` must be
-  silent, else stop. Then add `scc_set_root_with_no_emitted_member_builds_nothing`: synthetic graph, `nodes = [C]`,
+  silent, else stop. Then add `scc_set_root_with_no_emitted_member_builds_nothing`
+  (*as executed:* impossible as written, since Tarjan starts only from `nodes`; replaced
+  by `scc_set_none_for_an_scc_with_no_emitted_member`, `nodes = [A, C]`, edges A → X,
+  X → Y, Y → X, X → C, asserting no set and `row_ids() == {A, C}`;
+  in `scc_set_tests`). As first written: synthetic graph, `nodes = [C]`,
   edges X → Y, Y → X, X → C (X, Y not in `nodes`; the root SCC {X, Y} has no emitted
   member); assert `stats.recursive_roots == 1`, `stats.scc_sets_built == 0`,
   `row_ids() == {C}`. Run `scc_set_tests`: T2 fails on `scc_sets_built` (0 ≠ 1), T3b on
@@ -222,7 +237,9 @@ Red tests it turns green: **T2, T3b, T5, T6, T9** (and the Review Focus test bel
   assertion):
   - T1 §5.2: skip the successor merge in `fact_cone_for_scc` (`:2254-2289`) for a
     recursive SCC → A's literal row fails on `t/C`.
-  - T2 §5.3: use an empty set for a root → Y's literal row fails on `t/S`.
+  - T2 §5.3: use an empty set for a root → the literal rows fail on `t/S`; *as executed*
+    it fails first on X (the `"{m}: writes"` assertion, `m = X`): the test checks X,
+    Y, S in that order, and both X and Y lose `t/S`.
   - T3 §5.4: Break 1 `own_entries(&members[0])` → the literal row assertion fails;
     Break 2 skip the own fold → Q loses `[T]`.
   - T3b §5.4: skip the own fold → rows fail; `MAY_COMMIT` and set-count assertions
@@ -233,8 +250,9 @@ Red tests it turns green: **T2, T3b, T5, T6, T9** (and the Review Focus test bel
   - T9 §5.7: (a) `compose_cone_over_graph` passes `PerMemberWalk` → fails on
     `member_walks == 0`; (b) drop `sort_inherited` in `emit_picks` → fails on A's literal
     raw order.
-  - `scc_set_root_with_no_emitted_member_builds_nothing`: drop the "has an emitted
-    member" condition → fails on `scc_sets_built == 0`.
+  - `scc_set_root_with_no_emitted_member_builds_nothing` (*as executed:*
+    `scc_set_none_for_an_scc_with_no_emitted_member`): drop the "has an emitted member"
+    condition → fails on the no-set assertion.
 - [ ] **Step 6: Gate and commit.** `scripts/ci-steps task-affected`. Commit:
   `#160 step 7a Task 2: fold recursive members from one set per Cone-SCC`.
 
@@ -275,7 +293,10 @@ Spec §5.8 (T8), A7a.2. Depends on Task 3.
 **Files:** none changed unless the run fails; the ledger Timeline line.
 
 - [ ] **Step 1:** `CDO_WS=/work/src/cdo-baseline/Cloud cargo test --profile cdo -p al-sem --lib scc_set_matches_member_walk_on_cdo -- --nocapture > <log> 2>&1`;
-  `grep` the `scc-set oracle on CDO:` line and `1 passed`. Required:
+  require BOTH lines `scc-set oracle on CDO (cross-app): ` and `scc-set oracle on CDO
+  (single-app): ` (T8 prints one per universe, its `scc-set oracle on CDO ({mode}): …`
+  format) and
+  `test result: ok. 1 passed`, with the same three `grep -q` as spec §8 Part 1. Required:
   `recursive_members_emitted == 714` cross-app; the line's classes and wall recorded in
   the ledger (spec §5.8: T8's cost goes into the numbers file).
 - [ ] **Step 2: Proof** (spec §5.8): the T3 Break 2 (skip own entries) on the CDO run →
@@ -299,7 +320,9 @@ Gate-inert prose. Depends on Tasks 1-4.
   test-only (`RecursiveMembership::PerMemberWalk`) and its deletion point; the census:
   new `cone_scc:` line, `BFS_PICKS` 0 in `DerivedOnly`, merge counters rise by the
   root-set merges, `DIRECT_NANOS` now also times the publisher-map build
-  (`det_cone_inputs`); M3 deferred to step 6; `fold_row` not in 7a. **Coverage limit:**
+  (`det_cone_inputs`) (*as executed:* that widening was reverted; `direct=` times the
+  per-routine loop only, as at step 0, in `det_cone_inputs`, so the CHANGELOG does
+  not state it); M3 deferred to step 6; `fold_row` not in 7a. **Coverage limit:**
   over the 249 fixture dirs only the multi-member (4) and root (4) classes are non-zero;
   self-loops, non-roots, successors, guarded successors and own entries are covered only
   by the hand tests (T1, T3, T4) and by T8 on CDO; the gap deviation (as step 3).

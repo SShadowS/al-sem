@@ -146,7 +146,10 @@ except `routine_ids.contains(m)` (`:2576`), which gates emission, not membership
 ### 4.2 The new recursive branch
 
 In `compose_inherited_cones`, for each recursive SCC i with at least one member in
-`routine_ids`, when `mode.wants_derived()`:
+`routine_ids`, when `mode.wants_derived()`. (*As delivered:* an SCC with no member in
+`routine_ids` is never a root, because Tarjan starts only from `nodes`, so it is always
+reached from a node outside it. Its "no set" case is pinned on a non-root SCC by
+`scc_set_none_for_an_scc_with_no_emitted_member`.) Steps:
 
 1. **Get the SCC set** once:
    - not a root: borrow `fact_cones[i]`, already built at `:2539-2541` and not freed
@@ -266,7 +269,9 @@ New, added by plan Task 1 BEFORE the switch (the stop rule's instrument, §6). T
 changes no output and no production path:
 
 - A per-call `ComposeStats` struct, plain integers, computed always and returned on
-  `ConeOutcome` as a `pub(crate)` field (so tests read it with no global state):
+  `ConeOutcome` as a field (so tests read it with no global state). *As delivered:*
+  the field is `#[cfg(test)] pub(crate) stats` on `ConeOutcome` (`capability_cone.rs`);
+  production reads the counts only through the census atomics. Fields:
   `recursive_sccs`, `recursive_members_all` (every member Tarjan placed in a recursive
   SCC, emitted or not), `recursive_members_emitted` (those that pass `routine_ids`, the
   population `BFS_CALLS` counts), `recursive_roots`, `self_loops`,
@@ -284,10 +289,15 @@ changes no output and no production path:
   deleted by the switch commit, where the same build becomes production and is timed
   under `BFS_WALK_NANOS`.
 - One new census line, printed after the `compose:` line
-  (`detector_context.rs:566`):
-  `[cones-census]   cone_scc: recursive={} members_all={} members_emitted={} roots={} self_loops={} max={} sizes=1:{} 2:{} 3-9:{} 10-99:{} 100+:{} member_walks={} own_entries={} sets_borrowed={} sets_built={} set_entries={} walk_total={:.1}ms root_set_probe={:.1}ms root_set_entries={}`.
-  Census output goes to stderr only when the census is on; no test pins its text today
-  (grep for `bfs_walk`/`picks=` in `tests/` finds nothing).
+  (`detector_context.rs:566`). At Task 1 it ended in `… walk_total={:.1}ms
+  root_set_probe={:.1}ms root_set_entries={}`. *As delivered,* the switch deletes the
+  two `root_set_*` fields (the probe is gone), so the line no longer carries them. The
+  exact delivered text is the `cone_scc:` format string in `cones_census::report`
+  (`src/engine/l5/detector_context.rs`), which this spec does not copy, since it may grow
+  further class counts. Census output goes to stderr only when the census is on.
+  *As delivered,* one test pins the line: `census_cone_scc_line_counts_the_recursive_sccs`
+  (`tests/cli/cli_build_counters.rs`). Before 7a no test pinned census text (grep for
+  `bfs_walk`/`picks=` in `tests/` found nothing).
 
 The perf-trace build counters (`build.cone`, `build.graph_scc`, …) do not move (I1): 7a
 adds no graph, no Tarjan and no cone. `cli_build_counters` stays green unchanged.
@@ -350,7 +360,11 @@ assertion the break names (the proof records that assertion's message), not else
 Each test also asserts its own PRECONDITION from the composition's output before its
 main assertions, so a fixture that stops producing the shape fails loudly instead of
 passing vacuously. All are `--lib` tests in `capability_cone::tests` unless named
-otherwise.
+otherwise. *As delivered,* they live in their own module, `capability_cone::scc_set_tests`
+(filter `cargo test -p al-sem --lib scc_set_tests`). Five of them (T2, T3b, T5, T6, T9)
+can go green only at the switch. Because `#[ignore` is refused
+(`scripts/agentflow/protect.py:16`), they were parked outside the repository between
+plan Tasks 1 and 2 and put back byte for byte (plan Task 1 Step 1, Task 2 Step 1).
 
 ### 5.1 The row comparator
 
@@ -385,8 +399,11 @@ S writing `t/S`; and a non-root self-loop R (R → R, R → S2, S2 writing `t/S2
 by a singleton U. Precondition: `stats.recursive_roots == 1`, `self_loops == 1`.
 Literal rows (X and Y carry `t/S`; R and U carry `t/S2`), and equal to the oracle;
 `stats.scc_sets_built == 1`, `scc_sets_borrowed == 1`.
-**Break:** for a root SCC use an empty set instead of building one → Y (which reaches
-`t/S` only through X) loses `t/S`; Y's literal row fails.
+**Break:** for a root SCC use an empty set instead of building one → both X and Y lose
+`t/S`: neither writes it itself, and under the new path a member reaches its successor's
+facts only through the set. *As delivered,* the test checks the rows in the order X, Y,
+S, so the red run fails first on X's literal row (the `"{m}: writes"` assertion with
+`m = X`, in `scc_set_root_and_self_loop`).
 
 ### 5.4 Own entries differ per member (T3, `scc_set_keeps_own_entries_per_member`)
 
@@ -565,7 +582,9 @@ Over the production entry `compose_cone_over_graph`:
   `relation_equals_the_legacy_base_on_cdo` (skips without `CDO_WS`, panics under
   `ENFORCE_CDO_WS=1`), cross-app and single-app. Prints
   `scc-set oracle on CDO: <n> routines, <r> recursive SCCs, <m> members, max <k>, <classes>, <s>`
-  with T7's class counts; asserts `recursive_members_emitted == 714` cross-app (step
+  with T7's class counts. *As delivered* it prints one such line per universe,
+  `scc-set oracle on CDO (cross-app): …` and `scc-set oracle on CDO (single-app): …`
+  (the `scc-set oracle on CDO ({mode}): …` format in the test). It asserts `recursive_members_emitted == 714` cross-app (step
   0's BFS calls; a different number means the input moved and the spec's numbers are
   stale, so the test says so). Runs in `scripts/cdo-gate`. **Cost:** it builds the
   CDO cross-app and single-app models once and composes each twice (new path, then the
@@ -849,12 +868,13 @@ for b in context.cone_derived context.summaries; do
 done
 head_ok   # the oracle test builds the head tree again (cdo profile)
 (cd $HW && CDO_WS=$WS cargo test --profile cdo -p al-sem --lib scc_set_matches_member_walk_on_cdo -- --nocapture) > $B/cdo-oracle.log 2>&1
-grep -q "scc-set oracle on CDO:" $B/cdo-oracle.log && grep -q "1 passed" $B/cdo-oracle.log || { echo "FAIL oracle line"; exit 1; }
+grep -q "^scc-set oracle on CDO (cross-app): " $B/cdo-oracle.log && grep -q "^scc-set oracle on CDO (single-app): " $B/cdo-oracle.log && grep -q "^test result: ok\. 1 passed" $B/cdo-oracle.log || { echo "FAIL oracle lines"; exit 1; }
 ```
 
 Pass: both `cmp` silent; the two histogram SHA-256 equal (step 4 recorded
 `c032c8db…a1594ef`); for each bucket, head `bytes=` ≤ parent `bytes=` (A7a.6; equal
-expected); the oracle log has its `scc-set oracle on CDO:` line and `1 passed`.
+expected); the oracle log has both `scc-set oracle on CDO (cross-app): ` and `scc-set
+oracle on CDO (single-app): ` lines and `test result: ok. 1 passed`.
 
 ### Part 2: bounded runs
 
