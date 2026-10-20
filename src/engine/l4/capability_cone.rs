@@ -2056,8 +2056,10 @@ fn inherited_facts_by_bfs<'g>(
                     let key = base_key_of(key, entry);
                     // `key` is the cone's `Arc<str>`; `seen` stays keyed by `String`
                     // because the sibling branch above feeds it `direct`'s own
-                    // `String` keys. This walk runs 503 times per 8020 run, so the
-                    // one owned copy per newly-seen key is not on any hot path.
+                    // `String` keys. Since #160 step 7a this walk runs only for the
+                    // raw half (RawOnly, Both) and the test oracle, never under
+                    // `analyze`'s DerivedOnly, so the one owned copy per newly-seen
+                    // key is not on any hot path.
                     if !seen.contains_key(&**key) {
                         seen.insert(key.to_string(), picked.len());
                         picked.push((&entry.rep, item.hops + entry.dist, first_hop));
@@ -2087,22 +2089,14 @@ fn inherited_facts_by_bfs<'g>(
         .collect()
 }
 
-/// A recursive member's inherited output from its BFS picks: the raw push and,
-/// when `derived` is given (only under `RecursiveMembership::PerMemberWalk`,
-/// #160 step 7a), the derived fold of the SAME picks. Under
-/// [`ConeOutput::DerivedOnly`] the `retag` clones and `sort_inherited` are
-/// skipped.
+/// A recursive member's RAW inherited output from its BFS picks (retagged,
+/// sorted). The derived row never reads the picks in production: it folds the
+/// member's Cone-SCC set (#160 step 7a). Empty unless the mode wants raw.
 fn emit_picks(
     subject: &str,
     picks: Vec<(&CapabilityFact, &TypedOutEdge)>,
     mode: ConeOutput,
-    derived: Option<&mut ConeDerivedBuilder>,
 ) -> Vec<CapabilityFact> {
-    if let Some(derived) = derived.filter(|_| mode.wants_derived()) {
-        for (rep, _) in &picks {
-            derived.fold_fact(rep);
-        }
-    }
     if !mode.wants_raw() {
         return Vec::new();
     }
@@ -2404,7 +2398,11 @@ fn coverage_cone_for_scc(
 pub(crate) enum RecursiveMembership {
     /// One set per Cone-SCC (§4.2). The only production value.
     PerScc,
-    /// The pre-7a path: fold the member's own BFS picks. The oracle.
+    /// The pre-7a path: fold the member's own BFS picks. The oracle (T7, T8),
+    /// test-only by type. Deleted, with its arm in `compose_inherited_cones`,
+    /// by step 7b's last commit once 7b's CDO oracle passes; if 7b is dropped,
+    /// by the next step that edits `compose_inherited_cones` (step 6 at the
+    /// latest). Spec §4.3.
     #[cfg(test)]
     PerMemberWalk,
 }
@@ -2424,12 +2422,17 @@ pub(crate) struct ComposeStats {
     pub(crate) max_recursive_members: u64,
     /// Recursive SCCs by member count: 1, 2, 3-9, 10-99, >= 100.
     pub(crate) size_hist: [u64; 5],
-    /// Calls of [`inherited_facts_by_bfs`].
+    /// Calls of [`inherited_facts_by_bfs`] (the raw half, or the oracle; 0
+    /// under `PerScc` + `DerivedOnly`). Their time is the census `walk_total`;
+    /// `bfs_walk` also holds the set builds and borrows.
     pub(crate) member_walks: u64,
     /// Own (producer-solve) entries of the emitted recursive members.
     pub(crate) own_entries_recursive: u64,
+    /// Sets taken from a non-root SCC's fact cone.
     pub(crate) scc_sets_borrowed: u64,
+    /// Sets built for a root SCC (its fact cone is never built).
     pub(crate) scc_sets_built: u64,
+    /// Σ set length over the emitted members that folded a set.
     pub(crate) scc_set_entries_folded: u64,
 }
 
@@ -2611,11 +2614,16 @@ fn compose_inherited_cones(
             scc_entry.members.len() as u64,
         );
         let recursive = scc_entry.recursive;
-        let emitted = scc_entry
-            .members
-            .iter()
-            .filter(|m| routine_ids.contains(*m))
-            .count() as u64;
+        // Read only for a recursive SCC; a singleton pays no lookup.
+        let emitted = if recursive {
+            scc_entry
+                .members
+                .iter()
+                .filter(|m| routine_ids.contains(*m))
+                .count() as u64
+        } else {
+            0
+        };
         if recursive {
             let n = scc_entry.members.len() as u64;
             stats.recursive_sccs += 1;
@@ -2717,7 +2725,21 @@ fn compose_inherited_cones(
                 }
                 let out = match picks {
                     Some(picks) => {
-                        emit_picks(m, picks, mode, scc_set.is_none().then_some(&mut derived))
+                        match membership {
+                            RecursiveMembership::PerScc => {}
+                            // The pre-7a oracle (§4.3): the derived row from the
+                            // member's own picks. Deleted with the variant (see
+                            // `RecursiveMembership`).
+                            #[cfg(test)]
+                            RecursiveMembership::PerMemberWalk => {
+                                if mode.wants_derived() {
+                                    for (rep, _) in &picks {
+                                        derived.fold_fact(rep);
+                                    }
+                                }
+                            }
+                        }
+                        emit_picks(m, picks, mode)
                     }
                     None => Vec::new(),
                 };

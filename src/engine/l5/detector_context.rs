@@ -373,8 +373,11 @@ pub(crate) mod cones_census {
     pub(crate) static WALK_DEDUP_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static WALK_COMPOSE_NANOS: AtomicU64 = AtomicU64::new(0);
     // Inside compose: the two per-member inherited-fact walks. The recursive
-    // arm splits into the WALK (`inherited_facts_by_bfs`) and the per-pick
-    // FOLD (`emit_picks`), with the pick population beside them (#160 §4.1.1).
+    // arm splits into the WALK and the FOLD (#160 §4.1.1). Since step 7a
+    // (§4.5) `BFS_WALK_NANOS` holds each recursive SCC's set build (root) or
+    // borrow (non-root) plus the per-member walks that still run (raw modes);
+    // `BFS_FOLD_NANOS` the per-member set fold plus `emit_picks` in raw modes.
+    // `BFS_PICKS` counts picks of walks that ran (0 under DerivedOnly).
     pub(crate) static BFS_WALK_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static BFS_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static BFS_PICKS: AtomicU64 = AtomicU64::new(0);
@@ -482,8 +485,10 @@ pub(crate) mod cones_census {
     pub(crate) static CONE_SCC_SETS_BORROWED: AtomicU64 = AtomicU64::new(0);
     pub(crate) static CONE_SCC_SETS_BUILT: AtomicU64 = AtomicU64::new(0);
     pub(crate) static CONE_SCC_SET_ENTRIES: AtomicU64 = AtomicU64::new(0);
-    /// A REPORT value, never a component (the §4.5 overlap rule): the
-    /// per-member walk time, from the same readings as `BFS_WALK_NANOS`.
+    /// A REPORT value, never a component (the §4.5 overlap rule): the time of
+    /// the per-member walks only, from the same readings `BFS_WALK_NANOS`
+    /// adds. `BFS_WALK_NANOS` also holds the set builds and borrows, so
+    /// `walk_total <= bfs_walk`; under DerivedOnly `walk_total` is 0.
     pub(crate) static WALK_TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
 
     /// Fold one compose call's stats into the Cone-SCC census, if it is on.
