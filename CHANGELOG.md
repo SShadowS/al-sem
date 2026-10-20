@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- #160 step 4: one execution relation per view. `ExecRelation`
+  (`src/engine/l4/exec_relation.rs`) is built once from one split of the calls:
+  workspace callers' calls plus every event dispatch (the Primary payload, in
+  `edges_by_from` / `edges_from_order` / `uncertainty_edges`), and every typed edge,
+  the dependency code's own calls included (the Cone payload, `typed_edges`), with
+  its SCC computed in `new`. Before, the cross-app base built the graph twice and ran
+  its own Tarjan, a single-app context built its own graph, and `build_l4` ran a
+  Tarjan when nobody handed it one. Now the cross-app base holds the relation
+  (`R3a5CrossAppBase.rel` replaces `graph`, `combined_scc`, `event_graph` and
+  `nodes`), the view's cell is `Cell::Rel` (single-app built by `prepare`, cross-app
+  the base's), `build_detector_artifacts` and `build_l4` take the relation, and the
+  cone takes only the typed edges (`&[TypedEdge]`, so it cannot read the Primary
+  payload). The r3a5 projection reads the relation and the model's own event graph.
+  The snapshot stays on its own legacy-cut graph until step 6.
+  - **Byte identity.** No golden moved. The CDO detector baseline and the
+    `--program-call-graph-stats` histogram are unchanged: `<Task 7>`.
+  - **Dependency uncertainty kept.** The dependency half's uncertainty edges,
+    dropped before, are kept in `rel.dependency_uncertainty`. Nothing reads them
+    yet (step 5 decides); they stay out of the Primary payload, the detector
+    context and the L4 solve.
+  - **Counters.** `build.combined_graph` drops by one in every command that builds
+    a cross-app base, since one relation counts one build: analyze cross-app 2→1,
+    `analyze --detector d47-…` 3→2, digest cross-app 3→2, events, policy check and
+    query cross-app 2→1. `build.graph_scc` moves nowhere. The step 0-2 child
+    spec's §4.4.8 restates the table "after step 4".
+  - **Spans, census, cells.** New span `rel.build`; gone
+    `context.event_combined_graph` and `context.core_scc_tarjan`;
+    `crossapp.base_graph` / `crossapp.base_artifacts_facts` renamed
+    `crossapp.field_index` / `crossapp.base_facts`. Census buckets `rel.graph`,
+    `rel.scc`, `rel.dependency_uncertainty` replace `base.graph`,
+    `base.combined_scc`, `base.event_graph`, `base.nodes`, `context.graph` and
+    `l4.scc`: `<Task 7>`. The `view.release` trace instant names `Rel` where it
+    named `Graph`.
+  - **Single-app SCC lifetime.** The single-app SCC is now built before the det
+    fill's cone and lives in `Cell::Rel` until it is released, longer than `l4`
+    held it (through the cone walk; in `events --single-app` and `policy check
+    --single-app` until their last release). About 0.8 MB on CDO, bounded by three
+    single-app peak bounds: `<Task 7>`.
+  - **Tests.** New: three behaviour pins on the base code (a dependency caller of
+    a dependency publisher stays out of the subscriber's reverse graph and commit
+    span, and a dependency `local` helper is never proven temporary; d17 samples
+    the first caller in emission order; dependency uncertainty stays out of
+    Primary and is kept), and a per-field parity oracle against today's cross-app
+    recipe on 251 app dirs (both models each), two inline fixtures and CDO. The
+    oracle first ran against a COPY of the assembler (independent code, with two
+    assembler-internal mutations caught), then `build_combined_graph` was made to
+    delegate to the one assembler after a text-identity check. Rewritten with the
+    code: the census and release-order counter tests (`rel.*`, `Cell::Rel`), the
+    SCC-sharing test (`base.rel.scc`), and `build_l4` / `build_detector_artifacts`
+    call sites.
 - #160 step 3: the capability snapshot and `project_r3a3` no longer run an L4
   solve to get their call-site-local coverage reasons. Before, each snapshot base
   (and each `project_r3a3`) ran its own `compute_summaries_v2` over a fresh Tarjan
