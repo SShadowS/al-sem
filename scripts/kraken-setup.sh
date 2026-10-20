@@ -6,6 +6,8 @@ mkdir -p /work/src
 if [ ! -d /work/src/tree-sitter-al/.git ]; then
   git clone https://github.com/SShadowS/tree-sitter-al.git /work/src/tree-sitter-al
 fi
+# agentflow's preflight looks only at <checkout>/tree-sitter-al (gitignored), not TREE_SITTER_AL_PATH
+[ -e tree-sitter-al ] || ln -s /work/src/tree-sitter-al tree-sitter-al
 # pi-mcp: /orchestrate's reviewer models (.mcp.json runs /work/src/pi-mcp/src/pi-server.ts)
 if [ ! -d /work/src/pi-mcp/.git ]; then
   git clone https://github.com/SShadowS/pi-mcp.git /work/src/pi-mcp

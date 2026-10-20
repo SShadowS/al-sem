@@ -13,7 +13,8 @@ agents:
     session_name: alsem-main
     start:
       - "Run `kraken tentacle ack` and report its output in one line. Do nothing else."
-      - /loop /orchestrate
+      # pi is on the ChatGPT subscription (openai-codex), which has no Gemini: the 2026-10-16 stand-ins
+      - "/loop /orchestrate Reviewers for this loop are the stand-ins: gpt-6.1-sol for gpt-6-astra and Opus for gemini-3.8-flash."
 setup:
   - bash scripts/kraken-setup.sh
 env:
