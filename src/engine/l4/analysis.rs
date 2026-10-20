@@ -137,7 +137,8 @@ pub fn render_warnings(diagnostics: &[SummarizeDiagnostic]) -> Vec<String> {
 }
 
 /// Tarjan over `graph.edges_by_from` (counter `build.graph_scc`): the one
-/// copy, also behind the cross-app base's SCC and the snapshot fold's.
+/// copy, also behind the cross-app base's SCC. The snapshot's coverage fold no
+/// longer solves, so it no longer calls this (#160 step 3).
 pub(crate) fn graph_scc(graph: &CombinedGraph) -> SccResult {
     let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &graph.edges_by_from {

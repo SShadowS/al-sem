@@ -226,8 +226,8 @@ fn analyze_cross_app_d47() {
             program: 1,
             bcg: 3,
             cone: 1,
-            v2: 1,
-            scc: 3,
+            v2: 0,
+            scc: 2,
             pd: 1,
             ctx: 1,
             snap: 1,
@@ -266,8 +266,8 @@ fn digest_cross_app() {
             program: 1,
             bcg: 3,
             cone: 2,
-            v2: 2,
-            scc: 4,
+            v2: 1,
+            scc: 3,
             pd: 2,
             ctx: 1,
             snap: 1,
@@ -299,8 +299,8 @@ fn digest_single_app() {
             program: 1,
             bcg: 2,
             cone: 2,
-            v2: 2,
-            scc: 4,
+            v2: 1,
+            scc: 3,
             pd: 2,
             ctx: 1,
             snap: 1,
@@ -319,8 +319,8 @@ fn prove() {
             program: 1,
             bcg: 2,
             cone: 2,
-            v2: 2,
-            scc: 4,
+            v2: 1,
+            scc: 3,
             pd: 2,
             ctx: 1,
             snap: 1,
@@ -362,8 +362,8 @@ const FINGERPRINT_ROW: Row = Row {
     program: 1,
     bcg: 2,
     cone: 2,
-    v2: 2,
-    scc: 4,
+    v2: 1,
+    scc: 3,
     pd: 2,
     ctx: 1,
     snap: 1,
@@ -417,8 +417,8 @@ fn diff_ws_ws() {
             program: 2,
             bcg: 2,
             cone: 2,
-            v2: 2,
-            scc: 4,
+            v2: 0,
+            scc: 2,
             pd: 2,
             ctx: 0,
             snap: 2,
@@ -446,8 +446,8 @@ fn diff_ws_ws_strict() {
             program: 2,
             bcg: 4,
             cone: 4,
-            v2: 4,
-            scc: 8,
+            v2: 2,
+            scc: 6,
             pd: 4,
             ctx: 2,
             snap: 2,
@@ -870,9 +870,11 @@ fn aldump_starts_no_phase_sampler() {
 }
 
 /// Code-review CR8: one snapshot base build opens `r3a3.graph_build` and
-/// `r3a3.clone_inputs` once each, as it opens `r3a3.direct_facts` once; a span
-/// count is a build count. Final panel F2-6: the narrowed graph span has a new
-/// name, so no `r3a3.calls_graph` (which covered the clones too) is left.
+/// `r3a3.clone_inputs` once each, as it opens `r3a3.direct_facts_scan` once; a
+/// span count is a build count. Final panel F2-6: the narrowed graph span has a
+/// new name, so no `r3a3.calls_graph` (which covered the clones too) is left.
+/// #160 step 3: likewise no `r3a3.direct_facts`, which also covered the
+/// coverage fold's L4 solve.
 #[test]
 fn r3a3_spans_open_once_per_base() {
     let (out, events) = spawn_trace_events(
@@ -897,11 +899,12 @@ fn r3a3_spans_open_once_per_base() {
             .filter(|e| e["ph"] == "B" && e["name"] == name)
             .count()
     };
-    let bases = opened("r3a3.direct_facts");
+    let bases = opened("r3a3.direct_facts_scan");
     assert!(bases > 0, "no snapshot base built");
     assert_eq!(opened("r3a3.graph_build"), bases);
     assert_eq!(opened("r3a3.clone_inputs"), bases);
     assert_eq!(opened("r3a3.calls_graph"), 0, "the old span name is back");
+    assert_eq!(opened("r3a3.direct_facts"), 0, "the old span name is back");
 }
 
 /// Spec §4.1.5: d47 fills the ordering cell after the context is built, so its

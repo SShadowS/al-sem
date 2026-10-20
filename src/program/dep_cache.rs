@@ -295,10 +295,12 @@ impl DepKey {
 }
 
 /// The shared `CDO_WS` gate (skips without it, panics under
-/// `ENFORCE_CDO_WS=1`), included verbatim like the integration tests do.
+/// `ENFORCE_CDO_WS=1`), included verbatim like the integration tests do. The
+/// lib's one copy: a second `#[path]` include of the same file is a clippy
+/// error, so other lib tests use this one.
 #[cfg(test)]
 #[path = "../../tests/common/cdo.rs"]
-mod cdo;
+pub(crate) mod cdo;
 
 #[cfg(test)]
 mod tests {
