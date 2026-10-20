@@ -5445,6 +5445,274 @@ codeunit 13 "Dep Rec Sub"
     }
 }
 
+/// #160 step 4 (spec §5.2-§5.4): the epic row-4 behaviours the one
+/// `ExecRelation` must keep, pinned on the base code before it exists.
+#[cfg(test)]
+mod step4_tests {
+    use super::*;
+    use crate::engine::gate::run::AnalysisTarget;
+    use crate::engine::l5::detectors::registered_detectors;
+    use crate::engine::l5::registry::Detector;
+    use crate::engine::l5::test_support::{
+        dependency_half, write_fixture_dep_uncertainty, write_fixture_step4,
+    };
+    use crate::engine::session::{View, analyze_plan, digest_plan};
+    use std::path::Path;
+
+    fn id_of(base: &R3a5CrossAppBase, name: &str) -> String {
+        let ids: Vec<&ModelRoutine> = base
+            .ws_routines()
+            .iter()
+            .filter(|r| r.name == name)
+            .collect();
+        assert_eq!(ids.len(), 1, "{name}: {}", ids.len());
+        ids[0].id.clone()
+    }
+
+    fn detector(name: &str) -> Detector {
+        registered_detectors()
+            .into_iter()
+            .find(|d| d.name == name)
+            .unwrap_or_else(|| panic!("no detector {name}"))
+    }
+
+    fn base_of(ws: &Path) -> R3a5CrossAppBase {
+        let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+        build_cross_app_base(&inputs, "r0").expect("cross-app base")
+    }
+
+    /// Spec §5.2: the Primary payload takes WORKSPACE callers only. A
+    /// dependency caller (`Post`) of a dependency publisher (`OnDepPost`)
+    /// stays out of the subscriber's reverse graph and its commit span, and a
+    /// dependency `local` helper (`Touch`) with only a dependency caller is
+    /// never proven closed-world temporary. The preconditions read immutable
+    /// inputs only (model rows, the model's event graph, an independent
+    /// [`dependency_half`]), so a break inside the relation cannot fail them.
+    #[test]
+    fn step4_dependency_publisher_primary_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture_step4(&ws);
+        let base = base_of(&ws);
+        let [on_dep_post, post, call_touch, touch, handle_ws] =
+            ["OnDepPost", "Post", "CallTouch", "Touch", "HandleWs"].map(|n| id_of(&base, n));
+        for (name, id) in [
+            ("OnDepPost", &on_dep_post),
+            ("Post", &post),
+            ("CallTouch", &call_touch),
+            ("Touch", &touch),
+        ] {
+            assert!(
+                base.dep_routine_ids.contains(id),
+                "precondition: {name} is a dependency routine"
+            );
+        }
+        let t = base.ws_routines().iter().find(|r| r.id == touch).unwrap();
+        assert_eq!(t.kind, "procedure", "precondition: Touch's kind");
+        assert_eq!(
+            t.access_modifier.as_deref(),
+            Some("local"),
+            "precondition: Touch is local"
+        );
+        let r = t
+            .record_variables
+            .iter()
+            .find(|v| v.is_parameter && v.name == "R")
+            .expect("precondition: Touch has the record parameter R");
+        assert_eq!(
+            r.temp_state.kind, "parameter-dependent",
+            "precondition: R's temp state"
+        );
+        let eg = &base.resolved.events.graph;
+        let evt = eg
+            .events
+            .iter()
+            .find(|e| e.publisher_routine_id.as_deref() == Some(on_dep_post.as_str()))
+            .expect("precondition: an event published by OnDepPost");
+        assert!(
+            eg.edges
+                .iter()
+                .any(|e| e.event_id == evt.id && e.subscriber_routine_id == handle_ws),
+            "precondition: OnDepPost's event reaches HandleWs"
+        );
+        let dep = dependency_half(&ws);
+        for (from, to) in [(&post, &on_dep_post), (&call_touch, &touch)] {
+            assert!(
+                dep.iter()
+                    .any(|e| &e.from == from && e.to.as_deref() == Some(to.as_str())),
+                "precondition: the dependency half holds {from} -> {to}"
+            );
+        }
+
+        let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
+        view.prepare(&digest_plan(
+            crate::engine::l5::detectors::default_detectors(),
+        ));
+        let det = view.det();
+        let name = |id: &str| -> String {
+            let m = view.model();
+            m.workspace
+                .routines
+                .iter()
+                .find(|r| r.id == id)
+                .map_or_else(|| id.to_string(), |r| r.name.clone())
+        };
+        // All three are checked and reported together, so a break shows
+        // which of them it moves.
+        let mut failures: Vec<String> = Vec::new();
+        // (1)
+        let callers: Vec<(String, String)> = det
+            .reverse_call_graph
+            .get(&handle_ws)
+            .map(|v| v.iter().map(|e| (e.kind.clone(), name(&e.from))).collect())
+            .unwrap_or_default();
+        let want = vec![("event-dispatch".to_string(), "OnDepPost".to_string())];
+        if callers != want {
+            failures.push(format!(
+                "(1) HandleWs's reverse callers: want {want:?}, got {callers:?}"
+            ));
+        }
+        // (2)
+        let roots: Vec<Vec<String>> = det
+            .transaction_spans
+            .iter()
+            .filter(|s| s.commit_routine_id == handle_ws)
+            .map(|s| s.span_roots.iter().map(|r| name(r)).collect())
+            .collect();
+        if roots != vec![vec!["OnDepPost".to_string()]] {
+            failures.push(format!(
+                "(2) HandleWs's commit span roots: want [[OnDepPost]], got {roots:?}"
+            ));
+        }
+        // (3)
+        let proven: Vec<&(String, u32)> = det
+            .closed_world_temp_params
+            .iter()
+            .filter(|(id, _)| id == &touch)
+            .collect();
+        if !proven.is_empty() {
+            failures.push(format!("(3) Touch proven closed-world temp: {proven:?}"));
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// Spec §5.3: when two workspace callers reach one dependency, d17's
+    /// sample is the FIRST caller in call-emission order (`edges_from_order`).
+    /// The precondition reads the call list handed to the graph build, not
+    /// the graph, so reversing `edges_from_order` there leaves it true.
+    #[test]
+    fn step4_from_order_picks_the_first_caller() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d17-drift");
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::create_dir_all(ws.join(".alpackages")).unwrap();
+        std::fs::copy(src.join("app.json"), ws.join("app.json")).unwrap();
+        for p in std::fs::read_dir(src.join(".alpackages")).unwrap() {
+            let p = p.unwrap().path();
+            std::fs::copy(&p, ws.join(".alpackages").join(p.file_name().unwrap())).unwrap();
+        }
+        for (file, id, name) in [("A.al", 50171, "A"), ("B.al", 50172, "B")] {
+            std::fs::write(
+                ws.join("src").join(file),
+                format!(
+                    "codeunit {id} {name}\n{{\n    procedure Do{name}()\n    begin\n        Codeunit.Run(Codeunit::D17DepNewer);\n    end;\n}}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let base = base_of(&ws);
+        let (a, b) = (id_of(&base, "DoA"), id_of(&base, "DoB"));
+        let first = |id: &str| base.resolved.calls.edges.iter().position(|e| e.from == id);
+        let (fa, fb) = (first(&a), first(&b));
+        assert!(
+            matches!((fa, fb), (Some(x), Some(y)) if x < y),
+            "precondition: A's first edge before B's: {fa:?} {fb:?}"
+        );
+        let a_object = base
+            .ws_routines()
+            .iter()
+            .find(|r| r.id == a)
+            .unwrap()
+            .object_id
+            .clone();
+
+        let plan = analyze_plan(vec![detector("d17-min-version-drift")], true);
+        let key = plan.keys().remove(0);
+        let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
+        view.prepare(&plan);
+        let out = view.run(&key);
+        let got: Vec<(&str, Vec<&str>, Vec<&str>)> = out
+            .findings
+            .iter()
+            .map(|f| {
+                (
+                    f.id.as_str(),
+                    f.evidence_path
+                        .iter()
+                        .map(|s| s.routine_id.as_str())
+                        .collect(),
+                    f.affected_objects.iter().map(|o| &**o).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![(
+                "d17/dddddddd-0000-0000-0000-0000000000d17",
+                vec![a.as_str()],
+                vec![a_object.as_str()],
+            )],
+            "the d17 sample is A (B is {b})"
+        );
+    }
+
+    /// Spec §5.4, part 1: a dependency routine's to-less call is not a
+    /// Primary uncertainty: neither the base's graph nor the detector
+    /// context (a plan holding d1, so the context is built) carries it.
+    #[test]
+    fn step4_dependency_uncertainty_stays_out_of_primary() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture_dep_uncertainty(&ws);
+        let base = base_of(&ws);
+        let dep_caller = id_of(&base, "DepCaller");
+        assert!(
+            base.dep_routine_ids.contains(&dep_caller),
+            "precondition: DepCaller is a dependency routine"
+        );
+        let dep = dependency_half(&ws);
+        assert!(
+            dep.iter().any(|e| e.from == dep_caller && e.to.is_none()),
+            "precondition: the dependency half holds a to-less edge from DepCaller: {dep:?}"
+        );
+        // Both checked and reported together.
+        let mut failures: Vec<String> = Vec::new();
+        let in_graph: Vec<&crate::engine::l4::combined_graph::UncertaintyEdge> = base
+            .graph
+            .uncertainty_edges
+            .iter()
+            .filter(|u| u.from == dep_caller)
+            .collect();
+        if !in_graph.is_empty() {
+            failures.push(format!(
+                "graph uncertainty_edges from DepCaller: {in_graph:?}"
+            ));
+        }
+        let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
+        view.prepare(&analyze_plan(
+            vec![detector(crate::engine::l5::detectors::d1::DETECTOR)],
+            true,
+        ));
+        if let Some(u) = view.det().uncertainty_edges_by_from.get(&dep_caller) {
+            failures.push(format!(
+                "context uncertainty_edges_by_from[DepCaller]: {u:?}"
+            ));
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+}
+
 /// #160 step 3: the coverage reasons come from a scan of the combined graph's
 /// uncertainty edges, proven equal to the retired solve-and-fold
 /// ([`compute_uncertainty_coverage_reasons`], kept as this oracle's old side).
