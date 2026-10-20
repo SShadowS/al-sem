@@ -175,13 +175,17 @@ fn run(args: &[&str]) -> BTreeMap<String, u64> {
 }
 
 // ---------------------------------------------------------------------------
-// §4.4.8 rows (after step 4; every row equals the step-4 child spec's §4.9
-// table, 2026-10-20: only `bcg` moved, and only in the rows that build a
-// cross-app base, -1 each: the base's dependency half-build is no longer a
-// counted `build_combined_graph`, so a relation counts one. `scc` moved in no
-// row: the Tarjan moved into `ExecRelation::new`. The rule (M4): `bcg` = one
-// per constructed relation + one per legacy-cut graph; `scc` = one per
-// constructed relation + one per cone composition.)
+// §4.4.8 rows (after step 4; every row equals child 0-2 §4.4.8's "After step
+// 4" table, 2026-10-20). Among the rows pinned before step 4, only `bcg`
+// moved, and only in the rows that build a cross-app base, -1 each: the base's
+// dependency half-build is no longer a counted `build_combined_graph`, so a
+// relation counts one; no `scc` of those rows moved (the Tarjan moved into
+// `ExecRelation::new`). Two rows are new at step 4:
+// `analyze_cross_app_with_a_dependency_half` (bcg 1, scc 2) and
+// `analyze_single_app_d47`, whose `scc` 2 includes the relation's Tarjan, new
+// there because that plan fills no `l4`. The rule (M4): `bcg` = one per
+// constructed relation + one per legacy-cut graph; `scc` = one per
+// constructed relation + one per cone composition.
 // ---------------------------------------------------------------------------
 
 #[test]
