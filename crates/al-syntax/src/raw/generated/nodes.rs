@@ -6575,6 +6575,23 @@ impl<'t> RawPreprocConditionalListElements<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalMoveArgs<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalMoveArgs<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalMoveArgs {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalMoveElements<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalMoveElements<'t> {
     #[inline]

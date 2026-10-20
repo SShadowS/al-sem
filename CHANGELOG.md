@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Grammar: tree-sitter-al `main` at `4d75846c`** (B7b-3; package version still 4.4.1; was
+  `8682cb5f`). The `node-types.json` hash guard had made CI red. 499 -> 500 named kinds, no
+  field change: `preproc_conditional_move_args` (a move header whose target or `;` comes from
+  an `#if` group) is `Structural`, and the lowerer reads no move modification, so it needs no
+  arm. Shape changes: a `call_statement` no longer holds its `;`, and every bare name in
+  statement position is a `call_statement` (`Bar` before `end`/`else`/`until` too, which the
+  lowerer now lowers as a parenless call: it skipped the bare identifier before); a case
+  group arm may hold `empty_statement` and nested groups, and a branch may carry a
+  directive-only group before its `;`. Two lowerer arms (see Fixed). `CACHE_VERSION_GRAMMAR`
+  is now `tree-sitter-al-v4.4.1-4d75846c-native`. Measured old vs new: per-test outcomes
+  identical apart from the two new lowerer tests (3,584 -> 3,586, all pass), zero goldens
+  moved (the stamp kept its length, so `dry-run.txt` did not move), CDO
+  `--program-call-graph-stats` byte-identical (SHA-256 `c032c8db…94ef`). Limit: in a file
+  that already has an ERROR, a name the parser recovers in statement position may now be a
+  `call_statement`, and is lowered as a call.
+
 - #160 step 7a: one inherited set per Cone-SCC (part of #160). In
   `compose_inherited_cones`, a recursive Cone-SCC member's derived row is now folded
   from ONE set per SCC (its fact cone) plus the member's own producer-solve entries and
@@ -321,6 +337,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - #160 step 2: `effect_query_cli::build_db_effect_bundle`, `cross_app_db_effect_bundle`, `QuerySubstrate::from_cross_app_base` / `from_resolved`, `run::analyzer_diagnostic_lines`, and `digest_cli` / `prove`'s `compute_tx_context_map`. Each was a second build of something the `View` now builds once.
 
 ### Fixed
+
+- **The lowerer reads two new shapes of the `4d75846c` grammar** (see Changed;
+  `crates/al-syntax/src/lower/mod.rs`):
+  - A `preproc_split_case_extended` arm may hold a nested `preproc_conditional_case`
+    with whole branches in it. The arm read only its direct `case_branch` children, so
+    such a branch was dropped with its calls; the arm is now read like a case group's.
+  - A split terminator (`if C then Bar #if X ; #endif else Baz;`, valid AL) leaves the
+    `else` as `(call_statement function: (identifier))` (grammar deferred item 43). It
+    was lowered as a call to `else`; it is now skipped, and `Bar` and `Baz` keep their
+    calls.
+  Tests `split_case_extended_nested_group_branch_is_kept` and
+  `split_terminator_else_is_not_a_call`: each failed before its arm and fails again
+  when its arm is broken.
 
 - agentflow `post-merge` no longer reads a missing CDO workspace as a red gate. On
   #107 it ran without `CDO_WS`. `cdo-gate` stopped at its usage error (exit 2),

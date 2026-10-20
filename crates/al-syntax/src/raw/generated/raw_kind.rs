@@ -307,6 +307,7 @@ pub enum RawKind {
     PreprocConditionalLayoutMixed,
     PreprocConditionalLinkValues,
     PreprocConditionalListElements,
+    PreprocConditionalMoveArgs,
     PreprocConditionalMoveElements,
     PreprocConditionalObject,
     PreprocConditionalOptionMembers,
@@ -830,6 +831,7 @@ impl RawKind {
             "preproc_conditional_layout_mixed" => Some(RawKind::PreprocConditionalLayoutMixed),
             "preproc_conditional_link_values" => Some(RawKind::PreprocConditionalLinkValues),
             "preproc_conditional_list_elements" => Some(RawKind::PreprocConditionalListElements),
+            "preproc_conditional_move_args" => Some(RawKind::PreprocConditionalMoveArgs),
             "preproc_conditional_move_elements" => Some(RawKind::PreprocConditionalMoveElements),
             "preproc_conditional_object" => Some(RawKind::PreprocConditionalObject),
             "preproc_conditional_option_members" => Some(RawKind::PreprocConditionalOptionMembers),
@@ -1362,6 +1364,7 @@ impl RawKind {
             RawKind::PreprocConditionalLayoutMixed => "preproc_conditional_layout_mixed",
             RawKind::PreprocConditionalLinkValues => "preproc_conditional_link_values",
             RawKind::PreprocConditionalListElements => "preproc_conditional_list_elements",
+            RawKind::PreprocConditionalMoveArgs => "preproc_conditional_move_args",
             RawKind::PreprocConditionalMoveElements => "preproc_conditional_move_elements",
             RawKind::PreprocConditionalObject => "preproc_conditional_object",
             RawKind::PreprocConditionalOptionMembers => "preproc_conditional_option_members",
@@ -1880,6 +1883,7 @@ impl RawKind {
         RawKind::PreprocConditionalLayoutMixed,
         RawKind::PreprocConditionalLinkValues,
         RawKind::PreprocConditionalListElements,
+        RawKind::PreprocConditionalMoveArgs,
         RawKind::PreprocConditionalMoveElements,
         RawKind::PreprocConditionalObject,
         RawKind::PreprocConditionalOptionMembers,
@@ -2089,7 +2093,7 @@ impl RawKind {
 /// `build.rs` asserts the checked-in grammar matches, so a silent grammar swap
 /// fails the build.
 pub const GRAMMAR_NODE_TYPES_HASH: &str =
-    "56b83adfd4555560cad5f8c98bc145789194a9486e27d034f41666f94cfe1aa7";
+    "cfe26f9030b86cbe7d27fa245e059c7ed0fb1932ef9768503861ee620965e9dd";
 
 /// Count of NAMED kinds (excludes `Error`). Sanity anchor for the coverage test.
-pub const NAMED_KIND_COUNT: usize = 499;
+pub const NAMED_KIND_COUNT: usize = 500;

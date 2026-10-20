@@ -237,6 +237,10 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocConditionalOrderByFields
         | RawKind::PreprocConditionalSortingFields
         | RawKind::PreprocConditionalVarNames
+        // `main` 4d75846c (B7b-3, still package v4.4.1): a `moveafter`/`movebefore`/
+        // `movefirst`/`movelast` header whose target or fixed `;` comes from an `#if`
+        // group. Structure; the lowerer reads no move modification, so no arm.
+        | RawKind::PreprocConditionalMoveArgs
         | RawKind::ActionAreaSection
         | RawKind::ActionBody
         | RawKind::ActionDeclaration
