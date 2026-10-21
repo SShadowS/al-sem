@@ -45,16 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Amendments to the epic: 7B-1, the memo key is the callee Cone-SCC, and there is no
     `FactKeyInterner` or hash-consed `SetArena` (measured net gain about 131 ms); 7B-2, the
     bounded timer is `singleton + bfs_fold`; 7B-3, the cone-span bound subtracts both bands;
-    7B-4, X is derived at this step's base (X = 4,382.1 ms, a projection).
+    7B-4, X is derived at this step's base, `afd5d88f` (X = 4,382.1 ms, a projection).
   - Census (`ALSEM_CONES_CENSUS=1`): the `singleton:` line drops `fold=` and gains
     `memo= row= open= own=`. A new `closed:` line carries `memo_builds`, `memo_reads`,
     `memo_entries`, `scc_set_folds`, `singleton_scans` and `memo_live_max`. The
     `singleton calls:` and `singleton pop:` lines are now counted only where a singleton scans
     `best` (the raw half), so they read 0 under `analyze`.
-  - The pre-7b derived paths stay reachable only through the test-only
-    `RecursiveMembership::PerMemberWalk`, the oracle of T7/T8, until the step's last commit
-    deletes it. The oracle that replaces it (T7'/T8') compares `DerivedOnly` with the fold of a
-    streamed `RawOnly` composition, so it survives step 6's removal of `Both`.
+  - The test-only `RecursiveMembership::PerMemberWalk` (step 7a's oracle) is deleted in this
+    step. T7'/T8' replace T7/T8 and compare `DerivedOnly` with the fold of a streamed `RawOnly`
+    composition, so they survive step 6's removal of `Both`.
   - Measured on CDO (`docs/measurements/2026-10-21-issue-160-step7b.md`): `singleton + bfs_fold`
     `<bench>` → `<bench>` ms; `context.capability_cones` `<bench>` → `<bench>` ms.
 - `/issue` (flow speed-ups, P1): findings-register marks are scoped to what changed. Each
@@ -181,7 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `#[cfg(test)]`; it is the oracle of T7 (fixtures) and T8 (CDO, in
     `scripts/cdo-gate`). It is deleted by step 7b's last commit once 7b's CDO oracle
     passes; if 7b is dropped, by the next step that edits `compose_inherited_cones`
-    (step 6 at the latest).
+    (step 6 at the latest). (Deleted in 7b.)
   - **Census.** A new `cone_scc:` line after `compose:` (recursive SCCs, members all
     and emitted, roots, self-loops, max, size histogram, member walks, own entries,
     sets borrowed and built, set entries, `walk_total`), fed from a per-call

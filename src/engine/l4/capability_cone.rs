@@ -1743,8 +1743,9 @@ type ClosedRowMemo = HashMap<usize, FoldedRow>;
 /// cloned, and only the survivors are cloned — by `retag`, and only when `mode`
 /// wants the raw Vec.
 ///
-/// #160 step 7b: `best` is built only for the raw Vec. Under [`ConeOutput::DerivedOnly`] there is no scan:
-/// the derived row comes from `memo` rows, the open entries and the own entries.
+/// #160 step 7b: `best` is built only for the raw Vec. Under
+/// [`ConeOutput::DerivedOnly`] there is no scan: the derived row comes from
+/// `memo` rows, the open entries and the own entries.
 #[allow(clippy::too_many_arguments)]
 fn inherited_facts_for_singleton<'g>(
     subject: &str,
@@ -2728,7 +2729,7 @@ fn compose_inherited_cones(
             }] += 1;
             stats.with_successor += u64::from(!succ_ids.is_empty());
             // A scan of every successor cone: only where it is read (the census,
-            // and T7/T8 in tests), not on every production compose.
+            // and T7'/T8' in tests), not on every production compose.
             if cfg!(test) || crate::engine::l5::detector_context::cones_census::enabled() {
                 stats.with_guarded_successor += u64::from(succ_ids.iter().any(|y| {
                     fact_cones
@@ -7130,9 +7131,9 @@ codeunit 50100 C
         );
     }
 
-    // -- T7, T8: the oracle over fixtures and CDO ------------------------------
+    // -- T7', T8': the oracle over fixtures and CDO ----------------------------
 
-    /// T7/T8's classes, summed over the compositions checked (§5.8), from the
+    /// T7'/T8''s classes, summed over the compositions checked (§5.8), from the
     /// new path's [`ComposeStats`]: the cone's own counts, no second walk.
     #[derive(Default, Debug)]
     struct Classes {
@@ -7145,8 +7146,8 @@ codeunit 50100 C
         with_successor: u64,
         with_guarded_successor: u64,
         members_with_own_entry: u64,
-        /// #160 step 7b: memo builds summed (asserted `> 0` over T7's corpus
-        /// and on T8's CDO cross-app universe, never per composition).
+        /// #160 step 7b: memo builds summed (asserted `> 0` over T7''s corpus
+        /// and on T8''s CDO cross-app universe, never per composition).
         closed_memo_builds: u64,
     }
 
@@ -7296,7 +7297,7 @@ codeunit 50100 C
         // The first run's non-zero classes (2026-10-20: 4 multi-member roots in
         // each mode). Every other class is 0 over the fixtures, a stated LIMIT:
         // self-loops, non-roots, successors, guarded successors and own
-        // entries are covered only by T2, T3/T3b, T4 and T8.
+        // entries are covered only by T2, T3/T3b, T4 and T8'.
         for (mode, c) in [("single-app", &single), ("cross-app", &cross)] {
             assert!(c.multi_member >= 1, "{mode}: no multi-member SCC");
             assert!(c.roots >= 1, "{mode}: no recursive root");
@@ -7350,8 +7351,8 @@ codeunit 50100 C
                     "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls; a \
                      different number means the input moved and the spec's numbers are stale"
                 );
-                // T8 is the only real-code oracle for these classes (T7's fixtures
-                // reach none of them), so a moved baseline must not drop them
+                // T8' is the only real-code oracle for these classes (T7''s
+                // fixtures reach none of them), so a moved baseline must not drop them
                 // silently. Roots are 0 on CDO, so the root-set build is carried
                 // by the hand graphs (T1-T6, T10, T11 all have a recursive root;
                 // T2's break targets it) and the census CLI test.
