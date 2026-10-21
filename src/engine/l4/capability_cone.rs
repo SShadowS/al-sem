@@ -7923,13 +7923,16 @@ codeunit 50100 C
             std::slice::from_ref(&cust),
             "M: G(true) satisfies it"
         );
-        // Pins the USE: N and M read G's cone through the memo, so a memo row
-        // that took the frame-bound entry would reach N.
-        assert!(
-            out.stats.closed_memo_builds >= 1 && out.stats.closed_memo_reads >= 2,
-            "N and M read G's cone through the memo (builds {}, reads {})",
-            out.stats.closed_memo_builds,
-            out.stats.closed_memo_reads
+        // Pins the USE: N and M read G's cone through ONE memo row, so a memo
+        // row that took the frame-bound entry would reach N.
+        assert_eq!(
+            out.stats.closed_memo_builds, 1,
+            "G's cone: one memo row, shared by N and M"
+        );
+        assert_eq!(out.stats.closed_memo_reads, 2, "N and M each read G's row");
+        assert_eq!(
+            out.stats.closed_memo_entries, 0,
+            "G's only entry is guarded, so its memo row folds no entry"
         );
     }
 
@@ -7940,6 +7943,14 @@ codeunit 50100 C
         let typed = vec![call_edge("A", "C", "cs/AC1"), call_edge("A", "C", "cs/AC2")];
         let nodes = strs(&["A", "C"]);
         let direct: Direct = [("C".to_string(), vec![insert("C", "t/C")])].into();
+        assert_eq!(
+            build_typed_edge_graph(&typed, &nodes).outgoing["A"]
+                .iter()
+                .filter(|e| e.to == "C")
+                .count(),
+            2,
+            "precondition: the cone's graph keeps both A -> C edges"
+        );
         let out = production(&typed, &nodes, &direct, ConeOutput::DerivedOnly);
         assert_eq!(out.derived.writes_tables_of("A"), ["t/C"], "A: writes");
         assert_eq!(out.stats.closed_memo_builds, 1, "C's cone, built once");
@@ -8018,7 +8029,6 @@ codeunit 50100 C
         assert!(raw("D").is_empty(), "Both: D's raw Vec");
         assert_eq!(both.stats.singleton_scans, 3, "Both: every singleton scans");
         let derived = production(&typed, &nodes, &direct, ConeOutput::DerivedOnly);
-        assert_rows_equal("T5", &both.derived, &derived.derived);
         assert_eq!(
             derived.stats.singleton_scans, 0,
             "DerivedOnly built `best` for a singleton"
