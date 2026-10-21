@@ -642,6 +642,31 @@ def cmd_clear_halt(args, ctx, gh, git):
                   "unresolved_incidents": [i["merge_sha"] for i in incidents.unresolved(ctx)]})
 
 
+def cmd_grant(args, ctx, gh, git):
+    """OPERATOR-ONLY: raise one cap of the run holding issue `--issue` by `--n`.
+
+    #190 needed a sixth spec round; the override happened outside the budget
+    file, so `status` and the retained budget under-counted that issue. Only
+    the run-id half of `require_operator` applies: the run being extended is
+    live by design. Fails closed on an unknown key, a non-positive `--n`, or
+    an issue no lease names."""
+    ctx.write_guard("grant budget")
+    try:
+        lock.require_human(ctx, "grant")
+    except lock.OperatorOnly as e:
+        return _emit({"granted": None, "refused": "operator-only", "detail": str(e)}, 1)
+    if args.key not in budget.CAPS:
+        return _emit({"granted": None, "refused": "unknown-key", "detail": sorted(budget.CAPS)}, 1)
+    if args.n < 1:
+        return _emit({"granted": None, "refused": "bad-n", "detail": args.n}, 1)
+    lk = next((x for x in lock.all_locks(ctx) if x.issue == args.issue), None)
+    if lk is None:
+        return _emit({"granted": None, "refused": "no-lease", "detail": args.issue}, 1)
+    cap = budget.grant(ctx, lk.run_id, args.key, args.n, args.by, args.issue)
+    return _emit({"granted": {"issue": args.issue, "run_id": lk.run_id, "key": args.key,
+                              "n": args.n, "cap": cap}})
+
+
 def cmd_resolve_incident(args, ctx, gh, git):
     """OPERATOR-ONLY. The human asserting that a recorded incident is closed."""
     try:
@@ -1911,6 +1936,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = add("clear-halt", cmd_clear_halt); s.add_argument("--reason", required=True); s.add_argument("--by", required=True)
     s = add("resolve-incident", cmd_resolve_incident); s.add_argument("--merge-sha", required=True)
     s.add_argument("--by", required=True); s.add_argument("--note", default="")
+    s = add("grant", cmd_grant); s.add_argument("--issue", type=int, required=True)
+    s.add_argument("--key", required=True); s.add_argument("--n", type=int, required=True)
+    s.add_argument("--by", required=True)
     add("incidents", cmd_incidents)
     s = add("unblock", cmd_unblock); s.add_argument("issue", type=int)
     s = add("run", cmd_run); s.add_argument("--name", required=True); s.add_argument("--timeout", type=int, required=True); s.add_argument("--cwd"); s.add_argument("child", nargs=argparse.REMAINDER)

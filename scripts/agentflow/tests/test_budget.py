@@ -45,6 +45,50 @@ def test_unknown_key_rejected(ctx):
         budget.charge(ctx, "nonsense")
 
 
+def test_a_grant_raises_one_cap_by_n_and_is_audited(ctx):
+    # #190's sixth spec round was recorded outside the budget; a grant puts it inside.
+    import json
+    budget.init(ctx, claimed_at=ctx.now())
+    for _ in range(5):
+        budget.charge(ctx, "spec_rounds")
+    with pytest.raises(budget.BudgetExceeded):
+        budget.charge(ctx, "spec_rounds")
+    assert budget.grant(ctx, ctx.run_id, "spec_rounds", 1, "operator", 8) == 6
+    assert budget.charge(ctx, "spec_rounds") == 0
+    with pytest.raises(budget.BudgetExceeded):
+        budget.charge(ctx, "spec_rounds")
+    assert budget.charge(ctx, "final_rounds") == 4  # other caps unmoved
+    [line] = ctx.paths.audit.read_text().splitlines()
+    assert json.loads(line) | {"at": 0} == {"at": 0, "run_id": "run-test", "action": "budget-grant",
+                                            "issue": 8, "target_run": "run-test", "key": "spec_rounds",
+                                            "n": 1, "by": "operator"}
+
+
+def test_a_grant_fails_closed_on_a_bad_key_or_n(ctx):
+    budget.init(ctx, claimed_at=ctx.now())
+    with pytest.raises(KeyError):
+        budget.grant(ctx, ctx.run_id, "nonsense", 1, "op", 8)
+    for n in (0, -1):
+        with pytest.raises(ValueError):
+            budget.grant(ctx, ctx.run_id, "spec_rounds", n, "op", 8)
+    assert budget.snapshot(ctx)["grants"] == {}
+
+
+def test_a_hand_edited_grant_is_rejected_and_a_pre_grant_budget_still_loads(ctx):
+    import json
+    path = ctx.run_dir / "budget.json"
+    # A budget written before `grant` existed: no `grants` key, checksum over counts + claimed_at.
+    budget.init(ctx, claimed_at=ctx.now())
+    assert "grants" not in json.loads(path.read_text())
+    assert budget.charge(ctx, "spec_rounds") == 4
+    budget.grant(ctx, ctx.run_id, "spec_rounds", 1, "op", 8)
+    data = json.loads(path.read_text())
+    data["grants"]["spec_rounds"] = 50
+    path.write_text(json.dumps(data))
+    with pytest.raises(RuntimeError, match="does not match"):
+        budget.charge(ctx, "spec_rounds")
+
+
 def test_loop_counter_is_durable_across_contexts(ctx):
     budget.loop_reset(ctx)
     assert budget.loop_tick(ctx, max_issues=2) == 1

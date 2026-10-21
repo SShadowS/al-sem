@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- agentflow (flow speed-ups, P9): new operator-only `grant --issue N --key <cap> --n <k>
+  --by <name>` raises one cap of the run holding issue N, inside `budget.json`'s checksum,
+  with a `budget-grant` audit line written first. It refuses a call carrying a run id, an
+  unknown key, `--n` below 1 and an issue no lease names; it allows a live lease, since
+  the run it extends is live. `charge` and `grant` now hold a per-run `budget-<run>`
+  mutex, so neither loses the other's write. A budget written before grants existed still
+  loads. #190's sixth spec round was recorded outside the budget. 4 new tests.
 - agentflow (flow speed-ups, P2): a findings-register entry whose only remaining work is
   a record written after the panel takes `disposition: fixed` with
   `closes_by: {kind: gate|attest|ci-wait, key}`, and the executor checks the record

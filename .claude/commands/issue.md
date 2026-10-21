@@ -109,7 +109,12 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    message what you will do if there is no answer within 15 minutes. On #190
    a bare "back to design" fired twice and cost ~30 min of operator wait and
    one spec round.
-5. **Spec panel.** `charge spec_rounds` per round (cap 5). Follow the
+5. **Spec panel.** `charge spec_rounds` per round (cap 5). A round past a
+   cap exists only after the operator runs `python scripts/agentflow grant
+   --issue N --key spec_rounds --n 1 --by <operator>` (operator-only: it
+   refuses any call carrying a run id); then charge the round as usual. Never
+   run a round the budget does not cover, and never record one "outside the
+   budget" in the ledger instead (#190 did, and `status` under-counted it). Follow the
    `panel-review` skill: a briefing file with absolute paths and a
    confirm/reject checklist; both reviewers in parallel. Maintain
    `findings.json` as a list of `{id, source, round, file, line,

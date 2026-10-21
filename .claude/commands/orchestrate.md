@@ -401,9 +401,10 @@ id or issue: a `FenceError` naming an issue this tick did not claim is a STOP.
   issue worktree is a refusal, not a shortcut.
 - Never edit `.agent/HALT` except through `set-halt`, never touch `scripts/`,
   `.claude/`, `.github/`, `CLAUDE.md`.
-- `clear-halt`, `resolve-incident` and `unblock` are OPERATOR-ONLY. Never call
-  them. For the first two, writing that here is not what stops the flow using
-  them — `lock.require_operator` is: every conductor call carries a run id
+- `clear-halt`, `resolve-incident`, `grant` and `unblock` are OPERATOR-ONLY. Never call
+  them. For the first three, writing that here is not what stops the flow using
+  them — `lock.require_operator` is (for `grant`, its run-id half
+  `lock.require_human`): every conductor call carries a run id
   (`--run-id` or `AGENTFLOW_RUN_ID`), and a run id in the context is refused.
   `unblock` is the exception: it sets its own run id, so nothing enforces this
   rule for it and the prompt really is the only guard. The read-only

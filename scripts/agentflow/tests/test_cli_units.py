@@ -111,6 +111,40 @@ def test_clear_halt_refuses_an_ordinary_invocation_carrying_a_run_id(capsys, roo
     assert not (root / ".agent" / "HALT").exists()
 
 
+def test_grant_is_operator_only_fails_closed_and_extends_the_live_run(capsys, root, monkeypatch):
+    """P9: an operator override past a cap goes through the budget, not around it.
+    Preconditions by assignment: run `run-a` holds issue 8 and has a budget."""
+    from agentflow import budget
+    from agentflow.state import Ctx, Paths
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    owner = Ctx(Paths(root), run_id="run-a", now=lambda: 1_000_000.0)
+    lock.acquire(owner, 8, "s", 1)
+    budget.init(owner, claimed_at=1_000_000.0)
+    path = root / ".agent" / "runs" / "run-a" / "budget.json"
+    before = path.read_bytes()
+    grant = ("grant", "--issue", "8", "--key", "spec_rounds", "--n", "1", "--by", "me")
+    # (a) automation: a run id on the call, by flag or by the environment.
+    code, out = run_cli(capsys, root, *grant, run_id="run-a")
+    assert code == 1 and out["refused"] == "operator-only"
+    monkeypatch.setenv("AGENTFLOW_RUN_ID", "tick-1")
+    code, out = run_cli(capsys, root, *grant, run_id=None)
+    assert code == 1 and out["refused"] == "operator-only"
+    monkeypatch.delenv("AGENTFLOW_RUN_ID")
+    # (b) fail closed on what it is asked to grant.
+    for args, refused in ((("--key", "spec-rounds"), "unknown-key"), (("--n", "0"), "bad-n"),
+                          (("--issue", "9"), "no-lease")):
+        argv = list(grant)
+        i = argv.index(args[0])
+        argv[i + 1] = args[1]
+        code, out = run_cli(capsys, root, *argv, run_id=None)
+        assert code == 1 and out["refused"] == refused, args
+    assert path.read_bytes() == before
+    # (c) an operator at a clean shell, while the run is live: that is when a grant is needed.
+    code, out = run_cli(capsys, root, *grant, run_id=None)
+    assert code == 0 and out["granted"]["run_id"] == "run-a" and out["granted"]["cap"] == 6
+    assert budget.snapshot(owner)["grants"] == {"spec_rounds": 1}
+
+
 def test_clear_halt_refuses_a_stale_reason_and_a_live_lock(capsys, root, monkeypatch):
     """T7. Three refusals whose preconditions are all stated literally."""
     from agentflow.state import Ctx, Paths
