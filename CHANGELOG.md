@@ -349,6 +349,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`perf_bounds`'s timing tests run one at a time and judge the minimum of their samples**
+  (#190; `tests/perf_bounds.rs`). Why: CI runs the binary's tests side by side on a 4-core
+  runner, so one test's samples were timed while another test was building or solving, and
+  ten gates judged the median of their samples. PR #187 failed twice this way
+  (`compute_summaries_v2`, medians 231.8 / 243.0 ms against a 230 ms bound, minima ~150 ms)
+  on a change that never reached that code. Now every timing test takes one shared lock
+  first, so they run one at a time, and every gate compares the minimum of its samples with
+  its bound. A new test reads the file and fails if a timing test does not take the lock, or
+  if it cannot check one. Under nextest, where each test is its own process, a `perf-bounds`
+  test-group in `.config/nextest.toml` runs them one at a time instead. No bound changed.
+  Under the lock, two CI runs measured a `compute_summaries_v2` solve made 3x heavier at
+  179.87 ms (run 39625785855) and 248.21 ms (run 39635284889, AMD EPYC 7763, 1x 86.52 ms):
+  the two runs differed ~1.4x (the first run's CPU was not recorded). So the 230 ms bound
+  catches a 3x slowdown only on runners as slow as the EPYC 7763; on the faster runner and
+  on the dev machine an exact 3x passes. The two runs do not establish a robust portable
+  bound (one in 173-180 ms, over 2x the slow run's 1x and under the fast run's 3x, fits both
+  with ~1-3% margin). A speed-independent ratio gate is
+  the follow-up.
 - **The lowerer reads two new shapes of the `4d75846c` grammar** (see Changed;
   `crates/al-syntax/src/lower/mod.rs`):
   - A `preproc_split_case_extended` arm may hold a nested `preproc_conditional_case`
