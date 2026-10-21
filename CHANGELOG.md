@@ -55,7 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     step. T7'/T8' replace T7/T8 and compare `DerivedOnly` with the fold of a streamed `RawOnly`
     composition, so they survive step 6's removal of `Both`.
   - Measured on CDO (`docs/measurements/2026-10-21-issue-160-step7b.md`): `singleton + bfs_fold`
-    `<bench>` → `<bench>` ms; `context.capability_cones` `<bench>` → `<bench>` ms.
+    5,473.8 → 1,056.7 ms; `context.capability_cones` 11,601.5 → 6,365.4 ms (medians of 5
+    interleaved rounds, parent `fd77939d`, head `f3ccb89c`). Both bounds are met and neither
+    is void. SARIF is byte-identical in both scopes and the histogram SHA is equal. Cross-app
+    `policy check` is 13.3 s faster (107.1 → 93.8 s).
 - `/issue` (flow speed-ups, P1): findings-register marks are scoped to what changed. Each
   entry carries an `anchor` (the file and lines, or the fix commit, its fix lives in) and an
   `anchor_hash`; an edit resets only the marks of entries whose anchor lines changed, plus
