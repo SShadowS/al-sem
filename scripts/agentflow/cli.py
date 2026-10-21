@@ -849,16 +849,27 @@ def _attest_closes(gates: dict):
     return closes
 
 
-def _ci_wait_unmet(ctx: Ctx, entries, final_head: str) -> list[str]:
+def _ci_wait_argv(pr: int) -> list[str]:
+    """The command `issue.md` step 13 runs as `ci-wait`."""
+    return ["gh", "pr", "checks", str(pr), "--watch"]
+
+
+def _ci_wait_unmet(ctx: Ctx, entries, final_head: str, pr: int) -> list[str]:
     """Ids of `closes_by: ci-wait` entries with no green `ci-wait` record on
-    `final_head` (the latest one this run wrote)."""
+    `final_head` (the latest one this run wrote). Green means what post-merge
+    asks of a gate record: exit code 0, not timed out, supervised, and the
+    real command (`gh pr checks <pr> --watch`, compared the way
+    `identity._same_command` compares), so `run --name ci-wait -- true` is
+    not a CI verdict."""
     if not isinstance(entries, list):
         return []
     ids = [str(e.get("id")) for e in entries
            if isinstance(e, dict) and isinstance(e.get("closes_by"), dict)
            and e["closes_by"].get("kind") == "ci-wait"]
     rec = identity.latest_records(ctx).get("ci-wait") if ids else None
-    green = isinstance(rec, dict) and rec.get("head") == final_head and rec.get("exit_code") == 0
+    green = (isinstance(rec, dict) and rec.get("head") == final_head and rec.get("exit_code") == 0
+             and rec.get("timed_out") is False and rec.get("supervised") is True
+             and identity._same_command(rec.get("argv"), _ci_wait_argv(pr)))
     return [] if green else ids
 
 
@@ -1089,7 +1100,7 @@ def _gate_reasons(ctx, gh, git, pr: int):
                 else:
                     # P2: a `closes_by: ci-wait` entry closes only on a green
                     # `ci-wait` record for the attested final head.
-                    unmet = _ci_wait_unmet(ctx, read_json(registered), att.final_head)
+                    unmet = _ci_wait_unmet(ctx, read_json(registered), att.final_head, pr)
                     if unmet:
                         reasons.append("closes-by-unmet:" + ",".join(unmet))
             except OSError:

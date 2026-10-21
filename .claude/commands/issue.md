@@ -142,7 +142,9 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    exit code is not 0, or an `attest` key that is not one of the
    three SHA fields; `merge-gate` refuses (`closes-by-unmet:<ids>`) a
    `ci-wait` entry until this run's latest `ci-wait` record is on the final
-   head with exit code 0. The attestation lists each one under `closed_by`.
+   head with exit code 0, not timed out, supervised, and of the step 13
+   command (`gh pr checks <pr> --watch`). The attestation lists each one
+   under `closed_by`.
    A repeat-run tuple an acceptance asks for is not a `closes_by` kind: record
    it in the ledger before the panel's last round.
    Round 1's briefing asks for EVERY finding at once, wording and stale

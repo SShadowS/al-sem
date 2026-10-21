@@ -41,7 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-`fixed` entry, a red or absent attested gate, a gate key `attest` does not itself
   require (only `ci-steps-all`, both `check-goldens` keys and `cdo-gate`), and an `attest` key outside
   `B`/`H`/`final_head`; `merge-gate` holds a `ci-wait` entry (`closes-by-unmet:<ids>`)
-  until the latest `ci-wait` record is green on the final head. The attestation lists
+  until the latest `ci-wait` record is green on the final head (exit 0, not timed out,
+  supervised, and the real `gh pr checks <pr> --watch` command). The attestation lists
   them under `closed_by`. On #190 such entries forced a final round after step 11.
   3 new tests (12 cases) in `test_cli_flow.py`.
 - agentflow (flow speed-ups, P8): new `ci-rerun --pr <pr>` reruns the latest `ci.yml`

@@ -988,7 +988,9 @@ def test_attest_refuses_a_closes_by_that_names_no_green_record(capsys, root, tmp
     assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["X"], out
 
 
-def test_merge_gate_holds_a_ci_wait_entry_until_a_green_ci_wait_record_on_the_final_head(capsys, repo_pair, tmp_path):
+def ci_wait_gate(capsys, repo_pair, tmp_path):
+    """An attested register with one `closes_by: ci-wait` entry; returns
+    (clone, ctx, B, reasons()) where reasons() runs merge-gate on PR 12."""
     _, clone = repo_pair
     write_ci_workflow(clone)
     ctx = Ctx(Paths(clone), run_id="run-test")
@@ -1007,14 +1009,43 @@ def test_merge_gate_holds_a_ci_wait_entry_until_a_green_ci_wait_record_on_the_fi
         _, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
         return out["reasons"]
 
-    assert reasons() == ["closes-by-unmet:F1-7"]                       # no record yet
+    return clone, ctx, B, reasons
+
+
+def ci_wait_record(head, **over):
+    """A green, supervised `ci-wait` record of the real command, as `run` writes it."""
+    return {"name": "ci-wait", "argv": ["gh", "pr", "checks", "12", "--watch"], "exit_code": 0,
+            "timed_out": False, "supervised": True, "head": head, **over}
+
+
+def test_merge_gate_holds_a_ci_wait_entry_until_a_green_ci_wait_record_on_the_final_head(capsys, repo_pair, tmp_path):
     from agentflow import identity
-    identity.append_record(ctx, {"name": "ci-wait", "head": B, "exit_code": 1})
-    assert reasons() == ["closes-by-unmet:F1-7"]                       # red
-    identity.append_record(ctx, {"name": "ci-wait", "head": "e" * 40, "exit_code": 0})
-    assert reasons() == ["closes-by-unmet:F1-7"]                       # another head
-    identity.append_record(ctx, {"name": "ci-wait", "head": B, "exit_code": 0})
+    clone, ctx, B, reasons = ci_wait_gate(capsys, repo_pair, tmp_path)
+    assert reasons() == ["closes-by-unmet:F1-7"]                       # no record yet
+    for bad in (dict(exit_code=1),                                     # red
+                dict(head="e" * 40),                                   # another head
+                dict(timed_out=True), dict(timed_out=None),            # killed, or unknown
+                dict(supervised=False),                                # not under the lock
+                dict(argv=["true"]),                                   # not the CI command
+                dict(argv=["gh", "pr", "checks", "13", "--watch"]),    # another PR
+                dict(argv=None)):
+        identity.append_record(ctx, ci_wait_record(B, **bad))
+        assert reasons() == ["closes-by-unmet:F1-7"], bad
+    identity.append_record(ctx, ci_wait_record(B))
     assert reasons() == []
+
+
+def test_a_ci_wait_run_of_some_other_command_does_not_close_the_entry(capsys, repo_pair, tmp_path):
+    # Through the real `run`: supervised, exit 0, on the final head, and still no CI verdict.
+    import time
+    from agentflow import budget
+    clone, ctx, B, reasons = ci_wait_gate(capsys, repo_pair, tmp_path)
+    lock.acquire(ctx, 8, "s", 1)
+    budget.init(ctx, claimed_at=time.time())
+    code, out = run(capsys, clone, "run", "--name", "ci-wait", "--timeout", "1", "--",
+                    sys.executable, "-c", "pass", gh_run=FakeRunner())
+    assert code == 0 and out["supervised"] is True, out
+    assert reasons() == ["closes-by-unmet:F1-7"]
 
 
 def prose_rule_repo(repo_pair):

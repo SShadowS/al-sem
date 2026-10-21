@@ -955,7 +955,9 @@ entry, a `gate` key outside the gates `attest` requires (`ci-steps-all`,
 not 0, and an `attest` key outside
 the three SHA fields. The `ci-wait` record only exists after the push, so
 `merge-gate` holds such an entry (`closes-by-unmet:<ids>`) until this run's latest
-`ci-wait` record names the final head with exit code 0. The attestation lists the
+`ci-wait` record names the final head with exit code 0, `timed_out: false`,
+`supervised: true` and the argv `gh pr checks <pr> --watch` (compared as post-merge
+compares a gate's command). The attestation lists the
 entries under `closed_by`. Before this, a reviewer who followed the rules had to
 re-raise "gate results empty" and forced a round after step 11 (#190, #160).
 
