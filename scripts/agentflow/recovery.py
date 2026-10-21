@@ -257,7 +257,7 @@ def post_merge_failure(ctx: Ctx, git: Git, gh: Gh, issue: int, merge_sha: str,
                     "local `master` has diverged from `origin/master`. Left untouched; "
                     "nothing reverted or pushed. HALT set.",
                     "local master diverged from origin/master, refusing to act")
-    wt = worktrees.verify_path(ctx.paths.root, "revert", merge_sha)
+    wt = worktrees.verify_path(ctx.paths.root)
     try:
         try:
             worktrees.create(git, wt, merge_sha)

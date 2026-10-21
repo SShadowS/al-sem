@@ -497,17 +497,21 @@ human for what the flow can finish itself.
 ### Isolation: the gates never run in the shared checkout
 
 The shared checkout stays on `master` for the whole command. The merge SHA is
-materialised in a disposable detached worktree (`../al-sem-verify-merge-<sha12>`,
-a sibling of the repo root, deliberately outside the glob that finds issue
-worktrees), and that directory is torn down in a `finally`.
+materialised in a disposable detached worktree (`../al-sem-verify-tree`, one
+FIXED path, a sibling of the repo root, deliberately outside the glob that finds
+issue worktrees), and that directory is torn down in a `finally`. Until 2026-10-21
+the path carried the merge SHA (`../al-sem-verify-merge-<sha12>`); see the build
+cache bullet below for why it no longer does.
 
 Why it must be disposable: when the verification run and the revert's validation
 run share a tree, everything the first left behind — a regenerated golden, a
 touched `Cargo.lock`, a `gen-syntax` rewrite, a line-ending materialisation — is
 inherited by the run that decides whether to PUSH. A revert that is red from a
 clean checkout can be green-lit by the leavings of the run it is reverting. The
-revert therefore gets its own second disposable worktree, created only after the
-first is destroyed, so peak extra disk is one tree rather than two.
+revert therefore gets its own second disposable worktree, created at the same
+path only after the first is destroyed, so peak extra disk is one tree rather than
+two. Post-merge runs one at a time (only the merge-lane holder runs it), so the
+fixed path never has two users.
 
 Three consequences worth writing down, because each is a real dependency between
 two files rather than an implementation detail:
@@ -519,12 +523,18 @@ two files rather than an implementation detail:
   there. They do because the gate runner derives `TREE_SITTER_AL_PATH` from the
   repo ROOT, not from the gate's cwd, and `scripts/ci-steps` honours that env var
   over its own `rev-parse --show-toplevel` fallback.
-- The SOURCE tree is isolated; the build CACHE deliberately is not
-  (`AGENTFLOW_VERIFY_TARGET_DIR`, else an inherited `CARGO_TARGET_DIR`, else the
-  root's `target/`). Measured: `target/` is 65G here and the drive has 55G free
-  while the issue worktree is still on disk. A per-worktree cache does not merely
-  cost time, it does not fit — and the dirt that can green-light a bad revert is
-  SOURCE dirt, which a fresh checkout already eliminates.
+- The verify tree builds into its own cache, never the main checkout's `target/`
+  (`AGENTFLOW_VERIFY_TARGET_DIR`, else an inherited `CARGO_TARGET_DIR`, else
+  `<root>/target-verify`, gitignored). Test binaries bake
+  `env!("CARGO_MANIFEST_DIR")`, and cargo reuses a binary whose Rust sources did
+  not change wherever it was built, so a shared cache let the checkout's own gates
+  run binaries that resolved fixtures under the deleted verify tree (observed after
+  #190's post-merge, merge 81e858ac: 37 lib failures in `cdo-gate`). For the same
+  reason the verify tree's path is fixed: every binary in its cache then names the
+  tree it runs in, and a merge that changes only fixtures cannot run binaries
+  pointing at the previous merge's tree (a false red, and a revert of a good merge).
+  On server1 `target/` is 9.7 GB and `/work` has 1.7 TB free. (History: the cache
+  was shared on the Windows box, where `target/` was 65G with 55G free.)
 
 Teardown is best effort and is REPORTED, never promoted to a verdict:
 `verify_worktree_removed: false` in the payload means either that Windows still

@@ -48,16 +48,19 @@ def test_slug():
 # delenvs every rung it is not asserting, so none of them can be answered by
 # the machine the suite happens to run on.
 
-def test_verify_target_dir_falls_back_to_the_roots_own_target(ctx, monkeypatch):
+def test_verify_target_dir_falls_back_to_its_own_cache_never_the_checkouts_target(ctx, monkeypatch):
+    """RUNG 3 is `<root>/target-verify`. Sharing `<root>/target` let the main
+    checkout's gates reuse test binaries built in the verify tree, whose baked
+    CARGO_MANIFEST_DIR named that (deleted) tree (#190's post-merge, 81e858ac)."""
     monkeypatch.delenv("AGENTFLOW_VERIFY_TARGET_DIR", raising=False)
     monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
-    assert cli._verify_target_dir(ctx) == str(ctx.paths.root / "target")
+    assert cli._verify_target_dir(ctx) == str(ctx.paths.root / "target-verify")
+    assert cli._verify_target_dir(ctx) != str(ctx.paths.root / "target")
 
 
 def test_verify_target_dir_honours_an_operators_inherited_cargo_target_dir(ctx, monkeypatch):
-    """RUNG 2 BEATS RUNG 3. The 65G/55G measurement in `_verify_target_dir`'s
-    docstring is why the cache is shared at all; an operator who has already
-    pointed cargo somewhere with room is the case it must not override."""
+    """RUNG 2 BEATS RUNG 3: an operator who has already pointed cargo somewhere
+    with room is the case it must not override."""
     monkeypatch.delenv("AGENTFLOW_VERIFY_TARGET_DIR", raising=False)
     monkeypatch.setenv("CARGO_TARGET_DIR", "U:/shared-cargo-target")
     assert cli._verify_target_dir(ctx) == "U:/shared-cargo-target"

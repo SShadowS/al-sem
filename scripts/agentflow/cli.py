@@ -156,27 +156,33 @@ def _grammar(ctx: Ctx) -> str:
 
 
 def _verify_target_dir(ctx: Ctx) -> str:
-    """The build cache a gate running in a disposable verification worktree
-    writes to. The SOURCE tree is isolated; the build CACHE deliberately is
-    not.
+    """The build cache a gate running in the verification worktree
+    (`worktrees.verify_path`) writes to: by default `<root>/target-verify`,
+    its own, NEVER the main checkout's `target/`.
 
-    MEASURED, and the reason this is not an oversight for a tidier to fix:
-    `target/` in this checkout is 65G and `U:` has 55G free, and at post-merge
-    time the issue worktree is still on disk (cleanup runs later). A per-
-    worktree cache does not merely cost time, it does not FIT.
+    MEASURED. Test binaries bake `env!("CARGO_MANIFEST_DIR")` (175 uses in
+    `tests/` and `src/`), and cargo reuses a binary whose Rust sources did not
+    change, whatever path it was built at. So "cargo keys artifacts by
+    content", the reason this used to share the root's `target/`, is false for
+    exactly the binaries the gates run. Observed on server1 after #190's
+    post-merge (merge 81e858ac): `ci-steps all` and `cdo-gate` in the main
+    checkout ran binaries built in the deleted verify tree and failed (37 lib
+    failures in cdo-gate, e.g. `vendored ws-d2 fixture missing at
+    /work/al-sem-verify-merge-81e858acea85/tests/fixtures/ws-d2`); a single
+    test passed only after a recompile. A separate cache keeps verify-built
+    binaries out of the checkout's `target/`, and the verify tree's FIXED path
+    keeps every binary in this cache pointing at the tree it runs in.
 
-    Sharing it reintroduces nothing the isolation exists for: the dirt that
-    can green-light a bad revert is SOURCE dirt, which a fresh checkout
-    eliminates; cargo keys artifacts by content; and today both the
-    verification run and the revert rerun already share exactly this directory
-    because both run in the root. It also keeps the worktree source-only,
-    which is what makes `rm -rf` fast and unlocked.
+    The cost is one more cache: on server1 `target/` is 9.7 GB and `/work`
+    has 1.7 TB free, and its first verify build is cold. (History: the shared
+    cache was chosen on the Windows box, where `target/` was 65G and `U:` had
+    55G free.) The worktree stays source-only, so `rm -rf` stays fast.
 
     Precedence: an explicit `AGENTFLOW_VERIFY_TARGET_DIR` wins, then an
-    operator's inherited `CARGO_TARGET_DIR`, then the root's `target/`."""
+    operator's inherited `CARGO_TARGET_DIR`, then `<root>/target-verify`."""
     return (os.environ.get("AGENTFLOW_VERIFY_TARGET_DIR")
             or os.environ.get("CARGO_TARGET_DIR")
-            or str(ctx.paths.root / "target"))
+            or str(ctx.paths.root / "target-verify"))
 
 
 def _with_bash(cmd: list[str]) -> list[str]:
@@ -1283,7 +1289,7 @@ def cmd_post_merge(args, ctx, gh, git):
                       "verify_worktree_removed": True, "verified_by": "identity", "identity_refused": []})
     results: dict = {}
     timeouts: list[str] = []
-    verify_wt = worktrees.verify_path(ctx.paths.root, "merge", args.merge_sha)
+    verify_wt = worktrees.verify_path(ctx.paths.root)
     ok, revert, halt, restore_failed, original_exc = True, None, None, None, None
     tree_anomaly: list[str] = []
     tree_anomaly_total = 0
@@ -1443,13 +1449,13 @@ def cmd_post_merge(args, ctx, gh, git):
             # --worktree <path>` removes it once a human has looked.
             #
             # KNOWN LIMIT, stated rather than discovered later: the retained
-            # tree is NOT permanent. `worktrees.verify_path` is a pure
-            # function of the merge SHA, and `worktrees.create` destroys
-            # whatever sits at that path before checking out -- so a second
-            # post-merge of the SAME merge SHA reclaims it and the evidence is
-            # gone. That can only follow an operator clearing HALT, i.e.
-            # someone who has been told the tree is there; it is pinned at the
-            # unit level by `test_create_replaces_a_leftover_directory_...`.
+            # tree is NOT permanent. `worktrees.verify_path` is ONE fixed
+            # path (see its docstring for why), and `worktrees.create`
+            # destroys whatever sits there before checking out -- so the NEXT
+            # post-merge, of any merge, reclaims it and the evidence is gone.
+            # That can only follow an operator clearing HALT, i.e. someone
+            # who has been told the tree is there; it is pinned at the unit
+            # level by `test_create_replaces_a_leftover_directory_...`.
             removed = False if retain_verify_wt else worktrees.destroy(git, verify_wt)
         if killed is not None:
             # HALT, never revert: the same routing a dirty tree gets, and for

@@ -78,13 +78,31 @@ def _guard(path: Path) -> None:
         raise RuntimeError(f"{path} is not an agentflow verification worktree")
 
 
-def verify_path(root: Path, purpose: str, sha: str) -> Path:
-    """Where a verification worktree for `sha` lives: a SIBLING of the repo
-    root, which is where the flow's issue worktrees already live
-    (`cli.cmd_claim` uses `ctx.paths.root.parent`). The distinct prefix keeps
-    it out of `recovery.recover_stale`'s glob, which matches
-    `al-sem-issue-{issue}-a*`."""
-    return root.parent / f"{VERIFY_PREFIX}{purpose}-{sha[:12]}"
+VERIFY_TREE = f"{VERIFY_PREFIX}tree"
+
+
+def verify_path(root: Path) -> Path:
+    """Where the verification worktree lives: a SIBLING of the repo root, which
+    is where the flow's issue worktrees already live (`cli.cmd_claim` uses
+    `ctx.paths.root.parent`). The distinct prefix keeps it out of
+    `recovery.recover_stale`'s glob, which matches `al-sem-issue-{issue}-a*`.
+
+    ONE FIXED PATH, for the merge check and the revert check alike, never one
+    per merge SHA. Test binaries bake `env!("CARGO_MANIFEST_DIR")` (175 uses
+    in `tests/` and `src/`), and cargo reuses a binary whose Rust sources did
+    not change, so a binary built in a tree at another path resolves its
+    fixtures and goldens under THAT path. With a per-SHA path, the next
+    post-merge of a merge that changes only fixtures ran binaries pointing at
+    the previous, deleted tree: a false red, and post-merge reverts a good
+    merge. A fixed path makes every binary in the verify cache
+    (`cli._verify_target_dir`) name the tree it runs in. Safe because at most
+    one exists at a time: post-merge runs only under the merge lane (one
+    holder, through post-merge), and the merge tree is torn down before the
+    revert tree is made (`cmd_post_merge`'s `finally`). `create` removes any
+    leftover first, so a later post-merge reclaims a tree an earlier one
+    RETAINED as evidence; that only follows an operator clearing the HALT the
+    retention set."""
+    return root.parent / VERIFY_TREE
 
 
 def create(git: Git, path: Path, commit: str) -> Path:

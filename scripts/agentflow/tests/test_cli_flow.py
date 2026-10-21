@@ -2149,7 +2149,7 @@ def test_post_merge_runs_gates_in_a_worktree_with_the_main_checkout_grammar(caps
     assertion cannot fail.
 
     THE TWO `delenv` CALLS ARE NOT TIDINESS. `_verify_target_dir` resolves
-    `AGENTFLOW_VERIFY_TARGET_DIR` or `CARGO_TARGET_DIR` or `<root>/target`,
+    `AGENTFLOW_VERIFY_TARGET_DIR` or `CARGO_TARGET_DIR` or `<root>/target-verify`,
     and its docstring names "an operator's inherited CARGO_TARGET_DIR" as a
     SUPPORTED case -- so the third-fallback assertion below inherited the real
     process environment and failed on exactly the machine configuration the
@@ -2203,13 +2203,18 @@ def test_post_merge_runs_gates_in_a_worktree_with_the_main_checkout_grammar(caps
     assert len(cwds) == 1, cwds                        # every gate in ONE tree
     cwd = Path(cwds.pop())
     assert cwd != clone and cwd.parent == clone.parent and cwd.name.startswith("al-sem-verify-")
+    # ONE FIXED PATH, never one per merge: test binaries bake CARGO_MANIFEST_DIR, and a
+    # per-SHA path left reused binaries pointing at the previous, deleted tree.
+    assert cwd.name == worktrees.VERIFY_TREE and merge_sha[:12] not in str(cwd), cwd
     # EVERY gate on the commit this run says it verified, never on whatever
     # `master` names by now -- which the prologue has just moved to `later`.
     assert {c["head"] for c in calls} == {merge_sha}, [c["head"] for c in calls]
     assert Git(clone).rev("master") == later           # the shared root really did move
     for c in calls:
         assert c["env"]["TREE_SITTER_AL_PATH"] == str(clone / "tree-sitter-al")
-        assert c["env"]["CARGO_TARGET_DIR"] == str(clone / "target")
+        # Its own cache, never the main checkout's `target/`: binaries built in the
+        # verify tree must not be reused by the checkout's own gates.
+        assert c["env"]["CARGO_TARGET_DIR"] == str(clone / "target-verify") != str(clone / "target")
     assert out["verify_worktree_removed"] is True and not cwd.exists()
     assert Git(clone).branch() == "master"
 
@@ -2422,8 +2427,8 @@ def test_the_revert_rerun_gates_share_the_build_cache_and_never_regenerate_golde
     WHY IT IS NOT COSMETIC, since `_run_gate`'s parameter defaults to None and
     the keyword therefore reads as redundant to a tidier. Without it the
     revert validation runs with cargo defaulting to `<revert worktree>/target`
-    -- a cold build in a directory cargo has never seen, against the 65G/55G
-    measurement in `_verify_target_dir`'s own docstring, with the issue
+    -- a cold build in a directory cargo has never seen, inside the tree
+    `rm -rf` must clear (see `_verify_target_dir`'s docstring), with the issue
     worktree still on disk. It exhausts the disk or crosses the 45-minute cap,
     `rerun_all` returns False, and `post_merge_failure` exits
     `revert-failed-gates`: a CORRECT revert is never pushed, master stays red,
@@ -2498,7 +2503,7 @@ def test_the_revert_rerun_gates_share_the_build_cache_and_never_regenerate_golde
     rerun = [c for c in calls if c["name"].endswith("-on-revert")]
     assert [c["name"] for c in rerun] == ["red-on-revert", "noop-cdo-on-revert",
                                           "ci-steps-test-on-revert"], calls
-    revert_wt = worktrees.verify_path(clone.resolve(), "revert", merge_sha)
+    revert_wt = worktrees.verify_path(clone.resolve())
     for c in rerun:
         # THE PIN, and `== expected_cache` rather than `in c["env"]`: a
         # `cargo_target_dir=""` regression sets no key at all, and a call site
@@ -3139,7 +3144,7 @@ def test_cleanup_of_a_verification_worktree_takes_the_detached_route(capsys, rep
     `master`, created here with the production helper that owns the name."""
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")),
+    kept = worktrees.create(g, worktrees.verify_path(clone),
                             g.rev("master"))
     assert kept.name.startswith(worktrees.VERIFY_PREFIX) and kept.is_dir()
     # The library refusal that makes the route necessary, stated first.
@@ -3201,7 +3206,7 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     refuses (the last arm)."""
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")), g.rev("master"))
+    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
     assert kept.name.startswith(worktrees.VERIFY_PREFIX) and kept.is_dir()
 
     dead = Ctx(Paths(clone), run_id="dead-run", now=lambda: 1_000_000.0)
@@ -3238,7 +3243,7 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     _slots(clone, 2)
     later = lk.heartbeat + lock.STALE_SECONDS + 1
     lock.acquire(Ctx(Paths(clone), run_id="sibling-run", now=lambda: later), 9, "s", 1)
-    again = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")), g.rev("master"))
+    again = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
     code, out = run(capsys, clone, "cleanup", "--worktree", str(again),
                     gh_run=FakeRunner(), run_id=None)
     assert code == 0 and not again.exists(), out
@@ -3279,7 +3284,7 @@ def test_cleanup_refuses_a_verify_named_directory_outside_the_checkouts_parent(
     # ...and the SAME name inside the checkout's parent is still accepted, so
     # the conjunct narrowed the path rather than closing the documented exit.
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")),
+    kept = worktrees.create(g, worktrees.verify_path(clone),
                             g.rev("master"))
     code, out = run(capsys, clone, "cleanup", "--worktree", str(kept),
                     gh_run=FakeRunner(), run_id="run-test")

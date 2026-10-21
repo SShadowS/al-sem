@@ -416,6 +416,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- agentflow (pre-existing): post-merge's verification worktree built into the main
+  checkout's `target/` from a new path per merge (`../al-sem-verify-merge-<sha12>`). Test
+  binaries bake `env!("CARGO_MANIFEST_DIR")` and cargo reuses a binary whose Rust sources
+  did not change, so after #190's post-merge (merge 81e858ac) the checkout's own
+  `ci-steps all` and `cdo-gate` ran binaries resolving fixtures under the deleted verify
+  tree (37 lib failures in `cdo-gate`). The next post-merge of a fixtures-only merge would
+  have done the same in the verify tree: a false red, and a revert of a good merge. The
+  merge and revert checks now share ONE fixed path, `../al-sem-verify-tree` (post-merge
+  runs one at a time under the merge lane, and the merge tree is gone before the revert
+  tree is made), and build into their own cache, `<root>/target-verify` (gitignored;
+  `AGENTFLOW_VERIFY_TARGET_DIR` and `CARGO_TARGET_DIR` still override it).
+
 - agentflow (pre-existing): `Git.changed_files` now passes `--no-renames`. With git's
   rename detection a `git mv src/x.rs docs/x.md` listed only `docs/x.md`, which is
   gate-inert, so a code file moved into `docs/` passed `freeze-check`, the post-merge
