@@ -20,6 +20,18 @@ def run_cli(capsys, root, *args, gh_run=None, dry=False, run_id="run-test"):
     return code, json.loads(out)
 
 
+def test_the_rule_mark_must_fill_every_slot_but_the_raisers():
+    """P3's "rule mark only in the OTHER slots" check. With today's two-slot roster it
+    follows from "the raiser accepted" plus "a rule mark is present", so no register
+    test can see it; it decides only for a larger roster, stated here literally."""
+    roster, entry = ("astra", "flash", "third"), {"source": "astra"}
+    yes = lambda e: True  # noqa: E731 -- the prose check is not what this pins
+    rule = cli.RULE_MARK
+    assert cli._rule_marks(["accepted", rule, rule], "minor", False, entry, yes, roster) == ["accepted"] * 3
+    for marks in (["accepted", rule, "re-raised"], ["accepted", rule, "accepted"], ["accepted", rule, None]):
+        assert cli._rule_marks(marks, "minor", False, entry, yes, roster) == marks, marks
+
+
 def test_slug():
     assert cli.slug("c10: Scope and elevation reachability across .app symbols") == "c10-scope-and-elevation-reachab"
 

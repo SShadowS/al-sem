@@ -1018,6 +1018,19 @@ def ci_wait_record(final_head, **over):
             "timed_out": False, "supervised": True, "head": final_head, **over}
 
 
+@pytest.mark.parametrize("cdo", [None, 1, True])
+def test_a_docs_only_attest_does_not_let_closes_by_cite_the_cdo_gate_it_skipped(capsys, root, tmp_path, cdo):
+    # `--docs-only` stops `_gate_failures` asking for `cdo-gate`, so only the closes_by
+    # check itself can see that the gate an entry cites is absent or red.
+    gates = {"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 0}
+    if cdo is not None:
+        gates["cdo-gate"] = cdo
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path,
+                                contents=json.dumps([closes("X", "gate", "cdo-gate")]))
+    code, out = attest(capsys, root, register, gates=json.dumps(gates), extra=("--docs-only",))
+    assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["X"], out
+
+
 def test_merge_gate_holds_a_ci_wait_entry_until_a_green_ci_wait_record_on_the_final_head(capsys, repo_pair, tmp_path):
     from agentflow import identity
     clone, ctx, B, reasons = ci_wait_gate(capsys, repo_pair, tmp_path)
@@ -1072,6 +1085,9 @@ def prose_rule_repo(repo_pair):
     _git_raw(clone, "mv", "src/x.rs", "docs/x.md")
     _git_raw(clone, "commit", "-q", "-m", "move code into docs")
     shas["renamed"] = g.rev("HEAD")
+    # A commit that touches nothing: "every changed path is prose" holds vacuously.
+    _git_raw(clone, "commit", "-q", "--allow-empty", "-m", "fixes nothing")
+    shas["empty"] = g.rev("HEAD")
     return clone, B, g.rev("HEAD"), shas
 
 
@@ -1117,6 +1133,7 @@ def test_a_raiser_only_mark_follows_a_substituted_slot(capsys, repo_pair, tmp_pa
     ("code", {}),                                                      # a code fix
     ("tests_md", {}),                                                  # tests/**/*.md is read by tests
     ("renamed", {}),                                                   # src/x.rs -> docs/x.md
+    ("empty", {}),                                                     # an empty commit fixes nothing
     ("on_master", {}),                                                 # not this branch's commit
     ("off_branch", {}),                                                # not on base..final_head
     ("changelog", {"severity": "important"}),                          # blocking
@@ -4842,6 +4859,16 @@ def test_ci_rerun_refuses_a_pr_head_that_is_not_a_full_sha(capsys, root, head):
     code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
     assert code == 1 and out["error"] == "pr-head-unknown", out
     assert not any(c.startswith("run ") for c in gh.calls) and gate_runs(root) == []
+
+
+def test_the_readonly_fake_counts_a_ci_rerun_as_a_write(capsys, root):
+    # conftest's MUTATING list is what lets a write-freedom test see `gh run rerun`;
+    # a readonly fake must trip on it rather than answer it.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes()
+    gh.readonly = True
+    with pytest.raises(AssertionError, match="mutating gh call under readonly: run rerun"):
+        run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
 
 
 def set_run_conclusion(gh, conclusion):
