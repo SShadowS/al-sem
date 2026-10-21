@@ -781,7 +781,55 @@ def _handoff_marks(marks: list) -> bool:
     return "accepted" in marks and all(m in ("accepted", "re-raised") for m in marks)
 
 
-def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted) -> list[str]:
+# `closes_by` (P2): an entry whose only remaining work is a record the flow
+# writes AFTER the panel. `gate` = an attested gate exit code, `attest` = an
+# attested SHA field, `ci-wait` = the `ci-wait` record on the final head.
+CLOSES_BY_KINDS = ("gate", "attest", "ci-wait")
+ATTEST_SHA_FIELDS = ("B", "H", "final_head")
+
+
+def _closes_by_ok(entry: dict, closes) -> bool:
+    """The entry's `closes_by` is well-formed, the entry is `fixed`, and (when
+    `closes` is given) the named record exists. Fails CLOSED: an unknown kind,
+    a missing key or a missing record is a failure, never a pass. `closes` is
+    None only on the handoff path, which merges nothing."""
+    cb = entry.get("closes_by")
+    if not isinstance(cb, dict) or cb.get("kind") not in CLOSES_BY_KINDS:
+        return False
+    if not isinstance(cb.get("key"), str) or not cb["key"] or entry.get("disposition") != "fixed":
+        return False
+    return closes is None or closes(cb["kind"], cb["key"])
+
+
+def _attest_closes(gates: dict):
+    """What `attest` itself can check: a gate key whose attested exit code is 0,
+    or an attested SHA field (already refused unless full). A `ci-wait` record
+    only exists after the push, so `merge-gate` checks that one
+    (`_ci_wait_unmet`); here only its key is checked."""
+    def closes(kind: str, key: str) -> bool:
+        if kind == "gate":
+            v = gates.get(key) if isinstance(gates, dict) else None
+            return isinstance(v, int) and not isinstance(v, bool) and v == 0
+        if kind == "attest":
+            return key in ATTEST_SHA_FIELDS
+        return kind == "ci-wait" and key == "ci-wait"
+    return closes
+
+
+def _ci_wait_unmet(ctx: Ctx, entries, final_head: str) -> list[str]:
+    """Ids of `closes_by: ci-wait` entries with no green `ci-wait` record on
+    `final_head` (the latest one this run wrote)."""
+    if not isinstance(entries, list):
+        return []
+    ids = [str(e.get("id")) for e in entries
+           if isinstance(e, dict) and isinstance(e.get("closes_by"), dict)
+           and e["closes_by"].get("kind") == "ci-wait"]
+    rec = identity.latest_records(ctx).get("ci-wait") if ids else None
+    green = isinstance(rec, dict) and rec.get("head") == final_head and rec.get("exit_code") == 0
+    return [] if green else ids
+
+
+def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted, closes=None) -> list[str]:
     """Ids of findings-register entries that block a merge: a `severity` or a
     `disposition` outside its closed vocabulary (missing included), an entry
     still `open`, one not `accepted` by BOTH reviewers (`marks_ok`; only the
@@ -822,6 +870,8 @@ def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted)
         elif not marks_ok(marks):
             bad.append(eid)
         elif blocking and disposition == "deferred":
+            bad.append(eid)
+        elif "closes_by" in e and not _closes_by_ok(e, closes):
             bad.append(eid)
     return bad
 
@@ -894,14 +944,17 @@ def cmd_attest(args, ctx, gh, git):
     reviewers, problem = _substituted_roster(args.substitute)
     if problem:
         return _emit({"error": "bad-substitute", "detail": problem}, 1)
-    bad_entries = _register_failures(read_json(register), tuple(reviewers.values()))
+    entries = read_json(register)
+    gates = json.loads(args.gates)
+    bad_entries = _register_failures(entries, tuple(reviewers.values()), closes=_attest_closes(gates))
     if bad_entries:
         return _emit({"error": "register-not-converged", "entries": bad_entries,
                       "reviewers": reviewers}, 1)
+    closed_by = {str(e.get("id")): e["closes_by"] for e in entries if "closes_by" in e}
     att = mergeops.Attestation(issue=args.issue, B=args.B, H=args.H, final_head=args.final_head,
                                register_hash=mergeops.register_hash(register),
-                               gates=json.loads(args.gates), body_hash=args.body_hash,
-                               register_path=rel.as_posix(), reviewers=reviewers)
+                               gates=gates, body_hash=args.body_hash,
+                               register_path=rel.as_posix(), reviewers=reviewers, closed_by=closed_by)
     return _emit({"path": str(mergeops.write_attestation(ctx, att))})
 
 
@@ -953,6 +1006,12 @@ def _gate_reasons(ctx, gh, git, pr: int):
             try:
                 if mergeops.register_hash(registered) != att.register_hash:
                     reasons.append("register-changed")
+                else:
+                    # P2: a `closes_by: ci-wait` entry closes only on a green
+                    # `ci-wait` record for the attested final head.
+                    unmet = _ci_wait_unmet(ctx, read_json(registered), att.final_head)
+                    if unmet:
+                        reasons.append("closes-by-unmet:" + ",".join(unmet))
             except OSError:
                 reasons.append("register-changed")
     workflow = _ci_workflow_name(ctx)

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- agentflow (flow speed-ups, P2): a findings-register entry whose only remaining work is
+  a record written after the panel takes `disposition: fixed` with
+  `closes_by: {kind: gate|attest|ci-wait, key}`, and the executor checks the record
+  instead of a later round re-marking it. `attest` refuses an unknown kind or key, a
+  non-`fixed` entry, a red or absent attested gate, and an `attest` key outside
+  `B`/`H`/`final_head`; `merge-gate` holds a `ci-wait` entry (`closes-by-unmet:<ids>`)
+  until the latest `ci-wait` record is green on the final head. The attestation lists
+  them under `closed_by`. On #190 such entries forced a final round after step 11.
+  3 new tests (12 cases) in `test_cli_flow.py`.
 - agentflow (flow speed-ups, P8): new `ci-rerun --pr <pr>` reruns the latest `ci.yml`
   run on the PR head without a new head or attestation: only the failed jobs of a red run,
   the whole of a green one. It is guarded like `push-branch` (dry-run, HALT, fence), fails

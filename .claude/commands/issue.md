@@ -122,6 +122,20 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    and `important` — or an explicit `blocking: true` — as BLOCKING, which may
    not be merely `deferred`. Normalise a reviewer's own wording (a panel that
    says "High" or "Blocker") into the three words before writing the register.
+   **Evidence that only exists after the panel.** An entry whose only
+   remaining work is a record the flow produces AFTER the panel (a gate exit
+   code, `B`/`H`/`final_head`, a `ci-wait` record) takes `disposition: fixed`
+   with `closes_by: {"kind": "gate"|"attest"|"ci-wait", "key": "<gate name |
+   B | H | final_head | ci-wait>"}` and needs no further mark: the reviewers
+   mark the RULE (that the named record closes it) `accepted`, and the
+   executor checks the record. `attest` refuses (`register-not-converged`) an
+   unknown kind or key, an entry that is not `fixed`, a `gate` key whose
+   attested exit code is not 0, or an `attest` key that is not one of the
+   three SHA fields; `merge-gate` refuses (`closes-by-unmet:<ids>`) a
+   `ci-wait` entry until this run's latest `ci-wait` record is on the final
+   head with exit code 0. The attestation lists each one under `closed_by`.
+   A repeat-run tuple an acceptance asks for is not a `closes_by` kind: record
+   it in the ledger before the panel's last round.
    Round 1's briefing asks for EVERY finding at once, wording and stale
    references included, not only blocking ones; later rounds verify fixes and
    raise a new finding only for a real defect a fix introduced (the final
@@ -386,7 +400,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
       one of `open|fixed|refuted|deferred`, any entry still `open`, any entry
       not marked `accepted` by BOTH reviewers, or any blocking entry
       (`severity` `critical` or `important`, or `blocking: true`) left
-      `deferred`.
+      `deferred`, or any `closes_by` entry whose named record is not there
+      (step 5).
 
     **A reviewer stand-in is the operator's decision, never yours.** When a
     rostered reviewer is unreachable, `attest --substitute SLOT=REVIEWER`

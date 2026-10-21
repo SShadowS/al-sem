@@ -946,6 +946,75 @@ def test_attest_binds_the_register_path_and_merge_refuses_a_changed_register(cap
     assert not any(c.startswith("pr merge") for c in gh.calls)
 
 
+BOTH = {"astra": "accepted", "flash": "accepted"}
+
+
+def closes(eid, kind, key, *, disposition="fixed", severity="important"):
+    """A register entry whose only remaining work is a post-panel record (P2)."""
+    return {"id": eid, "severity": severity, "disposition": disposition, "reviews": BOTH,
+            "closes_by": {"kind": kind, "key": key}}
+
+
+def test_attest_accepts_closes_by_entries_whose_record_is_attested(capsys, root, tmp_path):
+    # #190 final r2: "gate results empty" / "B/H empty" could only close after the
+    # panel, so a reviewer who followed the rule re-raised them and forced a round.
+    entries = [closes("S1-3", "gate", "cdo-gate"), closes("S2-2", "attest", "final_head"),
+               closes("F1-7", "ci-wait", "ci-wait")]
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path, contents=json.dumps(entries))
+    code, out = attest(capsys, root, register)
+    assert code == 0, out
+    att = json.loads(Path(out["path"]).read_text())
+    assert att["closed_by"] == {e["id"]: e["closes_by"] for e in entries}
+
+
+@pytest.mark.parametrize("entry", [
+    closes("X", "gate", "bench"),                  # no such attested gate
+    closes("X", "gate", "d4"),                     # attested, but red (see gates below)
+    closes("X", "attest", "base"),                 # not an attested SHA field
+    closes("X", "ci-wait", "ci"),                  # ci-wait names only its own record
+    closes("X", "later", "ci-steps-all"),          # unknown kind
+    closes("X", "gate", ""),                       # empty key
+    closes("X", "gate", "cdo-gate", disposition="refuted"),          # closes_by means `fixed`
+    closes("X", "gate", "cdo-gate", disposition="deferred", severity="minor"),
+    {"id": "X", "severity": "minor", "disposition": "fixed", "reviews": BOTH, "closes_by": "cdo-gate"},
+    {"id": "X", "severity": "minor", "disposition": "fixed", "reviews": BOTH, "closes_by": {"kind": "gate"}},
+], ids=lambda e: json.dumps(e.get("closes_by")) + e["disposition"])
+def test_attest_refuses_a_closes_by_that_names_no_green_record(capsys, root, tmp_path, entry):
+    gates = json.dumps({**json.loads(GREEN_GATES), "d4": 1})
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path, contents=json.dumps([entry]))
+    code, out = attest(capsys, root, register, gates=gates)
+    assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["X"], out
+
+
+def test_merge_gate_holds_a_ci_wait_entry_until_a_green_ci_wait_record_on_the_final_head(capsys, repo_pair, tmp_path):
+    _, clone = repo_pair
+    write_ci_workflow(clone)
+    ctx = Ctx(Paths(clone), run_id="run-test")
+    body = json.loads(ISSUES)[0][0]["body"]
+    register = claimed_register(ctx, tmp_path, body_hash=mergeops.body_hash(body),
+                                contents=json.dumps([closes("F1-7", "ci-wait", "ci-wait")]))
+    B = Git(clone).rev("origin/master")
+    code, out = run(capsys, clone, "attest", "--issue", "8", "--B", B, "--H", B, "--final-head", B,
+                     "--register", str(register), "--gates", GREEN_GATES,
+                     "--body-hash", mergeops.body_hash(body), gh_run=FakeRunner())
+    assert code == 0, out
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft":
+                     json.dumps({"headRefOid": B, "statusCheckRollup": rollup()})})
+
+    def reasons():
+        _, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
+        return out["reasons"]
+
+    assert reasons() == ["closes-by-unmet:F1-7"]                       # no record yet
+    from agentflow import identity
+    identity.append_record(ctx, {"name": "ci-wait", "head": B, "exit_code": 1})
+    assert reasons() == ["closes-by-unmet:F1-7"]                       # red
+    identity.append_record(ctx, {"name": "ci-wait", "head": "e" * 40, "exit_code": 0})
+    assert reasons() == ["closes-by-unmet:F1-7"]                       # another head
+    identity.append_record(ctx, {"name": "ci-wait", "head": B, "exit_code": 0})
+    assert reasons() == []
+
+
 def write_ci_workflow(clone, name="CI"):
     (clone / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
     (clone / ".github" / "workflows" / "ci.yml").write_text(f"name: {name}\n\non:\n  pull_request:\n")

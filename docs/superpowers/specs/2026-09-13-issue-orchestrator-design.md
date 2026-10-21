@@ -905,6 +905,19 @@ recorded but does not count. The final round may be confirm-only (no changes sin
 the previous round, only dispositions). Three rounds without convergence is
 `blocked` with the register attached; the standard is not relaxed.
 
+**Records that exist only after the panel (`closes_by`, added 2026-10-21).** An
+entry whose only remaining work is a record the flow writes after the panel (an
+attested gate exit code, an attested `B`/`H`/`final_head`, the `ci-wait` record on
+the final head) is `fixed` with `closes_by: {kind: gate|attest|ci-wait, key}`.
+The reviewers accept the rule that the record closes it; the executor checks the
+record and fails closed. `attest` refuses an unknown kind or key, a non-`fixed`
+entry, a `gate` key whose attested exit code is not 0, and an `attest` key outside
+the three SHA fields. The `ci-wait` record only exists after the push, so
+`merge-gate` holds such an entry (`closes-by-unmet:<ids>`) until this run's latest
+`ci-wait` record names the final head with exit code 0. The attestation lists the
+entries under `closed_by`. Before this, a reviewer who followed the rules had to
+re-raise "gate results empty" and forced a round after step 11 (#190, #160).
+
 **Handoff at the spec-panel cap (#45).** One carve-out, and it moves no merge
 standard. At the spec cap, a register that is *handoff-ready* hands its design
 to the next attempt as PRE-RATIFIED instead of blocking. Handoff-ready means:
