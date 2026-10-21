@@ -84,6 +84,17 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    the test or measurement that proves it, or "not deliverable, because"),
    Design, False-positive and failure shapes, Measurement plan. For a bounded
    issue the ledger's `## Design` is the spec.
+
+   **Pre-state every fallback.** Every rule of the form "if the measurement
+   shows X, go back to design" (in the spec or the bounded `## Design`) states
+   the alternative it falls back to (e.g. "keep the bound, state the
+   acceptance as partly delivered, file the ratio-gate follow-up"). The spec
+   panel reviews the fallback with the rule, so firing it needs no new round
+   and no operator decision: apply it and record that it fired in the ledger.
+   Ask the operator only when NO pre-stated fallback fits, and say in the same
+   message what you will do if there is no answer within 15 minutes. On #190
+   a bare "back to design" fired twice and cost ~30 min of operator wait and
+   one spec round.
 5. **Spec panel.** `charge spec_rounds` per round (cap 5). Follow the
    `panel-review` skill: a briefing file with absolute paths and a
    confirm/reject checklist; both reviewers in parallel. Maintain

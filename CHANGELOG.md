@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/issue` (flow speed-ups, P5): every "if the measurement shows X, go back to design"
+  rule in a spec or bounded design states its fallback, which the spec panel reviews with
+  it. Firing it then needs no new round and no operator decision; the operator is asked
+  only when no fallback fits, with a stated default after 15 minutes. On #190 a bare
+  "back to design" cost ~30 min of operator wait and one spec round.
 - `/issue` (flow speed-ups, P10): a later panel round's briefing carries only the fix diff
   and the ids to mark, in the reviewer's round-1 thread; the ledger, the full register and
   the previous reviews are not re-sent. Diff-only rounds took 1-2 min on #190 and #111,

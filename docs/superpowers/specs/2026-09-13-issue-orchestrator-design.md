@@ -724,7 +724,11 @@ render of the ledger becomes the PR body.
 4. **Spec.** `docs/superpowers/specs/YYYY-MM-DD-issue-N-<slug>-design.md`, with three
    required sections: "Acceptance matrix" (each Acceptance item → the test or
    measurement that proves it, or "not deliverable, because"), "False-positive and
-   failure shapes", and "Measurement plan".
+   failure shapes", and "Measurement plan". Every "if the measurement shows X, go
+   back to design" rule states the alternative it falls back to, so the panel
+   reviews it up front and firing it needs neither a new round nor an operator
+   decision; the operator is asked only when no pre-stated fallback fits, with a
+   default action after 15 minutes (added 2026-10-21, after #190).
 5. **Spec panel.** `panel-review` protocol: briefing file, both models in parallel,
    `require_evidence` on, `output_file` per model. Convergence is defined by the
    **findings register** (below). Cap 5 rounds via `continuation_id` (3 until 2026-10-14: two issues in a row, #64 and #71,
