@@ -2501,17 +2501,28 @@ fn plain_diff_u_timestamped_dev_null_is_a_deletion() {
 
 /// #111 C3. A `diff -ru` run (probe P5): its `diff -ru <old> <new>` line, the
 /// timestamped headers and an `Only in` line. The change matches exactly as in
-/// C1; the other two lines are ignored.
+/// C1 (the `diff -ru` line is ignored); the `Only in` line names a file only one
+/// side has, which digest does not read, so it is reported as one
+/// `diff-file-unmatched` on `<dir>/<name>`, never silently dropped.
 ///
-/// Mutation: drop the TAB cut -> `diff-file-unmatched`, exit 2.
+/// Mutations: drop the TAB cut -> `diff-file-unmatched` on the timestamped path;
+/// ignore `Only in` lines again -> no diagnostic.
 #[test]
 fn plain_diff_ru_timestamped_headers_match() {
     let ru = format!(
         "diff -ru ../old/src/posting.al ./src/posting.al\n--- ../old/src/posting.al\t2026-10-21 13:03:28.701655915 +0000\n+++ ./src/posting.al\t2026-10-21 13:03:28.702477280 +0000\n{D8_POSTING_HUNK}Only in ../old/src: subscriber.al\n"
     );
-    let label = format!("--- ../old/src/posting.al\n+++ ./src/posting.al\n{D8_POSTING_HUNK}");
-    let doc = assert_posting_change_matched(&ru);
-    assert_eq!(doc, assert_posting_change_matched(&label));
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(&ru));
+    assert_eq!(
+        diags(&doc),
+        vec![
+            serde_json::json!({"file": "../old/src/subscriber.al", "kind": "diff-file-unmatched"})
+        ],
+        "{ru}: {doc}"
+    );
+    assert!(!entries(&doc).is_empty(), "{ru}: {doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{ru}: {doc}");
+    assert_eq!(code, 0, "{ru}: {doc}");
 }
 
 /// #111 C4. GNU C-quotes a name with a space and puts the TAB AFTER the closing
