@@ -175,6 +175,9 @@ CDO number.
 
 - Base `B` = `617b402f853664cf1cec8d049d85561d66ac8aa2` (origin/master; unmoved at step 11, no rebase needed).
 - Gated head `H` = `280e6a9204d5bed925fde8dbb8b04ade7b95c8d7`.
+- Round 2 (after `base-moved`: the operator merged #192, `e63ce241`): `B` =
+  `e63ce241f13d6757e4c16efa6b8ec8cf1c20da6a`; rebased head `H` = `51c674e5bca09e14a0e0ef9a78ac637e64ce842b`
+  (`git range-diff`: all 11 commits `=`, patches unchanged, so no extra panel round).
 
 ## Timeline
 
@@ -274,6 +277,8 @@ CDO number.
   real 3x regression" is PARTLY delivered; step 13 would make that `blocked acceptance-unmet`, but the operator chose
   "Keep 230 ms, ship flake fix" with the 3x catch "recorded honestly as partly delivered" and the remainder filed as a
   follow-up (the ratio-gate discovery), so the PR closes #190 under that operator decision, stated in its body.
+- attest (`b82dd8f5`), push, pr-ready #191, ci-wait green (547 s); merge-gate `base-moved`: the operator merged #192.
+  Step 11 again (rebase_regate 1): clean rebase onto `e63ce241`, range-diff all `=`; full gates green on `51c674e5`.
 
 ## Acceptance matrix
 
@@ -312,6 +317,11 @@ On `H` = `280e6a92`, all `"supervised": true`, queued 0 s; logs under the run di
 | check-goldens-coverage | 0 | 0.0 | `check-goldens-coverage/20261021T171741-e200963c.log` ("coverage OK (36 golden dirs declared)") |
 | check-goldens | 0 | 0.1 | `check-goldens/20261021T171742-83ae0081.log` (tree stamp: this exact tree passed `ci-steps test` inside `ci-steps all`, goldens already verified) |
 | cdo-gate | 0 | 265.6 | `cdo-gate/20261021T171742-57365914.log` |
+
+On the rebased `H` = `51c674e5` (all supervised, queued 0 s): ci-steps-all exit 0, 64.7 s (build cached, 3590 tests run;
+`ci-steps-all/20261021T174637-d7b198c5.log`); check-goldens-coverage 0 (`…/20261021T174742-1514a16c.log`);
+check-goldens 0, tree stamp (`…/20261021T174742-549a556f.log`); cdo-gate 0, 152.4 s
+(`…/20261021T174742-34503976.log`). Tree clean outside `.agent`.
 
 **D4 (operator: two runs), on the gated head:**
 
