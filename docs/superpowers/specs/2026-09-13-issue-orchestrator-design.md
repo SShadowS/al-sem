@@ -755,7 +755,8 @@ render of the ledger becomes the PR body.
    and the mutation patch recorded in the ledger; `rustfmt <file>` only; SOLID and DRY
    as explicit per-task review criteria; the protected-path list. Implementer opus 5,
    per-task reviewer sonnet 5, review-fix edits sonnet 5. Cap 3 red-to-green attempts
-   per task.
+   per task. A bounded issue whose plan has at most two tasks has no per-task
+   reviewer; its proofs and the final panel are the review (added 2026-10-21).
 9. **Repo gates**, each run under the supervisor in a sanitized environment
    (`REGEN_TEMP_GOLDENS` unset, `ALSEM_NO_PREFLIGHT_CACHE=1`), each with its exit
    code captured and its log retained (never piped through `tail`):

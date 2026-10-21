@@ -183,7 +183,13 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    to the same implementer (`SendMessage` to its agent id, context intact)
    instead of a third, cold review-fix agent, which re-read the repo from
    scratch on every task. Two consecutive tasks the plan marks small may share
-   one reviewer dispatch over both commits. Call `python scripts/agentflow
+   one reviewer dispatch over both commits. **A bounded issue whose plan has
+   at most two tasks dispatches no per-task reviewer:** the implementer's own
+   TDD and discrimination proofs plus the final panel (the code-review skill
+   at high and both reviewers) are its review. Architectural issues, and
+   plans with three or more tasks, keep the per-task reviewer. (On #111 and
+   #190 it found only minors the final panel would also read; on #160 it
+   found an important gap at T1 that was cheaper to fix then.) Call `python scripts/agentflow
    beat` immediately before AND immediately after each dispatch and each
    `SendMessage` (not only around the pi calls above; an `opus` implementer
    dispatch routinely runs longer than the 30-minute staleness threshold).

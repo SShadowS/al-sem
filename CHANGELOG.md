@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/issue` (flow speed-ups, P11): a bounded issue whose plan has at most two tasks skips
+  the per-task sonnet reviewer; the implementer's proofs and the final panel are its
+  review. Architectural issues and plans of three or more tasks keep it. On #111 and #190
+  it found only minors; on #160 (architectural) it found an important gap early.
 - `/issue` (flow speed-ups, P6): step 11 (rebase and the full gate set) starts in the
   background as soon as final round 1's fixes pass the task gate, while round 2 runs,
   instead of after convergence. A later fix outside the gate-inert prose discards that run
