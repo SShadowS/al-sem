@@ -181,6 +181,19 @@ instructions to the flow. Concretely:
 | pi calls per issue | 20 (2 reviewers × up to 10 rounds; 14 until 2026-10-14) | `blocked` |
 | Per-gate timeout (supervised, below) | 45 min | gate fails |
 
+A panel-round cap may be raised for one run by the operator: `grant --issue N --key
+spec_rounds|final_rounds --n <k> --by <name>` adds `k` to that cap in the run's
+`budget.json` and appends a `budget-grant` line to `.agent/audit.jsonl` first. It
+refuses any other key (`key-not-grantable`; a `ci_fix` or `pi_calls` past its cap is
+not an extra round), `--n` below 1, an issue no lease names, and a call carrying a run
+id (`lock.require_human`). That last check is the whole code-side guard: a process
+that drops its run id is not stopped, so for `grant`, as for `unblock`, the prompt is
+the guard, and the narrow key set limits what a misuse can buy. Unlike `clear-halt` it
+does not refuse a live lease: the run it extends is live by design. The budget's
+checksum only detects a write that did not go through the executor's own helpers; it
+is not a guard against a caller of `grant`. Added 2026-10-21: #190's sixth spec round
+was recorded outside the budget.
+
 - **Per-loop budgets**: `--max-issues` (default 3), counted in
   `.agent/runs/loop.json` so re-fired ticks share one durable counter; the loop stops
   on the first `agent-regressed`.
@@ -484,17 +497,21 @@ human for what the flow can finish itself.
 ### Isolation: the gates never run in the shared checkout
 
 The shared checkout stays on `master` for the whole command. The merge SHA is
-materialised in a disposable detached worktree (`../al-sem-verify-merge-<sha12>`,
-a sibling of the repo root, deliberately outside the glob that finds issue
-worktrees), and that directory is torn down in a `finally`.
+materialised in a disposable detached worktree (`../al-sem-verify-tree`, one
+FIXED path, a sibling of the repo root, deliberately outside the glob that finds
+issue worktrees), and that directory is torn down in a `finally`. Until 2026-10-21
+the path carried the merge SHA (`../al-sem-verify-merge-<sha12>`); see the build
+cache bullet below for why it no longer does.
 
 Why it must be disposable: when the verification run and the revert's validation
 run share a tree, everything the first left behind — a regenerated golden, a
 touched `Cargo.lock`, a `gen-syntax` rewrite, a line-ending materialisation — is
 inherited by the run that decides whether to PUSH. A revert that is red from a
 clean checkout can be green-lit by the leavings of the run it is reverting. The
-revert therefore gets its own second disposable worktree, created only after the
-first is destroyed, so peak extra disk is one tree rather than two.
+revert therefore gets its own second disposable worktree, created at the same
+path only after the first is destroyed, so peak extra disk is one tree rather than
+two. Post-merge runs one at a time (only the merge-lane holder runs it), so the
+fixed path never has two users.
 
 Three consequences worth writing down, because each is a real dependency between
 two files rather than an implementation detail:
@@ -506,12 +523,18 @@ two files rather than an implementation detail:
   there. They do because the gate runner derives `TREE_SITTER_AL_PATH` from the
   repo ROOT, not from the gate's cwd, and `scripts/ci-steps` honours that env var
   over its own `rev-parse --show-toplevel` fallback.
-- The SOURCE tree is isolated; the build CACHE deliberately is not
-  (`AGENTFLOW_VERIFY_TARGET_DIR`, else an inherited `CARGO_TARGET_DIR`, else the
-  root's `target/`). Measured: `target/` is 65G here and the drive has 55G free
-  while the issue worktree is still on disk. A per-worktree cache does not merely
-  cost time, it does not fit — and the dirt that can green-light a bad revert is
-  SOURCE dirt, which a fresh checkout already eliminates.
+- The verify tree builds into its own cache, never the main checkout's `target/`
+  (`AGENTFLOW_VERIFY_TARGET_DIR`, else an inherited `CARGO_TARGET_DIR`, else
+  `<root>/target-verify`, gitignored). Test binaries bake
+  `env!("CARGO_MANIFEST_DIR")`, and cargo reuses a binary whose Rust sources did
+  not change wherever it was built, so a shared cache let the checkout's own gates
+  run binaries that resolved fixtures under the deleted verify tree (observed after
+  #190's post-merge, merge 81e858ac: 37 lib failures in `cdo-gate`). For the same
+  reason the verify tree's path is fixed: every binary in its cache then names the
+  tree it runs in, and a merge that changes only fixtures cannot run binaries
+  pointing at the previous merge's tree (a false red, and a revert of a good merge).
+  On server1 `target/` is 9.7 GB and `/work` has 1.7 TB free. (History: the cache
+  was shared on the Windows box, where `target/` was 65G with 55G free.)
 
 Teardown is best effort and is REPORTED, never promoted to a verdict:
 `verify_worktree_removed: false` in the payload means either that Windows still
@@ -720,17 +743,29 @@ render of the ledger becomes the PR body.
    (the battleplan issues list them under Dependencies, e.g. "SymbolReference.json
    carries Scope per symbol") is checked against real data, and the result goes in the
    ledger. A falsified dependency does not block; it shapes the spec and is a
-   candidate discovery.
+   candidate discovery. A probe runs in the acceptance's own shape (the same
+   `ci-steps` step, parallelism, profile and, for a CI target, core count). When
+   the acceptance names the CI runner, one throwaway probe commit may go to a draft
+   PR opened here (reverted afterwards, no `ci_fix` charge), and the Design states
+   which acceptance items the measured hardware can meet before the spec panel
+   sees it (added 2026-10-21, after #190).
 4. **Spec.** `docs/superpowers/specs/YYYY-MM-DD-issue-N-<slug>-design.md`, with three
    required sections: "Acceptance matrix" (each Acceptance item → the test or
    measurement that proves it, or "not deliverable, because"), "False-positive and
-   failure shapes", and "Measurement plan".
+   failure shapes", and "Measurement plan". Every "if the measurement shows X, go
+   back to design" rule states the alternative it falls back to, so the panel
+   reviews it up front and firing it needs neither a new round nor an operator
+   decision; the operator is asked only when no pre-stated fallback fits, with a
+   default action after 15 minutes (added 2026-10-21, after #190).
 5. **Spec panel.** `panel-review` protocol: briefing file, both models in parallel,
    `require_evidence` on, `output_file` per model. Convergence is defined by the
    **findings register** (below). Cap 5 rounds via `continuation_id` (3 until 2026-10-14: two issues in a row, #64 and #71,
    ended one round short with every entry accepted by one reviewer and new round-3 findings
-   left unreviewed); each round's
-   prompt carries the diff of the spec since the last round and the register.
+   left unreviewed). A later round's prompt carries only the diff since the
+   last marked round and the ids to mark (reset entries plus new ones), in the
+   reviewer's round-1 thread; the ledger, the full register and the previous
+   reviews are not re-sent (a full briefing only when the thread is gone). Added
+   2026-10-21: diff-only rounds took 1-2 min, full-context ones 4-13 min.
 6. **Acceptance to tests.** After the spec converges, an opus subagent turns the
    acceptance matrix into failing tests. Tests must compile and fail for the right
    reason (asserted output captured in the ledger). Not committed on their own: the
@@ -743,7 +778,8 @@ render of the ledger becomes the PR body.
    and the mutation patch recorded in the ledger; `rustfmt <file>` only; SOLID and DRY
    as explicit per-task review criteria; the protected-path list. Implementer opus 5,
    per-task reviewer sonnet 5, review-fix edits sonnet 5. Cap 3 red-to-green attempts
-   per task.
+   per task. A bounded issue whose plan has at most two tasks has no per-task
+   reviewer; its proofs and the final panel are the review (added 2026-10-21).
 9. **Repo gates**, each run under the supervisor in a sanitized environment
    (`REGEN_TEMP_GOLDENS` unset, `ALSEM_NO_PREFLIGHT_CACHE=1`), each with its exit
    code captured and its log retained (never piped through `tail`):
@@ -771,7 +807,9 @@ render of the ledger becomes the PR body.
     spec, and ledger, against the head SHA recorded in the register. Same
     convergence rule and cap. Every reviewer claim about code is source-verified
     before an edit.
-11. **Rebase and gate** (executor). Once the panel has converged, fetch and rebase
+11. **Rebase and gate** (executor). As soon as the final panel's round-1 fixes
+    pass the task gate (beside round 2, not after convergence; added 2026-10-21),
+    or after the panel and the bench when the issue has a CDO bench, fetch and rebase
     onto `origin/master`, then run the full step-9 set at once on the result, and
     go straight on to step 12, so `master` has as little time as possible to
     move. After **any** rebase the gates rerun (a clean rebase can still change
@@ -781,9 +819,15 @@ render of the ledger becomes the PR body.
     shows a branch commit whose diff changed outside CHANGELOG context lines and
     evidence files. Code that `master` brought in is not the branch's change: the
     gates cover how it combines with the branch, and the panel's register is
-    about the branch. Record the range-diff verdict in the ledger. A red gate
+    about the branch. Record the range-diff verdict in the ledger, and use the same
+    range-diff to re-point every register `fix_commit` and commit-shaped `anchor`
+    to its rebased SHA before `attest` (a later round's fix diff across a rebase is
+    likewise a range-diff, not a plain diff). A red gate
     here is fixed, gets one panel round over the fix, and the full set runs
-    again. A clean rebase is not charged; one conflict resolution is budgeted. The validated pair is `(B, H)`: `B` the
+    again. A later panel round whose fix touches anything outside the gate-inert
+    prose and the evidence discards the early run, and this step runs again on
+    the new head; gate records are keyed by tree, so a discarded run cannot be
+    attested. A clean rebase is not charged; one conflict resolution is budgeted. The validated pair is `(B, H)`: `B` the
     `origin/master` commit rebased onto, `H` the head the gates and panel passed on.
 12. **Freeze.** The freeze boundary is set **after** step 11, so `H` is post-rebase.
     The protected-path check runs once more over the whole approved diff (`B..H`)
@@ -833,7 +877,17 @@ render of the ledger becomes the PR body.
     (`ci-workflow-unknown`) rather than passing. One CI fix attempt allowed,
     independent of the rebase
     budget; a CI fix is a code change, so it returns to step 11 (gates, one panel
-    round, new `H`, new attestation). Immediately before merging, the executor
+    round, new `H`, new attestation). A red CI whose every failing test the diff
+    cannot reach is a flake, not a fix: `ci-rerun --pr <pr>` reruns the latest
+    `ci.yml` run on the PR head (only its failed jobs; a green run whole, for an
+    acceptance that asks for repeat runs), keeps the head and the attestation, and
+    appends a `ci-rerun` record to `gate-runs.jsonl`. It is guarded like
+    `push-branch` and refuses anything but a completed `failure`/`success` run of
+    that head. One flake rerun per head, enforced: a rerun of a red run is
+    refused (`rerun-already-used`) when `gate-runs.jsonl` already holds a red-run
+    `ci-rerun` for that head (a record of unknown shape counts as one); green reruns
+    stay allowed and are counted. A second failure is `blocked ci-flaky:<test>`,
+    never a `ci_fix` (added 2026-10-21, after #111). Immediately before merging, the executor
     re-fetches and requires **all** of: `origin/master == B` (the base is bound,
     not just the head; if it moved, that is a rebase, budgeted as such), the PR head
     `== final_head`, and the issue body hash `== body_hash` (re-checked here, not
@@ -852,8 +906,9 @@ reason code, leave the branch and worktree in place for a human.
 cited file and line, severity normalised to `critical` | `important` | `minor`,
 the conductor's disposition
 (`fixed` with commit SHA, `refuted` with source evidence, `deferred` as discovery
-with the reproducer, or `open`), the artifact hash it was raised against, and a
-per-reviewer disposition field (`accepted`, `re-raised`, `unreviewed`).
+with the reproducer, or `open`), an `anchor` (the file and line range, or the fix
+commit, its fix lives in) with an `anchor_hash` (sha256 of those lines at the last
+mark), and a per-reviewer disposition field (`accepted`, `re-raised`, `unreviewed`).
 
 Severity is a closed vocabulary rather than the reviewer's own wording, because
 the merge gate pattern-matches it: `critical` and `important` are BLOCKING, so
@@ -861,8 +916,14 @@ they may not be merely `deferred`. The conductor normalises a reviewer's phrasin
 into the three words when writing the entry; the executor refuses a register
 carrying anything else, rather than treating an unrecognised word as non-blocking.
 
-Each round's prompt shows every entry with its conductor disposition and asks each
-reviewer to mark each one `accepted` or `re-raised` against the current hash. A
+Round 1 shows every entry; a later round asks each reviewer to mark the entries
+whose marks were reset, plus new ones, `accepted` or `re-raised`. An edit resets
+the marks ONLY of entries whose anchor lines it changed, plus every entry its
+commit message names (a fix commit names the ids it addresses); an entry whose
+anchor is unchanged keeps both marks. Until 2026-10-21 the marks were tied to one
+hash over the whole spec, so any edit reset every mark (#190: 7 resets of up to 31
+entries); the executor never read that hash, so anchors are a conductor convention
+the executor does not check either. A
 `re-raised` stays unresolved whether or not it cites new evidence: the conductor
 must fix it or produce a new refutation for the next round. Silence is
 `unreviewed`, never approval. A dispute that survives the round cap is `blocked`
@@ -873,12 +934,45 @@ on its own (fail closed, at the cost of an occasional blocked-by-dispute issue).
 
 Convergence means: every entry carries a severity and a disposition from the two
 closed vocabularies; no `open` entries; every entry is `accepted` by **both**
-reviewers against the current hash (including the originating reviewer's own);
+reviewers against its own `anchor_hash` (including the originating reviewer's own,
+apart from the raiser-only carve-out below);
 every blocking entry — `critical`, `important`, or explicitly `blocking: true` —
 is `fixed` or `refuted` with evidence, never `deferred`. A reviewer downgrading its own blocking finding without a refutation is
 recorded but does not count. The final round may be confirm-only (no changes since
 the previous round, only dispositions). Three rounds without convergence is
 `blocked` with the register attached; the standard is not relaxed.
+
+**Raiser-only acceptance of a minor prose fix (added 2026-10-21).** One carve-out
+from "both reviewers": a `minor`, non-blocking entry whose fix commit touches only
+gate-inert prose (`protect.gate_inert`) and the two evidence files closes when the
+reviewer who raised it accepts; the other reviewer's mark is `accepted-by-rule`. The
+other reviewer still sees it in the briefing, and a `re-raised` reopens it. The
+executor (`attest`, and the handoff check) counts `accepted-by-rule` as `accepted`
+only when the entry is `minor` and not `blocking`, its `source` names the reviewer
+filling exactly one slot (a stand-in's name under `--substitute`), that slot is
+`accepted` and the rule mark sits in the other one, and its `fix_commit` is a full
+SHA on `B..final_head` whose own diff touches only those paths; anywhere else the
+mark is unknown and the entry fails. An entry raised outside the two slots (the
+code-review skill, a task reviewer, a proof) never qualifies. Code, tests, fixtures
+and `tests/**/*.md` never qualify. In 3 of 3 runs a final round existed only to
+confirm a wording fix.
+
+**Records that exist only after the panel (`closes_by`, added 2026-10-21).** An
+entry whose only remaining work is a record the flow writes after the panel (an
+attested gate exit code, an attested `B`/`H`/`final_head`, the `ci-wait` record on
+the final head) is `fixed` with `closes_by: {kind: gate|attest|ci-wait, key}`.
+The reviewers accept the rule that the record closes it; the executor checks the
+record and fails closed. `attest` refuses an unknown kind or key, a non-`fixed`
+entry, a `gate` key outside the gates `attest` requires (`ci-steps-all`,
+`check-goldens-coverage`, `check-goldens`, `cdo-gate`) or whose attested exit code is
+not 0, and an `attest` key outside
+the three SHA fields. The `ci-wait` record only exists after the push, so
+`merge-gate` holds such an entry (`closes-by-unmet:<ids>`) until this run's latest
+`ci-wait` record names the final head with exit code 0, `timed_out: false`,
+`supervised: true` and the argv `gh pr checks <pr> --watch` (compared as post-merge
+compares a gate's command). The attestation lists the
+entries under `closed_by`. Before this, a reviewer who followed the rules had to
+re-raise "gate results empty" and forced a round after step 11 (#190, #160).
 
 **Handoff at the spec-panel cap (#45).** One carve-out, and it moves no merge
 standard. At the spec cap, a register that is *handoff-ready* hands its design
@@ -921,10 +1015,12 @@ on its own: the substitution stays an explicit operator decision per attempt.
 A mismatch fails closed in both directions (`register-not-converged`), because
 the carried entries have no marks under the other roster's names.
 
-One limit, older than #141: a mark is not bound to the hash it was made
-against. A carried `accepted` from the spec panel passes `attest` even if the
+One limit, older than #141: the executor does not bind a mark to what it was
+made against. A carried `accepted` from the spec panel passes `attest` even if the
 final panel never re-marked that entry. Only the prompt (`issue.md`: round 1
-re-marks every carried entry) enforces this; a fix would be a per-mark `hash`.
+re-marks every carried entry and sets its `anchor_hash` afresh) enforces this;
+the per-entry `anchor_hash` (2026-10-21) is the field an executor check would
+read, via a `register-reset --since <sha>` helper, once two issues have used it.
 
 A crash after a consumed handoff takes the normal `blocked-crashed` route. The
 issue then needs `unblock` and a fresh panel. The handoff record is gone, but
@@ -1031,8 +1127,9 @@ can be reproduced after cleanup. Nothing in that directory is ever pushed.
   obligation and its three states), plus `.agent/incidents.json` and the
   append-only `.agent/audit.jsonl` alongside the existing `.agent/` state.
 - Executor subcommands added for the operator, not for the flow: `clear-halt`,
-  `resolve-incident`, `incidents`. The first two are gated in code; see
-  "Post-merge verification".
+  `resolve-incident`, `grant`, `incidents`. The first two are gated in code (see
+  "Post-merge verification"); `grant` only refuses a call carrying a run id, so the
+  prompt is its guard (see "Per-issue budgets").
 - `.claude/commands/orchestrate.md`, `.claude/commands/issue.md`.
 - `.claude/commands/README.md` (new): one entry per command, plus `/triage-wave`.
 - `.gitignore`: `.agent/*` with per-directory re-includes for the two evidence

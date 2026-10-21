@@ -9,6 +9,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/issue` (flow speed-ups, P1): findings-register marks are scoped to what changed. Each
+  entry carries an `anchor` (the file and lines, or the fix commit, its fix lives in) and an
+  `anchor_hash`; an edit resets only the marks of entries whose anchor lines changed, plus
+  the entries its commit message names. The old field was one `hash` over the whole Design,
+  so every edit reset every mark (#190: 7 resets of up to 31 entries). A conductor
+  convention for now: the executor never read the old hash and does not read the anchors.
+  After step 11's rebase the conductor re-points every `fix_commit` and commit anchor to
+  the rebased SHA (from `git range-diff`), and a later round's fix diff across a rebase is a
+  range-diff.
+- agentflow (flow speed-ups, P3): a `minor` register entry whose fix touches only
+  gate-inert prose and the evidence files closes on the raising reviewer's `accepted`;
+  the other reviewer's mark is `accepted-by-rule`, and a `re-raised` still reopens it.
+  `attest` and the handoff check count `accepted-by-rule` only when the entry is minor and
+  not blocking, its `source` fills exactly one review slot (a stand-in's name under
+  `--substitute`), that slot is `accepted` and the rule mark sits in the other one, and
+  its `fix_commit` is a full SHA on the branch (after `B`) whose own diff touches only
+  those paths; anywhere else, including an entry raised outside the two slots (the
+  code-review skill, a task reviewer, a proof), the entry fails. In 3 of 3 runs a final round existed only to confirm a wording fix. 2 new tests
+  (12 cases) in `test_cli_flow.py`.
+- agentflow (flow speed-ups, P9): new `grant --issue N --key spec_rounds|final_rounds
+  --n <k> --by <name>`, for the operator, raises one panel-round cap of the run holding
+  issue N, with a `budget-grant` audit line written first. It refuses every other key
+  (`key-not-grantable`, `ci_fix` included), `--n` below 1, an issue no lease names and a
+  call carrying a run id; it allows a live lease, since the run it extends is live. A
+  call without a run id is not stopped in code, so for `grant`, as for `unblock`, the
+  prompt is the guard. `charge` and `grant` now hold a per-run `budget-<run>`
+  mutex, so neither loses the other's write. A budget written before grants existed still
+  loads. #190's sixth spec round was recorded outside the budget. 4 new tests.
+- agentflow (flow speed-ups, P2): a findings-register entry whose only remaining work is
+  a record written after the panel takes `disposition: fixed` with
+  `closes_by: {kind: gate|attest|ci-wait, key}`, and the executor checks the record
+  instead of a later round re-marking it. `attest` refuses an unknown kind or key, a
+  non-`fixed` entry, a red or absent attested gate, a gate key `attest` does not itself
+  require (only `ci-steps-all`, both `check-goldens` keys and `cdo-gate`), and an `attest` key outside
+  `B`/`H`/`final_head`; `merge-gate` holds a `ci-wait` entry (`closes-by-unmet:<ids>`)
+  until the latest `ci-wait` record is green on the final head (exit 0, not timed out,
+  supervised, and the real `gh pr checks <pr> --watch` command). The attestation lists
+  them under `closed_by`. On #190 such entries forced a final round after step 11.
+  3 new tests (12 cases) in `test_cli_flow.py`.
+- agentflow (flow speed-ups, P8): new `ci-rerun --pr <pr>` reruns the latest `ci.yml`
+  run on the PR head without a new head or attestation: only the failed jobs of a red run,
+  the whole of a green one. It is guarded like `push-branch` (dry-run, HALT, fence), fails
+  closed on a run that is missing, unfinished or of another conclusion, and appends a
+  `ci-rerun` record (with the head's running `count`) to `gate-runs.jsonl`. A second rerun
+  of a red run on one head is refused (`rerun-already-used`); green reruns stay allowed. `/issue` step 13: a red CI whose every failing
+  test the diff cannot reach is a flake, rerun once with no `ci_fix` charge; a second
+  failure is `blocked ci-flaky:<test>`. On #111 a flake spent the one `ci_fix` and blocked
+  the issue after 45 min with no defect. 4 new tests (8 cases) in `test_cli_flow.py`.
+- `/issue` (flow speed-ups, P11): a bounded issue whose plan has at most two tasks skips
+  the per-task sonnet reviewer; the implementer's proofs and the final panel are its
+  review. Architectural issues and plans of three or more tasks keep it. On #111 and #190
+  it found only minors; on #160 (architectural) it found an important gap early.
+- `/issue` (flow speed-ups, P6): step 11 (rebase and the full gate set) starts in the
+  background as soon as final round 1's fixes pass the task gate, while round 2 runs,
+  instead of after convergence. A later fix outside the gate-inert prose discards that run
+  and step 11 runs again; gate records are keyed by tree, so a discarded run cannot be
+  attested. An issue with a CDO bench still waits for the panel and the bench. In 2 of 3
+  runs every round after the first was prose only (~10 min saved per issue).
+- `/issue` (flow speed-ups, P4): a probe reproduces the acceptance's own invocation (the
+  same `ci-steps` step, parallelism, profile and core count). When the acceptance names
+  the CI runner, step 3 may push one throwaway probe commit to a draft PR opened there,
+  and the Design says which acceptance items the measured hardware can meet before the
+  spec panel sees it. On #190 a serial probe of a parallel CI test, and runner variance
+  found after the design, cost one spec round, two amendments and ~1 h.
+- `/issue` (flow speed-ups, P5): every "if the measurement shows X, go back to design"
+  rule in a spec or bounded design states its fallback, which the spec panel reviews with
+  it. Firing it then needs no new round and no operator decision; the operator is asked
+  only when no fallback fits, with a stated default after 15 minutes. On #190 a bare
+  "back to design" cost ~30 min of operator wait and one spec round.
+- `/issue` (flow speed-ups, P10): a later panel round's briefing carries only the fix diff
+  and the ids to mark, in the reviewer's round-1 thread; the ledger, the full register and
+  the previous reviews are not re-sent. Diff-only rounds took 1-2 min on #190 and #111,
+  full-context rounds 4-13 min.
 - **CI runs in two parallel jobs.** `test` (fmt, lint, gen-syntax, the test suite) and `release` (the
   release build and `perf_bounds`) now run side by side instead of one after the other. The steps took
   ~6.5 min in a row (run 39625785855: Lint 32 s, Test 100 s, Build 202 s, Perf 41 s); the wall time is
@@ -349,6 +422,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- agentflow (pre-existing): post-merge's verification worktree built into the main
+  checkout's `target/` from a new path per merge (`../al-sem-verify-merge-<sha12>`). Test
+  binaries bake `env!("CARGO_MANIFEST_DIR")` and cargo reuses a binary whose Rust sources
+  did not change, so after #190's post-merge (merge 81e858ac) the checkout's own
+  `ci-steps all` and `cdo-gate` ran binaries resolving fixtures under the deleted verify
+  tree (37 lib failures in `cdo-gate`). The next post-merge of a fixtures-only merge would
+  have done the same in the verify tree: a false red, and a revert of a good merge. The
+  merge and revert checks now share ONE fixed path, `../al-sem-verify-tree` (post-merge
+  runs one at a time under the merge lane, and the merge tree is gone before the revert
+  tree is made), and build into their own cache, `<root>/target-verify` (gitignored;
+  `AGENTFLOW_VERIFY_TARGET_DIR` and `CARGO_TARGET_DIR` still override it).
+
+- agentflow (pre-existing): `Git.changed_files` now passes `--no-renames`. With git's
+  rename detection a `git mv src/x.rs docs/x.md` listed only `docs/x.md`, which is
+  gate-inert, so a code file moved into `docs/` passed `freeze-check`, the post-merge
+  identity check, `check-diff`'s protected-path check and the P3 prose check as prose.
+  Both paths are now listed. Tests: `test_mergeops.py` (freeze check) and the P3 refusal
+  list in `test_cli_flow.py`.
+- agentflow (pre-existing): `finish --outcome handoff` measured the handoff's `files` from
+  the shared checkout's local `master`, which lags while another session's merge waits for
+  its post-merge, so `files` could carry that merge's files too. It now uses
+  `merge-base origin/master <sha>`, for `files` and for the P3 prose check alike.
 - **`perf_bounds`'s timing tests run one at a time and judge the minimum of their samples**
   (#190; `tests/perf_bounds.rs`). Why: CI runs the binary's tests side by side on a 4-core
   runner, so one test's samples were timed while another test was building or solving, and

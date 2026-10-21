@@ -49,7 +49,7 @@ def test_create_replaces_a_leftover_directory_and_lands_detached_on_the_commit(r
     _, clone = repo_pair
     g = Git(clone)
     sha = commit_file(clone, "thing.txt", "x\n", "a commit to verify")
-    p = worktrees.verify_path(clone, "merge", sha)
+    p = worktrees.verify_path(clone)
     p.mkdir()
     (p / "junk.txt").write_text("left behind by a crashed run\n")
 
@@ -88,7 +88,7 @@ def test_create_cleans_up_after_its_own_postcondition_failure(repo_pair, monkeyp
     _, clone = repo_pair
     g = Git(clone)
     sha = commit_file(clone, "thing.txt", "x\n", "a commit to verify")
-    p = worktrees.verify_path(clone, "merge", sha)
+    p = worktrees.verify_path(clone)
 
     class LandsSomewhereElse(Git):
         def rev(self, ref):

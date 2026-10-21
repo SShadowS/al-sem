@@ -150,6 +150,13 @@ class Gh:
         out = self._raw(["pr", "view", str(n), "--repo", self.repo, "--json", fields])
         return json.loads(out or "{}")
 
+    def latest_run(self, workflow: str, sha: str) -> dict | None:
+        """The newest run of `workflow` (a file name) on commit `sha`, or None."""
+        out = self._raw(["run", "list", "--repo", self.repo, "--workflow", workflow, "--commit", sha,
+                         "--limit", "1", "--json", "databaseId,attempt,status,conclusion,headSha"])
+        runs = json.loads(out or "[]")
+        return runs[0] if runs else None
+
     # ---- writes ----------------------------------------------------------
     def ensure_labels(self, names: list[str]) -> None:
         existing = {d["name"] for d in self._api(f"repos/{self.repo}/labels?per_page=100", paginate=True)}
@@ -201,6 +208,10 @@ class Gh:
 
     def pr_ready(self, n: int) -> None:
         self._raw(["pr", "ready", str(n), "--repo", self.repo], mutating=True)
+
+    def rerun(self, run_id: int, failed_only: bool) -> None:
+        self._raw(["run", "rerun", str(run_id), "--repo", self.repo, *(["--failed"] if failed_only else [])],
+                  mutating=True)
 
     def merge_pr(self, n: int, head_sha: str) -> None:
         self._raw(["pr", "merge", str(n), "--squash", "--match-head-commit", head_sha], mutating=True)

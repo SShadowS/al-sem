@@ -49,6 +49,9 @@ class Attestation:
     # attestations written before substitution existed, which were all signed
     # by the named roster.
     reviewers: dict = field(default_factory=lambda: {r: r for r in ROSTER})
+    # Register entry id -> its `closes_by` ({kind, key}): the record that closed
+    # it after the panel, so the PR comment says what closed each one.
+    closed_by: dict = field(default_factory=dict)
 
 
 def body_hash(text: str) -> str:

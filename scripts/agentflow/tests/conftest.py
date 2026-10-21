@@ -52,7 +52,7 @@ def dry_ctx(root):
 import subprocess  # noqa: E402
 
 MUTATING = ("issue edit", "issue comment", "issue create", "pr create", "pr comment", "pr merge", "pr ready", "pr edit",
-            "issue reopen", "-X POST", "-X PATCH", "-X DELETE",
+            "issue reopen", "run rerun", "-X POST", "-X PATCH", "-X DELETE",
             "--method POST", "--method PATCH", "--method DELETE")
 
 

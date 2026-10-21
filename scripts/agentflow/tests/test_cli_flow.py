@@ -946,6 +946,217 @@ def test_attest_binds_the_register_path_and_merge_refuses_a_changed_register(cap
     assert not any(c.startswith("pr merge") for c in gh.calls)
 
 
+BOTH = {"astra": "accepted", "flash": "accepted"}
+
+
+def closes(eid, kind, key, *, disposition="fixed", severity="important"):
+    """A register entry whose only remaining work is a post-panel record (P2)."""
+    return {"id": eid, "severity": severity, "disposition": disposition, "reviews": BOTH,
+            "closes_by": {"kind": kind, "key": key}}
+
+
+def test_attest_accepts_closes_by_entries_whose_record_is_attested(capsys, root, tmp_path):
+    # #190 final r2: "gate results empty" / "B/H empty" could only close after the
+    # panel, so a reviewer who followed the rule re-raised them and forced a round.
+    entries = [closes("S1-3", "gate", "cdo-gate"), closes("S2-2", "attest", "final_head"),
+               closes("F1-7", "ci-wait", "ci-wait")]
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path, contents=json.dumps(entries))
+    code, out = attest(capsys, root, register)
+    assert code == 0, out
+    att = json.loads(Path(out["path"]).read_text())
+    assert att["closed_by"] == {e["id"]: e["closes_by"] for e in entries}
+
+
+@pytest.mark.parametrize("entry", [
+    closes("X", "gate", "bench"),                  # no such attested gate
+    closes("X", "gate", "d4"),                     # attested GREEN, but not a required gate
+    closes("X", "gate", "d5"),                     # attested red, and not a required gate
+    closes("X", "attest", "base"),                 # not an attested SHA field
+    closes("X", "ci-wait", "ci"),                  # ci-wait names only its own record
+    closes("X", "later", "ci-steps-all"),          # unknown kind
+    closes("X", "gate", ""),                       # empty key
+    closes("X", "gate", "cdo-gate", disposition="refuted"),          # closes_by means `fixed`
+    closes("X", "gate", "cdo-gate", disposition="deferred", severity="minor"),
+    {"id": "X", "severity": "minor", "disposition": "fixed", "reviews": BOTH, "closes_by": "cdo-gate"},
+    {"id": "X", "severity": "minor", "disposition": "fixed", "reviews": BOTH, "closes_by": {"kind": "gate"}},
+], ids=lambda e: json.dumps(e.get("closes_by")) + e["disposition"])
+def test_attest_refuses_a_closes_by_that_names_no_green_record(capsys, root, tmp_path, entry):
+    # `d4` is green in the blob: a key `attest` does not itself require is still refused.
+    gates = json.dumps({**json.loads(GREEN_GATES), "d4": 0, "d5": 1})
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path, contents=json.dumps([entry]))
+    code, out = attest(capsys, root, register, gates=gates)
+    assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["X"], out
+
+
+def ci_wait_gate(capsys, repo_pair, tmp_path):
+    """An attested register with one `closes_by: ci-wait` entry; returns
+    (clone, ctx, B, reasons()) where reasons() runs merge-gate on PR 12."""
+    _, clone = repo_pair
+    write_ci_workflow(clone)
+    ctx = Ctx(Paths(clone), run_id="run-test")
+    body = json.loads(ISSUES)[0][0]["body"]
+    register = claimed_register(ctx, tmp_path, body_hash=mergeops.body_hash(body),
+                                contents=json.dumps([closes("F1-7", "ci-wait", "ci-wait")]))
+    B = Git(clone).rev("origin/master")
+    code, out = run(capsys, clone, "attest", "--issue", "8", "--B", B, "--H", B, "--final-head", B,
+                     "--register", str(register), "--gates", GREEN_GATES,
+                     "--body-hash", mergeops.body_hash(body), gh_run=FakeRunner())
+    assert code == 0, out
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft":
+                     json.dumps({"headRefOid": B, "statusCheckRollup": rollup()})})
+
+    def reasons():
+        _, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
+        return out["reasons"]
+
+    return clone, ctx, B, reasons
+
+
+def ci_wait_record(final_head, **over):
+    """A green, supervised `ci-wait` record of the real command, as `run` writes it."""
+    return {"name": "ci-wait", "argv": ["gh", "pr", "checks", "12", "--watch"], "exit_code": 0,
+            "timed_out": False, "supervised": True, "head": final_head, **over}
+
+
+@pytest.mark.parametrize("cdo", [None, 1, True])
+def test_a_docs_only_attest_does_not_let_closes_by_cite_the_cdo_gate_it_skipped(capsys, root, tmp_path, cdo):
+    # `--docs-only` stops `_gate_failures` asking for `cdo-gate`, so only the closes_by
+    # check itself can see that the gate an entry cites is absent or red.
+    gates = {"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 0}
+    if cdo is not None:
+        gates["cdo-gate"] = cdo
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path,
+                                contents=json.dumps([closes("X", "gate", "cdo-gate")]))
+    code, out = attest(capsys, root, register, gates=json.dumps(gates), extra=("--docs-only",))
+    assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["X"], out
+
+
+def test_merge_gate_holds_a_ci_wait_entry_until_a_green_ci_wait_record_on_the_final_head(capsys, repo_pair, tmp_path):
+    from agentflow import identity
+    clone, ctx, B, reasons = ci_wait_gate(capsys, repo_pair, tmp_path)
+    assert reasons() == ["closes-by-unmet:F1-7"]                       # no record yet
+    for bad in (dict(exit_code=1),                                     # red
+                dict(head="e" * 40),                                   # another head
+                dict(timed_out=True), dict(timed_out=None),            # killed, or unknown
+                dict(supervised=False),                                # not under the lock
+                dict(argv=["true"]),                                   # not the CI command
+                dict(argv=["gh", "pr", "checks", "13", "--watch"]),    # another PR
+                dict(argv=None)):
+        identity.append_record(ctx, ci_wait_record(B, **bad))
+        assert reasons() == ["closes-by-unmet:F1-7"], bad
+    identity.append_record(ctx, ci_wait_record(B))
+    assert reasons() == []
+
+
+def test_a_ci_wait_run_of_some_other_command_does_not_close_the_entry(capsys, repo_pair, tmp_path):
+    # Through the real `run`: supervised, exit 0, on the final head, and still no CI verdict.
+    import time
+    from agentflow import budget
+    clone, ctx, B, reasons = ci_wait_gate(capsys, repo_pair, tmp_path)
+    lock.acquire(ctx, 8, "s", 1)
+    budget.init(ctx, claimed_at=time.time())
+    code, out = run(capsys, clone, "run", "--name", "ci-wait", "--timeout", "1", "--",
+                    sys.executable, "-c", "pass", gh_run=FakeRunner())
+    assert code == 0 and out["supervised"] is True, out
+    assert reasons() == ["closes-by-unmet:F1-7"]
+
+
+def prose_rule_repo(repo_pair):
+    """`master` (B) carries a CHANGELOG-only commit; branch `feat` then carries one
+    commit per fix shape; `other` carries a CHANGELOG-only commit off the branch.
+    Returns (clone, B, final_head, {shape: sha})."""
+    _, clone = repo_pair
+    g = Git(clone)
+    on_master = commit_file(clone, "CHANGELOG.md", "master\n", "master prose")
+    assert g.push("origin", "master")
+    B = g.rev("HEAD")
+    g._run("checkout", "-q", "-b", "other")
+    off_branch = commit_file(clone, "CHANGELOG.md", "other\n", "prose on another branch")
+    g._run("checkout", "-q", "-b", "feat", B)
+    shas = {"on_master": on_master, "off_branch": off_branch}
+    shas["code"] = commit_file(clone, "src/x.rs", "x\n", "code fix")
+    shas["changelog"] = commit_file(clone, "CHANGELOG.md", "feat\n", "wording")
+    (clone / "docs").mkdir(exist_ok=True)
+    (clone / "docs" / "a.md").write_text("a\n")
+    _git_raw(clone, "add", "docs/a.md")  # staged, so the next commit carries both files
+    shas["docs_and_ledger"] = commit_file(clone, ".agent/issue-8/ledger.md", "l\n", "docs + ledger")
+    shas["tests_md"] = commit_file(clone, "tests/prsummary.md", "t\n", "a golden the tests read")
+    # A code file moved into docs/: rename detection would list only docs/x.md.
+    _git_raw(clone, "mv", "src/x.rs", "docs/x.md")
+    _git_raw(clone, "commit", "-q", "-m", "move code into docs")
+    shas["renamed"] = g.rev("HEAD")
+    # A commit that touches nothing: "every changed path is prose" holds vacuously.
+    _git_raw(clone, "commit", "-q", "--allow-empty", "-m", "fixes nothing")
+    shas["empty"] = g.rev("HEAD")
+    return clone, B, g.rev("HEAD"), shas
+
+
+def rule_entry(fix_commit, *, severity="minor", reviews=None, source="astra", **extra):
+    """Raised by `source` (astra by default), so astra's slot is `accepted` and flash's
+    the rule mark."""
+    return {"id": "F2-1", "source": source, "severity": severity, "disposition": "fixed",
+            "fix_commit": fix_commit,
+            "reviews": reviews or {"astra": "accepted", "flash": "accepted-by-rule"}, **extra}
+
+
+def attest_rule(capsys, clone, tmp_path, B, head, entry, extra=()):
+    ctx = Ctx(Paths(clone), run_id="run-test")
+    register = claimed_register(ctx, tmp_path, contents=json.dumps([entry]))
+    return attest(capsys, clone, register, B=B, H=head, final_head=head, extra=extra)
+
+
+def test_attest_accepts_a_raiser_only_mark_on_a_minor_prose_only_fix(capsys, repo_pair, tmp_path):
+    # P3: #111 r3, #190 r3 and #160 r3 each existed only to confirm a wording fix.
+    clone, B, head, shas = prose_rule_repo(repo_pair)
+    for shape in ("changelog", "docs_and_ledger"):
+        code, out = attest_rule(capsys, clone, tmp_path, B, head, rule_entry(shas[shape]))
+        assert code == 0, (shape, out)
+    # The other direction: flash raised it, so flash accepts and astra gets the rule mark.
+    by_flash = rule_entry(shas["changelog"], source="flash",
+                          reviews={"astra": "accepted-by-rule", "flash": "accepted"})
+    assert attest_rule(capsys, clone, tmp_path, B, head, by_flash)[0] == 0
+
+
+def test_a_raiser_only_mark_follows_a_substituted_slot(capsys, repo_pair, tmp_path):
+    # Under `--substitute astra=sol` the marks sit under `sol`, and so does the source.
+    clone, B, head, shas = prose_rule_repo(repo_pair)
+    entry = rule_entry(shas["changelog"], source="sol",
+                       reviews={"sol": "accepted", "flash": "accepted-by-rule"})
+    code, out = attest_rule(capsys, clone, tmp_path, B, head, entry, extra=("--substitute", "astra=sol"))
+    assert code == 0, out
+    # Without the substitution `sol` fills no slot: no carve-out, and astra's slot is empty.
+    code, out = attest_rule(capsys, clone, tmp_path, B, head, entry)
+    assert code == 1 and out["entries"] == ["F2-1"], out
+
+
+@pytest.mark.parametrize("shape, entry_kw", [
+    ("code", {}),                                                      # a code fix
+    ("tests_md", {}),                                                  # tests/**/*.md is read by tests
+    ("renamed", {}),                                                   # src/x.rs -> docs/x.md
+    ("empty", {}),                                                     # an empty commit fixes nothing
+    ("on_master", {}),                                                 # not this branch's commit
+    ("off_branch", {}),                                                # not on base..final_head
+    ("changelog", {"severity": "important"}),                          # blocking
+    ("changelog", {"blocking": True}),                                 # blocking by flag
+    ("changelog", {"reviews": {"astra": "accepted-by-rule", "flash": "accepted-by-rule"}}),
+    ("changelog", {"reviews": {"astra": "re-raised", "flash": "accepted-by-rule"}}),  # an objection
+    # The rule mark in the RAISER's slot: astra raised it, so astra must accept it.
+    ("changelog", {"reviews": {"astra": "accepted-by-rule", "flash": "accepted"}}),
+    # Raised by no rostered reviewer: both must accept, as before.
+    ("changelog", {"source": "code-review"}),
+    ("changelog", {"source": "sonnet-task-review"}),
+    ("changelog", {"source": "proof-T1"}),
+    ("changelog", {"source": None}),
+    (None, {}),                                                        # no fix_commit
+    ("short", {}),                                                     # not a full SHA
+])
+def test_attest_refuses_a_raiser_only_mark_anywhere_else(capsys, repo_pair, tmp_path, shape, entry_kw):
+    clone, B, head, shas = prose_rule_repo(repo_pair)
+    fix = {None: None, "short": shas["changelog"][:8]}.get(shape, shas.get(shape))
+    code, out = attest_rule(capsys, clone, tmp_path, B, head, rule_entry(fix, **entry_kw))
+    assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["F2-1"], out
+
+
 def write_ci_workflow(clone, name="CI"):
     (clone / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
     (clone / ".github" / "workflows" / "ci.yml").write_text(f"name: {name}\n\non:\n  pull_request:\n")
@@ -1938,7 +2149,7 @@ def test_post_merge_runs_gates_in_a_worktree_with_the_main_checkout_grammar(caps
     assertion cannot fail.
 
     THE TWO `delenv` CALLS ARE NOT TIDINESS. `_verify_target_dir` resolves
-    `AGENTFLOW_VERIFY_TARGET_DIR` or `CARGO_TARGET_DIR` or `<root>/target`,
+    `AGENTFLOW_VERIFY_TARGET_DIR` or `CARGO_TARGET_DIR` or `<root>/target-verify`,
     and its docstring names "an operator's inherited CARGO_TARGET_DIR" as a
     SUPPORTED case -- so the third-fallback assertion below inherited the real
     process environment and failed on exactly the machine configuration the
@@ -1992,13 +2203,18 @@ def test_post_merge_runs_gates_in_a_worktree_with_the_main_checkout_grammar(caps
     assert len(cwds) == 1, cwds                        # every gate in ONE tree
     cwd = Path(cwds.pop())
     assert cwd != clone and cwd.parent == clone.parent and cwd.name.startswith("al-sem-verify-")
+    # ONE FIXED PATH, never one per merge: test binaries bake CARGO_MANIFEST_DIR, and a
+    # per-SHA path left reused binaries pointing at the previous, deleted tree.
+    assert cwd.name == worktrees.VERIFY_TREE and merge_sha[:12] not in str(cwd), cwd
     # EVERY gate on the commit this run says it verified, never on whatever
     # `master` names by now -- which the prologue has just moved to `later`.
     assert {c["head"] for c in calls} == {merge_sha}, [c["head"] for c in calls]
     assert Git(clone).rev("master") == later           # the shared root really did move
     for c in calls:
         assert c["env"]["TREE_SITTER_AL_PATH"] == str(clone / "tree-sitter-al")
-        assert c["env"]["CARGO_TARGET_DIR"] == str(clone / "target")
+        # Its own cache, never the main checkout's `target/`: binaries built in the
+        # verify tree must not be reused by the checkout's own gates.
+        assert c["env"]["CARGO_TARGET_DIR"] == str(clone / "target-verify") != str(clone / "target")
     assert out["verify_worktree_removed"] is True and not cwd.exists()
     assert Git(clone).branch() == "master"
 
@@ -2211,8 +2427,8 @@ def test_the_revert_rerun_gates_share_the_build_cache_and_never_regenerate_golde
     WHY IT IS NOT COSMETIC, since `_run_gate`'s parameter defaults to None and
     the keyword therefore reads as redundant to a tidier. Without it the
     revert validation runs with cargo defaulting to `<revert worktree>/target`
-    -- a cold build in a directory cargo has never seen, against the 65G/55G
-    measurement in `_verify_target_dir`'s own docstring, with the issue
+    -- a cold build in a directory cargo has never seen, inside the tree
+    `rm -rf` must clear (see `_verify_target_dir`'s docstring), with the issue
     worktree still on disk. It exhausts the disk or crosses the 45-minute cap,
     `rerun_all` returns False, and `post_merge_failure` exits
     `revert-failed-gates`: a CORRECT revert is never pushed, master stays red,
@@ -2287,7 +2503,7 @@ def test_the_revert_rerun_gates_share_the_build_cache_and_never_regenerate_golde
     rerun = [c for c in calls if c["name"].endswith("-on-revert")]
     assert [c["name"] for c in rerun] == ["red-on-revert", "noop-cdo-on-revert",
                                           "ci-steps-test-on-revert"], calls
-    revert_wt = worktrees.verify_path(clone.resolve(), "revert", merge_sha)
+    revert_wt = worktrees.verify_path(clone.resolve())
     for c in rerun:
         # THE PIN, and `== expected_cache` rather than `in c["env"]`: a
         # `cargo_target_dir=""` regression sets no key at all, and a call site
@@ -2928,7 +3144,7 @@ def test_cleanup_of_a_verification_worktree_takes_the_detached_route(capsys, rep
     `master`, created here with the production helper that owns the name."""
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")),
+    kept = worktrees.create(g, worktrees.verify_path(clone),
                             g.rev("master"))
     assert kept.name.startswith(worktrees.VERIFY_PREFIX) and kept.is_dir()
     # The library refusal that makes the route necessary, stated first.
@@ -2990,7 +3206,7 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     refuses (the last arm)."""
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")), g.rev("master"))
+    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
     assert kept.name.startswith(worktrees.VERIFY_PREFIX) and kept.is_dir()
 
     dead = Ctx(Paths(clone), run_id="dead-run", now=lambda: 1_000_000.0)
@@ -3027,7 +3243,7 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     _slots(clone, 2)
     later = lk.heartbeat + lock.STALE_SECONDS + 1
     lock.acquire(Ctx(Paths(clone), run_id="sibling-run", now=lambda: later), 9, "s", 1)
-    again = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")), g.rev("master"))
+    again = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
     code, out = run(capsys, clone, "cleanup", "--worktree", str(again),
                     gh_run=FakeRunner(), run_id=None)
     assert code == 0 and not again.exists(), out
@@ -3068,7 +3284,7 @@ def test_cleanup_refuses_a_verify_named_directory_outside_the_checkouts_parent(
     # ...and the SAME name inside the checkout's parent is still accepted, so
     # the conjunct narrowed the path rather than closing the documented exit.
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone, "merge", g.rev("master")),
+    kept = worktrees.create(g, worktrees.verify_path(clone),
                             g.rev("master"))
     code, out = run(capsys, clone, "cleanup", "--worktree", str(kept),
                     gh_run=FakeRunner(), run_id="run-test")
@@ -4202,6 +4418,51 @@ def test_a_design_converged_at_the_cap_is_handed_off_and_the_next_claim_starts_f
     assert "issue edit 8 --remove-label agent-design-ready" in gh2.calls
 
 
+def test_a_handoff_measures_its_files_from_origin_master_not_a_lagging_local_master(
+        capsys, repo_pair, fake_home):
+    """The shared checkout's local `master` lags while another session's merge waits
+    for its post-merge. Measured from it, the handoff's `files` would also carry what
+    that merge brought in, and the next attempt would `git restore` those files too."""
+    _, clone = repo_pair
+    g = Git(clone)
+    lagging = g.rev("HEAD")
+    commit_file(clone, "upstream.txt", "u\n", "another session's merge")
+    assert g.push("origin", "master")
+    sha = handoff_branch(clone, ISSUE34_REGISTER)          # cut from origin/master
+    _git_raw(clone, "checkout", "-q", "--detach")
+    _git_raw(clone, "branch", "-f", "master", lagging)     # local master one merge behind
+    gh = FakeRunner(HANDOFF_GH)
+    assert claim8(capsys, clone, gh)[0] == 0
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    assert code == 0, out
+    files = handoffs(clone)["8"]["files"]
+    assert "upstream.txt" not in files and ".agent/issue-8/findings.json" in files, files
+
+
+@pytest.mark.parametrize("fix, ok", [("spec", True), ("code", False)])
+def test_the_handoff_check_applies_the_prose_rule_to_the_branchs_own_commits(
+        capsys, repo_pair, fake_home, fix, ok):
+    """P3 on the handoff path: an `accepted-by-rule` mark passes only for a fix commit on
+    origin/master..sha that touches prose alone; a code fix leaves the mark unknown."""
+    _, clone = repo_pair
+    g = Git(clone)
+    g._run("checkout", "-q", "-b", BRANCH_A1)
+    shas = {"spec": commit_file(clone, "docs/superpowers/specs/2026-10-13-issue-8-design.md", "# D\n", "spec"),
+            "code": commit_file(clone, "src/x.rs", "x\n", "code")}
+    commit_file(clone, ".agent/issue-8/ledger.md", "## Design\n", "ledger")
+    register = [{"id": "F1", "source": "astra", "severity": "minor", "disposition": "fixed",
+                 "fix_commit": shas[fix], "reviews": {"astra": "accepted", "flash": "accepted-by-rule"}}]
+    sha = commit_file(clone, ".agent/issue-8/findings.json", json.dumps(register), "register")
+    g.checkout("master")
+    gh = FakeRunner(HANDOFF_GH)
+    assert claim8(capsys, clone, gh)[0] == 0
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    if ok:
+        assert code == 0, out
+    else:
+        assert code == 1 and out["error"] == "handoff-not-ready" and out["entries"] == ["F1"], out
+
+
 READS_ISSUES_KEY = f"api repos/{REPO}/issues?state=open&per_page=100 --paginate --slurp"
 
 
@@ -4507,3 +4768,153 @@ def test_finish_writes_the_handoff_record_while_holding_the_handoffs_mutex(
     assert code == 0, out
     assert [w for w in writes if w[0] == "handoffs.json"] == [("handoffs.json", True)]
     assert handoffs(clone)["8"]["sha"] == sha
+
+
+# ---- ci-rerun (flow speed-ups P8) -------------------------------------------
+
+PR_HEAD = "a" * 40
+CI_RUN_LIST = (f"run list --repo {REPO} --workflow ci.yml --commit {PR_HEAD} --limit 1 "
+               f"--json databaseId,attempt,status,conclusion,headSha")
+
+
+def ci_rerun_fakes(*, status="completed", conclusion="failure", head_sha=PR_HEAD, runs=None):
+    """The two reads `ci-rerun` makes, plus both rerun spellings, stated literally."""
+    if runs is None:
+        runs = [{"databaseId": 555, "attempt": 1, "status": status, "conclusion": conclusion,
+                 "headSha": head_sha}]
+    return FakeRunner({
+        f"pr view 12 --repo {REPO} --json headRefOid": json.dumps({"headRefOid": PR_HEAD}),
+        CI_RUN_LIST: json.dumps(runs),
+        f"run rerun 555 --repo {REPO} --failed": "",
+        f"run rerun 555 --repo {REPO}": "",
+    })
+
+
+def ci_reruns(gh):
+    return [c for c in gh.calls if c.startswith("run rerun")]
+
+
+def gate_runs(root):
+    p = root / ".agent" / "runs" / "run-test" / "gate-runs.jsonl"
+    return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+
+
+def test_ci_rerun_reruns_only_the_failed_jobs_and_records_it(capsys, root):
+    # #111: a flake on a head the diff cannot reach cost a `ci_fix`, a new head and a
+    # second full CI run. A rerun keeps the head; the record names what was rerun.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes()
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 0, out
+    assert ci_reruns(gh) == [f"run rerun 555 --repo {REPO} --failed"]
+    [rec] = gate_runs(root)
+    assert rec["name"] == "ci-rerun" and rec["head"] == PR_HEAD and rec["ci_run_id"] == 555
+    assert rec["failed_only"] is True and rec["attempt"] == 1
+
+
+def test_ci_rerun_of_a_green_run_reruns_all_of_it(capsys, root):
+    # An acceptance that asks for repeat runs on an unchanged head (#190's D4): a green
+    # run has no failed jobs, so `--failed` would rerun nothing.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes(conclusion="success")
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 0, out
+    assert ci_reruns(gh) == [f"run rerun 555 --repo {REPO}"]
+
+
+@pytest.mark.parametrize("fakes, error", [
+    # Real `gh run list --json` gives an unfinished run `conclusion: ""`, not null.
+    (dict(status="in_progress", conclusion=""), "ci-run-not-complete"),
+    (dict(status="queued", conclusion=""), "ci-run-not-complete"),
+    (dict(conclusion="cancelled"), "ci-run-conclusion-unknown"),
+    (dict(conclusion=""), "ci-run-conclusion-unknown"),
+    (dict(conclusion=None), "ci-run-conclusion-unknown"),
+    (dict(runs=[]), "ci-run-not-found"),
+    (dict(head_sha="b" * 40), "ci-run-not-found"),
+])
+def test_ci_rerun_fails_closed_on_anything_but_a_finished_run_of_this_head(capsys, root, fakes, error):
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes(**fakes)
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == error, out
+    assert ci_reruns(gh) == [] and gate_runs(root) == []
+
+
+def test_ci_rerun_refuses_under_halt_dry_run_and_without_a_lock(capsys, root):
+    # Guarded like `push-branch`: each refusal states its own precondition.
+    gh = ci_rerun_fakes()
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)          # no lock
+    assert code == 1 and "FenceError" in out["error"]
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh, dry=True)  # dry run
+    assert code == 2 and "dry-run" in out["error"]
+    lock.set_halt(Ctx(Paths(root), run_id="run-test"), "stop")
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)          # HALT
+    assert code == 1 and "HaltError" in out["error"]
+    assert ci_reruns(gh) == [] and gate_runs(root) == []
+
+
+@pytest.mark.parametrize("head", ["abc123", "", None, "A" * 40, 42])
+def test_ci_rerun_refuses_a_pr_head_that_is_not_a_full_sha(capsys, root, head):
+    # The head is what the run lookup and the one-rerun record key on; a short,
+    # missing, upper-case or non-string value must not reach either.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes()
+    gh.responses[f"pr view 12 --repo {REPO} --json headRefOid"] = json.dumps({"headRefOid": head})
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == "pr-head-unknown", out
+    assert not any(c.startswith("run ") for c in gh.calls) and gate_runs(root) == []
+
+
+def test_the_readonly_fake_counts_a_ci_rerun_as_a_write(capsys, root):
+    # conftest's MUTATING list is what lets a write-freedom test see `gh run rerun`;
+    # a readonly fake must trip on it rather than answer it.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes()
+    gh.readonly = True
+    with pytest.raises(AssertionError, match="mutating gh call under readonly: run rerun"):
+        run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+
+
+def set_run_conclusion(gh, conclusion):
+    gh.responses[CI_RUN_LIST] = json.dumps([{"databaseId": 555, "attempt": 1, "status": "completed",
+                                             "conclusion": conclusion, "headSha": PR_HEAD}])
+
+
+def test_a_second_rerun_of_a_red_run_on_one_head_is_refused(capsys, root):
+    # The rule allows ONE flake rerun per head; a second red is `blocked ci-flaky:<test>`.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes()
+    assert run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)[0] == 0
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == "rerun-already-used", out
+    assert len(ci_reruns(gh)) == 1 and len(gate_runs(root)) == 1
+
+
+def test_a_prior_rerun_record_of_unknown_shape_counts_as_a_red_rerun(capsys, root):
+    # Fail closed: only `failed_only: false` proves a prior rerun was of a green run.
+    from agentflow import identity
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    identity.append_record(Ctx(Paths(root), run_id="run-test"), {"name": "ci-rerun", "head": PR_HEAD})
+    gh = ci_rerun_fakes()
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == "rerun-already-used", out
+    assert ci_reruns(gh) == []
+
+
+def test_green_reruns_stay_allowed_and_are_counted(capsys, root):
+    # Repeat runs an acceptance asks for (#190's D4) rerun a green run; they do not use
+    # up the flake rerun, and a rerun on ANOTHER head does not count either.
+    from agentflow import identity
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    identity.append_record(Ctx(Paths(root), run_id="run-test"),
+                           {"name": "ci-rerun", "head": "b" * 40, "failed_only": True})
+    gh = ci_rerun_fakes(conclusion="success")
+    for _ in range(2):
+        assert run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)[0] == 0
+    set_run_conclusion(gh, "failure")
+    assert run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)[0] == 0
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == "rerun-already-used"
+    mine = [r for r in gate_runs(root) if r.get("head") == PR_HEAD]
+    assert [(r["failed_only"], r["count"]) for r in mine] == [(False, 1), (False, 2), (True, 3)]

@@ -20,6 +20,18 @@ def run_cli(capsys, root, *args, gh_run=None, dry=False, run_id="run-test"):
     return code, json.loads(out)
 
 
+def test_the_rule_mark_must_fill_every_slot_but_the_raisers():
+    """P3's "rule mark only in the OTHER slots" check. With today's two-slot roster it
+    follows from "the raiser accepted" plus "a rule mark is present", so no register
+    test can see it; it decides only for a larger roster, stated here literally."""
+    roster, entry = ("astra", "flash", "third"), {"source": "astra"}
+    yes = lambda e: True  # noqa: E731 -- the prose check is not what this pins
+    rule = cli.RULE_MARK
+    assert cli._rule_marks(["accepted", rule, rule], "minor", False, entry, yes, roster) == ["accepted"] * 3
+    for marks in (["accepted", rule, "re-raised"], ["accepted", rule, "accepted"], ["accepted", rule, None]):
+        assert cli._rule_marks(marks, "minor", False, entry, yes, roster) == marks, marks
+
+
 def test_slug():
     assert cli.slug("c10: Scope and elevation reachability across .app symbols") == "c10-scope-and-elevation-reachab"
 
@@ -36,16 +48,19 @@ def test_slug():
 # delenvs every rung it is not asserting, so none of them can be answered by
 # the machine the suite happens to run on.
 
-def test_verify_target_dir_falls_back_to_the_roots_own_target(ctx, monkeypatch):
+def test_verify_target_dir_falls_back_to_its_own_cache_never_the_checkouts_target(ctx, monkeypatch):
+    """RUNG 3 is `<root>/target-verify`. Sharing `<root>/target` let the main
+    checkout's gates reuse test binaries built in the verify tree, whose baked
+    CARGO_MANIFEST_DIR named that (deleted) tree (#190's post-merge, 81e858ac)."""
     monkeypatch.delenv("AGENTFLOW_VERIFY_TARGET_DIR", raising=False)
     monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
-    assert cli._verify_target_dir(ctx) == str(ctx.paths.root / "target")
+    assert cli._verify_target_dir(ctx) == str(ctx.paths.root / "target-verify")
+    assert cli._verify_target_dir(ctx) != str(ctx.paths.root / "target")
 
 
 def test_verify_target_dir_honours_an_operators_inherited_cargo_target_dir(ctx, monkeypatch):
-    """RUNG 2 BEATS RUNG 3. The 65G/55G measurement in `_verify_target_dir`'s
-    docstring is why the cache is shared at all; an operator who has already
-    pointed cargo somewhere with room is the case it must not override."""
+    """RUNG 2 BEATS RUNG 3: an operator who has already pointed cargo somewhere
+    with room is the case it must not override."""
     monkeypatch.delenv("AGENTFLOW_VERIFY_TARGET_DIR", raising=False)
     monkeypatch.setenv("CARGO_TARGET_DIR", "U:/shared-cargo-target")
     assert cli._verify_target_dir(ctx) == "U:/shared-cargo-target"
@@ -109,6 +124,44 @@ def test_clear_halt_refuses_an_ordinary_invocation_carrying_a_run_id(capsys, roo
     assert code == 0 and out["cleared"] == "incident A"
     assert out["unresolved_incidents"] == []
     assert not (root / ".agent" / "HALT").exists()
+
+
+def test_grant_is_operator_only_fails_closed_and_extends_the_live_run(capsys, root, monkeypatch):
+    """P9: an operator override past a cap goes through the budget, not around it.
+    Preconditions by assignment: run `run-a` holds issue 8 and has a budget."""
+    from agentflow import budget
+    from agentflow.state import Ctx, Paths
+    monkeypatch.delenv("AGENTFLOW_RUN_ID", raising=False)
+    owner = Ctx(Paths(root), run_id="run-a", now=lambda: 1_000_000.0)
+    lock.acquire(owner, 8, "s", 1)
+    budget.init(owner, claimed_at=1_000_000.0)
+    path = root / ".agent" / "runs" / "run-a" / "budget.json"
+    before = path.read_bytes()
+    grant = ("grant", "--issue", "8", "--key", "spec_rounds", "--n", "1", "--by", "me")
+    # (a) automation: a run id on the call, by flag or by the environment.
+    code, out = run_cli(capsys, root, *grant, run_id="run-a")
+    assert code == 1 and out["refused"] == "operator-only"
+    monkeypatch.setenv("AGENTFLOW_RUN_ID", "tick-1")
+    code, out = run_cli(capsys, root, *grant, run_id=None)
+    assert code == 1 and out["refused"] == "operator-only"
+    monkeypatch.delenv("AGENTFLOW_RUN_ID")
+    # (b) fail closed on what it is asked to grant.
+    # Only panel rounds: `ci_fix`, `pi_calls` and the rest are real caps but not grantable.
+    for args, refused in ((("--key", "spec-rounds"), "key-not-grantable"),
+                          (("--key", "ci_fix"), "key-not-grantable"),
+                          (("--key", "pi_calls"), "key-not-grantable"),
+                          (("--key", "rebase_regate"), "key-not-grantable"),
+                          (("--n", "0"), "bad-n"), (("--issue", "9"), "no-lease")):
+        argv = list(grant)
+        i = argv.index(args[0])
+        argv[i + 1] = args[1]
+        code, out = run_cli(capsys, root, *argv, run_id=None)
+        assert code == 1 and out["refused"] == refused, args
+    assert path.read_bytes() == before
+    # (c) an operator at a clean shell, while the run is live: that is when a grant is needed.
+    code, out = run_cli(capsys, root, *grant, run_id=None)
+    assert code == 0 and out["granted"]["run_id"] == "run-a" and out["granted"]["cap"] == 6
+    assert budget.snapshot(owner)["grants"] == {"spec_rounds": 1}
 
 
 def test_clear_halt_refuses_a_stale_reason_and_a_live_lock(capsys, root, monkeypatch):

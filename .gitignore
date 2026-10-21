@@ -1,6 +1,7 @@
 # Rust
 /target/
 /target2/
+/target-verify/
 
 # IDE
 .idea/

@@ -438,6 +438,15 @@ def is_stale(lk: Lock, now: float) -> bool:
     return (now - lk.heartbeat) > STALE_SECONDS
 
 
+def require_human(ctx: Ctx, what: str) -> None:
+    """Refusal (1) of `require_operator` alone: a run id means automation.
+    `grant` uses only this half, because the run it extends is live by design."""
+    if ctx.run_id:
+        raise OperatorOnly(
+            f"{what} is operator-only; this call carries run id {ctx.run_id!r}. "
+            f"Run it with no --run-id and with AGENTFLOW_RUN_ID unset.")
+
+
 def require_operator(ctx: Ctx, what: str) -> None:
     """Refuse `what` unless a HUMAN is asking, on a checkout no live run owns.
 
@@ -461,10 +470,7 @@ def require_operator(ctx: Ctx, what: str) -> None:
     ANY live lease refuses, not only "the" lock: with several runs, one live
     run is enough to make a clear unsafe.
     """
-    if ctx.run_id:
-        raise OperatorOnly(
-            f"{what} is operator-only; this call carries run id {ctx.run_id!r}. "
-            f"Run it with no --run-id and with AGENTFLOW_RUN_ID unset.")
+    require_human(ctx, what)
     now = ctx.now()
     lk = next((x for x in all_locks(ctx) if not is_stale(x, now)), None)
     if lk is not None:

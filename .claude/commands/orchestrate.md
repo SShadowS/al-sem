@@ -401,12 +401,14 @@ id or issue: a `FenceError` naming an issue this tick did not claim is a STOP.
   issue worktree is a refusal, not a shortcut.
 - Never edit `.agent/HALT` except through `set-halt`, never touch `scripts/`,
   `.claude/`, `.github/`, `CLAUDE.md`.
-- `clear-halt`, `resolve-incident` and `unblock` are OPERATOR-ONLY. Never call
+- `clear-halt`, `resolve-incident`, `grant` and `unblock` are OPERATOR-ONLY. Never call
   them. For the first two, writing that here is not what stops the flow using
   them — `lock.require_operator` is: every conductor call carries a run id
   (`--run-id` or `AGENTFLOW_RUN_ID`), and a run id in the context is refused.
-  `unblock` is the exception: it sets its own run id, so nothing enforces this
-  rule for it and the prompt really is the only guard. The read-only
+  `grant` and `unblock` are the exceptions, and for them the prompt really is
+  the only guard: `unblock` sets its own run id, and `grant` refuses only a
+  call that carries one (`lock.require_human`), so a call that drops it is not
+  stopped. `grant` only raises `spec_rounds` or `final_rounds`. The read-only
   `incidents` and `status` are fine to call.
 - An executor call that exits non-zero, or whose JSON has a TOP-LEVEL `error` key,
   is a stop for this tick; print it. The one exception is a refused `finish

@@ -79,17 +79,49 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    data with read-only commands (`aldump`, `alsem`, a fixture, `CDO_WS` if named).
    Record `probe | result | evidence` rows in the ledger. A falsified assumption
    shapes the spec and is a candidate discovery.
+
+   **Probe in the acceptance's own shape.** A probe reproduces the
+   acceptance's own invocation: the same script step (`scripts/ci-steps
+   <step>`), the same parallelism and profile, pinned to the same core count
+   when the target is CI. When the acceptance names the CI runner, this step
+   may push ONE throwaway probe commit to a draft PR to read the runner's
+   numbers: open the draft here (`push-branch`, then `pr-create --draft` as in
+   step 9) instead of in step 9, record the runner's numbers as probe rows,
+   then `git revert` the probe commit so it is not in the approved diff. A
+   probe charges no `ci_fix`. Then state in the Design which acceptance items
+   are feasible on the measured hardware and which are not, BEFORE the spec
+   panel sees it. On #190 a serial probe of a test CI runs in parallel, and
+   runner variance found only after the design, cost one spec round, two
+   amendments and ~1 h.
 4. **Spec.** Write `docs/superpowers/specs/<today>-issue-N-<slug>-design.md` with
    sections: Goal, Non-goals, Acceptance matrix (each Acceptance item →
    the test or measurement that proves it, or "not deliverable, because"),
    Design, False-positive and failure shapes, Measurement plan. For a bounded
    issue the ledger's `## Design` is the spec.
-5. **Spec panel.** `charge spec_rounds` per round (cap 5). Follow the
+
+   **Pre-state every fallback.** Every rule of the form "if the measurement
+   shows X, go back to design" (in the spec or the bounded `## Design`) states
+   the alternative it falls back to (e.g. "keep the bound, state the
+   acceptance as partly delivered, file the ratio-gate follow-up"). The spec
+   panel reviews the fallback with the rule, so firing it needs no new round
+   and no operator decision: apply it and record that it fired in the ledger.
+   Ask the operator only when NO pre-stated fallback fits, and say in the same
+   message what you will do if there is no answer within 15 minutes. On #190
+   a bare "back to design" fired twice and cost ~30 min of operator wait and
+   one spec round.
+5. **Spec panel.** `charge spec_rounds` per round (cap 5). A round past a
+   cap exists only after the operator runs `python scripts/agentflow grant
+   --issue N --key spec_rounds --n 1 --by <operator>` (`final_rounds` for the
+   final panel; no other cap can be granted). Never call `grant` yourself: it
+   refuses a call carrying your run id, but this sentence, not the code, is
+   what stops you dropping it. Then charge the round as usual. Never
+   run a round the budget does not cover, and never record one "outside the
+   budget" in the ledger instead (#190 did, and `status` under-counted it). Follow the
    `panel-review` skill: a briefing file with absolute paths and a
    confirm/reject checklist; both reviewers in parallel. Maintain
    `findings.json` as a list of `{id, source, round, file, line,
    severity: critical|important|minor, text,
-   disposition: open|fixed|refuted|deferred, evidence, hash,
+   disposition: open|fixed|refuted|deferred, evidence, anchor, anchor_hash,
    reviews: {astra: accepted|re-raised|unreviewed, flash: …}}`. Both
    vocabularies are closed and the executor refuses an entry whose `severity`
    or `disposition` is missing or outside them — an unrecognised word is a
@@ -97,17 +129,77 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    and `important` — or an explicit `blocking: true` — as BLOCKING, which may
    not be merely `deferred`. Normalise a reviewer's own wording (a panel that
    says "High" or "Blocker") into the three words before writing the register.
+   **Evidence that only exists after the panel.** An entry whose only
+   remaining work is a record the flow produces AFTER the panel (a gate exit
+   code, `B`/`H`/`final_head`, a `ci-wait` record) takes `disposition: fixed`
+   with `closes_by: {"kind": "gate"|"attest"|"ci-wait", "key": "<gate name |
+   B | H | final_head | ci-wait>"}` and needs no further mark: the reviewers
+   mark the RULE (that the named record closes it) `accepted`, and the
+   executor checks the record. `attest` refuses (`register-not-converged`) an
+   unknown kind or key, an entry that is not `fixed`, a `gate` key that is
+   not one of the gates `attest` requires (`ci-steps-all`,
+   `check-goldens-coverage`, `check-goldens`, `cdo-gate`) or whose attested
+   exit code is not 0, or an `attest` key that is not one of the
+   three SHA fields; `merge-gate` refuses (`closes-by-unmet:<ids>`) a
+   `ci-wait` entry until this run's latest `ci-wait` record is on the final
+   head with exit code 0, not timed out, supervised, and of the step 13
+   command (`gh pr checks <pr> --watch`). The attestation lists each one
+   under `closed_by`.
+   A repeat-run tuple an acceptance asks for is not a `closes_by` kind: record
+   it in the ledger before the panel's last round.
    Round 1's briefing asks for EVERY finding at once, wording and stale
    references included, not only blocking ones; later rounds verify fixes and
    raise a new finding only for a real defect a fix introduced (the final
    panel's rule in step 10; on #160 step 2 the spec panel used all 5 rounds).
-   Each later round
-   sends the spec diff plus the register and asks each reviewer to mark every
-   entry `accepted` or `re-raised`. Converged when: no `open`; every entry
-   `accepted` by both against the current hash; every blocking entry is `fixed`
-   or `refuted` with evidence. A `re-raised` stays unresolved even without new
-   evidence. Not converged after 5 rounds: check the handoff rule below, else
-   return `blocked spec-panel-cap`.
+   **A later round's briefing carries the diff and the ids, nothing else:**
+   the fix diff (a diff of the spec, or of the ledger's `## Design` for a
+   bounded issue; `git diff <last-marked-commit>..HEAD` for code, or, when a
+   rebase came in between, `git range-diff <old base>..<last-marked-commit>
+   origin/master..HEAD`, since a plain diff across a rebase also shows
+   everything `master` brought in) and the ids
+   to mark (the entries whose marks were reset, plus new entries). Each
+   reviewer marks those `accepted` or `re-raised`. Reviewers continue their
+   round-1 thread (`continuation_id` for pi; the same Opus agent via
+   `SendMessage` for an Opus stand-in). Do not re-link the ledger, the full
+   register or the previous reviews. If a reviewer's thread is gone (pi
+   threads do not survive a session), send that reviewer a full briefing
+   instead. Diff-only rounds came back in 1-2 min (#190 r4, r6b; #111 r3),
+   full-context rounds in 4-13 min (#160 final r1: 13 min).
+
+   **Marks are scoped to what changed (per-entry anchors).** Each entry
+   carries `anchor`: the file and line range (or the entry's own fix commit)
+   its fix lives in, and `anchor_hash`: sha256 of those lines at the time of
+   the last mark. A later Design or code edit resets the marks ONLY of
+   entries whose anchor lines changed (`git diff` over the anchor range),
+   plus any entry the edit's commit message names; a fix commit names the
+   entry ids it addresses, and those are always reset. An entry whose anchor
+   is unchanged keeps both marks. The reset entries plus the new ones are
+   "the ids to mark" in a later round's briefing. (One hash over the whole
+   Design reset every mark on every edit: 7 resets of up to 31 entries on
+   #190.) Converged when: no `open`; every entry `accepted` by both against
+   its own `anchor_hash`; every blocking entry is `fixed` or `refuted` with
+   evidence. A `re-raised` stays unresolved even without new evidence. Not
+   converged after 5 rounds: check the handoff rule below, else return
+   `blocked spec-panel-cap`.
+
+   **Raiser-only acceptance for a minor prose fix.** A `minor` entry whose fix
+   touches only gate-inert files (`CHANGELOG.md`, `docs/**/*.md`) and the two
+   evidence files is closed when the reviewer who raised it marks it
+   `accepted`; write the other reviewer's mark as `accepted-by-rule` and set
+   the entry's `fix_commit` to the full SHA of that fix. The briefing still
+   lists it so the other reviewer may object, and an objection is a
+   `re-raised` that reopens it. Code, tests, fixtures and `tests/**/*.md`
+   never qualify. The entry's `source` names the raiser exactly as its marks
+   are stored (a stand-in's own name under `--substitute`); an entry raised by
+   anyone outside the two review slots (the code-review skill, a task
+   reviewer, a proof) has no raiser here, and both reviewers accept it as
+   before. The executor counts `accepted-by-rule` as `accepted` only when the
+   entry is `minor` and not `blocking`, its `source` fills exactly one slot,
+   that slot's mark is `accepted`, the rule mark is in the OTHER slot, and
+   `fix_commit` is a commit on the branch (after `B`) whose
+   own diff touches only those files; anywhere else it is an unknown mark and
+   the entry fails. In 3 of 3 runs a final round existed only to confirm a
+   wording fix.
 
    **Handoff at the cap (#45).** The design may pass to the next attempt as
    PRE-RATIFIED when the register meets the handoff rule: every `severity` and
@@ -150,7 +242,13 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    to the same implementer (`SendMessage` to its agent id, context intact)
    instead of a third, cold review-fix agent, which re-read the repo from
    scratch on every task. Two consecutive tasks the plan marks small may share
-   one reviewer dispatch over both commits. Call `python scripts/agentflow
+   one reviewer dispatch over both commits. **A bounded issue whose plan has
+   at most two tasks dispatches no per-task reviewer:** the implementer's own
+   TDD and discrimination proofs plus the final panel (the code-review skill
+   at high and both reviewers) are its review. Architectural issues, and
+   plans with three or more tasks, keep the per-task reviewer. (On #111 and
+   #190 it found only minors the final panel would also read; on #160 it
+   found an important gap at T1 that was cheaper to fix then.) Call `python scripts/agentflow
    beat` immediately before AND immediately after each dispatch and each
    `SendMessage` (not only around the pi calls above; an `opus` implementer
    dispatch routinely runs longer than the 30-minute staleness threshold).
@@ -179,7 +277,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    in step 11. Running the full set before the panel only verifies a head that
    is never attested: on #107 it ran 7 times for one issue.
 
-   **Open a DRAFT PR now, so GitHub CI runs during the final panel.** After the
+   **Open a DRAFT PR now, so GitHub CI runs during the final panel** (unless
+   step 3's runner probe already opened it; then just `push-branch`). After the
    first green task gate here: `push-branch` (step 13's command), then
    `python scripts/agentflow pr-create --draft --title "<issue title> (#N)" --body-file <a short "final panel in progress" body> --head <branch>`.
    CI (Linux, CI's exact bar) then runs while the panel reviews, and again on
@@ -250,19 +349,22 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     enter `findings.json`. Then both reviewers over the diff, spec, and
     ledger, `charge final_rounds` per round (cap 5), same convergence rule.
     On a pre-ratified attempt (step 1), round 1 also asks both reviewers to
-    mark EVERY carried entry against the current hash: a carried `re-raised`
+    mark EVERY carried entry, and sets each one's `anchor_hash` afresh (anchors
+    do not carry across attempts): a carried `re-raised`
     is still unresolved, and `attest` refuses until both reviewers have
     accepted every entry.
     Source-verify every reviewer code claim before editing. Every fix passes
     step 9's TASK gate (`ci-steps-task`) before the next round; the full set
-    waits for step 11.
+    is step 11, which starts beside round 2 (see step 11).
 
     **Ask for everything in round 1; later rounds verify.** Round 1's briefing
     asks each reviewer for EVERY finding at once (code, tests, the numbers file,
     the CHANGELOG, spec wording, stale docs), not only blocking ones. Later
-    rounds' briefings send the fix diff and ask each reviewer to mark the
-    entries, and to raise a NEW finding only for a real defect the fixes
-    introduced. On #160 step 2 rounds 2-4 were wording and record fixes that
+    rounds' briefings follow step 5's later-round rule (the fix diff
+    `git diff <last-marked-commit>..HEAD`, a `git range-diff` across a
+    rebase, and the ids to mark, in the round-1
+    thread, nothing else) and ask each reviewer to mark those entries, and to
+    raise a NEW finding only for a real defect the fixes introduced. On #160 step 2 rounds 2-4 were wording and record fixes that
     round 1 could have named.
 
     **Prose after the gates is free.** `CHANGELOG.md` and `docs/**/*.md` are
@@ -270,7 +372,19 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     them follow `H`: a panel fix that touches ONLY those files (and the evidence)
     after step 11's gates needs no new gate run and no new `H`. A fix that
     touches anything else, a test included, goes back through step 11.
-11. **Rebase and gate.** Only once the panel has converged. Note the old base
+11. **Rebase and gate.** Start this step as soon as final round 1's fixes
+    have a green task gate, in the background, while round 2 runs: send round
+    2's briefing first (its fix diff is taken before the rebase), then rebase
+    and start the full set. If a later round yields a fix outside the
+    gate-inert set (`CHANGELOG.md`, `docs/**/*.md`, the two evidence files),
+    that run is discarded and this step runs again on the new head. A
+    gate-inert fix is committed only once the running gates have finished
+    (a commit during a run moves HEAD and voids the run's record); `attest`
+    still needs the records on `H`'s tree, so a discarded run can never be
+    attested. Exception: an issue that still has its CDO bench to run waits
+    for the panel to converge and the bench to finish, as step 9 says. In 2 of
+    3 runs every round after the first was prose only, and the ~10 min of
+    gates sat after a round that could not change them. Note the old base
     (`git merge-base HEAD origin/master`) and the old head, then
     `git fetch origin && git rebase origin/master` in the worktree (the fetch
     updates refs every session shares: on `cannot lock ref`, another session is
@@ -292,6 +406,15 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     branch. Record the range-diff verdict in the ledger either way. A red gate
     here: fix it, run one panel round over the fix, then the full set again.
     Record `B = origin/master` and `H = HEAD` in the ledger.
+
+    **A rebase rewrites every branch SHA, so re-point the register.** Use the
+    same `git range-diff <old base>..<old head> origin/master..HEAD` to map each
+    old branch commit to its rebased one, then rewrite every `fix_commit` and
+    every commit-shaped `anchor` in `findings.json` to the rebased SHA (an
+    `accepted-by-rule` entry whose `fix_commit` is not on `B..final_head` fails
+    `attest`). Recompute an `anchor_hash` only if the range-diff shows its
+    lines changed, and then that entry's marks are reset as usual. Do this
+    before `attest`, which hashes the register.
 12. **Freeze.** `halt-check` first; if halted, write the ledger and return
     `blocked halted`. First re-run the protected-path check over the WHOLE
     approved diff:
@@ -331,9 +454,11 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
       listing the entry ids): any entry whose `severity` is missing or not one
       of `critical|important|minor`, any whose `disposition` is missing or not
       one of `open|fixed|refuted|deferred`, any entry still `open`, any entry
-      not marked `accepted` by BOTH reviewers, or any blocking entry
+      not marked `accepted` by BOTH reviewers (an `accepted-by-rule` counts
+      only as step 5 states), or any blocking entry
       (`severity` `critical` or `important`, or `blocking: true`) left
-      `deferred`.
+      `deferred`, or any `closes_by` entry whose named record is not there
+      (step 5).
 
     **A reviewer stand-in is the operator's decision, never yours.** When a
     rostered reviewer is unreachable, `attest --substitute SLOT=REVIEWER`
@@ -359,8 +484,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     `register-changed`.
 13. **PR and merge.** `halt-check` first; if halted, write the ledger and return
     `blocked halted` — never push, create a PR, or comment past this point while
-    halted. The push, the PR and the PR comment all go through the executor;
-    never run `git push` or `gh` yourself here. Each of the three refuses under
+    halted. The push, the PR, the PR comment and a CI rerun all go through the
+    executor; never run `git push` or `gh` yourself here. Each of them refuses under
     `--dry-run`, under HALT, and unless the lock names this run, and the two
     that publish text scan it first (a violation is `blocked sanitize-failed`).
 
@@ -382,8 +507,24 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
 
     Poll CI through the supervisor:
     `python scripts/agentflow run --name ci-wait --timeout 45 --cwd <worktree> -- gh pr checks <pr> --watch`.
-    CI red: one fix (`charge ci_fix`), then steps 9–12 again with a new
-    attestation. Then `python scripts/agentflow merge-gate --pr <pr>`.
+    CI red: read the failing job. If every failing test is one the diff
+    cannot reach (the `task-affected` map in `scripts/ci-steps` says the
+    changed paths do not reach its test binary, or it is `perf_bounds` and
+    the diff touches none of the code it times), it is a FLAKE:
+    `python scripts/agentflow ci-rerun --pr <pr>` once (no `ci_fix` charge;
+    the head and the attestation are unchanged), then `ci-wait` again. A
+    second failure of the same test is `blocked ci-flaky:<test>` plus a
+    discovery, never a `ci_fix`. Any other red is one fix (`charge ci_fix`),
+    then steps 9–12 again with a new attestation. Repeat CI runs on an
+    unchanged head are otherwise run only when the issue's own acceptance
+    asks for them, and only through `ci-rerun` (a green run is rerun whole,
+    a red one only its failed jobs; anything else is refused:
+    `ci-run-not-found`, `ci-run-not-complete`, `ci-run-conclusion-unknown`).
+    The executor allows ONE rerun of a red run per head: a second one is
+    `rerun-already-used`, which is `blocked ci-flaky:<test>`. Green reruns
+    are not limited, and each record carries the head's rerun `count`.
+    On #111 a flake cost the one `ci_fix`, a second full CI run and a block,
+    45 min with no defect. Then `python scripts/agentflow merge-gate --pr <pr>`.
     `merge-lane-busy` means another session has merged and its post-merge has
     not yet verified it: the base is about to move. Beat at least every 10
     minutes and poll `merge-gate` until that reason is gone — no budget

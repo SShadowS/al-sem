@@ -156,27 +156,33 @@ def _grammar(ctx: Ctx) -> str:
 
 
 def _verify_target_dir(ctx: Ctx) -> str:
-    """The build cache a gate running in a disposable verification worktree
-    writes to. The SOURCE tree is isolated; the build CACHE deliberately is
-    not.
+    """The build cache a gate running in the verification worktree
+    (`worktrees.verify_path`) writes to: by default `<root>/target-verify`,
+    its own, NEVER the main checkout's `target/`.
 
-    MEASURED, and the reason this is not an oversight for a tidier to fix:
-    `target/` in this checkout is 65G and `U:` has 55G free, and at post-merge
-    time the issue worktree is still on disk (cleanup runs later). A per-
-    worktree cache does not merely cost time, it does not FIT.
+    MEASURED. Test binaries bake `env!("CARGO_MANIFEST_DIR")` (175 uses in
+    `tests/` and `src/`), and cargo reuses a binary whose Rust sources did not
+    change, whatever path it was built at. So "cargo keys artifacts by
+    content", the reason this used to share the root's `target/`, is false for
+    exactly the binaries the gates run. Observed on server1 after #190's
+    post-merge (merge 81e858ac): `ci-steps all` and `cdo-gate` in the main
+    checkout ran binaries built in the deleted verify tree and failed (37 lib
+    failures in cdo-gate, e.g. `vendored ws-d2 fixture missing at
+    /work/al-sem-verify-merge-81e858acea85/tests/fixtures/ws-d2`); a single
+    test passed only after a recompile. A separate cache keeps verify-built
+    binaries out of the checkout's `target/`, and the verify tree's FIXED path
+    keeps every binary in this cache pointing at the tree it runs in.
 
-    Sharing it reintroduces nothing the isolation exists for: the dirt that
-    can green-light a bad revert is SOURCE dirt, which a fresh checkout
-    eliminates; cargo keys artifacts by content; and today both the
-    verification run and the revert rerun already share exactly this directory
-    because both run in the root. It also keeps the worktree source-only,
-    which is what makes `rm -rf` fast and unlocked.
+    The cost is one more cache: on server1 `target/` is 9.7 GB and `/work`
+    has 1.7 TB free, and its first verify build is cold. (History: the shared
+    cache was chosen on the Windows box, where `target/` was 65G and `U:` had
+    55G free.) The worktree stays source-only, so `rm -rf` stays fast.
 
     Precedence: an explicit `AGENTFLOW_VERIFY_TARGET_DIR` wins, then an
-    operator's inherited `CARGO_TARGET_DIR`, then the root's `target/`."""
+    operator's inherited `CARGO_TARGET_DIR`, then `<root>/target-verify`."""
     return (os.environ.get("AGENTFLOW_VERIFY_TARGET_DIR")
             or os.environ.get("CARGO_TARGET_DIR")
-            or str(ctx.paths.root / "target"))
+            or str(ctx.paths.root / "target-verify"))
 
 
 def _with_bash(cmd: list[str]) -> list[str]:
@@ -642,6 +648,35 @@ def cmd_clear_halt(args, ctx, gh, git):
                   "unresolved_incidents": [i["merge_sha"] for i in incidents.unresolved(ctx)]})
 
 
+def cmd_grant(args, ctx, gh, git):
+    """For the operator: raise one panel-round cap of the run holding issue
+    `--issue` by `--n`.
+
+    #190 needed a sixth spec round; the override happened outside the budget
+    file, so `status` and the retained budget under-counted that issue. Only
+    the run-id half of `require_operator` applies: the run being extended is
+    live by design. That half refuses a call CARRYING a run id; a process that
+    drops it is not stopped, so for `grant`, as for `unblock`, the prompt is
+    the guard. Hence the narrow key set: only `spec_rounds` and
+    `final_rounds` (`budget.GRANTABLE`). Fails closed on any other key, a
+    non-positive `--n`, or an issue no lease names."""
+    ctx.write_guard("grant budget")
+    try:
+        lock.require_human(ctx, "grant")
+    except lock.OperatorOnly as e:
+        return _emit({"granted": None, "refused": "operator-only", "detail": str(e)}, 1)
+    if args.key not in budget.GRANTABLE:
+        return _emit({"granted": None, "refused": "key-not-grantable", "detail": list(budget.GRANTABLE)}, 1)
+    if args.n < 1:
+        return _emit({"granted": None, "refused": "bad-n", "detail": args.n}, 1)
+    lk = next((x for x in lock.all_locks(ctx) if x.issue == args.issue), None)
+    if lk is None:
+        return _emit({"granted": None, "refused": "no-lease", "detail": args.issue}, 1)
+    cap = budget.grant(ctx, lk.run_id, args.key, args.n, args.by, args.issue)
+    return _emit({"granted": {"issue": args.issue, "run_id": lk.run_id, "key": args.key,
+                              "n": args.n, "cap": cap}})
+
+
 def cmd_resolve_incident(args, ctx, gh, git):
     """OPERATOR-ONLY. The human asserting that a recorded incident is closed."""
     try:
@@ -781,7 +816,115 @@ def _handoff_marks(marks: list) -> bool:
     return "accepted" in marks and all(m in ("accepted", "re-raised") for m in marks)
 
 
-def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted) -> list[str]:
+# `closes_by` (P2): an entry whose only remaining work is a record the flow
+# writes AFTER the panel. `gate` = an attested gate exit code, `attest` = an
+# attested SHA field, `ci-wait` = the `ci-wait` record on the final head.
+CLOSES_BY_KINDS = ("gate", "attest", "ci-wait")
+ATTEST_SHA_FIELDS = ("B", "H", "final_head")
+
+
+def _closes_by_ok(entry: dict, closes) -> bool:
+    """The entry's `closes_by` is well-formed, the entry is `fixed`, and (when
+    `closes` is given) the named record exists. Fails CLOSED: an unknown kind,
+    a missing key or a missing record is a failure, never a pass. `closes` is
+    None only on the handoff path, which merges nothing."""
+    cb = entry.get("closes_by")
+    if not isinstance(cb, dict) or cb.get("kind") not in CLOSES_BY_KINDS:
+        return False
+    if not isinstance(cb.get("key"), str) or not cb["key"] or entry.get("disposition") != "fixed":
+        return False
+    return closes is None or closes(cb["kind"], cb["key"])
+
+
+def _attest_closes(gates: dict):
+    """What `attest` itself can check: a gate key whose attested exit code is 0,
+    or an attested SHA field (already refused unless full). A `ci-wait` record
+    only exists after the push, so `merge-gate` checks that one
+    (`_ci_wait_unmet`); here only its key is checked."""
+    def closes(kind: str, key: str) -> bool:
+        if kind == "gate":
+            # Only the gates `attest` itself requires: any other key in the
+            # blob is the conductor's own word, which nothing else checks.
+            if key not in (*REQUIRED_GATE_KEYS, CDO_GATE_KEY):
+                return False
+            v = gates.get(key) if isinstance(gates, dict) else None
+            return isinstance(v, int) and not isinstance(v, bool) and v == 0
+        if kind == "attest":
+            return key in ATTEST_SHA_FIELDS
+        return kind == "ci-wait" and key == "ci-wait"
+    return closes
+
+
+def _ci_wait_argv(pr: int) -> list[str]:
+    """The command `issue.md` step 13 runs as `ci-wait`."""
+    return ["gh", "pr", "checks", str(pr), "--watch"]
+
+
+def _ci_wait_unmet(ctx: Ctx, entries, final_head: str, pr: int) -> list[str]:
+    """Ids of `closes_by: ci-wait` entries with no green `ci-wait` record on
+    `final_head` (the latest one this run wrote). Green means what post-merge
+    asks of a gate record: exit code 0, not timed out, supervised, and the
+    real command (`gh pr checks <pr> --watch`, compared the way
+    `identity._same_command` compares), so `run --name ci-wait -- true` is
+    not a CI verdict."""
+    if not isinstance(entries, list):
+        return []
+    ids = [str(e.get("id")) for e in entries
+           if isinstance(e, dict) and isinstance(e.get("closes_by"), dict)
+           and e["closes_by"].get("kind") == "ci-wait"]
+    rec = identity.latest_records(ctx).get("ci-wait") if ids else None
+    green = (isinstance(rec, dict) and rec.get("head") == final_head and rec.get("exit_code") == 0
+             and rec.get("timed_out") is False and rec.get("supervised") is True
+             and identity._same_command(rec.get("argv"), _ci_wait_argv(pr)))
+    return [] if green else ids
+
+
+# P3: the mark the NON-raising reviewer gets on a minor, prose-only fix.
+RULE_MARK = "accepted-by-rule"
+
+
+def _prose_fix_checker(git: Git, issue: int, tip: str, base: str):
+    """`entry -> bool`: its `fix_commit` is a full SHA on `base..tip` whose own
+    diff touches only gate-inert prose and the two evidence files. Any git
+    failure, an empty diff, or one other path is False (fail closed)."""
+    allowed = protect.evidence_files(issue)
+
+    def ok(entry: dict) -> bool:
+        fix = entry.get("fix_commit")
+        if not isinstance(fix, str) or not _FULL_SHA.match(fix):
+            return False
+        try:
+            if not git.is_ancestor(fix, tip) or git.is_ancestor(fix, base):
+                return False
+            files = git.changed_files(f"{fix}~1", fix)
+        except GitError:
+            return False
+        return bool(files) and all(protect.gate_inert(f) or f in allowed for f in files)
+    return ok
+
+
+def _rule_marks(marks: list, severity: str, blocking: bool, entry: dict, prose_fix, roster) -> list:
+    """`accepted-by-rule` counts as `accepted` only on a non-blocking `minor`
+    entry whose RAISER accepted it and whose fix is prose only (`prose_fix`).
+    The raiser is the entry's `source`, matched against `roster` -- the
+    reviewers actually filling the slots, so a stand-in's name under
+    `--substitute`. Its slot must be `accepted` and every other slot the rule
+    mark. A `source` that fills no slot (the code-review skill, a task
+    reviewer, a proof) gets no carve-out. Anywhere else the mark is left as it
+    is: an unknown word, so the entry fails."""
+    if RULE_MARK not in marks:
+        return marks
+    raiser = str(entry.get("source", "")).strip().lower()
+    slots = [i for i, r in enumerate(roster) if str(r).strip().lower() == raiser]
+    ok = (severity == "minor" and not blocking and len(slots) == 1
+          and marks[slots[0]] == "accepted"
+          and all(m == RULE_MARK for i, m in enumerate(marks) if i != slots[0])
+          and prose_fix is not None and prose_fix(entry))
+    return ["accepted"] * len(marks) if ok else marks
+
+
+def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted, closes=None,
+                       prose_fix=None) -> list[str]:
     """Ids of findings-register entries that block a merge: a `severity` or a
     `disposition` outside its closed vocabulary (missing included), an entry
     still `open`, one not `accepted` by BOTH reviewers (`marks_ok`; only the
@@ -813,6 +956,7 @@ def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted)
         disposition = e.get("disposition")
         severity = str(e.get("severity", "")).strip().lower()
         blocking = e.get("blocking") is True or severity in BLOCKING_SEVERITIES
+        marks = _rule_marks(marks, severity, blocking, e, prose_fix, roster)
         if severity not in SEVERITIES:
             bad.append(eid)  # missing or unknown: malformed, never "not blocking"
         elif disposition not in DISPOSITIONS:
@@ -822,6 +966,8 @@ def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted)
         elif not marks_ok(marks):
             bad.append(eid)
         elif blocking and disposition == "deferred":
+            bad.append(eid)
+        elif "closes_by" in e and not _closes_by_ok(e, closes):
             bad.append(eid)
     return bad
 
@@ -894,14 +1040,18 @@ def cmd_attest(args, ctx, gh, git):
     reviewers, problem = _substituted_roster(args.substitute)
     if problem:
         return _emit({"error": "bad-substitute", "detail": problem}, 1)
-    bad_entries = _register_failures(read_json(register), tuple(reviewers.values()))
+    entries = read_json(register)
+    gates = json.loads(args.gates)
+    bad_entries = _register_failures(entries, tuple(reviewers.values()), closes=_attest_closes(gates),
+                                     prose_fix=_prose_fix_checker(git, args.issue, args.final_head, args.B))
     if bad_entries:
         return _emit({"error": "register-not-converged", "entries": bad_entries,
                       "reviewers": reviewers}, 1)
+    closed_by = {str(e.get("id")): e["closes_by"] for e in entries if "closes_by" in e}
     att = mergeops.Attestation(issue=args.issue, B=args.B, H=args.H, final_head=args.final_head,
                                register_hash=mergeops.register_hash(register),
-                               gates=json.loads(args.gates), body_hash=args.body_hash,
-                               register_path=rel.as_posix(), reviewers=reviewers)
+                               gates=gates, body_hash=args.body_hash,
+                               register_path=rel.as_posix(), reviewers=reviewers, closed_by=closed_by)
     return _emit({"path": str(mergeops.write_attestation(ctx, att))})
 
 
@@ -953,6 +1103,12 @@ def _gate_reasons(ctx, gh, git, pr: int):
             try:
                 if mergeops.register_hash(registered) != att.register_hash:
                     reasons.append("register-changed")
+                else:
+                    # P2: a `closes_by: ci-wait` entry closes only on a green
+                    # `ci-wait` record for the attested final head.
+                    unmet = _ci_wait_unmet(ctx, read_json(registered), att.final_head, pr)
+                    if unmet:
+                        reasons.append("closes-by-unmet:" + ",".join(unmet))
             except OSError:
                 reasons.append("register-changed")
     workflow = _ci_workflow_name(ctx)
@@ -1133,7 +1289,7 @@ def cmd_post_merge(args, ctx, gh, git):
                       "verify_worktree_removed": True, "verified_by": "identity", "identity_refused": []})
     results: dict = {}
     timeouts: list[str] = []
-    verify_wt = worktrees.verify_path(ctx.paths.root, "merge", args.merge_sha)
+    verify_wt = worktrees.verify_path(ctx.paths.root)
     ok, revert, halt, restore_failed, original_exc = True, None, None, None, None
     tree_anomaly: list[str] = []
     tree_anomaly_total = 0
@@ -1293,13 +1449,13 @@ def cmd_post_merge(args, ctx, gh, git):
             # --worktree <path>` removes it once a human has looked.
             #
             # KNOWN LIMIT, stated rather than discovered later: the retained
-            # tree is NOT permanent. `worktrees.verify_path` is a pure
-            # function of the merge SHA, and `worktrees.create` destroys
-            # whatever sits at that path before checking out -- so a second
-            # post-merge of the SAME merge SHA reclaims it and the evidence is
-            # gone. That can only follow an operator clearing HALT, i.e.
-            # someone who has been told the tree is there; it is pinned at the
-            # unit level by `test_create_replaces_a_leftover_directory_...`.
+            # tree is NOT permanent. `worktrees.verify_path` is ONE fixed
+            # path (see its docstring for why), and `worktrees.create`
+            # destroys whatever sits there before checking out -- so the NEXT
+            # post-merge, of any merge, reclaims it and the evidence is gone.
+            # That can only follow an operator clearing HALT, i.e. someone
+            # who has been told the tree is there; it is pinned at the unit
+            # level by `test_create_replaces_a_leftover_directory_...`.
             removed = False if retain_verify_wt else worktrees.destroy(git, verify_wt)
         if killed is not None:
             # HALT, never revert: the same routing a dirty tree gets, and for
@@ -1466,6 +1622,51 @@ def cmd_push_branch(args, ctx, gh, git):
     if not g.push_branch(name, args.force_with_lease):
         raise Fail({"error": f"push of {name} was rejected"})
     return _emit({"pushed": name, "head": head})
+
+
+CI_WORKFLOW_FILE = "ci.yml"
+
+
+def cmd_ci_rerun(args, ctx, gh, git):
+    """Rerun the latest `ci.yml` run on the PR's head, without a new head.
+
+    A flake (a red test the diff cannot reach) used to cost a `ci_fix`: the
+    only way to run CI again was an evidence commit, a re-attest and a full
+    CI run (#111: 45 min, then blocked on the same flake). The head and the
+    attestation stay as they are; `merge-gate` reads the check rollup, which
+    GitHub updates in place on a rerun. Guarded like `push-branch` (dry-run,
+    HALT, fence). Fails CLOSED on anything but a completed run that concluded
+    `failure` (rerun only the failed jobs) or `success` (an acceptance that
+    asks for repeat runs: rerun all of it).
+
+    ONE flake rerun per head, in code: a red run is refused
+    (`rerun-already-used`) when this run's `gate-runs.jsonl` already holds a
+    `ci-rerun` of a red run on the same head. A prior record whose
+    `failed_only` is not literally `false` counts as one (fail closed). Green
+    reruns stay allowed (an acceptance's repeat runs) and every record carries
+    the head's running `count`."""
+    _guard_external_write(ctx, "rerun CI")
+    head = gh.pr_view(args.pr, "headRefOid").get("headRefOid")
+    if not isinstance(head, str) or not _FULL_SHA.match(head):
+        raise Fail({"error": "pr-head-unknown", "pr": args.pr})
+    latest = gh.latest_run(CI_WORKFLOW_FILE, head)
+    if not isinstance(latest, dict) or latest.get("headSha") != head:
+        raise Fail({"error": "ci-run-not-found", "head": head})
+    status, conclusion = latest.get("status"), latest.get("conclusion")
+    if status != "completed":
+        raise Fail({"error": "ci-run-not-complete", "status": status})
+    if conclusion not in ("failure", "success"):
+        raise Fail({"error": "ci-run-conclusion-unknown", "conclusion": conclusion})
+    failed_only = conclusion == "failure"
+    prior = [r for r in identity.all_records(ctx) if r["name"] == "ci-rerun" and r.get("head") == head]
+    if failed_only and any(r.get("failed_only") is not False for r in prior):
+        raise Fail({"error": "rerun-already-used", "head": head})
+    gh.rerun(latest["databaseId"], failed_only)
+    rec = identity.append_record(ctx, {
+        "name": "ci-rerun", "pr": args.pr, "head": head, "ci_run_id": latest["databaseId"],
+        "attempt": latest.get("attempt"), "conclusion": conclusion, "failed_only": failed_only,
+        "count": len(prior) + 1, "at": ctx.now()})
+    return _emit({"rerun": rec})
 
 
 def _refuse_unclaimed_cleanup(ctx, args) -> None:
@@ -1665,15 +1866,19 @@ def _handoff_record(args, ctx: Ctx, git: Git) -> dict:
         entries = json.loads(register)
     except ValueError:
         entries = None
-    bad = _register_failures(entries, tuple(reviewers.values()), marks_ok=_handoff_marks)
+    # `origin/master`, not the shared checkout's local `master`, which lags
+    # while another session's merge waits for its post-merge (issue.md step 1).
+    # No fallback: a failed merge-base is a GitError, and nothing is handed off.
+    fork = git.out("merge-base", "origin/master", sha)
+    bad = _register_failures(entries, tuple(reviewers.values()), marks_ok=_handoff_marks,
+                             prose_fix=_prose_fix_checker(git, args.issue, sha, fork))
     if bad:
         raise Fail({"error": "handoff-not-ready", "entries": bad, "reviewers": reviewers})
     # `reviewers` reaches the next attempt through `claim`. A record without
     # it (written before #141) was signed by the named roster.
     return {"from_run": ctx.run_id, "from_attempt": claim.get("attempt"), "branch": branch, "sha": sha,
             "body_hash": claim.get("body_hash"), "register_blob": register_blob,
-            "files": git.changed_files(git.out("merge-base", "master", sha), sha),
-            "reviewers": reviewers}
+            "files": git.changed_files(fork, sha), "reviewers": reviewers}
 
 
 def cmd_finish(args, ctx, gh, git):
@@ -1816,6 +2021,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = add("clear-halt", cmd_clear_halt); s.add_argument("--reason", required=True); s.add_argument("--by", required=True)
     s = add("resolve-incident", cmd_resolve_incident); s.add_argument("--merge-sha", required=True)
     s.add_argument("--by", required=True); s.add_argument("--note", default="")
+    s = add("grant", cmd_grant); s.add_argument("--issue", type=int, required=True)
+    s.add_argument("--key", required=True); s.add_argument("--n", type=int, required=True)
+    s.add_argument("--by", required=True)
     add("incidents", cmd_incidents)
     s = add("unblock", cmd_unblock); s.add_argument("issue", type=int)
     s = add("run", cmd_run); s.add_argument("--name", required=True); s.add_argument("--timeout", type=int, required=True); s.add_argument("--cwd"); s.add_argument("child", nargs=argparse.REMAINDER)
@@ -1840,6 +2048,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = add("pr-comment", cmd_pr_comment); s.add_argument("--pr", type=int, required=True); s.add_argument("--body-file", required=True)
     s = add("push-branch", cmd_push_branch); s.add_argument("--branch", required=True)
     s.add_argument("--force-with-lease", action="store_true"); s.add_argument("--cwd")
+    s = add("ci-rerun", cmd_ci_rerun); s.add_argument("--pr", type=int, required=True)
     s = add("file-discoveries", cmd_file_discoveries); s.add_argument("file"); s.add_argument("--session", required=True)
         # `--branch` is NOT `required=True`: a retained verification worktree is
     # detached and has none, and that path is the only supported way to

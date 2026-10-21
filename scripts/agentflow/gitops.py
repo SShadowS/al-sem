@@ -176,7 +176,10 @@ class Git:
         self._run("fetch", "-q", remote)
 
     def changed_files(self, a: str, b: str) -> list[str]:
-        s = self.out("diff", "--name-only", f"{a}..{b}")
+        # --no-renames: with rename detection a `git mv src/x.rs docs/x.md`
+        # lists only the NEW path, so a moved code file read as prose to the
+        # freeze check, the protected-path check and the P3 prose check.
+        s = self.out("diff", "--name-only", "--no-renames", f"{a}..{b}")
         return [l for l in s.splitlines() if l]
 
     def diff(self, a: str, b: str) -> str:
