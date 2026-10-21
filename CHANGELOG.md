@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/issue` (flow speed-ups, P4): a probe reproduces the acceptance's own invocation (the
+  same `ci-steps` step, parallelism, profile and core count). When the acceptance names
+  the CI runner, step 3 may push one throwaway probe commit to a draft PR opened there,
+  and the Design says which acceptance items the measured hardware can meet before the
+  spec panel sees it. On #190 a serial probe of a parallel CI test, and runner variance
+  found after the design, cost one spec round, two amendments and ~1 h.
 - `/issue` (flow speed-ups, P5): every "if the measurement shows X, go back to design"
   rule in a spec or bounded design states its fallback, which the spec panel reviews with
   it. Firing it then needs no new round and no operator decision; the operator is asked

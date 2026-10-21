@@ -79,6 +79,20 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    data with read-only commands (`aldump`, `alsem`, a fixture, `CDO_WS` if named).
    Record `probe | result | evidence` rows in the ledger. A falsified assumption
    shapes the spec and is a candidate discovery.
+
+   **Probe in the acceptance's own shape.** A probe reproduces the
+   acceptance's own invocation: the same script step (`scripts/ci-steps
+   <step>`), the same parallelism and profile, pinned to the same core count
+   when the target is CI. When the acceptance names the CI runner, this step
+   may push ONE throwaway probe commit to a draft PR to read the runner's
+   numbers: open the draft here (`push-branch`, then `pr-create --draft` as in
+   step 9) instead of in step 9, record the runner's numbers as probe rows,
+   then `git revert` the probe commit so it is not in the approved diff. A
+   probe charges no `ci_fix`. Then state in the Design which acceptance items
+   are feasible on the measured hardware and which are not, BEFORE the spec
+   panel sees it. On #190 a serial probe of a test CI runs in parallel, and
+   runner variance found only after the design, cost one spec round, two
+   amendments and ~1 h.
 4. **Spec.** Write `docs/superpowers/specs/<today>-issue-N-<slug>-design.md` with
    sections: Goal, Non-goals, Acceptance matrix (each Acceptance item →
    the test or measurement that proves it, or "not deliverable, because"),
@@ -198,7 +212,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    in step 11. Running the full set before the panel only verifies a head that
    is never attested: on #107 it ran 7 times for one issue.
 
-   **Open a DRAFT PR now, so GitHub CI runs during the final panel.** After the
+   **Open a DRAFT PR now, so GitHub CI runs during the final panel** (unless
+   step 3's runner probe already opened it; then just `push-branch`). After the
    first green task gate here: `push-branch` (step 13's command), then
    `python scripts/agentflow pr-create --draft --title "<issue title> (#N)" --body-file <a short "final panel in progress" body> --head <branch>`.
    CI (Linux, CI's exact bar) then runs while the panel reviews, and again on

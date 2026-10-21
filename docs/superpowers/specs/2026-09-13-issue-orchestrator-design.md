@@ -720,7 +720,12 @@ render of the ledger becomes the PR body.
    (the battleplan issues list them under Dependencies, e.g. "SymbolReference.json
    carries Scope per symbol") is checked against real data, and the result goes in the
    ledger. A falsified dependency does not block; it shapes the spec and is a
-   candidate discovery.
+   candidate discovery. A probe runs in the acceptance's own shape (the same
+   `ci-steps` step, parallelism, profile and, for a CI target, core count). When
+   the acceptance names the CI runner, one throwaway probe commit may go to a draft
+   PR opened here (reverted afterwards, no `ci_fix` charge), and the Design states
+   which acceptance items the measured hardware can meet before the spec panel
+   sees it (added 2026-10-21, after #190).
 4. **Spec.** `docs/superpowers/specs/YYYY-MM-DD-issue-N-<slug>-design.md`, with three
    required sections: "Acceptance matrix" (each Acceptance item → the test or
    measurement that proves it, or "not deliverable, because"), "False-positive and
