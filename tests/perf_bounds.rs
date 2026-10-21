@@ -443,8 +443,9 @@ mod release_checks {
     // is runner-dependent: a 3x regression FAILS on a runner of the EPYC
     // 7763's speed and PASSES on the faster D3 runner and on the dev machine
     // (D2: 3x min 142-153ms; D3b local: 156ms). The two runs do not establish
-    // a robust portable bound (175ms would satisfy both measured runs with
-    // ~1.7% margin), so the bound stays 230ms; the follow-up is a
+    // a robust portable bound (one in 173-180ms — over 2x the slow run's 1x,
+    // under the fast run's 3x — fits both, with ~1-3% margin), so the bound
+    // stays 230ms; the follow-up is a
     // machine-independent ratio gate (this solve timed against a reference
     // workload in the same process, as `COMPUTE_ALL_SCALING_FACTOR` does).
     const COMPUTE_SUMMARIES_V2_BOUND: Duration = Duration::from_millis(230); // 3x ~76ms dev baseline (2026-07); runner data under the lock above (#190)

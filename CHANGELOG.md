@@ -364,7 +364,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the two runs differed ~1.4x (the first run's CPU was not recorded). So the 230 ms bound
   catches a 3x slowdown only on runners as slow as the EPYC 7763; on the faster runner and
   on the dev machine an exact 3x passes. The two runs do not establish a robust portable
-  bound (175 ms would satisfy both with ~1.7% margin). A speed-independent ratio gate is
+  bound (one in 173-180 ms, over 2x the slow run's 1x and under the fast run's 3x, fits both
+  with ~1-3% margin). A speed-independent ratio gate is
   the follow-up.
 - **The lowerer reads two new shapes of the `4d75846c` grammar** (see Changed;
   `crates/al-syntax/src/lower/mod.rs`):
