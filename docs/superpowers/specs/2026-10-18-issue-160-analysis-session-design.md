@@ -8,8 +8,8 @@ acceptance, and the findings each step's child spec must resolve. Implementation
 lives in child specs, one per delivery slice:
 
 - `2026-10-18-issue-160-steps-0-2-design.md` — steps 0, 1, 1b, 2 (written).
-- steps 3–4, 7a–7b, 10–11, 5–6, 8–9, 12, 13 — each written when its predecessor merges,
-  against the code as it then is.
+- steps 3–4, 7a–7b, 10 + 11a (one child spec, Decision 57), 11b, 5–6, 8–9, 12, 13 — each
+  written when its predecessor merges, against the code as it then is.
 
 Base: master `1e54624a`, worktree `U:/Git/al-sem-issue-160-a2` (head `5eca5bb5`: no
 `src/`, `tests/` or `crates/` change since `1e54624a`; the first attempt's worktree,
@@ -229,12 +229,12 @@ fix for #161.
 The struct above is the target; what step 4 built differs as follows:
 - **M1, the carrier.** `CombinedGraph` carries both payloads (`rel.graph`: Primary in
   `edges_by_from` / `edges_from_order` / `uncertainty_edges` / `nodes`, Cone in
-  `typed_edges`). Separate `typed` / `combined` / `from_order` vectors move to step 11,
-  with the `RoutineIx` keys.
+  `typed_edges`). Separate `typed` / `combined` / `from_order` vectors move to step 11
+  (11b since 2026-10-21, Decision 57), with the `RoutineIx` keys.
 - **M2, the accessors.** `Transfer` is two accessors, `rel.cone()` and `rel.primary()`,
   plus the cone's `&[TypedEdge]` parameter, not an enum value. The relation's fields are
   private, so every reader goes through `cone()`, `primary()`, `scc()` or
-  `dependency_uncertainty()`. The guarantee is one-directional until step 11: the cone
+  `dependency_uncertainty()`. The guarantee is one-directional until step 11b: the cone
   cannot read the Primary payload, but `primary()` returns the whole carrier.
 - **M3, the Cone pair deferred.** The Cone adjacency and SCC stay inside the cone. A
   tradeoff: `policy check` builds the pair twice (the det cone and its RAW build's cone),
@@ -252,7 +252,7 @@ The struct above is the target; what step 4 built differs as follows:
 - **M6, no copies.** No `events`, `upgraded_bindings` or `external_targets` in the
   relation: readers use `model.events.graph` and `model.calls`, the same bytes; the base's
   event-graph clone is deleted instead.
-- **M7, no `role`.** `Role` is step 8 and `RoutineIx` step 11; the halves split on
+- **M7, no `role`.** `Role` is step 8 and `RoutineIx` step 11 (11a; the re-keying 11b); the halves split on
   `dep_routine_ids`, keyed by string id (Decision 25).
 - **M8, no `dependency_calls` yet.** Its one reader is step 6's call-site ledger; holding
   the raw dependency `CallEdge`s from step 4 would retain them with no reader. Step 6 adds
@@ -378,7 +378,7 @@ impl View {
    is released, off policy's command-local RAW build (child spec §4.4.4; round 9);
    (9) every job's
    `compute` (a `Doc` borrows nothing), then `caps`, `model`, `rel`, `l4`, `identities`
-   released; (10) serialization, one job at a time. Before step 11 every cell keys routines
+   released; (10) serialization, one job at a time. Before step 11b every cell keys routines
    by the model's string id (Decision 25). Before step 6, items 5–6 do not exist: digest's
    and prove's entries come from today's composed snapshot, built at item 9 AFTER `det`
    is released (child spec §4.4; G-2's step-2 half: the snapshot never meets `det`).
@@ -524,6 +524,11 @@ Each child spec names which of these its step touches and how it proves them.
   as the timer's (step 2's digest bound). A sub-phase bound is written only when
   the step 0 median of that timer ≥ 2 × its band; otherwise the step is re-labelled
   non-speed before its spec is written (finding G-5). Peak: both numbers of §5.12.
+  (Amended 2026-10-21, Decision 58.) A non-speed step, one with no wall or peak bound
+  (11a, 11b, 5, 8, 13), runs no bench (`bench_ab.py`); its CDO evidence is `cdo-gate` plus
+  the identity check (SARIF at `--scope primary` and `--scope all`, the `aldump` histogram
+  SHA). In a speed step, a bench part that is "reported, no bound" runs 3 rounds (the
+  minimum for a band) of only the commands whose code the step touches.
 - **I7 Order is recorded, not assumed.** `rel.typed` concatenation, `from_order`, row
   order, dependency-body order, Rayon indexed collect.
 - **I8 Serialized inventory is primary-only; behaviour is primary subjects; in-memory
@@ -563,7 +568,7 @@ reopens them without new evidence. Numbers are stable across rounds.
 22. Every peak bound is relative (parent + 3 %); 2.85 GB reported.
 23. The ordering cell fills right after the pass; subjects = reportable roots carrying an ingredient.
 24. One copy of every inherited fact (`Arc<[CapabilityFact]>` per subject; one `ViewTree`).
-25. Interim key = the model's string id until step 11.
+25. Interim key = the model's string id until step 11 (the re-keying is 11b since 2026-10-21, Decision 57).
 26. E16 has two bounds with stated constants (4 GB, 0.8).
 27. `ResolvedProgram` splits into `ProgramMeta` (lives) and `ProgramBody` (released at today's drop point); `model`, `rel`, `caps`, `identities` released after the last compute.
 28. The fingerprint query/human path filters by role itself (`fingerprint_query.rs:659`, `:713-730`).
@@ -583,7 +588,7 @@ reopens them without new evidence. Numbers are stable across rounds.
 42. One `pd` arena, in view identity, read only by the effects cells, released at item 6 — **re-scoped by G-1 (the resolved own entries) and G-4 (lands at step 6)**; the step 6 child spec closes it.
 43. `rel.typed` keeps today's concatenation order; sorting is the adjacency's and the serializer's job.
 44. Every wall bound is a saving against a parent-commit sub-phase median; the one absolute line is `bfs` ≤ 1 s — **the bfs timer is split into walk and fold at step 0 (G-3); 7a's bound reads the walk half** (child spec of 7a).
-45. Step 10's bound reads the `b3.adapter.join` sub-span; step 11 carries `by_decl`.
+45. Step 10's bound reads the `b3.adapter.join` sub-span; step 11 carries `by_decl`. (Second half withdrawn 2026-10-21 by Decision 58: step 11 deletes the `by_decl` sub-phase, so I6 reads its saving off the analyze wall minus that wall's band, which makes the bound vacuous; step 11 is non-speed, as step 0 recommends, `docs/measurements/2026-10-18-issue-160-step0.md:98-102`.)
 46. `analysisGaps` is its own key class (reachability, both directions).
 47. Policy's rule engine is an item 8 projection off `det`; `l4` released at item 9. From step 6 on. Before step 6 it runs after `det` and `l4` are released, off the command-local `SUMMARIES | RAW_INHERITED_FACTS` build (Decision 50; child spec §4.4.4; round 9).
 48. The superset-mask parity test compares the whole `DetectorOutput` — **all four fields, `d1_cohort_index` included** (R6-2; `registry.rs:255-271`).
@@ -595,15 +600,22 @@ reopens them without new evidence. Numbers are stable across rounds.
 54. **(round 6) Per-timer noise bands, and the "≥ 2 × band" rule before a sub-phase bound is written** (I6; G-5). Step 0 records the bands.
 55. **(round 6) `edges`/`dependency_body_edges` are named for what they hold, and the concatenation order is kept because the `graph` projection's tie rule is order-sensitive** (R6-5; `project.rs:277-291`).
 56. **(round 6) At step 2, digest and prove compose their snapshot AFTER `det` is released**, so the snapshot never meets `det` (G-2, step-2 half; child spec §4.4). Amended in Round 13: `l4` (bundle, SCC) does overlap the composition, since the bundle is read after it (`DbTempStates`); that overlap is new for digest and prove, is sized by the `l4` bucket and is bounded by the step-2 peak bound (child spec §4.4.4).
+57. **(2026-10-21, owner decision on Fable's R1, `.agent/runs/20261021-185406-413c0c/fable-160-speedup.md`) Step 11 splits into 11a and 11b, and steps 10 and 11a land as ONE claim**: one child spec, one panel, one bench, one PR. 11a is identity, the J2/J5 joins and the collision census, output-neutral; 11b is the re-keying (the `ExecRelation` carrier split M1/M2, per-`RoutineIx` stores) and the one collided-id rule (Decision 6). The split is the step-11 pre-draft's amendment 11-A1 (`/work/bench/160-11/draft-step11-design.md` §4.5). Reason: 10 and 11a edit the same seam, `adapter()` / `Converter` (`program_calls.rs:1011-1300`), and 11a must rebase on 10 anyway; one claim removes the coordination instead of managing it, and saves one architectural flow overhead (≈ 1 h 50: spec panel ≈ 35 min, final panel ≈ 45, full set ≈ 12, CI and merge ≈ 15, a bench's fixed part ≈ 8). The two deletions stay proved by separate gates that do not overlap (10: `losses() == []`; 11a: the J2/J5 oracles). The boundary the two pre-drafts agreed holds inside the claim (`/work/bench/160-10/draft-step10-design.md` §11): step 10 mints `FileIx` (one table, keyed `(AppRef, virtual_path)`) and keeps `caller_mismatch`; 11a reuses that `FileIx`, mints no second file table, and replaces `caller_mismatch` with its `RowNodes`. 11b stays its own claim: 207 `edges_by_from` sites in 40 files make a large, mechanical diff.
+58. **(2026-10-21, owner decision on Fable's R3, same file) Non-speed steps run no bench; "reported, no bound" bench parts run 3 rounds of the touched commands only** (I6). The non-speed steps are 11a/11b (I6's deleted-sub-phase rule makes the `by_decl` bound vacuous, pre-draft amendment 11-A2; Decision 45 amended), 5, 8 and 13 (their rows carry no wall or peak bound, and none is in §5.12's peak list). Each keeps `cdo-gate` and the CDO identity check (SARIF at both scopes, histogram SHA); where a row's own acceptance expects a move (step 5's coverage, 11b's collision groups), the difference is read as that row already says. A reported number is not a bound, so no acceptance changes. Saves ≈ 15 min per non-speed step and ≈ 7 min per speed step (7a's part 3 was 923 s, `policy check` alone 85 s a run).
 
 ## 9. Delivery order
 
-Order: **0, 1, 1b, 2, 3, 4, 7a, 7b, 10, 11, 5, 6, 8, 9, 12, 13.** Byte-neutral steps
-first; identity work (10, 11) before the semantic steps (5, 6) so cross-app fingerprint
+Order: **0, 1, 1b, 2, 3, 4, 7a, 7b, 10 + 11a, 11b, 5, 6, 8, 9, 12, 13.** Byte-neutral steps
+first; identity work (10, 11a, 11b) before the semantic steps (5, 6) so cross-app fingerprint
 lands with step 10's measured headroom. Step numbers are stable names. Every step runs the
 task gate (`scripts/ci-steps task`) and `cargo test -p al-sem --lib`; steps 4–9 also run
 `scripts/cdo-gate` and `cdo-measure` before merge. A bounded step measures under §5.12 and
-I6 and fails on a miss. Each step is its own child issue and merges alone.
+I6 and fails on a miss. Each step is its own child issue and merges alone, with one
+exception: steps 10 and 11a are one claim, one child spec, one panel, one bench and one PR
+(amended 2026-10-21, Decision 57). Non-speed steps (11a, 11b, 5, 8, 13) run no bench, only
+`cdo-gate` and the CDO identity check (SARIF at both scopes, histogram SHA); a speed step's
+"reported, no bound" bench parts run 3 rounds of only the commands it touches (amended
+2026-10-21, Decision 58, I6).
 
 Steps 0, 1, 1b, 2 are specified in full in the child spec; the rows below are their
 contract. Later steps are contract only.
@@ -618,21 +630,22 @@ contract. Later steps are contract only.
 | **4** `ExecRelation` | `Transfer::{Cone, Primary}`, two payloads, eager adjacency/SCC; base, context, r3a5, L4 read §5.5's table; snapshot on `LegacyCut`; dependency uncertainty edges kept | byte-identical everywhere; CDO detector baseline identical; counters: `build_combined_graph` 1, `graph_scc` 2 per view (+ snapshot's own until step 6). Amended at step 4 (child spec §9): **M4**, the counters read as the child spec §4.9 rule: `bcg` = one per constructed relation + one per legacy-cut graph; `scc` = one per constructed relation + one per cone composition (query 1, policy 3, `diff` without `--strict` 1 per side; not "2 per view"). **M9**, "snapshot on `LegacyCut`" is a name, not a type: the snapshot path is unchanged and its docs call its graph the legacy cut until step 6 deletes it | dependency-publisher fixture (span, temp proof, reverse callers unchanged; discrimination "Primary callers only"); two-caller `from_order` fixture (reverse it; d17's sample flips) | none |
 | **7a** Membership: one inherited set per SCC | `DerivedOnly` reads one set per Cone-SCC; old path test-only until CDO passes | goldens unchanged; `bfs.walk` ≤ 1 s on CDO (absolute floor; expected ≈ 0) **and** cone saving ≥ parent `bfs.walk` median − 1 s − band(bfs.walk); retained ≤ 98 MB. The fold half (`bfs.fold`, G-3) is NOT in 7a's bound unless `fold_row` moves into 7a; the child spec states which | derived-row oracle on r0, gap, r4, CDO; scaling fixtures (chain, fan-out, 479-SCC, guard-heavy, producer blow-up); stop rule from step 0's SCC distribution | none |
 | **7b** Membership: closed-class sets, fold memo | `FactKeyInterner`, hash-consed `SetArena`, closed/open split, per-`SetId` memo, `fold_row` | goldens unchanged; (scan + fold + set-building) saving ≥ X − band and cone saving ≥ X − band, X re-derived at step 0 from the cone/own split and written down before code; X ≥ 2 × band or the step is dropped | 7a's oracle; a shared-callee-set fixture where the census counts one fold (disable the memo → two) | none |
-| **10** `SiteIx`, delete the span join | `SiteIx` on edges, call sites, ops; join by key with the span as a debug assertion; then delete J1, `texts`, J4 | `losses() == []` both universes on r0 + CDO; `edge_order_is_call_sites_then_triggers` green; attach saving ≥ parent `b3.adapter.join` − band(join) (only if join's step 0 median ≥ 2 × band, else a non-speed step); both peaks ≤ parent + band | debug span assertion on the whole suite before deletion; mis-pair one dependency site → the loss gate fails | none |
-| **11** `RoutineIx` | dependency rows included; string ids a projection; J2, J5 deleted; the collided-id rule | byte-identical; id-pattern counts per golden dir unchanged; CDO collision delta reported; attach saving ≥ parent `by_decl` − band (same ≥ 2 × band rule). **The `pd` arena is NOT this step's** (G-4) | hand-stated collision fixture asserting today's three rules on old code and the one rule on new code (make it first-wins → the union assertion fails) | none |
-| **5** One coverage policy | §6.3 in context, base, r3a5, L4, both universes, dependency uncertainty edges included | context == snapshot coverage per root on r0; on the dependency fixture the context's fold checked against its own `Cone` relation (the snapshot is still cut until 6); CDO triage of every span/coverage reader and of `policy check` with the owner's policy; > 30 % FP = opt-in or root-cause fix | ambiguous-call fixture (`partial`, span `coverage_complete=false`; remove the fold → fails); policy fixture with both `on_unknown` outcomes hand-stated | r3a5, cli-b digest/prove, cli-c-events, cli-c-policy, r4, cli-a, gate, `cli_d35_unknown_commit`; `cdo-measure` per detector |
+| **10** `SiteIx`, delete the span join | `SiteIx` on edges, call sites, ops; join by key with the span as a debug assertion; then delete J1, `texts`, J4. Mints `FileIx` (one table) and keeps `caller_mismatch` for 11a. **One claim with 11a** (Decision 57) | `losses() == []` both universes on r0 + CDO; `edge_order_is_call_sites_then_triggers` green; attach saving ≥ parent `b3.adapter.join` − band(join) (only if join's step 0 median ≥ 2 × band, else a non-speed step); both peaks ≤ parent + band | debug span assertion on the whole suite before deletion; mis-pair one dependency site → the loss gate fails | none |
+| **11a** `RoutineIx`: identity, joins, census (amended 2026-10-21, Decision 57: row 11 split, pre-draft 11-A1; **one claim with 10**) | `RoutineIx`, dependency rows included; `RowNodes` at assembly (replaces `caller_mismatch`); J2, J5 deleted; reuses step 10's `FileIx`; the collision census; output-neutral, no rule change | byte-identical. Non-speed (Decision 58): no bench, no bound. **The `pd` arena is NOT this step's** (G-4) | the hand-stated collision fixture written against today's three rules (passes on 11a unchanged); J2/J5 old-vs-new oracles | none |
+| **11b** `RoutineIx`: re-keying and the one rule (amended 2026-10-21, Decision 57) | string ids a projection; the `ExecRelation` carrier split (M1, M2) and per-`RoutineIx` stores; the collided-id rule (union merge) | byte-identical; id-pattern counts per golden dir unchanged; CDO collision delta reported. Non-speed (Decision 58): no bench, no bound | the collision fixture flipped to the one rule on new code (make it first-wins → the union assertion fails) | none |
+| **5** One coverage policy | §6.3 in context, base, r3a5, L4, both universes, dependency uncertainty edges included | context == snapshot coverage per root on r0; on the dependency fixture the context's fold checked against its own `Cone` relation (the snapshot is still cut until 6); CDO triage of every span/coverage reader and of `policy check` with the owner's policy; > 30 % FP = opt-in or root-cause fix. Non-speed (Decision 58): no bench | ambiguous-call fixture (`partial`, span `coverage_complete=false`; remove the fold → fails); policy fixture with both `on_unknown` outcomes hand-stated | r3a5, cli-b digest/prove, cli-c-events, cli-c-policy, r4, cli-a, gate, `cli_d35_unknown_commit`; `cdo-measure` per detector |
 | **6** One cone graph + scoped witness pass | snapshot on `Transfer::Cone`; `WitnessScope`; the `pd` arena in view identity (moved here from 11) and the resolved-entries decision (G-1); effects cells; `identities` cell; per-job trees with the retention decision (G-2); `RAW_INHERITED_FACTS`, `ConeOutput::Both`, `inherited_raw` deleted; `LegacyCut` and `build_r3a3_source_only_base` deleted; `unfetched-dependency` ledger rule; R6-4's serialization filter and link rule | #161 acceptance; context == snapshot coverage on the dependency fixture; CDO digest wall and both peaks ≤ parent + band; same for analyze with d47/d49/d51; counters at the final row (1 per view, `graph_scc` 2, `pd_solve` 1 or stated 2, witness pass 1 or 0); no raw `Vec` for any dependency subject; CDO `policy check` moves nothing; stop rule from step 0 (iv)'s three timings plus the solve | `mk.py` test (revert to cut → fails); scope discrimination; scoped-equals-unscoped oracle (digest every `c.diff` root, prove, fingerprint, ordering) with the whole-routine-gate discrimination; ordering root-set oracle with the `Hyperlink` and rid-less fixtures; policy facts oracle; `--diff` root resolution byte-equal; no-dependency parity | cross-app digest expectations in `cli_digest_query_dependencies`; `r4_cross_app_program` if it covers d47/d49/d51; CDO deltas triaged |
-| **8** Roles, schema 4, preflight | `Role` with the `dep:` filter beside it; live `is_dependency_role` with reachability; key classes; schema 4; `apps[]` by role; preflight | every cli-b diff against an allow-list (header, `apps[]` roles, gap role annotation; anything else fails) | reachable-only gap test; mixed-universe refusal; shards with a dependency `apps[0]`; one test per key class, gaps in both directions | every cli-b file; `cli_p1_inventory`; `cli_workspace_fingerprint_closure`; the key list at `tests/differential.rs:1758-1799` |
+| **8** Roles, schema 4, preflight | `Role` with the `dep:` filter beside it; live `is_dependency_role` with reachability; key classes; schema 4; `apps[]` by role; preflight | every cli-b diff against an allow-list (header, `apps[]` roles, gap role annotation; anything else fails). Non-speed (Decision 58): no bench | reachable-only gap test; mixed-universe refusal; shards with a dependency `apps[0]`; one test per key class, gaps in both directions | every cli-b file; `cli_p1_inventory`; `cli_workspace_fingerprint_closure`; the key list at `tests/differential.rs:1758-1799` |
 | **9** fingerprint, prove, diff cross-app | the cross-app `View`; `--single-app`; three stated output moves (diagnostics source, dependency shards, `unresolved_cone` caps) | fixtures; no-dependency parity; CDO fingerprint time/size reported; both peaks ≤ parent cross-app analyze + band; cell census; a miss walks §5.12's ladder | fixtures (a) two-hop not PROVEN, (a') one-hop with ledger + gap, (b) inherited fact through a dependency, (c) dependency-mediated `capability-gained`, (d) query path by role; one discrimination per filter | cli-b header `cross-app`; contents unchanged |
 | **12** `alsem batch` | plan; one view per (workspace, universe, `--no-roots-config`); fixed job order; one pass at the union; `JobOutput` writes; §5.11's batch rules; no `--threads` | per job: stdout, stderr lines, exit, files equal standalone; one build/`det`/cone/pass per view; the `Arc` census; CDO analyze+digest+fingerprint batch < standalone analyze + digest; each peak ≤ 1.15 × the largest standalone; four workers under E16 | contract test over every command; split traces per job; separate passes → counter 2 fails. Early batch after step 2: ≤ 55 s, two views, refuses `policy check` (Decision 50) | none (new family) |
-| **13** Incremental host | generation-checked cancellable L4 work off `on_swap` (`src/lsp/updater.rs:1206-1229`); invalidation to reverse reachability, SCC, demand, config files; watcher blindness fixed (`src/watcher.rs:29-42`); salsa adopt or remove | incremental == fresh after body, signature, edge-removal, SCC split/merge, dependency edits | — | none |
+| **13** Incremental host | generation-checked cancellable L4 work off `on_swap` (`src/lsp/updater.rs:1206-1229`); invalidation to reverse reachability, SCC, demand, config files; watcher blindness fixed (`src/watcher.rs:29-42`); salsa adopt or remove | incremental == fresh after body, signature, edge-removal, SCC split/merge, dependency edits. Non-speed (Decision 58): no bench | — | none |
 
 ## 10. Acceptance matrix for the epic
 
 | # | Claim | Evidence | Step |
 |---|---|---|---|
 | E1 | One context, cone, combined graph, solve, `pd_solve`, witness pass per view | step 0 counters, one discrimination each; step 2 states the remaining duplicates; step 6 the final row | 2, 6, 12 |
-| E2 | Byte-neutral steps move no golden | 8 targets + lib | 0–4, 7a, 7b, 10, 11 |
+| E2 | Byte-neutral steps move no golden | 8 targets + lib | 0–4, 7a, 7b, 10, 11a, 11b |
 | E3 | #161 closed | `mk.py` test + coverage equality | 5, 6 |
 | E4 | One coverage policy, every reader listed | fixtures: span, fanout, d35, d45, policy gate | 5 |
 | E5 | Inputs frozen, one edit per input class | disk-edit-after-read tests | 1 |
@@ -641,11 +654,11 @@ contract. Later steps are contract only.
 | E8 | Mixed universes/schemas refused | preflight test | 8 |
 | E9 | No-dependency parity for every command | parity tests | 6, 9 |
 | E10 | Cone faster, same rows, each sub-phase bounded on its own timer and band | oracle; `bfs.walk` ≤ 1 s and cone saving (7a); X-bounds (7b) | 7a, 7b |
-| E11 | Adapter gone, no losses, collided ids under one rule | `losses() == []`; collision fixture | 10, 11 |
+| E11 | Adapter gone, no losses, collided ids under one rule | `losses() == []`; collision fixture | 10, 11a, 11b |
 | E12 | Memory within budget; no dependency subject materialized; `det` never carries a raw fact | both peaks every retention step; census | 1b, 2, 6, 9, 10, 12 |
 | E13 | Batch equals standalone | contract test | 12 |
 | E14 | CDO ratchets unchanged | `scripts/cdo-gate` | every non-docs step |
-| E15 | Measured speed is accepted, not reported | step 2 digest saving ≥ parent `digest.tx_context_map` median − its band − band(digest wall) (the saving is a difference of whole-command walls); 7a/7b/10/11 per I6; 6 within parent; 12 batch < analyze + digest | 2, 6, 7a, 7b, 10, 11, 12 |
+| E15 | Measured speed is accepted, not reported | step 2 digest saving ≥ parent `digest.tx_context_map` median − its band − band(digest wall) (the saving is a difference of whole-command walls); 7a/7b/10 per I6 (11 is non-speed since 2026-10-21, Decision 58); 6 within parent; 12 batch < analyze + digest | 2, 6, 7a, 7b, 10, 12 |
 | E16 | Four workers fit the machine | summed peak ≤ RAM − 4 GB; throughput bounds | 12 |
 | E17 | Transfer rules reproduce today's adjacency per field | §5.5 table; publisher fixture | 4 |
 | E18 | One `pd` arena, never alive during a run; one write-failure exit code | step 6 census; closed-pipe test | 1, 6 |
