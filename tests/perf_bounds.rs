@@ -419,12 +419,19 @@ mod release_checks {
     // never reaches the L4 solve — runs 39611462366 and 39612982728, medians
     // 231.8 / 243.0ms against the 230ms bound, while the minima were 147.3 /
     // 151.6ms. The cause was sibling tests running in parallel plus the
-    // median; the gate now holds [`TIMING_LOCK`] and judges [`min_of`]. On
-    // the dev machine it trips at ~4.7x its min (230 / ~48ms, #190's lock and
-    // D2 runs; ~44ms in P5's earlier serial runs), so a 3x regression passes
-    // there (D2: a 3x solve measured min 142-153ms); on the CI runner the
-    // trip factor is measured in #190's D3.
-    const COMPUTE_SUMMARIES_V2_BOUND: Duration = Duration::from_millis(230); // 3x ~76ms measured baseline (re-measured post-A3-store 2026-07-24, unchanged)
+    // median; the gate now holds [`TIMING_LOCK`] and judges [`min_of`].
+    //
+    // 2026-10-21 (#190): bound tightened 230 -> 150ms, CALIBRATED TO THE CI
+    // RUNNER UNDER THE LOCK, not to the dev machine. #190's D3 probe (run
+    // 39625785855) timed a 3x solve on the runner under the lock: min
+    // 179.87ms (samples 179.9-186.3ms), so the runner's 1x min is ~60ms
+    // (dev machine 47-49ms). At 150ms that is 2.5x headroom over the runner's
+    // 1x cost, and a 3x regression fails there by ~20%. Scope: a 3x
+    // regression fails on a runner of D3/D3b's speed (CPU `<D3B_CPU>`). 150ms
+    // rejects 3x only while the true 1x cost is above 50ms, so a runner ~1.2x
+    // faster than that, or the dev machine (D2: a 3x solve measured min
+    // 142-153ms), may let an exact 3x pass.
+    const COMPUTE_SUMMARIES_V2_BOUND: Duration = Duration::from_millis(150); // runner-calibrated under the lock, #190 D3 (2026-10-21)
 
     // `recursive_scc_db_effects_within_bound` (final-branch-review M-6) — the
     // RECURSIVE-SCC counterpart to `COMPUTE_SUMMARIES_V2_BOUND` above, whose
@@ -539,9 +546,9 @@ mod release_checks {
     /// noise on a shared machine (OS scheduling preemption, cache/TLB
     /// eviction from other processes, CPU frequency scaling) is ONE-SIDED: an
     /// interrupted run is always slower than an uninterrupted one, never
-    /// faster. That makes the minimum of repeated samples the
-    /// maximum-likelihood estimator of the TRUE cost — every sample above it
-    /// is explained by "plus some noise," while the median of a noise-skewed
+    /// faster. So the minimum of repeated samples rejects transient positive
+    /// delays — every sample above it is explained by "plus some noise,"
+    /// while the median of a noise-skewed
     /// sample set is ITSELF skewed toward whatever fraction of samples
     /// happened to get interrupted (proven empirically: the median-based
     /// scaling gate this replaces flaked 2/5 times on the FIXED

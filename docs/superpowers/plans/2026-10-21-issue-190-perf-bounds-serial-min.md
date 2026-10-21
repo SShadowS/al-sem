@@ -85,3 +85,30 @@ register `.agent/issue-190/findings.json`.
   (named, never `-A`): `perf_bounds: run timing tests one at a time and judge the minimum (#190)`.
 
 D3 (the runner probe commit) and D4 (5/5 CI executions) are conductor steps after the draft PR, not this task.
+
+### Task 2: Tighten `COMPUTE_SUMMARIES_V2_BOUND` after D3 (spec amendment, ledger "Amendment after D3")
+
+D3 (run 39625785855) showed that under the lock the runner's 3x `compute_summaries_v2` min is 179.87 ms < 230 ms.
+
+**Files:** Modify `tests/perf_bounds.rs` (`COMPUTE_SUMMARIES_V2_BOUND` and its doc; `min_of`'s doc), `CHANGELOG.md`.
+
+- [ ] **Step 1:** `COMPUTE_SUMMARIES_V2_BOUND` = `Duration::from_millis(150)`. Its doc: calibrated to the CI runner under
+  the lock (D3: 3x min 179.87 ms, samples 179.9-186.3; implied 1x ~60 ms; dev machine 47-49 ms), so 2.5x headroom on
+  the runner and a 3x regression fails there by ~20%; the scope sentence: a 3x regression fails on a runner of
+  D3/D3b's speed (CPU `<D3B_CPU>`, placeholder the conductor fills after D3b), 150 ms rejects 3x only while 1x > 50 ms,
+  so a ~1.2x faster runner or the dev machine may let an exact 3x pass. Replace the "measured in #190's D3" note.
+- [ ] **Step 2:** `min_of`'s doc: drop "maximum-likelihood"; say the minimum rejects transient positive delays.
+- [ ] **Step 3:** If any doc names other bounds' calibration, cite the synthetic bounds by constant name
+  (`RUNG2_SYNTHETIC_BOUND`, `RUNG1_SCOPED_SYNTHETIC_BOUND`), not line numbers.
+- [ ] **Step 4:** CHANGELOG entry: add the bound change (230 → 150 ms) with the same runner scope sentence and placeholder.
+- [ ] **Step 5:** Verify: `taskset -c 0-3 cargo test --release --test perf_bounds -- --nocapture` 13 passed, 5 runs
+  (log `t2-5x.log`), `compute_summaries_v2` min recorded per run; `bash scripts/ci-steps task-affected` exit 0;
+  `rustfmt tests/perf_bounds.rs`; check-diff `[]`. Commit `tests/perf_bounds.rs CHANGELOG.md` and this plan file:
+  `perf_bounds: tighten compute_summaries_v2 to 150 ms, calibrated on the runner under the lock (#190)`.
+- [ ] **Step 6 (D3b probe, separate THROWAWAY commit on top):** in `compute_summaries_v2_within_bound` only: print the
+  CPU model (first `model name` line of `/proc/cpuinfo`); time 5 samples of ONE solve, then 5 samples of THREE solves,
+  binding every result until `start.elapsed()` is taken and dropping it after (same placement in both loops); print
+  both sample sets, the two mins and the multiplier; then assert the 3x min against the bound with the bound's own
+  message; finally `panic!("D3B-PROBE: …")` if the assert passed, so the output is always shown. Local run: record the
+  numbers (dev machine 3x may pass, then the D3B-PROBE panic fires). Commit
+  `THROWAWAY D3b probe (#190)`; do NOT push (the conductor pushes).
