@@ -3,7 +3,7 @@ name: alsem
 repo: https://github.com/SShadowS/al-sem.git
 image: .kraken/Dockerfile
 ssh_port: 2210 # server1's sshPorts range 2210-2299
-mem_limit: 24g # with the bc sidecar (3g + 6g + 4g tmpfs) 37g: server1's maxMemory must be >= 37g (was 32g at 16g)
+mem_limit: 24g # with the bc sidecar (sql 4g, its tmpfs inside that limit; bc 6g) 34g, inside server1's maxMemory (40g)
 agents:
   # one agent: agentflow's issue leases live in this checkout's .agent/, so a second
   # /orchestrate in another worktree would not see them
@@ -39,7 +39,8 @@ sidecars:
     services:
       sql:
         image: ghcr.io/stefanmaron/msdyn365bc.on.linux/mssql@sha256:6476ec91822702f6031eebd890269bf70190028cafc9a6e706aa1d196d04de24
-        mem_limit: 3g
+        # tmpfs pages count against this limit: 3g overflowed (SQL Error 701, BC hung at start on the LethAL pool)
+        mem_limit: 4g
         env:
           ACCEPT_EULA: "Y"
           MSSQL_MEMORY_LIMIT_MB: "2048"
