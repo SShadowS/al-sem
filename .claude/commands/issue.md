@@ -412,8 +412,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     `register-changed`.
 13. **PR and merge.** `halt-check` first; if halted, write the ledger and return
     `blocked halted` — never push, create a PR, or comment past this point while
-    halted. The push, the PR and the PR comment all go through the executor;
-    never run `git push` or `gh` yourself here. Each of the three refuses under
+    halted. The push, the PR, the PR comment and a CI rerun all go through the
+    executor; never run `git push` or `gh` yourself here. Each of them refuses under
     `--dry-run`, under HALT, and unless the lock names this run, and the two
     that publish text scan it first (a violation is `blocked sanitize-failed`).
 
@@ -435,8 +435,21 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
 
     Poll CI through the supervisor:
     `python scripts/agentflow run --name ci-wait --timeout 45 --cwd <worktree> -- gh pr checks <pr> --watch`.
-    CI red: one fix (`charge ci_fix`), then steps 9–12 again with a new
-    attestation. Then `python scripts/agentflow merge-gate --pr <pr>`.
+    CI red: read the failing job. If every failing test is one the diff
+    cannot reach (the `task-affected` map in `scripts/ci-steps` says the
+    changed paths do not reach its test binary, or it is `perf_bounds` and
+    the diff touches none of the code it times), it is a FLAKE:
+    `python scripts/agentflow ci-rerun --pr <pr>` once (no `ci_fix` charge;
+    the head and the attestation are unchanged), then `ci-wait` again. A
+    second failure of the same test is `blocked ci-flaky:<test>` plus a
+    discovery, never a `ci_fix`. Any other red is one fix (`charge ci_fix`),
+    then steps 9–12 again with a new attestation. Repeat CI runs on an
+    unchanged head are otherwise run only when the issue's own acceptance
+    asks for them, and only through `ci-rerun` (a green run is rerun whole,
+    a red one only its failed jobs; anything else is refused:
+    `ci-run-not-found`, `ci-run-not-complete`, `ci-run-conclusion-unknown`).
+    On #111 a flake cost the one `ci_fix`, a second full CI run and a block,
+    45 min with no defect. Then `python scripts/agentflow merge-gate --pr <pr>`.
     `merge-lane-busy` means another session has merged and its post-merge has
     not yet verified it: the base is about to move. Beat at least every 10
     minutes and poll `merge-gate` until that reason is gone — no budget

@@ -4507,3 +4507,84 @@ def test_finish_writes_the_handoff_record_while_holding_the_handoffs_mutex(
     assert code == 0, out
     assert [w for w in writes if w[0] == "handoffs.json"] == [("handoffs.json", True)]
     assert handoffs(clone)["8"]["sha"] == sha
+
+
+# ---- ci-rerun (flow speed-ups P8) -------------------------------------------
+
+PR_HEAD = "a" * 40
+CI_RUN_LIST = (f"run list --repo {REPO} --workflow ci.yml --commit {PR_HEAD} --limit 1 "
+               f"--json databaseId,attempt,status,conclusion,headSha")
+
+
+def ci_rerun_fakes(*, status="completed", conclusion="failure", head_sha=PR_HEAD, runs=None):
+    """The two reads `ci-rerun` makes, plus both rerun spellings, stated literally."""
+    if runs is None:
+        runs = [{"databaseId": 555, "attempt": 1, "status": status, "conclusion": conclusion,
+                 "headSha": head_sha}]
+    return FakeRunner({
+        f"pr view 12 --repo {REPO} --json headRefOid": json.dumps({"headRefOid": PR_HEAD}),
+        CI_RUN_LIST: json.dumps(runs),
+        f"run rerun 555 --repo {REPO} --failed": "",
+        f"run rerun 555 --repo {REPO}": "",
+    })
+
+
+def ci_reruns(gh):
+    return [c for c in gh.calls if c.startswith("run rerun")]
+
+
+def gate_runs(root):
+    p = root / ".agent" / "runs" / "run-test" / "gate-runs.jsonl"
+    return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+
+
+def test_ci_rerun_reruns_only_the_failed_jobs_and_records_it(capsys, root):
+    # #111: a flake on a head the diff cannot reach cost a `ci_fix`, a new head and a
+    # second full CI run. A rerun keeps the head; the record names what was rerun.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes()
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 0, out
+    assert ci_reruns(gh) == [f"run rerun 555 --repo {REPO} --failed"]
+    [rec] = gate_runs(root)
+    assert rec["name"] == "ci-rerun" and rec["head"] == PR_HEAD and rec["ci_run_id"] == 555
+    assert rec["failed_only"] is True and rec["attempt"] == 1
+
+
+def test_ci_rerun_of_a_green_run_reruns_all_of_it(capsys, root):
+    # An acceptance that asks for repeat runs on an unchanged head (#190's D4): a green
+    # run has no failed jobs, so `--failed` would rerun nothing.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes(conclusion="success")
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 0, out
+    assert ci_reruns(gh) == [f"run rerun 555 --repo {REPO}"]
+
+
+@pytest.mark.parametrize("fakes, error", [
+    (dict(status="in_progress", conclusion=None), "ci-run-not-complete"),
+    (dict(conclusion="cancelled"), "ci-run-conclusion-unknown"),
+    (dict(conclusion=None), "ci-run-conclusion-unknown"),
+    (dict(runs=[]), "ci-run-not-found"),
+    (dict(head_sha="b" * 40), "ci-run-not-found"),
+])
+def test_ci_rerun_fails_closed_on_anything_but_a_finished_run_of_this_head(capsys, root, fakes, error):
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes(**fakes)
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == error, out
+    assert ci_reruns(gh) == [] and gate_runs(root) == []
+
+
+def test_ci_rerun_refuses_under_halt_dry_run_and_without_a_lock(capsys, root):
+    # Guarded like `push-branch`: each refusal states its own precondition.
+    gh = ci_rerun_fakes()
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)          # no lock
+    assert code == 1 and "FenceError" in out["error"]
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh, dry=True)  # dry run
+    assert code == 2 and "dry-run" in out["error"]
+    lock.set_halt(Ctx(Paths(root), run_id="run-test"), "stop")
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)          # HALT
+    assert code == 1 and "HaltError" in out["error"]
+    assert ci_reruns(gh) == [] and gate_runs(root) == []

@@ -851,7 +851,14 @@ render of the ledger becomes the PR body.
     (`ci-workflow-unknown`) rather than passing. One CI fix attempt allowed,
     independent of the rebase
     budget; a CI fix is a code change, so it returns to step 11 (gates, one panel
-    round, new `H`, new attestation). Immediately before merging, the executor
+    round, new `H`, new attestation). A red CI whose every failing test the diff
+    cannot reach is a flake, not a fix: `ci-rerun --pr <pr>` reruns the latest
+    `ci.yml` run on the PR head (only its failed jobs; a green run whole, for an
+    acceptance that asks for repeat runs), keeps the head and the attestation, and
+    appends a `ci-rerun` record to `gate-runs.jsonl`. It is guarded like
+    `push-branch` and refuses anything but a completed `failure`/`success` run of
+    that head. One flake rerun per test; a second failure is `blocked
+    ci-flaky:<test>`, never a `ci_fix` (added 2026-10-21, after #111). Immediately before merging, the executor
     re-fetches and requires **all** of: `origin/master == B` (the base is bound,
     not just the head; if it moved, that is a rebase, budgeted as such), the PR head
     `== final_head`, and the issue body hash `== body_hash` (re-checked here, not

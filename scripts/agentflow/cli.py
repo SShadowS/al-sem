@@ -1468,6 +1468,42 @@ def cmd_push_branch(args, ctx, gh, git):
     return _emit({"pushed": name, "head": head})
 
 
+CI_WORKFLOW_FILE = "ci.yml"
+
+
+def cmd_ci_rerun(args, ctx, gh, git):
+    """Rerun the latest `ci.yml` run on the PR's head, without a new head.
+
+    A flake (a red test the diff cannot reach) used to cost a `ci_fix`: the
+    only way to run CI again was an evidence commit, a re-attest and a full
+    CI run (#111: 45 min, then blocked on the same flake). The head and the
+    attestation stay as they are; `merge-gate` reads the check rollup, which
+    GitHub updates in place on a rerun. Guarded like `push-branch` (dry-run,
+    HALT, fence). Fails CLOSED on anything but a completed run that concluded
+    `failure` (rerun only the failed jobs) or `success` (an acceptance that
+    asks for repeat runs: rerun all of it). How many reruns are allowed is
+    the prompt's rule (`issue.md` step 13), not this command's."""
+    _guard_external_write(ctx, "rerun CI")
+    head = gh.pr_view(args.pr, "headRefOid").get("headRefOid")
+    if not isinstance(head, str) or not _FULL_SHA.match(head):
+        raise Fail({"error": "pr-head-unknown", "pr": args.pr})
+    latest = gh.latest_run(CI_WORKFLOW_FILE, head)
+    if not isinstance(latest, dict) or latest.get("headSha") != head:
+        raise Fail({"error": "ci-run-not-found", "head": head})
+    status, conclusion = latest.get("status"), latest.get("conclusion")
+    if status != "completed":
+        raise Fail({"error": "ci-run-not-complete", "status": status})
+    if conclusion not in ("failure", "success"):
+        raise Fail({"error": "ci-run-conclusion-unknown", "conclusion": conclusion})
+    failed_only = conclusion == "failure"
+    gh.rerun(latest["databaseId"], failed_only)
+    rec = identity.append_record(ctx, {
+        "name": "ci-rerun", "pr": args.pr, "head": head, "ci_run_id": latest["databaseId"],
+        "attempt": latest.get("attempt"), "conclusion": conclusion, "failed_only": failed_only,
+        "at": ctx.now()})
+    return _emit({"rerun": rec})
+
+
 def _refuse_unclaimed_cleanup(ctx, args) -> None:
     """`--worktree` and `--branch` must name what THIS RUN CLAIMED.
 
@@ -1840,6 +1876,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = add("pr-comment", cmd_pr_comment); s.add_argument("--pr", type=int, required=True); s.add_argument("--body-file", required=True)
     s = add("push-branch", cmd_push_branch); s.add_argument("--branch", required=True)
     s.add_argument("--force-with-lease", action="store_true"); s.add_argument("--cwd")
+    s = add("ci-rerun", cmd_ci_rerun); s.add_argument("--pr", type=int, required=True)
     s = add("file-discoveries", cmd_file_discoveries); s.add_argument("file"); s.add_argument("--session", required=True)
         # `--branch` is NOT `required=True`: a retained verification worktree is
     # detached and has none, and that path is the only supported way to

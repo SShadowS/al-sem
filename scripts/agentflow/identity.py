@@ -110,6 +110,11 @@ def record_gate_run(ctx: Ctx, name: str, result, cwd: Path, *, argv: list[str], 
            "head": before["head"] if same_tree else None, "tree": before["tree"] if same_tree else None,
            "clean_before": before["clean"], "clean_after": after["clean"],
            "env": before["env"] if before["env"] == after["env"] else None, "at": ctx.now()}
+    return append_record(ctx, rec)
+
+
+def append_record(ctx: Ctx, rec: dict) -> dict:
+    """Append one line to this run's `gate-runs.jsonl` (`ci-rerun` writes here too)."""
     path = ctx.run_dir / GATE_RUNS
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
