@@ -253,7 +253,8 @@ on, so it must not touch `src/` or `tests/`.
   Measured values are `<bench>` placeholders.
 - [ ] **Step 2: Numbers file skeleton**, structured like
   `docs/measurements/2026-10-20-issue-160-step7a.md`:
-  - a protocol table: machine; parent `afd5d88f`, head from `$B/shas.txt`; profile,
+  - a protocol table: machine; parent `fd77939d` (the rebased base, code-identical to
+    `afd5d88f`, where X was derived), head from `$B/shas.txt`; profile,
     harness, commands;
   - Part 1: SARIF `cmp` in both scopes, histogram SHA, retained buckets head ≤ parent,
     the T8' lines;
@@ -261,7 +262,8 @@ on, so it must not touch `src/` or `tests/`.
     `4,382.1 − Bq ≥ 2 × Bc`). Then `Pq − Hq ≥ 4,382.1 − Bq` and
     `Pc − Hc ≥ 4,382.1 − Bq − Bc`, with the literal form `Pc − Hc ≥ 4,382.1 − Bc`
     reported. The sub-timers and the `closed:` line are reported;
-  - Part 3: `analyze --single-app` and cross-app `policy check`, reported;
+  - Part 3: `analyze --single-app` and cross-app `policy check`, 3 rounds per side
+    (epic Decision 58), reported, with the spec §8 `Both` fallback rule;
   - the re-run rule (one re-run of Part 2 if void; void again = FAIL = drop), every run
     listed, and a verdict.
   Every number is `<bench>` until the conductor fills it.
@@ -383,7 +385,9 @@ head, which is Task 4's commit. The conductor runs it through
 `agentflow run --name bench --timeout 45 -- bash <part>.sh`, never an implementer and never
 beside a build.
 
-- Bands come only from that bench's parent runs (`afd5d88f`).
+- Bands come only from that bench's parent runs (`fd77939d`, code-identical to
+  `afd5d88f`, X's base). Part 2 runs 5 rounds per side; Part 3 (reported) runs 3
+  (epic Decision 58).
 - Void checks are read first. A void bound gets one re-run of Part 2; void again = FAIL =
   drop.
 - A missed bound = drop: revert the speed commits; `PerMemberWalk` then goes to step 6.

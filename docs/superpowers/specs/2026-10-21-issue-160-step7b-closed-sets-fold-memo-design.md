@@ -567,8 +567,10 @@ One CDO bench, run ONCE after the final panel, by the conductor through
 `agentflow run --name bench --timeout 45 -- <cmd>`, in 7a's three-part shape (7a §8; its
 `check.sh` fail-closed rules are reused verbatim). `B=/work/bench/160-7b-final`, `WS` = the
 pinned CDO workspace read from `cdo_ws` in the main checkout's `.agent/config.json`, `P` =
-the branch base `afd5d88f`, `H` = the branch head. `export TREE_SITTER_AL_PATH` to the main
-checkout's grammar clone for every build; `RAYON_NUM_THREADS` unset; release-fast.
+the rebased branch base `fd77939d` (its `src`, `crates`, `tests` and Cargo files are
+identical to `afd5d88f`, the base X was derived at; X keeps that base), `H` = the branch
+head. `export TREE_SITTER_AL_PATH` to the main checkout's grammar clone for every build;
+`RAYON_NUM_THREADS` unset; release-fast.
 
 - **Part 1**: build both sides from clean trees; SARIF `cmp` at `--scope primary` and
   `--scope all`; histogram SHA equal; retained buckets head ≤ parent; T8 (or T8' on the
@@ -577,8 +579,16 @@ checkout's grammar clone for every build; `RAYON_NUM_THREADS` unset; release-fas
   (census OFF): span `context.capability_cones` per run. Run `c` (census ON): per run
   Q = `singleton=` + `bfs_fold=` from the `compose:` line, plus the `singleton:`,
   `closed:` and `compose rest:` lines (reported).
-- **Part 3** (reported, no bound): `analyze --single-app` and cross-app `policy check`,
-  5 rounds per side, walls and polled RSS.
+- **Part 3** (reported, no bound): `analyze --single-app` and cross-app `policy check`
+  (the commands whose code 7b touches), 3 rounds per side, walls and polled RSS. Epic
+  Decision 58 (2026-10-21) replaces the 5 rounds this part had: a "reported, no bound" part
+  runs 3 rounds of the touched commands only. Part 2, which carries the bounds, keeps 5.
+
+**`Both` fallback (pre-stated).** Under `ConeOutput::Both` (`alsem policy`'s raw build) a
+singleton now builds memo rows on top of the `best` scan. Part 3 reports the cross-app
+`policy check` wall. If the head's `policy check` median is slower than the parent's by
+more than the parent's band, `Both` folds its derived half from `best.values()` again, as
+before 7b (the memo serves `DerivedOnly` only); T7'/T8' and this bench are then re-run.
 
 **Bounds.** Bands come ONLY from this bench's own parent runs: band = max − min of the 5
 parent runs of that reading (I6, Decision 20). Nothing from P2, P3 or P15 enters a bound.
