@@ -870,8 +870,11 @@ render of the ledger becomes the PR body.
     acceptance that asks for repeat runs), keeps the head and the attestation, and
     appends a `ci-rerun` record to `gate-runs.jsonl`. It is guarded like
     `push-branch` and refuses anything but a completed `failure`/`success` run of
-    that head. One flake rerun per test; a second failure is `blocked
-    ci-flaky:<test>`, never a `ci_fix` (added 2026-10-21, after #111). Immediately before merging, the executor
+    that head. One flake rerun per head, enforced: a rerun of a red run is
+    refused (`rerun-already-used`) when `gate-runs.jsonl` already holds a red-run
+    `ci-rerun` for that head (a record of unknown shape counts as one); green reruns
+    stay allowed and are counted. A second failure is `blocked ci-flaky:<test>`,
+    never a `ci_fix` (added 2026-10-21, after #111). Immediately before merging, the executor
     re-fetches and requires **all** of: `origin/master == B` (the base is bound,
     not just the head; if it moved, that is a rebase, budgeted as such), the PR head
     `== final_head`, and the issue body hash `== body_hash` (re-checked here, not

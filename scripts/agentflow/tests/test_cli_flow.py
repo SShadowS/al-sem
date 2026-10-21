@@ -4749,3 +4749,47 @@ def test_ci_rerun_refuses_under_halt_dry_run_and_without_a_lock(capsys, root):
     code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)          # HALT
     assert code == 1 and "HaltError" in out["error"]
     assert ci_reruns(gh) == [] and gate_runs(root) == []
+
+
+def set_run_conclusion(gh, conclusion):
+    gh.responses[CI_RUN_LIST] = json.dumps([{"databaseId": 555, "attempt": 1, "status": "completed",
+                                             "conclusion": conclusion, "headSha": PR_HEAD}])
+
+
+def test_a_second_rerun_of_a_red_run_on_one_head_is_refused(capsys, root):
+    # The rule allows ONE flake rerun per head; a second red is `blocked ci-flaky:<test>`.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes()
+    assert run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)[0] == 0
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == "rerun-already-used", out
+    assert len(ci_reruns(gh)) == 1 and len(gate_runs(root)) == 1
+
+
+def test_a_prior_rerun_record_of_unknown_shape_counts_as_a_red_rerun(capsys, root):
+    # Fail closed: only `failed_only: false` proves a prior rerun was of a green run.
+    from agentflow import identity
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    identity.append_record(Ctx(Paths(root), run_id="run-test"), {"name": "ci-rerun", "head": PR_HEAD})
+    gh = ci_rerun_fakes()
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == "rerun-already-used", out
+    assert ci_reruns(gh) == []
+
+
+def test_green_reruns_stay_allowed_and_are_counted(capsys, root):
+    # Repeat runs an acceptance asks for (#190's D4) rerun a green run; they do not use
+    # up the flake rerun, and a rerun on ANOTHER head does not count either.
+    from agentflow import identity
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    identity.append_record(Ctx(Paths(root), run_id="run-test"),
+                           {"name": "ci-rerun", "head": "b" * 40, "failed_only": True})
+    gh = ci_rerun_fakes(conclusion="success")
+    for _ in range(2):
+        assert run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)[0] == 0
+    set_run_conclusion(gh, "failure")
+    assert run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)[0] == 0
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == "rerun-already-used"
+    mine = [r for r in gate_runs(root) if r.get("head") == PR_HEAD]
+    assert [(r["failed_only"], r["count"]) for r in mine] == [(False, 1), (False, 2), (True, 3)]

@@ -199,19 +199,25 @@ def identity_refusals(ctx: Ctx, git: Git, issue: int, merge_sha: str, commands: 
     return out
 
 
-def latest_records(ctx: Ctx) -> dict[str, dict]:
-    """The last parseable record per gate name. A torn line (a run killed
-    mid-write) is skipped: it is no evidence, and the record before it still is."""
+def all_records(ctx: Ctx) -> list[dict]:
+    """Every parseable record with a name, oldest first. A torn line (a run
+    killed mid-write) is skipped: it is no evidence."""
     try:
         lines = (ctx.run_dir / GATE_RUNS).read_text(encoding="utf-8").splitlines()
     except OSError:
-        return {}
-    out: dict[str, dict] = {}
+        return []
+    out = []
     for line in lines:
         try:
             rec = json.loads(line)
         except ValueError:
             continue
         if isinstance(rec, dict) and isinstance(rec.get("name"), str):
-            out[rec["name"]] = rec
+            out.append(rec)
     return out
+
+
+def latest_records(ctx: Ctx) -> dict[str, dict]:
+    """The last parseable record per gate name; a torn line is skipped, and the
+    record before it still counts."""
+    return {rec["name"]: rec for rec in all_records(ctx)}

@@ -47,7 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run on the PR head without a new head or attestation: only the failed jobs of a red run,
   the whole of a green one. It is guarded like `push-branch` (dry-run, HALT, fence), fails
   closed on a run that is missing, unfinished or of another conclusion, and appends a
-  `ci-rerun` record to `gate-runs.jsonl`. `/issue` step 13: a red CI whose every failing
+  `ci-rerun` record (with the head's running `count`) to `gate-runs.jsonl`. A second rerun
+  of a red run on one head is refused (`rerun-already-used`); green reruns stay allowed. `/issue` step 13: a red CI whose every failing
   test the diff cannot reach is a flake, rerun once with no `ci_fix` charge; a second
   failure is `blocked ci-flaky:<test>`. On #111 a flake spent the one `ci_fix` and blocked
   the issue after 45 min with no defect. 4 new tests (8 cases) in `test_cli_flow.py`.

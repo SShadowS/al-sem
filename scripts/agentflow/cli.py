@@ -1616,8 +1616,14 @@ def cmd_ci_rerun(args, ctx, gh, git):
     GitHub updates in place on a rerun. Guarded like `push-branch` (dry-run,
     HALT, fence). Fails CLOSED on anything but a completed run that concluded
     `failure` (rerun only the failed jobs) or `success` (an acceptance that
-    asks for repeat runs: rerun all of it). How many reruns are allowed is
-    the prompt's rule (`issue.md` step 13), not this command's."""
+    asks for repeat runs: rerun all of it).
+
+    ONE flake rerun per head, in code: a red run is refused
+    (`rerun-already-used`) when this run's `gate-runs.jsonl` already holds a
+    `ci-rerun` of a red run on the same head. A prior record whose
+    `failed_only` is not literally `false` counts as one (fail closed). Green
+    reruns stay allowed (an acceptance's repeat runs) and every record carries
+    the head's running `count`."""
     _guard_external_write(ctx, "rerun CI")
     head = gh.pr_view(args.pr, "headRefOid").get("headRefOid")
     if not isinstance(head, str) or not _FULL_SHA.match(head):
@@ -1631,11 +1637,14 @@ def cmd_ci_rerun(args, ctx, gh, git):
     if conclusion not in ("failure", "success"):
         raise Fail({"error": "ci-run-conclusion-unknown", "conclusion": conclusion})
     failed_only = conclusion == "failure"
+    prior = [r for r in identity.all_records(ctx) if r["name"] == "ci-rerun" and r.get("head") == head]
+    if failed_only and any(r.get("failed_only") is not False for r in prior):
+        raise Fail({"error": "rerun-already-used", "head": head})
     gh.rerun(latest["databaseId"], failed_only)
     rec = identity.append_record(ctx, {
         "name": "ci-rerun", "pr": args.pr, "head": head, "ci_run_id": latest["databaseId"],
         "attempt": latest.get("attempt"), "conclusion": conclusion, "failed_only": failed_only,
-        "at": ctx.now()})
+        "count": len(prior) + 1, "at": ctx.now()})
     return _emit({"rerun": rec})
 
 

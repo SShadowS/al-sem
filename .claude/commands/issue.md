@@ -503,6 +503,9 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     asks for them, and only through `ci-rerun` (a green run is rerun whole,
     a red one only its failed jobs; anything else is refused:
     `ci-run-not-found`, `ci-run-not-complete`, `ci-run-conclusion-unknown`).
+    The executor allows ONE rerun of a red run per head: a second one is
+    `rerun-already-used`, which is `blocked ci-flaky:<test>`. Green reruns
+    are not limited, and each record carries the head's rerun `count`.
     On #111 a flake cost the one `ci_fix`, a second full CI run and a block,
     45 min with no defect. Then `python scripts/agentflow merge-gate --pr <pr>`.
     `merge-lane-busy` means another session has merged and its post-merge has
