@@ -158,7 +158,21 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    full-context rounds in 4-13 min (#160 final r1: 13 min). Converged when: no `open`; every entry
    `accepted` by both against the current hash; every blocking entry is `fixed`
    or `refuted` with evidence. A `re-raised` stays unresolved even without new
-   evidence. Not converged after 5 rounds: check the handoff rule below, else
+   evidence.
+
+   **Raiser-only acceptance for a minor prose fix.** A `minor` entry whose fix
+   touches only gate-inert files (`CHANGELOG.md`, `docs/**/*.md`) and the two
+   evidence files is closed when the reviewer who raised it marks it
+   `accepted`; write the other reviewer's mark as `accepted-by-rule` and set
+   the entry's `fix_commit` to the full SHA of that fix. The briefing still
+   lists it so the other reviewer may object, and an objection is a
+   `re-raised` that reopens it. Code, tests, fixtures and `tests/**/*.md`
+   never qualify. The executor counts `accepted-by-rule` as `accepted` only
+   when the entry is `minor` and not `blocking`, the other mark is
+   `accepted`, and `fix_commit` is a commit on the branch (after `B`) whose
+   own diff touches only those files; anywhere else it is an unknown mark and
+   the entry fails. In 3 of 3 runs a final round existed only to confirm a
+   wording fix. Not converged after 5 rounds: check the handoff rule below, else
    return `blocked spec-panel-cap`.
 
    **Handoff at the cap (#45).** The design may pass to the next attempt as
@@ -403,7 +417,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
       listing the entry ids): any entry whose `severity` is missing or not one
       of `critical|important|minor`, any whose `disposition` is missing or not
       one of `open|fixed|refuted|deferred`, any entry still `open`, any entry
-      not marked `accepted` by BOTH reviewers, or any blocking entry
+      not marked `accepted` by BOTH reviewers (an `accepted-by-rule` counts
+      only as step 5 states), or any blocking entry
       (`severity` `critical` or `important`, or `blocking: true`) left
       `deferred`, or any `closes_by` entry whose named record is not there
       (step 5).

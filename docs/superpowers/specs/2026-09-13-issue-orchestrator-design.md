@@ -913,6 +913,18 @@ recorded but does not count. The final round may be confirm-only (no changes sin
 the previous round, only dispositions). Three rounds without convergence is
 `blocked` with the register attached; the standard is not relaxed.
 
+**Raiser-only acceptance of a minor prose fix (added 2026-10-21).** One carve-out
+from "both reviewers": a `minor`, non-blocking entry whose fix commit touches only
+gate-inert prose (`protect.gate_inert`) and the two evidence files closes when the
+reviewer who raised it accepts; the other reviewer's mark is `accepted-by-rule`. The
+other reviewer still sees it in the briefing, and a `re-raised` reopens it. The
+executor (`attest`, and the handoff check) counts `accepted-by-rule` as `accepted`
+only when the entry is `minor` and not `blocking`, the other mark is `accepted`, and
+its `fix_commit` is a full SHA on `B..final_head` whose own diff touches only those
+paths; anywhere else the mark is unknown and the entry fails. Code, tests, fixtures
+and `tests/**/*.md` never qualify. In 3 of 3 runs a final round existed only to
+confirm a wording fix.
+
 **Records that exist only after the panel (`closes_by`, added 2026-10-21).** An
 entry whose only remaining work is a record the flow writes after the panel (an
 attested gate exit code, an attested `B`/`H`/`final_head`, the `ci-wait` record on

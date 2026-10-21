@@ -1015,6 +1015,69 @@ def test_merge_gate_holds_a_ci_wait_entry_until_a_green_ci_wait_record_on_the_fi
     assert reasons() == []
 
 
+def prose_rule_repo(repo_pair):
+    """`master` (B) carries a CHANGELOG-only commit; branch `feat` then carries one
+    commit per fix shape; `other` carries a CHANGELOG-only commit off the branch.
+    Returns (clone, B, final_head, {shape: sha})."""
+    _, clone = repo_pair
+    g = Git(clone)
+    on_master = commit_file(clone, "CHANGELOG.md", "master\n", "master prose")
+    assert g.push("origin", "master")
+    B = g.rev("HEAD")
+    g._run("checkout", "-q", "-b", "other")
+    off_branch = commit_file(clone, "CHANGELOG.md", "other\n", "prose on another branch")
+    g._run("checkout", "-q", "-b", "feat", B)
+    shas = {"on_master": on_master, "off_branch": off_branch}
+    shas["code"] = commit_file(clone, "src/x.rs", "x\n", "code fix")
+    shas["changelog"] = commit_file(clone, "CHANGELOG.md", "feat\n", "wording")
+    (clone / "docs").mkdir(exist_ok=True)
+    (clone / "docs" / "a.md").write_text("a\n")
+    _git_raw(clone, "add", "docs/a.md")  # staged, so the next commit carries both files
+    shas["docs_and_ledger"] = commit_file(clone, ".agent/issue-8/ledger.md", "l\n", "docs + ledger")
+    shas["tests_md"] = commit_file(clone, "tests/prsummary.md", "t\n", "a golden the tests read")
+    return clone, B, g.rev("HEAD"), shas
+
+
+def rule_entry(fix_commit, *, severity="minor", reviews=None, **extra):
+    return {"id": "F2-1", "severity": severity, "disposition": "fixed", "fix_commit": fix_commit,
+            "reviews": reviews or {"astra": "accepted", "flash": "accepted-by-rule"}, **extra}
+
+
+def attest_rule(capsys, clone, tmp_path, B, head, entry):
+    ctx = Ctx(Paths(clone), run_id="run-test")
+    register = claimed_register(ctx, tmp_path, contents=json.dumps([entry]))
+    return attest(capsys, clone, register, B=B, H=head, final_head=head)
+
+
+def test_attest_accepts_a_raiser_only_mark_on_a_minor_prose_only_fix(capsys, repo_pair, tmp_path):
+    # P3: #111 r3, #190 r3 and #160 r3 each existed only to confirm a wording fix.
+    clone, B, head, shas = prose_rule_repo(repo_pair)
+    for shape in ("changelog", "docs_and_ledger"):
+        code, out = attest_rule(capsys, clone, tmp_path, B, head, rule_entry(shas[shape]))
+        assert code == 0, (shape, out)
+    flipped = rule_entry(shas["changelog"], reviews={"astra": "accepted-by-rule", "flash": "accepted"})
+    assert attest_rule(capsys, clone, tmp_path, B, head, flipped)[0] == 0
+
+
+@pytest.mark.parametrize("shape, entry_kw", [
+    ("code", {}),                                                      # a code fix
+    ("tests_md", {}),                                                  # tests/**/*.md is read by tests
+    ("on_master", {}),                                                 # not this branch's commit
+    ("off_branch", {}),                                                # not on base..final_head
+    ("changelog", {"severity": "important"}),                          # blocking
+    ("changelog", {"blocking": True}),                                 # blocking by flag
+    ("changelog", {"reviews": {"astra": "accepted-by-rule", "flash": "accepted-by-rule"}}),
+    ("changelog", {"reviews": {"astra": "re-raised", "flash": "accepted-by-rule"}}),  # an objection
+    (None, {}),                                                        # no fix_commit
+    ("short", {}),                                                     # not a full SHA
+])
+def test_attest_refuses_a_raiser_only_mark_anywhere_else(capsys, repo_pair, tmp_path, shape, entry_kw):
+    clone, B, head, shas = prose_rule_repo(repo_pair)
+    fix = {None: None, "short": shas["changelog"][:8]}.get(shape, shas.get(shape))
+    code, out = attest_rule(capsys, clone, tmp_path, B, head, rule_entry(fix, **entry_kw))
+    assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["F2-1"], out
+
+
 def write_ci_workflow(clone, name="CI"):
     (clone / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
     (clone / ".github" / "workflows" / "ci.yml").write_text(f"name: {name}\n\non:\n  pull_request:\n")

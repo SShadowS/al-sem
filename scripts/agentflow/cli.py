@@ -854,7 +854,44 @@ def _ci_wait_unmet(ctx: Ctx, entries, final_head: str) -> list[str]:
     return [] if green else ids
 
 
-def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted, closes=None) -> list[str]:
+# P3: the mark the NON-raising reviewer gets on a minor, prose-only fix.
+RULE_MARK = "accepted-by-rule"
+
+
+def _prose_fix_checker(git: Git, issue: int, tip: str, base: str):
+    """`entry -> bool`: its `fix_commit` is a full SHA on `base..tip` whose own
+    diff touches only gate-inert prose and the two evidence files. Any git
+    failure, an empty diff, or one other path is False (fail closed)."""
+    allowed = protect.evidence_files(issue)
+
+    def ok(entry: dict) -> bool:
+        fix = entry.get("fix_commit")
+        if not isinstance(fix, str) or not _FULL_SHA.match(fix):
+            return False
+        try:
+            if not git.is_ancestor(fix, tip) or git.is_ancestor(fix, base):
+                return False
+            files = git.changed_files(f"{fix}~1", fix)
+        except GitError:
+            return False
+        return bool(files) and all(protect.gate_inert(f) or f in allowed for f in files)
+    return ok
+
+
+def _rule_marks(marks: list, severity: str, blocking: bool, entry: dict, prose_fix) -> list:
+    """`accepted-by-rule` counts as `accepted` only on a non-blocking `minor`
+    entry the other reviewer `accepted`, whose fix is prose only (`prose_fix`).
+    Anywhere else it is left as it is: an unknown word, so the entry fails."""
+    if RULE_MARK not in marks:
+        return marks
+    ok = (severity == "minor" and not blocking and "accepted" in marks
+          and all(m in ("accepted", RULE_MARK) for m in marks)
+          and prose_fix is not None and prose_fix(entry))
+    return ["accepted"] * len(marks) if ok else marks
+
+
+def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted, closes=None,
+                       prose_fix=None) -> list[str]:
     """Ids of findings-register entries that block a merge: a `severity` or a
     `disposition` outside its closed vocabulary (missing included), an entry
     still `open`, one not `accepted` by BOTH reviewers (`marks_ok`; only the
@@ -886,6 +923,7 @@ def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted,
         disposition = e.get("disposition")
         severity = str(e.get("severity", "")).strip().lower()
         blocking = e.get("blocking") is True or severity in BLOCKING_SEVERITIES
+        marks = _rule_marks(marks, severity, blocking, e, prose_fix)
         if severity not in SEVERITIES:
             bad.append(eid)  # missing or unknown: malformed, never "not blocking"
         elif disposition not in DISPOSITIONS:
@@ -971,7 +1009,8 @@ def cmd_attest(args, ctx, gh, git):
         return _emit({"error": "bad-substitute", "detail": problem}, 1)
     entries = read_json(register)
     gates = json.loads(args.gates)
-    bad_entries = _register_failures(entries, tuple(reviewers.values()), closes=_attest_closes(gates))
+    bad_entries = _register_failures(entries, tuple(reviewers.values()), closes=_attest_closes(gates),
+                                     prose_fix=_prose_fix_checker(git, args.issue, args.final_head, args.B))
     if bad_entries:
         return _emit({"error": "register-not-converged", "entries": bad_entries,
                       "reviewers": reviewers}, 1)
@@ -1785,7 +1824,12 @@ def _handoff_record(args, ctx: Ctx, git: Git) -> dict:
         entries = json.loads(register)
     except ValueError:
         entries = None
-    bad = _register_failures(entries, tuple(reviewers.values()), marks_ok=_handoff_marks)
+    try:
+        fork = git.out("merge-base", "master", sha)
+    except GitError:
+        fork = sha  # nothing is then on fork..sha: an `accepted-by-rule` mark fails closed
+    bad = _register_failures(entries, tuple(reviewers.values()), marks_ok=_handoff_marks,
+                             prose_fix=_prose_fix_checker(git, args.issue, sha, fork))
     if bad:
         raise Fail({"error": "handoff-not-ready", "entries": bad, "reviewers": reviewers})
     # `reviewers` reaches the next attempt through `claim`. A record without
