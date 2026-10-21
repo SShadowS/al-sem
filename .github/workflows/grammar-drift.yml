@@ -1,0 +1,60 @@
+name: Grammar drift
+
+# The build (crates/al-syntax/build.rs) refuses a tree-sitter-al `main` whose node-types.json no longer
+# matches the committed node-types.sha256, and CI builds against `main`. So a grammar commit turns CI red
+# for every open PR; on 2026-10-20 that cost an issue in flight 40 min and its only CI fix. This checks
+# once a day and opens one issue, so the bump lands as its own PR (CLAUDE.md "Upgrading the grammar").
+# It sees only vocabulary changes (node-types.json), not shape changes that keep the vocabulary.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout al-sem
+        uses: actions/checkout@v4
+
+      - name: Checkout tree-sitter-al main
+        uses: actions/checkout@v4
+        with:
+          repository: SShadowS/tree-sitter-al
+          path: tree-sitter-al
+
+      - name: Compare node-types.json with the committed hash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          actual=$(sha256sum tree-sitter-al/src/node-types.json | cut -d' ' -f1)
+          expected=$(tr -d '[:space:]' < crates/al-syntax/src/raw/generated/node-types.sha256)
+          grammar_sha=$(git -C tree-sitter-al rev-parse --short=8 HEAD)
+          if [ "$actual" = "$expected" ]; then
+            echo "grammar main $grammar_sha matches the committed vocabulary"
+            exit 0
+          fi
+          echo "grammar main $grammar_sha drifted: $actual (committed $expected)"
+          gh label create grammar-drift --color D93F0B --description "tree-sitter-al main moved past the committed vocabulary" --force
+          open=$(gh issue list --label grammar-drift --state open --json number --jq 'length')
+          if [ "$open" != "0" ]; then
+            echo "a grammar-drift issue is already open"
+            exit 0
+          fi
+          {
+            echo "tree-sitter-al \`main\` is at \`$grammar_sha\`; its \`node-types.json\` hashes to \`$actual\`, but"
+            echo "\`crates/al-syntax/src/raw/generated/node-types.sha256\` holds \`$expected\`. The build refuses this"
+            echo "grammar, so CI is red for every PR until the bump lands."
+            echo
+            echo "## Acceptance"
+            echo
+            echo "- Follow CLAUDE.md \"Upgrading the grammar\" (pull, \`cargo run -p xtask -- gen-syntax\`, triage new"
+            echo "  kinds, bump \`CACHE_VERSION_GRAMMAR\`, measure both sides)."
+            echo "- CI green on the bump PR; the bump lands as its own PR, not inside another issue's branch."
+          } > drift-body.md
+          gh issue create --label grammar-drift \
+            --title "Grammar drift: tree-sitter-al main at $grammar_sha" --body-file drift-body.md
