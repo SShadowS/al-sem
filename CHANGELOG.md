@@ -406,6 +406,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- agentflow (pre-existing): `Git.changed_files` now passes `--no-renames`. With git's
+  rename detection a `git mv src/x.rs docs/x.md` listed only `docs/x.md`, which is
+  gate-inert, so a code file moved into `docs/` passed `freeze-check`, the post-merge
+  identity check, `check-diff`'s protected-path check and the P3 prose check as prose.
+  Both paths are now listed. Tests: `test_mergeops.py` (freeze check) and the P3 refusal
+  list in `test_cli_flow.py`.
+
 - **The lowerer reads two new shapes of the `4d75846c` grammar** (see Changed;
   `crates/al-syntax/src/lower/mod.rs`):
   - A `preproc_split_case_extended` arm may hold a nested `preproc_conditional_case`

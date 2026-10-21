@@ -22,6 +22,21 @@ def test_freeze_allows_only_own_evidence_files(repo_pair):
     assert ".agent/issue-9/ledger.md" in mergeops.freeze_violations(g, H, e3, issue=8)
 
 
+def test_a_code_file_renamed_into_docs_is_not_prose(repo_pair):
+    """With git's rename detection `git mv src/x.rs docs/x.md` lists only the new
+    path, which `gate_inert` accepts, so a code file moved out of the gates' view
+    read as a wording fix. `changed_files` lists both paths (`--no-renames`)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    H = commit_file(clone, "src/x.rs", "fn x() {}\n", "code")
+    (clone / "docs").mkdir()
+    subprocess.run(["git", "-C", str(clone), "mv", "src/x.rs", "docs/x.md"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(clone), "commit", "-q", "-m", "move"], check=True, capture_output=True)
+    moved = g.rev("HEAD")
+    assert sorted(g.changed_files(H, moved)) == ["docs/x.md", "src/x.rs"]
+    assert mergeops.freeze_violations(g, H, moved, issue=8) == ["src/x.rs"]
+
+
 def test_freeze_lets_gate_inert_prose_follow_H(repo_pair):
     """A wording fix in the CHANGELOG or a doc after the gates ran is not a new
     head: no gate reads those files (`protect.GATE_INERT`, pinned by

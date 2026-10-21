@@ -1035,6 +1035,10 @@ def prose_rule_repo(repo_pair):
     _git_raw(clone, "add", "docs/a.md")  # staged, so the next commit carries both files
     shas["docs_and_ledger"] = commit_file(clone, ".agent/issue-8/ledger.md", "l\n", "docs + ledger")
     shas["tests_md"] = commit_file(clone, "tests/prsummary.md", "t\n", "a golden the tests read")
+    # A code file moved into docs/: rename detection would list only docs/x.md.
+    _git_raw(clone, "mv", "src/x.rs", "docs/x.md")
+    _git_raw(clone, "commit", "-q", "-m", "move code into docs")
+    shas["renamed"] = g.rev("HEAD")
     return clone, B, g.rev("HEAD"), shas
 
 
@@ -1062,6 +1066,7 @@ def test_attest_accepts_a_raiser_only_mark_on_a_minor_prose_only_fix(capsys, rep
 @pytest.mark.parametrize("shape, entry_kw", [
     ("code", {}),                                                      # a code fix
     ("tests_md", {}),                                                  # tests/**/*.md is read by tests
+    ("renamed", {}),                                                   # src/x.rs -> docs/x.md
     ("on_master", {}),                                                 # not this branch's commit
     ("off_branch", {}),                                                # not on base..final_head
     ("changelog", {"severity": "important"}),                          # blocking
