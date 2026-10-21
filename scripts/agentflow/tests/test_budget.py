@@ -66,12 +66,16 @@ def test_a_grant_raises_one_cap_by_n_and_is_audited(ctx):
 
 def test_a_grant_fails_closed_on_a_bad_key_or_n(ctx):
     budget.init(ctx, claimed_at=ctx.now())
-    with pytest.raises(KeyError):
-        budget.grant(ctx, ctx.run_id, "nonsense", 1, "op", 8)
+    # Only panel rounds are grantable; every other cap, real or not, is refused.
+    assert budget.GRANTABLE == ("spec_rounds", "final_rounds")
+    for key in ("nonsense", *(k for k in budget.CAPS if k not in budget.GRANTABLE)):
+        with pytest.raises(KeyError):
+            budget.grant(ctx, ctx.run_id, key, 1, "op", 8)
     for n in (0, -1):
         with pytest.raises(ValueError):
             budget.grant(ctx, ctx.run_id, "spec_rounds", n, "op", 8)
     assert budget.snapshot(ctx)["grants"] == {}
+    assert budget.grant(ctx, ctx.run_id, "final_rounds", 1, "op", 8) == 6
 
 
 def test_a_hand_edited_grant_is_rejected_and_a_pre_grant_budget_still_loads(ctx):

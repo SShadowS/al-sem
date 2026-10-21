@@ -643,20 +643,24 @@ def cmd_clear_halt(args, ctx, gh, git):
 
 
 def cmd_grant(args, ctx, gh, git):
-    """OPERATOR-ONLY: raise one cap of the run holding issue `--issue` by `--n`.
+    """For the operator: raise one panel-round cap of the run holding issue
+    `--issue` by `--n`.
 
     #190 needed a sixth spec round; the override happened outside the budget
     file, so `status` and the retained budget under-counted that issue. Only
     the run-id half of `require_operator` applies: the run being extended is
-    live by design. Fails closed on an unknown key, a non-positive `--n`, or
-    an issue no lease names."""
+    live by design. That half refuses a call CARRYING a run id; a process that
+    drops it is not stopped, so for `grant`, as for `unblock`, the prompt is
+    the guard. Hence the narrow key set: only `spec_rounds` and
+    `final_rounds` (`budget.GRANTABLE`). Fails closed on any other key, a
+    non-positive `--n`, or an issue no lease names."""
     ctx.write_guard("grant budget")
     try:
         lock.require_human(ctx, "grant")
     except lock.OperatorOnly as e:
         return _emit({"granted": None, "refused": "operator-only", "detail": str(e)}, 1)
-    if args.key not in budget.CAPS:
-        return _emit({"granted": None, "refused": "unknown-key", "detail": sorted(budget.CAPS)}, 1)
+    if args.key not in budget.GRANTABLE:
+        return _emit({"granted": None, "refused": "key-not-grantable", "detail": list(budget.GRANTABLE)}, 1)
     if args.n < 1:
         return _emit({"granted": None, "refused": "bad-n", "detail": args.n}, 1)
     lk = next((x for x in lock.all_locks(ctx) if x.issue == args.issue), None)

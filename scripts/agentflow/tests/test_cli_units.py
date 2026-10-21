@@ -131,8 +131,12 @@ def test_grant_is_operator_only_fails_closed_and_extends_the_live_run(capsys, ro
     assert code == 1 and out["refused"] == "operator-only"
     monkeypatch.delenv("AGENTFLOW_RUN_ID")
     # (b) fail closed on what it is asked to grant.
-    for args, refused in ((("--key", "spec-rounds"), "unknown-key"), (("--n", "0"), "bad-n"),
-                          (("--issue", "9"), "no-lease")):
+    # Only panel rounds: `ci_fix`, `pi_calls` and the rest are real caps but not grantable.
+    for args, refused in ((("--key", "spec-rounds"), "key-not-grantable"),
+                          (("--key", "ci_fix"), "key-not-grantable"),
+                          (("--key", "pi_calls"), "key-not-grantable"),
+                          (("--key", "rebase_regate"), "key-not-grantable"),
+                          (("--n", "0"), "bad-n"), (("--issue", "9"), "no-lease")):
         argv = list(grant)
         i = argv.index(args[0])
         argv[i + 1] = args[1]

@@ -94,11 +94,18 @@ def charge(ctx: Ctx, key: str, n: int = 1, sub: str | None = None) -> int:
         return _cap(data, key) - used
 
 
+# The only caps a grant may raise: panel rounds. A `ci_fix`, `rebase_regate`
+# or `pi_calls` past its cap is a different decision, not an extra round.
+GRANTABLE = ("spec_rounds", "final_rounds")
+
+
 def grant(ctx: Ctx, run_id: str, key: str, n: int, by: str, issue: int) -> int:
-    """OPERATOR-ONLY (the caller, `cli.cmd_grant`, enforces it): raise run
-    `run_id`'s cap for `key` by `n`. The audit line lands BEFORE the write, so
-    a grant is never in effect without its record. Returns the new cap."""
-    if key not in CAPS:
+    """Raise run `run_id`'s cap for `key` (one of `GRANTABLE`) by `n`. Meant for
+    the operator; `cli.cmd_grant` refuses a call carrying a run id, but nothing
+    in code stops automation calling it without one (the prompt is the guard,
+    as for `unblock`). The audit line lands BEFORE the write, so a grant is
+    never in effect without its record. Returns the new cap."""
+    if key not in GRANTABLE:
         raise KeyError(key)
     if n < 1:
         raise ValueError(f"grant must be at least 1, not {n}")

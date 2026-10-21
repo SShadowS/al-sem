@@ -25,11 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those paths; anywhere else, including an entry raised outside the two slots (the
   code-review skill, a task reviewer, a proof), the entry fails. In 3 of 3 runs a final round existed only to confirm a wording fix. 2 new tests
   (12 cases) in `test_cli_flow.py`.
-- agentflow (flow speed-ups, P9): new operator-only `grant --issue N --key <cap> --n <k>
-  --by <name>` raises one cap of the run holding issue N, inside `budget.json`'s checksum,
-  with a `budget-grant` audit line written first. It refuses a call carrying a run id, an
-  unknown key, `--n` below 1 and an issue no lease names; it allows a live lease, since
-  the run it extends is live. `charge` and `grant` now hold a per-run `budget-<run>`
+- agentflow (flow speed-ups, P9): new `grant --issue N --key spec_rounds|final_rounds
+  --n <k> --by <name>`, for the operator, raises one panel-round cap of the run holding
+  issue N, with a `budget-grant` audit line written first. It refuses every other key
+  (`key-not-grantable`, `ci_fix` included), `--n` below 1, an issue no lease names and a
+  call carrying a run id; it allows a live lease, since the run it extends is live. A
+  call without a run id is not stopped in code, so for `grant`, as for `unblock`, the
+  prompt is the guard. `charge` and `grant` now hold a per-run `budget-<run>`
   mutex, so neither loses the other's write. A budget written before grants existed still
   loads. #190's sixth spec round was recorded outside the budget. 4 new tests.
 - agentflow (flow speed-ups, P2): a findings-register entry whose only remaining work is

@@ -181,13 +181,18 @@ instructions to the flow. Concretely:
 | pi calls per issue | 20 (2 reviewers × up to 10 rounds; 14 until 2026-10-14) | `blocked` |
 | Per-gate timeout (supervised, below) | 45 min | gate fails |
 
-A cap may be raised for one run only by the operator: `grant --issue N --key <cap>
---n <k> --by <name>` adds `k` to that cap in the run's `budget.json` (under its
-checksum, so a hand edit is still refused) and appends a `budget-grant` line to
-`.agent/audit.jsonl` first. It refuses any call carrying a run id
-(`lock.require_human`), an unknown key, `--n` below 1, and an issue no lease names.
-Unlike `clear-halt` it does not refuse a live lease: the run it extends is live by
-design. Added 2026-10-21: #190's sixth spec round was recorded outside the budget.
+A panel-round cap may be raised for one run by the operator: `grant --issue N --key
+spec_rounds|final_rounds --n <k> --by <name>` adds `k` to that cap in the run's
+`budget.json` and appends a `budget-grant` line to `.agent/audit.jsonl` first. It
+refuses any other key (`key-not-grantable`; a `ci_fix` or `pi_calls` past its cap is
+not an extra round), `--n` below 1, an issue no lease names, and a call carrying a run
+id (`lock.require_human`). That last check is the whole code-side guard: a process
+that drops its run id is not stopped, so for `grant`, as for `unblock`, the prompt is
+the guard, and the narrow key set limits what a misuse can buy. Unlike `clear-halt` it
+does not refuse a live lease: the run it extends is live by design. The budget's
+checksum only detects a write that did not go through the executor's own helpers; it
+is not a guard against a caller of `grant`. Added 2026-10-21: #190's sixth spec round
+was recorded outside the budget.
 
 - **Per-loop budgets**: `--max-issues` (default 3), counted in
   `.agent/runs/loop.json` so re-fired ticks share one durable counter; the loop stops
@@ -1102,8 +1107,9 @@ can be reproduced after cleanup. Nothing in that directory is ever pushed.
   obligation and its three states), plus `.agent/incidents.json` and the
   append-only `.agent/audit.jsonl` alongside the existing `.agent/` state.
 - Executor subcommands added for the operator, not for the flow: `clear-halt`,
-  `resolve-incident`, `grant`, `incidents`. The first three are gated in code; see
-  "Post-merge verification" and "Per-issue budgets".
+  `resolve-incident`, `grant`, `incidents`. The first two are gated in code (see
+  "Post-merge verification"); `grant` only refuses a call carrying a run id, so the
+  prompt is its guard (see "Per-issue budgets").
 - `.claude/commands/orchestrate.md`, `.claude/commands/issue.md`.
 - `.claude/commands/README.md` (new): one entry per command, plus `/triage-wave`.
 - `.gitignore`: `.agent/*` with per-directory re-includes for the two evidence

@@ -111,8 +111,10 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    one spec round.
 5. **Spec panel.** `charge spec_rounds` per round (cap 5). A round past a
    cap exists only after the operator runs `python scripts/agentflow grant
-   --issue N --key spec_rounds --n 1 --by <operator>` (operator-only: it
-   refuses any call carrying a run id); then charge the round as usual. Never
+   --issue N --key spec_rounds --n 1 --by <operator>` (`final_rounds` for the
+   final panel; no other cap can be granted). Never call `grant` yourself: it
+   refuses a call carrying your run id, but this sentence, not the code, is
+   what stops you dropping it. Then charge the round as usual. Never
    run a round the budget does not cover, and never record one "outside the
    budget" in the ledger instead (#190 did, and `status` under-counted it). Follow the
    `panel-review` skill: a briefing file with absolute paths and a
