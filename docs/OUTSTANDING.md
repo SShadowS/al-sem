@@ -643,11 +643,10 @@ sizings marked pre-arc).
   consistency (low priority; advisory engine only)
 
 - [x] **perf_bounds `compute_all_within_bound` CI flake** — addressed by #190 (lock +
-  `min_of`, 2026-10-21); confirmed on the runner by #190's CI runs. Original item: (seen
-  once, 2026-07-18,
-  docs-only push; adjacent runs of the same code passed): magnitude bound lost to
-  shared-runner load variance — the exact class the T3 arc fixed for rung bounds via
-  interleaved complexity-class assertions. Give compute_all the same load-stable
+  `min_of`); the repeat-green CI record is in #190's PR. Original item: (seen once,
+  2026-07-18, docs-only push; adjacent runs of the same code passed): magnitude bound
+  lost to shared-runner load variance — the exact class the T3 arc fixed for rung bounds
+  via interleaved complexity-class assertions. Give compute_all the same load-stable
   treatment if it flakes again
 
 - [x] **L4 db-effect RSS consumer-migration — remove the analyze-path

@@ -112,10 +112,13 @@ fn every_timing_test_holds_the_timing_lock() {
     for i in start..end {
         let t = lines[i].trim();
         if t != "#[test]" {
-            // Any other test attribute (`#[tokio::test]`, `#[test] fn x() {`)
-            // would be skipped, so it fails loudly instead.
+            // Any other test attribute (`#[tokio::test]`, `#[test] fn x() {`,
+            // `#[cfg_attr(…, test)]`) would be skipped, so it fails loudly.
+            let other_test_attr = t.contains("#[test")
+                || t.contains("test]")
+                || (t.starts_with("#[") && t.contains("test"));
             assert!(
-                t.starts_with("//") || !(t.contains("#[test") || t.contains("test]")),
+                t.starts_with("//") || !other_test_attr,
                 "line {}: test attribute not alone on its line as `#[test]` (`{t}`); \
                  the scan cannot check it",
                 i + 1
@@ -129,9 +132,11 @@ fn every_timing_test_holds_the_timing_lock() {
             "line {}: attribute between #[test] and fn (`{sig}`); the scan cannot check it",
             i + 2
         );
+        // The body opens at the first `{`, not at a line ENDING in `{`: a
+        // one-line `fn x() {}` must not skip ahead to the next fn's body.
         let body = (i + 1..end)
-            .find(|&j| lines[j].trim_end().ends_with('{'))
-            .expect("a test fn signature ends in `{`");
+            .find(|&j| lines[j].contains('{'))
+            .expect("a test fn signature contains `{`");
         let first = (body + 1..end)
             .map(|j| lines[j].trim())
             .find(|l| !l.is_empty());
@@ -173,13 +178,21 @@ mod release_checks {
 
     // 3x the CLAUDE.md target, per the binding T0.5 USER DECISION (see module doc).
     //
-    // Every bound below was calibrated as 3x a MEDIAN and is, since #190
-    // (2026-10-21), compared with a minimum ([`min_of`]). That widens each
-    // bound by its gate's median-over-min gap, which depends on the gate (worst
-    // per-run gap, 4-core serial runs): 3-5% for `build_full_100`,
+    // The bounds below are not all calibrated the same way: `BUILD_FULL_*`,
+    // `QUERY_BOUND`, `INCOMING_HIGH_FANIN_BOUND`, `RUNG1_BOUND`, `RUNG2_BOUND`
+    // are 3x a product target; `RUNG*_SYNTHETIC_BOUND` are 5x a measured
+    // synthetic-corpus baseline; `RECURSIVE_SCC_BOUND` (and
+    // `COMPUTE_SUMMARIES_V2_BOUND`'s original basis) is 3x a measured median,
+    // `RECURSIVE_SCC_BOUND`'s a contended one; `COMPUTE_ALL_BOUND` is
+    // architectural and already judged a minimum. Since #190 (2026-10-21) every
+    // magnitude gate compares a minimum ([`min_of`]) with its bound. Where a
+    // bound came from a median, that widens it by the gate's median-over-min
+    // gap (worst per-run gap, 4-core serial runs): 3-5% for `build_full_100`,
     // `compute_summaries_v2`, `recursive_scc`, `rung1_scoped`; 9-12% for
     // `incoming`, `outgoing`, `prepare`, `rung2`; 16% for `build_full_1000`;
-    // 18% for `rung1`. Small against the 3x margin; no bound value changed.
+    // 18% for `rung1`. Small against the margins; no bound value changed. A
+    // bound calibrated on CONTENDED runs loosens far more under the lock (~2x,
+    // see `RECURSIVE_SCC_BOUND`).
     const BUILD_FULL_100_BOUND: Duration = Duration::from_millis(1500); // target: 500ms
     const BUILD_FULL_1000_BOUND: Duration = Duration::from_millis(6000); // target: 2s
     const QUERY_BOUND: Duration = Duration::from_millis(3); // target: 1ms
@@ -424,12 +437,14 @@ mod release_checks {
     //
     // Runner calibration under the lock (#190's probes D3 and D3b): run
     // 39625785855 measured a 3x solve at min 179.87ms; run 39635284889 (AMD
-    // EPYC 7763) measured 1x 86.52ms and 3x 248.21ms. Hosted runners differ
-    // ~1.4x. 230ms keeps 2.7x headroom over the slow runner's 1x cost. What
-    // it catches is runner-dependent: a 3x regression FAILS on a runner of the
-    // EPYC 7763's speed and PASSES on the faster D3 runner and on the dev
-    // machine (D2: 3x min 142-153ms; D3b local: 156ms). No single absolute
-    // bound does both, so the bound stays 230ms; the follow-up is a
+    // EPYC 7763) measured 1x 86.52ms and 3x 248.21ms. The two runner runs
+    // differed ~1.4x (D3's CPU unrecorded; D3's probe also timed two drops).
+    // 230ms keeps 2.7x headroom over the slow run's 1x cost. What it catches
+    // is runner-dependent: a 3x regression FAILS on a runner of the EPYC
+    // 7763's speed and PASSES on the faster D3 runner and on the dev machine
+    // (D2: 3x min 142-153ms; D3b local: 156ms). The two runs do not establish
+    // a robust portable bound (175ms would satisfy both measured runs with
+    // ~1.7% margin), so the bound stays 230ms; the follow-up is a
     // machine-independent ratio gate (this solve timed against a reference
     // workload in the same process, as `COMPUTE_ALL_SCALING_FACTOR` does).
     const COMPUTE_SUMMARIES_V2_BOUND: Duration = Duration::from_millis(230); // 3x ~76ms dev baseline (2026-07); runner data under the lock above (#190)
@@ -478,7 +493,16 @@ mod release_checks {
     // post-A3-store re-measurement note) — which is precisely why that gate
     // could never have caught this class of regression, and this one can.
     //
-    // # Which baseline the 3x is taken over
+    // # Which baseline the 3x is taken over (history: the parallel shape)
+    //
+    // This calibration predates #190: siblings no longer overlap since
+    // [`TIMING_LOCK`], so the contended median below is history. Under the
+    // lock the CI runner measured min 133.09ms (#190's D3, run 39625785855):
+    // 650 / 133 ≈ 4.9x headroom. A bound calibrated on contended runs loosens
+    // by ~2x under the lock, not by the few-% median-over-min gap. Kept as is
+    // because its job is the ~22x re-materialization regression (133ms x 22 ≈
+    // 2.9s, far above 650ms); a re-baseline on locked runs is a filed
+    // follow-up.
     //
     // The 122.8ms above is an ISOLATED (`-- recursive_scc`-filtered) median.
     // Run in the REAL CI invocation shape — `cargo test --release --test
@@ -495,7 +519,8 @@ mod release_checks {
     // is wider. Generous enough for machine-to-machine variance; nowhere near
     // generous enough to let the regression through.
     //
-    // # This calibration is dev-machine-only (fix wave finding 5)
+    // # This calibration is dev-machine-only (fix wave finding 5; history, see
+    // the #190 note above for the runner number under the lock)
     //
     // Every number above (~123ms isolated, ~215ms worst full-suite median) was
     // measured on the AUTHOR'S dev machine, not on `.github/workflows/ci.yml`'s
@@ -530,7 +555,10 @@ mod release_checks {
     /// serial, `build_full_1000` 196-255ms vs 108-121ms. PR #187 failed CI
     /// twice on `compute_summaries_v2_within_bound` this way with no change on
     /// its code path. `every_timing_test_holds_the_timing_lock` (top level,
-    /// every profile) pins that each test takes it.
+    /// every profile) pins that each test takes it. The lock covers libtest
+    /// (`cargo test`: one process, many threads); under nextest each test is
+    /// its own process, so `.config/nextest.toml`'s `perf-bounds` test-group
+    /// (`max-threads = 1`) does the same job there.
     static TIMING_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Take [`TIMING_LOCK`]. Recovers from poisoning, so one test that panics
