@@ -2,6 +2,8 @@
 # kraken setup (idempotent): the sibling repos al-sem builds against, on the work volume.
 set -euo pipefail
 mkdir -p /work/src
+# the target of the image's ~/.al-sem link (.kraken/Dockerfile): agentflow's runs and timings survive a rebuild
+mkdir -p /work/.al-sem
 # The AL grammar: CI clones main too; build.rs refuses a grammar whose node-types.json hash drifts
 if [ ! -d /work/src/tree-sitter-al/.git ]; then
   git clone https://github.com/SShadowS/tree-sitter-al.git /work/src/tree-sitter-al

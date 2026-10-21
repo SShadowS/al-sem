@@ -40,4 +40,8 @@ RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:/opt/al-tool:$PATH' 'e
       'export RUSTUP_HOME=/opt/rustup' 'export DOTNET_CLI_TELEMETRY_OPTOUT=1' \
       'export PI_CODING_AGENT_DIR=/home/dev/.config/pi' > /etc/profile.d/al-sem-tools.sh \
     && chown -R dev:dev /opt/rustup /opt/cargo
+# ~/.al-sem (agentflow's retained runs, timings.jsonl) lives on the work volume: a rebuild keeps only /work,
+# /coord and a few home folders, so a plain ~/.al-sem was wiped every time. scripts/kraken-setup.sh makes
+# the target; the link is made here, not there, because kraken re-runs setup only when its inputs change.
+RUN ln -s /work/.al-sem /home/dev/.al-sem && chown -h dev:dev /home/dev/.al-sem
 # ends as root: the base entrypoint drops to dev
