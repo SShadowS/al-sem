@@ -349,6 +349,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`perf_bounds` no longer fails CI from noise alone** (#190; `tests/perf_bounds.rs`).
+  CI runs the binary's tests side by side on a 4-core runner, so one test's samples were
+  timed while another test was building or solving, and ten gates judged the median of
+  their samples. PR #187 failed twice this way (`compute_summaries_v2`, medians 231.8 /
+  243.0 ms against a 230 ms bound, minima ~150 ms) on a change that never reached that
+  code. Now every timing test takes one shared lock first, so they run one at a time, and
+  every gate compares the minimum of its samples with its bound. A new test reads the file
+  and fails if a timing test does not take the lock. No bound value changed.
 - **The lowerer reads two new shapes of the `4d75846c` grammar** (see Changed;
   `crates/al-syntax/src/lower/mod.rs`):
   - A `preproc_split_case_extended` arm may hold a nested `preproc_conditional_case`
