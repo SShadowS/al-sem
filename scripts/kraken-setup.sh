@@ -21,7 +21,7 @@ else
 fi
 (cd /work/src/pi-mcp && { [ -d node_modules ] || npm install --silent; } && npm run --silent --if-present build)
 # agentflow's settings for this checkout: the CDO gate reads the baseline below; one heavy gate at a
-# time until two have been measured to fit inside the tentacle's 24g (then raise heavy_gates to 2)
+# time until two have been measured to fit inside the tentacle's 32g (then raise heavy_gates to 2)
 mkdir -p .agent
 [ -f .agent/config.json ] ||
   echo '{"slots": 2, "heavy_gates": 1, "cdo_ws": "/work/src/cdo-baseline/Cloud"}' > .agent/config.json

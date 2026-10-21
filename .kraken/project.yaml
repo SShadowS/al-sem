@@ -3,7 +3,7 @@ name: alsem
 repo: https://github.com/SShadowS/al-sem.git
 image: .kraken/Dockerfile
 ssh_port: 2210 # server1's sshPorts range 2210-2299
-mem_limit: 24g # with the bc sidecar (sql 4g, its tmpfs inside that limit; bc 6g) 34g, inside server1's maxMemory (40g)
+mem_limit: 32g # with the bc sidecar (sql 4g, its tmpfs inside that limit; bc 6g) 42g: server1's maxMemory must be >= 42g
 agents:
   # one agent: agentflow's issue leases live in this checkout's .agent/, so a second
   # /orchestrate in another worktree would not see them
