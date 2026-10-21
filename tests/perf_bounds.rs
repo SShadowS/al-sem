@@ -1255,52 +1255,25 @@ mod release_checks {
             "sanity: compute_summaries_v2_bundle must produce summaries for a 1000-file workspace"
         );
 
-        // D3B-PROBE (throwaway, reverted next commit): runner CPU, 1x and 3x
-        // samples, multiplier; every result is kept until `elapsed()` is
-        // taken and dropped after it, the same in both loops.
-        let cpu = std::fs::read_to_string("/proc/cpuinfo")
-            .ok()
-            .and_then(|s| {
-                s.lines()
-                    .find(|l| l.starts_with("model name"))
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| "model name: <unreadable>".to_string());
-        println!("[perf_bounds] D3B cpu: {cpu}");
-        let mut samples1 = Vec::with_capacity(5);
-        for _ in 0..5 {
-            let start = Instant::now();
-            let r1 = sub.solve();
-            samples1.push(start.elapsed());
-            assert!(!r1.1.is_empty(), "sanity: solver must produce summaries");
-            drop(r1);
-        }
         let mut samples = Vec::with_capacity(5);
         for _ in 0..5 {
             let start = Instant::now();
-            let r1 = sub.solve();
-            let r2 = sub.solve();
-            let r3 = sub.solve();
+            let (_bundle, result, _diag) = sub.solve();
             samples.push(start.elapsed());
-            assert!(!r3.1.is_empty(), "sanity: solver must produce summaries");
-            drop((r1, r2, r3));
+            assert!(
+                !result.is_empty(),
+                "sanity: compute_summaries_v2_bundle must produce summaries"
+            );
         }
-        let m1 = min_of(&samples1);
         let m = min_of(&samples);
-        let mult = m.as_secs_f64() / m1.as_secs_f64();
         println!(
-            "[perf_bounds] D3B 1x: min={m1:?} samples={samples1:?}\n\
-             [perf_bounds] D3B 3x: min={m:?} samples={samples:?}\n\
-             [perf_bounds] D3B multiplier={mult:.3} bound={COMPUTE_SUMMARIES_V2_BOUND:?}"
+            "[perf_bounds] compute_summaries_v2_bundle(1000): min={m:?} bound={COMPUTE_SUMMARIES_V2_BOUND:?} \
+             samples={samples:?}"
         );
         assert!(
             m <= COMPUTE_SUMMARIES_V2_BOUND,
             "compute_summaries_v2_bundle min {m:?} exceeds 3x-target bound \
              {COMPUTE_SUMMARIES_V2_BOUND:?} (samples: {samples:?})"
-        );
-        panic!(
-            "D3B-PROBE: the 3x min {m:?} passed the bound {COMPUTE_SUMMARIES_V2_BOUND:?} \
-             (1x min {m1:?}, multiplier {mult:.3}); forced failure so the output is shown"
         );
     }
 
