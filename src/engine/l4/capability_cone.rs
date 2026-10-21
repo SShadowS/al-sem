@@ -3139,10 +3139,27 @@ pub fn compose_cone_over_graph(
         direct_in,
         coverage_in,
         routines,
-        mode,
-        RecursiveMembership::PerScc,
-        None,
+        ComposeOptions::production(mode),
     )
+}
+
+/// How one composition runs: the outputs it makes, the derived paths it takes
+/// (#160 step 7a §4.3) and the test oracle's raw sink (step 7b §4.7).
+pub(crate) struct ComposeOptions<'s> {
+    pub(crate) mode: ConeOutput,
+    pub(crate) membership: RecursiveMembership,
+    pub(crate) raw_sink: Option<RawSink<'s>>,
+}
+
+impl ComposeOptions<'_> {
+    /// The production options: `mode`, `PerScc`, no sink.
+    pub(crate) fn production(mode: ConeOutput) -> Self {
+        Self {
+            mode,
+            membership: RecursiveMembership::PerScc,
+            raw_sink: None,
+        }
+    }
 }
 
 /// #160 step 7b §4.7: the T7'/T8' oracle's `RawOnly` composition, streamed.
@@ -3163,25 +3180,27 @@ pub(crate) fn compose_raw_streaming(
         direct_in,
         coverage_in,
         routines,
-        ConeOutput::RawOnly,
-        RecursiveMembership::PerScc,
-        Some(sink),
+        ComposeOptions {
+            raw_sink: Some(sink),
+            ..ComposeOptions::production(ConeOutput::RawOnly)
+        },
     )
 }
 
-/// [`compose_cone_over_graph`] with the recursive-member strategy stated
-/// (#160 step 7a §4.3) and the test oracle's raw sink (step 7b §4.7).
-#[allow(clippy::too_many_arguments)]
+/// [`compose_cone_over_graph`] with its [`ComposeOptions`] stated.
 pub(crate) fn compose_cone_over_graph_with(
     typed: &[TypedEdge],
     nodes: &[String],
     direct_in: &HashMap<String, Vec<CapabilityFact>>,
     coverage_in: &HashMap<String, (String, Vec<String>)>,
     routines: &[ModelRoutine],
-    mode: ConeOutput,
-    membership: RecursiveMembership,
-    raw_sink: Option<RawSink<'_>>,
+    opts: ComposeOptions<'_>,
 ) -> ConeOutcome {
+    let ComposeOptions {
+        mode,
+        membership,
+        raw_sink,
+    } = opts;
     crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
     let g = build_typed_edge_graph(typed, nodes);
@@ -6836,9 +6855,10 @@ mod scc_set_tests {
             direct_in,
             &HashMap::new(),
             &[],
-            mode,
-            how,
-            None,
+            ComposeOptions {
+                membership: how,
+                ..ComposeOptions::production(mode)
+            },
         )
     }
 
@@ -6936,9 +6956,10 @@ mod scc_set_tests {
             &i.direct_full,
             &i.coverage_in,
             &m.workspace.routines,
-            mode,
-            how,
-            None,
+            ComposeOptions {
+                membership: how,
+                ..ComposeOptions::production(mode)
+            },
         )
     }
 
@@ -7259,9 +7280,10 @@ codeunit 50100 C
                 &i.direct_full,
                 &i.coverage_in,
                 &m.workspace.routines,
-                ConeOutput::DerivedOnly,
-                how,
-                None,
+                ComposeOptions {
+                    membership: how,
+                    ..ComposeOptions::production(ConeOutput::DerivedOnly)
+                },
             )
         };
         let new = run(RecursiveMembership::PerScc);
