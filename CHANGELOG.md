@@ -19,9 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate-inert prose and the evidence files closes on the raising reviewer's `accepted`;
   the other reviewer's mark is `accepted-by-rule`, and a `re-raised` still reopens it.
   `attest` and the handoff check count `accepted-by-rule` only when the entry is minor and
-  not blocking, the other mark is `accepted`, and its `fix_commit` is a full SHA on the
-  branch (after `B`) whose own diff touches only those paths; anywhere else the entry
-  fails. In 3 of 3 runs a final round existed only to confirm a wording fix. 2 new tests
+  not blocking, its `source` fills exactly one review slot (a stand-in's name under
+  `--substitute`), that slot is `accepted` and the rule mark sits in the other one, and
+  its `fix_commit` is a full SHA on the branch (after `B`) whose own diff touches only
+  those paths; anywhere else, including an entry raised outside the two slots (the
+  code-review skill, a task reviewer, a proof), the entry fails. In 3 of 3 runs a final round existed only to confirm a wording fix. 2 new tests
   (12 cases) in `test_cli_flow.py`.
 - agentflow (flow speed-ups, P9): new operator-only `grant --issue N --key <cap> --n <k>
   --by <name>` raises one cap of the run holding issue N, inside `budget.json`'s checksum,

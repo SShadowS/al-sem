@@ -878,14 +878,22 @@ def _prose_fix_checker(git: Git, issue: int, tip: str, base: str):
     return ok
 
 
-def _rule_marks(marks: list, severity: str, blocking: bool, entry: dict, prose_fix) -> list:
+def _rule_marks(marks: list, severity: str, blocking: bool, entry: dict, prose_fix, roster) -> list:
     """`accepted-by-rule` counts as `accepted` only on a non-blocking `minor`
-    entry the other reviewer `accepted`, whose fix is prose only (`prose_fix`).
-    Anywhere else it is left as it is: an unknown word, so the entry fails."""
+    entry whose RAISER accepted it and whose fix is prose only (`prose_fix`).
+    The raiser is the entry's `source`, matched against `roster` -- the
+    reviewers actually filling the slots, so a stand-in's name under
+    `--substitute`. Its slot must be `accepted` and every other slot the rule
+    mark. A `source` that fills no slot (the code-review skill, a task
+    reviewer, a proof) gets no carve-out. Anywhere else the mark is left as it
+    is: an unknown word, so the entry fails."""
     if RULE_MARK not in marks:
         return marks
-    ok = (severity == "minor" and not blocking and "accepted" in marks
-          and all(m in ("accepted", RULE_MARK) for m in marks)
+    raiser = str(entry.get("source", "")).strip().lower()
+    slots = [i for i, r in enumerate(roster) if str(r).strip().lower() == raiser]
+    ok = (severity == "minor" and not blocking and len(slots) == 1
+          and marks[slots[0]] == "accepted"
+          and all(m == RULE_MARK for i, m in enumerate(marks) if i != slots[0])
           and prose_fix is not None and prose_fix(entry))
     return ["accepted"] * len(marks) if ok else marks
 
@@ -923,7 +931,7 @@ def _register_failures(entries, roster=mergeops.ROSTER, marks_ok=_both_accepted,
         disposition = e.get("disposition")
         severity = str(e.get("severity", "")).strip().lower()
         blocking = e.get("blocking") is True or severity in BLOCKING_SEVERITIES
-        marks = _rule_marks(marks, severity, blocking, e, prose_fix)
+        marks = _rule_marks(marks, severity, blocking, e, prose_fix, roster)
         if severity not in SEVERITIES:
             bad.append(eid)  # missing or unknown: malformed, never "not blocking"
         elif disposition not in DISPOSITIONS:

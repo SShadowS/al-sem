@@ -1042,15 +1042,18 @@ def prose_rule_repo(repo_pair):
     return clone, B, g.rev("HEAD"), shas
 
 
-def rule_entry(fix_commit, *, severity="minor", reviews=None, **extra):
-    return {"id": "F2-1", "severity": severity, "disposition": "fixed", "fix_commit": fix_commit,
+def rule_entry(fix_commit, *, severity="minor", reviews=None, source="astra", **extra):
+    """Raised by `source` (astra by default), so astra's slot is `accepted` and flash's
+    the rule mark."""
+    return {"id": "F2-1", "source": source, "severity": severity, "disposition": "fixed",
+            "fix_commit": fix_commit,
             "reviews": reviews or {"astra": "accepted", "flash": "accepted-by-rule"}, **extra}
 
 
-def attest_rule(capsys, clone, tmp_path, B, head, entry):
+def attest_rule(capsys, clone, tmp_path, B, head, entry, extra=()):
     ctx = Ctx(Paths(clone), run_id="run-test")
     register = claimed_register(ctx, tmp_path, contents=json.dumps([entry]))
-    return attest(capsys, clone, register, B=B, H=head, final_head=head)
+    return attest(capsys, clone, register, B=B, H=head, final_head=head, extra=extra)
 
 
 def test_attest_accepts_a_raiser_only_mark_on_a_minor_prose_only_fix(capsys, repo_pair, tmp_path):
@@ -1059,8 +1062,22 @@ def test_attest_accepts_a_raiser_only_mark_on_a_minor_prose_only_fix(capsys, rep
     for shape in ("changelog", "docs_and_ledger"):
         code, out = attest_rule(capsys, clone, tmp_path, B, head, rule_entry(shas[shape]))
         assert code == 0, (shape, out)
-    flipped = rule_entry(shas["changelog"], reviews={"astra": "accepted-by-rule", "flash": "accepted"})
-    assert attest_rule(capsys, clone, tmp_path, B, head, flipped)[0] == 0
+    # The other direction: flash raised it, so flash accepts and astra gets the rule mark.
+    by_flash = rule_entry(shas["changelog"], source="flash",
+                          reviews={"astra": "accepted-by-rule", "flash": "accepted"})
+    assert attest_rule(capsys, clone, tmp_path, B, head, by_flash)[0] == 0
+
+
+def test_a_raiser_only_mark_follows_a_substituted_slot(capsys, repo_pair, tmp_path):
+    # Under `--substitute astra=sol` the marks sit under `sol`, and so does the source.
+    clone, B, head, shas = prose_rule_repo(repo_pair)
+    entry = rule_entry(shas["changelog"], source="sol",
+                       reviews={"sol": "accepted", "flash": "accepted-by-rule"})
+    code, out = attest_rule(capsys, clone, tmp_path, B, head, entry, extra=("--substitute", "astra=sol"))
+    assert code == 0, out
+    # Without the substitution `sol` fills no slot: no carve-out, and astra's slot is empty.
+    code, out = attest_rule(capsys, clone, tmp_path, B, head, entry)
+    assert code == 1 and out["entries"] == ["F2-1"], out
 
 
 @pytest.mark.parametrize("shape, entry_kw", [
@@ -1073,6 +1090,13 @@ def test_attest_accepts_a_raiser_only_mark_on_a_minor_prose_only_fix(capsys, rep
     ("changelog", {"blocking": True}),                                 # blocking by flag
     ("changelog", {"reviews": {"astra": "accepted-by-rule", "flash": "accepted-by-rule"}}),
     ("changelog", {"reviews": {"astra": "re-raised", "flash": "accepted-by-rule"}}),  # an objection
+    # The rule mark in the RAISER's slot: astra raised it, so astra must accept it.
+    ("changelog", {"reviews": {"astra": "accepted-by-rule", "flash": "accepted"}}),
+    # Raised by no rostered reviewer: both must accept, as before.
+    ("changelog", {"source": "code-review"}),
+    ("changelog", {"source": "sonnet-task-review"}),
+    ("changelog", {"source": "proof-T1"}),
+    ("changelog", {"source": None}),
     (None, {}),                                                        # no fix_commit
     ("short", {}),                                                     # not a full SHA
 ])

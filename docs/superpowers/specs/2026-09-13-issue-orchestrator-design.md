@@ -927,9 +927,12 @@ gate-inert prose (`protect.gate_inert`) and the two evidence files closes when t
 reviewer who raised it accepts; the other reviewer's mark is `accepted-by-rule`. The
 other reviewer still sees it in the briefing, and a `re-raised` reopens it. The
 executor (`attest`, and the handoff check) counts `accepted-by-rule` as `accepted`
-only when the entry is `minor` and not `blocking`, the other mark is `accepted`, and
-its `fix_commit` is a full SHA on `B..final_head` whose own diff touches only those
-paths; anywhere else the mark is unknown and the entry fails. Code, tests, fixtures
+only when the entry is `minor` and not `blocking`, its `source` names the reviewer
+filling exactly one slot (a stand-in's name under `--substitute`), that slot is
+`accepted` and the rule mark sits in the other one, and its `fix_commit` is a full
+SHA on `B..final_head` whose own diff touches only those paths; anywhere else the
+mark is unknown and the entry fails. An entry raised outside the two slots (the
+code-review skill, a task reviewer, a proof) never qualifies. Code, tests, fixtures
 and `tests/**/*.md` never qualify. In 3 of 3 runs a final round existed only to
 confirm a wording fix.
 

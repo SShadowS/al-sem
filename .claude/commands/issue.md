@@ -180,9 +180,14 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    the entry's `fix_commit` to the full SHA of that fix. The briefing still
    lists it so the other reviewer may object, and an objection is a
    `re-raised` that reopens it. Code, tests, fixtures and `tests/**/*.md`
-   never qualify. The executor counts `accepted-by-rule` as `accepted` only
-   when the entry is `minor` and not `blocking`, the other mark is
-   `accepted`, and `fix_commit` is a commit on the branch (after `B`) whose
+   never qualify. The entry's `source` names the raiser exactly as its marks
+   are stored (a stand-in's own name under `--substitute`); an entry raised by
+   anyone outside the two review slots (the code-review skill, a task
+   reviewer, a proof) has no raiser here, and both reviewers accept it as
+   before. The executor counts `accepted-by-rule` as `accepted` only when the
+   entry is `minor` and not `blocking`, its `source` fills exactly one slot,
+   that slot's mark is `accepted`, the rule mark is in the OTHER slot, and
+   `fix_commit` is a commit on the branch (after `B`) whose
    own diff touches only those files; anywhere else it is an unknown mark and
    the entry fails. In 3 of 3 runs a final round existed only to confirm a
    wording fix.
