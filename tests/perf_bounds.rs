@@ -525,12 +525,25 @@ mod release_checks {
     /// every profile) pins that each test takes it.
     static TIMING_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    // D3-PROBE (throwaway, reverted next commit): fail every timing test at its end so CI prints its samples.
+    struct D3Probe;
+    impl Drop for D3Probe {
+        fn drop(&mut self) {
+            if !std::thread::panicking() {
+                panic!("D3-PROBE: forced failure so CI shows this test's samples");
+            }
+        }
+    }
+
     /// Take [`TIMING_LOCK`]. Recovers from poisoning, so one test that panics
     /// while holding it does not turn every later test red.
-    fn serial() -> std::sync::MutexGuard<'static, ()> {
-        TIMING_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn serial() -> (std::sync::MutexGuard<'static, ()>, D3Probe) {
+        (
+            TIMING_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            D3Probe,
+        )
     }
 
     /// The MINIMUM of `samples` — the statistic every magnitude gate in this
@@ -1251,6 +1264,8 @@ mod release_checks {
         let mut samples = Vec::with_capacity(5);
         for _ in 0..5 {
             let start = Instant::now();
+            let _ = sub.solve(); // D3-PROBE: 3x the solve per timed sample
+            let _ = sub.solve(); // D3-PROBE
             let (_bundle, result, _diag) = sub.solve();
             samples.push(start.elapsed());
             assert!(
