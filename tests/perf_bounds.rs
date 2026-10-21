@@ -78,6 +78,82 @@ mod perf_support;
 #[test]
 fn perf_bounds_binary_is_never_empty() {}
 
+/// Every `#[test]` in `release_checks` must take the timing lock as its
+/// FIRST statement (`let _serial = serial();` — see `TIMING_LOCK`'s doc,
+/// #190). Reads this file's own source, so it runs in every profile and a
+/// new timing test without the lock goes red even in a debug run. Tests are
+/// selected by the `#[test]` attribute, not by name, and matches are anchored
+/// to whole trimmed lines, so this scan's own string literals never match.
+#[test]
+fn every_timing_test_holds_the_timing_lock() {
+    let lines: Vec<&str> = include_str!("perf_bounds.rs").lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| l.trim() == "mod release_checks {")
+        .expect("`mod release_checks {` not found: the scan would pass empty");
+    let end = start
+        + lines[start..]
+            .iter()
+            .position(|l| *l == "}")
+            .expect("the closing `}` of `release_checks` not found");
+    // `release_checks` is the last item, so a column-0 `}` that is not
+    // followed only by blank lines (e.g. one inside a raw string) would have
+    // cut the scan short.
+    if let Some(j) = (end + 1..lines.len()).find(|&j| !lines[j].trim().is_empty()) {
+        panic!(
+            "line {}: text after the column-0 `}}` taken as the end of `release_checks` \
+             (line {}); it must be the file's last item, or the scan stops early",
+            j + 1,
+            end + 1
+        );
+    }
+    let mut tests = 0;
+    let mut missing = Vec::new();
+    for i in start..end {
+        let t = lines[i].trim();
+        if t != "#[test]" {
+            // Any other test attribute (`#[tokio::test]`, `#[test] fn x() {`,
+            // `#[cfg_attr(…, test)]`) would be skipped, so it fails loudly.
+            let other_test_attr = t.contains("#[test")
+                || t.contains("test]")
+                || (t.starts_with("#[") && t.contains("test"));
+            assert!(
+                t.starts_with("//") || !other_test_attr,
+                "line {}: test attribute not alone on its line as `#[test]` (`{t}`); \
+                 the scan cannot check it",
+                i + 1
+            );
+            continue;
+        }
+        tests += 1;
+        let sig = lines[i + 1].trim();
+        assert!(
+            sig.starts_with("fn "),
+            "line {}: attribute between #[test] and fn (`{sig}`); the scan cannot check it",
+            i + 2
+        );
+        // The body opens at the first `{`, not at a line ENDING in `{`: a
+        // one-line `fn x() {}` must not skip ahead to the next fn's body.
+        let body = (i + 1..end)
+            .find(|&j| lines[j].contains('{'))
+            .expect("a test fn signature contains `{`");
+        let first = (body + 1..end)
+            .map(|j| lines[j].trim())
+            .find(|l| !l.is_empty());
+        if first != Some("let _serial = serial();") {
+            missing.push(sig.to_string());
+        }
+    }
+    assert!(
+        tests >= 11,
+        "found only {tests} #[test] fns in release_checks (expected >= 11)"
+    );
+    assert!(
+        missing.is_empty(),
+        "timing tests without `let _serial = serial();` as their first statement: {missing:#?}"
+    );
+}
+
 #[cfg(debug_assertions)]
 #[allow(dead_code)]
 /// Compile-time note (not a test): the real bounds checks live in
@@ -101,6 +177,22 @@ mod release_checks {
     use tempfile::TempDir;
 
     // 3x the CLAUDE.md target, per the binding T0.5 USER DECISION (see module doc).
+    //
+    // The bounds below are not all calibrated the same way: `BUILD_FULL_*`,
+    // `QUERY_BOUND`, `INCOMING_HIGH_FANIN_BOUND`, `RUNG1_BOUND`, `RUNG2_BOUND`
+    // are 3x a product target; `RUNG*_SYNTHETIC_BOUND` are 5x a measured
+    // synthetic-corpus baseline; `RECURSIVE_SCC_BOUND` (and
+    // `COMPUTE_SUMMARIES_V2_BOUND`'s original basis) is 3x a measured median,
+    // `RECURSIVE_SCC_BOUND`'s a contended one; `COMPUTE_ALL_BOUND` is
+    // architectural and already judged a minimum. Since #190 (2026-10-21) every
+    // magnitude gate compares a minimum ([`min_of`]) with its bound. Where a
+    // bound came from a median, that widens it by the gate's median-over-min
+    // gap (worst per-run gap, 4-core serial runs): 3-5% for `build_full_100`,
+    // `compute_summaries_v2`, `recursive_scc`, `rung1_scoped`; 9-12% for
+    // `incoming`, `outgoing`, `prepare`, `rung2`; 16% for `build_full_1000`;
+    // 18% for `rung1`. Small against the margins; no bound value changed. A
+    // bound calibrated on CONTENDED runs loosens far more under the lock (~2x,
+    // see `RECURSIVE_SCC_BOUND`).
     const BUILD_FULL_100_BOUND: Duration = Duration::from_millis(1500); // target: 500ms
     const BUILD_FULL_1000_BOUND: Duration = Duration::from_millis(6000); // target: 2s
     const QUERY_BOUND: Duration = Duration::from_millis(3); // target: 1ms
@@ -230,7 +322,7 @@ mod release_checks {
     // run is always slower, never faster), so the MEDIAN of a load-skewed
     // sample set is itself skewed upward, inflating the ratio.
     //
-    // **v2** — switched to [`min_of`] instead of [`median`] (the correct
+    // **v2** — switched to [`min_of`] instead of the median (the correct
     // estimator when noise is one-sided — see that function's doc), same
     // 250-vs-1000 sizes, factor 10. Isolated `-- compute_all`-filtered runs
     // looked clean (fixed 4.37-6.89, buggy 10.82-12.51, no overlap) — but
@@ -333,9 +425,30 @@ mod release_checks {
     // perf_support corpus is deliberately non-recursive (straight-line call
     // chains, see `compute_summaries_v2_within_bound`'s own doc), so the
     // closed-form non-recursive path exercised here was never expected to
-    // move. Bound left at 230ms (3x ~76ms) rather than tightened, per that
-    // baseline's still-current headroom rationale.
-    const COMPUTE_SUMMARIES_V2_BOUND: Duration = Duration::from_millis(230); // 3x ~76ms measured baseline (re-measured post-A3-store 2026-07-24, unchanged)
+    // move. Bound left at 230ms then (3x ~76ms) rather than tightened, per
+    // that baseline's headroom rationale at the time; see 2026-10-21 below.
+    //
+    // 2026-10-21 (#190): this gate failed PR #187's CI twice on a change that
+    // never reaches the L4 solve — runs 39611462366 and 39612982728, medians
+    // 231.8 / 243.0ms against the 230ms bound, while the minima were 147.3 /
+    // 151.6ms. That was before the lock: sibling tests running in parallel
+    // plus the median. The gate now holds [`TIMING_LOCK`] and judges
+    // [`min_of`].
+    //
+    // Runner calibration under the lock (#190's probes D3 and D3b): run
+    // 39625785855 measured a 3x solve at min 179.87ms; run 39635284889 (AMD
+    // EPYC 7763) measured 1x 86.52ms and 3x 248.21ms. The two runner runs
+    // differed ~1.4x (D3's CPU unrecorded; D3's probe also timed two drops).
+    // 230ms keeps 2.7x headroom over the slow run's 1x cost. What it catches
+    // is runner-dependent: a 3x regression FAILS on a runner of the EPYC
+    // 7763's speed and PASSES on the faster D3 runner and on the dev machine
+    // (D2: 3x min 142-153ms; D3b local: 156ms). The two runs do not establish
+    // a robust portable bound (one in 173-180ms — over 2x the slow run's 1x,
+    // under the fast run's 3x — fits both, with ~1-3% margin), so the bound
+    // stays 230ms; the follow-up is a
+    // machine-independent ratio gate (this solve timed against a reference
+    // workload in the same process, as `COMPUTE_ALL_SCALING_FACTOR` does).
+    const COMPUTE_SUMMARIES_V2_BOUND: Duration = Duration::from_millis(230); // 3x ~76ms dev baseline (2026-07); runner data under the lock above (#190)
 
     // `recursive_scc_db_effects_within_bound` (final-branch-review M-6) — the
     // RECURSIVE-SCC counterpart to `COMPUTE_SUMMARIES_V2_BOUND` above, whose
@@ -381,7 +494,16 @@ mod release_checks {
     // post-A3-store re-measurement note) — which is precisely why that gate
     // could never have caught this class of regression, and this one can.
     //
-    // # Which baseline the 3x is taken over
+    // # Which baseline the 3x is taken over (history: the parallel shape)
+    //
+    // This calibration predates #190: siblings no longer overlap since
+    // [`TIMING_LOCK`], so the contended median below is history. Under the
+    // lock the CI runner measured min 133.09ms (#190's D3, run 39625785855):
+    // 650 / 133 ≈ 4.9x headroom. A bound calibrated on contended runs loosens
+    // by ~2x under the lock, not by the few-% median-over-min gap. Kept as is
+    // because its job is the ~22x re-materialization regression (133ms x 22 ≈
+    // 2.9s, far above 650ms); a re-baseline on locked runs is a filed
+    // follow-up.
     //
     // The 122.8ms above is an ISOLATED (`-- recursive_scc`-filtered) median.
     // Run in the REAL CI invocation shape — `cargo test --release --test
@@ -398,7 +520,8 @@ mod release_checks {
     // is wider. Generous enough for machine-to-machine variance; nowhere near
     // generous enough to let the regression through.
     //
-    // # This calibration is dev-machine-only (fix wave finding 5)
+    // # This calibration is dev-machine-only (fix wave finding 5; history, see
+    // the #190 note above for the runner number under the lock)
     //
     // Every number above (~123ms isolated, ~215ms worst full-suite median) was
     // measured on the AUTHOR'S dev machine, not on `.github/workflows/ci.yml`'s
@@ -420,30 +543,52 @@ mod release_checks {
     /// File count for the recursive corpus — see [`RECURSIVE_SCC_BOUND`].
     const RECURSIVE_CORPUS_FILES: usize = 400;
 
-    fn median(mut samples: Vec<Duration>) -> Duration {
-        samples.sort();
-        samples[samples.len() / 2]
+    /// One lock for every timing test in this module: each `#[test]` takes
+    /// `let _serial = serial();` as its FIRST statement, so no two timing
+    /// tests overlap — setup included, since a sibling's untimed parse/build
+    /// is exactly the load that skews another test's samples (#190,
+    /// 2026-10-21). CI runs this binary's tests in parallel (default libtest
+    /// threads) on a 4-vCPU runner, and that sibling load is SUSTAINED: it
+    /// covers all of a gate's samples, so it raises the minimum too, which
+    /// [`min_of`] cannot undo. Measured once (P7, 2026-10-21, 4-core pinned,
+    /// dev machine), 5 full runs each:
+    /// `compute_summaries_v2`'s per-run min 54-71ms in parallel vs 44-47ms
+    /// serial, `build_full_1000` 196-255ms vs 108-121ms. PR #187 failed CI
+    /// twice on `compute_summaries_v2_within_bound` this way with no change on
+    /// its code path. `every_timing_test_holds_the_timing_lock` (top level,
+    /// every profile) pins that each test takes it. The lock covers libtest
+    /// (`cargo test`: one process, many threads); under nextest each test is
+    /// its own process, so `.config/nextest.toml`'s `perf-bounds` test-group
+    /// (`max-threads = 1`) does the same job there.
+    static TIMING_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Take [`TIMING_LOCK`]. Recovers from poisoning, so one test that panics
+    /// while holding it does not turn every later test red.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        TIMING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The MINIMUM of `samples` — the statistic [`measure_compute_all`] uses
-    /// instead of [`median`] (t3 final review, v2). Wall-clock measurement
+    /// The MINIMUM of `samples` — the statistic every magnitude gate in this
+    /// file judges (`compute_all` since t3 final review v2, the rest since
+    /// #190; a median was used before). Wall-clock measurement
     /// noise on a shared machine (OS scheduling preemption, cache/TLB
     /// eviction from other processes, CPU frequency scaling) is ONE-SIDED: an
     /// interrupted run is always slower than an uninterrupted one, never
-    /// faster. That makes the minimum of repeated samples the
-    /// maximum-likelihood estimator of the TRUE cost — every sample above it
-    /// is explained by "plus some noise," while the median of a noise-skewed
-    /// sample set is ITSELF skewed toward whatever fraction of samples
-    /// happened to get interrupted (proven empirically: the median-based
+    /// faster. So the minimum of repeated samples rejects transient positive
+    /// delays — every sample above it is explained by "plus some noise,"
+    /// while the median of a noise-skewed sample set is ITSELF skewed toward
+    /// whatever fraction of samples happened to get interrupted (proven
+    /// empirically: the median-based
     /// scaling gate this replaces flaked 2/5 times on the FIXED
     /// implementation when the reviewer ran it 5x back-to-back, deliberately
-    /// under load). This is the standard estimator throughout the
-    /// microbenchmarking literature (`hyperfine`, Criterion-style harnesses)
-    /// for exactly this reason — see `COMPUTE_ALL_SCALING_FACTOR`'s doc for
-    /// the re-measurement this motivated. Used for BOTH `compute_all`'s
-    /// magnitude bounds and its scaling ratio (not just the ratio) — the
-    /// same one-sided-noise argument applies to a plain "is this under Nms"
-    /// check just as much as to a ratio of two such checks.
+    /// under load). The minimum rejects TRANSIENT positive delays only: a
+    /// SUSTAINED load window covering every sample raises the minimum too,
+    /// and it does nothing for that — the load this binary causes itself is
+    /// removed by [`TIMING_LOCK`] instead; load from other tenants of the
+    /// machine is not filtered at all. See `COMPUTE_ALL_SCALING_FACTOR`'s doc
+    /// for the re-measurement this motivated.
     fn min_of(samples: &[Duration]) -> Duration {
         *samples.iter().min().expect("samples is never empty")
     }
@@ -602,6 +747,7 @@ mod release_checks {
 
     #[test]
     fn build_full_100_files_within_bound() {
+        let _serial = serial();
         let dir = corpus_dir(100);
 
         // Warm-up: first pass pages the corpus into the OS file cache so the
@@ -614,18 +760,19 @@ mod release_checks {
             LspSnapshot::build_full(dir.path()).expect("build_full");
             samples.push(start.elapsed());
         }
-        let m = median(samples.clone());
+        let m = min_of(&samples);
         println!(
-            "[perf_bounds] build_full_100_files: median={m:?} bound={BUILD_FULL_100_BOUND:?} samples={samples:?}"
+            "[perf_bounds] build_full_100_files: min={m:?} bound={BUILD_FULL_100_BOUND:?} samples={samples:?}"
         );
         assert!(
             m <= BUILD_FULL_100_BOUND,
-            "100-file build_full median {m:?} exceeds 3x-target bound {BUILD_FULL_100_BOUND:?} (samples: {samples:?})"
+            "100-file build_full min {m:?} exceeds 3x-target bound {BUILD_FULL_100_BOUND:?} (samples: {samples:?})"
         );
     }
 
     #[test]
     fn build_full_1000_files_within_bound() {
+        let _serial = serial();
         let dir = corpus_dir(1000);
 
         LspSnapshot::build_full(dir.path()).expect("build_full (warm-up)");
@@ -636,18 +783,19 @@ mod release_checks {
             LspSnapshot::build_full(dir.path()).expect("build_full");
             samples.push(start.elapsed());
         }
-        let m = median(samples.clone());
+        let m = min_of(&samples);
         println!(
-            "[perf_bounds] build_full_1000_files: median={m:?} bound={BUILD_FULL_1000_BOUND:?} samples={samples:?}"
+            "[perf_bounds] build_full_1000_files: min={m:?} bound={BUILD_FULL_1000_BOUND:?} samples={samples:?}"
         );
         assert!(
             m <= BUILD_FULL_1000_BOUND,
-            "1000-file build_full median {m:?} exceeds 3x-target bound {BUILD_FULL_1000_BOUND:?} (samples: {samples:?})"
+            "1000-file build_full min {m:?} exceeds 3x-target bound {BUILD_FULL_1000_BOUND:?} (samples: {samples:?})"
         );
     }
 
     #[test]
     fn prepare_within_bound() {
+        let _serial = serial();
         let (dir, snap) = build_snapshot(1000);
         let uri = path_to_uri(&dir.path().join(perf_support::file_name(1)))
             .as_str()
@@ -666,16 +814,17 @@ mod release_checks {
             samples.push(start.elapsed());
             assert!(result.is_some(), "sanity: must find a definition");
         }
-        let m = median(samples.clone());
-        println!("[perf_bounds] prepare: median={m:?} bound={QUERY_BOUND:?} samples={samples:?}");
+        let m = min_of(&samples);
+        println!("[perf_bounds] prepare: min={m:?} bound={QUERY_BOUND:?} samples={samples:?}");
         assert!(
             m <= QUERY_BOUND,
-            "prepare median {m:?} exceeds 3x-target bound {QUERY_BOUND:?} (samples: {samples:?})"
+            "prepare min {m:?} exceeds 3x-target bound {QUERY_BOUND:?} (samples: {samples:?})"
         );
     }
 
     #[test]
     fn incoming_within_bound() {
+        let _serial = serial();
         let (_dir, snap) = build_snapshot(1000);
         let hub_file = perf_support::file_name(perf_support::HUB_INDEX);
         let hub_proc0 = snap.decls_by_file[&hub_file]
@@ -704,18 +853,19 @@ mod release_checks {
                  pipeline's own per-call-site count 1:1 here)"
             );
         }
-        let m = median(samples.clone());
+        let m = min_of(&samples);
         println!(
-            "[perf_bounds] incoming: median={m:?} bound={INCOMING_HIGH_FANIN_BOUND:?} samples={samples:?}"
+            "[perf_bounds] incoming: min={m:?} bound={INCOMING_HIGH_FANIN_BOUND:?} samples={samples:?}"
         );
         assert!(
             m <= INCOMING_HIGH_FANIN_BOUND,
-            "incoming median {m:?} exceeds bound {INCOMING_HIGH_FANIN_BOUND:?} (samples: {samples:?})"
+            "incoming min {m:?} exceeds bound {INCOMING_HIGH_FANIN_BOUND:?} (samples: {samples:?})"
         );
     }
 
     #[test]
     fn outgoing_within_bound() {
+        let _serial = serial();
         let (_dir, snap) = build_snapshot(1000);
         let file1 = perf_support::file_name(1);
         let proc0 = snap.decls_by_file[&file1]
@@ -741,11 +891,11 @@ mod release_checks {
                  qualified + 2 local)"
             );
         }
-        let m = median(samples.clone());
-        println!("[perf_bounds] outgoing: median={m:?} bound={QUERY_BOUND:?} samples={samples:?}");
+        let m = min_of(&samples);
+        println!("[perf_bounds] outgoing: min={m:?} bound={QUERY_BOUND:?} samples={samples:?}");
         assert!(
             m <= QUERY_BOUND,
-            "outgoing median {m:?} exceeds 3x-target bound {QUERY_BOUND:?} (samples: {samples:?})"
+            "outgoing min {m:?} exceeds 3x-target bound {QUERY_BOUND:?} (samples: {samples:?})"
         );
     }
 
@@ -847,6 +997,7 @@ mod release_checks {
     /// unmeasured through 17 prior tasks.
     #[test]
     fn compute_all_within_bound() {
+        let _serial = serial();
         let sanity_dir = corpus_dir(1000);
         let sanity_snap = LspSnapshot::build_full(sanity_dir.path()).expect("build_full");
         assert_eq!(
@@ -875,7 +1026,7 @@ mod release_checks {
         // — see [`COMPUTE_ALL_BOUND`]'s doc for the measurements that killed it
         // and for why the SCALING assertion below is the real guard against the
         // O(decls * event_edges) regression class.
-        // `min_of`, not `median` — see that function's doc for why.
+        // `min_of`, not the median — see that function's doc for why.
         assert!(
             m1000 <= COMPUTE_ALL_BOUND,
             "compute_all min {m1000:?} exceeds the architectural bound {COMPUTE_ALL_BOUND:?} \
@@ -908,6 +1059,7 @@ mod release_checks {
 
     #[test]
     fn rung1_body_edit_apply_batch_within_bound() {
+        let _serial = serial();
         let (dir, base, parsed) = build_snapshot_with_parsed(1000);
         let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
         let target = dir.path().join(perf_support::file_name(1));
@@ -944,9 +1096,9 @@ mod release_checks {
             assert_eq!(rung, Rung::One, "a comment-only body edit must stay rung 1");
             cur = next;
         }
-        let m = median(samples.clone());
+        let m = min_of(&samples);
         println!(
-            "[perf_bounds] rung1_body_edit: median={m:?} absolute_bound={RUNG1_BOUND:?} \
+            "[perf_bounds] rung1_body_edit: min={m:?} absolute_bound={RUNG1_BOUND:?} \
              synthetic_bound={RUNG1_SYNTHETIC_BOUND:?} samples={samples:?}"
         );
         // Both bounds are asserted: the absolute (CDO-anchored) bound guards
@@ -955,11 +1107,11 @@ mod release_checks {
         // bound's headroom would otherwise miss — see both constants' doc.
         assert!(
             m <= RUNG1_BOUND,
-            "rung-1 body-edit median {m:?} exceeds CDO-anchored bound {RUNG1_BOUND:?} (samples: {samples:?})"
+            "rung-1 body-edit min {m:?} exceeds CDO-anchored bound {RUNG1_BOUND:?} (samples: {samples:?})"
         );
         assert!(
             m <= RUNG1_SYNTHETIC_BOUND,
-            "rung-1 body-edit median {m:?} exceeds corpus-relative bound {RUNG1_SYNTHETIC_BOUND:?} \
+            "rung-1 body-edit min {m:?} exceeds corpus-relative bound {RUNG1_SYNTHETIC_BOUND:?} \
              (samples: {samples:?}) — this is a real regression on THIS corpus even though it \
              may still be under the looser CDO-anchored bound"
         );
@@ -967,6 +1119,7 @@ mod release_checks {
 
     #[test]
     fn rung1_body_edit_scoped_within_bound() {
+        let _serial = serial();
         let (dir, base, parsed) = build_snapshot_with_parsed(1000);
         let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
         let target = dir.path().join(perf_support::file_name(1));
@@ -1004,20 +1157,20 @@ mod release_checks {
             samples.push(start.elapsed());
             cur = next;
         }
-        let m = median(samples.clone());
+        let m = min_of(&samples);
         println!(
-            "[perf_bounds] rung1_body_edit_scoped: median={m:?} absolute_bound={RUNG1_BOUND:?} \
+            "[perf_bounds] rung1_body_edit_scoped: min={m:?} absolute_bound={RUNG1_BOUND:?} \
              synthetic_bound={RUNG1_SCOPED_SYNTHETIC_BOUND:?} samples={samples:?}"
         );
         // Both bounds are asserted, mirroring the `apply_batch` test above.
         assert!(
             m <= RUNG1_BOUND,
-            "rung-1 scoped body-edit median {m:?} exceeds CDO-anchored bound {RUNG1_BOUND:?} \
+            "rung-1 scoped body-edit min {m:?} exceeds CDO-anchored bound {RUNG1_BOUND:?} \
              (samples: {samples:?})"
         );
         assert!(
             m <= RUNG1_SCOPED_SYNTHETIC_BOUND,
-            "rung-1 scoped body-edit median {m:?} exceeds corpus-relative bound \
+            "rung-1 scoped body-edit min {m:?} exceeds corpus-relative bound \
              {RUNG1_SCOPED_SYNTHETIC_BOUND:?} (samples: {samples:?}) — this is a real \
              regression on THIS corpus even though it may still be under the looser \
              CDO-anchored bound"
@@ -1026,6 +1179,7 @@ mod release_checks {
 
     #[test]
     fn rung2_signature_edit_apply_batch_within_bound() {
+        let _serial = serial();
         // Warm-up: a full cycle outside the timed samples below, both to
         // page the corpus into the OS file cache and to prove the rung-2
         // path works before timing it.
@@ -1068,19 +1222,19 @@ mod release_checks {
             samples.push(start.elapsed());
             assert_eq!(rung, Rung::Two, "a new-procedure edit must take rung 2");
         }
-        let m = median(samples.clone());
+        let m = min_of(&samples);
         println!(
-            "[perf_bounds] rung2_signature_edit: median={m:?} absolute_bound={RUNG2_BOUND:?} \
+            "[perf_bounds] rung2_signature_edit: min={m:?} absolute_bound={RUNG2_BOUND:?} \
              synthetic_bound={RUNG2_SYNTHETIC_BOUND:?} samples={samples:?}"
         );
         // Both bounds are asserted — see `RUNG2_SYNTHETIC_BOUND`'s doc.
         assert!(
             m <= RUNG2_BOUND,
-            "rung-2 signature-edit median {m:?} exceeds CDO-anchored bound {RUNG2_BOUND:?} (samples: {samples:?})"
+            "rung-2 signature-edit min {m:?} exceeds CDO-anchored bound {RUNG2_BOUND:?} (samples: {samples:?})"
         );
         assert!(
             m <= RUNG2_SYNTHETIC_BOUND,
-            "rung-2 signature-edit median {m:?} exceeds corpus-relative bound {RUNG2_SYNTHETIC_BOUND:?} \
+            "rung-2 signature-edit min {m:?} exceeds corpus-relative bound {RUNG2_SYNTHETIC_BOUND:?} \
              (samples: {samples:?}) — this is a real regression on THIS corpus even though it \
              may still be under the looser CDO-anchored bound"
         );
@@ -1115,6 +1269,7 @@ mod release_checks {
     /// is no longer needed.
     #[test]
     fn compute_summaries_v2_within_bound() {
+        let _serial = serial();
         let dir = corpus_dir(1000);
         let sub = L4Substrate::assemble(dir.path());
 
@@ -1140,14 +1295,14 @@ mod release_checks {
                 "sanity: compute_summaries_v2_bundle must produce summaries"
             );
         }
-        let m = median(samples.clone());
+        let m = min_of(&samples);
         println!(
-            "[perf_bounds] compute_summaries_v2_bundle(1000): median={m:?} bound={COMPUTE_SUMMARIES_V2_BOUND:?} \
+            "[perf_bounds] compute_summaries_v2_bundle(1000): min={m:?} bound={COMPUTE_SUMMARIES_V2_BOUND:?} \
              samples={samples:?}"
         );
         assert!(
             m <= COMPUTE_SUMMARIES_V2_BOUND,
-            "compute_summaries_v2_bundle median {m:?} exceeds 3x-target bound \
+            "compute_summaries_v2_bundle min {m:?} exceeds 3x-target bound \
              {COMPUTE_SUMMARIES_V2_BOUND:?} (samples: {samples:?})"
         );
     }
@@ -1200,6 +1355,7 @@ mod release_checks {
     /// theatre.
     #[test]
     fn recursive_scc_db_effects_within_bound() {
+        let _serial = serial();
         let dir = recursive_corpus_dir(RECURSIVE_CORPUS_FILES, perf_support::RECURSIVE_RING_FILES);
         let sub = L4Substrate::assemble(dir.path());
 
@@ -1258,15 +1414,15 @@ mod release_checks {
             samples.push(start.elapsed());
             assert!(!result.is_empty(), "sanity: solver must produce summaries");
         }
-        let m = median(samples.clone());
+        let m = min_of(&samples);
         println!(
             "[perf_bounds] recursive_scc_db_effects({RECURSIVE_CORPUS_FILES} files, \
-             {expected_scc_count} x {expected_scc_size}-member recursive SCCs): median={m:?} \
+             {expected_scc_count} x {expected_scc_size}-member recursive SCCs): min={m:?} \
              bound={RECURSIVE_SCC_BOUND:?} samples={samples:?}"
         );
         assert!(
             m <= RECURSIVE_SCC_BOUND,
-            "recursive-SCC db-effect solve median {m:?} exceeds 3x-baseline bound \
+            "recursive-SCC db-effect solve min {m:?} exceeds 3x-baseline bound \
              {RECURSIVE_SCC_BOUND:?} (samples: {samples:?})"
         );
     }

@@ -36,9 +36,9 @@ jobs:
         # so that file stays the single source of truth.
         uses: dtolnay/rust-toolchain@stable
 
-      # Caches the registry and the dependency builds of every profile CI uses
-      # (dev for lint/test, release for build/perf-bounds), keyed on Cargo.lock and
-      # the toolchain. Without it every PR rebuilt the whole dependency tree several
+      # Caches the registry and the dependency builds of the profiles this job uses
+      # (dev for test, release-check for lint; the `release` job caches its own),
+      # keyed on Cargo.lock, the toolchain and the job id. Without it every PR rebuilt the whole dependency tree several
       # times (Lint 1m24, Build 3m39, Perf bounds 3m38 on #174). Workspace crates are
       # never cached, so the code under test is always built fresh.
       - name: Cache cargo builds
@@ -75,6 +75,29 @@ jobs:
         env:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: scripts/ci-steps test
+
+  # The release build and perf bounds run in their own job, beside `test`, instead of
+  # after it: one job ran fmt, lint, test, build and perf one after another (~6.5 min of
+  # steps, measured 2026-10-21 on run 39625785855: Lint 32 s, Test 100 s, Build 202 s,
+  # Perf 41 s). Each job has its own rust-cache entry (the key includes the job id).
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout al-call-hierarchy
+        uses: actions/checkout@v4
+
+      - name: Checkout tree-sitter-al
+        uses: actions/checkout@v4
+        with:
+          repository: SShadowS/tree-sitter-al
+          path: tree-sitter-al
+
+      - name: Install Rust
+        # Version pinned by rust-toolchain.toml; see the `test` job.
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
 
       - name: Build
         env:

@@ -28,6 +28,16 @@ slow-timeout = { period = "60s" }
 filter = 'binary(r3) | binary(cli) | binary(r4)'
 priority = 50
 
+# perf_bounds' timing tests must not overlap (#190): under `cargo test` its
+# TIMING_LOCK serializes them, but nextest runs each test in its own process,
+# where a Mutex shares nothing. This group runs them one at a time instead.
+[test-groups]
+perf-bounds = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(perf_bounds)'
+test-group = 'perf-bounds'
+
 # A golden gate reports every stale family in one pass (scripts/check-goldens).
 [profile.goldens]
 fail-fast = false
