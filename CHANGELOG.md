@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- #160 epic spec: two owner-approved changes to the delivery plan (2026-10-21; part of
+  #160). Step 11 splits into 11a (routine identity, the two declaration joins, a collision
+  count; output unchanged) and 11b (re-keying by routine and the one rule for routines that
+  share a string id). Steps 10 and 11a land together as one issue, one spec, one review
+  panel, one benchmark and one PR, because both edit the same adapter code and 11a would
+  have to rebase on 10 anyway. Steps with no speed target (11a, 11b, 5, 8, 13) run no
+  benchmark, only `cdo-gate` and the CDO byte-identity check (SARIF, call-graph histogram),
+  and a "reported, no bound" benchmark part in a speed step runs 3 rounds of only the
+  commands the step touches. Step 11's `by_decl` speed bound is withdrawn: deleting that
+  phase made the bound empty. Estimated saving: about 1 h 50 for the merged claim and about
+  1 h of benchmarks across the epic. Recorded in the epic's §9, I6, E-rows and Decisions
+  45, 57, 58.
 - `/issue` (flow speed-ups, P1): findings-register marks are scoped to what changed. Each
   entry carries an `anchor` (the file and lines, or the fix commit, its fix lives in) and an
   `anchor_hash`; an edit resets only the marks of entries whose anchor lines changed, plus
