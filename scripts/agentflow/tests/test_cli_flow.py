@@ -4396,6 +4396,27 @@ def test_a_design_converged_at_the_cap_is_handed_off_and_the_next_claim_starts_f
     assert "issue edit 8 --remove-label agent-design-ready" in gh2.calls
 
 
+def test_a_handoff_measures_its_files_from_origin_master_not_a_lagging_local_master(
+        capsys, repo_pair, fake_home):
+    """The shared checkout's local `master` lags while another session's merge waits
+    for its post-merge. Measured from it, the handoff's `files` would also carry what
+    that merge brought in, and the next attempt would `git restore` those files too."""
+    _, clone = repo_pair
+    g = Git(clone)
+    lagging = g.rev("HEAD")
+    commit_file(clone, "upstream.txt", "u\n", "another session's merge")
+    assert g.push("origin", "master")
+    sha = handoff_branch(clone, ISSUE34_REGISTER)          # cut from origin/master
+    _git_raw(clone, "checkout", "-q", "--detach")
+    _git_raw(clone, "branch", "-f", "master", lagging)     # local master one merge behind
+    gh = FakeRunner(HANDOFF_GH)
+    assert claim8(capsys, clone, gh)[0] == 0
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    assert code == 0, out
+    files = handoffs(clone)["8"]["files"]
+    assert "upstream.txt" not in files and ".agent/issue-8/findings.json" in files, files
+
+
 READS_ISSUES_KEY = f"api repos/{REPO}/issues?state=open&per_page=100 --paginate --slurp"
 
 

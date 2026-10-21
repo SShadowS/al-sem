@@ -1860,10 +1860,10 @@ def _handoff_record(args, ctx: Ctx, git: Git) -> dict:
         entries = json.loads(register)
     except ValueError:
         entries = None
-    try:
-        fork = git.out("merge-base", "master", sha)
-    except GitError:
-        fork = sha  # nothing is then on fork..sha: an `accepted-by-rule` mark fails closed
+    # `origin/master`, not the shared checkout's local `master`, which lags
+    # while another session's merge waits for its post-merge (issue.md step 1).
+    # No fallback: a failed merge-base is a GitError, and nothing is handed off.
+    fork = git.out("merge-base", "origin/master", sha)
     bad = _register_failures(entries, tuple(reviewers.values()), marks_ok=_handoff_marks,
                              prose_fix=_prose_fix_checker(git, args.issue, sha, fork))
     if bad:
@@ -1872,8 +1872,7 @@ def _handoff_record(args, ctx: Ctx, git: Git) -> dict:
     # it (written before #141) was signed by the named roster.
     return {"from_run": ctx.run_id, "from_attempt": claim.get("attempt"), "branch": branch, "sha": sha,
             "body_hash": claim.get("body_hash"), "register_blob": register_blob,
-            "files": git.changed_files(git.out("merge-base", "master", sha), sha),
-            "reviewers": reviewers}
+            "files": git.changed_files(fork, sha), "reviewers": reviewers}
 
 
 def cmd_finish(args, ctx, gh, git):
