@@ -112,3 +112,26 @@ D3 (run 39625785855) showed that under the lock the runner's 3x `compute_summari
   message; finally `panic!("D3B-PROBE: …")` if the assert passed, so the output is always shown. Local run: record the
   numbers (dev machine 3x may pass, then the D3B-PROBE panic fires). Commit
   `THROWAWAY D3b probe (#190)`; do NOT push (the conductor pushes).
+
+### Task 3: Back to 230 ms after D3b (ledger "Amendment 2 after D3b")
+
+D3b (run 39635284889, AMD EPYC 7763) gave runner 1x 86.52 ms, so 150 ms is withdrawn. Head is `7627e2f0` (D3b
+reverted; tree = `b2a33e54`).
+
+**Files:** Modify `tests/perf_bounds.rs` (`COMPUTE_SUMMARIES_V2_BOUND` and its doc; the stale "bound left at 230ms"
+sentence; the unreflowed `min_of` doc line), `CHANGELOG.md`, this plan.
+
+- [ ] **Step 1:** `COMPUTE_SUMMARIES_V2_BOUND` = `Duration::from_millis(230)`. Rewrite its 2026-10-21 doc: the two CI
+  failures (medians 231.8 / 243.0 ms, pre-lock); under the lock the runners measured 3x min 179.87 ms (run 39625785855)
+  and 1x 86.52 / 3x 248.21 ms (run 39635284889, AMD EPYC 7763), so runners differ ~1.4x; 230 ms keeps 2.7x headroom
+  over the slow runner's 1x; a 3x regression fails on a runner of the EPYC 7763's speed and PASSES on the faster runner
+  and on the dev machine (D2 142-153 ms; D3b local 156 ms); a machine-independent ratio gate is the follow-up. No
+  `<D3B_CPU>` placeholder may remain.
+- [ ] **Step 2:** The older "Bound left at 230ms (3x ~76ms) rather than tightened …" sentence becomes clearly historical
+  (e.g. "Bound left at 230ms then (3x ~76ms) …; see 2026-10-21 below"). Reflow the short `min_of` doc line.
+- [ ] **Step 3:** CHANGELOG: no 150 ms change; the entry says what the change does (lock + `min_of`), the runner data,
+  and that the 3x catch holds only on runners of the slower speed seen, with the follow-up.
+- [ ] **Step 4:** Verify: `grep -c "D3B_CPU\|from_millis(150)" tests/perf_bounds.rs CHANGELOG.md` = 0;
+  `taskset -c 0-3 cargo test --release --test perf_bounds` 13 passed; `rustfmt tests/perf_bounds.rs`;
+  `bash scripts/ci-steps task-affected` exit 0; check-diff `[]`. Commit `tests/perf_bounds.rs CHANGELOG.md` and this
+  plan: `perf_bounds: keep compute_summaries_v2 at 230 ms; record the runner calibration (#190)`.

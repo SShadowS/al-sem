@@ -352,16 +352,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`perf_bounds`'s timing tests run one at a time and judge the minimum of their samples**
   (#190; `tests/perf_bounds.rs`). Why: CI runs the binary's tests side by side on a 4-core
   runner, so one test's samples were timed while another test was building or solving, and
-  ten gates judged the median of their samples. PR #187 failed twice this way (`compute_summaries_v2`, medians 231.8 /
-  243.0 ms against a 230 ms bound, minima ~150 ms) on a change that never reached that
-  code. Now every timing test takes one shared lock first, so they run one at a time, and
-  every gate compares the minimum of its samples with its bound. A new test reads the file
-  and fails if a timing test does not take the lock, or if it cannot check one.
-  `COMPUTE_SUMMARIES_V2_BOUND` drops from 230 to 150 ms: with the lock, a 3x slower solve
-  measured 179.87 ms on the CI runner and still passed 230 ms. The new bound is set for the
-  runner, not the dev machine. A 3x regression fails on a runner of that speed (CPU
-  `<D3B_CPU>`); 150 ms catches 3x only while the normal cost is above 50 ms, so a runner
-  ~1.2x faster, or the dev machine, may let an exact 3x pass. No other bound changed.
+  ten gates judged the median of their samples. PR #187 failed twice this way
+  (`compute_summaries_v2`, medians 231.8 / 243.0 ms against a 230 ms bound, minima ~150 ms)
+  on a change that never reached that code. Now every timing test takes one shared lock
+  first, so they run one at a time, and every gate compares the minimum of its samples with
+  its bound. A new test reads the file and fails if a timing test does not take the lock, or
+  if it cannot check one. No bound changed. Under the lock, two CI runners measured the
+  `compute_summaries_v2` solve 3x slower at 179.87 ms (run 39625785855) and 248.21 ms (run
+  39635284889, AMD EPYC 7763, 1x 86.52 ms): hosted runners differ ~1.4x. So its 230 ms bound
+  catches a 3x slowdown only on runners as slow as the EPYC 7763; on the faster runner and
+  on the dev machine an exact 3x passes. A speed-independent ratio gate is the follow-up.
 - **The lowerer reads two new shapes of the `4d75846c` grammar** (see Changed;
   `crates/al-syntax/src/lower/mod.rs`):
   - A `preproc_split_case_extended` arm may hold a nested `preproc_conditional_case`

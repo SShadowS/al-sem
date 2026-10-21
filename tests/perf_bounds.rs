@@ -412,26 +412,27 @@ mod release_checks {
     // perf_support corpus is deliberately non-recursive (straight-line call
     // chains, see `compute_summaries_v2_within_bound`'s own doc), so the
     // closed-form non-recursive path exercised here was never expected to
-    // move. Bound left at 230ms (3x ~76ms) rather than tightened, per that
-    // baseline's still-current headroom rationale.
+    // move. Bound left at 230ms then (3x ~76ms) rather than tightened, per
+    // that baseline's headroom rationale at the time; see 2026-10-21 below.
     //
     // 2026-10-21 (#190): this gate failed PR #187's CI twice on a change that
     // never reaches the L4 solve — runs 39611462366 and 39612982728, medians
     // 231.8 / 243.0ms against the 230ms bound, while the minima were 147.3 /
-    // 151.6ms. The cause was sibling tests running in parallel plus the
-    // median; the gate now holds [`TIMING_LOCK`] and judges [`min_of`].
+    // 151.6ms. That was before the lock: sibling tests running in parallel
+    // plus the median. The gate now holds [`TIMING_LOCK`] and judges
+    // [`min_of`].
     //
-    // 2026-10-21 (#190): bound tightened 230 -> 150ms, CALIBRATED TO THE CI
-    // RUNNER UNDER THE LOCK, not to the dev machine. #190's D3 probe (run
-    // 39625785855) timed a 3x solve on the runner under the lock: min
-    // 179.87ms (samples 179.9-186.3ms), so the runner's 1x min is ~60ms
-    // (dev machine 47-49ms). At 150ms that is 2.5x headroom over the runner's
-    // 1x cost, and a 3x regression fails there by ~20%. Scope: a 3x
-    // regression fails on a runner of D3/D3b's speed (CPU `<D3B_CPU>`). 150ms
-    // rejects 3x only while the true 1x cost is above 50ms, so a runner ~1.2x
-    // faster than that, or the dev machine (D2: a 3x solve measured min
-    // 142-153ms), may let an exact 3x pass.
-    const COMPUTE_SUMMARIES_V2_BOUND: Duration = Duration::from_millis(150); // runner-calibrated under the lock, #190 D3 (2026-10-21)
+    // Runner calibration under the lock (#190's probes D3 and D3b): run
+    // 39625785855 measured a 3x solve at min 179.87ms; run 39635284889 (AMD
+    // EPYC 7763) measured 1x 86.52ms and 3x 248.21ms. Hosted runners differ
+    // ~1.4x. 230ms keeps 2.7x headroom over the slow runner's 1x cost. What
+    // it catches is runner-dependent: a 3x regression FAILS on a runner of the
+    // EPYC 7763's speed and PASSES on the faster D3 runner and on the dev
+    // machine (D2: 3x min 142-153ms; D3b local: 156ms). No single absolute
+    // bound does both, so the bound stays 230ms; the follow-up is a
+    // machine-independent ratio gate (this solve timed against a reference
+    // workload in the same process, as `COMPUTE_ALL_SCALING_FACTOR` does).
+    const COMPUTE_SUMMARIES_V2_BOUND: Duration = Duration::from_millis(230); // 3x ~76ms dev baseline (2026-07); runner data under the lock above (#190)
 
     // `recursive_scc_db_effects_within_bound` (final-branch-review M-6) — the
     // RECURSIVE-SCC counterpart to `COMPUTE_SUMMARIES_V2_BOUND` above, whose
@@ -548,9 +549,9 @@ mod release_checks {
     /// interrupted run is always slower than an uninterrupted one, never
     /// faster. So the minimum of repeated samples rejects transient positive
     /// delays — every sample above it is explained by "plus some noise,"
-    /// while the median of a noise-skewed
-    /// sample set is ITSELF skewed toward whatever fraction of samples
-    /// happened to get interrupted (proven empirically: the median-based
+    /// while the median of a noise-skewed sample set is ITSELF skewed toward
+    /// whatever fraction of samples happened to get interrupted (proven
+    /// empirically: the median-based
     /// scaling gate this replaces flaked 2/5 times on the FIXED
     /// implementation when the reviewer ran it 5x back-to-back, deliberately
     /// under load). The minimum rejects TRANSIENT positive delays only: a
