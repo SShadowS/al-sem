@@ -2409,7 +2409,7 @@ fn rooted_and_climbing_spellings_still_do_not_match() {
 
 /// #76 T3. A diff whose headers spell the path `./src/posting.al` (as
 /// `diff -u --label ./src/posting.al` writes them; plain `diff -u` appends a tab
-/// and a timestamp, which the parser does not strip) or `a/./src/posting.al`
+/// and a timestamp, which the parser cuts off since #111) or `a/./src/posting.al`
 /// matches the file by hunk: line 9 roots only `PostSalesDoc`.
 ///
 /// Mutation: bypass `normalize_input` for the diff lookup -> `diff-file-unmatched`.
@@ -2425,4 +2425,116 @@ fn diff_path_spellings_match_by_hunk() {
         assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{diff}: {doc}");
         assert!(diags(&doc).is_empty(), "{diff}: {doc}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// #111: plain `diff -u` / `diff -ru` headers (`<path><TAB><timestamp>`)
+// ---------------------------------------------------------------------------
+
+/// The hunk of the #111 probe `p-plain.diff` (GNU diffutils 3.12, `diff -u`
+/// against an old copy of the d8 `posting.al`): line 10 of the post-change file
+/// (`Header.Modify();`, inside `PostSalesDoc`) replaced a comment.
+const D8_POSTING_HUNK: &str = "@@ -7,7 +7,7 @@\n     begin\n         Header.Get('001');\n         Header.\"Status Posted\" := true;\n-        // old line\n+        Header.Modify();\n         Line.SetRange(\"Document No.\", Header.\"No.\");\n         Line.ModifyAll(\"Status Posted\", true);\n         OnAfterPostSalesDoc(Header);\n";
+
+/// Asserts the exact #111 change result: exit 0, the changed line roots exactly
+/// `PostSalesDoc`, and no diagnostic.
+fn assert_posting_change_matched(diff: &str) -> Value {
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(diff));
+    assert!(diags(&doc).is_empty(), "{diff}: {doc}");
+    assert_eq!(code, 0, "{diff}: {doc}");
+    assert!(!entries(&doc).is_empty(), "{diff}: {doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{diff}: {doc}");
+    doc
+}
+
+/// #111 C1. A plain `diff -u` change: GNU writes each header as
+/// `<path><TAB><timestamp>` (probe P1, bytes as captured). The path ends at the
+/// TAB, so the file matches: exactly `PostSalesDoc`, and the same document as
+/// the timestamp-free (`--label`) form of the same diff.
+///
+/// Mutation: drop the TAB cut in `extract_path` -> `diff-file-unmatched` on
+/// `./src/posting.al<TAB>2026-…`, exit 2.
+#[test]
+fn plain_diff_u_timestamped_headers_match() {
+    let stamped = format!(
+        "--- ./old/src/posting.al\t2026-10-21 13:02:30.262374453 +0000\n+++ ./src/posting.al\t2026-10-21 13:02:06.656738697 +0000\n{D8_POSTING_HUNK}"
+    );
+    let label = format!("--- ./old/src/posting.al\n+++ ./src/posting.al\n{D8_POSTING_HUNK}");
+    let doc = assert_posting_change_matched(&stamped);
+    assert_eq!(doc, assert_posting_change_matched(&label));
+}
+
+/// #111 C2. A plain `diff -u` deletion: `+++ /dev/null<TAB><timestamp>` (probe
+/// P3) is a deletion of the `---` path: exit 2, exactly one `diff-file-deleted`
+/// on `./src/subscriber.al`, no `diff-file-unmatched`; the same document as the
+/// timestamp-free form.
+///
+/// Mutation: drop the TAB cut -> `diff-file-unmatched` on `/dev/null<TAB>2026-…`.
+#[test]
+fn plain_diff_u_timestamped_dev_null_is_a_deletion() {
+    let ws = corpus("ws-d8-commit-in-tx");
+    let body: String = std::fs::read_to_string(ws.join("src/subscriber.al"))
+        .unwrap()
+        .replace('\r', "")
+        .lines()
+        .map(|l| format!("-{l}\n"))
+        .collect();
+    assert_eq!(body.lines().count(), 13, "precondition: 13 deleted lines");
+    let stamped = format!(
+        "--- ./src/subscriber.al\t2026-10-21 13:02:06.657738682 +0000\n+++ /dev/null\t2026-10-21 10:30:23.114887542 +0000\n@@ -1,13 +0,0 @@\n{body}"
+    );
+    let label = format!("--- ./src/subscriber.al\n+++ /dev/null\n@@ -1,13 +0,0 @@\n{body}");
+    let mut docs = Vec::new();
+    for diff in [stamped, label] {
+        let (doc, code) = digest(&ws, &[], Some(&diff));
+        assert_eq!(
+            diags(&doc),
+            vec![serde_json::json!({"file": "./src/subscriber.al", "kind": "diff-file-deleted"})],
+            "{diff}: {doc}"
+        );
+        assert_eq!(code, 2, "{diff}: {doc}");
+        assert!(entries(&doc).is_empty(), "{diff}: {doc}");
+        docs.push(doc);
+    }
+    assert_eq!(docs[0], docs[1]);
+}
+
+/// #111 C3. A `diff -ru` run (probe P5): its `diff -ru <old> <new>` line, the
+/// timestamped headers and an `Only in` line. The change matches exactly as in
+/// C1; the other two lines are ignored.
+///
+/// Mutation: drop the TAB cut -> `diff-file-unmatched`, exit 2.
+#[test]
+fn plain_diff_ru_timestamped_headers_match() {
+    let ru = format!(
+        "diff -ru ../old/src/posting.al ./src/posting.al\n--- ../old/src/posting.al\t2026-10-21 13:03:28.701655915 +0000\n+++ ./src/posting.al\t2026-10-21 13:03:28.702477280 +0000\n{D8_POSTING_HUNK}Only in ../old/src: subscriber.al\n"
+    );
+    let label = format!("--- ../old/src/posting.al\n+++ ./src/posting.al\n{D8_POSTING_HUNK}");
+    let doc = assert_posting_change_matched(&ru);
+    assert_eq!(doc, assert_posting_change_matched(&label));
+}
+
+/// #111 C4. GNU C-quotes a name with a space and puts the TAB AFTER the closing
+/// quote (probe P7c): `+++ "./src/a b.al"<TAB><timestamp>`. Cutting at the TAB
+/// before unquoting leaves a whole quoted token, so the file `src/a b.al`
+/// matches: exit 0, exactly `PostSalesDoc`, no diagnostic.
+///
+/// Mutation: cut AFTER `unquote_path` -> the token is not unquoted, the path
+/// keeps its quotes -> `diff-file-unmatched`.
+#[test]
+fn gnu_quoted_timestamped_header_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    d8_workspace(dir.path(), &d8_posting());
+    std::fs::rename(
+        dir.path().join("src/posting.al"),
+        dir.path().join("src/a b.al"),
+    )
+    .unwrap();
+    let diff = format!(
+        "--- \"./old/src/a b.al\"\t2026-10-21 13:02:30.262374453 +0000\n+++ \"./src/a b.al\"\t2026-10-21 13:02:06.656738697 +0000\n{D8_POSTING_HUNK}"
+    );
+    let (doc, code) = digest(dir.path(), &[], Some(&diff));
+    assert!(diags(&doc).is_empty(), "{diff}: {doc}");
+    assert_eq!(code, 0, "{diff}: {doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{diff}: {doc}");
 }

@@ -165,6 +165,9 @@ fn is_octal(c: char) -> bool {
 fn extract_path(line: &str) -> Option<String> {
     // Remove leading --- / +++ and one space (line[4..])
     let rest = line[4..].trim_start();
+    // `diff -u` / git write `<path or "quoted path">[<TAB><time>]`; both C-quote a name's own TAB (#111).
+    // Residual: a producer writing a TAB-containing name raw and unquoted is cut at that TAB.
+    let rest = rest.split_once('\t').map_or(rest, |(path, _)| path);
     // /dev/null detection tolerates trailing whitespace (TS matches `rest.trim()`) (#16).
     if rest == "/dev/null" || rest.trim_end() == "/dev/null" {
         return None;
@@ -949,6 +952,58 @@ mod tests {
         // Valid forms still parse.
         assert!(super::parse_hunk_header("@@ -5,3 +10,4 @@").is_some());
         assert!(super::parse_hunk_header("@@ -5 +10 @@ ctx").is_some());
+    }
+
+    #[test]
+    fn plain_diff_u_timestamped_dev_null_is_an_addition() {
+        // #111 U1: GNU `diff -u` headers are `<path><TAB><timestamp>` (probe
+        // P7c). `--- /dev/null<TAB><time>` makes the file ADDED; CRLF endings
+        // and spaces before the TAB give the same path.
+        for (eol, pad) in [("\n", ""), ("\r\n", ""), ("\n", "  "), ("\r\n", " ")] {
+            let diff = format!(
+                "--- /dev/null\t1970-01-01 00:00:00.000000000 +0000{eol}\
+                 +++ ./src/new.al{pad}\t2026-10-21 13:02:06.656738697 +0000{eol}\
+                 @@ -0,0 +1,2 @@{eol}+x{eol}+y{eol}"
+            );
+            let r = parse_unified_diff(&diff);
+            assert_eq!(r.files.len(), 1, "{diff:?}");
+            let f = &r.files[0];
+            assert_eq!(f.path, "./src/new.al", "{diff:?}");
+            assert_eq!(f.kind, DiffFileKind::Added, "{diff:?}");
+            assert_eq!(f.old_path, None, "{diff:?}");
+            assert_eq!(f.hunks.len(), 1, "{diff:?}");
+            assert_eq!(f.hunks[0].new_start, 1, "{diff:?}");
+            assert_eq!(f.hunks[0].new_count, 2, "{diff:?}");
+            assert_eq!(
+                f.hunks[0].changes,
+                vec![HunkChange::Added(1), HunkChange::Added(2)],
+                "{diff:?}"
+            );
+            assert!(r.errors.is_empty() && r.file_errors.is_empty(), "{diff:?}");
+        }
+    }
+
+    #[test]
+    fn git_headers_keep_their_path_under_the_tab_cut() {
+        // #111 U2, git 2.53.0 bytes (probe P7b): an unquoted name with a space
+        // gets a trailing raw TAB; a name with a TAB is C-quoted, its TAB the
+        // escaped `\t`, decoded after the cut.
+        let space = "diff --git a/with space.al b/with space.al\n\
+            --- a/with space.al\t\n\
+            +++ b/with space.al\t\n\
+            @@ -1 +1 @@\n-x\n+y\n";
+        let r = parse_unified_diff(space);
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].path, "with space.al");
+        assert_eq!(r.files[0].kind, DiffFileKind::Modified);
+        let tab = "diff --git \"a/with\\ttab.al\" \"b/with\\ttab.al\"\n\
+            --- \"a/with\\ttab.al\"\n\
+            +++ \"b/with\\ttab.al\"\n\
+            @@ -1 +1 @@\n-x\n+y\n";
+        let r = parse_unified_diff(tab);
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].path, "with\ttab.al");
+        assert_eq!(r.files[0].kind, DiffFileKind::Modified);
     }
 
     #[test]
