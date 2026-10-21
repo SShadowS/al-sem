@@ -804,6 +804,38 @@ fn census_cone_scc_line_counts_the_recursive_sccs() {
     );
 }
 
+/// #160 step 7b §4.8/§5 T9: the census `closed:` line. `ws-compose` has one
+/// singleton reading a callee cone with a closed entry (at the 7b base its
+/// `singleton pop:` line reads `closed_entries=1`), so at least one memo row is
+/// built.
+#[test]
+fn census_closed_line_counts_the_memo() {
+    let (out, _) = spawn_traced(
+        &[
+            "analyze",
+            &r0("ws-compose").to_string_lossy(),
+            "--single-app",
+            "--format",
+            "json",
+        ],
+        &[("ALSEM_CONES_CENSUS", "1")],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    let closed: Vec<&str> = err
+        .lines()
+        .filter(|l| l.starts_with("[cones-census]   closed: "))
+        .collect();
+    assert_eq!(closed.len(), 1, "one closed line:\n{err}");
+    let builds: u64 = closed[0]
+        .split(" memo_builds=")
+        .nth(1)
+        .and_then(|r| r.split(' ').next())
+        .unwrap_or_else(|| panic!("memo_builds in {}", closed[0]))
+        .parse()
+        .unwrap();
+    assert!(builds > 0, "no memo row built: {}", closed[0]);
+}
+
 /// Spec §4.1.4 / §8.1: both peaks reach the trace. Windows only, because
 /// `read_rss()` is `None` elsewhere and both counters are then 0. Spawned,
 /// because the tracer is a process `OnceLock` read from the environment.

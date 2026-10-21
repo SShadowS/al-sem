@@ -711,29 +711,35 @@ pub struct ConeDerivedCensus {
 #[derive(Debug, Default)]
 pub struct ConeDerivedBuilder {
     store: ConeDerivedStore,
-    flags: u8,
-    s_writes_all: Vec<ResId>,
-    s_phys_writes: Vec<(ResId, u8)>,
-    s_phys_reads: Vec<ResId>,
-    s_events: Vec<ResId>,
+    /// The routine in progress.
+    cur: Scratch,
+    /// A [`FoldedRow`] in progress (#160 step 7b §4.2), so a row can be built
+    /// while a routine is in progress.
+    set: Scratch,
 }
 
-impl ConeDerivedBuilder {
-    /// Start a fresh routine (clears the scratch buffers, keeping their capacity).
-    pub fn begin_routine(&mut self) {
+/// Unfrozen fold output: presence flags plus the four id buffers.
+#[derive(Debug, Default)]
+struct Scratch {
+    flags: u8,
+    writes_all: Vec<ResId>,
+    phys_writes: Vec<(ResId, u8)>,
+    phys_reads: Vec<ResId>,
+    events: Vec<ResId>,
+}
+
+impl Scratch {
+    fn clear(&mut self) {
         self.flags = 0;
-        self.s_writes_all.clear();
-        self.s_phys_writes.clear();
-        self.s_phys_reads.clear();
-        self.s_events.clear();
+        self.writes_all.clear();
+        self.phys_writes.clear();
+        self.phys_reads.clear();
+        self.events.clear();
     }
 
-    /// Fold ONE reachable fact into the routine in progress. Reads only fields
-    /// `retag` does not rewrite (`op` / `resource_kind` / `resource_id` /
-    /// `extra`), so a pre-retag representative folds identically to its retagged
-    /// clone. Idempotent per distinct `(kind, op, resource_id, temp)` — folding a
-    /// fact twice is a no-op after the freeze dedup.
-    pub fn fold_fact(&mut self, f: &CapabilityFact) {
+    /// What ONE fact contributes: the one classifier behind
+    /// [`ConeDerivedBuilder::fold_fact`] and [`ConeDerivedBuilder::fold_set`].
+    fn add(&mut self, interner: &mut ResInterner, f: &CapabilityFact) {
         match f.resource_kind {
             "table" => {
                 self.flags |= TOUCHES_TABLE;
@@ -746,14 +752,14 @@ impl ConeDerivedBuilder {
                     return;
                 };
                 if let Some(bit) = write_op_bit(f.op) {
-                    let id = self.store.interner.intern(rid);
-                    self.s_writes_all.push(id);
+                    let id = interner.intern(rid);
+                    self.writes_all.push(id);
                     if !is_temp {
-                        self.s_phys_writes.push((id, bit));
+                        self.phys_writes.push((id, bit));
                     }
                 } else if f.op == "read" && !is_temp {
-                    let id = self.store.interner.intern(rid);
-                    self.s_phys_reads.push(id);
+                    let id = interner.intern(rid);
+                    self.phys_reads.push(id);
                 }
             }
             "transaction" => {
@@ -765,8 +771,8 @@ impl ConeDerivedBuilder {
                 if f.op == "publish"
                     && let Some(rid) = f.resource_id.as_deref()
                 {
-                    let id = self.store.interner.intern(rid);
-                    self.s_events.push(id);
+                    let id = interner.intern(rid);
+                    self.events.push(id);
                 }
             }
             // ⟨C1 Task 2 fix I1⟩ Routed through `io_kind_bit` — the ONE
@@ -780,19 +786,90 @@ impl ConeDerivedBuilder {
             }
         }
     }
+}
+
+/// F of a set of facts, frozen (sorted, deduped, masks OR-merged) by
+/// [`ConeDerivedBuilder::fold_set`] (#160 step 7b §4.2). Its ids are that
+/// builder's `ResId`s; meaningless with any other builder.
+#[derive(Debug)]
+pub(crate) struct FoldedRow {
+    flags: u8,
+    writes_all: Box<[ResId]>,
+    phys_writes: Box<[(ResId, u8)]>,
+    phys_reads: Box<[ResId]>,
+    events: Box<[ResId]>,
+}
+
+impl ConeDerivedBuilder {
+    /// Start a fresh routine (clears the scratch buffers, keeping their capacity).
+    pub fn begin_routine(&mut self) {
+        self.cur.clear();
+    }
+
+    /// Fold ONE reachable fact into the routine in progress. Reads only fields
+    /// `retag` does not rewrite (`op` / `resource_kind` / `resource_id` /
+    /// `extra`), so a pre-retag representative folds identically to its retagged
+    /// clone. Idempotent per distinct `(kind, op, resource_id, temp)` — folding a
+    /// fact twice is a no-op after the freeze dedup.
+    pub fn fold_fact(&mut self, f: &CapabilityFact) {
+        self.cur.add(&mut self.store.interner, f);
+    }
+
+    /// F of `facts`, frozen into a [`FoldedRow`] (#160 step 7b §4.2). Uses the
+    /// second scratch, so the routine in progress is untouched.
+    pub(crate) fn fold_set<'f>(
+        &mut self,
+        facts: impl IntoIterator<Item = &'f CapabilityFact>,
+    ) -> FoldedRow {
+        self.set.clear();
+        for f in facts {
+            // The memo's domain condition (spec Words): `None` and `Some("")`
+            // share a key but fold differently.
+            debug_assert!(
+                f.resource_id.as_deref() != Some(""),
+                "fold_set: a fact with resource_id Some(\"\")"
+            );
+            self.set.add(&mut self.store.interner, f);
+        }
+        let s = &mut self.set;
+        let ids = |scratch: &mut Vec<ResId>| {
+            let mut v = Vec::new();
+            freeze_ids(scratch, &mut v);
+            v.into_boxed_slice()
+        };
+        let mut phys_writes = Vec::new();
+        freeze_masked(&mut s.phys_writes, &mut phys_writes);
+        FoldedRow {
+            flags: s.flags,
+            writes_all: ids(&mut s.writes_all),
+            phys_writes: phys_writes.into_boxed_slice(),
+            phys_reads: ids(&mut s.phys_reads),
+            events: ids(&mut s.events),
+        }
+    }
+
+    /// OR a [`FoldedRow`] of this builder into the routine in progress.
+    pub(crate) fn fold_row(&mut self, row: &FoldedRow) {
+        let c = &mut self.cur;
+        c.flags |= row.flags;
+        c.writes_all.extend_from_slice(&row.writes_all);
+        c.phys_writes.extend_from_slice(&row.phys_writes);
+        c.phys_reads.extend_from_slice(&row.phys_reads);
+        c.events.extend_from_slice(&row.events);
+    }
 
     /// Freeze the routine in progress into the pools and record its row.
     pub fn finish_routine(&mut self, routine_id: &str) {
-        let table_writes_all = freeze_ids(&mut self.s_writes_all, &mut self.store.writes_all_pool);
+        let c = &mut self.cur;
+        let table_writes_all = freeze_ids(&mut c.writes_all, &mut self.store.writes_all_pool);
         let physical_table_writes =
-            freeze_masked(&mut self.s_phys_writes, &mut self.store.phys_writes_pool);
-        let physical_table_reads =
-            freeze_ids(&mut self.s_phys_reads, &mut self.store.phys_reads_pool);
-        let event_publishes = freeze_ids(&mut self.s_events, &mut self.store.events_pool);
+            freeze_masked(&mut c.phys_writes, &mut self.store.phys_writes_pool);
+        let physical_table_reads = freeze_ids(&mut c.phys_reads, &mut self.store.phys_reads_pool);
+        let event_publishes = freeze_ids(&mut c.events, &mut self.store.events_pool);
         self.store.rows.insert(
             routine_id.to_string(),
             ConeDerivedRow {
-                flags: self.flags,
+                flags: c.flags,
                 table_writes_all,
                 physical_table_writes,
                 physical_table_reads,

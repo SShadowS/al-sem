@@ -390,14 +390,30 @@ pub(crate) mod cones_census {
     /// proving the cost is elsewhere. Split: the per-edge SUBST of frame-bound
     /// entries, the candidate scan over every out-edge's callee cone
     /// (`SCAN_CONE`), the scan over the subject's own producer-solve entries
-    /// (`SCAN_OWN`), the derived FOLD over the surviving bests, and the raw
-    /// materialization (`retag` + `sort_inherited`, skipped under
-    /// `ConeOutput::DerivedOnly`).
+    /// (`SCAN_OWN`), and the raw materialization (`retag` + `sort_inherited`,
+    /// skipped under `ConeOutput::DerivedOnly`). Since #160 step 7b the scans
+    /// run for the raw half only (0 in `analyze`), and the derived row is
+    /// folded from memoized closed-set rows: memo-row builds (`MEMO`),
+    /// `fold_row` (`ROW`), the substituted open entries (`OPEN`) and the own
+    /// entries (`OWN_FOLD`). All nest inside `SINGLETON_NANOS`; none is a
+    /// [`component_snapshot`] component.
     pub(crate) static SGL_SUBST_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_SCAN_CONE_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_SCAN_OWN_NANOS: AtomicU64 = AtomicU64::new(0);
-    pub(crate) static SGL_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_MEMO_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_ROW_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_OPEN_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SGL_OWN_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_RAW_NANOS: AtomicU64 = AtomicU64::new(0);
+    /// #160 step 7b §4.8: the closed-set memo, summed from each compose call's
+    /// `ComposeStats`, plus the most memo rows alive at once in one compose
+    /// (set only under the census).
+    pub(crate) static CLOSED_MEMO_BUILDS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CLOSED_MEMO_READS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CLOSED_MEMO_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCC_SET_FOLDS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SINGLETON_SCANS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CLOSED_MEMO_LIVE_MAX: AtomicU64 = AtomicU64::new(0);
     /// Populations the scan time is per. Accumulated in plain locals inside the
     /// walk and folded in with ONE `fetch_add` per call — the inner loop runs
     /// millions of times and must not touch an atomic (the distortion this
@@ -414,7 +430,7 @@ pub(crate) mod cones_census {
     pub(crate) static SGL_OWN_ENTRIES: AtomicU64 = AtomicU64::new(0);
     /// `best` insertions — each one a `String` key clone today.
     pub(crate) static SGL_WINS: AtomicU64 = AtomicU64::new(0);
-    /// Surviving `best` entries summed over all calls (= `fold_fact` calls).
+    /// Surviving `best` entries summed over the calls that scanned.
     pub(crate) static SGL_BESTS: AtomicU64 = AtomicU64::new(0);
     /// How the walk's calls distribute over the number of CONE-BEARING out-edges
     /// they actually merge. A call with one cone-bearing edge needs no merge at
@@ -518,6 +534,11 @@ pub(crate) mod cones_census {
         add(&CONE_SCC_OWN_ENTRY_MEMBERS, s.members_with_own_entry);
         add(&CONE_SCC_WITH_SUCCESSOR, s.with_successor);
         add(&CONE_SCC_WITH_GUARDED_SUCCESSOR, s.with_guarded_successor);
+        add(&CLOSED_MEMO_BUILDS, s.closed_memo_builds);
+        add(&CLOSED_MEMO_READS, s.closed_memo_reads);
+        add(&CLOSED_MEMO_ENTRIES, s.closed_memo_entries);
+        add(&SCC_SET_FOLDS, s.scc_set_folds);
+        add(&SINGLETON_SCANS, s.singleton_scans);
     }
 
     /// The eight components of compose that [`COMPOSE_REST_NANOS`] subtracts.
@@ -650,11 +671,14 @@ pub(crate) mod cones_census {
             CONE_SCC_WITH_GUARDED_SUCCESSOR.load(Ordering::Relaxed),
         );
         eprintln!(
-            "[cones-census]   singleton: subst={:.1}ms scan_cone={:.1}ms scan_own={:.1}ms fold={:.1}ms raw={:.1}ms",
+            "[cones-census]   singleton: subst={:.1}ms scan_cone={:.1}ms scan_own={:.1}ms memo={:.1}ms row={:.1}ms open={:.1}ms own={:.1}ms raw={:.1}ms",
             ms(SGL_SUBST_NANOS.load(Ordering::Relaxed)),
             ms(SGL_SCAN_CONE_NANOS.load(Ordering::Relaxed)),
             ms(SGL_SCAN_OWN_NANOS.load(Ordering::Relaxed)),
-            ms(SGL_FOLD_NANOS.load(Ordering::Relaxed)),
+            ms(SGL_MEMO_NANOS.load(Ordering::Relaxed)),
+            ms(SGL_ROW_NANOS.load(Ordering::Relaxed)),
+            ms(SGL_OPEN_NANOS.load(Ordering::Relaxed)),
+            ms(SGL_OWN_FOLD_NANOS.load(Ordering::Relaxed)),
             ms(SGL_RAW_NANOS.load(Ordering::Relaxed)),
         );
         eprintln!(
@@ -672,6 +696,15 @@ pub(crate) mod cones_census {
             SGL_OWN_ENTRIES.load(Ordering::Relaxed),
             SGL_WINS.load(Ordering::Relaxed),
             SGL_BESTS.load(Ordering::Relaxed),
+        );
+        eprintln!(
+            "[cones-census]   closed: memo_builds={} memo_reads={} memo_entries={} scc_set_folds={} singleton_scans={} memo_live_max={}",
+            CLOSED_MEMO_BUILDS.load(Ordering::Relaxed),
+            CLOSED_MEMO_READS.load(Ordering::Relaxed),
+            CLOSED_MEMO_ENTRIES.load(Ordering::Relaxed),
+            SCC_SET_FOLDS.load(Ordering::Relaxed),
+            SINGLETON_SCANS.load(Ordering::Relaxed),
+            CLOSED_MEMO_LIVE_MAX.load(Ordering::Relaxed),
         );
         eprintln!(
             "[cones-census]   compose rest: coverage_cone={:.1}ms emit_record={:.1}ms",
