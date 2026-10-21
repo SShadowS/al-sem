@@ -289,7 +289,7 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     accepted every entry.
     Source-verify every reviewer code claim before editing. Every fix passes
     step 9's TASK gate (`ci-steps-task`) before the next round; the full set
-    waits for step 11.
+    is step 11, which starts beside round 2 (see step 11).
 
     **Ask for everything in round 1; later rounds verify.** Round 1's briefing
     asks each reviewer for EVERY finding at once (code, tests, the numbers file,
@@ -305,7 +305,19 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     them follow `H`: a panel fix that touches ONLY those files (and the evidence)
     after step 11's gates needs no new gate run and no new `H`. A fix that
     touches anything else, a test included, goes back through step 11.
-11. **Rebase and gate.** Only once the panel has converged. Note the old base
+11. **Rebase and gate.** Start this step as soon as final round 1's fixes
+    have a green task gate, in the background, while round 2 runs: send round
+    2's briefing first (its fix diff is taken before the rebase), then rebase
+    and start the full set. If a later round yields a fix outside the
+    gate-inert set (`CHANGELOG.md`, `docs/**/*.md`, the two evidence files),
+    that run is discarded and this step runs again on the new head. A
+    gate-inert fix is committed only once the running gates have finished
+    (a commit during a run moves HEAD and voids the run's record); `attest`
+    still needs the records on `H`'s tree, so a discarded run can never be
+    attested. Exception: an issue that still has its CDO bench to run waits
+    for the panel to converge and the bench to finish, as step 9 says. In 2 of
+    3 runs every round after the first was prose only, and the ~10 min of
+    gates sat after a round that could not change them. Note the old base
     (`git merge-base HEAD origin/master`) and the old head, then
     `git fetch origin && git rebase origin/master` in the worktree (the fetch
     updates refs every session shares: on `cannot lock ref`, another session is

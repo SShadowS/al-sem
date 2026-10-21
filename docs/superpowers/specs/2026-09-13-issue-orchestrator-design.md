@@ -783,7 +783,9 @@ render of the ledger becomes the PR body.
     spec, and ledger, against the head SHA recorded in the register. Same
     convergence rule and cap. Every reviewer claim about code is source-verified
     before an edit.
-11. **Rebase and gate** (executor). Once the panel has converged, fetch and rebase
+11. **Rebase and gate** (executor). As soon as the final panel's round-1 fixes
+    pass the task gate (beside round 2, not after convergence; added 2026-10-21),
+    or after the panel and the bench when the issue has a CDO bench, fetch and rebase
     onto `origin/master`, then run the full step-9 set at once on the result, and
     go straight on to step 12, so `master` has as little time as possible to
     move. After **any** rebase the gates rerun (a clean rebase can still change
@@ -795,7 +797,10 @@ render of the ledger becomes the PR body.
     gates cover how it combines with the branch, and the panel's register is
     about the branch. Record the range-diff verdict in the ledger. A red gate
     here is fixed, gets one panel round over the fix, and the full set runs
-    again. A clean rebase is not charged; one conflict resolution is budgeted. The validated pair is `(B, H)`: `B` the
+    again. A later panel round whose fix touches anything outside the gate-inert
+    prose and the evidence discards the early run, and this step runs again on
+    the new head; gate records are keyed by tree, so a discarded run cannot be
+    attested. A clean rebase is not charged; one conflict resolution is budgeted. The validated pair is `(B, H)`: `B` the
     `origin/master` commit rebased onto, `H` the head the gates and panel passed on.
 12. **Freeze.** The freeze boundary is set **after** step 11, so `H` is post-rebase.
     The protected-path check runs once more over the whole approved diff (`B..H`)

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/issue` (flow speed-ups, P6): step 11 (rebase and the full gate set) starts in the
+  background as soon as final round 1's fixes pass the task gate, while round 2 runs,
+  instead of after convergence. A later fix outside the gate-inert prose discards that run
+  and step 11 runs again; gate records are keyed by tree, so a discarded run cannot be
+  attested. An issue with a CDO bench still waits for the panel and the bench. In 2 of 3
+  runs every round after the first was prose only (~10 min saved per issue).
 - `/issue` (flow speed-ups, P4): a probe reproduces the acceptance's own invocation (the
   same `ci-steps` step, parallelism, profile and core count). When the acceptance names
   the CI runner, step 3 may push one throwaway probe commit to a draft PR opened there,
