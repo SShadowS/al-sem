@@ -1012,10 +1012,10 @@ def ci_wait_gate(capsys, repo_pair, tmp_path):
     return clone, ctx, B, reasons
 
 
-def ci_wait_record(head, **over):
+def ci_wait_record(final_head, **over):
     """A green, supervised `ci-wait` record of the real command, as `run` writes it."""
     return {"name": "ci-wait", "argv": ["gh", "pr", "checks", "12", "--watch"], "exit_code": 0,
-            "timed_out": False, "supervised": True, "head": head, **over}
+            "timed_out": False, "supervised": True, "head": final_head, **over}
 
 
 def test_merge_gate_holds_a_ci_wait_entry_until_a_green_ci_wait_record_on_the_final_head(capsys, repo_pair, tmp_path):
