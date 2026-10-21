@@ -4417,6 +4417,30 @@ def test_a_handoff_measures_its_files_from_origin_master_not_a_lagging_local_mas
     assert "upstream.txt" not in files and ".agent/issue-8/findings.json" in files, files
 
 
+@pytest.mark.parametrize("fix, ok", [("spec", True), ("code", False)])
+def test_the_handoff_check_applies_the_prose_rule_to_the_branchs_own_commits(
+        capsys, repo_pair, fake_home, fix, ok):
+    """P3 on the handoff path: an `accepted-by-rule` mark passes only for a fix commit on
+    origin/master..sha that touches prose alone; a code fix leaves the mark unknown."""
+    _, clone = repo_pair
+    g = Git(clone)
+    g._run("checkout", "-q", "-b", BRANCH_A1)
+    shas = {"spec": commit_file(clone, "docs/superpowers/specs/2026-10-13-issue-8-design.md", "# D\n", "spec"),
+            "code": commit_file(clone, "src/x.rs", "x\n", "code")}
+    commit_file(clone, ".agent/issue-8/ledger.md", "## Design\n", "ledger")
+    register = [{"id": "F1", "source": "astra", "severity": "minor", "disposition": "fixed",
+                 "fix_commit": shas[fix], "reviews": {"astra": "accepted", "flash": "accepted-by-rule"}}]
+    sha = commit_file(clone, ".agent/issue-8/findings.json", json.dumps(register), "register")
+    g.checkout("master")
+    gh = FakeRunner(HANDOFF_GH)
+    assert claim8(capsys, clone, gh)[0] == 0
+    code, out = finish_handoff(capsys, clone, sha, gh)
+    if ok:
+        assert code == 0, out
+    else:
+        assert code == 1 and out["error"] == "handoff-not-ready" and out["entries"] == ["F1"], out
+
+
 READS_ISSUES_KEY = f"api repos/{REPO}/issues?state=open&per_page=100 --paginate --slurp"
 
 
@@ -4777,8 +4801,11 @@ def test_ci_rerun_of_a_green_run_reruns_all_of_it(capsys, root):
 
 
 @pytest.mark.parametrize("fakes, error", [
-    (dict(status="in_progress", conclusion=None), "ci-run-not-complete"),
+    # Real `gh run list --json` gives an unfinished run `conclusion: ""`, not null.
+    (dict(status="in_progress", conclusion=""), "ci-run-not-complete"),
+    (dict(status="queued", conclusion=""), "ci-run-not-complete"),
     (dict(conclusion="cancelled"), "ci-run-conclusion-unknown"),
+    (dict(conclusion=""), "ci-run-conclusion-unknown"),
     (dict(conclusion=None), "ci-run-conclusion-unknown"),
     (dict(runs=[]), "ci-run-not-found"),
     (dict(head_sha="b" * 40), "ci-run-not-found"),
@@ -4803,6 +4830,18 @@ def test_ci_rerun_refuses_under_halt_dry_run_and_without_a_lock(capsys, root):
     code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)          # HALT
     assert code == 1 and "HaltError" in out["error"]
     assert ci_reruns(gh) == [] and gate_runs(root) == []
+
+
+@pytest.mark.parametrize("head", ["abc123", "", None, "A" * 40, 42])
+def test_ci_rerun_refuses_a_pr_head_that_is_not_a_full_sha(capsys, root, head):
+    # The head is what the run lookup and the one-rerun record key on; a short,
+    # missing, upper-case or non-string value must not reach either.
+    lock.acquire(Ctx(Paths(root), run_id="run-test"), 8, "s", 1)
+    gh = ci_rerun_fakes()
+    gh.responses[f"pr view 12 --repo {REPO} --json headRefOid"] = json.dumps({"headRefOid": head})
+    code, out = run(capsys, root, "ci-rerun", "--pr", "12", gh_run=gh)
+    assert code == 1 and out["error"] == "pr-head-unknown", out
+    assert not any(c.startswith("run ") for c in gh.calls) and gate_runs(root) == []
 
 
 def set_run_conclusion(gh, conclusion):

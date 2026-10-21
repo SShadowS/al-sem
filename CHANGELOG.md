@@ -422,6 +422,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity check, `check-diff`'s protected-path check and the P3 prose check as prose.
   Both paths are now listed. Tests: `test_mergeops.py` (freeze check) and the P3 refusal
   list in `test_cli_flow.py`.
+- agentflow (pre-existing): `finish --outcome handoff` measured the handoff's `files` from
+  the shared checkout's local `master`, which lags while another session's merge waits for
+  its post-merge, so `files` could carry that merge's files too. It now uses
+  `merge-base origin/master <sha>`, for `files` and for the P3 prose check alike.
 
 - **The lowerer reads two new shapes of the `4d75846c` grammar** (see Changed;
   `crates/al-syntax/src/lower/mod.rs`):

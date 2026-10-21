@@ -93,6 +93,33 @@ def test_a_hand_edited_grant_is_rejected_and_a_pre_grant_budget_still_loads(ctx)
         budget.charge(ctx, "spec_rounds")
 
 
+def test_a_grant_and_a_charge_at_once_both_land(root):
+    """The per-run `budget-<run>` mutex. A conductor's `charge` and an operator's
+    `grant` on one run's budget.json, in two real processes, with every read of the
+    file slowed so both read before either writes. Without the mutex one write
+    overwrites the other: the charge or the grant is lost."""
+    import json
+    import time
+    from agentflow.state import Paths
+    from agentflow.tests.conftest import run_concurrently
+    budget.init(Ctx(paths=Paths(root), run_id="run-a"), claimed_at=time.time())
+    body = """
+    from agentflow import budget
+    from agentflow.state import Ctx, Paths
+    slow_reads("budget.json")
+    barrier()
+    if TAG == "charge":
+        budget.charge(Ctx(paths=Paths(ROOT), run_id="run-a"), "spec_rounds")
+    else:
+        budget.grant(Ctx(paths=Paths(ROOT), run_id=None), "run-a", "spec_rounds", 1, "op", 8)
+    """
+    results = run_concurrently(root, body, ["charge", "grant"])
+    assert [r[0] for r in results] == [0, 0], results
+    data = json.loads((root / ".agent" / "runs" / "run-a" / "budget.json").read_text())
+    assert data["counts"] == {"spec_rounds": 1} and data["grants"] == {"spec_rounds": 1}, data
+    assert budget.snapshot(Ctx(paths=Paths(root), run_id="run-a"))["grants"] == {"spec_rounds": 1}
+
+
 def test_loop_counter_is_durable_across_contexts(ctx):
     budget.loop_reset(ctx)
     assert budget.loop_tick(ctx, max_issues=2) == 1
