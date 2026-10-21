@@ -10,10 +10,16 @@
 //!
 //! Handles the 9 spec edge cases: a/b/ prefix stripping, quoted paths, /dev/null,
 //! renames, omitted hunk count (defaults to 1), zero-length ranges, CRLF,
-//! "\ No newline" marker, and always returns {files, errors, file_errors}. A `@@`
-//! line inside a file section that is not a valid hunk header is an error of
-//! that file (#72); in a `diff --git` section the lines after it, up to the next
-//! `diff --git`, are skipped.
+//! "\ No newline" marker, and always returns {files, errors, file_errors,
+//! only_in}. A `@@` line inside a file section that is not a valid hunk header
+//! is an error of that file (#72); in a `diff --git` section the lines after it,
+//! up to the next `diff --git`, are skipped.
+//!
+//! Header contract (#111): a raw TAB ends a `---`/`+++` path. GNU diff writes
+//! `<path or "quoted path"><TAB><time>`; git writes a bare trailing TAB after an
+//! unquoted name with a space; both C-quote a name's own TAB (`\t`), which is
+//! decoded after the cut. `diff -r`'s `Only in <dir>: <name>` lines are kept as
+//! `<dir>/<name>` in `only_in`.
 
 #[derive(Debug, Clone)]
 pub struct DiffHunk {
@@ -85,6 +91,9 @@ pub struct DiffParseResult {
     pub errors: Vec<String>,
     /// Header errors, each attached to its file section's path (#72).
     pub file_errors: Vec<FileError>,
+    /// `diff -r`'s `Only in <dir>: <name>` lines, as `<dir>/<name>` joined as
+    /// written: a file only one side has, which carries no hunk (#111).
+    pub only_in: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,8 +174,12 @@ fn is_octal(c: char) -> bool {
 fn extract_path(line: &str) -> Option<String> {
     // Remove leading --- / +++ and one space (line[4..])
     let rest = line[4..].trim_start();
+    // A raw TAB ends the path (#111): GNU writes `<path or "quoted path"><TAB><time>`, git a
+    // bare trailing TAB after an unquoted name with a space; both C-quote a name's own TAB.
+    // Residual: a producer writing a TAB-containing name raw and unquoted is cut at that TAB.
+    let rest = rest.split_once('\t').map_or(rest, |(path, _)| path);
     // /dev/null detection tolerates trailing whitespace (TS matches `rest.trim()`) (#16).
-    if rest == "/dev/null" || rest.trim_end() == "/dev/null" {
+    if rest.trim_end() == "/dev/null" {
         return None;
     }
     let unquoted = unquote_path(rest);
@@ -509,6 +522,7 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
             files: Vec::new(),
             errors: Vec::new(),
             file_errors: Vec::new(),
+            only_in: Vec::new(),
         };
     }
 
@@ -523,6 +537,7 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
 
     let mut files: Vec<DiffFile> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
+    let mut only_in: Vec<String> = Vec::new();
 
     // State
     let mut current_file: Option<DiffFile> = None;
@@ -753,6 +768,14 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
                 section.skip = section.git;
             }
         }
+        // `diff -r`: a file only one side has (#111). It is kept so the caller can
+        // report it; it is not read as an addition or deletion.
+        if let Some((dir, name)) = line
+            .strip_prefix("Only in ")
+            .and_then(|r| r.split_once(": "))
+        {
+            only_in.push(format!("{dir}/{name}"));
+        }
         // All other lines ignored
     }
 
@@ -785,6 +808,7 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
         files,
         errors,
         file_errors,
+        only_in,
     }
 }
 
@@ -949,6 +973,79 @@ mod tests {
         // Valid forms still parse.
         assert!(super::parse_hunk_header("@@ -5,3 +10,4 @@").is_some());
         assert!(super::parse_hunk_header("@@ -5 +10 @@ ctx").is_some());
+    }
+
+    #[test]
+    fn plain_diff_u_timestamped_dev_null_is_an_addition() {
+        // #111 U1: GNU `diff -u` headers are `<path><TAB><timestamp>` (probe
+        // P7c). `--- /dev/null<TAB><time>` makes the file ADDED; CRLF endings
+        // and spaces before the TAB give the same path.
+        for (eol, pad) in [("\n", ""), ("\r\n", ""), ("\n", "  "), ("\r\n", " ")] {
+            let diff = format!(
+                "--- /dev/null\t1970-01-01 00:00:00.000000000 +0000{eol}\
+                 +++ ./src/new.al{pad}\t2026-10-21 13:02:06.656738697 +0000{eol}\
+                 @@ -0,0 +1,2 @@{eol}+x{eol}+y{eol}"
+            );
+            let r = parse_unified_diff(&diff);
+            assert_eq!(r.files.len(), 1, "{diff:?}");
+            let f = &r.files[0];
+            assert_eq!(f.path, "./src/new.al", "{diff:?}");
+            assert_eq!(f.kind, DiffFileKind::Added, "{diff:?}");
+            assert_eq!(f.old_path, None, "{diff:?}");
+            assert_eq!(f.hunks.len(), 1, "{diff:?}");
+            assert_eq!(f.hunks[0].new_start, 1, "{diff:?}");
+            assert_eq!(f.hunks[0].new_count, 2, "{diff:?}");
+            assert_eq!(
+                f.hunks[0].changes,
+                vec![HunkChange::Added(1), HunkChange::Added(2)],
+                "{diff:?}"
+            );
+            assert!(r.errors.is_empty() && r.file_errors.is_empty(), "{diff:?}");
+        }
+    }
+
+    #[test]
+    fn git_headers_keep_their_path_under_the_tab_cut() {
+        // #111 U2, git 2.53.0 bytes (probe P7b): an unquoted name with a space
+        // gets a trailing raw TAB; a name with a TAB is C-quoted, its TAB the
+        // escaped `\t`, decoded after the cut.
+        let space = "diff --git a/with space.al b/with space.al\n\
+            --- a/with space.al\t\n\
+            +++ b/with space.al\t\n\
+            @@ -1 +1 @@\n-x\n+y\n";
+        let r = parse_unified_diff(space);
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].path, "with space.al");
+        assert_eq!(r.files[0].kind, DiffFileKind::Modified);
+        let tab = "diff --git \"a/with\\ttab.al\" \"b/with\\ttab.al\"\n\
+            --- \"a/with\\ttab.al\"\n\
+            +++ \"b/with\\ttab.al\"\n\
+            @@ -1 +1 @@\n-x\n+y\n";
+        let r = parse_unified_diff(tab);
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].path, "with\ttab.al");
+        assert_eq!(r.files[0].kind, DiffFileKind::Modified);
+    }
+
+    #[test]
+    fn only_in_lines_are_recorded() {
+        // #111 F1-1: `diff -r` names a file only one side has as
+        // `Only in <dir>: <name>` (GNU diffutils 3.12). It is recorded as
+        // `<dir>/<name>`, joined as written, after a complete hunk and alone.
+        let diff = "diff -ru ../old/src/a.al ./src/a.al\n\
+            --- ../old/src/a.al\t2026-10-21 13:03:28.701655915 +0000\n\
+            +++ ./src/a.al\t2026-10-21 13:03:28.702477280 +0000\n\
+            @@ -1 +1 @@\n-x\n+y\n\
+            Only in ../old/src: gone.al\n\
+            Only in ./src: new.al\n";
+        let r = parse_unified_diff(diff);
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].path, "./src/a.al");
+        assert_eq!(r.only_in, vec!["../old/src/gone.al", "./src/new.al"]);
+        assert!(r.errors.is_empty() && r.file_errors.is_empty());
+        let r = parse_unified_diff("Only in o: del.al\n");
+        assert!(r.files.is_empty());
+        assert_eq!(r.only_in, vec!["o/del.al"]);
     }
 
     #[test]

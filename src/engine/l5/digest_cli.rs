@@ -493,6 +493,11 @@ pub fn resolve_changed_roots(
                 hits.extend(hit);
             }
         }
+        // `diff -r`'s `Only in` files carry no hunk, so their roots are unknown:
+        // report each one, never drop it silently (#111).
+        for file in &parsed.only_in {
+            diagnostics.push(ChangedRootsDiagnostic::DiffFileUnmatched { file: file.clone() });
+        }
     }
 
     // Touched sets of one id from several inputs are unioned.
