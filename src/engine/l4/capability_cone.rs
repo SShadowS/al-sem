@@ -2521,8 +2521,48 @@ struct InheritedConeResult {
     coverage: CoverageRecord,
 }
 
-/// #160 step 7b §4.7: the test oracle's per-routine raw-Vec sink.
-pub(crate) type RawSink<'a> = &'a mut dyn FnMut(&str, Vec<CapabilityFact>);
+/// #160 step 7b §4.7: the T7'/T8' oracle's streamed raw fold. Test-only, so
+/// production builds carry no parameter and no per-routine branch for it.
+/// While [`raw_fold_hook::fold`] runs, every routine `compose_inherited_cones`
+/// emits is folded at once from its raw inherited Vec ∪ its raw direct facts
+/// into the hook's builder, and its raw Vec is dropped, so no raw Vec of all
+/// routines is ever held.
+#[cfg(test)]
+pub(crate) mod raw_fold_hook {
+    use super::{CapabilityFact, ConeDerivedBuilder, ConeDerivedStore};
+    use std::cell::RefCell;
+
+    thread_local! {
+        static ORACLE: RefCell<Option<ConeDerivedBuilder>> = const { RefCell::new(None) };
+    }
+
+    /// Run `compose` (a `RawOnly` composition) with the hook on; return its
+    /// result and the oracle store.
+    pub(crate) fn fold<T>(compose: impl FnOnce() -> T) -> (T, ConeDerivedStore) {
+        ORACLE.with(|o| *o.borrow_mut() = Some(ConeDerivedBuilder::default()));
+        let out = compose();
+        let oracle = ORACLE
+            .with(|o| o.borrow_mut().take())
+            .expect("the hook's builder");
+        (out, oracle.finish())
+    }
+
+    /// At emission: with the hook on, fold `raw ∪ direct` for `id` and keep
+    /// an empty Vec; otherwise return `raw` unchanged.
+    pub(super) fn offer(
+        id: &str,
+        raw: Vec<CapabilityFact>,
+        direct: Option<&Vec<CapabilityFact>>,
+    ) -> Vec<CapabilityFact> {
+        ORACLE.with(|o| match o.borrow_mut().as_mut() {
+            Some(b) => {
+                b.fold_routine(id, raw.iter().chain(direct.into_iter().flatten()));
+                Vec::new()
+            }
+            None => raw,
+        })
+    }
+}
 
 /// Compute capabilityFactsInherited + coverage for EVERY routine via a single
 /// fused bottom-up SCC-cone pass. Mirrors `composeInheritedCones`. The engine
@@ -2544,10 +2584,6 @@ fn compose_inherited_cones(
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, super::param_guard::FrameGuards>,
     mode: ConeOutput,
-    // #160 step 7b §4.7: the T7'/T8' oracle's streaming sink. `Some`: each
-    // member's raw Vec goes to it at emission, and `out` keeps an empty Vec.
-    // Production callers pass `None`.
-    mut raw_sink: Option<RawSink<'_>>,
 ) -> (
     HashMap<String, InheritedConeResult>,
     ConeDerivedStore,
@@ -2631,15 +2667,17 @@ fn compose_inherited_cones(
         // ⟨C1 Task 4⟩ An SCC's cone has two readers. (1) Its PREDECESSORS:
         // `fact_cone_for_scc` reads `fact_cones[y]` only for `y ∈ succ_sccs[j]`,
         // and both per-routine walks (`inherited_facts_for_singleton` /
-        // `inherited_facts_by_bfs`, the raw half and the test oracle) read a
-        // cone only for a routine whose SCC differs from the subject's
-        // (`build_succ_sccs` excludes self, and the BFS treats a same-SCC hop
-        // as a sibling and expands it instead of pulling a cone; a
-        // non-recursive singleton has no self-edge by `tarjan_scc`'s
-        // `recursive` rule). (2) Since #160 step 7a, a non-root RECURSIVE SCC's
-        // own members, which fold `fact_cones[i]` as their Cone-SCC set during
-        // `i`'s member loop. Both readers are done before `i`'s cone is freed:
-        // the free below runs after the member loop, and only once every
+        // `inherited_facts_by_bfs`) read a cone only for a routine whose SCC
+        // differs from the subject's (`build_succ_sccs` excludes self, and the
+        // BFS treats a same-SCC hop as a sibling and expands it instead of
+        // pulling a cone; a non-recursive singleton has no self-edge by
+        // `tarjan_scc`'s `recursive` rule). Since #160 step 7b this includes,
+        // in every mode that wants derived rows, the singleton's memo-row build
+        // (`memo[y]` = F(closed entries of `fact_cones[y]`)), whose row is freed
+        // together with the cone below. (2) Since step 7a, a non-root RECURSIVE
+        // SCC's own members, which fold `fact_cones[i]` as their Cone-SCC set
+        // during `i`'s member loop. Both readers are done before `i`'s cone is
+        // freed: the free below runs after the member loop, and only once every
         // predecessor has run.
         //
         // `remaining_uses[i]` is the number of SCCs holding `i` as a successor,
@@ -2888,13 +2926,8 @@ fn compose_inherited_cones(
                     _t_der1,
                 );
             }
-            let inherited = match raw_sink.as_mut() {
-                Some(sink) => {
-                    sink(m, inherited);
-                    Vec::new()
-                }
-                None => inherited,
-            };
+            #[cfg(test)]
+            let inherited = raw_fold_hook::offer(m, inherited, direct_raw.get(m));
             let _t_emit = crate::engine::l5::detector_context::cones_census::start();
             let d_status = cov
                 .get(m)
@@ -2922,6 +2955,16 @@ fn compose_inherited_cones(
                 _t_emit,
             );
         }
+        // 7b §4.5: the set row's destruction is recursive fold work, charged to
+        // `BFS_FOLD_NANOS` (the B1 timer `bfs_fold`), not left untimed.
+        if let Some(row) = set_row {
+            let _t = crate::engine::l5::detector_context::cones_census::start();
+            drop(row);
+            crate::engine::l5::detector_context::cones_census::add_since(
+                &crate::engine::l5::detector_context::cones_census::BFS_FOLD_NANOS,
+                _t,
+            );
+        }
 
         // refcount-free downstream cones whose last predecessor (this SCC) is done.
         for y in succ_ids {
@@ -2930,7 +2973,22 @@ fn compose_inherited_cones(
             }
             if remaining_uses[*y] == 0 {
                 fact_cones.remove(y);
-                memo.remove(y);
+                // 7b §4.4: a memo row's destruction is singleton work, charged
+                // to `SINGLETON_NANOS` (the B1 timer `singleton`) and to its
+                // `SGL_MEMO_NANOS` sub-timer, from one reading.
+                let _t = crate::engine::l5::detector_context::cones_census::start();
+                let dropped = memo.remove(y).is_some(); // the row drops at this `;`
+                if dropped && let Some(t) = _t {
+                    let ns = t.elapsed().as_nanos() as u64;
+                    crate::engine::l5::detector_context::cones_census::add(
+                        &crate::engine::l5::detector_context::cones_census::SINGLETON_NANOS,
+                        ns,
+                    );
+                    crate::engine::l5::detector_context::cones_census::add(
+                        &crate::engine::l5::detector_context::cones_census::SGL_MEMO_NANOS,
+                        ns,
+                    );
+                }
                 cov_cones.remove(y);
             }
         }
@@ -3079,68 +3137,6 @@ pub fn compose_cone_over_graph(
     routines: &[ModelRoutine],
     mode: ConeOutput,
 ) -> ConeOutcome {
-    compose_cone_over_graph_with(
-        typed,
-        nodes,
-        direct_in,
-        coverage_in,
-        routines,
-        ComposeOptions::production(mode),
-    )
-}
-
-/// How one composition runs: the outputs it makes and the test oracle's raw
-/// sink (#160 step 7b §4.7).
-pub(crate) struct ComposeOptions<'s> {
-    pub(crate) mode: ConeOutput,
-    pub(crate) raw_sink: Option<RawSink<'s>>,
-}
-
-impl ComposeOptions<'_> {
-    /// The production options: `mode`, no sink.
-    pub(crate) fn production(mode: ConeOutput) -> Self {
-        Self {
-            mode,
-            raw_sink: None,
-        }
-    }
-}
-
-/// #160 step 7b §4.7: the T7'/T8' oracle's `RawOnly` composition, streamed.
-/// Each emitted routine's raw inherited Vec goes to `sink` at once and is not
-/// kept, so no raw Vec of all routines is ever held.
-#[cfg(test)]
-pub(crate) fn compose_raw_streaming(
-    typed: &[TypedEdge],
-    nodes: &[String],
-    direct_in: &HashMap<String, Vec<CapabilityFact>>,
-    coverage_in: &HashMap<String, (String, Vec<String>)>,
-    routines: &[ModelRoutine],
-    sink: RawSink<'_>,
-) -> ConeOutcome {
-    compose_cone_over_graph_with(
-        typed,
-        nodes,
-        direct_in,
-        coverage_in,
-        routines,
-        ComposeOptions {
-            raw_sink: Some(sink),
-            ..ComposeOptions::production(ConeOutput::RawOnly)
-        },
-    )
-}
-
-/// [`compose_cone_over_graph`] with its [`ComposeOptions`] stated.
-pub(crate) fn compose_cone_over_graph_with(
-    typed: &[TypedEdge],
-    nodes: &[String],
-    direct_in: &HashMap<String, Vec<CapabilityFact>>,
-    coverage_in: &HashMap<String, (String, Vec<String>)>,
-    routines: &[ModelRoutine],
-    opts: ComposeOptions<'_>,
-) -> ConeOutcome {
-    let ComposeOptions { mode, raw_sink } = opts;
     crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
     let g = build_typed_edge_graph(typed, nodes);
@@ -3210,7 +3206,6 @@ pub(crate) fn compose_cone_over_graph_with(
         &routines_by_id,
         &frames,
         mode,
-        raw_sink,
     );
     crate::engine::l5::detector_context::cones_census::add_since(
         &crate::engine::l5::detector_context::cones_census::WALK_COMPOSE_NANOS,
@@ -4418,7 +4413,6 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         &routines_by_id,
         &frames,
         ConeOutput::RawOnly,
-        None,
     );
 
     // ── Project ───────────────────────────────────────────────────────────
@@ -7206,22 +7200,17 @@ codeunit 50100 C
                 new.stats.member_walks, new.stats.singleton_scans
             ));
         }
-        let mut oracle = ConeDerivedBuilder::default();
-        compose_raw_streaming(
-            rel.cone(),
-            &i.nodes,
-            &i.direct_full,
-            &i.coverage_in,
-            &m.workspace.routines,
-            &mut |id, raw| {
-                oracle.fold_routine(
-                    id,
-                    raw.iter()
-                        .chain(i.direct_full.get(id).into_iter().flatten()),
-                );
-            },
-        );
-        if let Some(d) = rows_diff(&new.derived, &oracle.finish()) {
+        let (_raw, oracle) = raw_fold_hook::fold(|| {
+            compose_cone_over_graph(
+                rel.cone(),
+                &i.nodes,
+                &i.direct_full,
+                &i.coverage_in,
+                &m.workspace.routines,
+                ConeOutput::RawOnly,
+            )
+        });
+        if let Some(d) = rows_diff(&new.derived, &oracle) {
             failures.push(format!("{where_}: {d}"));
         }
         classes.add(&new.stats, i.nodes.len());
@@ -7331,17 +7320,19 @@ codeunit 50100 C
                 let rel = ExecRelation::single_app(&m);
                 Some(check_model(&m, &rel, "CDO", &mut classes, &mut failures))
             };
-            let Some(stats) = stats else {
-                continue;
-            };
+            let stats = stats.unwrap_or_else(|| {
+                panic!(
+                    "CDO {mode}: no composition to check (no model built)\n{}",
+                    failures.join("\n")
+                )
+            });
             println!(
-                "{label} on CDO ({mode}): {} routines, {} recursive SCCs, {} members, max {}, {}, closed_memo_builds {} singleton_scans {}, {:.1?}",
+                "{label} on CDO ({mode}): {} routines, {} recursive SCCs, {} members, max {}, {}, singleton_scans {}, {:.1?}",
                 classes.routines,
                 stats.recursive_sccs,
                 stats.recursive_members_emitted,
                 stats.max_recursive_members,
                 classes.line(),
-                stats.closed_memo_builds,
                 stats.singleton_scans,
                 start.elapsed()
             );

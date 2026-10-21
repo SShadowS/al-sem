@@ -376,7 +376,9 @@ pub(crate) mod cones_census {
     // arm splits into the WALK and the FOLD (#160 §4.1.1). Since step 7a
     // (§4.5) `BFS_WALK_NANOS` holds each recursive SCC's set build (root) or
     // borrow (non-root) plus the per-member walks that still run (raw modes);
-    // `BFS_FOLD_NANOS` the per-member set fold plus `emit_picks` in raw modes.
+    // `BFS_FOLD_NANOS` the derived fold plus `emit_picks` in raw modes. Since
+    // step 7b the set is folded ONCE per SCC (its row built, each member's
+    // `fold_row` + own entries, and the row's destruction all charge it).
     // `BFS_PICKS` counts picks of walks that ran (0 under DerivedOnly).
     pub(crate) static BFS_WALK_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static BFS_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
@@ -393,9 +395,11 @@ pub(crate) mod cones_census {
     /// (`SCAN_OWN`), and the raw materialization (`retag` + `sort_inherited`,
     /// skipped under `ConeOutput::DerivedOnly`). Since #160 step 7b the scans
     /// run for the raw half only (0 in `analyze`), and the derived row is
-    /// folded from memoized closed-set rows: memo-row builds (`MEMO`),
+    /// folded from memoized closed-set rows: memo-row builds and destruction
+    /// (`MEMO`; the destruction runs in the refcount-free loop and is added to
+    /// `SINGLETON_NANOS` and `MEMO` from one reading, so it is counted once),
     /// `fold_row` (`ROW`), the substituted open entries (`OPEN`) and the own
-    /// entries (`OWN_FOLD`). All nest inside `SINGLETON_NANOS`; none is a
+    /// entries (`OWN_FOLD`). All count inside `SINGLETON_NANOS`; none is a
     /// [`component_snapshot`] component.
     pub(crate) static SGL_SUBST_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SGL_SCAN_CONE_NANOS: AtomicU64 = AtomicU64::new(0);
@@ -414,7 +418,10 @@ pub(crate) mod cones_census {
     pub(crate) static SCC_SET_FOLDS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SINGLETON_SCANS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static CLOSED_MEMO_LIVE_MAX: AtomicU64 = AtomicU64::new(0);
-    /// Populations the scan time is per. Accumulated in plain locals inside the
+    /// Populations the scan time is per (since #160 step 7b, the raw-half scan
+    /// only: these and the `SGL_CALLS_*` / `SGL_ENTRIES_N_CONES` counts stay 0
+    /// under `DerivedOnly`, and the report prints their two lines only when a
+    /// singleton scanned). Accumulated in plain locals inside the
     /// walk and folded in with ONE `fetch_add` per call — the inner loop runs
     /// millions of times and must not touch an atomic (the distortion this
     /// module's `add_gated` doc records).
@@ -681,22 +688,26 @@ pub(crate) mod cones_census {
             ms(SGL_OWN_FOLD_NANOS.load(Ordering::Relaxed)),
             ms(SGL_RAW_NANOS.load(Ordering::Relaxed)),
         );
-        eprintln!(
-            "[cones-census]   singleton calls: 0_cones={} 1_cone={} n_cones={} entries_under_n_cones={}",
-            SGL_CALLS_0_CONES.load(Ordering::Relaxed),
-            SGL_CALLS_1_CONE.load(Ordering::Relaxed),
-            SGL_CALLS_N_CONES.load(Ordering::Relaxed),
-            SGL_ENTRIES_N_CONES.load(Ordering::Relaxed),
-        );
-        eprintln!(
-            "[cones-census]   singleton pop: edges={} closed_entries={} open_entries={} own_entries={} wins={} bests={}",
-            SGL_EDGES.load(Ordering::Relaxed),
-            SGL_CLOSED_ENTRIES.load(Ordering::Relaxed),
-            SGL_OPEN_ENTRIES.load(Ordering::Relaxed),
-            SGL_OWN_ENTRIES.load(Ordering::Relaxed),
-            SGL_WINS.load(Ordering::Relaxed),
-            SGL_BESTS.load(Ordering::Relaxed),
-        );
+        // #160 step 7b: the scan populations exist only where a singleton
+        // scanned `best` (the raw half); under `DerivedOnly` they would be zeros.
+        if SINGLETON_SCANS.load(Ordering::Relaxed) > 0 {
+            eprintln!(
+                "[cones-census]   singleton calls: 0_cones={} 1_cone={} n_cones={} entries_under_n_cones={}",
+                SGL_CALLS_0_CONES.load(Ordering::Relaxed),
+                SGL_CALLS_1_CONE.load(Ordering::Relaxed),
+                SGL_CALLS_N_CONES.load(Ordering::Relaxed),
+                SGL_ENTRIES_N_CONES.load(Ordering::Relaxed),
+            );
+            eprintln!(
+                "[cones-census]   singleton pop: edges={} closed_entries={} open_entries={} own_entries={} wins={} bests={}",
+                SGL_EDGES.load(Ordering::Relaxed),
+                SGL_CLOSED_ENTRIES.load(Ordering::Relaxed),
+                SGL_OPEN_ENTRIES.load(Ordering::Relaxed),
+                SGL_OWN_ENTRIES.load(Ordering::Relaxed),
+                SGL_WINS.load(Ordering::Relaxed),
+                SGL_BESTS.load(Ordering::Relaxed),
+            );
+        }
         eprintln!(
             "[cones-census]   closed: memo_builds={} memo_reads={} memo_entries={} scc_set_folds={} singleton_scans={} memo_live_max={}",
             CLOSED_MEMO_BUILDS.load(Ordering::Relaxed),

@@ -6,8 +6,12 @@
 //! clones held live for the whole detector run (~10.9 GB). Every analyze-path
 //! consumer of that Vec reads only a derived predicate off it — a presence
 //! boolean, a table/event id-set, or (d44) an id-set tagged with which write ops
-//! occurred. This module is that derived view, computed by folding the SAME
-//! reachable representatives the `retag` sites already visit, with zero clones.
+//! occurred. This module is that derived view, folded with zero clones. Since
+//! #160 step 7b it does not fold the `retag` sites' representatives one by one:
+//! a singleton folds memoized rows of its callees' closed sets (EVERY closed
+//! entry of each callee cone, not one winner per key) and a recursive member
+//! folds its SCC set's row. The rows agree with a per-representative fold
+//! because the fold depends only on a fact's key (7b spec §4.1).
 //!
 //! ⟨Task 3⟩ It is no longer a parallel view: the analyze path composes under
 //! [`ConeOutput::DerivedOnly`] and the raw Vec is not built at all. The only
@@ -742,6 +746,13 @@ impl Scratch {
     /// What ONE fact contributes: the one classifier behind
     /// [`ConeDerivedBuilder::fold_fact`] and [`ConeDerivedBuilder::fold_set`].
     fn add(&mut self, interner: &mut ResInterner, f: &CapabilityFact) {
+        // The fold's domain condition (#160 step 7b spec, Words): the key
+        // writes `None` and `Some("")` alike, but this fold tells them apart,
+        // so F would not be a function of the key. Checked on every fold.
+        debug_assert!(
+            f.resource_id.as_deref() != Some(""),
+            "fold: a fact with resource_id Some(\"\")"
+        );
         match f.resource_kind {
             "table" => {
                 self.flags |= TOUCHES_TABLE;
@@ -825,12 +836,6 @@ impl ConeDerivedBuilder {
     ) -> FoldedRow {
         self.set.clear();
         for f in facts {
-            // The memo's domain condition (spec Words): `None` and `Some("")`
-            // share a key but fold differently.
-            debug_assert!(
-                f.resource_id.as_deref() != Some(""),
-                "fold_set: a fact with resource_id Some(\"\")"
-            );
             self.set.add(&mut self.store.interner, f);
         }
         let s = &mut self.set;
@@ -887,7 +892,9 @@ impl ConeDerivedBuilder {
     /// key-deduped representatives, not a flat reachable list (see the module
     /// docs' dedup-asymmetry note). It exists for callers that already hold the
     /// literal reachable sequence — hand-built fixture summaries, whose inherited
-    /// facts ARE the input rather than a cone output.
+    /// facts ARE the input rather than a cone output — and for the T7'/T8'
+    /// oracle (#160 step 7b), which folds each routine's streamed `RawOnly` Vec
+    /// plus its raw direct facts (`capability_cone::raw_fold_hook`).
     ///
     /// ⟨fix M3⟩ `#[cfg(test)]` + `pub(crate)` keep that a STRUCTURAL guarantee
     /// rather than just a doc warning. ⟨issue 33⟩ Its original justification —
@@ -896,8 +903,8 @@ impl ConeDerivedBuilder {
     /// `inherited_fact_key` the fold is dedup-invariant, so raw and deduped
     /// inputs now agree. The confinement stays as a cost and clarity boundary
     /// (the production path must not pay for a flat reachable list), not as a
-    /// correctness guard. Its only caller (`l5::test_support::cone_store_of`) is
-    /// itself `#[cfg(test)]`-only.
+    /// correctness guard. Every caller (`l5::test_support::cone_store_of`, the
+    /// capability cone's test oracle) is itself `#[cfg(test)]`-only.
     #[cfg(test)]
     pub(crate) fn fold_routine<'f>(
         &mut self,
@@ -1025,6 +1032,18 @@ mod tests {
     use crate::engine::l4::combined_graph::{CombinedGraph, TypedEdge};
     use crate::program::body::features::PTempState;
     use std::collections::HashMap;
+
+    /// #160 step 7b: the fold's domain condition is checked in the shared
+    /// classifier, so `fold_fact` (not only `fold_set`) refuses a
+    /// `resource_id` of `Some("")` in a debug build.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "fold: a fact with resource_id Some(\"\")")]
+    fn fold_fact_refuses_an_empty_resource_id() {
+        let mut b = ConeDerivedBuilder::default();
+        b.begin_routine();
+        b.fold_fact(&fact("X", "insert", "table", Some("")));
+    }
 
     // -- fixture constructors -------------------------------------------------
 
