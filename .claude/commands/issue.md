@@ -101,9 +101,17 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    references included, not only blocking ones; later rounds verify fixes and
    raise a new finding only for a real defect a fix introduced (the final
    panel's rule in step 10; on #160 step 2 the spec panel used all 5 rounds).
-   Each later round
-   sends the spec diff plus the register and asks each reviewer to mark every
-   entry `accepted` or `re-raised`. Converged when: no `open`; every entry
+   **A later round's briefing carries the diff and the ids, nothing else:**
+   the fix diff (a diff of the spec, or of the ledger's `## Design` for a
+   bounded issue; `git diff <last-marked-commit>..HEAD` for code) and the ids
+   to mark (the entries whose marks were reset, plus new entries). Each
+   reviewer marks those `accepted` or `re-raised`. Reviewers continue their
+   round-1 thread (`continuation_id` for pi; the same Opus agent via
+   `SendMessage` for an Opus stand-in). Do not re-link the ledger, the full
+   register or the previous reviews. If a reviewer's thread is gone (pi
+   threads do not survive a session), send that reviewer a full briefing
+   instead. Diff-only rounds came back in 1-2 min (#190 r4, r6b; #111 r3),
+   full-context rounds in 4-13 min (#160 final r1: 13 min). Converged when: no `open`; every entry
    `accepted` by both against the current hash; every blocking entry is `fixed`
    or `refuted` with evidence. A `re-raised` stays unresolved even without new
    evidence. Not converged after 5 rounds: check the handoff rule below, else
@@ -260,9 +268,10 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     **Ask for everything in round 1; later rounds verify.** Round 1's briefing
     asks each reviewer for EVERY finding at once (code, tests, the numbers file,
     the CHANGELOG, spec wording, stale docs), not only blocking ones. Later
-    rounds' briefings send the fix diff and ask each reviewer to mark the
-    entries, and to raise a NEW finding only for a real defect the fixes
-    introduced. On #160 step 2 rounds 2-4 were wording and record fixes that
+    rounds' briefings follow step 5's later-round rule (the fix diff
+    `git diff <last-marked-commit>..HEAD` and the ids to mark, in the round-1
+    thread, nothing else) and ask each reviewer to mark those entries, and to
+    raise a NEW finding only for a real defect the fixes introduced. On #160 step 2 rounds 2-4 were wording and record fixes that
     round 1 could have named.
 
     **Prose after the gates is free.** `CHANGELOG.md` and `docs/**/*.md` are

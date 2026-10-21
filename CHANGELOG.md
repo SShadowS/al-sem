@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/issue` (flow speed-ups, P10): a later panel round's briefing carries only the fix diff
+  and the ids to mark, in the reviewer's round-1 thread; the ledger, the full register and
+  the previous reviews are not re-sent. Diff-only rounds took 1-2 min on #190 and #111,
+  full-context rounds 4-13 min.
 - **Grammar: tree-sitter-al `main` at `4d75846c`** (B7b-3; package version still 4.4.1; was
   `8682cb5f`). The `node-types.json` hash guard had made CI red. 499 -> 500 named kinds, no
   field name added or removed; the `target` field of the four move hosts

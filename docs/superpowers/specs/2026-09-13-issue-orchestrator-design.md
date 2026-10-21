@@ -729,8 +729,11 @@ render of the ledger becomes the PR body.
    `require_evidence` on, `output_file` per model. Convergence is defined by the
    **findings register** (below). Cap 5 rounds via `continuation_id` (3 until 2026-10-14: two issues in a row, #64 and #71,
    ended one round short with every entry accepted by one reviewer and new round-3 findings
-   left unreviewed); each round's
-   prompt carries the diff of the spec since the last round and the register.
+   left unreviewed). A later round's prompt carries only the diff since the
+   last marked round and the ids to mark (reset entries plus new ones), in the
+   reviewer's round-1 thread; the ledger, the full register and the previous
+   reviews are not re-sent (a full briefing only when the thread is gone). Added
+   2026-10-21: diff-only rounds took 1-2 min, full-context ones 4-13 min.
 6. **Acceptance to tests.** After the spec converges, an opus subagent turns the
    acceptance matrix into failing tests. Tests must compile and fail for the right
    reason (asserted output captured in the ledger). Not committed on their own: the
