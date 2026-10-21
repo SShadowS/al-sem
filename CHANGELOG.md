@@ -38,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a record written after the panel takes `disposition: fixed` with
   `closes_by: {kind: gate|attest|ci-wait, key}`, and the executor checks the record
   instead of a later round re-marking it. `attest` refuses an unknown kind or key, a
-  non-`fixed` entry, a red or absent attested gate, and an `attest` key outside
+  non-`fixed` entry, a red or absent attested gate, a gate key `attest` does not itself
+  require (only `ci-steps-all`, both `check-goldens` keys and `cdo-gate`), and an `attest` key outside
   `B`/`H`/`final_head`; `merge-gate` holds a `ci-wait` entry (`closes-by-unmet:<ids>`)
   until the latest `ci-wait` record is green on the final head. The attestation lists
   them under `closed_by`. On #190 such entries forced a final round after step 11.

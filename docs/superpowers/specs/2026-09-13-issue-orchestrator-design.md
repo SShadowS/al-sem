@@ -950,7 +950,9 @@ attested gate exit code, an attested `B`/`H`/`final_head`, the `ci-wait` record 
 the final head) is `fixed` with `closes_by: {kind: gate|attest|ci-wait, key}`.
 The reviewers accept the rule that the record closes it; the executor checks the
 record and fails closed. `attest` refuses an unknown kind or key, a non-`fixed`
-entry, a `gate` key whose attested exit code is not 0, and an `attest` key outside
+entry, a `gate` key outside the gates `attest` requires (`ci-steps-all`,
+`check-goldens-coverage`, `check-goldens`, `cdo-gate`) or whose attested exit code is
+not 0, and an `attest` key outside
 the three SHA fields. The `ci-wait` record only exists after the push, so
 `merge-gate` holds such an entry (`closes-by-unmet:<ids>`) until this run's latest
 `ci-wait` record names the final head with exit code 0. The attestation lists the

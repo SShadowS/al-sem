@@ -837,6 +837,10 @@ def _attest_closes(gates: dict):
     (`_ci_wait_unmet`); here only its key is checked."""
     def closes(kind: str, key: str) -> bool:
         if kind == "gate":
+            # Only the gates `attest` itself requires: any other key in the
+            # blob is the conductor's own word, which nothing else checks.
+            if key not in (*REQUIRED_GATE_KEYS, CDO_GATE_KEY):
+                return False
             v = gates.get(key) if isinstance(gates, dict) else None
             return isinstance(v, int) and not isinstance(v, bool) and v == 0
         if kind == "attest":

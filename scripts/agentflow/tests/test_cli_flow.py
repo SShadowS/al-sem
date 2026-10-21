@@ -969,7 +969,8 @@ def test_attest_accepts_closes_by_entries_whose_record_is_attested(capsys, root,
 
 @pytest.mark.parametrize("entry", [
     closes("X", "gate", "bench"),                  # no such attested gate
-    closes("X", "gate", "d4"),                     # attested, but red (see gates below)
+    closes("X", "gate", "d4"),                     # attested GREEN, but not a required gate
+    closes("X", "gate", "d5"),                     # attested red, and not a required gate
     closes("X", "attest", "base"),                 # not an attested SHA field
     closes("X", "ci-wait", "ci"),                  # ci-wait names only its own record
     closes("X", "later", "ci-steps-all"),          # unknown kind
@@ -980,7 +981,8 @@ def test_attest_accepts_closes_by_entries_whose_record_is_attested(capsys, root,
     {"id": "X", "severity": "minor", "disposition": "fixed", "reviews": BOTH, "closes_by": {"kind": "gate"}},
 ], ids=lambda e: json.dumps(e.get("closes_by")) + e["disposition"])
 def test_attest_refuses_a_closes_by_that_names_no_green_record(capsys, root, tmp_path, entry):
-    gates = json.dumps({**json.loads(GREEN_GATES), "d4": 1})
+    # `d4` is green in the blob: a key `attest` does not itself require is still refused.
+    gates = json.dumps({**json.loads(GREEN_GATES), "d4": 0, "d5": 1})
     register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path, contents=json.dumps([entry]))
     code, out = attest(capsys, root, register, gates=gates)
     assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["X"], out

@@ -136,8 +136,10 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    B | H | final_head | ci-wait>"}` and needs no further mark: the reviewers
    mark the RULE (that the named record closes it) `accepted`, and the
    executor checks the record. `attest` refuses (`register-not-converged`) an
-   unknown kind or key, an entry that is not `fixed`, a `gate` key whose
-   attested exit code is not 0, or an `attest` key that is not one of the
+   unknown kind or key, an entry that is not `fixed`, a `gate` key that is
+   not one of the gates `attest` requires (`ci-steps-all`,
+   `check-goldens-coverage`, `check-goldens`, `cdo-gate`) or whose attested
+   exit code is not 0, or an `attest` key that is not one of the
    three SHA fields; `merge-gate` refuses (`closes-by-unmet:<ids>`) a
    `ci-wait` entry until this run's latest `ci-wait` record is on the final
    head with exit code 0. The attestation lists each one under `closed_by`.
