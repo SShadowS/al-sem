@@ -320,7 +320,9 @@ Depends on Task 3's green record. **It is the step's last code commit.**
   - the `membership` parameter, wherever only the variant used it.
   Since `PerScc` is then the only value, the enum and the parameter both go; spec §4.7
   says "wherever only the variant used it".
-- Added (`#[cfg(test)]`):
+- Added (`#[cfg(test)]`; superseded in final panel round 1 by the `#[cfg(test)]` module
+  `raw_fold_hook` with a thread-local oracle builder, so no `raw_sink` parameter or branch
+  reaches non-test builds — spec §4.7):
   - `compose_raw_streaming(…, sink: &mut dyn FnMut(&str, Vec<CapabilityFact>))`;
   - a `raw_sink: Option<&mut dyn FnMut(&str, Vec<CapabilityFact>)>` parameter on
     `compose_inherited_cones`. Production callers pass `None`. With `Some`, the member's

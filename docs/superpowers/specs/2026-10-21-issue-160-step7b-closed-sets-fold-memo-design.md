@@ -26,7 +26,8 @@ Words (7a's, plus):
   and `Some("")` share a key while `fold_fact` treats them differently (`None` returns
   before any id is pushed). The design therefore assumes no fact has `resource_id ==
   Some("")`. Measured: 0 such facts among the closed, open and own entries the memo path
-  folds on CDO (ledger P20). `fold_set` carries a `debug_assert!` on it (§4.2).
+  folds on CDO (ledger P20). The shared classifier `Scratch::add` carries a `debug_assert!` on
+  it, so every fold checks it (§4.2).
 - **Closed entry** = a cone entry with no guard (`frame_bound(e)` is false,
   `capability_cone.rs:1537-1539`). **Open entry** = a frame-bound (guarded) one; it is
   carried per call edge through `substitute_entry` (`:1592-1616`) and may be dropped there.
@@ -227,9 +228,12 @@ impl ConeDerivedBuilder {
 }
 ```
 
-`fold_set` carries `debug_assert!(f.resource_id.as_deref() != Some(""))` for each fact
-(the Words domain condition; 0 such facts on CDO, P20). A debug build of any fixture that
-breaks it fails loudly instead of folding a row that differs from the old path.
+`Scratch::add`, the one classifier behind `fold_fact` and `fold_set`, carries
+`debug_assert!(f.resource_id.as_deref() != Some(""))` for each fact (the Words domain condition;
+0 such facts on CDO, P20), so the memo path, the open and own entries and the oracle all check
+it. A debug build of any fixture that breaks it fails loudly instead of folding a row that
+differs from the old path. (Final panel round 1 moved it here from `fold_set`;
+`fold_fact_refuses_an_empty_resource_id` pins it.)
 
 No existing fixture or test is expected to trip it (P23):
 - A fact's `resource_id` is set in production from two places only: `op.table_id`
@@ -356,14 +360,13 @@ universe composes TWICE over the det cone's exact inputs (`det_cone_inputs`):
    - T7' sums `closed_memo_builds` over its whole corpus and asserts the sum `> 0`.
    - T8' asserts `> 0` on the CDO cross-app universe, where the probe counted 25,498
      builds (P5). Single-app is not asserted, since its count was not measured.
-2. `RawOnly`, the witness engine step 6 keeps. It runs through a `cfg(test)` streaming
-   entry, `compose_raw_streaming(…, sink: &mut dyn FnMut(&str, Vec<CapabilityFact>))`.
-   This passes a `raw_sink: Option<&mut dyn FnMut(…)>` to `compose_inherited_cones`;
-   production callers pass `None`. At each member's emission the raw `Vec` goes to the sink
-   instead of into `out` (its `InheritedConeResult` keeps an empty `Vec`). The sink folds
-   `raw ∪ direct_raw[m]` into an oracle builder at once: `begin_routine`, `fold_fact` each
-   fact, `finish_routine(m)`, the steps of `fold_routine` (`cone_derived.rs`, `cfg(test)`),
-   which the sink calls directly. Then it drops the `Vec`.
+2. `RawOnly`, the witness engine step 6 keeps, run with the test-only streaming hook
+   `raw_fold_hook` (a `#[cfg(test)]` module holding a thread-local oracle builder; final panel
+   round 1 replaced the `raw_sink` parameter this item first described, so non-test builds
+   carry no parameter or branch for it). At each member's emission one `#[cfg(test)]`
+   statement folds `raw ∪ direct_raw[m]` into the oracle builder at once: `begin_routine`,
+   `fold_fact` each fact, `finish_routine(m)`, the steps of `fold_routine` (`cone_derived.rs`,
+   `cfg(test)`). Then it drops the `Vec`, so only one subject's raw facts are alive at a time.
 
    The self half is `direct_raw`, the raw set with producers, not the deduped `direct`.
 3. `rows_diff(store, oracle_store)` (7a's comparator: row ids, flags, the four lists, the
@@ -553,7 +556,7 @@ I10 (A7b.11). I3, I4, I5, I8, I11 untouched.
 - **Interning order leaks into output**: I2 goldens and CDO SARIF identity (§8 part 1).
 - **A noise-only pass or fail**: the void checks in §8. A void bound never passes.
 - **A `resource_id` of `Some("")`** (a key that hides two reps F tells apart): the
-  `debug_assert!` in `fold_set` (§4.2); 0 on CDO (P20).
+  `debug_assert!` in `Scratch::add`, so every fold (§4.2); 0 on CDO (P20).
 - **The oracle runs out of memory in `cdo-gate`**: T8' streams per subject (§4.7, memory
   plan, with a recorded RSS rule).
 - **The `Both` mode pays twice** (scan for raw plus memo for derived): reported in §8
