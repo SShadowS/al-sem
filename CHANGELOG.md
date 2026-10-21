@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the entries its commit message names. The old field was one `hash` over the whole Design,
   so every edit reset every mark (#190: 7 resets of up to 31 entries). A conductor
   convention for now: the executor never read the old hash and does not read the anchors.
+  After step 11's rebase the conductor re-points every `fix_commit` and commit anchor to
+  the rebased SHA (from `git range-diff`), and a later round's fix diff across a rebase is a
+  range-diff.
 - agentflow (flow speed-ups, P3): a `minor` register entry whose fix touches only
   gate-inert prose and the evidence files closes on the raising reviewer's `accepted`;
   the other reviewer's mark is `accepted-by-rule`, and a `re-raised` still reopens it.

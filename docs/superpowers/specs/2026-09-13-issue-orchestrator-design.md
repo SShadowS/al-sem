@@ -809,7 +809,10 @@ render of the ledger becomes the PR body.
     shows a branch commit whose diff changed outside CHANGELOG context lines and
     evidence files. Code that `master` brought in is not the branch's change: the
     gates cover how it combines with the branch, and the panel's register is
-    about the branch. Record the range-diff verdict in the ledger. A red gate
+    about the branch. Record the range-diff verdict in the ledger, and use the same
+    range-diff to re-point every register `fix_commit` and commit-shaped `anchor`
+    to its rebased SHA before `attest` (a later round's fix diff across a rebase is
+    likewise a range-diff, not a plain diff). A red gate
     here is fixed, gets one panel round over the fix, and the full set runs
     again. A later panel round whose fix touches anything outside the gate-inert
     prose and the evidence discards the early run, and this step runs again on

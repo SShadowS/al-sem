@@ -153,7 +153,10 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    panel's rule in step 10; on #160 step 2 the spec panel used all 5 rounds).
    **A later round's briefing carries the diff and the ids, nothing else:**
    the fix diff (a diff of the spec, or of the ledger's `## Design` for a
-   bounded issue; `git diff <last-marked-commit>..HEAD` for code) and the ids
+   bounded issue; `git diff <last-marked-commit>..HEAD` for code, or, when a
+   rebase came in between, `git range-diff <old base>..<last-marked-commit>
+   origin/master..HEAD`, since a plain diff across a rebase also shows
+   everything `master` brought in) and the ids
    to mark (the entries whose marks were reset, plus new entries). Each
    reviewer marks those `accepted` or `re-raised`. Reviewers continue their
    round-1 thread (`continuation_id` for pi; the same Opus agent via
@@ -358,7 +361,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     asks each reviewer for EVERY finding at once (code, tests, the numbers file,
     the CHANGELOG, spec wording, stale docs), not only blocking ones. Later
     rounds' briefings follow step 5's later-round rule (the fix diff
-    `git diff <last-marked-commit>..HEAD` and the ids to mark, in the round-1
+    `git diff <last-marked-commit>..HEAD`, a `git range-diff` across a
+    rebase, and the ids to mark, in the round-1
     thread, nothing else) and ask each reviewer to mark those entries, and to
     raise a NEW finding only for a real defect the fixes introduced. On #160 step 2 rounds 2-4 were wording and record fixes that
     round 1 could have named.
@@ -402,6 +406,15 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     branch. Record the range-diff verdict in the ledger either way. A red gate
     here: fix it, run one panel round over the fix, then the full set again.
     Record `B = origin/master` and `H = HEAD` in the ledger.
+
+    **A rebase rewrites every branch SHA, so re-point the register.** Use the
+    same `git range-diff <old base>..<old head> origin/master..HEAD` to map each
+    old branch commit to its rebased one, then rewrite every `fix_commit` and
+    every commit-shaped `anchor` in `findings.json` to the rebased SHA (an
+    `accepted-by-rule` entry whose `fix_commit` is not on `B..final_head` fails
+    `attest`). Recompute an `anchor_hash` only if the range-diff shows its
+    lines changed, and then that entry's marks are reset as usual. Do this
+    before `attest`, which hashes the register.
 12. **Freeze.** `halt-check` first; if halted, write the ledger and return
     `blocked halted`. First re-run the protected-path check over the WHOLE
     approved diff:
