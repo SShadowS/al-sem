@@ -343,18 +343,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`alsem digest --diff` reads plain `diff -u` / `diff -ru` headers** (#111). GNU `diff`
-  writes each `---`/`+++` header as `<path><TAB><timestamp>`, and the TAB and timestamp
-  stayed in the path, so every file was `diff-file-unmatched` (exit 2) and a timestamped
-  `/dev/null` was not seen as an addition or deletion. The header path now ends at the first
-  raw TAB, before the `/dev/null` test and before unquoting, so GNU's quoted form
-  `"./src/a b.al"<TAB><time>` matches too. Both GNU diff and git C-quote a name that holds a
-  TAB, so a raw TAB only ever ends the path (checked on GNU diffutils 3.12 and git 2.53.0);
-  a producer that writes such a name raw and unquoted would cut it at that TAB.
-  `src/engine/l5/diff_parser.rs` (`extract_path`). Not covered: `diff -ru`'s `Only in …`
-  lines and `diff -ruN`'s epoch-dated deletions are not read as deletions (the latter reads
-  as a modified file with every line deleted), and a git name with a trailing space still
-  loses it to the existing trim.
+- **`alsem digest --diff` reads plain `diff -u` / `diff -ru` headers** (#111), when their
+  paths are relative to the workspace (run `diff` from the workspace root, or use
+  `--label`). GNU `diff` writes each `---`/`+++` header as `<path><TAB><timestamp>`, and the
+  TAB and timestamp stayed in the path, so every plain-diff file was `diff-file-unmatched`
+  and a timestamped `/dev/null` was not seen as an addition or deletion. The header path now
+  ends at the first raw TAB, before the `/dev/null` test and before unquoting, so GNU's
+  quoted form `"./src/a b.al"<TAB><time>` matches too. Both GNU diff and git C-quote a name
+  that holds a TAB, so a raw TAB only ever ends the path (checked on GNU diffutils 3.12 and
+  git 2.53.0); a producer that writes such a name raw and unquoted would cut it at that TAB.
+  `diff -r`'s `Only in <dir>: <name>` lines, ignored before, are now reported as
+  `diff-file-unmatched` on `<dir>/<name>`, so a diff that adds or deletes files no longer
+  drops their roots silently. `src/engine/l5/diff_parser.rs` (`extract_path`, the new
+  `DiffParseResult::only_in`), `src/engine/l5/digest_cli.rs`. Not covered: `diff -ru old
+  new` run from a parent folder writes a tree-root folder (`n/src/…`) that is not matched;
+  `Only in` lines and `diff -ruN`'s epoch-dated deletions are not read as additions or
+  deletions (a `-N` deletion reads as a modified file with every line deleted); and a git
+  name with a trailing space still loses it to the existing trim.
 - **The lowerer reads two new shapes of the `4d75846c` grammar** (see Changed;
   `crates/al-syntax/src/lower/mod.rs`):
   - A `preproc_split_case_extended` arm may hold a nested `preproc_conditional_case`
