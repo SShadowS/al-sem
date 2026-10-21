@@ -642,8 +642,9 @@ sizings marked pre-arc).
   today. Migrate to `eq_fold_identifier`/`fold_identifier` layer-by-layer for
   consistency (low priority; advisory engine only)
 
-- [x] **perf_bounds `compute_all_within_bound` CI flake** — DONE 2026-10-21 (#190): all
-  timing tests hold one lock and judge `min_of`. Original item: (seen once, 2026-07-18,
+- [x] **perf_bounds `compute_all_within_bound` CI flake** — addressed by #190 (lock +
+  `min_of`, 2026-10-21); confirmed on the runner by #190's CI runs. Original item: (seen
+  once, 2026-07-18,
   docs-only push; adjacent runs of the same code passed): magnitude bound lost to
   shared-runner load variance — the exact class the T3 arc fixed for rung bounds via
   interleaved complexity-class assertions. Give compute_all the same load-stable

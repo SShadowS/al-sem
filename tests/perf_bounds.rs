@@ -96,10 +96,30 @@ fn every_timing_test_holds_the_timing_lock() {
             .iter()
             .position(|l| *l == "}")
             .expect("the closing `}` of `release_checks` not found");
+    // `release_checks` is the last item, so a column-0 `}` that is not
+    // followed only by blank lines (e.g. one inside a raw string) would have
+    // cut the scan short.
+    if let Some(j) = (end + 1..lines.len()).find(|&j| !lines[j].trim().is_empty()) {
+        panic!(
+            "line {}: text after the column-0 `}}` taken as the end of `release_checks` \
+             (line {}); it must be the file's last item, or the scan stops early",
+            j + 1,
+            end + 1
+        );
+    }
     let mut tests = 0;
     let mut missing = Vec::new();
     for i in start..end {
-        if lines[i].trim() != "#[test]" {
+        let t = lines[i].trim();
+        if t != "#[test]" {
+            // Any other test attribute (`#[tokio::test]`, `#[test] fn x() {`)
+            // would be skipped, so it fails loudly instead.
+            assert!(
+                t.starts_with("//") || !(t.contains("#[test") || t.contains("test]")),
+                "line {}: test attribute not alone on its line as `#[test]` (`{t}`); \
+                 the scan cannot check it",
+                i + 1
+            );
             continue;
         }
         tests += 1;
@@ -400,9 +420,10 @@ mod release_checks {
     // 231.8 / 243.0ms against the 230ms bound, while the minima were 147.3 /
     // 151.6ms. The cause was sibling tests running in parallel plus the
     // median; the gate now holds [`TIMING_LOCK`] and judges [`min_of`]. On
-    // the dev machine it trips at ~5x its min (230 / ~44ms), so a 3x
-    // regression passes there; on the CI runner the trip factor is measured
-    // in #190's D3.
+    // the dev machine it trips at ~4.7x its min (230 / ~48ms, #190's lock and
+    // D2 runs; ~44ms in P5's earlier serial runs), so a 3x regression passes
+    // there (D2: a 3x solve measured min 142-153ms); on the CI runner the
+    // trip factor is measured in #190's D3.
     const COMPUTE_SUMMARIES_V2_BOUND: Duration = Duration::from_millis(230); // 3x ~76ms measured baseline (re-measured post-A3-store 2026-07-24, unchanged)
 
     // `recursive_scc_db_effects_within_bound` (final-branch-review M-6) — the
@@ -495,7 +516,8 @@ mod release_checks {
     /// 2026-10-21). CI runs this binary's tests in parallel (default libtest
     /// threads) on a 4-vCPU runner, and that sibling load is SUSTAINED: it
     /// covers all of a gate's samples, so it raises the minimum too, which
-    /// [`min_of`] cannot undo. Measured pinned to 4 cores, 5 full runs each:
+    /// [`min_of`] cannot undo. Measured once (P7, 2026-10-21, 4-core pinned,
+    /// dev machine), 5 full runs each:
     /// `compute_summaries_v2`'s per-run min 54-71ms in parallel vs 44-47ms
     /// serial, `build_full_1000` 196-255ms vs 108-121ms. PR #187 failed CI
     /// twice on `compute_summaries_v2_within_bound` this way with no change on
