@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A daily grammar-drift check** (`.github/workflows/grammar-drift.yml`). It compares tree-sitter-al
+  `main`'s `node-types.json` with the committed `node-types.sha256` and, on a mismatch, opens one
+  `grammar-drift` issue (none if one is already open) with an Acceptance section, so the grammar bump lands
+  as its own PR instead of turning every PR's CI red. It sees vocabulary changes only, not shape changes
+  that keep the vocabulary. It can also be run by hand (`workflow_dispatch`).
+
 ### Changed
 
 - `/issue` (flow speed-ups, P1): findings-register marks are scoped to what changed. Each
