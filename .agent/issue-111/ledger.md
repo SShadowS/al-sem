@@ -162,7 +162,19 @@ parsing only).
 - step 11: `origin/master` still `617b402f` (no rebase; range-diff empty). **B = `617b402f853664cf1cec8d049d85561d66ac8aa2`,
   H = `042764fe8c4c2f679f2c77d8d22b9f1cc503123e`.** Full gate set: all four exit 0, supervised (Gate results).
 - step 12: protected-path check over B..H, evidence sanitized and committed after H, `freeze-check`, `attest` with
-  `--substitute astra=sol --substitute flash=opus`.
+  `--substitute astra=sol --substitute flash=opus`. Done: `check-diff --base 617b402f… --head 042764fe…` →
+  `{"reasons": []}`; `sanitize` → `{"violations": {}}`; evidence `5e725465d9287ab34694a99040e850ca2cfba99b`;
+  `freeze-check --H 042764fe…` → `{"violations": []}`; `attest` → `attestation.json`.
+- step 13: `push-branch` → head `5e725465…`; `pr-ready --pr 187` with this ledger as body and `Closes #111` (every
+  acceptance row met: C1 and C2 are the CLI tests the acceptance names) → `{"ready": 187}`.
+- **CI red, unrelated flake**: `ci-wait` exit 1 after 538.8 s (`logs/ci-wait/20261021T135012-55afd1ea.log`); the only
+  failure is `perf_bounds::release_checks::compute_summaries_v2_within_bound` (`ci-fail.log`): `median=231.830322ms
+  bound=230ms samples=[183.772311ms, 266.943045ms, 231.830322ms, 409.95284ms, 147.325406ms]`. #111 changes only the
+  `--diff` parser and digest's diagnostics, never L4's summary solve; the samples span 147-410 ms on the runner (a
+  noisy machine), the median misses by 1.8 ms, and the same test passed in the local `ci-steps-all` on H. No code fix
+  applies. `charge ci_fix` → 0 (the one allowed CI fix): this evidence commit gives a new final head, which is
+  re-attested on the same B and H and pushed so CI runs again. The flake is filed as a discovery (a different
+  `perf_bounds` check from #179's `compute_all` ratio).
 
 ## Acceptance matrix
 
@@ -202,7 +214,8 @@ Filed by `/orchestrate` step 10 after the merge (both are non-goals of #111, reg
 ```json
 [
   {"subsystem": "l5 / digest (diff parser: directory-diff deletions)", "locator": "src/engine/l5/diff_parser.rs (header and hunk parsing; the `Only in` arm records `<dir>/<name>` in `only_in`, which digest reports as diff-file-unmatched)", "symptom": "A GNU directory diff never yields DiffFileDeleted or an added file: plain `diff -ru` reports an added or deleted file only as an `Only in <dir>: <name>` line, which (since #111) is reported as diff-file-unmatched rather than mapped to a deletion or an addition, and `diff -ruN` writes the real path with the epoch time (`+++ n/del.al<TAB>1970-01-01 00:00:00.000000000 +0000`, `@@ -1 +0,0 @@`), which reads as a modified file with every line deleted.", "kind": "enhancement", "origin_issue": 111, "reproducer": "GNU diffutils 3.12: diff -ruN old new where old has a file new lacks -> alsem digest <ws> --diff that.diff: the file is a modified file with all lines deleted, not diff-file-deleted; diff -ru (no -N): the file is reported as diff-file-unmatched on `<dir>/<name>`, not diff-file-deleted.", "pre_existing": true, "capability": "digest --diff treats a `diff -ruN` epoch-dated, all-lines-deleted file, and an `Only in` line for a workspace file, as a deletion", "acceptance": "both shapes yield diff-file-deleted for the file, like a /dev/null deletion"},
-  {"subsystem": "l5 / digest (diff parser: unquote_path)", "locator": "src/engine/l5/diff_parser.rs unquote_path (~:104, `s.trim()`)", "symptom": "unquote_path trims its input, so an unquoted git path whose file name ends in a space (git writes `--- a/name <TAB>`) loses that trailing space and cannot match the file.", "kind": "bug", "origin_issue": 111, "reproducer": "a workspace file whose name ends in a space, `src/x.al ` (git allows it), changed in git -> header `--- a/src/x.al <TAB>` -> digest reads the path as `src/x.al` and reports it unmatched.", "pre_existing": true, "capability": "a git header path keeps its trailing spaces (the trailing TAB, now cut, already marks the end)", "acceptance": "a header for a name ending in a space matches that file"}
+  {"subsystem": "l5 / digest (diff parser: unquote_path)", "locator": "src/engine/l5/diff_parser.rs unquote_path (~:104, `s.trim()`)", "symptom": "unquote_path trims its input, so an unquoted git path whose file name ends in a space (git writes `--- a/name <TAB>`) loses that trailing space and cannot match the file.", "kind": "bug", "origin_issue": 111, "reproducer": "a workspace file whose name ends in a space, `src/x.al ` (git allows it), changed in git -> header `--- a/src/x.al <TAB>` -> digest reads the path as `src/x.al` and reports it unmatched.", "pre_existing": true, "capability": "a git header path keeps its trailing spaces (the trailing TAB, now cut, already marks the end)", "acceptance": "a header for a name ending in a space matches that file"},
+  {"subsystem": "tests / perf_bounds (CI noise)", "locator": "tests/perf_bounds.rs:1125-1150 release_checks::compute_summaries_v2_within_bound (COMPUTE_SUMMARIES_V2_BOUND = 230 ms, median of 5 samples)", "symptom": "On the GitHub runner the 5 samples spread widely (147-410 ms in one run) and the median can cross the 230 ms bound with no code change, failing CI for an unrelated PR (#187, a --diff parser change).", "kind": "bug", "origin_issue": 111, "reproducer": "PR #187 CI run 39611462366: `compute_summaries_v2_bundle(1000): median=231.830322ms bound=230ms samples=[183.772311ms, 266.943045ms, 231.830322ms, 409.95284ms, 147.325406ms]`; the same head passed perf_bounds locally.", "pre_existing": true, "capability": "a perf bound that does not fail on runner noise alone (more samples, min-of-N, or a noise-aware bound), like #179 asks for compute_all", "acceptance": "the check stays green across repeated CI runs of an unchanged head, yet still fails on a real 3x regression"}
 ]
 ```
 
