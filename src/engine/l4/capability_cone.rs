@@ -32,7 +32,9 @@ use std::sync::Arc;
 
 use super::combined_graph::{CombinedGraph, TypedEdge, build_combined_graph};
 use super::cone_census;
-use super::cone_derived::{ConeDerivedBuilder, ConeDerivedStore, ConeOutput, fact_is_known_temp};
+use super::cone_derived::{
+    ConeDerivedBuilder, ConeDerivedStore, ConeOutput, FoldedRow, fact_is_known_temp,
+};
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
 use crate::program::body::capability::table_commit;
@@ -1729,14 +1731,21 @@ fn candidate_wins(dist: usize, edge: &TypedOutEdge, cur: Option<(usize, &TypedOu
     }
 }
 
+/// The closed-set memo of one composition (#160 step 7b §4.3): a callee
+/// Cone-SCC's index → F(the closed entries of its fact cone), built at the
+/// first read and freed with the cone.
+type ClosedRowMemo = HashMap<usize, FoldedRow>;
+
 /// Singleton non-recursive fast path. Mirrors `inheritedFactsForSingleton`.
 ///
 /// ⟨C1⟩ `best` holds BORROWED representatives/edges (it used to clone both on
 /// every win): the winners' fields are read identically whether borrowed or
 /// cloned, and only the survivors are cloned — by `retag`, and only when `mode`
-/// wants the raw Vec. Under [`ConeOutput::DerivedOnly`] neither the `retag`
-/// clone nor `sort_inherited`'s allocation happens; the fold over the SAME
-/// `best.values()` key-winners still runs.
+/// wants the raw Vec.
+///
+/// #160 step 7b: `best` is built only for the raw Vec. Under
+/// [`ConeOutput::DerivedOnly`] there is no scan: the derived row comes from
+/// `memo` rows, the open entries and the own entries.
 #[allow(clippy::too_many_arguments)]
 fn inherited_facts_for_singleton<'g>(
     subject: &str,
@@ -1749,6 +1758,8 @@ fn inherited_facts_for_singleton<'g>(
     own: &'g [super::pd_solve::ResolvedEntry<'g>],
     mode: ConeOutput,
     derived: &mut ConeDerivedBuilder,
+    memo: &mut ClosedRowMemo,
+    stats: &mut ComposeStats,
 ) -> Vec<CapabilityFact> {
     struct Best<'a> {
         rep: &'a CapabilityFact,
@@ -1797,6 +1808,81 @@ fn inherited_facts_for_singleton<'g>(
         &crate::engine::l5::detector_context::cones_census::SGL_SUBST_NANOS,
         _subst_t,
     );
+    // #160 step 7b §4.3: the derived row is F(memo rows of the distinct callee
+    // SCCs) ∪ F(substituted open entries) ∪ F(own entries); F is a function of
+    // the key, so it equals the fold of `best` (spec §4.1).
+    if mode.wants_derived() {
+        // J(m), in out-edge order. Small (at most 156 on CDO): `contains`.
+        let mut callee_sccs: Vec<usize> = Vec::new();
+        for edge in out_edges {
+            let Some(&yj) = scc_id_by_routine.get(&edge.to) else {
+                continue;
+            };
+            debug_assert_ne!(
+                Some(yj),
+                my_scc,
+                "inherited_facts_for_singleton({subject:?}): out-edge to {:?} maps back to \
+                 the subject's own SCC",
+                edge.to
+            );
+            if cones.contains_key(&yj) && !callee_sccs.contains(&yj) {
+                callee_sccs.push(yj);
+            }
+        }
+        for j in callee_sccs {
+            if let std::collections::hash_map::Entry::Vacant(slot) = memo.entry(j) {
+                let _t = crate::engine::l5::detector_context::cones_census::start();
+                let mut entries = 0u64;
+                let row = derived.fold_set(
+                    cones[&j]
+                        .values()
+                        .filter(|e| !frame_bound(e))
+                        .inspect(|_| entries += 1)
+                        .map(|e| &*e.rep),
+                );
+                stats.closed_memo_builds += 1;
+                stats.closed_memo_entries += entries;
+                slot.insert(row);
+                if crate::engine::l5::detector_context::cones_census::enabled() {
+                    crate::engine::l5::detector_context::cones_census::max(
+                        &crate::engine::l5::detector_context::cones_census::CLOSED_MEMO_LIVE_MAX,
+                        memo.len() as u64,
+                    );
+                }
+                crate::engine::l5::detector_context::cones_census::add_since(
+                    &crate::engine::l5::detector_context::cones_census::SGL_MEMO_NANOS,
+                    _t,
+                );
+            }
+            let _t = crate::engine::l5::detector_context::cones_census::start();
+            derived.fold_row(&memo[&j]);
+            stats.closed_memo_reads += 1;
+            crate::engine::l5::detector_context::cones_census::add_since(
+                &crate::engine::l5::detector_context::cones_census::SGL_ROW_NANOS,
+                _t,
+            );
+        }
+        let _t = crate::engine::l5::detector_context::cones_census::start();
+        for (_, e) in subst.iter().flatten() {
+            derived.fold_fact(&e.rep);
+        }
+        crate::engine::l5::detector_context::cones_census::add_since(
+            &crate::engine::l5::detector_context::cones_census::SGL_OPEN_NANOS,
+            _t,
+        );
+        let _t = crate::engine::l5::detector_context::cones_census::start();
+        for e in own {
+            derived.fold_fact(&e.rep);
+        }
+        crate::engine::l5::detector_context::cones_census::add_since(
+            &crate::engine::l5::detector_context::cones_census::SGL_OWN_FOLD_NANOS,
+            _t,
+        );
+        if !mode.wants_raw() {
+            return Vec::new();
+        }
+    }
+    stats.singleton_scans += 1;
     // Keys BORROW from `cones` (and `subst`) instead of being cloned. The
     // census counted 10,522,793 `best` insertions per 8020 run against only
     // 136,952 out-edges — i.e. the walk is cone-ENTRY-bound, and every one of
@@ -1931,19 +2017,7 @@ fn inherited_facts_for_singleton<'g>(
         best.len() as u64,
     );
 
-    if mode.wants_derived() {
-        let _t = crate::engine::l5::detector_context::cones_census::start();
-        for b in best.values() {
-            derived.fold_fact(b.rep);
-        }
-        crate::engine::l5::detector_context::cones_census::add_since(
-            &crate::engine::l5::detector_context::cones_census::SGL_FOLD_NANOS,
-            _t,
-        );
-    }
-    if !mode.wants_raw() {
-        return Vec::new();
-    }
+    // Only the raw half reaches here (`DerivedOnly` returned above).
     let _t = crate::engine::l5::detector_context::cones_census::start();
     let out: Vec<CapabilityFact> = best
         .values()
@@ -1960,8 +2034,7 @@ fn inherited_facts_for_singleton<'g>(
 /// Set-correct path for routines in recursive SCCs. Mirrors
 /// `inheritedFactsByBfs`.
 ///
-/// #160 step 7a: this walk feeds the RAW half only (`RawOnly`, `Both`) and the
-/// test-only `RecursiveMembership::PerMemberWalk` oracle. In production the
+/// #160 step 7a: this walk feeds the RAW half only (`RawOnly`, `Both`). The
 /// derived row of a recursive member is folded from its Cone-SCC's set (the
 /// SCC's fact cone) plus its own entries, never from these picks.
 ///
@@ -2395,20 +2468,6 @@ fn coverage_cone_for_scc(
     }
 }
 
-/// How a recursive member's derived row is folded (#160 step 7a).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RecursiveMembership {
-    /// One set per Cone-SCC (§4.2). The only production value.
-    PerScc,
-    /// The pre-7a path: fold the member's own BFS picks. The oracle (T7, T8),
-    /// test-only by type. Deleted, with its arm in `compose_inherited_cones`,
-    /// by step 7b's last commit once 7b's CDO oracle passes; if 7b is dropped,
-    /// by the next step that edits `compose_inherited_cones` (step 6 at the
-    /// latest). Spec §4.3.
-    #[cfg(test)]
-    PerMemberWalk,
-}
-
 /// Per-call counts of the cone's SCC shapes and of the recursive branch's
 /// work (#160 step 7a §4.5). Plain integers, computed on every call; the
 /// census (`cones_census`, `cone_scc:` line) sums them over the process.
@@ -2424,8 +2483,8 @@ pub(crate) struct ComposeStats {
     pub(crate) max_recursive_members: u64,
     /// Recursive SCCs by member count: 1, 2, 3-9, 10-99, >= 100.
     pub(crate) size_hist: [u64; 5],
-    /// Calls of [`inherited_facts_by_bfs`] (the raw half, or the oracle; 0
-    /// under `PerScc` + `DerivedOnly`). Their time is the census `walk_total`;
+    /// Calls of [`inherited_facts_by_bfs`] (the raw half only; 0 under
+    /// `DerivedOnly`). Their time is the census `walk_total`;
     /// `bfs_walk` also holds the set builds and borrows.
     pub(crate) member_walks: u64,
     /// Own (producer-solve) entries of the emitted recursive members.
@@ -2441,14 +2500,68 @@ pub(crate) struct ComposeStats {
     pub(crate) scc_sets_borrowed: u64,
     /// Sets built for a root SCC (its fact cone is never built).
     pub(crate) scc_sets_built: u64,
-    /// Σ set length over the emitted members that folded a set.
+    /// Σ set length over the emitted members that read a set: the entries the
+    /// members' rows cover (each member reads the SCC's set row once).
     pub(crate) scc_set_entries_folded: u64,
+    /// #160 step 7b §4.8: memo rows built (one per callee Cone-SCC read).
+    pub(crate) closed_memo_builds: u64,
+    /// `fold_row` calls on memo rows: one per (singleton, distinct callee SCC).
+    pub(crate) closed_memo_reads: u64,
+    /// Closed entries folded into memo rows.
+    pub(crate) closed_memo_entries: u64,
+    /// Folds of a recursive SCC's set: one per recursive SCC with a set.
+    pub(crate) scc_set_folds: u64,
+    /// Singleton calls that built `best` (the raw half only).
+    pub(crate) singleton_scans: u64,
 }
 
 /// The per-routine cone result.
 struct InheritedConeResult {
     inherited: Vec<CapabilityFact>,
     coverage: CoverageRecord,
+}
+
+/// #160 step 7b §4.7: the T7'/T8' oracle's streamed raw fold. Test-only, so
+/// production builds carry no parameter and no per-routine branch for it.
+/// While [`raw_fold_hook::fold`] runs, every routine `compose_inherited_cones`
+/// emits is folded at once from its raw inherited Vec ∪ its raw direct facts
+/// into the hook's builder, and its raw Vec is dropped, so no raw Vec of all
+/// routines is ever held.
+#[cfg(test)]
+pub(crate) mod raw_fold_hook {
+    use super::{CapabilityFact, ConeDerivedBuilder, ConeDerivedStore};
+    use std::cell::RefCell;
+
+    thread_local! {
+        static ORACLE: RefCell<Option<ConeDerivedBuilder>> = const { RefCell::new(None) };
+    }
+
+    /// Run `compose` (a `RawOnly` composition) with the hook on; return its
+    /// result and the oracle store.
+    pub(crate) fn fold<T>(compose: impl FnOnce() -> T) -> (T, ConeDerivedStore) {
+        ORACLE.with(|o| *o.borrow_mut() = Some(ConeDerivedBuilder::default()));
+        let out = compose();
+        let oracle = ORACLE
+            .with(|o| o.borrow_mut().take())
+            .expect("the hook's builder");
+        (out, oracle.finish())
+    }
+
+    /// At emission: with the hook on, fold `raw ∪ direct` for `id` and keep
+    /// an empty Vec; otherwise return `raw` unchanged.
+    pub(super) fn offer(
+        id: &str,
+        raw: Vec<CapabilityFact>,
+        direct: Option<&Vec<CapabilityFact>>,
+    ) -> Vec<CapabilityFact> {
+        ORACLE.with(|o| match o.borrow_mut().as_mut() {
+            Some(b) => {
+                b.fold_routine(id, raw.iter().chain(direct.into_iter().flatten()));
+                Vec::new()
+            }
+            None => raw,
+        })
+    }
 }
 
 /// Compute capabilityFactsInherited + coverage for EVERY routine via a single
@@ -2471,7 +2584,6 @@ fn compose_inherited_cones(
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, super::param_guard::FrameGuards>,
     mode: ConeOutput,
-    membership: RecursiveMembership,
 ) -> (
     HashMap<String, InheritedConeResult>,
     ConeDerivedStore,
@@ -2544,6 +2656,8 @@ fn compose_inherited_cones(
 
     let mut fact_cones: HashMap<usize, ConeFacts> = HashMap::new();
     let mut cov_cones: HashMap<usize, CoverageCone> = HashMap::new();
+    // #160 step 7b §4.4: a memo row lives exactly as long as its cone.
+    let mut memo: ClosedRowMemo = HashMap::new();
 
     let empty_succ: BTreeSet<usize> = BTreeSet::new();
     for i in 0..scc.sccs.len() {
@@ -2553,15 +2667,17 @@ fn compose_inherited_cones(
         // ⟨C1 Task 4⟩ An SCC's cone has two readers. (1) Its PREDECESSORS:
         // `fact_cone_for_scc` reads `fact_cones[y]` only for `y ∈ succ_sccs[j]`,
         // and both per-routine walks (`inherited_facts_for_singleton` /
-        // `inherited_facts_by_bfs`, the raw half and the test oracle) read a
-        // cone only for a routine whose SCC differs from the subject's
-        // (`build_succ_sccs` excludes self, and the BFS treats a same-SCC hop
-        // as a sibling and expands it instead of pulling a cone; a
-        // non-recursive singleton has no self-edge by `tarjan_scc`'s
-        // `recursive` rule). (2) Since #160 step 7a, a non-root RECURSIVE SCC's
-        // own members, which fold `fact_cones[i]` as their Cone-SCC set during
-        // `i`'s member loop. Both readers are done before `i`'s cone is freed:
-        // the free below runs after the member loop, and only once every
+        // `inherited_facts_by_bfs`) read a cone only for a routine whose SCC
+        // differs from the subject's (`build_succ_sccs` excludes self, and the
+        // BFS treats a same-SCC hop as a sibling and expands it instead of
+        // pulling a cone; a non-recursive singleton has no self-edge by
+        // `tarjan_scc`'s `recursive` rule). Since #160 step 7b this includes,
+        // in every mode that wants derived rows, the singleton's memo-row build
+        // (`memo[y]` = F(closed entries of `fact_cones[y]`)), whose row is freed
+        // together with the cone below. (2) Since step 7a, a non-root RECURSIVE
+        // SCC's own members, which fold `fact_cones[i]` as their Cone-SCC set
+        // during `i`'s member loop. Both readers are done before `i`'s cone is
+        // freed: the free below runs after the member loop, and only once every
         // predecessor has run.
         //
         // `remaining_uses[i]` is the number of SCCs holding `i` as a successor,
@@ -2651,7 +2767,7 @@ fn compose_inherited_cones(
             }] += 1;
             stats.with_successor += u64::from(!succ_ids.is_empty());
             // A scan of every successor cone: only where it is read (the census,
-            // and T7/T8 in tests), not on every production compose.
+            // and T7'/T8' in tests), not on every production compose.
             if cfg!(test) || crate::engine::l5::detector_context::cones_census::enabled() {
                 stats.with_guarded_successor += u64::from(succ_ids.iter().any(|y| {
                     fact_cones
@@ -2667,10 +2783,7 @@ fn compose_inherited_cones(
         // by every member's derived fold. A non-root borrows its fact cone
         // (built above, freed after the member loop); a root, whose cone is
         // never built, gets the same build here, dropped after the loop.
-        let use_set = recursive
-            && emitted > 0
-            && mode.wants_derived()
-            && membership == RecursiveMembership::PerScc;
+        let use_set = recursive && emitted > 0 && mode.wants_derived();
         let _t_set = use_set
             .then(crate::engine::l5::detector_context::cones_census::start)
             .flatten();
@@ -2689,6 +2802,18 @@ fn compose_inherited_cones(
             &crate::engine::l5::detector_context::cones_census::BFS_WALK_NANOS,
             _t_set,
         );
+        // 7b §4.5: F(the SCC set), folded ONCE per SCC, after the set window
+        // (timed as fold only); each member `fold_row`s it.
+        let set_row = scc_set.map(|set| {
+            let _t = crate::engine::l5::detector_context::cones_census::start();
+            let row = derived.fold_set(set.values().map(|e| &*e.rep));
+            stats.scc_set_folds += 1;
+            crate::engine::l5::detector_context::cones_census::add_since(
+                &crate::engine::l5::detector_context::cones_census::BFS_FOLD_NANOS,
+                _t,
+            );
+            row
+        });
         for m in &scc_entry.members {
             if !routine_ids.contains(m) {
                 continue;
@@ -2705,9 +2830,8 @@ fn compose_inherited_cones(
             let inherited = if recursive {
                 stats.own_entries_recursive += own_entries(m).len() as u64;
                 stats.members_with_own_entry += u64::from(!own_entries(m).is_empty());
-                // The walk runs only for the raw half, or as the derived
-                // oracle (`PerMemberWalk`): never under `PerScc` + `DerivedOnly`.
-                let picks = if scc_set.is_none() || mode.wants_raw() {
+                // The walk runs only for the raw half: never under `DerivedOnly`.
+                let picks = if mode.wants_raw() {
                     stats.member_walks += 1;
                     let picks = inherited_facts_by_bfs(
                         m,
@@ -2738,34 +2862,16 @@ fn compose_inherited_cones(
                     None
                 };
                 let _t_fold = crate::engine::l5::detector_context::cones_census::start();
-                // §4.2 step 2: the SCC set, then the member's own entries.
-                if let Some(set) = scc_set {
-                    for entry in set.values() {
-                        derived.fold_fact(&entry.rep);
-                    }
+                // §4.2 step 2: the SCC set's row, then the member's own entries.
+                if let (Some(set), Some(row)) = (scc_set, &set_row) {
+                    derived.fold_row(row);
                     for entry in own_entries(m) {
                         derived.fold_fact(&entry.rep);
                     }
                     stats.scc_set_entries_folded += set.len() as u64;
                 }
                 let out = match picks {
-                    Some(picks) => {
-                        match membership {
-                            RecursiveMembership::PerScc => {}
-                            // The pre-7a oracle (§4.3): the derived row from the
-                            // member's own picks. Deleted with the variant (see
-                            // `RecursiveMembership`).
-                            #[cfg(test)]
-                            RecursiveMembership::PerMemberWalk => {
-                                if mode.wants_derived() {
-                                    for (rep, _) in &picks {
-                                        derived.fold_fact(rep);
-                                    }
-                                }
-                            }
-                        }
-                        emit_picks(m, picks, mode)
-                    }
+                    Some(picks) => emit_picks(m, picks, mode),
                     None => Vec::new(),
                 };
                 crate::engine::l5::detector_context::cones_census::add_since(
@@ -2785,6 +2891,8 @@ fn compose_inherited_cones(
                     own_entries(m),
                     mode,
                     &mut derived,
+                    &mut memo,
+                    &mut stats,
                 )
             };
             if recursive {
@@ -2818,6 +2926,8 @@ fn compose_inherited_cones(
                     _t_der1,
                 );
             }
+            #[cfg(test)]
+            let inherited = raw_fold_hook::offer(m, inherited, direct_raw.get(m));
             let _t_emit = crate::engine::l5::detector_context::cones_census::start();
             let d_status = cov
                 .get(m)
@@ -2845,6 +2955,16 @@ fn compose_inherited_cones(
                 _t_emit,
             );
         }
+        // 7b §4.5: the set row's destruction is recursive fold work, charged to
+        // `BFS_FOLD_NANOS` (the B1 timer `bfs_fold`), not left untimed.
+        if let Some(row) = set_row {
+            let _t = crate::engine::l5::detector_context::cones_census::start();
+            drop(row);
+            crate::engine::l5::detector_context::cones_census::add_since(
+                &crate::engine::l5::detector_context::cones_census::BFS_FOLD_NANOS,
+                _t,
+            );
+        }
 
         // refcount-free downstream cones whose last predecessor (this SCC) is done.
         for y in succ_ids {
@@ -2853,6 +2973,22 @@ fn compose_inherited_cones(
             }
             if remaining_uses[*y] == 0 {
                 fact_cones.remove(y);
+                // 7b §4.4: a memo row's destruction is singleton work, charged
+                // to `SINGLETON_NANOS` (the B1 timer `singleton`) and to its
+                // `SGL_MEMO_NANOS` sub-timer, from one reading.
+                let _t = crate::engine::l5::detector_context::cones_census::start();
+                let dropped = memo.remove(y).is_some(); // the row drops at this `;`
+                if dropped && let Some(t) = _t {
+                    let ns = t.elapsed().as_nanos() as u64;
+                    crate::engine::l5::detector_context::cones_census::add(
+                        &crate::engine::l5::detector_context::cones_census::SINGLETON_NANOS,
+                        ns,
+                    );
+                    crate::engine::l5::detector_context::cones_census::add(
+                        &crate::engine::l5::detector_context::cones_census::SGL_MEMO_NANOS,
+                        ns,
+                    );
+                }
                 cov_cones.remove(y);
             }
         }
@@ -2865,10 +3001,12 @@ fn compose_inherited_cones(
     // non-empty map means a cone escaped both mechanisms — the 1,599 MB leak
     // this task closed, returning.
     debug_assert!(
-        fact_cones.is_empty() && cov_cones.is_empty(),
-        "cone leak: {} fact cone(s) / {} coverage cone(s) survived the SCC walk",
+        fact_cones.is_empty() && cov_cones.is_empty() && memo.is_empty(),
+        "cone leak: {} fact cone(s) / {} coverage cone(s) / {} closed-set memo row(s) \
+         survived the SCC walk",
         fact_cones.len(),
-        cov_cones.len()
+        cov_cones.len(),
+        memo.len()
     );
 
     // ⟨C1 census⟩ `ALSEM_RETAINED_CENSUS=1` — report what's LEFT in `fact_cones`/
@@ -2999,28 +3137,6 @@ pub fn compose_cone_over_graph(
     routines: &[ModelRoutine],
     mode: ConeOutput,
 ) -> ConeOutcome {
-    compose_cone_over_graph_with(
-        typed,
-        nodes,
-        direct_in,
-        coverage_in,
-        routines,
-        mode,
-        RecursiveMembership::PerScc,
-    )
-}
-
-/// [`compose_cone_over_graph`] with the recursive-member strategy stated
-/// (#160 step 7a §4.3).
-pub(crate) fn compose_cone_over_graph_with(
-    typed: &[TypedEdge],
-    nodes: &[String],
-    direct_in: &HashMap<String, Vec<CapabilityFact>>,
-    coverage_in: &HashMap<String, (String, Vec<String>)>,
-    routines: &[ModelRoutine],
-    mode: ConeOutput,
-    membership: RecursiveMembership,
-) -> ConeOutcome {
     crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
     let g = build_typed_edge_graph(typed, nodes);
@@ -3090,7 +3206,6 @@ pub(crate) fn compose_cone_over_graph_with(
         &routines_by_id,
         &frames,
         mode,
-        membership,
     );
     crate::engine::l5::detector_context::cones_census::add_since(
         &crate::engine::l5::detector_context::cones_census::WALK_COMPOSE_NANOS,
@@ -4298,7 +4413,6 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         &routines_by_id,
         &frames,
         ConeOutput::RawOnly,
-        RecursiveMembership::PerScc,
     );
 
     // ── Project ───────────────────────────────────────────────────────────
@@ -4816,6 +4930,8 @@ mod pd_uses_tests {
             &own,
             mode,
             derived,
+            &mut HashMap::new(),
+            &mut ComposeStats::default(),
         )
     }
 
@@ -6512,7 +6628,9 @@ codeunit 50111 "Cell Calls"
 /// #160 step 7a: one inherited set per Cone-SCC. The tests of the spec's §5
 /// (`docs/superpowers/specs/2026-10-20-issue-160-step7a-scc-membership-design.md`),
 /// T1-T11 and the §5.1 row comparator. Each asserts its precondition before
-/// its main assertions; the oracle is [`RecursiveMembership::PerMemberWalk`].
+/// its main assertions. Since step 7b's last commit the oracle is the fold of
+/// a `RawOnly` composition (raw inherited Vec ∪ raw direct facts per
+/// routine), the witness engine step 6 keeps (7b spec §4.7).
 #[cfg(test)]
 mod scc_set_tests {
     use super::callsite_local_scan_tests::{
@@ -6662,33 +6780,36 @@ mod scc_set_tests {
         nodes: &[String],
         direct_in: &Direct,
         mode: ConeOutput,
-        how: RecursiveMembership,
     ) -> ConeOutcome {
-        compose_cone_over_graph_with(typed, nodes, direct_in, &HashMap::new(), &[], mode, how)
+        compose_cone_over_graph(typed, nodes, direct_in, &HashMap::new(), &[], mode)
     }
 
-    /// The new path and the oracle, both `DerivedOnly`.
-    fn both_paths(
+    /// The oracle store (7b §4.7): per routine, F(its `RawOnly` inherited Vec
+    /// ∪ its raw direct facts).
+    fn raw_fold(raw: &ConeOutcome, direct_in: &Direct) -> ConeDerivedStore {
+        let mut b = ConeDerivedBuilder::default();
+        for (id, r) in &raw.cones {
+            b.fold_routine(
+                id,
+                r.inherited
+                    .iter()
+                    .chain(direct_in.get(id).into_iter().flatten()),
+            );
+        }
+        b.finish()
+    }
+
+    /// The production path (`DerivedOnly`), the `RawOnly` witness engine, and
+    /// the oracle store folded from the latter.
+    fn derived_and_raw_fold(
         typed: &[TypedEdge],
         nodes: &[String],
         direct_in: &Direct,
-    ) -> (ConeOutcome, ConeOutcome) {
-        (
-            compose(
-                typed,
-                nodes,
-                direct_in,
-                ConeOutput::DerivedOnly,
-                RecursiveMembership::PerScc,
-            ),
-            compose(
-                typed,
-                nodes,
-                direct_in,
-                ConeOutput::DerivedOnly,
-                RecursiveMembership::PerMemberWalk,
-            ),
-        )
+    ) -> (ConeOutcome, ConeOutcome, ConeDerivedStore) {
+        let new = compose(typed, nodes, direct_in, ConeOutput::DerivedOnly);
+        let raw = compose(typed, nodes, direct_in, ConeOutput::RawOnly);
+        let oracle = raw_fold(&raw, direct_in);
+        (new, raw, oracle)
     }
 
     fn insert(subject: &str, t: &str) -> CapabilityFact {
@@ -6723,7 +6844,7 @@ mod scc_set_tests {
     #[test]
     fn scc_set_rows_hand_stated() {
         let (typed, nodes, direct) = t1_graph();
-        let (new, old) = both_paths(&typed, &nodes, &direct);
+        let (new, _raw, oracle) = derived_and_raw_fold(&typed, &nodes, &direct);
         assert_eq!(
             new.stats.recursive_sccs, 1,
             "precondition: one recursive SCC, {{A, B}}"
@@ -6742,40 +6863,33 @@ mod scc_set_tests {
         assert_eq!(d.writes_tables_of("C"), ["t/C"], "C: writes");
         assert_eq!(d.publishes_events_of("C"), Vec::<String>::new());
         assert_eq!(d.flags_of("C"), TABLE_FLAGS, "C: flags");
-        assert_rows_equal("T1", d, &old.derived);
+        assert_rows_equal("T1", d, &oracle);
     }
 
     // -- helpers over inline AL -----------------------------------------------
 
     /// Compose over the det cone's exact inputs ([`det_cone_inputs`]).
-    fn compose_model(
-        m: &Model,
-        rel: &ExecRelation,
-        mode: ConeOutput,
-        how: RecursiveMembership,
-    ) -> ConeOutcome {
+    fn compose_model(m: &Model, rel: &ExecRelation, mode: ConeOutput) -> ConeOutcome {
         let i = det_cone_inputs(m);
-        compose_cone_over_graph_with(
+        compose_cone_over_graph(
             rel.cone(),
             &i.nodes,
             &i.direct_full,
             &i.coverage_in,
             &m.workspace.routines,
             mode,
-            how,
         )
     }
 
-    fn both_paths_model(m: &Model, rel: &ExecRelation) -> (ConeOutcome, ConeOutcome) {
-        (
-            compose_model(m, rel, ConeOutput::DerivedOnly, RecursiveMembership::PerScc),
-            compose_model(
-                m,
-                rel,
-                ConeOutput::DerivedOnly,
-                RecursiveMembership::PerMemberWalk,
-            ),
-        )
+    /// [`derived_and_raw_fold`] over a model's det cone inputs.
+    fn derived_and_raw_fold_model(
+        m: &Model,
+        rel: &ExecRelation,
+    ) -> (ConeOutcome, ConeOutcome, ConeDerivedStore) {
+        let new = compose_model(m, rel, ConeOutput::DerivedOnly);
+        let raw = compose_model(m, rel, ConeOutput::RawOnly);
+        let oracle = raw_fold(&raw, &det_cone_inputs(m).direct_full);
+        (new, raw, oracle)
     }
 
     /// The id of the one routine named `name`.
@@ -6849,7 +6963,7 @@ codeunit 50100 C
             routine_id(&m, "P"),
             table_id(&m, "Cust"),
         );
-        let (new, old) = both_paths_model(&m, &rel);
+        let (new, _raw, oracle) = derived_and_raw_fold_model(&m, &rel);
         assert!(
             non_seed_states(&new.pd_solution, &q) >= 1,
             "precondition: Q holds a state of W's producer"
@@ -6869,7 +6983,7 @@ codeunit 50100 C
             Vec::<String>::new(),
             "P's row"
         );
-        assert_rows_equal("T3", &new.derived, &old.derived);
+        assert_rows_equal("T3", &new.derived, &oracle);
     }
 
     // -- T4 -------------------------------------------------------------------
@@ -6917,7 +7031,7 @@ codeunit 50100 C
         let rel = ExecRelation::single_app(&m);
         let cust = table_id(&m, "Cust");
         let [a, b, n, mm] = ["A", "B", "N", "M"].map(|r| routine_id(&m, r));
-        let (new, old) = both_paths_model(&m, &rel);
+        let (new, _raw, oracle) = derived_and_raw_fold_model(&m, &rel);
         assert_eq!(
             new.derived.writes_tables_of(&n),
             Vec::<String>::new(),
@@ -6935,7 +7049,7 @@ codeunit 50100 C
                 "{name}: the T2 write"
             );
         }
-        assert_rows_equal("T4", &new.derived, &old.derived);
+        assert_rows_equal("T4", &new.derived, &oracle);
     }
 
     // -- T11 ------------------------------------------------------------------
@@ -6955,7 +7069,7 @@ codeunit 50100 C
             ("C".to_string(), vec![insert("C", "t/C")]),
         ]
         .into();
-        let (new, old) = both_paths(&typed, &nodes, &direct);
+        let (new, _raw, oracle) = derived_and_raw_fold(&typed, &nodes, &direct);
         assert_eq!(
             new.stats.recursive_members_all, 2,
             "precondition: Tarjan puts A and B in one SCC"
@@ -6973,7 +7087,7 @@ codeunit 50100 C
             ["t/C"],
             "A reaches t/C through B"
         );
-        assert_rows_equal("T11", &new.derived, &old.derived);
+        assert_rows_equal("T11", &new.derived, &oracle);
     }
 
     // -- T10 ------------------------------------------------------------------
@@ -6991,13 +7105,7 @@ codeunit 50100 C
             call_edge("L", "S", "cs/LS"),
         ];
         let nodes = strs(&["X", "Y", "Z", "L", "S"]);
-        let out = compose(
-            &typed,
-            &nodes,
-            &HashMap::new(),
-            ConeOutput::DerivedOnly,
-            RecursiveMembership::PerScc,
-        );
+        let out = compose(&typed, &nodes, &HashMap::new(), ConeOutput::DerivedOnly);
         let s = out.stats;
         assert_eq!(s.recursive_sccs, 2, "recursive_sccs");
         assert_eq!(s.recursive_members_all, 4, "recursive_members_all");
@@ -7017,9 +7125,9 @@ codeunit 50100 C
         );
     }
 
-    // -- T7, T8: the oracle over fixtures and CDO ------------------------------
+    // -- T7', T8': the oracle over fixtures and CDO ----------------------------
 
-    /// T7/T8's classes, summed over the compositions checked (§5.8), from the
+    /// T7'/T8''s classes, summed over the compositions checked (§5.8), from the
     /// new path's [`ComposeStats`]: the cone's own counts, no second walk.
     #[derive(Default, Debug)]
     struct Classes {
@@ -7032,6 +7140,9 @@ codeunit 50100 C
         with_successor: u64,
         with_guarded_successor: u64,
         members_with_own_entry: u64,
+        /// #160 step 7b: memo builds summed (asserted `> 0` over T7''s corpus
+        /// and on T8''s CDO cross-app universe, never per composition).
+        closed_memo_builds: u64,
     }
 
     impl Classes {
@@ -7045,24 +7156,28 @@ codeunit 50100 C
             self.with_successor += s.with_successor;
             self.with_guarded_successor += s.with_guarded_successor;
             self.members_with_own_entry += s.members_with_own_entry;
+            self.closed_memo_builds += s.closed_memo_builds;
         }
 
         fn line(&self) -> String {
             format!(
-                "self-loops {} multi-member {} roots {} non-roots {} with-successor {} with-guarded-successor {} members-with-own-entry {}",
+                "self-loops {} multi-member {} roots {} non-roots {} with-successor {} with-guarded-successor {} members-with-own-entry {} closed-memo-builds {}",
                 self.self_loops,
                 self.multi_member,
                 self.roots,
                 self.non_roots,
                 self.with_successor,
                 self.with_guarded_successor,
-                self.members_with_own_entry
+                self.members_with_own_entry,
+                self.closed_memo_builds
             )
         }
     }
 
-    /// One model: compose over the det cone's inputs with the new path and the
-    /// oracle, compare rows, count classes. Returns the new path's stats.
+    /// #160 step 7b §4.7 T7'/T8': one model, `DerivedOnly` on the production
+    /// path against the fold of the streamed `RawOnly` Vec plus `direct_raw`,
+    /// per routine; counts classes and returns the production path's stats.
+    /// Survives step 6 (no `Both`, no second derived path).
     fn check_model(
         m: &Model,
         rel: &ExecRelation,
@@ -7071,20 +7186,31 @@ codeunit 50100 C
         failures: &mut Vec<String>,
     ) -> ComposeStats {
         let i = det_cone_inputs(m);
-        let run = |how| {
-            compose_cone_over_graph_with(
+        let new = compose_cone_over_graph(
+            rel.cone(),
+            &i.nodes,
+            &i.direct_full,
+            &i.coverage_in,
+            &m.workspace.routines,
+            ConeOutput::DerivedOnly,
+        );
+        if (new.stats.member_walks, new.stats.singleton_scans) != (0, 0) {
+            failures.push(format!(
+                "{where_}: DerivedOnly ran an old path (member_walks {}, singleton_scans {})",
+                new.stats.member_walks, new.stats.singleton_scans
+            ));
+        }
+        let (_raw, oracle) = raw_fold_hook::fold(|| {
+            compose_cone_over_graph(
                 rel.cone(),
                 &i.nodes,
                 &i.direct_full,
                 &i.coverage_in,
                 &m.workspace.routines,
-                ConeOutput::DerivedOnly,
-                how,
+                ConeOutput::RawOnly,
             )
-        };
-        let new = run(RecursiveMembership::PerScc);
-        let old = run(RecursiveMembership::PerMemberWalk);
-        if let Some(d) = rows_diff(&new.derived, &old.derived) {
+        });
+        if let Some(d) = rows_diff(&new.derived, &oracle) {
             failures.push(format!("{where_}: {d}"));
         }
         classes.add(&new.stats, i.nodes.len());
@@ -7116,12 +7242,13 @@ codeunit 50100 C
         }
     }
 
-    /// §5.8 T7: the derived-row oracle on every app dir under step 3's five
-    /// roots, single-app and cross-app, over the det cone's exact inputs.
-    /// Prints the class table; the classes non-zero on the first run are
-    /// minimums.
+    /// 7b §4.7 T7' (was 7a §5.8 T7): the derived-row oracle
+    /// ([`check_model`]) on every app dir under step 3's five roots,
+    /// single-app and cross-app, over the det cone's exact inputs. Prints the
+    /// class table; the classes non-zero on the first run are minimums.
     #[test]
-    fn scc_set_matches_member_walk_on_fixtures() {
+    fn derived_only_matches_raw_fold_on_fixtures() {
+        let label = "raw-fold oracle";
         let start = std::time::Instant::now();
         let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
         let mut single = Classes::default();
@@ -7143,7 +7270,7 @@ codeunit 50100 C
             }
         }
         println!(
-            "scc-set oracle on fixtures, {:.1?}\nsingle-app: {} compositions, {} routines, {}\ncross-app: {} compositions, {} routines, {}",
+            "{label} on fixtures, {:.1?}\nsingle-app: {} compositions, {} routines, {}\ncross-app: {} compositions, {} routines, {}",
             start.elapsed(),
             single.compositions,
             single.routines,
@@ -7159,21 +7286,30 @@ codeunit 50100 C
         // The first run's non-zero classes (2026-10-20: 4 multi-member roots in
         // each mode). Every other class is 0 over the fixtures, a stated LIMIT:
         // self-loops, non-roots, successors, guarded successors and own
-        // entries are covered only by T2, T3/T3b, T4 and T8.
+        // entries are covered only by T2, T3/T3b, T4 and T8'.
         for (mode, c) in [("single-app", &single), ("cross-app", &cross)] {
             assert!(c.multi_member >= 1, "{mode}: no multi-member SCC");
             assert!(c.roots >= 1, "{mode}: no recursive root");
         }
+        // #160 step 7b §4.7: summed, not per composition (`ws-d7-event-cycle`
+        // holds only recursive participants and builds no memo row).
+        assert!(
+            single.closed_memo_builds + cross.closed_memo_builds > 0,
+            "{label}: no memo row built over the whole corpus"
+        );
     }
 
-    /// §5.8 T8: the oracle on CDO (skips without `CDO_WS`, panics under
-    /// `ENFORCE_CDO_WS=1`), cross-app and single-app.
+    /// 7b §4.7 T8' (was 7a §5.8 T8): the oracle ([`check_model`]) on CDO
+    /// (skips without `CDO_WS`, panics under `ENFORCE_CDO_WS=1`), cross-app
+    /// and single-app, one after the other.
     #[test]
-    fn scc_set_matches_member_walk_on_cdo() {
+    fn derived_only_matches_raw_fold_on_cdo() {
+        let label = "raw-fold oracle";
         let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
             return;
         };
         let mut failures = Vec::new();
+        let mut cross_memo_builds = 0;
         for mode in ["cross-app", "single-app"] {
             let start = std::time::Instant::now();
             let mut classes = Classes::default();
@@ -7184,16 +7320,20 @@ codeunit 50100 C
                 let rel = ExecRelation::single_app(&m);
                 Some(check_model(&m, &rel, "CDO", &mut classes, &mut failures))
             };
-            let Some(stats) = stats else {
-                continue;
-            };
+            let stats = stats.unwrap_or_else(|| {
+                panic!(
+                    "CDO {mode}: no composition to check (no model built)\n{}",
+                    failures.join("\n")
+                )
+            });
             println!(
-                "scc-set oracle on CDO ({mode}): {} routines, {} recursive SCCs, {} members, max {}, {}, {:.1?}",
+                "{label} on CDO ({mode}): {} routines, {} recursive SCCs, {} members, max {}, {}, singleton_scans {}, {:.1?}",
                 classes.routines,
                 stats.recursive_sccs,
                 stats.recursive_members_emitted,
                 stats.max_recursive_members,
                 classes.line(),
+                stats.singleton_scans,
                 start.elapsed()
             );
             if mode == "cross-app" {
@@ -7202,8 +7342,8 @@ codeunit 50100 C
                     "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls; a \
                      different number means the input moved and the spec's numbers are stale"
                 );
-                // T8 is the only real-code oracle for these classes (T7's fixtures
-                // reach none of them), so a moved baseline must not drop them
+                // T8' is the only real-code oracle for these classes (T7''s
+                // fixtures reach none of them), so a moved baseline must not drop them
                 // silently. Roots are 0 on CDO, so the root-set build is carried
                 // by the hand graphs (T1-T6, T10, T11 all have a recursive root;
                 // T2's break targets it) and the census CLI test.
@@ -7215,9 +7355,16 @@ codeunit 50100 C
                 ] {
                     assert!(n >= 1, "CDO cross-app: no {class} class");
                 }
+                cross_memo_builds = stats.closed_memo_builds;
             }
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+        // #160 step 7b §4.7: the probe counted 25,498 builds cross-app (P5).
+        // Single-app is not asserted: its count was not measured.
+        assert!(
+            cross_memo_builds > 0,
+            "{label}: CDO cross-app built no memo row"
+        );
     }
 
     /// T5's graph: a 479-member cycle M000 -> ... -> M478 -> M000, each member
@@ -7284,7 +7431,7 @@ codeunit 50100 C
             ("S2".to_string(), vec![insert("S2", "t/S2")]),
         ]
         .into();
-        let (new, old) = both_paths(&typed, &nodes, &direct);
+        let (new, _raw, oracle) = derived_and_raw_fold(&typed, &nodes, &direct);
         assert_eq!(
             new.stats.recursive_roots, 1,
             "precondition: one root ({{X, Y}})"
@@ -7297,7 +7444,7 @@ codeunit 50100 C
         for m in ["R", "U", "S2"] {
             assert_eq!(d.writes_tables_of(m), ["t/S2"], "{m}: writes");
         }
-        assert_rows_equal("T2", d, &old.derived);
+        assert_rows_equal("T2", d, &oracle);
         assert_eq!(new.stats.scc_sets_built, 1, "the root's set is built once");
         assert_eq!(
             new.stats.scc_sets_borrowed, 1,
@@ -7315,7 +7462,7 @@ codeunit 50100 C
         let mut tables: Vec<String> = names.iter().map(|n| table_id(&m, n)).collect();
         tables.sort();
         let members: Vec<String> = (1..=8).map(|i| routine_id(&m, &format!("M{i}"))).collect();
-        let (new, old) = both_paths_model(&m, &rel);
+        let (new, _raw, oracle) = derived_and_raw_fold_model(&m, &rel);
         for (i, mi) in members.iter().enumerate() {
             assert_eq!(
                 non_seed_states(&new.pd_solution, mi),
@@ -7347,7 +7494,7 @@ codeunit 50100 C
                 i + 1
             );
         }
-        assert_rows_equal("T3b", &new.derived, &old.derived);
+        assert_rows_equal("T3b", &new.derived, &oracle);
     }
 
     // -- T5, T6 ---------------------------------------------------------------
@@ -7356,15 +7503,18 @@ codeunit 50100 C
     #[test]
     fn scc_set_479_cycle_scales() {
         let (typed, nodes, direct) = t5_graph();
-        let (new, old) = both_paths(&typed, &nodes, &direct);
+        let (new, raw, oracle) = derived_and_raw_fold(&typed, &nodes, &direct);
         let mut all: Vec<String> = nodes.iter().map(|n| format!("t/{n}")).collect();
         all.sort();
         assert_eq!(all.len(), 482);
         for n in nodes.iter().filter(|n| n.starts_with('M')) {
             assert_eq!(new.derived.writes_tables_of(n), all, "{n}: all 482 tables");
         }
-        assert_rows_equal("T5", &new.derived, &old.derived);
-        assert_eq!(old.stats.member_walks, 479, "the oracle walks every member");
+        assert_rows_equal("T5", &new.derived, &oracle);
+        assert_eq!(
+            raw.stats.member_walks, 479,
+            "the oracle's RawOnly composition walks every member"
+        );
         assert_eq!(
             new.stats.member_walks, 0,
             "no per-member walk under DerivedOnly"
@@ -7404,8 +7554,8 @@ codeunit 50100 C
             nodes.push(p);
             nodes.push(q);
         }
-        let (new, old) = both_paths(&typed, &nodes, &direct);
-        assert_rows_equal("T6 chain", &new.derived, &old.derived);
+        let (new, _raw, oracle) = derived_and_raw_fold(&typed, &nodes, &direct);
+        assert_rows_equal("T6 chain", &new.derived, &oracle);
         assert_eq!(
             new.stats.scc_sets_borrowed + new.stats.scc_sets_built,
             20,
@@ -7426,8 +7576,8 @@ codeunit 50100 C
             direct.insert(s.clone(), vec![insert(&s, &format!("t/{s}"))]);
             nodes.push(s);
         }
-        let (new, old) = both_paths(&typed, &nodes, &direct);
-        assert_rows_equal("T6 fan-out", &new.derived, &old.derived);
+        let (new, _raw, oracle) = derived_and_raw_fold(&typed, &nodes, &direct);
+        assert_rows_equal("T6 fan-out", &new.derived, &oracle);
         assert_eq!(
             new.stats.scc_sets_borrowed + new.stats.scc_sets_built,
             1,
@@ -7496,7 +7646,7 @@ codeunit 50100 C
         ];
         let nodes = strs(&["A", "C"]);
         let direct: Direct = [("C".to_string(), vec![insert("C", "t/C")])].into();
-        let (new, old) = both_paths(&typed, &nodes, &direct);
+        let (new, _raw, oracle) = derived_and_raw_fold(&typed, &nodes, &direct);
         assert_eq!(
             (
                 new.stats.recursive_sccs,
@@ -7515,6 +7665,210 @@ codeunit 50100 C
             ["A", "C"].into_iter().collect::<BTreeSet<&str>>()
         );
         assert_eq!(new.derived.writes_tables_of("A"), ["t/C"], "A reaches t/C");
-        assert_rows_equal("no emitted member", &new.derived, &old.derived);
+        assert_rows_equal("no emitted member", &new.derived, &oracle);
+    }
+
+    // -- #160 step 7b: closed-class sets, fold memo (spec §5) ------------------
+
+    /// The production entry over a hand graph (no coverage, no routines).
+    fn production(
+        typed: &[TypedEdge],
+        nodes: &[String],
+        direct: &Direct,
+        mode: ConeOutput,
+    ) -> ConeOutcome {
+        compose_cone_over_graph(typed, nodes, direct, &HashMap::new(), &[], mode)
+    }
+
+    /// 7b §5 T1: singletons A -> C, B -> C, C -> D; C writes `t/C`, D writes
+    /// `t/D`. C's cone is read by A and B, D's by C: two memo rows, three reads.
+    #[test]
+    fn closed_memo_folds_a_shared_callee_once() {
+        let typed = vec![
+            call_edge("A", "C", "cs/AC"),
+            call_edge("B", "C", "cs/BC"),
+            call_edge("C", "D", "cs/CD"),
+        ];
+        let nodes = strs(&["A", "B", "C", "D"]);
+        let direct: Direct = [
+            ("C".to_string(), vec![insert("C", "t/C")]),
+            ("D".to_string(), vec![insert("D", "t/D")]),
+        ]
+        .into();
+        let out = production(&typed, &nodes, &direct, ConeOutput::DerivedOnly);
+        assert_eq!(
+            out.stats.recursive_sccs, 0,
+            "precondition: every routine is a singleton"
+        );
+        let d = &out.derived;
+        for m in ["A", "B", "C"] {
+            assert_eq!(d.writes_tables_of(m), ["t/C", "t/D"], "{m}: writes");
+            assert_eq!(d.flags_of(m), TABLE_FLAGS, "{m}: flags");
+        }
+        assert_eq!(d.writes_tables_of("D"), ["t/D"], "D: writes");
+        assert_eq!(
+            out.stats.closed_memo_builds, 2,
+            "one memo row per callee cone read (C's once for A and B, D's for C)"
+        );
+        assert_eq!(
+            out.stats.closed_memo_reads, 3,
+            "one fold_row per (subject, callee SCC)"
+        );
+        assert_eq!(
+            out.stats.closed_memo_entries, 3,
+            "C's cone holds t/C and t/D, D's holds t/D"
+        );
+    }
+
+    /// 7b §5 T2's source: G writes `Cust` under `[G.Flag = true]`; N calls
+    /// `G(false)`, which contradicts the guard, M calls `G(true)`.
+    const T2_7B_SRC: &str = r#"
+codeunit 50100 C
+{
+    var
+        Rec2: Record Cust;
+
+    procedure G(Flag: Boolean)
+    begin
+        if Flag then
+            Rec2.Modify();
+    end;
+
+    procedure N()
+    begin
+        G(false);
+    end;
+
+    procedure M()
+    begin
+        G(true);
+    end;
+}
+"#;
+
+    /// 7b §5 T2: G's only entry is frame-bound, so it must stay out of G's
+    /// memo row and reach N and M through `substitute_entry` alone.
+    #[test]
+    fn closed_memo_excludes_frame_bound_entries() {
+        let m = model(T2_7B_SRC);
+        let rel = ExecRelation::single_app(&m);
+        let cust = table_id(&m, "Cust");
+        let [n, mm] = ["N", "M"].map(|r| routine_id(&m, r));
+        let out = compose_model(&m, &rel, ConeOutput::DerivedOnly);
+        assert_eq!(
+            out.derived.writes_tables_of(&n),
+            Vec::<String>::new(),
+            "N: G(false) contradicts the guard"
+        );
+        assert_eq!(
+            out.derived.writes_tables_of(&mm),
+            std::slice::from_ref(&cust),
+            "M: G(true) satisfies it"
+        );
+        // Pins the USE: N and M read G's cone through ONE memo row, so a memo
+        // row that took the frame-bound entry would reach N.
+        assert_eq!(
+            out.stats.closed_memo_builds, 1,
+            "G's cone: one memo row, shared by N and M"
+        );
+        assert_eq!(out.stats.closed_memo_reads, 2, "N and M each read G's row");
+        assert_eq!(
+            out.stats.closed_memo_entries, 0,
+            "G's only entry is guarded, so its memo row folds no entry"
+        );
+    }
+
+    /// 7b §5 T3: A calls C at two call sites; C's memo row is folded into A
+    /// once.
+    #[test]
+    fn duplicate_edges_fold_one_row() {
+        let typed = vec![call_edge("A", "C", "cs/AC1"), call_edge("A", "C", "cs/AC2")];
+        let nodes = strs(&["A", "C"]);
+        let direct: Direct = [("C".to_string(), vec![insert("C", "t/C")])].into();
+        assert_eq!(
+            build_typed_edge_graph(&typed, &nodes).outgoing["A"]
+                .iter()
+                .filter(|e| e.to == "C")
+                .count(),
+            2,
+            "precondition: the cone's graph keeps both A -> C edges"
+        );
+        let out = production(&typed, &nodes, &direct, ConeOutput::DerivedOnly);
+        assert_eq!(out.derived.writes_tables_of("A"), ["t/C"], "A: writes");
+        assert_eq!(out.stats.closed_memo_builds, 1, "C's cone, built once");
+        assert_eq!(
+            out.stats.closed_memo_reads, 1,
+            "A reads C's row once, not once per edge (the J(m) dedup)"
+        );
+    }
+
+    /// 7b §5 T4 on 7a T3's source: P and Q form one recursive SCC; Q owns a
+    /// state of W's producer, P does not. The SCC's set is folded once, and
+    /// each member's own entries stay its own.
+    #[test]
+    fn scc_set_folds_once_per_scc() {
+        let m = model(T3_SRC);
+        let rel = ExecRelation::single_app(&m);
+        let (q, p, cust) = (
+            routine_id(&m, "Q"),
+            routine_id(&m, "P"),
+            table_id(&m, "Cust"),
+        );
+        let out = compose_model(&m, &rel, ConeOutput::DerivedOnly);
+        assert!(
+            non_seed_states(&out.pd_solution, &q) >= 1,
+            "precondition: Q holds a state of W's producer"
+        );
+        assert_eq!(
+            non_seed_states(&out.pd_solution, &p),
+            0,
+            "precondition: P's Q(false) contradicts W's guard"
+        );
+        assert_eq!(out.derived.writes_physical_tables_of(&q), [cust], "Q's row");
+        assert_eq!(
+            out.derived.writes_physical_tables_of(&p),
+            Vec::<String>::new(),
+            "P's row"
+        );
+        assert_eq!(
+            out.stats.scc_set_folds, 1,
+            "the SCC's set is folded once, not once per member"
+        );
+    }
+
+    /// 7b §5 T5 (pins the USE): the production entry builds no `best` under
+    /// `DerivedOnly`; under `Both` every singleton scans and the raw Vecs are
+    /// today's. Graph A -> C -> D; C writes `t/C`, D writes `t/D`.
+    #[test]
+    fn derived_only_builds_no_best() {
+        let typed = vec![call_edge("A", "C", "cs/AC"), call_edge("C", "D", "cs/CD")];
+        let nodes = strs(&["A", "C", "D"]);
+        let direct: Direct = [
+            ("C".to_string(), vec![insert("C", "t/C")]),
+            ("D".to_string(), vec![insert("D", "t/D")]),
+        ]
+        .into();
+        let both = production(&typed, &nodes, &direct, ConeOutput::Both);
+        let raw = |id: &str| -> Vec<_> { both.cones[id].inherited.iter().map(raw_row).collect() };
+        assert_eq!(
+            raw("A"),
+            vec![
+                ("insert", "table", Some("t/C"), "call", Some("cs/AC")),
+                ("insert", "table", Some("t/D"), "call", Some("cs/AC")),
+            ],
+            "Both: A's raw Vec"
+        );
+        assert_eq!(
+            raw("C"),
+            vec![("insert", "table", Some("t/D"), "call", Some("cs/CD"))],
+            "Both: C's raw Vec"
+        );
+        assert!(raw("D").is_empty(), "Both: D's raw Vec");
+        assert_eq!(both.stats.singleton_scans, 3, "Both: every singleton scans");
+        let derived = production(&typed, &nodes, &direct, ConeOutput::DerivedOnly);
+        assert_eq!(
+            derived.stats.singleton_scans, 0,
+            "DerivedOnly built `best` for a singleton"
+        );
     }
 }

@@ -6,8 +6,12 @@
 //! clones held live for the whole detector run (~10.9 GB). Every analyze-path
 //! consumer of that Vec reads only a derived predicate off it — a presence
 //! boolean, a table/event id-set, or (d44) an id-set tagged with which write ops
-//! occurred. This module is that derived view, computed by folding the SAME
-//! reachable representatives the `retag` sites already visit, with zero clones.
+//! occurred. This module is that derived view, folded with zero clones. Since
+//! #160 step 7b it does not fold the `retag` sites' representatives one by one:
+//! a singleton folds memoized rows of its callees' closed sets (EVERY closed
+//! entry of each callee cone, not one winner per key) and a recursive member
+//! folds its SCC set's row. The rows agree with a per-representative fold
+//! because the fold depends only on a fact's key (7b spec §4.1).
 //!
 //! ⟨Task 3⟩ It is no longer a parallel view: the analyze path composes under
 //! [`ConeOutput::DerivedOnly`] and the raw Vec is not built at all. The only
@@ -38,13 +42,15 @@
 //! `witness_callsite_id` and the two first-hop ids (`witness_first_hop_operation_id`,
 //! `witness_first_hop_event_id`). No derived predicate above reads any of them, so
 //! folding the PRE-retag representative is equivalent by construction. For a
-//! singleton SCC the fold runs at the `retag` call site, over the same
-//! representatives (the key-winner `best.values()`). For a recursive member
-//! (#160 step 7a) the raw half retags the BFS walk's `seen`-deduped picks, while
-//! the derived row folds the member's Cone-SCC set (the SCC's fact cone) plus its
-//! own producer-solve entries; the fold is a function of the key and a union, so
-//! it equals the fold of the picks (spec §4.1; the test-only `PerMemberWalk`
-//! oracle checks it). Every routine also folds its own RAW direct facts.
+//! singleton (#160 step 7b) the raw half retags the key-winner `best.values()`,
+//! while the derived row folds memoized rows of its callees' closed sets
+//! (`ConeDerivedBuilder::fold_set` / `fold_row`) plus its substituted open
+//! entries and its own entries. For a recursive member (step 7a) the raw half
+//! retags the BFS walk's `seen`-deduped picks, while the derived row folds the
+//! member's Cone-SCC set row plus its own producer-solve entries. The fold is a
+//! function of the key and a union, so both equal the fold of the raw facts
+//! (7a/7b spec §4.1; the T7'/T8' raw-fold oracle checks it). Every routine also
+//! folds its own RAW direct facts.
 //!
 //! **The dedup asymmetry.** The cone dedups inherited facts by
 //! `inherited_fact_key = op|resource_kind|resource_id|confidence|tempClass`, so
@@ -711,29 +717,42 @@ pub struct ConeDerivedCensus {
 #[derive(Debug, Default)]
 pub struct ConeDerivedBuilder {
     store: ConeDerivedStore,
-    flags: u8,
-    s_writes_all: Vec<ResId>,
-    s_phys_writes: Vec<(ResId, u8)>,
-    s_phys_reads: Vec<ResId>,
-    s_events: Vec<ResId>,
+    /// The routine in progress.
+    cur: Scratch,
+    /// A [`FoldedRow`] in progress (#160 step 7b §4.2), so a row can be built
+    /// while a routine is in progress.
+    set: Scratch,
 }
 
-impl ConeDerivedBuilder {
-    /// Start a fresh routine (clears the scratch buffers, keeping their capacity).
-    pub fn begin_routine(&mut self) {
+/// Unfrozen fold output: presence flags plus the four id buffers.
+#[derive(Debug, Default)]
+struct Scratch {
+    flags: u8,
+    writes_all: Vec<ResId>,
+    phys_writes: Vec<(ResId, u8)>,
+    phys_reads: Vec<ResId>,
+    events: Vec<ResId>,
+}
+
+impl Scratch {
+    fn clear(&mut self) {
         self.flags = 0;
-        self.s_writes_all.clear();
-        self.s_phys_writes.clear();
-        self.s_phys_reads.clear();
-        self.s_events.clear();
+        self.writes_all.clear();
+        self.phys_writes.clear();
+        self.phys_reads.clear();
+        self.events.clear();
     }
 
-    /// Fold ONE reachable fact into the routine in progress. Reads only fields
-    /// `retag` does not rewrite (`op` / `resource_kind` / `resource_id` /
-    /// `extra`), so a pre-retag representative folds identically to its retagged
-    /// clone. Idempotent per distinct `(kind, op, resource_id, temp)` — folding a
-    /// fact twice is a no-op after the freeze dedup.
-    pub fn fold_fact(&mut self, f: &CapabilityFact) {
+    /// What ONE fact contributes: the one classifier behind
+    /// [`ConeDerivedBuilder::fold_fact`] and [`ConeDerivedBuilder::fold_set`].
+    fn add(&mut self, interner: &mut ResInterner, f: &CapabilityFact) {
+        // The fold's domain condition (#160 step 7b spec, Words): the key
+        // writes `None` and `Some("")` alike, but this fold tells them apart,
+        // so F would not be a function of the key. Checked on every fold.
+        debug_assert!(
+            f.resource_id.as_deref() != Some(""),
+            "fold: a fact with resource_id Some(\"\")"
+        );
         match f.resource_kind {
             "table" => {
                 self.flags |= TOUCHES_TABLE;
@@ -746,14 +765,14 @@ impl ConeDerivedBuilder {
                     return;
                 };
                 if let Some(bit) = write_op_bit(f.op) {
-                    let id = self.store.interner.intern(rid);
-                    self.s_writes_all.push(id);
+                    let id = interner.intern(rid);
+                    self.writes_all.push(id);
                     if !is_temp {
-                        self.s_phys_writes.push((id, bit));
+                        self.phys_writes.push((id, bit));
                     }
                 } else if f.op == "read" && !is_temp {
-                    let id = self.store.interner.intern(rid);
-                    self.s_phys_reads.push(id);
+                    let id = interner.intern(rid);
+                    self.phys_reads.push(id);
                 }
             }
             "transaction" => {
@@ -765,8 +784,8 @@ impl ConeDerivedBuilder {
                 if f.op == "publish"
                     && let Some(rid) = f.resource_id.as_deref()
                 {
-                    let id = self.store.interner.intern(rid);
-                    self.s_events.push(id);
+                    let id = interner.intern(rid);
+                    self.events.push(id);
                 }
             }
             // ⟨C1 Task 2 fix I1⟩ Routed through `io_kind_bit` — the ONE
@@ -780,19 +799,84 @@ impl ConeDerivedBuilder {
             }
         }
     }
+}
+
+/// F of a set of facts, frozen (sorted, deduped, masks OR-merged) by
+/// [`ConeDerivedBuilder::fold_set`] (#160 step 7b §4.2). Its ids are that
+/// builder's `ResId`s; meaningless with any other builder.
+#[derive(Debug)]
+pub(crate) struct FoldedRow {
+    flags: u8,
+    writes_all: Box<[ResId]>,
+    phys_writes: Box<[(ResId, u8)]>,
+    phys_reads: Box<[ResId]>,
+    events: Box<[ResId]>,
+}
+
+impl ConeDerivedBuilder {
+    /// Start a fresh routine (clears the scratch buffers, keeping their capacity).
+    pub fn begin_routine(&mut self) {
+        self.cur.clear();
+    }
+
+    /// Fold ONE reachable fact into the routine in progress. Reads only fields
+    /// `retag` does not rewrite (`op` / `resource_kind` / `resource_id` /
+    /// `extra`), so a pre-retag representative folds identically to its retagged
+    /// clone. Idempotent per distinct `(kind, op, resource_id, temp)` — folding a
+    /// fact twice is a no-op after the freeze dedup.
+    pub fn fold_fact(&mut self, f: &CapabilityFact) {
+        self.cur.add(&mut self.store.interner, f);
+    }
+
+    /// F of `facts`, frozen into a [`FoldedRow`] (#160 step 7b §4.2). Uses the
+    /// second scratch, so the routine in progress is untouched.
+    pub(crate) fn fold_set<'f>(
+        &mut self,
+        facts: impl IntoIterator<Item = &'f CapabilityFact>,
+    ) -> FoldedRow {
+        self.set.clear();
+        for f in facts {
+            self.set.add(&mut self.store.interner, f);
+        }
+        let s = &mut self.set;
+        let ids = |scratch: &mut Vec<ResId>| {
+            let mut v = Vec::new();
+            freeze_ids(scratch, &mut v);
+            v.into_boxed_slice()
+        };
+        let mut phys_writes = Vec::new();
+        freeze_masked(&mut s.phys_writes, &mut phys_writes);
+        FoldedRow {
+            flags: s.flags,
+            writes_all: ids(&mut s.writes_all),
+            phys_writes: phys_writes.into_boxed_slice(),
+            phys_reads: ids(&mut s.phys_reads),
+            events: ids(&mut s.events),
+        }
+    }
+
+    /// OR a [`FoldedRow`] of this builder into the routine in progress.
+    pub(crate) fn fold_row(&mut self, row: &FoldedRow) {
+        let c = &mut self.cur;
+        c.flags |= row.flags;
+        c.writes_all.extend_from_slice(&row.writes_all);
+        c.phys_writes.extend_from_slice(&row.phys_writes);
+        c.phys_reads.extend_from_slice(&row.phys_reads);
+        c.events.extend_from_slice(&row.events);
+    }
 
     /// Freeze the routine in progress into the pools and record its row.
     pub fn finish_routine(&mut self, routine_id: &str) {
-        let table_writes_all = freeze_ids(&mut self.s_writes_all, &mut self.store.writes_all_pool);
+        let c = &mut self.cur;
+        let table_writes_all = freeze_ids(&mut c.writes_all, &mut self.store.writes_all_pool);
         let physical_table_writes =
-            freeze_masked(&mut self.s_phys_writes, &mut self.store.phys_writes_pool);
-        let physical_table_reads =
-            freeze_ids(&mut self.s_phys_reads, &mut self.store.phys_reads_pool);
-        let event_publishes = freeze_ids(&mut self.s_events, &mut self.store.events_pool);
+            freeze_masked(&mut c.phys_writes, &mut self.store.phys_writes_pool);
+        let physical_table_reads = freeze_ids(&mut c.phys_reads, &mut self.store.phys_reads_pool);
+        let event_publishes = freeze_ids(&mut c.events, &mut self.store.events_pool);
         self.store.rows.insert(
             routine_id.to_string(),
             ConeDerivedRow {
-                flags: self.flags,
+                flags: c.flags,
                 table_writes_all,
                 physical_table_writes,
                 physical_table_reads,
@@ -808,7 +892,9 @@ impl ConeDerivedBuilder {
     /// key-deduped representatives, not a flat reachable list (see the module
     /// docs' dedup-asymmetry note). It exists for callers that already hold the
     /// literal reachable sequence — hand-built fixture summaries, whose inherited
-    /// facts ARE the input rather than a cone output.
+    /// facts ARE the input rather than a cone output — and for the T7'/T8'
+    /// oracle (#160 step 7b), which folds each routine's streamed `RawOnly` Vec
+    /// plus its raw direct facts (`capability_cone::raw_fold_hook`).
     ///
     /// ⟨fix M3⟩ `#[cfg(test)]` + `pub(crate)` keep that a STRUCTURAL guarantee
     /// rather than just a doc warning. ⟨issue 33⟩ Its original justification —
@@ -817,8 +903,8 @@ impl ConeDerivedBuilder {
     /// `inherited_fact_key` the fold is dedup-invariant, so raw and deduped
     /// inputs now agree. The confinement stays as a cost and clarity boundary
     /// (the production path must not pay for a flat reachable list), not as a
-    /// correctness guard. Its only caller (`l5::test_support::cone_store_of`) is
-    /// itself `#[cfg(test)]`-only.
+    /// correctness guard. Every caller (`l5::test_support::cone_store_of`, the
+    /// capability cone's test oracle) is itself `#[cfg(test)]`-only.
     #[cfg(test)]
     pub(crate) fn fold_routine<'f>(
         &mut self,
@@ -946,6 +1032,18 @@ mod tests {
     use crate::engine::l4::combined_graph::{CombinedGraph, TypedEdge};
     use crate::program::body::features::PTempState;
     use std::collections::HashMap;
+
+    /// #160 step 7b: the fold's domain condition is checked in the shared
+    /// classifier, so `fold_fact` (not only `fold_set`) refuses a
+    /// `resource_id` of `Some("")` in a debug build.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "fold: a fact with resource_id Some(\"\")")]
+    fn fold_fact_refuses_an_empty_resource_id() {
+        let mut b = ConeDerivedBuilder::default();
+        b.begin_routine();
+        b.fold_fact(&fact("X", "insert", "table", Some("")));
+    }
 
     // -- fixture constructors -------------------------------------------------
 
