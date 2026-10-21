@@ -119,7 +119,7 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    confirm/reject checklist; both reviewers in parallel. Maintain
    `findings.json` as a list of `{id, source, round, file, line,
    severity: critical|important|minor, text,
-   disposition: open|fixed|refuted|deferred, evidence, hash,
+   disposition: open|fixed|refuted|deferred, evidence, anchor, anchor_hash,
    reviews: {astra: accepted|re-raised|unreviewed, flash: …}}`. Both
    vocabularies are closed and the executor refuses an entry whose `severity`
    or `disposition` is missing or outside them — an unrecognised word is a
@@ -155,10 +155,23 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    register or the previous reviews. If a reviewer's thread is gone (pi
    threads do not survive a session), send that reviewer a full briefing
    instead. Diff-only rounds came back in 1-2 min (#190 r4, r6b; #111 r3),
-   full-context rounds in 4-13 min (#160 final r1: 13 min). Converged when: no `open`; every entry
-   `accepted` by both against the current hash; every blocking entry is `fixed`
-   or `refuted` with evidence. A `re-raised` stays unresolved even without new
-   evidence.
+   full-context rounds in 4-13 min (#160 final r1: 13 min).
+
+   **Marks are scoped to what changed (per-entry anchors).** Each entry
+   carries `anchor`: the file and line range (or the entry's own fix commit)
+   its fix lives in, and `anchor_hash`: sha256 of those lines at the time of
+   the last mark. A later Design or code edit resets the marks ONLY of
+   entries whose anchor lines changed (`git diff` over the anchor range),
+   plus any entry the edit's commit message names; a fix commit names the
+   entry ids it addresses, and those are always reset. An entry whose anchor
+   is unchanged keeps both marks. The reset entries plus the new ones are
+   "the ids to mark" in a later round's briefing. (One hash over the whole
+   Design reset every mark on every edit: 7 resets of up to 31 entries on
+   #190.) Converged when: no `open`; every entry `accepted` by both against
+   its own `anchor_hash`; every blocking entry is `fixed` or `refuted` with
+   evidence. A `re-raised` stays unresolved even without new evidence. Not
+   converged after 5 rounds: check the handoff rule below, else return
+   `blocked spec-panel-cap`.
 
    **Raiser-only acceptance for a minor prose fix.** A `minor` entry whose fix
    touches only gate-inert files (`CHANGELOG.md`, `docs/**/*.md`) and the two
@@ -172,8 +185,7 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    `accepted`, and `fix_commit` is a commit on the branch (after `B`) whose
    own diff touches only those files; anywhere else it is an unknown mark and
    the entry fails. In 3 of 3 runs a final round existed only to confirm a
-   wording fix. Not converged after 5 rounds: check the handoff rule below, else
-   return `blocked spec-panel-cap`.
+   wording fix.
 
    **Handoff at the cap (#45).** The design may pass to the next attempt as
    PRE-RATIFIED when the register meets the handoff rule: every `severity` and
@@ -323,7 +335,8 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     enter `findings.json`. Then both reviewers over the diff, spec, and
     ledger, `charge final_rounds` per round (cap 5), same convergence rule.
     On a pre-ratified attempt (step 1), round 1 also asks both reviewers to
-    mark EVERY carried entry against the current hash: a carried `re-raised`
+    mark EVERY carried entry, and sets each one's `anchor_hash` afresh (anchors
+    do not carry across attempts): a carried `re-raised`
     is still unresolved, and `attest` refuses until both reviewers have
     accepted every entry.
     Source-verify every reviewer code claim before editing. Every fix passes

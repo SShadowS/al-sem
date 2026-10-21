@@ -885,8 +885,9 @@ reason code, leave the branch and worktree in place for a human.
 cited file and line, severity normalised to `critical` | `important` | `minor`,
 the conductor's disposition
 (`fixed` with commit SHA, `refuted` with source evidence, `deferred` as discovery
-with the reproducer, or `open`), the artifact hash it was raised against, and a
-per-reviewer disposition field (`accepted`, `re-raised`, `unreviewed`).
+with the reproducer, or `open`), an `anchor` (the file and line range, or the fix
+commit, its fix lives in) with an `anchor_hash` (sha256 of those lines at the last
+mark), and a per-reviewer disposition field (`accepted`, `re-raised`, `unreviewed`).
 
 Severity is a closed vocabulary rather than the reviewer's own wording, because
 the merge gate pattern-matches it: `critical` and `important` are BLOCKING, so
@@ -894,8 +895,14 @@ they may not be merely `deferred`. The conductor normalises a reviewer's phrasin
 into the three words when writing the entry; the executor refuses a register
 carrying anything else, rather than treating an unrecognised word as non-blocking.
 
-Each round's prompt shows every entry with its conductor disposition and asks each
-reviewer to mark each one `accepted` or `re-raised` against the current hash. A
+Round 1 shows every entry; a later round asks each reviewer to mark the entries
+whose marks were reset, plus new ones, `accepted` or `re-raised`. An edit resets
+the marks ONLY of entries whose anchor lines it changed, plus every entry its
+commit message names (a fix commit names the ids it addresses); an entry whose
+anchor is unchanged keeps both marks. Until 2026-10-21 the marks were tied to one
+hash over the whole spec, so any edit reset every mark (#190: 7 resets of up to 31
+entries); the executor never read that hash, so anchors are a conductor convention
+the executor does not check either. A
 `re-raised` stays unresolved whether or not it cites new evidence: the conductor
 must fix it or produce a new refutation for the next round. Silence is
 `unreviewed`, never approval. A dispute that survives the round cap is `blocked`
@@ -906,7 +913,8 @@ on its own (fail closed, at the cost of an occasional blocked-by-dispute issue).
 
 Convergence means: every entry carries a severity and a disposition from the two
 closed vocabularies; no `open` entries; every entry is `accepted` by **both**
-reviewers against the current hash (including the originating reviewer's own);
+reviewers against its own `anchor_hash` (including the originating reviewer's own,
+apart from the raiser-only carve-out below);
 every blocking entry — `critical`, `important`, or explicitly `blocking: true` —
 is `fixed` or `refuted` with evidence, never `deferred`. A reviewer downgrading its own blocking finding without a refutation is
 recorded but does not count. The final round may be confirm-only (no changes since
@@ -979,10 +987,12 @@ on its own: the substitution stays an explicit operator decision per attempt.
 A mismatch fails closed in both directions (`register-not-converged`), because
 the carried entries have no marks under the other roster's names.
 
-One limit, older than #141: a mark is not bound to the hash it was made
-against. A carried `accepted` from the spec panel passes `attest` even if the
+One limit, older than #141: the executor does not bind a mark to what it was
+made against. A carried `accepted` from the spec panel passes `attest` even if the
 final panel never re-marked that entry. Only the prompt (`issue.md`: round 1
-re-marks every carried entry) enforces this; a fix would be a per-mark `hash`.
+re-marks every carried entry and sets its `anchor_hash` afresh) enforces this;
+the per-entry `anchor_hash` (2026-10-21) is the field an executor check would
+read, via a `register-reset --since <sha>` helper, once two issues have used it.
 
 A crash after a consumed handoff takes the normal `blocked-crashed` route. The
 issue then needs `unblock` and a fresh panel. The handoff record is gone, but

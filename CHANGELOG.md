@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/issue` (flow speed-ups, P1): findings-register marks are scoped to what changed. Each
+  entry carries an `anchor` (the file and lines, or the fix commit, its fix lives in) and an
+  `anchor_hash`; an edit resets only the marks of entries whose anchor lines changed, plus
+  the entries its commit message names. The old field was one `hash` over the whole Design,
+  so every edit reset every mark (#190: 7 resets of up to 31 entries). A conductor
+  convention for now: the executor never read the old hash and does not read the anchors.
 - agentflow (flow speed-ups, P3): a `minor` register entry whose fix touches only
   gate-inert prose and the evidence files closes on the raising reviewer's `accepted`;
   the other reviewer's mark is `accepted-by-rule`, and a `re-raised` still reopens it.
