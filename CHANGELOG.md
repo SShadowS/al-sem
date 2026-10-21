@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CI runs in two parallel jobs.** `test` (fmt, lint, gen-syntax, the test suite) and `release` (the
+  release build and `perf_bounds`) now run side by side instead of one after the other. The steps took
+  ~6.5 min in a row (run 39625785855: Lint 32 s, Test 100 s, Build 202 s, Perf 41 s); the wall time is
+  now the slower job's. Each job keeps its own dependency cache. The flow's merge gate needs every check
+  of the `CI` workflow green, so it covers both jobs unchanged.
+
 - **Grammar: tree-sitter-al `main` at `4d75846c`** (B7b-3; package version still 4.4.1; was
   `8682cb5f`). The `node-types.json` hash guard had made CI red. 499 -> 500 named kinds, no
   field name added or removed; the `target` field of the four move hosts
