@@ -26,6 +26,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- #160 step 11b: routine identity corrections, `RoutineIx` re-keying, and one rule for rows
+  that share one routine id (part of #160; spec
+  `docs/superpowers/specs/2026-10-22-issue-160-step11b-routine-rekeying-design.md`). The only
+  output change: in each cross-app CDO report (`--scope primary` and `--scope all`, SARIF
+  and JSON), 14 `d9-transaction-span-summary` results say "publishes N event(s)" with N one
+  higher; nothing else moved, and no golden moved. Identity runs and census:
+  `docs/measurements/2026-10-22-issue-160-step11b.md`.
+  - **The corrections (stage C).** J2, the adapter's caller check and the event graph read
+    each row's true node (`RowNodes.node_of`) instead of its declaration anchor. The first
+    `#if` arm of the Base Application's `GetPurchaseHeaderPageID` now gets its 5 program
+    edges (they were `Unknown(NoProgramSite)`), and one of them raises
+    `OnAfterGetPurchaseHeaderPageID`: that is the 14 `d9` moves. `RowNodes.decl_anchor`,
+    `j5_node` and `RowNodes::build`'s `edges`/`demand` parameters are deleted.
+  - **The re-keying (stage A, byte-neutral).** `RoutineIx` (a row's position) is stored in
+    `CallEdge.from_ix`; the L4 interner's index is renamed `SolveIx`. The carrier is split:
+    the relation holds a `PrimaryGraph` and the Cone payload apart. The rule-bearing producers
+    emit per row, and `program/model/projection.rs` turns their per-row output into the
+    per-id input every computation takes (the cone, the solve, the event graph and the spans
+    stay per id). Every union payload type is `Ord`.
+  - **The one rule (stage B).** Only ids with two or more rows change. Set-valued inputs are
+    the full-value union of the rows' values (equal items collapse, unequal ones are all
+    kept, ordered by today's sort key and then the total order); coverage takes the least
+    complete status and the sorted union of reasons; flags are OR-ed. Single-valued lookups
+    take the LAST OWNING row per key, and every piece of one key comes from that row: a call
+    site's edge and bindings (`site_pick`, read by d37 and `compose_roles_only`, which now
+    visit the id's owned call sites), an operation's order and scope frame, a parameter's
+    role. In detail: direct facts, coverage and leaf/base summaries (R2a/R2b/R2c, #13); the
+    collided edge and uncertainty lists (class U); one interface uncertainty per call site
+    from its last owning row (R1b); one interface candidate per implementer (R1c); one
+    publisher symbol per distinct value (R4b); the reverse call graph and r3a1 list an id
+    once; commits are unioned and each seeds from its owning row, a checked run once (#14,
+    #16); a temp proof of an event parameter needs every raise, read at its own row, and
+    rewrites every subscriber row (#17); root classifications, policy evaluation and the
+    dependency order index keep one item per id, and `resolve_target` no longer reads two
+    rows of one id as "ambiguous". Guard frames (class G) and the detectors' own row choices
+    (class R) are unchanged. The cone's `CapabilityFact`, `CapabilityExtra` and `ValueSource`
+    derive `Ord`.
+  - Epic amendments 11B-1 to 11B-8 (spec §9).
 - **Grammar: tree-sitter-al `main` at `960ed312`** (B7b-2, "#if groups inside expressions";
   package version still 4.4.1; was `4d75846c`). The `node-types.json` hash guard had made CI
   red. 500 -> 501 named kinds, no field name added or removed. The new

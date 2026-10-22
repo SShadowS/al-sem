@@ -55,25 +55,25 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
     let (calls, events) = (resolved.calls.clone(), resolved.events.clone());
     let rewrites: Vec<(usize, u32)> = {
         let routines = &resolved.workspace.routines;
-        // The row each raiser / subscriber id is read through (#17, #160 step
-        // 11b §4.5): the projection's compat LAST row.
-        let index: HashMap<&str, usize> = super::projection::last_per_id_borrowed(
-            &super::projection::RowsOfId::build(routines),
-            (0..routines.len()).map(Some).collect(),
-        );
+        // #17 (#160 step 11b §4.6): the publisher is read through its LAST row
+        // (class P); each raise at its own row (`CallEdge.from_ix`); a proof
+        // rewrites EVERY row of a subscriber id.
+        let rows = super::projection::RowsOfId::build(routines);
+        let index: HashMap<&str, usize> =
+            super::projection::last_per_id_borrowed(&rows, (0..routines.len()).map(Some).collect());
         let resolved_sites: HashSet<&str> = calls
             .edges
             .iter()
             .filter(|e| e.to.is_some())
             .map(|e| e.callsite_id.as_str())
             .collect();
-        let mut raises: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+        let mut raises: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
         for e in &calls.edges {
             if let Some(to) = &e.to {
                 raises
                     .entry(to.as_str())
                     .or_default()
-                    .push((e.from.as_str(), e.callsite_id.as_str()));
+                    .push((e.from_ix.get(), e.callsite_id.as_str()));
             }
         }
         let routine = |id: &str| index.get(id).map(|&i| &routines[i]);
@@ -116,32 +116,33 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
                 let Some(i) = pv.parameter_index else {
                     continue;
                 };
-                let all_temp = sites.iter().all(|(from, cs_id)| {
-                    routine(from)
-                        .and_then(|r| r.call_sites.iter().find(|c| c.id == *cs_id))
+                let all_temp = sites.iter().all(|&(from_ix, cs_id)| {
+                    routines
+                        .get(from_ix)
+                        .and_then(|r| r.call_sites.iter().find(|c| c.id == cs_id))
                         .is_some_and(|cs| is_known_temp(cs.source_temp_state_for(i)))
                 });
                 if !all_temp {
                     continue;
                 }
                 for edge in events.graph.edges.iter().filter(|e| e.event_id == ev.id) {
-                    let Some(&si) = index.get(edge.subscriber_routine_id.as_str()) else {
-                        continue;
-                    };
-                    let s = &routines[si];
-                    let Some(sp) = s
-                        .parameters
-                        .iter()
-                        .find(|sp| event_param_names_match(&sp.name, &pv.name))
-                    else {
-                        continue;
-                    };
-                    if s.record_variables.iter().any(|rv| {
-                        rv.is_parameter
-                            && rv.parameter_index == Some(sp.index)
-                            && is_pd(&rv.temp_state, sp.index)
-                    }) {
-                        out.push((si, sp.index));
+                    for &six in rows.rows(edge.subscriber_routine_id.as_str()) {
+                        let si = six.get();
+                        let s = &routines[si];
+                        let Some(sp) = s
+                            .parameters
+                            .iter()
+                            .find(|sp| event_param_names_match(&sp.name, &pv.name))
+                        else {
+                            continue;
+                        };
+                        if s.record_variables.iter().any(|rv| {
+                            rv.is_parameter
+                                && rv.parameter_index == Some(sp.index)
+                                && is_pd(&rv.temp_state, sp.index)
+                        }) {
+                            out.push((si, sp.index));
+                        }
                     }
                 }
             }

@@ -65,6 +65,11 @@ pub fn detect_d37(
     let mut skipped_temp_record = 0u64;
     let mut skipped_parameter = 0u64;
     let mut skipped_trigger_rec = 0u64;
+    // A collided id's owned call sites (#160 step 11b §4.6, `site_pick`).
+    let owned = crate::program::model::projection::owned_sites(
+        &crate::program::model::projection::RowsOfId::build(&ws.routines),
+        &ws.routines,
+    );
 
     for routine in &ws.routines {
         // roleOf(routine) !== "primary" → skip. Source-only ⇒ all primary.
@@ -116,6 +121,7 @@ pub fn detect_d37(
             let source_record_variable_id = op.record_variable_id.as_deref();
             let helper_verdict = post_validate_helper_verdict(
                 routine,
+                &crate::program::model::projection::sites_of(&owned, routine),
                 source_record_variable_id,
                 &source_variable_name_lc,
                 &op.source_anchor,
@@ -181,24 +187,25 @@ fn later_persisted(
 /// After the Validate op, walk callsites in source order. If any post-Validate helper
 /// might persist (yes or unknown) the Validate is suppressed; only when EVERY
 /// forwarding helper provably doesn't persist do we fall through to emit.
+/// `sites` are the routine's call sites: its id's owned sites when the id is
+/// collided (#160 step 11b §4.6).
 fn post_validate_helper_verdict(
     routine: &ModelRoutine,
+    sites: &[&crate::program::body::features::PCallSite],
     source_record_variable_id: Option<&str>,
     source_variable_name_lc: &str,
     validate_anchor: &PAnchor,
     ctx: &DetectorContext,
 ) -> &'static str {
-    for cs in &routine.call_sites {
+    for cs in sites {
         if !before_anchor(validate_anchor, &cs.source_anchor) {
             continue;
         }
-        // The site's resolved callee edge and its upgraded bindings, through
-        // `site_pick` (#160 step 11b §4.6; compat form in stage A:
-        // graph.edgesByFrom.get(routine.id)?.find(callsiteId === cs.id), and the
-        // R5 bindings).
+        // The site's resolved callee and its upgraded bindings, both from one
+        // row, through `site_pick` (#160 step 11b §4.6).
         let pick = crate::program::model::projection::site_pick(
-            ctx.graph.edges_by_from.get(&routine.id).map(Vec::as_slice),
-            |e| e.callsite_id.as_deref(),
+            &ctx.graph,
+            &routine.id,
             &cs.id,
             &ctx.upgraded_bindings_by_callsite,
         );
@@ -230,12 +237,11 @@ fn post_validate_helper_verdict(
             if !callee_parameter_is_var {
                 continue;
             }
-            let edge_to = pick.edge.map(|e| e.to.clone());
-            let edge_to = match edge_to {
+            let edge_to = match pick.callee {
                 Some(t) => t,
                 None => return "suppress-unknown",
             };
-            let callee = ctx.routine_by_id.get(edge_to.as_str()).copied();
+            let callee = ctx.routine_by_id.get(edge_to).copied();
             let callee_role = callee.and_then(|c| {
                 ctx.parameter_roles_by_routine.get(&c.id).and_then(|roles| {
                     roles

@@ -316,7 +316,10 @@ pub fn classify_roots(workspace: &ModelEntities) -> Vec<RootClassification> {
     }
 
     // Canonical sort for determinism — RoutineId is an ASCII slash-form string.
-    result.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
+    // The rows of one id keep one copy of each distinct classification (class
+    // K, #160 step 11b §4.6): the full value breaks a tie, equal copies collapse.
+    result.sort_by(|a, b| a.routine_id.cmp(&b.routine_id).then_with(|| a.cmp(b)));
+    result.dedup();
     result
 }
 
@@ -526,8 +529,10 @@ fn overlay_config_roots(
 
     for entry in &config.roots {
         let mut matches = resolve_target(&entry.target, workspace);
-        // Sort matches by internal id (ASCII ordinal), first wins.
+        // Sort matches by internal id (ASCII ordinal), first wins. The rows of
+        // one id are one match (#160 step 11b §4.6), never "ambiguous".
         matches.sort_by(|a, b| a.id.cmp(&b.id));
+        matches.dedup_by(|a, b| a.id == b.id);
 
         if matches.is_empty() {
             continue;

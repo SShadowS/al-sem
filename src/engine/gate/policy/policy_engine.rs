@@ -194,6 +194,15 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
     // Sort routines by id.
     let mut sorted_routines: Vec<&ModelRoutine> = model.routines.iter().collect();
     sorted_routines.sort_by(|a, b| a.id.cmp(&b.id));
+    // One evaluation per id (#160 step 11b §4.6): the rows of a collided id are
+    // one routine, read through its LAST row (the stable sort keeps row order).
+    sorted_routines.dedup_by(|later, kept| {
+        let same = later.id == kept.id;
+        if same {
+            *kept = *later;
+        }
+        same
+    });
 
     for rule in &sorted_rules {
         let mut summary = RuleRunSummary {

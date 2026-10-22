@@ -106,6 +106,7 @@ pub fn graph_from_edges(nodes: &[&str], edges: &[CombinedEdge]) -> PrimaryGraph 
         edges_by_from,
         edges_from_order,
         uncertainty_edges: Vec::new(),
+        collided_site_callee: HashMap::new(),
     }
 }
 
@@ -415,6 +416,7 @@ pub fn minimal_ctx<'a>(
         edges_by_from: graph_edges,
         edges_from_order: vec![],
         uncertainty_edges: vec![],
+        collided_site_callee: HashMap::new(),
     };
     MinimalCtx {
         routines,

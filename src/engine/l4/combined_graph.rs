@@ -199,6 +199,24 @@ pub struct PrimaryGraph {
     pub edges_from_order: Vec<String>,
     /// Sorted (uncertaintySortKey) uncertainty edges.
     pub uncertainty_edges: Vec<UncertaintyEdge>,
+    /// #160 step 11b §4.6 (`site_pick`): for every call site of a COLLIDED id,
+    /// the callee of its LAST OWNING row's first targeted call edge (`None` when
+    /// that row's site has none). Empty when no id is collided; a single-row
+    /// id's sites are never here.
+    pub collided_site_callee: HashMap<String, Option<String>>,
+}
+
+impl PrimaryGraph {
+    /// `nodes` with each id once (class K, spec §4.6): `nodes` is sorted and
+    /// holds a collided id once per row, so a reader walking it would list the
+    /// id's edges once per row.
+    pub fn distinct_nodes(&self) -> impl Iterator<Item = &String> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|&(i, n)| i == 0 || self.nodes[i - 1] != *n)
+            .map(|(_, n)| n)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -312,12 +330,31 @@ pub(crate) fn assemble(
     let mut edges: Vec<CombinedEdge> = Vec::new();
     let mut uncertainty_edges: Vec<UncertaintyEdge> = Vec::new();
 
+    // #160 step 11b §4.6: a collided id's call sites belong to their LAST
+    // OWNING row (class P): R1b's one interface uncertainty per site and
+    // `site_pick`'s callee come from that row only.
+    let rows = crate::program::model::projection::RowsOfId::build(&workspace.routines);
+    let owners = crate::program::model::projection::site_owners(&rows, &workspace.routines);
+    let owns = |ce: &CallEdge| {
+        owners
+            .get(ce.callsite_id.as_str())
+            .is_none_or(|&o| o == ce.from_ix)
+    };
+    let mut collided_site_callee: HashMap<String, Option<String>> =
+        owners.keys().map(|cs| ((*cs).to_string(), None)).collect();
+
     // Interface callsites that already received an "interface-open-world" uncertainty
     // (emit exactly once per callsite even with multiple "maybe" edges).
     let mut interface_open_world_emitted: HashSet<String> = HashSet::new();
 
     // --- call-derived edges + uncertainty records ---
     for ce in call_edges {
+        if ce.to.is_some()
+            && owners.get(ce.callsite_id.as_str()) == Some(&ce.from_ix)
+            && let Some(slot @ None) = collided_site_callee.get_mut(&ce.callsite_id)
+        {
+            slot.clone_from(&ce.to);
+        }
         // event-dispatch dispatchKind never appears in the model's calls; al-sem
         // skips it here regardless (event hops come from the event graph), so no
         // check is needed.
@@ -335,8 +372,10 @@ pub(crate) fn assemble(
                     dispatch: None,
                 });
             }
-            // Resolved interface dispatch ("maybe"): open-world uncertainty, once.
+            // Resolved interface dispatch ("maybe"): open-world uncertainty, once,
+            // from the site's (last owning) row.
             if ce.dispatch_kind == DispatchKind::Interface
+                && owns(ce)
                 && !interface_open_world_emitted.contains(&ce.callsite_id)
             {
                 interface_open_world_emitted.insert(ce.callsite_id.clone());
@@ -361,7 +400,7 @@ pub(crate) fn assemble(
         // to-less edge → typed uncertainty on the `from` routine.
         if ce.dispatch_kind == DispatchKind::Interface {
             // Zero-impl interface dispatch → "interface-open-world".
-            if !interface_open_world_emitted.contains(&ce.callsite_id) {
+            if owns(ce) && !interface_open_world_emitted.contains(&ce.callsite_id) {
                 interface_open_world_emitted.insert(ce.callsite_id.clone());
                 let interface_name = ce
                     .dispatch_meta
@@ -460,11 +499,40 @@ pub(crate) fn assemble(
         }
         edges_by_from.entry(e.from.clone()).or_default().push(e);
     }
-    for list in edges_by_from.values_mut() {
-        list.sort_by_key(edge_sort_key);
+    for (from, list) in &mut edges_by_from {
+        if rows.is_collided(from) {
+            // Class U, collided (#160 step 11b §4.6): the full-value union,
+            // ordered by the sort key, then the full value.
+            *list = crate::program::model::projection::union_by_value(
+                vec![std::mem::take(list)],
+                edge_sort_key,
+            );
+        } else {
+            list.sort_by_key(edge_sort_key);
+        }
     }
 
     uncertainty_edges.sort_by_key(uncertainty_sort_key);
+    // Class U, collided: the key starts with `from`, so one id's uncertainties
+    // are one run; a collided id's run is ordered by the full value on a key tie
+    // and equal items collapse.
+    let mut i = 0;
+    while i < uncertainty_edges.len() {
+        let from = &uncertainty_edges[i].from;
+        let j = i + uncertainty_edges[i..]
+            .iter()
+            .take_while(|u| &u.from == from)
+            .count();
+        if rows.is_collided(from) {
+            uncertainty_edges[i..j].sort_by(|a, b| {
+                uncertainty_sort_key(a)
+                    .cmp(&uncertainty_sort_key(b))
+                    .then_with(|| a.cmp(b))
+            });
+        }
+        i = j;
+    }
+    uncertainty_edges.dedup_by(|a, b| a == b && rows.is_collided(&a.from));
 
     let typed_edges = build_typed_edges(workspace, call_edges, event_graph);
 
@@ -474,6 +542,7 @@ pub(crate) fn assemble(
             edges_by_from,
             edges_from_order,
             uncertainty_edges,
+            collided_site_callee,
         },
         typed_edges,
     }
@@ -615,10 +684,14 @@ fn build_typed_edges(
             if !interface_edges_by_callsite.contains_key(&ce.callsite_id) {
                 interface_order.push(ce.callsite_id.clone());
             }
-            interface_edges_by_callsite
+            let group = interface_edges_by_callsite
                 .entry(ce.callsite_id.clone())
-                .or_default()
-                .push(ce);
+                .or_default();
+            // R1c (#160 step 11b §4.6): one candidate per distinct implementer,
+            // so a collided id's rows do not count one implementer twice.
+            if !group.iter().any(|c| c.to == ce.to) {
+                group.push(ce);
+            }
         }
     }
 
@@ -1144,7 +1217,7 @@ pub fn project_r3a1(
 
     // Combined edges: al-sem's emission order — sorted nodes → per-from sorted edges.
     let mut combined_edges: Vec<PCombinedEdge> = Vec::new();
-    for node in &graph.nodes {
+    for node in graph.distinct_nodes() {
         if let Some(list) = graph.edges_by_from.get(node) {
             for e in list {
                 combined_edges.push(project_combined_edge(e, &map, &event_by_id));

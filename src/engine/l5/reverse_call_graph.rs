@@ -35,7 +35,9 @@ pub type ReverseCallGraph = BTreeMap<String, Vec<CombinedEdge>>;
 /// the reverse list for any callee is a stable function of the inputs.
 pub fn build_reverse_call_graph(graph: &PrimaryGraph) -> ReverseCallGraph {
     let mut reverse: ReverseCallGraph = BTreeMap::new();
-    for node in &graph.nodes {
+    // Each id once (class K, #160 step 11b §4.6): a collided id is in `nodes`
+    // once per row.
+    for node in graph.distinct_nodes() {
         if let Some(edges) = graph.edges_by_from.get(node) {
             for e in edges {
                 reverse.entry(e.to.clone()).or_default().push(e.clone());

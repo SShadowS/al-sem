@@ -987,6 +987,7 @@ mod tests {
             edges_by_from,
             edges_from_order: Vec::new(),
             uncertainty_edges: Vec::new(),
+            collided_site_callee: HashMap::new(),
         };
         // `b` is a fixed leaf — never recomputed.
         let eff = effective_sccs(&scc_result.sccs[0], &graph, &|id: &str| id != "b");

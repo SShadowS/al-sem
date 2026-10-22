@@ -1955,6 +1955,7 @@ mod tests {
             edges_by_from: HashMap::new(),
             edges_from_order: Vec::new(),
             uncertainty_edges: Vec::new(),
+            collided_site_callee: HashMap::new(),
         };
         let body_avail_by_id: HashMap<String, bool> = HashMap::new();
         let indexes = build_indexes(&routine);

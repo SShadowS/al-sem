@@ -1054,6 +1054,7 @@ mod tests {
                 edges_by_from: HashMap::new(),
                 edges_from_order: Vec::new(),
                 uncertainty_edges: Vec::new(),
+                collided_site_callee: HashMap::new(),
             },
             typed_edges: edges,
         }

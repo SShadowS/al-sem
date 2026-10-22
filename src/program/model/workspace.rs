@@ -1473,6 +1473,38 @@ pub fn assemble_and_resolve_workspace_from_program(
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
 
+/// #160 step 11b T2 (spec §5.2): [`assemble_and_resolve_workspace_from_program`]
+/// with the rows of every collision group (rows sharing one string id) in
+/// REVERSED order, before `RowNodes` and the attach, so every row index stays
+/// consistent. The rows keep their positions as a set; only the group's
+/// members swap places. Test entry.
+#[doc(hidden)]
+pub fn assemble_and_resolve_workspace_from_program_reversed_groups(
+    inputs: &crate::program::inputs::InputSet,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+    ctx: &crate::program::resolve::full::ProgramContext,
+    parenless: &crate::program::resolve::full::ParenlessCalls,
+) -> Option<ModelRows> {
+    let (mut ws, mut node_of) =
+        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
+    let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
+    for (ri, r) in ws.routines.iter().enumerate() {
+        by_id.entry(r.id.clone()).or_default().push(ri);
+    }
+    for rows in by_id.values().filter(|rows| rows.len() > 1) {
+        let (mut i, mut j) = (0, rows.len() - 1);
+        while i < j {
+            ws.routines.swap(rows[i], rows[j]);
+            node_of.swap(rows[i], rows[j]);
+            i += 1;
+            j -= 1;
+        }
+    }
+    let row_nodes = RowNodes::build(ctx, &ws, node_of);
+    finish_resolved(ws, inputs, skip_roots_config, row_nodes)
+}
+
 /// The CROSS-APP detector model (engine-switch S7.2): the workspace's rows exactly as
 /// [`assemble_and_resolve_workspace_from_program`] builds them, then every dependency
 /// the workspace requires (its declared closure, S7.4: not an app that depends on

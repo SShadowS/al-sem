@@ -312,19 +312,35 @@ pub fn program_event_graph(
     let mut events: Vec<EventSymbol> = Vec::new();
     let mut event_ix: HashMap<String, usize> = HashMap::new();
     let mut real: HashSet<String> = HashSet::new();
-    // One symbol per publisher row (#160 step 11b §4.5, R4b: compat KEPT, so a
-    // collided publisher keeps one symbol per row; `event_ix` names its last).
-    let per_row: Vec<EventSymbol> = ws
-        .routines
-        .iter()
-        .filter(|r| r.kind == "event-publisher")
-        .map(build_event_symbol)
-        .collect();
-    for s in super::projection::kept_per_row(per_row) {
-        real.insert(s.id.clone());
-        event_ix.insert(s.id.clone(), events.len());
-        events.push(s);
+    // One symbol per publisher row; a collided publisher's symbols are the
+    // full-value union of its rows', at its first row's place (#160 step 11b
+    // §4.6, R4b: equal arms make one symbol; `event_ix` names the last).
+    let rows = super::projection::RowsOfId::build(&ws.routines);
+    let is_publisher = |r: &&ModelRoutine| r.kind == "event-publisher";
+    let mut merged: HashSet<&str> = HashSet::new();
+    for r in ws.routines.iter().filter(is_publisher) {
+        let syms = if rows.is_collided(&r.id) {
+            if !merged.insert(r.id.as_str()) {
+                continue;
+            }
+            let per_row = rows
+                .rows(&r.id)
+                .iter()
+                .map(|ix| &ws.routines[ix.get()])
+                .filter(is_publisher)
+                .map(|q| vec![build_event_symbol(q)])
+                .collect();
+            super::projection::union_by_value(per_row, |s| s.id.clone())
+        } else {
+            vec![build_event_symbol(r)]
+        };
+        for s in syms {
+            real.insert(s.id.clone());
+            event_ix.insert(s.id.clone(), events.len());
+            events.push(s);
+        }
     }
+    drop(rows);
     // A symbol for an event no bound publisher stands behind (L3's synthesized
     // `maybe`/`unknown` symbols).
     fn synth(

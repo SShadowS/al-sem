@@ -724,6 +724,33 @@ pub fn assemble_and_resolve_inline_program(
     .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
 }
 
+/// #160 step 11b T2 (spec §5.2): [`assemble_and_resolve_inline_program_default`]
+/// with the rows of every collision group in REVERSED order, before `RowNodes`
+/// and the attach
+/// ([`crate::program::model::workspace::assemble_and_resolve_workspace_from_program_reversed_groups`]).
+/// The source is the same; only the row order differs. Test entry.
+#[doc(hidden)]
+#[must_use]
+pub fn assemble_and_resolve_inline_program_reversed_groups(
+    files: &[(String, String)],
+    app_guid: &str,
+) -> crate::program::model::workspace::Model {
+    let dir = write_inline_workspace(files, app_guid);
+    let inputs = crate::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let program = ResolvedProgram::build(&inputs, ProgramScope::Workspace)
+        .unwrap_or_else(|_| panic!("program build failed for inline workspace {app_guid}"));
+    let rows =
+        crate::program::model::workspace::assemble_and_resolve_workspace_from_program_reversed_groups(
+            &inputs,
+            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+            true,
+            &program.body().ctx,
+            &program.body().parenless_calls,
+        )
+        .unwrap_or_else(|| panic!("model assembly failed for inline workspace {app_guid}"));
+    attach_program_calls(rows, program).0
+}
+
 /// The inline files and an `app.json` with id `app_guid`, written to a fresh
 /// temporary directory (see [`assemble_and_resolve_inline_program`]).
 fn write_inline_workspace(files: &[(String, String)], app_guid: &str) -> tempfile::TempDir {

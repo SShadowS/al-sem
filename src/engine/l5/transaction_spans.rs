@@ -31,14 +31,14 @@
 //! insertion order for the explicit-commit pass — both yield spans in a stable
 //! order which downstream Task 2b sorts by the span's own key).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ResBitset};
 use crate::engine::l4::param_guard::{FrameGuards, Req, across_edge, conjoin, frame_guards_over};
 use crate::engine::l5::capability_query::reachable_coverage;
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::pending_writes::{
-    ForwardSites, Pending, forward_sites, is_checked_run, pending_before, toward_sites,
+    ForwardSites, Pending, PendingCtx, forward_sites, is_checked_run, pending_before, toward_sites,
 };
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::features::PCallee;
@@ -355,6 +355,8 @@ struct SpanInputs<'a> {
     cone_derived: &'a ConeDerivedStore,
     routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
     fwd: &'a ForwardSites<'a>,
+    /// [`pending_before`]'s lookups (the ones above, and the collided ids).
+    pending: &'a PendingCtx<'a>,
 }
 
 /// Run-lifetime scratch: the two id bitsets the union fills and clears per
@@ -428,15 +430,7 @@ fn span_template<'c>(
                 continue;
             };
             let (targets, unsited) = toward_sites(rid, |to| visited.contains(to), inputs.fwd);
-            let p = pending_before(
-                r,
-                &targets,
-                unsited,
-                inputs.fwd,
-                inputs.routine_by_id,
-                inputs.summaries,
-                inputs.cone_derived,
-            );
+            let p = pending_before(r, &targets, unsited, inputs.pending);
             pending_by_routine.insert(rid.clone(), p.tables.len());
             pending_others.tables.extend(p.tables);
             pending_others.events.extend(p.events);
@@ -484,9 +478,24 @@ pub fn compute_transaction_spans(
     // PRIMARY routines only. A BTreeMap so the explicit-commit seed iteration is
     // deterministic (al-sem's Map is insertion-ordered over model.routines; we
     // key-sort, which Task 2b re-sorts by span key anyway).
-    // #160 step 11b §4.5: #14, per row, then the projection (compat LAST: the
-    // last primary row of the id with commits).
+    // #160 step 11b §4.6: #14, per row, then the projection: a collided id's
+    // commits are the union of its primary rows' commits, and each commit seeds
+    // from its LAST OWNING row (`seed_of_commit`).
     let rows = crate::program::model::projection::RowsOfId::build(routines);
+    let seed_of_commit: HashMap<&str, &ModelRoutine> =
+        crate::program::model::projection::last_per_key_pairs(
+            routines
+                .iter()
+                .filter(|r| is_primary(r, dep_routine_ids))
+                .flat_map(|r| {
+                    r.operation_sites
+                        .iter()
+                        .filter(|os| os.kind == "commit")
+                        .map(move |os| (os.id.as_str(), r))
+                }),
+        );
+    // #16: a collided id's checked-run site seeds once, from its last owning row.
+    let site_owners = crate::program::model::projection::site_owners(&rows, routines);
     let commits_per_row = routines
         .iter()
         .map(|r| {
@@ -503,21 +512,31 @@ pub fn compute_transaction_spans(
         })
         .collect();
     let commits_by_routine: BTreeMap<String, Vec<String>> =
-        crate::program::model::projection::last_per_id(&rows, commits_per_row)
-            .into_iter()
-            .collect();
+        crate::program::model::projection::merge_per_id(&rows, commits_per_row, |v| {
+            crate::program::model::projection::union_by_value(v, |_| ())
+        })
+        .into_iter()
+        .collect();
 
     // Everything about a span that depends only on the seed ROUTINE — cached
     // per distinct seed routine id (see `span_template` above `compute_transaction_spans`).
     let mut template_cache: HashMap<String, SpanTemplate> = HashMap::new();
-    // The seed row of an id (compat LAST, #14's seed).
+    // The routine row of an id (class P: the LAST row).
     let routine_by_id: HashMap<&str, &ModelRoutine> =
         crate::program::model::projection::last_per_id_borrowed(
             &rows,
             routines.iter().map(Some).collect(),
         );
+    let collided: HashSet<&str> = rows.collided().map(|(id, _)| id).collect();
     drop(rows);
     let fwd = forward_sites(reverse);
+    let pending = PendingCtx {
+        fwd: &fwd,
+        routines: &routine_by_id,
+        summaries,
+        cone_derived,
+        collided: &collided,
+    };
     let inputs = SpanInputs {
         commits_by_routine: &commits_by_routine,
         reverse,
@@ -525,20 +544,13 @@ pub fn compute_transaction_spans(
         cone_derived,
         routine_by_id: &routine_by_id,
         fwd: &fwd,
+        pending: &pending,
     };
     // The seed routine's own pending part, up to ONE Commit (or checked run),
     // joined with the template's.
     let pending_at =
         |t: &SpanTemplate, seed: &ModelRoutine, at: &str| -> (Vec<String>, Vec<String>) {
-            let own = pending_before(
-                seed,
-                &[at],
-                false,
-                &fwd,
-                &routine_by_id,
-                summaries,
-                cone_derived,
-            );
+            let own = pending_before(seed, &[at], false, &pending);
             let tables: BTreeSet<String> = t
                 .pending_others
                 .tables
@@ -567,10 +579,10 @@ pub fn compute_transaction_spans(
 
     // --- explicit-commit seeds ---
     for (commit_routine_id, commit_ops) in &commits_by_routine {
-        let seed = routine_by_id[commit_routine_id.as_str()];
         // clone the template fields once per OP (one walk per distinct
         // requirement list — usually one per routine)
         for commit_operation_id in commit_ops {
+            let seed = seed_of_commit[commit_operation_id.as_str()];
             let reqs = seed_reqs(seed, commit_operation_id, &inputs, &mut scratch);
             let t = span_template(
                 commit_routine_id,
@@ -607,11 +619,15 @@ pub fn compute_transaction_spans(
     // --- §B: synthetic seeds for CHECKED codeunit-run implicit commits ---
     // Codeunit.Run only; objectRunReturnUsed === true only (the STRICT affirmative
     // predicate). NOT Page.Run / Report.Run.
-    for r in routines {
+    for (ri, r) in routines.iter().enumerate() {
         if !is_primary(r, dep_routine_ids) {
             continue;
         }
+        let ix = crate::program::model::ix::RoutineIx::of(ri);
         for cs in &r.call_sites {
+            if site_owners.get(cs.id.as_str()).is_some_and(|&o| o != ix) {
+                continue;
+            }
             let PCallee::ObjectRun { object_kind, .. } = &cs.callee else {
                 continue;
             };

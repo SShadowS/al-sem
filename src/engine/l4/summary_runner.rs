@@ -39,6 +39,7 @@ use super::summary::{
     Uncertainty, project_routine_summary_core_internal, summary_change_key,
 };
 use crate::engine::perf_trace as pt;
+use crate::program::body::features::PCallSite;
 use crate::program::model::calls::UpgradedBinding;
 use crate::program::model::event_param_temp::event_param_names_match;
 use crate::program::model::projection;
@@ -770,6 +771,7 @@ fn resolve_field(table_id: &str, field_name: &str, fields: &FieldIndex) -> Optio
 #[allow(clippy::too_many_arguments)]
 fn compose_roles_only(
     routine: &ModelRoutine,
+    sites: &[&PCallSite],
     base_roles: &[RecordRoleSummary],
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
@@ -788,17 +790,13 @@ fn compose_roles_only(
     // Cross-call exit-effect composition (spec §(c1b)).
     // `binding_resolution` and `callee_parameter_is_var` live in the upgraded-
     // bindings side table (from the call resolver), NOT on PCallArgumentBinding.
-    for cs in &routine.call_sites {
-        // The site's resolved callee edge and its upgraded bindings, through
-        // `site_pick` (#160 step 11b §4.6; compat form in stage A: the first
-        // edge with this call-site id in the id's unioned list, the R5 bindings).
-        let pick = projection::site_pick(
-            graph.edges_by_from.get(&routine.id).map(Vec::as_slice),
-            |e| e.callsite_id.as_deref(),
-            &cs.id,
-            upgraded_bindings,
-        );
-        let (upgraded, edge) = (pick.bindings, pick.edge);
+    // `sites`: the routine's call sites, or its id's owned sites when the id is
+    // collided (#160 step 11b §4.6).
+    for cs in sites {
+        // The site's resolved callee and its upgraded bindings, both from one
+        // row, through `site_pick` (#160 step 11b §4.6).
+        let pick = projection::site_pick(graph, &routine.id, &cs.id, upgraded_bindings);
+        let (upgraded, callee) = (pick.bindings, pick.callee);
 
         for (arg_idx, binding) in cs.argument_bindings.iter().enumerate() {
             // Get the upgraded state for this binding position.
@@ -825,7 +823,7 @@ fn compose_roles_only(
                 continue;
             }
 
-            let callee_id = match edge.map(|e| e.to.as_str()) {
+            let callee_id = match callee {
                 Some(id) => id,
                 None => continue,
             };
@@ -1275,6 +1273,34 @@ fn opaque_role(r: &RecordRoleSummary) -> RecordRoleSummary {
 // compute_summaries_v2 — the new-solver seam (l4-summary-fixpoint-redesign).
 // ---------------------------------------------------------------------------
 
+/// The base (or leaf) summaries of ONE collided id's rows, in row order, made
+/// one (#160 step 11b §4.6, #13 / R2b): `db_effects` and `uncertainties` are
+/// full-value unions (by `effect_key`, then the full value), the two flags are
+/// OR-ed, and `parameter_roles` are class P: the LAST row's, never a union (a
+/// reader takes ONE record per parameter index).
+pub(crate) fn union_summaries(rows: Vec<RoutineSummary>) -> RoutineSummary {
+    let mut db_effects = Vec::new();
+    let mut uncertainties = Vec::new();
+    let (mut in_cycle, mut unresolved) = (false, false);
+    let mut last = None;
+    for s in rows {
+        db_effects.push(s.db_effects);
+        uncertainties.push(s.uncertainties);
+        in_cycle |= s.in_recursive_cycle;
+        unresolved |= s.has_unresolved_calls;
+        last = Some((s.routine_id, s.parameter_roles));
+    }
+    let (routine_id, parameter_roles) = last.expect("a collided id has rows");
+    RoutineSummary {
+        routine_id,
+        db_effects: projection::union_by_value(db_effects, |e| e.effect_key.clone()),
+        in_recursive_cycle: in_cycle,
+        has_unresolved_calls: unresolved,
+        uncertainties: projection::union_by_value(uncertainties, |_| ()),
+        parameter_roles,
+    }
+}
+
 /// The v2 db-effect solver core (the ONLY summary path since the old Jacobi
 /// solver was retired). Computes `db_effects` / `uncertainties` /
 /// `has_unresolved_calls` via the closed-form `db_effect_solver` (effective-SCC
@@ -1347,9 +1373,11 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     summaries_census::add(&summaries_census::ROUTINES, routines.len() as u64);
     summaries_census::add(&summaries_census::SCCS, scc.sccs.len() as u64);
 
-    // #160 step 11b §4.5: #13, every input per row, then the projection
-    // (compat LAST).
+    // #160 step 11b §4.6: #13, every input per row, then the projection: the
+    // routine row, body availability, dispatch and stable id are class P (the
+    // LAST row); the base summary is the full-value union.
     let rows = projection::RowsOfId::build(routines);
+    let owned_sites = projection::owned_sites(&rows, routines);
     let _t = summaries_census::start();
     let routines_by_id: HashMap<String, &ModelRoutine> =
         projection::last_per_id(&rows, routines.iter().map(Some).collect());
@@ -1387,7 +1415,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     // Base intraprocedural summaries for NON-LEAF routines only (a leaf carries
     // its own summary; its EMPTY merged features must never overwrite it).
     let _t = summaries_census::start();
-    let base_summaries: HashMap<String, RoutineSummary> = projection::last_per_id(
+    let base_summaries: HashMap<String, RoutineSummary> = projection::merge_per_id(
         &rows,
         routines
             .iter()
@@ -1396,6 +1424,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
                     .then(|| base_intraprocedural_summary(r, &routines_by_id, fields))
             })
             .collect(),
+        union_summaries,
     );
     summaries_census::add_since(&summaries_census::BASE_SUMMARIES_NANOS, _t);
     summaries_census::add(
@@ -1474,6 +1503,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         fixed_roles,
         uncertainty_edges_by_from: &uncertainty_edges_by_from,
         dispatch_by_id: &dispatch_by_id,
+        owned_sites: &owned_sites,
     };
 
     // One workspace-wide interned effect universe, threaded across every SCC
@@ -1773,6 +1803,9 @@ pub struct SccComputeCtx<'a> {
     /// Each event publisher's dispatch bindings (#107), only for routines with
     /// a non-empty result.
     pub(crate) dispatch_by_id: &'a HashMap<String, Vec<ParamDispatch>>,
+    /// A collided id's owned call sites (#160 step 11b §4.6), read by
+    /// [`compose_roles_only`] instead of one row's sites.
+    pub(crate) owned_sites: &'a HashMap<&'a str, Vec<&'a PCallSite>>,
 }
 
 /// A diagnostic surfaced by the L4 summarize stage — presently just the JACOBI
@@ -1838,6 +1871,7 @@ fn member_roles(
     }
     compose_roles_only(
         routine,
+        &projection::sites_of(ctx.owned_sites, routine),
         base_roles,
         snapshot,
         final_map,

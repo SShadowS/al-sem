@@ -470,6 +470,7 @@ mod tests {
                     edges_by_from,
                     edges_from_order,
                     uncertainty_edges: Vec::new(),
+                    collided_site_callee: HashMap::new(),
                 },
                 HashMap::new(),
             )

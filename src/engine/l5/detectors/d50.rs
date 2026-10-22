@@ -697,6 +697,7 @@ mod tests {
                     edges_by_from: HashMap::new(),
                     edges_from_order: vec![],
                     uncertainty_edges: vec![],
+                    collided_site_callee: HashMap::new(),
                 },
                 HashMap::new(),
             )

@@ -455,11 +455,10 @@ impl<'a> OperationJoin<'a> {
             HashMap::new();
         for r in &resolved.workspace.routines {
             for op in &r.record_operations {
-                // First writer wins: operation ids are unique per workspace by
-                // construction (they embed the owning routine's id), so a
-                // collision would be a bug upstream — never silently prefer the
-                // later one, which would move the anchor without saying so.
-                by_id.entry(op.id.as_str()).or_insert((r, op));
+                // Operation ids embed the owning routine's id, so only the rows
+                // of a collided id share one; then the LAST owning row's
+                // operation is the anchor (#160 step 11b §4.6, class P).
+                by_id.insert(op.id.as_str(), (r, op));
             }
         }
         OperationJoin { by_id }

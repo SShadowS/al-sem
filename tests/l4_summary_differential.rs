@@ -1449,6 +1449,7 @@ mod fixtures {
                 edges_by_from,
                 edges_from_order,
                 uncertainty_edges: Vec::new(),
+                collided_site_callee: Default::default(),
             },
             typed_edges: Vec::new(),
         }

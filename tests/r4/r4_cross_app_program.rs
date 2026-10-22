@@ -2071,3 +2071,144 @@ fn event_graph_reads_node_of() {
         m.events.census
     );
 }
+
+/// 11b T1g (#160 11b spec §5.3, class P `scope_frames_by_routine` +
+/// `collect_dep_order_index`): a source-bearing dependency whose `Work` is
+/// declared in two arms that differ in their ops. Arm A (the first row) does
+/// its two record ops inside `if Flag then begin ... end` (a nested frame);
+/// arm B (the last row) does one record op at the top level. Today a row's ops
+/// are paired with ANOTHER row's frames (frames last-wins per id, ops from the
+/// first collected entry), so arm A's ops name a frame the entry does not hold.
+/// At B each `{id}/opN` and its scope frame come from that op's last owning
+/// row: `op0` is arm B's (its top-level frame), `op1` arm A's (the only owner),
+/// and every op's frame is in the entry. Break: today's pairing (frames LAST,
+/// ops FIRST). Stage B.
+#[test]
+fn dep_order_index_pairs_frames_and_ops_of_one_row() {
+    use al_sem::engine::deps::dep_artifact_l4::{
+        ConsumerModel, collect_dep_order_index, dep_artifacts_from_model,
+    };
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Go.al"),
+        "codeunit 50201 \"Ws Go\"\n{\n    procedure Go()\n    var\n        D: Codeunit \"Dep Ord\";\n    begin\n        D.Work(true);\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/Ord.al",
+            r#"table 50172 "Dep T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50172 "Dep Ord"
+{
+#if XSYM
+    procedure Work(Flag: Boolean)
+    var
+        T: Record "Dep T";
+    begin
+        if Flag then begin
+            T.Insert();
+            T.Modify();
+        end;
+    end;
+#else
+    procedure Work(Flag: Boolean)
+    var
+        T: Record "Dep T";
+    begin
+        T.Insert();
+    end;
+#endif
+}
+"#,
+        )],
+        "",
+    );
+    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false).expect("model");
+    let rows: Vec<usize> = x
+        .resolved
+        .workspace
+        .routines
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.name == "Work")
+        .map(|(ri, _)| ri)
+        .collect();
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let row = |ri: usize| &x.resolved.workspace.routines[ri];
+    let id = row(rows[0]).id.clone();
+    assert_eq!(row(rows[1]).id, id, "precondition: one id");
+    assert_eq!(
+        (
+            row(rows[0]).record_operations.len(),
+            row(rows[1]).record_operations.len()
+        ),
+        (2, 1),
+        "precondition: arm A has two record ops, arm B (the last row) one"
+    );
+    let arts = dep_artifacts_from_model(&x);
+    let mut consumer = ConsumerModel::with_routine_ids(
+        x.resolved
+            .workspace
+            .routines
+            .iter()
+            .map(|r| r.id.clone())
+            .collect(),
+    );
+    collect_dep_order_index(&mut consumer, &arts);
+    let entry = consumer
+        .dep_routine_order_entries
+        .get(&id)
+        .unwrap_or_else(|| panic!("precondition: Work has an order entry: {consumer:?}"));
+    let frames: Vec<i64> = entry.scope_frames.iter().map(|f| f.frame_id).collect();
+    let ops: Vec<(String, i64)> = entry
+        .operation_orders
+        .iter()
+        .map(|o| (o.operation_id.clone(), o.frame_id))
+        .collect();
+    for suffix in ["op0", "op1"] {
+        assert!(
+            ops.iter().any(|(op, _)| op == &format!("{id}/{suffix}")),
+            "{suffix} is in the entry (the union of the rows' keys): {ops:?}"
+        );
+    }
+    for (op, frame) in &ops {
+        assert!(
+            frames.contains(frame),
+            "{op}'s frame {frame} is one of the entry's frames {frames:?}: frames and ops of one row"
+        );
+    }
+    let root = entry
+        .scope_frames
+        .iter()
+        .find(|f| f.parent_frame_id < 0 || f.kind == "root")
+        .map(|f| f.frame_id);
+    assert_eq!(
+        ops.iter()
+            .find(|(op, _)| op == &format!("{id}/op0"))
+            .map(|(_, f)| *f),
+        root,
+        "op0 is arm B's (the last owning row): its top-level frame: {ops:?} {:?}",
+        entry.scope_frames
+    );
+}

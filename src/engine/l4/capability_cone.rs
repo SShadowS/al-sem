@@ -50,7 +50,7 @@ use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
 /// A `ValueSource` (internal form — table-field tableId is INTERNAL until
 /// projected). Mirrors al-sem `ValueSource`.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub enum ValueSource {
     Literal {
         value: String,
@@ -79,7 +79,7 @@ pub enum ValueSource {
 /// vector-exercised families produce are modelled with structure; the rest pass
 /// through as opaque JSON for projection (so the full corpus in Task 3 can be
 /// extended without reshaping the cone).
-#[derive(Debug, Clone, PartialEq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub enum CapabilityExtra {
     Table {
         record_variable_id: Option<String>,
@@ -110,7 +110,9 @@ pub enum CapabilityExtra {
 
 /// One normalized direct/inherited capability fact (internal form). `subject` is
 /// kept for `repKey` tie-break parity but excluded from the projection.
-#[derive(Debug, Clone, PartialEq, salsa::SalsaValue)]
+/// `Ord` (#160 step 11b §4.6): a collided id's direct facts are a full-value
+/// union, ordered by this total order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct CapabilityFact {
     pub subject: String,
     /// ⟨C1 Task 4⟩ `op` / `resource_kind` / `confidence` / `provenance` / `via`
@@ -3931,7 +3933,9 @@ pub(crate) fn build_cross_app_base(
                 .push(evt);
         }
     }
-    // #160 step 11b §4.5: R2b, per row, then the projection (compat LAST).
+    // #160 step 11b §4.6: R2b, per row, then the projection: the routine row is
+    // class P (LAST); a collided id's leaf summary, direct facts and coverage
+    // are the full-value union (coverage: the least complete).
     let rows = crate::program::model::projection::RowsOfId::build(&ws.routines);
     let routines_by_id: HashMap<String, &ModelRoutine> =
         crate::program::model::projection::last_per_id(
@@ -3968,9 +3972,19 @@ pub(crate) fn build_cross_app_base(
         facts_per_row.push(Some(facts));
     }
     let leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary> =
-        crate::program::model::projection::last_per_id(&rows, leaf_per_row);
-    let direct_coverage = crate::program::model::projection::last_per_id(&rows, coverage_per_row);
-    let direct_full = crate::program::model::projection::last_per_id(&rows, facts_per_row);
+        crate::program::model::projection::merge_per_id(
+            &rows,
+            leaf_per_row,
+            super::summary_runner::union_summaries,
+        );
+    let direct_coverage = crate::program::model::projection::merge_per_id(
+        &rows,
+        coverage_per_row,
+        crate::program::model::projection::least_complete,
+    );
+    let direct_full = crate::program::model::projection::merge_per_id(&rows, facts_per_row, |v| {
+        crate::program::model::projection::union_by_value(v, |_| ())
+    });
     drop(rows);
 
     let declared_dependencies = std::mem::take(&mut x.declared_dependencies);
@@ -4377,11 +4391,11 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     let uncertainty_reasons = callsite_local_coverage_reasons(&graph);
 
     // Per-routine direct facts (full) + direct coverage + the dedup-keyed map.
-    // #160 step 11b §4.5: R2c, per row, then the projection (compat LAST).
+    // #160 step 11b §4.6: R2c, per row, then the projection: a collided id's
+    // direct facts are the full-value union, its coverage the least complete.
     let mut routine_ids: BTreeSet<String> = BTreeSet::new();
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     let mut facts_per_row = Vec::with_capacity(ws.routines.len());
-    let mut direct_per_row = Vec::with_capacity(ws.routines.len());
     let mut cov_per_row = Vec::with_capacity(ws.routines.len());
 
     for r in &ws.routines {
@@ -4389,29 +4403,44 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
 
-        // Canonical rep per dedup key (min repKey wins) — the
-        // composeInheritedCones direct-fact dedup.
-        let byk = dedup_direct(&facts);
-        direct_per_row.push((!byk.is_empty()).then_some(byk));
-
         // Fold uncertainty-derived coverage reasons (identical to the snapshot base).
         let (status, final_reasons) =
             fold_uncertainty_reasons(status, reasons, uncertainty_reasons.get(r.id.as_str()));
 
-        cov_per_row.push(Some(DirectCoverage {
-            direct_status: status,
-            reasons: final_reasons,
-        }));
+        cov_per_row.push(Some((status, final_reasons)));
         facts_per_row.push(Some(facts));
     }
     let rows = crate::program::model::projection::RowsOfId::build(&ws.routines);
     let direct_full: HashMap<String, Vec<CapabilityFact>> =
-        crate::program::model::projection::last_per_id(&rows, facts_per_row);
-    let direct: RoutineDirectFacts =
-        crate::program::model::projection::last_per_id(&rows, direct_per_row);
-    let cov: RoutineDirectCoverage =
-        crate::program::model::projection::last_per_id(&rows, cov_per_row);
+        crate::program::model::projection::merge_per_id(&rows, facts_per_row, |v| {
+            crate::program::model::projection::union_by_value(v, |_| ())
+        });
+    let cov: RoutineDirectCoverage = crate::program::model::projection::merge_per_id(
+        &rows,
+        cov_per_row,
+        crate::program::model::projection::least_complete,
+    )
+    .into_iter()
+    .map(|(id, (direct_status, reasons))| {
+        (
+            id,
+            DirectCoverage {
+                direct_status,
+                reasons,
+            },
+        )
+    })
+    .collect();
     drop(rows);
+    // Canonical rep per dedup key (min repKey wins) — the
+    // composeInheritedCones direct-fact dedup, over the per-id facts.
+    let direct: RoutineDirectFacts = direct_full
+        .iter()
+        .filter_map(|(id, facts)| {
+            let byk = dedup_direct(facts);
+            (!byk.is_empty()).then(|| (id.clone(), byk))
+        })
+        .collect();
 
     // ⟨C1 Task 3⟩ `RawOnly` — this projection consumes the RAW cone (its
     // `sort_inherited` byte order IS the R3a-3 golden surface, Global Constraint
@@ -4578,7 +4607,8 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
     let uncertainty_reasons = callsite_local_coverage_reasons(&graph);
 
     // Per-routine direct facts (full) + uncertainty-folded direct coverage.
-    // #160 step 11b §4.5: R2c, per row, then the projection (compat LAST).
+    // #160 step 11b §4.6: R2c, per row, then the projection (full-value union;
+    // coverage the least complete).
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     let mut facts_per_row = Vec::with_capacity(ws.routines.len());
     let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
@@ -4595,9 +4625,15 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
     }
     let rows = crate::program::model::projection::RowsOfId::build(&ws.routines);
     let direct_coverage: HashMap<String, (String, Vec<String>)> =
-        crate::program::model::projection::last_per_id(&rows, coverage_per_row);
+        crate::program::model::projection::merge_per_id(
+            &rows,
+            coverage_per_row,
+            crate::program::model::projection::least_complete,
+        );
     let direct_full: HashMap<String, Vec<CapabilityFact>> =
-        crate::program::model::projection::last_per_id(&rows, facts_per_row);
+        crate::program::model::projection::merge_per_id(&rows, facts_per_row, |v| {
+            crate::program::model::projection::union_by_value(v, |_| ())
+        });
     drop(rows);
 
     drop(_s1);
@@ -4751,7 +4787,8 @@ pub fn compute_r3a3_real_matrix(resolved: &Model) -> R3a3RealMatrix {
     }
 
     // Per-routine SET of direct-fact dedup keys (inheritedFactKey).
-    // #160 step 11b §4.5: R2c, per row, then the projection (compat LAST).
+    // #160 step 11b §4.6: R2c, per row, then the projection (a collided id's
+    // key sets are unioned).
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     let mut keys_per_row = Vec::with_capacity(ws.routines.len());
     for r in &ws.routines {
@@ -4764,9 +4801,10 @@ pub fn compute_r3a3_real_matrix(resolved: &Model) -> R3a3RealMatrix {
         keys_per_row.push((!keys.is_empty()).then_some(keys));
     }
     let direct_keys: HashMap<String, BTreeSet<String>> =
-        crate::program::model::projection::last_per_id(
+        crate::program::model::projection::merge_per_id(
             &crate::program::model::projection::RowsOfId::build(&ws.routines),
             keys_per_row,
+            |sets| sets.into_iter().flatten().collect(),
         );
 
     let empty_edges: Vec<TypedOutEdge> = Vec::new();
@@ -6407,6 +6445,7 @@ codeunit 50111 "Cell Calls"
                 ue("B", "external-target", "b1"),
                 ue("Orphan", "ambiguous-overload", "o1"),
             ],
+            collided_site_callee: HashMap::new(),
         };
         let set = |ks: &[&str]| {
             ks.iter()
