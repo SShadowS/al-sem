@@ -398,8 +398,22 @@ NO finding for `L`'s loop (the walk enters `Wide`, spends the 500-node budget, a
 `Db` branch: `NodeBudgetCut`). A control variant with `Wide` calling one `A1` asserts the d2
 finding IS emitted (the walk enters `Wide` and still reaches `Db`). Break: delete the fold call
 in `det_cone_inputs` → `Wide` is `No`, pruned, and the main variant emits the d2 finding →
-fails. The test's doc says it pins a known precision cost; if F6 fires, its main assertion
-flips to "finding emitted".
+fails. The test's doc says it pins a known precision cost.
+
+**T9 if F6 fires (round 3, R1-05).** F6 makes the main variant emit the finding, so the
+variants and their mutations become:
+- **T9-main** (the fixture above): the d2 finding IS emitted. Mutation: remove F6's `Yes`-first
+  ordering in d2's `expand` (Edit) → the walk enters `Wide` first, spends the budget, and the
+  finding is lost → fails. This pins F6's use.
+- **T9-nested** (sol's shape, the residual F6 cannot fix): `S` calls `A` then `Db`; `A` calls
+  `Deep` (a `Yes` chain whose record operation sits below depth 20, so it is depth-cut and
+  gives no `Complete` path) and `Wide` (the 500 terminal-free `Unknown` callees). F6 orders
+  `A`'s own edges `Deep` then `Wide`, so the walk still spends the budget inside `A` before it
+  returns to `Db`. Asserts: at the head the finding is NOT emitted (`NodeBudgetCut`).
+  Mutation: delete the fold call in `det_cone_inputs` → `Wide` is `No`, pruned, the walk
+  reaches `Db`, the finding is emitted → fails. This pins the fold's use in d2 under F6, and it
+  is the stated residual of F6's residual rule.
+- The control variant is unchanged.
 
 **The `O(L)` fixture is not compilable AL** (a Codeunit is neither a `Text` nor an
 implementation of the interface). It works because our overload resolver is lenient; the
@@ -420,7 +434,7 @@ not a fold kind (P7), and the prototype left it green. Predicted unchanged, unde
 | A5 | Snapshot-derived output byte-identical | single-app: the A4 goldens (r3a3, cli-b fingerprint/snapshot/diff/prove) and CDO `fingerprint` bytes, parent vs head; cross-app: CDO `digest` `coverage` key on every root of §8 step 4, parent vs head | 0 bytes moved in those keys (prove's and digest's `transactionContext` are §3.2 readers, not A5) | yes (prototype: fingerprint equal) |
 | A6 | Resolution untouched | CDO `aldump --program-call-graph-stats` SHA, parent vs head | equal (`c032c8db…` on the parent) | yes |
 | A7 | CDO ratchets | `bash scripts/cdo-gate` | exit 0 | yes |
-| A8 | CDO moves triaged | `cdo-measure` comp; explicit d45; `--single-app`; the span enumeration and digest/prove runs (§8); `triage-findings` with §7's verdicts | each default-mode detector ≤ 30 % FP (§7's gating verdict) on its added findings at each scope, or F1/F2 applied; no d2 finding lost, or F6 applied; fanout, `transactionContext` and d45 text verdicts reported, not gated (§7) | yes |
+| A8 | CDO moves triaged | `cdo-measure` comp; explicit d45; `--single-app`; the span enumeration and digest/prove runs (§8); `triage-findings` with §7's verdicts | each default-mode detector ≤ 30 % FP (§7's gating verdict) on its added findings at each scope, or F1/F2 applied; no d2 finding lost; if one is, F6 applied AND every lost d2 finding restored on a CDO re-run, each residual loss recorded under F6's residual rule (stated limit + the d2 budget discovery issue); fanout, `transactionContext` and d45 text verdicts reported, not gated (§7) | yes |
 | A9 | Policy | CDO `policy check`, bundled policy, both universes: byte-identical to the parent. Proxy for "the owner's policy" (Q1): `ws-policy-custom`, both universes: deltas of findings and `routinesSkippedCoverage` reported; a seeded sample of 30 routines that went `complete` → `partial` and were dropped from `cust-coverage-gate` is checked to reach a four-kind edge | as stated | **partial**: CDO has no owner policy; the bundled one cannot move (§3.4) |
 | A10 | L4-solve fold gone | `grep -rn compute_uncertainty_coverage_reasons src` | 0 hits (code and the two docs of §4.3) | yes |
 
@@ -574,9 +588,22 @@ the background, output to a log file; never piped through `tail`.
 - **F6 (the head loses a d2 finding on CDO, or a d2 r4 golden moves).** Each lost finding is
   checked to be a `NodeBudgetCut` caused by a newly entered `Unknown` branch (§3.2). Then d2's
   `expand` orders a node's admitted edges `Yes` first, `Unknown` after, stable within each
-  class, so a DB branch is walked before a terminal-free one; T9's main assertion flips to
-  "finding emitted"; evidence-path moves this causes in other d2 findings are explained under
-  F5. (d1 cannot move, §3.2.)
+  class, so a DB branch is walked before a terminal-free one; T9 becomes T9-main and
+  T9-nested (§5); evidence-path moves this causes in other d2 findings are explained under F5.
+  **Acceptance is the outcome, not the change (R3-01):** after F6, CDO is measured again, and
+  every d2 finding the head had lost must be back (same id and fingerprint as the parent).
+  Local ordering does not guarantee it (T9-nested's shape: a depth-cut `Yes` branch followed by
+  terminal-free `Unknown` callees inside one node still spends the shared budget). **Residual
+  rule, pre-stated:** each d2 finding still lost after F6 is recorded in the spec's §7 and the
+  ledger as a stated limit, with its repro, and one discovery issue is filed: "d2: replace the
+  budgeted `walk_evidence` with budget-free reachability, as d1 did" (`d1.rs:8-31`: d1 left the
+  same 500-node walker because the budget "silently under-found deep terminals", defect D-A).
+  The step keeps the fold. Why this and not "d2 reads the unfolded presence for its prune":
+  the fold's `partial` is the correct coverage (§1), and the loss is caused by d2's shared
+  budget, which already loses findings without the fold whenever a real DB branch is large
+  (the same D-A defect). Giving d2 an unfolded presence would bring back a second coverage
+  answer in the context (a second direct-coverage map and cone result kept only for d2),
+  which is the two-policy split this step removes. (d1 cannot move, §3.2.)
 - **F3 (any detector has > 300 added findings in one mode and scope, or the head's P2 count
   exceeds 50 % of primary routines cross-app).** Triage a seeded random sample of 30 per
   detector (seed recorded) instead of every finding; the rule applies to the sample. (The
