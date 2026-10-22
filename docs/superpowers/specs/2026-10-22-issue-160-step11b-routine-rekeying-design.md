@@ -222,6 +222,15 @@ The class decides what A keys per row, and what B's projection does. Paths are u
 | **R** reader-side finding choice over rows (11B-3: readers are not re-keyed) | `d1_reach.rs:836-860` groups, `d1_dataflow.rs:3164-3186` / `:3308-3322`, `d1_cohort.rs:575-590`; `detectors/d2.rs:253-261`, `:302-533`; `d3.rs:161-624`; `d13.rs:41-94`; `d18.rs:58-129`; `d47.rs:384-452`, `d49.rs:128-150`, `d51.rs:172-204`; `engine/gate/run.rs:565, :576, :617` `kept_ids` | FW / any | unchanged | **unchanged**: they read projected inputs and keep their own first-row choice; listed in the step-6/reader discovery (§12) |
 | kept | R7 the solver interner (`engine/l4/routine_interner.rs:96-108`); R8 `ConeDerivedStore` (one per SCC member: Tarjan skips repeated ids, `scc.rs:69-70`); R3a summaries drain (`detector_context.rs:1385-1496`): with the cone per id it only files one per-id result | — | `SolveIx` rename / unchanged | fed by the projection |
 
+**F6 additions (implementation and final panel round 1):** `engine/l5/pending_writes.rs`
+`effects` (class P: a collided seed row counts only the sited direct facts it makes itself;
+its id's facts are the union); the snapshot's call-site resolutions (`derive_callsite_resolutions`)
+and operation index with its frame table (`derive_operation_evidence`,
+`derive_routine_order_frames`: class P per key, the frame table holding every row's frames,
+shifted per row, so a K copy's `order` and a P op's `order` both name their own row's frames);
+the dependency order index's return summaries (class P per id); the checked-run seeds (#16)
+are the union of the rows that produce one, each seeded from the last such row.
+
 Downstream only (no rule of their own): `d1_graph.rs:134`, `:261`, `:293`; `ordering_inter.rs`
 (keyed over the snapshot's already-grouped `callsite_resolutions`); `unresolved_cone.rs:118`,
 `:131`, `:184`; `gate/diff/*`; `baseline.rs:94`; the event-id keyed detector maps; d8/d50 span

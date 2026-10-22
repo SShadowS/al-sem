@@ -187,7 +187,8 @@ impl std::ops::DerefMut for CombinedGraph {
 /// cannot read the Cone payload.
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct PrimaryGraph {
-    /// Sorted internal routine ids.
+    /// Sorted internal routine ids, each once (a collided id's rows are one
+    /// node, #160 step 11b §4.6).
     pub nodes: Vec<String>,
     /// from-id → its edgeSortKey-sorted edge list.
     pub edges_by_from: HashMap<String, Vec<CombinedEdge>>,
@@ -204,19 +205,6 @@ pub struct PrimaryGraph {
     /// that row's site has none). Empty when no id is collided; a single-row
     /// id's sites are never here.
     pub collided_site_callee: HashMap<String, Option<String>>,
-}
-
-impl PrimaryGraph {
-    /// `nodes` with each id once (class K, spec §4.6): `nodes` is sorted and
-    /// holds a collided id once per row, so a reader walking it would list the
-    /// id's edges once per row.
-    pub fn distinct_nodes(&self) -> impl Iterator<Item = &String> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .filter(|&(i, n)| i == 0 || self.nodes[i - 1] != *n)
-            .map(|(_, n)| n)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +480,9 @@ pub(crate) fn assemble(
     // --- assemble: sorted nodes, sorted per-from edge lists, sorted uncertainties ---
     let mut nodes: Vec<String> = workspace.routines.iter().map(|r| r.id.clone()).collect();
     nodes.sort();
+    // A collided id is one node (class K, #160 step 11b §4.6): its rows are one
+    // routine to every reader (the reverse graph, r3a1, d2, the cone, the SCCs).
+    nodes.dedup();
 
     let mut edges_by_from: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
     // Track the first-appearance order of `from` keys (mirrors al-sem JS Map insertion
@@ -539,7 +530,7 @@ pub(crate) fn assemble(
     }
     uncertainty_edges.dedup_by(|a, b| a == b && rows.is_collided(&a.from));
 
-    let typed_edges = build_typed_edges(workspace, call_edges, event_graph);
+    let typed_edges = build_typed_edges(workspace, call_edges, event_graph, &rows);
 
     CombinedGraph {
         primary: PrimaryGraph {
@@ -643,6 +634,7 @@ fn build_typed_edges(
     workspace: &ModelEntities,
     call_edges: &[CallEdge],
     event_graph: &EventGraph,
+    rows: &crate::program::model::projection::RowsOfId<'_>,
 ) -> Vec<TypedEdge> {
     // One pass over the routines:
     // - callsite id → &PCallSite (for callee details);
@@ -692,9 +684,10 @@ fn build_typed_edges(
             let group = interface_edges_by_callsite
                 .entry(ce.callsite_id.clone())
                 .or_default();
-            // R1c (#160 step 11b §4.6): one candidate per distinct implementer,
-            // so a collided id's rows do not count one implementer twice.
-            if !group.iter().any(|c| c.to == ce.to) {
+            // R1c (#160 step 11b §4.6): a collided id's site keeps one candidate
+            // per distinct implementer, so its rows do not count one implementer
+            // twice. A single-row id's site is untouched.
+            if !rows.is_collided(&ce.from) || !group.iter().any(|c| c.to == ce.to) {
                 group.push(ce);
             }
         }
@@ -1222,7 +1215,7 @@ pub fn project_r3a1(
 
     // Combined edges: al-sem's emission order — sorted nodes → per-from sorted edges.
     let mut combined_edges: Vec<PCombinedEdge> = Vec::new();
-    for node in graph.distinct_nodes() {
+    for node in &graph.nodes {
         if let Some(list) = graph.edges_by_from.get(node) {
             for e in list {
                 combined_edges.push(project_combined_edge(e, &map, &event_by_id));

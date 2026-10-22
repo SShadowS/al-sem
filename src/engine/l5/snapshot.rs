@@ -1140,6 +1140,85 @@ fn compute_routine_order(r: &ModelRoutine) -> RoutineOrder {
     }
 }
 
+/// The rows of the snapshot's COLLIDED ids (#160 step 11b §4.6; spec §3.2
+/// #20): which row owns each of their call sites (class P), and where each
+/// row's scope frames sit in the id's ONE frame table. Every row's frames are
+/// kept (the call-site evidence keeps every row's copy, class K, and each copy's
+/// `order` names its own row's frames), in blocks ordered by the row's
+/// declaration anchor, then row order, so the table does not depend on row
+/// order; each row's frame ids are shifted past the blocks before it. A
+/// single-row id is in neither map: its own frames, unshifted.
+struct CollidedRows<'a> {
+    /// Call-site id -> its LAST OWNING row.
+    site_owner: HashMap<&'a str, crate::program::model::ix::RoutineIx>,
+    /// Row -> the shift its frame ids take in its id's table.
+    frame_offset: HashMap<usize, i64>,
+    /// Collided id -> its one frame table.
+    frames: HashMap<&'a str, Vec<ScopeFrame>>,
+}
+
+impl<'a> CollidedRows<'a> {
+    fn build(routines: &'a [ModelRoutine]) -> Self {
+        use crate::program::model::projection::{RowsOfId, site_owners};
+        let rows = RowsOfId::build(routines);
+        let site_owner = site_owners(&rows, routines);
+        let mut frame_offset = HashMap::new();
+        let mut frames = HashMap::new();
+        for (id, ixs) in rows.collided() {
+            let mut per_row: Vec<(usize, Vec<ScopeFrame>)> = ixs
+                .iter()
+                .map(|ix| {
+                    (
+                        ix.get(),
+                        compute_routine_order(&routines[ix.get()]).scope_frames,
+                    )
+                })
+                .filter(|(_, f)| !f.is_empty())
+                .collect();
+            per_row.sort_by_key(|(ri, _)| {
+                let a = &routines[*ri].source_anchor;
+                (a.source_unit_id.clone(), a.start_line, a.start_column, *ri)
+            });
+            let (mut table, mut next) = (Vec::new(), 0);
+            for (ri, fs) in per_row {
+                let off = next;
+                frame_offset.insert(ri, off);
+                for mut f in fs {
+                    f.frame_id += off;
+                    if f.parent_frame_id >= 0 {
+                        f.parent_frame_id += off;
+                    }
+                    next = next.max(f.frame_id + 1);
+                    table.push(f);
+                }
+            }
+            frames.insert(id, table);
+        }
+        CollidedRows {
+            site_owner,
+            frame_offset,
+            frames,
+        }
+    }
+
+    /// Row `ri`'s `order`, its frame id shifted into its id's table.
+    fn order(&self, ri: usize, order: Option<OperationOrder>) -> Option<OperationOrder> {
+        let off = self.frame_offset.get(&ri).copied().unwrap_or(0);
+        order.map(|mut o| {
+            if o.frame_id >= 0 {
+                o.frame_id += off;
+            }
+            o
+        })
+    }
+
+    /// Whether row `ri` is the LAST OWNING row of call site `cs` (always, for a
+    /// single-row id's site).
+    fn owns_site(&self, ri: usize, cs: &str) -> bool {
+        self.site_owner.get(cs).is_none_or(|o| o.get() == ri)
+    }
+}
+
 // ===========================================================================
 // compose_snapshot — the orchestrator. Runs every consumed-core deriver over the
 // source-only R3a base, then assembles in fixed key order.
@@ -1162,17 +1241,18 @@ pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> Ca
     crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
 
+    let collided = CollidedRows::build(&base.ws_routines);
     let identities = derive_identity_table(resolved);
     let capability_facts = derive_capability_facts(base);
     let typed_edges = derive_typed_edges(base);
-    let operation_index = derive_operation_evidence(base);
-    let callsite_index = derive_callsite_evidence(base);
-    let callsite_resolutions = derive_callsite_resolutions(base, &typed_edges);
+    let operation_index = derive_operation_evidence(base, &collided);
+    let callsite_index = derive_callsite_evidence(base, &collided);
+    let callsite_resolutions = derive_callsite_resolutions(base, &typed_edges, &collided);
     let analysis_gaps = derive_analysis_gaps(base);
     let coverage = derive_coverage(base);
     let event_declarations = derive_event_declarations(base);
     let root_classifications = derive_root_classifications(resolved, base);
-    let routine_order_frames = derive_routine_order_frames(base);
+    let routine_order_frames = derive_routine_order_frames(base, &collided);
     let pd_solution = derive_pd_arena(base, &typed_edges, &capability_facts);
 
     let snapshot = CapabilitySnapshot {
@@ -1749,7 +1829,10 @@ fn snap_combined_value_source(
 // Sort by operationId (al-sem). M8: operationId = `r0/<lowerhex>/opN` → ordinal-safe.
 // ---------------------------------------------------------------------------
 
-fn derive_operation_evidence(base: &R3a3SourceBase) -> Vec<SnapshotOperationEvidence> {
+fn derive_operation_evidence(
+    base: &R3a3SourceBase,
+    collided: &CollidedRows<'_>,
+) -> Vec<SnapshotOperationEvidence> {
     use std::collections::BTreeSet;
 
     // Referenced op ids = witnessOperationId of any direct ∪ inherited fact.
@@ -1785,7 +1868,9 @@ fn derive_operation_evidence(base: &R3a3SourceBase) -> Vec<SnapshotOperationEvid
     let mut by_id: std::collections::BTreeMap<String, SnapshotOperationEvidence> =
         std::collections::BTreeMap::new();
 
-    for r in &base.ws_routines {
+    // A collided id's op is its LAST OWNING row's (the later row overwrites),
+    // with that row's `order`, shifted into the id's one frame table.
+    for (ri, r) in base.ws_routines.iter().enumerate() {
         let stable = stable_routine_id(&r.id, &base.routine_to_stable);
         // Re-stamp op/callsite order (L3 assembly does not).
         let order = compute_routine_order(r);
@@ -1811,7 +1896,7 @@ fn derive_operation_evidence(base: &R3a3SourceBase) -> Vec<SnapshotOperationEvid
                 end_column: a.end_column,
                 display_text: op.kind.clone(),
                 control_context: op.control_context.clone(),
-                order: op.order,
+                order: collided.order(ri, op.order),
                 under_asserterror: if op.under_asserterror == Some(true) {
                     Some(true)
                 } else {
@@ -1848,7 +1933,10 @@ fn derive_operation_evidence(base: &R3a3SourceBase) -> Vec<SnapshotOperationEvid
                 end_column: a.end_column,
                 display_text: display,
                 control_context: matching.and_then(|op| op.control_context.clone()),
-                order: matching.and_then(|_| op_order_by_id.get(ro.id.as_str()).map(|o| **o)),
+                order: collided.order(
+                    ri,
+                    matching.and_then(|_| op_order_by_id.get(ro.id.as_str()).map(|o| **o)),
+                ),
                 under_asserterror: None,
             };
             by_id.insert(ro.id.clone(), entry);
@@ -1867,7 +1955,10 @@ fn derive_operation_evidence(base: &R3a3SourceBase) -> Vec<SnapshotOperationEvid
 // M8: callsiteId = `r0/<lowerhex>/csN` → ordinal-safe.
 // ---------------------------------------------------------------------------
 
-fn derive_callsite_evidence(base: &R3a3SourceBase) -> Vec<SnapshotCallsiteEvidence> {
+fn derive_callsite_evidence(
+    base: &R3a3SourceBase,
+    collided: &CollidedRows<'_>,
+) -> Vec<SnapshotCallsiteEvidence> {
     use std::collections::BTreeSet;
 
     let mut referenced: BTreeSet<String> = BTreeSet::new();
@@ -1898,7 +1989,7 @@ fn derive_callsite_evidence(base: &R3a3SourceBase) -> Vec<SnapshotCallsiteEviden
     }
 
     let mut out: Vec<SnapshotCallsiteEvidence> = Vec::new();
-    for r in &base.ws_routines {
+    for (ri, r) in base.ws_routines.iter().enumerate() {
         let stable = stable_routine_id(&r.id, &base.routine_to_stable);
         let order = compute_routine_order(r);
         for cs in &order.call_sites {
@@ -1916,7 +2007,7 @@ fn derive_callsite_evidence(base: &R3a3SourceBase) -> Vec<SnapshotCallsiteEviden
                 end_column: a.end_column,
                 callee_display: render_callee(&cs.callee),
                 control_context: cs.control_context.clone(),
-                order: cs.order,
+                order: collided.order(ri, cs.order),
                 under_asserterror: if cs.under_asserterror == Some(true) {
                     Some(true)
                 } else {
@@ -1956,6 +2047,7 @@ fn map_dispatch_kind(dk: &str) -> &'static str {
 fn derive_callsite_resolutions(
     base: &R3a3SourceBase,
     typed_edges: &[SnapshotGraphEdge],
+    collided: &CollidedRows<'_>,
 ) -> Vec<SnapshotCallsiteResolution> {
     use std::collections::BTreeMap;
 
@@ -1985,11 +2077,16 @@ fn derive_callsite_resolutions(
     }
 
     // callsiteId → calleeDisplay / resultConsumed / underAsserterror from callSites.
+    // A collided id's site reads every piece from its LAST OWNING row (#160 step
+    // 11b §4.6, class P), as its representative edge below does.
     let mut callee_display: HashMap<String, String> = HashMap::new();
     let mut result_consumed: HashMap<String, bool> = HashMap::new();
     let mut under_asserterror: HashMap<String, bool> = HashMap::new();
-    for r in &base.ws_routines {
+    for (ri, r) in base.ws_routines.iter().enumerate() {
         for cs in &r.call_sites {
+            if !collided.owns_site(ri, &cs.id) {
+                continue;
+            }
             callee_display.insert(cs.id.clone(), display_of_callee(&cs.callee));
             if let Some(rc) = cs.result_consumed {
                 result_consumed.insert(cs.id.clone(), rc);
@@ -2022,7 +2119,19 @@ fn derive_callsite_resolutions(
 
     for key in &group_order {
         grouped_callsites.insert(key.clone());
-        let group_edges = &groups[key];
+        let mut group_edges = &groups[key];
+        // A collided site: its LAST OWNING row's edges, when that row has any.
+        let owned: Vec<&crate::program::model::calls::CallEdge>;
+        if let Some(&o) = collided.site_owner.get(key.as_str()) {
+            owned = group_edges
+                .iter()
+                .copied()
+                .filter(|e| e.from_ix == o)
+                .collect();
+            if !owned.is_empty() {
+                group_edges = &owned;
+            }
+        }
         let representative = group_edges[0];
         let callsite_key = representative.callsite_id.clone();
         let from = stable_routine_id(&representative.from, map);
@@ -2323,10 +2432,16 @@ fn is_dependency_role(_r: &ModelRoutine) -> bool {
 fn derive_coverage(base: &R3a3SourceBase) -> Vec<SnapshotCoverageRecord> {
     let map = &base.routine_to_stable;
     let mut out: Vec<SnapshotCoverageRecord> = Vec::new();
+    // The cone is per id, so the rows of a collided id would emit equal copies:
+    // each id is emitted once (class K, #160 step 11b §4.6).
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for r in &base.ws_routines {
         let Some(cone) = base.cones.get(&r.id) else {
             continue;
         };
+        if !seen.insert(r.id.as_str()) {
+            continue;
+        }
         let cov = &cone.coverage;
         let mut reasons = cov.reasons.clone();
         reasons.sort();
@@ -2480,18 +2595,25 @@ fn derive_root_classifications(
 // HashMap iteration). M8: stable routine id keys → ordinal-safe.
 // ---------------------------------------------------------------------------
 
-fn derive_routine_order_frames(base: &R3a3SourceBase) -> Option<RoutineOrderFrames> {
+fn derive_routine_order_frames(
+    base: &R3a3SourceBase,
+    collided: &CollidedRows<'_>,
+) -> Option<RoutineOrderFrames> {
     use std::collections::BTreeMap;
     // BTreeMap keyed by stable routine id → sorted key order (M8: stable id ⇒
     // ordinal-safe; M1: BTreeMap iteration is sorted, not hash-ordered).
     let mut entries: BTreeMap<String, Vec<ScopeFrame>> = BTreeMap::new();
     for r in &base.ws_routines {
-        let order = compute_routine_order(r);
-        if order.scope_frames.is_empty() {
+        // A collided id's one table holds every row's frames (`CollidedRows`).
+        let frames = match collided.frames.get(r.id.as_str()) {
+            Some(table) => table.clone(),
+            None => compute_routine_order(r).scope_frames,
+        };
+        if frames.is_empty() {
             continue;
         }
         let stable = stable_routine_id(&r.id, &base.routine_to_stable);
-        entries.insert(stable, order.scope_frames);
+        entries.insert(stable, frames);
     }
     if entries.is_empty() {
         return None;

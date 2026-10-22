@@ -41,7 +41,7 @@ use crate::engine::l5::pending_writes::{
     ForwardSites, Pending, PendingCtx, forward_sites, is_checked_run, pending_before, toward_sites,
 };
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
-use crate::program::body::features::PCallee;
+use crate::program::body::features::{PCallSite, PCallee};
 use crate::program::model::workspace::ModelRoutine;
 
 const MAX_DEPTH: usize = 50;
@@ -371,6 +371,14 @@ struct SpanScratch {
     census: TxSpanCensus,
 }
 
+/// A CHECKED `Codeunit.Run` (its return value is used): an implicit commit
+/// boundary. Codeunit.Run only; `objectRunReturnUsed === true` only (the
+/// STRICT affirmative predicate). NOT Page.Run / Report.Run.
+fn is_checked_codeunit_run(cs: &PCallSite) -> bool {
+    matches!(&cs.callee, PCallee::ObjectRun { object_kind, .. } if object_kind == "Codeunit")
+        && cs.object_run_return_used == Some(true)
+}
+
 /// What the seed routine's parameters must be for `site` (a Commit, or a
 /// checked run) to run.
 fn seed_reqs(
@@ -379,7 +387,7 @@ fn seed_reqs(
     inputs: &SpanInputs<'_>,
     scratch: &mut SpanScratch,
 ) -> Vec<Req> {
-    let frame = scratch.frames.entry(r.id.clone()).or_insert_with(|| {
+    let compute = || {
         let callees_at = |cs_id: &str| -> Vec<&str> {
             inputs
                 .fwd
@@ -391,11 +399,26 @@ fn seed_reqs(
                 .collect()
         };
         frame_guards_over(r, callees_at, inputs.routine_by_id)
-    });
-    frame
-        .as_ref()
-        .and_then(|f| f.by_site.get(site).cloned())
-        .unwrap_or_default()
+    };
+    let reqs = |frame: &Option<FrameGuards>| {
+        frame
+            .as_ref()
+            .and_then(|f| f.by_site.get(site).cloned())
+            .unwrap_or_default()
+    };
+    // The id's cached frame is its row in `routine_by_id` (the LAST row, class
+    // G, which `backward_cone` reads). An earlier row of a collided id that
+    // seeds (it owns the Commit or checked run) reads its OWN frame, uncached,
+    // so its site's requirements come from the row that has the site (#160 step
+    // 11b §4.6).
+    if inputs
+        .routine_by_id
+        .get(r.id.as_str())
+        .is_some_and(|&last| !std::ptr::eq(last, r))
+    {
+        return reqs(&compute());
+    }
+    reqs(scratch.frames.entry(r.id.clone()).or_insert_with(compute))
 }
 
 fn span_template<'c>(
@@ -494,8 +517,21 @@ pub fn compute_transaction_spans(
                         .map(move |os| (os.id.as_str(), r))
                 }),
         );
-    // #16: a collided id's checked-run site seeds once, from its last owning row.
-    let site_owners = crate::program::model::projection::site_owners(&rows, routines);
+    // #16: a collided id's checked-run seeds are the union of its rows' seeds,
+    // one span per call-site id, seeded from the LAST row whose site IS a
+    // checked run (as `seed_of_commit` picks among the rows that commit).
+    let checked_run_seed: HashMap<&str, &ModelRoutine> =
+        crate::program::model::projection::last_per_key_pairs(
+            routines
+                .iter()
+                .filter(|r| is_primary(r, dep_routine_ids))
+                .flat_map(|r| {
+                    r.call_sites
+                        .iter()
+                        .filter(|cs| is_checked_codeunit_run(cs))
+                        .map(move |cs| (cs.id.as_str(), r))
+                }),
+        );
     let commits_per_row = routines
         .iter()
         .map(|r| {
@@ -619,22 +655,15 @@ pub fn compute_transaction_spans(
     // --- §B: synthetic seeds for CHECKED codeunit-run implicit commits ---
     // Codeunit.Run only; objectRunReturnUsed === true only (the STRICT affirmative
     // predicate). NOT Page.Run / Report.Run.
-    for (ri, r) in routines.iter().enumerate() {
+    for r in routines {
         if !is_primary(r, dep_routine_ids) {
             continue;
         }
-        let ix = crate::program::model::ix::RoutineIx::of(ri);
         for cs in &r.call_sites {
-            if site_owners.get(cs.id.as_str()).is_some_and(|&o| o != ix) {
-                continue;
-            }
-            let PCallee::ObjectRun { object_kind, .. } = &cs.callee else {
-                continue;
-            };
-            if object_kind != "Codeunit" {
-                continue;
-            }
-            if cs.object_run_return_used != Some(true) {
+            if !checked_run_seed
+                .get(cs.id.as_str())
+                .is_some_and(|&seed| std::ptr::eq(seed, r))
+            {
                 continue;
             }
             let reqs = seed_reqs(r, &cs.id, &inputs, &mut scratch);

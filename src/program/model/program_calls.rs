@@ -1231,6 +1231,14 @@ fn key_join<'a>(
                 continue;
             };
             consumed.insert(k);
+            // A paired row always has a node (#160 step 11b §4.2, R1-20): only a
+            // dependency row of an app the graph does not know has none, and no
+            // program site keys to its file, so the key join cannot pair it.
+            debug_assert!(
+                row_nodes.node_of[ri].is_some(),
+                "call site {} is paired, but its row has no node",
+                cs.id
+            );
             if is_operation(ce) {
                 shape += 1;
                 unmatched(

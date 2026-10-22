@@ -148,9 +148,15 @@ impl<'a> PolicyModel<'a> {
     ) -> Self {
         let objects_by_id: HashMap<&str, &ModelObject> =
             objects.iter().map(|o| (o.id.as_str(), o)).collect();
-        let root_kinds_by_routine_id: HashMap<&str, &[String]> = root_classifications
-            .iter()
-            .map(|rc| (rc.routine_id.as_str(), rc.kinds.as_slice()))
+        // One classification per id (class P, #160 step 11b §4.6).
+        let root_kinds_by_routine_id: HashMap<&str, &[String]> =
+            crate::engine::root_classification::classification_per_id(
+                root_classifications,
+                routines,
+                objects,
+            )
+            .into_iter()
+            .map(|(id, rc)| (id, rc.kinds.as_slice()))
             .collect();
         // G-5: REAL table wins an id collision with a tableextension stub.
         let tables_by_id: HashMap<&str, &ModelTable> =

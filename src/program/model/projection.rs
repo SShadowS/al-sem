@@ -227,8 +227,10 @@ pub fn least_complete(per_row: Vec<(String, Vec<String>)>) -> (String, Vec<Strin
 }
 
 /// Class P, per key: over items emitted in row order, the LAST item per key
-/// wins, i.e. the LAST OWNING row's. Points: the detector context's
-/// `call_site_by_id` and `root_classifications_by_routine`.
+/// wins, i.e. the LAST OWNING row's. Point: the detector context's
+/// `call_site_by_id` (`root_classifications_by_routine` reads
+/// `root_classification::classification_per_id`: its input is sorted by value,
+/// not emitted in row order).
 pub fn last_per_key<K: std::hash::Hash + Eq, T>(
     items: impl IntoIterator<Item = T>,
     key: impl Fn(&T) -> K,

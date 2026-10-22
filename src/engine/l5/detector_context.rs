@@ -1679,9 +1679,14 @@ pub(crate) fn build_detector_artifacts(
     let root_classifications_by_routine: HashMap<
         String,
         crate::engine::root_classification::RootClassification,
-    > = projection::last_per_key(resolved.root_classifications.iter().cloned(), |rc| {
-        rc.routine_id.clone()
-    });
+    > = crate::engine::root_classification::classification_per_id(
+        &resolved.root_classifications,
+        &resolved.workspace.routines,
+        &resolved.workspace.objects,
+    )
+    .into_iter()
+    .map(|(id, rc)| (id.to_string(), rc.clone()))
+    .collect();
 
     // ⟨substrate census⟩ `ALSEM_UNCERTAINTY_CENSUS=1` — see `UncertaintyIndex::emit_census`.
     uncertainties.emit_census(&uncertainties_by_node);

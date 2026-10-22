@@ -161,15 +161,22 @@ fn effects(
         // A collided id's direct facts are the union of its rows' facts, and
         // its rows share site ids: a sited fact is this row's only if the row
         // itself makes it (#160 step 11b §4.6, every piece of a key from one row).
-        let own = collided
-            .contains(r.id.as_str())
-            .then(|| crate::engine::l4::capability_cone::direct_facts_for_routine(r, &[]).0);
+        // (Only a collided id's rows compute it, sorted for the lookup.)
+        let own = collided.contains(r.id.as_str()).then(|| {
+            let mut own = crate::engine::l4::capability_cone::direct_facts_for_routine(r, &[]).0;
+            own.sort();
+            own
+        });
         for f in &s.capability_facts_direct {
             let at = f
                 .witness_operation_id
                 .as_ref()
                 .or(f.witness_callsite_id.as_ref());
-            if at.is_some() && own.as_ref().is_some_and(|own| !own.contains(f)) {
+            if at.is_some()
+                && own
+                    .as_ref()
+                    .is_some_and(|own| own.binary_search(f).is_err())
+            {
                 continue;
             }
             // A fact with no site is the routine's own, at its entry (a

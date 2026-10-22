@@ -61,11 +61,13 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
         let rows = super::projection::RowsOfId::build(routines);
         let index: HashMap<&str, usize> =
             super::projection::last_per_id_borrowed(&rows, (0..routines.len()).map(Some).collect());
-        let resolved_sites: HashSet<&str> = calls
+        // Resolved per `(row, site)`: the rows of a collided id share site ids, so
+        // one row's resolved site must not vouch for another row's.
+        let resolved_sites: HashSet<(usize, &str)> = calls
             .edges
             .iter()
             .filter(|e| e.to.is_some())
-            .map(|e| e.callsite_id.as_str())
+            .map(|e| (e.from_ix.get(), e.callsite_id.as_str()))
             .collect();
         let mut raises: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
         for e in &calls.edges {
@@ -80,11 +82,12 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
         let complete = |p: &ModelRoutine| {
             routines
                 .iter()
-                .filter(|q| q.object_id == p.object_id)
-                .all(|q| {
+                .enumerate()
+                .filter(|(_, q)| q.object_id == p.object_id)
+                .all(|(qi, q)| {
                     !q.parse_incomplete
                         && q.call_sites.iter().all(|cs| {
-                            resolved_sites.contains(cs.id.as_str())
+                            resolved_sites.contains(&(qi, cs.id.as_str()))
                                 || match &cs.callee {
                                     PCallee::Bare { name } => {
                                         !unq(name).eq_ignore_ascii_case(unq(&p.name))

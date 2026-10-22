@@ -214,7 +214,8 @@ fn collision_rules_hand_stated() {
 /// the production consumer (`build_detector_context`'s coverage record) the
 /// routine's direct coverage is `unknown` with reasons
 /// `["opaque-dependency", "parse-incomplete"]`. Break: LAST reasons -> one
-/// reason missing. Stage B.
+/// reason missing. The snapshot's coverage holds ONE record for the id, with
+/// the same status and reasons (break: one record per row -> two). Stage B.
 #[test]
 fn collided_coverage_is_the_least_complete_union() {
     let mut m = build(WORK_SRC, "22222222-0000-0000-0000-00000011b002");
@@ -239,6 +240,28 @@ fn collided_coverage_is_the_least_complete_union() {
     sorted.sort();
     sorted.dedup();
     assert_eq!(cov.reasons, sorted, "reasons sorted and unique");
+    // The snapshot's coverage (the second production consumer, FP-06/FP-19):
+    // ONE record for the id (class K: the rows' equal copies collapse), with
+    // the same least-complete status and union of reasons.
+    let stable = m.workspace.routines[rows[0]].stable_routine_id.clone();
+    let snap = crate::engine::l5::snapshot::compose_snapshot(&m);
+    let records: Vec<_> = snap
+        .coverage
+        .iter()
+        .filter(|c| c.subject == stable)
+        .collect();
+    assert_eq!(
+        records.len(),
+        1,
+        "one snapshot coverage record: {records:#?}"
+    );
+    assert_eq!(records[0].direct_status, "unknown", "{records:#?}");
+    for r in ["opaque-dependency", "parse-incomplete"] {
+        assert!(
+            records[0].reasons.iter().any(|x| x == r),
+            "the snapshot's reasons are the union, {r} missing: {records:#?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +611,8 @@ fn collided_edge_list_is_order_free_in_production() {
 /// OWNING row's. Two collided rows whose interface uncertainties at one
 /// call-site key differ in `interface_name` (arm A calls through `IA`, arm B
 /// through `IB`): `uncertainty_edges_by_from[id]` holds exactly arm B's (the
-/// last owning row's) uncertainty in the normal order. Stage B.
+/// last owning row's) uncertainty in the normal order, and arm A's with the
+/// rows reversed. Stage B.
 #[test]
 fn collided_interface_uncertainty_is_the_last_owning_rows() {
     let src = r#"
@@ -621,33 +645,41 @@ codeunit 50819 "UI Work"
 #endif
 }
 "#;
-    let m = build(src, "22222222-0000-0000-0000-00000011b006");
-    let (id, rows) = collided(&m, "Work");
-    assert!(
-        line(&m, rows[0]) < line(&m, rows[1]),
-        "precondition: arm A first"
-    );
-    let owned = build_detector_context(&m, substrate::ALL);
-    let ctx = owned.ctx();
-    let names: Vec<Option<String>> = ctx
-        .uncertainty_edges_by_from
-        .get(&id)
-        .map(|v| {
-            v.iter()
-                .filter(|u| u.kind == "interface-open-world")
-                .map(|u| u.interface_name.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-    assert_eq!(
-        names.len(),
-        1,
-        "one interface uncertainty per key: {names:?}"
-    );
-    assert!(
-        names[0].as_deref().is_some_and(|n| n.contains("UI B")),
-        "the LAST owning row's uncertainty (arm B, `UI B`): {names:?}"
-    );
+    let guid = "22222222-0000-0000-0000-00000011b006";
+    // Row order: arm B is the last row; reversed (FP-19): arm A is.
+    for (m, last) in [
+        (build(src, guid), "UI B"),
+        (build_reversed(src, guid), "UI A"),
+    ] {
+        let (id, rows) = collided(&m, "Work");
+        let last_arm = if last == "UI B" {
+            line(&m, rows[0]) < line(&m, rows[1])
+        } else {
+            line(&m, rows[0]) > line(&m, rows[1])
+        };
+        assert!(last_arm, "precondition: the arm of {last} is the last row");
+        let owned = build_detector_context(&m, substrate::ALL);
+        let ctx = owned.ctx();
+        let names: Vec<Option<String>> = ctx
+            .uncertainty_edges_by_from
+            .get(&id)
+            .map(|v| {
+                v.iter()
+                    .filter(|u| u.kind == "interface-open-world")
+                    .map(|u| u.interface_name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            names.len(),
+            1,
+            "one interface uncertainty per key: {names:?}"
+        );
+        assert!(
+            names[0].as_deref().is_some_and(|n| n.contains(last)),
+            "the LAST owning row's uncertainty (`{last}`): {names:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1510,8 +1542,12 @@ codeunit 50884 "SP Work"
 ///   the id's owned keys include it -> `S` persists (one row's sites, arm B's,
 ///   would miss it).
 /// - Single-row ids are untouched: `Single` persists through its one edge, and
-///   `Solo` keeps its base role (its interface site's bindings are ambiguous),
-///   both as before stage B.
+///   `Solo` keeps its base role, both as before stage B. LIMIT (final panel
+///   FP-19): `Solo`'s interface site has ambiguous bindings, so neither
+///   consumer reaches the edge choice there; this case does not test §4.6's
+///   multi-implementer equality. That equality rests on the code (a single-row
+///   id never enters `collided_site_callee`, so `site_pick` runs the unchanged
+///   first-edge lookup) and on B's identity runs.
 ///
 /// Breaks: read `edges_by_from[id]` directly again -> d37 flags and `R` does not
 /// persist; iterate one row's call sites -> `S` does not persist. Stage B.
@@ -1694,9 +1730,10 @@ codeunit 50887 "WK Work"
 /// out). A one-seed-per-key (class P) rule would drop arm A's genuine in-loop
 /// chain, the case `gap_g18_transitive_loop::hand_stated_collision_still_fires_a_genuine_inloop_chain`
 /// pins. Break: seed each call-site key once, from its last owning row -> arm
-/// A's seed is missing.
+/// A's seed is missing. A characterization: it holds before 11b too (each row
+/// always seeded); the EQUAL-copy half is `d1_collapses_an_equal_seed_copy`.
 #[test]
-fn d1_seeds_a_collided_call_site_once() {
+fn d1_keeps_both_arms_unequal_seeds() {
     let src = r#"
 table 50888 "D1 T"
 {
@@ -2062,4 +2099,673 @@ codeunit 50172 "Dep Ord"
             "the cross-app base's {what} hold both arms' writes: {ops:?}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Final panel round 1 (FP-01 .. FP-20): the points the review found still on
+// a pre-11b rule, each pinned through its production call site.
+// ---------------------------------------------------------------------------
+
+/// FP-01 (#17, §4.6): a raise is "resolved" per `(row, site)`. The collided
+/// `Raise`'s arm A raises the local `OnX` with a temporary record (resolved);
+/// arm B, at the same `{id}/cs0`, names `OnX` with the wrong arity
+/// (unresolved). Rule 2 fails ("a call site that could name the publisher is
+/// unresolved"), so `Handle`'s parameter is not proven temporary. Break: key
+/// the resolved sites by the string id only -> arm A's edge vouches for arm B's
+/// site and the parameter is rewritten.
+#[test]
+fn event_param_temp_unresolved_sibling_raise_is_not_proven() {
+    let src = r#"
+table 50891 "EU T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50891 "EU Pub"
+{
+    [IntegrationEvent(false, false)]
+    local procedure OnX(var Rec: Record "EU T")
+    begin
+    end;
+
+#if A
+    procedure Raise()
+    var
+        Rec: Record "EU T" temporary;
+    begin
+        OnX(Rec);
+    end;
+#else
+    procedure Raise()
+    var
+        Rec: Record "EU T" temporary;
+    begin
+        OnX(Rec, Rec);
+    end;
+#endif
+}
+
+codeunit 50892 "EU Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"EU Pub", 'OnX', '', false, false)]
+    local procedure Handle(var Rec: Record "EU T")
+    begin
+        Rec.Insert();
+    end;
+}
+"#;
+    let m = build(src, "22222222-0000-0000-0000-00000011b031");
+    let (raise, rows) = collided(&m, "Raise");
+    let cs0 = format!("{raise}/cs0");
+    let resolved_at = |ri: usize| {
+        m.calls
+            .edges
+            .iter()
+            .any(|e| e.from_ix.get() == ri && e.callsite_id == cs0 && e.to.is_some())
+    };
+    assert_eq!(
+        (resolved_at(rows[0]), resolved_at(rows[1])),
+        (true, false),
+        "precondition: arm A's raise is resolved, arm B's (same {cs0}) is not"
+    );
+    assert!(
+        !m.events.graph.edges.is_empty(),
+        "precondition: Handle subscribes to OnX"
+    );
+    let got = handle_param_temp(&m);
+    assert_eq!(got.len(), 1, "precondition: Handle is one row");
+    assert!(
+        !got[0].1,
+        "an unresolved raise in arm B leaves the parameter unproven: {got:?}"
+    );
+}
+
+/// FP-02 (#20, class P): a collided call site's snapshot resolution reads
+/// every piece (display, `underAsserterror`, the representative edge) from
+/// its LAST OWNING row. Arm A's `cs0` is `asserterror Missing()`; arm B's
+/// (the last row) is `Helper()`. In row order the resolution is arm B's
+/// (`Helper`, resolved, no `underAsserterror`); with the rows reversed it is
+/// arm A's. Break: `underAsserterror` set by any row (sticky) -> the row-order
+/// case reads `Some(true)`.
+#[test]
+fn collided_callsite_resolution_reads_the_last_owning_row() {
+    let src = r#"
+codeunit 50893 "CR Work"
+{
+#if A
+    procedure Work()
+    begin
+        asserterror Missing();
+    end;
+#else
+    procedure Work()
+    begin
+        Helper();
+    end;
+#endif
+
+    local procedure Helper()
+    begin
+    end;
+}
+"#;
+    let guid = "22222222-0000-0000-0000-00000011b032";
+    let pick = |m: &Model| {
+        let (id, _) = collided(m, "Work");
+        let cs0 = format!("{id}/cs0");
+        let snap = crate::engine::l5::snapshot::compose_snapshot(m);
+        let mine: Vec<_> = snap
+            .callsite_resolutions
+            .iter()
+            .filter(|r| r.callsite_id == cs0)
+            .collect();
+        assert_eq!(mine.len(), 1, "one resolution per call site: {mine:#?}");
+        (
+            mine[0].callee_display.clone(),
+            mine[0].status.clone(),
+            mine[0].under_asserterror,
+        )
+    };
+    let (m, r) = (build(src, guid), build_reversed(src, guid));
+    let (_, rows) = collided(&m, "Work");
+    assert!(
+        m.workspace.routines[rows[0]].call_sites[0].under_asserterror == Some(true)
+            && m.workspace.routines[rows[1]].call_sites[0].under_asserterror != Some(true),
+        "precondition: only arm A's cs0 is under asserterror"
+    );
+    let (display, status, ua) = pick(&m);
+    assert!(
+        display.contains("Helper") && status == "resolved" && ua.is_none(),
+        "row order: arm B's site ({display}, {status}, {ua:?})"
+    );
+    let (display, status, ua) = pick(&r);
+    assert!(
+        display.contains("Missing") && status != "resolved" && ua == Some(true),
+        "reversed: arm A's site ({display}, {status}, {ua:?})"
+    );
+}
+
+/// FP-04 (#16, class S): a collided id's checked-run seeds are the union of
+/// its rows' seeds. Arm A's `cs0` is a checked `Codeunit.Run`; arm B's (the
+/// last row) is a plain call. The span is seeded from arm A, the row whose
+/// site IS a checked run. Break: pick the site's LAST OWNING row before the
+/// checked-run test -> arm B owns `cs0`, is no checked run, and no span seeds.
+#[test]
+fn collided_checked_run_seeds_from_the_row_that_has_it() {
+    let src = r#"
+codeunit 50894 "CK Target"
+{
+    trigger OnRun()
+    begin
+    end;
+}
+
+codeunit 50895 "CK Work"
+{
+#if A
+    procedure Work()
+    begin
+        if Codeunit.Run(Codeunit::"CK Target") then;
+    end;
+#else
+    procedure Work()
+    begin
+        Helper();
+    end;
+#endif
+
+    local procedure Helper()
+    begin
+    end;
+}
+"#;
+    let m = build(src, "22222222-0000-0000-0000-00000011b033");
+    let (id, rows) = collided(&m, "Work");
+    let cs0 = format!("{id}/cs0");
+    let checked = |ri: usize| {
+        let cs = &m.workspace.routines[ri].call_sites[0];
+        cs.id == cs0
+            && matches!(
+                &cs.callee,
+                crate::program::body::features::PCallee::ObjectRun { .. }
+            )
+            && cs.object_run_return_used == Some(true)
+    };
+    assert_eq!(
+        (checked(rows[0]), checked(rows[1])),
+        (true, false),
+        "precondition: only arm A's {cs0} is a checked Codeunit.Run"
+    );
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let seeds: Vec<Option<&str>> = ctx
+        .transaction_spans
+        .iter()
+        .filter(|s| s.commit_routine_id == id)
+        .map(|s| s.seed_callsite_id.as_deref())
+        .collect();
+    assert_eq!(
+        seeds,
+        vec![Some(cs0.as_str())],
+        "arm A's checked run seeds one span"
+    );
+}
+
+/// FP-10 (class G, #15): an earlier row of a collided id that seeds a span (it
+/// owns the Commit) reads its OWN guard frame. Arm A commits only `if DoIt`;
+/// arm B (the last row) inserts, then commits only `if not DoIt` (its `op1`).
+/// `CallTrue` passes `true`, `CallFalse` passes `false`. Arm A's span (`op0`)
+/// holds `CallTrue` and not `CallFalse`; arm B's (`op1`) the other way round.
+/// Break: cache the seed's frame under the id whatever row seeds -> arm B's
+/// `op1` reads arm A's frame, finds no requirement, and holds both callers.
+#[test]
+fn collided_commit_seed_reads_its_own_rows_guard_frame() {
+    let src = r#"
+table 50896 "GS X"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50896 "GS Work"
+{
+#if A
+    procedure Work(DoIt: Boolean)
+    begin
+        if DoIt then
+            Commit();
+    end;
+#else
+    procedure Work(DoIt: Boolean)
+    var
+        X: Record "GS X";
+    begin
+        X.Insert();
+        if not DoIt then
+            Commit();
+    end;
+#endif
+
+    procedure CallTrue()
+    begin
+        Work(true);
+    end;
+
+    procedure CallFalse()
+    begin
+        Work(false);
+    end;
+}
+"#;
+    let m = build(src, "22222222-0000-0000-0000-00000011b034");
+    let (id, rows) = collided(&m, "Work");
+    let commit_ops = |ri: usize| -> Vec<String> {
+        m.workspace.routines[ri]
+            .operation_sites
+            .iter()
+            .filter(|o| o.kind == "commit")
+            .map(|o| o.id.clone())
+            .collect()
+    };
+    let (op0, op1) = (format!("{id}/op0"), format!("{id}/op1"));
+    assert_eq!(
+        (commit_ops(rows[0]), commit_ops(rows[1])),
+        (vec![op0.clone()], vec![op1.clone()]),
+        "precondition: arm A commits at op0, arm B (the last row) at op1"
+    );
+    let (t, f) = (id_named(&m, "CallTrue"), id_named(&m, "CallFalse"));
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let callers = |op: &str| -> (bool, bool) {
+        let span = ctx
+            .transaction_spans
+            .iter()
+            .find(|s| s.commit_routine_id == id && s.commit_operation_id == op)
+            .unwrap_or_else(|| panic!("a span for {op}: {:#?}", ctx.transaction_spans));
+        (
+            span.routines_in_span.contains(&t),
+            span.routines_in_span.contains(&f),
+        )
+    };
+    assert_eq!(
+        callers(&op0),
+        (true, false),
+        "arm A's Commit needs DoIt: only CallTrue reaches it"
+    );
+    assert_eq!(
+        callers(&op1),
+        (false, true),
+        "arm B's Commit needs not DoIt: only CallFalse reaches it (its own frame)"
+    );
+}
+
+/// FP-05 (#20, frames with their row): every operation in the snapshot's
+/// operation index names a frame of its routine's frame table. Arm A modifies,
+/// then inserts inside two nested `if`s (`op1`, frame 2 of arm A); arm B (the
+/// last row) only modifies (`op0`, its root frame). `op1` exists in arm A only.
+/// In both row orders, each op's frame id is in the id's table, and `op1`'s
+/// frame is a nested one. Break: the table is the LAST row's alone (and orders
+/// unshifted) -> in row order `op1`'s frame 2 is not in arm B's one-frame table.
+#[test]
+fn snapshot_operations_name_frames_of_their_own_row() {
+    let src = r#"
+table 50897 "SF T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50897 "SF Work"
+{
+#if A
+    procedure Work(F: Boolean; G: Boolean)
+    var
+        T: Record "SF T";
+    begin
+        T.Modify();
+        if F then
+            if G then
+                T.Insert();
+    end;
+#else
+    procedure Work(F: Boolean; G: Boolean)
+    var
+        T: Record "SF T";
+    begin
+        T.Modify();
+    end;
+#endif
+}
+"#;
+    let guid = "22222222-0000-0000-0000-00000011b035";
+    for m in [build(src, guid), build_reversed(src, guid)] {
+        let (id, rows) = collided(&m, "Work");
+        let ops = |ri: usize| m.workspace.routines[ri].operation_sites.len();
+        let (a, b) = if line(&m, rows[0]) < line(&m, rows[1]) {
+            (rows[0], rows[1])
+        } else {
+            (rows[1], rows[0])
+        };
+        assert_eq!(
+            (ops(a), ops(b)),
+            (2, 1),
+            "precondition: arm A has op1 alone"
+        );
+        let stable = m.workspace.routines[a].stable_routine_id.clone();
+        let snap = crate::engine::l5::snapshot::compose_snapshot(&m);
+        let table = snap
+            .routine_order_frames
+            .as_ref()
+            .and_then(|f| f.get(&stable))
+            .unwrap_or_else(|| panic!("precondition: Work has a frame table"));
+        let mine: Vec<_> = snap
+            .operation_index
+            .iter()
+            .filter(|o| o.routine == stable)
+            .collect();
+        let op1 = format!("{id}/op1");
+        assert!(
+            mine.iter().any(|o| o.operation_id == op1),
+            "precondition: op1 is in the operation index: {mine:#?}"
+        );
+        for o in &mine {
+            let frame = o.order.map(|ord| ord.frame_id);
+            let found = table.iter().find(|f| Some(f.frame_id) == frame);
+            assert!(
+                found.is_some(),
+                "{}'s frame {frame:?} is in Work's table {table:#?}",
+                o.operation_id
+            );
+            if o.operation_id == op1 {
+                assert!(
+                    found.is_some_and(|f| f.parent_frame_id >= 0),
+                    "op1's frame is arm A's nested `if` frame: {table:#?}"
+                );
+            }
+        }
+    }
+}
+
+/// FP-06 (class K, d1 seeds): EQUAL seed copies collapse. `Work` (one arm,
+/// looping over a call to `WriteA`) is duplicated by assignment (a second,
+/// equal row of the same id, the stated precondition), and the production
+/// `build_d1_graph` runs on that model: one seed for `cs0`, not two. Break:
+/// push every row's seed -> two equal seeds.
+#[test]
+fn d1_collapses_an_equal_seed_copy() {
+    let src = r#"
+table 50898 "D1E T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50898 "D1E Work"
+{
+    local procedure WriteA()
+    var
+        T: Record "D1E T";
+    begin
+        T.Insert();
+    end;
+
+    procedure Work()
+    var
+        I: Integer;
+    begin
+        for I := 1 to 3 do
+            WriteA();
+    end;
+}
+"#;
+    let mut m = build(src, "22222222-0000-0000-0000-00000011b036");
+    let id = id_named(&m, "Work");
+    let ri = rows_named(&m, "Work")[0];
+    let copy = m.workspace.routines[ri].clone();
+    m.workspace.routines.push(copy);
+    let (_, rows) = collided(&m, "Work");
+    assert!(
+        m.workspace.routines[rows[0]].call_sites == m.workspace.routines[rows[1]].call_sites
+            && m.workspace.routines[rows[0]].loops == m.workspace.routines[rows[1]].loops,
+        "precondition: the two rows are equal"
+    );
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let mut memo = HashMap::new();
+    let (_, seeds) = crate::engine::l5::d1_graph::build_d1_graph(&ctx, &m.workspace, &mut memo);
+    let cs0 = format!("{id}/cs0");
+    assert_eq!(
+        seeds.iter().filter(|s| s.callsite.id == cs0).count(),
+        1,
+        "the equal copies are one seed"
+    );
+}
+
+/// FP-07 (class P over a class K list): the classification lookup reads a
+/// collided id's LAST row's copy, not the greatest by value. `Work` in an
+/// Install codeunit is a plain procedure in arm A and an event subscriber in
+/// arm B (the last row): the K list keeps both copies, and the detector
+/// context's lookup is arm B's (`event-subscriber` among its kinds). A roots
+/// config that names another routine leaves `Work`'s entries as they are.
+/// Breaks: the lookup takes the last of the value-sorted list -> arm A's
+/// (`["install-codeunit"]` sorts after); the overlay collapses every id to one
+/// entry -> one `Work` entry with the config.
+#[test]
+fn collided_classification_lookup_is_the_last_rows() {
+    use crate::engine::root_classification::compute_root_classifications;
+    let src = r#"
+codeunit 50899 "RC Install"
+{
+    Subtype = Install;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnX()
+    begin
+    end;
+
+#if A
+    local procedure Work()
+    begin
+    end;
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"RC Install", 'OnX', '', false, false)]
+    local procedure Work()
+    begin
+    end;
+#endif
+
+    trigger OnInstallAppPerCompany()
+    begin
+    end;
+}
+"#;
+    let mut m = build(src, "22222222-0000-0000-0000-00000011b037");
+    // A subscriber's id differs from a plain procedure's, so the one id is
+    // stated by assignment (spec §5: a shape the source cannot make), and the
+    // classifications are recomputed from the rows.
+    let rows = rows_named(&m, "Work");
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let (id, stable) = {
+        let r = &m.workspace.routines[rows[0]];
+        (r.id.clone(), r.stable_routine_id.clone())
+    };
+    m.workspace.routines[rows[1]].id = id.clone();
+    m.workspace.routines[rows[1]].stable_routine_id = stable;
+    m.root_classifications = compute_root_classifications(&m.workspace, None).0;
+    let (_, rows) = collided(&m, "Work");
+    assert!(
+        m.workspace.routines[rows[0]].kind != "event-subscriber"
+            && m.workspace.routines[rows[1]].kind == "event-subscriber",
+        "precondition: only arm B (the last row) is a subscriber"
+    );
+    let mine = |all: &[crate::engine::root_classification::RootClassification]| {
+        all.iter()
+            .filter(|c| c.routine_id == id)
+            .map(|c| c.kinds.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        mine(&m.root_classifications).len(),
+        2,
+        "precondition: the K list keeps both arms' copies: {:?}",
+        mine(&m.root_classifications)
+    );
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let kinds = &ctx.root_classifications_by_routine[&id].kinds;
+    assert!(
+        kinds.iter().any(|k| k == "event-subscriber"),
+        "the lookup is the LAST row's classification: {kinds:?}"
+    );
+    let other = rows_named(&m, "OnInstallAppPerCompany");
+    let other = &m.workspace.routines[other[0]].id;
+    let config = format!(
+        r#"{{"version":1,"roots":[{{"id":"E1","target":{{"routineId":"{other}"}},"kinds":["install-codeunit"]}}]}}"#
+    );
+    let (with_config, _) =
+        compute_root_classifications(&m.workspace, Some(&Ok(config.into_bytes())));
+    assert_eq!(
+        mine(&with_config),
+        mine(&m.root_classifications),
+        "a config that does not name Work leaves its entries as they are"
+    );
+}
+
+/// FP-09 (class P per parameter, `dispatch_by_id`): a collided publisher's
+/// dispatch is its LAST row's, an empty one included. `OnP(var Rec)` is
+/// declared in two arms; its subscriber modifies `Rec`, so with a dispatch
+/// the publisher's parameter role persists. Arm B (the last row) is made
+/// bodyless by assignment (the stated precondition): its dispatch is empty,
+/// and the publisher's role no longer takes arm A's. Break: drop empty
+/// dispatches before the pick -> arm A's dispatch is taken and the role
+/// persists.
+#[test]
+fn collided_bodyless_last_publisher_takes_no_sibling_dispatch() {
+    use crate::engine::l4::effect_lattice::EffectPresence;
+    let src = r#"
+table 50900 "DP T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50900 "DP Pub"
+{
+#if A
+    [IntegrationEvent(false, false)]
+    procedure OnP(var Rec: Record "DP T")
+    begin
+    end;
+#else
+    [IntegrationEvent(false, false)]
+    procedure OnP(var Rec: Record "DP T")
+    begin
+    end;
+#endif
+}
+
+codeunit 50901 "DP Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"DP Pub", 'OnP', '', false, false)]
+    local procedure Handle(var Rec: Record "DP T")
+    begin
+        Rec.Modify();
+    end;
+}
+"#;
+    let role = |m: &Model, id: &str| {
+        let owned = build_detector_context(m, substrate::ALL);
+        let ctx = owned.ctx();
+        ctx.parameter_roles_by_routine
+            .get(id)
+            .and_then(|v| v.iter().find(|r| r.parameter_index == 0))
+            .map(|r| r.persists_current_record)
+    };
+    let mut m = build(src, "22222222-0000-0000-0000-00000011b038");
+    let (id, rows) = collided(&m, "OnP");
+    assert_ne!(
+        role(&m, &id),
+        Some(EffectPresence::No),
+        "precondition: with a dispatch, the subscriber's Modify reaches OnP's role"
+    );
+    m.workspace.routines[rows[1]].body_available = false;
+    assert_eq!(
+        role(&m, &id),
+        Some(EffectPresence::No),
+        "the bodyless LAST row's empty dispatch: no subscriber fact is folded"
+    );
+}
+
+/// FP-18 (#13, the union's order): a collided id's summary uncertainties are
+/// ordered by today's key (`uncertainty_key`: kind, then the site), then the
+/// full value, through `union_summaries` (the merge `base_summaries` and the
+/// cross-app leaves use). Two uncertainties whose key order and full-value
+/// order disagree (an op-sited one sorts first by value, a call-site one first
+/// by key) come out in key order, in both input orders. Break: sort by the
+/// full value only -> the op-sited one first.
+#[test]
+fn union_summaries_orders_uncertainties_by_key() {
+    use crate::engine::l4::summary::{RoutineSummary, Uncertainty, uncertainty_key};
+    use crate::engine::l4::summary_runner::union_summaries;
+    let unc = |cs: Option<&str>, op: Option<&str>| Uncertainty {
+        kind: "k".to_string(),
+        callsite_id: cs.map(str::to_string),
+        operation_id: op.map(str::to_string),
+        routine_id: None,
+        interface_name: None,
+    };
+    let (by_op, by_cs) = (unc(None, Some("w/op9")), unc(Some("w/cs1"), None));
+    assert!(
+        by_op < by_cs && uncertainty_key(&by_cs) < uncertainty_key(&by_op),
+        "precondition: value order and key order disagree"
+    );
+    let row = |u: Uncertainty| RoutineSummary {
+        routine_id: "w".to_string(),
+        db_effects: Vec::new(),
+        in_recursive_cycle: false,
+        has_unresolved_calls: false,
+        uncertainties: vec![u],
+        parameter_roles: Vec::new(),
+    };
+    let want = vec![by_cs.clone(), by_op.clone()];
+    for rows in [
+        vec![row(by_op.clone()), row(by_cs.clone())],
+        vec![row(by_cs.clone()), row(by_op.clone())],
+    ] {
+        assert_eq!(
+            union_summaries(rows).uncertainties,
+            want,
+            "key order, then the full value"
+        );
+    }
+}
+
+/// FP-20 (#22, class P): `OperationJoin` anchors a collided id's op at its
+/// LAST OWNING row. On T1's fixture both arms have an `op0` (arm A's
+/// `A.Insert()`, arm B's `B.Modify()`, at different lines): the join answers
+/// arm B's line. Break: first writer wins -> arm A's line.
+#[test]
+fn operation_join_reads_the_last_owning_row() {
+    use crate::engine::l4::effect_query_cli::{OperationJoin, RoutineJoin};
+    let m = build(WORK_SRC, "22222222-0000-0000-0000-00000011b039");
+    let (id, rows) = collided(&m, "Work");
+    let op0 = format!("{id}/op0");
+    let op_line = |ri: usize| {
+        m.workspace.routines[ri]
+            .record_operations
+            .iter()
+            .find(|o| o.id == op0)
+            .map(|o| o.source_anchor.start_line)
+    };
+    let (a, b) = (op_line(rows[0]), op_line(rows[1]));
+    assert!(
+        a.is_some() && b.is_some() && a != b,
+        "precondition: both arms own {op0}, at different lines ({a:?}, {b:?})"
+    );
+    let routines = RoutineJoin::build(&m);
+    let got = OperationJoin::build(&m)
+        .get(&op0, &routines)
+        .map(|o| o.line);
+    assert_eq!(got, b, "the LAST owning row's (arm B's) operation");
 }

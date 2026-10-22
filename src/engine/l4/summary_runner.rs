@@ -1275,7 +1275,8 @@ fn opaque_role(r: &RecordRoleSummary) -> RecordRoleSummary {
 
 /// The base (or leaf) summaries of ONE collided id's rows, in row order, made
 /// one (#160 step 11b §4.6, #13 / R2b): `db_effects` and `uncertainties` are
-/// full-value unions (by `effect_key`, then the full value), the two flags are
+/// full-value unions (by today's key, `effect_key` / `uncertainty_key`, then
+/// the full value), the two flags are
 /// OR-ed, and `parameter_roles` are class P: the LAST row's, never a union (a
 /// reader takes ONE record per parameter index).
 pub(crate) fn union_summaries(rows: Vec<RoutineSummary>) -> RoutineSummary {
@@ -1296,7 +1297,7 @@ pub(crate) fn union_summaries(rows: Vec<RoutineSummary>) -> RoutineSummary {
         db_effects: projection::union_by_value(db_effects, |e| e.effect_key.clone()),
         in_recursive_cycle: in_cycle,
         has_unresolved_calls: unresolved,
-        uncertainties: projection::union_by_value(uncertainties, |_| ()),
+        uncertainties: projection::union_by_value(uncertainties, super::summary::uncertainty_key),
         parameter_roles,
     }
 }
@@ -1392,17 +1393,20 @@ pub fn compute_summaries_v2_bundle_with_leaves(
 
     // Each event publisher's dispatch bindings (#107 Design 2), once per solve.
     let shared_events = shared_event_ids(graph);
-    let dispatch_by_id: HashMap<String, Vec<ParamDispatch>> = projection::last_per_id(
+    // Every row of an id owns every parameter index (one signature), so the
+    // pick is the LAST row's dispatch, an empty one included (a bodyless last
+    // row does not take an earlier row's); an empty pick is then absent.
+    let mut dispatch_by_id: HashMap<String, Vec<ParamDispatch>> = projection::last_per_id(
         &rows,
         routines
             .iter()
             .map(|r| {
                 let edges = graph.edges_by_from.get(&r.id)?;
-                let d = dispatch_bindings(r, edges, &routines_by_id, &shared_events);
-                (!d.is_empty()).then_some(d)
+                Some(dispatch_bindings(r, edges, &routines_by_id, &shared_events))
             })
             .collect(),
     );
+    dispatch_by_id.retain(|_, d| !d.is_empty());
     summaries_census::dispatch_publishers(dispatch_by_id.iter().map(|(id, pds)| {
         let r = routines_by_id[id];
         (

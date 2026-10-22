@@ -2269,3 +2269,183 @@ fn a_subscriber_id_over_two_nodes_emits_both_nodes_subscriptions() {
         "the id emits both of its nodes' subscriptions, each once"
     );
 }
+
+/// 11b R4's union is order-free (#160 11b spec §4.6, final panel FP-08): the
+/// same two-node `Hb` id as above, built once in row order and once with its
+/// two rows (and their nodes) swapped by assignment. The whole event graph's
+/// edge list is equal in both orders: the id's edges are sorted by full value
+/// at the place of its first edge, not appended in row order. Break: append
+/// the second node's edges in row order (no union pass) -> the two lists differ.
+#[test]
+fn a_two_node_subscriber_ids_edges_do_not_depend_on_row_order() {
+    use al_sem::program::model::program_calls::cross_app_event_graph_after;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    j5_shapes_dependency_workspace(dir.path());
+    let run = |swap: bool| {
+        let graph = cross_app_event_graph_after(&read(dir.path()), MI, |rows| {
+            let hb: Vec<usize> = rows
+                .workspace
+                .routines
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.name == "Hb" && r.kind == "event-subscriber")
+                .map(|(ri, _)| ri)
+                .collect();
+            assert_eq!(hb.len(), 2, "precondition: two rows for Hb");
+            let id = rows.workspace.routines[hb[0]].id.clone();
+            let stable = rows.workspace.routines[hb[0]].stable_routine_id.clone();
+            rows.workspace.routines[hb[1]].id = id;
+            rows.workspace.routines[hb[1]].stable_routine_id = stable;
+            if swap {
+                rows.workspace.routines.swap(hb[0], hb[1]);
+                rows.row_nodes.node_of.swap(hb[0], hb[1]);
+            }
+        })
+        .expect("event graph");
+        graph
+            .edges
+            .iter()
+            .map(|e| format!("{e:?}"))
+            .collect::<Vec<String>>()
+    };
+    let (straight, swapped) = (run(false), run(true));
+    let to = |edges: &[String], ev: &str| {
+        edges
+            .iter()
+            .filter(|e| e.contains(&format!("/{ev}\"")))
+            .count()
+    };
+    assert!(
+        to(&straight, "ona") > 0 && to(&straight, "onb") > 0,
+        "precondition: the graph holds OnA and OnB edges: {straight:#?}"
+    );
+    assert_eq!(
+        straight, swapped,
+        "the edge list does not depend on the row order of a two-node id"
+    );
+}
+
+/// 11b class P, `collect_dep_order_index`'s return summaries (#160 11b spec
+/// §4.6, final panel FP-11): a source-bearing dependency whose `Work` is
+/// declared in two arms with different return shapes. Arm A (the first row)
+/// returns normally; arm B (the last row) always raises an error. The consumer
+/// reads ONE return summary for the id, the LAST row's: every path errors.
+/// Break: keep a summary per row (the consumer takes the first) -> arm A's.
+#[test]
+fn dep_return_summary_is_the_last_rows() {
+    use al_sem::engine::deps::dep_artifact_l4::{
+        ConsumerModel, TriBool, collect_dep_order_index, compute_dep_return_summary,
+        dep_artifacts_from_model,
+    };
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Go.al"),
+        "codeunit 50201 \"Ws Go\"\n{\n    procedure Go()\n    var\n        D: Codeunit \"Dep Ret\";\n    begin\n        D.Work(true);\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/Ret.al",
+            r#"table 50173 "Dep R"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50173 "Dep Ret"
+{
+#if XSYM
+    procedure Work(Flag: Boolean)
+    var
+        T: Record "Dep R";
+    begin
+        T.Insert();
+    end;
+#else
+    procedure Work(Flag: Boolean)
+    var
+        T: Record "Dep R";
+    begin
+        T.Modify();
+        Error('boom');
+    end;
+#endif
+}
+"#,
+        )],
+        "",
+    );
+    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false).expect("model");
+    let rows: Vec<usize> = x
+        .resolved
+        .workspace
+        .routines
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.name == "Work")
+        .map(|(ri, _)| ri)
+        .collect();
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let row = |ri: usize| &x.resolved.workspace.routines[ri];
+    let id = row(rows[0]).id.clone();
+    assert_eq!(row(rows[1]).id, id, "precondition: one id");
+    assert!(
+        row(rows[0]).source_anchor.start_line < row(rows[1]).source_anchor.start_line,
+        "precondition: arm A is the first row"
+    );
+    assert_eq!(
+        (
+            compute_dep_return_summary(row(rows[0])).all_paths_error,
+            compute_dep_return_summary(row(rows[1])).all_paths_error
+        ),
+        (TriBool::False, TriBool::True),
+        "precondition: arm A returns normally, arm B always errors"
+    );
+    let arts = dep_artifacts_from_model(&x);
+    let mut consumer = ConsumerModel::with_routine_ids(
+        x.resolved
+            .workspace
+            .routines
+            .iter()
+            .map(|r| r.id.clone())
+            .collect(),
+    );
+    collect_dep_order_index(&mut consumer, &arts);
+    let per_row: Vec<TriBool> = arts
+        .iter()
+        .filter_map(|a| a.abi.dep_order_index.as_ref())
+        .flat_map(|idx| &idx.return_summaries)
+        .filter(|rs| rs.routine_id == id)
+        .map(|rs| rs.all_paths_error)
+        .collect();
+    assert_eq!(
+        per_row,
+        [TriBool::True],
+        "the artifact holds ONE return summary for the id, the LAST row's"
+    );
+    assert_eq!(
+        consumer
+            .dep_return_summaries
+            .get(&id)
+            .map(|rs| rs.all_paths_error),
+        Some(TriBool::True),
+        "the consumer reads the LAST row's return summary (arm B always errors)"
+    );
+}

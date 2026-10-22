@@ -196,6 +196,12 @@ pub(crate) fn build_d1_graph<'a>(
     // initial frontier.
     let mut frontier: Vec<&'a str> = Vec::new();
     let mut frontier_seen: HashSet<&'a str> = HashSet::new();
+    let collided: HashSet<&'a str> =
+        crate::program::model::projection::RowsOfId::build(&ws.routines)
+            .collided()
+            .map(|(id, _)| id)
+            .collect();
+    let mut seeds_of_id: HashMap<&'a str, Vec<usize>> = HashMap::new();
 
     for routine in &ws.routines {
         // detect_d1's routine gate (d1.rs:984-990): body available, not parse-incomplete.
@@ -238,6 +244,24 @@ pub(crate) fn build_d1_graph<'a>(
                 continue;
             }
             let entry_id: &'a str = edge.to.as_str();
+            // Class K (#160 step 11b §4.6): a collided id's rows keep one copy of
+            // each distinct seed; an EQUAL copy (same loop, call site, callee and
+            // depth, from another row of the id) collapses. Unequal ones stay.
+            if collided.contains(routine.id.as_str()) {
+                let mine = seeds_of_id.entry(routine.id.as_str()).or_default();
+                if mine.iter().any(|&k| {
+                    let s: &D1Seed<'_> = &seeds[k];
+                    s.loop_id == rep
+                        && s.loop_info == loop_info
+                        && s.callsite == cs
+                        && seed_entry_ids[k] == entry_id
+                        && s.entry_edge_kind == edge.kind
+                        && s.seed_depth == cs.loop_stack.len() as i64
+                }) {
+                    continue;
+                }
+                mine.push(seeds.len());
+            }
             if frontier_seen.insert(entry_id) {
                 frontier.push(entry_id);
             }

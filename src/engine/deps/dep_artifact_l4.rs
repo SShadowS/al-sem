@@ -618,6 +618,16 @@ fn build_dep_order_index(
     }
 
     return_summary_list.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
+    // A return summary is single-valued per id: a collided id's rows (adjacent
+    // after the stable sort, in row order) keep the LAST row's (#160 step 11b
+    // §4.6, class P; every row owns the id).
+    return_summary_list.dedup_by(|later, kept| {
+        let same = later.routine_id == kept.routine_id;
+        if same {
+            std::mem::swap(later, kept);
+        }
+        same
+    });
     routine_entries.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
     // A collided id's rows (adjacent after the stable sort, in row order) make
     // ONE entry (#160 step 11b §4.6, class P).

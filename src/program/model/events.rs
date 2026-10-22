@@ -375,16 +375,18 @@ pub fn program_event_graph(
     // A routine declared in several `#if` arms is several model rows with ONE
     // id (issue #103). The id emits the full-value union of the subscriptions
     // of its rows' DISTINCT nodes (R4, #160 step 11b §4.6): each (id, node)
-    // emits once, and an edge equal to one the id already has is not repeated.
-    // When the rows share one node (every CDO and corpus group) that is the
-    // first mapped row's edges, as before. A row without a node (`node_of` is
-    // `None`: a dependency row of an app the graph does not know, the
-    // fail-closed guard below) hides nothing. `model_subscribers` and
-    // `unmapped_subscribers` stay per row (the latter only for ids no row
-    // maps); every later counter is per (id, node).
+    // emits once, and an id with two or more nodes has its edges sorted by full
+    // value and equal ones collapsed (`union_multi_node_edges`), at the place
+    // of its first edge, so they do not depend on row order. When the rows
+    // share one node (every CDO and corpus group) that is the first mapped
+    // row's edges, as before. A row without a node (`node_of` is `None`: a
+    // dependency row of an app the graph does not know, the fail-closed guard
+    // below) hides nothing. `model_subscribers` and `unmapped_subscribers` stay
+    // per row (the latter only for ids no row maps); every later counter is per
+    // (id, node), counted before the union.
     let mut processed: HashSet<&str> = HashSet::new();
     let mut processed_nodes: HashSet<(&str, &RoutineNodeId)> = HashSet::new();
-    let mut nodes_of_id: HashMap<&str, usize> = HashMap::new();
+    let mut multi_node: HashSet<&str> = HashSet::new();
     // Unmapped rows, by id: counted after the loop, and only for an id no row
     // mapped. An unmapped row of an id another row mapped loses nothing.
     let mut unmapped: Vec<&str> = Vec::new();
@@ -399,13 +401,13 @@ pub fn program_event_graph(
             unmapped.push(r.id.as_str());
             continue;
         };
-        processed.insert(r.id.as_str());
+        let first_mapped_row = processed.insert(r.id.as_str());
         if !processed_nodes.insert((r.id.as_str(), node)) {
             continue;
         }
-        let nodes_of_this_id = nodes_of_id.entry(r.id.as_str()).or_default();
-        *nodes_of_this_id += 1;
-        let repeat_node = *nodes_of_this_id > 1;
+        if !first_mapped_row {
+            multi_node.insert(r.id.as_str());
+        }
         let subs = subs_by_node.get(node).map(Vec::as_slice).unwrap_or(&[]);
         if subs.is_empty() {
             c.subscribers_without_subscription += 1;
@@ -579,10 +581,6 @@ pub fn program_event_graph(
                 conditional: s.conditional_any,
                 mixed_readings: s.conditional_any && s.conditions.is_empty(),
             };
-            // A second node of the id: equal edges collapse (the union).
-            if repeat_node && edges.contains(&edge) {
-                continue;
-            }
             edges.push(edge);
         }
     }
@@ -590,10 +588,49 @@ pub fn program_event_graph(
         .iter()
         .filter(|id| !processed.contains(*id))
         .count();
+    let edges = if multi_node.is_empty() {
+        edges
+    } else {
+        union_multi_node_edges(edges, &multi_node)
+    };
     ProgramEvents {
         graph: EventGraph { events, edges },
         census: c,
     }
+}
+
+/// R4's union for the subscriber ids of `multi` (two or more distinct nodes):
+/// each such id's edges, wherever its rows emitted them, are sorted by full
+/// value, equal ones collapse, and the run takes the place of the id's first
+/// edge. Every other edge keeps its place.
+fn union_multi_node_edges(
+    edges: Vec<EventEdge>,
+    multi: &std::collections::HashSet<&str>,
+) -> Vec<EventEdge> {
+    let mut groups: std::collections::HashMap<String, Vec<Vec<EventEdge>>> =
+        std::collections::HashMap::new();
+    // `Err(id)` marks where the id's run goes.
+    let mut slots: Vec<Result<EventEdge, String>> = Vec::with_capacity(edges.len());
+    for e in edges {
+        if multi.contains(e.subscriber_routine_id.as_str()) {
+            let group = groups.entry(e.subscriber_routine_id.clone()).or_default();
+            if group.is_empty() {
+                slots.push(Err(e.subscriber_routine_id.clone()));
+            }
+            group.push(vec![e]);
+        } else {
+            slots.push(Ok(e));
+        }
+    }
+    slots
+        .into_iter()
+        .flat_map(|slot| match slot {
+            Ok(e) => vec![e],
+            Err(id) => {
+                super::projection::union_by_value(groups.remove(&id).expect("the id's run"), |_| ())
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

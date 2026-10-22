@@ -28,13 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - #160 step 11b: routine identity corrections, `RoutineIx` re-keying, and one rule for rows
   that share one routine id (part of #160; spec
-  `docs/superpowers/specs/2026-10-22-issue-160-step11b-routine-rekeying-design.md`). The only
-  output change: in each cross-app CDO report (`--scope primary` and `--scope all`, SARIF
-  and JSON), 14 `d9-transaction-span-summary` results say "publishes N event(s)" with N one
-  higher; nothing else moved, and no golden moved. Identity runs and census:
+  `docs/superpowers/specs/2026-10-22-issue-160-step11b-routine-rekeying-design.md`). In the
+  reports the identity runs compare (`alsem analyze`, SARIF and JSON, on CDO and on every
+  fixture dir, both universes and both scopes, plus the CDO call-graph histogram) the only
+  output change is: in each cross-app CDO report, 14 `d9-transaction-span-summary` results
+  say "publishes N event(s)" with N one higher. No golden moved. Cross-app `digest` and
+  `fingerprint` were not compared on CDO (spec §8): for routines whose cone reaches
+  `PageManagement` they may carry the same extra event. Identity runs and census:
   `docs/measurements/2026-10-22-issue-160-step11b.md`.
-  - **The corrections (stage C).** J2, the adapter's caller check and the event graph read
-    each row's true node (`RowNodes.node_of`) instead of its declaration anchor. The first
+  - **The corrections (stage C).** Each reads a row's true node (`RowNodes.node_of`): J2
+    still looks a node up by its declaration anchor, but keeps only a row at that anchor
+    whose node IS that node; the adapter's caller check compares the row's node with the
+    edge's caller (it compared their declaration anchors); the event graph maps a
+    subscriber row to its node (J5's span map is gone). The first
     `#if` arm of the Base Application's `GetPurchaseHeaderPageID` now gets its 5 program
     edges (they were `Unknown(NoProgramSite)`), and one of them raises
     `OnAfterGetPurchaseHeaderPageID`: that is the 14 `d9` moves. `RowNodes.decl_anchor`,
@@ -52,32 +58,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     take the LAST OWNING row per key, and every piece of one key comes from that row: a call
     site's edge and bindings, an operation's order and scope frame, a parameter's role.
     What changed, point by point:
-    - direct facts, coverage and leaf/base summaries (R2a/R2b/R2c, #13): the union;
+    - direct facts, coverage and leaf/base summaries (R2a/R2b/R2c, #13): the union (a
+      summary's uncertainties ordered by `uncertainty_key`, then the full value);
     - the collided edge and uncertainty lists (class U): ordered by full value, equal items
       collapse; one interface uncertainty per call site, from its last owning row (R1b);
-      one interface candidate per implementer (R1c);
+      a collided id's interface site counts each implementer once (R1c);
     - the per-site consumers read one pick (`site_pick`): d37, `compose_roles_only` (both
       visit the id's owned call sites) and the role walker's call transfer
       (`cfg_walker`); R9 `resolved_call_edge_by_callsite` takes the owning row's edge;
+    - a publisher's event dispatch is its LAST row's, an empty one included (a bodyless
+      last row no longer takes an earlier row's dispatch);
     - events: one publisher symbol per distinct value (R4b); a subscriber id emits the
-      union of its rows' distinct nodes' subscriptions (R4; equal to before when its rows
-      share one node, as every CDO and corpus group does);
-    - the reverse call graph and r3a1 list an id once; commits are unioned and each seeds
-      from its owning row, a checked run once (#14, #16); a temp proof of an event
-      parameter needs every raise, read at its own row, and rewrites every subscriber row
-      (#17);
-    - one item per id, or per distinct value: root classifications (`resolve_target` no
-      longer reads two rows of one id as "ambiguous"), policy evaluation, the dependency
-      order index, and the snapshot's capability facts (one copy per id) and call-site
-      evidence (ordered by full value, equal copies collapse).
+      union of its rows' distinct nodes' subscriptions, ordered by full value (R4; equal
+      to before when its rows share one node, as every CDO and corpus group does);
+    - `CombinedGraph.nodes` holds each id once, so the reverse call graph, r3a1, d2 and
+      the cone list an id once; commits and checked-run seeds are unions, each seeded from
+      a row that has it (#14, #16), and that row's own guard frame decides the seed's
+      requirements; a span's pending writes count a collided seed row's own sited facts
+      only; a temp proof of an event parameter needs every raise, read (and checked
+      resolved) at its own row, and rewrites every subscriber row (#17);
+    - one copy per distinct value: root classifications (`resolve_target` no longer reads
+      two rows of one id as "ambiguous"; a roots config leaves the entries of an id it
+      does not name as they are), the snapshot's call-site evidence (ordered by full
+      value), d1's seeds (an equal copy collapses; the arms' unequal seeds are both kept);
+      one per id: the snapshot's capability facts and coverage;
+    - single-valued per id or key, from the LAST owning row: the classification lookups
+      (d50/d51, policy `routine.rootKinds`), the dependency order index's entries (each
+      op/call site with its own row's frames) and return summaries, the snapshot's
+      call-site resolutions (display, `underAsserterror`, `resultConsumed` and the
+      representative edge from one row) and its operation index, whose orders name frames
+      of the id's one frame table (every row's frames, shifted per row), `OperationJoin`
+      (`query effects` origins); policy evaluation evaluates a collided id once, through
+      its LAST row.
 
     What deliberately stays: single-row ids (passed through untouched); guard frames (class
-    G, still the last row's frame; a defect filed for step 6); the detectors that pick their
-    own row (class R: d1 reach/dataflow/cohort, d2, d3, d13, d18, d47, d49, d51 and the gate's
-    `kept_ids`); d1's seeds (class K: the arms' seeds are unequal, so each row keeps its own
-    seed with its own loop and callee, which the callee-name guard already picks; a test
-    pins it); the cone, the solve, the event graph and the spans stay per string id. The
-    cone's `CapabilityFact`, `CapabilityExtra` and `ValueSource` now derive `Ord`.
+    G: the cone reads the last row's frame per id, and so do a span's callers; a defect is
+    filed for step 6); the detectors that pick their own row (class R: d1
+    reach/dataflow/cohort, d2, d3, d13, d18, d47, d49, d51 and the gate's `kept_ids`); the
+    cone, the solve, the event graph and the spans stay per string id. Census counters of
+    the event graph count per (id, node). The cone's `CapabilityFact`, `CapabilityExtra` and
+    `ValueSource` now derive `Ord`.
   - Epic amendments 11B-1 to 11B-8 (spec §9).
 - **Grammar: tree-sitter-al `main` at `960ed312`** (B7b-2, "#if groups inside expressions";
   package version still 4.4.1; was `4d75846c`). The `node-types.json` hash guard had made CI
