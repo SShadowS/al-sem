@@ -369,6 +369,58 @@ impl<'t> IdentifierOrQuotedIdentifierOrStringLiteral<'t> {
     }
 }
 
+/// One of: list_literal, preproc_conditional_operand.
+#[derive(Copy, Clone)]
+pub enum ListLiteralOrPreprocConditionalOperand<'t> {
+    ListLiteral(RawListLiteral<'t>),
+    PreprocConditionalOperand(RawPreprocConditionalOperand<'t>),
+}
+impl<'t> ListLiteralOrPreprocConditionalOperand<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        match n.kind() {
+            RawKind::ListLiteral => Some(Self::ListLiteral(RawListLiteral(n))),
+            RawKind::PreprocConditionalOperand => Some(Self::PreprocConditionalOperand(
+                RawPreprocConditionalOperand(n),
+            )),
+            _ => None,
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        match self {
+            Self::ListLiteral(x) => x.node(),
+            Self::PreprocConditionalOperand(x) => x.node(),
+        }
+    }
+}
+
+/// One of: preproc_conditional_operand, type_specification.
+#[derive(Copy, Clone)]
+pub enum PreprocConditionalOperandOrTypeSpecification<'t> {
+    PreprocConditionalOperand(RawPreprocConditionalOperand<'t>),
+    TypeSpecification(RawTypeSpecification<'t>),
+}
+impl<'t> PreprocConditionalOperandOrTypeSpecification<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        match n.kind() {
+            RawKind::PreprocConditionalOperand => Some(Self::PreprocConditionalOperand(
+                RawPreprocConditionalOperand(n),
+            )),
+            RawKind::TypeSpecification => Some(Self::TypeSpecification(RawTypeSpecification(n))),
+            _ => None,
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        match self {
+            Self::PreprocConditionalOperand(x) => x.node(),
+            Self::TypeSpecification(x) => x.node(),
+        }
+    }
+}
+
 /// One of: string_literal, verbatim_string.
 #[derive(Copy, Clone)]
 pub enum StringLiteralOrVerbatimString<'t> {
@@ -1471,10 +1523,10 @@ impl<'t> RawAsExpression<'t> {
             .field(FieldName::Operator)
             .and_then(RawAsKeyword::cast)
     }
-    pub fn right(self) -> Option<RawTypeSpecification<'t>> {
+    pub fn right(self) -> Option<PreprocConditionalOperandOrTypeSpecification<'t>> {
         self.0
             .field(FieldName::Right)
-            .and_then(RawTypeSpecification::cast)
+            .and_then(PreprocConditionalOperandOrTypeSpecification::cast)
     }
 }
 
@@ -4229,10 +4281,10 @@ impl<'t> RawInExpression<'t> {
             .field(FieldName::Operator)
             .and_then(RawInKeyword::cast)
     }
-    pub fn right(self) -> Option<RawListLiteral<'t>> {
+    pub fn right(self) -> Option<ListLiteralOrPreprocConditionalOperand<'t>> {
         self.0
             .field(FieldName::Right)
-            .and_then(RawListLiteral::cast)
+            .and_then(ListLiteralOrPreprocConditionalOperand::cast)
     }
 }
 
@@ -4430,10 +4482,10 @@ impl<'t> RawIsExpression<'t> {
             .field(FieldName::Operator)
             .and_then(RawIsKeyword::cast)
     }
-    pub fn right(self) -> Option<RawTypeSpecification<'t>> {
+    pub fn right(self) -> Option<PreprocConditionalOperandOrTypeSpecification<'t>> {
         self.0
             .field(FieldName::Right)
-            .and_then(RawTypeSpecification::cast)
+            .and_then(PreprocConditionalOperandOrTypeSpecification::cast)
     }
 }
 
@@ -6629,6 +6681,29 @@ impl<'t> RawPreprocConditionalObject<'t> {
     #[inline]
     pub fn node(self) -> RawNode<'t> {
         self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalOperand<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalOperand<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalOperand {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn operand(self) -> Vec<RawNode<'t>> {
+        self.0.children_by_field(FieldName::Operand)
+    }
+    pub fn operator(self) -> Vec<RawNode<'t>> {
+        self.0.children_by_field(FieldName::Operator)
     }
 }
 
