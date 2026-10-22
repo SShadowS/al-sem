@@ -282,9 +282,14 @@ which receives the file); it trips a `debug_assert!` and counts each of its site
 sites, so their lengths equal the site vectors' by construction; a `debug_assert_eq!` on the
 three lengths at the end of `project_ir` pins it.
 
-`ModelRoutine` literals to update (`file: None, site_exprs: SiteExprs::default()`): 14 in
-`src` (2 production: `workspace.rs:1375`, `abi_rows.rs:183`; 12 in test code) and 6 in
-`tests` (`rg -n 'ModelRoutine \{'`, excluding signatures and the definition).
+`ModelRoutine` literals to update (`file: None, site_exprs: SiteExprs::default()`): 11 in
+`src` (2 production: `workspace.rs:1375`, `abi_rows.rs:183`; 9 in test code:
+`root_classification.rs:822`, `return_summary.rs:894`, `l5/test_support.rs:117`,
+`l4/cfg_walker.rs:1869`, `l4/db_effect_solver.rs:1814`, `l5/d1_temp.rs:275`,
+`gate/format_pr_summary.rs:311`, `l5/fingerprint.rs:305`, `l5/detectors/d17.rs:385`) and 3
+in `tests` (`temp_state/temp_state_shadowing.rs:100`, `temp_state/temp_state_path.rs:63`,
+`l4_summary_differential.rs:1289`); `rg -n 'ModelRoutine \{'` excluding the definition and
+function signatures (`program_calls.rs:2269` is one).
 
 ### 4.2a The LSP path
 
@@ -293,10 +298,10 @@ file contributes", shared by the batch snapshot (`:764`) and the incremental upd
 (`updater.rs:554`, `:829`). It reads only `LspEdge`s, never a key, and it has no
 `ProgramContext` file table when the updater re-resolves one file. It therefore calls
 `resolve_file_obligations(…, None)`: the explicit unstamped path. The LSP's edges are
-unchanged by construction; T10 (§5.11) pins it: the batch and the incremental recompute give
-the same `LspEdge`s before and after (the existing per-file/full-run concatenation test,
-`full.rs:4199`, extended), and the batch path's `ClassifiedEdge`s carry `Some` stamps whose
-`file` is `ctx.file_ix` of their file while the LSP path's carry `None`.
+unchanged by construction. T10 (§5.11) pins it at `resolve_file_obligations` itself (called
+directly with `None` and with `Some`), because `recompute_file` returns `LspEdge`s and a
+stamp cannot be observed through it; the existing batch/incremental `recompute_file` tests
+keep pinning the LSP's output.
 
 ### 4.3 The key join (step 10)
 
@@ -382,12 +387,16 @@ Single-app is unchanged (no demand, primary only).
       /// row's `node`; dependency source rows from `source_routine_node_id`; ABI rows
       /// from J3's `node_id`. Read by the collision census; 11b's corrections read it.
       node_of: Vec<Option<RoutineNodeId>>,
-      /// The program's declaration anchor `(FileIx, start line, start col)` of each node a
-      /// model row stands for: one `DeclSurface::get_with_path` per node, captured here
-      /// and never derived from a row. The caller check reads it (§4.8).
+      /// The program's declaration anchor `(FileIx, start line, start col)` of EVERY node
+      /// of a model app (`model_apps`) that has a surface declaration, whether or not a
+      /// held row stands for it: one `DeclSurface::get_with_path` per such node, captured
+      /// here and never derived from a row. This is the domain J2 answers on today
+      /// (`l3_routine` asks the surface for any node of a model app, `:1178-1191`). The
+      /// caller check reads it (§4.8).
       decl_anchor: HashMap<RoutineNodeId, (FileIx, u32, u32)>,
-      /// J2's answer, recorded (§4.7): per node, the FIRST non-symbol-only row (over all
-      /// rows) whose anchor equals `decl_anchor[node]`.
+      /// J2's answer, recorded (§4.7): for every node in `decl_anchor`, the FIRST
+      /// non-symbol-only row (over all rows) whose anchor equals `decl_anchor[node]`;
+      /// absent when no row has that anchor (J2's `None`).
       j2_row: HashMap<RoutineNodeId, u32>,
       /// J5's answer, recorded (§4.9): per row, the node today's span map gives, or None.
       j5_node: Vec<Option<RoutineNodeId>>,
@@ -406,9 +415,13 @@ Single-app is unchanged (no demand, primary only).
 
 `Converter::l3_routine(node)` becomes `row_nodes.j2_row.get(node)`, restricted to model apps
 and to non-symbol-only rows (a symbol-only row's empty unit never equals a declaration's,
-so J2 never returned one; the restriction makes that explicit). `j2_row` is exactly J2:
-`decl_anchor` is the surface's declaration (last write wins per node), and "first row at
-that anchor over all rows" is `by_decl`'s `entry().or_insert`. It therefore keeps the
+so J2 never returned one; the restriction makes that explicit). `j2_row` is exactly J2, on
+J2's own domain: `decl_anchor` covers every node of a model app that has a surface
+declaration (not only nodes a held row stands for), so a route into a node no row stands
+for, but whose declaration anchor coincides with some row's, gets that row exactly as
+today; `decl_anchor` is the surface's declaration (last write wins per node), and "first row
+at that anchor over all rows" is `by_decl`'s `entry().or_insert`. A node with no surface
+declaration, or whose anchor no row has, is absent from `j2_row` (J2's `None`). It therefore keeps the
 cross-node alias (both `AcquireTokenFromCache` nodes → row `…4f4ac631`, which is what keeps
 R-PAIRS' two non-equivalent pairs byte-identical) and the two collision shapes:
 `GetPurchaseHeaderPageID` (two anchors → the row at line 353) and `GetSalesHeaderPageID`
@@ -523,9 +536,23 @@ both conversions on the SAME pristine model and returns three separate compariso
    accepted (or none).
 2. **Converted output:** the full `ResolvedCalls` of each, grouped by `(from, callsite id)`:
    every `CallEdge` (`Debug`), every `ExternalTargetRef`, every `upgraded_bindings` entry.
-3. **Census:** both censuses, with stated expected differences only: `duplicate_program_span`
-   and `duplicate_l3_span` may be lower on the key side (a span duplicate is two keys); every
-   other counter equal. Both run with the same demand setting.
+3. **Census:** both censuses, under the same demand setting (cross-app: the 10A-2 filter,
+   as production runs at Task 2), compared counter by counter against EXACT stated deltas.
+   A span duplicate is two keys, so each extra edge the span join set aside as
+   `duplicate_program_span` is classified on the key side like any other edge: a call edge is
+   consumed by its own arm's call site (no counter), a non-firing operation edge becomes an
+   `operation_site`, a firing one an `implicit_trigger_matched`. Expected, derived from P15
+   (not measured in key mode; the probe's key mode recomputed pairs, not the census):
+   - single-app CDO and every r0 / `tests/fixtures` dir: every counter equal (0 duplicates
+     either side, P2, P15);
+   - cross-app CDO: `duplicate_program_span` 24 → 0, `duplicate_l3_span` 23 → 0,
+     `operation_site` +1, every other counter equal. The 24 span duplicates are the 23
+     call edges of R-PAIRS' second arms (consumed by their own sites on the key side; the
+     23 model call-site span duplicates are those same sites) plus one operation edge, the
+     non-firing record op at `AccessToken.Table.al` 68:11 of `AcquireTokenFromCache`'s
+     second arm (P6 listed it; P15 found 0 differing accepted op pairs, so it does not fire),
+     which the key side counts as an `operation_site`.
+   T1 asserts these deltas exactly at Task 1; any other delta is F2.
 
 Tests:
 - `key_join_equals_span_join_on_the_fixtures` (r0 dirs with an `app.json` and
@@ -569,14 +596,18 @@ Break: swap the first two call sites' `site_exprs` entries of one fixture row �
 Moving a site's anchor no longer unpairs it; moving a row's anchor no longer changes J2.
 Each test below keeps its expected outcome and states its precondition on the new input:
 - `l3_ops_with_no_program_site_are_counted_by_trigger_capability` (`program_calls.rs:2318-2350`):
-  set the ops' and operation sites' `site_exprs` entries to `u32::MAX`.
-- `a_site_without_a_program_edge_is_unknown_not_legacy_resolved` (`:2632+`): same, for the
-  call site.
+  replace each original expression index `e` of routine `P` by `u32::MAX - e` (its 2
+  record ops and 3 operation sites). Distinct originals stay distinct, so no within-category
+  duplicate is created, and each record op keeps the same key as its own operation site
+  (the walk's correspondence, §3.3); no unused key equals a real one (the test asserts every
+  index of the file is below `u32::MAX / 2`).
+- `a_site_without_a_program_edge_is_unknown_not_legacy_resolved` (`:2632+`): same rule
+  (`u32::MAX - e`), for the one call site.
 - `duplicate_l3_span_is_counted` (`:2357-2374`): the clone of a call site also copies its
   `site_exprs` entry (stated in the test).
 - `unmatched_record_op_gets_no_l3_trigger_edge` (`program_calls_adapter_tests.rs:1326-1341`)
-  and `unmatched_site_is_unknown_not_l3` (`:1347+`): set the record op's / call site's
-  `site_exprs` entry to `u32::MAX`.
+  and `unmatched_site_is_unknown_not_l3` (`:1347+`): the same `u32::MAX - e` rule, for the
+  record op AND its own operation site (one key, kept shared) / for the call site.
 - `interface_implementer_outside_l3_is_unknown` (`program_calls_adapter_tests.rs:396-415`):
   remove `Go`'s node from `row_nodes.j2_row` instead of moving `Go`'s anchor (the
   `adapt_with` helper gains access to `RowNodes`).
@@ -691,19 +722,27 @@ Breaks: T7a/T7c `j2_row` = last row → T7c fails; T7b per-node selection → fa
 
 ### 5.11 T10: the LSP's unstamped path
 
-`lsp_recompute_file_is_unstamped_and_unchanged` (`--lib`, `src/lsp/snapshot.rs` tests):
-for an r0 fixture, `recompute_file` gives the same `LspEdge`s as before the change (the
-existing batch/incremental equality tests stay green) and its `ClassifiedEdge`s carry
-`site == None`; the batch resolution of the same file carries `Some` with
-`file == ctx.file_ix(app, path)`. The existing `resolve_file_obligations_matches_full_run_per_file_and_in_concatenation`
-(`full.rs:4199`) passes `Some(file)` and additionally asserts every call-site edge's stamp.
-Break: let the LSP path stamp `Some(FileIx(0))` → the `None` assertion fails. Revert.
+`recompute_file` returns `LspEdge`s (`src/lsp/snapshot.rs:1145-1155`), not
+`ClassifiedEdge`s, so no test can see a stamp through it. The stamp is therefore pinned at
+the function the LSP calls, and the LSP's output separately:
+- `resolve_file_obligations_unstamped_and_stamped` (`--lib`, `full.rs` tests): for an r0
+  fixture file, call `resolve_file_obligations(…, None)` directly (the exact call
+  `recompute_file` makes) → every edge has `site == None`; call it with `Some(f)` → every
+  call-site edge has `Some` with `at.file == f`, and the two edge lists are equal apart from
+  `site`. Break: stamp `Some(FileIx(0))` when `file` is `None` → the `None` assertion fails.
+  Revert.
+- The existing `resolve_file_obligations_matches_full_run_per_file_and_in_concatenation`
+  (`full.rs:4199`) passes `Some(ctx.file_ix(app, path))` and additionally asserts every
+  call-site edge's stamp equals it.
+- LSP output parity: the existing batch/incremental tests of `recompute_file` (updater
+  rung-1/rung-2 against a fresh snapshot) stay green unchanged; they compare `LspEdge`s,
+  which carry no key, so they show the unstamped path gives the LSP the same edges.
 
 ### 5.12 Tests deleted or rewritten with the code they pin (I2's exception)
 
 Deleted: `links_keep_every_edge_and_qualify_by_app` (with `SiteLinks`; T4b restates its
 app half, T4 its every-edge half); T1, T7, T8 (Task 3, with the old paths). Rewritten: the
-seven tests of §5.3. Mechanical: the 20 `ModelRoutine` and 10 `ClassifiedEdge` test literals
+seven tests of §5.3. Mechanical: the 12 `ModelRoutine` (9 in `src`, 3 in `tests`) and 10 `ClassifiedEdge` test literals
 (§4.2, §3.3) gain the new fields; the two `resolve_file_obligations` test callers pass a file.
 Changed by assertion only: A8 (§5.10).
 
