@@ -310,6 +310,7 @@ pub enum RawKind {
     PreprocConditionalMoveArgs,
     PreprocConditionalMoveElements,
     PreprocConditionalObject,
+    PreprocConditionalOperand,
     PreprocConditionalOptionMembers,
     PreprocConditionalOrderByFields,
     PreprocConditionalPermissions,
@@ -834,6 +835,7 @@ impl RawKind {
             "preproc_conditional_move_args" => Some(RawKind::PreprocConditionalMoveArgs),
             "preproc_conditional_move_elements" => Some(RawKind::PreprocConditionalMoveElements),
             "preproc_conditional_object" => Some(RawKind::PreprocConditionalObject),
+            "preproc_conditional_operand" => Some(RawKind::PreprocConditionalOperand),
             "preproc_conditional_option_members" => Some(RawKind::PreprocConditionalOptionMembers),
             "preproc_conditional_order_by_fields" => Some(RawKind::PreprocConditionalOrderByFields),
             "preproc_conditional_permissions" => Some(RawKind::PreprocConditionalPermissions),
@@ -1367,6 +1369,7 @@ impl RawKind {
             RawKind::PreprocConditionalMoveArgs => "preproc_conditional_move_args",
             RawKind::PreprocConditionalMoveElements => "preproc_conditional_move_elements",
             RawKind::PreprocConditionalObject => "preproc_conditional_object",
+            RawKind::PreprocConditionalOperand => "preproc_conditional_operand",
             RawKind::PreprocConditionalOptionMembers => "preproc_conditional_option_members",
             RawKind::PreprocConditionalOrderByFields => "preproc_conditional_order_by_fields",
             RawKind::PreprocConditionalPermissions => "preproc_conditional_permissions",
@@ -1886,6 +1889,7 @@ impl RawKind {
         RawKind::PreprocConditionalMoveArgs,
         RawKind::PreprocConditionalMoveElements,
         RawKind::PreprocConditionalObject,
+        RawKind::PreprocConditionalOperand,
         RawKind::PreprocConditionalOptionMembers,
         RawKind::PreprocConditionalOrderByFields,
         RawKind::PreprocConditionalPermissions,
@@ -2093,7 +2097,7 @@ impl RawKind {
 /// `build.rs` asserts the checked-in grammar matches, so a silent grammar swap
 /// fails the build.
 pub const GRAMMAR_NODE_TYPES_HASH: &str =
-    "cfe26f9030b86cbe7d27fa245e059c7ed0fb1932ef9768503861ee620965e9dd";
+    "ec2f0cc05a58c818e645f86772942be937dbe84e6945d0af9c93fd7a3b69b1d5";
 
 /// Count of NAMED kinds (excludes `Error`). Sanity anchor for the coverage test.
-pub const NAMED_KIND_COUNT: usize = 500;
+pub const NAMED_KIND_COUNT: usize = 501;

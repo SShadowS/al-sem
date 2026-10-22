@@ -241,6 +241,10 @@ pub fn class_of(k: RawKind) -> Class {
         // `movefirst`/`movelast` header whose target or fixed `;` comes from an `#if`
         // group. Structure; the lowerer reads no move modification, so no arm.
         | RawKind::PreprocConditionalMoveArgs
+        // `main` 960ed312 (B7b-2, still package v4.4.1): an `#if` group standing in
+        // place of a whole operand, one `operand` per arm. Structure; the lowerer
+        // reads one arm of it (`lower_expr`).
+        | RawKind::PreprocConditionalOperand
         | RawKind::ActionAreaSection
         | RawKind::ActionBody
         | RawKind::ActionDeclaration
