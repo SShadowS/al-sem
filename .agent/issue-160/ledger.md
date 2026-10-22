@@ -112,6 +112,8 @@ Amendments 10A-1..10A-5, 11A-1..11A-4; fallbacks F1-F11 pre-stated (spec §10).
 - step 11: master still `ca35bf51` = base, no rebase. Full set on H = `4f88604f` started (ci-steps-all ∥ cdo-gate, heavy_gates=2; then check-goldens-coverage, check-goldens)
 - step 11 DONE (~11:00 UTC): all four green on H, clean before/after. No range-diff (no rebase), so no extra panel round
 - step 12: halt-check clear; whole-diff `check-diff --base ca35bf51 --head 4f88604f` `[]`; acceptance matrix all met (A10.3/A11a.3 `rg` checks empty on H); sanitize `{}`; ledger + register committed, then freeze-check and attest
+- step 12 done: evidence commit `3b199117`; freeze-check `[]`; attest OK (`--substitute astra=sol --substitute flash=opus`). Step 13: pushed, PR #206 marked ready (body = sanitized ledger, "Part of #160"), `ci-wait` exit 1, `merge-gate` → `ci-not-green`
+- CI red for EVERY PR and master (not this diff): `crates/al-syntax/build.rs:28` node-types hash panic — `tree-sitter-al` `main` moved 4d75846c → 960ed312 (one commit, "#if groups inside expressions", +1 named kind `preproc_conditional_operand`) after the 06:15 drift check. Not a flake (a rerun fails the same way); a fix inside #206 would mix in a grammar bump. No ci_fix charged. Operator decision (2026-10-22): "I do the bump first" — the grammar bump runs as its own branch/PR (`grammar/bump-960ed312`, separate grammar clone so the shared clone stays at 4d75846c); after it merges, #206 rebases (step 11 again, `rebase_regate`), re-gates, re-attests and merges. #206's lease kept (heartbeat)
 
 ### Acceptance tests (step 6)
 
