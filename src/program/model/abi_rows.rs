@@ -211,6 +211,9 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         operation_sites: Vec::new(),
         statement_tree: None,
         loops: Vec::new(),
+        // A symbol-only row has no sites (#160 §4.2).
+        file: None,
+        site_exprs: Default::default(),
         // Dep routines are bodyless (ABI symbol-only) — no body anchor / refs /
         // unreachable statements. `body_available` is hardcoded false for projected
         // dep routines (deps/projection.rs), and the L5 detectors that read these

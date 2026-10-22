@@ -18,7 +18,6 @@ pub mod events;
 pub mod extension_fields;
 pub mod program_calls;
 pub mod record_types;
-pub mod site_links;
 pub mod symbol_table;
 pub mod taxonomy;
 pub mod workspace;

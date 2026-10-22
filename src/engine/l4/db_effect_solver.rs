@@ -1835,6 +1835,8 @@ pub(crate) mod tests {
             operation_sites: Vec::new(),
             statement_tree: None,
             loops: Vec::new(),
+            file: None,
+            site_exprs: Default::default(),
             source_anchor: pd_anchor(),
             declaration_start_line: 0,
             identifier_references: Vec::new(),

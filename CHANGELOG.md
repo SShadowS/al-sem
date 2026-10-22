@@ -27,6 +27,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new: per-test outcomes identical apart from the two new lowerer tests (3,597 -> 3,599, all
   pass), zero goldens moved, the stamp kept its length so `dry-run.txt` did not move, CDO
   `--program-call-graph-stats` byte-identical (SHA-256 `c032c8db…94ef`, as at `4d75846c`).
+- #160 steps 10 + 11a: the adapter pairs call sites by key, and routine identity is recorded
+  once at assembly (part of #160). Output is unchanged: no golden moved, and on CDO the SARIF
+  (both scopes, cross-app and single-app) and the call-graph histogram are byte-identical.
+  Measured on CDO (server1, `release-fast`, 5 runs a side): cross-app `analyze` drops from
+  26.9 s to 18.6 s, the join span `b3.adapter.join` from 8,381.6 ms to 90.3 ms, and the kernel
+  peak from 3,219 MB to 3,070 MB; single-app is unchanged within noise. Numbers and bounds:
+  `docs/measurements/2026-10-22-issue-160-steps10-11a.md`.
+  - **The key join (step 10).** A model call site and a program edge now pair by
+    `SiteIx = (FileIx, expression index)`: the resolver stamps it on each call-site edge
+    (`ClassifiedEdge.site`, with `fires` for a record op), and the body walk records it per
+    site (`ModelRoutine.file`, `site_exprs`). `FileIx` comes from one file table on the
+    `ProgramContext`, keyed by app and path. The span join (J1), the source `texts` map and
+    the op-name parse (J4, now the resolver's `fires`) are deleted, with `site_links.rs`.
+    A debug assertion checks that every accepted pair has the same span on both sides. The
+    LSP's per-file re-resolve passes no file and stays unstamped. The site keys are freed
+    at the attach, after the join.
+  - **`RowNodes` (step 11a).** Built at the end of assembly and dropped at the attach: each
+    row's true node (`node_of`), the program declaration anchor of every caller the join reads
+    (`decl_anchor`, for the caller check), and today's J2 and J5 answers (`j2_row`,
+    `j5_node`). The caller check, the callee-row lookup and the event graph read them; the
+    per-use `by_decl` map, the surface lookups and the event graph's span map are deleted.
+    J2's cross-node alias and J5's two mapping gaps are kept as recorded answers, so the
+    output does not move; correcting them is step 11b's. J5 answers for event-subscriber
+    rows only, the only rows the event graph reads.
+  - **The cross-app census counts only callers the model holds** (10A-2): a dependency
+    routine the workspace does not demand is no longer a lost site. The cross-app loss gate
+    on CDO is exactly the known residual (18 XmlPort record ops the body walk misses, 5
+    `caller_mismatch` sites of one `#if`-split routine, their 23 fallback sites).
+  - **Census.** A `[retained-census] collision …` line per model (rows sharing a string id,
+    split by node and role, plus `j2_alias_nodes` and `j5_compat_rows`: event-subscriber
+    rows whose recorded J5 answer is not their true node), and four new
+    buckets: `program.edge_site`, `program.file_table`, `program.row_nodes`,
+    `model.site_exprs`.
+  - Amendments to the epic: 10A-1 (`SiteIx` is a key, not a dense index), 10A-2 (the
+    demand filter), 10A-3 (the CDO gate asserts the residual), 10A-4 (bounds on
+    `b3.adapter` and `analyze.total`, kernel peak RSS), 10A-5 (byte identity is read on the
+    converted calls), 11A-1 (one claim), 11A-2 (`RoutineIx` is the row position), 11A-3
+    (J2/J5 answers recorded, wrong ones included), 11A-4 (the L4 interner's `RoutineIx`
+    keeps its name).
 - #160 epic spec: two owner-approved changes to the delivery plan (2026-10-21; part of
   #160). Step 11 splits into 11a (routine identity, the two declaration joins, a collision
   count; output unchanged) and 11b (re-keying by routine and the one rule for routines that

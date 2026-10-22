@@ -95,6 +95,9 @@ pub struct IrSpine {
     /// call_sites with `argument_bindings` EMPTY (filled by the post-pass in
     /// `routine_features_partial` from `ir_record_variables` + the params).
     pub call_sites: Vec<PCallSite>,
+    /// #160 §4.2: each site's expression index, parallel to `call_sites`,
+    /// `record_operations` and `operation_sites` (filled at the same pushes).
+    pub site_exprs: crate::program::site_key::SiteExprs,
     /// Per call-site, the argument ExprIds (parallel to `call_sites`) — the binding
     /// post-pass needs them to anchor + classify each argument.
     pub cs_arg_exprs: Vec<Vec<ExprId>>,
@@ -271,6 +274,8 @@ struct SpineCtx<'a> {
     /// no nested loop resets the nearest-enclosing-loop context.
     in_until: bool,
     call_sites: Vec<PCallSite>,
+    /// #160 §4.2: each site's expression index (see [`IrSpine::site_exprs`]).
+    site_exprs: crate::program::site_key::SiteExprs,
     cs_arg_exprs: Vec<Vec<ExprId>>,
     /// Every assignment whose target is a bare variable, `(name lowercased,
     /// value expr)`, in walk order. Read by `exhausting_advance` (#50) to see
@@ -979,6 +984,8 @@ impl<'a> SpineCtx<'a> {
             };
             let is_commit = fname.as_deref() == Some("commit");
             let is_error = fname.as_deref() == Some("error");
+            // #160 §4.2: the site's key in this file, the resolver's `site.expr`.
+            let expr_ix = u32::try_from(eid.index()).expect("an expression index fits u32");
             if is_record_op || is_commit || is_error {
                 let op_id = format!("{}/op{}", self.routine_id, self.op_index);
                 // Error advances the op counter but is NOT mapped (legacy
@@ -994,6 +1001,7 @@ impl<'a> SpineCtx<'a> {
                     // PRecordOperation (pre-backfill) for record DB ops.
                     let (field_arguments, field_argument_infos) =
                         self.record_op_field_args(op_type, &args);
+                    self.site_exprs.record_ops.push(expr_ix);
                     self.record_operations.push(PRecordOperation {
                         id: op_id.clone(),
                         op: op_type.to_string(),
@@ -1042,6 +1050,7 @@ impl<'a> SpineCtx<'a> {
                         },
                     )
                 };
+                self.site_exprs.op_sites.push(expr_ix);
                 self.operation_sites.push(POperationSite {
                     id: op_id,
                     kind: kind.to_string(),
@@ -1083,6 +1092,7 @@ impl<'a> SpineCtx<'a> {
                 } else {
                     (None, None)
                 };
+                self.site_exprs.calls.push(expr_ix);
                 self.call_sites.push(PCallSite {
                     id: cs_id,
                     operation_id: String::new(),
@@ -1285,6 +1295,7 @@ pub fn walk_spine(
         count_next_call_fn: false,
         in_until: false,
         call_sites: Vec::new(),
+        site_exprs: Default::default(),
         cs_arg_exprs: Vec::new(),
         bare_assigns: Vec::new(),
         assign_target: None,
@@ -1332,6 +1343,7 @@ pub fn walk_spine(
         record_operations: ctx.record_operations,
         operation_sites: ctx.operation_sites,
         call_sites: ctx.call_sites,
+        site_exprs: ctx.site_exprs,
         cs_arg_exprs: ctx.cs_arg_exprs,
     }
 }
@@ -1718,6 +1730,8 @@ pub struct IrPartialFeatures {
     pub record_operations: Vec<PRecordOperation>,
     pub operation_sites: Vec<POperationSite>,
     pub call_sites: Vec<PCallSite>,
+    /// #160 §4.2: each site's expression index (see [`IrSpine::site_exprs`]).
+    pub site_exprs: crate::program::site_key::SiteExprs,
 }
 
 /// Build the validated slice of `PFeatures` from the owned IR for one routine.
@@ -1881,6 +1895,7 @@ pub fn routine_features_partial(
         record_operations,
         operation_sites: spine.operation_sites,
         call_sites,
+        site_exprs: spine.site_exprs,
     }
 }
 
@@ -1908,10 +1923,13 @@ pub fn project_routine_features_ir(
         source_table_name,
         &HashSet::new(),
     )
+    .0
 }
 
 /// [`project_routine_features_ir`] with the parens-less value reads the program
-/// resolver kept as calls (`program::resolve::full::ParenlessCalls`).
+/// resolver kept as calls (`program::resolve::full::ParenlessCalls`), plus each
+/// site's expression index (#160 §4.2), kept apart from `PFeatures` so the L2
+/// snapshot (a `Debug` hash of `PFeatures`) does not see it.
 #[allow(clippy::too_many_arguments)]
 pub fn project_routine_features_ir_with(
     file: &AlFile,
@@ -1922,7 +1940,10 @@ pub fn project_routine_features_ir_with(
     source_unit_id: &str,
     source_table_name: Option<&str>,
     parenless_calls: &HashSet<ExprId>,
-) -> super::features::PFeatures {
+) -> (
+    super::features::PFeatures,
+    crate::program::site_key::SiteExprs,
+) {
     let p = routine_features_partial(
         file,
         object_idx,
@@ -1936,7 +1957,7 @@ pub fn project_routine_features_ir_with(
     let record_variables =
         ir_record_variables(file, object_idx, routine, routine_id, source_table_name);
     let variables = ir_variables(file, object_idx, routine, source, source_unit_id);
-    super::features::PFeatures {
+    let features = super::features::PFeatures {
         loops: p.loops,
         operation_sites: p.operation_sites,
         record_operations: p.record_operations,
@@ -1952,7 +1973,8 @@ pub fn project_routine_features_ir_with(
         condition_references: p.condition_references,
         statement_tree: p.statement_tree,
         scope_frames: Vec::new(),
-    }
+    };
+    (features, p.site_exprs)
 }
 
 // ---- record_variables (params + locals + implicit Rec) ----

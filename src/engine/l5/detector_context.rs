@@ -2380,6 +2380,154 @@ page 50812 "CP2 Wizard"
         );
     }
 
+    /// #160 step 11a (spec §5.9), the epic's 11a proof: today's three rules for
+    /// rows that share one string id, hand-stated (the technique of
+    /// `hand_stated_id_collision_keeps_a_real_summary_and_derived_row`): two
+    /// `OnAction` triggers with DIFFERENT bodies, B's `id` set to A's by
+    /// assignment. R1: the combined graph files both rows' out-edges under the
+    /// one id (union). R2: the direct facts and coverage are the LAST row's
+    /// (`det_cone_inputs` inserts per row). R3: one summary, written by the FIRST
+    /// row, carrying R2's direct facts. 11a changes no rule, so this passes on
+    /// 11a unchanged; 11b flips it to the union rule.
+    #[test]
+    fn collision_rules_hand_stated() {
+        use crate::engine::l4::capability_cone::direct_facts_for_routine;
+        use crate::engine::l5::registry::substrate;
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
+
+        let src = r#"
+table 50813 "CR A"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+table 50814 "CR B"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+page 50813 "CR Wizard"
+{
+    PageType = Card;
+
+    actions
+    {
+        area(Processing)
+        {
+            action(Alpha)
+            {
+                trigger OnAction()
+                var
+                    A: Record "CR A";
+                begin
+                    A.Insert();
+                    TouchA();
+                end;
+            }
+            action(Beta)
+            {
+                trigger OnAction()
+                var
+                    B: Record "CR B";
+                begin
+                    B.Modify();
+                    TouchB();
+                end;
+            }
+        }
+    }
+
+    local procedure TouchA()
+    begin
+    end;
+
+    local procedure TouchB()
+    begin
+    end;
+}
+"#;
+        let files = vec![("src/CRWizard.al".to_string(), src.to_string())];
+        let mut resolved = assemble_and_resolve_inline_program_default(
+            &files,
+            "22222222-0000-0000-0000-0000000cr011",
+        );
+        let id_of = |m: &Model, name: &str| {
+            m.workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap()
+                .id
+                .clone()
+        };
+        let (touch_a, touch_b) = (id_of(&resolved, "TouchA"), id_of(&resolved, "TouchB"));
+        let on_actions: Vec<usize> = resolved
+            .workspace
+            .routines
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.name == "OnAction")
+            .map(|(ri, _)| ri)
+            .collect();
+        assert_eq!(on_actions.len(), 2, "precondition: two OnAction rows");
+
+        const SHARED_ID: &str = "hand-stated-collision-id";
+        let forced = force_shared_id(&mut resolved, "OnAction", SHARED_ID);
+        assert_eq!(forced, 2, "precondition: both rows carry the shared id");
+        // FP-14: the FIRST row is marked parse-incomplete by assignment, so the
+        // two rows' coverage differs too and R2's coverage half can tell first
+        // from last.
+        resolved.workspace.routines[on_actions[0]].parse_incomplete = true;
+        // Each row's own direct facts, under the shared id (the facts' subject).
+        let facts = |ri: usize| direct_facts_for_routine(&resolved.workspace.routines[ri], &[]);
+        let (a_direct, b_direct) = (facts(on_actions[0]), facts(on_actions[1]));
+        assert_ne!(
+            a_direct.0, b_direct.0,
+            "precondition: the two bodies have different direct facts"
+        );
+        assert_ne!(
+            (&a_direct.1, &a_direct.2),
+            (&b_direct.1, &b_direct.2),
+            "precondition: the two rows have different coverage"
+        );
+
+        // R2: direct facts and coverage, last row wins.
+        let inputs = det_cone_inputs(&resolved);
+        assert_eq!(
+            inputs.direct_full.get(SHARED_ID),
+            Some(&b_direct.0),
+            "R2: the direct facts are the LAST row's"
+        );
+        assert_eq!(
+            inputs.coverage_in.get(SHARED_ID),
+            Some(&(b_direct.1.clone(), b_direct.2.clone())),
+            "R2: the direct coverage is the LAST row's"
+        );
+
+        let owned = build_detector_context(&resolved, substrate::SUMMARIES);
+        let ctx = owned.ctx();
+        // R1: the edges are the union of both rows'.
+        let to: std::collections::BTreeSet<&str> = ctx
+            .graph
+            .edges_by_from
+            .get(SHARED_ID)
+            .map(|v| v.iter().map(|e| e.to.as_str()).collect())
+            .unwrap_or_default();
+        assert!(
+            to.contains(touch_a.as_str()) && to.contains(touch_b.as_str()),
+            "R1: both rows' callees under the one id: {to:?}"
+        );
+        // R3: one summary, the first row's, holding R2's direct facts.
+        let summary = ctx.summaries.get(SHARED_ID).expect("R3: a summary");
+        assert!(summary.coverage.is_some(), "R3: not degenerate");
+        assert_eq!(
+            summary.capability_facts_direct, b_direct.0,
+            "R3: the first row's summary holds the last row's direct facts"
+        );
+    }
+
     /// ⟨fix wave FIX 1, final-branch-review finding 2⟩ Discriminates the call-site
     /// regression the review flagged: both `perf_bounds` L4 gates call
     /// `compute_summaries_v2_bundle` directly, so neither would notice if

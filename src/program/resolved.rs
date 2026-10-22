@@ -14,7 +14,7 @@
 //! `dependency_body_edges` is one edge per dependency call site. A dependency
 //! publisher can sit in both, so the order `edges` then `dependency_body_edges` is
 //! a contract (the graph projection keeps the first edge's `via` on a `conf` tie,
-//! the adapter takes the first edge at a span). Both fields are private:
+//! the adapter takes the first edge at a site key). Both fields are private:
 //! [`ProgramBody::all_edges`] and [`EdgeView::all_edges`] are the only ways a
 //! reader walks both.
 
@@ -317,11 +317,20 @@ impl ResolvedProgram {
     }
 
     /// #160 §4.1.5: the `program.snapshot_texts`, `program.report` and `inputs`
-    /// buckets, printed.
+    /// buckets, printed; #160 steps 10 + 11a (§4.13): `program.edge_site` (the
+    /// edges' site keys, a part of `program.report`) and `program.file_table`.
     pub(crate) fn census(&self) {
         self.snapshot_texts_tally()
             .emit("program.snapshot_texts", Kind::Exact);
         self.report_tally().emit("program.report", Kind::Shallow);
+        let b = &self.body;
+        let edges = b.edges.len() + b.dependency_body_edges.len();
+        Tally {
+            bytes: edges * std::mem::size_of::<Option<crate::program::site_key::ProgramSite>>(),
+            allocs: 0,
+        }
+        .emit("program.edge_site", Kind::Exact);
+        b.ctx.files.census().emit("program.file_table", Kind::Exact);
         self.meta.inputs.census().emit("inputs", Kind::Exact);
     }
 
@@ -392,6 +401,7 @@ fn edge_for_test(body: &ProgramBody, params_count: usize) -> ClassifiedEdge {
     ClassifiedEdge {
         obligation_id: first.obligation_id.clone(),
         edge,
+        site: first.site,
     }
 }
 

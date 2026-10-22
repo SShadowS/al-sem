@@ -697,6 +697,7 @@ impl LspSnapshot {
             ws_file_set,
             dep_layer,
             profile: _,
+            files: _,
         } = ctx;
 
         // Locate the ONE primary (workspace) `ParsedUnit` — `snap.apps` is
@@ -1157,6 +1158,8 @@ pub(crate) fn recompute_file(
         index,
         surface,
         obj_node_map,
+        // #160 §4.2a: the LSP's explicit unstamped path (it reads no key).
+        None,
     );
     let def_surface = def_surface_fingerprint(pf);
 
