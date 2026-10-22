@@ -1,7 +1,7 @@
 # #160 child spec: step 5 — one coverage policy
 
-Status: revised after spec panel round 1 (2026-10-22; findings R1-01 to R1-19 in
-`.agent/issue-160/findings.json`). Made from the pre-draft
+Status: revised after spec panel rounds 1 and 2 (2026-10-22; findings R1-01 to R1-19 and
+R2-01 to R2-03 in `.agent/issue-160/findings.json`; §0.1, §0.2). Made from the pre-draft
 `/work/bench/160-5/draft-step5-design.md` once the probes had run. §0 lists what the probes
 changed; §0.1 lists what round 1 changed.
 
@@ -63,8 +63,8 @@ Words:
    analysed" hubs explain all 41 added d35 findings at primary scope:
    `ExecuteRequestInternal` (Codeunit 6225912, 35) and `LogMessageInternal` (Codeunit 8712, 6);
    12 hubs explain the 83 at all scope. Every one of the 41 names `interface-open-world`.
-3. **d1 and d2 do not move on CDO, and cannot move their output** (§3.2, the d1/d2 limit).
-   They stay in the reader list as readers whose cost, not output, changes.
+3. **d1 and d2 do not move on CDO.** d1 cannot move at all; d2 can only LOSE a finding, through
+   its shared walk budget (§3.2, round 2). T9 pins d2's use.
 4. **d45 is opt-in** (`detectors/mod.rs:1636-1648`), so `cdo-measure`'s default `analyze`
    never runs it. Run explicitly (P10b): 150 findings both sides, 65 change only their text
    (`subscriberCoverage=complete` → `partial`). §8 adds the explicit run.
@@ -119,6 +119,20 @@ Words:
 - **T6 pins `--coverage-policy`** (R1-11); counts, citations, deleted-doc lines, §7 pointer,
   Q2's reason, T4's assertions and the fixture note fixed (R1-12 to R1-19).
 
+### 0.2 What spec panel round 2 changed
+
+- **T1's d9 text** (R1-03): with one pending table d9 says "writes 1 known table(s) before
+  it" (`d9.rs:75-80`), not the "effect scope unknown" wording.
+- **d2 can lose a finding** (R1-05): its walk budget is shared, so §3.2 replaces "cannot
+  change" with what can change; T9 pins d2's use with a budget fixture; F6 is its fallback.
+  d1 has no budget and stays a stated limit.
+- **Mixed-reason d35 text** (R1-06): F1 keeps mixed-reason UNKNOWN findings in d35 with their
+  id and fingerprint, but their text gains the fold reasons and targets (`d35.rs:145-170`,
+  `:233-268`); permitted and tested.
+- **F2's d9 split needs an incomplete span** (R2-01) and **a span's reasons are defined**
+  (R2-02, §7).
+- **Fanout and `transactionContext` are reported, not gated** (R2-03): they are not detectors.
+
 ## Feasibility first
 
 Decision 58 classes step 5 **non-speed**: no bench, no wall or peak bound. Its CDO evidence is
@@ -139,7 +153,7 @@ On the measured data every acceptance item but one is feasible:
   the bundled policy (`requireCoverage: partial`) cannot be moved by the fold (measured:
   byte-identical). Delivered with a stated proxy (Q1), not as worded.
 - **The "> 30 % FP = opt-in or root-cause fix" rule** is feasible to apply with §7's verdicts;
-  whether it fires is the triage's answer. Its fallbacks are pre-stated (F1-F3).
+  whether it fires is the triage's answer. Its fallbacks are pre-stated (F1-F3, F6).
 
 ## 1. Goal
 
@@ -209,19 +223,27 @@ P-d's are built from the same calls, so their uncertainty edges are the same lis
 | events fanout (`event_flow.rs:350`; `gate/events.rs:441`; `--coverage-policy`, `:456-518`) | `inherited_status` → `capabilityComposition` | `complete` → `partial`; under `--coverage-policy strict` the entry is dropped with a stderr line and exit 1; under `ignore` it is rewritten to `complete` | partial events 7 → 35; single-app 0 → 2 |
 | policy coverage gate (`policy_engine.rs:250-264`, gate `:72-79`) | `inherited_status` | only under `requireCoverage: complete` (§3.4) | bundled: byte-identical; custom: §0 item 8 |
 | d1 (`d1_graph.rs:135`, the closure edge filter; `d1.rs:723` is the test-only shadow oracle) | `touches_db_derived` → `presence()` (`capability_query.rs:158-166`) | walk cost only (the d1/d2 limit below) | 0 findings, 0 `detectorStats` change |
-| d2 (`detectors/d2.rs:137`, `:392`) | `touches_physical_table_derived` → `presence()` | walk cost only | 0 findings, 0 `detectorStats` change |
+| d2 (`detectors/d2.rs:137`, `:392`) | `touches_physical_table_derived` → `presence()` | walk cost; a finding can be LOST when the 500-node budget is spent on a newly entered branch (below) | 0 findings, 0 `detectorStats` change |
 | d34 (`detectors/d34.rs:115`) | `may_commit_derived == Yes` | cannot move (the fold adds no fact) | 0 |
 
-**The d1/d2 limit (stated, not pinned).** `presence()` returns `Unknown` instead of `No` only
-for a summary whose cone holds no fact of the asked kind. Each arm that reads it (d1's closure
-edge filter, d2's `expand` at `:137`, d2's subscriber gate at `:392`) only decides whether a
-walk ENTERS that callee. The walk follows the Primary graph's edges (a subset of the Cone's)
-and its terminals are record operations in the routines it reaches; every such operation is
-already a fact in the callee's cone. So a walk that enters a callee with no fact of that kind
-ends with no terminal, and d1/d2 output cannot change; only the walk's cost can. There is
-therefore no output a use-pinning test could assert. Evidence: the prototype left d1 and d2
-findings and `detectorStats` byte-identical on CDO at both scopes, and every r4 golden green.
-If the head moves either, it is F5.
+**d1 and d2: what the fold can change (round 2, R1-05).** `presence()` returns `Unknown`
+instead of `No` only for a summary whose cone holds no fact of the asked kind. Each arm that
+reads it (d1's closure edge filter, d2's `expand` at `:137`, d2's subscriber gate at `:392`)
+only decides whether a walk ENTERS that callee. The walk follows the Primary graph's edges (a
+subset of the Cone's) and its terminals are record operations in the routines it reaches;
+every such operation is already a fact in the callee's cone. So the newly entered branch
+never yields a terminal: the fold cannot ADD a d1 or d2 finding or path.
+- **d1 cannot change.** Its production reachability has no node or depth budget; cycle
+  safety is label dedup alone (`d1.rs:18`, `:111-117`: the 500-node bound belongs to the
+  test-only shadow oracle). Extra terminal-free edges change nothing it reports. Stated
+  limit, no test (no output to assert).
+- **d2 can LOSE a finding through its walk budget.** `walk_evidence` shares one node budget
+  across a walk (`d2.rs:56-59`: `max_nodes: 500`, `max_depth: 20`; `path_walker.rs:265-273`)
+  and visits edges in emission order, not terminal-first. A newly entered terminal-free branch
+  that comes before the DB branch can spend the budget, so the DB branch is cut
+  (`NodeBudgetCut`), the subscriber has no `Complete` path (`d2.rs:424-426`) and the finding
+  disappears. T9 pins this use and its cost. CDO, prototype: d2 findings and `detectorStats`
+  byte-identical at both scopes, so the cost did not bite there; a head loss is F6.
 
 d8 and d50 read spans but not `coverage_complete`.
 
@@ -352,7 +374,7 @@ and subscribers as stated.
 
 | # | Test | Asserts | Break → failing assertion |
 |---|---|---|---|
-| T1 | **spans and d9** (row's proof; lib test over `build_detector_context` with `TRANSACTION_SPANS`) | preconditions, hand-stated: `rel.primary().uncertainty_edges` holds exactly one edge, `ambiguous-overload` from `Helper`; `Helper`'s direct reasons `== ["ambiguous-overload"]`; the explicit-Commit span's `routines_in_span == {Entry, Root}` and `pending_physical_tables.len() == 1`. Then: `Root` inherited `partial`; the span's `coverage_complete == false`; d9 emits exactly one finding for that span, in its incomplete-coverage wording (`d9.rs:77`) | delete the fold call in `det_cone_inputs` → `coverage_complete` is `true` and d9 emits nothing (the span has 1 table) |
+| T1 | **spans and d9** (row's proof; lib test over `build_detector_context` with `TRANSACTION_SPANS`) | preconditions, hand-stated: `rel.primary().uncertainty_edges` holds exactly one edge, `ambiguous-overload` from `Helper`; `Helper`'s direct reasons `== ["ambiguous-overload"]`; the explicit-Commit span's `routines_in_span == {Entry, Root}` and `pending_physical_tables.len() == 1`. Then: `Root` inherited `partial`; the span's `coverage_complete == false`; d9 emits exactly one finding for that span, admitted by the incomplete-coverage gate (`d9.rs:54-56`: 1 table < 2), whose table text is "writes 1 known table(s) before it" (`d9.rs:75-80`: the count wins over the "effect scope unknown" wording) | delete the fold call in `det_cone_inputs` → `coverage_complete` is `true` and d9 emits nothing (the span has 1 table) |
 | T1b | **digest and prove** (cli umbrella, production CLI): `alsem digest <ws> --routine Root` and `alsem prove <ws> Root may-commit`, both `--format json --deterministic` | the COMMIT effect's `transactionContext` is `unknown` in digest's output and in prove's `evidence`; digest's `coverage` key for `Root` is `partial` before and after the break (it is the snapshot's, which already folds) | same break → `transactionContext` known in both; the `coverage` key unchanged |
 | T2 | **policy, both `onUnknown` outcomes** (cli umbrella, `alsem policy check <ws> --policy <file> --format json --deterministic`, the production pipeline incl. the RAW build `pipeline.rs:266`): two rules, both `when: {routine.name: Helper, capability.op: modify}`, `requireCoverage: complete`; A `onUnknown: fail-closed`, B `fail-open` | A: findings `==` one coverage finding on `Helper`; `routinesSkippedCoverage == 1`, `routinesMatched == 0`. B: no finding; `routinesSkippedCoverage == 1`, `routinesMatched == 0` (every other routine is skipped by `routine.name` before the gate) | delete the fold → A: one rule finding on `Helper`, skipped 0, matched 1; B: the same |
 | T3 | **context == snapshot coverage per routine on r0** (row's acceptance; lib): every `tests/r0-corpus/` dir, single-app, every routine: `(direct_status, inherited_status, sorted reasons, sorted unknown_targets)` from the context (`det_cone_inputs` + `compose_cone_over_graph` over `rel.cone()`) equals the snapshot base's (`build_r3a3_source_only_base`) | equality over all dirs; precondition: at least 11 dirs have a routine with a four-kind reason (P5) | delete the fold in `det_cone_inputs` → fails on those dirs (it fails the same way on the base: the test is the bug's witness) |
@@ -363,8 +385,21 @@ and subscribers as stated.
 | T8 | **d45** (E4; cli, opt-in so it names `--detector`): publisher/subscriber pair where the subscriber reaches `Helper` and writes a table | the finding's root cause carries `subscriberCoverage=partial` | delete the fold → `complete` |
 
 T6-T8 can be one workspace with several runs (the `cli_d35_unknown_commit` pattern). T1, T3,
-T4, T5 are lib tests. T4's fixture is shared with step 6's acceptance (Q7). d1 and d2 get no
-test: their output cannot move (§3.2, the d1/d2 limit).
+T4, T5, T9 are lib tests. T4's fixture is shared with step 6's acceptance (Q7). d1 gets no
+test: its output cannot move (§3.2).
+
+**T9, d2's use and its budget cost** (lib, over `build_detector_context` + d2; the fixture is
+generated in the test): a loop in `L` raises event `E`; its subscriber `S` first calls `Wide`,
+then `Db`. `Wide` calls 500 generated procedures `A1..A500`, each making only the ambiguous
+`O(L)` call (no record operation anywhere under `Wide`); `Db` does one `Modify` on a physical
+table. Preconditions, hand-stated: every `Ai` and `Wide` has no physical-table fact and is
+`partial`; `S`'s outgoing edges are in the order `Wide`, `Db`. Asserts: at the head, d2 emits
+NO finding for `L`'s loop (the walk enters `Wide`, spends the 500-node budget, and cuts the
+`Db` branch: `NodeBudgetCut`). A control variant with `Wide` calling one `A1` asserts the d2
+finding IS emitted (the walk enters `Wide` and still reaches `Db`). Break: delete the fold call
+in `det_cone_inputs` → `Wide` is `No`, pruned, and the main variant emits the d2 finding →
+fails. The test's doc says it pins a known precision cost; if F6 fires, its main assertion
+flips to "finding emitted".
 
 **The `O(L)` fixture is not compilable AL** (a Codeunit is neither a `Text` nor an
 implementation of the interface). It works because our overload resolver is lenient; the
@@ -380,12 +415,12 @@ not a fold kind (P7), and the prototype left it green. Predicted unchanged, unde
 |---|---|---|---|---|
 | A1 | Context == snapshot per routine, r0, single-app | T3 | all dirs equal; break fails | yes |
 | A2 | Cross-app fold includes the dependency half, carried by the Cone | T4, T5 | green; breaks fail | yes (P6 shape) |
-| A3 | Every reader that can move its output is listed and pinned by its use | §3.2; T1 (spans, d9), T1b (digest, prove), T2 (policy), T6 (fanout, all three `--coverage-policy` modes), T7 (d35), T8 (d45); d1/d2 by the stated limit | each break fails | yes |
+| A3 | Every reader that can move its output is listed and pinned by its use | §3.2; T1 (spans, d9), T1b (digest, prove), T2 (policy), T6 (fanout, all three `--coverage-policy` modes), T7 (d35), T8 (d45), T9 (d2 and its budget cost); d1 by the stated limit of §3.2 | each break fails | yes |
 | A4 | No existing golden or test outcome moves except the I2-exception deletions of §4.3 | `scripts/check-goldens`, `scripts/ci-steps task` on the head | green with no regen; a move is F5 | yes (prototype: 921/921, 2,241/2,241) |
 | A5 | Snapshot-derived output byte-identical | single-app: the A4 goldens (r3a3, cli-b fingerprint/snapshot/diff/prove) and CDO `fingerprint` bytes, parent vs head; cross-app: CDO `digest` `coverage` key on every root of §8 step 4, parent vs head | 0 bytes moved in those keys (prove's and digest's `transactionContext` are §3.2 readers, not A5) | yes (prototype: fingerprint equal) |
 | A6 | Resolution untouched | CDO `aldump --program-call-graph-stats` SHA, parent vs head | equal (`c032c8db…` on the parent) | yes |
 | A7 | CDO ratchets | `bash scripts/cdo-gate` | exit 0 | yes |
-| A8 | CDO moves triaged | `cdo-measure` comp; explicit d45; `--single-app`; the span enumeration and digest/prove runs (§8); `triage-findings` with §7's verdicts | each default-mode detector ≤ 30 % FP (§7's gating verdict) on its added findings at each scope, or F1/F2 applied | yes |
+| A8 | CDO moves triaged | `cdo-measure` comp; explicit d45; `--single-app`; the span enumeration and digest/prove runs (§8); `triage-findings` with §7's verdicts | each default-mode detector ≤ 30 % FP (§7's gating verdict) on its added findings at each scope, or F1/F2 applied; no d2 finding lost, or F6 applied; fanout, `transactionContext` and d45 text verdicts reported, not gated (§7) | yes |
 | A9 | Policy | CDO `policy check`, bundled policy, both universes: byte-identical to the parent. Proxy for "the owner's policy" (Q1): `ws-policy-custom`, both universes: deltas of findings and `routinesSkippedCoverage` reported; a seeded sample of 30 routines that went `complete` → `partial` and were dropped from `cust-coverage-gate` is checked to reach a four-kind edge | as stated | **partial**: CDO has no owner policy; the bundled one cannot move (§3.4) |
 | A10 | L4-solve fold gone | `grep -rn compute_uncertainty_coverage_reasons src` | 0 hits (code and the two docs of §4.3) | yes |
 
@@ -395,9 +430,11 @@ not a fold kind (P7), and the prototype left it green. Predicted unchanged, unde
 they pin; no test is rewritten.
 
 **Verdicts (pre-stated, so they cannot drift).** Each added or changed item gets two verdicts.
-- **Epistemic** (gating, per the row's > 30 % rule, for d35 UNKNOWN, d9's incomplete-span
-  wording, d45's text, fanout's `partial`, and every changed `transactionContext`): is
-  `partial` correct for the universe analysed? Decided per named uncertain call, by kind:
+- **Epistemic**: is `partial` correct for the universe analysed? It GATES (the row's > 30 %
+  rule, with F1/F2) for the detectors only: d35 UNKNOWN and d9's coverage-admitted findings.
+  It is recorded and REPORTED, not gated, for d45's text, fanout's `partial` and every changed
+  `transactionContext` (R2-03): those are not detectors, the row's rule speaks of detectors, and
+  they have no opt-in to fall back to. Decided per named uncertain call, by kind:
   - `interface-open-world`: open the interface's declaration. `Access = Internal` → closed
     world: the call is decidable from the app's own implementations, so the verdict is
     **false** (and the edge is a precision issue to file: an internal interface should not be
@@ -412,8 +449,13 @@ they pin; no test is rewritten.
   hazard? d35: a Commit reachable from the subscriber. d9 and digest/prove: the span really
   reaches a routine the analysis could not finish. This tells the owner whether the honest
   `partial` is also a useful warning.
+- **A span's reasons** (R2-02): a span carries only `coverage_complete`, so its reasons are
+  defined as the union of `coverage.reasons` over the span's routines whose inherited status is
+  not `complete`, and its uncertain calls are those routines' `unknown_targets`' four-kind
+  edges. Empty when the span is complete. The triage of d9, digest/prove and F2's split use
+  this definition.
 - d9 needs no Commit verdict (every d9 span is Commit-seeded, `d9.rs:36-39`); its epistemic
-  verdict is the span's named reasons, by the rules above.
+  verdict is the span's reasons, by the rules above.
 
 Shapes:
 - **d35 "may be reachable" findings.** +41 primary, +83 all cross-app, +61 single-app
@@ -427,7 +469,9 @@ Shapes:
   enumeration of §8 step 4 covers spans d9 does not report).
 - **d45 text** (opt-in): `subscriberCoverage` complete → partial on 65 findings; no count
   change.
-- **d1/d2** walk more, output unchanged (§3.2's limit); a move is F5.
+- **d1** walks more, output unchanged (§3.2). **d2** walks more and can LOSE a finding when
+  the newly entered branch spends its node budget (§3.2, T9); 0 on CDO with the prototype; a
+  head loss is F6.
 - **Policy fail-open silent drop** (§3.4): −182 cross-app under the custom policy. It is the
   declared meaning of `fail-open`, so it is not counted as FP; A9's sample checks that each
   dropped routine really reaches a four-kind edge.
@@ -473,8 +517,9 @@ the background, output to a log file; never piped through `tail`.
 ## 9. Amendments this spec asks the epic to take
 
 - **5-A1** §6.3's reader list adds d9 (through spans), digest's and **prove's** tx context,
-  and d45 (named as opt-in); names d1 (`d1_graph`) and d2 as readers whose output cannot move
-  (§3.2's limit) and d34 as unable to move (reads `Yes` only).
+  and d45 (named as opt-in); names d2 as a reader that can lose a finding through its walk
+  budget (§3.2), d1 (`d1_graph`) as a reader whose output cannot move, and d34 as unable to
+  move (reads `Yes` only).
 - **5-A2** The row's "`policy check` with the owner's policy" is delivered with the proxy of
   Q1. Under the bundled policy (`requireCoverage: partial`) the fold cannot move the gate.
 - **5-A3** Until step 6 the snapshot's fold input is its own cut graph's uncertainty (Primary
@@ -485,7 +530,7 @@ the background, output to a log file; never piped through `tail`.
 - **5-A5** §5.8's deletion of `compute_uncertainty_coverage_reasons` happens here, with the
   tests named in §4.3.
 - **5-A6** E4's fixture list adds d9 (T1), digest and prove (T1b), the policy counters in both
-  modes (T2), and fanout's `--coverage-policy` modes (T6).
+  modes (T2), fanout's `--coverage-policy` modes (T6) and d2's walk with its budget cost (T9).
 - **5-A7** The row's golden list ("r3a5, cli-b digest/prove, cli-c-events, cli-c-policy, r4,
   cli-a, gate, `cli_d35_unknown_commit`") becomes "none predicted" (§0 item 1): the existing
   goldens do not witness the bug, and the new tests carry the evidence. The epic's "Goldens
@@ -501,22 +546,37 @@ the background, output to a log file; never piped through `tail`.
   (an `Internal` interface emitted as open-world; an `ambiguous-overload` the compiler
   decides) is filed as its own issue against the resolver/graph with the hub as its repro,
   and recorded in the ledger's discoveries; it cannot be fixed in this step (A6).
-  (b) Then the findings whose EVERY coverage reason is one of the four kinds (the step's new
-  population) move to a new opt-in detector id
-  `d35u-commit-may-be-reachable-in-event-subscriber`. Everything else in d35 stays default
-  and byte-identical: the YES arm, and every UNKNOWN finding with at least one other reason
-  (`object-run-unresolved`, #148; `cli_d35_unknown_commit` stays green). Pre-stated
-  migrations: the id is registered in `OPT_IN_DETECTORS` with d35's substrate requirements;
-  T7 asserts the finding under `--detector d35u-…` and its ABSENCE under the default
-  selection and under `--detector d35`; a test asserts a mixed-reason UNKNOWN finding stays
-  under d35 in the default selection; the CDO comp shows d35's default findings equal to the
-  parent's plus the mixed-reason adds. The ledger records "back to default when (a)'s issues
-  land". This splits one coverage's PRESENTATION across two ids; every reader still reads
+  (b) Then the UNKNOWN findings whose coverage reasons are NON-EMPTY and ALL among the four
+  kinds (the step's new population) move to a new opt-in detector id
+  `d35u-commit-may-be-reachable-in-event-subscriber`. Everything else stays in d35, default:
+  the YES arm byte-identical, and every UNKNOWN finding with an empty reason set or at least
+  one other reason (`object-run-unresolved`, #148; `cli_d35_unknown_commit` stays green).
+  A mixed-reason UNKNOWN finding keeps its id, `rootCauseKey` and fingerprint, but its text
+  is permitted to change: the fold adds its kinds to the reasons and its routines to the
+  "partly analysed" targets (`d35.rs:145-170`, `coverage_reasons` `:233-268`); this is the
+  one text change F1 allows in d35. Pre-stated migrations: the id is registered in
+  `OPT_IN_DETECTORS` with d35's substrate requirements; T7 asserts the finding under
+  `--detector d35u-…` and its ABSENCE under the default selection and under `--detector d35`;
+  a test with a subscriber reaching both an unresolved object run and `Helper` asserts the
+  finding stays under d35 in the default selection, and its reasons text names both
+  `object-run-unresolved` and `ambiguous-overload`; the CDO comp shows d35's default findings
+  equal to the parent's (ids and fingerprints) plus the mixed-reason adds, with text changes
+  only in mixed-reason findings. The ledger records "back to default when (a)'s issues land". This splits one coverage's PRESENTATION across two ids; every reader still reads
   the one fold, so it does not re-create two coverage policies.
 - **F2 (d9 > 30 % epistemically false on added findings, default mode).** The same split
-  as F1 (a); then the d9 findings whose span's every incomplete reason is a fold kind move to
-  an opt-in id the same way (`d9u-…`), with the same migration tests. (d1/d2 cannot move,
-  §3.2.)
+  as F1 (a); then a d9 finding moves to an opt-in id `d9u-…` only if ALL hold (R2-01): its
+  span is incomplete (`coverage_complete == false`), it was admitted by coverage alone (fewer
+  than 2 pending physical tables, `d9.rs:54-56`), and the span's reasons (§7) are NON-EMPTY and
+  all among the four kinds. Every other d9 finding stays in d9, default; a complete,
+  table-rich span (`>= 2` tables) is never moved. Migration tests as F1's, plus a
+  preservation test: a complete span with two pending tables keeps its d9 finding under the
+  default selection and is absent under `--detector d9u-…`.
+- **F6 (the head loses a d2 finding on CDO, or a d2 r4 golden moves).** Each lost finding is
+  checked to be a `NodeBudgetCut` caused by a newly entered `Unknown` branch (§3.2). Then d2's
+  `expand` orders a node's admitted edges `Yes` first, `Unknown` after, stable within each
+  class, so a DB branch is walked before a terminal-free one; T9's main assertion flips to
+  "finding emitted"; evidence-path moves this causes in other d2 findings are explained under
+  F5. (d1 cannot move, §3.2.)
 - **F3 (any detector has > 300 added findings in one mode and scope, or the head's P2 count
   exceeds 50 % of primary routines cross-app).** Triage a seeded random sample of 30 per
   detector (seed recorded) instead of every finding; the rule applies to the sample. (The
@@ -528,7 +588,7 @@ the background, output to a log file; never piped through `tail`.
 - **F5 (an existing golden or test outcome moves, other than §4.3's deletions).** Stop.
   Explain the move from the diff (the `golden-diff-triager` agent) before regenerating
   anything; a move traced to the fold in a reader §3.2 lists as moving is regenerated and
-  recorded as a discovery against §0 item 1; any other move (d1/d2 included) is a bug to fix.
+  recorded as a discovery against §0 item 1; any other move (d1 included; d2 goes to F6) is a bug to fix.
   No regen is a bless.
 
 ## 11. Risks
@@ -555,7 +615,8 @@ the background, output to a log file; never piped through `tail`.
    yes*; the callee has no body in the universe.
 5. **Q5. Replace the deleted roles-cap test?** *Recommended (agreed): no.*
 6. **Q6. Own use-pinning tests for d1 and d9?** *Resolved:* d9 in T1 (a real span and d9
-   finding); d1/d2 by the stated limit of §3.2, since their output cannot move.
+   finding); d2 in T9 (its use and its budget cost); d1 by the stated limit of §3.2, since
+   it has no budget and its output cannot move.
 7. **Q7. T4's fixture is the one step 6 reuses?** *Recommended (agreed): yes*, with the
    leniency note of §5.
 8. **Q8. Which mode does the > 30 % rule gate?** *Recommended (agreed):* the default
