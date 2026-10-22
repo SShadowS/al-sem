@@ -31,8 +31,8 @@ Words:
 - **Gap** = a row of the snapshot's `analysisGaps`.
 - **Key class** = the rule that decides which rows of one top-level snapshot key are
   serialized (Decision 13).
-- **Reference field** = a field of a serialized row whose value is an id of another row
-  (§4.4, `REFERENCE_FIELDS`). **Referenced** = the canonical id of a reference field's value.
+- **Reference field** = a field of a serialized row whose value is an id of another row, in one
+  DOMAIN (§4.4, `REFERENCES`). **Referenced** = a row a reference field's value resolves to.
 - **Preflight** = the checks `alsem diff` runs before comparing (`gate/diff/preflight.rs`).
 
 ## 0. What the probes changed in the pre-draft
@@ -93,6 +93,23 @@ Words:
 - The allow-list checks exact values, key order and the PROVENANCE edit (S11, S12, O9) and is
   step 8's check only (S16). Wording narrowed (S17, O12); grep widened (O10); compile-affected
   tests named (O11); `apps[]` for an unknown app (O14); `rel` from another model (O18).
+
+### 0.2 What spec panel round 2 changed
+
+- **References are typed by domain** (SN1, SN2, SN3, ON1, ON3, ON4). §4.4's `REFERENCES`
+  table names, per key, the field that DEFINES the row and each field that REFERS to another
+  row, with its domain: identity, app, operation, callsite, frame, edge. Each domain has one
+  destination and one matching rule. Operation and callsite ids match Evidence rows verbatim;
+  a row's own id is never a reference to itself; `permissionFacts.target` is listed; a stable
+  event id gives its object by its first three `:` segments.
+- **Closure is checked per domain** against the unfiltered rows, and a model-rooted value
+  that resolves to nothing is a violation. So a wrong table mapping fails on its own (SN4).
+- **Shards are closed over every domain, not only identities** (S3): evidence rows, their
+  frames and identities, to a fixpoint.
+- **The model is bound to the universe by pointer** (O18): a cross-app universe carries its
+  base, and composing it with any other model panics (T12).
+- The A8.1 grep lists its expected non-role hits (ON2). New tests T9g and T12; new fallbacks
+  F24-F28.
 
 ## Feasibility first
 
@@ -271,18 +288,20 @@ pub fn role_of_stable_id(primary: Option<&str>, stable_id: &str) -> Role;
 - **`FullSnapshotOptions` gains `universe: SnapshotUniverse<'a>`:**
   ```rust
   pub enum SnapshotUniverse<'a> { SingleApp, CrossApp(CrossAppUniverse<'a>) }
-  /// Fields private: built only by `of`, so `rel` and `dependency_apps` always
-  /// come from the same target as the model the caller composes (O18).
-  pub struct CrossAppUniverse<'a> { rel: &'a ExecRelation, dependency_apps: &'a [DependencyApp] }
+  /// Field private: built only by `of`, so `rel`, `dependency_apps` and the
+  /// model all come from ONE base (O18).
+  pub struct CrossAppUniverse<'a> { base: &'a R3a5CrossAppBase }
   impl<'a> SnapshotUniverse<'a> {
-      /// SingleApp → SingleApp; CrossApp(base) → CrossApp { &base.rel, &base.dependency_apps }.
+      /// SingleApp → SingleApp; CrossApp(base) → CrossApp { base }.
       pub fn of(target: &'a AnalysisTarget) -> Self;
   }
   ```
   An options field, not a new parameter, so step 6's signature rewrite of
   `compose_full_snapshot` rebases over it without a conflict in the parameter list. The model
-  is still passed separately, so `compose_full_snapshot` also `debug_assert!`s that every
-  `rel.cone()` endpoint is a routine id of `resolved` (O18).
+  is still a parameter, so in `CrossApp` `compose_full_snapshot` checks model identity, not
+  just id membership: `assert!(std::ptr::eq(resolved, &base.resolved))` (always on; one
+  pointer compare). Two revisions of one workspace share routine ids, so an endpoint check would
+  pass for the wrong model; a pointer check cannot (O18, round 2). T12 pins it.
 - **`apps[]`** rows: `appGuid, publisher, name, version, role`. Single-app: the primary row
   (today's), `role: "primary"`. Cross-app (8A-3): the primary row first, then every dependency
   app that owns a SERIALIZED `identities` row, sorted by `locale_compare` of guid (today's sort).
@@ -308,8 +327,11 @@ pub fn role_of_stable_id(primary: Option<&str>, stable_id: &str) -> Role;
 pub enum KeyClass { Header, Input, Inventory, Behaviour, Gap, Evidence }
 /// Every top-level key, in insertion order, with its class.
 pub const SNAPSHOT_KEYS: &[(&str, KeyClass)] = &[ /* table below */ ];
-/// The fields whose values are ids of other rows, by serialized name, at any depth.
-pub const REFERENCE_FIELDS: &[&str] = &[ /* list below */ ];
+pub enum Domain { Identity, App, Operation, Callsite, Frame, Edge }
+/// Per key: its defining field and its reference fields with their domains (table below).
+pub const REFERENCES: &[(&str, Option<&str>, &[(&str, Domain)])] = &[ /* list below */ ];
+/// Fields that are data, never references (list below).
+pub const NON_REFERENCE_FIELDS: &[&str] = &[ /* list below */ ];
 ```
 
 | Class | Keys (subject field) | Serialized rows, cross-app |
@@ -332,42 +354,73 @@ single-app fingerprint is already 129 MB at the base (P3); building their CBOR o
 would load step 9's cross-app peak bound for nothing. Step 6 (scoped composition) must produce
 exactly what this filter produces; T9 and T10 are its oracle.
 
-**`REFERENCE_FIELDS` and canonical ids (S1, O3, S9).** Reference extraction reads only these
-serialized field names, at any depth of a kept row: `subject`, `from`, `to`, `resourceId`,
-`tableId`, `witnessOperationId`, `witnessCallsiteId`, `witnessFirstHopOperationId`,
-`witnessFirstHopEventId`, `callsiteId`, `operationId`, `eventId`, `candidates`, `objectId`,
-`unknownTargets`, `publisherObject`, `routine`, `routineId`, `stableId`, `permissionSet`,
-`targetObject`. The implementation completes the list from the serde names of
-`snapshot.rs:270-1000` and `SnapshotGraphEdge`; T9-closure fails on any id-shaped value under an
-unlisted field. Each value maps to canonical ids with the existing projections, never a string
-rewrite:
-- a stable id (routine, object, table) as is, plus its object prefix (`<guid>:<Type>:<N>`, the
-  part before `#`);
-- an internal table, field or key id (`<guid>/table/N[/…]`) → `stable_table_id` of its first
-  three segments (`snapshot.rs:1035-1045`), giving `<guid>:Table:N`;
-- any other internal object-rooted id (`<guid>/<Type>/<N>[/…]`, event ids included) →
-  `to_stable_object_id` of its first three segments (`ids.rs:135-137`);
-- an internal routine id → its stable id through `routine_to_stable` (`snapshot.rs:1029-1033`).
-A string under any other field (a literal value, a display name, a file path) is never read, so
-it cannot keep a row (S9).
+**References, typed by domain (S1, O3, S9; round 2: SN1, SN2, SN3, ON1, ON3, ON4).** A row's
+fields are of three kinds. A DEFINING field is the row's own id; it is never a reference, so a
+row cannot keep itself (SN2). A REFERENCE field names a row of one DOMAIN. Every other field is
+data and is never read (S9). The domains, each with one destination and one matching rule:
 
-**Order of the filter steps (O17).** (1) Inventory, Behaviour and Gap rows are filtered.
-(2) Their references are collected. (3) Evidence rows (`operationIndex`, `callsiteIndex`) are
-filtered by primary routine or referenced id. (4) The kept Evidence rows' references join the
-set, and their routines' frames join `routineOrderFrames`. (5) `identities` is filtered.
-(6) `apps` is built from the kept `identities`.
+| Domain | Destination (and its class) | Values look like | Matching rule |
+|---|---|---|---|
+| identity | an `identities` row (Evidence) | stable routine/object/table ids; stable field ids `<guid>:Table:N#F`; stable event ids `<guid>:<Type>:<N>::<Event>::<hash>`; internal table/field/key ids `<guid>/table/N[/…]`; internal object-rooted ids `<guid>/<Type>/<N>[/…]`; internal routine ids `<instance>/<hash>` | a stable routine/object/table id as is; any other stable id → its object or table, the first three `:` segments (ON1; a field id → its table); an internal table/field/key id → `stable_table_id` of its first three `/` segments (`snapshot.rs:1035-1045`), `<guid>:Table:N`; another internal object-rooted id → `to_stable_object_id` of its first three segments (`ids.rs:135-137`); an internal routine id → `routine_to_stable` (`snapshot.rs:1029-1033`) |
+| app | an `apps[]` row (Inventory) | a bare app guid (an app-level gap subject) | case-insensitive guid compare |
+| operation | an `operationIndex` row (Evidence) by its `operationId` | `<instance>/<hash>/opN` | verbatim (SN1, ON4) |
+| callsite | a `callsiteIndex` row (Evidence) by its `callsiteId` | `<instance>/<hash>/csN` | verbatim (SN1, ON4) |
+| frame | the `routineOrderFrames` table of the referring row's `routine` (Behaviour) | `order.frameId`, an integer | the frame id inside that routine's table |
+| edge | a `typedEdges` row (Behaviour) by its `edgeId` | edge ids | verbatim |
 
-**Closure.** After step (5), every canonical reference of every serialized row is an
-`identities` row, a kept Evidence row, or a value the model has no row for (an external or
-unresolved target, `"unknown"`). T9-closure asserts it on DD and R5B.
+`REFERENCES: &[(key, defining_field, &[(field_path, Domain)])]` holds, per key (field paths
+from the serialized rows, `tests/cli-b-goldens/snapshot/*.raw.json`, and the structs of
+`snapshot.rs:270-1000` AND the model-derived rows of `snapshot_full.rs:417-812`, SN3):
+- `contractFacts`: defines `stableId`; no references.
+- `schemaFacts`: defines `stableId`; no references.
+- `permissionFacts`: `subject`, `target` (SN3), `permissionSet` → identity;
+  `derivedFromCapability.witnessCallsiteId` → callsite; `derivedFromCapability.witnessFirstHopEventId` → identity.
+- `rootClassifications`: `routineId`, `sourceAnchor.enclosingRoutineId` → identity.
+- `eventDeclarations`: `routine`, `eventId`, `binding.publisherObject`, `sourceAnchor.enclosingRoutineId` → identity.
+- `capabilityFacts`: `subject`, `resourceId`, `resourceArgSource…tableId`, `witnessFirstHopEventId` → identity; `witnessOperationId`, `witnessFirstHopOperationId` → operation; `witnessCallsiteId` → callsite.
+- `coverage`: `subject`, `unknownTargets` → identity.
+- `callsiteResolutions`: `from`, `candidates`, `unresolvedCandidates.objectId` → identity; `callsiteId` → callsite; `resolvedEdges` → edge.
+- `typedEdges`: defines `edgeId`; `from`, `to`, `eventId`, `targetObject`, `*Anchor.enclosingRoutineId` → identity; `callsiteId` → callsite; `operationId` → operation.
+- `analysisGaps`: `subject` → identity (a stable routine id) or app (a bare guid).
+- `operationIndex`: defines `operationId`; `routine` → identity; `order.frameId` → frame.
+- `callsiteIndex`: defines `callsiteId`; `routine` → identity; `order.frameId` → frame.
+- `routineOrderFrames`: defines its map key; `parentFrameId` → frame (same table).
+- `identities`: defines `stableIds`; no references.
+
+Every other field is listed as data in `NON_REFERENCE_FIELDS` (ON3), at least: `value` (a
+literal value source), `displayText`, `calleeDisplay`, `sourceFile`, `sourceUnitId`,
+`extra.recordVariableId`, `detail`, `reasons`, `attributes.*`, `signatureFingerprint`,
+`shapeFingerprint`, `kind`, `op`, `rights`. The implementation completes both lists from the
+same census; a field in neither list fails T9-closure.
+
+**Order of the filter steps (O17).** (1) Inventory, Behaviour and Gap rows are filtered by
+subject. (2) Their references are resolved. (3) Evidence index rows (`operationIndex`,
+`callsiteIndex`) are kept if their routine is primary or their id is referenced. (4) The kept
+Evidence rows' references are resolved; each kept row's frame table joins `routineOrderFrames`.
+(5) `identities` keeps every primary id and every referenced identity. (6) `apps` keeps the
+primary row, every app owning a kept identity, and every app referenced by a kept gap. Steps
+(2) and (4) resolve against the UNFILTERED rows; a reference with no destination even there is
+external (a guid that is no model app, `"unknown"`, a value the model never had).
+
+**Closure (checked per domain).** After step (6), every reference of every serialized row
+whose destination exists among the unfiltered rows has that destination serialized. A
+reference whose value is rooted in a model app (its guid prefix is the primary or a
+`dependency_apps` guid) or equals a model routine id or Evidence id, and that resolves to no
+unfiltered row, is a violation too: it is a mapping error, not an external target. T9-closure
+asserts both on DD and R5B. This is why a wrong table mapping fails by itself (SN4):
+`bbbb…/table/18` rewritten to `bbbb…:table:18` names a model app and resolves to nothing.
 
 **Sharding (S3, O4, O13).** `slice_for_app` (`snapshot_full.rs:1318-1376`) keeps its own
 per-key membership match (`routine` for the indexes, `from` OR `to` for edges, `routine` OR
 `binding.publisherObject` for event declarations, verbatim copy for header, `inputs`,
 `analysisGaps`): it decides shard membership, not role. Two changes: its `<guid>:` prefix
-compare becomes case-insensitive (O13), and after slicing each shard's `identities` gains every
-id its kept rows reference that the full tree's `identities` holds (S3). In single-app every
-referenced id that `identities` holds is primary (P3), so no shard golden moves. T9-keys checks
+compare becomes case-insensitive (O13), and after slicing each shard is CLOSED (S3): every row
+of the full tree that a kept shard row references, in any domain of the `REFERENCES` table
+(identities, `operationIndex` and `callsiteIndex` rows, their frame tables), is added to the
+shard, and the rows so added are scanned in turn until nothing new is added (a fixpoint; each
+pass only adds rows of the finite full tree). The shard then satisfies the same per-domain
+Closure rule as the full snapshot. In single-app every row a reference reaches in the full tree
+is primary (P3), so nothing is added and no shard golden moves. T9-keys checks
 that the keys `slice_for_app` matches equal `SNAPSHOT_KEYS`; nothing panics at run time (O4).
 
 **Key-set equality (T9-keys):** both universes compose keys ⊆ `SNAPSHOT_KEYS` with every
@@ -443,17 +496,19 @@ tests live in a new `tests/cli/cli_snapshot_schema4.rs` member; lib tests in `ro
 | T6b | `fatal_preflight_exits_one` (cli): two vendored inputs of different apps | both load | exit 1 with `app-identity-mismatch`. Break: drop the `fatal` gate → exit 0 (P9) |
 | T7 | `diff_refuses_schema_3` (cli): a temp copy of a vendored input edited back to `schemaVersion: 3`, diffed against a v4 file | the copy carries 3 | stderr names 3, v4 and the remedy; exit 1. Break: accept 3 → loads, fails |
 | T7b | `diff_refuses_bad_universe_or_roles` (cli, S14, O6): five temp copies: no `analysisUniverse`; `analysisUniverse: "both"`; an `apps[]` row without `role`; two `primary` rows; a dependency shard (`apps[]` = one `dependency` row) | each copy differs from a valid v4 file in that one field (asserted) | each refused at load, exit 1, the message names the field (the shard case names the hint). Break: drop each check in turn → that copy loads |
-| T8 | `shards_read_role_not_position` (lib, `snapshot_full.rs`; O15): a hand-built v4 tree whose `apps[]` lists a dependency (`0000…`) before the primary | hand-built, not composed | manifest roles right; `primary-only` writes the primary's shard only; the primary shard's `identities` holds the dependency id its kept edge references (S3). Break 1: read `apps[0]` → roles swapped. Break 2: no shard closure → the referenced id is missing |
+| T8 | `shards_read_role_not_position` (lib, `snapshot_full.rs`; O15): a hand-built v4 tree whose `apps[]` lists a dependency (`0000…`) before the primary | hand-built, not composed | manifest roles right; `primary-only` writes the primary's shard only; the tree also holds a primary fact whose `witnessOperationId` is a dependency operation row (with its `order.frameId`, routine and frame table), and a primary edge to a dependency routine; the primary shard holds that operation row, its routine's frame table and both dependency identities (S3, round 2). Break 1: read `apps[0]` → roles swapped. Break 2: close identities only (round 1's rule) → the operation row and its frames are missing. Break 3: one pass instead of a fixpoint → the operation's routine identity (reached only through the added operation row) is missing |
 | T8b | `preflight_identity_reads_role` (lib, `preflight.rs`; O15) | same tree shape, two sides of different primaries, same `apps[0]` | `app-identity-mismatch` raised. Break: read `apps[0]` → no diagnostic |
 | T9a Inventory | DD cross-app | in memory, `contractFacts` holds `Dep Lib`/`Dep Sub` rows, `schemaFacts` holds dependency table `Customer` (18) rows (S15), `rootClassifications` and `eventDeclarations` hold dependency rows, `routineInventory` lists `Outer` (each precondition asserted per key) | serialized: none of them; inventory doc's `routineInventory` primary only. Break: identity filter → they appear |
 | T9b Behaviour | DD cross-app | in memory, `Inner` has direct capability facts and coverage | serialized: no `capabilityFacts`/`coverage`/`typedEdges`/`callsiteResolutions` row with a dependency subject; `CallChain`'s rows present. Break: identity filter → `Inner` appears |
 | T9c Gap | T3, T4, T4c | — | — |
-| T9d Evidence | DD + R5B cross-app (S8, O3) | `Outer` is referenced by `CallChain`'s typed edge; `TouchCust`'s fact names `bbbb…/table/18`; R5B's `eeee…` rows are unreferenced; in memory, `Inner`'s `operationIndex` row and `Outer`'s `callsiteIndex` row exist | serialized `identities` holds `Outer`, `bbbb…:Table:18` and every primary id, no `eeee…` id; `operationIndex` holds `CallChain`'s and `TouchCust`'s rows and NOT `Inner`'s (unreferenced on the cut); `callsiteIndex` holds `CallChain`'s rows and NOT `Outer`'s. Break 1: emit every row → `eeee…` ids and `Inner`'s operation appear. Break 2: primary only → `Outer` missing. Break 3: `/`→`:` rewrite instead of `stable_table_id` → `bbbb…:Table:18` missing. Break 4: drop primary rows from Evidence → `TouchCust`'s operation missing |
-| T9-closure | DD + R5B cross-app; one hand-stated literal (S9) | a `literal` value source in a kept fact carries a dependency stable id as its `value` (hand-stated) | every canonical reference resolves (§4.4 Closure); every id-shaped string (starts with a model app guid) sits under a `REFERENCE_FIELDS` field or a listed non-reference field; the literal does NOT keep its id. Break 1: read every `Text` → the literal keeps its id. Break 2: drop `tableId` from the list → the closure check fails |
+| T9d Evidence | DD + R5B cross-app (S8, O3) | `Outer` is referenced by `CallChain`'s typed edge; `TouchCust`'s fact names `bbbb…/table/18`; R5B's `eeee…` rows are unreferenced; in memory, `Inner`'s `operationIndex` row and `Outer`'s `callsiteIndex` row exist | serialized `identities` holds `Outer`, `bbbb…:Table:18` and every primary id, no `eeee…` id; `operationIndex` holds `CallChain`'s and `TouchCust`'s rows and NOT `Inner`'s (unreferenced on the cut); `callsiteIndex` holds `CallChain`'s rows and NOT `Outer`'s. Break 1: emit every row → `eeee…` ids and `Inner`'s operation appear. Break 2: primary only → `Outer` missing. Break 3 (moved to T9-closure, SN4: `TouchCust`'s permission `target` already names `bbbb…:Table:18`, so this identity survives a wrong table mapping here). Break 4: drop primary rows from Evidence → `TouchCust`'s operation missing |
+| T9g | `evidence_follows_dependency_witness` (lib, `snapshot_full.rs`, hand-built typed rows through the production filter; SN1) | a primary fact's `witnessOperationId` and `witnessCallsiteId` name a dependency routine's operation and call-site rows, each with an `order.frameId` in that routine's frame table; that routine is referenced by nothing else | the filtered output keeps both Evidence rows, the routine's frame table and the routine's identity. Break 1: match operation ids through the identity mapping (object prefix) instead of verbatim → the rows are dropped. Break 2: skip filter step (4) → the frame table and the identity are missing |
+| T9-closure | DD + R5B cross-app; one hand-stated literal (S9, SN2, SN4, ON3, ON4) | DD's `TouchCust` fact carries `resourceId` `bbbb…/table/18`; a `literal` value source in a kept fact carries a dependency stable id as its `value` (hand-stated); a kept fact carries a `table-field` value source with a `tableId` (hand-stated if none, asserted) | the per-domain Closure of §4.4 holds; every string that is id-shaped (rooted in a model app guid, or equal to a model routine id or an Evidence row id) sits under a field of `REFERENCES` or `NON_REFERENCE_FIELDS`; the literal keeps nothing. Break 1: read every `Text` → the literal keeps its id. Break 2: drop `tableId` from `REFERENCES` → it is in neither list, fails. Break 3: map internal tables by a `/`→`:` rewrite → `bbbb…:table:18` is model-rooted and resolves to nothing, a violation. Break 4: treat `stableId` as a reference → T10's unreferenced-table precondition fails (SN2) |
 | T9e Input | DD single vs cross | — | `workspaceFingerprint`, `inputs` equal across universes. Break: filter `inputs` as Inventory → dependency `.app` rows vanish |
 | T9f Header and order | DD both universes; R5B-F (S8) | R5B-F's primary guid sorts after `dddd…` (asserted) | `analysisUniverse` per universe; DD cross-app `apps` holds `bbbb…` with `role: "dependency"`, publisher `probe`; R5B-F `apps[0]` is `ffff…` with `role: "primary"`, `dddd…` second, no `eeee…` row. Break: sort `apps[]` by guid only → `dddd…` first |
 | T9-keys | both universes, DD (O4) | — | composed keys ⊆ `SNAPSHOT_KEYS`, required keys present; the keys `slice_for_app` matches equal `SNAPSHOT_KEYS`. Break: insert a new key without a class → fails |
 | T10 | `no_dependency_cross_equals_single` (`tests/r0-corpus/ws-d8-commit-in-tx`; S7, O5, S10) | the cross-app base builds with no dependency; one primary routine hand-stated `parse_incomplete` in both models, so `analysisGaps` is non-empty; some primary identity (a table) is referenced by no row (asserted) | full trees equal except `analysisUniverse`. Break 1: write gap `role` only in cross-app → the single-app gap row lacks it, fails. Break 2: Evidence keeps referenced ids only (drop "every primary id") → the unreferenced table vanishes cross-app, fails |
+| T12 | `cross_app_universe_binds_its_model` (cli member, O18) | two cross-app targets built from the same workspace (equal routine ids, asserted) | composing target A's model with `SnapshotUniverse::of(&target_b)` panics with the model-identity message; A with A composes. Break: drop the `ptr::eq` assert → it composes silently |
 | T11 | `cli_p1_inventory` (edited) | — | inventory doc `schemaVersion "1.2.0"`, `apps[0].role == "primary"`, `payload.analysisUniverse == "single-app"`; the projection-subset check (`:105-125`) still byte-equal |
 
 Tests rewritten with the code they pin (I2's exception): `snapshot_deserialize.rs`
@@ -471,9 +526,9 @@ Any other lib test that reads in-memory gaps of a cross-app model is named in th
 
 | # | Issue / epic item | Evidence |
 |---|---|---|
-| A8.1 | `Role` with the `dep:` filter beside it | D1; T1, T1c, T2. Grep (O10): `rg -n 'app_guid.*(eq_ignore_ascii_case\|to_ascii_lowercase)\|eq_ignore_ascii_case\(g\)\|eq_ignore_ascii_case\(p\)' src` hits only `role.rs` (a hit inside 11b's `projection.rs:97-111` is the kept rule, T1c). d1's map holds no comparison, so it is checked by name: `d1.rs:1993-1998` unchanged (O1) |
+| A8.1 | `Role` with the `dep:` filter beside it | D1; T1, T1c, T2. Grep (O10): `rg -n 'app_guid.*(eq_ignore_ascii_case\|to_ascii_lowercase)\|eq_ignore_ascii_case\(g\)\|eq_ignore_ascii_case\(p\)' src` hits `role.rs` and, besides it, only these guid normalisations, none a role decision (ON2; measured at `f96619ec`): `program/resolve/compiler_oracle.rs:313`, `program/model/events.rs:254`, `program/model/program_calls.rs:386`, `engine/l5/detectors/d13.rs:82-83` (friend lookup), `program/model/program_calls_adapter_tests.rs:1505,1641` (test filters). Every other base hit (`coverage.rs`, `registry.rs`, `gate/run.rs`, `exec_relation.rs`, `test_support.rs`, `effect_query_cli.rs`, `selector_index.rs`, `digest.rs`, `capability_cone.rs`) must be gone; a hit inside 11b's `projection.rs:97-111` is the kept rule (T1c). d1's map holds no comparison, so it is checked by name: `d1.rs:1993-1998` unchanged (O1) |
 | A8.2 | Live `is_dependency_role` with reachability | D2; T3, T4, T4c, T5 |
-| A8.3 | Key classes | D4; T9a-f, T9-keys, T9-closure |
+| A8.3 | Key classes | D4; T9a-g, T9-keys, T9-closure, T12 |
 | A8.4 | Snapshot schema 4 | D3; `rg 'SNAPSHOT_SCHEMA_VERSION: i64' src` = 1 hit |
 | A8.5 | `apps[]` by role | D3, D5.4; T8, T8b, T9f |
 | A8.6 | Preflight | D5; T6, T6b, T7, T7b, T8b |
@@ -508,8 +563,10 @@ Untouched: I1 (no build counter moves; the BFS is not one), I3, I5, I6, I7, I11.
 - **Reach from the job's subjects:** D2's roots take no job input (the composition has no
   subject parameter at step 8), so this shape cannot arise yet; step 12's batch contract test
   is where a job-dependent root would show.
-- **A dangling reference (filtered too much):** T9-closure, T9d's breaks 2 and 3, T8's shard
-  arm. **A row kept by an id-shaped literal (filtered too little):** T9-closure's literal arm.
+- **A dangling reference (filtered too much):** T9-closure (per domain), T9d's break 2, T9g,
+  T8's shard arms. **A row kept by an id-shaped literal or by its own id (filtered too
+  little):** T9-closure's breaks 1 and 4.
+- **A cross-app universe composed with another revision's model:** T12.
 - **Position read as role:** T8, T8b, T9f (R5B-F).
 - **A key added later without a class:** T9-keys.
 - **A silent mixed-universe, stale-schema or role-less diff:** T6, T6b, T7, T7b.
@@ -592,13 +649,18 @@ written into a file.
 | F14 | the panel keeps the inventory doc at 1.1.0 | `role`, `analysisUniverse` and the `routineInventory` class still land; T11 asserts 1.1.0 |
 | F15 | hand-editing the 12 inputs moves a diff output | the edit is wrong (or preflight is): fix it; outputs must not move |
 | F16 | the reach BFS or the reference walk is slow on a large cross-app model | report it in Part 2 (no bound, Decision 58); step 9's peak/time bounds own it |
-| F17 | T9-closure finds an id-shaped value under a field not in `REFERENCE_FIELDS` or the non-reference list (S9) | classify that field (reference or not) in the same commit, from its serde struct; a field that holds ids is added to `REFERENCE_FIELDS` and T9-closure re-run; never fall back to reading every string |
+| F17 | T9-closure finds an id-shaped value under a field not in `REFERENCES` or `NON_REFERENCE_FIELDS` (S9) | classify that field (reference or not) in the same commit, from its serde struct; a field that holds ids is added to `REFERENCE_FIELDS` and T9-closure re-run; never fall back to reading every string |
 | F18 | T10 finds a cross/single difference (S10) | the parity contract stays as written. Find the cause: if step 8 made it, fix step 8; if it is older (the cut model differs from the single-app one), stop and raise it to the operator with the diff, and file it; T10 is not narrowed |
 | F19 | T4c cannot show `Inner` outside the cut's reach (the precondition fails) | the cut includes dependency callers somewhere: find which edge and choose a deeper dependency-only hop (add `Inner → Deeper` to a temp copy of DD's dependency source) |
 | F20 | load validation (D5.2) refuses a file some existing test or golden feeds to `diff` | that input is upgraded like D6's (three edits) and named; the rule is not relaxed |
 | F21 | the D2 `has_source` assertion fires on a fixture or on CDO | the opaque grouping is wrong for that model: switch loop 2 to key on `dependency_apps[].has_source == false` (the epic's original 8A-5 idea) and add the row to T3; `body-unavailable` then covers the body-less rows of apps with source |
 | F22 | a serialized identity's app is missing from `dependency_apps` (the D3 assertion fires) | a model row came from an app the loader did not list as required: stop and find that path; do not emit a guessed `apps[]` row |
 | F23 | the case-insensitive shard prefix (O13) moves a shard golden | a fixture guid is upper-case in `app.json`: the move is the fix; triage it in Part 0 as a stated, reviewed exception |
+| F24 | the field census finds a field whose values belong to more than one domain (e.g. `subject` holding a routine id or a bare guid) | the domain is decided per VALUE by its shape (bare guid → app; otherwise identity), stated in `REFERENCES` beside that field; never by trying every domain |
+| F25 | T9-closure reports a model-rooted value that resolves to no unfiltered row and is not a mapping error (a genuinely dangling id the composer already emits today) | record it as a discovery with the value and its key; add that exact shape to the external list with a comment naming the discovery; the closure rule is not loosened in general |
+| F26 | a shard fixpoint adds rows in single-app (a shard golden moves) | P3's claim is wrong for that fixture: find the referencing row; if the added row is correct, it is the S3 fix and is triaged in Part 0 as a stated exception; otherwise the domain rule is wrong |
+| F27 | T12's two targets cannot be built in one process (a global or cache refuses) | build the second from a temp copy of the workspace; the assertion and its break are unchanged |
+| F28 | T9-closure cannot find a `table-field` value source in DD or R5B | hand-state one on a kept primary fact (asserted), as the precondition already allows |
 
 ## 11. Decisions on the open questions
 
@@ -653,10 +715,10 @@ here covers the no-dependency case.
    (both production callers pass `SingleApp`); `DependencyApp.publisher`,
    `R3a5CrossAppBase.dependency_apps`; `project_apps` by role; inventory doc 1.2.0, universe in
    payload, `routineInventory` classed.
-4. Key classes on typed rows: `KeyClass`, `SNAPSHOT_KEYS`, `REFERENCE_FIELDS`, canonical
-   reference mapping, the six-step order, the `has_source` and `dependency_apps` assertions;
-   shard closure and case-insensitive prefix; T3, T4, T4c, T5, T8, T9a-f, T9-keys, T9-closure,
-   T10.
+4. Key classes on typed rows: `KeyClass`, `SNAPSHOT_KEYS`, `Domain`, `REFERENCES`,
+   `NON_REFERENCE_FIELDS`, the per-domain resolution, the model-identity assert, the six-step
+   order, the `has_source` and `dependency_apps` assertions; shard closure to a fixpoint and
+   the case-insensitive prefix; T3, T4, T4c, T5, T8, T9a-g, T9-keys, T9-closure, T10, T12.
 5. Preflight: load refusals (schema 3, universe, roles, dependency shard), universe mismatch,
    role-based identity, `DiffEngineResult.fatal` + exit 1; T6, T6b, T7, T7b, T8b.
 6. Goldens: hand-edit the 12 diff inputs + PROVENANCE; rewrite the named tests;
