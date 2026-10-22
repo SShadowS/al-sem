@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use super::combined_graph::CombinedGraph;
+use super::combined_graph::PrimaryGraph;
 use super::effect_lattice::{EffectPresence, join_presence};
 use super::event_dispatch::{DispatchKind, ParamDispatch};
 use super::summary::{FieldList, RoutineSummary};
@@ -238,7 +238,7 @@ pub(crate) fn walk_param(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
     indexes: &WalkIndexes,
     dispatch: Option<&ParamDispatch>,
@@ -423,7 +423,7 @@ fn walk_cfg(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
     idx: &WalkIndexes,
     exit_states: &mut Vec<PerParamState>,
@@ -1068,7 +1068,7 @@ fn apply_condition_leaves(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
     idx: &WalkIndexes,
     exit_states: &mut Vec<PerParamState>,
@@ -1216,7 +1216,7 @@ fn apply_call(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
 ) -> PerParamState {
     // Find the binding that forwards THIS param to the callee (resolved only).
@@ -1749,7 +1749,7 @@ fn walk_flat(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
 ) -> PerParamState {
     let mut events: Vec<FlatEvent> = Vec::new();
@@ -1950,12 +1950,11 @@ mod tests {
         let snapshot: HashMap<String, RoutineSummary> = HashMap::new();
         let final_map: HashMap<String, RoutineSummary> = HashMap::new();
         let upgraded_bindings: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
-        let graph = CombinedGraph {
+        let graph = PrimaryGraph {
             nodes: Vec::new(),
             edges_by_from: HashMap::new(),
             edges_from_order: Vec::new(),
             uncertainty_edges: Vec::new(),
-            typed_edges: Vec::new(),
         };
         let body_avail_by_id: HashMap<String, bool> = HashMap::new();
         let indexes = build_indexes(&routine);

@@ -398,7 +398,7 @@ mod reverse_index_differential {
     use al_sem::engine::l4::effect_store::SummaryBundle;
     use al_sem::engine::l4::effect_universe::{EffectId, EffectIdentity};
     use al_sem::engine::l4::reverse_index::{ReverseEffectIndex, class_of};
-    use al_sem::engine::l4::routine_interner::RoutineIx;
+    use al_sem::engine::l4::routine_interner::SolveIx;
     use al_sem::engine::l4::scc::SccResult;
     use al_sem::engine::l4::summary::RoutineSummary;
     use al_sem::engine::l4::summary_runner::compute_summaries_v2_bundle_with_leaves;
@@ -423,27 +423,27 @@ mod reverse_index_differential {
         /// effects, resolved through the frozen universe's OWN identity map (so
         /// no `effect_key` injectivity is assumed — the interning map IS the
         /// injection).
-        pub effect_ids: HashMap<RoutineIx, HashSet<EffectId>>,
+        pub effect_ids: HashMap<SolveIx, HashSet<EffectId>>,
         /// Per routine-with-a-row: the exact `table_id` string set.
-        pub table_ids: HashMap<RoutineIx, HashSet<String>>,
+        pub table_ids: HashMap<SolveIx, HashSet<String>>,
         /// Reversed ROUTINE adjacency `to -> [(from, cost)]`, cost 1 when the
         /// edge crosses an SCC boundary and 0 when it does not. Deliberately
         /// over raw routine ids: the implementation walks a prebuilt
         /// CONDENSATION, so a 0-1 BFS here is a structurally different
         /// computation that must nonetheless agree.
         rev_routine: HashMap<&'a str, Vec<(&'a str, u32)>>,
-        pub routines: Vec<RoutineIx>,
+        pub routines: Vec<SolveIx>,
         pub tables: Vec<String>,
     }
 
     impl<'a> Oracle<'a> {
         pub fn build(bundle: &'a SummaryBundle, graph: &'a CombinedGraph, scc: &SccResult) -> Self {
             let universe = bundle.effects().universe();
-            let mut routines: Vec<RoutineIx> = bundle.routines_with_rows().collect();
+            let mut routines: Vec<SolveIx> = bundle.routines_with_rows().collect();
             routines.sort_unstable();
 
-            let mut effect_ids: HashMap<RoutineIx, HashSet<EffectId>> = HashMap::new();
-            let mut table_ids: HashMap<RoutineIx, HashSet<String>> = HashMap::new();
+            let mut effect_ids: HashMap<SolveIx, HashSet<EffectId>> = HashMap::new();
+            let mut table_ids: HashMap<SolveIx, HashSet<String>> = HashMap::new();
             for &r in &routines {
                 let mut eids: HashSet<EffectId> = HashSet::new();
                 let mut tids: HashSet<String> = HashSet::new();
@@ -502,15 +502,15 @@ mod reverse_index_differential {
             }
         }
 
-        pub fn touches_table(&self, r: RoutineIx, t: &str) -> bool {
+        pub fn touches_table(&self, r: SolveIx, t: &str) -> bool {
             self.table_ids.get(&r).is_some_and(|s| s.contains(t))
         }
 
-        pub fn touches_effect(&self, r: RoutineIx, e: EffectId) -> bool {
+        pub fn touches_effect(&self, r: SolveIx, e: EffectId) -> bool {
             self.effect_ids.get(&r).is_some_and(|s| s.contains(&e))
         }
 
-        pub fn up_table(&self, t: &str) -> Vec<RoutineIx> {
+        pub fn up_table(&self, t: &str) -> Vec<SolveIx> {
             self.routines
                 .iter()
                 .copied()
@@ -518,7 +518,7 @@ mod reverse_index_differential {
                 .collect()
         }
 
-        pub fn up_effect(&self, e: EffectId) -> Vec<RoutineIx> {
+        pub fn up_effect(&self, e: EffectId) -> Vec<SolveIx> {
             self.routines
                 .iter()
                 .copied()
@@ -531,7 +531,7 @@ mod reverse_index_differential {
         /// equals BFS depth in the condensation, so it must match the
         /// implementation exactly — without this oracle ever building one.
         /// `r` itself is excluded.
-        pub fn ancestor_depths(&self, r: RoutineIx) -> HashMap<RoutineIx, u32> {
+        pub fn ancestor_depths(&self, r: SolveIx) -> HashMap<SolveIx, u32> {
             let start = self.bundle.routine_id(r);
             let mut dist: HashMap<&str, u32> = HashMap::new();
             let mut dq: VecDeque<&str> = VecDeque::new();
@@ -560,8 +560,8 @@ mod reverse_index_differential {
 
         /// The ancestor answer used everywhere: transitive callers of `r`
         /// (excluding `r`) that have a row and touch `t`, ascending.
-        pub fn ancestors_touching(&self, r: RoutineIx, t: &str) -> Vec<RoutineIx> {
-            let mut v: Vec<RoutineIx> = self
+        pub fn ancestors_touching(&self, r: SolveIx, t: &str) -> Vec<SolveIx> {
+            let mut v: Vec<SolveIx> = self
                 .ancestor_depths(r)
                 .into_keys()
                 .filter(|&a| self.table_ids.contains_key(&a) && self.touches_table(a, t))
@@ -575,9 +575,9 @@ mod reverse_index_differential {
         /// O(V·(V+E)) — unusable past fixture scale, which is why
         /// [`Self::ancestors_touching`] exists; the fixture test asserts the two
         /// agree, so the cheaper one is itself under oracle.
-        pub fn ancestors_touching_bruteforce(&self, r: RoutineIx, t: &str) -> Vec<RoutineIx> {
+        pub fn ancestors_touching_bruteforce(&self, r: SolveIx, t: &str) -> Vec<SolveIx> {
             let target = self.bundle.routine_id(r).to_string();
-            let mut v: Vec<RoutineIx> = self
+            let mut v: Vec<SolveIx> = self
                 .routines
                 .iter()
                 .copied()
@@ -619,7 +619,7 @@ mod reverse_index_differential {
     // The exhaustive comparison.
     // -----------------------------------------------------------------------
 
-    fn is_strictly_ascending(v: &[RoutineIx]) -> bool {
+    fn is_strictly_ascending(v: &[SolveIx]) -> bool {
         v.windows(2).all(|w| w[0] < w[1])
     }
 
@@ -793,7 +793,7 @@ mod reverse_index_differential {
         graph: &CombinedGraph,
         scc: &SccResult,
         oracle: &Oracle<'_>,
-        routines: &[RoutineIx],
+        routines: &[SolveIx],
         tables: &[String],
     ) {
         let query = DbEffectQuery::build(bundle, scc, graph);
@@ -825,7 +825,7 @@ mod reverse_index_differential {
 
             for t in tables {
                 let ups = query.ancestors_touching(r, t);
-                let mut got: Vec<RoutineIx> = ups.iter().map(|a| a.touch.routine).collect();
+                let mut got: Vec<SolveIx> = ups.iter().map(|a| a.touch.routine).collect();
                 got.sort_unstable();
                 got.dedup();
                 assert_eq!(
@@ -973,7 +973,7 @@ mod reverse_index_differential {
         // Every member is every other member's ancestor at depth 0 — the answer
         // an effect-class-DAG walk could not give.
         for &r in &rs {
-            let ancestors: Vec<RoutineIx> =
+            let ancestors: Vec<SolveIx> =
                 query.ancestors(r).into_iter().map(|(_, ix)| ix).collect();
             for &other in &rs {
                 if other == r {
@@ -1017,7 +1017,7 @@ mod reverse_index_differential {
 ///   `touches_effect` / `down` / the ⟨rev3⟩ disjointness invariant / ascending
 ///   order, over EVERY table, EVERY `EffectId` and EVERY routine-with-a-row.
 /// - **Sampled, deterministically** — `ancestors_touching`, whose oracle is
-///   O(V·(V+E)): every 50th routine-with-a-row (ascending `RoutineIx`, so the
+///   O(V·(V+E)): every 50th routine-with-a-row (ascending `SolveIx`, so the
 ///   sample is reproducible), against its own touched tables PLUS two tables it
 ///   does NOT touch. The negatives are the interesting half — they are where
 ///   "a caller reaches it through a sibling branch" actually shows up.
@@ -1049,7 +1049,7 @@ fn cdo_reverse_index_matches_slow_oracle() {
 
     use al_sem::engine::l4::combined_graph::build_combined_graph;
     use al_sem::engine::l4::reverse_index::ReverseEffectIndex;
-    use al_sem::engine::l4::routine_interner::RoutineIx;
+    use al_sem::engine::l4::routine_interner::SolveIx;
     use al_sem::engine::l4::scc::{SccInputGraph, tarjan_scc};
     use al_sem::engine::l4::summary_runner::compute_summaries_v2_bundle_with_leaves;
     use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
@@ -1127,7 +1127,7 @@ fn cdo_reverse_index_matches_slow_oracle() {
     diff::assert_index_matches_oracle("CDO_WS", &bundle, &graph, &scc, &oracle);
 
     // Sampled — the rule is stated in this test's doc, and printed, not hidden.
-    let sample: Vec<RoutineIx> = routines.iter().copied().step_by(50).collect();
+    let sample: Vec<SolveIx> = routines.iter().copied().step_by(50).collect();
     assert!(
         !sample.is_empty(),
         "the every-50th sample must not be empty"
@@ -1444,10 +1444,12 @@ mod fixtures {
             edges_by_from.entry(e.from.clone()).or_default().push(e);
         }
         CombinedGraph {
-            nodes: node_vec,
-            edges_by_from,
-            edges_from_order,
-            uncertainty_edges: Vec::new(),
+            primary: al_sem::engine::l4::combined_graph::PrimaryGraph {
+                nodes: node_vec,
+                edges_by_from,
+                edges_from_order,
+                uncertainty_edges: Vec::new(),
+            },
             typed_edges: Vec::new(),
         }
     }

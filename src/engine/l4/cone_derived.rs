@@ -1029,7 +1029,7 @@ mod tests {
     use super::test_facts::{call_edge, fact, temp_fact};
     use super::*;
     use crate::engine::l4::capability_cone::compose_cone_over_graph;
-    use crate::engine::l4::combined_graph::{CombinedGraph, TypedEdge};
+    use crate::engine::l4::combined_graph::{CombinedGraph, PrimaryGraph, TypedEdge};
     use crate::program::body::features::PTempState;
     use std::collections::HashMap;
 
@@ -1049,10 +1049,12 @@ mod tests {
 
     fn graph_of(edges: Vec<TypedEdge>) -> CombinedGraph {
         CombinedGraph {
-            nodes: Vec::new(),
-            edges_by_from: HashMap::new(),
-            edges_from_order: Vec::new(),
-            uncertainty_edges: Vec::new(),
+            primary: PrimaryGraph {
+                nodes: Vec::new(),
+                edges_by_from: HashMap::new(),
+                edges_from_order: Vec::new(),
+                uncertainty_edges: Vec::new(),
+            },
             typed_edges: edges,
         }
     }

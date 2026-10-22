@@ -26,7 +26,7 @@ use crate::engine::l4::analysis::{CoreSummaries, L4Analysis, L4Request, build_l4
 use crate::engine::l4::capability_cone::{
     CapabilityFact, compose_cone_over_graph, direct_facts_for_routine,
 };
-use crate::engine::l4::combined_graph::CombinedGraph;
+use crate::engine::l4::combined_graph::{PrimaryGraph, TypedEdge};
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeOutput};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::reverse_index::ReverseEffectIndex;
@@ -43,6 +43,7 @@ use crate::engine::perf_trace as pt;
 use crate::program::body::features::PCallSite;
 use crate::program::model::calls::{CallEdge, UpgradedBinding};
 use crate::program::model::events::{EventGraph, EventSymbol};
+use crate::program::model::projection;
 use crate::program::model::workspace::{Model, ModelObject, ModelRoutine, ModelTable};
 
 /// A declared workspace dependency (`model.identity.primaryDependencies[]`): the
@@ -820,11 +821,13 @@ impl<'a> UncertaintyView<'a> {
 pub struct DetectorArtifacts {
     /// The substrate bits this was built with (`registry::substrate`).
     pub demanded: u32,
-    /// The view's `ExecRelation` graph (`rel.primary()`, shared by pointer;
-    /// #160 step 4): detectors read the Primary payload (`edges_by_from`, …)
-    /// and d43 the Cone payload (`typed_edges`) from the ctx here (al-sem
+    /// The view's `ExecRelation` Primary payload (`rel.primary()`, shared by
+    /// pointer; #160 step 4): detectors read `edges_by_from`, … here (al-sem
     /// passed it as the detector's `graph` arg).
-    pub graph: Arc<CombinedGraph>,
+    pub graph: Arc<PrimaryGraph>,
+    /// The view's `ExecRelation` Cone payload (`rel.cone()`, shared by
+    /// pointer; #160 step 11b §4.4): d43 reads it.
+    pub cone: Arc<Vec<TypedEdge>>,
     /// The raw L3 event graph (al-sem `model.eventGraph`). d12/d38 read its
     /// `events`/`edges`; the combined-graph build already constructs it, so it is
     /// captured here rather than recomputed.
@@ -1046,18 +1049,22 @@ impl<'v> DetectorContext<'v> {
         ordering: Option<&'v OrderingFactsMap>,
     ) -> Self {
         let _s = pt::span("context", "context.final_indexes");
-        let routine_by_id = routines.iter().map(|r| (r.id.as_str(), r)).collect();
+        // #160 step 11b §4.5: the routine lookup is the projection's class P
+        // pick (compat LAST).
+        let routine_by_id = projection::last_per_id_borrowed(
+            &projection::RowsOfId::build(routines),
+            routines.iter().map(Some).collect(),
+        );
         let objects_by_id = objects.iter().map(|o| (o.id.as_str(), o)).collect();
         // G-5: REAL table wins an id collision with a tableextension stub (the stub's
         // id reuses the extension's own object number) — otherwise rootCause text
         // renders the EXTENSION's name for ops on the real table.
         let table_by_id = crate::program::model::workspace::table_by_id_preferring_real(tables);
-        let mut call_site_by_id: HashMap<&str, &PCallSite> = HashMap::new();
-        for r in routines {
-            for cs in &r.call_sites {
-                call_site_by_id.insert(cs.id.as_str(), cs);
-            }
-        }
+        // Compat LAST per call-site id (a collided id's rows share site ids).
+        let call_site_by_id: HashMap<&str, &PCallSite> =
+            projection::last_per_key(routines.iter().flat_map(|r| &r.call_sites), |cs| {
+                cs.id.as_str()
+            });
         let fingerprint_index =
             crate::engine::l5::fingerprint::FingerprintIndex::build(routines, objects);
         let ctx = DetectorContext {
@@ -1249,17 +1256,21 @@ pub(crate) fn det_cone_inputs(resolved: &Model) -> DetConeInputs {
         }
     }
     let empty_pub: Vec<&EventSymbol> = Vec::new();
-    let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
-    let mut coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
     // `direct=` times the per-routine extraction only, as at step 0.
     let t_direct = cones_census::start();
+    // #160 step 11b §4.5: per row, then the projection (R2a, compat LAST).
+    let mut facts_per_row = Vec::with_capacity(ws.routines.len());
+    let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
-        coverage_in.insert(r.id.clone(), (status, reasons));
-        direct_full.insert(r.id.clone(), facts);
+        coverage_per_row.push(Some((status, reasons)));
+        facts_per_row.push(Some(facts));
     }
+    let rows = projection::RowsOfId::build(&ws.routines);
+    let coverage_in = projection::last_per_id(&rows, coverage_per_row);
+    let direct_full = projection::last_per_id(&rows, facts_per_row);
     cones_census::add_since(&cones_census::DIRECT_NANOS, t_direct);
     DetConeInputs {
         nodes,
@@ -1281,7 +1292,8 @@ pub(crate) fn build_detector_artifacts(
     cross: Option<CrossAppInputs<'_>>,
 ) -> (DetectorArtifacts, Option<L4Analysis>) {
     // The Primary payload; `DetectorArtifacts.graph` shares it by pointer.
-    let graph: Arc<CombinedGraph> = Arc::clone(rel.primary());
+    let graph: Arc<PrimaryGraph> = Arc::clone(rel.primary());
+    let cone = Arc::clone(rel.cone_shared());
     use crate::engine::l5::registry::substrate;
     assert!(
         demanded & substrate::CORE_SUMMARIES == 0 || l4.is_some(),
@@ -1524,16 +1536,21 @@ pub(crate) fn build_detector_artifacts(
     // Public (default-access). A routine with NO entry is treated as Public by
     // `find_reachable_roots`, so we only need to insert the non-Public cases — but we
     // insert all parsed modifiers explicitly for clarity.
-    let mut access_modifiers: HashMap<String, AccessModifier> = HashMap::new();
-    for r in &ws.routines {
-        let access = match r.access_modifier.as_deref() {
-            Some("local") => AccessModifier::Local,
-            Some("internal") => AccessModifier::Internal,
-            // "protected" / None / any other value → public (al-sem default-access).
-            _ => AccessModifier::Public,
-        };
-        access_modifiers.insert(r.id.clone(), access);
-    }
+    // #160 step 11b §4.5: per row, then the projection (#11, compat LAST).
+    let access_per_row = ws
+        .routines
+        .iter()
+        .map(|r| {
+            Some(match r.access_modifier.as_deref() {
+                Some("local") => AccessModifier::Local,
+                Some("internal") => AccessModifier::Internal,
+                // "protected" / None / any other value → public (al-sem default-access).
+                _ => AccessModifier::Public,
+            })
+        })
+        .collect();
+    let access_modifiers: HashMap<String, AccessModifier> =
+        projection::last_per_id(&projection::RowsOfId::build(&ws.routines), access_per_row);
     // See `DetectorContext::internal_reachable_externally` doc: defaults to false
     // (the Rust model carries no `primaryInternalsVisibleTo`; source-only fixtures
     // never set `internalsVisibleTo`).
@@ -1744,11 +1761,9 @@ pub(crate) fn build_detector_artifacts(
     let root_classifications_by_routine: HashMap<
         String,
         crate::engine::root_classification::RootClassification,
-    > = resolved
-        .root_classifications
-        .iter()
-        .map(|rc| (rc.routine_id.clone(), rc.clone()))
-        .collect();
+    > = projection::last_per_key(resolved.root_classifications.iter().cloned(), |rc| {
+        rc.routine_id.clone()
+    });
 
     // ⟨substrate census⟩ `ALSEM_UNCERTAINTY_CENSUS=1` — see `UncertaintyIndex::emit_census`.
     uncertainties.emit_census(&uncertainties_by_node);
@@ -1756,6 +1771,7 @@ pub(crate) fn build_detector_artifacts(
     let art = DetectorArtifacts {
         demanded,
         graph,
+        cone,
         event_graph,
         reverse_call_graph,
         entry_points,
@@ -2027,19 +2043,17 @@ fn census_ordering_facts(m: &HashMap<String, crate::engine::l5::ordering_facts::
 /// interface's signature, but not their bodies. Analysing every implementer is
 /// a detector change, not a resolution one: see `docs/OUTSTANDING.md`.
 fn first_resolved_edge_per_callsite(edges: Vec<CallEdge>) -> HashMap<String, CallEdge> {
-    let mut by_callsite: HashMap<String, CallEdge> = HashMap::new();
-    for ce in edges {
-        if ce.to.is_none() {
-            continue;
-        }
-        by_callsite.entry(ce.callsite_id.clone()).or_insert(ce);
-    }
-    by_callsite
+    // #160 step 11b §4.5: R9, compat FIRST per call-site id (a collided id's
+    // rows emit one call-site id each, in row order).
+    projection::first_per_key(edges.into_iter().filter(|ce| ce.to.is_some()), |ce| {
+        ce.callsite_id.clone()
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::model::ix::RoutineIx;
 
     /// States a routine-id collision across the WHOLE model, by assignment: every
     /// routine named `name` gets the id `shared`, and so does every precomputed
@@ -2083,7 +2097,7 @@ mod tests {
     #[test]
     fn the_first_targeted_edge_represents_a_call_site() {
         let mk = |to: Option<&str>| {
-            let mut e = CallEdge::base("caller", "cs1", "op1");
+            let mut e = CallEdge::base(RoutineIx(0), "caller", "cs1", "op1");
             e.to = to.map(str::to_string);
             e
         };
@@ -2101,7 +2115,7 @@ mod tests {
     fn model_calls_reach_detector_context_and_ordering_base() {
         use crate::program::model::calls::{CallEdge, ResolvedCalls};
         use crate::program::model::taxonomy::{DispatchKind, Resolution};
-        let mut edge = CallEdge::base("from-r", "distinct-callsite", "distinct-op");
+        let mut edge = CallEdge::base(RoutineIx(0), "from-r", "distinct-callsite", "distinct-op");
         edge.to = Some("to-r".to_string());
         // Dynamic so the coverage path (`dynamic_dispatch_sites`) shows it too.
         edge.dispatch_kind = DispatchKind::Dynamic;

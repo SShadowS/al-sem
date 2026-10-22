@@ -24,7 +24,7 @@ use crate::program::model::workspace::Model;
 
 /// The temp-state of a record operation (internal form — NOT the serde
 /// projection shape). Mirrors al-sem `TempState`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, salsa::SalsaValue)]
 pub enum TempState {
     Known(bool),
     ParameterDependent(u32),
@@ -64,7 +64,7 @@ impl TempState {
 }
 
 /// One de-duplicated DB effect (internal form). Mirrors al-sem `DbEffect`.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct DbEffect {
     /// `effectKeyOf(op, tableId, operationId, tempState)` — EXCLUDES via.
     pub effect_key: String,
@@ -83,7 +83,7 @@ pub struct DbEffect {
 /// value can key an intern map — see
 /// [`crate::engine::l5::d1_cohort::UncertaintyTable`], which stores one copy of
 /// each distinct uncertainty for a whole d1 run and hands out [`u32`] ids.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct Uncertainty {
     pub kind: String,
     pub callsite_id: Option<String>,

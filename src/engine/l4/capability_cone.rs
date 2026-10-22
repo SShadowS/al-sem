@@ -30,7 +30,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use super::combined_graph::{CombinedGraph, TypedEdge, build_combined_graph};
+use super::combined_graph::{CombinedGraph, PrimaryGraph, TypedEdge, build_combined_graph};
 use super::cone_census;
 use super::cone_derived::{
     ConeDerivedBuilder, ConeDerivedStore, ConeOutput, FoldedRow, fact_is_known_temp,
@@ -3561,7 +3561,7 @@ pub(crate) fn capability_fact_sort_key(f: &PCapabilityFact) -> String {
 #[cfg(test)]
 fn compute_uncertainty_coverage_reasons(
     ws: &ModelEntities,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     calls: &crate::program::model::calls::ResolvedCalls,
 ) -> HashMap<String, BTreeSet<String>> {
     use crate::engine::l4::summary_runner::compute_summaries_v2;
@@ -3634,7 +3634,7 @@ fn compute_uncertainty_coverage_reasons(
 /// So a routine's solved set of these kinds is exactly its own uncertainty
 /// edges'. A `from` that is no workspace routine may get a key; readers look up
 /// workspace routine ids only. The map borrows from `graph`.
-fn callsite_local_coverage_reasons(graph: &CombinedGraph) -> HashMap<&str, BTreeSet<&str>> {
+fn callsite_local_coverage_reasons(graph: &PrimaryGraph) -> HashMap<&str, BTreeSet<&str>> {
     let mut out: HashMap<&str, BTreeSet<&str>> = HashMap::new();
     for ue in &graph.uncertainty_edges {
         let kind = ue.uncertainty.kind.as_str();
@@ -3931,15 +3931,20 @@ pub(crate) fn build_cross_app_base(
                 .push(evt);
         }
     }
+    // #160 step 11b §4.5: R2b, per row, then the projection (compat LAST).
+    let rows = crate::program::model::projection::RowsOfId::build(&ws.routines);
     let routines_by_id: HashMap<String, &ModelRoutine> =
-        ws.routines.iter().map(|r| (r.id.clone(), r)).collect();
-    let mut leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary> =
-        HashMap::new();
+        crate::program::model::projection::last_per_id(
+            &rows,
+            ws.routines.iter().map(Some).collect(),
+        );
+    let mut leaf_per_row = Vec::with_capacity(ws.routines.len());
     let mut fixed_roles: HashSet<String> = HashSet::new();
-    let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
-    let mut direct_coverage: HashMap<String, (String, Vec<String>)> = HashMap::new();
+    let mut facts_per_row = Vec::with_capacity(ws.routines.len());
+    let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     for r in &ws.routines {
+        let mut leaf = None;
         if dep_routine_ids.contains(&r.id) && r.body_available {
             let has_out_edge = rel
                 .primary()
@@ -3949,17 +3954,24 @@ pub(crate) fn build_cross_app_base(
             if has_out_edge {
                 fixed_roles.insert(r.id.clone());
             } else {
-                leaf_summaries.insert(
-                    r.id.clone(),
-                    base_intraprocedural_summary(r, &routines_by_id, &field_index),
-                );
+                leaf = Some(base_intraprocedural_summary(
+                    r,
+                    &routines_by_id,
+                    &field_index,
+                ));
             }
         }
+        leaf_per_row.push(leaf);
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
-        direct_coverage.insert(r.id.clone(), (status, reasons));
-        direct_full.insert(r.id.clone(), facts);
+        coverage_per_row.push(Some((status, reasons)));
+        facts_per_row.push(Some(facts));
     }
+    let leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary> =
+        crate::program::model::projection::last_per_id(&rows, leaf_per_row);
+    let direct_coverage = crate::program::model::projection::last_per_id(&rows, coverage_per_row);
+    let direct_full = crate::program::model::projection::last_per_id(&rows, facts_per_row);
+    drop(rows);
 
     let declared_dependencies = std::mem::take(&mut x.declared_dependencies);
     let resolved_app_versions = x
@@ -4365,11 +4377,12 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     let uncertainty_reasons = callsite_local_coverage_reasons(&graph);
 
     // Per-routine direct facts (full) + direct coverage + the dedup-keyed map.
-    let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
-    let mut direct: RoutineDirectFacts = HashMap::new();
-    let mut cov: RoutineDirectCoverage = HashMap::new();
+    // #160 step 11b §4.5: R2c, per row, then the projection (compat LAST).
     let mut routine_ids: BTreeSet<String> = BTreeSet::new();
     let empty_pub: Vec<&EventSymbol> = Vec::new();
+    let mut facts_per_row = Vec::with_capacity(ws.routines.len());
+    let mut direct_per_row = Vec::with_capacity(ws.routines.len());
+    let mut cov_per_row = Vec::with_capacity(ws.routines.len());
 
     for r in &ws.routines {
         routine_ids.insert(r.id.clone());
@@ -4379,23 +4392,26 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         // Canonical rep per dedup key (min repKey wins) — the
         // composeInheritedCones direct-fact dedup.
         let byk = dedup_direct(&facts);
-        if !byk.is_empty() {
-            direct.insert(r.id.clone(), byk);
-        }
+        direct_per_row.push((!byk.is_empty()).then_some(byk));
 
         // Fold uncertainty-derived coverage reasons (identical to the snapshot base).
         let (status, final_reasons) =
             fold_uncertainty_reasons(status, reasons, uncertainty_reasons.get(r.id.as_str()));
 
-        cov.insert(
-            r.id.clone(),
-            DirectCoverage {
-                direct_status: status,
-                reasons: final_reasons,
-            },
-        );
-        direct_full.insert(r.id.clone(), facts);
+        cov_per_row.push(Some(DirectCoverage {
+            direct_status: status,
+            reasons: final_reasons,
+        }));
+        facts_per_row.push(Some(facts));
     }
+    let rows = crate::program::model::projection::RowsOfId::build(&ws.routines);
+    let direct_full: HashMap<String, Vec<CapabilityFact>> =
+        crate::program::model::projection::last_per_id(&rows, facts_per_row);
+    let direct: RoutineDirectFacts =
+        crate::program::model::projection::last_per_id(&rows, direct_per_row);
+    let cov: RoutineDirectCoverage =
+        crate::program::model::projection::last_per_id(&rows, cov_per_row);
+    drop(rows);
 
     // ⟨C1 Task 3⟩ `RawOnly` — this projection consumes the RAW cone (its
     // `sort_inherited` byte order IS the R3a-3 golden surface, Global Constraint
@@ -4562,9 +4578,10 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
     let uncertainty_reasons = callsite_local_coverage_reasons(&graph);
 
     // Per-routine direct facts (full) + uncertainty-folded direct coverage.
-    let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
-    let mut direct_coverage: HashMap<String, (String, Vec<String>)> = HashMap::new();
+    // #160 step 11b §4.5: R2c, per row, then the projection (compat LAST).
     let empty_pub: Vec<&EventSymbol> = Vec::new();
+    let mut facts_per_row = Vec::with_capacity(ws.routines.len());
+    let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
@@ -4573,9 +4590,15 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
         let (status, final_reasons) =
             fold_uncertainty_reasons(status, reasons, uncertainty_reasons.get(r.id.as_str()));
 
-        direct_coverage.insert(r.id.clone(), (status, final_reasons));
-        direct_full.insert(r.id.clone(), facts);
+        coverage_per_row.push(Some((status, final_reasons)));
+        facts_per_row.push(Some(facts));
     }
+    let rows = crate::program::model::projection::RowsOfId::build(&ws.routines);
+    let direct_coverage: HashMap<String, (String, Vec<String>)> =
+        crate::program::model::projection::last_per_id(&rows, coverage_per_row);
+    let direct_full: HashMap<String, Vec<CapabilityFact>> =
+        crate::program::model::projection::last_per_id(&rows, facts_per_row);
+    drop(rows);
 
     drop(_s1);
     let _s2 = pt::span("r3a3", "r3a3.compose_cone");
@@ -4652,7 +4675,13 @@ pub fn issue160_full_graph_timings(
         let sb = if side == "cut" {
             build_r3a3_source_only_base(&base.resolved)
         } else {
-            build_r3a3_source_only_base_over(&base.resolved, (**base.rel.primary()).clone())
+            build_r3a3_source_only_base_over(
+                &base.resolved,
+                CombinedGraph {
+                    primary: (**base.rel.primary()).clone(),
+                    typed_edges: base.rel.cone().to_vec(),
+                },
+            )
         };
         let (cone1, pd1) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
         let t = std::time::Instant::now();
@@ -4722,8 +4751,9 @@ pub fn compute_r3a3_real_matrix(resolved: &Model) -> R3a3RealMatrix {
     }
 
     // Per-routine SET of direct-fact dedup keys (inheritedFactKey).
+    // #160 step 11b §4.5: R2c, per row, then the projection (compat LAST).
     let empty_pub: Vec<&EventSymbol> = Vec::new();
-    let mut direct_keys: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut keys_per_row = Vec::with_capacity(ws.routines.len());
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, _, _) = direct_facts_for_routine(r, pubs);
@@ -4731,10 +4761,13 @@ pub fn compute_r3a3_real_matrix(resolved: &Model) -> R3a3RealMatrix {
         for f in &facts {
             keys.insert(inherited_fact_key(f));
         }
-        if !keys.is_empty() {
-            direct_keys.insert(r.id.clone(), keys);
-        }
+        keys_per_row.push((!keys.is_empty()).then_some(keys));
     }
+    let direct_keys: HashMap<String, BTreeSet<String>> =
+        crate::program::model::projection::last_per_id(
+            &crate::program::model::projection::RowsOfId::build(&ws.routines),
+            keys_per_row,
+        );
 
     let empty_edges: Vec<TypedOutEdge> = Vec::new();
     let mut m = R3a3RealMatrix::default();
@@ -6359,7 +6392,7 @@ codeunit 50111 "Cell Calls"
                 interface_name: None,
             },
         };
-        let graph = CombinedGraph {
+        let graph = PrimaryGraph {
             nodes: vec!["A".to_string(), "B".to_string()],
             edges_by_from: HashMap::new(),
             edges_from_order: Vec::new(),
@@ -6374,7 +6407,6 @@ codeunit 50111 "Cell Calls"
                 ue("B", "external-target", "b1"),
                 ue("Orphan", "ambiguous-overload", "o1"),
             ],
-            typed_edges: Vec::new(),
         };
         let set = |ks: &[&str]| {
             ks.iter()

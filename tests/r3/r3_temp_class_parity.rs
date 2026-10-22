@@ -169,8 +169,11 @@ pub fn matched_l4(resolved: &Model) -> (SummaryBundle, BTreeMap<String, usize>) 
         edges_by_from.insert(from.clone(), kept);
     }
     let graph = CombinedGraph {
-        edges_by_from,
-        ..full
+        primary: al_sem::engine::l4::combined_graph::PrimaryGraph {
+            edges_by_from,
+            ..full.primary
+        },
+        typed_edges: full.typed_edges,
     };
     let adjacency: HashMap<String, Vec<String>> = graph
         .edges_by_from

@@ -745,7 +745,7 @@ pub struct SnapshotOperationEvidence {
 /// `CallsiteEvidence` field order: callsiteId, routine, sourceFile, startLine,
 /// startColumn, endLine, endColumn, calleeDisplay, [controlContext], [order],
 /// [underAsserterror].
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SnapshotCallsiteEvidence {
     #[serde(rename = "callsiteId")]
     pub callsite_id: String,

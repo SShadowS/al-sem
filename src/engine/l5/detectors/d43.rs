@@ -8,7 +8,7 @@
 //!
 //! ## Substrate
 //! - `enumerate_dispatch_sites` (ported below from al-sem `engine/dispatch-sites.ts`)
-//!   walks `ctx.graph.typed_edges` for caller→publisher edges, finds the publisher's
+//!   walks `ctx.cone` (the relation's Cone payload) for caller→publisher edges, finds the publisher's
 //!   `var Boolean` IsHandled formal, binds the caller's actual, and collects post-call
 //!   `conditionReferences` guards + the caller's guarded table writes.
 //! - `classify_subscriber` reads the subscriber's `var_assignments` + `has_branching`
@@ -82,7 +82,7 @@ fn enumerate_dispatch_sites(
         }
     }
 
-    for edge in &ctx.graph.typed_edges {
+    for edge in ctx.cone.iter() {
         if edge.kind != "direct-call"
             && edge.kind != "object-run-resolved"
             && edge.kind != "dependency-export"

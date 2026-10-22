@@ -76,7 +76,7 @@ pub struct PExpressionInfo {
 ///
 /// `{ kind: "known", value }` | `{ kind: "parameter-dependent", parameterIndex }`
 /// | `{ kind: "unknown" }`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PTempState {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]

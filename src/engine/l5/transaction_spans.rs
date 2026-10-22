@@ -484,27 +484,39 @@ pub fn compute_transaction_spans(
     // PRIMARY routines only. A BTreeMap so the explicit-commit seed iteration is
     // deterministic (al-sem's Map is insertion-ordered over model.routines; we
     // key-sort, which Task 2b re-sorts by span key anyway).
-    let mut commits_by_routine: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for r in routines {
-        if !is_primary(r, dep_routine_ids) {
-            continue;
-        }
-        let commit_ops: Vec<String> = r
-            .operation_sites
-            .iter()
-            .filter(|os| os.kind == "commit")
-            .map(|os| os.id.clone())
+    // #160 step 11b §4.5: #14, per row, then the projection (compat LAST: the
+    // last primary row of the id with commits).
+    let rows = crate::program::model::projection::RowsOfId::build(routines);
+    let commits_per_row = routines
+        .iter()
+        .map(|r| {
+            if !is_primary(r, dep_routine_ids) {
+                return None;
+            }
+            let commit_ops: Vec<String> = r
+                .operation_sites
+                .iter()
+                .filter(|os| os.kind == "commit")
+                .map(|os| os.id.clone())
+                .collect();
+            (!commit_ops.is_empty()).then_some(commit_ops)
+        })
+        .collect();
+    let commits_by_routine: BTreeMap<String, Vec<String>> =
+        crate::program::model::projection::last_per_id(&rows, commits_per_row)
+            .into_iter()
             .collect();
-        if !commit_ops.is_empty() {
-            commits_by_routine.insert(r.id.clone(), commit_ops);
-        }
-    }
 
     // Everything about a span that depends only on the seed ROUTINE — cached
     // per distinct seed routine id (see `span_template` above `compute_transaction_spans`).
     let mut template_cache: HashMap<String, SpanTemplate> = HashMap::new();
+    // The seed row of an id (compat LAST, #14's seed).
     let routine_by_id: HashMap<&str, &ModelRoutine> =
-        routines.iter().map(|r| (r.id.as_str(), r)).collect();
+        crate::program::model::projection::last_per_id_borrowed(
+            &rows,
+            routines.iter().map(Some).collect(),
+        );
+    drop(rows);
     let fwd = forward_sites(reverse);
     let inputs = SpanInputs {
         commits_by_routine: &commits_by_routine,

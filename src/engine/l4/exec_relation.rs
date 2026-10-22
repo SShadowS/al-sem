@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use super::combined_graph::{CombinedGraph, TypedEdge, UncertaintyEdge, assemble};
+use super::combined_graph::{PrimaryGraph, TypedEdge, UncertaintyEdge, assemble};
 use super::scc::SccResult;
 use crate::engine::perf_trace as pt;
 use crate::program::model::calls::CallEdge;
@@ -15,24 +15,25 @@ use crate::program::model::workspace::{Model, ModelEntities};
 /// rules are the two accessors; spec §4.3's field table says which consumer
 /// reads which.
 ///
-/// `CombinedGraph` stays the carrier (amendment M1): 32 source files read its
-/// fields through a `graph.` value and 13 detectors read `edges_by_from` as a
-/// map, so changing the container is step 11's job, when every key becomes a
-/// `RoutineIx`.
+/// The carrier is split (#160 step 11b §4.4, amendments M1, M2): the Primary
+/// payload is a [`PrimaryGraph`] (today's field names, no typed edges) and the
+/// Cone payload a `Vec<TypedEdge>`, moved out of the assembled graph in
+/// [`ExecRelation::new`].
 ///
 /// The transfer rules are two accessors, not an `enum Transfer` value (M2):
 /// each consumer's rule is fixed. The fields are private, so every reader
 /// names its rule: [`ExecRelation::cone`] or [`ExecRelation::primary`] (plus
 /// [`ExecRelation::scc`] and [`ExecRelation::dependency_uncertainty`]). The
-/// type guarantee is ONE-directional: the cone takes `&[TypedEdge]`, so it
-/// cannot read the Primary payload. The reverse is a naming convention until
-/// step 11 splits the container: `primary()` returns the whole carrier, typed
-/// edges included (d43 reads the Cone payload through `ctx.graph.typed_edges`).
+/// type guarantee holds in both directions: the cone takes `&[TypedEdge]`, so
+/// it cannot read the Primary payload, and `primary()` has no typed edges.
 pub struct ExecRelation {
-    /// Primary payload in `edges_by_from` / `edges_from_order` /
-    /// `uncertainty_edges` / `nodes`; Cone payload in `typed_edges` (primary
-    /// half with event dispatch, then the dependency half, in that order).
-    graph: Arc<CombinedGraph>,
+    /// Primary payload: `edges_by_from` / `edges_from_order` /
+    /// `uncertainty_edges` / `nodes`.
+    primary: Arc<PrimaryGraph>,
+    /// Cone payload: the primary half's typed edges (event dispatch included),
+    /// then the dependency half's, in that order (Decision 43). Shared by
+    /// pointer with the detector artifacts (d43 reads it).
+    typed: Arc<Vec<TypedEdge>>,
     /// Tarjan over the Primary payload, computed in [`ExecRelation::new`].
     scc: Arc<SccResult>,
     /// The dependency half's uncertainty edges, in the order the half-build
@@ -73,18 +74,19 @@ impl ExecRelation {
     ) -> ExecRelation {
         pt::counter_delta("build.combined_graph", 1);
         let _s = pt::span("rel", "rel.build");
-        let mut graph = assemble(ws, primary, events);
+        let graph = assemble(ws, primary, events);
+        let (primary, mut typed) = (graph.primary, graph.typed_edges);
         let mut dependency_uncertainty = Vec::new();
         if !dependency.is_empty() {
             let d = assemble(ws, dependency, &EventGraph::default());
-            graph.typed_edges.extend(d.typed_edges);
-            dependency_uncertainty = d.uncertainty_edges;
+            typed.extend(d.typed_edges);
+            dependency_uncertainty = d.primary.uncertainty_edges;
         }
-        // `graph_scc` reads `nodes` and `edges_by_from` only, so the typed-edge
-        // extend above cannot move it.
-        let scc = super::analysis::graph_scc(&graph);
+        // `graph_scc` reads `nodes` and `edges_by_from` only.
+        let scc = super::analysis::graph_scc(&primary);
         ExecRelation {
-            graph: Arc::new(graph),
+            primary: Arc::new(primary),
+            typed: Arc::new(typed),
             scc: Arc::new(scc),
             dependency_uncertainty,
         }
@@ -99,7 +101,7 @@ impl ExecRelation {
             return;
         }
         use crate::engine::census::{Kind, Tally, combined_graph, scc as scc_tally};
-        combined_graph(&self.graph).emit("rel.graph", Kind::Shallow);
+        combined_graph(&self.primary, &self.typed).emit("rel.graph", Kind::Shallow);
         scc_tally(&self.scc).emit("rel.scc", Kind::Shallow);
         Tally::default()
             .buf::<UncertaintyEdge>(self.dependency_uncertainty.len())
@@ -108,13 +110,18 @@ impl ExecRelation {
 
     /// `Transfer::Cone`: every typed edge, every caller.
     pub fn cone(&self) -> &[TypedEdge] {
-        &self.graph.typed_edges
+        &self.typed
+    }
+
+    /// The Cone payload, shared by pointer (`DetectorArtifacts::cone`).
+    pub fn cone_shared(&self) -> &Arc<Vec<TypedEdge>> {
+        &self.typed
     }
 
     /// `Transfer::Primary`: primary callers' call edges plus event dispatch
     /// from any publisher.
-    pub fn primary(&self) -> &Arc<CombinedGraph> {
-        &self.graph
+    pub fn primary(&self) -> &Arc<PrimaryGraph> {
+        &self.primary
     }
 
     /// The Primary payload's SCC, shared by pointer with every `build_l4`.
@@ -138,7 +145,7 @@ impl ExecRelation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::l4::combined_graph::build_combined_graph;
+    use crate::engine::l4::combined_graph::{CombinedGraph, build_combined_graph};
     use crate::program::model::calls::ResolvedCalls;
     use crate::program::model::program_calls::{
         assemble_and_resolve_cross_app_program, assemble_and_resolve_workspace_program,
@@ -189,7 +196,7 @@ mod tests {
         };
         let half = build_combined_graph(ws, &dep_calls, &no_events);
         graph.typed_edges.extend(half.typed_edges);
-        (graph, scc, half.uncertainty_edges)
+        (graph, scc, half.primary.uncertainty_edges)
     }
 
     /// `field: …` naming the first index where `new` and `legacy` differ.
@@ -254,7 +261,7 @@ mod tests {
             stats.dep_uncertainty += 1;
         }
         let rel = ExecRelation::new(ws, &primary, &dependency, events);
-        let g = &*rel.graph;
+        let g = &*rel.primary;
         let mut diffs: Vec<String> = Vec::new();
         diffs.extend(diff_vec("nodes", &g.nodes, &lg.nodes));
         let keys: BTreeSet<&String> = g
@@ -290,7 +297,7 @@ mod tests {
             &g.uncertainty_edges,
             &lg.uncertainty_edges,
         ));
-        diffs.extend(diff_vec("typed_edges", &g.typed_edges, &lg.typed_edges));
+        diffs.extend(diff_vec("typed_edges", &rel.typed, &lg.typed_edges));
         if *rel.scc != lscc {
             diffs.push(format!(
                 "scc: {} sccs new, {} legacy",

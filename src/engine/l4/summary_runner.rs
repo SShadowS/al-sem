@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::combined_graph::CombinedGraph;
+use super::combined_graph::PrimaryGraph;
 use super::db_effect_solver::{build_rvid_by_opid, seed_fixed_leaf_rows, solve_scc_db_effects};
 use super::effect_lattice::{EffectPresence, effect_key_of, join_presence};
 use super::effect_store::{SummaryBundle, SummaryBundleBuilder};
@@ -41,6 +41,7 @@ use super::summary::{
 use crate::engine::perf_trace as pt;
 use crate::program::model::calls::UpgradedBinding;
 use crate::program::model::event_param_temp::event_param_names_match;
+use crate::program::model::projection;
 use crate::program::model::workspace::{ModelParameter, ModelRoutine};
 use serde_json::json;
 
@@ -773,7 +774,7 @@ fn compose_roles_only(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
     dispatch: &[ParamDispatch],
 ) -> Vec<RecordRoleSummary> {
@@ -788,15 +789,16 @@ fn compose_roles_only(
     // `binding_resolution` and `callee_parameter_is_var` live in the upgraded-
     // bindings side table (from the call resolver), NOT on PCallArgumentBinding.
     for cs in &routine.call_sites {
-        // Get the upgraded bindings for this callsite (if any).
-        let upgraded = upgraded_bindings.get(&cs.id);
-
-        // Find the resolved callee edge for this callsite.
-        let edge = graph.edges_by_from.get(&routine.id).and_then(|edges| {
-            edges
-                .iter()
-                .find(|e| e.callsite_id.as_deref() == Some(&cs.id))
-        });
+        // The site's resolved callee edge and its upgraded bindings, through
+        // `site_pick` (#160 step 11b §4.6; compat form in stage A: the first
+        // edge with this call-site id in the id's unioned list, the R5 bindings).
+        let pick = projection::site_pick(
+            graph.edges_by_from.get(&routine.id).map(Vec::as_slice),
+            |e| e.callsite_id.as_deref(),
+            &cs.id,
+            upgraded_bindings,
+        );
+        let (upgraded, edge) = (pick.bindings, pick.edge);
 
         for (arg_idx, binding) in cs.argument_bindings.iter().enumerate() {
             // Get the upgraded state for this binding position.
@@ -1328,7 +1330,7 @@ fn opaque_role(r: &RecordRoleSummary) -> RecordRoleSummary {
 /// the digest's transaction spans.
 pub fn compute_summaries_v2_bundle_with_leaves(
     routines: &[ModelRoutine],
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     scc: &SccResult,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     fields: &FieldIndex,
@@ -1345,28 +1347,34 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     summaries_census::add(&summaries_census::ROUTINES, routines.len() as u64);
     summaries_census::add(&summaries_census::SCCS, scc.sccs.len() as u64);
 
+    // #160 step 11b §4.5: #13, every input per row, then the projection
+    // (compat LAST).
+    let rows = projection::RowsOfId::build(routines);
     let _t = summaries_census::start();
     let routines_by_id: HashMap<String, &ModelRoutine> =
-        routines.iter().map(|r| (r.id.clone(), r)).collect();
+        projection::last_per_id(&rows, routines.iter().map(Some).collect());
     summaries_census::add_since(&summaries_census::ROUTINES_BY_ID_NANOS, _t);
 
     let _t = summaries_census::start();
-    let body_avail_by_id: HashMap<String, bool> = routines
-        .iter()
-        .map(|r| (r.id.clone(), r.body_available))
-        .collect();
+    let body_avail_by_id: HashMap<String, bool> = projection::last_per_id(
+        &rows,
+        routines.iter().map(|r| Some(r.body_available)).collect(),
+    );
     summaries_census::add_since(&summaries_census::BODY_AVAIL_NANOS, _t);
 
     // Each event publisher's dispatch bindings (#107 Design 2), once per solve.
     let shared_events = shared_event_ids(graph);
-    let dispatch_by_id: HashMap<String, Vec<ParamDispatch>> = routines
-        .iter()
-        .filter_map(|r| {
-            let edges = graph.edges_by_from.get(&r.id)?;
-            let d = dispatch_bindings(r, edges, &routines_by_id, &shared_events);
-            (!d.is_empty()).then(|| (r.id.clone(), d))
-        })
-        .collect();
+    let dispatch_by_id: HashMap<String, Vec<ParamDispatch>> = projection::last_per_id(
+        &rows,
+        routines
+            .iter()
+            .map(|r| {
+                let edges = graph.edges_by_from.get(&r.id)?;
+                let d = dispatch_bindings(r, edges, &routines_by_id, &shared_events);
+                (!d.is_empty()).then_some(d)
+            })
+            .collect(),
+    );
     summaries_census::dispatch_publishers(dispatch_by_id.iter().map(|(id, pds)| {
         let r = routines_by_id[id];
         (
@@ -1379,16 +1387,16 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     // Base intraprocedural summaries for NON-LEAF routines only (a leaf carries
     // its own summary; its EMPTY merged features must never overwrite it).
     let _t = summaries_census::start();
-    let base_summaries: HashMap<String, RoutineSummary> = routines
-        .iter()
-        .filter(|r| !leaf_summaries.contains_key(&r.id))
-        .map(|r| {
-            (
-                r.id.clone(),
-                base_intraprocedural_summary(r, &routines_by_id, fields),
-            )
-        })
-        .collect();
+    let base_summaries: HashMap<String, RoutineSummary> = projection::last_per_id(
+        &rows,
+        routines
+            .iter()
+            .map(|r| {
+                (!leaf_summaries.contains_key(&r.id))
+                    .then(|| base_intraprocedural_summary(r, &routines_by_id, fields))
+            })
+            .collect(),
+    );
     summaries_census::add_since(&summaries_census::BASE_SUMMARIES_NANOS, _t);
     summaries_census::add(
         &summaries_census::BASE_SUMMARIES_BUILT,
@@ -1396,15 +1404,19 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     );
 
     let _t = summaries_census::start();
-    let stable_map: HashMap<String, String> = routines
-        .iter()
-        .map(|r| (r.id.clone(), r.stable_routine_id.clone()))
-        .collect();
+    let stable_map: HashMap<String, String> = projection::last_per_id(
+        &rows,
+        routines
+            .iter()
+            .map(|r| Some(r.stable_routine_id.clone()))
+            .collect(),
+    );
+    drop(rows);
     summaries_census::add_since(&summaries_census::STABLE_MAP_NANOS, _t);
 
     // Task A1/A3: intern every workspace routine id once, up front, in the
     // CANONICAL `stable_routine_id`-sorted order (spec rev4) — so ascending
-    // `RoutineIx` is stable across repeated builds of the SAME workspace, not
+    // `SolveIx` is stable across repeated builds of the SAME workspace, not
     // merely self-consistent within one run. Covers every routine (leaf AND
     // non-leaf), the db-effect solver's per-member maps, AND — Task A3 — every
     // fixed-leaf id, INCLUDING retained cross-app dependency leaves that are
@@ -1645,7 +1657,7 @@ pub fn compute_summaries_v2_bundle_with_leaves(
 /// untouched (see `SummaryBundle::has_row`'s doc).
 pub fn compute_summaries_v2_with_leaves_core(
     routines: &[ModelRoutine],
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     scc: &SccResult,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     fields: &FieldIndex,
@@ -1683,7 +1695,7 @@ pub fn compute_summaries_v2_with_leaves_core(
 /// fixed-leaf map call [`compute_summaries_v2_with_leaves_core`] directly.
 pub fn compute_summaries_v2(
     routines: &[ModelRoutine],
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     scc: &SccResult,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     fields: &FieldIndex,
@@ -1716,7 +1728,7 @@ pub fn compute_summaries_v2(
 /// using the materializing [`compute_summaries_v2`] / `_with_leaves_core` shims.
 pub fn compute_summaries_v2_bundle(
     routines: &[ModelRoutine],
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     scc: &SccResult,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     fields: &FieldIndex,
@@ -1746,7 +1758,7 @@ pub struct SccComputeCtx<'a> {
     pub routines_by_id: &'a HashMap<String, &'a ModelRoutine>,
     pub base_summaries: &'a HashMap<String, RoutineSummary>,
     pub upgraded_bindings: &'a HashMap<String, Vec<UpgradedBinding>>,
-    pub graph: &'a CombinedGraph,
+    pub graph: &'a PrimaryGraph,
     pub body_avail_by_id: &'a HashMap<String, bool>,
     pub stable_map: &'a HashMap<String, String>,
     pub leaf_summaries: &'a HashMap<String, RoutineSummary>,

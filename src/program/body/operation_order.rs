@@ -42,7 +42,7 @@ use std::collections::HashMap;
 ///
 /// Serializes to al-sem's `POperationOrder` shape (camelCase, all four fields
 /// always present) — `r1a-l2-projection.ts:projectOperationOrder`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct OperationOrder {
     #[serde(rename = "orderId")]
     pub order_id: u32,

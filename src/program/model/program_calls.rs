@@ -123,6 +123,7 @@ use super::calls::{
     UnknownReason as ModelReason, UpgradedBinding, initial_binding_state, mark_bindings_ambiguous,
     object_run_dispatch_kind, upgrade_bindings, upgrade_bindings_with,
 };
+use super::ix::RoutineIx;
 use super::taxonomy::{DispatchKind, Resolution};
 use super::workspace::{ModelEntities, ModelRecordOperation, ModelRoutine};
 use crate::program::abi_ingest::object_kind_from_abi_type;
@@ -1015,8 +1016,12 @@ pub fn adapter_census_for_workspace_cross_app(
 /// to-less `Unknown(NoProgramSite)` edge, bindings in their initial state (a
 /// record argument stays `"unresolved-callee"`). Engine-switch S3.1 — this used to
 /// be the legacy resolver's answer.
-fn no_program_edge(r: &ModelRoutine, cs: &PCallSite) -> (Vec<CallEdge>, Vec<UpgradedBinding>) {
-    let mut e = CallEdge::base(&r.id, &cs.id, &cs.operation_id);
+fn no_program_edge(
+    ix: RoutineIx,
+    r: &ModelRoutine,
+    cs: &PCallSite,
+) -> (Vec<CallEdge>, Vec<UpgradedBinding>) {
+    let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);
     e.resolution = Resolution::Unknown(ModelReason::NoProgramSite);
     (vec![e], initial_binding_state(cs).bindings)
 }
@@ -1358,7 +1363,10 @@ fn convert<'a>(
         primary: view.primary_app_ref,
         model_apps: model_apps(graph, view.primary_app_ref, ws),
         abi_rows: abi_rows.unwrap_or(&empty_abi_rows),
-        routine_by_id: ws.routines.iter().map(|r| (r.id.as_str(), r)).collect(),
+        routine_pick: super::projection::last_per_id_borrowed(
+            &super::projection::RowsOfId::build(&ws.routines),
+            ws.routines.iter().map(Some).collect(),
+        ),
         upgrade_dependency_bindings,
         graph,
         surface: &surface,
@@ -1374,17 +1382,20 @@ fn convert<'a>(
     // The conversion loop to the end of the adapter.
     let _s_convert = pt::span("b3", "b3.adapter.convert");
     let mut edges: Vec<CallEdge> = Vec::new();
-    let mut upgraded_bindings: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
+    // Per site, in row order; one list per call-site id after the projection
+    // (#160 step 11b §4.5, R5: compat LAST per call-site id).
+    let mut bindings_per_site: Vec<(String, Vec<UpgradedBinding>)> = Vec::new();
     // The adapter emits no resolver diagnostics (the legacy resolver's
     // double-upgrade warning had no program-engine analogue to fire).
     let diagnostics = Vec::new();
     // Call sites in routine order, then the implicit-trigger edges in
     // routine/op order (the legacy resolver's order).
     for (ri, r) in ws.routines.iter().enumerate() {
+        let ix = RoutineIx::of(ri);
         for (ci, cs) in r.call_sites.iter().enumerate() {
             let program_edge = j.calls.get(&(ri, ci));
             let converted = program_edge.and_then(|ce| {
-                let out = conv.call(r, cs, ce, &mut c);
+                let out = conv.call(ix, r, cs, ce, &mut c);
                 if out.is_none() {
                     c.adapter_callee_outside_l3 += 1;
                 }
@@ -1399,18 +1410,18 @@ fn convert<'a>(
                     // S3.1: no legacy fallback. The program engine gave nothing
                     // usable here, and that is reported as such.
                     c.adapter_l3_fallback_sites += 1;
-                    no_program_edge(r, cs)
+                    no_program_edge(ix, r, cs)
                 }
             };
             edges.extend(site_edges);
-            upgraded_bindings.insert(cs.id.clone(), bindings);
+            bindings_per_site.push((cs.id.clone(), bindings));
         }
     }
     for (ri, r) in ws.routines.iter().enumerate() {
         for (oi, op) in r.record_operations.iter().enumerate() {
             if let Some(ce) = j.ops.get(&(ri, oi)) {
                 c.adapter_program_trigger_ops += 1;
-                edges.extend(conv.triggers(r, op, ce, &mut c));
+                edges.extend(conv.triggers(RoutineIx::of(ri), r, op, ce, &mut c));
             } else if matches!(
                 op.op.as_str(),
                 "Insert" | "Modify" | "Delete" | "Validate" | "Rename"
@@ -1420,6 +1431,7 @@ fn convert<'a>(
             }
         }
     }
+    let upgraded_bindings = super::projection::last_per_key_pairs(bindings_per_site);
     (
         ResolvedCalls {
             edges,
@@ -1460,13 +1472,17 @@ struct Converter<'a> {
     model_apps: HashSet<AppRef>,
     /// The cross-app model's symbol-only rows by program id (S7.3); empty otherwise.
     abi_rows: &'a crate::program::model::workspace::AbiRowIds,
-    routine_by_id: HashMap<&'a str, &'a ModelRoutine>,
+    /// The row a symbol-only routine's string id stands for: the projection's
+    /// class P pick (#160 step 11b §4.5, R6; compat LAST = today's answer).
+    routine_pick: HashMap<&'a str, &'a ModelRoutine>,
     upgrade_dependency_bindings: bool,
     graph: &'a ProgramGraph,
     surface: &'a DeclSurface,
     /// The model's rows, indexed by `RoutineIx`.
     rows: &'a [ModelRoutine],
-    /// J2's answer recorded at assembly (#160 §4.7): node -> row.
+    /// J2's answer recorded at assembly (#160 §4.7): node -> the first
+    /// non-symbol-only row at the node's declaration anchor whose `node_of` is
+    /// that node (node-filtered since #160 step 11b §4.2).
     j2_row: &'a HashMap<RoutineNodeId, u32>,
     objects: HashMap<ObjectKey, &'a ObjectNode>,
     /// The primary app's objects by `(kind, folded name)` (S6.0): "is this
@@ -1484,8 +1500,8 @@ struct Converter<'a> {
 impl<'a> Converter<'a> {
     /// The model routine for a program source routine: a primary-app routine, or
     /// a dependency routine of a cross-app model (S7.3). J2's answer (the first
-    /// non-symbol-only row at the node's declaration anchor), recorded at
-    /// assembly (#160 §4.7).
+    /// non-symbol-only row at the node's declaration anchor whose `node_of` is
+    /// the node; #160 step 11b §4.2), recorded at assembly (#160 §4.7).
     fn l3_routine(&self, id: &RoutineNodeId) -> Option<&'a ModelRoutine> {
         if !self.model_apps.contains(&id.object.app) {
             return None;
@@ -1507,7 +1523,7 @@ impl<'a> Converter<'a> {
             RouteTarget::AbiSymbol { key } if key.app == self.primary => Target::Outside,
             RouteTarget::AbiSymbol { .. } => Self::route_routine_id(route)
                 .and_then(|id| self.abi_rows.get(&id))
-                .and_then(|row| self.routine_by_id.get(row.as_str()).copied())
+                .and_then(|row| self.routine_pick.get(row.as_str()).copied())
                 .map_or(Target::Outside, Target::Model),
             RouteTarget::Builtin(_) | RouteTarget::Unresolved => Target::Outside,
         }
@@ -1559,6 +1575,7 @@ impl<'a> Converter<'a> {
     /// workspace callee has no L3 routine: the caller falls back to L3.
     fn call(
         &self,
+        ix: RoutineIx,
         r: &ModelRoutine,
         cs: &PCallSite,
         ce: &ClassifiedEdge,
@@ -1570,7 +1587,7 @@ impl<'a> Converter<'a> {
         // Dispatch kind from the L2 callee shape (ruling 4). A `Page.RunModal(..)`
         // style member call the program engine sees as a run takes the run kind
         // its receiver keyword names.
-        let mut e = CallEdge::base(&r.id, &cs.id, &cs.operation_id);
+        let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);
         e.dispatch_kind = match &cs.callee {
             PCallee::Bare { .. } => DispatchKind::Direct,
             PCallee::Member { receiver, .. }
@@ -1648,7 +1665,7 @@ impl<'a> Converter<'a> {
         };
         match shape {
             DispatchShape::Polymorphic => {
-                let edges = self.interface(r, cs, ce, &mut state, c)?;
+                let edges = self.interface(ix, r, cs, ce, &mut state, c)?;
                 return Some((edges, state.bindings));
             }
             DispatchShape::AmbiguousOverload => {
@@ -1996,6 +2013,7 @@ impl<'a> Converter<'a> {
     /// ambiguous.
     fn interface(
         &self,
+        ix: RoutineIx,
         r: &ModelRoutine,
         cs: &PCallSite,
         ce: &ClassifiedEdge,
@@ -2087,7 +2105,7 @@ impl<'a> Converter<'a> {
                 .collect(),
         };
         let base = || {
-            let mut e = CallEdge::base(&r.id, &cs.id, &cs.operation_id);
+            let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);
             e.dispatch_kind = DispatchKind::Interface;
             e
         };
@@ -2125,6 +2143,7 @@ impl<'a> Converter<'a> {
     /// (`implicit_edges::trigger_mapping`).
     fn triggers(
         &self,
+        ix: RoutineIx,
         r: &ModelRoutine,
         op: &ModelRecordOperation,
         ce: &ClassifiedEdge,
@@ -2191,7 +2210,7 @@ impl<'a> Converter<'a> {
         let fires = crate::engine::l4::combined_graph::trigger_fires(&op.op, op.run_trigger);
         tos.into_iter()
             .map(|to| {
-                let mut e = CallEdge::base(&r.id, &op.id, &op.id);
+                let mut e = CallEdge::base(ix, &r.id, &op.id, &op.id);
                 e.to = Some(to);
                 e.dispatch_kind = DispatchKind::ImplicitTrigger;
                 e.fires = Some(fires);
@@ -3266,20 +3285,6 @@ mod tests {
             (rows.len(), by_id.len()),
             "{c:?}"
         );
-    }
-
-    /// #160 step 11b (spec §4.2 "The census", A11b.1): in stage C the census
-    /// counts J2's aliases against the corrected, node-filtered J2, so T7b's
-    /// two-nodes-at-one-anchor shape (the `AcquireTokenFromCache` alias, counted
-    /// 1 until 11b) reads `j2_alias_nodes = 0`. Deleted in stage A with the field.
-    #[test]
-    fn collision_census_has_no_j2_alias_after_the_correction() {
-        let (_dir, ctx, _report, rows) = single_app(&[("src/s.al", ONE_ANCHOR_TWO_NODES)]);
-        assert_eq!(nodes_named(&ctx, "p").len(), 2, "precondition: two nodes");
-        assert_eq!(rows_named(&rows, "P").len(), 2, "precondition: two rows");
-        let c =
-            crate::program::model::workspace::collision_census(&rows.workspace, &rows.row_nodes);
-        assert_eq!(c.j2_alias_nodes, 0, "{c:?}");
     }
 }
 

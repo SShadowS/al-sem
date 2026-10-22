@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use crate::engine::l4::combined_graph::CombinedGraph;
+use crate::engine::l4::combined_graph::PrimaryGraph;
 use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::scc::{SccInputGraph, SccResult, tarjan_scc};
@@ -59,7 +59,7 @@ pub(crate) fn build_l4(
     req: L4Request,
     cross: Option<&CrossAppInputs<'_>>,
 ) -> (L4Analysis, CoreSummaries) {
-    let graph: &CombinedGraph = rel.primary();
+    let graph: &PrimaryGraph = rel.primary();
     let scc = Arc::clone(rel.scc());
     emit_scc_stats(graph, &scc);
 
@@ -137,7 +137,7 @@ pub fn render_warnings(diagnostics: &[SummarizeDiagnostic]) -> Vec<String> {
 /// copy, called by `ExecRelation::new` for every view's SCC (#160 step 4). The
 /// snapshot's coverage fold no longer solves, so it no longer calls this
 /// (#160 step 3).
-pub(crate) fn graph_scc(graph: &CombinedGraph) -> SccResult {
+pub(crate) fn graph_scc(graph: &PrimaryGraph) -> SccResult {
     let mut scc_adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &graph.edges_by_from {
         scc_adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
@@ -181,7 +181,7 @@ pub(crate) fn solver_field_index(ws: &ModelEntities) -> FieldIndex {
 /// Reimplements the historical `SCCSTATS`/`SCCANATOMY` eprintln probe
 /// (`git show c8836e7^:src/engine/l5/detector_context.rs`) as one lazy JSON
 /// payload, built only when tracing is enabled.
-fn emit_scc_stats(graph: &CombinedGraph, scc: &SccResult) {
+fn emit_scc_stats(graph: &PrimaryGraph, scc: &SccResult) {
     pt::instant_lazy("l4", "scc_stats", || {
         let max_scc = scc.sccs.iter().map(|s| s.members.len()).max().unwrap_or(0);
         let recursive_sccs = scc.sccs.iter().filter(|s| s.recursive).count();

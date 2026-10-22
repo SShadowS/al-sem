@@ -92,7 +92,7 @@ fn canonical_kinds(set: &BTreeSet<String>) -> Vec<String> {
 /// Per-routine classification with full provenance (al-sem `RootClassification`).
 /// `sourceAnchor` is intentionally NOT carried here — the R4-F stable projection
 /// omits it, and no Rust consumer (d50/d51 lookup by routine id) needs it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RootClassification {
     /// Internal RoutineId (`${modelInstanceId}/${hash}`).
     pub routine_id: String,

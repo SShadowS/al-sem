@@ -55,11 +55,12 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
     let (calls, events) = (resolved.calls.clone(), resolved.events.clone());
     let rewrites: Vec<(usize, u32)> = {
         let routines = &resolved.workspace.routines;
-        let index: HashMap<&str, usize> = routines
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.id.as_str(), i))
-            .collect();
+        // The row each raiser / subscriber id is read through (#17, #160 step
+        // 11b §4.5): the projection's compat LAST row.
+        let index: HashMap<&str, usize> = super::projection::last_per_id_borrowed(
+            &super::projection::RowsOfId::build(routines),
+            (0..routines.len()).map(Some).collect(),
+        );
         let resolved_sites: HashSet<&str> = calls
             .edges
             .iter()

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::analysis::{L4Analysis, L4Request, build_l4};
-use crate::engine::l4::combined_graph::CombinedGraph;
+use crate::engine::l4::combined_graph::PrimaryGraph;
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::summary_runner::SummarizeDiagnostic;
 use crate::engine::l5::detector_context::{
@@ -447,7 +447,7 @@ impl View {
     /// Cross-app, the rest of the base (its cone inputs, its own `rel`
     /// handle) drops here, so it is not live through the query and the
     /// render, as at `1524b1fd`.
-    pub fn into_query_parts(self) -> (Model, Arc<CombinedGraph>, L4Analysis) {
+    pub fn into_query_parts(self) -> (Model, Arc<PrimaryGraph>, L4Analysis) {
         let graph = Arc::clone(self.rel.expect("rel cell not filled").primary());
         let l4 = self.l4.expect("l4 cell not filled");
         let model = match self.target {

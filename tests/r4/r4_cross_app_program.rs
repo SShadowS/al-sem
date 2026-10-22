@@ -2071,36 +2071,3 @@ fn event_graph_reads_node_of() {
         m.events.census
     );
 }
-
-/// FP-01 / FP-10 (#160 §4.9, §4.10), restated by 11b (spec §4.2 "The census",
-/// A11b.2): in stage C `j5_compat_rows` is computed against the corrected
-/// mapping (`node_of`), so the fixture's two former subscriber gaps (`Ha`'s
-/// unmapped first arm, `Hb`'s second row mapped to the first node) read 0.
-/// Deleted in stage A with the field.
-#[test]
-fn j5_compat_rows_counts_the_subscriber_gaps_only() {
-    use al_sem::program::model::program_calls::cross_app_rows_before_attach;
-    use al_sem::program::model::workspace::{MODEL_INSTANCE_ID_DEFAULT as MI, collision_census};
-    let dir = tempfile::tempdir().unwrap();
-    j5_shapes_dependency_workspace(dir.path());
-    let rows = cross_app_rows_before_attach(&read(dir.path()), MI).expect("rows");
-    let named = |name: &str| -> Vec<usize> {
-        rows.workspace
-            .routines
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.name == name)
-            .map(|(ri, _)| ri)
-            .collect()
-    };
-    let node = |ri: usize| rows.row_nodes.node_of[ri].clone();
-    let (ha, hb) = (named("Ha"), named("Hb"));
-    assert_eq!((ha.len(), hb.len()), (2, 2), "precondition: two rows each");
-    assert!(
-        node(ha[0]).is_some() && node(ha[0]) == node(ha[1]),
-        "precondition: Ha's rows are one node"
-    );
-    assert_ne!(node(hb[0]), node(hb[1]), "precondition: Hb is two nodes");
-    let c = collision_census(&rows.workspace, &rows.row_nodes);
-    assert_eq!(c.j5_compat_rows, 0, "{c:?}");
-}

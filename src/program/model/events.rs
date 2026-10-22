@@ -11,7 +11,7 @@ use crate::program::attributes::{AttributeInfo, bool_arg, find_attribute};
 
 /// One evidence record. The R2c surface only ever carries `{source}` (+ an optional
 /// `note` on synthesized symbols).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Evidence {
     pub source: String,
     pub note: Option<String>,
@@ -41,7 +41,7 @@ impl Evidence {
 }
 
 /// One EventSymbol (publisher or synthesized). Ids in INTERNAL form.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EventSymbol {
     /// Internal event id (`${publisherObjectId}/event/${eventName_lc}`).
     pub id: String,
@@ -65,7 +65,7 @@ pub struct EventSymbol {
 }
 
 /// A bound event publisher that is not a routine of the detector model.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PublisherRef {
     /// A dependency routine. `target` is [`super::model_routine_key`]; `body` is
     /// the registry's body state (`None` when the registry has no entry).
@@ -80,7 +80,7 @@ pub enum PublisherRef {
 }
 
 /// One EventEdge. Ids in INTERNAL form.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EventEdge {
     pub event_id: String,
     pub subscriber_routine_id: String,
@@ -312,13 +312,18 @@ pub fn program_event_graph(
     let mut events: Vec<EventSymbol> = Vec::new();
     let mut event_ix: HashMap<String, usize> = HashMap::new();
     let mut real: HashSet<String> = HashSet::new();
-    for r in &ws.routines {
-        if r.kind == "event-publisher" {
-            let s = build_event_symbol(r);
-            real.insert(s.id.clone());
-            event_ix.insert(s.id.clone(), events.len());
-            events.push(s);
-        }
+    // One symbol per publisher row (#160 step 11b §4.5, R4b: compat KEPT, so a
+    // collided publisher keeps one symbol per row; `event_ix` names its last).
+    let per_row: Vec<EventSymbol> = ws
+        .routines
+        .iter()
+        .filter(|r| r.kind == "event-publisher")
+        .map(build_event_symbol)
+        .collect();
+    for s in super::projection::kept_per_row(per_row) {
+        real.insert(s.id.clone());
+        event_ix.insert(s.id.clone(), events.len());
+        events.push(s);
     }
     // A symbol for an event no bound publisher stands behind (L3's synthesized
     // `maybe`/`unknown` symbols).
@@ -352,10 +357,11 @@ pub fn program_event_graph(
 
     let mut edges: Vec<EventEdge> = Vec::new();
     // A routine declared in several `#if` arms is several model rows with ONE
-    // id, all standing for one program node (issue #103): only its first row
-    // that maps emits edges. A row counts only once it maps, so an unmapped
-    // first row (a dependency's declaration surface keeps the LAST same-id
-    // span) does not hide a later row that maps. `model_subscribers` and
+    // id (issue #103): only its first row that has a node emits edges (R4,
+    // #160 step 11b §4.5: the compat rule is today's). A row counts only once
+    // it has a node, so a row without one (`node_of` is `None`: a dependency
+    // row of an app the graph does not know, the fail-closed guard below) does
+    // not hide a later row of the id that has one. `model_subscribers` and
     // `unmapped_subscribers` stay per row (the latter only for ids no row
     // maps); every later counter is per id.
     let mut processed: HashSet<&str> = HashSet::new();

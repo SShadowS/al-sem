@@ -100,6 +100,9 @@ impl UnknownReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallEdge {
     pub from: String,
+    /// The row of `from` that emitted this edge (#160 step 11b §4.3): rows that
+    /// share one string id tell their edges apart by it.
+    pub from_ix: super::ix::RoutineIx,
     pub to: Option<String>,
     pub callsite_id: String,
     pub operation_id: String,
@@ -129,9 +132,15 @@ pub struct CallEdge {
 }
 
 impl CallEdge {
-    pub(crate) fn base(from: &str, callsite_id: &str, operation_id: &str) -> CallEdge {
+    pub(crate) fn base(
+        from_ix: super::ix::RoutineIx,
+        from: &str,
+        callsite_id: &str,
+        operation_id: &str,
+    ) -> CallEdge {
         CallEdge {
             from: from.to_string(),
+            from_ix,
             to: None,
             callsite_id: callsite_id.to_string(),
             operation_id: operation_id.to_string(),

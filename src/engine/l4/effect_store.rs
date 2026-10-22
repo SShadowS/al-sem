@@ -41,7 +41,7 @@ use std::ops::Range;
 use crate::engine::l4::db_effect_solver::kind_to_temp_state;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_universe::{EffectId, FrozenEffectUniverse};
-use crate::engine::l4::routine_interner::{RoutineInterner, RoutineIx};
+use crate::engine::l4::routine_interner::{RoutineInterner, SolveIx};
 use crate::engine::l4::summary::DbEffect;
 
 // ---------------------------------------------------------------------------
@@ -529,7 +529,7 @@ pub struct SummaryBundleBuilder {
     /// Shared `C` bitsets — one push per effective SCC (and per fixed leaf),
     /// referenced by every member's [`RawRow::terminal_set`].
     arena: Vec<Vec<u64>>,
-    rows: HashMap<RoutineIx, RawRow>,
+    rows: HashMap<SolveIx, RawRow>,
 }
 
 impl SummaryBundleBuilder {
@@ -553,7 +553,7 @@ impl SummaryBundleBuilder {
     /// parallel — `finish` reorders the PD pair to `key_rank` order.
     pub fn push_row(
         &mut self,
-        routine_ix: RoutineIx,
+        routine_ix: SolveIx,
         terminal_set: SetRef,
         base_via: Vec<ViaRank>,
         pd_delta: Vec<EffectId>,
@@ -574,14 +574,14 @@ impl SummaryBundleBuilder {
     /// True iff `r` has a row (was solved this run, or is a retained fixed
     /// leaf) — the feed-forward "is this callee settled?" gate, matching the
     /// old `settled.get(&callee).is_some()`.
-    pub fn has_row(&self, r: RoutineIx) -> bool {
+    pub fn has_row(&self, r: SolveIx) -> bool {
         self.rows.contains_key(&r)
     }
 
     /// A settled routine's shared terminal-set bits (`C`) — for the solver's
     /// closed-form union / via folds to OR wholesale. Empty slice if `r` has
     /// no row.
-    pub fn terminal_bits(&self, r: RoutineIx) -> &[u64] {
+    pub fn terminal_bits(&self, r: SolveIx) -> &[u64] {
         match self.rows.get(&r) {
             Some(row) => &self.arena[row.terminal_set.0 as usize],
             None => &[],
@@ -590,7 +590,7 @@ impl SummaryBundleBuilder {
 
     /// A settled routine's PD-fact ids — for the solver's PD reachability seed
     /// / substituted-via attribution. Empty slice if `r` has no row / no PD.
-    pub fn pd_ids(&self, r: RoutineIx) -> &[EffectId] {
+    pub fn pd_ids(&self, r: SolveIx) -> &[EffectId] {
         match self.rows.get(&r) {
             Some(row) => &row.pd_delta,
             None => &[],
@@ -620,7 +620,7 @@ impl SummaryBundleBuilder {
             .map(|bits| store.intern_set(bits))
             .collect();
 
-        let mut summaries: HashMap<RoutineIx, CompactRoutineSummary> =
+        let mut summaries: HashMap<SolveIx, CompactRoutineSummary> =
             HashMap::with_capacity(self.rows.len());
         let mut via_pool: Vec<ViaRank> = Vec::new();
         let mut delta_pool: Vec<EffectId> = Vec::new();
@@ -707,7 +707,7 @@ fn push_ids(pool: &mut Vec<EffectId>, ids: &[EffectId]) -> Range<u32> {
 /// cached `ordered_ids` (+ per-row `base_via`) with the row's `key_rank`-sorted
 /// `pd_delta` (+ `delta_via`).
 pub struct SummaryBundle {
-    summaries: HashMap<RoutineIx, CompactRoutineSummary>,
+    summaries: HashMap<SolveIx, CompactRoutineSummary>,
     effects: EffectStore,
     via_pool: Vec<ViaRank>,
     delta_pool: Vec<EffectId>,
@@ -721,7 +721,7 @@ impl SummaryBundle {
     /// routine interner are not walked.
     pub(crate) fn census_tally(&self) -> crate::engine::census::Tally {
         let mut t = crate::engine::census::Tally::default();
-        t.buf::<(RoutineIx, CompactRoutineSummary)>(self.summaries.len())
+        t.buf::<(SolveIx, CompactRoutineSummary)>(self.summaries.len())
             .buf::<HybridEffectSet>(self.effects.sets.len())
             .buf::<Box<[EffectId]>>(self.effects.ordered.len())
             .buf::<ViaRank>(self.via_pool.len())
@@ -735,26 +735,26 @@ impl SummaryBundle {
         t
     }
 
-    /// Look up the [`RoutineIx`] for a routine id, if interned.
-    pub fn routine_ix(&self, routine_id: &str) -> Option<RoutineIx> {
+    /// Look up the [`SolveIx`] for a routine id, if interned.
+    pub fn routine_ix(&self, routine_id: &str) -> Option<SolveIx> {
         self.interner.get(routine_id)
     }
 
-    /// The routine id for an interned [`RoutineIx`] — the inverse of
+    /// The routine id for an interned [`SolveIx`] — the inverse of
     /// [`Self::routine_ix`]. Panics if `ix` was never produced by this
     /// bundle's interner (mirrors [`RoutineInterner::name`]'s own contract);
-    /// every `RoutineIx` in circulation is expected to have come from this
+    /// every `SolveIx` in circulation is expected to have come from this
     /// bundle. A4's [`crate::engine::l4::reverse_index::graph_scc_of`] uses
-    /// this to bridge a `RoutineIx` back to the string id
+    /// this to bridge a `SolveIx` back to the string id
     /// [`crate::engine::l4::scc::SccResult::scc_id_by_routine`] is keyed by.
-    pub fn routine_id(&self, ix: RoutineIx) -> &str {
+    pub fn routine_id(&self, ix: SolveIx) -> &str {
         self.interner.name(ix)
     }
 
     /// True iff `r` has a compact row (was recomputed this run OR is a retained
     /// fixed leaf — spec ⟨rev3⟩ "fixed leaves get a singleton class"). A
     /// missing routine gets no row.
-    pub fn has_row(&self, r: RoutineIx) -> bool {
+    pub fn has_row(&self, r: SolveIx) -> bool {
         self.summaries.contains_key(&r)
     }
 
@@ -762,8 +762,8 @@ impl SummaryBundle {
     /// A4's reverse-index build iterates this once to group routines by their
     /// shared [`EffectSetId`] and to walk each routine's own delta. Callers
     /// needing a deterministic order sort the result themselves (A4's build
-    /// pass sorts each class's members ascending by [`RoutineIx`]).
-    pub fn routines_with_rows(&self) -> impl Iterator<Item = RoutineIx> + '_ {
+    /// pass sorts each class's members ascending by [`SolveIx`]).
+    pub fn routines_with_rows(&self) -> impl Iterator<Item = SolveIx> + '_ {
         self.summaries.keys().copied()
     }
 
@@ -775,7 +775,7 @@ impl SummaryBundle {
     /// The shared [`EffectSetId`] of a routine's terminal base (its effect
     /// class's set), if it has a row — the notion A4's reverse transpose
     /// consumes.
-    pub fn terminal_base(&self, r: RoutineIx) -> Option<EffectSetId> {
+    pub fn terminal_base(&self, r: SolveIx) -> Option<EffectSetId> {
         self.summaries.get(&r).map(|row| row.terminal_base)
     }
 
@@ -784,7 +784,7 @@ impl SummaryBundle {
     /// which needs the raw delta ids (not the merged `db_effects` view) to
     /// build `effect_to_delta_routines`/`table_to_delta_routines`. Empty for
     /// a routine with no row.
-    pub fn pd_delta_ids(&self, r: RoutineIx) -> &[EffectId] {
+    pub fn pd_delta_ids(&self, r: SolveIx) -> &[EffectId] {
         match self.summaries.get(&r) {
             Some(row) => &self.delta_pool[row.pd_delta.start as usize..row.pd_delta.end as usize],
             None => &[],
@@ -796,7 +796,7 @@ impl SummaryBundle {
     /// `key_rank`-sorted `pd_delta` (with `delta_via`), yielding effects in
     /// `(effect_key, operation_id)` order (byte-identical to the old solver's
     /// `Vec<DbEffect>` sort). Empty for a routine with no row.
-    pub fn db_effects(&self, r: RoutineIx) -> impl Iterator<Item = DbEffectRef<'_>> {
+    pub fn db_effects(&self, r: SolveIx) -> impl Iterator<Item = DbEffectRef<'_>> {
         let out = match self.summaries.get(&r) {
             Some(row) => self.project_row(row),
             None => Vec::new(),

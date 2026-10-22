@@ -412,7 +412,7 @@ impl RoutineVariables {
 /// A routine parameter (the L3-relevant subset of al-sem's `ParameterSymbol`) —
 /// drives arity matching, `calleeParameterIsVar` upgrades, and overload arg-type
 /// disambiguation (`typeText`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModelParameter {
     /// Positional index (0-based) — the EventSymbol parameter shape.
     pub index: u32,
@@ -2029,13 +2029,9 @@ pub struct CollisionCensus {
     pub rows_primary: usize,
     pub rows_dependency_source: usize,
     pub rows_symbol_only: usize,
-    /// Nodes in `j2_row` (every model-app node with a surface declaration whose
-    /// anchor some row has, looked up or not) whose `j2_row`'s `node_of` is another
-    /// node (J2's cross-node alias).
-    pub j2_alias_nodes: usize,
-    /// Event-subscriber rows whose J5 answer differs from `node_of`. Since 11b
-    /// (C) J5 IS `node_of`, so this reads 0; deleted in 11b stage A.
-    pub j5_compat_rows: usize,
+    /// Groups whose rows do not share one role (#160 step 11b §4.3): the count
+    /// the projection's role check makes. Must read 0.
+    pub groups_mixed_role: usize,
 }
 
 impl CollisionCensus {
@@ -2046,7 +2042,7 @@ impl CollisionCensus {
         eprintln!(
             "[retained-census] collision routine_rows={} distinct_ids={} collision_groups={} \
              collision_rows={} groups_one_node={} groups_several_nodes={} rows_primary={} \
-             rows_dependency_source={} rows_symbol_only={} j2_alias_nodes={} j5_compat_rows={}",
+             rows_dependency_source={} rows_symbol_only={} groups_mixed_role={}",
             c.routine_rows,
             c.distinct_ids,
             c.collision_groups,
@@ -2056,8 +2052,7 @@ impl CollisionCensus {
             c.rows_primary,
             c.rows_dependency_source,
             c.rows_symbol_only,
-            c.j2_alias_nodes,
-            c.j5_compat_rows
+            c.groups_mixed_role
         );
     }
 }
@@ -2097,12 +2092,7 @@ pub fn collision_census(ws: &ModelEntities, row_nodes: &RowNodes) -> CollisionCe
             }
         }
     }
-    c.j2_alias_nodes = row_nodes
-        .j2_row
-        .iter()
-        .filter(|&(n, &ri)| node(ri as usize) != Some(n))
-        .count();
-    // `j5_compat_rows` stays 0: the event graph reads `node_of` itself (11b §4.2).
+    c.groups_mixed_role = super::projection::mixed_role_groups(&ws.routines);
     c
 }
 

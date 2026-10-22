@@ -102,9 +102,12 @@ impl Tally {
     }
 }
 
-/// [`crate::engine::l4::combined_graph::CombinedGraph`], shallow (`rel.graph`:
-/// the view's `ExecRelation` holds the one graph since #160 step 4).
-pub fn combined_graph(g: &crate::engine::l4::combined_graph::CombinedGraph) -> Tally {
+/// The view's `ExecRelation` payloads, shallow (`rel.graph`: the Primary
+/// payload `g` and the Cone payload `typed`, split since #160 step 11b).
+pub fn combined_graph(
+    g: &crate::engine::l4::combined_graph::PrimaryGraph,
+    typed: &[crate::engine::l4::combined_graph::TypedEdge],
+) -> Tally {
     let mut t = Tally::default();
     t.buf::<String>(g.nodes.len()).strs(&g.nodes);
     t.buf::<(String, Vec<crate::engine::l4::combined_graph::CombinedEdge>)>(g.edges_by_from.len())
@@ -113,7 +116,7 @@ pub fn combined_graph(g: &crate::engine::l4::combined_graph::CombinedGraph) -> T
     t.buf::<String>(g.edges_from_order.len())
         .strs(&g.edges_from_order);
     t.buf::<crate::engine::l4::combined_graph::UncertaintyEdge>(g.uncertainty_edges.len());
-    t.buf::<crate::engine::l4::combined_graph::TypedEdge>(g.typed_edges.len());
+    t.buf::<crate::engine::l4::combined_graph::TypedEdge>(typed.len());
     t
 }
 

@@ -42,7 +42,7 @@
 //! for a FULL dense bitmap over a ~100k-routine domain), so a plain sorted
 //! `Box<[u32]>` below [`POSTING_SPARSE_THRESHOLD`] and a dense `Box<[u64]>`
 //! bitmap at/above it (the SAME shape as `effect_store::HybridEffectSet`, but
-//! over the `RoutineIx`/`EffectClassIx` domains rather than the frozen
+//! over the `SolveIx`/`EffectClassIx` domains rather than the frozen
 //! `EffectId` universe — see [`PostingList`] for why it is a separate, small
 //! type rather than a reuse of `HybridEffectSet`) already gives O(1)-ish
 //! membership with no new dependency. Revisit only if profiling on a real
@@ -96,7 +96,7 @@
 //!   but any surface that renders a table must state what it is rather than
 //!   showing it as though it were a table id. See
 //!   [`crate::engine::l4::effect_query::UNKNOWN_TABLE_ID`].
-//! - **[`RoutineIx`] is not a user-facing identity.**
+//! - **[`SolveIx`] is not a user-facing identity.**
 //!   [`SummaryBundle::routine_id`] yields the INTERNAL id
 //!   (`<appGuid>:Codeunit:6175271#<bodyhash>`). Rendering needs a join to
 //!   `ModelRoutine` (`name` / `object_type` / `stable_routine_id` /
@@ -108,7 +108,7 @@ use std::ops::Range;
 
 use crate::engine::l4::effect_store::{DbEffectRef, EffectSetId, SummaryBundle};
 use crate::engine::l4::effect_universe::EffectId;
-use crate::engine::l4::routine_interner::RoutineIx;
+use crate::engine::l4::routine_interner::SolveIx;
 use crate::engine::l4::scc::SccResult;
 
 // ---------------------------------------------------------------------------
@@ -146,14 +146,14 @@ pub struct GraphSccIx(pub u32);
 /// row"). A thin, stateless projection off [`SummaryBundle::terminal_base`] —
 /// NOT cached inside [`ReverseEffectIndex`], so there is exactly one place
 /// this classification is computed.
-pub fn class_of(bundle: &SummaryBundle, r: RoutineIx) -> Option<EffectClassIx> {
+pub fn class_of(bundle: &SummaryBundle, r: SolveIx) -> Option<EffectClassIx> {
     bundle.terminal_base(r).map(EffectClassIx::from)
 }
 
 /// A routine's ORIGINAL Tarjan SCC id, from the call-graph condensation
 /// `scc` carries — independent of whether `r` has a compact db-effect row at
 /// all (every graph node has a Tarjan SCC; not every node has a row).
-pub fn graph_scc_of(scc: &SccResult, bundle: &SummaryBundle, r: RoutineIx) -> Option<GraphSccIx> {
+pub fn graph_scc_of(scc: &SccResult, bundle: &SummaryBundle, r: SolveIx) -> Option<GraphSccIx> {
     let name = bundle.routine_id(r);
     scc.scc_id_by_routine
         .get(name)
@@ -172,10 +172,10 @@ pub fn graph_scc_of(scc: &SccResult, bundle: &SummaryBundle, r: RoutineIx) -> Op
 /// and impl rather than reusing `HybridEffectSet`: that type's dense repr is
 /// sized to a FROZEN `EffectId` universe length with tail-bit masking
 /// against it, a contract that does not apply to a posting list's ad hoc
-/// `RoutineIx`/`EffectClassIx` domain (see module doc).
+/// `SolveIx`/`EffectClassIx` domain (see module doc).
 const POSTING_SPARSE_THRESHOLD: usize = 256;
 
-/// One posting list: the set of raw `u32` ids (a [`RoutineIx`] or
+/// One posting list: the set of raw `u32` ids (a [`SolveIx`] or
 /// [`EffectClassIx`] value, unwrapped) referencing one effect or table.
 /// Always constructed sorted + deduplicated ([`PostingList::from_ids`]), so
 /// iteration is always ascending and membership never decompresses the list.
@@ -267,8 +267,8 @@ fn set_bit_u32(bits: &mut Vec<u64>, id: u32) {
 /// bundle, never changes db-effect output).
 pub struct ReverseEffectIndex {
     /// `class_members_pool[class_members_ranges[c]]` = class `c`'s member
-    /// routines, ascending `RoutineIx` (spec Step 4 CSR).
-    class_members_pool: Vec<RoutineIx>,
+    /// routines, ascending `SolveIx` (spec Step 4 CSR).
+    class_members_pool: Vec<SolveIx>,
     class_members_ranges: Vec<Range<u32>>,
     /// `EffectId.0` -> the classes whose shared base contains that effect.
     effect_to_sccs: Vec<PostingList>,
@@ -287,7 +287,7 @@ impl ReverseEffectIndex {
     /// and its table keys; the posting lists' own heap is not walked.
     pub(crate) fn census_tally(&self) -> crate::engine::census::Tally {
         let mut t = crate::engine::census::Tally::default();
-        t.buf::<RoutineIx>(self.class_members_pool.len())
+        t.buf::<SolveIx>(self.class_members_pool.len())
             .buf::<Range<u32>>(self.class_members_ranges.len())
             .buf::<PostingList>(self.effect_to_sccs.len())
             .buf::<PostingList>(self.effect_to_delta_routines.len())
@@ -307,10 +307,10 @@ impl ReverseEffectIndex {
         let n_effects = universe.len();
         let n_classes = store.set_count();
 
-        // 1. Group routines-with-rows by class, ascending RoutineIx per class
+        // 1. Group routines-with-rows by class, ascending SolveIx per class
         //    (deterministic regardless of the bundle's HashMap iteration
         //    order).
-        let mut members_by_class: Vec<Vec<RoutineIx>> = vec![Vec::new(); n_classes];
+        let mut members_by_class: Vec<Vec<SolveIx>> = vec![Vec::new(); n_classes];
         for r in bundle.routines_with_rows() {
             if let Some(set_id) = bundle.terminal_base(r) {
                 members_by_class[set_id.0 as usize].push(r);
@@ -321,7 +321,7 @@ impl ReverseEffectIndex {
         }
 
         // 2. CSR-pool the class members.
-        let mut class_members_pool: Vec<RoutineIx> = Vec::new();
+        let mut class_members_pool: Vec<SolveIx> = Vec::new();
         let mut class_members_ranges: Vec<Range<u32>> = Vec::with_capacity(n_classes);
         for members in &members_by_class {
             let start = class_members_pool.len() as u32;
@@ -410,8 +410,8 @@ impl ReverseEffectIndex {
         }
     }
 
-    /// A class's ascending-`RoutineIx` members (spec Step 4 CSR).
-    pub fn class_members(&self, class: EffectClassIx) -> &[RoutineIx] {
+    /// A class's ascending-`SolveIx` members (spec Step 4 CSR).
+    pub fn class_members(&self, class: EffectClassIx) -> &[SolveIx] {
         match self.class_members_ranges.get(class.0 as usize) {
             Some(range) => &self.class_members_pool[range.start as usize..range.end as usize],
             None => &[],
@@ -428,12 +428,12 @@ impl ReverseEffectIndex {
     }
 
     /// The routines whose OWN delta (not their class's base) carries `effect`.
-    pub fn effect_delta_routines(&self, effect: EffectId) -> impl Iterator<Item = RoutineIx> + '_ {
+    pub fn effect_delta_routines(&self, effect: EffectId) -> impl Iterator<Item = SolveIx> + '_ {
         self.effect_to_delta_routines
             .get(effect.0 as usize)
             .into_iter()
             .flat_map(|pl| pl.iter())
-            .map(RoutineIx)
+            .map(SolveIx)
     }
 
     /// True iff `table_id`'s posting includes `class` (its shared base
@@ -446,7 +446,7 @@ impl ReverseEffectIndex {
 
     /// True iff `table_id`'s DELTA posting includes `r` (its own delta
     /// touches the table, disjoint from its class's base — ⟨rev3⟩).
-    pub fn table_touches_via_delta_routine(&self, table_id: &str, r: RoutineIx) -> bool {
+    pub fn table_touches_via_delta_routine(&self, table_id: &str, r: SolveIx) -> bool {
         self.table_to_delta_routines
             .get(table_id)
             .is_some_and(|pl| pl.contains(r.0))
@@ -459,7 +459,7 @@ impl ReverseEffectIndex {
     pub fn down<'a>(
         &self,
         bundle: &'a SummaryBundle,
-        r: RoutineIx,
+        r: SolveIx,
     ) -> impl Iterator<Item = DbEffectRef<'a>> {
         bundle.db_effects(r)
     }
@@ -467,7 +467,7 @@ impl ReverseEffectIndex {
     /// "Does routine `r` touch table `table_id`?" — a pure posting-list
     /// membership check (base-class OR disjoint-delta); NEVER decompresses
     /// `r`'s full effect set (no call to [`Self::down`]/`db_effects` here).
-    pub fn touches_table(&self, bundle: &SummaryBundle, r: RoutineIx, table_id: &str) -> bool {
+    pub fn touches_table(&self, bundle: &SummaryBundle, r: SolveIx, table_id: &str) -> bool {
         let Some(class) = class_of(bundle, r) else {
             return false;
         };
@@ -492,7 +492,7 @@ impl ReverseEffectIndex {
 
     /// True iff `effect`'s DELTA posting includes `r`. Private — see
     /// [`Self::effect_touches_via_base`].
-    fn effect_touches_via_delta_routine(&self, effect: EffectId, r: RoutineIx) -> bool {
+    fn effect_touches_via_delta_routine(&self, effect: EffectId, r: SolveIx) -> bool {
         self.effect_to_delta_routines
             .get(effect.0 as usize)
             .is_some_and(|pl| pl.contains(r.0))
@@ -508,7 +508,7 @@ impl ReverseEffectIndex {
     /// posting element-by-element (a full bit-scan in the dense case) and so
     /// contradicted this doc's own "same no-decompression shape" claim.
     /// Harmless at DO's mean posting of 25, wrong asymptotics as written.
-    pub fn touches_effect(&self, bundle: &SummaryBundle, r: RoutineIx, effect: EffectId) -> bool {
+    pub fn touches_effect(&self, bundle: &SummaryBundle, r: SolveIx, effect: EffectId) -> bool {
         let Some(class) = class_of(bundle, r) else {
             return false;
         };
@@ -516,13 +516,13 @@ impl ReverseEffectIndex {
             || self.effect_touches_via_delta_routine(effect, r)
     }
 
-    /// Up: every routine that touches `table_id`, as an ASCENDING-`RoutineIx`
+    /// Up: every routine that touches `table_id`, as an ASCENDING-`SolveIx`
     /// result (spec ⟨rev4 P1, DECIDED⟩: expand class postings into a
     /// TEMPORARY routine bitmap — set bits while expanding classes + delta
     /// postings — then bit-scan ascending; expanding sorted class postings
-    /// directly does NOT yield a globally-sorted `RoutineIx` sequence, since
+    /// directly does NOT yield a globally-sorted `SolveIx` sequence, since
     /// class order and routine order are independent).
-    pub fn up_table(&self, table_id: &str) -> Vec<RoutineIx> {
+    pub fn up_table(&self, table_id: &str) -> Vec<SolveIx> {
         let mut bits: Vec<u64> = Vec::new();
         if let Some(pl) = self.table_to_sccs.get(table_id) {
             for class in pl.iter() {
@@ -536,13 +536,13 @@ impl ReverseEffectIndex {
                 set_bit_u32(&mut bits, r);
             }
         }
-        iter_bits(&bits).map(RoutineIx).collect()
+        iter_bits(&bits).map(SolveIx).collect()
     }
 
-    /// Up: every routine that touches `effect`, ascending `RoutineIx` — the
+    /// Up: every routine that touches `effect`, ascending `SolveIx` — the
     /// effect-granularity sibling of [`Self::up_table`], same temporary-
     /// bitmap construction.
-    pub fn up_effect(&self, effect: EffectId) -> Vec<RoutineIx> {
+    pub fn up_effect(&self, effect: EffectId) -> Vec<SolveIx> {
         let mut bits: Vec<u64> = Vec::new();
         for class in self.effect_classes(effect) {
             for &r in self.class_members(class) {
@@ -552,13 +552,13 @@ impl ReverseEffectIndex {
         for r in self.effect_delta_routines(effect) {
             set_bit_u32(&mut bits, r.0);
         }
-        iter_bits(&bits).map(RoutineIx).collect()
+        iter_bits(&bits).map(SolveIx).collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
+    use crate::engine::l4::combined_graph::{CombinedEdge, PrimaryGraph};
     use crate::engine::l4::db_effect_solver::effective_sccs;
     use crate::engine::l4::effect_lattice::TempStateKind;
     use crate::engine::l4::effect_store::{
@@ -568,7 +568,7 @@ mod tests {
     use crate::engine::l4::reverse_index::{
         POSTING_SPARSE_THRESHOLD, PostingList, ReverseEffectIndex, class_of, graph_scc_of,
     };
-    use crate::engine::l4::routine_interner::{RoutineInterner, RoutineIx};
+    use crate::engine::l4::routine_interner::{RoutineInterner, SolveIx};
     use crate::engine::l4::scc::{SccInputGraph, tarjan_scc};
     use std::collections::HashMap;
 
@@ -595,8 +595,8 @@ mod tests {
     /// touches only `T3`.
     struct Fixture {
         bundle: SummaryBundle,
-        r1: RoutineIx,
-        r2: RoutineIx,
+        r1: SolveIx,
+        r2: SolveIx,
         base_t1: EffectId,
         pd_t1: EffectId,
         pd_t2: EffectId,
@@ -732,7 +732,7 @@ mod tests {
         }
     }
 
-    // ---- up_table: exact routine set, ascending RoutineIx -----------------
+    // ---- up_table: exact routine set, ascending SolveIx -----------------
 
     #[test]
     fn up_table_returns_exactly_expected_routines_ascending() {
@@ -742,10 +742,10 @@ mod tests {
         assert_eq!(index.up_table("T1"), vec![fx.r1]);
         assert_eq!(index.up_table("T2"), vec![fx.r1]);
         assert_eq!(index.up_table("T3"), vec![fx.r2]);
-        assert_eq!(index.up_table("T4"), Vec::<RoutineIx>::new());
+        assert_eq!(index.up_table("T4"), Vec::<SolveIx>::new());
     }
 
-    /// `up_table` must yield ascending `RoutineIx` even when class-posting
+    /// `up_table` must yield ascending `SolveIx` even when class-posting
     /// expansion order disagrees with routine order (⟨rev4 P1, DECIDED⟩: the
     /// temporary-bitmap normalization is load-bearing, not cosmetic).
     #[test]
@@ -755,12 +755,12 @@ mod tests {
         let e2 = u.intern(&ident("Modify", "TX", "op2", TempStateKind::Known(true)));
 
         let mut interner = RoutineInterner::new();
-        let a = interner.intern("a"); // RoutineIx(0)
-        let b_ix = interner.intern("b"); // RoutineIx(1)
+        let a = interner.intern("a"); // SolveIx(0)
+        let b_ix = interner.intern("b"); // SolveIx(1)
 
         let mut builder = SummaryBundleBuilder::new();
         // Push b's terminal set FIRST (lower EffectSetId / class) even though
-        // b's RoutineIx is HIGHER than a's.
+        // b's SolveIx is HIGHER than a's.
         let set_b = builder.push_terminal_set(bits_of(&[e2]));
         builder.push_row(b_ix, set_b, vec![ViaRank::Direct], vec![], vec![]);
         let set_a = builder.push_terminal_set(bits_of(&[e1]));
@@ -903,7 +903,7 @@ mod tests {
             .collect();
 
         let mut interner = RoutineInterner::new();
-        let routines: Vec<RoutineIx> = (0..N)
+        let routines: Vec<SolveIx> = (0..N)
             .map(|n| interner.intern(&format!("r{n:04}")))
             .collect();
 
@@ -982,12 +982,11 @@ mod tests {
                     resolution: "resolved".to_string(),
                 });
         }
-        let graph = CombinedGraph {
+        let graph = PrimaryGraph {
             nodes: nodes.clone(),
             edges_by_from,
             edges_from_order: Vec::new(),
             uncertainty_edges: Vec::new(),
-            typed_edges: Vec::new(),
         };
         // `b` is a fixed leaf — never recomputed.
         let eff = effective_sccs(&scc_result.sccs[0], &graph, &|id: &str| id != "b");

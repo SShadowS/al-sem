@@ -192,7 +192,17 @@ fn post_validate_helper_verdict(
         if !before_anchor(validate_anchor, &cs.source_anchor) {
             continue;
         }
-        let upgraded = ctx.upgraded_bindings_by_callsite.get(&cs.id);
+        // The site's resolved callee edge and its upgraded bindings, through
+        // `site_pick` (#160 step 11b §4.6; compat form in stage A:
+        // graph.edgesByFrom.get(routine.id)?.find(callsiteId === cs.id), and the
+        // R5 bindings).
+        let pick = crate::program::model::projection::site_pick(
+            ctx.graph.edges_by_from.get(&routine.id).map(Vec::as_slice),
+            |e| e.callsite_id.as_deref(),
+            &cs.id,
+            &ctx.upgraded_bindings_by_callsite,
+        );
+        let upgraded = pick.bindings;
         for (i, binding) in cs.argument_bindings.iter().enumerate() {
             let up: Option<&UpgradedBinding> = upgraded.and_then(|u| u.get(i));
             let binding_resolution = up.map(|u| u.binding_resolution.as_str());
@@ -220,17 +230,7 @@ fn post_validate_helper_verdict(
             if !callee_parameter_is_var {
                 continue;
             }
-            // edge = graph.edgesByFrom.get(routine.id)?.find(callsiteId === cs.id)
-            let edge_to = ctx
-                .graph
-                .edges_by_from
-                .get(&routine.id)
-                .and_then(|edges| {
-                    edges
-                        .iter()
-                        .find(|e| e.callsite_id.as_deref() == Some(cs.id.as_str()))
-                })
-                .map(|e| e.to.clone());
+            let edge_to = pick.edge.map(|e| e.to.clone());
             let edge_to = match edge_to {
                 Some(t) => t,
                 None => return "suppress-unknown",
