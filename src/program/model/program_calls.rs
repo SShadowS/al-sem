@@ -320,6 +320,7 @@ impl SiteCensus {
 use crate::program::model::site_links::model_key as l3_key;
 
 /// The source text a span covers (byte columns), when the unit is known.
+#[cfg(test)]
 fn span_text<'a>(texts: &HashMap<String, &'a str>, k: &SiteKey) -> Option<&'a str> {
     let text = texts.get(k.0.as_str())?;
     let offset = |line: u32, col: u32| -> Option<usize> {
@@ -334,6 +335,7 @@ fn span_text<'a>(texts: &HashMap<String, &'a str>, k: &SiteKey) -> Option<&'a st
 
 /// The operation name of a record-op call's text: `Rec.Insert(true)` →
 /// `insert`.
+#[cfg(test)]
 fn op_name(call_text: &str) -> String {
     let callee = call_text.split('(').next().unwrap_or("");
     let last = callee.rsplit('.').next().unwrap_or("").trim();
@@ -403,14 +405,18 @@ pub(crate) fn join_reads<'a>(
     })
 }
 
-/// Pair every L3 call site with the program edge at the same exact span and
-/// count what does not pair, by reason. `view` must come from
+/// Pair every model call site with the program edge at the same key and count
+/// what does not pair, by reason. `view` must come from
 /// `resolve_full_program_with(ctx)` (`ProgramReport::edge_view`, or a
-/// `ProgramBody::edge_view` of the same build); `ws` is the L3 model of the same
-/// workspace.
+/// `ProgramBody::edge_view` of the same build); `rows` is the model of the same
+/// workspace, assembled without demand.
 #[must_use]
-pub fn site_census(view: EdgeView<'_>, ctx: &ProgramContext, ws: &ModelEntities) -> SiteCensus {
-    join(view, ctx, ws).census
+pub fn site_census(
+    view: EdgeView<'_>,
+    ctx: &ProgramContext,
+    rows: &crate::program::model::workspace::ModelRows,
+) -> SiteCensus {
+    join(view, ctx, rows, None).census
 }
 
 /// The census plus the pairs it found, for the adapter.
@@ -424,13 +430,22 @@ struct Join<'a> {
     ops: HashMap<(usize, usize), &'a ClassifiedEdge>,
 }
 
-fn join<'a>(view: EdgeView<'a>, ctx: &ProgramContext, ws: &ModelEntities) -> Join<'a> {
-    span_join(view, ctx, ws, None)
+/// The production join (#160 step 10): [`key_join`] over the rows and their
+/// `RowNodes`, under the demand the model was built from (`None`: built without
+/// demand).
+fn join<'a>(
+    view: EdgeView<'a>,
+    ctx: &ProgramContext,
+    rows: &crate::program::model::workspace::ModelRows,
+    demand: Option<&HashSet<RoutineNodeId>>,
+) -> Join<'a> {
+    key_join(view, ctx, &rows.workspace, &rows.row_nodes, demand)
 }
 
 /// The span join (J1), reading only the program sites of callers
-/// [`caller_held`] admits under `demand`. Production passes `None` (every caller
-/// of a model app, as it always read).
+/// [`caller_held`] admits under `demand`. Test-only since #160 Task 2: T1's
+/// oracle compares it with the key join; Task 3 deletes it.
+#[cfg(test)]
 fn span_join<'a>(
     view: EdgeView<'a>,
     ctx: &ProgramContext,
@@ -658,8 +673,8 @@ fn span_join<'a>(
 /// engine's call-site edges (code map B7; see the module doc), plus the
 /// census with its `adapter_*` counts. `view` must come from
 /// `resolve_full_program_with(ctx)` (`ProgramReport::edge_view`, or a
-/// `ProgramBody::edge_view` of the same build); `ws` is the L3 model of the same
-/// workspace. Nothing here mutates `ws`.
+/// `ProgramBody::edge_view` of the same build); `rows` is the model of the same
+/// workspace, assembled without demand. Nothing here mutates `rows`.
 ///
 /// `upgrade_dependency_bindings` (stage 2): upgrade the bindings of a call
 /// into a dependency routine with that routine's parameter `var`-ness, as
@@ -669,17 +684,14 @@ fn span_join<'a>(
 pub fn resolved_calls_from_program(
     view: EdgeView<'_>,
     ctx: &ProgramContext,
-    ws: &ModelEntities,
+    rows: &crate::program::model::workspace::ModelRows,
     upgrade_dependency_bindings: bool,
 ) -> (ResolvedCalls, SiteCensus) {
-    adapter(view, ctx, ws, upgrade_dependency_bindings, None)
+    adapter(view, ctx, rows, upgrade_dependency_bindings, None, None)
 }
 
-/// #160 steps 10 + 11a (§4.3, §4.5, §4.7, §4.8): the adapter over the rows WITH
-/// their `RowNodes`, under the demand the model was built from (`None`: built
-/// without demand). Until Task 2, `rows.row_nodes` and `demand` are not read
-/// (Task 2 joins by key, checks the caller with `decl_anchor`, reads `j2_row` and
-/// filters the program side by demand).
+/// #160 steps 10 + 11a (§4.3, §4.5, §4.7, §4.8): [`resolved_calls_from_program`]
+/// under the demand the model was built from (`None`: built without demand).
 #[must_use]
 #[cfg(test)]
 pub(crate) fn resolved_calls_from_rows(
@@ -689,19 +701,10 @@ pub(crate) fn resolved_calls_from_rows(
     upgrade_dependency_bindings: bool,
     demand: Option<&HashSet<RoutineNodeId>>,
 ) -> (ResolvedCalls, SiteCensus) {
-    let _ = (&rows.row_nodes, demand);
-    adapter(
-        view,
-        ctx,
-        &rows.workspace,
-        upgrade_dependency_bindings,
-        None,
-    )
+    adapter(view, ctx, rows, upgrade_dependency_bindings, None, demand)
 }
 
-/// [`site_census`] over the rows with their `RowNodes` (see
-/// [`resolved_calls_from_rows`]). Until Task 2, `row_nodes` and `demand` are
-/// not read.
+/// [`site_census`] under `demand` (see [`resolved_calls_from_rows`]).
 #[must_use]
 #[cfg(test)]
 pub(crate) fn site_census_rows(
@@ -710,8 +713,7 @@ pub(crate) fn site_census_rows(
     rows: &crate::program::model::workspace::ModelRows,
     demand: Option<&HashSet<RoutineNodeId>>,
 ) -> SiteCensus {
-    let _ = (&rows.row_nodes, demand);
-    join(view, ctx, &rows.workspace).census
+    join(view, ctx, rows, demand).census
 }
 
 /// The production step that points the detectors at the program engine's
@@ -738,7 +740,7 @@ pub fn attach_program_calls(
 /// joins a symbol-only dependency routine to its model row. Also returns the
 /// adapter's census (#160 §5.2: the cross-app loss gate reads it through this,
 /// the production path). `demand` (#160 §4.5, 10A-2): the demand the model was
-/// built from; not read until Task 2.
+/// built from; the join reads only the program sites of the callers it holds.
 fn attach_program_calls_with(
     rows: crate::program::model::workspace::ModelRows,
     program: ResolvedProgram,
@@ -750,16 +752,20 @@ fn attach_program_calls_with(
     SiteCensus,
 ) {
     use crate::engine::perf_trace as pt;
-    let _ = demand;
     let (calls, census) = {
         let _s = pt::span("b3", "b3.adapter");
         let body = program.body();
-        adapter(body.edge_view(), &body.ctx, &rows.workspace, true, abi_rows)
+        adapter(body.edge_view(), &body.ctx, &rows, true, abi_rows, demand)
     };
-    // Engine-switch S4.2: the detector event graph, from the same program build.
+    // Engine-switch S4.2: the detector event graph, from the same program build;
+    // each row's node is J5's answer recorded at assembly (#160 §4.9).
     let events = {
         let _s = pt::span("b3", "b3.events");
-        crate::program::model::events::program_event_graph(&program.body().ctx, &rows.workspace)
+        crate::program::model::events::program_event_graph_with_row_nodes(
+            &program.body().ctx,
+            &rows.workspace,
+            &rows.row_nodes,
+        )
     };
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.program");
@@ -1200,16 +1206,25 @@ fn no_program_edge(r: &ModelRoutine, cs: &PCallSite) -> (Vec<CallEdge>, Vec<Upgr
 fn adapter(
     view: EdgeView<'_>,
     ctx: &ProgramContext,
-    ws: &ModelEntities,
+    rows: &crate::program::model::workspace::ModelRows,
     upgrade_dependency_bindings: bool,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
+    demand: Option<&HashSet<RoutineNodeId>>,
 ) -> (ResolvedCalls, SiteCensus) {
     use crate::engine::perf_trace as pt;
     let j = {
         let _s = pt::span("b3", "b3.adapter.join");
-        join(view, ctx, ws)
+        join(view, ctx, rows, demand)
     };
-    convert(j, view, ctx, ws, upgrade_dependency_bindings, abi_rows)
+    convert(
+        j,
+        view,
+        ctx,
+        &rows.workspace,
+        &rows.row_nodes,
+        upgrade_dependency_bindings,
+        abi_rows,
+    )
 }
 
 /// #160 step 10 (§4.3): the key join. Pairs model sites and program sites by
@@ -1217,9 +1232,8 @@ fn adapter(
 /// (§4.5), checking the caller against the declaration anchor captured at
 /// assembly (`RowNodes::decl_anchor`, §4.8), and classifying the program sites no
 /// call site took by the resolver's `fires` (§4.4), with no source text. Same
-/// buckets and rules as [`span_join`]. Until Task 2 switches `adapter` to it,
-/// only the test-only parity oracle calls it.
-#[cfg(test)]
+/// buckets and rules as the span join it replaced. Every accepted pair's two
+/// spans are compared by a debug assertion (§4.3 step 4).
 fn key_join<'a>(
     view: EdgeView<'a>,
     ctx: &ProgramContext,
@@ -1384,6 +1398,13 @@ fn key_join<'a>(
                     &cs.callee_text,
                 );
             } else {
+                // §4.3 step 4: an accepted pair anchors one span on both sides.
+                debug_assert_eq!(
+                    l3_key(&cs.source_anchor),
+                    program_span(ce),
+                    "call site {} paired by key at a different span",
+                    cs.id
+                );
                 matched += 1;
                 matched_calls.insert((ri, ci), ce);
             }
@@ -1399,8 +1420,14 @@ fn key_join<'a>(
                 op_site += 1;
             } else if let Some(at) = model_record_ops.get(k) {
                 it_matched += 1;
-                for &pos in at {
-                    matched_ops.insert(pos, *ce);
+                for &(ri, oi) in at {
+                    debug_assert_eq!(
+                        l3_key(&ws.routines[ri].record_operations[oi].source_anchor),
+                        program_span(ce),
+                        "record op {} paired by key at a different span",
+                        ws.routines[ri].record_operations[oi].id
+                    );
+                    matched_ops.insert((ri, oi), *ce);
                 }
             } else {
                 it_unmatched += 1;
@@ -1469,7 +1496,8 @@ fn convert<'a>(
     j: Join<'a>,
     view: EdgeView<'a>,
     ctx: &ProgramContext,
-    ws: &ModelEntities,
+    ws: &'a ModelEntities,
+    row_nodes: &'a crate::program::model::workspace::RowNodes,
     upgrade_dependency_bindings: bool,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
 ) -> (ResolvedCalls, SiteCensus) {
@@ -1477,20 +1505,6 @@ fn convert<'a>(
     let mut c = j.census;
     let surface = ctx.decl_surface();
     let graph = ctx.graph();
-    let mut by_decl: HashMap<(&str, u32, u32), &ModelRoutine> = HashMap::new();
-    {
-        let _s = pt::span("b3", "b3.adapter.by_decl");
-        for r in &ws.routines {
-            let a = &r.source_anchor;
-            let unit = a
-                .source_unit_id
-                .strip_prefix("ws:")
-                .unwrap_or(&a.source_unit_id);
-            by_decl
-                .entry((unit, a.start_line, a.start_column))
-                .or_insert(r);
-        }
-    }
     let objects = graph
         .objects
         .iter()
@@ -1511,7 +1525,8 @@ fn convert<'a>(
         upgrade_dependency_bindings,
         graph,
         surface: &surface,
-        by_decl,
+        rows: &ws.routines,
+        j2_row: &row_nodes.j2_row,
         objects,
         primary_objects,
         site_facts: view.site_facts,
@@ -1612,8 +1627,10 @@ struct Converter<'a> {
     upgrade_dependency_bindings: bool,
     graph: &'a ProgramGraph,
     surface: &'a DeclSurface,
-    /// L3 routines by declaration anchor `(unit, line, column)`.
-    by_decl: HashMap<(&'a str, u32, u32), &'a ModelRoutine>,
+    /// The model's rows, indexed by `RoutineIx`.
+    rows: &'a [ModelRoutine],
+    /// J2's answer recorded at assembly (#160 §4.7): node -> row.
+    j2_row: &'a HashMap<RoutineNodeId, u32>,
     objects: HashMap<ObjectKey, &'a ObjectNode>,
     /// The primary app's objects by `(kind, folded name)` (S6.0): "is this
     /// receiver object ours?".
@@ -1628,21 +1645,15 @@ struct Converter<'a> {
 }
 
 impl<'a> Converter<'a> {
-    /// The model routine for a program source routine, by declaration anchor: a
-    /// primary-app routine, or a dependency routine of a cross-app model (S7.3).
+    /// The model routine for a program source routine: a primary-app routine, or
+    /// a dependency routine of a cross-app model (S7.3). J2's answer (the first
+    /// non-symbol-only row at the node's declaration anchor), recorded at
+    /// assembly (#160 §4.7).
     fn l3_routine(&self, id: &RoutineNodeId) -> Option<&'a ModelRoutine> {
         if !self.model_apps.contains(&id.object.app) {
             return None;
         }
-        let (meta, path) = self.surface.get_with_path(id)?;
-        let unit = model_unit(self.graph, self.primary, id.object.app, path);
-        self.by_decl
-            .get(&(
-                unit.as_str(),
-                meta.origin.start.row,
-                meta.origin.start.column,
-            ))
-            .copied()
+        self.j2_row.get(id).map(|&ri| &self.rows[ri as usize])
     }
 
     /// Where a route's target lives relative to the model (S7.3).
@@ -2422,7 +2433,7 @@ fn map_unknown(reason: PReason) -> Resolution {
 /// the adapter runs (analyze then drops them before the detector context).
 pub fn adapter_census_for_workspace(workspace: &std::path::Path) -> Result<SiteCensus, String> {
     let (ctx, report, l3) = build_models(workspace)?;
-    Ok(resolved_calls_from_program(report.edge_view(), &ctx, &l3.workspace, true).1)
+    Ok(resolved_calls_from_program(report.edge_view(), &ctx, &l3, true).1)
 }
 
 pub(crate) fn build_models(
@@ -2491,9 +2502,22 @@ pub(crate) fn build_models_with(
 // deleted at Task 3 with the code they compare.
 // ---------------------------------------------------------------------------
 
+/// `u32::MAX - e` for every expression index (#160 §5.3): an index no
+/// expression has, keeping distinct indices distinct and a record op's key equal
+/// to its own operation site's.
+#[cfg(test)]
+pub(crate) fn unkey(exprs: &mut [u32]) {
+    assert!(
+        exprs.iter().all(|&e| e < u32::MAX / 2),
+        "precondition: every expression index is below u32::MAX / 2"
+    );
+    for e in exprs {
+        *e = u32::MAX - *e;
+    }
+}
+
 /// The call pairs the PRODUCTION join accepts over `rows`: `(row, call site)`
-/// -> program edge. Production joins by span until Task 2 makes this the key
-/// join, with `rows.row_nodes` and `demand`.
+/// -> program edge.
 #[cfg(test)]
 pub(crate) fn accepted_call_pairs<'a>(
     view: EdgeView<'a>,
@@ -2501,8 +2525,7 @@ pub(crate) fn accepted_call_pairs<'a>(
     rows: &crate::program::model::workspace::ModelRows,
     demand: Option<&HashSet<RoutineNodeId>>,
 ) -> HashMap<(usize, usize), &'a ClassifiedEdge> {
-    let _ = (&rows.row_nodes, demand);
-    join(view, ctx, &rows.workspace).calls
+    join(view, ctx, rows, demand).calls
 }
 
 /// One `(row, site)` whose accepted program edge differs between the span join
@@ -2619,8 +2642,9 @@ pub(crate) fn key_join_parity(
     }
     pairs.sort();
     let (span_call_pairs, span_op_pairs) = (span.calls.len(), span.ops.len());
-    let (span_calls, span_census) = convert(span, view, ctx, ws, true, abi_rows);
-    let (key_calls, key_census) = convert(key, view, ctx, ws, true, abi_rows);
+    let rn = &rows.row_nodes;
+    let (span_calls, span_census) = convert(span, view, ctx, ws, rn, true, abi_rows);
+    let (key_calls, key_census) = convert(key, view, ctx, ws, rn, true, abi_rows);
     let groups = |c: &ResolvedCalls| {
         let mut g: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for e in &c.edges {
@@ -3104,6 +3128,95 @@ mod tests {
         );
     }
 
+    /// Precondition by assignment: the model's `Insert` and `SetRange` record
+    /// ops and the `Commit` get keys no expression has (#160 §5.3: each
+    /// expression index `e` of `P`'s 2 record ops and 3 operation sites becomes
+    /// `u32::MAX - e`; it used to move their anchors, which no longer unpairs
+    /// them), so no program edge sits at their keys. Insert is trigger-capable;
+    /// SetRange and Commit are not. The program's record ops then find no model
+    /// record op.
+    #[test]
+    fn l3_ops_with_no_program_site_are_counted_by_trigger_capability() {
+        let cu = "codeunit 50101 \"C\"\n{\n    procedure P()\n    var\n        R: Record \"T\";\n    begin\n        R.SetRange(Code, 'X');\n        R.Insert(true);\n        Commit();\n    end;\n}\n";
+        let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnInsert()\n    begin\n    end;\n}\n";
+        let c = census_with(
+            &[("src/t.al", table.as_bytes()), ("src/c.al", cu.as_bytes())],
+            |ws| {
+                let r = routine(ws, "P");
+                assert_eq!(r.record_operations.len(), 2);
+                assert_eq!(r.operation_sites.len(), 3);
+                unkey(&mut r.site_exprs.record_ops);
+                unkey(&mut r.site_exprs.op_sites);
+            },
+        );
+        assert_eq!(
+            counts(&c),
+            SiteCensus {
+                program_sites: 3,
+                operation_site: 2,
+                implicit_trigger_unmatched: 1,
+                l3_record_operations: 2,
+                l3_operation_sites: 3,
+                l3_op_no_program_site_trigger: 1,
+                l3_op_no_program_site_other: 2,
+                ..Default::default()
+            },
+            "{c:#?}"
+        );
+    }
+
+    /// T9 (#160 §5.9): the caller check reads the declaration anchor captured
+    /// at assembly. Hand-stated: the program's declaration of `Caller` (read
+    /// from the `DeclSurface`, as assembly captures it) is recorded one column
+    /// off in `row_nodes.decl_anchor`; the row is untouched. Its sites are
+    /// `caller_mismatch`.
+    #[test]
+    fn caller_check_reads_captured_decl_anchor() {
+        let c = census_rows_with(&[("src/m.al", TWO_CALLS.as_bytes())], |rows, ctx| {
+            let (line, col) = {
+                let row = rows
+                    .workspace
+                    .routines
+                    .iter()
+                    .find(|r| r.name == "Caller")
+                    .unwrap();
+                (row.source_anchor.start_line, row.source_anchor.start_column)
+            };
+            let node = ctx
+                .graph()
+                .routines
+                .iter()
+                .find(|n| n.id.object.app == ctx.primary_app_ref && &*n.id.name_lc == "caller")
+                .expect("precondition: a program node for Caller")
+                .id
+                .clone();
+            let surface = ctx.decl_surface();
+            let (meta, path) = surface
+                .get_with_path(&node)
+                .expect("precondition: Caller has a program declaration");
+            let file = ctx
+                .file_ix(ctx.primary_app_ref, path)
+                .expect("precondition: its file has a FileIx");
+            let (dl, dc) = (meta.origin.start.row, meta.origin.start.column);
+            assert_eq!(
+                (dl, dc),
+                (line, col),
+                "precondition: the row's anchor is the program's declaration"
+            );
+            rows.row_nodes.decl_anchor.insert(node, (file, dl, dc + 1));
+        });
+        assert_eq!(
+            counts(&c),
+            SiteCensus {
+                l3_call_sites: 2,
+                program_sites: 2,
+                caller_mismatch: 2,
+                ..Default::default()
+            },
+            "{c:#?}"
+        );
+    }
+
     /// Precondition by assignment: a second model call site is a clone of the
     /// first, its span AND its key (#160 §5.3: the clone also copies its
     /// `site_exprs` entry). Both are classified (both `matched` against the one
@@ -3339,6 +3452,53 @@ mod tests {
             "{:?}",
             c.losses()
         );
+    }
+
+    /// T4 (#160 §5.4): duplicates are counted per category. Two call sites of
+    /// one row given one key by assignment are one duplicate; a record op and
+    /// its own operation site at one key (the walk's normal shape) are none.
+    #[test]
+    fn duplicate_model_key_per_category() {
+        let two_keys = census_with(&[("src/m.al", TWO_CALLS.as_bytes())], |ws| {
+            let r = routine(ws, "Caller");
+            let first = *r
+                .site_exprs
+                .calls
+                .first()
+                .expect("precondition: the walk keyed Caller's call sites");
+            r.site_exprs.calls[1] = first;
+        });
+        assert_eq!(
+            two_keys.duplicate_l3_span, 1,
+            "two call sites at one key are one duplicate: {two_keys:#?}"
+        );
+        let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnInsert()\n    begin\n    end;\n}\n";
+        let cu = "codeunit 50101 \"C\"\n{\n    procedure P()\n    var\n        R: Record \"T\";\n    begin\n        R.Insert(true);\n    end;\n}\n";
+        let shared = census_with(
+            &[("src/t.al", table.as_bytes()), ("src/c.al", cu.as_bytes())],
+            |ws| {
+                let r = routine(ws, "P");
+                assert_eq!(
+                    r.site_exprs.record_ops, r.site_exprs.op_sites,
+                    "precondition: the record op and its own operation site share one key"
+                );
+            },
+        );
+        assert_eq!(shared.duplicate_l3_span, 0, "{shared:#?}");
+    }
+
+    /// T5 (#160 §5.5): a call site whose key is right and whose anchor is moved
+    /// one column pairs by key, and the span debug assertion on the accepted
+    /// pair panics.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic]
+    fn span_assertion_fires_on_a_key_pair_whose_spans_differ() {
+        let _ = census_with(&[("src/m.al", TWO_CALLS.as_bytes())], |ws| {
+            routine(ws, "Caller").call_sites[0]
+                .source_anchor
+                .start_column += 1;
+        });
     }
 
     /// T1 (#160 §5.1): on every fixture, both universes, the key join accepts
@@ -3943,8 +4103,7 @@ mod no_fallback_tests {
         .unwrap();
 
         let (ctx, report, l3) = build_models(&root).unwrap();
-        let (calls, census) =
-            resolved_calls_from_program(report.edge_view(), &ctx, &l3.workspace, true);
+        let (calls, census) = resolved_calls_from_program(report.edge_view(), &ctx, &l3, true);
         std::fs::remove_dir_all(&root).ok();
         let caller = l3
             .workspace
@@ -3985,5 +4144,55 @@ mod no_fallback_tests {
             t.body,
             Some(crate::program::registry::BodyState::NotAnalyzed)
         );
+    }
+
+    /// S3.1: a call site the program engine gives no edge for is an honest
+    /// `Unknown(NoProgramSite)` — never the legacy resolver's answer. Hand-stated:
+    /// one model call site is given a key no program edge has (#160 §5.3:
+    /// `u32::MAX - e`; it used to move the site's span). That site would
+    /// otherwise resolve (it is an ordinary workspace call).
+    #[test]
+    fn a_site_without_a_program_edge_is_unknown_not_legacy_resolved() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-cross-object-chain");
+        let (ctx, report, mut l3) = build_models(&ws).unwrap();
+        let (ri, ci) = l3
+            .workspace
+            .routines
+            .iter()
+            .enumerate()
+            .find_map(|(ri, r)| (!r.call_sites.is_empty()).then_some((ri, 0)))
+            .unwrap();
+        let cs_id = l3.workspace.routines[ri].call_sites[ci].id.clone();
+        let before = resolved_calls_from_rows(report.edge_view(), &ctx, &l3, true, None).0;
+        let resolved_before: Vec<_> = before
+            .edges
+            .iter()
+            .filter(|e| e.callsite_id == cs_id)
+            .collect();
+        assert!(
+            resolved_before.iter().any(|e| e.to.is_some()),
+            "precondition: the site resolves while its program edge is found: {resolved_before:?}"
+        );
+
+        let e = l3.workspace.routines[ri]
+            .site_exprs
+            .calls
+            .get_mut(ci)
+            .expect("precondition: the walk keyed the call site");
+        unkey(std::slice::from_mut(e));
+        let (calls, census) = resolved_calls_from_rows(report.edge_view(), &ctx, &l3, true, None);
+        let site: Vec<_> = calls
+            .edges
+            .iter()
+            .filter(|e| e.callsite_id == cs_id)
+            .collect();
+        assert_eq!(site.len(), 1, "{site:?}");
+        assert_eq!(site[0].to, None);
+        assert_eq!(
+            site[0].resolution,
+            Resolution::Unknown(ModelReason::NoProgramSite)
+        );
+        assert_eq!(census.adapter_l3_fallback_sites, 1);
     }
 }
