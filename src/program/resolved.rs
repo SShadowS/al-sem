@@ -14,7 +14,7 @@
 //! `dependency_body_edges` is one edge per dependency call site. A dependency
 //! publisher can sit in both, so the order `edges` then `dependency_body_edges` is
 //! a contract (the graph projection keeps the first edge's `via` on a `conf` tie,
-//! the adapter takes the first edge at a span). Both fields are private:
+//! the adapter takes the first edge at a site key). Both fields are private:
 //! [`ProgramBody::all_edges`] and [`EdgeView::all_edges`] are the only ways a
 //! reader walks both.
 

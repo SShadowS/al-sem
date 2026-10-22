@@ -1835,12 +1835,25 @@ fn j5_shapes_dependency_workspace(dir: &Path) {
     procedure RaiseA()
     begin
         OnA(1);
+        P();
     end;
 
     [IntegrationEvent(false, false)]
     procedure OnA(X: Integer)
     begin
     end;
+
+#if XSYM
+    local procedure P()
+    begin
+        Commit();
+    end;
+#else
+    local procedure P()
+    begin
+        Commit();
+    end;
+#endif
 
 #if XSYM
     [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnA', '', false, false)]
@@ -1968,4 +1981,61 @@ fn j5_node_keeps_the_dependency_span_map_answers() {
         (Some(hb_nodes[0].clone()), Some(hb_nodes[0].clone())),
         "Hb: both rows map to the first Hb node in graph order"
     );
+}
+
+/// FP-01 / FP-10 (#160 §4.9, §4.10): J5 answers for event-subscriber rows only,
+/// and `j5_compat_rows` counts exactly those rows whose recorded answer is not
+/// their true node. The fixture holds both kinds of `#if` duplicate: the
+/// ordinary procedure `P` (two rows, one node, not a subscriber) and the
+/// subscribers `Ha` (first arm unmapped) and `Hb` (second row mapped to the
+/// first node). Only the two subscriber gaps count.
+#[test]
+fn j5_compat_rows_counts_the_subscriber_gaps_only() {
+    use al_sem::program::model::program_calls::cross_app_rows_before_attach;
+    use al_sem::program::model::workspace::{MODEL_INSTANCE_ID_DEFAULT as MI, collision_census};
+    let dir = tempfile::tempdir().unwrap();
+    j5_shapes_dependency_workspace(dir.path());
+    let rows = cross_app_rows_before_attach(&read(dir.path()), MI).expect("rows");
+    let named = |name: &str| -> Vec<usize> {
+        rows.workspace
+            .routines
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.name == name)
+            .map(|(ri, _)| ri)
+            .collect()
+    };
+    let node = |ri: usize| rows.row_nodes.node_of[ri].clone();
+    let j5 = |ri: usize| rows.row_nodes.j5(ri).cloned();
+    let p = named("P");
+    assert_eq!(p.len(), 2, "precondition: P has two rows");
+    assert!(
+        p.iter()
+            .all(|&ri| rows.workspace.routines[ri].kind != "event-subscriber"),
+        "precondition: P is not a subscriber"
+    );
+    assert!(
+        node(p[0]).is_some() && node(p[0]) == node(p[1]),
+        "precondition: P's rows are one node"
+    );
+    assert_eq!(
+        (j5(p[0]), j5(p[1])),
+        (None, None),
+        "J5 answers for no non-subscriber row"
+    );
+    let (ha, hb) = (named("Ha"), named("Hb"));
+    assert_eq!((ha.len(), hb.len()), (2, 2), "precondition: two rows each");
+    assert_ne!(
+        j5(ha[0]),
+        node(ha[0]),
+        "precondition: Ha's first arm is a gap"
+    );
+    assert_eq!(j5(ha[1]), node(ha[1]), "precondition: Ha's second arm maps");
+    assert_ne!(node(hb[0]), node(hb[1]), "precondition: Hb is two nodes");
+    assert!(
+        j5(hb[0]).is_some() && j5(hb[0]) == j5(hb[1]),
+        "precondition: both Hb rows map to one node, so exactly one is a gap"
+    );
+    let c = collision_census(&rows.workspace, &rows.row_nodes);
+    assert_eq!(c.j5_compat_rows, 2, "{c:?}");
 }

@@ -403,7 +403,8 @@ Single-app is unchanged (no demand, primary only).
       /// declaration, or whose anchor no row has, is absent (J2's `None`), so the map
       /// holds about one entry per row, not one per model-app node.
       j2_row: HashMap<RoutineNodeId, u32>,
-      /// J5's answer, recorded (§4.9): per row, the node today's span map gives, or None.
+      /// J5's answer, recorded (§4.9): per row, the node today's span map gives an
+      /// event-subscriber row, or None (every other row: J5 is read for subscribers only).
       j5_node: Vec<Option<RoutineNodeId>>,
   }
   ```
@@ -460,14 +461,23 @@ second row of each two-rows-at-one-anchor routine maps to the first row's node, 
 `GetPurchaseHeaderPageID`'s line-324 arm maps to nothing. The `processed` rule (first MAPPED
 row per string id, `:376-391`) is unchanged. Correcting the mapping to `node_of` is 11b's.
 
+J5 is recorded for event-subscriber rows only (final panel r1, FP-10): the event graph is
+J5's only reader and it reads no other row's node, so every other row's `j5_node` is `None`
+by construction, not a mapping gap.
+
 ### 4.10 The collision census (11a)
 
 One line printed with the other `rel.*` census lines (`ALSEM_RETAINED_CENSUS`), per model:
 `routine_rows`, `distinct_ids`, `collision_groups`, `collision_rows`, each group split into
 one node / several nodes by `node_of`, and by role (primary, dependency source,
 symbol-only); and `j2_alias_nodes` (nodes whose `j2_row`'s `node_of` is another node) and
-`j5_compat_rows` (rows whose `j5_node` differs from `node_of`), so 11b's corrections start
-from a count. Measured by the probe (P8, P9): CDO cross-app 31,658 rows, 31,656 ids, 2
+`j5_compat_rows` (event-subscriber rows whose `j5_node` differs from `node_of`), so 11b's
+corrections start from a count. `j5_compat_rows` counts subscriber rows only (final panel
+r1, FP-01): J5 answers for no other row (§4.9), so counting every row would count each
+non-subscriber's `None` against its node, a non-answer and not a gap. A non-subscriber
+`#if` duplicate (e.g. `PageManagement.GetPurchaseHeaderPageID`'s rows) is J2's shape and
+is counted by `j2_alias_nodes` and the `caller_mismatch` residual, not here.
+`j5_compat_rows_counts_the_subscriber_gaps_only` (r4) pins the count on a fixture with both. Measured by the probe (P8, P9): CDO cross-app 31,658 rows, 31,656 ids, 2
 groups (both one node, dependency source, `PageManagement` codeunit 700); single-app 5,479
 rows, 0 groups; r0 `ws-cross-object-chain` cross-app, one group of two symbol-only `OnRun`
 rows of codeunit 60105.
@@ -517,7 +527,7 @@ lines. Task 2 / Task 3 is committed only after that record exists and is green.
 | Item | Lives | Size on CDO cross-app (P11, P15) | Charged in |
 |---|---|---|---|
 | `ClassifiedEdge.site` (`Option<ProgramSite>`, 16 B) | the program body, released at attach (Decision 35) | 16 B × ≈ 477,700 edges (46,328 workspace + 431,248 dependency body + publisher) ≈ 7.6 MB | `census.program` (`ResolvedProgram::census`), new bucket `program.edge_site` |
-| `ModelRoutine.{file, site_exprs}` | the model (retained) | 4 B × (81,745 + 33,290 + 33,493) sites + 3 × 24 B vector headers + 8 B per row × 31,658 rows ≈ 3.1 MB | `census_model_rows` (`program_calls.rs:717-737`), new bucket `model.site_exprs` |
+| `ModelRoutine.{file, site_exprs}` | the rows, assembly → attach: only the join and the census read them, so the attach clears them (the key vectors are freed; the inline 80 B per row stays in the rows' buffer, charged by `model`) (final panel r1, FP-12) | 4 B × (81,745 + 33,290 + 33,493) sites + 3 × 24 B vector headers + 8 B per row × 31,658 rows ≈ 3.1 MB | new bucket `model.site_exprs`, emitted at the attach (`census.program`) before they are cleared |
 | `FileTable` | the `ProgramContext` | one entry per parsed file (`AppRef` + `String` path + map slot, ≈ 100-150 B); the file count was not read at spec time | `census.program`, new bucket `program.file_table` |
 | `RowNodes` | build-local (assembly → attach) | `node_of` and `j5_node` 72 B × 31,658 ≈ 2.3 MB each; `decl_anchor` (callers of read edges only) and `j2_row` (matched nodes only, ≈ one per row; the extra entries are the cross-node aliases) ≈ 31,700 entries × (72 + 12 or 4 + slot) / 0.875 load ≈ 3.2 MB and 2.9 MB; ≈ 11 MB | `census.program`, bucket `program.row_nodes`, marked at attach |
 | deleted: the join's `String`-keyed maps (`SiteLinks`, `program`, `consumed`, `l3_*`) | transient inside the join | not measured (P3 has no byte census) | — |

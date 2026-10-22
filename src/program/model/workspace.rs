@@ -2014,9 +2014,11 @@ pub struct RowNodes {
     pub decl_anchor:
         HashMap<crate::program::node::RoutineNodeId, (crate::program::site_key::FileIx, u32, u32)>,
     /// J2's answer (§4.7): node -> the FIRST non-symbol-only row at the node's
-    /// surface declaration anchor (a `RoutineIx`).
+    /// surface declaration anchor (a `RoutineIx`), for every model-app routine
+    /// target of an edge the join reads (the nodes the conversion looks up).
     pub j2_row: HashMap<crate::program::node::RoutineNodeId, u32>,
-    /// J5's answer (§4.9): per row, the node today's span map gives, or `None`.
+    /// J5's answer (§4.9): per row, the node the span map gives an
+    /// event-subscriber row (the only rows the event graph reads), else `None`.
     pub j5_node: Vec<Option<crate::program::node::RoutineNodeId>>,
 }
 
@@ -2037,7 +2039,8 @@ pub struct CollisionCensus {
     pub rows_primary: usize,
     pub rows_dependency_source: usize,
     pub rows_symbol_only: usize,
-    /// Nodes whose `j2_row`'s `node_of` is another node (J2's cross-node alias).
+    /// Nodes (in `j2_row`'s domain: routine targets the conversion looks up)
+    /// whose `j2_row`'s `node_of` is another node (J2's cross-node alias).
     pub j2_alias_nodes: usize,
     /// Event-subscriber rows (the only rows J5 answers for) whose `j5_node`
     /// differs from `node_of`.
@@ -2142,26 +2145,47 @@ impl RowNodes {
         node_of: Vec<Option<crate::program::node::RoutineNodeId>>,
         demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     ) -> Self {
-        use crate::program::model::program_calls::{join_reads, model_apps, model_unit};
+        use crate::program::model::program_calls::{join_reads, model_apps};
         let _s = pt::span("l3", "l3.row_nodes");
         debug_assert_eq!(node_of.len(), ws.routines.len(), "one node slot per row");
         let graph = ctx.graph();
         let primary = ctx.primary_app_ref;
         let surface = ctx.decl_surface();
         let apps = model_apps(graph, primary, ws);
-        // J2's anchor map: the FIRST non-symbol-only row at each declaration anchor.
-        let mut first_at: HashMap<(&str, u32, u32), u32> = HashMap::new();
+        // J2's anchor map: the FIRST non-symbol-only row at each declaration anchor,
+        // keyed by `(app, virtual path, line, col)` (the row's model unit read back:
+        // `ws:<path>` or a bare path is the primary app, `dep:<guid>:<path>` that
+        // dependency), so a node is looked up without spelling its unit.
+        let app_of_guid: HashMap<&str, crate::program::node::AppRef> = apps
+            .iter()
+            .map(|&a| (graph.apps.resolve(a).guid.as_str(), a))
+            .collect();
+        let mut first_at: HashMap<(crate::program::node::AppRef, &str, u32, u32), u32> =
+            HashMap::new();
         for (ri, r) in ws.routines.iter().enumerate() {
             let a = &r.source_anchor;
             if a.source_unit_id.is_empty() {
                 continue;
             }
-            let unit = a
-                .source_unit_id
-                .strip_prefix("ws:")
-                .unwrap_or(&a.source_unit_id);
+            let (app, path) = match a.source_unit_id.strip_prefix("dep:") {
+                Some(rest) => {
+                    let Some((guid, path)) = rest.split_once(':') else {
+                        continue;
+                    };
+                    let Some(&app) = app_of_guid.get(guid) else {
+                        continue;
+                    };
+                    (app, path)
+                }
+                None => (
+                    primary,
+                    a.source_unit_id
+                        .strip_prefix("ws:")
+                        .unwrap_or(&a.source_unit_id),
+                ),
+            };
             first_at
-                .entry((unit, a.start_line, a.start_column))
+                .entry((app, path, a.start_line, a.start_column))
                 .or_insert(u32::try_from(ri).expect("row index fits u32"));
         }
         // The caller check's side (§4.6, §4.8): the declaration of every `from`
@@ -2193,8 +2217,7 @@ impl RowNodes {
                 continue;
             };
             let (line, col) = (meta.origin.start.row, meta.origin.start.column);
-            let unit = model_unit(graph, primary, id.object.app, path);
-            if let Some(&ri) = first_at.get(&(unit.as_str(), line, col)) {
+            if let Some(&ri) = first_at.get(&(id.object.app, path, line, col)) {
                 j2_row.insert(id.clone(), ri);
             }
         }
@@ -2210,12 +2233,11 @@ impl RowNodes {
                 .entry((row.file.clone(), row.start, row.end))
                 .or_insert(&row.node);
         }
-        let model_guids = crate::program::model::events::model_guids(ws);
         for r in &graph.routines {
-            let guid = &graph.apps.resolve(r.id.object.app).guid;
-            if r.id.object.app == primary || !model_guids.contains(&guid.to_ascii_lowercase()) {
+            if r.id.object.app == primary || !apps.contains(&r.id.object.app) {
                 continue;
             }
+            let guid = &graph.apps.resolve(r.id.object.app).guid;
             if let Some((meta, path)) = surface.get_with_path(&r.id) {
                 spans
                     .entry((
@@ -2226,13 +2248,19 @@ impl RowNodes {
                     .or_insert(&r.id);
             }
         }
+        // J5 answers for event-subscriber rows only: the event graph reads no
+        // other row's node.
         let j5_node = ws
             .routines
             .iter()
             .map(|r| {
-                spans
-                    .get(&super::census::anchor_key(&r.source_anchor))
-                    .map(|n| (*n).clone())
+                (r.kind == "event-subscriber")
+                    .then(|| {
+                        spans
+                            .get(&super::census::anchor_key(&r.source_anchor))
+                            .map(|n| (*n).clone())
+                    })
+                    .flatten()
             })
             .collect();
         RowNodes {

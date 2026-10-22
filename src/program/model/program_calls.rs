@@ -153,7 +153,8 @@ pub struct UnmatchedSite {
     pub start_col: u32,
     pub end_line: u32,
     pub end_col: u32,
-    /// The callee text (L3 side) or the site's source text (program side).
+    /// The callee text (model side); empty on the program side (the key join
+    /// reads no source text, #160 §4.3 step 5).
     pub text: String,
 }
 
@@ -162,7 +163,9 @@ pub struct UnmatchedSite {
 pub struct SiteCensus {
     /// L3 call sites (`ModelRoutine::call_sites`) over the workspace.
     pub l3_call_sites: usize,
-    /// Program workspace call-site edges (`ObligationId::CallSite`, primary app).
+    /// Program call-site edges the join reads (`ObligationId::CallSite`): the
+    /// primary app's, and in a cross-app model those of the dependency callers
+    /// the model holds (`join_reads`).
     pub program_sites: usize,
     pub matched: usize,
     pub no_program_site: usize,
@@ -518,7 +521,7 @@ pub fn attach_program_calls(
 /// the production path). `demand` (#160 §4.5, 10A-2): the demand the model was
 /// built from; the join reads only the program sites of the callers it holds.
 fn attach_program_calls_with(
-    rows: crate::program::model::workspace::ModelRows,
+    mut rows: crate::program::model::workspace::ModelRows,
     program: ResolvedProgram,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
     demand: Option<&HashSet<RoutineNodeId>>,
@@ -551,9 +554,16 @@ fn attach_program_calls_with(
             .census()
             .emit("program.row_nodes", crate::engine::census::Kind::Shallow);
         crate::program::model::workspace::collision_census(&rows.workspace, &rows.row_nodes).emit();
+        census_site_exprs(&rows.workspace)
+            .emit("model.site_exprs", crate::engine::census::Kind::Exact);
     }
-    // #160 §4.13: `RowNodes` is build-local (assembly -> attach); it ends here.
+    // #160 §4.13: `RowNodes` and the rows' site keys are build-local (assembly ->
+    // attach): only the join and the census read them, so they end here.
     drop(rows.row_nodes);
+    for r in &mut rows.workspace.routines {
+        r.file = None;
+        r.site_exprs = crate::program::site_key::SiteExprs::default();
+    }
     let (meta, body) = program.into_parts();
     body.release();
     // #160 §4.1.4: everything retained from here on is post-attach.
@@ -591,21 +601,25 @@ fn census_model(m: &crate::program::model::workspace::Model) {
     t.bytes += c.bytes;
     t.allocs += c.allocs;
     t.emit("model", Kind::Shallow);
-    // #160 §4.13: the rows' `file` and site keys (inline in the rows' buffer,
-    // which `model` charges, plus the key vectors' heap).
+}
+
+/// #160 §4.13: the rows' `file` and site keys (inline in the rows' buffer, which
+/// `model` charges, plus the key vectors' heap), read at the attach before the
+/// key vectors are freed.
+fn census_site_exprs(ws: &ModelEntities) -> crate::engine::census::Tally {
     let mut k = crate::engine::census::Tally {
-        bytes: m.workspace.routines.len()
+        bytes: ws.routines.len()
             * (std::mem::size_of::<Option<crate::program::site_key::FileIx>>()
                 + std::mem::size_of::<crate::program::site_key::SiteExprs>()),
         allocs: 0,
     };
-    for r in &m.workspace.routines {
+    for r in &ws.routines {
         let e = &r.site_exprs;
         k.buf::<u32>(e.calls.len())
             .buf::<u32>(e.record_ops.len())
             .buf::<u32>(e.op_sites.len());
     }
-    k.emit("model.site_exprs", Kind::Exact);
+    k
 }
 
 /// The `model` bucket without its calls: the rows' buffers and the events
@@ -1080,8 +1094,11 @@ fn key_join<'a>(
         let has_sites = !(r.call_sites.is_empty()
             && r.record_operations.is_empty()
             && r.operation_sites.is_empty());
+        // A dependency source row of an app the graph does not know has no file
+        // (`append_dependency_rows`): its sites count unpaired, as before the key
+        // join. Any other row with sites always has one.
         debug_assert!(
-            r.file.is_some() || !has_sites,
+            r.file.is_some() || !has_sites || r.source_anchor.source_unit_id.starts_with("dep:"),
             "row {} has sites but no file: they cannot pair",
             r.id
         );
@@ -1256,13 +1273,25 @@ fn key_join<'a>(
         "every program site lands in exactly one bucket"
     );
     c.unmatched = misses;
+    // The full span, so two sites sharing a start (`A().B()`) never fall back to
+    // the program map's iteration order.
     c.unmatched.sort_by(|a, b| {
-        (&a.unit, a.start_line, a.start_col, a.reason).cmp(&(
-            &b.unit,
-            b.start_line,
-            b.start_col,
-            b.reason,
-        ))
+        (
+            &a.unit,
+            a.start_line,
+            a.start_col,
+            a.reason,
+            a.end_line,
+            a.end_col,
+        )
+            .cmp(&(
+                &b.unit,
+                b.start_line,
+                b.start_col,
+                b.reason,
+                b.end_line,
+                b.end_col,
+            ))
     });
     Join {
         census: c,
@@ -2582,7 +2611,7 @@ mod tests {
     }
 
     /// Precondition by assignment: the L3 caller's declaration anchor is moved
-    /// one column, so both its sites pair by span and callee but not by
+    /// one column, so both its sites pair by key and callee but not by
     /// caller.
     #[test]
     fn caller_anchor_disagreement_is_caller_mismatch() {
@@ -2978,13 +3007,71 @@ mod tests {
     /// pair panics.
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic]
+    #[should_panic(expected = "paired by key at a different span")]
     fn span_assertion_fires_on_a_key_pair_whose_spans_differ() {
         let _ = census_with(&[("src/m.al", TWO_CALLS.as_bytes())], |ws| {
             routine(ws, "Caller").call_sites[0]
                 .source_anchor
                 .start_column += 1;
         });
+    }
+
+    /// FP-02: two program-only sites sharing a start (`GetC().Work()`: the
+    /// outer call and the receiver call begin at one column) are listed in
+    /// span order, whatever the program map's iteration order. Precondition by
+    /// assignment: `Caller`'s call sites get keys no expression has (§5.3), so
+    /// both program edges are `program_only_site`.
+    #[test]
+    fn unmatched_sites_sharing_a_start_are_in_span_order() {
+        let cu = "codeunit 50101 \"C\"\n{\n    procedure GetC(): Codeunit \"C\"\n    begin\n    end;\n\n    procedure Work()\n    begin\n    end;\n\n    procedure Caller()\n    begin\n        GetC().Work();\n    end;\n}\n";
+        let c = census_with(&[("src/c.al", cu.as_bytes())], |ws| {
+            let r = routine(ws, "Caller");
+            assert_eq!(r.call_sites.len(), 2, "precondition: two call sites");
+            unkey(&mut r.site_exprs.calls);
+        });
+        let only: Vec<(u32, u32, u32, u32)> = c
+            .unmatched
+            .iter()
+            .filter(|u| u.reason == "program_only_site")
+            .map(|u| (u.start_line, u.start_col, u.end_line, u.end_col))
+            .collect();
+        assert_eq!(only.len(), 2, "{c:#?}");
+        assert_eq!(
+            (only[0].0, only[0].1),
+            (only[1].0, only[1].1),
+            "precondition: the two sites share a start: {only:?}"
+        );
+        assert!(
+            (only[0].2, only[0].3) < (only[1].2, only[1].3),
+            "program-only sites sharing a start are in span order: {only:?}"
+        );
+    }
+
+    /// FP-03: a dependency source row of an app the graph does not know has no
+    /// file (`append_dependency_rows` projects it with `file = None`) and keeps
+    /// its call sites. They count unpaired, as before the key join, and nothing
+    /// panics. Hand-stated: `Caller`'s row is given no file and a dependency
+    /// unit.
+    #[test]
+    fn a_dependency_row_with_no_file_counts_its_sites_unpaired() {
+        let c = census_with(&[("src/m.al", TWO_CALLS.as_bytes())], |ws| {
+            let r = routine(ws, "Caller");
+            assert!(r.file.is_some(), "precondition: the row had a file");
+            r.file = None;
+            r.source_anchor.source_unit_id =
+                "dep:dddddddd-0000-0000-0000-000000000099:src/m.al".to_string();
+        });
+        assert_eq!(
+            counts(&c),
+            SiteCensus {
+                l3_call_sites: 2,
+                program_sites: 2,
+                no_program_site: 2,
+                program_only_site: 2,
+                ..Default::default()
+            },
+            "{c:#?}"
+        );
     }
 
     /// The rows named `name`, by position (`RoutineIx`).

@@ -248,9 +248,7 @@ pub fn isolated_event_ids(routines: &[ModelRoutine]) -> std::collections::HashSe
 }
 
 /// The guids of the apps whose routines `ws` holds, lowercased.
-pub(crate) fn model_guids(
-    ws: &super::workspace::ModelEntities,
-) -> std::collections::HashSet<String> {
+fn model_guids(ws: &super::workspace::ModelEntities) -> std::collections::HashSet<String> {
     ws.routines
         .iter()
         .map(|r| r.app_guid.to_ascii_lowercase())
@@ -284,19 +282,6 @@ pub fn program_event_graph(
     ctx: &crate::program::resolve::full::ProgramContext,
     ws: &super::workspace::ModelEntities,
     row_nodes: &super::workspace::RowNodes,
-) -> ProgramEvents {
-    event_graph_by(ctx, ws, |ri, _| row_nodes.j5(ri))
-}
-
-/// [`program_event_graph`] with each subscriber row's program node given by
-/// `node_of(row index, row)` (`None`: the row does not map).
-fn event_graph_by<'n>(
-    ctx: &crate::program::resolve::full::ProgramContext,
-    ws: &super::workspace::ModelEntities,
-    node_of: impl Fn(
-        usize,
-        &super::workspace::ModelRoutine,
-    ) -> Option<&'n crate::program::node::RoutineNodeId>,
 ) -> ProgramEvents {
     use crate::engine::ids::sha256_hex;
     use crate::program::node::RoutineNodeId;
@@ -382,7 +367,7 @@ fn event_graph_by<'n>(
             continue;
         }
         c.model_subscribers += 1;
-        let Some(node) = node_of(ri, r) else {
+        let Some(node) = row_nodes.j5(ri) else {
             unmapped.push(r.id.as_str());
             continue;
         };

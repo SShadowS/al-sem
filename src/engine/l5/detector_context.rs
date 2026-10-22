@@ -2476,12 +2476,21 @@ page 50813 "CR Wizard"
         const SHARED_ID: &str = "hand-stated-collision-id";
         let forced = force_shared_id(&mut resolved, "OnAction", SHARED_ID);
         assert_eq!(forced, 2, "precondition: both rows carry the shared id");
+        // FP-14: the FIRST row is marked parse-incomplete by assignment, so the
+        // two rows' coverage differs too and R2's coverage half can tell first
+        // from last.
+        resolved.workspace.routines[on_actions[0]].parse_incomplete = true;
         // Each row's own direct facts, under the shared id (the facts' subject).
         let facts = |ri: usize| direct_facts_for_routine(&resolved.workspace.routines[ri], &[]);
         let (a_direct, b_direct) = (facts(on_actions[0]), facts(on_actions[1]));
         assert_ne!(
             a_direct.0, b_direct.0,
             "precondition: the two bodies have different direct facts"
+        );
+        assert_ne!(
+            (&a_direct.1, &a_direct.2),
+            (&b_direct.1, &b_direct.2),
+            "precondition: the two rows have different coverage"
         );
 
         // R2: direct facts and coverage, last row wins.

@@ -1523,11 +1523,12 @@ fn cross_app_census_has_no_losses_with_a_dependency_body() {
     drop(a);
 
     let census = adapter_census_for_workspace_cross_app(dir.path()).unwrap();
+    // The loss gate first, so a mis-paired site is reported by name.
+    assert_eq!(census.losses(), vec![], "{census:#?}");
     assert_eq!(
         census.matched, 2,
-        "precondition (a): Caller's D.DepA() and DepA's DepB() are matched: {census:#?}"
+        "Caller's D.DepA() and DepA's DepB() are matched: {census:#?}"
     );
-    assert_eq!(census.losses(), vec![], "{census:#?}");
 }
 
 /// T4b (#160 §5.4): two source-bearing dependencies each hold `src/Main.al`
