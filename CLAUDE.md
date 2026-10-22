@@ -104,20 +104,6 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
 
 ## Running
 
-```bash
-# LSP mode (default) - communicates via stdio
-cargo run
-
-# CLI mode: index a project and report definition/call-site counts
-cargo run -- --project /path/to/al-project
-
-# CLI mode: code quality analysis (complexity, params, line count, fan-in, unused procs)
-cargo run -- --project /path/to/al-project --analyze --format text   # or json | csv
-
-# With verbose logging
-cargo run -- --project /path/to/al-project --verbose
-```
-
 There is no `--no-lsp` flag — `clap` rejects unknown flags outright. LSP server mode is
 the default whenever `--project` is *not* given; passing `--project` alone switches to
 CLI mode (index-and-report, or `--analyze` for the quality-diagnostics report). `--lsp`
@@ -138,8 +124,8 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
     Update it with `git -C tree-sitter-al pull`.
   - **When `main` moves, the build stops on purpose, locally and in CI alike**:
     `crates/al-syntax/build.rs` compares `node-types.json` with the committed
-    `node-types.sha256` and panics on a mismatch. Do the "Upgrading the grammar" steps below
-    (it sat 3 releases behind for 4 days once and left CI red the whole time).
+    `node-types.sha256` and panics on a mismatch. Do the steps in the `grammar-upgrade`
+    skill (it sat 3 releases behind for 4 days once and left CI red the whole time).
   - **Git worktrees have no grammar clone** (it is gitignored). Set `TREE_SITTER_AL_PATH`
     to the main checkout's `tree-sitter-al/` — the `al-syntax` build script falls back to
     `../../tree-sitter-al` (relative to `crates/al-syntax`) when the env var is unset,
@@ -197,7 +183,7 @@ AL Source Files + .alpackages → snapshot::snapshot_workspace (AppSetSnapshot)
       eventPublishersInFile / eventReferenceAtPosition / fieldProperties / actionProperties)
     → LSP Responses
 ```
-Every module above lives in `src/lsp/` (a library module, see Key Modules below) so
+Every module above lives in `src/lsp/` (a library module) so
 benches/tests can build a snapshot and query it in-process; `main.rs` re-exports `lsp`
 (alongside `config`/`telemetry`/`analysis`) so the binary-only modules (`server.rs`,
 `watcher.rs`) keep using it unchanged.
@@ -245,87 +231,31 @@ removed every test, golden and `aldump` mode that measured L3 itself (`--l3-*`,
 `docs/superpowers/specs/2026-10-06-engine-switch-design.md`; plan:
 `docs/superpowers/plans/2026-10-07-engine-switch-s9.md`.
 
-**Key Modules — LSP surface (`src/lsp/`, `server.rs`, `watcher.rs`):**
-- `main.rs` - CLI entry point (clap), dispatches to LSP server / CLI index / `--analyze`
-- `server.rs` - LSP server initialization, dispatch, and the diagnostics-publish/watcher wiring
-- `src/lsp/snapshot.rs` - `LspSnapshot`: the immutable, `Arc`-shareable query surface
-  (`decls_by_file`/`edges_by_file`/`event_edges`/`dep_decl_by_id`), built by
-  [`LspSnapshot::build_full`] directly from the program engine's resolved graph
-- `src/lsp/updater.rs` - The incremental updater: `ChangeEvent` batching, the two-rung
-  (plus degenerate rung-3) soundness ladder, atomic `SharedSnapshot` swap
-- `src/lsp/def_surface.rs` - Per-file definition-surface fingerprinting (the rung-1/rung-2 gate)
-- `src/lsp/encoding.rs` - UTF-8/UTF-16 `PositionEncoding` negotiation + `LineTable` conversion
-- `src/lsp/handlers.rs` - `prepare`/`incoming`/`outgoing` (prepareCallHierarchy / incomingCalls
-  / outgoingCalls)
-- `src/lsp/lens.rs` - `code_lenses` (reference counts + quality-metric thresholds)
-- `src/lsp/diagnostics.rs` - `compute_all`/`DiagnosticsState` (unused-procedure + code-quality
-  diagnostics, diffed and republished on every snapshot swap)
-- `src/lsp/custom.rs` - `dependencyDocumentSymbol` / `eventPublishersInFile` /
-  `eventReferenceAtPosition` (engine-backed custom requests, reading dependency ABI/workspace
-  IR directly) plus `fieldProperties`/`actionProperties` (graph-independent, pure
-  source-read + `al-syntax` facade lookup) and the `al-preview://` URI parser
-  (`parse_al_preview_uri`, also used by `lsp::handlers`'s ABI-symbol URI minting)
-- `watcher.rs` - File system watcher for incremental updates
-- `analysis.rs` - Code quality metrics (cyclomatic complexity, params, line count) for
-  `--analyze` — a library module (shares `routine_complexity_ir`/
-  `is_framework_invocation_attribute` with `src/lsp/lens.rs`/`diagnostics.rs`)
-- `config.rs` - Diagnostic threshold config (global `~/.al-sem/config.json` + per-workspace
-  `.al-sem.json`; both fall back to the pre-rename `.al-call-hierarchy` spellings)
-- `state_paths.rs` - The one place that knows both the current and pre-rename per-user
-  state locations. **Read it before touching any `~/.al-sem/` path** — the read-fallback
-  is what keeps an install that predates the 2026-08-07 rename working
-- `app_package.rs` - Parser for .app files (extracts SymbolReference.json)
-- `dependencies.rs` - Dependency resolution from app.json and .alpackages
-- `protocol.rs` - LSP protocol URI/path conversion helpers
-- `types.rs` - Core AL object-type enum shared across lib/binary
-- `language.rs` - Re-exports `al_syntax::language::language()`; also holds the legacy
-  tree-sitter S-expression queries (`DEFINITIONS`/`CALLS`/`EVENT_SUBSCRIBERS`/`VARIABLES`),
-  which are dead code — retired by the owned-IR migration, zero call sites repo-wide.
-  Kept only because `tree-sitter-al/queries/highlights.scm`/`tree-sitter-al/queries/tags.scm` (editor syntax
-  highlighting, a separate consumer) still reference the same grammar node names.
-
-**Key Modules — program engine (`src/engine/`, `src/program/`, `src/snapshot/`):**
-- `src/snapshot/` - App-set ingestion: turns a workspace + symbol-only dep tables into
-  identity-verified per-app source roots (`snapshot_workspace`, `AppSetSnapshot`)
-- `src/program/` - Whole-program semantic graph: `node`/`topology` (app-qualified identity
-  + index), `build` (assembly), `sig_fp` (signature fingerprints)
-- `src/program/profile.rs` - `BuildProfile` (`LIGHT`/`FULL`/explicit `Summary`): what a graph
-  build keeps of the dependencies. Every build states one.
-- `src/program/dep_summary.rs` - `PackedFile`, the per-file dependency summary made at parse
-  time so `LIGHT` can drop the syntax tree.
-- `src/program/resolve/` - **The fresh call/behaviour-edge resolver** — `full.rs`
-  (`resolve_full_program`, the entry point), `resolver.rs`/`receiver.rs`/`arg_dispatch.rs`
-  (dispatch), `builtins.rs`/`member_catalog.rs` (platform intrinsic catalogs), `edge.rs`
-  (the `Histogram` taxonomy + `ObligationOutcome`)
-- `src/program/abi_ingest.rs` - Dependency ABI ingestion (sibling of `resolve/`, not inside it)
-- `src/program/impact_graph/` - The may-execute call graph behind `alsem graph` (JSONL,
+**Rules that live in modules** (find the files by name; the code is the tour):
+- `src/state_paths.rs` is the one place that knows both the current and pre-rename
+  per-user state locations. **Read it before touching any `~/.al-sem/` path** — the
+  read-fallback is what keeps an install that predates the 2026-08-07 rename working.
+  `config.rs` reads `~/.al-sem/config.json` and `.al-sem.json`, falling back to the
+  pre-rename `.al-call-hierarchy` spellings.
+- `src/engine/l4/effect_query.rs` (`DbEffectQuery`): **read its module doc BEFORE building
+  anything on it** — it states which question this substrate answers and which one
+  `cone_derived.rs` already answers better (physical-table WRITES), so a second answer to
+  the same question is not built.
+- `src/program/impact_graph/` is the may-execute call graph behind `alsem graph` (JSONL,
   schema `al-sem.callgraph`), read by bc-dev-mcp's test selection. Its contract (hubs,
   `hiddenCallers`, pruning) is in `docs/superpowers/specs/2026-10-13-callgraph-export-design.md`;
-  change the schema only together with bc-dev-mcp's parser
-- `src/program/body/` - Structural body-walk + feature projection over the owned IR
-  (was `src/engine/l2`, moved in engine-switch S2b.1)
-- `src/program/model/` - The detector model: `Model` (rows + the program engine's calls
-  and event graph), `ModelRoutine`/`ModelObject`/`ModelTable`/…, built only by
-  `program_calls::attach_program_calls`. Renamed from the `L3*` types in engine-switch
-  S9.7; the legacy L3 engine (`src/engine/l3`, the RETIRED al-sem port) was deleted in
-  S9.6
-- `src/engine/l4/` - Per-routine effect summaries over the call graph's SCC condensation.
-  Its db-effect QUERY surface is `effect_query.rs` (`DbEffectQuery`: down / up-global /
-  the ancestor-scoped up-query) over `reverse_index.rs`'s transpose, with
-  `effect_query_cli.rs` as the `alsem query` transport + the `RoutineIx`→`ModelRoutine`
-  join. Read `effect_query.rs`'s module doc BEFORE building anything on it — it states
-  which question this substrate answers and which one `cone_derived.rs` already answers
-  better (physical-table WRITES), so a second answer to the same question is not built.
-- `src/engine/l5/` - Detectors + query substrate (findings, event-flow, digests, fingerprints)
-- `src/engine/gate/` - The production `analyze` CLI path (SARIF/JSON/HTML/terminal report,
-  baseline diffing, inline suppression, policy)
-- `src/engine/deps/` - `.app` symbol-reference ingestion (manifest + SymbolReference.json → ABI)
-- `src/bin/aldump.rs` - Multi-mode dump CLI: `--program-call-graph-stats` (north-star),
-  `--l2`, `--r3a*`/`--r4*` projections, `--graphify-export`, etc. — see its `usage()`
-- `src/bin/alsem.rs` - The production `analyze`/diagnostics CLI (installed binary name);
-  also hosts `alsem query touches|effects` (the db-effect query surface above) and
-  `alsem graph <ws> [--out F]` (the call-graph export above)
-- `src/bin/mint-goldens.rs` - Mints/regenerates committed golden fixtures
+  change the schema only together with bc-dev-mcp's parser.
+- `src/program/model/` (`Model`, `ModelRoutine`, …) is built only by
+  `program_calls::attach_program_calls`. Every graph build states a `BuildProfile`
+  (`src/program/profile.rs`); there is no default.
+- `src/lsp/custom.rs` holds the `al-preview://` URI parser (`parse_al_preview_uri`), also
+  used by `lsp::handlers`'s ABI-symbol URI minting.
+- `src/lsp/lens.rs`/`diagnostics.rs` share `routine_complexity_ir` and
+  `is_framework_invocation_attribute` with `analysis.rs` (the `--analyze` metrics).
+- `src/language.rs` holds legacy tree-sitter S-expression queries
+  (`DEFINITIONS`/`CALLS`/`EVENT_SUBSCRIBERS`/`VARIABLES`) that are dead code (zero call
+  sites). Keep them: `tree-sitter-al/queries/highlights.scm` and `tags.scm` (editor syntax
+  highlighting, a separate consumer) still reference the same grammar node names.
 
 **`crates/al-syntax`** is the **only** crate that touches tree-sitter: FFI grammar
 binding (`language.rs`), the generated raw vocabulary + typed CST (`raw/generated/`),
@@ -368,27 +298,27 @@ fan-in/fan-out for the query rows, exercising `LspSnapshot`/`lsp::handlers`/
 Architecture above). A release-only CI gate (`tests/perf_bounds.rs`) asserts every
 operation stays within 3x its target on every PR (rung 1/rung 2 additionally carry a
 corpus-relative bound — see that file's own doc), so an order-of-magnitude regression
-fails loudly even though the day-to-day numbers below have wide headroom.
+fails loudly even though the day-to-day numbers have wide headroom. Re-run the bench for
+current numbers; do not quote old ones.
 
-| Operation | Target | Measured (2026-07-13, dev machine, Criterion median) |
-|-----------|--------|-------------------------------------------------------|
-| `build_full` (100 files) | < 500ms | ~8.07ms |
-| `build_full` (1000 files) | < 2s | ~74.45ms |
-| `prepare` (prepareCallHierarchy) | < 1ms | ~7.88µs |
-| `incoming` (1000-file graph, 999-way real fan-in) | ~25ms — see note below | ~16.34ms |
-| `outgoing` (1000-file graph) | < 1ms | ~6.60µs |
-| `compute_all` (diagnostics recompute, 1000-file event-bearing graph) | 50ms (architectural — see footnote below) | ~7.9ms |
-| Incremental update, rung 1 (body-only edit, 1000-file graph) | 100ms (real-CDO-workspace re-measurement) | ~13.28ms |
-| Incremental update, rung 2 (signature-change edit, 1000-file graph) | ~1.5s (real-CDO-workspace re-measurement) | ~149.93ms |
+| Operation | Target |
+|-----------|--------|
+| `build_full` (100 files) | < 500ms |
+| `build_full` (1000 files) | < 2s |
+| `prepare` (prepareCallHierarchy) | < 1ms |
+| `incoming` (1000-file graph, 999-way real fan-in) | ~25ms — see note below |
+| `outgoing` (1000-file graph) | < 1ms |
+| `compute_all` (diagnostics recompute, 1000-file event-bearing graph) | 50ms (architectural — see footnote below) |
+| Incremental update, rung 1 (body-only edit, 1000-file graph) | 100ms (real-CDO-workspace re-measurement) |
+| Incremental update, rung 2 (signature-change edit, 1000-file graph) | ~1.5s (real-CDO-workspace re-measurement) |
 
 **Every rung-1/rung-2 save additionally pays `compute_all`'s own cost** — `server.rs`'s
 `on_swap` runs the full diagnostics recompute after EVERY snapshot swap, including a
 single-file rung-1 body edit, so the real per-save latency a user experiences is
-rung-N's own number PLUS `compute_all`'s row above (~13.28ms + ~7.9ms ≈ 21ms for a
-rung-1 save on this corpus). `compute_all` used to carry a real O(decls × event_edges)
+rung-N's own number PLUS `compute_all`'s row above. `compute_all` used to carry a real O(decls × event_edges)
 quadratic cost (found and fixed in a t3 whole-branch review pass — see
-`src/lsp/snapshot.rs`'s `LspSnapshot::publisher_fanout` doc); the row above already
-reflects the fix, measured on an event-bearing corpus (`tests/perf_support/`'s
+`src/lsp/snapshot.rs`'s `LspSnapshot::publisher_fanout` doc); the numbers
+reflect the fix, measured on an event-bearing corpus (`tests/perf_support/`'s
 generator now declares 2 publisher/2 subscriber routines per file specifically so this
 cost is never accidentally measured against an all-zero `event_edges` population).
 
@@ -403,263 +333,34 @@ scans: genuinely O(distinct callers), a different complexity class than
 `prepare`/`outgoing` (whose cost doesn't scale with fan-in). 20ms is still
 editor-imperceptible for a "who calls this" panel.
 
-## Key Data Structures
-
-```rust
-// src/program/node.rs — overload-aware routine identity (object + name + enclosing
-// member + arity + a param-type-sequence fingerprint; total, not name-only)
-RoutineNodeId { object: ObjectNodeId, name_lc, enclosing_member_lc, params_count, sig_fp }
-
-// src/lsp/snapshot.rs — LspSnapshot's owned, Arc-shareable query surface
-DeclEntry { id: RoutineNodeId, name, origin, name_origin, virtual_path }  // a declaration
-EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never a borrow
-```
-
 ## Grammar (tree-sitter-al v4.4.1 + main `960ed312`)
 
 **Current reality:** the grammar is **v4.4.1** by `tree-sitter-al/package.json`, but the
 committed `node-types.sha256` matches `main` at **`960ed312`** (2026-10-22), hundreds of
 commits past the v4.4.1 tag commit (`7819df5`) with the package version unchanged. **The package
-version is NOT a grammar identity any more** — name the commit. v4.0.0
-is the breaking parse-tree release (see the v4.0.0 shapes note below); v4.0.1 on top
-fixes the scanner's MSVC `_Static_assert` guard and lets 14 section keywords parse as
-variable names. v4.1.0/v4.2.0/v4.3.0 (all 2026-09-09) are three parse-SHAPE corrections:
-a single-entry `Implementation` mapping is an `implementation_value` and not a
-comparison; `CalcFormula` aggregates and `order()` views are not calls while
-`Continue(X)` is a call and not the statement; and a negative literal in a property is
-one signed literal and not a `unary_expression`.
+version is NOT a grammar identity any more** — name the commit. What each bump moved is in
+CHANGELOG.md.
 
-**v4.4.0 (2026-09-13) fixes two REAL parse failures in Microsoft's own Base Application**,
-found by the CDO `recovered_files` ratchet moving 0 -> 5 once BC 28.1 symbols were ingested
-(filed as grammar issues #24/#25): (a) a mid-expression `#if` where the binary operator
-DANGLES at the end of the line before the directive and the branch opens with an operand —
-the already-existing `preproc_conditional_expression_tail` covered only the operator-first
-form; (b) a block opened inside a preproc branch and closed after `#endif`, which errored
-across the whole enclosing procedure. All 5 Base Application files parse clean on v4.4.0.
-
-**v4.4.1 (2026-10) moved no named kinds (still 473)** but changed shapes: `asserterror` takes
-a STATEMENT, not an expression (grammar issues #26/#28; the lowerer already lowered its body
-as a branch), and contextual keywords lex as names at the start of a property value (#27).
-
-**`main` at `bf72a2d0` (2026-10-05, still "v4.4.1") moved the vocabulary 473 -> 487 named
-kinds (fields +`prefix`/`uri`/`continuation`/`variables`, −`table`) and changed shapes**:
-`TableRelation` is keyed by name with one `target: (qualified_name …)` (B5; the `table`
-field is gone), a dotted value of any other property is an expression (B5), the 13 ML
-properties and `Namespaces` are keyed by name (B4), link syntax lives only under the six
-link properties (B5b), a whole-value `#if` is `preproc_conditional_property_value` (G6;
-since B8 its arms may also be `CalcFormula` formulas), and ten new preproc shapes parse BC 29 code that was an ERROR before
-(`preproc_conditional_arguments`, `preproc_split_open_statement`,
-`preproc_split_block_end_in_else`/`_close_after_endif`, `preproc_split_var_section_tail`,
-`preproc_split_table_field_open`, `preproc_split_key`, `preproc_split_modify`,
-`preproc_split_container_reopen`, `preproc_split_permissions_property`). The engine reads
-property values as TEXT, so B4/B5/B5b/B8 move no IR. G6 does: a whole-value `#if` is one
-`property` node, and its raw text (directives included) reached `SourceTable`/`TableNo` as
-a confident table name, so `lower_property` now emits one entry per arm (this was also true
-of the old `preproc_conditional_table_relation` shape). Eight of the ten preproc shapes
-needed lowerer arms; `_container_reopen` and `_permissions_property` did not (see CHANGELOG).
-On CDO, nothing moved. Zero goldens moved from the grammar (the cache `dry-run.txt` moved
-only because the longer `CACHE_VERSION_GRAMMAR` stamp grew a fixture past 0.85 KB); CDO
-histogram byte-identical. Commits keep landing on `main` — it moved twice during the
-upgrade (`821c9147` -> `a7455b69` -> `bf72a2d0`); check `origin/main` again before you
-commit, since CI builds whatever `main` is when it runs.
-
-**`main` at `8682cb5f` (2026-10-07, still "v4.4.1", 106 commits past `bf72a2d0`) moved the
-vocabulary 487 -> 499 named kinds, no field added or removed.** New: `chartpart_keyword`
-(Trivia), `chartpart_section` (a page-layout part, deferred-work 32), `filter_group` (a
-parenthesised filter, 31), `preproc_conditional_property_value_sequence` (a property value
-made of a RUN of whole-value `#if` groups, B11), and eight B7b-1 groups, one per strict
-delimited list, that let an `#if` stand anywhere in the list:
-`preproc_conditional_{implements,field_list_items,sorting_fields,order_by_fields,
-move_elements,array_dimensions,attribute_args,var_names}`. B6 also narrowed
-`_expression_statement` to an invocation and made `and`/`or`/`xor`/`div`/`mod`/`in`/`not`
-reserved in code (operator-led or literal "statements" now ERROR, as alc rejects them).
-The grammar's own audit says every production tree is byte-identical in its four corpora.
-Four shapes needed lowerer arms, because the IR reads those hosts: the property sequence
-(one entry per arm of every group, like G6), `implements` and variable names (every arm's
-names, the union the lowerer already reads across `#if`-wrapped headers and declarations),
-and key field lists and attribute arguments, which are POSITIONAL, so they read ONE arm:
-the first arm the routine's build context does not rule out (`conditional_list_arm`). A
-union there is no build at all and shifts `[EventSubscriber]`'s `args[2]`. Nothing reads
-sorting, `OrderBy`, move elements, array sizes, filters or `chartpart` (not a
-`PageControl`; 0 sites in the grammar's corpora), so those need no arm. Measured: per-test
-outcomes identical old vs new apart from the 5 new lowerer tests, zero goldens moved, CDO
-histogram byte-identical (`recoveredFiles` 0 on both), and the same-length stamp left
-`dry-run.txt` alone.
-
-**`main` at `4d75846c` (B7b-3, 499 -> 500 kinds) and `960ed312` (2026-10-22, B7b-2, 500 ->
-501 kinds, no field added or removed).** `4d75846c` is recorded in CHANGELOG (a parenless
-call has one shape; two lowerer arms). `960ed312` lets an `#if` group stand anywhere inside
-an expression: `preproc_conditional_operand` stands in place of a whole operand (binary and
-unary operands, region roots, and in a receiver position a call's `function` or a member's
-`object`), one `operand` field per arm; `preproc_conditional_expression_tail` and
-`preproc_operand_prefix` now also sit beside the value of an argument list, a list literal
-and a parenthesis. The grammar says production trees are unchanged over its four corpora.
-Three lowerer changes, each pinned by a test with a discrimination proof: the operand group
-reads ONE arm (an operand is positional; `lower_operand_group` uses `conditional_list_arm`,
-with a `SyntaxIssue` because the other arms' calls are not lowered), where it was an
-`Unknown` that linked no child, so every call in every arm vanished; and a prefix beside an
-argument, list element or parenthesised value takes no value slot (`expr_children`), where
-it inflated the arity or hid the parenthesis's real value. Tails and prefixes stay unlowered
-(their operands' calls are not read), as tails already were. Measured: per-test outcomes
-identical old vs new apart from the 2 new lowerer tests (3,597 -> 3,599), zero goldens
-moved, CDO `--program-call-graph-stats` byte-identical (`c032c8db…94ef`, `unknown` 0 and
-`recoveredFiles` 0 on both), and the same-length stamp left `dry-run.txt` alone.
-
-**v4.4.0 DID move the vocabulary — 467 -> 473 named kinds (+3 fields) — unlike v4.0.1 ->
-v4.3.0, which moved none.** The six additions are all preproc-split shapes
-(`PreprocOperandPrefix`, `PreprocSplitCaseEndBranch`, `PreprocSplitCaseStatementEnd`,
-`PreprocSplitReportBraceClose`, `PreprocSplitReportDataitemHeader`,
-`PreprocSplitReportDataitemOpenOverEndif`). They tripped `kind_policy.rs`'s exhaustive
-match exactly as that gate intends, and were triaged `Structural` like every other
-`Preproc*` node (the lowerer owns descent). `crates/al-syntax/src/raw/mod.rs`'s
-`NAMED_KIND_COUNT` sanity anchor needs updating in the same commit — it is a `--lib` test,
-so `scripts/check-goldens` will NOT catch it.
-
-**Measure a grammar bump on BOTH sides — neither outcome is a rule.** v4.0.1 -> v4.3.0 moved
-zero test outcomes across ~2500 tests; v4.4.0 moved the vocabulary but still moved ZERO
-goldens (all 9 targets green), because the golden corpus contains none of the preprocessor
-shapes it fixes. A future release can do either. Run the full suite on the old grammar and
-the new one and diff the per-test outcomes; that is the only way to attribute a moved golden
-to the grammar rather than to whatever else is in your diff.
+**Measure a grammar bump on BOTH sides — neither outcome is a rule.** A bump can move zero
+test outcomes or several goldens. Run the full suite on the old grammar and the new one and
+diff the per-test outcomes; that is the only way to attribute a moved golden to the grammar
+rather than to whatever else is in your diff.
 Nothing pins the grammar commit: local builds and CI (`.github/workflows/ci.yml`) both use
 `SShadowS/tree-sitter-al` `main`, so a grammar change surfaces on the next build rather than
 silently drifting. `crates/al-syntax` is the **only** crate
 that links tree-sitter or walks its raw CST — every other consumer (`src/lsp/snapshot.rs`,
 `src/program/body` and everything layered on it, `src/program/resolve`) reads the owned
 AL syntax IR that `al-syntax`'s lowerer (`crates/al-syntax/src/lower/mod.rs`) produces.
-Practical effect: the "flat vs. recursive walk" hazard that mattered under the old
-tree-sitter-query architecture (see History below) no longer applies to engine code at
-all — the IR's `Block`/`Stmt` items are already flattened once, at the lowering
-boundary, so nothing downstream ever sees a `statement_block`/`declaration_body`
-wrapper node.
 
-**Upgrading the grammar (the checklist the v4.3.0, v4.4.0, v4.4.1, `bf72a2d0`, `8682cb5f`, `4d75846c` and `960ed312` bumps followed):**
-
-1. `git -C tree-sitter-al pull` — moves the local clone to the new `main` tip.
-2. `cargo run -p xtask -- gen-syntax` — regenerates the raw vocabulary AND the
-   `node-types.sha256` sidecar. Skipping this is not an option: `crates/al-syntax/build.rs`
-   sha256s the grammar's `node-types.json` and PANICS on mismatch, so the build refuses
-   before a single test runs.
-3. **Triage any new `RawKind` in `crates/al-syntax/src/schema/kind_policy.rs`** (the
-   exhaustive match fails the build on purpose — classify it, never wildcard it) and update
-   `crates/al-syntax/src/raw/mod.rs`'s `NAMED_KIND_COUNT` anchor.
-4. **Bump `CACHE_VERSION_GRAMMAR`** (`src/engine/gate/cache_prune.rs`) and its mirror in
-   `tests/cli/cli_c_cache_differential.rs`, plus the `grammar` stamp in the two
-   `tests/cli-c-goldens/cache/fixture-cache/` artifacts that carry the CURRENT tuple
-   (`1234...` and `cafecafe...`; `babebabe...` is deliberately stale). The `cafecafe`
-   Kept fixture's `artifactContentHash` is a sha256 over its own raw text, so it must be
-   RECOMPUTED after the stamp changes — edit the stamp, then rehash. This constant keys
-   dependency-cache invalidation: leave it stale and caches minted under the old grammar
-   are silently reused under the new one. `cache_version_grammar_tracks_the_linked_grammar`
-   is the guard, and it is a `--lib` unit test, so **`scripts/check-goldens` does NOT run
-   it** — run `cargo test -p al-sem --lib` too. The stamp carries the grammar COMMIT
-   (`tree-sitter-al-v4.4.1-960ed312-native`) because `main` changes shapes without moving
-   the package version; the guard checks only the version part, so a same-version bump
-   passes it with a stale commit — update the commit by hand. A longer stamp can push
-   `1234….json` across a 0.1 KB boundary in `tests/cli-c-goldens/cache/dry-run.txt`.
-5. **Measure both sides.** Run the full suite on the OLD grammar and the NEW one and diff
-   the per-test outcomes; that is the only way to attribute a moved golden to the grammar
-   rather than to whatever else is in your diff. `gen-syntax` makes the revert cheap: check
-   the old grammar commit out in `tree-sitter-al/`, re-run it, and the vocabulary returns to the committed bytes —
-   no `git checkout --` of generated files needed.
-6. Update this section's version numbers and the Prerequisites line.
-
-**Notes still relevant if you touch the lowerer itself** (`crates/al-syntax/src/lower/mod.rs`,
-the one place that still reads raw grammar shapes):
-- A scoped member trigger (`Object::Member` triggers) is a single named
-  `member_trigger_name` CST node (`object`/`member` fields, no literal `::` token in its
-  field set) rather than a plain `(identifier)`/`(quoted_identifier)` — `routine_name_text`
-  joins the two fields back into `Object::Member` text. Editor consumers
-  (`tree-sitter-al/queries/highlights.scm` + `tree-sitter-al/queries/tags.scm`) capture `member_trigger_name` directly;
-  the engine does not use `.scm` queries at all (IR-only).
-- A `case` branch's `pattern` field binds one `_single_pattern` value per branch value —
-  the `,` separators are never tagged `pattern` — and an `in`-as-case-pattern lowers to
-  the named `in_expression` node, never an inline `seq` leaking `left`/`operator`/`right`.
-  The lowerer keeps a defensive `is_named()` filter on `children_by_field(Pattern)` as
-  belt-and-suspenders (an anonymous `,` token has no `RawKind` and would panic if it ever
-  reached `lower_expr`).
-- Object/field/action bodies wrap their content in a `declaration_body` node (repeat1 of
-  `_body_element`); a code block's statements wrap in `statement_block`; report dataitem
-  bodies in `report_body`; `var_section`'s body in `var_body`. `grammar.js`'s own rule
-  definitions are the source of truth — grep it rather than trusting this list to stay
-  current.
-- **Validate a lowerer change with the differential goldens** (`cargo test`): zero
-  divergences = behaviour-preserving. Goldens are **Rust-owned baselines** regenerated
-  from this engine — see Testing Philosophy & Goldens below.
-- Dump a real tree with `tree-sitter parse <file.al>` from `tree-sitter-al/` — always
-  verify a grammar-shape claim against real `tree-sitter parse` output, not just a read
-  of `grammar.js` (two owned-grammar field-pollution bugs upstream of the lowerer were
-  found exactly this way; see CHANGELOG history).
-- **v4.0.0 shapes (2026-08-12 upgrade — what moved and what to rely on):**
-  - The statement terminator `;` lives OUTSIDE `code_block`, `if_statement` and the
-    branch rules — statement/block spans end at their last real token (1 byte earlier
-    than v3 when a `;` followed). Body/branch fields (`body`, `then_branch`,
-    `else_branch`, …) hold exactly ONE named node, never `[stmt, ';']`.
-  - A dangling `else` binds to the INNER `if` (was: outer construct) — the one v4
-    change that alters what a program means. `case … else` bodies are one
-    `statement_block`.
-  - Operator precedence is Pascal-correct: `and`/`or`/`xor` bind TIGHTER than
-    comparison, unary minus tighter than `*` (`-a * b` = `(-a) * b`), and `..` is no
-    longer an expression operator. Binary IR shapes reflect this.
-  - ~70 more keywords became NAMED nodes (`record_keyword`, `field_keyword`, …), plus
-    `assignment_operator` and `filter_operator`. They appear as named children
-    everywhere — `schema/kind_policy.rs` classifies them `Trivia` and the shared
-    `structural_children` filter drops them, so positional reads stay clean. A new
-    RawKind variant fails `kind_policy.rs`'s exhaustive match (the loudness gate):
-    triage it there, never wildcard it.
-  - Keyword nodes have a UNIFORM shape (one anonymous child, canonical lowercase
-    spelling) — read a keyword's text from the node itself, never a child. Queries
-    naming non-lowercase anonymous spellings (`"IF"`, `"Then"`) no longer compile.
-  - Dotted-reference fields no longer include the `.` separator tokens.
-
-**History (V1 → V2 → V3, kept for archaeology — not actionable for engine code today):**
-V2 removed V1's wrapper nodes (`procedure name:`/`trigger_declaration name:` held
-`identifier`/`quoted_identifier` directly, no `name`/`trigger_name` wrapper), renamed
-`parameter_name:` → `name:` and `property:` → `member:`, merged `field_access` into
-`member_expression`, unified `named_trigger`/`onrun_trigger` into `trigger_declaration`,
-and unified the individual `*_property` nodes into one `property` node. V3 then
-reintroduced wrapper nodes for a different reason (structural grouping, not per-field
-naming) — `code_block`'s body wraps in `statement_block`, object/field/action bodies in
-`declaration_body`, etc. (see above) — which broke direct-child (`named_children`) reads
-written against V2's flat shape; the fix at the time was recursive walks or explicit
-`child_by_field_name("body")` descent. All of that now lives entirely inside the
-`al-syntax` lowerer; nothing else needs to know it happened.
+Upgrading the grammar, and the notes for touching the lowerer: see the `grammar-upgrade` skill.
 
 ## Adding New AL Constructs
 
-1. **Grammar first.** If the construct isn't already parseable, add/fix the rule in
-   `tree-sitter-al/grammar.js` (a separate repo we own — `SShadowS/tree-sitter-al`) and
-   regenerate (`tree-sitter generate` from `tree-sitter-al/`). Verify the real shape with
-   `tree-sitter parse <file.al>` — never assume from reading `grammar.js` alone (see
-   Grammar section above for why).
-2. **Lower it.** Teach `crates/al-syntax/src/lower/mod.rs` to turn the new CST shape into
-   the owned IR (`crates/al-syntax/src/ir/`) — extend `ObjectKind`/`RoutineKind`/`StmtKind`/
-   `ExprKind` etc. as needed. This is the ONLY place that reads raw tree-sitter nodes for
-   the new construct; get it right here and every consumer below sees a clean IR node.
-3. **Wire the IR consumers that need it**, as applicable:
-   - LSP surface: nothing to wire separately — `src/lsp/snapshot.rs`'s `LspSnapshot`
-     projects directly off the program engine's resolved graph (below), so a new
-     construct that resolves correctly there is automatically visible to
-     prepare/incoming/outgoing/codeLens/diagnostics with no LSP-specific step.
-   - Program engine (the moat): `src/program/resolve/extract.rs` (obligation extraction)
-     and/or `src/program/resolve/resolver.rs` (dispatch) if it's a new call/edge shape
-   - Detector model (body facts the detectors read): the body walk under
-     `src/program/body/` and the projection in `src/program/model/workspace.rs`
-4. **Add a fixture** under `tests/fixtures/` (or the plan/task-specific golden family) and
-   **regenerate goldens**: `REGEN_TEMP_GOLDENS=1 cargo test` rewrites Rust-owned goldens —
-   inspect the diff before committing; it is a measurement, never an auto-bless (see
-   Testing Philosophy & Goldens below). `REGEN_TEMP_GOLDENS` is value-tested (`=1`
-   specifically), not presence-tested — `REGEN_TEMP_GOLDENS=0` does NOT trigger a regen.
-5. Format touched files with `rustfmt <file>` (never `cargo fmt`), run
-   `cargo clippy --all-targets --all-features`, and — if the change could move the
-   call-graph resolution needle — re-measure with `aldump --program-call-graph-stats`
-   (see Project Direction & The Moat below).
+See the `add-al-construct` skill.
 
 ## Resolution Coverage
 
-The old table here (`Local procedures | Yes`, `Record methods | Partial`, ...) predated
-the whole resolution program and is gone — a binary yes/no doesn't describe the fresh
-resolver's output. The honest taxonomy, as emitted by `aldump
+The honest taxonomy, as emitted by `aldump
 --program-call-graph-stats <workspace>` (`src/program/resolve/edge.rs`'s `Histogram`;
 JSON keys shown):
 
@@ -675,23 +376,8 @@ JSON keys shown):
 | Ambiguous, resolved | `ambiguousResolved` | Closed same-object overload-ambiguity candidate set — NOT counted as `unknown` |
 
 Both `wholeProgram` (every edge, including dependency-internal ones) and `primaryScoped`
-(workspace-only edges) variants are
-emitted, each with `realUnknownRate = unknown / total`. **Last measured** (CDO,
-Continia's real BC workspace — requires `CDO_WS`; not reproducible in this sandbox, see
-`scripts/cdo-gate`), immediately after the Tier-1 deep-review-remediation merge (commit
-`f171d0f`), JSON SHA-256 `0a3b85bc832ff0a3e77acee118d203edbf62827dc37617c8d9315fe52d5cb7d0`:
-
-| Scope | total | resolvedSource | resolvedCatalog | resolvedAbiExternal | honestDynamic | honestEmpty | conditionalResolved | unknown | ambiguousResolved |
-|-------|------:|----------------:|-----------------:|----------------------:|----------------:|-------------:|----------------------:|--------:|--------------------:|
-| primaryScoped | 18113 | 8325 | 5783 | 57 | 55 | 3876 | 17 | **0** | 0 |
-| wholeProgram | 43375 | 10219 | 5783 | 57 | 55 | 26942 | 319 | **0** | 0 |
-
-`realUnknownRate` is **0.0000%** in both scopes — but treat that as a point-in-time
-measurement to re-verify (`scripts/cdo-gate <CDO_WS>`), not an immutable fact: the deep
-review that produced Tier 0 found the metric had been structurally unfalsifiable (missed
-edges could land in `builtin`/vanish entirely/never get measured/report success on
-failure) before Tier 0's instrument-honesty fixes landed. Tier 0 closed those specific
-holes; the zero above is the first measurement taken with the hardened instrument.
+(workspace-only edges) variants are emitted, each with `realUnknownRate = unknown / total`.
+Re-measure with `scripts/cdo-gate <CDO_WS>`; never quote an old number as current.
 
 ## Project Direction & The Moat
 
@@ -700,7 +386,7 @@ north-star metric is the **real-`unknown` edge rate** on real BC apps (measure w
 `aldump --program-call-graph-stats <workspace>`, the FRESH clean-room resolver — no L3
 oracle): drive it toward zero, where the residual is provably dynamic. See Resolution
 Coverage above for the full honest taxonomy (`resolved`/`builtin`/`dynamic`/`external`/
-`unknown`) and the current CDO numbers, and the call-graph resolution redesign spec
+`unknown`) and the call-graph resolution redesign spec
 under `docs/superpowers/specs/`.
 
 **The unknown rate has two definitions — do not conflate them.** (There used to be a
