@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Grammar: tree-sitter-al `main` at `960ed312`** (B7b-2, "#if groups inside expressions";
+  package version still 4.4.1; was `4d75846c`). The `node-types.json` hash guard had made CI
+  red. 500 -> 501 named kinds, no field name added or removed. The new
+  `preproc_conditional_operand` (an `#if` group in place of a whole operand, one `operand`
+  per arm) is `Structural` and the lowerer reads one arm of it; tails and prefixes now also
+  sit beside the value of an argument list, a list literal and a parenthesis (see Fixed).
+  `CACHE_VERSION_GRAMMAR` is now `tree-sitter-al-v4.4.1-960ed312-native`. Measured old vs
+  new: per-test outcomes identical apart from the two new lowerer tests (3,597 -> 3,599, all
+  pass), zero goldens moved, the stamp kept its length so `dry-run.txt` did not move, CDO
+  `--program-call-graph-stats` byte-identical (SHA-256 `c032c8db…94ef`, as at `4d75846c`).
 - #160 epic spec: two owner-approved changes to the delivery plan (2026-10-21; part of
   #160). Step 11 splits into 11a (routine identity, the two declaration joins, a collision
   count; output unchanged) and 11b (re-keying by routine and the one rule for routines that
@@ -472,6 +482,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The lowerer reads the `960ed312` grammar's expression `#if` shapes** (see Changed). An
+  operand group (`1 + #if X Foo() #else Bar() #endif`, or a callee
+  `#if X Foo #else Bar #endif (1)`) lowers as its first arm a build can take
+  (`conditional_list_arm`, the positional-list policy; a union is no build), with a
+  `SyntaxIssue` because the other arms' calls are not lowered. It was an `Unknown`, which
+  links no child, so every call in every arm was lost. A `preproc_operand_prefix` beside an
+  argument, list element or parenthesised value is skipped like a tail already was: it
+  counted as an extra argument (`Baz(#if X 1 + #endif Qux(), 2)` had arity 3) or hid a
+  parenthesis's value. Pinned by `operand_group_lowers_its_first_arm` and
+  `operand_prefix_takes_no_value_slot`, both proven to fail with the change removed. Limits:
+  the arm is chosen without the routine's build guard (like key field lists), and the
+  operands of tails and prefixes are still not lowered.
 - agentflow (pre-existing): post-merge's verification worktree built into the main
   checkout's `target/` from a new path per merge (`../al-sem-verify-merge-<sha12>`). Test
   binaries bake `env!("CARGO_MANIFEST_DIR")` and cargo reuses a binary whose Rust sources

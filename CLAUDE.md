@@ -129,7 +129,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al grammar (currently **v4.4.1 + `main` at `8682cb5f`**, see the Grammar
+- tree-sitter-al grammar (currently **v4.4.1 + `main` at `960ed312`**, see the Grammar
   section — the package version did not move for 459 commits, many of them shape changes): a plain, gitignored clone of
   `SShadowS/tree-sitter-al` at `tree-sitter-al/`, on its `main` branch. **It is NOT pinned
   and NOT a submodule** (it was one until 2026-10-03). Local builds and CI both build
@@ -415,11 +415,11 @@ DeclEntry { id: RoutineNodeId, name, origin, name_origin, virtual_path }  // a d
 EdgeRef { file: String, idx: u32 }  // index into edges_by_file[file] — never a borrow
 ```
 
-## Grammar (tree-sitter-al v4.4.1 + main `8682cb5f`)
+## Grammar (tree-sitter-al v4.4.1 + main `960ed312`)
 
 **Current reality:** the grammar is **v4.4.1** by `tree-sitter-al/package.json`, but the
-committed `node-types.sha256` matches `main` at **`8682cb5f`** (2026-10-07), 459 commits
-past the v4.4.1 tag commit (`7819df5`) with the package version unchanged. **The package
+committed `node-types.sha256` matches `main` at **`960ed312`** (2026-10-22), hundreds of
+commits past the v4.4.1 tag commit (`7819df5`) with the package version unchanged. **The package
 version is NOT a grammar identity any more** — name the commit. v4.0.0
 is the breaking parse-tree release (see the v4.0.0 shapes note below); v4.0.1 on top
 fixes the scanner's MSVC `_Static_assert` guard and lets 14 section keywords parse as
@@ -486,6 +486,25 @@ outcomes identical old vs new apart from the 5 new lowerer tests, zero goldens m
 histogram byte-identical (`recoveredFiles` 0 on both), and the same-length stamp left
 `dry-run.txt` alone.
 
+**`main` at `4d75846c` (B7b-3, 499 -> 500 kinds) and `960ed312` (2026-10-22, B7b-2, 500 ->
+501 kinds, no field added or removed).** `4d75846c` is recorded in CHANGELOG (a parenless
+call has one shape; two lowerer arms). `960ed312` lets an `#if` group stand anywhere inside
+an expression: `preproc_conditional_operand` stands in place of a whole operand (binary and
+unary operands, region roots, and in a receiver position a call's `function` or a member's
+`object`), one `operand` field per arm; `preproc_conditional_expression_tail` and
+`preproc_operand_prefix` now also sit beside the value of an argument list, a list literal
+and a parenthesis. The grammar says production trees are unchanged over its four corpora.
+Three lowerer changes, each pinned by a test with a discrimination proof: the operand group
+reads ONE arm (an operand is positional; `lower_operand_group` uses `conditional_list_arm`,
+with a `SyntaxIssue` because the other arms' calls are not lowered), where it was an
+`Unknown` that linked no child, so every call in every arm vanished; and a prefix beside an
+argument, list element or parenthesised value takes no value slot (`expr_children`), where
+it inflated the arity or hid the parenthesis's real value. Tails and prefixes stay unlowered
+(their operands' calls are not read), as tails already were. Measured: per-test outcomes
+identical old vs new apart from the 2 new lowerer tests (3,597 -> 3,599), zero goldens
+moved, CDO `--program-call-graph-stats` byte-identical (`c032c8db…94ef`, `unknown` 0 and
+`recoveredFiles` 0 on both), and the same-length stamp left `dry-run.txt` alone.
+
 **v4.4.0 DID move the vocabulary — 467 -> 473 named kinds (+3 fields) — unlike v4.0.1 ->
 v4.3.0, which moved none.** The six additions are all preproc-split shapes
 (`PreprocOperandPrefix`, `PreprocSplitCaseEndBranch`, `PreprocSplitCaseStatementEnd`,
@@ -514,7 +533,7 @@ all — the IR's `Block`/`Stmt` items are already flattened once, at the lowerin
 boundary, so nothing downstream ever sees a `statement_block`/`declaration_body`
 wrapper node.
 
-**Upgrading the grammar (the checklist the v4.3.0, v4.4.0, v4.4.1, `bf72a2d0` and `8682cb5f` bumps followed):**
+**Upgrading the grammar (the checklist the v4.3.0, v4.4.0, v4.4.1, `bf72a2d0`, `8682cb5f`, `4d75846c` and `960ed312` bumps followed):**
 
 1. `git -C tree-sitter-al pull` — moves the local clone to the new `main` tip.
 2. `cargo run -p xtask -- gen-syntax` — regenerates the raw vocabulary AND the
@@ -534,7 +553,7 @@ wrapper node.
    are silently reused under the new one. `cache_version_grammar_tracks_the_linked_grammar`
    is the guard, and it is a `--lib` unit test, so **`scripts/check-goldens` does NOT run
    it** — run `cargo test -p al-sem --lib` too. The stamp carries the grammar COMMIT
-   (`tree-sitter-al-v4.4.1-8682cb5f-native`) because `main` changes shapes without moving
+   (`tree-sitter-al-v4.4.1-960ed312-native`) because `main` changes shapes without moving
    the package version; the guard checks only the version part, so a same-version bump
    passes it with a stale commit — update the commit by hand. A longer stamp can push
    `1234….json` across a 0.1 KB boundary in `tests/cli-c-goldens/cache/dry-run.txt`.
