@@ -2014,8 +2014,9 @@ pub struct RowNodes {
     pub decl_anchor:
         HashMap<crate::program::node::RoutineNodeId, (crate::program::site_key::FileIx, u32, u32)>,
     /// J2's answer (§4.7): node -> the FIRST non-symbol-only row at the node's
-    /// surface declaration anchor (a `RoutineIx`), for every model-app routine
-    /// target of an edge the join reads (the nodes the conversion looks up).
+    /// surface declaration anchor (a `RoutineIx`), for every model-app node with a
+    /// surface declaration (J2's full domain; only nodes whose anchor some row has
+    /// are stored). The conversion looks up only route targets, a subset.
     pub j2_row: HashMap<crate::program::node::RoutineNodeId, u32>,
     /// J5's answer (§4.9): per row, the node the span map gives an
     /// event-subscriber row (the only rows the event graph reads), else `None`.
@@ -2039,8 +2040,9 @@ pub struct CollisionCensus {
     pub rows_primary: usize,
     pub rows_dependency_source: usize,
     pub rows_symbol_only: usize,
-    /// Nodes (in `j2_row`'s domain: routine targets the conversion looks up)
-    /// whose `j2_row`'s `node_of` is another node (J2's cross-node alias).
+    /// Nodes in `j2_row` (every model-app node with a surface declaration whose
+    /// anchor some row has, looked up or not) whose `j2_row`'s `node_of` is another
+    /// node (J2's cross-node alias).
     pub j2_alias_nodes: usize,
     /// Event-subscriber rows (the only rows J5 answers for) whose `j5_node`
     /// differs from `node_of`.
