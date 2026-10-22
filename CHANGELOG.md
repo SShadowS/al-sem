@@ -28,9 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pass), zero goldens moved, the stamp kept its length so `dry-run.txt` did not move, CDO
   `--program-call-graph-stats` byte-identical (SHA-256 `c032c8db…94ef`, as at `4d75846c`).
 - #160 steps 10 + 11a: the adapter pairs call sites by key, and routine identity is recorded
-  once at assembly (part of #160). The change is meant to leave every output byte as it
-  was: no golden moved, and the CDO identity check (SARIF, call-graph histogram) and the
-  bench numbers follow in `docs/measurements/2026-10-22-issue-160-steps10-11a.md`.
+  once at assembly (part of #160). Output is unchanged: no golden moved, and on CDO the SARIF
+  (both scopes, cross-app and single-app) and the call-graph histogram are byte-identical.
+  Measured on CDO (server1, `release-fast`, 5 runs a side): cross-app `analyze` drops from
+  26.9 s to 18.6 s, the join span `b3.adapter.join` from 8,381.6 ms to 90.3 ms, and the kernel
+  peak from 3,219 MB to 3,070 MB; single-app is unchanged within noise. Numbers and bounds:
+  `docs/measurements/2026-10-22-issue-160-steps10-11a.md`.
   - **The key join (step 10).** A model call site and a program edge now pair by
     `SiteIx = (FileIx, expression index)`: the resolver stamps it on each call-site edge
     (`ClassifiedEdge.site`, with `fires` for a record op), and the body walk records it per
