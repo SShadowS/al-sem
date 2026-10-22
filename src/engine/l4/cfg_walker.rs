@@ -1219,8 +1219,12 @@ fn apply_call(
     graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
 ) -> PerParamState {
+    // The site's callee and bindings, both from one row (`site_pick`, #160 step
+    // 11b §4.6: a collided id's site reads its LAST owning row).
+    let pick =
+        crate::program::model::projection::site_pick(graph, &routine.id, &cs.id, upgraded_bindings);
     // Find the binding that forwards THIS param to the callee (resolved only).
-    let upgraded = upgraded_bindings.get(&cs.id);
+    let upgraded = pick.bindings;
     let binding_idx = cs.argument_bindings.iter().enumerate().find(|(i, b)| {
         let resolution = upgraded
             .and_then(|ub| ub.get(*i))
@@ -1252,13 +1256,8 @@ fn apply_call(
         .map(|ub| ub.callee_parameter_is_var)
         .unwrap_or(false);
 
-    // Resolve the callee edge + summary.
-    let callee_id = graph.edges_by_from.get(&routine.id).and_then(|edges| {
-        edges
-            .iter()
-            .find(|e| e.callsite_id.as_deref() == Some(cs.id.as_str()))
-            .map(|e| e.to.as_str())
-    });
+    // Resolve the callee summary.
+    let callee_id = pick.callee;
     let look = CalleeLookup {
         snapshot,
         final_map,

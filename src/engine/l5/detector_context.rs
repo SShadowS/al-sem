@@ -1049,8 +1049,8 @@ impl<'v> DetectorContext<'v> {
         ordering: Option<&'v OrderingFactsMap>,
     ) -> Self {
         let _s = pt::span("context", "context.final_indexes");
-        // #160 step 11b §4.5: the routine lookup is the projection's class P
-        // pick (compat LAST).
+        // #160 step 11b §4.6: the routine lookup is the projection's class P
+        // pick (the LAST row of the id).
         let routine_by_id = projection::last_per_id_borrowed(
             &projection::RowsOfId::build(routines),
             routines.iter().map(Some).collect(),
@@ -1060,7 +1060,8 @@ impl<'v> DetectorContext<'v> {
         // id reuses the extension's own object number) — otherwise rootCause text
         // renders the EXTENSION's name for ops on the real table.
         let table_by_id = crate::program::model::workspace::table_by_id_preferring_real(tables);
-        // Compat LAST per call-site id (a collided id's rows share site ids).
+        // Class P per call-site id: the LAST owning row's site (a collided id's
+        // rows share site ids).
         let call_site_by_id: HashMap<&str, &PCallSite> =
             projection::last_per_key(routines.iter().flat_map(|r| &r.call_sites), |cs| {
                 cs.id.as_str()
@@ -1452,7 +1453,8 @@ pub(crate) fn build_detector_artifacts(
     // Public (default-access). A routine with NO entry is treated as Public by
     // `find_reachable_roots`, so we only need to insert the non-Public cases — but we
     // insert all parsed modifiers explicitly for clarity.
-    // #160 step 11b §4.5: per row, then the projection (#11, compat LAST).
+    // #160 step 11b §4.6: per row, then the projection (#11, class P: the LAST
+    // row of the id).
     let access_per_row = ws
         .routines
         .iter()

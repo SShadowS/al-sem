@@ -2212,3 +2212,60 @@ codeunit 50172 "Dep Ord"
         entry.scope_frames
     );
 }
+
+/// 11b R4 (#160 11b spec §4.6): a subscriber id whose rows are DIFFERENT nodes
+/// emits the union of its distinct nodes' subscriptions. T5's `Hb` is two rows
+/// and two nodes subscribing to `OnA` / `OnB`; its second row is given the
+/// first row's id by assignment (the hand-stated precondition), before the
+/// production `program_event_graph` runs. The one id gets both edges, each
+/// once. Break: only the first row of an id with a node emits (the old
+/// `processed` rule) -> `OnB` is missing.
+#[test]
+fn a_subscriber_id_over_two_nodes_emits_both_nodes_subscriptions() {
+    use al_sem::program::model::program_calls::cross_app_event_graph_after;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    j5_shapes_dependency_workspace(dir.path());
+    let mut id = String::new();
+    let graph = cross_app_event_graph_after(&read(dir.path()), MI, |rows| {
+        let hb: Vec<usize> = rows
+            .workspace
+            .routines
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.name == "Hb" && r.kind == "event-subscriber")
+            .map(|(ri, _)| ri)
+            .collect();
+        assert_eq!(hb.len(), 2, "precondition: two rows for Hb");
+        let node = |ri: usize| rows.row_nodes.node_of[ri].clone();
+        assert!(
+            node(hb[0]).is_some() && node(hb[1]).is_some() && node(hb[0]) != node(hb[1]),
+            "precondition: Hb's rows are two nodes"
+        );
+        id = rows.workspace.routines[hb[0]].id.clone();
+        let stable = rows.workspace.routines[hb[0]].stable_routine_id.clone();
+        rows.workspace.routines[hb[1]].id = id.clone();
+        rows.workspace.routines[hb[1]].stable_routine_id = stable;
+    })
+    .expect("event graph");
+    let mut edges: Vec<(String, String)> = graph
+        .edges
+        .iter()
+        .filter(|e| e.subscriber_routine_id == id)
+        .map(|e| {
+            (
+                e.event_id.rsplit('/').next().unwrap().to_string(),
+                e.resolution.clone(),
+            )
+        })
+        .collect();
+    edges.sort();
+    assert_eq!(
+        edges,
+        [
+            ("ona".to_string(), "resolved".to_string()),
+            ("onb".to_string(), "resolved".to_string())
+        ],
+        "the id emits both of its nodes' subscriptions, each once"
+    );
+}

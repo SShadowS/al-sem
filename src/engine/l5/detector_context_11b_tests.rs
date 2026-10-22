@@ -327,6 +327,29 @@ fn swap_surfaces(m: &Model, id: &str) -> Vec<(&'static str, Vec<String>)> {
         .map(|e| dbg(e))
         .collect();
     reverse.sort();
+    let snapshot = crate::engine::l5::snapshot::compose_snapshot(m);
+    let stable = m
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.id == id)
+        .expect("Work")
+        .stable_routine_id
+        .clone();
+    let facts: Vec<String> = snapshot
+        .capability_facts
+        .iter()
+        .filter(|f| f.subject == stable)
+        .map(|f| dbg(f))
+        .collect();
+    let mut once = facts.clone();
+    once.sort();
+    once.dedup();
+    assert_eq!(
+        once.len(),
+        facts.len(),
+        "the snapshot lists each capability fact of the id once: {facts:#?}"
+    );
     vec![
         (
             "det_cone_inputs.direct_full",
@@ -365,6 +388,16 @@ fn swap_surfaces(m: &Model, id: &str) -> Vec<(&'static str, Vec<String>)> {
                 .iter()
                 .filter(|s| s.commit_routine_id == id)
                 .map(|s| dbg(s))
+                .collect(),
+        ),
+        ("snapshot capability_facts", facts),
+        (
+            "snapshot callsite_index",
+            snapshot
+                .callsite_index
+                .iter()
+                .filter(|c| c.routine == stable)
+                .map(|c| dbg(c))
                 .collect(),
         ),
     ]
@@ -1557,6 +1590,179 @@ fn per_site_consumers_read_one_pick() {
         role(&id_named(&m, "Solo"), 0),
         Some(EffectPresence::No),
         "single-row Solo: the interface site's bindings are ambiguous, so its base role, as before stage B"
+    );
+}
+
+/// The walker's call transfer (`cfg_walker::apply_call`, reached through
+/// `compose_roles_only` -> `walk_param`) is a third per-site consumer: it reads
+/// the site's callee through `site_pick` too. `Work(var R)` hands `R` at `cs0`
+/// to `KeepsR` in arm A and to `DirtiesR` in arm B (the walked row, the LAST
+/// owning row). The unioned list's first `cs0` edge is arm A's (`KeepsR`'s id
+/// sorts first). `Work`'s path
+/// facts for `R` (entry requirement, dirt, loaded fields) equal those of the
+/// single-row `RefB`, which makes arm B's call, and differ from `RefA`'s (arm A's
+/// call). Break: take the first `cs0` edge of `edges_by_from[id]` again ->
+/// `Work` follows `RefA`.
+#[test]
+fn walker_reads_the_last_owning_rows_callee() {
+    let src = r#"
+table 50887 "WK T"
+{
+    fields { field(1; "No."; Code[20]) { } field(2; Name; Text[30]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50887 "WK Work"
+{
+    local procedure DirtiesR(var R: Record "WK T")
+    begin
+        R.Name := 'x';
+    end;
+
+    local procedure KeepsR(var R: Record "WK T")
+    begin
+    end;
+
+#if A
+    procedure Work(var R: Record "WK T")
+    begin
+        KeepsR(R);
+    end;
+#else
+    procedure Work(var R: Record "WK T")
+    begin
+        DirtiesR(R);
+    end;
+#endif
+
+    procedure RefA(var R: Record "WK T")
+    begin
+        KeepsR(R);
+    end;
+
+    procedure RefB(var R: Record "WK T")
+    begin
+        DirtiesR(R);
+    end;
+}
+"#;
+    let m = build(src, "22222222-0000-0000-0000-00000011b024");
+    let (id, _) = collided(&m, "Work");
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let first = ctx.graph.edges_by_from[&id]
+        .iter()
+        .find(|e| e.callsite_id.as_deref() == Some(format!("{id}/cs0").as_str()))
+        .map(|e| e.to.clone());
+    assert_eq!(
+        first,
+        Some(id_named(&m, "KeepsR")),
+        "precondition: the unioned list's first cs0 edge is arm A's (KeepsR)"
+    );
+    let path = |rid: &str| {
+        let r = ctx
+            .parameter_roles_by_routine
+            .get(rid)
+            .and_then(|v| v.iter().find(|r| r.parameter_index == 0))
+            .expect("a role for R");
+        format!(
+            "{:?} {:?} {:?} {:?} {:?}",
+            r.requires_loaded_at_entry,
+            r.required_loaded_fields_at_entry,
+            r.mutates_before_load,
+            r.dirty_at_exit,
+            r.current_loaded_fields_at_exit
+        )
+    };
+    let (a, b) = (path(&id_named(&m, "RefA")), path(&id_named(&m, "RefB")));
+    assert_ne!(
+        a, b,
+        "precondition: the two calls give different path facts"
+    );
+    assert_eq!(
+        path(&id),
+        b,
+        "the walker follows arm B's DirtiesR (the last owning row), as RefB does"
+    );
+}
+
+/// d1's seeds (`d1_graph::build_d1_graph`) are spec §3.2 class K: only EQUAL
+/// copies collapse, unequal ones stay. `Work`'s two arms loop over a call at
+/// the same `cs0`, to `WriteA` in arm A and `WriteB` in arm B: the two seeds are
+/// unequal (different rows, loops and callees), so both are kept, each with its
+/// own row's loop and callee (the callee-name guard keeps the other arm's edge
+/// out). A one-seed-per-key (class P) rule would drop arm A's genuine in-loop
+/// chain, the case `gap_g18_transitive_loop::hand_stated_collision_still_fires_a_genuine_inloop_chain`
+/// pins. Break: seed each call-site key once, from its last owning row -> arm
+/// A's seed is missing.
+#[test]
+fn d1_seeds_a_collided_call_site_once() {
+    let src = r#"
+table 50888 "D1 T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50888 "D1 Work"
+{
+    local procedure WriteA()
+    var
+        T: Record "D1 T";
+    begin
+        T.Insert();
+    end;
+
+    local procedure WriteB()
+    var
+        T: Record "D1 T";
+    begin
+        T.Modify();
+    end;
+
+#if A
+    procedure Work()
+    var
+        I: Integer;
+    begin
+        for I := 1 to 3 do
+            WriteA();
+    end;
+#else
+    procedure Work()
+    var
+        I: Integer;
+    begin
+        for I := 1 to 3 do
+            WriteB();
+    end;
+#endif
+}
+"#;
+    let m = build(src, "22222222-0000-0000-0000-00000011b025");
+    let (id, rows) = collided(&m, "Work");
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let mut memo = HashMap::new();
+    let (graph, seeds) = crate::engine::l5::d1_graph::build_d1_graph(&ctx, &m.workspace, &mut memo);
+    let cs0 = format!("{id}/cs0");
+    let mine: Vec<(usize, &str)> = seeds
+        .iter()
+        .filter(|s| s.callsite.id == cs0)
+        .map(|s| {
+            let row = rows
+                .iter()
+                .copied()
+                .find(|&ri| std::ptr::eq(s.loop_routine, &m.workspace.routines[ri]))
+                .expect("the seed's loop routine is a row of Work");
+            (row, graph.node_ids[s.entry as usize])
+        })
+        .collect();
+    let (write_a, write_b) = (id_named(&m, "WriteA"), id_named(&m, "WriteB"));
+    assert_eq!(
+        mine,
+        vec![(rows[0], write_a.as_str()), (rows[1], write_b.as_str())],
+        "the arms' unequal seeds are both kept, each with its own row's loop and callee"
     );
 }
 

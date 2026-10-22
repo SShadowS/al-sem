@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(super::least_complete(vec![complete, partial]), want);
     }
 
-    /// Every payload type a stage-B union sorts by full value has a TOTAL order
+    /// Every payload type a collided id's union sorts by full value has a TOTAL order
     /// (`Ord`), never a serialization or `Debug` tie-break. Deriving `Ord` is the
     /// check that no field is hash-ordered or a float: `HashMap`/`HashSet` and
     /// `f32`/`f64` have no `Ord`, so the derive (and this test) fails to compile.
@@ -398,7 +398,7 @@ mod tests {
         total::<crate::engine::l4::summary::Uncertainty>();
         total::<crate::engine::l4::summary::DbEffect>();
         total::<crate::program::body::capability::CapabilityFact>();
-        // The cone's own fact type: R2a/R2b/R2c union it (stage B).
+        // The cone's own fact type: R2a/R2b/R2c union it.
         total::<crate::engine::l4::capability_cone::CapabilityFact>();
         total::<crate::engine::root_classification::RootClassification>();
         total::<crate::engine::l5::snapshot::SnapshotCallsiteEvidence>();

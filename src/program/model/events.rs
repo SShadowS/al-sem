@@ -373,14 +373,18 @@ pub fn program_event_graph(
 
     let mut edges: Vec<EventEdge> = Vec::new();
     // A routine declared in several `#if` arms is several model rows with ONE
-    // id (issue #103): only its first row that has a node emits edges (R4,
-    // #160 step 11b §4.5: the compat rule is today's). A row counts only once
-    // it has a node, so a row without one (`node_of` is `None`: a dependency
-    // row of an app the graph does not know, the fail-closed guard below) does
-    // not hide a later row of the id that has one. `model_subscribers` and
+    // id (issue #103). The id emits the full-value union of the subscriptions
+    // of its rows' DISTINCT nodes (R4, #160 step 11b §4.6): each (id, node)
+    // emits once, and an edge equal to one the id already has is not repeated.
+    // When the rows share one node (every CDO and corpus group) that is the
+    // first mapped row's edges, as before. A row without a node (`node_of` is
+    // `None`: a dependency row of an app the graph does not know, the
+    // fail-closed guard below) hides nothing. `model_subscribers` and
     // `unmapped_subscribers` stay per row (the latter only for ids no row
-    // maps); every later counter is per id.
+    // maps); every later counter is per (id, node).
     let mut processed: HashSet<&str> = HashSet::new();
+    let mut processed_nodes: HashSet<(&str, &RoutineNodeId)> = HashSet::new();
+    let mut nodes_of_id: HashMap<&str, usize> = HashMap::new();
     // Unmapped rows, by id: counted after the loop, and only for an id no row
     // mapped. An unmapped row of an id another row mapped loses nothing.
     let mut unmapped: Vec<&str> = Vec::new();
@@ -395,9 +399,13 @@ pub fn program_event_graph(
             unmapped.push(r.id.as_str());
             continue;
         };
-        if !processed.insert(r.id.as_str()) {
+        processed.insert(r.id.as_str());
+        if !processed_nodes.insert((r.id.as_str(), node)) {
             continue;
         }
+        let nodes_of_this_id = nodes_of_id.entry(r.id.as_str()).or_default();
+        *nodes_of_this_id += 1;
+        let repeat_node = *nodes_of_this_id > 1;
         let subs = subs_by_node.get(node).map(Vec::as_slice).unwrap_or(&[]);
         if subs.is_empty() {
             c.subscribers_without_subscription += 1;
@@ -561,7 +569,7 @@ pub fn program_event_graph(
                     (id, "unknown")
                 }
             };
-            edges.push(EventEdge {
+            let edge = EventEdge {
                 event_id,
                 subscriber_routine_id: r.id.clone(),
                 subscriber_stable_routine_id: r.stable_routine_id.clone(),
@@ -570,7 +578,12 @@ pub fn program_event_graph(
                 provenance: vec![Evidence::tree_sitter()],
                 conditional: s.conditional_any,
                 mixed_readings: s.conditional_any && s.conditions.is_empty(),
-            });
+            };
+            // A second node of the id: equal edges collapse (the union).
+            if repeat_node && edges.contains(&edge) {
+                continue;
+            }
+            edges.push(edge);
         }
     }
     c.unmapped_subscribers = unmapped

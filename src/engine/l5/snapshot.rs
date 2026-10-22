@@ -1355,8 +1355,16 @@ fn derive_capability_facts(base: &R3a3SourceBase) -> Vec<SnapshotCapabilityFact>
     // Per-routine emission is independent; indexed par_iter + sequential flatten
     // preserves the exact sequential emission order (ties in the sort key below are
     // resolved by the STABLE sort from this input order — do not reorder).
-    let per_routine: Vec<Vec<SnapshotCapabilityFact>> = base
+    // The facts are per id (`direct_full`, `cones`), so the rows of a collided id
+    // would emit equal copies: each id is emitted once, at its first row (class
+    // K, #160 step 11b §4.6).
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let first_rows: Vec<&ModelRoutine> = base
         .ws_routines
+        .iter()
+        .filter(|r| seen.insert(r.id.as_str()))
+        .collect();
+    let per_routine: Vec<Vec<SnapshotCapabilityFact>> = first_rows
         .par_iter()
         .map(|r| {
             // Only routines with a cone entry contribute (mirrors composeSnapshot:
@@ -1917,7 +1925,11 @@ fn derive_callsite_evidence(base: &R3a3SourceBase) -> Vec<SnapshotCallsiteEviden
             });
         }
     }
-    out.sort_by(|a, b| a.callsite_id.cmp(&b.callsite_id));
+    // A call-site id names one routine id, so only the rows of a collided id tie
+    // here: their copies are ordered by full value and equal ones collapse (class
+    // K, #160 step 11b §4.6).
+    out.sort_by(|a, b| a.callsite_id.cmp(&b.callsite_id).then_with(|| a.cmp(b)));
+    out.dedup();
     out
 }
 

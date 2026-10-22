@@ -340,6 +340,11 @@ pub(crate) fn assemble(
             .get(ce.callsite_id.as_str())
             .is_none_or(|&o| o == ce.from_ix)
     };
+    // Which callee a collided site reads: among the edges of its LAST owning
+    // row (`from_ix`), the FIRST with a target in `call_edges` order, i.e. the
+    // adapter's emission order (a multi-target interface site is emitted sorted
+    // by target id), the same within-row policy as R9. `None` when that row's
+    // site has no targeted edge (the slot is filled once, never overwritten).
     let mut collided_site_callee: HashMap<String, Option<String>> =
         owners.keys().map(|cs| ((*cs).to_string(), None)).collect();
 

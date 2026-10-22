@@ -1410,7 +1410,7 @@ fn convert<'a>(
     let _s_convert = pt::span("b3", "b3.adapter.convert");
     let mut edges: Vec<CallEdge> = Vec::new();
     // Per site, in row order; one list per call-site id after the projection
-    // (#160 step 11b §4.5, R5: compat LAST per call-site id).
+    // (#160 step 11b §4.6, R5: the LAST owning row per call-site id).
     let mut bindings_per_site: Vec<(String, Vec<UpgradedBinding>)> = Vec::new();
     // The adapter emits no resolver diagnostics (the legacy resolver's
     // double-upgrade warning had no program-engine analogue to fire).
@@ -1500,7 +1500,7 @@ struct Converter<'a> {
     /// The cross-app model's symbol-only rows by program id (S7.3); empty otherwise.
     abi_rows: &'a crate::program::model::workspace::AbiRowIds,
     /// The row a symbol-only routine's string id stands for: the projection's
-    /// class P pick (#160 step 11b §4.5, R6; compat LAST = today's answer).
+    /// class P pick (#160 step 11b §4.6, R6: the LAST row of the id).
     routine_pick: HashMap<&'a str, &'a ModelRoutine>,
     upgrade_dependency_bindings: bool,
     graph: &'a ProgramGraph,

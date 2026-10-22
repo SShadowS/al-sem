@@ -50,19 +50,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     kept, ordered by today's sort key and then the total order); coverage takes the least
     complete status and the sorted union of reasons; flags are OR-ed. Single-valued lookups
     take the LAST OWNING row per key, and every piece of one key comes from that row: a call
-    site's edge and bindings (`site_pick`, read by d37 and `compose_roles_only`, which now
-    visit the id's owned call sites), an operation's order and scope frame, a parameter's
-    role. In detail: direct facts, coverage and leaf/base summaries (R2a/R2b/R2c, #13); the
-    collided edge and uncertainty lists (class U); one interface uncertainty per call site
-    from its last owning row (R1b); one interface candidate per implementer (R1c); one
-    publisher symbol per distinct value (R4b); the reverse call graph and r3a1 list an id
-    once; commits are unioned and each seeds from its owning row, a checked run once (#14,
-    #16); a temp proof of an event parameter needs every raise, read at its own row, and
-    rewrites every subscriber row (#17); root classifications, policy evaluation and the
-    dependency order index keep one item per id, and `resolve_target` no longer reads two
-    rows of one id as "ambiguous". Guard frames (class G) and the detectors' own row choices
-    (class R) are unchanged. The cone's `CapabilityFact`, `CapabilityExtra` and `ValueSource`
-    derive `Ord`.
+    site's edge and bindings, an operation's order and scope frame, a parameter's role.
+    What changed, point by point:
+    - direct facts, coverage and leaf/base summaries (R2a/R2b/R2c, #13): the union;
+    - the collided edge and uncertainty lists (class U): ordered by full value, equal items
+      collapse; one interface uncertainty per call site, from its last owning row (R1b);
+      one interface candidate per implementer (R1c);
+    - the per-site consumers read one pick (`site_pick`): d37, `compose_roles_only` (both
+      visit the id's owned call sites) and the role walker's call transfer
+      (`cfg_walker`); R9 `resolved_call_edge_by_callsite` takes the owning row's edge;
+    - events: one publisher symbol per distinct value (R4b); a subscriber id emits the
+      union of its rows' distinct nodes' subscriptions (R4; equal to before when its rows
+      share one node, as every CDO and corpus group does);
+    - the reverse call graph and r3a1 list an id once; commits are unioned and each seeds
+      from its owning row, a checked run once (#14, #16); a temp proof of an event
+      parameter needs every raise, read at its own row, and rewrites every subscriber row
+      (#17);
+    - one item per id, or per distinct value: root classifications (`resolve_target` no
+      longer reads two rows of one id as "ambiguous"), policy evaluation, the dependency
+      order index, and the snapshot's capability facts (one copy per id) and call-site
+      evidence (ordered by full value, equal copies collapse).
+
+    What deliberately stays: single-row ids (passed through untouched); guard frames (class
+    G, still the last row's frame; a defect filed for step 6); the detectors that pick their
+    own row (class R: d1 reach/dataflow/cohort, d2, d3, d13, d18, d47, d49, d51 and the gate's
+    `kept_ids`); d1's seeds (class K: the arms' seeds are unequal, so each row keeps its own
+    seed with its own loop and callee, which the callee-name guard already picks; a test
+    pins it); the cone, the solve, the event graph and the spans stay per string id. The
+    cone's `CapabilityFact`, `CapabilityExtra` and `ValueSource` now derive `Ord`.
   - Epic amendments 11B-1 to 11B-8 (spec §9).
 - **Grammar: tree-sitter-al `main` at `960ed312`** (B7b-2, "#if groups inside expressions";
   package version still 4.4.1; was `4d75846c`). The `node-types.json` hash guard had made CI
