@@ -40,6 +40,7 @@ use crate::engine::ids::to_stable_object_id;
 use crate::program::body::capability::table_commit;
 use crate::program::body::features::{PCallSite, PCallee, PExpressionInfo, POperationSite};
 use crate::program::model::events::{EventGraph, EventSymbol};
+use crate::program::model::role::Role;
 use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
 // ===========================================================================
@@ -3671,9 +3672,6 @@ pub struct R3a5FullSummaryProjection {
 /// projection. Extracted so the R3b Salsa layer can build its fine-grained inputs
 /// from EXACTLY the same base the from-scratch path uses (no divergent assembly).
 pub struct R3a5CrossAppBase {
-    /// The workspace app's guid, lowercase (engine-switch S7.4): the role of an
-    /// object-anchored finding.
-    pub primary_app_guid: String,
     /// The program build's dependency coverage and ledger (`alsem analyze`'s
     /// preflight, engine-switch S8.3).
     pub coverage: crate::program::resolve::full::FreshCoverage,
@@ -3685,6 +3683,9 @@ pub struct R3a5CrossAppBase {
     /// facts from it. [`Self::ws_routines`] and [`Self::objects`] are views onto
     /// it.
     pub resolved: crate::program::model::workspace::Model,
+    /// The ids of the routines whose role is `Dependency`
+    /// (`Model::routine_role`, #220): the string-keyed projection of the role
+    /// rule, built once here.
     pub dep_routine_ids: BTreeSet<String>,
     /// The view's ONE execution relation (#160 step 4): the Primary payload
     /// (workspace callers' calls plus every event dispatch) drives the solve
@@ -3796,19 +3797,18 @@ pub(crate) fn build_cross_app_base(
         model_instance_id,
         false,
     )?;
-    let Some(primary) = x.resolved.primary_app.as_ref() else {
+    if x.resolved.primary_app.is_none() {
         return Err(
             crate::program::model::program_calls::CrossAppFailure::NoPrimaryApp {
                 fresh: Box::new(x.coverage),
             },
         );
-    };
-    let primary = primary.app_guid.to_ascii_lowercase();
+    }
     let ws: &ModelEntities = &x.resolved.workspace;
     let dep_routine_ids: BTreeSet<String> = ws
         .routines
         .iter()
-        .filter(|r| r.app_guid.to_ascii_lowercase() != primary)
+        .filter(|r| x.resolved.routine_role(r) == Role::Dependency)
         .map(|r| r.id.clone())
         .collect();
 
@@ -3934,7 +3934,6 @@ pub(crate) fn build_cross_app_base(
     let mut resolved = x.resolved;
     resolved.calls = std::sync::Arc::new(calls);
     let base = R3a5CrossAppBase {
-        primary_app_guid: primary.clone(),
         coverage: x.coverage.clone(),
         friends: x.friends.clone(),
         resolved,
@@ -3968,10 +3967,6 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
     use crate::program::model::program_calls::{census_calls, census_model_rows};
     b.rel.emit_census();
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
-    emit(
-        "base.primary_app_guid",
-        Tally::default().strs([&b.primary_app_guid]),
-    );
     emit(
         "base.coverage",
         Tally::default()

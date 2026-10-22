@@ -443,16 +443,15 @@ pub(crate) fn finish_run(
         run_each(resolved, ctx, detectors);
     let findings = match cross {
         None => {
-            // Role-scoping filter (registry.ts:161-172). Source-only: every
-            // routine's role is "primary" (no analysisRole), so the predicate
-            // keeps everything.
+            // Role-scoping filter (registry.ts:161-172), by THE role rule. A
+            // single-app model holds only the workspace's routines, so every
+            // role is "primary" and the predicate keeps everything.
             let _s = pt::span("l4_l5", "l4_l5.role_scope_and_sort");
             let role_by_routine: std::collections::HashMap<&str, &str> = resolved
                 .workspace
                 .routines
                 .iter()
-                // analysisRole is not modeled on ModelRoutine (source-only ⇒ always primary).
-                .map(|r| (r.id.as_str(), "primary"))
+                .map(|r| (r.id.as_str(), resolved.routine_role(r).as_str()))
                 .collect();
             role_scope_and_sort(findings, &role_by_routine)
         }
@@ -521,25 +520,16 @@ fn cross_app_scope(
     // objects are roled by their app too (engine-switch S7.4: the cross-app model
     // holds dependency objects, and a Microsoft test library's API page is not the
     // workspace's to fix).
+    let model = &base.resolved;
     let role_by_routine: std::collections::HashMap<&str, &str> = base
         .ws_routines()
         .iter()
-        .map(|r| {
-            let role = if base.dep_routine_ids.contains(&r.id) {
-                "dependency"
-            } else {
-                "primary"
-            };
-            (r.id.as_str(), role)
-        })
-        .chain(base.objects().iter().map(|o| {
-            let role = if o.app_guid.to_ascii_lowercase() == base.primary_app_guid {
-                "primary"
-            } else {
-                "dependency"
-            };
-            (o.id.as_str(), role)
-        }))
+        .map(|r| (r.id.as_str(), model.routine_role(r).as_str()))
+        .chain(
+            base.objects()
+                .iter()
+                .map(|o| (o.id.as_str(), model.object_role(o).as_str())),
+        )
         .collect();
     // A finding whose primary location is in dependency source (`dep:` unit) is
     // out of scope even when its enclosing routine is the workspace's: the user
@@ -873,6 +863,119 @@ mod tests {
         };
         let out = run_detectors_cross_app(&base, std::slice::from_ref(&probe), true);
         assert_eq!(out.findings.len(), 0);
+    }
+
+    static ROLE_PROBE: std::sync::OnceLock<Vec<Finding>> = std::sync::OnceLock::new();
+
+    fn role_probe(_: &Model, _: &DetectorContext) -> Result<DetectorOutput, DetectorError> {
+        let f = ROLE_PROBE.get().expect("template set").clone();
+        Ok(DetectorOutput::no_diag(
+            f,
+            DetectorStats::new("probe", 1, 1),
+        ))
+    }
+
+    /// T2 (#220 spec §5): `cross_app_scope` decides roles by THE role rule
+    /// (`Model::routine_role` / `object_role`). Three hand-stated findings
+    /// (a real d13 finding with its anchor moved): one anchored on a
+    /// DEPENDENCY OBJECT id, one on a DEPENDENCY ROUTINE id, and one located
+    /// in `dep:` source with a primary actionable anchor. `--scope primary`
+    /// drops the first two and keeps the third; `--scope all` keeps all
+    /// three. The `dep:` test above stays.
+    ///
+    /// Break: `role_of_app` always `Primary` -> both dependency-anchored
+    /// findings are kept under `--scope primary`, fails.
+    #[test]
+    fn cross_app_scope_uses_role() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-d13-internal-call");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
+            .expect("cross-app base");
+        let primary = base
+            .resolved
+            .primary_app
+            .as_ref()
+            .expect("primary app")
+            .app_guid
+            .clone();
+        let dep_object = base
+            .objects()
+            .iter()
+            .find(|o| !o.app_guid.eq_ignore_ascii_case(&primary))
+            .expect("precondition: the model holds a dependency object")
+            .id
+            .clone();
+        let dep_routine = base
+            .ws_routines()
+            .iter()
+            .find(|r| !r.app_guid.eq_ignore_ascii_case(&primary))
+            .expect("precondition: the model holds a dependency routine")
+            .id
+            .clone();
+        let primary_routine = base
+            .ws_routines()
+            .iter()
+            .find(|r| r.app_guid.eq_ignore_ascii_case(&primary))
+            .expect("precondition: a primary routine")
+            .id
+            .clone();
+        let d13 = crate::engine::l5::detectors::registered_detectors()
+            .into_iter()
+            .find(|d| d.name == "d13-cross-app-internal-call")
+            .unwrap();
+        let real = run_detectors_cross_app(&base, std::slice::from_ref(&d13), true);
+        assert_eq!(real.findings.len(), 1, "the fixture's d13 finding");
+        let template = real.findings[0].clone();
+        let mut on_object = template.clone();
+        on_object.root_cause_key = "on-dep-object".to_string();
+        on_object.primary_location.enclosing_routine_id = dep_object;
+        on_object.actionable_anchor = None;
+        let mut on_routine = template.clone();
+        on_routine.root_cause_key = "on-dep-routine".to_string();
+        on_routine.primary_location.enclosing_routine_id = dep_routine;
+        on_routine.actionable_anchor = None;
+        let mut dep_located = template.clone();
+        dep_located.root_cause_key = "dep-located".to_string();
+        dep_located.primary_location.source_unit_id = "dep:dddd:src/Lib.al".to_string();
+        let mut anchor = template.primary_location.clone();
+        anchor.enclosing_routine_id = primary_routine;
+        assert!(anchor.source_unit_id.starts_with("ws:"));
+        dep_located.actionable_anchor = Some(anchor);
+        ROLE_PROBE
+            .set(vec![on_object, on_routine, dep_located])
+            .unwrap();
+        let probe = Detector {
+            name: "probe".to_string(),
+            run: role_probe,
+            requires: d13.requires,
+            rule_name: "Probe",
+            short_description: "test probe",
+        };
+        let keys = |scope_primary: bool| -> Vec<String> {
+            let mut k: Vec<String> =
+                run_detectors_cross_app(&base, std::slice::from_ref(&probe), scope_primary)
+                    .findings
+                    .into_iter()
+                    .map(|f| f.root_cause_key)
+                    .collect();
+            k.sort();
+            k
+        };
+        assert_eq!(
+            keys(true),
+            vec!["dep-located".to_string()],
+            "--scope primary"
+        );
+        assert_eq!(
+            keys(false),
+            vec![
+                "dep-located".to_string(),
+                "on-dep-object".to_string(),
+                "on-dep-routine".to_string()
+            ],
+            "--scope all"
+        );
     }
 
     // -----------------------------------------------------------------------

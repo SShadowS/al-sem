@@ -45,6 +45,7 @@
 use std::collections::HashMap;
 
 use super::calls::CallEdge;
+use super::role::Role;
 use super::taxonomy::{DispatchKind, Resolution};
 use super::workspace::{Model, ModelRoutine};
 
@@ -239,19 +240,10 @@ impl Model {
         // Coverage is the primary app's: a cross-app model (engine-switch S8.3) also
         // holds the dependency code the workspace demands, which is not the
         // workspace's to cover. A single-app model holds nothing else.
-        let primary = self
-            .primary_app
-            .as_ref()
-            .map(|a| a.app_guid.to_ascii_lowercase());
-        let in_primary = |guid: &str| {
-            primary
-                .as_deref()
-                .is_none_or(|p| guid.eq_ignore_ascii_case(p))
-        };
         let routines: Vec<ModelRoutine> = ws
             .routines
             .iter()
-            .filter(|r| in_primary(&r.app_guid))
+            .filter(|r| self.routine_role(r) == Role::Primary)
             .cloned()
             .collect();
 
@@ -267,7 +259,7 @@ impl Model {
         let mut app_guids: Vec<String> = ws
             .objects
             .iter()
-            .filter(|o| in_primary(&o.app_guid))
+            .filter(|o| self.object_role(o) == Role::Primary)
             .map(|o| o.app_guid.clone())
             .collect::<std::collections::HashSet<_>>()
             .into_iter()

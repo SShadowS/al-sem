@@ -42,6 +42,7 @@ use crate::engine::perf_trace as pt;
 use crate::engine::session::{RunKey, View, analyze_plan};
 use crate::program::inputs::{InputNeeds, InputSet};
 use crate::program::model::coverage::AnalysisCoverage;
+use crate::program::model::role::Role;
 use crate::program::model::workspace::{Model, assemble_and_resolve_workspace_from_program};
 
 /// Output format.
@@ -239,14 +240,12 @@ impl AnalysisTarget {
         }
     }
 
-    /// Whether `r` belongs to the workspace app (#70): every routine single-app;
-    /// cross-app, the routines that are not the base's dependency routines.
+    /// Whether `r` belongs to the workspace app (#70), by THE role rule
+    /// (`Model::routine_role`, #220). A single-app model holds only the
+    /// workspace's routines, so every one is primary there.
     #[must_use]
     pub fn is_primary_routine(&self, r: &crate::program::model::workspace::ModelRoutine) -> bool {
-        match self {
-            AnalysisTarget::SingleApp(_) => true,
-            AnalysisTarget::CrossApp(b) => !b.dep_routine_ids.contains(&r.id),
-        }
+        self.resolved().routine_role(r) == Role::Primary
     }
 }
 
@@ -405,19 +404,17 @@ fn build_cross_app_analysis_model(inputs: &Arc<InputSet>) -> AnalysisModel {
 }
 
 /// `--scope primary`'s dependency test (engine-switch S5.3): a finding's object is a
-/// dependency object when the model object's app is not the primary app. It used to
-/// be `|_| false`. The analyze model holds the primary app only until S7/S8 add
-/// dependency routines, so today this keeps every finding, as before; it is the
-/// rule those steps rely on. With no primary app identity (no `app.json` id) nothing
-/// is treated as a dependency.
+/// dependency object when its role is `Dependency` (`Model::object_role`, #220). It
+/// used to be `|_| false`. With no primary app identity (no `app.json` id) nothing
+/// is treated as a dependency; an object the index does not hold is not one either.
 pub fn dependency_object_predicate<'a>(
     resolved: &'a Model,
     idx: &'a ProjectionIndex<'a>,
 ) -> impl Fn(&str) -> bool + 'a {
-    let primary = resolved.primary_app.as_ref().map(|a| a.app_guid.as_str());
-    move |obj_id: &str| match (primary, idx.objects_by_id.get(obj_id)) {
-        (Some(p), Some(o)) => !o.app_guid.eq_ignore_ascii_case(p),
-        _ => false,
+    move |obj_id: &str| {
+        idx.objects_by_id
+            .get(obj_id)
+            .is_some_and(|o| resolved.object_role(o) == Role::Dependency)
     }
 }
 

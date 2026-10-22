@@ -682,19 +682,13 @@ pub fn dependency_half(ws: &std::path::Path) -> Vec<crate::program::model::calls
         &inputs, "r0", false,
     )
     .unwrap_or_else(|_| panic!("cross-app model for {}", ws.display()));
-    let primary = x
-        .resolved
-        .primary_app
-        .as_ref()
-        .expect("primary app")
-        .app_guid
-        .to_ascii_lowercase();
+    assert!(x.resolved.primary_app.is_some(), "primary app");
     let dep: std::collections::BTreeSet<&str> = x
         .resolved
         .workspace
         .routines
         .iter()
-        .filter(|r| r.app_guid.to_ascii_lowercase() != primary)
+        .filter(|r| x.resolved.routine_role(r) == crate::program::model::role::Role::Dependency)
         .map(|r| r.id.as_str())
         .collect();
     x.resolved

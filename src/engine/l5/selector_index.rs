@@ -86,10 +86,8 @@ pub(crate) fn build_selector_indexes(
     primary_app_guid: Option<&str>,
 ) -> SelectorIndexes {
     let is_primary = |id: &str| {
-        primary_app_guid.is_none_or(|g| {
-            id.get(..g.len()).is_some_and(|p| p.eq_ignore_ascii_case(g))
-                && id.as_bytes().get(g.len()) == Some(&b':')
-        })
+        crate::program::model::role::role_of_stable_id(primary_app_guid, id)
+            == crate::program::model::role::Role::Primary
     };
     let mut routine_display_by_id: HashMap<String, String> = HashMap::new();
     let mut display_to_stable_ids: Vec<(String, Vec<String>)> = Vec::new();
