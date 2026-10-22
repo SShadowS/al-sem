@@ -420,6 +420,16 @@ Evidence rows' references are resolved; each kept row's frame table joins `routi
 primary row, every app owning a kept identity, and every app referenced by a kept gap. Steps
 (2) and (4) resolve against the UNFILTERED rows.
 
+**Step (6) for a guid with no app metadata (O4N1, decision).** An app guid that a kept gap
+references but that is neither the primary nor in `dependency_apps` gets NO `apps[]` row: step
+(6) has no publisher, name or version to build one from, and it never guesses. It does not
+assert either. The Closure check below then reports it as an app-domain violation, which is
+what T9-closure's dangling-app arm expects (a reported violation, not a panic). This differs
+from F22's identity assertion on purpose: a gap subject comes from the in-memory gap table,
+which a test can hand-state, so the check must report it, not abort the composition. In
+production the case cannot arise (a gap's app guid comes from a model row, and every model row
+comes from the primary or a required app, `program_calls.rs:995-1008`); F31 covers it if it does.
+
 **Closure (checked per domain; S3N3).** After step (6), every reference of every serialized row
 resolves to a serialized row of its domain. The only exceptions are explicit:
 - **identity** values may stay unresolved only in these shapes (`EXTERNAL_IDENTITY_SHAPES`): the
@@ -693,6 +703,7 @@ written into a file.
 | F26 | a shard closure adds rows in single-app (a shard golden moves) | a defect, never an allow-list exception: no shard golden may move beyond the header and `role` changes (§4.4). Find the referencing row and the domain; if the slice misses a primary row, fix the closure so it only adds rows the slice could not keep; stop and raise it if the fix would change the shard shape |
 | F29 | T10's `Unused` table is named by some field after all (the precondition assert fails) | use another declaration no field names (an enum or page with no code use) and assert the same precondition; the arm and its break are unchanged |
 | F30 | a nested value-source arm of T9-closure cannot be hand-stated on a composed DD/R5B model | run that arm on hand-built typed rows through the production filter, as T9g does; the arm and its break are unchanged |
+| F31 | the Closure check reports an app-domain violation on a composed (not hand-stated) model: a gap's app guid has no `apps[]` row | treat it like F22: a model row came from an app the loader did not list as required; stop and find that path; never emit a guessed `apps[]` row and never relax the app domain |
 | F27 | T12's two targets cannot be built in one process (a global or cache refuses) | build the second from a temp copy of the workspace; the assertion and its break are unchanged |
 | F28 | T9-closure cannot find a `table-field` value source in DD or R5B | hand-state one on a kept primary fact (asserted), as the precondition already allows |
 
