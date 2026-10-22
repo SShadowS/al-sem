@@ -652,7 +652,6 @@ consistent). The source is the same in both runs; only the row order differs.
 orders:
 - the per-id direct facts and coverage the cone takes (`det_cone_inputs`);
 - the collided id's projected base summary (`db_effects`, `uncertainties`, the flags);
-- the event graph (symbols and edges);
 - `rel.primary().edges_by_from[id]` and `uncertainty_edges_by_from[id]`;
 - the reverse call graph;
 - the transaction spans (seeds and commits);
@@ -672,7 +671,10 @@ Preconditions:
 - the arms' shared call sites have equal callee text;
 - the reversed model really has the arms in the other order;
 - the compared surfaces are non-empty and each mentions the collided id (listed by the test, so
-  a surface that silently drops the id fails the precondition).
+  a surface that silently drops the id fails the precondition). The preconditions are
+  surface-specific: the event graph is NOT compared here, because this fixture's collided
+  routine is an ordinary event caller, which event symbols and subscriptions do not record; the
+  event graph's union is pinned by T1b (R3-S1).
 
 The test asserts that each compared surface, normalized, is equal in both orders. Break: revert
 any one union to a first-row pick (recorded for R2a, #13 and the snapshot's K dedup) → that
@@ -688,9 +690,14 @@ input orders: the outputs are equal, keep BOTH items, and are ordered by full va
 through production (decision 1), for class U: two collided rows' call edges with one call-site
 id and one target but different `resolution` and `dispatch`, made so by assignment on
 `model.calls` (each row's `from_ix` kept), are built into an `ExecRelation` in both row orders.
-`rel.primary().edges_by_from[id]` (and, with two uncertainties differing in `interface_name`,
-`uncertainty_edges_by_from[id]`) must be equal in both orders, hold both items, and order them
-by full value; today's stable sort keeps emission order, so the test fails before B. Break: dedup by sort key → one item lost
+`rel.primary().edges_by_from[id]` must be equal in both orders, hold both items, and order them
+by full value; today's stable sort keeps emission order, so the test fails before B. The
+production uncertainty half asserts the class-P rule instead (R3-S2): R1b keeps ONE interface
+uncertainty per call-site key, chosen from the LAST owning row (`combined_graph.rs:308-348`
+emits once per site), so with two collided rows whose uncertainties at one call-site key differ
+in `interface_name`, `uncertainty_edges_by_from[id]` holds exactly the LAST owning row's
+uncertainty in both row orders' normalized form; the two-item union of conflicting
+uncertainties stays a projection-helper test (above), not a production assertion. Break: dedup by sort key → one item lost
 → fails; insertion order → the two orders differ → fails. A single-row id with an internal
 duplicate is passed through untouched (asserted with the same mutation).
 
