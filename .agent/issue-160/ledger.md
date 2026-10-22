@@ -1,380 +1,263 @@
-# Issue #160 ledger: attempt 3 on server1 (epic step 7b: closed-class sets, fold memo)
+# Issue #160 ledger: attempt 4 on server1 (epic steps 10 + 11a: `SiteIx` and the span join; routine identity)
 
 ## Claim
 
 ```json
-{"run_id":"20261021-185406-413c0c","issue":160,"attempt":3,"session":"claude-code-session:c8325c25-f1bf-436d-a204-90152a41120c","branch":"issue/160-alsem-batch-build-the-model-onc-a3","worktree":"/work/al-sem-issue-160-a3","body_hash":"2ec746e00deded290965d462f57e8ade73a96d606db1b7f89361f532a6d32883","reconciled":[]}
+{"run_id":"20261022-063306-17a312","issue":160,"attempt":4,"session":"claude-code-session:c8325c25-f1bf-436d-a204-90152a41120c","branch":"issue/160-alsem-batch-build-the-model-onc-a4","worktree":"/work/al-sem-issue-160-a4","body_hash":"2ec746e00deded290965d462f57e8ade73a96d606db1b7f89361f532a6d32883","reconciled":[]}
 ```
 
 Issue body hash: `2ec746e00deded290965d462f57e8ade73a96d606db1b7f89361f532a6d32883`.
-Base `afd5d88f4ceb9c4457b992d58b6b1237c4461c02` (make-worktree, origin/master; includes the flow speed-ups #194).
-Operator (2026-10-21): #160 is highest priority; take epic step 7b next. Reviewers: the operator's standing
-stand-ins, gpt-6.1-sol (slot astra) and Opus (slot flash); attest with `--substitute astra=sol --substitute flash=opus`.
-Loop budget: claim 3 of 10.
+Base `ca35bf51f4cbfc4213299fa0adf01f59fb636e32` (make-worktree, origin/master; step 7b's merge).
+Operator (2026-10-22): #160 next, epic steps 10 + 11a as ONE claim (epic Decision 57, #200); start from the 2026-10-21
+pre-drafts (step 10 and step 11, kept outside the repo); memory bounds use psutil RSS sampling (`read_rss` is a Linux
+stub, #204, deferred by the operator). Reviewers: the operator's standing stand-ins, gpt-6.1-sol (slot astra) and Opus
+(slot flash); attest with `--substitute astra=sol --substitute flash=opus`. Loop budget: claim 4 of 10. The claim was
+taken on the operator's explicit pick although `fetch` excluded #160 (`agent-done` from step 7b's finish).
 
 Earlier steps' ledgers are in git history: step 0 at `5f096af9` (PR #165), step 1 at `576dd296` (PR #170), step 1b
 at `6c6bce17` (PR #172), step 2 at `d4d8b71f` (PR #174), step 3 at `c554b704` (PR #178), step 4 at `c186f4d1` (PR #180),
-step 7a at `617b402f` (PR #181). This file and `findings.json` replace them for this step.
+step 7a at `617b402f` (PR #181), step 7b at `ca35bf51` (PR #203). This file and `findings.json` replace them for this step.
 
-Part of #160. This PR delivers epic step 7b only (spec
-`docs/superpowers/specs/2026-10-18-issue-160-analysis-session-design.md` §5.6 and §9, row **7b**). #160 stays open
-until its last step (owner decision, 2026-10-18): the PR says "Part of #160" and carries no closing keyword.
+Part of #160. This PR delivers epic steps 10 and 11a only (epic §9 rows 10 and 11a, Decision 57). #160 stays open until
+its last step: the PR says "Part of #160" and carries no closing keyword.
 
 ## Classification
 
-**Architectural.** Epic §9 row 7b: a `FactKeyInterner`, a hash-consed `SetArena`, the closed/open split, a
-per-`SetId` fold memo and `ConeDerivedBuilder::fold_row`, replacing the per-fact fold for closed entries in
-`compose_inherited_cones`. New data structures across the cone engine, a byte-neutral obligation (7a's oracle, every
-golden unchanged) and a pre-registered drop rule (X ≥ 2 × band, X derived before code). It gets a child spec, as
-steps 3, 4 and 7a did.
+**Architectural.** Two epic rows in one claim: step 10 (`SiteIx` — the `(FileIx, ExprId)` key on call sites and ops;
+the key join replaces the span join; J1/`texts`/J4 deleted) and step 11a (routine identity: `RoutineIx`, the two
+declaration joins J2/J5 replaced by a row→node table; a collision census; output unchanged). New identity types across
+the resolver→model adapter, byte-neutral obligations on r0 and CDO in both universes, and a step-10 speed bound under
+I6; step 11a is non-speed (Decision 58). One child spec.
 
 ## Assumption probes
 
 | probe | result | evidence |
 |---|---|---|
-| P1 master moved since 7a's bench: is 7a's band still the right one? | NO, re-measured. `afd5d88f` differs from 7a's head `7bb9f90c` by a grammar bump (8682cb5f lowerer arms, `crates/al-syntax`, `cache_prune.rs`); no cone code moved. CDO shape unchanged: routines 31,658, singleton calls 30,942, fact_cone x28,191, 714 recursive members, as at 7a | `git diff --stat 7bb9f90c afd5d88f -- src crates`; `/work/bench/160-7b/bench-c/c-base-*.err` |
-| P2 cone-span band at base (census OFF, 5 rounds, run `a`) | median 10,168.7 ms, band **1,502.2** (one spiked run, 11,647.3; the other four 10,145.1-10,188.3). Probe binary census-off is inert: 9,992.9-10,751.5 | `/work/bench/160-7b/bench-a/`, `bench-a-spans.txt`; load 2.86 → 6.08 (the bench's own threads; 22 cores) |
-| P3 timer band at base, Q = `singleton` + `bfs_fold` (census ON) | reading 1 (5 runs): median 5,268.5, band 4,241.6, from ONE spiked run (run 5: every timer ×1.7-2.2, `pd_solve` 5,857 against 2,626-2,846, which 7b does not touch); without it 735.9. Reading 2 (6 runs, same binary twice): median 5,377.3, band **472.1**. 7a's head (`7bb9f90c`): band 573.2 | `/work/bench/160-7b/bench-c/c-base-*.err`, `bench-c2/c-*.err`; load 6.08 → 5.57 (r1), 3.54 → 4.47 (r2) |
-| P4 the old work: scan + fold at base, median of reading 1 | `scan_cone + scan_own + fold` 4,269.3 ms (band 2,819.6 with the spike; 394.1 in reading 2, median 4,438.8); `bfs_fold` 389.8; plus 386-423 ms of singleton time outside the sub-timers (`own_keys`, one `format!` per own entry, 1,681,935) | same files |
-| P5 X, derived (throwaway census patch, `/work/bench/160-7b/probe/probe.patch`, built release-fast, run census ON interleaved with base, 5 rounds; reverted, `git diff -- src crates` empty) | per-callee-SCC memo, singleton head work `memo + row + open + own` median **789.2** ms (788.5/888.9/789.2/852.7/786.5); recursive set fold once per SCC + per member `fold_row` + own: median **41.0** ms. **X = (4,269.3 − 789.2) + (389.8 − 41.0) = 3,480.1 + 348.8 = 3,828.9 ms.** Conservative: the probe re-ran `substitute_entry` inside `open` and ran cold (before the real path); the 386 ms `own_keys` overhead is not counted | `bench-c/c-probe-*.err` (`probe7b:` lines) |
-| P6 feasibility: X ≥ 2 × band | YES against the cone-span band (3,828.9 ≥ 3,004.4, spike included) and the timer band of reading 2 (≥ 944.2). NO only against reading 1's timer band with its spiked run (8,483.2) | P2, P3, P5 |
-| P7 does a memo key determine the folded row (closed entries)? | YES. `fold_fact` reads only `resource_kind`, `op`, `resource_id`, known-temp (`cone_derived.rs:736-783`), all in `inherited_fact_key`; a closed entry has no guard (`frame_bound` = `guard.is_some()`, `capability_cone.rs:1537`); `fact_cones[j]` is inserted once (`:2597`) and never mutated until freed. Probe: memo rows + open + own + self = the real row for **31,656 of 31,656** rows, mismatch 0, every run | `probe7b pop: … checked=31656 mismatch=0` |
-| P8 is the epic's interner + hash-consed SetArena needed? | NO. 25,498 memo builds (3,879,321 closed entries) against 10,584,764 per-best folds today; distinct closed sets among them 14,438 (hash-consing saves ≤ 11,060 builds, ≤ ~220 ms, below every band, and needs a key interner); distinct per-singleton union sets 7,825 of 15,838, but `fold_row` costs 5.8 ms in total. Memo key = the callee Cone-SCC index | `probe7b pop:` |
-| P9 closed vs open split | closed 12,610,531 scanned today vs open (frame-bound) 152,230 (1.2 %); 109,826 frame-bound entries skipped by memo builds; open stays on `substitute_entry` | `singleton pop:`, `probe7b pop:` |
-| P10 recursive sets | Σ SCC set size over 67 SCCs = 67,491, against 4,292,741 set entries folded per member today (98.4 % fewer folds); own entries 757,002 stay per member | `probe7b pop: rec_set_entries`, `cone_scc: set_entries` |
-| P11 memo memory (build-local, Decision 32) | live max 1,568 rows / 836,418 ids (≈ 4 MB), freed with the cone it mirrors | `memo_live_max`, `memo_live_ids_max` |
-| P12 duplicate edges | 51,095 cone-bearing edges, 42,912 distinct (subject, callee SCC): 8,183 duplicate cone reads today | `cone_edges`, `distinct_j` |
-| P13 ordering bits (Decision 38) in the row? | NO. `ConeDerivedRow.flags` holds 5 presence bits (`cone_derived.rs:111-123`); the ordering bits live in step 2's ordering cell (`detector_context.rs:1044`). 7b does not touch them | grep |
-| P14 census text pinned by tests? | only the `cone_scc:` line (`census_cone_scc_line_counts_the_recursive_sccs`); the `singleton:` line is unpinned | `grep -rn 'scan_cone\|singleton:' tests` empty |
-| P15 X as a projection of the COMPLETE new region (panel r1: sol #3, opus M1/M2). Probe 2 (`/work/bench/160-7b/probe2/probe2.patch`, reverted, `git diff -- src crates` empty); `bench3.sh` under `agentflow run --name bench`, base vs probe2, census ON, 5 rounds, 338.5 s, exit 0, load 1.82 → 3.90 | base Q = `singleton + bfs_fold`: 5,279.5 / 5,372.5 / 5,238.4 / 5,219.4 / 5,376.8, median **5,279.5**. Projected head Q = `sgl_full` (J collect + dedup, memo builds, `fold_row`, a fresh subst + open fold, own fold) + `drop` (memo destruction) + `rec`: 892.4 / 1,063.5 / 873.4 / 897.4 / 952.4, median **897.4**. **X = 5,279.5 − 897.4 = 4,382.1 ms** (supersedes P5's 3,828.9 sub-timer estimate). Probe finalisation (self half + `finish_routine`, outside Q both sides) 116.8-122.5 ms | `/work/bench/160-7b/bench-c3/c-*.err` (`probe7b full:` lines) |
-| P16 complete rows equal (sol #5) | 7a's comparator fields (row-id sets, flags, four lists, `physical_table_write_ops_of` masks): **31,656 / 31,656 rows equal, row-id sets equal, all 5 runs** | `checked=31656 mismatch=0`, no `ROW IDS differ` line |
-| P17 hash-consing, entry-weighted (sol #4, opus I7) | duplicate memo builds 11,060 fold 2,047,522 of 3,879,321 entries (52.8 %); their time 304.1-403.3 ms (median 314.4); hashing every new closed set (`DefaultHasher` over key strings) 182.1-198.6 ms (median 183.4). Net gain ≈ 131 ms. The P8 "≤ ~220 ms" is withdrawn | `dup_memo`, `dup_entries`, `hash` |
-| P18 `own_keys` alone (sol #11) | 301.5-380.7 ms per run (median 310.5); the rest of the old singleton remainder (382.2-742.3 ms per base run in reading 1) is dropping `best` and loop overhead | `own_keys=` |
-| P19 singleton out-degree (sol #16) | max out-degree 292, max distinct callee SCCs per subject 156 | `max_deg`, `max_j` |
-| P20 `resource_id == Some("")` (sol #17) | **0** among closed memo entries, substituted open entries and own entries | `empty_rid=0` |
-| P21 Q band, reading 3 (5 base runs, P15's base side) | 157.4 (5,219.4-5,376.8); memo timer at probe 573.2-701.8 ms | P15 files |
-| P22 does step 0 record the closed/open split? (sol #14 vs opus E5) | YES for populations and scan time: `SGL_CLOSED/OPEN/OWN_ENTRIES` 12,498,190 / 151,140 / 2,420,676 and `scan_cone` 2,669.3 ms (`docs/measurements/2026-10-18-issue-160-step0.md:118`, `:137`). It records NO new-path cost (distinct callee sets, memo build cost), and ran on Windows at a pre-7a base. Sol is right on the fact; 7B-4's reason is restated | grep of the step-0 doc |
-| P23 can a test fixture produce `resource_id == Some("")` (the new `fold_set` `debug_assert!`; opus r2 "not checked") | NOT FOUND by reading the code. In production, a fact's `resource_id` comes from `op.table_id` (`capability_cone.rs:609`, model table ids built as `{app_guid}/table/{n}`, `workspace.rs:592`, assigned in `record_types.rs:138-248`) or `evt.id` (`:1092`); every other site passes `None`. No hand-built test fact in `src/` or `tests/` passes `Some("")` as a resource id: the `Some("")` hits are routine-id parts (`ids.rs`), record-variable names (`table_display.rs:205`), dependency fields (`dependencies.rs:1005`) and a regen flag (`tests/common/regen.rs:68`). The first `cargo test` run with the assert is the real check | `grep -rn 'Some("")' src tests`, `grep -n 'resource_id' capability_cone.rs` |
-| P24 r2 S1-7: a T7 fixture with no singleton memo build | `tests/r0-corpus/ws-d7-event-cycle` has one file, `event-a.al`, with 6 procedures. Sol says all 6 are recursive event participants, so `closed_memo_builds` can legitimately be 0 per composition; the spec asserts `> 0` only summed over T7's corpus (and on CDO cross-app). I did not check the fixture's SCC structure | `ls`, `grep -c procedure` |
+| P1 cross-app census at base, CDO, both universes, with and without the demand filter (step-10 pre-draft P1) | single-app `losses=[]` (15,539 call sites, 20,721 program sites). Cross-app today: `program_only_site` 231,408, `implicit_trigger_unmatched` 18,532, `duplicate_program_span` 74, `duplicate_l3_span` 23, `shape_mismatch` 18, `caller_mismatch` 5, `adapter_l3_fallback_sites` 23 (449,383 program sites, 81,745 call sites, 81,722 matched). With the program side limited to callers the model holds (demand, 31,707 nodes): `caller_mismatch` 5, `shape_mismatch` 18, `duplicate_program_span` 24, `duplicate_l3_span` 23 (115,238 program sites; 334,145 non-demanded dropped). Residual causes, from the miss list: 18 × Base App XmlPort `ICOutboxImpExp` table-element `X.DeleteAll` (program: record op, model: call site); 5 × Base App `PageManagement.GetPurchaseHeaderPageID` first `#if` arm (collision group, surface keeps the last arm) | `/work/bench/160-10-11a/p1-cdo-{cross,single}.err` (`probe160-census*`, `probe160-demand-miss*`); probe binary = base + `probe.patch`, `ALSEM_PROBE160=1`; patch reverted after the build |
+| P2 r0-corpus + `tests/fixtures` dirs with an `app.json`, both universes | 220 dirs × 2 universes, all exit 0; every census `losses=[]`; span↔key parity clean on every dir (0 differ / span-only / key-only); J4 agreement 100 %; 1 collision group (P8) | `/work/bench/160-10-11a/p1-r0.txt` |
+| P3 where the join's time goes (step-10 pre-draft P2) | cross-app CDO: `span_text` walks 25,289,392,125 bytes (367,587 unconsumed sites); probe sub-spans (median of 5): `b3.join.rest` (J4 loop) 9,806.5 ms of `b3.adapter.join` 10,319.5 (95 %), `program` 317.5, `model` 146.6, `texts` 9.2; caller check 24.0-24.5 ms. Single-app: 193,564,480 bytes; rest 60.1 ms of 94.6; caller check 3 ms. The probe's join runs ≈ 2.2 s slower than the base's (instrumentation), so only its proportions are used | `/work/bench/160-10-11a/bench-a-spans.txt`, `bench-s-spans.txt`, `bench-a-join-lines.txt` |
+| P4 the join's median and band at base `ca35bf51` (5 interleaved rounds, `agentflow run --name bench`, load 2.35-7.75) | cross-app: `b3.adapter.join` 8,108.9 ms band 571.8 (≥ 2 × band: 14.2×); `b3.adapter` 8,334.6 band 591.9; `crossapp.attach_program_calls` 9,775.0 band 729.0; analyze wall 26.2 s band 1.8; `b3.adapter.by_decl` 9.6 band 0.6. Single-app: join 80.7 band 2.4 (33.6×); `b3.adapter` 151.8 band 8.6; wall 3.8 s band 0.1; `by_decl` 0.8 band 0.1. stdout SHA equal across sides per command | `/work/bench/160-10-11a/bench-a/runs.jsonl`, `bench-a-summary.txt`, `bench-a-spans.txt`, `load-bench.txt` |
+| P5 peaks on Linux | trace `peak.process_mb` / `peak.post_attach_mb` read 0 on every run (`read_rss` stub, #204); `bench_ab.py`'s psutil RSS sample: cross-app base 3,219.9 MB (band 40.4), single-app 707.4 (25.7). Kernel peak RSS (`getrusage` `ru_maxrss` = VmHWM, `maxrss.py`), 3 rounds per side: cross-app base 3,222.6 MB (band 31.0), probe 3,222.3 (25.5); single-app base 704.8 (15.6), probe 702.8 (33.0) | `/work/bench/160-10-11a/bench-m/maxrss.txt`, `maxrss.py` |
+| P6 span↔key parity, CDO (open question 7) | single-app: all 15,539 call sites, 5,182 operation sites, 5,124 record ops pair with the same edge both ways. Cross-app: 81,714 / 33,491 / 33,288 same; 31 call sites, 1 operation site, 1 record op pair with a DIFFERENT edge (29 + 1 + 1 equivalent: same kind, shape, routes; 2 not); 0 span-only, 0 key-only; 0 duplicate program keys; the 74 span duplicates are all two expressions at one span (`#if`-split routines in three dependency files: `AccessToken.Table.al`, `CoreSessionManager.Codeunit.al`, `OAuth20Setup.Table.al`, plus `PageManagement`), 41 of them same `from`, 72 same routes | `p1-cdo-cross.err` (`probe160-parity*`, `probe160-spandup*`, `probe160-keydup`); probe v3 stamps `probe_expr` on `ClassifiedEdge` |
+| P7 J4 replaceable by the extractor's op name | `can_fire_trigger(op_name(span_text))` == `can_fire_trigger(extractor op)` on 135,013 / 135,013 `ImplicitTrigger` spans cross-app CDO, 5,124 / 5,124 single-app, all r0 | `probe160-j4` lines in `p1-cdo-*.err`, `p1-r0.txt` |
+| P8 collision groups (step-11 pre-draft P1, P2) | CDO cross-app: 31,658 rows, 31,656 ids, 2 groups, both dependency source, both Base App codeunit 700 `PageManagement`: `GetSalesHeaderPageID` (2 rows, one anchor 288:0-321:8, one node) and `GetPurchaseHeaderPageID` (2 arms 324:4 / 353:4, one node). Single-app 5,479 rows, 0 groups. r0 + fixtures: one group, `ws-cross-object-chain` cross-app: two symbol-only `OnRun` rows of codeunit 60105 (dependency `cccc7777-…-0010`). Inline gap fixtures not scanned | `probe160-collisions`/`group`/`row` lines; `r0-coc.err` |
+| P9 row → node by J5's span key (RowNodes feasibility) | CDO cross-app: 31,657 of 31,658 rows map (the unmapped one: `GetPurchaseHeaderPageID` arm at 324); 4 nodes have 2 mapped rows: `GetSalesHeaderPageID` (twins) and three `#if`-split routines whose two rows share an anchor with DIFFERENT string ids (`AcquireTokenFromCache`, `GetAccessToken`, `GetFreshAccessToken`), which the span key cannot tell apart | `probe160-multirow-node` lines |
+| P10 production `ClassifiedEdge` constructors | 2 (`full.rs:1066` call sites, `:1304` publisher flow); the other 12 literals are under `#[cfg(test)]` | `rg -n 'ClassifiedEdge \{' src` + the first `#[cfg(test)]` line per file |
+| P11 `RowNodes` size (step-11 pre-draft P5) | `size_of::<RoutineNodeId>()` = 72 = `size_of::<Option<RoutineNodeId>>()`; 31,658 rows → `node_of` ≈ 2.3 MB, `rows_of` about the same, build-local | `probe160-collisions` line |
+| P12 can the key live on the L2 feature types? | no: `tests/l2_ir/ir_l2_snapshot.rs:66-74` hashes `format!("{feats:?}")` per routine, so any new field on `PCallSite` / `PRecordOperation` / `POperationSite` (serde-skipped or not) moves `l2_features.snapshot`; `ModelRoutine` appears in no golden's `Debug` text (only test failure messages) | read; `rg '\{:?\}' tests` |
+| P13 id-pattern baseline per golden dir (step-11 pre-draft P3) | 23 golden dirs × 4 patterns: 43 non-zero rows, 21,435 occurrences | `/work/bench/160-10-11a/p3-ids-base.tsv` |
+| P14 base drift since the pre-drafts (`afd5d88f` → `ca35bf51`) | `src`/`crates`/`tests`: only `capability_cone.rs`, `cone_derived.rs`, `detector_context.rs`, `tests/cli/cli_build_counters.rs` (7b); `program_calls.rs`, `events.rs`, `workspace.rs`, `full.rs`, `ir_walk.rs`, `site_links.rs` unchanged, so the pre-drafts' citations hold there; `detector_context.rs` R2/R3 re-cited (`:1240-1261`, `:1388-1389`, `:1675-1681`) | `git diff --stat afd5d88f ca35bf51 -- src crates tests` |
+| P15 row-indexed re-probe (round-1 R1-04/05/11/15; model keys read from each ROW's own site vectors, not by string id; both joins' accepted pairs AND the complete converted `ResolvedCalls` compared) | single-app CDO: 15,539 accepted call pairs and 987 accepted op pairs identical; converted output 32,011 `(from, site)` groups identical. Cross-app CDO: accepted call pairs 81,699 same, **23 differ** (all Some/Some), accepted op pairs 6,271 same, 0 differ; **converted output identical**: 165,361 groups (edges + external targets + bindings), 84,717 edges each side, 0 differing groups. The 23: `AcquireTokenFromCache` cs0-cs7 (8), `GetAccessToken` cs0,1,3,4,5,6,7 (7), `GetFreshAccessToken` cs0-cs3 (4), Base App `GetSalesHeaderPageID` second twin cs0-cs3 (4); 21 select an edge of equal kind/shape/routes; 2 (`GetAccessToken` cs4, cs6) select edges whose target node differs (`acquiretokenfromcache`/5, `sig_fp` 9686704692977790200 by span, 8102086367325882817 by key) and both convert to one row (J2's first row at the shared anchor). The earlier 31+1+1 (P6) was the string-id keying artifact; op totals are 33,493 operation sites and 33,290 record ops. Model keys: 0 duplicates among calls, record ops, operation sites; every record-op key is also an operation-site key (33,290/33,290 cross, 5,124/5,124 single); 0 call/record op without an expr. Residual (demand-filtered), exact: 18 `shape_mismatch` Base App `ICOutboxImpExp.XmlPort.al` 656:8…666:8 (11 × `DeleteAll`), 671:16, 679:24, 689:24, 698:24, 707:24, 716:24, 725:24 (7 × `Insert`); 5 `caller_mismatch` `PageManagement.Codeunit.al` 329:8, 330:11, 331:19, 331:42, 350:8 | `/work/bench/160-10-11a/p4v-cdo-{cross,single}.err`, `reference-cross-app.txt`, `probe4.patch` (reverted; `git diff -- src crates tests` empty); load 2.4-7.8 |
 
 ## Design
 
-(child spec: `docs/superpowers/specs/2026-10-21-issue-160-step7b-closed-sets-fold-memo-design.md`)
-Feasibility (r1, superseded): X = 3,828.9 ms ≥ 2 × band (cone span 1,502.2; timer 472.1 on the quiet reading).
-Feasibility (after panel r1): X = 4,382.1 ms (P15, a projection of the complete new region) ≥ 2 × every spec-time band
-except reading 1's disturbed Q band; 7b is NOT dropped. Conductor decisions written into the spec: §8 bounds take bands
-only from the final bench's parent runs; a void bound is re-run once (Part 2) and then FAILS → drop; a missed bound →
-drop; an unnamed T8 mismatch class → drop; final oracle = `DerivedOnly` vs streamed F(`RawOnly` ∪ `direct_raw`).
-Amendments asked: 7B-1 (no interner/SetArena: memo keyed by callee Cone-SCC), 7B-2 (bounded timer Q = `singleton`
-+ `bfs_fold`), 7B-3 (cone bound subtracts both bands), 7B-4 (X derived at this step's base, not step 0).
+(child spec: `docs/superpowers/specs/2026-10-22-issue-160-steps10-11a-siteix-routine-identity-design.md`)
+
+Summary: step 10 stamps `(FileIx, ExprId)` on program edges and (as parallel vectors) on model rows, joins by key,
+keeps the span as a debug assertion, replaces J4 by the extractor's op (`fires`), counts only callers the model holds
+(10A-2), and deletes J1/`texts`/J4; step 11a records `RowNodes` at assembly and replaces the caller check, J2 and J5
+with output-neutral rules. Feasibility (spec "Feasibility first"): every row item feasible except cross-app CDO
+`losses() == []` (residual 23 sites, two non-join causes: 10A-3) and the Linux post-attach peak (10A-4).
+Amendments 10A-1..10A-5, 11A-1..11A-4; fallbacks F1-F11 pre-stated (spec §10).
 
 ## Base/Head SHAs
 
-- Claim base `afd5d88f4ceb9c4457b992d58b6b1237c4461c02` (make-worktree). Rebased onto `fd77939d` (#197-#201) after Task 4,
-  then onto `4f5d4c1b` (#202) after the bench; both rebases clean, `git range-diff` all `=` (the first moved only Task 2's
-  CHANGELOG context), so no extra panel round.
-- **B** = `4f5d4c1b5495b1d05a624aecf7aeb744720c14d8` (origin/master at step 11, unmoved at step 12).
-- **H** = `af823c6c98543cc3c6685482c6f2c422bde4156b` (the gated head; `9ac7c4a6`'s rebased image).
+- B (base, `origin/master`): `ca35bf51f4cbfc4213299fa0adf01f59fb636e32` (no rebase: master did not move)
+- H (head the full gates passed on): `4f88604f59c8f39b9b42abcef3a795d34c0e535b`
+- bench: parent `ca35bf51`, head `71580ffd` (code-identical to H; H adds the numbers file and CHANGELOG, docs only)
 
 ## Timeline
 
-- make-worktree: `{"worktree": "/work/al-sem-issue-160-a3", "branch": "issue/160-alsem-batch-build-the-model-onc-a3", "base": "afd5d88f4ceb9c4457b992d58b6b1237c4461c02", "target": null}`
-- classify: architectural
-- post-7a baseline read from `/work/bench/160-7a/bench-c/c-head-1.err` (7a's head `7bb9f90c`, CDO cross-app
-  `analyze`, release-fast): compose 10,061.7 ms = singleton 4,914.4 (scan_cone 2,794.6, fold 1,374.6, scan_own 193.0,
-  subst 129.0) + fact_cone 1,564.8 (x28,191) + bfs_fold 394.0 + derived_fold 208.5 + untimed pd_solve 2,705.2 + rest.
-  7a's retained run dir (`~/.al-sem/agentflow/runs/20261020-113707-ad56ee`) is gone after the tentacle rebuild (the
-  home directory is not kept); the bench files under `/work/bench/160-7a/` survived.
-- probes (2026-10-21 19:00-19:21): built base `afd5d88f` release-fast (`/work/bench/160-7b/base/alsem`); applied a
-  throwaway census patch (per-callee-SCC memo + per-SCC set fold, timed beside the real path, rows compared), built
-  `/work/bench/160-7b/probe/alsem`, saved the diff to `probe/probe.patch`, reverted (`git diff -- src crates` empty).
-  `agentflow run --name bench` (exclusive slot) × 2: `bench.sh` (run `a` census off + run `c` census on, base vs
-  probe, 5 rounds each, 679.7 s, exit 0) and `bench2.sh` (base twice, census on, 3 rounds, 193.7 s, exit 0). Load
-  avg 2.9-6.1 during the runs. Spec written; nothing committed.
-- spec panel r1 (sol 10 important + 8 minor; opus 1 critical + 7 important + 8 minor). Probe 2 (19:30-19:44): re-applied
-  the probe patch, widened it (whole-region timer, memo-drop timer, `own_keys` timer, entry-weighted duplicate builds
-  and hash cost, max out-degree, empty-rid count, 7a's full comparator incl. masks and row ids), built
-  `/work/bench/160-7b/probe2/alsem`, saved `probe2.patch`, reverted (`git diff -- src crates` empty); `bench3.sh` under
-  `agentflow run --name bench` (338.5 s, exit 0, load 1.82 → 3.90). X re-derived as 4,382.1 ms (P15). Spec revised for
-  every holding finding. Nothing committed.
-- spec panel round 1 counters (spec_rounds 1/5, pi_calls 1, subagents 3). Conductor decisions for the fallbacks:
-  void twice = speed acceptance fails = drop; missed = drop; unnameable CDO mismatch = drop; final oracle DerivedOnly
-  vs F(RawOnly ∪ direct_raw), streamed per subject (16 GiB container); a recorded T8 CDO run before PerMemberWalk's
-  deletion. Opus E5 refuted (step 0 records the split). Register S1-1..S1-23, all fixed, anchors per spec section.
-- spec panel round 2 (spec_rounds 2/5, pi_calls 2, subagents 3): continued threads, new spec + register ids. opus
-  accepted all 23 + N1 (S2-1, pre-warm omission); sol accepted 18, re-raised S1-7/8/10/16/19. All fixed (P23: no
-  fixture yields `resource_id == Some("")`, by reading the code; P24). Spec 692 lines.
-- spec panel round 3 (spec_rounds 3/5, pi_calls 3, subagents 3), ids S1-7/8/10/16/19 + S2-1 only: both accepted all
-  six, no new findings. **Converged**: 24 entries, all fixed, all accepted by both.
-- step 6 acceptance tests: opus subagent dispatched (subagents → 55), red and uncommitted.
-- step 7 plan `docs/superpowers/plans/2026-10-21-issue-160-step7b-closed-sets-fold-memo.md` (drafted by the spec
-  author, subagents → 54): 4 tasks — T1 the switch + acceptance tests (one commit), T2 CHANGELOG + numbers skeleton
-  (docs; the "commit before the deletion"), T3 the recorded `cdo-gate` oracle run (no commit; licenses T4), T4 delete
-  `RecursiveMembership` (the enum, since `PerScc` would be its only value) and install T7'/T8'. `charge plan_tasks` × 4
-  → remaining 6. Accepted: the bench-numbers docs commit follows T4 (gate-inert, after H); the CHANGELOG entry is
-  reverted with the code if 7b is dropped.
-- pre-work (operator's request, 2026-10-21): two read-only opus agents draft step 10 and step 11 child specs under
-  `/work/bench/160-10/`, `/work/bench/160-11/` (no CDO runs, no builds, while 7b benches). Both drafts done
-  (`draft-step10-design.md`, `draft-step11-design.md`, each with `probes-todo.md`). The step-10 drafter found
-  `read_rss` is a stub on Linux (`perf_trace.rs:175`), so the trace's memory peaks read 0 on server1 — recorded as a
-  discovery here.
-- Task 1 committed `1101e9d9` (switch + step-6 tests + spec + plan); 11 discrimination proofs (T1-T7, T9), all red on
-  the break and green on the revert; T8/T8' green on CDO. `check-diff` reports the stub's `#[allow(` → stopped.
-- Task 1 follow-up `e50026ce` (conductor's order): `ComposeOptions { mode, membership, raw_sink }` replaces the
-  `#[allow(clippy::too_many_arguments)]` on `compose_cone_over_graph_with`; production passes
-  `ComposeOptions::production(mode)` (`PerScc`, no sink). Signature refactor only; the test helpers `compose`,
-  `compose_model`, `check_model` changed only their call (no assertion changed), so no proof re-run.
-  `ci-steps task-affected` exit 0 (3598 passed); `ci-steps clippy` (release, `-D warnings`) exit 0; `check-diff`
-  `{"reasons": []}`.
-- Census note for Task 2's CHANGELOG: the `singleton calls:` and `singleton pop:` lines are now counted only where a
-  singleton scans `best` (the raw half, `RawOnly`/`Both`, or the test oracle), so under `analyze` (`DerivedOnly`) they
-  read 0. The memo path's populations are on the new `closed:` line.
-- Task 1 review minors `93ccd999` (tests only): T2 exact counts (builds 1, reads 2, entries 0, as predicted), T3
-  asserts its two-edge precondition on `build_typed_edge_graph`, T5 drops its memo-vs-memo rows comparison. Proofs
-  re-run for T2 (3 breaks) and T3 (2 breaks). `task-affected` exit 0 (3598 passed); `check-diff` `{"reasons": []}`.
-- Task 2 `a91ffae6` (docs only): CHANGELOG entry (incl. the 0-reading `singleton calls:`/`singleton pop:` lines, the
-  `closed:` line, `PerMemberWalk` deleted at the step's end) and `docs/measurements/2026-10-21-issue-160-step7b.md`
-  skeleton (`<bench>` placeholders). `task-affected` exit 0; `check-diff` `{"reasons": []}`. This is the commit
-  Task 3's recorded `cdo-gate` runs on; `git status --porcelain -- src tests crates` empty.
-- Task 3 (no commit): conductor's `cdo-gate` at `a91ffae6` PASS; T8/T8' alone on CDO with RSS, both CDO breaks red
-  (no LIMIT needed for T2's class). Recorded under Gate results; licenses Task 4.
-- Task 4 `9af9c15d`: `RecursiveMembership`/`PerMemberWalk` deleted (enum, arms, parameters, `ComposeOptions.membership`);
-  T7/T8 removed, T7'/T8' the only oracle; spec §4.7 table migrated (`derived_and_raw_fold[_model]`, T10, 7a T5 reads
-  `member_walks == 479` off RawOnly). 4 proofs (own-entry fold, T2 class, DerivedOnly scan, 7a T5 walk). T8' RSS
-  3,836.2 MiB. `check-diff` vs origin/master now flags master's own new commits (base moved; rebase needed).
-- rebase onto origin/master `fd77939d` (#197-#201 merged by the operator; `--autostash` for the tracked evidence
-  files): one CHANGELOG conflict (both sides added under Unreleased → both kept). `git range-diff afd5d88f..9af9c15d
-  origin/master..HEAD`: Task 1 `1101e9d9`→`078639a7`, `e50026ce`→`0f53300a`, `93ccd999`→`7889e07f` and Task 4
-  `9af9c15d`→`12c441e6` all `=`; Task 2 `a91ffae6`→`1123f330` differs only in CHANGELOG context lines. So Task 3's
-  recorded `cdo-gate` run on `a91ffae6` is the same patch as `1123f330`. `check-diff --base origin/master` `[]`.
-- task gate `ci-steps-task` on `12c441e6`: exit 0, supervised, 59.3 s
-  (`logs/ci-steps-task/20261021T213429-280610f9.log`). Sonnet review of Tasks 2+4 dispatched (subagents → 51).
-- push-branch head `12c441e6`; draft PR #203.
-- Sonnet review of Tasks 2+4: no critical/important; minors (stale T7/T8 comment names, two doc wraps, CHANGELOG
-  sentence stale after the deletion, the numbers file's Parent) fixed in `e8fd2788` (comments/docs only;
-  task-affected exit 0; check-diff `[]`). The rebase licence was judged sound (`git diff a91ffae6 1123f330 -- src crates
-  tests Cargo.* scripts/ci-steps scripts/cdo-gate` empty).
-- final panel round 1 (final_rounds 1/5, pi_calls 4, subagents 50 left): code-review skill at high (forked) + sol +
-  opus over `origin/master...e8fd2788`, full briefing. Code-review: no correctness bug, 10 findings (efficiency, docs,
-  tests). sol: 1 important (B1 timers) + 4 minor. opus: 0 critical, 2 important (Part 3 rounds vs Decision 58; RSS
-  methodology) + 7 minor. Fixed in `0c08452b` (code), `10bc2a14` (docs), `f3ccb89c` (spec/plan sync); register F1-1..F1-14
-  (F1-11 deferred minor = discovery; F1-12, F1-14 refuted). Task gate on `f3ccb89c`: exit 0, 27.2 s
-  (`logs/ci-steps-task/20261021T220052-bed7c8e5.log`). Pushed `f3ccb89c`.
-- final panel round 2 (final_rounds 2/5, pi_calls 5, subagents 49 left), diff `e8fd2788..f3ccb89c` + ids F1-1..F1-14 in
-  each reviewer's round-1 thread: both accepted all 14, no new findings. **Converged**: 38 entries, all accepted by both,
-  no blocking entry deferred.
-- bench (spec §8): dispatched to the spec author under `agentflow run --name bench` (one supervised run, exit 0, 1,601.1 s,
-  log `logs/bench/20261021T221142-1ee49d0a.log`, raw files `/work/bench/160-7b-final/`). Void checks hold; **B1 met**
-  (Pq − Hq = 5,473.8 − 1,056.7 = 4,417.1 ≥ 3,641.5), **B2 met** (Pc − Hc = 11,601.5 − 6,365.4 = 5,236.1 ≥ 2,930.0), the
-  literal epic form met (≥ 3,670.6); head lower in 5/5 on both. Part 1 identity holds; Part 3 `policy check` 107.1 →
-  93.8 s (the `Both` fallback does not fire). Numbers committed `9ac7c4a6` (CHANGELOG + numbers file only).
-- step 11: rebase onto `4f5d4c1b` (#202), clean, `git range-diff` all 10 commits `=` → no extra panel round. Full set on
-  `af823c6c` (see Gate results), all exit 0, supervised; tree clean outside `.agent`.
-
-## Acceptance matrix
-
-| Item | Delivered by | Status |
-|---|---|---|
-| A7b.1 `FactKeyInterner`, hash-consed `SetArena` | amendment 7B-1 (memo keyed by callee Cone-SCC; net gain of hash-consing ≈ 131 ms, P17) | not delivered as named — by the accepted amendment |
-| A7b.2 closed/open split | memo rows for closed entries, `substitute_entry` + `fold_fact` for open; T2 | delivered |
-| A7b.3 per-SCC memo | T1 (2 builds, 3 with the memo off), T3, T6 | delivered |
-| A7b.4 `fold_row` | T1, T4 (recursive set folded once per SCC) | delivered |
-| A7b.5 goldens unchanged | `check-goldens` 910 passed, no golden moved; CDO SARIF byte-identical both scopes; histogram SHA `c032c8db…` equal (bench Part 1) | delivered |
-| A7b.6 7a's oracle | T7/T8 widened, green in the recorded `cdo-gate` at `a91ffae6` (= `1123f330` → rebased); then T7'/T8' (DerivedOnly vs streamed RawOnly fold) | delivered |
-| A7b.7 X before code, ≥ 2 × band | X = 4,382.1 ms (P15); bench void checks hold | delivered |
-| A7b.8 B1 | 4,417.1 ≥ 3,641.5 | delivered |
-| A7b.9 B2 | 5,236.1 ≥ 2,930.0 (literal epic form 5,236.1 ≥ 3,670.6) | delivered |
-| A7b.10 `PerMemberWalk` deleted | Task 4 (`12c441e6`), after the recorded `cdo-gate` run | delivered |
-| A7b.11 E14 CDO ratchets | `cdo-gate` exit 0 on `af823c6c` | delivered |
-| A7b.12 retained bytes | `context.cone_derived` 65,273,122 and `context.summaries` 36,400,882 equal both sides (bench Part 1) | delivered |
+- claim (attempt 4) and make-worktree: `{"worktree": "/work/al-sem-issue-160-a4", "branch":
+  "issue/160-alsem-batch-build-the-model-onc-a4", "base": "ca35bf51f4cbfc4213299fa0adf01f59fb636e32", "target": null}`
+- classify: architectural (one child spec for 10 + 11a, Decision 57)
+- probes P1-P14 (2026-10-22; base + probe binaries in `/work/bench/160-10-11a/`, probe patch reverted, `git diff -- src crates tests` empty; timing through `agentflow run --name bench`) and spec written: `docs/superpowers/specs/2026-10-22-issue-160-steps10-11a-siteix-routine-identity-design.md` (uncommitted, for spec panel round 1)
+- spec panel round 1: sol REJECT (17 important, 3 minor), opus REJECT (7 important, 13 minor) → register R1-01..R1-25 (18 important, 7 minor). Conductor decisions: F9/F10 fail closed per 7b; `canonical_row` reproduces J2 incl. the cross-node alias; row-indexed CDO re-probe; LSP seam designed
+- spec panel round 1 fixes (R1-01..R1-25): row-indexed re-probe P15 (probe4.patch, reverted); spec revised (909 lines), all 25 fixed, none refuted; converted output identical in both universes; committed `423be046`
+- spec panel round 2 dispatched (per-id line ranges; the round-1 spec was never committed, so no diff exists). Caps: spec_rounds 3, pi_calls 18, subagents 57 remaining
+- spec panel round 2: sol 23 accepted, re-raised R1-06 (census delta operation_site +1) and R1-08 (u32::MAX duplicates); opus 25 accepted, 2 new minors R2-01 (j2_row/decl_anchor coverage) and R2-02 (T10 cannot observe the stamp). Fix batch sent to spec author (conductor: R2-01 keys on every model-app node with a surface declaration)
+- spec panel round 2 fixes committed `3aa1854c`; round 3 (diff-only, 8 ids): sol 8 accepted; opus 8 accepted + 2 minors R3-01 (decl_anchor sizing), R3-02 (F2 census trigger). Conductor fixed both in the spec (`a27cf4b8`, `f52ac8be`): decl_anchor keyed on the callers the check reads (absence = caller_mismatch, as `is_none_or` at program_calls.rs:518-529); j2_row stores matched nodes only
+- spec panel round 4 dispatched (one more round left in budget after it; 6 ids). sol: 6 accepted, no new findings. Caps: spec_rounds 1, pi_calls 16, subagents 55 remaining
+- spec panel round 4: opus 6 accepted, no new findings. Conductor anchor check: 20 entries only shifted lines (re-pointed, hashes unchanged); R1-13's anchor (§10 table) held R3-02's F2 edit and was reset
+- spec panel round 5 (R1-13 only): sol accepted, opus accepted. **Spec panel CONVERGED** at `f52ac8be`: 29 entries (20 important, 9 minor), all `fixed`, all accepted by both against their own anchor_hash. Caps: spec_rounds 0, pi_calls 15, subagents 54
+- step 6 acceptance tests: halt-check clear; opus subagent dispatched (subagents → 53), tests against behaviour-neutral stubs as in 7b, red and uncommitted; CDO parts CDO_WS-gated, not run
+- step 6 done (08:15 UTC, ~32 min): lib suite 20 red on their named assertion, 2186 pass, 4 ignored; clippy -D warnings clean; `--test temp_state`, `l4_summary_differential`, `program_resolve_harness adapter_` green; `--test r4 r4_cross_app_program::` red only on A8 and T8a (intended). Goldens/whole suite not run (no output path changed: `site` None, keys empty, adapter split verbatim)
+- step 7 plan `docs/superpowers/plans/2026-10-22-issue-160-steps10-11a-siteix-routine-identity.md` (spec author, subagents → 52; committed `260ae832`): 3 tasks — T1 keys + FileTable/RowNodes + census + oracles + all acceptance tests (production still on the old joins); T2 Step 0 licensing cdo-gate on T1's commit, then the switch; T3 Step 0 licensing cdo-gate on T2's commit, then the deletions + CHANGELOG + numbers skeleton + discoveries (ledger). `charge plan_tasks` × 3 → remaining 9. Conductor decision: the 12 tests that need the production switch (T2 ×2, T3 ×5, T4 per-category, T4b, T5, T9 caller check) are committed in Task 1 under `#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]`; Task 2 removes every one and its gate asserts `rg '#160 Task 2: needs'` is empty (the squash merge never carries an ignore; committing red tests alone is refused by the pre-commit hook)
+- step 8 Task 1: halt-check clear; opus implementer dispatched (subagents → 51, task_attempts T1 → 2 left)
+- Task 1 committed `06f6d8ef` (~25 min): production unchanged, no golden moved; `ci-steps task-affected` rc 0 (3609 passed, 18 skipped), `check-goldens` rc 0 (912 passed), check-diff `[]`; 15 proof rows. 10 tests ignored for Task 2 (not 12: the list named 11, and T4b is green at Task 1). Plan deviations: T7/T8 breaks came back green on the fixtures (no cross-node alias / no source-bearing dependency subscriber outside CDO), so T7 gained T7b's source and T8 a hand-stated dependency subscriber (§5.7/§5.8), both then failed; one new `#[allow(clippy::too_many_arguments)]`; `decl_anchor` domain = model-app nodes `caller_held` admits (to review against R3-01). No fallback fired
+- Task 1 review: sonnet reviewer dispatched (subagents → 50). In parallel, Task 2 Step 0 licensing `cdo-gate` on `06f6d8ef` (background; re-run if the review changes code)
+- Task 1 review (sonnet, ~10 min): approve with changes, no critical. Important: `decl_anchor` construction unpinned at Task 1 (only reader test ignored, no proof breaks it). Minor: domain wider than spec; stale STEP-6 `if let` guards; collision-census line not in `rel.*` format; `j5_span_map` built twice until Task 2. Sent back to the same implementer: add a test-only `decl_anchor` oracle against today's surface tuple with proofs, NARROW `decl_anchor` to the spec domain (conductor decision: conform to the converged spec R3-01, keeps §4.13's estimate), fix guards and the census line. The Step 0 `cdo-gate` started on `06f6d8ef` was STOPPED (TaskStop) before its result: the fix edits the same worktree mid-run, so its later `cargo test` invocations would build a half-edited tree. It re-runs on the fix commit
+- Task 1 review fixes done in the tree (gates green: task-affected 3611 passed, check-goldens 912 passed; new oracle `decl_anchor_equals_surface_caller_decl` + `_on_cdo`, proofs: insert dropped → 432 differences, column+1 → fails, revert → ok; `decl_anchor` narrowed via a shared `join_reads`; census line now `[retained-census] collision …`). Not committed: `check-diff` (run with HEAD = `06f6d8ef`) rejects 11 lines ALREADY in `06f6d8ef` — 10 `#[ignore` (my step-7 decision) and 1 `#[allow(clippy::too_many_arguments)]` (`protect.py`: no commit may add either). The Task 1 report's `reasons: []` was a false pass: check-diff ran before the commit, so it checked the plan commit. **Conductor error, corrected:** the 10 Task-2 tests leave the branch (saved verbatim under `/work/bench/160-10-11a/task2-held-tests/`; Task 2 restores them with the switch and owns their proofs); `_with` returns the keys so no new `allow` exists; follow-up commit(s) on top, check-diff run AFTER each commit until `[]`. task_attempts T1 → 1 left
+- Task 1 DONE at `88dae97d` (follow-up on `06f6d8ef`): check-diff on HEAD `reasons: []`; task-affected 3611 passed / 8 skipped, check-goldens 912 passed; `git diff master -- src tests crates` adds no `#[ignore` / `#[allow(`. Held for Task 2 (`/work/bench/160-10-11a/task2-held-tests/`, 3 files): the 10 tests + helpers `unkey`, `adapt_rows_with`. Note: 5 of them replace master tests of the same name (old span-based form), so the branch has fewer tests for those behaviours until Task 2 restores them — accepted (squash merge; Task 2's gate must show all 10 present and green)
+- Task 2 Step 0: licensing `cdo-gate` on `88dae97d` started (background, `agentflow run --name cdo-gate`)
+- Task 2 Step 0 GREEN (09:02→~09:13 UTC): gate record `cdo-gate` exit 0, head `88dae97d`, clean before/after, CDO identity captured; log `logs/cdo-gate/20261022T090242-83f53f28.log`. On CDO: `key_join_equals_span_join_on_cdo` (R-PAIRS exact + census deltas), `j2_row_equals_decl_join_on_cdo`, `event_graph_j5_node_equals_span_join_on_cdo`, `decl_anchor_equals_surface_caller_decl_on_cdo` all ok; harness 202 passed, l4 summary 20 passed. F1/F2/F5/F6 did not fire. Licenses Task 2's switch. Task 2 implementer (fresh opus) dispatched
+- Task 2 DONE at `9417e0a0` (~13 min): key join in production with the span `debug_assert_eq!` on every accepted pair; demand filter in the cross-app join; caller check reads `decl_anchor`; `l3_routine` reads `j2_row` (`by_decl` + its trace span deleted); attach builds events via `j5_node` (one `j5_span_map` build); `span_join`/`span_text`/`op_name` `#[cfg(test)]`. check-diff `[]`; task-affected 3621 passed, check-goldens 913 passed (no golden moved), whole debug suite (`ci-steps test`, A10.6, J1 present) 3621 passed; all 10 held tests re-added unchanged and green (CDO one skips here); 10 proof rows. Deviations: two proofs fail at an earlier assertion (T2 row 10 at its precondition; duplicate_program_key at the join's bucket identity); T3's break is "key miss falls back to span". No fallback fired
+- Task 2 review (sonnet) and Task 3 Step 0 licensing `cdo-gate` on `9417e0a0` (first run of `adapter_cross_app_losses_on_cdo` / R-RESIDUAL; F7 if it differs) started in parallel; no tree edits until the gate returns
+- Task 2 review (sonnet, ~6 min): approve, no critical/important; all 10 re-added tests match the held originals (no assertion changed) and pin the production path; T3's substitute break judged stronger than the plan's. Minor, folded into Task 3 (same file; keeps `9417e0a0` = the licensed commit): (1) `drop(rows.row_nodes)` after the census block, before `post_attach` (§4.13 "build-local"); (2) `resolved_calls_from_program`/`site_census` → `pub(crate)` (demand-blind); (3) ledger notes on the T2-row-10 and duplicate_program_key proofs + a last-wins-but-counts proof variant; (4) HashMap iteration order in `key_join` — deterministic via sorts, not a regression, no change; (5) `SiteLinks::build`/`sites_of`/`at` now test-only, deleted with `span_join` in Task 3
+- Task 3 Step 0 GREEN (09:25→~09:31 UTC): gate record `cdo-gate` exit 0, head `9417e0a0`, clean before/after, CDO identity captured; log `logs/cdo-gate/20261022T092548-679cb791.log`. `adapter_cross_app_losses_on_cdo` ok (the cross-app residual is exactly R-RESIDUAL, 23 sites: F7 did not fire); `adapter_loses_no_site_or_route_on_cdo` ok; T1/T7/T8/decl_anchor CDO oracles ok on the switched production; harness 203, lib 2203 passed. Licenses Task 3's deletions. Task 3 sent to the Task 2 implementer (context intact), with the review's minors 1-3 and 5
+- Task 3 DONE at `d63e4433` (~14 min): J1, `texts`/`span_text`/`op_name`, `j5_span_map`/`node_by_span`, `site_links.rs` and the T1/T7/T8/decl_anchor oracles deleted; J5's rules live in `RowNodes::build`; `program_event_graph(&RowNodes)`; `drop(rows.row_nodes)` before post_attach; `resolved_calls_from_program` pub(crate), `site_census` deleted (no caller); CHANGELOG `[Unreleased] → Changed`; numbers skeleton `docs/measurements/2026-10-2x-issue-160-steps10-11a.md` (placeholders; filename date to fix at the bench); 3 discoveries appended (XmlPort table-element receivers; the 11b collision corrections with `<bench>` counts; A8's precondition for 11b). check-diff `[]`; task-affected 3612, check-goldens 913, whole suite 3612 passed (−9 = the deleted oracle tests); release clippy rc 0. Strengthened `duplicate_program_key_is_counted` (copy differs in callee fp, hand-stated) now catches the last-wins variant (before: NOT caught). Deleted-names `rg` hits only `source_dependency_bindings_by_declaration` (substring; `rg -w` empty)
+- Step 9: Task 3 review (sonnet) and the recorded task gate (`agentflow run --name ci-steps-task`) on `d63e4433` started in parallel
+- recorded `ci-steps-task` on `d63e4433`: exit 0, clean before/after. push-branch `d63e4433`; draft PR #206 opened (GitHub CI runs during the final panel)
+- Task 3 review (sonnet, ~5 min): sound deletion; J5 move verbatim; guards adequate (deleting `decl_anchor.insert` turns every site `caller_mismatch`, failing every `matched` expectation); strengthened duplicate-key test discriminates. Important: CHANGELOG asserts "Speed-up … `<bench>`" before any bench; numbers file has placeholder date `2026-10-2x`. Minor: 3 stale comments. Sent back to the implementer: drop the claim, rename to `2026-10-22-…` with every reference, fix comments; recorded task gate re-runs on the fix commit. Not pinned (harmless): `decl_anchor`'s demand-restricted domain (a wider domain adds unread entries only)
+- Task 3 review fixes at `cef61d8e`: CHANGELOG claim and `<bench>` removed (points to the numbers file); numbers file renamed to `docs/measurements/2026-10-22-issue-160-steps10-11a.md` (all references updated; the two earlier ledger lines keep the old name as history); 3 comments. check-diff `[]`; task-affected 3612, check-goldens 913; recorded `ci-steps-task` on `cef61d8e` exit 0, clean before/after; pushed to #206
+- final panel round 1 (~10 min): code-review high (10 findings), sol (1 important, 4 minor; F3/F4/F5/F7 rejected or unverified), opus (7 minor; F1-F6 confirmed, F7 partial). No critical. Register FP-01..FP-16 (3 important: FP-01 `j5_compat_rows` population vs §4.10; FP-02 `unmatched` order HashMap-dependent; FP-03 debug_assert panics on a dependency row with an unknown app; 13 minor incl. 5 assembly-cost items). Fix batch FP-01..15 to the implementer (task_attempts FP-r1 → 2 left); FP-16 (discoveries) by the conductor: XmlPort sites corrected; the 11b counts' `<bench>` is filled from bench Part 1's census line before filing
+- step 10 final panel round 1 on `cef61d8e`: `code-review` skill at high on the issue branch (built-in, forked, background) + sol (pi, continued spec thread) + opus (continued agent). Caps: final_rounds 4, pi_calls 14, subagents 46 remaining
+- final r1 fixes `70eb808c` (implementer, ~20 min): FP-01..08, 10..14 fixed; FP-09 refuted (node_of is §4.6's record for 11b); FP-15 proofs (fixture-wide cross-app gate: demand-filter and dependency-only caller breaks come back GREEN, recorded as a stated LIMIT — no fixture has a source-bearing dependency the join reads; the CDO residual test's same-count substitution fails, revert passes on this code). Recorded `ci-steps-task` on `70eb808c` exit 0
+- final r2 (diff-only): sol 15 accepted + FP-16 re-raised (PageManagement counter; unmeasured reproducer claim); opus 16 accepted + new minor FP-17 (j2_row/j2_alias_nodes docs describe the abandoned narrowing). Conductor fixed FP-16 (ledger) and FP-17 (`5fe9318d`, docs); recorded `ci-steps-task` on `5fe9318d` exit 0; pushed
+- final r3: sol accepted FP-16, FP-17; opus accepted FP-17, re-raised FP-16 (GetAccessToken/GetFreshAccessToken are one-node twins per P15, not aliases — verified). Fixed in the ledger discovery and the spec Feasibility row (`71580ffd`, docs only; check-diff `[]`; pushed)
+- final r4 (FP-16 only): sol accepted, opus accepted. **FINAL PANEL CONVERGED** at `71580ffd`: 46 entries (29 spec + 17 final), all fixed or refuted, all accepted by both against their own anchor. Caps: final_rounds 1, pi_calls 11
+- step 11 prep: bench worktrees `/work/bench/160-10-11a-final/{parent-wt@ca35bf51, head-wt@71580ffd}` (clean, detached); release-fast builds running (`build.sh`)
+- builds OK (`bins.sha`); the ONE CDO bench started via `agentflow run --name bench --timeout 45` (`bench.sh all`: Part 1 identity SARIF ×4 + histogram + census; Part 2 bench_ab 5 rounds a/s + VmHWM 3 rounds; Part 3 digest/fingerprint 3 rounds, reported). Deviation: Part 3's digest uses `--file src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al` instead of `--diff` (the pinned CDO workspace has a single commit, so no small diff exists); reported only, no bound
+- bench DONE (10:31→10:47 UTC; `agentflow run --name bench` exit 0, not timed out; log `logs/bench/20261022T103104-2657cbca.log`). Part 1: SARIF ×4 byte-identical, histogram SHA equal (`c032c8db…`), collision line cross-app 2 one-node dependency groups + `j2_alias_nodes=1`, single-app 0. Part 2: B1 void checks 8381.6 ≥ 638.2 and 7736.0 ≥ 653.0 (not void), `Pa−Ha` 8354.7 ≥ 7736.0 MET; B3 void check 7039.0 ≥ 2047.0, `Pt−Ht` 8253.1 ≥ 7039.0 MET; B2-a 3070.0 ≤ 3315.5 MET (−149 MB); B2-s 710.4 ≤ 728.1 MET. F8: every bucket under its §4.13 estimate. Part 3: digest −8.0 s, fingerprint ±0, outputs equal. Load rose above the 4.0 start gate during the run (1-min 4.4-6.3); every bound holds by more than the parent's band. Numbers file + CHANGELOG committed `4f88604f` (docs only; check-diff `[]`). No fallback fired (F3, F8, F9, F10)
+- step 11: master still `ca35bf51` = base, no rebase. Full set on H = `4f88604f` started (ci-steps-all ∥ cdo-gate, heavy_gates=2; then check-goldens-coverage, check-goldens)
+- step 11 DONE (~11:00 UTC): all four green on H, clean before/after. No range-diff (no rebase), so no extra panel round
+- step 12: halt-check clear; whole-diff `check-diff --base ca35bf51 --head 4f88604f` `[]`; acceptance matrix all met (A10.3/A11a.3 `rg` checks empty on H); sanitize `{}`; ledger + register committed, then freeze-check and attest
 
 ### Acceptance tests (step 6)
 
-Written against base `afd5d88f` + the stubs below; not committed (red by design). Each fails on the assertion
-named, for the reason the spec states; the row assertions in front of it pass. All in
-`src/engine/l4/capability_cone.rs` mod `scc_set_tests` unless stated.
+Written against base `ca35bf51` + behaviour-neutral stubs; not committed (red by design). Full per-test table and stub
+list: the test author's report (conductor transcript); logs in the session scratchpad (`lib_all.log`, `r4.log`, `r4b.log`,
+`harness.log`).
 
-Stubs added (all behaviour-neutral for production output):
-- `ComposeStats` gains `closed_memo_builds`, `closed_memo_reads`, `closed_memo_entries` (stay 0: no memo yet),
-  `scc_set_folds` (counted where today's code folds the set: once PER MEMBER; 7b moves it to once per SCC) and
-  `singleton_scans` (`+= 1` at every `inherited_facts_for_singleton` call: every call builds `best` today).
-- `compose_inherited_cones` and `compose_cone_over_graph_with` gain `raw_sink: Option<RawSink<'_>>` (new alias
-  `RawSink`); at each member's emission a `Some` sink gets the raw Vec and `out` keeps `Vec::new()`. Production
-  callers pass `None` (both `compose_inherited_cones` call sites, `compose_cone_over_graph`). New `cfg(test)`
-  `compose_raw_streaming` (§4.7) = `RawOnly` + `PerScc` + `Some(sink)`. This is the real streaming entry, not a
-  placeholder: a non-streaming stub would hold every raw Vec on CDO (the 10 GB shape).
-- Test helpers: `check_model` widened; new `check_model_raw_fold`, `Check` fn type, `check_cross_app_with`
-  (replaces `check_cross_app`), `oracle_on_fixtures` / `oracle_on_cdo` (T7/T8 bodies, shared by T7'/T8'),
-  `Classes.closed_memo_builds`, `production()`, `T2_7B_SRC`.
+Stubs: `src/program/site_key.rs` (new: `FileIx`, `SiteIx`, `ProgramSite`, `SiteExprs`; `FileTable` is real), 
+`ClassifiedEdge.site` (always None), `resolve_file_obligations(.., file: Option<FileIx>)` (ignored; all three callers incl.
+LSP pass None), `ProgramContext.files` (real), `ModelRoutine.file`/`site_exprs` (None/empty), `ModelRows.row_nodes`/`RowNodes`
+(empty), `collision_census` (default), `program_event_graph_with_row_nodes` (default), `key_join` (pairs nothing), `convert`
+split out of `adapter` verbatim, cross-app entry split into `cross_app_assemble` + `cross_app_program_census` (shared by tests).
 
-| test | file:fn | proves | failing output (short) |
+| test | spec | now |
+|---|---|---|
+| `cross_app_census_has_no_losses_with_a_dependency_body` | T2 | red: losses `[("program_only_site",1)]` |
+| `adapter_loses_nothing_cross_app_on_the_fixtures` | T2 | green by design (holds today) |
+| `adapter_cross_app_losses_on_cdo` | T2/10A-3 | CDO-gated |
+| `l3_ops_with_no_program_site_are_counted_by_trigger_capability` | T3 | red |
+| `a_site_without_a_program_edge_is_unknown_not_legacy_resolved` | T3 | red |
+| `duplicate_l3_span_is_counted` | T3 | green by design |
+| `unmatched_record_op_gets_no_l3_trigger_edge`, `unmatched_site_is_unknown_not_l3`, `interface_implementer_outside_l3_is_unknown` | T3 | red |
+| `duplicate_program_key_is_counted` | T4 | green by design |
+| `duplicate_model_key_per_category` | T4 | red |
+| `two_apps_same_path_same_expr_pair_within_their_app` | T4b | red (key file None) |
+| `span_assertion_fires_on_a_key_pair_whose_spans_differ` | T5 | red (no panic) |
+| `record_op_site_fires_matches_can_fire_trigger` | T6 | red |
+| `key_join_equals_span_join_on_the_fixtures` / `_on_cdo` | T1 | red (1214 diffs) / CDO-gated |
+| `j2_row_equals_decl_join` / `_on_cdo` | T7 | red (466) / CDO-gated |
+| `event_graph_j5_node_equals_span_join` / `_on_cdo` | T8 | red (184) / CDO-gated |
+| `j2_row_two_anchors_one_node_is_the_last_arm`, `j2_row_one_anchor_two_nodes_is_the_first_row`, `j2_row_one_anchor_one_node_is_the_first_row` | T7a-c | red |
+| `j5_node_keeps_the_dependency_span_map_answers` | T8a | red |
+| `a_dependencys_if_duplicated_subscriber_gets_each_edge_once` | A8 | red (precondition `(false,false)`) |
+| `caller_check_reads_captured_decl_anchor` | T9 | red |
+| `collision_rules_hand_stated` | T9 | green by design |
+| `collision_census_counts_groups` | T9 | red |
+| `resolve_file_obligations_unstamped_and_stamped`, `..._matches_full_run_per_file_and_in_concatenation` | T10 | red |
+
+Carried into the plan (test author's notes): `span_join_under_demand` must apply the §4.5 filter at Task 1; T1's CDO identity
+keys R-PAIRS by (row name, csN, path, line, col), not the routine-id hash; R-RESIDUAL hard-codes the Base Application id;
+T8a asserts J5's "first node in graph routine order" for Hb (verify against the real `j5_node`); T4b's procedure is `Work`
+(not `Run`, the built-in); discrimination proofs, T2's two breaks, the §4.13 census buckets and the span debug assertion are
+implementation work.
+
+## Acceptance matrix
+
+| # | Epic item | Met | Evidence |
 |---|---|---|---|
-| T1 | `closed_memo_folds_a_shared_callee_once` | A7b.3/A7b.4: one memo row per callee cone; builds 2, reads 3, entries 3; rows A,B,C = t/C,t/D | `one memo row per callee cone read …` left 0 right 2 |
-| T2 | `closed_memo_excludes_frame_bound_entries` | A7b.2: N (G(false)) lacks Cust, M has it; the memo is used (builds ≥ 1, reads ≥ 2) | `N and M read G's cone through the memo (builds 0, reads 0)` |
-| T3 | `duplicate_edges_fold_one_row` | A7b.3: J(m) dedup; builds 1, reads 1 | `C's cone, built once` left 0 right 1 |
-| T4 | `scc_set_folds_once_per_scc` | A7b.4: set folded once per SCC; Q writes Cust, P nothing (preconditions on `pd_solution` as 7a T3) | `the SCC's set is folded once, not once per member` left 2 right 1 |
-| T5 | `derived_only_builds_no_best` | §7 "production stays on the scan": `Both` raw Vecs of A, C, D stated literally, `Both` scans 3; `DerivedOnly` scans 0 (production entry) | `DerivedOnly built \`best\` for a singleton` left 3 right 0 |
-| T6 | none (the extended leak `debug_assert!`, §4.4) | A7b.3 memo freed | no test code: the `&& memo.is_empty()` clause lands with the memo |
-| T7 widened | `scc_set_matches_member_walk_on_fixtures` → `oracle_on_fixtures(check_model, …)` | A7b.6: PerScc `singleton_scans == 0` per composition; PerMemberWalk memo builds/reads 0; Σ `closed_memo_builds > 0` | panics on `failures`: 480 × `the PerScc side scanned \`best\` for N singletons`; no row diff |
-| T7' | `derived_only_matches_raw_fold_on_fixtures` | A7b.6 final oracle: DerivedOnly (production) vs fold of streamed RawOnly ∪ `direct_raw`; `member_walks == 0`, `singleton_scans == 0` per composition; Σ builds > 0 | 480 × `DerivedOnly ran an old path (member_walks 0, singleton_scans N)`; **no row diff on any of 498 compositions** |
-| T8 widened | `scc_set_matches_member_walk_on_cdo` → `oracle_on_cdo(check_model, …)` | A7b.6 on CDO; cross-app builds > 0 (asserted after `failures`); oracle lines now print `closed_memo_builds` and `singleton_scans` | cdo profile, 62.0 s cross-app: `scanned \`best\` for 30942 singletons` (cross-app), 5478 (single-app); no row diff |
-| T8' | `derived_only_matches_raw_fold_on_cdo` | as T7', on CDO | 74.7 s cross-app: `DerivedOnly ran an old path (member_walks 0, singleton_scans 30942)`, single-app 5478; **no row diff** (31,658 + 5,479 rows); max RSS not recorded at step 6 (no `/usr/bin/time`); recorded later with `getrusage` (see Gate results: Task 1 3,870.8 MiB, Task 3 3,846.3 MiB, Task 4 3,836.2 MiB, final-panel r1 warm binary 3,857.8 MiB) |
-| T9 | `tests/cli/cli_build_counters.rs::census_closed_line_counts_the_memo` (`ws-compose`, base `singleton pop: closed_entries=1`) | §4.8 census line exists once, `memo_builds > 0` | `one closed line:` left 0 right 1 |
-
-Untouched and green with the stubs: the other 47 `capability_cone`/`cone_derived` lib tests (incl. 7a T1-T6, T10,
-T11, `singleton_walk_*`); dev clippy `-p al-sem --lib --tests` clean. Discrimination proofs (§5 breaks) are for the
-implementation step, after the tests go green.
+| A10.1 | `SiteIx` on edges, call sites, ops | yes | `ClassifiedEdge.site`, `ModelRoutine.{file, site_exprs}` (Task 1, `06f6d8ef`/`88dae97d`) |
+| A10.2 | Join by key, span as a debug assertion | yes | `key_join` in production (`9417e0a0`); T5 `span_assertion_fires_on_a_key_pair_whose_spans_differ` with `expected` (FP-06) |
+| A10.3 | Delete J1, `texts`, J4 | yes | `d63e4433`; `rg 'span_text|op_name|SiteLinks|texts:' src/program/model` empty on H |
+| A10.4 | `losses() == []` both universes on r0 + CDO | yes | T2 fixtures green; `adapter_loses_no_site_or_route_on_cdo` ok; cross-app CDO = R-RESIDUAL exactly (`adapter_cross_app_losses_on_cdo` ok in the cdo-gate on `9417e0a0` and on H) |
+| A10.5 | `edge_order_is_call_sites_then_triggers` green | yes | unchanged test, green in every gate |
+| A10.6 | Debug span assertion on the whole suite before deletion | yes | Task 2's `ci-steps test` (debug, J1 present) 3621 passed; T1 CDO variant green in the recorded cdo-gate on `88dae97d` |
+| A10.7 | Mis-pair one dependency site → the loss gate fails | yes | T2 proof re-recorded at the loss gate after FP-13: `[("no_program_site",1),("program_only_site",1),("adapter_l3_fallback_sites",1)]` |
+| A10.8 | Attach saving ≥ parent join − band, if join median ≥ 2 × band | yes | B1 met (8,354.7 ≥ 7,736.0, not void), B3 met (8,253.1 ≥ 7,039.0, not void) — numbers file |
+| A10.9 | Both peaks ≤ parent + band | yes (process peak) | B2-a 3,070.0 ≤ 3,315.5, B2-s 710.4 ≤ 728.1 (kernel `VmHWM`); post-attach peak not readable on Linux (#204, 10A-4) |
+| A10.10 | Mints `FileIx`, keeps `caller_mismatch` for 11a | yes | `FileTable` (`src/program/site_key.rs`); caller check reads the captured `decl_anchor` |
+| A11a.1 | `RoutineIx`, dependency rows included | yes | `RowNodes.node_of` over workspace, dependency source and symbol-only rows (T8a, T9, collision census) |
+| A11a.2 | `RowNodes` at assembly replaces `caller_mismatch` | yes | T9 `caller_check_reads_captured_decl_anchor`; `caller_anchor_disagreement_is_caller_mismatch` |
+| A11a.3 | J2, J5 deleted | yes | `rg -w 'by_decl|node_by_span' src` empty on H; no `b3.adapter.by_decl` span in the head traces (0 of 5) |
+| A11a.4 | Reuses step 10's `FileIx` | yes | one `FileTable` in `ProgramContext` |
+| A11a.5 | The collision census | yes | `collision_census_counts_groups`, `j5_compat_rows_counts_the_subscriber_gaps_only`; CDO lines both universes in the numbers file |
+| A11a.6 | Output-neutral, no rule change; collision fixture passes unchanged | yes | `collision_rules_hand_stated` (strengthened, FP-14); T1/T7/T8 green on CDO before deletion; CDO SARIF ×4 + histogram identical |
+| A11a.7 | Non-speed, no bench (Decision 58) | yes | 11a has no bound; its CDO evidence is cdo-gate + identity |
+| E2/I2 | Byte-identical | yes | no golden moved (check-goldens green on H); CDO histogram SHA `c032c8db…` equal; CDO SARIF identical at both scopes, both universes |
+| E14 | CDO ratchets | yes | `scripts/cdo-gate` green on H |
 
 ## Discrimination proofs
 
 | test | mutation | fail output | pass output | commit |
 |---|---|---|---|---|
-| T1 `closed_memo_folds_a_shared_callee_once` | singleton memo: `if !memo.contains_key(&j)` → `if true \|\| …` (rebuild every read); re-run on the final `Entry::Vacant` shape as `memo.remove(&j)` after `fold_row` | both: `one memo row per callee cone read (C's once for A and B, D's for C)` left 3 right 2 | 1 passed | 1101e9d9 |
-| T2 `closed_memo_excludes_frame_bound_entries` | memo build: drop `.filter(\|e\| !frame_bound(e))` (fold_set over every cone entry) | `N: G(false) contradicts the guard` left [`…160003/table/50100`] right [] | 1 passed | 1101e9d9 |
-| T3 `duplicate_edges_fold_one_row` | J(m): drop `&& !callee_sccs.contains(&yj)` | `A reads C's row once, not once per edge (the J(m) dedup)` left 2 right 1 | 1 passed | 1101e9d9 |
-| T4 `scc_set_folds_once_per_scc` (break 1) | recursive branch: `fold_set` + `scc_set_folds += 1` per member, not per SCC | `the SCC's set is folded once, not once per member` left 2 right 1 | 1 passed | 1101e9d9 |
-| T4 (break 2) | set row = `fold_set(set ∪ every member's own entries)` | `P's row` left [`…160003/table/50100`] right [] | 1 passed | 1101e9d9 |
-| T5 `derived_only_builds_no_best` | singleton: `if !mode.wants_raw() { return }` → `if false && …` (DerivedOnly falls through to the scan) | `DerivedOnly built \`best\` for a singleton` left 3 right 0 | 1 passed | 1101e9d9 |
-| T6 (leak `debug_assert!`) | refcount-free loop: delete `memo.remove(y)`; run T1 | T1 panics at the leak `debug_assert!`: `cone leak: 0 fact cone(s) / 0 coverage cone(s) / 2 closed-set memo row(s) survived the SCC walk` | 1 passed | 1101e9d9 |
-| T7 `scc_set_matches_member_walk_on_fixtures` (break 1) | singleton memo path: own-entry fold `for e in own { fold_fact }` → `for _e in own {}` | row diffs, first `ws-d1-multi-caller: r0/1f7597…: writes_tables_of differs` (also ws-d37, ws-d40, ws-e2e, single- and cross-app); T7' and `singleton_walk_folds_own_entries` fail too | 3 passed (T7, T7', singleton_walk_folds_own_entries) | 1101e9d9 |
-| T7 (break 2) | `use_memo = wants_derived() && (true \|\| membership == PerScc)` (PerMemberWalk also memoizes) | 261 × `the PerMemberWalk oracle used the memo`, first `ws-argument-bindings: … (builds 4, reads 6)`; 0 row diffs | 1 passed | 1101e9d9 |
-| T9 `census_closed_line_counts_the_memo` | `add_compose_stats`: delete `add(&CLOSED_MEMO_BUILDS, …)` | `no memo row built: [cones-census]   closed: memo_builds=0 memo_reads=1 memo_entries=1 scc_set_folds=0 singleton_scans=0 memo_live_max=1` | 45 passed (`cli_build_counters::`) | 1101e9d9 |
-| T2 (exact counts, review minor) break 1 | memo build: drop `.filter(\|e\| !frame_bound(e))` | `N: G(false) contradicts the guard` left [`…160003/table/50100`] right [] | 1 passed | 93ccd999 |
-| T2 break 2 | memo build: `.inspect(entries += 1)` moved before the `frame_bound` filter (counts the guarded entry, folds the same row) | `G's only entry is guarded, so its memo row folds no entry` left 1 right 0 | 1 passed | 93ccd999 |
-| T2 break 3 | `memo.remove(&j)` after `fold_row` (rebuild every read) | `G's cone: one memo row, shared by N and M` left 2 right 1 | 1 passed | 93ccd999 |
-| T3 (with precondition) break 1 | J(m): drop `&& !callee_sccs.contains(&yj)` | `A reads C's row once, not once per edge (the J(m) dedup)` left 2 right 1 (the new precondition passed first) | 1 passed | 93ccd999 |
-| T3 precondition | `build_typed_edge_graph`: `list.dedup_by(\|a, b\| a.to == b.to)` after the sort | `precondition: the cone's graph keeps both A -> C edges` left 1 right 2 | 1 passed | 93ccd999 |
-| T8 + T8' on CDO (Task 3, at a91ffae6) break (a) | singleton memo path: own-entry fold `for e in own { fold_fact }` → `for _e in own {}` | both red at the `failures` assert: 2 row diffs each, `CDO (cross-app): r0/0000102f…: writes_tables_of differs`, `CDO: r0/000025ae…: flags_of differs` | both `1 passed` (re-run after revert) | a91ffae6 (no commit) |
-| T8 + T8' on CDO (Task 3) break (b), T2's class | memo build: drop `.filter(\|e\| !frame_bound(e))` | both RED (no LIMIT needed): `CDO (cross-app): r0/008c9f2c…: physical_table_reads_of differs`, `CDO: r0/008c9f2c…: physical_table_reads_of differs` | both `1 passed` (re-run after revert) | a91ffae6 (no commit) |
-| T7' + T8' (Task 4) break 1 | singleton own-entry fold → `for _e in own {}` | T7' red: 18 row diffs, first `ws-d1-multi-caller: r0/1f7597…: writes_tables_of differs`; T8' red: `CDO (cross-app): r0/0000102f…: writes_tables_of differs`, `CDO: r0/000025ae…: flags_of differs` | T7' in `task-affected` (3596 passed); T8' `1 passed` | 9af9c15d |
-| T7' + T8' (Task 4) break 2, T2's class | memo build: drop `.filter(\|e\| !frame_bound(e))` | T8' red: `CDO (cross-app)` and `CDO: r0/008c9f2c…: physical_table_reads_of differs`; T7' GREEN (no fixture has a guarded successor entry reaching a memo row: the fixtures' `with-guarded-successor` is 0), the class is carried by T2 and T8' | as above | 9af9c15d |
-| T7' (Task 4) break 3 | memo path: `if !mode.wants_raw() { return }` → `if false && …` (DerivedOnly takes the scan) | T7' red: 480 × `DerivedOnly ran an old path`, first `ws-api-page: … (member_walks 0, singleton_scans 2)`, 0 row diffs; T5 `derived_only_builds_no_best` red too | pass (`task-affected`) | 9af9c15d |
-| 7a T5 `scc_set_479_cycle_scales` (migrated) | recursive branch: `let picks = if mode.wants_raw()` → `if true \|\| …` (DerivedOnly walks) | `no per-member walk under DerivedOnly` left 479 right 0 | pass (`task-affected`) | 9af9c15d |
-| `fold_fact_refuses_an_empty_resource_id` (new, final panel r1) | `Scratch::add`: delete the `resource_id != Some("")` `debug_assert!` | `note: test did not panic as expected` | 1 passed | 0c08452b |
-| T7' via `raw_fold_hook` (final panel r1) | hook: `raw.iter()` → `raw.iter().take(0)` (the raw Vec is dropped unfolded) | 144 row diffs, first `ws-callsite-resolutions: r0/4cf8c46b…: flags_of differs` | pass (`task-affected`) | 0c08452b |
-| T8' missing composition (final panel r1) | `check_cross_app`: `return None` for `where_ == "CDO"` | `CDO cross-app: no composition to check (no model built)` | T8' on CDO `1 passed` (cross-app `… singleton_scans 0, 84.2s`) | 0c08452b |
-
-(A first break-(a) attempt did not apply — the Edit was refused, `grep -c` read 0 — and its two green runs are discarded; the break was re-applied and checked before the runs above.)
+| T1 `key_join_equals_span_join_on_the_fixtures` | `workspace.rs` project_ir: `site_exprs.calls.swap(0, 1)` when ≥ 2 calls | FAILED at the differences assert: "286 key/span differences: …full_program_fixture (single-app): 2 accepted pairs differ, first PairDiff { kind: "call", ri: 1, ix: 0, row_name: "Caller" …" | ok (reverted) | 06f6d8ef |
+| T6 `record_op_site_fires_matches_can_fire_trigger` | `full.rs` stamp: `fires: true \|\| matches!(…)` | FAILED "fires per record-op site": left `("Rec.SetRange", Some(true))`, right `Some(false)` | ok | 06f6d8ef |
+| T10 `resolve_file_obligations_unstamped_and_stamped` | `full.rs` stamp: `file.or(Some(FileIx(0))).map(…)` | FAILED "src/CrossChainCaller.Codeunit.al: the unstamped path stamps nothing" | ok | 06f6d8ef |
+| T10 `resolve_file_obligations_matches_full_run_per_file_and_in_concatenation` (changed) | `full.rs` stamp: `file: FileIx(file.0 + 1)` | FAILED "file A.al: a call-site edge's stamp names its file", left `Some(FileIx(1))`, right `Some(FileIx(0))` | ok | 06f6d8ef |
+| T9 `collision_census_counts_groups` | `workspace.rs` collision_census: group by row index instead of id | FAILED "one group of two symbol-only rows": left `(0, 0, 0)`, right `(1, 2, 2)` | ok | 06f6d8ef |
+| T9 `collision_rules_hand_stated` | `detector_context.rs:1261` `direct_full.insert` → `entry().or_insert` | FAILED "R2: the direct facts are the LAST row's" (left: A's `insert` on table 50813, right: B's `modify` on 50814) | ok | 06f6d8ef |
+| T7 `j2_row_equals_decl_join` | `RowNodes::build`: j2_row only when `node_of[ri] == id` (per-node selection) | FIRST RUN GREEN on r0 + tests/fixtures (no cross-node shape there). Test changed per §5.7 ("the T7b cross-node fixture differs"): T7b's source added to the oracle's set. Then FAILED "2 J2 differences: /tmp/… (single-app): 1 nodes differ … p/1 sig_fp 69875687941676757: J2 Some(0), j2_row None" | ok | 06f6d8ef |
+| T7b `j2_row_one_anchor_two_nodes_is_the_first_row` | same per-node break | FAILED "j2_row of … p … = the first row": left `None`, right `Some(0)` | ok | 06f6d8ef |
+| T7c `j2_row_one_anchor_one_node_is_the_first_row` | `RowNodes::build`: first_at `insert` (last row wins) | FAILED "j2_row = the first row": left `Some(1)`, right `Some(0)` (T7b and T7 also fail; T7a stays green, its anchors differ) | ok | 06f6d8ef |
+| T7a `j2_row_two_anchors_one_node_is_the_last_arm` | `RowNodes::build`: j2_row = the node's first row by `node_of` (anchor ignored); the spec lists no own break for T7a | FAILED "j2_row = the second arm's row": left `Some(0)`, right `Some(1)` | ok | 06f6d8ef |
+| T8 `event_graph_j5_node_equals_span_join` | `RowNodes::build`: j5_node `None` for `dep:` rows | FIRST RUN GREEN (no source-bearing dependency subscriber in r0/tests/fixtures). Per §5.8 a hand-stated one was added (dependency `Dep Pub` with subscriber `H`, via `adapter_tests::write_workspace`, + precondition `dep_subscriber_edges > 0`). Then FAILED at the differences assert: "2 J5 differences: /tmp/… (cross-app): graph differs (1 / 0 edges)" | ok | 06f6d8ef |
+| T8a `j5_node_keeps_the_dependency_span_map_answers` | `RowNodes::build`: `j5_node = node_of.clone()` | FAILED "Ha: the first arm maps to nothing, the second to Ha's node": left `(Some(ha), Some(ha))` (the Hb assertion is after it, not reached) | ok | 06f6d8ef |
+| A8 `a_dependencys_if_duplicated_subscriber_gets_each_edge_once` (precondition) | same `j5_node = node_of` | FAILED "precondition: J5 maps the second H row, not the first": left `(true, true)`, right `(false, true)` | ok | 06f6d8ef |
+| A8 `a_dependencys_if_duplicated_subscriber_gets_each_edge_once` | break 8: `events.rs` `processed.insert` moved before the row maps | FAILED edges assert: left `[]`, right `[("ona","50171.H","resolved"),("onb","50171.H","resolved")]` (T8a also fails: 2 edges, want 3) | ok | 06f6d8ef |
+| T4b `two_apps_same_path_same_expr_pair_within_their_app` (GREEN at Task 1, not ignored) | `FileTable::get` by path only | FAILED at "precondition: two FileIx": `FileIx(1)` == `FileIx(1)` (the key join's caller_mismatch half is Task 2's) | ok | 06f6d8ef |
+| `decl_anchor_equals_surface_caller_decl` (review item 1) | `RowNodes::build`: drop the `decl_anchor.insert` | FAILED "432 decl_anchor differences: …ws-policy-api-dynamic-dispatch (single-app): … onaction/dispatch: surface Some(("src/Page.al", 24, 16)), decl_anchor None" | ok | 88dae97d |
+| `decl_anchor_equals_surface_caller_decl` (review item 1) | `RowNodes::build`: insert `column + 1` | FAILED "432 decl_anchor differences: … surface Some(("src/Page.al", 24, 16)), decl_anchor Some(("src/Page.al", 24, 17))" | ok | 88dae97d |
+| T2 `cross_app_census_has_no_losses_with_a_dependency_body` (epic row 10) | `key_join` call-site loop: `DepA`'s key → `SiteIx { file, expr: u32::MAX }` | FAILED at the "precondition (a) … matched" assert (it precedes `losses()`): left 1, right 2; the census dump names `no_program_site: 1`, `program_only_site: 1`. NOTE (Task 2 review): the failure is the `matched == 2` precondition, whose message dumps the census; the `losses()` assert itself is not reached by this break | ok | 9417e0a0 |
+| T2 `cross_app_census_has_no_losses_with_a_dependency_body` (10A-2) | `join`: `demand.and(None)` (no demand filter) | FAILED losses: left `[("program_only_site", 1)]`, right `[]` (DepCu.Codeunit.al line 13, DepUnused's `DepB()`) | ok | 9417e0a0 |
+| T3 `l3_ops_with_no_program_site_are_counted_by_trigger_capability`, `a_site_without_a_program_edge_is_unknown_not_legacy_resolved`, `unmatched_record_op_gets_no_l3_trigger_edge`, `unmatched_site_is_unknown_not_l3` | `key_join`: a model key that misses falls back to the program site at the same span (pairing by something other than the key; one break, four runs) | all 4 FAILED: l3_ops: `l3_op_no_program_site_trigger/_other` 0/0 (want 1/2), `implicit_trigger_matched` 1; a_site: `to` left `Some("r0/ef7f…")`, right `None`; unmatched_record_op: `adapter_l3_trigger_ops` left 0, right 1; unmatched_site: `to` left `Some("r0/213b…")`, right `None` | ok | 9417e0a0 |
+| T3 `interface_implementer_outside_l3_is_unknown` | `Converter::l3_routine`: on a `j2_row` miss, fall back to today's per-use J2 (surface anchor → first row) | FAILED edge count: left 2, right 1 | ok | 9417e0a0 |
+| T4 `duplicate_model_key_per_category` | record ops share `seen_op_sites` (count across categories) | FAILED at the SECOND assert (`shared.duplicate_l3_span`): left 1, right 0 | ok | 9417e0a0 |
+| T4 `duplicate_program_key_is_counted` (re-proved on the key join) | program side `Entry::Occupied(mut o) => o.insert(ce)` (last wins, not counted) | FAILED at the join's bucket identity "every program site lands in exactly one bucket": left 3, right 2 (before the test's own assert). NOTE (Task 2 review): this is the PRODUCTION bucket-identity `debug_assert`, not the test's assertion; see the Task 3 variant rows below | ok | 9417e0a0 |
+| T4b `two_apps_same_path_same_expr_pair_within_their_app` (the join half) | `key_join`: both sides key with `FileIx(0)` (file not in the key) | FAILED "AppRef(1): Work's Helper() pairs" (its site met the other app's edge: caller_mismatch, no pair) | ok | 9417e0a0 |
+| T5 `span_assertion_fires_on_a_key_pair_whose_spans_differ` | delete the call-pair span `debug_assert_eq!` | FAILED "test did not panic as expected" | ok | 9417e0a0 |
+| T9 `caller_check_reads_captured_decl_anchor` | caller check compares the row anchor with `j2_row`'s row anchor (row-derived side) | FAILED: `matched: 2, caller_mismatch: 0` (want 0/2); `caller_anchor_disagreement_is_caller_mismatch` also fails under it | ok | 9417e0a0 |
+| `adapter_cross_app_losses_on_cdo` | not run: CDO-gated, CDO not run in Task 2 (it skips without `CDO_WS`); its first real run is Task 3 Step 0's cdo-gate | — | skipped (no `CDO_WS`) | 9417e0a0 |
+| T4 `duplicate_program_key_is_counted` (Task 2 review item 3, variant) | program side `Entry::Occupied(mut o) => { o.insert(ce); c.duplicate_program_span += 1; }` (last wins, still counted), test UNCHANGED | NOT CAUGHT: test passed (the copy was identical to the original, so which edge is kept was invisible) | — | d63e4433 |
+| T4 `duplicate_program_key_is_counted` (strengthened: the copy differs only by `callee_fingerprint = callee_fp("NotTheCallee")`, precondition asserted; new assert `(matched, callee_fp_mismatch) == (2, 0)`) | same last-wins-still-counted break | FAILED "the first edge at a key wins": left `(1, 1)`, right `(2, 0)` | ok | d63e4433 |
+| T7b `j2_row_one_anchor_two_nodes_is_the_first_row` (Task 3 re-run, permanent) | `RowNodes::build`: `j2_row` only when `node_of[ri] == id` (per-node) | FAILED left `None`, right `Some(0)` | ok | d63e4433 |
+| T8a `j5_node_keeps_the_dependency_span_map_answers` (Task 3 re-run, permanent) | `RowNodes::build`: `j5_node = node_of.clone()` | FAILED left `(Some(ha), Some(ha))`, right `(None, Some(ha))` | ok | d63e4433 |
+| A8 `a_dependencys_if_duplicated_subscriber_gets_each_edge_once` (Task 3 re-run) | same `j5_node = node_of` | FAILED precondition left `(true, true)`, right `(false, true)` | ok | d63e4433 |
+| A8 `a_dependencys_if_duplicated_subscriber_gets_each_edge_once` (Task 3 re-run) | break 8: `events.rs` `processed.insert` before the row maps | FAILED edges left `[]`, right `[("ona","50171.H","resolved"),("onb","50171.H","resolved")]` | ok | d63e4433 |
+| T5 `span_assertion_fires_on_a_key_pair_whose_spans_differ` (Task 3 re-run; the assertion is now in the only join) | delete the call-pair span `debug_assert_eq!` | FAILED "test did not panic as expected" | ok | d63e4433 |
+| FP-01 `j5_compat_rows_counts_the_subscriber_gaps_only` (r4, new) | `collision_census`: count every row (`kind == "event-subscriber" \|\| true`) | FAILED `j5_compat_rows`: left 7, right 2 | ok | 70eb808c |
+| FP-10 `j5_compat_rows_counts_the_subscriber_gaps_only` (r4, new) | `RowNodes::build`: record J5 for every row (subscriber gate `\|\| true`) | FAILED "J5 answers for no non-subscriber row": left `(None, Some(p))`, right `(None, None)` | ok | 70eb808c |
+| FP-02 `unmatched_sites_sharing_a_start_are_in_span_order` (new) | final sort: b's end fields replaced by a's (end tie-break neutralised; order falls back to the program map's iteration) | 12 separate runs: 7 FAILED "program-only sites sharing a start are in span order: [(12, 8, 12, 21), (12, 8, 12, 14)]", 5 passed (HashMap seed per process); unbroken: 12/12 passed | ok | 70eb808c |
+| FP-03 `a_dependency_row_with_no_file_counts_its_sites_unpaired` (new) | restore the unconditional `debug_assert!(r.file.is_some() \|\| !has_sites)` | FAILED (panic) "row r0/573e… has sites but no file: they cannot pair" | ok | 70eb808c |
+| FP-06 T5 `span_assertion_fires_on_a_key_pair_whose_spans_differ` (`expected = "paired by key at a different span"`) | change the assertion's message ("at another span") | FAILED "panic did not contain expected string" | ok | 70eb808c |
+| FP-08 T7c/T7b (J2 map re-keyed by `(app, path, line, col)`) | `first_at` last-wins (`insert`) | FAILED T7c and T7b: left `Some(1)`, right `Some(0)` (T7a stays green, its anchors differ) | ok | 70eb808c |
+| FP-08 (dependency rows' key parse) | `app_of_guid.get(guid).filter(\|_\| false)` (no dependency row in the J2 map) | 8 r4 tests FAILED (e.g. `the_cross_app_model_resolves_dependency_bodies_and_events`, `differential_r4_findings_match_goldens`); program_calls lib tests stayed green (single-app) | ok | 70eb808c |
+| FP-13 T2 `cross_app_census_has_no_losses_with_a_dependency_body` (losses() now asserted first) | `DepA`'s call-site key → `u32::MAX` (epic row 10) | FAILED at the loss gate: left `[("no_program_site", 1), ("program_only_site", 1), ("adapter_l3_fallback_sites", 1)]`, right `[]` | ok | 70eb808c |
+| FP-14 `collision_rules_hand_stated` (first row now parse-incomplete; coverage-differs precondition asserted) | `det_cone_inputs`: `coverage_in.entry(..).or_insert` (coverage first-wins only) | FAILED "R2: the direct coverage is the LAST row's": left `("unknown", ["parse-incomplete"])`, right `("complete", [])` | ok | 70eb808c |
+| FP-15a `adapter_loses_nothing_cross_app_on_the_fixtures` (harness) | (1) `join`: drop the demand filter; (2) caller check +1 column for dependency callers only | BOTH CAME BACK GREEN: no r0/tests/fixtures workspace has a source-bearing dependency whose bodies the join reads (stated LIMIT of this gate; the dependency-body cases are pinned by `cross_app_census_has_no_losses_with_a_dependency_body` and the CDO test). (3) caller check +1 column for every caller: FAILED, 183 workspaces listed, e.g. "ws-policy-api-dynamic-dispatch: [(\"caller_mismatch\", 1), (\"adapter_l3_fallback_sites\", 1)]" | ok (after (3) reverted) | 70eb808c |
+| FP-15b `adapter_cross_app_losses_on_cdo` (CDO, run with the per-command `CDO_WS` prefix; tree = 70eb808c's code) | R-RESIDUAL entry `(656, 8, 33)` → `(656, 9, 33)` (same count, another site) | FAILED "CDO cross-app: the residual is R-RESIDUAL" (the count assertion before it passed), 138.3 s | ok, 146.3 s | 70eb808c |
 
 ## Findings register summary
 
-38 entries: spec panel S1-1..S1-23, S2-1 (1 critical, 14 important, 9 minor; all fixed); final panel F1-1..F1-14 (3
-important, 11 minor; 11 fixed, F1-11 deferred minor (a discovery), F1-12 and F1-14 refuted). Every entry accepted by both
-reviewers (sol, opus); no blocking entry deferred. Spec panel converged in 3 rounds, final panel in 2.
+46 entries, all `fixed` or `refuted`, every one `accepted` by both reviewer slots (stand-ins gpt-6.1-sol in slot astra, Opus in slot flash, per the operator; attested with `--substitute astra=sol --substitute flash=opus`).
+- Spec panel (5 rounds): R1-01..R1-25, R2-01..R2-02, R3-01..R3-02 — 20 important, 9 minor; all fixed.
+- Final panel (4 rounds; round 1 also ran the `code-review` skill at high): FP-01..FP-17 — 3 important (FP-01 `j5_compat_rows` population, FP-02 `unmatched` order, FP-03 debug-assert on an unknown-app dependency row), 14 minor; FP-09 refuted (`node_of` is §4.6's record for 11b), the rest fixed.
 
 ## Gate results
 
-**Step 11 full set on H = `af823c6c`** (all `"supervised": true`, queued 0 s; logs under the run dir `logs/`):
+On H `4f88604f` (agentflow records, clean before and after, CDO identity captured for cdo-gate):
 
-| gate | exit | seconds | log |
-|---|---|---|---|
-| ci-steps-all | 0 | 388.6 | `ci-steps-all/20261021T224046-f8140ac8.log` |
-| check-goldens-coverage | 0 | 0.0 | `check-goldens-coverage/20261021T224715-189be23e.log` |
-| check-goldens | 0 | 0.1 | `check-goldens/20261021T224715-0fa5ca32.log` (tree stamp: this tree passed `ci-steps test` inside `ci-steps all`) |
-| cdo-gate | 0 | 269.3 | `cdo-gate/20261021T224715-d060ee5b.log` |
+| gate | exit |
+|---|--:|
+| ci-steps-all | 0 |
+| cdo-gate | 0 |
+| check-goldens-coverage | 0 |
+| check-goldens | 0 |
 
-`git status --porcelain -- . ':!.agent'` empty.
-
-
-- **Task 3 recorded run (licenses Task 4).** HEAD `a91ffae6`; `agentflow run --name cdo-gate` (run by the conductor):
-  exit 0, supervised, 597.6 s, `cdo-gate: PASS` (lib 2185 passed, T8/T8' included, `ENFORCE_CDO_WS=1`); log
-  `/work/alsem/.agent/runs/20261021-185406-413c0c/logs/cdo-gate/20261021T205008-d45dfb87.log`. The oracle lines
-  (captured stdout there) come from T8/T8' run alone at the same HEAD, `cdo` profile, `--nocapture`, one at a time:
-  - T8 `scc_set_matches_member_walk_on_cdo`, pass:
-    `scc-set oracle on CDO (cross-app): 31658 routines, 67 recursive SCCs, 714 members, max 479, … closed-memo-builds 25498, closed_memo_builds 25498 singleton_scans 0, 69.9s`;
-    `scc-set oracle on CDO (single-app): 5479 routines, 1 recursive SCCs, 1 members, … closed_memo_builds 2751 singleton_scans 0, 5.2s`.
-    The `PerMemberWalk` side's `closed_memo_builds == 0 && closed_memo_reads == 0` is asserted inside `check_model` (no
-    failure). Max RSS **3,917,996 kB (3,826.2 MiB)**.
-  - T8' `derived_only_matches_raw_fold_on_cdo`, pass:
-    `raw-fold oracle on CDO (cross-app): … closed_memo_builds 25498 singleton_scans 0, 79.6s`;
-    `raw-fold oracle on CDO (single-app): … closed_memo_builds 2751 singleton_scans 0, 4.4s`.
-    Max RSS **3,938,636 kB (3,846.3 MiB)**. T8' − T8 = **+20.2 MiB** (rule: ≤ 256 MB).
-  - Both breaks red (proof table). Afterwards `git status --porcelain -- src tests crates` empty, HEAD `a91ffae6`,
-    both CDO oracles green again.
-- **Task 4 `9af9c15d`** (the deletion; last code commit). `cargo test -p al-sem --lib` 2186 passed; `check-goldens`
-  910 passed, no golden moved; release `ci-steps clippy` exit 0; `ci-steps task-affected` exit 0 (3596 passed, 8
-  skipped). T8' alone on CDO (`cdo` profile): `raw-fold oracle on CDO (cross-app): 31658 routines, 67 recursive SCCs,
-  714 members, … closed_memo_builds 25498 singleton_scans 0, 74.6s`; single-app `… closed_memo_builds 2751
-  singleton_scans 0, 4.4s`; pass. Max RSS **3,928,228 kB (3,836.2 MiB)** = T8 (Task 3) + 10.0 MiB (rule ≤ T8 + 256 MB).
-- `check-diff --base origin/master` after Task 4: reasons `protected-path:.github/workflows/grammar-drift.yml`,
-  `protected-path:scripts/kraken-setup.sh`. Cause: origin/master moved to `fd77939d` (#197-#201) after the branch
-  base `afd5d88f`; the branch touches neither path (`git diff --stat afd5d88f HEAD -- .github scripts` empty).
-  `check-diff --base afd5d88f`: `{"reasons": []}`. Needs the rebase onto the new master (conductor), not a code fix.
-- **Final panel r1 fixes.** Code `0c08452b` (timers, `raw_fold_hook`, classifier `debug_assert!`, census lines, T8'
-  message, docs): `ci-steps task-affected` exit 0 (3597 passed, 8 skipped), release `ci-steps clippy` exit 0,
-  `check-diff` `{"reasons": []}`; `cargo test -p al-sem --lib` 2187 passed. Docs `10bc2a14` (Decision 58 rounds,
-  parent `fd77939d`, grammar `4d75846c`, `Both` fallback): `task-affected` exit 0 (3597 passed), `check-diff` `[]`.
-- **RSS, warm binary (opus #2).** Every `cargo test` RSS above was taken after a separate
-  `cargo test --profile cdo -p al-sem --lib --no-run`: the measured logs show no `Compiling` line and `Finished … in
-  0.11-0.13s` (Task 3's T8 and T8', Task 4's T8'), so cargo compiled nothing and the max is the test binary's (cargo
-  itself is small). Re-measured at `0c08452b` on the already-built binary run directly
-  (`target/cdo/deps/al_sem-91c9905995cf54cf engine::l4::capability_cone::scc_set_tests::derived_only_matches_raw_fold_on_cdo --exact --nocapture --test-threads=1`,
-  `CDO_WS` from config, `ENFORCE_CDO_WS=1`): pass, cross-app `… closed-memo-builds 25498, singleton_scans 0, 71.8s`,
-  single-app `… 2751, singleton_scans 0, 4.5s`; max RSS **3,950,344 kB (3,857.8 MiB)** = Task 3's T8
-  (3,826.2 MiB, warm) + 31.6 MiB (rule ≤ + 256 MB).
-- **The CDO bench (spec §8), run once after the final panel.** P `fd77939d`, H `f3ccb89c`, both built release-fast
-  from clean detached worktrees `/work/bench/160-7b-final/{parent,head}-wt` (`TREE_SITTER_AL_PATH` = the main
-  checkout's grammar, `RAYON_NUM_THREADS` unset; `shas.txt`); the head's `cdo` test binary prebuilt (`--no-run`).
-  - Command (one supervised run, started once the 1-min load was ≤ 4, at 3.17):
-    `PYTHONUTF8=1 python3 scripts/agentflow --root /work/alsem --run-id 20261021-185406-413c0c run --name bench --timeout 45 --cwd /work/al-sem-issue-160-a3 -- bash /work/bench/160-7b-final/bench.sh`.
-    Result: exit 0, `"supervised": true`, 1,601.1 s, log
-    `/work/alsem/.agent/runs/20261021-185406-413c0c/logs/bench/20261021T221142-1ee49d0a.log`
-    (`OK part1`, `OK part2`, `OK part3`; 7a's `check.sh` verbatim).
-  - Load (1/5/15 min, `/work/bench/160-7b-final/load.txt`, plus a 60 s tick):
-    - Part 1: 3.17/8.76/13.77 → middle 7.07 → end 6.14;
-    - Part 2: 6.14 → 5.95 → 5.57;
-    - Part 3: 5.57 → end 9.48;
-    - ticks 3.17-11.37.
-  - **Part 1.**
-    - SARIF `cmp` silent at `--scope primary` (9,698,287 B) and `--scope all` (73,864,653 B).
-    - Histogram SHA-256 equal on both sides: `c032c8db…94ef`.
-    - Retained `context.cone_derived` 65,273,122 = 65,273,122; `context.summaries` 36,400,882 = 36,400,882.
-    - T8' (`derived_only_matches_raw_fold_on_cdo`) passed: cross-app `… closed-memo-builds 25498, singleton_scans 0,
-      75.5s`; single-app `… 2751, singleton_scans 0, 4.4s`.
-  - **Part 2** (5 interleaved rounds per side, samples in round order).
-    - Q = `singleton + bfs_fold`, parent: 5,473.8 / 6,095.5 / 5,355.2 / 5,354.9 / 5,522.2. Pq 5,473.8, Bq 740.6.
-    - Q, head: 982.2 / 1,209.5 / 1,056.7 / 902.7 / 1,289.8. Hq 1,056.7, band 387.1.
-    - Span `context.capability_cones`, parent: 11,850.0 / 11,601.5 / 11,864.1 / 11,152.5 / 11,281.8. Pc 11,601.5,
-      Bc 711.5.
-    - Span, head: 6,384.2 / 6,365.4 / 6,214.7 / 6,289.3 / 6,442.6. Hc 6,365.4, band 227.9.
-    - Void checks: B1 4,382.1 ≥ 1,481.2, holds. B2 3,641.5 ≥ 1,423.0, holds. No re-run.
-    - **B1 met:** 4,417.1 ≥ 3,641.5. **B2 met:** 5,236.1 ≥ 2,930.0. Literal form 5,236.1 ≥ 3,670.6, met.
-    - Head sub-timer medians (ms): subst 132.5, memo 683.0, row 5.8, open 19.7, own 139.6, `bfs_fold` 39.7.
-    - `closed:` line as expected in all 5 head rounds (25498 / 42912 / 3879321 / 67 / 0 / 1568).
-    - stdout SHA `245055170098d892` on both sides.
-  - **Part 3** (3 rounds per side, Decision 58).
-    - `as` (`analyze --single-app`): 5.7 (0.8) vs 5.7 (1.9) s; RSS 700.6 / 707.6 MB; stdout `c6c4d832599851f3`.
-    - `px` (cross-app `policy check`): 107.1 (6.3) vs 93.8 (6.4) s, −13.3 s; RSS 13,877.9 / 13,847.9 MB; stdout
-      `a1b8f1ad82042442`.
-    - The `Both` fallback does not fire.
-  - **Verdict: every bound met, none void.** Numbers committed as `9ac7c4a6` (`CHANGELOG.md`,
-    `docs/measurements/2026-10-21-issue-160-step7b.md` only; pre-commit hook passed).
-
-- Task 1 (`1101e9d9`): `scripts/ci-steps task-affected` exit 0 (3598 passed, 8 skipped; a first run failed dev
-  clippy `map_entry` on `contains_key` + `insert`, fixed with the `Entry` API before the commit);
-  `cargo test -p al-sem --lib` 2188 passed; `scripts/check-goldens` 910 passed, no golden moved; pre-commit hook passed.
-- Task 1 CDO, `cdo` profile, run alone, `ENFORCE_CDO_WS=1` (before the `Entry` refactor, same behaviour):
-  - T8 widened: `scc-set oracle on CDO (cross-app): 31658 routines, 67 recursive SCCs, 714 members, … closed_memo_builds
-    25498 singleton_scans 0`; `(single-app): 5479 routines, … closed_memo_builds 2751 singleton_scans 0`; pass.
-    Max RSS 3,942,696 kB (3,850.3 MiB) (`getrusage(RUSAGE_CHILDREN).ru_maxrss` of `cargo test`; no `/usr/bin/time`).
-  - T8': `raw-fold oracle on CDO (cross-app): … closed_memo_builds 25498 singleton_scans 0`; single-app 2751 / 0; pass.
-    Max RSS 3,963,696 kB (3,870.8 MiB) = T8 + 20.5 MiB (rule: ≤ T8 + 256 MB).
-- Task 1 `check-diff` (after the commit): **reason** `forbidden:allow-attribute:src/engine/l4/capability_cone.rs:
-  #[allow(clippy::too_many_arguments)]` — the step-6 stub's attribute on `compose_cone_over_graph_with` (its 8th
-  parameter `raw_sink`). Stopped and reported. Fixed in `e50026ce` (`ComposeOptions`): `check-diff` `{"reasons": []}`,
-  `ci-steps task-affected` exit 0, release `ci-steps clippy` exit 0.
+Earlier recorded runs: licensing `cdo-gate` on `88dae97d` and `9417e0a0` (exit 0); `ci-steps-task` on `d63e4433`, `cef61d8e`, `70eb808c`, `5fe9318d` (exit 0); `bench` on `71580ffd` (exit 0).
 
 ## Discoveries
 
 ```json
 [
-  {"subsystem": "engine / perf_trace (memory peaks on Linux)", "locator": "src/engine/perf_trace.rs:175 read_rss (the non-Windows arm returns None)", "symptom": "On Linux (server1, the kraken tentacle) read_rss is a stub, so the trace's peak.process_mb and peak.post_attach_mb read 0; every #160 memory bound measured there falls back to psutil's 20 ms RSS sampling, which is not a true high-water mark, and the post-attach peak cannot be read at all.", "kind": "enhancement", "origin_issue": 160, "reproducer": "On server1, `alsem analyze <ws> --trace <file>` (any workspace): the trace's peak.process_mb / peak.post_attach_mb events are 0; on Windows the same command reports K32GetProcessMemoryInfo's peak working set.", "pre_existing": true, "capability": "read_rss on Linux from /proc/self/status (VmRSS, VmHWM), with the post-attach peak taken by resetting VmHWM via /proc/self/clear_refs (\"5\") at attach", "acceptance": "on Linux the trace's peak.process_mb equals VmHWM at exit and peak.post_attach_mb is the high-water mark after the attach point; a unit test covers the parsing"},
-  {"subsystem": "engine / l4 capability cone (step 7b memo path)", "locator": "src/engine/l4/capability_cone.rs inherited_facts_for_singleton (memo build, subst) and the recursive set_row fold in compose_inherited_cones", "symptom": "The 7b memo path still does avoidable work: a memo row is built and kept for a callee cone with a single reader (no reuse possible); a non-root recursive SCC's cone is folded once for set_row and again for each singleton's memo row; under DerivedOnly the subst Vec (one Vec per out-edge, Arc clones per guarded entry) is built only to fold e.rep.", "kind": "enhancement", "origin_issue": 160, "reproducer": "ALSEM_CONES_CENSUS=1 alsem analyze <cdo_ws> on 7b's head: closed: memo_builds 25498 (the single-reader share is unmeasured); singleton: subst 132.5 ms, memo 683.0 ms (bench medians, docs/measurements/2026-10-21-issue-160-step7b.md).", "pre_existing": false, "capability": "fold a single-reader callee cone straight into the routine row; share one fold between set_row and the memo for a guard-free SCC cone; fold substitute_entry's rep directly under DerivedOnly", "acceptance": "each change keeps every golden and the T7'/T8' oracle green and shows a saving beyond the noise band on the singleton timer in a CDO A/B bench"}
+  {"subsystem": "agent flow / /issue step 8 + agentflow check-diff", "locator": ".claude/commands/issue.md step 8 (\"Before each task's commit: check-diff --base master --head HEAD\"); scripts/agentflow check-diff", "symptom": "Run before `git commit`, check-diff's --head HEAD is still the previous commit, so a task's own diff is never checked before it lands. On #160 steps 10+11a it reported reasons [] for Task 1, whose commit carried 10 `#[ignore` and 1 `#[allow(` lines that check-diff forbids; the block surfaced only at the next commit.", "kind": "bug", "origin_issue": 160, "reproducer": "In an issue worktree, add a `#[ignore]` to a test, stage it, run `agentflow check-diff --base master --head HEAD` (reasons []), commit, run it again (forbidden:ignore-attribute).", "pre_existing": true, "capability": "check-diff checks the change that is about to be committed: either the skill runs it after the commit and fixes forward, or check-diff gains a --staged mode that diffs the index against the base", "acceptance": "the reproducer's first run reports forbidden:ignore-attribute; the skill text names the mode it uses"},
+  {"subsystem": "program body walk (model record operations)", "locator": "src/program/body/ir_walk.rs (record-receiver classification); CDO Base Application src/Finance/Intercompany/Outbox/ICOutboxImpExp.XmlPort.al lines 656-725", "symptom": "body walk: XmlPort table elements are record receivers (18 Base Application sites on CDO). The walk does not treat an XmlPort `tableelement` variable as a record, so its record ops (in `ICOutboxImpExp.XmlPort.al`: 11 `DeleteAll` such as `ICOutboxTrans.DeleteAll`, `ICOutBoxJnlLine.DeleteAll`, and 7 `Insert`) become call sites while the program engine sees record ops: 18 `shape_mismatch` and 18 `Unknown(NoProgramSite)` call edges in the cross-app model (R-RESIDUAL, spec §3.5).", "kind": "bug", "origin_issue": 160, "pre_existing": true, "reproducer": "A source-bearing dependency (or workspace) XmlPort with `tableelement(X; \"Some Table\")` and a trigger body calling `X.Insert();`; build the cross-app model and read `adapter_census_for_workspace_cross_app`: one `shape_mismatch` at that call. On CDO, `adapter_cross_app_losses_on_cdo` lists the 18.", "capability": "the body walk types an XmlPort table element as a record of its table, so its record ops are record operations on both sides", "acceptance": "the reproducer gives 0 `shape_mismatch`; on CDO `adapter_cross_app_losses_on_cdo` drops the 18 shape_mismatch sites (its expected residual updated in that change, with the moved SARIF/goldens triaged)"},
+  {"subsystem": "#160 step 11b (routine identity corrections)", "locator": "src/program/model/workspace.rs RowNodes::build (j2_row, j5_node) and collision_census; src/program/model/program_calls.rs key_join caller check", "symptom": "11b: J2's cross-node alias, J5's subscriber mapping gaps and the collision group's 5 `NoProgramSite` sites. Step 11a records today's answers as compatibility targets (spec §4.7-§4.9, 11A-3): `j2_row` maps both `AcquireTokenFromCache` nodes to one row (the cross-node alias, the only one on CDO per probe P15; the one-node twins `GetAccessToken` / `GetFreshAccessToken` — two string ids, one node — are in no census counter); `j5_node` (recorded for event-subscriber rows only, spec §4.10 after FP-01) maps the second row of a two-rows-at-one-anchor subscriber to the first row's node or leaves an arm unmapped; the first `#if` arm of `PageManagement.GetPurchaseHeaderPageID` (one node, two rows: counted under `collision_groups` / `groups_one_node`, not `j2_alias_nodes`, which counts only nodes whose `j2_row` belongs to ANOTHER node; not a subscriber, so not `j5_compat_rows`) gives 5 `caller_mismatch` / `Unknown(NoProgramSite)` sites. CDO counts of `j2_alias_nodes` / `j5_compat_rows`: the collision-census line measured in bench Part 1, recorded in docs/measurements/2026-10-22-issue-160-steps10-11a.md.", "kind": "feature", "origin_issue": 160, "pre_existing": true, "reproducer": "T7a/T7b/T8a fixtures (`j2_row_two_anchors_one_node_is_the_last_arm`, `j2_row_one_anchor_two_nodes_is_the_first_row`, `j5_node_keeps_the_dependency_span_map_answers`) state each shape; on CDO, `ALSEM_RETAINED_CENSUS=1 alsem analyze <ws> --format sarif` prints the `[retained-census] collision` line (`j2_alias_nodes`, `j5_compat_rows`, `collision_groups`; values recorded in the numbers file, not asserted here), and `adapter_cross_app_losses_on_cdo` lists the 5 caller_mismatch sites.", "capability": "J2 and J5 read `RowNodes.node_of` (each row's true node) instead of the anchor/span compatibility answers, and the caller check accepts each `#if` arm's own declaration", "acceptance": "`j2_alias_nodes` and `j5_compat_rows` are 0 on CDO; the 5 caller_mismatch sites leave R-RESIDUAL; T7a-c/T8a are restated to the corrected answers; output moves are triaged"},
+  {"subsystem": "#160 step 11b (A8 test precondition)", "locator": "tests/r4/r4_cross_app_program.rs a_dependencys_if_duplicated_subscriber_gets_each_edge_once", "symptom": "A8's precondition must be restated by 11b (spec §5.10). Since 11a it asserts `row_nodes.j5_node[first row] == None` and `j5_node[second row] == Some(_)` (J5's recorded gap). 11b corrects `j5_node` to `node_of`, which fails that precondition by design.", "kind": "feature", "origin_issue": 160, "pre_existing": false, "reproducer": "Set `j5_node = node_of.clone()` in `RowNodes::build` and run `cargo test --test r4 a_dependencys_if_duplicated_subscriber_gets_each_edge_once`: the precondition fails (left (true, true), right (false, true)).", "capability": "A8 keeps discriminating its break 8 (processed marked before a row maps) under 11b's corrected mapping, with a precondition stated on the corrected `j5_node`", "acceptance": "11b's spec restates A8's precondition; break 8 still fails the restated test"}
 ]
 ```
 
 ## Not delivered
-
-- A7b.1 as named (`FactKeyInterner`, hash-consed `SetArena`): replaced by amendment 7B-1 (a memo keyed by the callee
-  Cone-SCC), accepted by both panels; measured net gain of hash-consing ≈ 131 ms (P17).
-- #160 itself stays open: this PR is epic step 7b only ("Part of #160").
