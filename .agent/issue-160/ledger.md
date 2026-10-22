@@ -62,9 +62,10 @@ Amendments 10A-1..10A-5, 11A-1..11A-4; fallbacks F1-F11 pre-stated (spec §10).
 
 ## Base/Head SHAs
 
-- B (base, `origin/master`): `ca35bf51f4cbfc4213299fa0adf01f59fb636e32` (no rebase: master did not move)
-- H (head the full gates passed on): `4f88604f59c8f39b9b42abcef3a795d34c0e535b`
-- bench: parent `ca35bf51`, head `71580ffd` (code-identical to H; H adds the numbers file and CHANGELOG, docs only)
+- B (base, `origin/master`): `397fe6f1d6b68390d37b1c10ac57c5e2366f19ea` (the grammar bump #207; rebased from `ca35bf51`)
+- H (head the full gates passed on): `e4b8f7cf3fcdec0667d75bade505c66c1969bd1b`
+- before the rebase: B `ca35bf51`, H `4f88604f` (gates green there too; attestation superseded)
+- bench: parent `ca35bf51`, head `71580ffd` (grammar `4d75846c`; the bump moved zero goldens and left the CDO histogram identical, so the bench stands — rebased code commits are `=` in the range-diff)
 
 ## Timeline
 
@@ -114,6 +115,9 @@ Amendments 10A-1..10A-5, 11A-1..11A-4; fallbacks F1-F11 pre-stated (spec §10).
 - step 12: halt-check clear; whole-diff `check-diff --base ca35bf51 --head 4f88604f` `[]`; acceptance matrix all met (A10.3/A11a.3 `rg` checks empty on H); sanitize `{}`; ledger + register committed, then freeze-check and attest
 - step 12 done: evidence commit `3b199117`; freeze-check `[]`; attest OK (`--substitute astra=sol --substitute flash=opus`). Step 13: pushed, PR #206 marked ready (body = sanitized ledger, "Part of #160"), `ci-wait` exit 1, `merge-gate` → `ci-not-green`
 - CI red for EVERY PR and master (not this diff): `crates/al-syntax/build.rs:28` node-types hash panic — `tree-sitter-al` `main` moved 4d75846c → 960ed312 (one commit, "#if groups inside expressions", +1 named kind `preproc_conditional_operand`) after the 06:15 drift check. Not a flake (a rerun fails the same way); a fix inside #206 would mix in a grammar bump. No ci_fix charged. Operator decision (2026-10-22): "I do the bump first" — the grammar bump runs as its own branch/PR (`grammar/bump-960ed312`, separate grammar clone so the shared clone stays at 4d75846c); after it merges, #206 rebases (step 11 again, `rebase_regate`), re-gates, re-attests and merges. #206's lease kept (heartbeat)
+- grammar bump PR #207 (subagent; lowerer arms for `preproc_conditional_operand` and prefixes, 2 tests with proofs; old/new per-test outcomes identical apart from the 2 new tests; zero goldens moved; CDO histogram identical; local ci-steps all + check-goldens + cdo-gate green; GitHub CI green) merged by the conductor as `397fe6f1` (operator: "You can merge yourself")
+- step 11 again: ledger note committed, `charge rebase_regate` (→ 0), `git -c core.commentChar=';' rebase origin/master`: one conflict in CHANGELOG.md (both add an `[Unreleased] → Changed` entry), resolved keeping both. Range-diff `ca35bf51..a28cf661 origin/master..e4b8f7cf`: 13 of 16 commits `=`, 3 `!` (d63e4433, 70eb808c, 4f88604f) differ only in CHANGELOG context. Register re-pointed (70eb808c→d75d4229, 5fe9318d→218611b0, 71580ffd→f6d71b05); FP-04 reset (its anchor lines moved). check-diff `--base 397fe6f1 --head e4b8f7cf` `[]`
+- final r5 (the resolved conflict triggers one round; budget's last): sol and opus accepted FP-04 and confirmed the range-diff verdict. Register converged (46). Full set on H `e4b8f7cf` (grammar 960ed312): ci-steps-all, cdo-gate, check-goldens-coverage, check-goldens all exit 0, clean before/after
 
 ### Acceptance tests (step 6)
 
@@ -240,7 +244,7 @@ implementation work.
 
 ## Gate results
 
-On H `4f88604f` (agentflow records, clean before and after, CDO identity captured for cdo-gate):
+On H `e4b8f7cf` (rebased on `397fe6f1`, grammar 960ed312; agentflow records, clean before and after, CDO identity captured for cdo-gate; the same four were green on the pre-rebase H `4f88604f`):
 
 | gate | exit |
 |---|--:|
