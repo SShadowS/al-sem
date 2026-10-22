@@ -125,6 +125,7 @@ mod tests {
         let copy = |ce: &ClassifiedEdge| ClassifiedEdge {
             obligation_id: ce.obligation_id.clone(),
             edge: ce.edge.clone(),
+            site: ce.site,
         };
         let same = copy(&report.edges[i]);
         report.edges.push(same);

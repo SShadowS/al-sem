@@ -247,6 +247,63 @@ pub fn isolated_event_ids(routines: &[ModelRoutine]) -> std::collections::HashSe
     ids
 }
 
+/// #160 step 11a (§4.9): [`program_event_graph`] with each row's node read from
+/// `row_nodes.j5_node` (J5's answer, recorded at assembly) instead of the span
+/// map. Task 2 switches the attach to it; until then only the J5 oracle calls it.
+#[must_use]
+pub fn program_event_graph_with_row_nodes(
+    ctx: &crate::program::resolve::full::ProgramContext,
+    ws: &super::workspace::ModelEntities,
+    row_nodes: &super::workspace::RowNodes,
+) -> ProgramEvents {
+    event_graph_by(ctx, ws, |ri, _| row_nodes.j5(ri))
+}
+
+/// The guids of the apps whose routines `ws` holds, lowercased.
+fn model_guids(ws: &super::workspace::ModelEntities) -> std::collections::HashSet<String> {
+    ws.routines
+        .iter()
+        .map(|r| r.app_guid.to_ascii_lowercase())
+        .collect()
+}
+
+/// J5's span map (§3.2, §4.9): a model row's `(unit, start, end)` -> the program
+/// node there. Workspace rows from the graph's physical rows (first wins); a
+/// cross-app model's dependency rows (engine-switch S7.3) from the dependency
+/// tier's declarations (no physical rows), spelled with the model's
+/// `dep:<guid>:<path>` unit, in graph routine order (first wins).
+pub(crate) fn j5_span_map<'c>(
+    ctx: &'c crate::program::resolve::full::ProgramContext,
+    ws: &super::workspace::ModelEntities,
+) -> std::collections::HashMap<super::census::Key, &'c crate::program::node::RoutineNodeId> {
+    let graph = ctx.graph();
+    let primary = ctx.primary_app_ref;
+    let mut node_by_span = std::collections::HashMap::new();
+    for row in &graph.workspace_rows.routines {
+        node_by_span
+            .entry((row.file.clone(), row.start, row.end))
+            .or_insert(&row.node);
+    }
+    let model_guids = model_guids(ws);
+    let surface = ctx.decl_surface();
+    for r in &graph.routines {
+        let guid = &graph.apps.resolve(r.id.object.app).guid;
+        if r.id.object.app == primary || !model_guids.contains(&guid.to_ascii_lowercase()) {
+            continue;
+        }
+        if let Some((meta, path)) = surface.get_with_path(&r.id) {
+            node_by_span
+                .entry((
+                    format!("dep:{guid}:{path}"),
+                    crate::program::physical::Pos::of(meta.origin.start),
+                    crate::program::physical::Pos::of(meta.origin.end),
+                ))
+                .or_insert(&r.id);
+        }
+    }
+    node_by_span
+}
+
 /// Build the detector event graph from the program engine's subscription
 /// inventory (`SubscriberIndex::subscriptions`) for the model `ws`.
 ///
@@ -270,6 +327,24 @@ pub fn program_event_graph(
     ctx: &crate::program::resolve::full::ProgramContext,
     ws: &super::workspace::ModelEntities,
 ) -> ProgramEvents {
+    let spans = j5_span_map(ctx, ws);
+    event_graph_by(ctx, ws, |_, r| {
+        spans
+            .get(&super::census::anchor_key(&r.source_anchor))
+            .copied()
+    })
+}
+
+/// [`program_event_graph`] with each subscriber row's program node given by
+/// `node_of(row index, row)` (`None`: the row does not map).
+fn event_graph_by<'n>(
+    ctx: &crate::program::resolve::full::ProgramContext,
+    ws: &super::workspace::ModelEntities,
+    node_of: impl Fn(
+        usize,
+        &super::workspace::ModelRoutine,
+    ) -> Option<&'n crate::program::node::RoutineNodeId>,
+) -> ProgramEvents {
     use crate::engine::ids::sha256_hex;
     use crate::program::node::RoutineNodeId;
     use crate::program::registry::TargetParams;
@@ -285,39 +360,11 @@ pub fn program_event_graph(
     for s in index.subscriptions() {
         subs_by_node.entry(&s.subscriber).or_default().push(s);
     }
-    let mut node_by_span: HashMap<super::census::Key, &RoutineNodeId> = HashMap::new();
-    for row in &graph.workspace_rows.routines {
-        node_by_span
-            .entry((row.file.clone(), row.start, row.end))
-            .or_insert(&row.node);
-    }
-    // A cross-app model (engine-switch S7.3) also holds dependency routines; their
-    // declarations come from the dependency tier (no physical rows), spelled with
-    // the model's `dep:<guid>:<path>` unit.
-    let model_guids: HashSet<String> = ws
-        .routines
-        .iter()
-        .map(|r| r.app_guid.to_ascii_lowercase())
-        .collect();
+    // A cross-app model (engine-switch S7.3) also holds dependency routines.
+    let model_guids = model_guids(ws);
     let in_model = |app: crate::program::node::AppRef| {
         model_guids.contains(&graph.apps.resolve(app).guid.to_ascii_lowercase())
     };
-    let surface = ctx.decl_surface();
-    for r in &graph.routines {
-        if r.id.object.app == primary || !in_model(r.id.object.app) {
-            continue;
-        }
-        if let Some((meta, path)) = surface.get_with_path(&r.id) {
-            let guid = &graph.apps.resolve(r.id.object.app).guid;
-            node_by_span
-                .entry((
-                    format!("dep:{guid}:{path}"),
-                    crate::program::physical::Pos::of(meta.origin.start),
-                    crate::program::physical::Pos::of(meta.origin.end),
-                ))
-                .or_insert(&r.id);
-        }
-    }
     let mut routine_by_id = HashMap::new();
     for r in &graph.routines {
         routine_by_id.entry(&r.id).or_insert(r);
@@ -377,12 +424,12 @@ pub fn program_event_graph(
     // Unmapped rows, by id: counted after the loop, and only for an id no row
     // mapped. An unmapped row of an id another row mapped loses nothing.
     let mut unmapped: Vec<&str> = Vec::new();
-    for r in &ws.routines {
+    for (ri, r) in ws.routines.iter().enumerate() {
         if r.kind != "event-subscriber" {
             continue;
         }
         c.model_subscribers += 1;
-        let Some(node) = node_by_span.get(&super::census::anchor_key(&r.source_anchor)) else {
+        let Some(node) = node_of(ri, r) else {
             unmapped.push(r.id.as_str());
             continue;
         };

@@ -450,6 +450,7 @@ mod tests {
         let ce = ClassifiedEdge {
             obligation_id: crate::program::resolve::full::ObligationId::Publisher(pubr),
             edge,
+            site: None,
         };
 
         let rep = build_report(&graph, &[ce], ws);

@@ -1198,6 +1198,7 @@ mod tests {
                 callee_fp: 42,
             },
             edge,
+            site: None,
         };
         (graph, vec![ce], a)
     }
@@ -1283,6 +1284,7 @@ mod tests {
                 callee_fp: 7,
             },
             edge,
+            site: None,
         };
         // Drop the routines so only the unknown edge is present.
         g.routines.clear();
@@ -1376,6 +1378,7 @@ mod tests {
         let ce = ClassifiedEdge {
             obligation_id: crate::program::resolve::full::ObligationId::Publisher(pubr),
             edge,
+            site: None,
         };
         let doc = build_graphify_document(&graph, &[ce], a);
 
@@ -1467,6 +1470,7 @@ mod tests {
                 callee_fp: 99,
             },
             edge,
+            site: None,
         };
         let doc = build_graphify_document(&g, &[ce], primary);
 

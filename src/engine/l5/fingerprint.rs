@@ -328,6 +328,8 @@ mod tests {
             operation_sites: Vec::new(),
             statement_tree: None,
             loops: Vec::new(),
+            file: None,
+            site_exprs: Default::default(),
             source_anchor: crate::program::body::features::PAnchor {
                 source_unit_id: "ws:test.al".to_string(),
                 start_line: 0,

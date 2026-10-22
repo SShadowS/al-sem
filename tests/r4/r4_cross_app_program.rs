@@ -1730,18 +1730,39 @@ fn if_dup_dependency_workspace(dir: &Path) {
 /// maps. The unmapped first row loses nothing, so it is not counted in
 /// `unmapped_subscribers` (CR5): that counter is for lost subscriptions.
 ///
-/// Stated limit: "the first row does not map" is NOT asserted here (the span
-/// map is internal). It holds only while the dependency declaration surface
-/// keeps the LAST same-id span; this test guards "mark an id processed before
-/// it maps" (break 8, recorded failing in the issue ledger) only under that
-/// behaviour. If the surface ever keeps every span, both rows map and this
-/// test no longer discriminates break 8.
+/// Asserted precondition (#160 §5.10, replacing the stated limit "the first row
+/// does not map is NOT asserted, the span map is internal"): the recorded J5
+/// answer `row_nodes.j5_node` maps the second H row and not the first, read
+/// from the cross-app assembly before the attach. So this test keeps
+/// discriminating break 8 ("mark an id processed before it maps"). 11b, which
+/// corrects `j5_node` to `node_of`, fails this precondition by design and must
+/// restate the test.
 #[test]
 fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
-    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::program_calls::{
+        assemble_and_resolve_cross_app_program, cross_app_rows_before_attach,
+    };
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     if_dup_dependency_workspace(dir.path());
+    let rows = cross_app_rows_before_attach(&read(dir.path()), MI).expect("rows");
+    let h: Vec<usize> = rows
+        .workspace
+        .routines
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.name == "H" && r.kind == "event-subscriber")
+        .map(|(ri, _)| ri)
+        .collect();
+    assert_eq!(h.len(), 2, "precondition: two rows for H");
+    assert_eq!(
+        (
+            rows.row_nodes.j5(h[0]).is_some(),
+            rows.row_nodes.j5(h[1]).is_some()
+        ),
+        (false, true),
+        "precondition: J5 maps the second H row, not the first"
+    );
     let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
         .expect("model")
         .resolved;
@@ -1779,4 +1800,170 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
         )
     };
     assert_eq!(edges, [resolved("ona"), resolved("onb")]);
+}
+
+/// T8a (#160 §5.10): J5's two shapes in a source-bearing dependency, as event
+/// subscribers. `Ha` is T7a's shape (two `#if` arms at two lines, one node);
+/// `Hb` is T7b's (a split header whose arms differ in a parameter type: two
+/// nodes, two rows at one anchor).
+fn j5_shapes_dependency_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Go.al"),
+        "codeunit 50201 \"Ws Go\"\n{\n    procedure Go()\n    var\n        P: Codeunit \"Dep Pub\";\n    begin\n        P.RaiseA();\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/Pub.al",
+            r#"codeunit 50171 "Dep Pub"
+{
+    procedure RaiseA()
+    begin
+        OnA(1);
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnA(X: Integer)
+    begin
+    end;
+
+#if XSYM
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnA', '', false, false)]
+    local procedure Ha()
+    begin
+        Commit();
+    end;
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnA', '', false, false)]
+    local procedure Ha()
+    begin
+        Commit();
+    end;
+#endif
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnA', '', false, false)]
+#if XSYM
+    local procedure Hb(X: Integer)
+#else
+    local procedure Hb(X: Text)
+#endif
+    begin
+        Commit();
+    end;
+}
+"#,
+        )],
+        "",
+    );
+}
+
+/// T8a (#160 §5.10): the recorded J5 answer keeps J5's two wrong answers
+/// (P9): `Ha`'s first arm maps to nothing (the dependency surface keeps the
+/// LAST declaration), and both `Hb` rows map to ONE node, the first of `Hb`'s
+/// two nodes in graph routine order (J5's first-wins on the shared span). The
+/// event graph's edges per subscriber are hand-stated.
+#[test]
+fn j5_node_keeps_the_dependency_span_map_answers() {
+    use al_sem::program::model::program_calls::{
+        assemble_and_resolve_cross_app_program, cross_app_rows_before_attach,
+    };
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    j5_shapes_dependency_workspace(dir.path());
+    let rows = cross_app_rows_before_attach(&read(dir.path()), MI).expect("rows");
+    let named = |name: &str| -> Vec<usize> {
+        rows.workspace
+            .routines
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.name == name && r.kind == "event-subscriber")
+            .map(|(ri, _)| ri)
+            .collect()
+    };
+    let (ha, hb) = (named("Ha"), named("Hb"));
+    assert_eq!((ha.len(), hb.len()), (2, 2), "precondition: two rows each");
+    let anchor = |ri: usize| {
+        let a = &rows.workspace.routines[ri].source_anchor;
+        (a.start_line, a.start_column)
+    };
+    assert_ne!(
+        anchor(ha[0]),
+        anchor(ha[1]),
+        "precondition: Ha has two anchors"
+    );
+    assert_eq!(
+        anchor(hb[0]),
+        anchor(hb[1]),
+        "precondition: Hb has one anchor"
+    );
+    let ctx = build_context(dir.path()).expect("context");
+    let graph = ctx.graph();
+    let nodes = |name_lc: &str| -> Vec<al_sem::program::node::RoutineNodeId> {
+        let mut out = Vec::new();
+        for n in &graph.routines {
+            if graph.apps.resolve(n.id.object.app).guid == DEP_GUID
+                && &*n.id.name_lc == name_lc
+                && !out.contains(&n.id)
+            {
+                out.push(n.id.clone());
+            }
+        }
+        out
+    };
+    let (ha_nodes, hb_nodes) = (nodes("ha"), nodes("hb"));
+    assert_eq!(ha_nodes.len(), 1, "precondition: Ha is one node");
+    assert_eq!(hb_nodes.len(), 2, "precondition: Hb is two nodes");
+
+    // Today's event graph (the span map's answer), per subscriber.
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
+        .expect("model")
+        .resolved;
+    let mut edges: Vec<(String, String, String)> = m
+        .events
+        .graph
+        .edges
+        .iter()
+        .map(|e| {
+            (
+                e.event_id.rsplit('/').next().unwrap().to_string(),
+                e.subscriber_routine_id.clone(),
+                e.resolution.clone(),
+            )
+        })
+        .collect();
+    edges.sort();
+    // One edge for Ha's one id (its mapped second row); one per Hb row, each
+    // its own id (two nodes, two signatures), both bound to OnA.
+    let id = |ri: usize| rows.workspace.routines[ri].id.clone();
+    let edge = |ri: usize| ("ona".to_string(), id(ri), "resolved".to_string());
+    assert_eq!(id(ha[0]), id(ha[1]), "precondition: Ha's rows share one id");
+    assert_ne!(id(hb[0]), id(hb[1]), "precondition: Hb's rows are two ids");
+    let mut want = vec![edge(ha[0]), edge(hb[0]), edge(hb[1])];
+    want.sort();
+    assert_eq!(edges, want, "today's event graph, per subscriber");
+
+    let j5 = |ri: usize| rows.row_nodes.j5(ri).cloned();
+    assert_eq!(
+        (j5(ha[0]), j5(ha[1])),
+        (None, Some(ha_nodes[0].clone())),
+        "Ha: the first arm maps to nothing, the second to Ha's node"
+    );
+    assert_eq!(
+        (j5(hb[0]), j5(hb[1])),
+        (Some(hb_nodes[0].clone()), Some(hb_nodes[0].clone())),
+        "Hb: both rows map to the first Hb node in graph order"
+    );
 }

@@ -501,6 +501,13 @@ pub struct ModelRoutine {
     /// record-type projection drops, forwarded here for L5 detectors (d4 reads
     /// `routine.features.loops`). Additive — never reaches an R0–R3 golden.
     pub loops: Vec<crate::program::body::features::PLoop>,
+    /// #160 step 10 (§4.2): the parsed file this row was projected from; `None`
+    /// for a symbol-only row (it has no sites).
+    pub file: Option<crate::program::site_key::FileIx>,
+    /// #160 step 10 (§4.2): the expression index of each site, parallel to
+    /// `call_sites`, `record_operations` and `operation_sites`. With `file`, a
+    /// site's key. The body walk fills it at the pushes that number the sites.
+    pub site_exprs: crate::program::site_key::SiteExprs,
     /// The routine's OWN declaration anchor (the procedure / trigger_declaration
     /// node range, with `syntax_kind` = "procedure" / "trigger_declaration").
     /// al-sem `routine-indexer.ts:419` builds this as the routine's `sourceAnchor`.
@@ -755,6 +762,9 @@ pub fn rows_population(
 /// of the same text (`al_syntax::parse` over the same `read_al_source` bytes), so
 /// each workspace file is parsed once. S2b.4: `population` names the declarations
 /// to project; the analyze path takes it from the program graph's physical rows.
+/// #160 §4.2: each row stores `file` and its sites' expression indices. Returns
+/// the `(object, routine)` position of each row pushed, in push order, so the
+/// caller can name each row's program node (§4.6).
 #[allow(clippy::too_many_arguments)]
 fn project_ir(
     ir_file: &al_syntax::ir::AlFile,
@@ -765,8 +775,11 @@ fn project_ir(
     source_unit_id: &str,
     cols: &Utf16Cols,
     parenless_calls: &std::collections::HashSet<al_syntax::ir::ExprId>,
+    file: Option<crate::program::site_key::FileIx>,
     workspace: &mut ModelEntities,
-) {
+) -> Vec<(usize, usize)> {
+    // The `(object, routine)` position in `ir_file` of each row pushed, in order.
+    let mut positions = Vec::new();
     for (oi, routine_ixs) in population {
         let oi = *oi;
         let o = &ir_file.objects[oi];
@@ -1000,7 +1013,7 @@ fn project_ir(
                 .collect::<Vec<_>>(),
         );
 
-        for ir_routine in routine_ixs.iter().map(|&ri| &o.routines[ri]) {
+        for (rix, ir_routine) in routine_ixs.iter().map(|&ri| (ri, &o.routines[ri])) {
             let rname = ir_routine.name.clone();
             if rname.is_empty() {
                 continue;
@@ -1015,7 +1028,7 @@ fn project_ir(
             // unescapes it.
             let enclosing_member = crate::program::body::ir_walk::ir_enclosing_member(ir_routine);
 
-            let (routine_id, mut features) = {
+            let (routine_id, mut features, site_exprs) = {
                 let kind_for_id = crate::program::body::ir_walk::ir_routine_kind(ir_routine);
                 let params_for_id = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
                 let rid = crate::program::body::scope::compute_routine_id(
@@ -1029,17 +1042,18 @@ fn project_ir(
                     ir_routine.return_type.as_deref(),
                     model_instance_id,
                 );
-                let feats = crate::program::body::ir_walk::project_routine_features_ir_with(
-                    ir_file,
-                    oi,
-                    ir_routine,
-                    &rid,
-                    source,
-                    source_unit_id,
-                    source_table_name.as_deref(),
-                    parenless_calls,
-                );
-                (rid, feats)
+                let (feats, site_exprs) =
+                    crate::program::body::ir_walk::project_routine_features_ir_keyed(
+                        ir_file,
+                        oi,
+                        ir_routine,
+                        &rid,
+                        source,
+                        source_unit_id,
+                        source_table_name.as_deref(),
+                        parenless_calls,
+                    );
+                (rid, feats, site_exprs)
             };
 
             // R1b control-context lattice (the SAME pass `aldump --l2` applies):
@@ -1131,7 +1145,7 @@ fn project_ir(
                                 .iter()
                                 .any(|rv| rv.name.eq_fold_identifier(receiver))
                     });
-            let record_operations = features
+            let record_operations: Vec<ModelRecordOperation> = features
                 .record_operations
                 .iter()
                 .map(|op| ModelRecordOperation {
@@ -1372,6 +1386,21 @@ fn project_ir(
                 None => (None, None),
             };
 
+            // The walk fills the key vectors at the pushes that number the sites.
+            debug_assert_eq!(
+                (
+                    site_exprs.calls.len(),
+                    site_exprs.record_ops.len(),
+                    site_exprs.op_sites.len()
+                ),
+                (
+                    call_sites.len(),
+                    record_operations.len(),
+                    operation_sites.len()
+                ),
+                "{routine_id}: one key per site"
+            );
+            positions.push((oi, rix));
             workspace.routines.push(ModelRoutine {
                 id: routine_id,
                 stable_routine_id,
@@ -1396,6 +1425,8 @@ fn project_ir(
                 operation_sites,
                 statement_tree,
                 loops,
+                file,
+                site_exprs,
                 source_anchor,
                 declaration_start_line: declaration_start_line(ir_routine),
                 identifier_references,
@@ -1410,6 +1441,7 @@ fn project_ir(
             });
         }
     }
+    positions
 }
 
 // ---------------------------------------------------------------------------
@@ -1435,8 +1467,10 @@ pub fn assemble_and_resolve_workspace_from_program(
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
 ) -> Option<ModelRows> {
-    let ws = assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
-    finish_resolved(ws, inputs, skip_roots_config)
+    let (ws, node_of) =
+        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
+    let row_nodes = RowNodes::build(ctx, &ws, node_of, None);
+    finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
 
 /// The CROSS-APP detector model (engine-switch S7.2): the workspace's rows exactly as
@@ -1462,9 +1496,21 @@ pub fn assemble_and_resolve_cross_app_from_program(
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
 ) -> Option<(ModelRows, AbiRowIds)> {
-    let mut ws = assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
-    let abi_rows = append_dependency_rows(&mut ws, model_instance_id, ctx, demand, parenless);
-    Some((finish_resolved(ws, inputs, skip_roots_config)?, abi_rows))
+    let (mut ws, mut node_of) =
+        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
+    let abi_rows = append_dependency_rows(
+        &mut ws,
+        &mut node_of,
+        model_instance_id,
+        ctx,
+        demand,
+        parenless,
+    );
+    let row_nodes = RowNodes::build(ctx, &ws, node_of, demand);
+    Some((
+        finish_resolved(ws, inputs, skip_roots_config, row_nodes)?,
+        abi_rows,
+    ))
 }
 
 /// One dependency app in a cross-app model's snapshot (engine-switch S7.4).
@@ -1494,8 +1540,12 @@ pub struct DeclaredDependencyDecl {
 /// to it stays a dependency target.
 pub type AbiRowIds = HashMap<crate::program::node::RoutineNodeId, String>;
 
+/// Appends the dependency rows to `ws` and each row's program node to `node_of`
+/// (#160 §4.6: a symbol-only row's J3 node, a source row's
+/// `source_routine_node_id`).
 fn append_dependency_rows(
     ws: &mut ModelEntities,
+    node_of: &mut Vec<Option<crate::program::node::RoutineNodeId>>,
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
@@ -1534,10 +1584,15 @@ fn append_dependency_rows(
                     .iter()
                     .map(move |r| crate::program::abi_ingest::abi_routine_node_id(&obj, r))
             });
-            for (node_id, row) in node_ids.zip(&p.routines) {
-                ids.entry(node_id)
-                    .and_modify(|v| *v = None)
-                    .or_insert_with(|| Some(row.id.clone()));
+            let mut nodes = node_ids.map(Some).chain(std::iter::repeat(None));
+            for row in &p.routines {
+                let node_id = nodes.next().flatten();
+                if let Some(node_id) = &node_id {
+                    ids.entry(node_id.clone())
+                        .and_modify(|v| *v = None)
+                        .or_insert_with(|| Some(row.id.clone()));
+                }
+                node_of.push(node_id);
             }
             objects.extend(p.objects);
             tables.extend(p.tables);
@@ -1564,7 +1619,7 @@ fn append_dependency_rows(
             let calls = app
                 .and_then(|a| parenless.get(&(a, pf.virtual_path.clone())))
                 .unwrap_or(&no_calls);
-            project_ir(
+            let positions = project_ir(
                 &pf.file,
                 &population,
                 &pf.text,
@@ -1573,8 +1628,18 @@ fn append_dependency_rows(
                 &format!("dep:{guid}:{}", pf.virtual_path),
                 &cols,
                 calls,
+                app.and_then(|a| ctx.file_ix(a, &pf.virtual_path)),
                 ws,
             );
+            node_of.extend(positions.into_iter().map(|(oi, ri)| {
+                app.map(|app| {
+                    let o = &pf.file.objects[oi];
+                    crate::program::sig_fp::source_routine_node_id(
+                        dep_object_node_id(app, o),
+                        &o.routines[ri],
+                    )
+                })
+            }));
         }
     }
     ids.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
@@ -1588,21 +1653,12 @@ fn demanded_population(
     app: crate::program::node::AppRef,
     demand: &std::collections::HashSet<crate::program::node::RoutineNodeId>,
 ) -> FilePopulation {
-    use crate::program::node::{ObjKey, ObjectNodeId};
-    use al_syntax::IdentifierFoldExt;
     ir_file
         .objects
         .iter()
         .enumerate()
         .map(|(oi, o)| {
-            let object = ObjectNodeId {
-                app,
-                kind: o.kind,
-                key: match o.id {
-                    Some(n) => ObjKey::Id(n),
-                    None => ObjKey::Name(o.name.fold_identifier().into()),
-                },
-            };
+            let object = dep_object_node_id(app, o);
             let routines = o
                 .routines
                 .iter()
@@ -1618,6 +1674,25 @@ fn demanded_population(
             (oi, routines)
         })
         .collect()
+}
+
+/// The program object id of dependency object `o` of `app`, as the resolver
+/// builds a caller's (`resolve_file_obligations`): the owning app, the object's
+/// number or folded name.
+fn dep_object_node_id(
+    app: crate::program::node::AppRef,
+    o: &al_syntax::ir::ObjectDecl,
+) -> crate::program::node::ObjectNodeId {
+    use crate::program::node::{ObjKey, ObjectNodeId};
+    use al_syntax::IdentifierFoldExt;
+    ObjectNodeId {
+        app,
+        kind: o.kind,
+        key: match o.id {
+            Some(n) => ObjKey::Id(n),
+            None => ObjKey::Name(o.name.fold_identifier().into()),
+        },
+    }
 }
 
 /// Which files the program-backed assembly projects.
@@ -1668,7 +1743,10 @@ fn assemble_l3_workspace_from_program(
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
-) -> Option<ModelEntities> {
+) -> Option<(
+    ModelEntities,
+    Vec<Option<crate::program::node::RoutineNodeId>>,
+)> {
     let selected = {
         let _s = pt::span("l3", "l3.select_program_parse");
         select_program_files(inputs, ctx)?
@@ -1691,6 +1769,14 @@ fn assemble_l3_workspace_from_program(
     let _s = pt::span("l3", "l3.project_parallel");
     // S2b.4: what exists is what the program engine extracted.
     let population = rows_population(&ctx.graph().workspace_rows);
+    // #160 §4.6: a workspace row's node is its physical row's.
+    let node_at: HashMap<(&str, u32, u32), &crate::program::node::RoutineNodeId> = ctx
+        .graph()
+        .workspace_rows
+        .routines
+        .iter()
+        .map(|r| ((r.file.as_str(), r.object_ix, r.routine_ix), &r.node))
+        .collect();
     let no_decls = FilePopulation::new();
     let no_calls = std::collections::HashSet::new();
     // Deterministic order: files sorted by name (the `ws:<name>` unit id order),
@@ -1698,7 +1784,11 @@ fn assemble_l3_workspace_from_program(
     let mut sorted = files;
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     use rayon::prelude::*;
-    let fragments: Vec<ModelEntities> = crate::big_stack::big_stack_pool().install(|| {
+    type Fragment = (
+        ModelEntities,
+        Vec<Option<crate::program::node::RoutineNodeId>>,
+    );
+    let fragments: Vec<Fragment> = crate::big_stack::big_stack_pool().install(|| {
         sorted
             .par_iter()
             .map(|(fname, pf)| {
@@ -1721,7 +1811,7 @@ fn assemble_l3_workspace_from_program(
                 let calls = parenless
                     .get(&(ctx.primary_app_ref, pf.virtual_path.clone()))
                     .unwrap_or(&no_calls);
-                project_ir(
+                let positions = project_ir(
                     &pf.file,
                     pop,
                     &pf.text,
@@ -1730,9 +1820,21 @@ fn assemble_l3_workspace_from_program(
                     &source_unit_id,
                     &cols,
                     calls,
+                    ctx.file_ix(ctx.primary_app_ref, &pf.virtual_path),
                     &mut ws,
                 );
-                ws
+                let nodes = positions
+                    .into_iter()
+                    .map(|(oi, ri)| {
+                        let at = (
+                            *fname,
+                            u32::try_from(oi).expect("object index fits u32"),
+                            u32::try_from(ri).expect("routine index fits u32"),
+                        );
+                        node_at.get(&at).map(|n| (*n).clone())
+                    })
+                    .collect();
+                (ws, nodes)
             })
             .collect()
     });
@@ -1741,12 +1843,14 @@ fn assemble_l3_workspace_from_program(
         tables: Vec::new(),
         routines: Vec::new(),
     };
-    for mut frag in fragments {
+    let mut node_of = Vec::new();
+    for (mut frag, nodes) in fragments {
         workspace.objects.append(&mut frag.objects);
         workspace.tables.append(&mut frag.tables);
         workspace.routines.append(&mut frag.routines);
+        node_of.extend(nodes);
     }
-    Some(workspace)
+    Some((workspace, node_of))
 }
 
 /// The finishing half shared by the single-app and cross-app entries: resolve,
@@ -1755,6 +1859,7 @@ fn finish_resolved(
     mut ws: ModelEntities,
     inputs: &crate::program::inputs::InputSet,
     skip_roots_config: bool,
+    row_nodes: RowNodes,
 ) -> Option<ModelRows> {
     let resolved = {
         resolve(&mut ws);
@@ -1777,6 +1882,7 @@ fn finish_resolved(
             root_classifications,
             primary_app,
             infra_diagnostics,
+            row_nodes,
         }
     };
     // Empty fail-closed model (no objects/routines) → treat as not-analyzable.
@@ -1885,6 +1991,194 @@ pub struct ModelRows {
     pub root_classifications: Vec<crate::engine::root_classification::RootClassification>,
     pub primary_app: Option<crate::engine::gate::app_attribution::App>,
     pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
+    /// #160 step 11a (§4.6): the row/node table recorded at assembly. Build-local:
+    /// read by the adapter and the event graph, never retained by the model.
+    pub row_nodes: RowNodes,
+}
+
+/// #160 step 11a (§4.6): each row's node and today's J2/J5 answers, recorded once
+/// at assembly. Indexed by `RoutineIx` = the row's position in
+/// `ModelEntities::routines`.
+#[derive(Debug, Clone, Default)]
+pub struct RowNodes {
+    /// The true node of each row (per `RoutineIx`).
+    pub node_of: Vec<Option<crate::program::node::RoutineNodeId>>,
+    /// The program's declaration anchor `(FileIx, start line, start col)` of every
+    /// `from` node of a program edge the join reads, captured from
+    /// `DeclSurface::get_with_path`, never derived from a row.
+    pub decl_anchor:
+        HashMap<crate::program::node::RoutineNodeId, (crate::program::site_key::FileIx, u32, u32)>,
+    /// J2's answer (§4.7): node -> the FIRST non-symbol-only row at the node's
+    /// surface declaration anchor (a `RoutineIx`).
+    pub j2_row: HashMap<crate::program::node::RoutineNodeId, u32>,
+    /// J5's answer (§4.9): per row, the node today's span map gives, or `None`.
+    pub j5_node: Vec<Option<crate::program::node::RoutineNodeId>>,
+}
+
+/// #160 step 11a (§4.10): rows that share a string id, per model, printed with
+/// the `rel.*` census lines.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CollisionCensus {
+    pub routine_rows: usize,
+    pub distinct_ids: usize,
+    /// Ids held by more than one row.
+    pub collision_groups: usize,
+    /// Rows in those groups.
+    pub collision_rows: usize,
+    /// Groups whose rows all stand for one node (`node_of`) / for several.
+    pub groups_one_node: usize,
+    pub groups_several_nodes: usize,
+    /// Rows in a group, by role.
+    pub rows_primary: usize,
+    pub rows_dependency_source: usize,
+    pub rows_symbol_only: usize,
+    /// Nodes whose `j2_row`'s `node_of` is another node (J2's cross-node alias).
+    pub j2_alias_nodes: usize,
+    /// Event-subscriber rows (the only rows J5 answers for) whose `j5_node`
+    /// differs from `node_of`.
+    pub j5_compat_rows: usize,
+}
+
+/// #160 step 11a (§4.10): the collision census of one model.
+#[must_use]
+pub fn collision_census(ws: &ModelEntities, row_nodes: &RowNodes) -> CollisionCensus {
+    let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (ri, r) in ws.routines.iter().enumerate() {
+        by_id.entry(r.id.as_str()).or_default().push(ri);
+    }
+    let node = |ri: usize| row_nodes.node_of.get(ri).and_then(Option::as_ref);
+    let mut c = CollisionCensus {
+        routine_rows: ws.routines.len(),
+        distinct_ids: by_id.len(),
+        ..CollisionCensus::default()
+    };
+    for rows in by_id.values().filter(|rows| rows.len() > 1) {
+        c.collision_groups += 1;
+        c.collision_rows += rows.len();
+        if rows
+            .iter()
+            .all(|&ri| node(ri).is_some() && node(ri) == node(rows[0]))
+        {
+            c.groups_one_node += 1;
+        } else {
+            c.groups_several_nodes += 1;
+        }
+        for &ri in rows {
+            let unit = &ws.routines[ri].source_anchor.source_unit_id;
+            if unit.starts_with("ws:") {
+                c.rows_primary += 1;
+            } else if unit.starts_with("dep:") {
+                c.rows_dependency_source += 1;
+            } else {
+                c.rows_symbol_only += 1;
+            }
+        }
+    }
+    c.j2_alias_nodes = row_nodes
+        .j2_row
+        .iter()
+        .filter(|&(n, &ri)| node(ri as usize) != Some(n))
+        .count();
+    c.j5_compat_rows = ws
+        .routines
+        .iter()
+        .enumerate()
+        .filter(|(ri, r)| r.kind == "event-subscriber" && row_nodes.j5(*ri) != node(*ri))
+        .count();
+    c
+}
+
+impl RowNodes {
+    /// The `program.row_nodes` census bucket (#160 §4.13), shallow.
+    pub(crate) fn census(&self) -> crate::engine::census::Tally {
+        use crate::program::node::RoutineNodeId;
+        let mut t = crate::engine::census::Tally::default();
+        t.buf::<Option<RoutineNodeId>>(self.node_of.len())
+            .buf::<(RoutineNodeId, (crate::program::site_key::FileIx, u32, u32))>(
+                self.decl_anchor.len(),
+            )
+            .buf::<(RoutineNodeId, u32)>(self.j2_row.len())
+            .buf::<Option<RoutineNodeId>>(self.j5_node.len());
+        t
+    }
+
+    /// Record the table at the end of assembly (§4.6-§4.9), from the rows, the
+    /// program graph and its `DeclSurface`. `node_of` is each row's node, as the
+    /// assembly projected it; `demand` is the demand the model was built from
+    /// (`None`: built without demand).
+    pub(crate) fn build(
+        ctx: &crate::program::resolve::full::ProgramContext,
+        ws: &ModelEntities,
+        node_of: Vec<Option<crate::program::node::RoutineNodeId>>,
+        demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
+    ) -> Self {
+        use crate::program::model::program_calls::{caller_held, model_apps, model_unit};
+        let _s = pt::span("l3", "l3.row_nodes");
+        debug_assert_eq!(node_of.len(), ws.routines.len(), "one node slot per row");
+        let graph = ctx.graph();
+        let primary = ctx.primary_app_ref;
+        let surface = ctx.decl_surface();
+        let apps = model_apps(graph, primary, ws);
+        // J2's `by_decl`: the FIRST non-symbol-only row at each declaration anchor.
+        let mut first_at: HashMap<(&str, u32, u32), u32> = HashMap::new();
+        for (ri, r) in ws.routines.iter().enumerate() {
+            let a = &r.source_anchor;
+            if a.source_unit_id.is_empty() {
+                continue;
+            }
+            let unit = a
+                .source_unit_id
+                .strip_prefix("ws:")
+                .unwrap_or(&a.source_unit_id);
+            first_at
+                .entry((unit, a.start_line, a.start_column))
+                .or_insert(u32::try_from(ri).expect("row index fits u32"));
+        }
+        // J2's domain is every model-app node with a declaration; the caller
+        // check reads the declarations of the callers the join reads (§4.5).
+        let (mut decl_anchor, mut j2_row) = (HashMap::new(), HashMap::new());
+        for n in &graph.routines {
+            let id = &n.id;
+            if !apps.contains(&id.object.app) {
+                continue;
+            }
+            let Some((meta, path)) = surface.get_with_path(id) else {
+                continue;
+            };
+            let (line, col) = (meta.origin.start.row, meta.origin.start.column);
+            if caller_held(id, primary, demand)
+                && let Some(file) = ctx.file_ix(id.object.app, path)
+            {
+                decl_anchor.insert(id.clone(), (file, line, col));
+            }
+            let unit = model_unit(graph, primary, id.object.app, path);
+            if let Some(&ri) = first_at.get(&(unit.as_str(), line, col)) {
+                j2_row.insert(id.clone(), ri);
+            }
+        }
+        let spans = crate::program::model::events::j5_span_map(ctx, ws);
+        let j5_node = ws
+            .routines
+            .iter()
+            .map(|r| {
+                spans
+                    .get(&super::census::anchor_key(&r.source_anchor))
+                    .map(|n| (*n).clone())
+            })
+            .collect();
+        RowNodes {
+            node_of,
+            decl_anchor,
+            j2_row,
+            j5_node,
+        }
+    }
+
+    /// J5's recorded answer for row `ri` (`None` past the end).
+    #[must_use]
+    pub fn j5(&self, ri: usize) -> Option<&crate::program::node::RoutineNodeId> {
+        self.j5_node.get(ri).and_then(Option::as_ref)
+    }
 }
 
 /// The detector model: the rows, with the program engine's calls and event graph.

@@ -846,6 +846,8 @@ mod tests {
             operation_sites: Vec::new(),
             statement_tree: None,
             loops: Vec::new(),
+            file: None,
+            site_exprs: Default::default(),
             source_anchor: anchor("trigger_declaration"),
             declaration_start_line: 0,
             identifier_references: Vec::new(),

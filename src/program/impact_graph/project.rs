@@ -1315,6 +1315,7 @@ mod tests {
                     },
                     routes,
                 },
+                site: None,
             });
             ob
         }
@@ -1350,6 +1351,7 @@ mod tests {
                     },
                     routes: subscribers.iter().map(|s| src(s)).collect(),
                 },
+                site: None,
             });
         }
 
@@ -2055,6 +2057,7 @@ mod tests {
                 },
                 routes: vec![unknown()],
             },
+            site: None,
         });
         let site = w.edge(
             &r,

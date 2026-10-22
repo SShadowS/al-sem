@@ -99,6 +99,10 @@ pub enum ObligationId {
 pub struct ClassifiedEdge {
     pub obligation_id: ObligationId,
     pub edge: Edge,
+    /// #160 step 10 (§4.2): the call site's key and `fires`, stamped when the
+    /// resolution was given a file; `None` for publisher edges and the LSP's
+    /// unstamped path.
+    pub site: Option<crate::program::site_key::ProgramSite>,
 }
 
 /// Result of resolving ALL call-site obligations in ONE workspace file —
@@ -318,6 +322,19 @@ pub fn is_primary_scope(edge: &ClassifiedEdge, primary_app_ref: AppRef) -> bool 
 // ---------------------------------------------------------------------------
 // Core resolution
 // ---------------------------------------------------------------------------
+
+/// The record operations the program resolver emits an `ImplicitTrigger` edge
+/// for. `ModifyAll`/`DeleteAll` (with RunTrigger) fire `OnModify`/`OnDelete`
+/// once per row; leaving them out dropped those existing program edges from the
+/// model (#96). One function decides on both sides of the adapter's join (#160
+/// §4.4): the resolver stamps it on each record-op site, the model reads it for
+/// its own record ops.
+pub(crate) fn can_fire_trigger(op: &str) -> bool {
+    matches!(
+        op,
+        "insert" | "modify" | "delete" | "modifyall" | "deleteall" | "validate" | "rename"
+    )
+}
 
 /// Inline helper: an Unknown-evidence Unresolved route (resolution failure).
 /// Task 3: `reason` is REQUIRED — every call site supplies a diagnostic
@@ -897,6 +914,10 @@ fn resolve_call_site_obligation(
 /// function returns its own contribution in a [`FileResolution`] instead of
 /// mutating shared state, so per-file re-resolution (rung 1) never needs the
 /// other files' accumulators in scope.
+///
+/// `file` (#160 step 10, §4.2/§4.2a): the file's [`crate::program::site_key::FileIx`]
+/// when the caller has a `ProgramContext` file table; the LSP passes `None` (its
+/// explicit unstamped path), and then every edge's `site` is `None`.
 pub(crate) fn resolve_file_obligations(
     pf: &ParsedFile,
     caller_app: AppRef,
@@ -904,6 +925,7 @@ pub(crate) fn resolve_file_obligations(
     index: &ResolveIndex,
     surface: &DeclSurface,
     obj_node_map: &HashMap<ObjectNodeId, &ObjectNode>,
+    file: Option<crate::program::site_key::FileIx>,
 ) -> FileResolution {
     let mut edges: Vec<ClassifiedEdge> = Vec::new();
     let mut flagged: Vec<FlaggedBuiltinDispatchSite> = Vec::new();
@@ -1064,6 +1086,19 @@ pub(crate) fn resolve_file_obligations(
                         completeness,
                         routes,
                     },
+                    // #160 §4.2, §4.4: the key, and whether a record op can fire
+                    // a trigger (the extractor's own op name).
+                    site: file.map(|file| crate::program::site_key::ProgramSite {
+                        at: crate::program::site_key::SiteIx {
+                            file,
+                            expr: u32::try_from(site.expr.index())
+                                .expect("an expression index fits u32"),
+                        },
+                        fires: matches!(
+                            &site.shape,
+                            CalleeShape::RecordOp { op, .. } if can_fire_trigger(&op.fold_identifier())
+                        ),
+                    }),
                 });
             }
         }
@@ -1188,6 +1223,7 @@ fn resolve_full_program_from_parts(
     surface: &DeclSurface,
     primary_app_ref: AppRef,
     ws_file_set: &HashSet<String>,
+    files: &crate::program::site_key::FileTable,
 ) -> (
     Vec<ClassifiedEdge>,
     Coverage,
@@ -1249,6 +1285,7 @@ fn resolve_full_program_from_parts(
                         &index,
                         surface,
                         &obj_node_map,
+                        files.get(primary_app_ref, &pf.virtual_path),
                     );
                     (pf.virtual_path.clone(), r)
                 })
@@ -1291,6 +1328,7 @@ fn resolve_full_program_from_parts(
         classified_edges.push(ClassifiedEdge {
             obligation_id: obl_id,
             edge,
+            site: None,
         });
     }
 
@@ -1394,6 +1432,7 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
             &ctx.decl_surface(),
             primary_app_ref,
             ws_file_set,
+            &ctx.files,
         );
 
     // ── Step 6: Histograms ────────────────────────────────────────────────────
@@ -1466,6 +1505,7 @@ pub fn resolve_full_program_for_export(
             &ctx.decl_surface(),
             ctx.primary_app_ref,
             &ctx.ws_file_set,
+            &ctx.files,
         );
     Some((ctx.graph, edges, ctx.primary_app_ref))
 }
@@ -1503,6 +1543,9 @@ pub struct ProgramContext {
     pub(crate) dep_layer: DepLayer,
     /// What this build was asked to keep (spec §4).
     pub(crate) profile: BuildProfile,
+    /// #160 step 10 (§4.1): every parsed file of this build, numbered (the
+    /// workspace's, then the dependency bodies' when kept). The only file table.
+    pub(crate) files: crate::program::site_key::FileTable,
 }
 
 impl ProgramContext {
@@ -1510,6 +1553,12 @@ impl ProgramContext {
     #[must_use]
     pub fn profile(&self) -> BuildProfile {
         self.profile
+    }
+
+    /// The [`crate::program::site_key::FileIx`] of `path` in `app` (#160 §4.1).
+    #[must_use]
+    pub fn file_ix(&self, app: AppRef, path: &str) -> Option<crate::program::site_key::FileIx> {
+        self.files.get(app, path)
     }
 
     /// The app-set snapshot the graph was built from.
@@ -1654,7 +1703,15 @@ impl ProgramContext {
             files
                 .par_iter()
                 .map(|(app, pf)| {
-                    resolve_file_obligations(pf, *app, &self.graph, &index, &surface, &maps[app])
+                    resolve_file_obligations(
+                        pf,
+                        *app,
+                        &self.graph,
+                        &index,
+                        &surface,
+                        &maps[app],
+                        self.file_ix(*app, &pf.virtual_path),
+                    )
                 })
                 .collect()
         });
@@ -1858,7 +1915,17 @@ pub fn build_context_from_snapshot_cached(
         )
     })?;
 
+    let files = crate::program::site_key::FileTable::build(
+        &graph,
+        &parsed,
+        dep_layer
+            .dep_nodes
+            .bodies
+            .as_deref()
+            .map_or(&[], Vec::as_slice),
+    );
     Ok(ProgramContext {
+        files,
         snap,
         graph,
         parsed,
@@ -4126,6 +4193,7 @@ mod tests {
                 &DeclSurface::build(&graph, &parsed),
                 primary_app_ref,
                 &ws_file_set,
+                &crate::program::site_key::FileTable::build(&graph, &parsed, &[]),
             );
             resolve_from_parts_total_times.push(t5.elapsed());
 
@@ -4250,6 +4318,7 @@ mod tests {
             &ctx.decl_surface(),
             primary_app_ref,
             ws_file_set,
+            &ctx.files,
         );
         assert!(coverage_holds(&coverage), "fixture coverage must hold");
 
@@ -4289,6 +4358,10 @@ mod tests {
                 if !ws_file_set.contains(&pf.virtual_path) {
                     continue;
                 }
+                // #160 §5.11: the workspace caller's call, with the file's key.
+                let file_ix = ctx
+                    .file_ix(primary_app_ref, &pf.virtual_path)
+                    .expect("precondition: every parsed workspace file has a FileIx");
                 let file_res = resolve_file_obligations(
                     pf,
                     primary_app_ref,
@@ -4296,7 +4369,17 @@ mod tests {
                     &index,
                     &surface,
                     &obj_node_map,
+                    Some(file_ix),
                 );
+                // #160 §5.11: every call-site edge carries the file's stamp.
+                for ce in &file_res.edges {
+                    assert_eq!(
+                        ce.site.map(|s| s.at.file),
+                        Some(file_ix),
+                        "file {}: a call-site edge's stamp names its file",
+                        pf.virtual_path
+                    );
+                }
 
                 // Per-file assertion: this file's edges equal the full run's
                 // Phase-1 edges filtered to this file's virtual_path.
@@ -4336,6 +4419,122 @@ mod tests {
             assert_eq!(&got.obligation_id, &want.obligation_id);
             assert_eq!(&got.edge, &want.edge);
         }
+    }
+
+    /// #160 T10 (§5.11): the LSP's unstamped path, pinned at the function the LSP
+    /// calls (`recompute_file` returns `LspEdge`s, so no stamp is visible
+    /// through it). `None` -> every edge `site == None`; `Some(f)` -> every
+    /// call-site edge stamped with `f`; the two lists are equal apart from `site`.
+    #[test]
+    fn resolve_file_obligations_unstamped_and_stamped() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-cross-object-chain");
+        let ctx = build_context(&ws).expect("build_context");
+        let primary = ctx.primary_app_ref;
+        let map = app_object_map(&ctx.graph, primary);
+        let index = ResolveIndex::build(&ctx.graph);
+        let surface = ctx.decl_surface();
+        // A key no table hands out, so a stamp can only come from the argument.
+        let f = crate::program::site_key::FileIx(7_777);
+        let mut checked = 0;
+        for unit in ctx
+            .parsed
+            .iter()
+            .filter(|u| ctx.graph.apps.find(&u.app) == Some(primary))
+        {
+            for pf in unit
+                .files
+                .iter()
+                .filter(|pf| ctx.ws_file_set.contains(&pf.virtual_path))
+            {
+                let unstamped =
+                    resolve_file_obligations(pf, primary, &ctx.graph, &index, &surface, &map, None);
+                let stamped = resolve_file_obligations(
+                    pf,
+                    primary,
+                    &ctx.graph,
+                    &index,
+                    &surface,
+                    &map,
+                    Some(f),
+                );
+                if unstamped.edges.is_empty() {
+                    continue;
+                }
+                assert!(
+                    unstamped.edges.iter().all(|ce| ce.site.is_none()),
+                    "{}: the unstamped path stamps nothing",
+                    pf.virtual_path
+                );
+                assert_eq!(unstamped.edges.len(), stamped.edges.len());
+                for (u, s) in unstamped.edges.iter().zip(&stamped.edges) {
+                    assert_eq!(u.obligation_id, s.obligation_id);
+                    assert_eq!(u.edge, s.edge, "equal apart from `site`");
+                }
+                assert!(
+                    stamped.edges.iter().all(|ce| matches!(
+                        ce.site,
+                        Some(crate::program::site_key::ProgramSite { at, .. }) if at.file == f
+                    )),
+                    "{}: every call-site edge carries the given file",
+                    pf.virtual_path
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 1,
+            "fixture precondition: a workspace file with call sites"
+        );
+    }
+
+    /// #160 T6 (§5.6): the resolver stamps `fires` from the op it parsed, with
+    /// the same answer `can_fire_trigger` gives the op name. One op per line.
+    #[test]
+    fn record_op_site_fires_matches_can_fire_trigger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("Tab.al"),
+            "table 50100 \"Tab\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n        field(2; Amount; Decimal) { }\n    }\n\n    procedure Q()\n    begin\n        Modify();\n    end;\n}\n",
+        )
+        .expect("write Tab.al");
+        std::fs::write(
+            dir.path().join("C.al"),
+            "codeunit 50101 \"C\"\n{\n    procedure P()\n    var\n        Rec: Record \"Tab\";\n        T: Record \"Tab\";\n    begin\n        Rec.Insert(true);\n        Rec.SetRange(Code, 'X');\n        Rec.ModifyAll(Amount, 0);\n        T.ModifyAll(Amount, 0, true);\n    end;\n}\n",
+        )
+        .expect("write C.al");
+        let ctx = build_context(dir.path()).expect("build_context");
+        let report = resolve_full_program_with(&ctx);
+        // (file, 0-based line) -> the op's label, as hand-stated above.
+        let sites = [
+            ("C.al", 7, "Rec.Insert", Some(true)),
+            ("C.al", 8, "Rec.SetRange", Some(false)),
+            ("C.al", 9, "Rec.ModifyAll", Some(true)),
+            ("Tab.al", 10, "implicit Rec Modify", Some(true)),
+            ("C.al", 10, "T.ModifyAll(Amount, 0, true)", Some(true)),
+        ];
+        let mut got = Vec::new();
+        for (file, line, label, _) in sites {
+            let at: Vec<_> = report
+                .edges
+                .iter()
+                .filter(|ce| {
+                    matches!(ce.obligation_id, ObligationId::CallSite { .. })
+                        && ce.edge.site.span.unit == file
+                        && ce.edge.site.span.start.line == line
+                })
+                .collect();
+            assert_eq!(at.len(), 1, "precondition: one program site for {label}");
+            assert_eq!(
+                at[0].edge.kind,
+                crate::program::resolve::edge::EdgeKind::ImplicitTrigger,
+                "precondition: {label} is a record op"
+            );
+            got.push((label, at[0].site.map(|s| s.fires)));
+        }
+        let want: Vec<_> = sites.iter().map(|(_, _, l, f)| (*l, *f)).collect();
+        assert_eq!(got, want, "fires per record-op site");
     }
 
     /// `app_object_map` of the primary app holds exactly the primary app's objects, and
@@ -4379,8 +4578,10 @@ mod tests {
                 .iter()
                 .filter(|pf| ws_file_set.contains(&pf.virtual_path))
             {
-                let a = resolve_file_obligations(pf, primary, graph, &index, &surface, &ws_map);
-                let b = resolve_file_obligations(pf, primary, graph, &index, &surface, &full_map);
+                let f = ctx.file_ix(primary, &pf.virtual_path);
+                let a = resolve_file_obligations(pf, primary, graph, &index, &surface, &ws_map, f);
+                let b =
+                    resolve_file_obligations(pf, primary, graph, &index, &surface, &full_map, f);
                 assert!(!a.edges.is_empty());
                 assert_eq!(a.edges.len(), b.edges.len());
                 for (x, y) in a.edges.iter().zip(b.edges.iter()) {

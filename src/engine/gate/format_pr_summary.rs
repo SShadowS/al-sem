@@ -332,6 +332,8 @@ mod tests {
             operation_sites: vec![],
             statement_tree: None,
             loops: vec![],
+            file: None,
+            site_exprs: Default::default(),
             source_anchor: PAnchor {
                 source_unit_id: "src/Foo.al".to_string(),
                 start_line: 0,

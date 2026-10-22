@@ -112,7 +112,66 @@ fn adapt_full(
     mutate_graph: impl FnOnce(&mut ProgramContext),
     mutate: impl FnOnce(&mut ModelEntities),
 ) -> Adapted {
+    adapt_rows(
+        files,
+        dep,
+        upgrade_dependency_bindings,
+        mutate_graph,
+        |rows, _| mutate(&mut rows.workspace),
+    )
+}
+
+/// [`adapt_with`] whose `mutate` reaches the whole rows, `RowNodes` included
+/// (#160 §5.3: a test states a `RowNodes` precondition by assignment).
+fn adapt_rows_with(
+    files: &[(&str, &str)],
+    dep_symbols: Option<&str>,
+    mutate: impl FnOnce(&mut crate::program::model::workspace::ModelRows, &ProgramContext),
+) -> Adapted {
+    adapt_rows(
+        files,
+        dep_symbols.map(|s| (s, &[][..])),
+        true,
+        |_| {},
+        mutate,
+    )
+}
+
+/// [`adapt_full`] over the rows: the adapter reads them with their `RowNodes`
+/// (`resolved_calls_from_rows`). `mutate` sees the built context (read-only).
+fn adapt_rows(
+    files: &[(&str, &str)],
+    dep: Option<(&str, &[(&str, &str)])>,
+    upgrade_dependency_bindings: bool,
+    mutate_graph: impl FnOnce(&mut ProgramContext),
+    mutate: impl FnOnce(&mut crate::program::model::workspace::ModelRows, &ProgramContext),
+) -> Adapted {
     let dir = tempfile::tempdir().unwrap();
+    write_workspace(dir.path(), files, dep);
+    let (mut ctx, report, mut l3) = build_models(dir.path()).unwrap();
+    mutate_graph(&mut ctx);
+    mutate(&mut l3, &ctx);
+    let (calls, census) = resolved_calls_from_rows(
+        report.edge_view(),
+        &ctx,
+        &l3,
+        upgrade_dependency_bindings,
+        None,
+    );
+    Adapted {
+        calls,
+        census,
+        ws: l3.workspace,
+    }
+}
+
+/// Write `files` and an `app.json` under `root`, with the dependency app
+/// (`DEP_GUID`, symbols plus embedded `.al` sources) in `.alpackages` when given.
+pub(super) fn write_workspace(
+    root: &std::path::Path,
+    files: &[(&str, &str)],
+    dep: Option<(&str, &[(&str, &str)])>,
+) {
     let deps = if dep.is_some() {
         format!(
             r#","dependencies":[{{"id":"{DEP_GUID}","name":"B3 Dep","publisher":"Microsoft","version":"28.0.0.0"}}]"#
@@ -121,7 +180,7 @@ fn adapt_full(
         String::new()
     };
     std::fs::write(
-        dir.path().join("app.json"),
+        root.join("app.json"),
         format!(
             r#"{{"id":"b3b3b3b3-0000-0000-0000-000000000003","name":"B3 Adapter","publisher":"T","version":"1.0.0.0"{deps}}}"#
         ),
@@ -135,28 +194,14 @@ fn adapt_full(
         ];
         entries.extend(sources.iter().map(|(p, t)| (*p, t.as_bytes())));
         let app = test_apps::build_app(&entries);
-        let pk = dir.path().join(".alpackages");
+        let pk = root.join(".alpackages");
         std::fs::create_dir_all(&pk).unwrap();
         std::fs::write(pk.join("Microsoft_B3 Dep_28.4.app"), app).unwrap();
     }
     for (rel, text) in files {
-        let p = dir.path().join(rel);
+        let p = root.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
-    }
-    let (mut ctx, report, mut l3) = build_models(dir.path()).unwrap();
-    mutate_graph(&mut ctx);
-    mutate(&mut l3.workspace);
-    let (calls, census) = resolved_calls_from_program(
-        report.edge_view(),
-        &ctx,
-        &l3.workspace,
-        upgrade_dependency_bindings,
-    );
-    Adapted {
-        calls,
-        census,
-        ws: l3.workspace,
     }
 }
 
@@ -389,20 +434,30 @@ fn interface_with_workspace_and_dependency_implementers() {
     );
 }
 
-/// Minor 5, precondition by assignment: the workspace implementer's L3
-/// declaration anchor is moved, so its program route joins no L3
-/// routine. Since engine-switch S3.1 the site is one honest
-/// `Unknown(NoProgramSite)` edge (it used to fall back to L3) and is counted.
+/// Minor 5, precondition by assignment: the workspace implementer `Go`'s node
+/// has no J2 row (#160 §5.3: removed from `row_nodes.j2_row`; it used to move
+/// `Go`'s anchor, which no longer changes J2 once J2 is recorded at assembly),
+/// so its program route joins no model routine. Since engine-switch S3.1 the
+/// site is one honest `Unknown(NoProgramSite)` edge (it used to fall back to
+/// L3) and is counted.
 #[test]
+#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]
 fn interface_implementer_outside_l3_is_unknown() {
     let ws_impl = "codeunit 50103 \"WsImpl\" implements IDep\n{\n    procedure Go(var C: Record Customer)\n    begin\n    end;\n}\n";
     let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        X: Interface IDep;\n        C: Record Customer;\n    begin\n        X.Go(C);\n    end;\n}\n";
-    let a = adapt_with(
+    let a = adapt_rows_with(
         &[("src/i.al", ws_impl), ("src/w.al", cu)],
         Some(DEP_SYMBOLS),
-        |ws| {
-            let go = ws.routines.iter_mut().find(|r| r.name == "Go").unwrap();
-            go.source_anchor.start_column += 100;
+        |rows, ctx| {
+            let go: Vec<RoutineNodeId> = ctx
+                .graph()
+                .routines
+                .iter()
+                .filter(|r| r.id.object.app == ctx.primary_app_ref && &*r.id.name_lc == "go")
+                .map(|r| r.id.clone())
+                .collect();
+            assert_eq!(go.len(), 1, "precondition: one workspace node `go`");
+            rows.row_nodes.j2_row.remove(&go[0]);
         },
     );
     let cs = a.site("Caller", "X.Go");
@@ -1323,15 +1378,19 @@ fn multi_route_call_keeps_every_route() {
     assert_eq!(census.adapter_multi_route_sites, 1, "{census:#?}");
 }
 
-/// S3.5, precondition by assignment: the op is moved off its span, so it
-/// pairs with no program edge. It used to keep L3's own trigger edge; it
-/// now gets none.
+/// S3.5, precondition by assignment: the op is given a key no expression has
+/// (#160 §5.3: `u32::MAX - e` for the record op AND its own operation site, one
+/// key kept shared; it used to move the op's anchor, which no longer unpairs
+/// it), so it pairs with no program edge. It used to keep L3's own trigger
+/// edge; it now gets none.
 #[test]
+#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]
 fn unmatched_record_op_gets_no_l3_trigger_edge() {
     let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnModify()\n    begin\n    end;\n\n    procedure P()\n    begin\n        Modify();\n    end;\n}\n";
     let a = adapt_with(&[("src/t.al", table)], None, |ws| {
         let r = ws.routines.iter_mut().find(|r| r.name == "P").unwrap();
-        r.record_operations[0].source_anchor.start_column += 100;
+        unkey(&mut r.site_exprs.record_ops);
+        unkey(&mut r.site_exprs.op_sites);
     });
     let op = &a.routine("P").record_operations[0];
     assert_eq!(a.edges(&op.id), vec![]);
@@ -1340,15 +1399,17 @@ fn unmatched_record_op_gets_no_l3_trigger_edge() {
 }
 
 /// Ruling 2 as replaced by engine-switch S3.1, precondition by assignment:
-/// the L3 site is moved off its span, so it pairs with no program edge. It
+/// the model site is given a key no expression has (#160 §5.3: `u32::MAX - e`;
+/// it used to move the site's anchor), so it pairs with no program edge. It
 /// used to keep L3's own (resolved) edge; it is now one honest
 /// `Unknown(NoProgramSite)` edge.
 #[test]
+#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]
 fn unmatched_site_is_unknown_not_l3() {
     let cu = "codeunit 50101 \"W\"\n{\n    procedure Foo()\n    begin\n    end;\n\n    procedure Caller()\n    begin\n        Foo();\n    end;\n}\n";
     let a = adapt_with(&[("src/w.al", cu)], None, |ws| {
         let r = ws.routines.iter_mut().find(|r| r.name == "Caller").unwrap();
-        r.call_sites[0].source_anchor.start_column += 100;
+        unkey(&mut r.site_exprs.calls);
     });
     let cs = a.site("Caller", "Foo");
     let got = a.edges(&cs.id);
@@ -1403,4 +1464,210 @@ fn edge_order_is_call_sites_then_triggers() {
         .map(|e| e.callsite_id.as_str())
         .collect();
     assert_eq!(edge_sites, sites, "call-site edges in source order");
+}
+
+/// T2 (#160 §5.2, 10A-2): a cross-app model with a source-bearing dependency
+/// loses nothing. Hand-stated: the workspace calls `DepA`, which calls `DepB`
+/// (both demanded); `DepUnused` also calls `DepB` but nothing reaches it, so the
+/// model holds no row for it while the program resolved its body. Its edge is
+/// not a lost site.
+#[test]
+#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]
+fn cross_app_census_has_no_losses_with_a_dependency_body() {
+    let dep_src = "codeunit 60010 \"Dep Cu\"\n{\n    procedure DepA()\n    begin\n        DepB();\n    end;\n\n    procedure DepB()\n    begin\n    end;\n\n    procedure DepUnused()\n    begin\n        DepB();\n    end;\n}\n";
+    let symbols = r#"{"Codeunits":[{"Id":60010,"Name":"Dep Cu","Methods":[{"Name":"DepA","Parameters":[]},{"Name":"DepB","Parameters":[]},{"Name":"DepUnused","Parameters":[]}]}]}"#;
+    let ws_src = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        D: Codeunit \"Dep Cu\";\n    begin\n        D.DepA();\n    end;\n}\n";
+    let dir = tempfile::tempdir().unwrap();
+    write_workspace(
+        dir.path(),
+        &[("src/w.al", ws_src)],
+        Some((symbols, &[("src/DepCu.Codeunit.al", dep_src)])),
+    );
+    let a = cross_app_assemble(
+        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+        false,
+    )
+    .expect("cross-app build");
+    let dep_rows: Vec<&str> = a
+        .rows
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.app_guid.eq_ignore_ascii_case(DEP_GUID))
+        .map(|r| r.name.as_str())
+        .collect();
+    assert!(
+        dep_rows.contains(&"DepA") && dep_rows.contains(&"DepB"),
+        "precondition (a): DepA and DepB are demanded rows: {dep_rows:?}"
+    );
+    assert!(
+        !dep_rows.contains(&"DepUnused"),
+        "precondition (b): DepUnused is not demanded: {dep_rows:?}"
+    );
+    let unused: Vec<&ClassifiedEdge> = a
+        .program
+        .body()
+        .all_edges()
+        .filter(|ce| {
+            matches!(ce.obligation_id, ObligationId::CallSite { .. })
+                && &*ce.edge.from.name_lc == "depunused"
+        })
+        .collect();
+    assert_eq!(
+        unused.len(),
+        1,
+        "precondition (b): DepUnused's DepB() is a program edge"
+    );
+    assert_eq!(
+        unused[0].edge.kind,
+        EdgeKind::Call,
+        "precondition (b): an ordinary call"
+    );
+    drop(a);
+
+    let census = adapter_census_for_workspace_cross_app(dir.path()).unwrap();
+    assert_eq!(
+        census.matched, 2,
+        "precondition (a): Caller's D.DepA() and DepA's DepB() are matched: {census:#?}"
+    );
+    assert_eq!(census.losses(), vec![], "{census:#?}");
+}
+
+/// T4b (#160 §5.4): two source-bearing dependencies each hold `src/Main.al`
+/// with IDENTICAL text (so identical `ExprId`s), each calling its own
+/// `Helper()`. The two files get two `FileIx`, and each app's site pairs with
+/// its own app's edge, by its own app's key.
+#[test]
+fn two_apps_same_path_same_expr_pair_within_their_app() {
+    let main = "codeunit 60020 \"Main X\"\n{\n    procedure Work()\n    begin\n        Helper();\n    end;\n\n    procedure Helper()\n    begin\n    end;\n}\n";
+    let apps = [
+        (
+            "dddddddd-b3b3-0000-0000-0000000004b1",
+            "T4b One",
+            60021,
+            "Entry One",
+        ),
+        (
+            "dddddddd-b3b3-0000-0000-0000000004b2",
+            "T4b Two",
+            60031,
+            "Entry Two",
+        ),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let deps: Vec<String> = apps
+        .iter()
+        .map(|(g, n, ..)| {
+            format!(r#"{{"id":"{g}","name":"{n}","publisher":"Microsoft","version":"28.0.0.0"}}"#)
+        })
+        .collect();
+    std::fs::write(
+        dir.path().join("app.json"),
+        format!(
+            r#"{{"id":"b3b3b3b3-0000-0000-0000-0000000004b0","name":"T4b Ws","publisher":"T","version":"1.0.0.0","dependencies":[{}]}}"#,
+            deps.join(",")
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/W.al"),
+        "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        A: Codeunit \"Entry One\";\n        B: Codeunit \"Entry Two\";\n    begin\n        A.Go();\n        B.Go();\n    end;\n}\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join(".alpackages")).unwrap();
+    for (guid, name, entry_id, entry) in apps {
+        let symbols = format!(
+            r#"{{"Codeunits":[{{"Id":60020,"Name":"Main X","Methods":[{{"Name":"Work","Parameters":[]}},{{"Name":"Helper","Parameters":[]}}]}},{{"Id":{entry_id},"Name":"{entry}","Methods":[{{"Name":"Go","Parameters":[]}}]}}]}}"#
+        );
+        let entry_src = format!(
+            "codeunit {entry_id} \"{entry}\"\n{{\n    procedure Go()\n    var\n        M: Codeunit \"Main X\";\n    begin\n        M.Work();\n    end;\n}}\n"
+        );
+        let manifest = test_apps::manifest_xml(guid, name);
+        let app = test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", symbols.as_bytes()),
+            ("src/Main.al", main.as_bytes()),
+            ("src/Entry.al", entry_src.as_bytes()),
+        ]);
+        std::fs::write(
+            dir.path()
+                .join(format!(".alpackages/Microsoft_{name}_28.4.app")),
+            app,
+        )
+        .unwrap();
+    }
+    let a = cross_app_assemble(
+        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+        false,
+    )
+    .expect("cross-app build");
+    let body = a.program.body();
+    let ctx = &body.ctx;
+    let mut sides = Vec::new();
+    for (guid, ..) in apps {
+        let unit = ctx
+            .dep_bodies()
+            .unwrap_or_default()
+            .iter()
+            .find(|u| u.app.guid.eq_ignore_ascii_case(guid))
+            .unwrap_or_else(|| panic!("precondition: {guid} is a source-bearing dependency"));
+        let app = ctx.graph().apps.find(&unit.app).unwrap();
+        let main_file = unit
+            .files
+            .iter()
+            .find(|f| f.virtual_path.ends_with("Main.al"))
+            .expect("precondition: the app holds Main.al");
+        let file = ctx
+            .file_ix(app, &main_file.virtual_path)
+            .expect("precondition: Main.al has a FileIx");
+        let runs: Vec<usize> = a
+            .rows
+            .workspace
+            .routines
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.name == "Work" && r.app_guid.eq_ignore_ascii_case(guid))
+            .map(|(ri, _)| ri)
+            .collect();
+        assert_eq!(
+            runs.len(),
+            1,
+            "precondition: one Work row in {guid}; rows: {:?}",
+            a.rows
+                .workspace
+                .routines
+                .iter()
+                .map(|r| (&r.app_guid, &r.name))
+                .collect::<Vec<_>>()
+        );
+        sides.push((app, file, main_file.virtual_path.clone(), runs[0]));
+    }
+    assert_eq!(sides[0].2, sides[1].2, "precondition: one virtual path");
+    assert_ne!(sides[0].1, sides[1].1, "precondition: two FileIx");
+    let (r0, r1) = (
+        &a.rows.workspace.routines[sides[0].3],
+        &a.rows.workspace.routines[sides[1].3],
+    );
+    assert_eq!(
+        r0.site_exprs.calls, r1.site_exprs.calls,
+        "precondition: identical text gives identical ExprIds"
+    );
+    let pairs = accepted_call_pairs(body.edge_view(), ctx, &a.rows, Some(&a.demand));
+    for (app, file, _, ri) in &sides {
+        let ce = pairs
+            .get(&(*ri, 0))
+            .unwrap_or_else(|| panic!("{app:?}: Work's Helper() pairs"));
+        assert_eq!(
+            ce.edge.from.object.app, *app,
+            "pairs with its own app's edge"
+        );
+        assert_eq!(
+            ce.site.map(|s| s.at.file),
+            Some(*file),
+            "{app:?}: the pair's program key names this app's Main.al"
+        );
+    }
 }

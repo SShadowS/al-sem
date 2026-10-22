@@ -10653,6 +10653,135 @@ fn adapter_loses_no_site_or_route_on_cdo() {
     assert_eq!(census.losses(), vec![], "CDO adapter losses");
 }
 
+/// #160 T2 (§5.2): the CROSS-APP adapter loses nothing on any fixture
+/// (`tests/r0-corpus` dirs and `tests/fixtures` dirs, to depth 3, with an
+/// `app.json`), through the production cross-app build and attach
+/// (`adapter_census_for_workspace_cross_app`).
+#[test]
+fn adapter_loses_nothing_cross_app_on_the_fixtures() {
+    use al_sem::program::model::program_calls::adapter_census_for_workspace_cross_app;
+    let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir("tests/r0-corpus")
+        .expect("read tests/r0-corpus")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.join("app.json").is_file())
+        .collect();
+    for e in walkdir::WalkDir::new("tests/fixtures").max_depth(3) {
+        let e = e.expect("walk tests/fixtures");
+        if e.file_type().is_dir() && e.path().join("app.json").is_file() {
+            dirs.push(e.path().to_path_buf());
+        }
+    }
+    dirs.sort();
+    let mut checked = 0;
+    let mut failures = Vec::new();
+    for dir in dirs {
+        match adapter_census_for_workspace_cross_app(&dir) {
+            Ok(census) => {
+                checked += 1;
+                let losses = census.losses();
+                if !losses.is_empty() {
+                    failures.push(format!("{}: {losses:?}", dir.display()));
+                }
+            }
+            Err(e) => failures.push(format!("{}: {e}", dir.display())),
+        }
+    }
+    assert!(
+        checked > 200,
+        "fixture precondition: {checked} workspaces checked"
+    );
+    assert!(
+        failures.is_empty(),
+        "cross-app adapter losses:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// #160 T2 (§5.2, 10A-3): the cross-app loss gate on the pinned CDO workspace.
+/// The losses are exactly R-RESIDUAL (spec §3.5): 18 `shape_mismatch` (XmlPort
+/// table-element record ops the body walk misses) and 5 `caller_mismatch` (the
+/// first `#if` arm of `PageManagement.GetPurchaseHeaderPageID`), with their 23
+/// `adapter_l3_fallback_sites`; set equality, so a new loss replacing a fixed
+/// one fails. Skips without `CDO_WS`; fails under `ENFORCE_CDO_WS=1`.
+#[test]
+#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]
+fn adapter_cross_app_losses_on_cdo() {
+    let Some(ws) = cdo_ws_or_enforce() else {
+        return;
+    };
+    let census = al_sem::program::model::program_calls::adapter_census_for_workspace_cross_app(&ws)
+        .expect("cross-app census of CDO_WS");
+    assert!(census.program_sites > 0, "CDO precondition: program sites");
+    assert_eq!(
+        census.losses(),
+        vec![
+            ("caller_mismatch", 5),
+            ("shape_mismatch", 18),
+            ("adapter_l3_fallback_sites", 23),
+        ],
+        "CDO cross-app adapter losses"
+    );
+    // The Base Application's app id (the same in every release).
+    const BASE_APP: &str = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+    let got: std::collections::BTreeSet<(String, String, u32, u32, u32, u32)> = census
+        .unmatched
+        .iter()
+        .map(|u| {
+            let unit = u
+                .unit
+                .replace(&format!("dep:{BASE_APP}:"), "dep:<BaseApp>:");
+            (
+                u.reason.to_string(),
+                unit,
+                u.start_line,
+                u.start_col,
+                u.end_line,
+                u.end_col,
+            )
+        })
+        .collect();
+    assert_eq!(got.len(), census.unmatched.len(), "unique residual sites");
+    let xml = "dep:<BaseApp>:src/Finance/Intercompany/Outbox/ICOutboxImpExp.XmlPort.al";
+    let pages = "dep:<BaseApp>:src/Utilities/PageManagement.Codeunit.al";
+    let shape: [(u32, u32, u32); 18] = [
+        (656, 8, 33),
+        (657, 8, 35),
+        (658, 8, 33),
+        (659, 8, 36),
+        (660, 8, 37),
+        (661, 8, 36),
+        (662, 8, 37),
+        (663, 8, 33),
+        (664, 8, 37),
+        (665, 8, 31),
+        (666, 8, 35),
+        (671, 16, 38),
+        (679, 24, 48),
+        (689, 24, 46),
+        (698, 24, 49),
+        (707, 24, 50),
+        (716, 24, 49),
+        (725, 24, 50),
+    ];
+    let caller: [(u32, u32, u32); 5] = [
+        (329, 8, 39),
+        (330, 11, 46),
+        (331, 19, 84),
+        (331, 42, 83),
+        (350, 8, 70),
+    ];
+    let want: std::collections::BTreeSet<_> = shape
+        .iter()
+        .map(|&(l, s, e)| ("shape_mismatch".to_string(), xml.to_string(), l, s, l, e))
+        .chain(
+            caller
+                .iter()
+                .map(|&(l, s, e)| ("caller_mismatch".to_string(), pages.to_string(), l, s, l, e)),
+        )
+        .collect();
+    assert_eq!(got, want, "CDO cross-app: the residual is R-RESIDUAL");
+}
+
 /// Engine-switch S9.0e: dependency bodies, resolved from their own app (what
 /// cross-app `alsem analyze` reads; `ProgramContext::resolve_dependency_bodies`),
 /// are not in `realUnknownRate`, which counts workspace and publisher edges only.
