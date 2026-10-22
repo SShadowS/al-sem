@@ -18,9 +18,9 @@
 //!   by a debug assertion.
 //! - **Callee check**: `callee_fp(PCallSite.callee_text)` must equal the
 //!   program site's `callee_fingerprint`.
-//! - **Caller check**: the program caller's declaration anchor captured at
-//!   assembly (`RowNodes::decl_anchor`, from [`DeclSurface::get_with_path`])
-//!   must equal `(row file, start_line, start_column)` of the model routine.
+//! - **Caller check**: the model routine's node (`RowNodes::node_of`) must be
+//!   the program edge's caller (#160 step 11b §4.2): the key already paired one
+//!   expression, and an expression belongs to exactly one declaration.
 //! - **Callee routine** (J2): `RowNodes::j2_row`, recorded at assembly.
 //! - Only the program sites of callers the model holds are read
 //!   ([`join_reads`]: a primary routine, or one in the demand the model was
@@ -408,8 +408,7 @@ pub(crate) fn caller_held(
 
 /// The program call-site edges the join reads (§4.3 step 1, §4.5): a caller of
 /// a model app (`apps`, [`model_apps`]) that [`caller_held`] admits, in
-/// `view.all_edges()` order. `RowNodes::decl_anchor` is recorded for exactly
-/// their callers.
+/// `view.all_edges()` order.
 pub(crate) fn join_reads<'a>(
     view: EdgeView<'a>,
     apps: &HashSet<AppRef>,
@@ -537,7 +536,7 @@ fn attach_program_calls_with(
         adapter(body.edge_view(), &body.ctx, &rows, true, abi_rows, demand)
     };
     // Engine-switch S4.2: the detector event graph, from the same program build;
-    // each row's node is J5's answer recorded at assembly (#160 §4.9).
+    // each row's node is `row_nodes.node_of` (#160 step 11b §4.2).
     let events = {
         let _s = pt::span("b3", "b3.events");
         crate::program::model::events::program_event_graph(
@@ -695,7 +694,6 @@ pub fn assemble_and_resolve_workspace_program(
         skip_roots_config,
         &program.body().ctx,
         &program.body().parenless_calls,
-        program.body().edge_view(),
     )?;
     Some(attach_program_calls(rows, program).0)
 }
@@ -716,6 +714,18 @@ pub fn assemble_and_resolve_inline_program(
     app_guid: &str,
     model_instance_id: &str,
 ) -> crate::program::model::workspace::Model {
+    let dir = write_inline_workspace(files, app_guid);
+    assemble_and_resolve_workspace_program(
+        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        model_instance_id,
+        true,
+    )
+    .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
+}
+
+/// The inline files and an `app.json` with id `app_guid`, written to a fresh
+/// temporary directory (see [`assemble_and_resolve_inline_program`]).
+fn write_inline_workspace(files: &[(String, String)], app_guid: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temp workspace");
     let app = serde_json::json!({
         "id": app_guid,
@@ -742,12 +752,7 @@ pub fn assemble_and_resolve_inline_program(
         std::fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("write {name}: {e}"));
     }
-    assemble_and_resolve_workspace_program(
-        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
-        model_instance_id,
-        true,
-    )
-    .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
+    dir
 }
 
 /// [`assemble_and_resolve_inline_program`] with the default model-instance id.
@@ -853,7 +858,6 @@ pub(crate) fn cross_app_assemble(
             ctx,
             Some(&demand),
             &body.parenless_calls,
-            body.edge_view(),
         )
     };
     let Some((rows, abi_rows)) = assembled else {
@@ -882,6 +886,30 @@ pub fn cross_app_rows_before_attach(
     cross_app_assemble(inputs, model_instance_id, true)
         .ok()
         .map(|a| a.rows)
+}
+
+/// #160 step 11b (spec §5.5, A8's second case, R1-18): the cross-app event
+/// graph after `edit` has changed the assembled rows (their `RowNodes`
+/// included), built by the production `program_event_graph` over the program the
+/// assembly kept. `None` when the build or the assembly fails. Test entry.
+#[doc(hidden)]
+#[must_use]
+pub fn cross_app_event_graph_after(
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    model_instance_id: &str,
+    edit: impl FnOnce(&mut crate::program::model::workspace::ModelRows),
+) -> Option<crate::program::model::events::EventGraph> {
+    let mut a = cross_app_assemble(inputs, model_instance_id, true).ok()?;
+    edit(&mut a.rows);
+    let body = a.program.body();
+    Some(
+        crate::program::model::events::program_event_graph(
+            &body.ctx,
+            &a.rows.workspace,
+            &a.rows.row_nodes,
+        )
+        .graph,
+    )
 }
 
 /// [`assemble_and_resolve_cross_app_program`] plus the adapter's census, from
@@ -1021,8 +1049,8 @@ fn adapter(
 
 /// #160 step 10 (§4.3): the key join. Pairs model sites and program sites by
 /// [`crate::program::site_key::SiteIx`], reading the program sites of the callers [`caller_held`] admits
-/// (§4.5), checking the caller against the declaration anchor captured at
-/// assembly (`RowNodes::decl_anchor`, §4.8), and classifying the program sites no
+/// (§4.5), checking the caller by node equality (`RowNodes::node_of`, 11b
+/// §4.2), and classifying the program sites no
 /// call site took by the resolver's `fires` (§4.4), with no source text. Same
 /// buckets and rules as the span join it replaced. Every accepted pair's two
 /// spans are compared by a debug assertion (§4.3 step 4).
@@ -1153,7 +1181,6 @@ fn key_join<'a>(
                 model_record_ops.entry(k).or_default().push((ri, oi));
             }
         }
-        let decl = &r.source_anchor;
         for (ci, (cs, e)) in r.call_sites.iter().zip(&r.site_exprs.calls).enumerate() {
             c.l3_call_sites += 1;
             let k = key(e);
@@ -1186,9 +1213,7 @@ fn key_join<'a>(
                     model_key(&cs.source_anchor),
                     &cs.callee_text,
                 );
-            } else if row_nodes.decl_anchor.get(&ce.edge.from)
-                != Some(&(k.file, decl.start_line, decl.start_column))
-            {
+            } else if row_nodes.node_of[ri].as_ref() != Some(&ce.edge.from) {
                 caller += 1;
                 unmatched(
                     "caller_mismatch",
@@ -2297,7 +2322,6 @@ pub(crate) fn build_models_with(
         false,
         &ctx,
         &report.parenless_calls,
-        report.edge_view(),
     )
     .ok_or_else(|| {
         format!(
@@ -2610,11 +2634,13 @@ mod tests {
         );
     }
 
-    /// Precondition by assignment: the L3 caller's declaration anchor is moved
-    /// one column, so both its sites pair by key and callee but not by
-    /// caller.
+    /// #160 step 11b T4 (spec §4.2, §5.5; restated with the code it pins, I2's
+    /// exception): precondition by assignment, the model caller's declaration
+    /// anchor is moved one column. The key decides the site and the node decides
+    /// the caller, so a moved anchor ALONE no longer fails the caller check: both
+    /// sites pair (until 11b the anchor check made them `caller_mismatch`).
     #[test]
-    fn caller_anchor_disagreement_is_caller_mismatch() {
+    fn caller_anchor_disagreement_alone_is_matched() {
         let c = census_with(&[("src/m.al", TWO_CALLS.as_bytes())], |ws| {
             routine(ws, "Caller").source_anchor.start_column += 1;
         });
@@ -2623,7 +2649,7 @@ mod tests {
             SiteCensus {
                 l3_call_sites: 2,
                 program_sites: 2,
-                caller_mismatch: 2,
+                matched: 2,
                 ..Default::default()
             },
             "{c:#?}"
@@ -2667,45 +2693,35 @@ mod tests {
         );
     }
 
-    /// T9 (#160 §5.9): the caller check reads the declaration anchor captured
-    /// at assembly. Hand-stated: the program's declaration of `Caller` (read
-    /// from the `DeclSurface`, as assembly captures it) is recorded one column
-    /// off in `row_nodes.decl_anchor`; the row is untouched. Its sites are
-    /// `caller_mismatch`.
+    /// #160 step 11b T4 (spec §4.2, §5.5; replaces 11a's
+    /// `caller_check_reads_captured_decl_anchor`): the caller check is node
+    /// equality, `row_nodes.node_of[ri] == edge.from`. Hand-stated: `Caller`'s
+    /// row is given ANOTHER node (`Foo`'s) in `node_of` by assignment; its anchor
+    /// and its site keys are untouched. Both its sites are `caller_mismatch`.
     #[test]
-    fn caller_check_reads_captured_decl_anchor() {
+    fn caller_check_reads_node_of() {
         let c = census_rows_with(&[("src/m.al", TWO_CALLS.as_bytes())], |rows, ctx| {
-            let (line, col) = {
-                let row = rows
-                    .workspace
-                    .routines
-                    .iter()
-                    .find(|r| r.name == "Caller")
-                    .unwrap();
-                (row.source_anchor.start_line, row.source_anchor.start_column)
-            };
-            let node = ctx
-                .graph()
+            let ri = rows
+                .workspace
                 .routines
                 .iter()
-                .find(|n| n.id.object.app == ctx.primary_app_ref && &*n.id.name_lc == "caller")
-                .expect("precondition: a program node for Caller")
-                .id
-                .clone();
-            let surface = ctx.decl_surface();
-            let (meta, path) = surface
-                .get_with_path(&node)
-                .expect("precondition: Caller has a program declaration");
-            let file = ctx
-                .file_ix(ctx.primary_app_ref, path)
-                .expect("precondition: its file has a FileIx");
-            let (dl, dc) = (meta.origin.start.row, meta.origin.start.column);
+                .position(|r| r.name == "Caller")
+                .expect("precondition: a row for Caller");
+            let node_named = |name_lc: &str| {
+                ctx.graph()
+                    .routines
+                    .iter()
+                    .find(|n| n.id.object.app == ctx.primary_app_ref && &*n.id.name_lc == name_lc)
+                    .unwrap_or_else(|| panic!("precondition: a program node for {name_lc}"))
+                    .id
+                    .clone()
+            };
             assert_eq!(
-                (dl, dc),
-                (line, col),
-                "precondition: the row's anchor is the program's declaration"
+                rows.row_nodes.node_of[ri].as_ref(),
+                Some(&node_named("caller")),
+                "precondition: the row's node is Caller's"
             );
-            rows.row_nodes.decl_anchor.insert(node, (file, dl, dc + 1));
+            rows.row_nodes.node_of[ri] = Some(node_named("foo"));
         });
         assert_eq!(
             counts(&c),
@@ -3102,8 +3118,9 @@ mod tests {
     /// T7a (#160 §5.10; the `GetPurchaseHeaderPageID` shape): one procedure
     /// declared in `#if A` / `#else` arms at two lines, same signature. One node,
     /// two rows at two anchors; J2 = the second arm's row (the surface keeps the
-    /// last declaration); the first arm's site is `caller_mismatch` (today's
-    /// answer, R-RESIDUAL's shape).
+    /// last declaration), unchanged by 11b. Restated by 11b T3 (spec §5.4): the
+    /// first arm's site is now `matched` (the caller check is node equality, and
+    /// both arms' rows are the one node), no longer `caller_mismatch`.
     #[test]
     fn j2_row_two_anchors_one_node_is_the_last_arm() {
         let src = "codeunit 50100 \"S\"\n{\n#if A\n    procedure P()\n    begin\n        Message('a');\n    end;\n#else\n    procedure P()\n    begin\n        Message('b');\n    end;\n#endif\n\n    procedure Caller()\n    begin\n        P();\n    end;\n}\n";
@@ -3126,8 +3143,13 @@ mod tests {
             .collect();
         assert_eq!(
             mismatched,
-            [(5, "caller_mismatch")],
-            "the first arm's site is caller_mismatch"
+            Vec::<(u32, &str)>::new(),
+            "the first arm's site is matched, not caller_mismatch"
+        );
+        assert_eq!(
+            (c.caller_mismatch, c.matched),
+            (0, 3),
+            "every site pairs (both arms' Message, and Caller's P): {c:#?}"
         );
         assert_eq!(
             rows.row_nodes.j2_row.get(&nodes[0]).copied(),
@@ -3139,11 +3161,13 @@ mod tests {
     /// T7b's source: a split header whose `#if` arms differ in a parameter type.
     const ONE_ANCHOR_TWO_NODES: &str = "codeunit 50100 \"S\"\n{\n#if A\n    procedure P(X: Integer)\n#else\n    procedure P(X: Text)\n#endif\n    begin\n        Message('p');\n    end;\n\n    procedure Caller()\n    begin\n        P(1);\n        P('x');\n    end;\n}\n";
 
-    /// T7b (#160 §5.10; the `AcquireTokenFromCache` shape): a split header whose
-    /// arms differ in a parameter type. Two nodes, two rows at one anchor; J2 of
-    /// BOTH nodes = the first row (the recorded cross-node alias).
+    /// T7b restated by 11b T3 (#160 11b spec §4.2, §5.4; the
+    /// `AcquireTokenFromCache` shape): a split header whose arms differ in a
+    /// parameter type. Two nodes, two rows at one anchor; J2 is node-filtered, so
+    /// each node maps to its OWN row (until 11b both mapped to the first row, the
+    /// cross-node alias).
     #[test]
-    fn j2_row_one_anchor_two_nodes_is_the_first_row() {
+    fn j2_row_one_anchor_two_nodes_is_each_nodes_own_row() {
         let (_dir, ctx, _report, rows) = single_app(&[("src/s.al", ONE_ANCHOR_TWO_NODES)]);
         let p = rows_named(&rows, "P");
         assert_eq!(p.len(), 2, "precondition: two rows");
@@ -3158,12 +3182,20 @@ mod tests {
             (a.start_line, a.start_column)
         };
         assert_eq!(anchor(p[0]), anchor(p[1]), "precondition: one anchor");
-        let first = Some(u32::try_from(p[0]).unwrap());
-        for n in &nodes {
+        let own: std::collections::HashSet<_> = p
+            .iter()
+            .map(|&ri| rows.row_nodes.node_of[ri].clone())
+            .collect();
+        assert_eq!(own.len(), 2, "precondition: the two rows are two nodes");
+        for &ri in &p {
+            let n = rows.row_nodes.node_of[ri]
+                .clone()
+                .expect("precondition: each row has a node");
+            assert!(nodes.contains(&n), "precondition: a P node");
             assert_eq!(
-                rows.row_nodes.j2_row.get(n).copied(),
-                first,
-                "j2_row of {n:?} = the first row"
+                rows.row_nodes.j2_row.get(&n).copied(),
+                Some(u32::try_from(ri).unwrap()),
+                "j2_row of {n:?} = that node's own row {ri}"
             );
         }
     }
@@ -3234,6 +3266,20 @@ mod tests {
             (rows.len(), by_id.len()),
             "{c:?}"
         );
+    }
+
+    /// #160 step 11b (spec §4.2 "The census", A11b.1): in stage C the census
+    /// counts J2's aliases against the corrected, node-filtered J2, so T7b's
+    /// two-nodes-at-one-anchor shape (the `AcquireTokenFromCache` alias, counted
+    /// 1 until 11b) reads `j2_alias_nodes = 0`. Deleted in stage A with the field.
+    #[test]
+    fn collision_census_has_no_j2_alias_after_the_correction() {
+        let (_dir, ctx, _report, rows) = single_app(&[("src/s.al", ONE_ANCHOR_TWO_NODES)]);
+        assert_eq!(nodes_named(&ctx, "p").len(), 2, "precondition: two nodes");
+        assert_eq!(rows_named(&rows, "P").len(), 2, "precondition: two rows");
+        let c =
+            crate::program::model::workspace::collision_census(&rows.workspace, &rows.row_nodes);
+        assert_eq!(c.j2_alias_nodes, 0, "{c:?}");
     }
 }
 

@@ -3070,3 +3070,8 @@ page 50813 "CP3 Wizard"
         );
     }
 }
+
+// #160 step 11b acceptance tests: a child module, for private access.
+#[cfg(test)]
+#[path = "detector_context_11b_tests.rs"]
+mod tests_11b;

@@ -275,8 +275,8 @@ fn model_guids(ws: &super::workspace::ModelEntities) -> std::collections::HashSe
 ///   publisher routine (combined graph, cones, fan-out, d43, d45) therefore do not
 ///   change; `subscribers_by_event` gains the workspace subscribers of such events.
 ///
-/// Each subscriber row's program node is J5's answer recorded at assembly
-/// (`row_nodes.j5_node`, #160 §4.9); a row it does not map has no edges.
+/// Each subscriber row's program node is its true node (`row_nodes.node_of`,
+/// #160 step 11b §4.2); a row with no node has no edges.
 #[must_use]
 pub fn program_event_graph(
     ctx: &crate::program::resolve::full::ProgramContext,
@@ -367,7 +367,9 @@ pub fn program_event_graph(
             continue;
         }
         c.model_subscribers += 1;
-        let Some(node) = row_nodes.j5(ri) else {
+        // `None` (a dependency row of an app the graph does not know) is the
+        // fail-closed guard (11b D7).
+        let Some(node) = row_nodes.node_of.get(ri).and_then(Option::as_ref) else {
             unmapped.push(r.id.as_str());
             continue;
         };

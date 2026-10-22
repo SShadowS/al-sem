@@ -1460,19 +1460,16 @@ fn project_ir(
 ///
 /// `parenless` is the resolution's [`crate::program::resolve::full::ParenlessCalls`]
 /// (`ProgramReport::parenless_calls`): the body walk takes those reads as calls.
-/// `edges` is the same resolution's edges: `RowNodes::decl_anchor` records the
-/// declaration of each caller the join reads (#160 §4.6).
 pub fn assemble_and_resolve_workspace_from_program(
     inputs: &crate::program::inputs::InputSet,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
-    edges: crate::program::resolved::EdgeView<'_>,
 ) -> Option<ModelRows> {
     let (ws, node_of) =
         assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
-    let row_nodes = RowNodes::build(ctx, edges, &ws, node_of, None);
+    let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
 
@@ -1491,7 +1488,6 @@ pub fn assemble_and_resolve_workspace_from_program(
 ///
 /// `demand` (engine-switch S8.2, `program::resolve::demand`): when given, a
 /// source-bearing dependency file keeps every object but only the routines in it.
-/// `edges`: as for [`assemble_and_resolve_workspace_from_program`].
 pub fn assemble_and_resolve_cross_app_from_program(
     inputs: &crate::program::inputs::InputSet,
     model_instance_id: &str,
@@ -1499,7 +1495,6 @@ pub fn assemble_and_resolve_cross_app_from_program(
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
-    edges: crate::program::resolved::EdgeView<'_>,
 ) -> Option<(ModelRows, AbiRowIds)> {
     let (mut ws, mut node_of) =
         assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
@@ -1511,7 +1506,7 @@ pub fn assemble_and_resolve_cross_app_from_program(
         demand,
         parenless,
     );
-    let row_nodes = RowNodes::build(ctx, edges, &ws, node_of, demand);
+    let row_nodes = RowNodes::build(ctx, &ws, node_of);
     Some((
         finish_resolved(ws, inputs, skip_roots_config, row_nodes)?,
         abi_rows,
@@ -2001,26 +1996,20 @@ pub struct ModelRows {
     pub row_nodes: RowNodes,
 }
 
-/// #160 step 11a (§4.6): each row's node and today's J2/J5 answers, recorded once
-/// at assembly. Indexed by `RoutineIx` = the row's position in
-/// `ModelEntities::routines`.
+/// #160 step 11a (§4.6): each row's node and J2's answer, recorded once at
+/// assembly. Indexed by `RoutineIx` = the row's position in
+/// `ModelEntities::routines`. Step 11b (C): the caller check and the event
+/// graph read `node_of` directly.
 #[derive(Debug, Clone, Default)]
 pub struct RowNodes {
     /// The true node of each row (per `RoutineIx`).
     pub node_of: Vec<Option<crate::program::node::RoutineNodeId>>,
-    /// The program's declaration anchor `(FileIx, start line, start col)` of every
-    /// `from` node of a program edge the join reads, captured from
-    /// `DeclSurface::get_with_path`, never derived from a row.
-    pub decl_anchor:
-        HashMap<crate::program::node::RoutineNodeId, (crate::program::site_key::FileIx, u32, u32)>,
-    /// J2's answer (§4.7): node -> the FIRST non-symbol-only row at the node's
-    /// surface declaration anchor (a `RoutineIx`), for every model-app node with a
-    /// surface declaration (J2's full domain; only nodes whose anchor some row has
-    /// are stored). The conversion looks up only route targets, a subset.
+    /// J2's answer (§4.7, node-filtered by 11b §4.2): node -> the FIRST
+    /// non-symbol-only row at the node's surface declaration anchor whose
+    /// `node_of` is that node (a `RoutineIx`), for every model-app node with a
+    /// surface declaration (J2's full domain; a node with no such row is
+    /// absent). The conversion looks up only route targets, a subset.
     pub j2_row: HashMap<crate::program::node::RoutineNodeId, u32>,
-    /// J5's answer (§4.9): per row, the node the span map gives an
-    /// event-subscriber row (the only rows the event graph reads), else `None`.
-    pub j5_node: Vec<Option<crate::program::node::RoutineNodeId>>,
 }
 
 /// #160 step 11a (§4.10): rows that share a string id, per model, printed with
@@ -2044,8 +2033,8 @@ pub struct CollisionCensus {
     /// anchor some row has, looked up or not) whose `j2_row`'s `node_of` is another
     /// node (J2's cross-node alias).
     pub j2_alias_nodes: usize,
-    /// Event-subscriber rows (the only rows J5 answers for) whose `j5_node`
-    /// differs from `node_of`.
+    /// Event-subscriber rows whose J5 answer differs from `node_of`. Since 11b
+    /// (C) J5 IS `node_of`, so this reads 0; deleted in 11b stage A.
     pub j5_compat_rows: usize,
 }
 
@@ -2113,12 +2102,7 @@ pub fn collision_census(ws: &ModelEntities, row_nodes: &RowNodes) -> CollisionCe
         .iter()
         .filter(|&(n, &ri)| node(ri as usize) != Some(n))
         .count();
-    c.j5_compat_rows = ws
-        .routines
-        .iter()
-        .enumerate()
-        .filter(|(ri, r)| r.kind == "event-subscriber" && row_nodes.j5(*ri) != node(*ri))
-        .count();
+    // `j5_compat_rows` stays 0: the event graph reads `node_of` itself (11b §4.2).
     c
 }
 
@@ -2128,41 +2112,35 @@ impl RowNodes {
         use crate::program::node::RoutineNodeId;
         let mut t = crate::engine::census::Tally::default();
         t.buf::<Option<RoutineNodeId>>(self.node_of.len())
-            .buf::<(RoutineNodeId, (crate::program::site_key::FileIx, u32, u32))>(
-                self.decl_anchor.len(),
-            )
-            .buf::<(RoutineNodeId, u32)>(self.j2_row.len())
-            .buf::<Option<RoutineNodeId>>(self.j5_node.len());
+            .buf::<(RoutineNodeId, u32)>(self.j2_row.len());
         t
     }
 
-    /// Record the table at the end of assembly (§4.6-§4.9), from the rows, the
+    /// Record the table at the end of assembly (§4.6-§4.7), from the rows, the
     /// program graph and its `DeclSurface`. `node_of` is each row's node, as the
-    /// assembly projected it; `demand` is the demand the model was built from
-    /// (`None`: built without demand).
+    /// assembly projected it.
     pub(crate) fn build(
         ctx: &crate::program::resolve::full::ProgramContext,
-        edges: crate::program::resolved::EdgeView<'_>,
         ws: &ModelEntities,
         node_of: Vec<Option<crate::program::node::RoutineNodeId>>,
-        demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     ) -> Self {
-        use crate::program::model::program_calls::{join_reads, model_apps};
+        use crate::program::model::program_calls::model_apps;
         let _s = pt::span("l3", "l3.row_nodes");
         debug_assert_eq!(node_of.len(), ws.routines.len(), "one node slot per row");
         let graph = ctx.graph();
         let primary = ctx.primary_app_ref;
         let surface = ctx.decl_surface();
         let apps = model_apps(graph, primary, ws);
-        // J2's anchor map: the FIRST non-symbol-only row at each declaration anchor,
-        // keyed by `(app, virtual path, line, col)` (the row's model unit read back:
-        // `ws:<path>` or a bare path is the primary app, `dep:<guid>:<path>` that
-        // dependency), so a node is looked up without spelling its unit.
+        // J2's anchor map: EVERY non-symbol-only row at each declaration anchor,
+        // in row order, keyed by `(app, virtual path, line, col)` (the row's model
+        // unit read back: `ws:<path>` or a bare path is the primary app,
+        // `dep:<guid>:<path>` that dependency), so a node is looked up without
+        // spelling its unit.
         let app_of_guid: HashMap<&str, crate::program::node::AppRef> = apps
             .iter()
             .map(|&a| (graph.apps.resolve(a).guid.as_str(), a))
             .collect();
-        let mut first_at: HashMap<(crate::program::node::AppRef, &str, u32, u32), u32> =
+        let mut rows_at: HashMap<(crate::program::node::AppRef, &str, u32, u32), Vec<u32>> =
             HashMap::new();
         for (ri, r) in ws.routines.iter().enumerate() {
             let a = &r.source_anchor;
@@ -2186,29 +2164,14 @@ impl RowNodes {
                         .unwrap_or(&a.source_unit_id),
                 ),
             };
-            first_at
+            rows_at
                 .entry((app, path, a.start_line, a.start_column))
-                .or_insert(u32::try_from(ri).expect("row index fits u32"));
+                .or_default()
+                .push(u32::try_from(ri).expect("row index fits u32"));
         }
-        // The caller check's side (§4.6, §4.8): the declaration of every `from`
-        // of a program edge the join reads, from the surface (never from a row).
-        // A `from` with no declaration (or no file) is absent: `caller_mismatch`.
-        let mut decl_anchor = HashMap::new();
-        for ce in join_reads(edges, &apps, demand) {
-            let from = &ce.edge.from;
-            if decl_anchor.contains_key(from) {
-                continue;
-            }
-            if let Some((meta, path)) = surface.get_with_path(from)
-                && let Some(file) = ctx.file_ix(from.object.app, path)
-            {
-                decl_anchor.insert(
-                    from.clone(),
-                    (file, meta.origin.start.row, meta.origin.start.column),
-                );
-            }
-        }
-        // J2's domain is every model-app node with a declaration (§4.7).
+        // J2's domain is every model-app node with a declaration (§4.7); its row
+        // is the first at the anchor that IS the node (11b §4.2), so two nodes
+        // sharing one anchor never alias.
         let mut j2_row = HashMap::new();
         for n in &graph.routines {
             let id = &n.id;
@@ -2219,64 +2182,18 @@ impl RowNodes {
                 continue;
             };
             let (line, col) = (meta.origin.start.row, meta.origin.start.column);
-            if let Some(&ri) = first_at.get(&(id.object.app, path, line, col)) {
+            if let Some(ri) = rows_at
+                .get(&(id.object.app, path, line, col))
+                .and_then(|rows| {
+                    rows.iter()
+                        .copied()
+                        .find(|&ri| node_of[ri as usize].as_ref() == Some(id))
+                })
+            {
                 j2_row.insert(id.clone(), ri);
             }
         }
-        // J5's two rules (§4.9), keyed by `(unit, start, end)`: a workspace row
-        // takes the node of the first physical row there; a cross-app model's
-        // dependency row (no physical rows, engine-switch S7.3) the first node,
-        // graph routine order, whose declaration span is there (spelled with the
-        // model's `dep:<guid>:<path>` unit). Else `None`.
-        let mut spans: HashMap<super::census::Key, &crate::program::node::RoutineNodeId> =
-            HashMap::new();
-        for row in &graph.workspace_rows.routines {
-            spans
-                .entry((row.file.clone(), row.start, row.end))
-                .or_insert(&row.node);
-        }
-        for r in &graph.routines {
-            if r.id.object.app == primary || !apps.contains(&r.id.object.app) {
-                continue;
-            }
-            let guid = &graph.apps.resolve(r.id.object.app).guid;
-            if let Some((meta, path)) = surface.get_with_path(&r.id) {
-                spans
-                    .entry((
-                        format!("dep:{guid}:{path}"),
-                        crate::program::physical::Pos::of(meta.origin.start),
-                        crate::program::physical::Pos::of(meta.origin.end),
-                    ))
-                    .or_insert(&r.id);
-            }
-        }
-        // J5 answers for event-subscriber rows only: the event graph reads no
-        // other row's node.
-        let j5_node = ws
-            .routines
-            .iter()
-            .map(|r| {
-                (r.kind == "event-subscriber")
-                    .then(|| {
-                        spans
-                            .get(&super::census::anchor_key(&r.source_anchor))
-                            .map(|n| (*n).clone())
-                    })
-                    .flatten()
-            })
-            .collect();
-        RowNodes {
-            node_of,
-            decl_anchor,
-            j2_row,
-            j5_node,
-        }
-    }
-
-    /// J5's recorded answer for row `ri` (`None` past the end).
-    #[must_use]
-    pub fn j5(&self, ri: usize) -> Option<&crate::program::node::RoutineNodeId> {
-        self.j5_node.get(ri).and_then(Option::as_ref)
+        RowNodes { node_of, j2_row }
     }
 }
 
@@ -3234,7 +3151,7 @@ mod population_tests {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
         let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
-        let (mut ctx, report, _) =
+        let (mut ctx, _report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let full = assemble_and_resolve_workspace_from_program(
             &inputs,
@@ -3242,7 +3159,6 @@ mod population_tests {
             true,
             &ctx,
             &Default::default(),
-            report.edge_view(),
         )
         .unwrap();
 
@@ -3261,7 +3177,6 @@ mod population_tests {
             true,
             &ctx,
             &Default::default(),
-            report.edge_view(),
         )
         .unwrap();
 
@@ -3294,7 +3209,7 @@ mod population_tests {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
         let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
-        let (mut ctx, report, _) =
+        let (mut ctx, _report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let decls = |m: &ModelRows| -> Vec<(String, u32)> {
             m.workspace
@@ -3316,7 +3231,6 @@ mod population_tests {
                 true,
                 &ctx,
                 &Default::default(),
-                report.edge_view(),
             )
             .unwrap(),
         );
@@ -3337,7 +3251,6 @@ mod population_tests {
                 true,
                 &ctx,
                 &Default::default(),
-                report.edge_view(),
             )
             .unwrap(),
         );
