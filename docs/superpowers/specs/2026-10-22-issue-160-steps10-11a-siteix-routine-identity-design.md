@@ -388,9 +388,12 @@ Single-app is unchanged (no demand, primary only).
       /// from J3's `node_id`. Read by the collision census; 11b's corrections read it.
       node_of: Vec<Option<RoutineNodeId>>,
       /// The program's declaration anchor `(FileIx, start line, start col)` of every node
-      /// a held row stands for (`node_of`), captured from `DeclSurface::get_with_path` and
-      /// never derived from a row. The caller check reads only `decl_anchor[from]`, and
-      /// after the demand filter (10A-2) `from` is always such a node (§4.8).
+      /// that is the `from` of a program edge the join reads (after the 10A-2 filter),
+      /// captured from `DeclSurface::get_with_path` and never derived from a row. That is
+      /// exactly the set the caller check reads (`decl_anchor[from]`, §4.8), including a
+      /// `from` no held row stands for (the cross-node alias), so it is sized by callers,
+      /// not by model-app nodes. A `from` with no surface declaration is absent, and the
+      /// check reads absence as `caller_mismatch`, as today's failed surface lookup does.
       decl_anchor: HashMap<RoutineNodeId, (FileIx, u32, u32)>,
       /// J2's answer, recorded (§4.7). Built by walking EVERY node of a model app
       /// (`model_apps`) that has a surface declaration, whether or not a held row stands
@@ -516,7 +519,7 @@ lines. Task 2 / Task 3 is committed only after that record exists and is green.
 | `ClassifiedEdge.site` (`Option<ProgramSite>`, 16 B) | the program body, released at attach (Decision 35) | 16 B × ≈ 477,700 edges (46,328 workspace + 431,248 dependency body + publisher) ≈ 7.6 MB | `census.program` (`ResolvedProgram::census`), new bucket `program.edge_site` |
 | `ModelRoutine.{file, site_exprs}` | the model (retained) | 4 B × (81,745 + 33,290 + 33,493) sites + 3 × 24 B vector headers + 8 B per row × 31,658 rows ≈ 3.1 MB | `census_model_rows` (`program_calls.rs:717-737`), new bucket `model.site_exprs` |
 | `FileTable` | the `ProgramContext` | one entry per parsed file (`AppRef` + `String` path + map slot, ≈ 100-150 B); the file count was not read at spec time | `census.program`, new bucket `program.file_table` |
-| `RowNodes` | build-local (assembly → attach) | `node_of` and `j5_node` 72 B × 31,658 ≈ 2.3 MB each; `decl_anchor` (held nodes only) and `j2_row` (matched nodes only, ≈ one per row; the extra entries are the cross-node aliases) ≈ 31,700 entries × (72 + 12 or 4 + slot) / 0.875 load ≈ 3.2 MB and 2.9 MB; ≈ 11 MB | `census.program`, bucket `program.row_nodes`, marked at attach |
+| `RowNodes` | build-local (assembly → attach) | `node_of` and `j5_node` 72 B × 31,658 ≈ 2.3 MB each; `decl_anchor` (callers of read edges only) and `j2_row` (matched nodes only, ≈ one per row; the extra entries are the cross-node aliases) ≈ 31,700 entries × (72 + 12 or 4 + slot) / 0.875 load ≈ 3.2 MB and 2.9 MB; ≈ 11 MB | `census.program`, bucket `program.row_nodes`, marked at attach |
 | deleted: the join's `String`-keyed maps (`SiteLinks`, `program`, `consumed`, `l3_*`) | transient inside the join | not measured (P3 has no byte census) | — |
 
 Expected net growth at the process peak (set in attach, epic §5.12): ≈ 12-20 MB up, minus the
