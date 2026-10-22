@@ -2149,7 +2149,7 @@ impl RowNodes {
         let primary = ctx.primary_app_ref;
         let surface = ctx.decl_surface();
         let apps = model_apps(graph, primary, ws);
-        // J2's `by_decl`: the FIRST non-symbol-only row at each declaration anchor.
+        // J2's anchor map: the FIRST non-symbol-only row at each declaration anchor.
         let mut first_at: HashMap<(&str, u32, u32), u32> = HashMap::new();
         for (ri, r) in ws.routines.iter().enumerate() {
             let a = &r.source_anchor;
@@ -2165,7 +2165,7 @@ impl RowNodes {
                 .or_insert(u32::try_from(ri).expect("row index fits u32"));
         }
         // The caller check's side (§4.6, §4.8): the declaration of every `from`
-        // of a program edge the join reads, by the lookup the check makes today.
+        // of a program edge the join reads, from the surface (never from a row).
         // A `from` with no declaration (or no file) is absent: `caller_mismatch`.
         let mut decl_anchor = HashMap::new();
         for ce in join_reads(edges, &apps, demand) {
@@ -2198,7 +2198,34 @@ impl RowNodes {
                 j2_row.insert(id.clone(), ri);
             }
         }
-        let spans = crate::program::model::events::j5_span_map(ctx, ws);
+        // J5's two rules (§4.9), keyed by `(unit, start, end)`: a workspace row
+        // takes the node of the first physical row there; a cross-app model's
+        // dependency row (no physical rows, engine-switch S7.3) the first node,
+        // graph routine order, whose declaration span is there (spelled with the
+        // model's `dep:<guid>:<path>` unit). Else `None`.
+        let mut spans: HashMap<super::census::Key, &crate::program::node::RoutineNodeId> =
+            HashMap::new();
+        for row in &graph.workspace_rows.routines {
+            spans
+                .entry((row.file.clone(), row.start, row.end))
+                .or_insert(&row.node);
+        }
+        let model_guids = crate::program::model::events::model_guids(ws);
+        for r in &graph.routines {
+            let guid = &graph.apps.resolve(r.id.object.app).guid;
+            if r.id.object.app == primary || !model_guids.contains(&guid.to_ascii_lowercase()) {
+                continue;
+            }
+            if let Some((meta, path)) = surface.get_with_path(&r.id) {
+                spans
+                    .entry((
+                        format!("dep:{guid}:{path}"),
+                        crate::program::physical::Pos::of(meta.origin.start),
+                        crate::program::physical::Pos::of(meta.origin.end),
+                    ))
+                    .or_insert(&r.id);
+            }
+        }
         let j5_node = ws
             .routines
             .iter()

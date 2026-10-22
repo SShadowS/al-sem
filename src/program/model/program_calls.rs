@@ -7,33 +7,39 @@
 //! edge. This module does the pairing and counts what does not pair, by
 //! reason.
 //!
-//! # Join keys (code map A3, `docs/2026-10-04-b3-code-map.md`)
+//! # Join keys (#160 steps 10 + 11a)
 //!
-//! - **Site**: `(unit, start.line, start.col, end.line, end.col)`. The L3 unit
-//!   is `PAnchor::source_unit_id` minus its `"ws:"` prefix; the program unit
-//!   is `CanonicalSpan::unit` (the virtual path). Both sides anchor the same
-//!   IR node (the `Call` expression origin) and both use 0-based rows and
-//!   BYTE columns, so no column conversion is done.
+//! - **Site**: [`crate::program::site_key::SiteIx`] = `(FileIx, expression
+//!   index)`. The program side is `ClassifiedEdge::site`, stamped by the
+//!   resolver; the model side is `(ModelRoutine::file, ModelRoutine::site_exprs)`,
+//!   recorded by the body walk. Both name the same IR expression. The file
+//!   table is keyed by app and path, so two apps' `src/Main.al` never meet.
+//!   Every accepted pair's two spans (0-based rows, BYTE columns) are compared
+//!   by a debug assertion.
 //! - **Callee check**: `callee_fp(PCallSite.callee_text)` must equal the
 //!   program site's `callee_fingerprint`.
-//! - **Caller check**: the L3 routine's declaration anchor
-//!   `(unit, start_line, start_column)` must equal the program caller's
-//!   `(virtual_path, origin.start)` from [`DeclSurface::get_with_path`].
+//! - **Caller check**: the program caller's declaration anchor captured at
+//!   assembly (`RowNodes::decl_anchor`, from [`DeclSurface::get_with_path`])
+//!   must equal `(row file, start_line, start_column)` of the model routine.
+//! - **Callee routine** (J2): `RowNodes::j2_row`, recorded at assembly.
+//! - Only the program sites of callers the model holds are read
+//!   ([`join_reads`]: a primary routine, or one in the demand the model was
+//!   built from).
 //!
 //! # Reasons
 //!
 //! Per L3 call site: `matched`, or unmatched as `no_program_site` (no program
-//! edge at that span), `shape_mismatch` (the program sees a record op or
+//! edge at that key), `shape_mismatch` (the program sees a record op or
 //! `Commit` there), `callee_fp_mismatch`, `caller_mismatch`.
 //!
-//! Per program workspace call-site edge that no L3 call site took:
+//! Per program call-site edge that no L3 call site took:
 //! - a record op (`EdgeKind::ImplicitTrigger`) whose operation can fire a
-//!   table trigger (insert/modify/delete/validate/rename):
+//!   table trigger (the resolver's `fires` stamp, `can_fire_trigger`):
 //!   `implicit_trigger_matched` when an `ModelRecordOperation` sits at the same
-//!   span, else `implicit_trigger_unmatched`;
+//!   key, else `implicit_trigger_unmatched`;
 //! - any other record op, or a `Commit`: `operation_site` (no L3 call
 //!   analogue; L3 keeps these as operation sites, code map A6);
-//! - a call or run with an L3 operation site at the same span:
+//! - a call or run with an L3 operation site at the same key:
 //!   `op_shape_mismatch` (L3 says record op, the program says call; until
 //!   engine-switch S3.5 the bare implicit-`Rec` op, 571 sites on CDO, now 0).
 //!   No L3 call site is involved, but the adapter takes implicit-trigger
@@ -41,7 +47,7 @@
 //! - otherwise `program_only_site`.
 //!
 //! Per L3 operation site (not `error-call`, which is also a call site) with no
-//! program edge at its span: `l3_op_no_program_site_trigger` for a
+//! program edge at its key: `l3_op_no_program_site_trigger` for a
 //! trigger-capable record op (insert/modify/delete/validate/rename), else
 //! `l3_op_no_program_site_other`. `l3_record_operations` and
 //! `l3_operation_sites` are the L3 totals.
@@ -51,7 +57,7 @@
 //!
 //! # The adapter (B3 Phase A, Task 3)
 //!
-//! [`resolved_calls_from_program`] builds L3's `ResolvedCalls` from the
+//! `resolved_calls_from_program` builds L3's `ResolvedCalls` from the
 //! program engine's edges, so detectors can run on the program engine's
 //! resolution without changing. Stage 1: resolution only. It follows code
 //! map B7 row by row:
@@ -61,8 +67,8 @@
 //!   resolver. Exceptions that keep L3's shape: an interface edge is
 //!   `Interface`, a builtin is `Builtin`, a dynamic edge is `Dynamic`, and
 //!   `CuVar.Run()` landing on a codeunit's `OnRun` is `CodeunitRun`.
-//! - **Workspace callee**: `to` = the L3 routine with the same declaration
-//!   anchor (the census's caller join), `Resolved`; bindings upgraded with
+//! - **Workspace callee**: `to` = the routine `RowNodes::j2_row` records for
+//!   the target node (J2), `Resolved`; bindings upgraded with
 //!   that routine's parameters, as `upgrade_bindings` does.
 //! - **Dependency callee** (a routine or ABI symbol outside the workspace
 //!   app), `ObjectNotInGraph`, an ABI-collapsed overload, or a member decline
@@ -170,10 +176,15 @@ pub struct SiteCensus {
     pub operation_site: usize,
     pub implicit_trigger_matched: usize,
     pub implicit_trigger_unmatched: usize,
-    /// Program edges sharing a span with an earlier one (only the first joins).
+    /// Program edges sharing a site key with an earlier one (only the first
+    /// joins). The name (from the span join) is kept for the census's
+    /// continuity.
     pub duplicate_program_span: usize,
-    /// L3 call sites sharing a span with an earlier L3 call site. Each is still
-    /// classified (so two can count `matched` against one program edge).
+    /// Model sites sharing a site key with an earlier site of the same category
+    /// (call site, record op, operation site); a record op and its own
+    /// operation site share one key by design and are not counted. Each is
+    /// still classified (so two call sites can count `matched` against one
+    /// program edge). The name is kept for the census's continuity.
     pub duplicate_l3_span: usize,
     /// L3 record operations (`ModelRoutine::record_operations`).
     pub l3_record_operations: usize,
@@ -181,13 +192,13 @@ pub struct SiteCensus {
     /// `error-call` sites are also call sites and are counted there.
     pub l3_operation_sites: usize,
     /// L3 trigger-capable record ops (Insert/Modify/Delete/Validate/Rename)
-    /// with no program edge at their span.
+    /// with no program edge at their key.
     pub l3_op_no_program_site_trigger: usize,
     /// Any other L3 operation site (non-trigger record op, lock, commit) with
-    /// no program edge at its span.
+    /// no program edge at its key.
     pub l3_op_no_program_site_other: usize,
-    /// Adapter counts ([`resolved_calls_from_program`]); always 0 from
-    /// [`site_census`].
+    /// Adapter counts (the adapter's conversion); always 0 from the join's
+    /// census alone.
     ///
     /// L3 call sites whose edges came from the program engine.
     pub adapter_program_sites: usize,
@@ -197,7 +208,7 @@ pub struct SiteCensus {
     /// L3's own resolver). The name is kept for the census's continuity.
     pub adapter_l3_fallback_sites: usize,
     /// Matched call sites whose workspace callee has no L3 routine (no
-    /// declaration-anchor join); counted in `adapter_l3_fallback_sites`.
+    /// `RowNodes::j2_row` entry); counted in `adapter_l3_fallback_sites`.
     pub adapter_callee_outside_l3: usize,
     /// L3 record ops whose trigger edges came from the program engine.
     pub adapter_program_trigger_ops: usize,
@@ -317,29 +328,33 @@ impl SiteCensus {
     }
 }
 
-use crate::program::model::site_links::model_key as l3_key;
-
-/// The source text a span covers (byte columns), when the unit is known.
-#[cfg(test)]
-fn span_text<'a>(texts: &HashMap<String, &'a str>, k: &SiteKey) -> Option<&'a str> {
-    let text = texts.get(k.0.as_str())?;
-    let offset = |line: u32, col: u32| -> Option<usize> {
-        let mut start = 0usize;
-        for _ in 0..line {
-            start += text[start..].find('\n')? + 1;
-        }
-        Some(start + col as usize)
-    };
-    text.get(offset(k.1, k.2)?..offset(k.3, k.4)?)
+/// The span of a model anchor, its unit spelled as the model spells it (the
+/// `ws:` prefix dropped): an unmatched site's location, and the model side of
+/// the span debug assertion.
+fn model_key(a: &crate::program::body::features::PAnchor) -> SiteKey {
+    let unit = a
+        .source_unit_id
+        .strip_prefix("ws:")
+        .unwrap_or(&a.source_unit_id);
+    (
+        unit.to_string(),
+        a.start_line,
+        a.start_column,
+        a.end_line,
+        a.end_column,
+    )
 }
 
-/// The operation name of a record-op call's text: `Rec.Insert(true)` →
-/// `insert`.
-#[cfg(test)]
-fn op_name(call_text: &str) -> String {
-    let callee = call_text.split('(').next().unwrap_or("");
-    let last = callee.rsplit('.').next().unwrap_or("").trim();
-    last.trim_matches('"').fold_identifier()
+/// The span of a program site, its unit the virtual path (spelled as a model
+/// unit by the caller, [`model_unit`]).
+fn program_key(s: &crate::program::resolve::edge::CanonicalSpan) -> SiteKey {
+    (
+        s.unit.clone(),
+        s.start.line,
+        s.start.col,
+        s.end.line,
+        s.end.col,
+    )
 }
 
 /// The model's source-unit spelling of program file `path` in `app` (engine-switch
@@ -405,26 +420,12 @@ pub(crate) fn join_reads<'a>(
     })
 }
 
-/// Pair every model call site with the program edge at the same key and count
-/// what does not pair, by reason. `view` must come from
-/// `resolve_full_program_with(ctx)` (`ProgramReport::edge_view`, or a
-/// `ProgramBody::edge_view` of the same build); `rows` is the model of the same
-/// workspace, assembled without demand.
-#[must_use]
-pub fn site_census(
-    view: EdgeView<'_>,
-    ctx: &ProgramContext,
-    rows: &crate::program::model::workspace::ModelRows,
-) -> SiteCensus {
-    join(view, ctx, rows, None).census
-}
-
 /// The census plus the pairs it found, for the adapter.
 struct Join<'a> {
     census: SiteCensus,
     /// Matched L3 call sites: `(routine index, call-site index)` → edge.
     calls: HashMap<(usize, usize), &'a ClassifiedEdge>,
-    /// L3 record ops with a program `ImplicitTrigger` edge at their span
+    /// L3 record ops with a program `ImplicitTrigger` edge at their key
     /// (the census's `implicit_trigger_matched`): `(routine index, op
     /// index)` → edge.
     ops: HashMap<(usize, usize), &'a ClassifiedEdge>,
@@ -442,233 +443,6 @@ fn join<'a>(
     key_join(view, ctx, &rows.workspace, &rows.row_nodes, demand)
 }
 
-/// The span join (J1), reading only the program sites of callers
-/// [`caller_held`] admits under `demand`. Test-only since #160 Task 2: T1's
-/// oracle compares it with the key join; Task 3 deletes it.
-#[cfg(test)]
-fn span_join<'a>(
-    view: EdgeView<'a>,
-    ctx: &ProgramContext,
-    ws: &ModelEntities,
-    demand: Option<&HashSet<RoutineNodeId>>,
-) -> Join<'a> {
-    let mut c = SiteCensus::default();
-    let mut matched_calls: HashMap<(usize, usize), &'a ClassifiedEdge> = HashMap::new();
-    let mut matched_ops: HashMap<(usize, usize), &'a ClassifiedEdge> = HashMap::new();
-    let surface = ctx.decl_surface();
-    let graph = ctx.graph();
-    let primary = view.primary_app_ref;
-    let apps = model_apps(graph, primary, ws);
-    // Keyed by model unit (S7.3): dependency files too, when the model holds them.
-    let mut texts: HashMap<String, &str> = ctx
-        .parsed()
-        .iter()
-        .flat_map(|u| &u.files)
-        .map(|f| (f.virtual_path.clone(), &*f.text))
-        .collect();
-    for unit in ctx.dep_bodies().unwrap_or_default() {
-        let Some(app) = graph.apps.find(&unit.app) else {
-            continue;
-        };
-        if apps.contains(&app) {
-            for f in &unit.files {
-                texts.insert(model_unit(graph, primary, app, &f.virtual_path), &*f.text);
-            }
-        }
-    }
-    let commit_fp = callee_fp("Commit");
-
-    // The site links keep EVERY edge per span (S2b.6); this adapter still takes
-    // the first in report order, as it always did — S3 converts all of them.
-    let links = crate::program::model::site_links::SiteLinks::build(view);
-    let mut program: HashMap<SiteKey, &'a ClassifiedEdge> = HashMap::new();
-    for &app in &apps {
-        for (k, edges) in links.sites_of(app) {
-            let mut held = edges
-                .iter()
-                .copied()
-                .filter(|ce| caller_held(&ce.edge.from, primary, demand));
-            let Some(first) = held.next() else {
-                continue;
-            };
-            let n = 1 + held.count();
-            c.program_sites += n;
-            c.duplicate_program_span += n - 1;
-            let unit = model_unit(graph, primary, app, &k.0);
-            program.insert((unit, k.1, k.2, k.3, k.4), first);
-        }
-    }
-    let is_operation = |ce: &ClassifiedEdge| {
-        ce.edge.kind == EdgeKind::ImplicitTrigger
-            || (ce.edge.kind == EdgeKind::Call && ce.edge.site.callee_fingerprint == commit_fp)
-    };
-
-    let mut consumed: HashSet<SiteKey> = HashSet::new();
-    let mut l3_ops: HashSet<SiteKey> = HashSet::new();
-    let mut l3_record_ops: HashMap<SiteKey, Vec<(usize, usize)>> = HashMap::new();
-    let mut misses: Vec<UnmatchedSite> = Vec::new();
-    let mut unmatched = |reason: &'static str, k: &SiteKey, text: &str| {
-        misses.push(UnmatchedSite {
-            reason,
-            unit: k.0.clone(),
-            start_line: k.1,
-            start_col: k.2,
-            end_line: k.3,
-            end_col: k.4,
-            text: text.to_string(),
-        });
-    };
-    let (mut matched, mut no_site, mut shape, mut fp, mut caller) = (0, 0, 0, 0, 0);
-    let mut l3_call_sites = 0;
-    let mut seen_l3_calls: HashSet<SiteKey> = HashSet::new();
-
-    for (ri, r) in ws.routines.iter().enumerate() {
-        for op in &r.operation_sites {
-            if op.kind == "error-call" {
-                continue;
-            }
-            c.l3_operation_sites += 1;
-            let k = l3_key(&op.source_anchor);
-            // Record ops (kind "record-op"/"lock") are handled with their
-            // op name below; only `commit` is left here.
-            if op.kind == "commit" && !program.contains_key(&k) {
-                c.l3_op_no_program_site_other += 1;
-                unmatched("l3_op_no_program_site_other", &k, "Commit");
-            }
-            l3_ops.insert(k);
-        }
-        for (oi, op) in r.record_operations.iter().enumerate() {
-            c.l3_record_operations += 1;
-            let k = l3_key(&op.source_anchor);
-            if !program.contains_key(&k) {
-                if can_fire_trigger(&op.op.fold_identifier()) {
-                    c.l3_op_no_program_site_trigger += 1;
-                    unmatched("l3_op_no_program_site_trigger", &k, &op.op);
-                } else {
-                    c.l3_op_no_program_site_other += 1;
-                    unmatched("l3_op_no_program_site_other", &k, &op.op);
-                }
-            }
-            l3_record_ops.entry(k).or_default().push((ri, oi));
-        }
-        let decl = &r.source_anchor;
-        let decl_unit = decl
-            .source_unit_id
-            .strip_prefix("ws:")
-            .unwrap_or(&decl.source_unit_id);
-        for (ci, cs) in r.call_sites.iter().enumerate() {
-            l3_call_sites += 1;
-            let k = l3_key(&cs.source_anchor);
-            if !seen_l3_calls.insert(k.clone()) {
-                c.duplicate_l3_span += 1;
-            }
-            let Some(ce) = program.get(&k) else {
-                no_site += 1;
-                unmatched("no_program_site", &k, &cs.callee_text);
-                continue;
-            };
-            consumed.insert(k.clone());
-            if is_operation(ce) {
-                shape += 1;
-                unmatched("shape_mismatch", &k, &cs.callee_text);
-            } else if callee_fp(&cs.callee_text) != ce.edge.site.callee_fingerprint {
-                fp += 1;
-                unmatched("callee_fp_mismatch", &k, &cs.callee_text);
-            } else if surface
-                .get_with_path(&ce.edge.from)
-                .is_none_or(|(meta, path)| {
-                    let unit = model_unit(graph, primary, ce.edge.from.object.app, path);
-                    (
-                        unit.as_str(),
-                        meta.origin.start.row,
-                        meta.origin.start.column,
-                    ) != (decl_unit, decl.start_line, decl.start_column)
-                })
-            {
-                caller += 1;
-                unmatched("caller_mismatch", &k, &cs.callee_text);
-            } else {
-                matched += 1;
-                matched_calls.insert((ri, ci), *ce);
-            }
-        }
-    }
-
-    let mut rest: Vec<(&SiteKey, &&'a ClassifiedEdge)> = program
-        .iter()
-        .filter(|(k, _)| !consumed.contains(*k))
-        .collect();
-    rest.sort_by(|a, b| a.0.cmp(b.0));
-    let (mut op_site, mut it_matched, mut it_unmatched, mut prog_only, mut op_shape) =
-        (0, 0, 0, 0, 0);
-    for (k, ce) in rest {
-        let text = span_text(&texts, k).unwrap_or("");
-        if ce.edge.kind == EdgeKind::ImplicitTrigger {
-            if !can_fire_trigger(&op_name(text)) {
-                op_site += 1;
-            } else if let Some(at) = l3_record_ops.get(k) {
-                it_matched += 1;
-                for &pos in at {
-                    matched_ops.insert(pos, *ce);
-                }
-            } else {
-                it_unmatched += 1;
-                unmatched("implicit_trigger_unmatched", k, text);
-            }
-        } else if is_operation(ce) {
-            op_site += 1;
-        } else if l3_ops.contains(k) {
-            op_shape += 1;
-            unmatched("op_shape_mismatch", k, text);
-        } else {
-            prog_only += 1;
-            unmatched("program_only_site", k, text);
-        }
-    }
-
-    c.l3_call_sites = l3_call_sites;
-    c.matched = matched;
-    c.no_program_site = no_site;
-    c.shape_mismatch = shape;
-    c.op_shape_mismatch = op_shape;
-    c.callee_fp_mismatch = fp;
-    c.caller_mismatch = caller;
-    c.operation_site = op_site;
-    c.implicit_trigger_matched = it_matched;
-    c.implicit_trigger_unmatched = it_unmatched;
-    c.program_only_site = prog_only;
-    debug_assert_eq!(
-        c.l3_call_sites,
-        c.matched + c.no_program_site + c.shape_mismatch + c.callee_fp_mismatch + c.caller_mismatch,
-        "every L3 call site lands in exactly one bucket"
-    );
-    debug_assert_eq!(
-        c.program_sites,
-        c.duplicate_program_span
-            + consumed.len()
-            + c.operation_site
-            + c.implicit_trigger_matched
-            + c.implicit_trigger_unmatched
-            + c.program_only_site
-            + c.op_shape_mismatch,
-        "every program site lands in exactly one bucket"
-    );
-    c.unmatched = misses;
-    c.unmatched.sort_by(|a, b| {
-        (&a.unit, a.start_line, a.start_col, a.reason).cmp(&(
-            &b.unit,
-            b.start_line,
-            b.start_col,
-            b.reason,
-        ))
-    });
-    Join {
-        census: c,
-        calls: matched_calls,
-        ops: matched_ops,
-    }
-}
-
 /// The adapter, stage 1: L3's `ResolvedCalls` built from the program
 /// engine's call-site edges (code map B7; see the module doc), plus the
 /// census with its `adapter_*` counts. `view` must come from
@@ -679,9 +453,10 @@ fn span_join<'a>(
 /// `upgrade_dependency_bindings` (stage 2): upgrade the bindings of a call
 /// into a dependency routine with that routine's parameter `var`-ness, as
 /// for a workspace callee. Production passes `true`; tests pass `false` to see
-/// stage 1 alone.
+/// stage 1 alone. Demand-blind: correct only on rows assembled without demand
+/// (single-app); the cross-app attach passes its demand to [`adapter`].
 #[must_use]
-pub fn resolved_calls_from_program(
+pub(crate) fn resolved_calls_from_program(
     view: EdgeView<'_>,
     ctx: &ProgramContext,
     rows: &crate::program::model::workspace::ModelRows,
@@ -704,7 +479,8 @@ pub(crate) fn resolved_calls_from_rows(
     adapter(view, ctx, rows, upgrade_dependency_bindings, None, demand)
 }
 
-/// [`site_census`] under `demand` (see [`resolved_calls_from_rows`]).
+/// The join's census alone (no conversion, no `adapter_*` counts), under
+/// `demand` (see [`resolved_calls_from_rows`]).
 #[must_use]
 #[cfg(test)]
 pub(crate) fn site_census_rows(
@@ -761,7 +537,7 @@ fn attach_program_calls_with(
     // each row's node is J5's answer recorded at assembly (#160 §4.9).
     let events = {
         let _s = pt::span("b3", "b3.events");
-        crate::program::model::events::program_event_graph_with_row_nodes(
+        crate::program::model::events::program_event_graph(
             &program.body().ctx,
             &rows.workspace,
             &rows.row_nodes,
@@ -776,6 +552,8 @@ fn attach_program_calls_with(
             .emit("program.row_nodes", crate::engine::census::Kind::Shallow);
         crate::program::model::workspace::collision_census(&rows.workspace, &rows.row_nodes).emit();
     }
+    // #160 §4.13: `RowNodes` is build-local (assembly -> attach); it ends here.
+    drop(rows.row_nodes);
     let (meta, body) = program.into_parts();
     body.release();
     // #160 §4.1.4: everything retained from here on is post-attach.
@@ -1241,7 +1019,6 @@ fn key_join<'a>(
     row_nodes: &crate::program::model::workspace::RowNodes,
     demand: Option<&HashSet<RoutineNodeId>>,
 ) -> Join<'a> {
-    use crate::program::model::site_links::program_key;
     use crate::program::site_key::SiteIx;
     use std::collections::hash_map::Entry;
     let mut c = SiteCensus::default();
@@ -1326,7 +1103,7 @@ fn key_join<'a>(
                 c.l3_op_no_program_site_other += 1;
                 unmatched(
                     "l3_op_no_program_site_other",
-                    l3_key(&op.source_anchor),
+                    model_key(&op.source_anchor),
                     "Commit",
                 );
             }
@@ -1353,7 +1130,7 @@ fn key_join<'a>(
                     c.l3_op_no_program_site_other += 1;
                     "l3_op_no_program_site_other"
                 };
-                unmatched(reason, l3_key(&op.source_anchor), &op.op);
+                unmatched(reason, model_key(&op.source_anchor), &op.op);
             }
             if let Some(k) = k {
                 model_record_ops.entry(k).or_default().push((ri, oi));
@@ -1372,7 +1149,7 @@ fn key_join<'a>(
                 no_site += 1;
                 unmatched(
                     "no_program_site",
-                    l3_key(&cs.source_anchor),
+                    model_key(&cs.source_anchor),
                     &cs.callee_text,
                 );
                 continue;
@@ -1380,12 +1157,16 @@ fn key_join<'a>(
             consumed.insert(k);
             if is_operation(ce) {
                 shape += 1;
-                unmatched("shape_mismatch", l3_key(&cs.source_anchor), &cs.callee_text);
+                unmatched(
+                    "shape_mismatch",
+                    model_key(&cs.source_anchor),
+                    &cs.callee_text,
+                );
             } else if callee_fp(&cs.callee_text) != ce.edge.site.callee_fingerprint {
                 fp += 1;
                 unmatched(
                     "callee_fp_mismatch",
-                    l3_key(&cs.source_anchor),
+                    model_key(&cs.source_anchor),
                     &cs.callee_text,
                 );
             } else if row_nodes.decl_anchor.get(&ce.edge.from)
@@ -1394,13 +1175,13 @@ fn key_join<'a>(
                 caller += 1;
                 unmatched(
                     "caller_mismatch",
-                    l3_key(&cs.source_anchor),
+                    model_key(&cs.source_anchor),
                     &cs.callee_text,
                 );
             } else {
                 // §4.3 step 4: an accepted pair anchors one span on both sides.
                 debug_assert_eq!(
-                    l3_key(&cs.source_anchor),
+                    model_key(&cs.source_anchor),
                     program_span(ce),
                     "call site {} paired by key at a different span",
                     cs.id
@@ -1422,7 +1203,7 @@ fn key_join<'a>(
                 it_matched += 1;
                 for &(ri, oi) in at {
                     debug_assert_eq!(
-                        l3_key(&ws.routines[ri].record_operations[oi].source_anchor),
+                        model_key(&ws.routines[ri].record_operations[oi].source_anchor),
                         program_span(ce),
                         "record op {} paired by key at a different span",
                         ws.routines[ri].record_operations[oi].id
@@ -2426,7 +2207,7 @@ fn map_unknown(reason: PReason) -> Resolution {
 }
 
 /// Build both models for `workspace` and run the adapter; return its census
-/// (the [`site_census`] counts plus the `adapter_*` counts). The program
+/// (the join's counts plus the `adapter_*` counts). The program
 /// context uses the `Summary` dependency profile, as analyze's build does:
 /// the resolver resolves workspace files only, so dependency bodies are not
 /// read. Both models are resident together, as they are in `analyze` while
@@ -2497,9 +2278,7 @@ pub(crate) fn build_models_with(
 }
 
 // ---------------------------------------------------------------------------
-// #160 steps 10 + 11a, Task 1: test-only helpers and the old-vs-new oracles
-// (spec §5.1 T1, §5.7 T7). The oracles compare on PRISTINE assembly and are
-// deleted at Task 3 with the code they compare.
+// #160 steps 10 + 11a: test-only helpers.
 // ---------------------------------------------------------------------------
 
 /// `u32::MAX - e` for every expression index (#160 §5.3): an index no
@@ -2526,313 +2305,6 @@ pub(crate) fn accepted_call_pairs<'a>(
     demand: Option<&HashSet<RoutineNodeId>>,
 ) -> HashMap<(usize, usize), &'a ClassifiedEdge> {
     join(view, ctx, rows, demand).calls
-}
-
-/// One `(row, site)` whose accepted program edge differs between the span join
-/// and the key join (T1).
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct PairDiff {
-    /// `"call"` (a call site) or `"op"` (a record op).
-    pub kind: &'static str,
-    pub ri: usize,
-    pub ix: usize,
-    pub row_name: String,
-    pub site_id: String,
-    pub unit: String,
-    pub start_line: u32,
-    pub start_col: u32,
-    /// The first route's routine target of each side's edge (`None`: no edge,
-    /// or not a routine route).
-    pub span_target: Option<RoutineNodeId>,
-    pub key_target: Option<RoutineNodeId>,
-    pub span_paired: bool,
-    pub key_paired: bool,
-}
-
-/// T1's three comparisons (#160 §5.1).
-#[cfg(test)]
-pub(crate) struct ParityReport {
-    /// Accepted pairs that differ, row-indexed, sorted.
-    pub pairs: Vec<PairDiff>,
-    /// Accepted call / op pairs on the span side (the "is anything compared?"
-    /// precondition).
-    pub span_call_pairs: usize,
-    pub span_op_pairs: usize,
-    /// Converted output groups (by call-site / op id) that differ.
-    pub conversion: Vec<String>,
-    pub groups: usize,
-    /// Both joins' censuses after conversion (adapter counters included).
-    pub span_census: SiteCensus,
-    pub key_census: SiteCensus,
-}
-
-/// The span join under the 10A-2 demand filter (§4.5), for T1's census
-/// comparison under one demand setting (the production span join stays
-/// unfiltered until deleted).
-#[cfg(test)]
-fn span_join_under_demand<'a>(
-    view: EdgeView<'a>,
-    ctx: &ProgramContext,
-    ws: &ModelEntities,
-    demand: Option<&HashSet<RoutineNodeId>>,
-) -> Join<'a> {
-    span_join(view, ctx, ws, demand)
-}
-
-/// T1 (#160 §5.1): both joins and both conversions on the SAME pristine model.
-#[cfg(test)]
-pub(crate) fn key_join_parity(
-    view: EdgeView<'_>,
-    ctx: &ProgramContext,
-    rows: &crate::program::model::workspace::ModelRows,
-    abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
-    demand: Option<&HashSet<RoutineNodeId>>,
-) -> ParityReport {
-    use std::collections::{BTreeMap, BTreeSet};
-    let ws = &rows.workspace;
-    let span = span_join_under_demand(view, ctx, ws, demand);
-    let key = key_join(view, ctx, ws, &rows.row_nodes, demand);
-    let target = |ce: Option<&&ClassifiedEdge>| {
-        ce.and_then(|ce| ce.edge.routes.first())
-            .and_then(|r| match &r.target {
-                RouteTarget::Routine(id) => Some(id.clone()),
-                _ => None,
-            })
-    };
-    let mut pairs = Vec::new();
-    for (kind, a, b) in [
-        ("call", &span.calls, &key.calls),
-        ("op", &span.ops, &key.ops),
-    ] {
-        let at: BTreeSet<(usize, usize)> = a.keys().chain(b.keys()).copied().collect();
-        for (ri, ix) in at {
-            let (x, y) = (a.get(&(ri, ix)), b.get(&(ri, ix)));
-            let same = match (x, y) {
-                (Some(x), Some(y)) => std::ptr::eq(*x, *y),
-                (None, None) => true,
-                _ => false,
-            };
-            if same {
-                continue;
-            }
-            let r = &ws.routines[ri];
-            let (site_id, anchor) = if kind == "call" {
-                let cs = &r.call_sites[ix];
-                (cs.id.clone(), &cs.source_anchor)
-            } else {
-                let op = &r.record_operations[ix];
-                (op.id.clone(), &op.source_anchor)
-            };
-            pairs.push(PairDiff {
-                kind,
-                ri,
-                ix,
-                row_name: r.name.clone(),
-                site_id,
-                unit: anchor.source_unit_id.clone(),
-                start_line: anchor.start_line,
-                start_col: anchor.start_column,
-                span_target: target(x),
-                key_target: target(y),
-                span_paired: x.is_some(),
-                key_paired: y.is_some(),
-            });
-        }
-    }
-    pairs.sort();
-    let (span_call_pairs, span_op_pairs) = (span.calls.len(), span.ops.len());
-    let rn = &rows.row_nodes;
-    let (span_calls, span_census) = convert(span, view, ctx, ws, rn, true, abi_rows);
-    let (key_calls, key_census) = convert(key, view, ctx, ws, rn, true, abi_rows);
-    let groups = |c: &ResolvedCalls| {
-        let mut g: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for e in &c.edges {
-            g.entry(e.callsite_id.clone())
-                .or_default()
-                .push(format!("edge {e:?}"));
-        }
-        for t in &c.external_targets {
-            g.entry(t.callsite_id.clone())
-                .or_default()
-                .push(format!("target {t:?}"));
-        }
-        for (id, b) in &c.upgraded_bindings {
-            g.entry(id.clone())
-                .or_default()
-                .push(format!("bindings {b:?}"));
-        }
-        g
-    };
-    let (gs, gk) = (groups(&span_calls), groups(&key_calls));
-    let ids: BTreeSet<&String> = gs.keys().chain(gk.keys()).collect();
-    let conversion = ids
-        .iter()
-        .filter(|id| gs.get(**id) != gk.get(**id))
-        .map(|id| format!("{id}: span {:?} / key {:?}", gs.get(*id), gk.get(*id)))
-        .collect();
-    ParityReport {
-        pairs,
-        span_call_pairs,
-        span_op_pairs,
-        conversion,
-        groups: gs.len(),
-        span_census,
-        key_census,
-    }
-}
-
-/// The `decl_anchor` oracle (#160 §4.6, §4.8): for each `from` of a program edge
-/// the join reads (under `demand`), today's caller-check side (the surface's
-/// declaration, spelled `(model unit, line, col)`) against `rows.row_nodes
-/// .decl_anchor[from]` spelled the same way, absence included. Returns the
-/// callers compared and the differences.
-#[cfg(test)]
-pub(crate) fn decl_anchor_differences(
-    view: EdgeView<'_>,
-    ctx: &ProgramContext,
-    rows: &crate::program::model::workspace::ModelRows,
-    demand: Option<&HashSet<RoutineNodeId>>,
-) -> (usize, Vec<String>) {
-    let graph = ctx.graph();
-    let primary = ctx.primary_app_ref;
-    let surface = ctx.decl_surface();
-    let apps = model_apps(graph, primary, &rows.workspace);
-    let files: HashMap<crate::program::site_key::FileIx, (AppRef, &str)> =
-        ctx.files.iter().map(|(a, p, f)| (f, (a, p))).collect();
-    let (mut seen, mut diffs) = (HashSet::new(), Vec::new());
-    for ce in join_reads(view, &apps, demand) {
-        let from = &ce.edge.from;
-        if !seen.insert(from) {
-            continue;
-        }
-        let old = surface.get_with_path(from).map(|(meta, path)| {
-            (
-                model_unit(graph, primary, from.object.app, path),
-                meta.origin.start.row,
-                meta.origin.start.column,
-            )
-        });
-        let new = rows.row_nodes.decl_anchor.get(from).map(|&(f, l, c)| {
-            let unit = files.get(&f).map_or_else(
-                || format!("<unknown {f:?}>"),
-                |&(a, p)| model_unit(graph, primary, a, p),
-            );
-            (unit, l, c)
-        });
-        if old != new {
-            diffs.push(format!("{from:?}: surface {old:?}, decl_anchor {new:?}"));
-        }
-    }
-    (seen.len(), diffs)
-}
-
-/// T7 (#160 §5.7): over J2's whole domain (every node of a model app), today's
-/// `Converter::l3_routine` answer (surface declaration -> first row at that
-/// anchor) against `rows.row_nodes.j2_row`. Returns the nodes either side maps
-/// and the differences.
-#[cfg(test)]
-pub(crate) fn j2_differences(
-    ctx: &ProgramContext,
-    rows: &crate::program::model::workspace::ModelRows,
-) -> (usize, Vec<String>) {
-    let ws = &rows.workspace;
-    let graph = ctx.graph();
-    let primary = ctx.primary_app_ref;
-    let surface = ctx.decl_surface();
-    let apps = model_apps(graph, primary, ws);
-    let mut by_decl: HashMap<(&str, u32, u32), u32> = HashMap::new();
-    for (ri, r) in ws.routines.iter().enumerate() {
-        let a = &r.source_anchor;
-        let unit = a
-            .source_unit_id
-            .strip_prefix("ws:")
-            .unwrap_or(&a.source_unit_id);
-        by_decl
-            .entry((unit, a.start_line, a.start_column))
-            .or_insert(u32::try_from(ri).expect("row index fits u32"));
-    }
-    let (mut mapped, mut diffs) = (0, Vec::new());
-    for n in &graph.routines {
-        let id = &n.id;
-        if !apps.contains(&id.object.app) {
-            continue;
-        }
-        let old = surface.get_with_path(id).and_then(|(meta, path)| {
-            let unit = model_unit(graph, primary, id.object.app, path);
-            by_decl
-                .get(&(
-                    unit.as_str(),
-                    meta.origin.start.row,
-                    meta.origin.start.column,
-                ))
-                .copied()
-        });
-        let new = rows.row_nodes.j2_row.get(id).copied();
-        if old.is_some() || new.is_some() {
-            mapped += 1;
-        }
-        if old != new {
-            diffs.push(format!("{id:?}: J2 {old:?}, j2_row {new:?}"));
-        }
-    }
-    (mapped, diffs)
-}
-
-/// The workspaces T1/T7/T8 compare on (#160 §5.1): every `tests/r0-corpus` dir
-/// with a root `app.json`, and every `tests/fixtures` dir (to depth 3) with one.
-#[cfg(test)]
-pub(crate) fn oracle_fixture_workspaces() -> Vec<std::path::PathBuf> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(root.join("tests/r0-corpus"))
-        .expect("read tests/r0-corpus")
-        .map(|e| e.expect("dir entry").path())
-        .filter(|p| p.join("app.json").is_file())
-        .collect();
-    for e in walkdir::WalkDir::new(root.join("tests/fixtures")).max_depth(3) {
-        let e = e.expect("walk tests/fixtures");
-        if e.file_type().is_dir() && e.path().join("app.json").is_file() {
-            dirs.push(e.path().to_path_buf());
-        }
-    }
-    dirs.sort();
-    dirs
-}
-
-/// Run `f` on the single-app build of `ws` (as `alsem analyze --single-app`
-/// builds it) and on its cross-app build (`cross_app_assemble`), with the
-/// universe's label, its abi rows and its demand. A failed build is `Err`.
-#[cfg(test)]
-pub(crate) fn for_both_universes(
-    ws: &std::path::Path,
-    mut f: impl FnMut(
-        &str,
-        EdgeView<'_>,
-        &ProgramContext,
-        &crate::program::model::workspace::ModelRows,
-        Option<&crate::program::model::workspace::AbiRowIds>,
-        Option<&HashSet<RoutineNodeId>>,
-    ),
-) -> Result<(), String> {
-    let (ctx, report, rows) = build_models(ws)?;
-    f("single-app", report.edge_view(), &ctx, &rows, None, None);
-    drop((ctx, report, rows));
-    let a = cross_app_assemble(
-        &crate::program::inputs::InputSet::read(ws, &Default::default()),
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-        false,
-    )
-    .map_err(|e| format!("cross-app build: {e:?}"))?;
-    let body = a.program.body();
-    f(
-        "cross-app",
-        body.edge_view(),
-        &body.ctx,
-        &a.rows,
-        Some(&a.abi_rows),
-        Some(&a.demand),
-    );
-    Ok(())
 }
 
 #[cfg(test)]
@@ -2875,7 +2347,7 @@ mod tests {
 
     /// #96: every record op the program resolver emits an `ImplicitTrigger` edge
     /// for passes the adapter's gate, the bulk `ModifyAll`/`DeleteAll` included
-    /// (`op_name` folds the call text to these spellings).
+    /// (the resolver's `fires` stamp reads the same function, #160 §4.4).
     #[test]
     fn can_fire_trigger_admits_the_resolver_ops() {
         for op in [
@@ -2892,7 +2364,6 @@ mod tests {
         for op in ["get", "findset", "calcfields", "testfield"] {
             assert!(!can_fire_trigger(op), "{op}");
         }
-        assert_eq!(op_name("T.ModifyAll(Amount, 0, true)"), "modifyall");
     }
 
     const APP_JSON: &str = r#"{"id":"b3b3b3b3-0000-0000-0000-000000000001","name":"B3 Census","publisher":"T","version":"1.0.0.0"}"#;
@@ -3426,7 +2897,10 @@ mod tests {
     }
 
     /// T4 (#160 §5.4): a copy of one program call-site edge (same site, same
-    /// key) is a duplicate program key, counted and named as a loss.
+    /// key) is a duplicate program key, counted and named as a loss, and the
+    /// FIRST edge at the key is the one the join keeps. Hand-stated: the copy
+    /// differs from the original only in its callee fingerprint, so keeping the
+    /// copy would turn the site into a `callee_fp_mismatch`.
     #[test]
     fn duplicate_program_key_is_counted() {
         let (_dir, ctx, mut report, rows) = single_app(&[("src/m.al", TWO_CALLS)]);
@@ -3439,11 +2913,16 @@ mod tests {
                     && ce.edge.from.object.app == primary
             })
             .unwrap();
-        let copy = ClassifiedEdge {
+        let mut copy = ClassifiedEdge {
             obligation_id: report.edges[i].obligation_id.clone(),
             edge: report.edges[i].edge.clone(),
             site: report.edges[i].site,
         };
+        copy.edge.site.callee_fingerprint = callee_fp("NotTheCallee");
+        assert_ne!(
+            copy.edge.site.callee_fingerprint, report.edges[i].edge.site.callee_fingerprint,
+            "precondition: the copy is told apart by its callee fingerprint"
+        );
         report.edges.push(copy);
         let c = site_census_rows(report.edge_view(), &ctx, &rows, None);
         assert_eq!(c.duplicate_program_span, 1, "{c:#?}");
@@ -3451,6 +2930,11 @@ mod tests {
             c.losses().contains(&("duplicate_program_span", 1)),
             "{:?}",
             c.losses()
+        );
+        assert_eq!(
+            (c.matched, c.callee_fp_mismatch),
+            (2, 0),
+            "the first edge at a key wins: {c:#?}"
         );
     }
 
@@ -3499,389 +2983,6 @@ mod tests {
                 .source_anchor
                 .start_column += 1;
         });
-    }
-
-    /// T1 (#160 §5.1): on every fixture, both universes, the key join accepts
-    /// the same pairs as the span join, converts to the same calls and gives
-    /// the same census (P2: 0 differences on these dirs).
-    #[test]
-    fn key_join_equals_span_join_on_the_fixtures() {
-        let (mut runs, mut call_pairs) = (0, 0);
-        let mut failures = Vec::new();
-        for ws in oracle_fixture_workspaces() {
-            let built = for_both_universes(&ws, |u, view, ctx, rows, abi, demand| {
-                let p = key_join_parity(view, ctx, rows, abi, demand);
-                runs += 1;
-                call_pairs += p.span_call_pairs;
-                if let Some(d) = p.pairs.first() {
-                    failures.push(format!(
-                        "{} ({u}): {} accepted pairs differ, first {d:?}",
-                        ws.display(),
-                        p.pairs.len()
-                    ));
-                }
-                if let Some(g) = p.conversion.first() {
-                    failures.push(format!(
-                        "{} ({u}): {} converted groups differ, first {g}",
-                        ws.display(),
-                        p.conversion.len()
-                    ));
-                }
-                if counts(&p.span_census) != counts(&p.key_census) {
-                    failures.push(format!(
-                        "{} ({u}): census differs: span {:?} / key {:?}",
-                        ws.display(),
-                        counts(&p.span_census),
-                        counts(&p.key_census)
-                    ));
-                }
-            });
-            if let Err(e) = built {
-                failures.push(format!("{}: {e}", ws.display()));
-            }
-        }
-        assert!(runs > 200, "fixture precondition: {runs} runs");
-        assert!(call_pairs > 0, "fixture precondition: accepted pairs exist");
-        assert!(
-            failures.is_empty(),
-            "{} key/span differences:\n{}",
-            failures.len(),
-            failures.join("\n")
-        );
-    }
-
-    /// R-PAIRS (#160 §3.5): `(row name, site index, virtual path, start line,
-    /// start col)` of the 23 call sites whose accepted pair differs, key vs
-    /// span, on cross-app CDO.
-    fn r_pairs() -> std::collections::BTreeSet<(String, String, String, u32, u32)> {
-        let token = "src/.dependencies/CC/Table/AccessToken.Table.al";
-        let session = "src/Source/Core/CoreSessionManager.Codeunit.al";
-        let pages = "src/Utilities/PageManagement.Codeunit.al";
-        let rows: &[(&str, &str, &str, u32, u32)] = &[
-            ("AcquireTokenFromCache", "cs0", token, 64, 8),
-            ("AcquireTokenFromCache", "cs1", token, 65, 8),
-            ("AcquireTokenFromCache", "cs2", token, 67, 8),
-            ("AcquireTokenFromCache", "cs3", token, 72, 42),
-            ("AcquireTokenFromCache", "cs4", token, 74, 42),
-            ("AcquireTokenFromCache", "cs5", token, 76, 24),
-            ("AcquireTokenFromCache", "cs6", token, 77, 24),
-            ("AcquireTokenFromCache", "cs7", token, 81, 45),
-            ("GetAccessToken", "cs0", session, 59, 8),
-            ("GetAccessToken", "cs1", session, 60, 8),
-            ("GetAccessToken", "cs3", session, 73, 38),
-            ("GetAccessToken", "cs4", session, 76, 11),
-            ("GetAccessToken", "cs5", session, 81, 11),
-            ("GetAccessToken", "cs6", session, 85, 11),
-            ("GetAccessToken", "cs7", session, 89, 15),
-            ("GetFreshAccessToken", "cs0", session, 101, 8),
-            ("GetFreshAccessToken", "cs1", session, 103, 8),
-            ("GetFreshAccessToken", "cs2", session, 104, 11),
-            ("GetFreshAccessToken", "cs3", session, 107, 12),
-            ("GetSalesHeaderPageID", "cs0", pages, 297, 8),
-            ("GetSalesHeaderPageID", "cs1", pages, 298, 11),
-            ("GetSalesHeaderPageID", "cs2", pages, 299, 19),
-            ("GetSalesHeaderPageID", "cs3", pages, 299, 42),
-        ];
-        rows.iter()
-            .map(|(n, s, p, l, c)| (n.to_string(), s.to_string(), p.to_string(), *l, *c))
-            .collect()
-    }
-
-    /// A model unit's virtual path: `ws:` and `dep:<guid>:` dropped.
-    fn unit_path(unit: &str) -> &str {
-        if let Some(rest) = unit.strip_prefix("dep:") {
-            rest.split_once(':').map_or(rest, |(_, p)| p)
-        } else {
-            unit.strip_prefix("ws:").unwrap_or(unit)
-        }
-    }
-
-    /// T1 on CDO (#160 §5.1; skips without `CDO_WS`, panics under
-    /// `ENFORCE_CDO_WS=1`): single-app identical; cross-app the differing
-    /// accepted pairs are EXACTLY R-PAIRS, the two non-equivalent ones carry the
-    /// stated target nodes, the conversion is identical, and the census moves by
-    /// exactly the stated deltas.
-    #[test]
-    fn key_join_equals_span_join_on_cdo() {
-        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
-            return;
-        };
-        let mut universes = Vec::new();
-        for_both_universes(&ws, |u, view, ctx, rows, abi, demand| {
-            let p = key_join_parity(view, ctx, rows, abi, demand);
-            eprintln!(
-                "key/span parity on CDO ({u}): {} call pairs, {} op pairs, {} differ, {} groups, {} differ",
-                p.span_call_pairs,
-                p.span_op_pairs,
-                p.pairs.len(),
-                p.groups,
-                p.conversion.len()
-            );
-            universes.push(u.to_string());
-            assert!(p.span_call_pairs > 0, "CDO precondition ({u}): pairs");
-            assert_eq!(p.conversion, Vec::<String>::new(), "CDO ({u}): conversion");
-            if u == "single-app" {
-                assert_eq!(p.pairs, vec![], "CDO single-app: accepted pairs");
-                assert_eq!(counts(&p.key_census), counts(&p.span_census));
-                return;
-            }
-            assert!(
-                p.pairs.iter().all(|d| d.kind == "call"),
-                "CDO cross-app: no op pair differs"
-            );
-            let got: std::collections::BTreeSet<_> = p
-                .pairs
-                .iter()
-                .map(|d| {
-                    (
-                        d.row_name.clone(),
-                        d.site_id.rsplit('/').next().unwrap().to_string(),
-                        unit_path(&d.unit).to_string(),
-                        d.start_line,
-                        d.start_col,
-                    )
-                })
-                .collect();
-            assert_eq!(got.len(), p.pairs.len(), "R-PAIRS identities are unique");
-            assert_eq!(got, r_pairs(), "CDO cross-app: the differing pairs are R-PAIRS");
-            for site in ["cs4", "cs6"] {
-                let d = p
-                    .pairs
-                    .iter()
-                    .find(|d| d.row_name == "GetAccessToken" && d.site_id.ends_with(site))
-                    .unwrap();
-                let (s, k) = (d.span_target.as_ref().unwrap(), d.key_target.as_ref().unwrap());
-                assert_eq!((&*s.name_lc, s.params_count), ("acquiretokenfromcache", 5));
-                assert_eq!((&*k.name_lc, k.params_count), ("acquiretokenfromcache", 5));
-                assert_eq!(s.sig_fp, 9686704692977790200, "{site}: span target");
-                assert_eq!(k.sig_fp, 8102086367325882817, "{site}: key target");
-            }
-            let mut want = counts(&p.span_census);
-            assert_eq!(
-                (want.duplicate_program_span, want.duplicate_l3_span),
-                (24, 23),
-                "CDO precondition: the span join's duplicates under demand (P1)"
-            );
-            want.duplicate_program_span = 0;
-            want.duplicate_l3_span = 0;
-            want.operation_site += 1;
-            assert_eq!(counts(&p.key_census), want, "CDO cross-app: census deltas");
-        })
-        .expect("CDO builds");
-        assert_eq!(universes, ["single-app", "cross-app"]);
-    }
-
-    /// T7 (#160 §5.7): `j2_row` is J2, node for node, on every fixture (both
-    /// universes).
-    #[test]
-    fn j2_row_equals_decl_join() {
-        let mut mapped = 0;
-        let mut failures = Vec::new();
-        // §5.7: the set includes T7b's cross-node shape, which no r0 or
-        // tests/fixtures dir holds (P15: on CDO only).
-        let (shape, ..) = single_app(&[("src/s.al", ONE_ANCHOR_TWO_NODES)]);
-        let shape_ws = shape.path().to_path_buf();
-        for ws in oracle_fixture_workspaces().into_iter().chain([shape_ws]) {
-            let built = for_both_universes(&ws, |u, _, ctx, rows, _, _| {
-                let (n, diffs) = j2_differences(ctx, rows);
-                mapped += n;
-                if let Some(d) = diffs.first() {
-                    failures.push(format!(
-                        "{} ({u}): {} nodes differ, first {d}",
-                        ws.display(),
-                        diffs.len()
-                    ));
-                }
-            });
-            if let Err(e) = built {
-                failures.push(format!("{}: {e}", ws.display()));
-            }
-        }
-        assert!(mapped > 0, "fixture precondition: J2 maps nodes");
-        assert!(
-            failures.is_empty(),
-            "{} J2 differences:\n{}",
-            failures.len(),
-            failures.join("\n")
-        );
-    }
-
-    /// The `decl_anchor` oracle (§4.6, §4.8): on every fixture (both universes)
-    /// the captured declaration of each caller the join reads is the surface's,
-    /// absence included.
-    #[test]
-    fn decl_anchor_equals_surface_caller_decl() {
-        let (mut callers, mut failures) = (0, Vec::new());
-        for ws in oracle_fixture_workspaces() {
-            let built = for_both_universes(&ws, |u, view, ctx, rows, _, demand| {
-                let (n, diffs) = decl_anchor_differences(view, ctx, rows, demand);
-                callers += n;
-                if let Some(d) = diffs.first() {
-                    failures.push(format!(
-                        "{} ({u}): {} callers differ, first {d}",
-                        ws.display(),
-                        diffs.len()
-                    ));
-                }
-            });
-            if let Err(e) = built {
-                failures.push(format!("{}: {e}", ws.display()));
-            }
-        }
-        assert!(callers > 0, "fixture precondition: the join reads callers");
-        assert!(
-            failures.is_empty(),
-            "{} decl_anchor differences:\n{}",
-            failures.len(),
-            failures.join("\n")
-        );
-    }
-
-    /// The `decl_anchor` oracle on CDO (skips without `CDO_WS`, panics under
-    /// `ENFORCE_CDO_WS=1`).
-    #[test]
-    fn decl_anchor_equals_surface_caller_decl_on_cdo() {
-        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
-            return;
-        };
-        for_both_universes(&ws, |u, view, ctx, rows, _, demand| {
-            let (n, diffs) = decl_anchor_differences(view, ctx, rows, demand);
-            eprintln!(
-                "decl_anchor oracle on CDO ({u}): {n} callers, {} differ",
-                diffs.len()
-            );
-            assert!(n > 0, "CDO precondition ({u}): callers");
-            assert_eq!(diffs, Vec::<String>::new(), "CDO ({u})");
-        })
-        .expect("CDO builds");
-    }
-
-    /// T7 on CDO (skips without `CDO_WS`, panics under `ENFORCE_CDO_WS=1`).
-    #[test]
-    fn j2_row_equals_decl_join_on_cdo() {
-        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
-            return;
-        };
-        for_both_universes(&ws, |u, _, ctx, rows, _, _| {
-            let (n, diffs) = j2_differences(ctx, rows);
-            eprintln!(
-                "J2 oracle on CDO ({u}): {n} nodes mapped, {} differ",
-                diffs.len()
-            );
-            assert!(n > 0, "CDO precondition ({u}): J2 maps nodes");
-            assert_eq!(diffs, Vec::<String>::new(), "CDO ({u})");
-        })
-        .expect("CDO builds");
-    }
-
-    /// T8 (#160 §5.8): the event graph read through `j5_node` is the span-map
-    /// graph, `Debug` text and census, on every fixture (both universes).
-    #[test]
-    fn event_graph_j5_node_equals_span_join() {
-        use crate::program::model::events::{
-            program_event_graph, program_event_graph_with_row_nodes,
-        };
-        let (mut with_edges, mut dep_subscriber_edges, mut failures) = (0, 0, Vec::new());
-        // §5.8: no r0 or tests/fixtures dir has a source-bearing dependency
-        // subscriber, so one is hand-stated: the workspace raises a dependency
-        // event whose subscriber `H` lives in the dependency's source.
-        let shape = tempfile::tempdir().unwrap();
-        super::adapter_tests::write_workspace(
-            shape.path(),
-            &[(
-                "src/w.al",
-                "codeunit 50101 \"W\"\n{\n    procedure Go()\n    var\n        P: Codeunit \"Dep Pub\";\n    begin\n        P.RaiseA();\n    end;\n}\n",
-            )],
-            Some((
-                r#"{"Codeunits":[{"Id":60030,"Name":"Dep Pub","Methods":[{"Name":"RaiseA","Parameters":[]},{"Name":"OnA","Parameters":[]}]}]}"#,
-                &[(
-                    "src/DepPub.Codeunit.al",
-                    "codeunit 60030 \"Dep Pub\"\n{\n    procedure RaiseA()\n    begin\n        OnA();\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnA()\n    begin\n    end;\n\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnA', '', false, false)]\n    local procedure H()\n    begin\n    end;\n}\n",
-                )],
-            )),
-        );
-        let shape_ws = shape.path().to_path_buf();
-        for ws in oracle_fixture_workspaces().into_iter().chain([shape_ws]) {
-            let built = for_both_universes(&ws, |u, _, ctx, rows, _, _| {
-                let old = program_event_graph(ctx, &rows.workspace);
-                let new = program_event_graph_with_row_nodes(ctx, &rows.workspace, &rows.row_nodes);
-                with_edges += usize::from(!old.graph.edges.is_empty());
-                let dep_rows: HashSet<&str> = rows
-                    .workspace
-                    .routines
-                    .iter()
-                    .filter(|r| r.source_anchor.source_unit_id.starts_with("dep:"))
-                    .map(|r| r.id.as_str())
-                    .collect();
-                dep_subscriber_edges += old
-                    .graph
-                    .edges
-                    .iter()
-                    .filter(|e| dep_rows.contains(e.subscriber_routine_id.as_str()))
-                    .count();
-                if format!("{:?}", old.graph) != format!("{:?}", new.graph) {
-                    failures.push(format!(
-                        "{} ({u}): graph differs ({} / {} edges)",
-                        ws.display(),
-                        old.graph.edges.len(),
-                        new.graph.edges.len()
-                    ));
-                }
-                if old.census != new.census {
-                    failures.push(format!(
-                        "{} ({u}): census {:?} / {:?}",
-                        ws.display(),
-                        old.census,
-                        new.census
-                    ));
-                }
-            });
-            if let Err(e) = built {
-                failures.push(format!("{}: {e}", ws.display()));
-            }
-        }
-        assert!(with_edges > 0, "fixture precondition: event edges exist");
-        assert!(
-            dep_subscriber_edges > 0,
-            "fixture precondition: a source-bearing dependency subscriber has an edge"
-        );
-        assert!(
-            failures.is_empty(),
-            "{} J5 differences:\n{}",
-            failures.len(),
-            failures.join("\n")
-        );
-    }
-
-    /// T8 on CDO (skips without `CDO_WS`, panics under `ENFORCE_CDO_WS=1`).
-    #[test]
-    fn event_graph_j5_node_equals_span_join_on_cdo() {
-        use crate::program::model::events::{
-            program_event_graph, program_event_graph_with_row_nodes,
-        };
-        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
-            return;
-        };
-        for_both_universes(&ws, |u, _, ctx, rows, _, _| {
-            let old = program_event_graph(ctx, &rows.workspace);
-            let new = program_event_graph_with_row_nodes(ctx, &rows.workspace, &rows.row_nodes);
-            eprintln!(
-                "J5 oracle on CDO ({u}): {} / {} edges, census {:?}",
-                old.graph.edges.len(),
-                new.graph.edges.len(),
-                old.census
-            );
-            assert!(
-                !old.graph.edges.is_empty(),
-                "CDO precondition ({u}): event edges"
-            );
-            assert!(
-                format!("{:?}", old.graph) == format!("{:?}", new.graph),
-                "CDO ({u}): the event graph differs"
-            );
-            assert_eq!(old.census, new.census, "CDO ({u}): census");
-        })
-        .expect("CDO builds");
     }
 
     /// The rows named `name`, by position (`RoutineIx`).
