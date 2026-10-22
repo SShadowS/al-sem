@@ -874,7 +874,18 @@ render of the ledger becomes the PR body.
     check is not green, and neither is a PR where only an unrelated workflow has
     reported. The required workflow is identified by the `name:` of
     `.github/workflows/ci.yml`; if that cannot be read, the gate refuses
-    (`ci-workflow-unknown`) rather than passing. One CI fix attempt allowed,
+    (`ci-workflow-unknown`) rather than passing. **Timed CI waiver** (added
+    2026-10-22, for a GitHub Actions outage): `ci_waiver_until` in
+    `.agent/config.json` is an ISO-8601 UTC time set by the OPERATOR only, never
+    by the conductor; a malformed value is a `ConfigError` refusal. Before that
+    time, a PR whose CI is not green does not get `ci-not-green` when the
+    attestation records every gate `attest` requires (`cdo-gate` unless
+    docs-only) at exit 0: `merge-gate` and `merge` then report `ci_waived: true`
+    and `ci_waived_until`, `merge` posts a PR comment saying CI was waived and
+    that the attested local gates were the evidence, and the merge record keeps
+    `ci_waived_until`. Expired, absent, or without those green gates, the gate
+    is unchanged. A `closes_by: ci-wait` entry still needs its green `ci-wait`
+    record. One CI fix attempt allowed,
     independent of the rebase
     budget; a CI fix is a code change, so it returns to step 11 (gates, one panel
     round, new `H`, new attestation). A red CI whose every failing test the diff

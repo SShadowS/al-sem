@@ -1245,6 +1245,80 @@ def test_merge_gate_passes_with_the_ci_workflows_checks_green(capsys, repo_pair)
         {"headRefOid": B, "statusCheckRollup": rollup()})})
     code, out = run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
     assert code == 0 and out["ci_green"] is True and out["reasons"] == []
+    assert out["ci_waived"] is False and out["ci_waived_until"] is None
+
+
+# ---- the operator's timed CI waiver (2026-10-22 Actions incident) -----------
+
+WAIVER = "2026-10-23T12:00:00Z"
+WAIVER_EPOCH = 1_792_756_800  # WAIVER as epoch seconds
+
+
+def _waiver_gate(capsys, clone, monkeypatch, *, now, gates, waiver=WAIVER):
+    """merge-gate on PR 12 with GitHub CI RED, the operator's waiver in
+    `.agent/config.json`, the clock at `now` and the attestation's gates stated
+    by assignment."""
+    write_ci_workflow(clone)
+    (clone / ".agent").mkdir(exist_ok=True)
+    (clone / ".agent" / "config.json").write_text(json.dumps({"ci_waiver_until": waiver}))
+    monkeypatch.setenv("AGENTFLOW_NOW", str(now))
+    B = Git(clone).rev("master")
+    mergeops.write_attestation(Ctx(Paths(clone), run_id="run-test"), mergeops.Attestation(
+        issue=8, B=B, H=B, final_head=B, register_hash="r" * 40, gates=gates,
+        body_hash=mergeops.body_hash(json.loads(ISSUES)[0][0]["body"])))
+    gh = FakeRunner({**READS, f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft": json.dumps(
+        {"headRefOid": B, "statusCheckRollup": rollup(conclusion="FAILURE")})})
+    return run(capsys, clone, "merge-gate", "--pr", "12", gh_run=gh)
+
+
+def test_a_live_ci_waiver_with_green_attested_gates_stands_in_for_red_ci(capsys, repo_pair, monkeypatch):
+    _, clone = repo_pair
+    code, out = _waiver_gate(capsys, clone, monkeypatch, now=WAIVER_EPOCH - 3600,
+                             gates=json.loads(GREEN_GATES))
+    assert code == 0 and out["reasons"] == [] and out["ci_green"] is False
+    assert out["ci_waived"] is True and out["ci_waived_until"] == WAIVER
+
+
+@pytest.mark.parametrize("now,gates", [
+    (WAIVER_EPOCH, json.loads(GREEN_GATES)),                               # expired (deadline itself)
+    (WAIVER_EPOCH - 3600, {**json.loads(GREEN_GATES), "cdo-gate": 1}),     # a red attested gate
+    (WAIVER_EPOCH - 3600, {"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 0}),  # cdo-gate missing
+    (WAIVER_EPOCH - 3600, {}),                                             # no attested gates at all
+], ids=["expired", "gate-red", "cdo-gate-missing", "no-gates"])
+def test_a_ci_waiver_waives_nothing_expired_or_without_green_attested_gates(capsys, repo_pair, monkeypatch, now, gates):
+    _, clone = repo_pair
+    code, out = _waiver_gate(capsys, clone, monkeypatch, now=now, gates=gates)
+    assert code == 1 and out["reasons"] == ["ci-not-green"] and out["ci_waived"] is False
+
+
+def test_a_malformed_ci_waiver_is_a_refusal_not_no_waiver(capsys, repo_pair, monkeypatch):
+    _, clone = repo_pair
+    code, out = _waiver_gate(capsys, clone, monkeypatch, now=WAIVER_EPOCH - 3600,
+                             gates=json.loads(GREEN_GATES), waiver="2026-10-23T12:00:00")  # naive: no UTC
+    assert code == 2 and "ConfigError" in out["error"] and "ci_waiver_until" in out["error"]
+
+
+def test_a_merge_under_a_ci_waiver_says_so_in_a_pr_comment_and_the_merge_record(capsys, repo_pair, monkeypatch):
+    _, clone = repo_pair
+    code, _ = _waiver_gate(capsys, clone, monkeypatch, now=WAIVER_EPOCH - 3600, gates=json.loads(GREEN_GATES))
+    assert code == 0
+    ctx = Ctx(Paths(clone), run_id="run-test")
+    lock.acquire(ctx, 8, "s", 1)
+    B = Git(clone).rev("master")
+    gh = FakeRunner({**READS,
+                     f"pr view 12 --repo {REPO} --json headRefOid,statusCheckRollup,isDraft": json.dumps(
+                         {"headRefOid": B, "statusCheckRollup": rollup(conclusion="FAILURE")}),
+                     "pr comment 12 *": "",
+                     f"pr merge 12 --squash --match-head-commit {B}": "",
+                     f"pr view 12 --repo {REPO} --json mergeCommit": json.dumps({"mergeCommit": {"oid": "f" * 40}})})
+    code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh)
+    assert code == 0 and out["ci_waived"] is True and out["ci_waived_until"] == WAIVER
+    assert json.loads((ctx.run_dir / "merge.json").read_text())["ci_waived_until"] == WAIVER
+    comment = [c for c in gh.calls if c.startswith("pr comment 12 ")]
+    merge_at = next(i for i, c in enumerate(gh.calls) if c.startswith("pr merge 12 "))
+    assert len(comment) == 1 and gh.calls.index(comment[0]) < merge_at
+    body = Path(comment[0].split("--body-file ", 1)[1]).read_text(encoding="utf-8")
+    assert "waived" in body and WAIVER in body and '"cdo-gate": 0' in body
 
 
 def test_merge_records_what_it_merged_for_post_merge_to_verify(capsys, repo_pair, tmp_path):
@@ -1277,7 +1351,9 @@ def test_merge_records_what_it_merged_for_post_merge_to_verify(capsys, repo_pair
     code, out = run(capsys, clone, "merge", "--pr", "12", gh_run=gh)
     assert code == 0 and out["merge_sha"] == merged_oid
     assert json.loads((ctx.run_dir / "merge.json").read_text()) == {
-        "issue": 8, "pr": 12, "merge_sha": merged_oid, "run_id": "run-test", "source": "merge"}
+        "issue": 8, "pr": 12, "merge_sha": merged_oid, "run_id": "run-test", "source": "merge",
+        "ci_waived_until": ""}
+    assert not any(c.startswith("pr comment") for c in gh.calls)
 
 
 # ---- the merge lane (parallel-issues design, commit 12) ---------------------
@@ -3425,7 +3501,8 @@ def test_recover_records_the_merge_it_adopted_and_post_merge_accepts_it(capsys, 
     code, out = run(capsys, clone, "recover", gh_run=gh, run_id="run-new")
     assert code == 0 and out["action"] == "merged-needs-post-merge"
     assert json.loads((clone / ".agent" / "runs" / "run-new" / "merge.json").read_text()) == {
-        "issue": 8, "pr": 3, "merge_sha": merged, "run_id": "run-new", "source": "recover"}
+        "issue": 8, "pr": 3, "merge_sha": merged, "run_id": "run-new", "source": "recover",
+        "ci_waived_until": ""}
     monkeypatch.setattr(cli, "gates", lambda: [("noop", [sys.executable, "-c", "pass"], 1)])
     monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
     code, out = run(capsys, clone, "post-merge", "--issue", "8", "--merge-sha", merged,
@@ -3501,7 +3578,8 @@ def test_a_recovery_follow_through_that_dies_mid_gates_is_recoverable_again(
     # THE CONSEQUENCE: the merge record post-merge demands is minted again, so
     # the follow-through can actually re-run.
     assert json.loads((clone / ".agent" / "runs" / "run-3" / "merge.json").read_text()) == {
-        "issue": 8, "pr": 3, "merge_sha": "a" * 40, "run_id": "run-3", "source": "recover"}
+        "issue": 8, "pr": 3, "merge_sha": "a" * 40, "run_id": "run-3", "source": "recover",
+        "ci_waived_until": ""}
     assert not any("agent-blocked" in c for c in gh2.calls), gh2.calls
 
     # AND THE THIRD, because "it works twice" is not "it works every time"

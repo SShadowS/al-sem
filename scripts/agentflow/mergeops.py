@@ -94,6 +94,9 @@ class MergeRecord:
     merge_sha: str
     run_id: str
     source: str
+    # The operator's `ci_waiver_until` this merge passed under instead of a
+    # green GitHub CI; "" when CI was green (and in records older than it).
+    ci_waived_until: str = ""
 
 
 def write_merge_record(ctx: Ctx, rec: MergeRecord) -> Path:

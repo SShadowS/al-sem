@@ -219,15 +219,18 @@ def test_config_defaults_when_the_file_or_a_key_is_missing(ctx):
     `.agent/config.json` acts exactly as before. Stated as literals."""
     assert ctx.paths.config == ctx.paths.root / ".agent" / "config.json"
     defaults = {"slots": 1, "heavy_gates": 1, "min_free_gb": 40, "reserve_gb_per_run": 30,
-                "gate_wait_minutes": 180, "target_root": "", "cdo_ws": ""}
+                "gate_wait_minutes": 180, "target_root": "", "cdo_ws": "", "ci_waiver_until": None}
     assert state.config(ctx) == defaults
     ctx.paths.config.write_text(json.dumps({"slots": 2}), encoding="utf-8")
     assert state.config(ctx) == {**defaults, "slots": 2}
 
 
 @pytest.mark.parametrize("bad", [{"slot": 2}, {"slots": "2"}, {"slots": True}, {"slots": -1}, [1],
-                                 {"target_root": 5}],
-                         ids=["unknown-key", "string", "bool", "negative", "not-an-object", "target-root-not-str"])
+                                 {"target_root": 5}, {"ci_waiver_until": "tomorrow"},
+                                 {"ci_waiver_until": "2026-10-23T12:00:00"},
+                                 {"ci_waiver_until": "2026-10-23T14:00:00+02:00"}, {"ci_waiver_until": 1761220800}],
+                         ids=["unknown-key", "string", "bool", "negative", "not-an-object", "target-root-not-str",
+                              "waiver-not-a-time", "waiver-naive", "waiver-not-utc", "waiver-not-str"])
 def test_config_refuses_a_value_it_would_otherwise_ignore(ctx, bad):
     """A misspelt key or a wrong type would silently fall back to the
     default. Two sessions must agree on these numbers, so a file the owner
