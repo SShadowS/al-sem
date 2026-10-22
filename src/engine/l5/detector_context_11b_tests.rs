@@ -2769,3 +2769,67 @@ fn operation_join_reads_the_last_owning_row() {
         .map(|o| o.line);
     assert_eq!(got, b, "the LAST owning row's (arm B's) operation");
 }
+
+/// FP-14 (d37, a row's own sites): a row's `Validate` is compared only with
+/// the call sites that row declares. Arm A validates `L` and calls nothing;
+/// arm B (the last row, later in the file) hands `L` to `WriteIt`, which
+/// persists it. Arm A's `Validate` is still flagged: arm B's call is not
+/// "after" it on any path. Break: walk the id's owned sites (both arms') ->
+/// arm B's call suppresses arm A's finding.
+#[test]
+fn d37_compares_a_validate_with_its_own_rows_sites_only() {
+    let src = r#"
+table 50902 "VA T"
+{
+    fields { field(1; "No."; Code[20]) { } field(2; Name; Text[30]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50902 "VA Work"
+{
+    procedure WriteIt(var R: Record "VA T")
+    begin
+        R.Modify();
+    end;
+
+#if A
+    procedure Work()
+    var
+        L: Record "VA T";
+    begin
+        L.Get('x');
+        L.Validate(Name, 'n');
+    end;
+#else
+    procedure Work()
+    var
+        L: Record "VA T";
+    begin
+        L.Get('x');
+        WriteIt(L);
+    end;
+#endif
+}
+"#;
+    let m = build(src, "22222222-0000-0000-0000-00000011b040");
+    let (id, rows) = collided(&m, "Work");
+    let r = |ri: usize| &m.workspace.routines[ri];
+    let validates = |ri: usize| r(ri).record_operations.iter().any(|o| o.op == "Validate");
+    assert!(
+        validates(rows[0])
+            && r(rows[0]).call_sites.is_empty()
+            && !validates(rows[1])
+            && !r(rows[1]).call_sites.is_empty()
+            && line(&m, rows[0]) < line(&m, rows[1]),
+        "precondition: arm A validates and calls nothing; arm B (later) calls WriteIt"
+    );
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let out = crate::engine::l5::detectors::d37::detect_d37(&m, &ctx).expect("d37");
+    assert!(
+        out.findings
+            .iter()
+            .any(|f| f.id.starts_with(&format!("d37/{id}/"))),
+        "arm A's Validate is flagged: arm B's call is not after it"
+    );
+}

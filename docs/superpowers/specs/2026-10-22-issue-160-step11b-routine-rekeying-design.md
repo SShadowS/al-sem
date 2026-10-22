@@ -229,7 +229,27 @@ and operation index with its frame table (`derive_operation_evidence`,
 `derive_routine_order_frames`: class P per key, the frame table holding every row's frames,
 shifted per row, so a K copy's `order` and a P op's `order` both name their own row's frames);
 the dependency order index's return summaries (class P per id); the checked-run seeds (#16)
-are the union of the rows that produce one, each seeded from the last such row.
+are the union of the rows that produce one, each seeded from the last such row. Conductor
+decisions on the round-1 spec gaps:
+- **Policy evaluation is class P, not K** (FP-03): one evaluation per collided id, through its
+  LAST row (`policy_engine.rs` `run_policy_engine`). Policy findings are keyed by routine id,
+  and a class K dedup of per-row findings, which carry their row's anchor, cannot collapse
+  natural `#if` arms. LIMIT: an earlier arm's distinct facts produce no policy finding.
+- **d37 compares a row's `Validate` only with that row's own call sites** (FP-14), the same
+  own-facts principle as `pending_writes`: another arm's sites sit at other source positions,
+  so "after the `Validate`" means nothing across arms. Each site's callee and bindings still
+  come from `site_pick`.
+- **LIMIT: order and position comparisons across arms** (FP-12): a collided id's merged
+  dependency order entry (and the snapshot's operation index) holds keys of several rows,
+  each with its own row's `order_id`; comparing two entries owned by different arms is not
+  meaningful. Not changed.
+- **LIMIT: readers of the serialized call-site evidence pick by value** (FP-13): the
+  snapshot's `callsiteIndex` is class K (each row's copy, sorted by full value) and carries
+  no row, so its class P readers (`unresolved_cone.rs`, `digest.rs`, `ordering_engine.rs`)
+  pick a collided site's copy by value, not by its LAST owning row. Not changed.
+- Neither limit has a CDO witness: CDO's 2 collision groups have equal facts at every point
+  (the census and the identity runs). Discoveries are filed for both (carry the owning row or
+  anchor in the evidence; per-arm order comparison).
 
 Downstream only (no rule of their own): `d1_graph.rs:134`, `:261`, `:293`; `ordering_inter.rs`
 (keyed over the snapshot's already-grouped `callsite_resolutions`); `unresolved_cone.rs:118`,

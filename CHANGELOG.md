@@ -63,9 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - the collided edge and uncertainty lists (class U): ordered by full value, equal items
       collapse; one interface uncertainty per call site, from its last owning row (R1b);
       a collided id's interface site counts each implementer once (R1c);
-    - the per-site consumers read one pick (`site_pick`): d37, `compose_roles_only` (both
-      visit the id's owned call sites) and the role walker's call transfer
-      (`cfg_walker`); R9 `resolved_call_edge_by_callsite` takes the owning row's edge;
+    - the per-site consumers read one pick (`site_pick`): d37 (over the row's OWN call
+      sites: another arm's sites are never "after" this row's `Validate`),
+      `compose_roles_only` (over the id's owned call sites) and the role walker's call
+      transfer (`cfg_walker`); R9 `resolved_call_edge_by_callsite` takes the owning row's
+      edge;
     - a publisher's event dispatch is its LAST row's, an empty one included (a bodyless
       last row no longer takes an earlier row's dispatch);
     - events: one publisher symbol per distinct value (R4b); a subscriber id emits the
@@ -88,16 +90,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       call-site resolutions (display, `underAsserterror`, `resultConsumed` and the
       representative edge from one row) and its operation index, whose orders name frames
       of the id's one frame table (every row's frames, shifted per row), `OperationJoin`
-      (`query effects` origins); policy evaluation evaluates a collided id once, through
-      its LAST row.
+      (`query effects` origins); policy evaluation (class P: one evaluation per collided
+      id, through its LAST row, because policy findings are keyed by routine id; an
+      earlier arm's distinct facts produce no policy finding).
 
     What deliberately stays: single-row ids (passed through untouched); guard frames (class
     G: the cone reads the last row's frame per id, and so do a span's callers; a defect is
     filed for step 6); the detectors that pick their own row (class R: d1
     reach/dataflow/cohort, d2, d3, d13, d18, d47, d49, d51 and the gate's `kept_ids`); the
     cone, the solve, the event graph and the spans stay per string id. Census counters of
-    the event graph count per (id, node). The cone's `CapabilityFact`, `CapabilityExtra` and
-    `ValueSource` now derive `Ord`.
+    the event graph count per (id, node). Two stated limits, neither with a CDO witness (CDO's
+    2 collision groups have equal facts at every point): within one collided id, order and
+    position comparisons between entries of different arms (the dependency order index's
+    `order_id`s, the snapshot's operation index) are not meaningful; and readers of the
+    snapshot's call-site evidence (`unresolved_cone`, `digest`, `ordering_engine`) pick a
+    collided site's copy by value, since the evidence carries no row. The cone's
+    `CapabilityFact`, `CapabilityExtra` and `ValueSource` now derive `Ord`.
   - Epic amendments 11B-1 to 11B-8 (spec §9).
 - **Grammar: tree-sitter-al `main` at `960ed312`** (B7b-2, "#if groups inside expressions";
   package version still 4.4.1; was `4d75846c`). The `node-types.json` hash guard had made CI

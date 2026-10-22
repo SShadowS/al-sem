@@ -65,12 +65,6 @@ pub fn detect_d37(
     let mut skipped_temp_record = 0u64;
     let mut skipped_parameter = 0u64;
     let mut skipped_trigger_rec = 0u64;
-    // A collided id's owned call sites (#160 step 11b §4.6, `site_pick`).
-    let owned = crate::program::model::projection::owned_sites(
-        &crate::program::model::projection::RowsOfId::build(&ws.routines),
-        &ws.routines,
-    );
-
     for routine in &ws.routines {
         // roleOf(routine) !== "primary" → skip. Source-only ⇒ all primary.
         if !routine.body_available {
@@ -121,7 +115,7 @@ pub fn detect_d37(
             let source_record_variable_id = op.record_variable_id.as_deref();
             let helper_verdict = post_validate_helper_verdict(
                 routine,
-                &crate::program::model::projection::sites_of(&owned, routine),
+                &routine.call_sites.iter().collect::<Vec<_>>(),
                 source_record_variable_id,
                 &source_variable_name_lc,
                 &op.source_anchor,
@@ -187,8 +181,10 @@ fn later_persisted(
 /// After the Validate op, walk callsites in source order. If any post-Validate helper
 /// might persist (yes or unknown) the Validate is suppressed; only when EVERY
 /// forwarding helper provably doesn't persist do we fall through to emit.
-/// `sites` are the routine's call sites: its id's owned sites when the id is
-/// collided (#160 step 11b §4.6).
+/// `sites` are the row's OWN call sites: a collided id's other arm sits at
+/// other source positions, so "after this `Validate`" means nothing across
+/// arms (#160 step 11b, final panel FP-14). Each site's callee and bindings
+/// still come from `site_pick`.
 fn post_validate_helper_verdict(
     routine: &ModelRoutine,
     sites: &[&crate::program::body::features::PCallSite],
