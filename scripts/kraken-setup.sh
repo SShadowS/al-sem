@@ -31,7 +31,13 @@ mkdir -p .agent
 if [ -f .claude/kraken-claude.tar ]; then
   t=$(mktemp -d)
   tar -xf .claude/kraken-claude.tar -C "$t"
-  for d in agents skills hooks; do rm -rf ".claude/$d" && cp -r "$t/project/$d" ".claude/$d"; done
+  for d in agents hooks; do rm -rf ".claude/$d" && cp -r "$t/project/$d" ".claude/$d"; done
+  # skills: replace only the skills the tar holds, so tracked skills (.gitignore) survive a re-run
+  mkdir -p .claude/skills
+  for s in "$t"/project/skills/*; do
+    [ -e "$s" ] || continue
+    rm -rf ".claude/skills/$(basename "$s")" && cp -r "$s" ".claude/skills/"
+  done
   cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
   mkdir -p "$cfg/skills"
   cp "$t/user/CLAUDE.md" "$cfg/CLAUDE.md"
