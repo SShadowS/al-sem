@@ -72,6 +72,12 @@ impl FileTable {
         self.by_key.get(&(app, path.to_string())).copied()
     }
 
+    /// Every `(app, path, number)`, unordered (test oracles map a number back).
+    #[cfg(test)]
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (AppRef, &str, FileIx)> {
+        self.by_key.iter().map(|((a, p), f)| (*a, p.as_str(), *f))
+    }
+
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_key.len()

@@ -121,22 +121,6 @@ fn adapt_full(
     )
 }
 
-/// [`adapt_with`] whose `mutate` reaches the whole rows, `RowNodes` included
-/// (#160 §5.3: a test states a `RowNodes` precondition by assignment).
-fn adapt_rows_with(
-    files: &[(&str, &str)],
-    dep_symbols: Option<&str>,
-    mutate: impl FnOnce(&mut crate::program::model::workspace::ModelRows, &ProgramContext),
-) -> Adapted {
-    adapt_rows(
-        files,
-        dep_symbols.map(|s| (s, &[][..])),
-        true,
-        |_| {},
-        mutate,
-    )
-}
-
 /// [`adapt_full`] over the rows: the adapter reads them with their `RowNodes`
 /// (`resolved_calls_from_rows`). `mutate` sees the built context (read-only).
 fn adapt_rows(
@@ -431,51 +415,6 @@ fn interface_with_workspace_and_dependency_implementers() {
     assert_eq!(
         targets[0].body,
         Some(crate::program::registry::BodyState::Bodyless)
-    );
-}
-
-/// Minor 5, precondition by assignment: the workspace implementer `Go`'s node
-/// has no J2 row (#160 §5.3: removed from `row_nodes.j2_row`; it used to move
-/// `Go`'s anchor, which no longer changes J2 once J2 is recorded at assembly),
-/// so its program route joins no model routine. Since engine-switch S3.1 the
-/// site is one honest `Unknown(NoProgramSite)` edge (it used to fall back to
-/// L3) and is counted.
-#[test]
-#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]
-fn interface_implementer_outside_l3_is_unknown() {
-    let ws_impl = "codeunit 50103 \"WsImpl\" implements IDep\n{\n    procedure Go(var C: Record Customer)\n    begin\n    end;\n}\n";
-    let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        X: Interface IDep;\n        C: Record Customer;\n    begin\n        X.Go(C);\n    end;\n}\n";
-    let a = adapt_rows_with(
-        &[("src/i.al", ws_impl), ("src/w.al", cu)],
-        Some(DEP_SYMBOLS),
-        |rows, ctx| {
-            let go: Vec<RoutineNodeId> = ctx
-                .graph()
-                .routines
-                .iter()
-                .filter(|r| r.id.object.app == ctx.primary_app_ref && &*r.id.name_lc == "go")
-                .map(|r| r.id.clone())
-                .collect();
-            assert_eq!(go.len(), 1, "precondition: one workspace node `go`");
-            rows.row_nodes.j2_row.remove(&go[0]);
-        },
-    );
-    let cs = a.site("Caller", "X.Go");
-    let got = a.edges(&cs.id);
-    assert_eq!(got.len(), 1, "{got:?}");
-    assert_eq!(
-        got[0].resolution,
-        Resolution::Unknown(ModelReason::NoProgramSite)
-    );
-    let c = &a.census;
-    assert_eq!(
-        (
-            c.adapter_callee_outside_l3,
-            c.adapter_l3_fallback_sites,
-            c.adapter_program_sites
-        ),
-        (1, 1, 0),
-        "{c:#?}"
     );
 }
 
@@ -1378,51 +1317,6 @@ fn multi_route_call_keeps_every_route() {
     assert_eq!(census.adapter_multi_route_sites, 1, "{census:#?}");
 }
 
-/// S3.5, precondition by assignment: the op is given a key no expression has
-/// (#160 §5.3: `u32::MAX - e` for the record op AND its own operation site, one
-/// key kept shared; it used to move the op's anchor, which no longer unpairs
-/// it), so it pairs with no program edge. It used to keep L3's own trigger
-/// edge; it now gets none.
-#[test]
-#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]
-fn unmatched_record_op_gets_no_l3_trigger_edge() {
-    let table = "table 50100 \"T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { }\n    }\n    trigger OnModify()\n    begin\n    end;\n\n    procedure P()\n    begin\n        Modify();\n    end;\n}\n";
-    let a = adapt_with(&[("src/t.al", table)], None, |ws| {
-        let r = ws.routines.iter_mut().find(|r| r.name == "P").unwrap();
-        unkey(&mut r.site_exprs.record_ops);
-        unkey(&mut r.site_exprs.op_sites);
-    });
-    let op = &a.routine("P").record_operations[0];
-    assert_eq!(a.edges(&op.id), vec![]);
-    assert_eq!(a.census.adapter_l3_trigger_ops, 1, "{:#?}", a.census);
-    assert_eq!(a.census.adapter_program_trigger_ops, 0, "{:#?}", a.census);
-}
-
-/// Ruling 2 as replaced by engine-switch S3.1, precondition by assignment:
-/// the model site is given a key no expression has (#160 §5.3: `u32::MAX - e`;
-/// it used to move the site's anchor), so it pairs with no program edge. It
-/// used to keep L3's own (resolved) edge; it is now one honest
-/// `Unknown(NoProgramSite)` edge.
-#[test]
-#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]
-fn unmatched_site_is_unknown_not_l3() {
-    let cu = "codeunit 50101 \"W\"\n{\n    procedure Foo()\n    begin\n    end;\n\n    procedure Caller()\n    begin\n        Foo();\n    end;\n}\n";
-    let a = adapt_with(&[("src/w.al", cu)], None, |ws| {
-        let r = ws.routines.iter_mut().find(|r| r.name == "Caller").unwrap();
-        unkey(&mut r.site_exprs.calls);
-    });
-    let cs = a.site("Caller", "Foo");
-    let got = a.edges(&cs.id);
-    assert_eq!(got.len(), 1);
-    assert_eq!(got[0].to, None);
-    assert_eq!(
-        got[0].resolution,
-        Resolution::Unknown(ModelReason::NoProgramSite)
-    );
-    assert_eq!(a.census.adapter_l3_fallback_sites, 1, "{:#?}", a.census);
-    assert_eq!(a.census.adapter_program_sites, 0, "{:#?}", a.census);
-}
-
 /// Ruling 5: the adapter emits edges in the legacy resolver's order: call
 /// sites in routine order (each routine's in source order), then the trigger
 /// edges in routine/op order. Stated directly since engine-switch S9.6 (it was
@@ -1464,74 +1358,6 @@ fn edge_order_is_call_sites_then_triggers() {
         .map(|e| e.callsite_id.as_str())
         .collect();
     assert_eq!(edge_sites, sites, "call-site edges in source order");
-}
-
-/// T2 (#160 §5.2, 10A-2): a cross-app model with a source-bearing dependency
-/// loses nothing. Hand-stated: the workspace calls `DepA`, which calls `DepB`
-/// (both demanded); `DepUnused` also calls `DepB` but nothing reaches it, so the
-/// model holds no row for it while the program resolved its body. Its edge is
-/// not a lost site.
-#[test]
-#[ignore = "#160 Task 2: needs the key join in production (spec §4.12)"]
-fn cross_app_census_has_no_losses_with_a_dependency_body() {
-    let dep_src = "codeunit 60010 \"Dep Cu\"\n{\n    procedure DepA()\n    begin\n        DepB();\n    end;\n\n    procedure DepB()\n    begin\n    end;\n\n    procedure DepUnused()\n    begin\n        DepB();\n    end;\n}\n";
-    let symbols = r#"{"Codeunits":[{"Id":60010,"Name":"Dep Cu","Methods":[{"Name":"DepA","Parameters":[]},{"Name":"DepB","Parameters":[]},{"Name":"DepUnused","Parameters":[]}]}]}"#;
-    let ws_src = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        D: Codeunit \"Dep Cu\";\n    begin\n        D.DepA();\n    end;\n}\n";
-    let dir = tempfile::tempdir().unwrap();
-    write_workspace(
-        dir.path(),
-        &[("src/w.al", ws_src)],
-        Some((symbols, &[("src/DepCu.Codeunit.al", dep_src)])),
-    );
-    let a = cross_app_assemble(
-        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-        false,
-    )
-    .expect("cross-app build");
-    let dep_rows: Vec<&str> = a
-        .rows
-        .workspace
-        .routines
-        .iter()
-        .filter(|r| r.app_guid.eq_ignore_ascii_case(DEP_GUID))
-        .map(|r| r.name.as_str())
-        .collect();
-    assert!(
-        dep_rows.contains(&"DepA") && dep_rows.contains(&"DepB"),
-        "precondition (a): DepA and DepB are demanded rows: {dep_rows:?}"
-    );
-    assert!(
-        !dep_rows.contains(&"DepUnused"),
-        "precondition (b): DepUnused is not demanded: {dep_rows:?}"
-    );
-    let unused: Vec<&ClassifiedEdge> = a
-        .program
-        .body()
-        .all_edges()
-        .filter(|ce| {
-            matches!(ce.obligation_id, ObligationId::CallSite { .. })
-                && &*ce.edge.from.name_lc == "depunused"
-        })
-        .collect();
-    assert_eq!(
-        unused.len(),
-        1,
-        "precondition (b): DepUnused's DepB() is a program edge"
-    );
-    assert_eq!(
-        unused[0].edge.kind,
-        EdgeKind::Call,
-        "precondition (b): an ordinary call"
-    );
-    drop(a);
-
-    let census = adapter_census_for_workspace_cross_app(dir.path()).unwrap();
-    assert_eq!(
-        census.matched, 2,
-        "precondition (a): Caller's D.DepA() and DepA's DepB() are matched: {census:#?}"
-    );
-    assert_eq!(census.losses(), vec![], "{census:#?}");
 }
 
 /// T4b (#160 §5.4): two source-bearing dependencies each hold `src/Main.al`

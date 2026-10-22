@@ -1043,7 +1043,7 @@ fn project_ir(
                     model_instance_id,
                 );
                 let (feats, site_exprs) =
-                    crate::program::body::ir_walk::project_routine_features_ir_keyed(
+                    crate::program::body::ir_walk::project_routine_features_ir_with(
                         ir_file,
                         oi,
                         ir_routine,
@@ -1460,16 +1460,19 @@ fn project_ir(
 ///
 /// `parenless` is the resolution's [`crate::program::resolve::full::ParenlessCalls`]
 /// (`ProgramReport::parenless_calls`): the body walk takes those reads as calls.
+/// `edges` is the same resolution's edges: `RowNodes::decl_anchor` records the
+/// declaration of each caller the join reads (#160 §4.6).
 pub fn assemble_and_resolve_workspace_from_program(
     inputs: &crate::program::inputs::InputSet,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
+    edges: crate::program::resolved::EdgeView<'_>,
 ) -> Option<ModelRows> {
     let (ws, node_of) =
         assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
-    let row_nodes = RowNodes::build(ctx, &ws, node_of, None);
+    let row_nodes = RowNodes::build(ctx, edges, &ws, node_of, None);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
 
@@ -1488,6 +1491,7 @@ pub fn assemble_and_resolve_workspace_from_program(
 ///
 /// `demand` (engine-switch S8.2, `program::resolve::demand`): when given, a
 /// source-bearing dependency file keeps every object but only the routines in it.
+/// `edges`: as for [`assemble_and_resolve_workspace_from_program`].
 pub fn assemble_and_resolve_cross_app_from_program(
     inputs: &crate::program::inputs::InputSet,
     model_instance_id: &str,
@@ -1495,6 +1499,7 @@ pub fn assemble_and_resolve_cross_app_from_program(
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
+    edges: crate::program::resolved::EdgeView<'_>,
 ) -> Option<(ModelRows, AbiRowIds)> {
     let (mut ws, mut node_of) =
         assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
@@ -1506,7 +1511,7 @@ pub fn assemble_and_resolve_cross_app_from_program(
         demand,
         parenless,
     );
-    let row_nodes = RowNodes::build(ctx, &ws, node_of, demand);
+    let row_nodes = RowNodes::build(ctx, edges, &ws, node_of, demand);
     Some((
         finish_resolved(ws, inputs, skip_roots_config, row_nodes)?,
         abi_rows,
@@ -2039,6 +2044,30 @@ pub struct CollisionCensus {
     pub j5_compat_rows: usize,
 }
 
+impl CollisionCensus {
+    /// Print the census as one `[retained-census]` line on stderr, `key=value`
+    /// as the bucket lines are (it has no `bucket=`, so no bucket reader sees it).
+    pub fn emit(&self) {
+        let c = self;
+        eprintln!(
+            "[retained-census] collision routine_rows={} distinct_ids={} collision_groups={} \
+             collision_rows={} groups_one_node={} groups_several_nodes={} rows_primary={} \
+             rows_dependency_source={} rows_symbol_only={} j2_alias_nodes={} j5_compat_rows={}",
+            c.routine_rows,
+            c.distinct_ids,
+            c.collision_groups,
+            c.collision_rows,
+            c.groups_one_node,
+            c.groups_several_nodes,
+            c.rows_primary,
+            c.rows_dependency_source,
+            c.rows_symbol_only,
+            c.j2_alias_nodes,
+            c.j5_compat_rows
+        );
+    }
+}
+
 /// #160 step 11a (§4.10): the collision census of one model.
 #[must_use]
 pub fn collision_census(ws: &ModelEntities, row_nodes: &RowNodes) -> CollisionCensus {
@@ -2108,11 +2137,12 @@ impl RowNodes {
     /// (`None`: built without demand).
     pub(crate) fn build(
         ctx: &crate::program::resolve::full::ProgramContext,
+        edges: crate::program::resolved::EdgeView<'_>,
         ws: &ModelEntities,
         node_of: Vec<Option<crate::program::node::RoutineNodeId>>,
         demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     ) -> Self {
-        use crate::program::model::program_calls::{caller_held, model_apps, model_unit};
+        use crate::program::model::program_calls::{join_reads, model_apps, model_unit};
         let _s = pt::span("l3", "l3.row_nodes");
         debug_assert_eq!(node_of.len(), ws.routines.len(), "one node slot per row");
         let graph = ctx.graph();
@@ -2134,9 +2164,26 @@ impl RowNodes {
                 .entry((unit, a.start_line, a.start_column))
                 .or_insert(u32::try_from(ri).expect("row index fits u32"));
         }
-        // J2's domain is every model-app node with a declaration; the caller
-        // check reads the declarations of the callers the join reads (§4.5).
-        let (mut decl_anchor, mut j2_row) = (HashMap::new(), HashMap::new());
+        // The caller check's side (§4.6, §4.8): the declaration of every `from`
+        // of a program edge the join reads, by the lookup the check makes today.
+        // A `from` with no declaration (or no file) is absent: `caller_mismatch`.
+        let mut decl_anchor = HashMap::new();
+        for ce in join_reads(edges, &apps, demand) {
+            let from = &ce.edge.from;
+            if decl_anchor.contains_key(from) {
+                continue;
+            }
+            if let Some((meta, path)) = surface.get_with_path(from)
+                && let Some(file) = ctx.file_ix(from.object.app, path)
+            {
+                decl_anchor.insert(
+                    from.clone(),
+                    (file, meta.origin.start.row, meta.origin.start.column),
+                );
+            }
+        }
+        // J2's domain is every model-app node with a declaration (§4.7).
+        let mut j2_row = HashMap::new();
         for n in &graph.routines {
             let id = &n.id;
             if !apps.contains(&id.object.app) {
@@ -2146,11 +2193,6 @@ impl RowNodes {
                 continue;
             };
             let (line, col) = (meta.origin.start.row, meta.origin.start.column);
-            if caller_held(id, primary, demand)
-                && let Some(file) = ctx.file_ix(id.object.app, path)
-            {
-                decl_anchor.insert(id.clone(), (file, line, col));
-            }
             let unit = model_unit(graph, primary, id.object.app, path);
             if let Some(&ri) = first_at.get(&(unit.as_str(), line, col)) {
                 j2_row.insert(id.clone(), ri);
@@ -3135,7 +3177,7 @@ mod population_tests {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
         let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
-        let (mut ctx, _report, _) =
+        let (mut ctx, report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let full = assemble_and_resolve_workspace_from_program(
             &inputs,
@@ -3143,6 +3185,7 @@ mod population_tests {
             true,
             &ctx,
             &Default::default(),
+            report.edge_view(),
         )
         .unwrap();
 
@@ -3161,6 +3204,7 @@ mod population_tests {
             true,
             &ctx,
             &Default::default(),
+            report.edge_view(),
         )
         .unwrap();
 
@@ -3193,7 +3237,7 @@ mod population_tests {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
         let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
-        let (mut ctx, _report, _) =
+        let (mut ctx, report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let decls = |m: &ModelRows| -> Vec<(String, u32)> {
             m.workspace
@@ -3215,6 +3259,7 @@ mod population_tests {
                 true,
                 &ctx,
                 &Default::default(),
+                report.edge_view(),
             )
             .unwrap(),
         );
@@ -3235,6 +3280,7 @@ mod population_tests {
                 true,
                 &ctx,
                 &Default::default(),
+                report.edge_view(),
             )
             .unwrap(),
         );

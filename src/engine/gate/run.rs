@@ -321,6 +321,7 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
             false,
             &program.body().ctx,
             &program.body().parenless_calls,
+            program.body().edge_view(),
         )
     };
     let Some(rows) = resolved else {

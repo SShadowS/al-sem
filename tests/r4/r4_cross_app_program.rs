@@ -273,6 +273,7 @@ fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
     };
     for ws in cross_app_fixtures() {
         let ctx = build_context(&ws).expect("context");
+        let report = al_sem::program::resolve::full::resolve_full_program_with(&ctx);
         let (model, _) = assemble_and_resolve_cross_app_from_program(
             &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
             MI,
@@ -280,6 +281,7 @@ fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
             &ctx,
             None,
             &Default::default(),
+            report.edge_view(),
         )
         .expect("program model");
         // Rank of each routine's block: 0 workspace, 1 ABI, 2 parsed dependency.

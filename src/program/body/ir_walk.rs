@@ -1923,39 +1923,15 @@ pub fn project_routine_features_ir(
         source_table_name,
         &HashSet::new(),
     )
-}
-
-/// [`project_routine_features_ir`] with the parens-less value reads the program
-/// resolver kept as calls (`program::resolve::full::ParenlessCalls`).
-#[allow(clippy::too_many_arguments)]
-pub fn project_routine_features_ir_with(
-    file: &AlFile,
-    object_idx: usize,
-    routine: &RoutineDecl,
-    routine_id: &str,
-    source: &str,
-    source_unit_id: &str,
-    source_table_name: Option<&str>,
-    parenless_calls: &HashSet<ExprId>,
-) -> super::features::PFeatures {
-    project_routine_features_ir_keyed(
-        file,
-        object_idx,
-        routine,
-        routine_id,
-        source,
-        source_unit_id,
-        source_table_name,
-        parenless_calls,
-    )
     .0
 }
 
-/// [`project_routine_features_ir_with`] plus each site's expression index
-/// (#160 §4.2), kept apart from `PFeatures` so the L2 snapshot (a `Debug` hash
-/// of `PFeatures`) does not see it.
+/// [`project_routine_features_ir`] with the parens-less value reads the program
+/// resolver kept as calls (`program::resolve::full::ParenlessCalls`), plus each
+/// site's expression index (#160 §4.2), kept apart from `PFeatures` so the L2
+/// snapshot (a `Debug` hash of `PFeatures`) does not see it.
 #[allow(clippy::too_many_arguments)]
-pub fn project_routine_features_ir_keyed(
+pub fn project_routine_features_ir_with(
     file: &AlFile,
     object_idx: usize,
     routine: &RoutineDecl,
