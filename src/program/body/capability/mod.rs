@@ -38,7 +38,7 @@ use std::collections::{HashMap, HashSet};
 /// Where a value at a capability extraction site comes from (`ValueSource`,
 /// `model/capability.ts`). `table-field` carries NO `tableId` (deep-stripped:
 /// L3-resolved / `"unknown"` at L2). Internally tagged on `kind`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(tag = "kind")]
 pub enum ValueSource {
     #[serde(rename = "literal")]
@@ -76,7 +76,7 @@ pub enum ValueSource {
 /// Per-resourceKind extra semantics (`CapabilityExtra`, `model/capability.ts`).
 /// Internally tagged on `kind`. Nested arg-source fields are deep-stripped (no
 /// `tableId`) by construction (they are `ValueSource`, which has none).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(untagged)]
 pub enum CapabilityExtra {
     Table(TableExtra),
@@ -102,7 +102,7 @@ fn kind_storage() -> &'static str {
     "storage"
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TableExtra {
     /// Always "table".
     #[serde(skip_deserializing, default = "kind_table")]
@@ -115,7 +115,7 @@ pub struct TableExtra {
     pub op_subtype: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DispatchExtra {
     /// Always "dispatch".
     #[serde(skip_deserializing, default = "kind_dispatch")]
@@ -126,7 +126,7 @@ pub struct DispatchExtra {
     pub modal: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HttpExtra {
     /// Always "http".
     #[serde(skip_deserializing, default = "kind_http")]
@@ -136,7 +136,7 @@ pub struct HttpExtra {
     pub body_arg_source: Option<ValueSource>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EventExtra {
     /// Always "event".
     #[serde(skip_deserializing, default = "kind_event")]
@@ -147,7 +147,7 @@ pub struct EventExtra {
     pub include_sender: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StorageExtra {
     /// Always "storage".
     #[serde(skip_deserializing, default = "kind_storage")]
@@ -165,7 +165,7 @@ pub struct StorageExtra {
 ///
 /// Field order matches the al-sem JSON projection key set; `skip_serializing_if`
 /// mirrors the TS "only emit a key when defined" convention.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CapabilityFact {
     pub op: String,
     #[serde(rename = "resourceKind")]
@@ -225,7 +225,7 @@ impl CoverageReason {
 /// An index-stage diagnostic — emitted by the unreachable filter (`severity` =
 /// "info", `stage` = "index"). Mirrors `model/finding.ts` `Diagnostic`, projected
 /// to the 4 fields al-sem's capture captures.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CapabilityDiagnostic {
     pub severity: String,
     pub stage: String,

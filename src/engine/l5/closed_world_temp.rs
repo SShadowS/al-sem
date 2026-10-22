@@ -42,7 +42,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use al_syntax::IdentifierFoldExt;
 
-use crate::engine::l4::combined_graph::CombinedGraph;
+use crate::engine::l4::combined_graph::PrimaryGraph;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l5::reverse_call_graph::{ReverseCallGraph, callers_of};
 use crate::program::body::features::{PCallee, PTempState};
@@ -98,7 +98,7 @@ struct ProofEnv<'a> {
 /// Pure + deterministic: a set lookup table built once in the detector context.
 pub fn prove_closed_world_temp_params(
     routines: &[ModelRoutine],
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     reverse: &ReverseCallGraph,
     entry_points: &BTreeSet<String>,
 ) -> ClosedWorldTempParams {

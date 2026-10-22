@@ -1,5 +1,5 @@
 //! `RoutineInterner` — interns a routine's internal id (`ModelRoutine.id` /
-//! `RoutineSummary.routine_id`) as a compact `RoutineIx(u32)`.
+//! `RoutineSummary.routine_id`) as a compact `SolveIx(u32)`.
 //!
 //! Unlike [`crate::engine::l4::effect_universe::EffectUniverse`] (which grows
 //! lazily during solving — new effect identities are discovered as PD
@@ -11,7 +11,7 @@
 //!
 //! ⟨spec rev4⟩ Assignment order is CANONICAL, not insertion-order: every
 //! entry is interned in ascending `(stable_routine_id, routine_id)` order, so
-//! ascending `RoutineIx` is stable across repeated builds of the SAME
+//! ascending `SolveIx` is stable across repeated builds of the SAME
 //! workspace — not merely self-consistent within one loaded interner (which
 //! is all plain solve-order interning would give, since Tarjan/HashMap
 //! iteration order is not itself a cross-build-stable property).
@@ -24,13 +24,13 @@ use std::collections::HashMap;
 /// `solve_side_facts`'s per-member maps) the closed-form db-effect solver
 /// used to key by the routine's raw id.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
-pub struct RoutineIx(pub u32);
+pub struct SolveIx(pub u32);
 
-/// Interner: routine id (`&str`) -> `RoutineIx`, plus the reverse `Vec` for
-/// `RoutineIx -> &str` lookup.
+/// Interner: routine id (`&str`) -> `SolveIx`, plus the reverse `Vec` for
+/// `SolveIx -> &str` lookup.
 pub struct RoutineInterner {
     by_id: Vec<String>,
-    by_routine_id: HashMap<String, RoutineIx>,
+    by_routine_id: HashMap<String, SolveIx>,
 }
 
 impl Default for RoutineInterner {
@@ -47,33 +47,33 @@ impl RoutineInterner {
         }
     }
 
-    /// Intern `routine_id`, creating a fresh `RoutineIx` on first sight.
+    /// Intern `routine_id`, creating a fresh `SolveIx` on first sight.
     /// Stable across repeated calls with an equal id (re-interning an
     /// already-seen id returns the SAME ix, never a duplicate) — mirrors
     /// [`crate::engine::l4::effect_universe::EffectUniverse::intern`]'s own
     /// contract. Assignment order is plain intern-call order; CALLERS that
     /// need the canonical cross-build-stable order use [`Self::build_canonical`]
     /// instead of hand-rolled `intern` calls in solve order.
-    pub fn intern(&mut self, routine_id: &str) -> RoutineIx {
+    pub fn intern(&mut self, routine_id: &str) -> SolveIx {
         if let Some(&ix) = self.by_routine_id.get(routine_id) {
             return ix;
         }
-        let ix = RoutineIx(self.by_id.len() as u32);
+        let ix = SolveIx(self.by_id.len() as u32);
         self.by_id.push(routine_id.to_string());
         self.by_routine_id.insert(routine_id.to_string(), ix);
         ix
     }
 
     /// Look up an already-interned routine id without creating one.
-    pub fn get(&self, routine_id: &str) -> Option<RoutineIx> {
+    pub fn get(&self, routine_id: &str) -> Option<SolveIx> {
         self.by_routine_id.get(routine_id).copied()
     }
 
     /// The routine id for an interned ix. Panics if `ix` was never produced
-    /// by this interner — every `RoutineIx` in circulation is expected to
+    /// by this interner — every `SolveIx` in circulation is expected to
     /// have come from exactly one `RoutineInterner` (mirrors
     /// `EffectUniverse::identity`'s own panic contract).
-    pub fn name(&self, ix: RoutineIx) -> &str {
+    pub fn name(&self, ix: SolveIx) -> &str {
         &self.by_id[ix.0 as usize]
     }
 
@@ -91,7 +91,7 @@ impl RoutineInterner {
     /// ascending `(stable_routine_id, routine_id)` order (the `routine_id`
     /// tie-break gives a total order defensively — two routines should never
     /// share a `stable_routine_id` in a well-formed workspace, but nothing
-    /// here assumes that), so ascending `RoutineIx` is stable across
+    /// here assumes that), so ascending `SolveIx` is stable across
     /// repeated builds of the SAME workspace (spec rev4), not merely
     /// self-consistent within one loaded interner.
     pub fn build_canonical<'a, I>(entries: I) -> Self
@@ -117,10 +117,7 @@ mod tests {
         let mut i = RoutineInterner::new();
         let x1 = i.intern("x");
         let x2 = i.intern("x");
-        assert_eq!(
-            x1, x2,
-            "re-intern of the same id returns the same RoutineIx"
-        );
+        assert_eq!(x1, x2, "re-intern of the same id returns the same SolveIx");
         assert_eq!(i.name(x1), "x");
     }
 
@@ -137,11 +134,11 @@ mod tests {
         let mut i = RoutineInterner::new();
         let a = i.intern("a");
         let b = i.intern("b");
-        assert_eq!(a, RoutineIx(0));
-        assert_eq!(b, RoutineIx(1));
+        assert_eq!(a, SolveIx(0));
+        assert_eq!(b, SolveIx(1));
     }
 
-    /// ⟨spec rev4⟩ `build_canonical` assigns ascending `RoutineIx` by
+    /// ⟨spec rev4⟩ `build_canonical` assigns ascending `SolveIx` by
     /// `stable_routine_id` order — NOT by input/insertion order.
     #[test]
     fn build_canonical_orders_by_stable_routine_id_not_input_order() {
@@ -152,14 +149,14 @@ mod tests {
             ("b_id", "stable::b"),
         ];
         let interner = RoutineInterner::build_canonical(entries);
-        assert_eq!(interner.get("a_id"), Some(RoutineIx(0)));
-        assert_eq!(interner.get("b_id"), Some(RoutineIx(1)));
-        assert_eq!(interner.get("c_id"), Some(RoutineIx(2)));
+        assert_eq!(interner.get("a_id"), Some(SolveIx(0)));
+        assert_eq!(interner.get("b_id"), Some(SolveIx(1)));
+        assert_eq!(interner.get("c_id"), Some(SolveIx(2)));
     }
 
     /// The whole point of canonical ordering: two builds fed the SAME
     /// `(routine_id, stable_routine_id)` set in DIFFERENT input order must
-    /// assign the SAME `RoutineIx` to each id.
+    /// assign the SAME `SolveIx` to each id.
     #[test]
     fn build_canonical_is_reproducible_regardless_of_input_order() {
         let entries_a = vec![

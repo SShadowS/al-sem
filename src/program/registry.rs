@@ -21,7 +21,7 @@ use crate::program::resolve::decl_surface::DepMeta;
 use crate::snapshot::identity::TrustTier;
 
 /// The state of a dependency routine's body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BodyState {
     /// The body was parsed cleanly and its facts are in the analysed model.
     AnalyzedClean,

@@ -10698,11 +10698,13 @@ fn adapter_loses_nothing_cross_app_on_the_fixtures() {
 }
 
 /// #160 T2 (§5.2, 10A-3): the cross-app loss gate on the pinned CDO workspace.
-/// The losses are exactly R-RESIDUAL (spec §3.5): 18 `shape_mismatch` (XmlPort
-/// table-element record ops the body walk misses) and 5 `caller_mismatch` (the
-/// first `#if` arm of `PageManagement.GetPurchaseHeaderPageID`), with their 23
-/// `adapter_l3_fallback_sites`; set equality, so a new loss replacing a fixed
-/// one fails. Skips without `CDO_WS`; fails under `ENFORCE_CDO_WS=1`.
+/// The losses are exactly R-RESIDUAL (spec §3.5) minus the 5 `caller_mismatch`
+/// sites of the first `#if` arm of `PageManagement.GetPurchaseHeaderPageID`,
+/// which step 11b's node-equality caller check pairs (11b spec §4.2, §5.8,
+/// A11b.3): 18 `shape_mismatch` (XmlPort table-element record ops the body
+/// walk misses) with their 18 `adapter_l3_fallback_sites`; set equality, so a
+/// new loss replacing a fixed one fails. Skips without `CDO_WS`; fails under
+/// `ENFORCE_CDO_WS=1`.
 #[test]
 fn adapter_cross_app_losses_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -10713,11 +10715,7 @@ fn adapter_cross_app_losses_on_cdo() {
     assert!(census.program_sites > 0, "CDO precondition: program sites");
     assert_eq!(
         census.losses(),
-        vec![
-            ("caller_mismatch", 5),
-            ("shape_mismatch", 18),
-            ("adapter_l3_fallback_sites", 23),
-        ],
+        vec![("shape_mismatch", 18), ("adapter_l3_fallback_sites", 18)],
         "CDO cross-app adapter losses"
     );
     // The Base Application's app id (the same in every release).
@@ -10741,7 +10739,6 @@ fn adapter_cross_app_losses_on_cdo() {
         .collect();
     assert_eq!(got.len(), census.unmatched.len(), "unique residual sites");
     let xml = "dep:<BaseApp>:src/Finance/Intercompany/Outbox/ICOutboxImpExp.XmlPort.al";
-    let pages = "dep:<BaseApp>:src/Utilities/PageManagement.Codeunit.al";
     let shape: [(u32, u32, u32); 18] = [
         (656, 8, 33),
         (657, 8, 35),
@@ -10762,23 +10759,14 @@ fn adapter_cross_app_losses_on_cdo() {
         (716, 24, 49),
         (725, 24, 50),
     ];
-    let caller: [(u32, u32, u32); 5] = [
-        (329, 8, 39),
-        (330, 11, 46),
-        (331, 19, 84),
-        (331, 42, 83),
-        (350, 8, 70),
-    ];
     let want: std::collections::BTreeSet<_> = shape
         .iter()
         .map(|&(l, s, e)| ("shape_mismatch".to_string(), xml.to_string(), l, s, l, e))
-        .chain(
-            caller
-                .iter()
-                .map(|&(l, s, e)| ("caller_mismatch".to_string(), pages.to_string(), l, s, l, e)),
-        )
         .collect();
-    assert_eq!(got, want, "CDO cross-app: the residual is R-RESIDUAL");
+    assert_eq!(
+        got, want,
+        "CDO cross-app: the residual is R-RESIDUAL minus the 5 caller_mismatch sites"
+    );
 }
 
 /// Engine-switch S9.0e: dependency bodies, resolved from their own app (what

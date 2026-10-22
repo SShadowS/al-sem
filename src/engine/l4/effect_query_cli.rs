@@ -1,6 +1,6 @@
 //! `alsem query` — the shipped transport over
 //! [`crate::engine::l4::effect_query::DbEffectQuery`], and the home of the
-//! `RoutineIx -> ModelRoutine` join that turns an index answer into a user-facing
+//! `SolveIx -> ModelRoutine` join that turns an index answer into a user-facing
 //! one.
 //!
 //! ## Why this exists at all
@@ -111,7 +111,7 @@ pub struct QueryRunResult {
 /// fields drop before the query is built ([`View::into_query_parts`]).
 pub struct QuerySubstrate {
     model: Model,
-    graph: std::sync::Arc<crate::engine::l4::combined_graph::CombinedGraph>,
+    graph: std::sync::Arc<crate::engine::l4::combined_graph::PrimaryGraph>,
     l4: crate::engine::l4::analysis::L4Analysis,
     /// Which dependencies the model holds (#66), stated in every document.
     pub dependencies: LoadedDependencies,
@@ -360,10 +360,10 @@ fn is_primary_routine(resolved: &Model, r: &ModelRoutine) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// The RoutineIx -> ModelRoutine join (scope §1.5: RoutineIx is not an identity).
+// The SolveIx -> ModelRoutine join (scope §1.5: SolveIx is not an identity).
 // ---------------------------------------------------------------------------
 
-/// The user-facing identity of a routine. `RoutineIx` is an internal dense
+/// The user-facing identity of a routine. `SolveIx` is an internal dense
 /// index and `SummaryBundle::routine_id` yields the INTERNAL id
 /// (`<appGuid>:Codeunit:6175271#<bodyhash>`) — neither is renderable, so every
 /// surface joins through here.
@@ -455,11 +455,10 @@ impl<'a> OperationJoin<'a> {
             HashMap::new();
         for r in &resolved.workspace.routines {
             for op in &r.record_operations {
-                // First writer wins: operation ids are unique per workspace by
-                // construction (they embed the owning routine's id), so a
-                // collision would be a bug upstream — never silently prefer the
-                // later one, which would move the anchor without saying so.
-                by_id.entry(op.id.as_str()).or_insert((r, op));
+                // Operation ids embed the owning routine's id, so only the rows
+                // of a collided id share one; then the LAST owning row's
+                // operation is the anchor (#160 step 11b §4.6, class P).
+                by_id.insert(op.id.as_str(), (r, op));
             }
         }
         OperationJoin { by_id }

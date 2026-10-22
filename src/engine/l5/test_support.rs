@@ -1,5 +1,5 @@
 //! Synthetic-input constructors shared by the L5 native-oracle tests. NOT a
-//! golden fixture — these build minimal `ModelRoutine` / `CombinedGraph` /
+//! golden fixture — these build minimal `ModelRoutine` / `PrimaryGraph` /
 //! `CapabilityFact` / `FullRoutineSummary` values directly so each oracle
 //! exercises the query functions on hand-built inputs (mirroring al-sem's
 //! probe-style soundness oracles, not a byte-diff).
@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use crate::engine::l4::capability_cone::{CapabilityFact, CoverageRecord};
-use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
+use crate::engine::l4::combined_graph::{CombinedEdge, PrimaryGraph};
 use crate::engine::l4::cone_derived::{ConeDerivedBuilder, ConeDerivedStore};
 use crate::engine::l5::detector_context::{DetectorArtifacts, DetectorContext};
 use crate::engine::l5::full_summary::FullRoutineSummary;
@@ -82,12 +82,12 @@ pub fn edge(from: &str, to: &str, callsite_id: &str) -> CombinedEdge {
     }
 }
 
-/// Build a `CombinedGraph` from a node list + flat edge list. `nodes` is sorted;
+/// Build a `PrimaryGraph` from a node list + flat edge list. `nodes` is sorted;
 /// `edges_by_from` is grouped (each per-from list in input order — the L5
 /// reverse-graph builder is robust to per-from ordering). `edges_from_order`
 /// records the first-appearance of each `from` key in the `edges` slice
 /// (matching al-sem JS Map insertion order).
-pub fn graph_from_edges(nodes: &[&str], edges: &[CombinedEdge]) -> CombinedGraph {
+pub fn graph_from_edges(nodes: &[&str], edges: &[CombinedEdge]) -> PrimaryGraph {
     let mut node_vec: Vec<String> = nodes.iter().map(|n| n.to_string()).collect();
     node_vec.sort();
     let mut edges_by_from: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
@@ -101,12 +101,12 @@ pub fn graph_from_edges(nodes: &[&str], edges: &[CombinedEdge]) -> CombinedGraph
             .or_default()
             .push(e.clone());
     }
-    CombinedGraph {
+    PrimaryGraph {
         nodes: node_vec,
         edges_by_from,
         edges_from_order,
         uncertainty_edges: Vec::new(),
-        typed_edges: Vec::new(),
+        collided_site_callee: HashMap::new(),
     }
 }
 
@@ -411,12 +411,12 @@ pub fn minimal_ctx<'a>(
     graph_edges: HashMap<String, Vec<CombinedEdge>>,
     summaries: HashMap<String, FullRoutineSummary>,
 ) -> MinimalCtx<'a> {
-    let graph = CombinedGraph {
+    let graph = PrimaryGraph {
         nodes: vec![],
         edges_by_from: graph_edges,
         edges_from_order: vec![],
         uncertainty_edges: vec![],
-        typed_edges: vec![],
+        collided_site_callee: HashMap::new(),
     };
     MinimalCtx {
         routines,
@@ -427,12 +427,13 @@ pub fn minimal_ctx<'a>(
 /// Artifacts with `graph` and `summaries` (and the derived cone store folded
 /// from them) and every other field empty / default.
 pub fn empty_artifacts(
-    graph: CombinedGraph,
+    graph: PrimaryGraph,
     summaries: HashMap<String, FullRoutineSummary>,
 ) -> DetectorArtifacts {
     DetectorArtifacts {
         demanded: 0,
         graph: std::sync::Arc::new(graph),
+        cone: std::sync::Arc::new(Vec::new()),
         event_graph: crate::program::model::events::EventGraph {
             events: vec![],
             edges: vec![],

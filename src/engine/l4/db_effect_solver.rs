@@ -19,13 +19,13 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
+use crate::engine::l4::combined_graph::{CombinedEdge, PrimaryGraph};
 use crate::engine::l4::effect_lattice::{TempStateKind, via_for_edge_kind};
 use crate::engine::l4::effect_store::{
     SetRef, SummaryBundleBuilder, ViaRank, has_bit, iter_set_bits, or_bits, set_bit,
 };
 use crate::engine::l4::effect_universe::{EffectId, EffectIdentity, GrowingEffectUniverse};
-use crate::engine::l4::routine_interner::{RoutineInterner, RoutineIx};
+use crate::engine::l4::routine_interner::{RoutineInterner, SolveIx};
 use crate::engine::l4::scc::{Scc, SccInputGraph, tarjan_scc};
 use crate::engine::l4::summary::{
     DbEffect, RoutineSummary, TempState, Uncertainty, dedupe_uncertainties, uncertainty_at,
@@ -52,7 +52,7 @@ use crate::program::model::workspace::ModelRoutine;
 /// verbatim, so callers can fold over the result exactly like a normal SCC list.
 pub fn effective_sccs(
     scc_entry: &Scc,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     is_recomputed: &dyn Fn(&str) -> bool,
 ) -> Vec<Scc> {
     // 1. Filter to recomputed members only. Keep `scc_entry.members`' own order (it
@@ -135,19 +135,19 @@ pub struct PdFact {
 /// One product-graph state: `(routine, base identity, param_index)` — a
 /// `PdFact` pre-materialization. Plain tuple internally so the worklist/visited
 /// set never allocates a `PdFact` just to check membership. Task A1: `routine`
-/// is a [`RoutineIx`] (a `Copy` `u32`), not a `String` — every member of an
+/// is a [`SolveIx`] (a `Copy` `u32`), not a `String` — every member of an
 /// effective SCC is already interned (see [`RoutineInterner::build_canonical`]),
 /// so this worklist never hashes/clones a routine id string mid-solve.
 /// `PdFact`/`TerminalEmission` (the OUTPUT of this module) stay `String`-keyed —
 /// only the internal solve state changes representation.
-type PdState = (RoutineIx, (String, String, String), u32);
+type PdState = (SolveIx, (String, String, String), u32);
 
 /// Apply one `substitute_pd_temp_state` outcome to the worklist: a
 /// `ParameterDependent(j)` result inserts (and, if unseen, enqueues) a new
 /// state at `at_routine`; a `Known`/`Unknown` result emits a [`TerminalEmission`]
 /// and stops (terminal states transfer by identity thereafter — Task 5).
 fn apply_pd_transition(
-    at_routine: RoutineIx,
+    at_routine: SolveIx,
     base: &(String, String, String),
     outcome: TempState,
     interner: &RoutineInterner,
@@ -219,7 +219,7 @@ fn apply_pd_transition(
 /// the plan's other Step functions / Task 8's uniform per-SCC ctx wiring.
 pub fn solve_pd_reachability(
     eff: &Scc,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     routines_by_id: &HashMap<String, &ModelRoutine>,
     settled_db: &SummaryBundleBuilder,
     _upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -236,7 +236,7 @@ pub fn solve_pd_reachability(
     // multi-callsite-same-callee shape the retired `compose_routine` handled).
     // Stays keyed by `&str` (the graph's own id shape) — `w` is converted via
     // `interner.name(w)` at the ONE lookup site below (the worklist pop),
-    // rather than rebuilding this whole index as `RoutineIx`-keyed.
+    // rather than rebuilding this whole index as `SolveIx`-keyed.
     let mut callers_by_callee: HashMap<&str, Vec<(&str, &CombinedEdge)>> = HashMap::new();
     for v in &eff.members {
         for e in graph.edges_by_from.get(v).into_iter().flatten() {
@@ -415,20 +415,20 @@ pub struct SccPresence {
     /// Per-member `ParameterDependent`-only bits (`delta \ base`, since PD and
     /// terminal identities are disjoint EffectIds). The `pd_delta` of each
     /// member's compact row.
-    pub pd_by_member: HashMap<RoutineIx, Vec<u64>>,
+    pub pd_by_member: HashMap<SolveIx, Vec<u64>>,
 }
 
 impl SccPresence {
     /// True iff `id` is present for member `m` (in the shared terminal union OR
     /// that member's own PD facts).
-    fn member_present(&self, m: RoutineIx, id: EffectId) -> bool {
+    fn member_present(&self, m: SolveIx, id: EffectId) -> bool {
         has_bit(&self.terminal_union, id)
             || self.pd_by_member.get(&m).is_some_and(|pd| has_bit(pd, id))
     }
 
     /// Iterate member `m`'s full present ids (terminal union + its PD facts),
     /// ascending EffectId within each half. The two halves are disjoint.
-    fn member_present_ids(&self, m: RoutineIx) -> impl Iterator<Item = EffectId> + '_ {
+    fn member_present_ids(&self, m: SolveIx) -> impl Iterator<Item = EffectId> + '_ {
         let pd = self.pd_by_member.get(&m);
         iter_set_bits(&self.terminal_union).chain(pd.into_iter().flat_map(|b| iter_set_bits(b)))
     }
@@ -500,7 +500,7 @@ fn intern_terminal_db_effect(
 #[allow(clippy::too_many_arguments)]
 pub fn closed_form_union(
     eff: &Scc,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     routines_by_id: &HashMap<String, &ModelRoutine>,
     settled_db: &SummaryBundleBuilder,
     base_summaries: &HashMap<String, RoutineSummary>,
@@ -579,7 +579,7 @@ pub fn closed_form_union(
     // effects[v] = C ∪ member-v's own retained PD facts. Task A3: `C` is
     // recorded ONCE (in `terminal_union`) and NEVER cloned per member — only
     // each member's PD-only bits are stored per-member.
-    let mut pd_by_member: HashMap<RoutineIx, Vec<u64>> = HashMap::with_capacity(eff.members.len());
+    let mut pd_by_member: HashMap<SolveIx, Vec<u64>> = HashMap::with_capacity(eff.members.len());
     for m in &eff.members {
         let m_ix = interner
             .get(m)
@@ -619,8 +619,8 @@ pub fn closed_form_union(
 /// needed (a strict improvement: compile-time > runtime-assert, per this
 /// repo's "engine never throws in production" rule taken one step further).
 fn merge_via_into(
-    via_map: &mut HashMap<(RoutineIx, EffectId), ViaRank>,
-    member: RoutineIx,
+    via_map: &mut HashMap<(SolveIx, EffectId), ViaRank>,
+    member: SolveIx,
     id: EffectId,
     via: ViaRank,
 ) {
@@ -710,15 +710,15 @@ fn merge_via_into(
 /// byte.
 pub fn reconstruct_via(
     eff: &Scc,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     presence: &SccPresence,
     base_summaries: &HashMap<String, RoutineSummary>,
     settled_db: &SummaryBundleBuilder,
     universe: &GrowingEffectUniverse,
     interner: &RoutineInterner,
-) -> HashMap<(RoutineIx, EffectId), ViaRank> {
+) -> HashMap<(SolveIx, EffectId), ViaRank> {
     let member_set: HashSet<&str> = eff.members.iter().map(|s| s.as_str()).collect();
-    let mut via_map: HashMap<(RoutineIx, EffectId), ViaRank> = HashMap::new();
+    let mut via_map: HashMap<(SolveIx, EffectId), ViaRank> = HashMap::new();
 
     // Descending-rank order, `Inherited` excluded — see this fn's own doc
     // for why the floor rank is never built or queried.
@@ -849,8 +849,8 @@ pub(crate) fn is_callsite_local_kind(kind: &str) -> bool {
 /// sorted by [`uncertainty_key`], via [`dedupe_uncertainties`]) and
 /// `has_unresolved_calls`.
 pub struct SideFacts {
-    pub uncertainties: HashMap<RoutineIx, Vec<Uncertainty>>,
-    pub has_unresolved: HashMap<RoutineIx, bool>,
+    pub uncertainties: HashMap<SolveIx, Vec<Uncertainty>>,
+    pub has_unresolved: HashMap<SolveIx, bool>,
 }
 
 /// Fold `u` into the SCC-shared uncertainty map under its [`uncertainty_key`],
@@ -955,7 +955,7 @@ fn fold_shared(
 #[allow(clippy::too_many_arguments)]
 pub fn solve_side_facts(
     eff: &Scc,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     routines_by_id: &HashMap<String, &ModelRoutine>,
     settled: &HashMap<String, RoutineSummary>,
     base_summaries: &HashMap<String, RoutineSummary>,
@@ -983,9 +983,9 @@ pub fn solve_side_facts(
 
     // Per-member entries PRODUCED AT that member (base + its own opaque-callee
     // + its own uncertainty-edge entries, regardless of kind) — `produced_at(m)`
-    // in the doc above. Task A1: keyed by `RoutineIx`, killing the per-member
+    // in the doc above. Task A1: keyed by `SolveIx`, killing the per-member
     // `m.clone()` String allocation this map used to pay on every insert.
-    let mut own_by_member: HashMap<RoutineIx, Vec<Uncertainty>> = HashMap::new();
+    let mut own_by_member: HashMap<SolveIx, Vec<Uncertainty>> = HashMap::new();
     // The SCC-wide shared union of the PROPAGATABLE (non-callsite-local) part
     // — `shared_uncertainties` in the doc above — keyed by `uncertainty_key`
     // so a legitimate duplicate (the same source reached via two different
@@ -1120,8 +1120,8 @@ pub fn solve_side_facts(
 
     let _t = summaries_census::start();
     let mut shared_vec: Vec<Uncertainty> = shared.into_values().collect();
-    let mut uncertainties: HashMap<RoutineIx, Vec<Uncertainty>> = HashMap::new();
-    let mut has_unresolved: HashMap<RoutineIx, bool> = HashMap::new();
+    let mut uncertainties: HashMap<SolveIx, Vec<Uncertainty>> = HashMap::new();
+    let mut has_unresolved: HashMap<SolveIx, bool> = HashMap::new();
     let member_count = eff.members.len();
     for (i, m) in eff.members.iter().enumerate() {
         let m_ix = interner
@@ -1260,13 +1260,13 @@ pub(crate) fn build_rvid_by_opid(
 #[allow(clippy::too_many_arguments)]
 fn attribute_pd_substituted_via(
     eff: &Scc,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     presence: &SccPresence,
     settled_db: &SummaryBundleBuilder,
     routines_by_id: &HashMap<String, &ModelRoutine>,
     universe: &GrowingEffectUniverse,
     interner: &RoutineInterner,
-    via_map: &mut HashMap<(RoutineIx, EffectId), ViaRank>,
+    via_map: &mut HashMap<(SolveIx, EffectId), ViaRank>,
 ) {
     let member_set: HashSet<&str> = eff.members.iter().map(|s| s.as_str()).collect();
 
@@ -1359,9 +1359,9 @@ fn attribute_pd_substituted_via(
 /// `ordinal_of`-parallel via column — spec:175); only the per-row PD delta is
 /// reordered to `key_rank` order.
 fn materialize_member_row(
-    member_ix: RoutineIx,
+    member_ix: SolveIx,
     presence: &SccPresence,
-    via_map: &HashMap<(RoutineIx, EffectId), ViaRank>,
+    via_map: &HashMap<(SolveIx, EffectId), ViaRank>,
     terminal_set: SetRef,
     bundle: &mut SummaryBundleBuilder,
 ) {
@@ -1400,7 +1400,7 @@ fn materialize_member_row(
 #[allow(clippy::too_many_arguments)]
 fn solve_one_effective_scc(
     eff: &Scc,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     routines_by_id: &HashMap<String, &ModelRoutine>,
     settled: &HashMap<String, RoutineSummary>,
     base_summaries: &HashMap<String, RoutineSummary>,
@@ -1552,7 +1552,7 @@ fn solve_one_effective_scc(
 #[allow(clippy::too_many_arguments)]
 pub fn solve_scc_db_effects(
     scc_entry: &Scc,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     routines_by_id: &HashMap<String, &ModelRoutine>,
     settled: &HashMap<String, RoutineSummary>,
     base_summaries: &HashMap<String, RoutineSummary>,
@@ -1696,10 +1696,10 @@ pub(crate) mod tests {
     use super::*;
     use crate::engine::l4::combined_graph::CombinedEdge;
 
-    /// Build a minimal `CombinedGraph` for SCC-decomposition tests: every edge is a
+    /// Build a minimal `PrimaryGraph` for SCC-decomposition tests: every edge is a
     /// plain "direct" call with a synthetic callsite id, no other L4 machinery
     /// (uncertainty/typed edges, event dispatch) attached.
-    fn build_cycle_graph(nodes: &[&str], edges: &[(&str, &str)]) -> CombinedGraph {
+    fn build_cycle_graph(nodes: &[&str], edges: &[(&str, &str)]) -> PrimaryGraph {
         let mut sorted_nodes: Vec<String> = nodes.iter().map(|n| n.to_string()).collect();
         sorted_nodes.sort();
 
@@ -1727,12 +1727,12 @@ pub(crate) mod tests {
                 });
         }
 
-        CombinedGraph {
+        PrimaryGraph {
             nodes: sorted_nodes,
             edges_by_from,
             edges_from_order,
             uncertainty_edges: Vec::new(),
-            typed_edges: Vec::new(),
+            collided_site_callee: HashMap::new(),
         }
     }
 
@@ -1955,8 +1955,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// A `CombinedGraph` from a node list + flat edge list, grouped by `from`.
-    fn pd_graph(nodes: &[&str], edges: Vec<CombinedEdge>) -> CombinedGraph {
+    /// A `PrimaryGraph` from a node list + flat edge list, grouped by `from`.
+    fn pd_graph(nodes: &[&str], edges: Vec<CombinedEdge>) -> PrimaryGraph {
         let mut node_vec: Vec<String> = nodes.iter().map(|n| n.to_string()).collect();
         node_vec.sort();
         let mut edges_by_from: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
@@ -1967,12 +1967,12 @@ pub(crate) mod tests {
             }
             edges_by_from.entry(e.from.clone()).or_default().push(e);
         }
-        CombinedGraph {
+        PrimaryGraph {
             nodes: node_vec,
             edges_by_from,
             edges_from_order,
             uncertainty_edges: Vec::new(),
-            typed_edges: Vec::new(),
+            collided_site_callee: HashMap::new(),
         }
     }
 
@@ -2046,7 +2046,7 @@ pub(crate) mod tests {
     /// union ∪ its own PD facts) — Task A3 split `by_member` into
     /// `terminal_union` + `pd_by_member`, so tests that assert on the complete
     /// per-member presence rebuild it here.
-    fn member_full_bits(presence: &SccPresence, ix: RoutineIx) -> Vec<u64> {
+    fn member_full_bits(presence: &SccPresence, ix: SolveIx) -> Vec<u64> {
         let mut bits = presence.terminal_union.clone();
         if let Some(pd) = presence.pd_by_member.get(&ix) {
             or_bits(&mut bits, pd);
@@ -2968,9 +2968,9 @@ pub(crate) mod tests {
         });
 
         let mut interner = RoutineInterner::new();
-        let m_ix: RoutineIx = interner.intern("m");
+        let m_ix: SolveIx = interner.intern("m");
 
-        let mut via_map: HashMap<(RoutineIx, EffectId), ViaRank> = HashMap::new();
+        let mut via_map: HashMap<(SolveIx, EffectId), ViaRank> = HashMap::new();
         via_map.insert((m_ix, zeta_id), ViaRank::Direct);
         via_map.insert((m_ix, alpha_id), ViaRank::Direct);
 
@@ -3003,7 +3003,7 @@ pub(crate) mod tests {
     /// `compute_summaries_v2_bundle_with_leaves` does, so
     /// a test's hand-built `graph.uncertainty_edges` and its
     /// `uncertainty_edges_by_from` argument stay consistent with each other.
-    fn index_uncertainty_edges(graph: &CombinedGraph) -> HashMap<String, Vec<usize>> {
+    fn index_uncertainty_edges(graph: &PrimaryGraph) -> HashMap<String, Vec<usize>> {
         let mut by_from: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, ue) in graph.uncertainty_edges.iter().enumerate() {
             by_from.entry(ue.from.clone()).or_default().push(i);

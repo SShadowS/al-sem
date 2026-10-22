@@ -55,7 +55,7 @@
 //!    [`ViaRank`] and 98.8% of real memberships are `inherited` — so "yes" alone
 //!    answers the less useful half of the user's question ("does THIS routine do
 //!    it, or something twelve frames down?").
-//! 2. **This facade returns [`RoutineIx`] + effect facts, never rendered
+//! 2. **This facade returns [`SolveIx`] + effect facts, never rendered
 //!    names.** The join to `ModelRoutine`'s `name` / `object_type` /
 //!    `stable_routine_id` / `source_anchor` belongs to the CONSUMER (see
 //!    `effect_query_cli.rs`), because `l4` should not own presentation and the
@@ -67,11 +67,11 @@
 
 use std::collections::VecDeque;
 
-use crate::engine::l4::combined_graph::CombinedGraph;
+use crate::engine::l4::combined_graph::PrimaryGraph;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_store::{SummaryBundle, ViaRank};
 use crate::engine::l4::reverse_index::{GraphSccIx, ReverseEffectIndex, graph_scc_of};
-use crate::engine::l4::routine_interner::RoutineIx;
+use crate::engine::l4::routine_interner::SolveIx;
 use crate::engine::l4::scc::SccResult;
 
 /// The literal sentinel `summary_runner`'s base extraction substitutes when a
@@ -108,7 +108,7 @@ pub fn is_unknown_table(table_id: &str) -> bool {
 /// [`DbEffectQuery::all_effects`]'s unfiltered down-list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableTouch<'a> {
-    pub routine: RoutineIx,
+    pub routine: SolveIx,
     /// `Insert` / `Modify` / `Get` / `FindSet` / `CalcFields` / …
     pub op: &'a str,
     pub table_id: &'a str,
@@ -148,7 +148,7 @@ impl<'a> DbEffectQuery<'a> {
     /// Build the query surface. `scc` MUST be the Tarjan result for `graph`
     /// (the same pair the summary solve consumed) — the ancestor walk reads
     /// both and they are meaningless apart.
-    pub fn build(bundle: &'a SummaryBundle, scc: &'a SccResult, graph: &CombinedGraph) -> Self {
+    pub fn build(bundle: &'a SummaryBundle, scc: &'a SccResult, graph: &PrimaryGraph) -> Self {
         let index = ReverseEffectIndex::build(bundle);
         let mut rev_condensation: Vec<Vec<GraphSccIx>> = vec![Vec::new(); scc.sccs.len()];
         for (from, edges) in &graph.edges_by_from {
@@ -177,13 +177,13 @@ impl<'a> DbEffectQuery<'a> {
     }
 
     /// The bundle this query reads — for a consumer that needs
-    /// [`SummaryBundle::routine_id`] to join a [`RoutineIx`] back to a routine.
+    /// [`SummaryBundle::routine_id`] to join a [`SolveIx`] back to a routine.
     pub fn bundle(&self) -> &'a SummaryBundle {
         self.bundle
     }
 
-    /// Look up a routine's [`RoutineIx`] by its internal id.
-    pub fn routine_ix(&self, routine_id: &str) -> Option<RoutineIx> {
+    /// Look up a routine's [`SolveIx`] by its internal id.
+    pub fn routine_ix(&self, routine_id: &str) -> Option<SolveIx> {
         self.bundle.routine_ix(routine_id)
     }
 
@@ -191,7 +191,7 @@ impl<'a> DbEffectQuery<'a> {
 
     /// **D.** Does `r`'s transitive effect cone touch `table_id`? A pure
     /// posting-list probe — never decompresses `r`'s effect set.
-    pub fn touches_table(&self, r: RoutineIx, table_id: &str) -> bool {
+    pub fn touches_table(&self, r: SolveIx, table_id: &str) -> bool {
         self.index.touches_table(self.bundle, r, table_id)
     }
 
@@ -202,7 +202,7 @@ impl<'a> DbEffectQuery<'a> {
     /// re-reads the bundle precisely so `via` / `op` / `temp_state` survive
     /// (module-doc rule 1). Empty iff `touches_table` is false — asserted by the
     /// differential, not merely intended.
-    pub fn touches(&self, r: RoutineIx, table_id: &str) -> Vec<TableTouch<'a>> {
+    pub fn touches(&self, r: SolveIx, table_id: &str) -> Vec<TableTouch<'a>> {
         self.bundle
             .db_effects(r)
             .filter(|e| e.table_id == table_id)
@@ -220,7 +220,7 @@ impl<'a> DbEffectQuery<'a> {
     /// **D, unfiltered.** `r`'s complete transitive effect cone — the same rows
     /// [`Self::touches`] filters, in the same order. Backs `alsem query
     /// effects`.
-    pub fn all_effects(&self, r: RoutineIx) -> Vec<TableTouch<'a>> {
+    pub fn all_effects(&self, r: SolveIx) -> Vec<TableTouch<'a>> {
         self.bundle
             .db_effects(r)
             .map(|e| TableTouch {
@@ -237,12 +237,12 @@ impl<'a> DbEffectQuery<'a> {
     // -- U-global -----------------------------------------------------------
 
     /// **U-global.** Every routine in the workspace that touches `table_id`,
-    /// ascending [`RoutineIx`].
+    /// ascending [`SolveIx`].
     ///
     /// WORKSPACE-WIDE and unscoped: on DO the median answer is 377 routines.
     /// Report the count and scope it (see [`Self::ancestors_touching`]) rather
     /// than rendering the list raw.
-    pub fn routines_touching(&self, table_id: &str) -> Vec<RoutineIx> {
+    pub fn routines_touching(&self, table_id: &str) -> Vec<SolveIx> {
         self.index.up_table(table_id)
     }
 
@@ -277,11 +277,11 @@ impl<'a> DbEffectQuery<'a> {
     /// leaf disappears from the effective-SCC DAG, so an ancestor set computed
     /// there would be strictly too small. Pinned by
     /// `ancestors_are_computed_on_the_tarjan_condensation_not_the_effect_class_dag`.
-    pub fn ancestors(&self, r: RoutineIx) -> Vec<(u32, RoutineIx)> {
+    pub fn ancestors(&self, r: SolveIx) -> Vec<(u32, SolveIx)> {
         let Some(start) = graph_scc_of(self.scc, self.bundle, r) else {
             return Vec::new(); // r is not a node of the condensation at all.
         };
-        let mut out: Vec<(u32, RoutineIx)> = Vec::new();
+        let mut out: Vec<(u32, SolveIx)> = Vec::new();
         for (scc_ix, depth) in self.ancestor_sccs(start) {
             for member_id in &self.scc.sccs[scc_ix.0 as usize].members {
                 let Some(member) = self.bundle.routine_ix(member_id) else {
@@ -298,7 +298,7 @@ impl<'a> DbEffectQuery<'a> {
         // merge or binary-search the result without re-deriving the key — and
         // cannot write an ordering check that silently compares by the wrong
         // field (which is exactly what happened when this returned
-        // `(RoutineIx, u32)` sorted by `(depth, ix)`).
+        // `(SolveIx, u32)` sorted by `(depth, ix)`).
         out.sort_unstable();
         out
     }
@@ -306,13 +306,13 @@ impl<'a> DbEffectQuery<'a> {
     /// **U-scoped** — the query the hover exists for: which transitive callers
     /// of `r` touch `table_id`, nearest first, WITH witnesses.
     ///
-    /// Ordered `(depth, RoutineIx, bundle emit order)`; `r` itself is never
+    /// Ordered `(depth, SolveIx, bundle emit order)`; `r` itself is never
     /// included (see [`Self::ancestors`]).
     ///
     /// Read the result against [`Self::touches_table`]: when `r` itself touches
     /// `table_id` every ancestor trivially does too (summaries are
     /// transitive-down), so the informative case is the one where `r` does not.
-    pub fn ancestors_touching(&self, r: RoutineIx, table_id: &str) -> Vec<AncestorTouch<'a>> {
+    pub fn ancestors_touching(&self, r: SolveIx, table_id: &str) -> Vec<AncestorTouch<'a>> {
         let mut out: Vec<AncestorTouch<'a>> = Vec::new();
         for (depth, ancestor) in self.ancestors(r) {
             // Membership from the INDEX (cheap posting probe) — witnesses from
@@ -384,7 +384,7 @@ mod tests {
         b
     }
 
-    fn combined(nodes: &[&str], edges: &[(&str, &str)]) -> CombinedGraph {
+    fn combined(nodes: &[&str], edges: &[(&str, &str)]) -> PrimaryGraph {
         let mut edges_by_from: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
         let mut edges_from_order: Vec<String> = Vec::new();
         for (from, to) in edges {
@@ -408,16 +408,16 @@ mod tests {
         }
         let mut node_vec: Vec<String> = nodes.iter().map(|n| (*n).to_string()).collect();
         node_vec.sort();
-        CombinedGraph {
+        PrimaryGraph {
             nodes: node_vec,
             edges_by_from,
             edges_from_order,
             uncertainty_edges: Vec::new(),
-            typed_edges: Vec::new(),
+            collided_site_callee: HashMap::new(),
         }
     }
 
-    fn tarjan_of(graph: &CombinedGraph) -> SccResult {
+    fn tarjan_of(graph: &PrimaryGraph) -> SccResult {
         let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
         for (from, list) in &graph.edges_by_from {
             adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
@@ -434,12 +434,12 @@ mod tests {
     /// shape.
     struct Chain {
         bundle: SummaryBundle,
-        graph: CombinedGraph,
+        graph: PrimaryGraph,
         scc: SccResult,
-        top: RoutineIx,
-        mid: RoutineIx,
-        low: RoutineIx,
-        sink: RoutineIx,
+        top: SolveIx,
+        mid: SolveIx,
+        low: SolveIx,
+        sink: SolveIx,
     }
 
     fn chain() -> Chain {

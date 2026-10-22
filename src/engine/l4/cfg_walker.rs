@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use super::combined_graph::CombinedGraph;
+use super::combined_graph::PrimaryGraph;
 use super::effect_lattice::{EffectPresence, join_presence};
 use super::event_dispatch::{DispatchKind, ParamDispatch};
 use super::summary::{FieldList, RoutineSummary};
@@ -238,7 +238,7 @@ pub(crate) fn walk_param(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
     indexes: &WalkIndexes,
     dispatch: Option<&ParamDispatch>,
@@ -423,7 +423,7 @@ fn walk_cfg(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
     idx: &WalkIndexes,
     exit_states: &mut Vec<PerParamState>,
@@ -1068,7 +1068,7 @@ fn apply_condition_leaves(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
     idx: &WalkIndexes,
     exit_states: &mut Vec<PerParamState>,
@@ -1216,11 +1216,15 @@ fn apply_call(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
 ) -> PerParamState {
+    // The site's callee and bindings, both from one row (`site_pick`, #160 step
+    // 11b §4.6: a collided id's site reads its LAST owning row).
+    let pick =
+        crate::program::model::projection::site_pick(graph, &routine.id, &cs.id, upgraded_bindings);
     // Find the binding that forwards THIS param to the callee (resolved only).
-    let upgraded = upgraded_bindings.get(&cs.id);
+    let upgraded = pick.bindings;
     let binding_idx = cs.argument_bindings.iter().enumerate().find(|(i, b)| {
         let resolution = upgraded
             .and_then(|ub| ub.get(*i))
@@ -1252,13 +1256,8 @@ fn apply_call(
         .map(|ub| ub.callee_parameter_is_var)
         .unwrap_or(false);
 
-    // Resolve the callee edge + summary.
-    let callee_id = graph.edges_by_from.get(&routine.id).and_then(|edges| {
-        edges
-            .iter()
-            .find(|e| e.callsite_id.as_deref() == Some(cs.id.as_str()))
-            .map(|e| e.to.as_str())
-    });
+    // Resolve the callee summary.
+    let callee_id = pick.callee;
     let look = CalleeLookup {
         snapshot,
         final_map,
@@ -1749,7 +1748,7 @@ fn walk_flat(
     snapshot: &HashMap<String, RoutineSummary>,
     final_map: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
-    graph: &CombinedGraph,
+    graph: &PrimaryGraph,
     body_avail_by_id: &HashMap<String, bool>,
 ) -> PerParamState {
     let mut events: Vec<FlatEvent> = Vec::new();
@@ -1950,12 +1949,12 @@ mod tests {
         let snapshot: HashMap<String, RoutineSummary> = HashMap::new();
         let final_map: HashMap<String, RoutineSummary> = HashMap::new();
         let upgraded_bindings: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
-        let graph = CombinedGraph {
+        let graph = PrimaryGraph {
             nodes: Vec::new(),
             edges_by_from: HashMap::new(),
             edges_from_order: Vec::new(),
             uncertainty_edges: Vec::new(),
-            typed_edges: Vec::new(),
+            collided_site_callee: HashMap::new(),
         };
         let body_avail_by_id: HashMap<String, bool> = HashMap::new();
         let indexes = build_indexes(&routine);

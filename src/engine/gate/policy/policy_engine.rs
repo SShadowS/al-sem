@@ -148,9 +148,15 @@ impl<'a> PolicyModel<'a> {
     ) -> Self {
         let objects_by_id: HashMap<&str, &ModelObject> =
             objects.iter().map(|o| (o.id.as_str(), o)).collect();
-        let root_kinds_by_routine_id: HashMap<&str, &[String]> = root_classifications
-            .iter()
-            .map(|rc| (rc.routine_id.as_str(), rc.kinds.as_slice()))
+        // One classification per id (class P, #160 step 11b §4.6).
+        let root_kinds_by_routine_id: HashMap<&str, &[String]> =
+            crate::engine::root_classification::classification_per_id(
+                root_classifications,
+                routines,
+                objects,
+            )
+            .into_iter()
+            .map(|(id, rc)| (id, rc.kinds.as_slice()))
             .collect();
         // G-5: REAL table wins an id collision with a tableextension stub.
         let tables_by_id: HashMap<&str, &ModelTable> =
@@ -194,6 +200,15 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
     // Sort routines by id.
     let mut sorted_routines: Vec<&ModelRoutine> = model.routines.iter().collect();
     sorted_routines.sort_by(|a, b| a.id.cmp(&b.id));
+    // One evaluation per id (#160 step 11b §4.6): the rows of a collided id are
+    // one routine, read through its LAST row (the stable sort keeps row order).
+    sorted_routines.dedup_by(|later, kept| {
+        let same = later.id == kept.id;
+        if same {
+            *kept = *later;
+        }
+        same
+    });
 
     for rule in &sorted_rules {
         let mut summary = RuleRunSummary {

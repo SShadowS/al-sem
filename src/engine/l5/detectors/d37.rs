@@ -65,8 +65,13 @@ pub fn detect_d37(
     let mut skipped_temp_record = 0u64;
     let mut skipped_parameter = 0u64;
     let mut skipped_trigger_rec = 0u64;
-
-    for routine in &ws.routines {
+    // A collided id's call sites, each with its LAST OWNING row (#160 step 11b
+    // §4.6): `site_pick` reads that row's callee and bindings.
+    let site_owners = crate::program::model::projection::site_owners(
+        &crate::program::model::projection::RowsOfId::build(&ws.routines),
+        &ws.routines,
+    );
+    for (ri, routine) in ws.routines.iter().enumerate() {
         // roleOf(routine) !== "primary" → skip. Source-only ⇒ all primary.
         if !routine.body_available {
             continue;
@@ -116,6 +121,16 @@ pub fn detect_d37(
             let source_record_variable_id = op.record_variable_id.as_deref();
             let helper_verdict = post_validate_helper_verdict(
                 routine,
+                &routine
+                    .call_sites
+                    .iter()
+                    .map(|cs| {
+                        let own = site_owners
+                            .get(cs.id.as_str())
+                            .is_none_or(|o| o.get() == ri);
+                        (cs, own)
+                    })
+                    .collect::<Vec<_>>(),
                 source_record_variable_id,
                 &source_variable_name_lc,
                 &op.source_anchor,
@@ -181,27 +196,39 @@ fn later_persisted(
 /// After the Validate op, walk callsites in source order. If any post-Validate helper
 /// might persist (yes or unknown) the Validate is suppressed; only when EVERY
 /// forwarding helper provably doesn't persist do we fall through to emit.
+/// `sites` are the row's OWN call sites: a collided id's other arm sits at
+/// other source positions, so "after this `Validate`" means nothing across
+/// arms (#160 step 11b, final panel FP-14). Each site's callee and bindings
+/// come from `site_pick`, i.e. from the site's LAST OWNING row; the flag says
+/// whether that is this row. A site another row owns last is read as
+/// `suppress-unknown` when it takes our record (final panel NEW-1): its callee
+/// and bindings are that row's, and R5 keeps no bindings of this row.
 fn post_validate_helper_verdict(
     routine: &ModelRoutine,
+    sites: &[(&crate::program::body::features::PCallSite, bool)],
     source_record_variable_id: Option<&str>,
     source_variable_name_lc: &str,
     validate_anchor: &PAnchor,
     ctx: &DetectorContext,
 ) -> &'static str {
-    for cs in &routine.call_sites {
+    for &(cs, own) in sites {
         if !before_anchor(validate_anchor, &cs.source_anchor) {
             continue;
         }
-        let upgraded = ctx.upgraded_bindings_by_callsite.get(&cs.id);
+        // The site's resolved callee and its upgraded bindings, both from one
+        // row, through `site_pick` (#160 step 11b §4.6).
+        let pick = crate::program::model::projection::site_pick(
+            &ctx.graph,
+            &routine.id,
+            &cs.id,
+            &ctx.upgraded_bindings_by_callsite,
+        );
+        let upgraded = pick.bindings;
         for (i, binding) in cs.argument_bindings.iter().enumerate() {
             let up: Option<&UpgradedBinding> = upgraded.and_then(|u| u.get(i));
             let binding_resolution = up.map(|u| u.binding_resolution.as_str());
             let callee_parameter_is_var = up.map(|u| u.callee_parameter_is_var).unwrap_or(false);
 
-            // Literals / non-record expressions can't forward a record — skip.
-            if binding_resolution == Some("non-record-arg") {
-                continue;
-            }
             // Match by stable id when both sides have one; fall back to name.
             let matches_by_id = binding.source_record_variable_id.is_some()
                 && source_record_variable_id.is_some()
@@ -209,6 +236,15 @@ fn post_validate_helper_verdict(
             let matches_by_name =
                 binding.source_variable_name.as_deref() == Some(source_variable_name_lc);
             if !matches_by_id && !matches_by_name {
+                continue;
+            }
+            // Our record goes to a site whose callee and bindings are another
+            // row's: nothing of this row says what the callee does with it.
+            if !own {
+                return "suppress-unknown";
+            }
+            // Literals / non-record expressions can't forward a record — skip.
+            if binding_resolution == Some("non-record-arg") {
                 continue;
             }
             // Unresolved-callee / ambiguous: preserve the old conservatism for
@@ -220,22 +256,11 @@ fn post_validate_helper_verdict(
             if !callee_parameter_is_var {
                 continue;
             }
-            // edge = graph.edgesByFrom.get(routine.id)?.find(callsiteId === cs.id)
-            let edge_to = ctx
-                .graph
-                .edges_by_from
-                .get(&routine.id)
-                .and_then(|edges| {
-                    edges
-                        .iter()
-                        .find(|e| e.callsite_id.as_deref() == Some(cs.id.as_str()))
-                })
-                .map(|e| e.to.clone());
-            let edge_to = match edge_to {
+            let edge_to = match pick.callee {
                 Some(t) => t,
                 None => return "suppress-unknown",
             };
-            let callee = ctx.routine_by_id.get(edge_to.as_str()).copied();
+            let callee = ctx.routine_by_id.get(edge_to).copied();
             let callee_role = callee.and_then(|c| {
                 ctx.parameter_roles_by_routine.get(&c.id).and_then(|roles| {
                     roles

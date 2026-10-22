@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::combined_graph::{CombinedEdge, CombinedGraph};
+use super::combined_graph::{CombinedEdge, PrimaryGraph};
 use super::effect_lattice::EffectPresence;
 use super::summary_runner::{event_publisher_param, summaries_census};
 use crate::program::model::event_param_temp::event_param_names_match;
@@ -55,7 +55,7 @@ pub(crate) struct ParamDispatch {
 /// The event ids that more than one publisher routine raises: overloads share
 /// one event id (step-6 Ruling), so each of their subscribers is attached to
 /// every overload, though it selected only one.
-pub(crate) fn shared_event_ids(graph: &CombinedGraph) -> HashSet<String> {
+pub(crate) fn shared_event_ids(graph: &PrimaryGraph) -> HashSet<String> {
     let mut publishers: HashMap<&str, &str> = HashMap::new();
     let mut shared = HashSet::new();
     for e in graph.edges_by_from.values().flatten() {

@@ -18,9 +18,9 @@
 //!   by a debug assertion.
 //! - **Callee check**: `callee_fp(PCallSite.callee_text)` must equal the
 //!   program site's `callee_fingerprint`.
-//! - **Caller check**: the program caller's declaration anchor captured at
-//!   assembly (`RowNodes::decl_anchor`, from [`DeclSurface::get_with_path`])
-//!   must equal `(row file, start_line, start_column)` of the model routine.
+//! - **Caller check**: the model routine's node (`RowNodes::node_of`) must be
+//!   the program edge's caller (#160 step 11b §4.2): the key already paired one
+//!   expression, and an expression belongs to exactly one declaration.
 //! - **Callee routine** (J2): `RowNodes::j2_row`, recorded at assembly.
 //! - Only the program sites of callers the model holds are read
 //!   ([`join_reads`]: a primary routine, or one in the demand the model was
@@ -123,6 +123,7 @@ use super::calls::{
     UnknownReason as ModelReason, UpgradedBinding, initial_binding_state, mark_bindings_ambiguous,
     object_run_dispatch_kind, upgrade_bindings, upgrade_bindings_with,
 };
+use super::ix::RoutineIx;
 use super::taxonomy::{DispatchKind, Resolution};
 use super::workspace::{ModelEntities, ModelRecordOperation, ModelRoutine};
 use crate::program::abi_ingest::object_kind_from_abi_type;
@@ -408,8 +409,7 @@ pub(crate) fn caller_held(
 
 /// The program call-site edges the join reads (§4.3 step 1, §4.5): a caller of
 /// a model app (`apps`, [`model_apps`]) that [`caller_held`] admits, in
-/// `view.all_edges()` order. `RowNodes::decl_anchor` is recorded for exactly
-/// their callers.
+/// `view.all_edges()` order.
 pub(crate) fn join_reads<'a>(
     view: EdgeView<'a>,
     apps: &HashSet<AppRef>,
@@ -537,7 +537,7 @@ fn attach_program_calls_with(
         adapter(body.edge_view(), &body.ctx, &rows, true, abi_rows, demand)
     };
     // Engine-switch S4.2: the detector event graph, from the same program build;
-    // each row's node is J5's answer recorded at assembly (#160 §4.9).
+    // each row's node is `row_nodes.node_of` (#160 step 11b §4.2).
     let events = {
         let _s = pt::span("b3", "b3.events");
         crate::program::model::events::program_event_graph(
@@ -695,7 +695,6 @@ pub fn assemble_and_resolve_workspace_program(
         skip_roots_config,
         &program.body().ctx,
         &program.body().parenless_calls,
-        program.body().edge_view(),
     )?;
     Some(attach_program_calls(rows, program).0)
 }
@@ -716,6 +715,45 @@ pub fn assemble_and_resolve_inline_program(
     app_guid: &str,
     model_instance_id: &str,
 ) -> crate::program::model::workspace::Model {
+    let dir = write_inline_workspace(files, app_guid);
+    assemble_and_resolve_workspace_program(
+        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        model_instance_id,
+        true,
+    )
+    .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
+}
+
+/// #160 step 11b T2 (spec §5.2): [`assemble_and_resolve_inline_program_default`]
+/// with the rows of every collision group in REVERSED order, before `RowNodes`
+/// and the attach
+/// ([`crate::program::model::workspace::assemble_and_resolve_workspace_from_program_reversed_groups`]).
+/// The source is the same; only the row order differs. Test entry.
+#[doc(hidden)]
+#[must_use]
+pub fn assemble_and_resolve_inline_program_reversed_groups(
+    files: &[(String, String)],
+    app_guid: &str,
+) -> crate::program::model::workspace::Model {
+    let dir = write_inline_workspace(files, app_guid);
+    let inputs = crate::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let program = ResolvedProgram::build(&inputs, ProgramScope::Workspace)
+        .unwrap_or_else(|_| panic!("program build failed for inline workspace {app_guid}"));
+    let rows =
+        crate::program::model::workspace::assemble_and_resolve_workspace_from_program_reversed_groups(
+            &inputs,
+            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+            true,
+            &program.body().ctx,
+            &program.body().parenless_calls,
+        )
+        .unwrap_or_else(|| panic!("model assembly failed for inline workspace {app_guid}"));
+    attach_program_calls(rows, program).0
+}
+
+/// The inline files and an `app.json` with id `app_guid`, written to a fresh
+/// temporary directory (see [`assemble_and_resolve_inline_program`]).
+fn write_inline_workspace(files: &[(String, String)], app_guid: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temp workspace");
     let app = serde_json::json!({
         "id": app_guid,
@@ -742,12 +780,7 @@ pub fn assemble_and_resolve_inline_program(
         std::fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("write {name}: {e}"));
     }
-    assemble_and_resolve_workspace_program(
-        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
-        model_instance_id,
-        true,
-    )
-    .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
+    dir
 }
 
 /// [`assemble_and_resolve_inline_program`] with the default model-instance id.
@@ -853,7 +886,6 @@ pub(crate) fn cross_app_assemble(
             ctx,
             Some(&demand),
             &body.parenless_calls,
-            body.edge_view(),
         )
     };
     let Some((rows, abi_rows)) = assembled else {
@@ -882,6 +914,30 @@ pub fn cross_app_rows_before_attach(
     cross_app_assemble(inputs, model_instance_id, true)
         .ok()
         .map(|a| a.rows)
+}
+
+/// #160 step 11b (spec §5.5, A8's second case, R1-18): the cross-app event
+/// graph after `edit` has changed the assembled rows (their `RowNodes`
+/// included), built by the production `program_event_graph` over the program the
+/// assembly kept. `None` when the build or the assembly fails. Test entry.
+#[doc(hidden)]
+#[must_use]
+pub fn cross_app_event_graph_after(
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    model_instance_id: &str,
+    edit: impl FnOnce(&mut crate::program::model::workspace::ModelRows),
+) -> Option<crate::program::model::events::EventGraph> {
+    let mut a = cross_app_assemble(inputs, model_instance_id, true).ok()?;
+    edit(&mut a.rows);
+    let body = a.program.body();
+    Some(
+        crate::program::model::events::program_event_graph(
+            &body.ctx,
+            &a.rows.workspace,
+            &a.rows.row_nodes,
+        )
+        .graph,
+    )
 }
 
 /// [`assemble_and_resolve_cross_app_program`] plus the adapter's census, from
@@ -987,8 +1043,12 @@ pub fn adapter_census_for_workspace_cross_app(
 /// to-less `Unknown(NoProgramSite)` edge, bindings in their initial state (a
 /// record argument stays `"unresolved-callee"`). Engine-switch S3.1 — this used to
 /// be the legacy resolver's answer.
-fn no_program_edge(r: &ModelRoutine, cs: &PCallSite) -> (Vec<CallEdge>, Vec<UpgradedBinding>) {
-    let mut e = CallEdge::base(&r.id, &cs.id, &cs.operation_id);
+fn no_program_edge(
+    ix: RoutineIx,
+    r: &ModelRoutine,
+    cs: &PCallSite,
+) -> (Vec<CallEdge>, Vec<UpgradedBinding>) {
+    let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);
     e.resolution = Resolution::Unknown(ModelReason::NoProgramSite);
     (vec![e], initial_binding_state(cs).bindings)
 }
@@ -1021,8 +1081,8 @@ fn adapter(
 
 /// #160 step 10 (§4.3): the key join. Pairs model sites and program sites by
 /// [`crate::program::site_key::SiteIx`], reading the program sites of the callers [`caller_held`] admits
-/// (§4.5), checking the caller against the declaration anchor captured at
-/// assembly (`RowNodes::decl_anchor`, §4.8), and classifying the program sites no
+/// (§4.5), checking the caller by node equality (`RowNodes::node_of`, 11b
+/// §4.2), and classifying the program sites no
 /// call site took by the resolver's `fires` (§4.4), with no source text. Same
 /// buckets and rules as the span join it replaced. Every accepted pair's two
 /// spans are compared by a debug assertion (§4.3 step 4).
@@ -1153,7 +1213,6 @@ fn key_join<'a>(
                 model_record_ops.entry(k).or_default().push((ri, oi));
             }
         }
-        let decl = &r.source_anchor;
         for (ci, (cs, e)) in r.call_sites.iter().zip(&r.site_exprs.calls).enumerate() {
             c.l3_call_sites += 1;
             let k = key(e);
@@ -1172,6 +1231,14 @@ fn key_join<'a>(
                 continue;
             };
             consumed.insert(k);
+            // A paired row always has a node (#160 step 11b §4.2, R1-20): only a
+            // dependency row of an app the graph does not know has none, and no
+            // program site keys to its file, so the key join cannot pair it.
+            debug_assert!(
+                row_nodes.node_of[ri].is_some(),
+                "call site {} is paired, but its row has no node",
+                cs.id
+            );
             if is_operation(ce) {
                 shape += 1;
                 unmatched(
@@ -1186,9 +1253,7 @@ fn key_join<'a>(
                     model_key(&cs.source_anchor),
                     &cs.callee_text,
                 );
-            } else if row_nodes.decl_anchor.get(&ce.edge.from)
-                != Some(&(k.file, decl.start_line, decl.start_column))
-            {
+            } else if row_nodes.node_of[ri].as_ref() != Some(&ce.edge.from) {
                 caller += 1;
                 unmatched(
                     "caller_mismatch",
@@ -1333,7 +1398,10 @@ fn convert<'a>(
         primary: view.primary_app_ref,
         model_apps: model_apps(graph, view.primary_app_ref, ws),
         abi_rows: abi_rows.unwrap_or(&empty_abi_rows),
-        routine_by_id: ws.routines.iter().map(|r| (r.id.as_str(), r)).collect(),
+        routine_pick: super::projection::last_per_id_borrowed(
+            &super::projection::RowsOfId::build(&ws.routines),
+            ws.routines.iter().map(Some).collect(),
+        ),
         upgrade_dependency_bindings,
         graph,
         surface: &surface,
@@ -1349,17 +1417,20 @@ fn convert<'a>(
     // The conversion loop to the end of the adapter.
     let _s_convert = pt::span("b3", "b3.adapter.convert");
     let mut edges: Vec<CallEdge> = Vec::new();
-    let mut upgraded_bindings: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
+    // Per site, in row order; one list per call-site id after the projection
+    // (#160 step 11b §4.6, R5: the LAST owning row per call-site id).
+    let mut bindings_per_site: Vec<(String, Vec<UpgradedBinding>)> = Vec::new();
     // The adapter emits no resolver diagnostics (the legacy resolver's
     // double-upgrade warning had no program-engine analogue to fire).
     let diagnostics = Vec::new();
     // Call sites in routine order, then the implicit-trigger edges in
     // routine/op order (the legacy resolver's order).
     for (ri, r) in ws.routines.iter().enumerate() {
+        let ix = RoutineIx::of(ri);
         for (ci, cs) in r.call_sites.iter().enumerate() {
             let program_edge = j.calls.get(&(ri, ci));
             let converted = program_edge.and_then(|ce| {
-                let out = conv.call(r, cs, ce, &mut c);
+                let out = conv.call(ix, r, cs, ce, &mut c);
                 if out.is_none() {
                     c.adapter_callee_outside_l3 += 1;
                 }
@@ -1374,18 +1445,18 @@ fn convert<'a>(
                     // S3.1: no legacy fallback. The program engine gave nothing
                     // usable here, and that is reported as such.
                     c.adapter_l3_fallback_sites += 1;
-                    no_program_edge(r, cs)
+                    no_program_edge(ix, r, cs)
                 }
             };
             edges.extend(site_edges);
-            upgraded_bindings.insert(cs.id.clone(), bindings);
+            bindings_per_site.push((cs.id.clone(), bindings));
         }
     }
     for (ri, r) in ws.routines.iter().enumerate() {
         for (oi, op) in r.record_operations.iter().enumerate() {
             if let Some(ce) = j.ops.get(&(ri, oi)) {
                 c.adapter_program_trigger_ops += 1;
-                edges.extend(conv.triggers(r, op, ce, &mut c));
+                edges.extend(conv.triggers(RoutineIx::of(ri), r, op, ce, &mut c));
             } else if matches!(
                 op.op.as_str(),
                 "Insert" | "Modify" | "Delete" | "Validate" | "Rename"
@@ -1395,6 +1466,7 @@ fn convert<'a>(
             }
         }
     }
+    let upgraded_bindings = super::projection::last_per_key_pairs(bindings_per_site);
     (
         ResolvedCalls {
             edges,
@@ -1435,13 +1507,17 @@ struct Converter<'a> {
     model_apps: HashSet<AppRef>,
     /// The cross-app model's symbol-only rows by program id (S7.3); empty otherwise.
     abi_rows: &'a crate::program::model::workspace::AbiRowIds,
-    routine_by_id: HashMap<&'a str, &'a ModelRoutine>,
+    /// The row a symbol-only routine's string id stands for: the projection's
+    /// class P pick (#160 step 11b §4.6, R6: the LAST row of the id).
+    routine_pick: HashMap<&'a str, &'a ModelRoutine>,
     upgrade_dependency_bindings: bool,
     graph: &'a ProgramGraph,
     surface: &'a DeclSurface,
     /// The model's rows, indexed by `RoutineIx`.
     rows: &'a [ModelRoutine],
-    /// J2's answer recorded at assembly (#160 §4.7): node -> row.
+    /// J2's answer recorded at assembly (#160 §4.7): node -> the first
+    /// non-symbol-only row at the node's declaration anchor whose `node_of` is
+    /// that node (node-filtered since #160 step 11b §4.2).
     j2_row: &'a HashMap<RoutineNodeId, u32>,
     objects: HashMap<ObjectKey, &'a ObjectNode>,
     /// The primary app's objects by `(kind, folded name)` (S6.0): "is this
@@ -1459,8 +1535,8 @@ struct Converter<'a> {
 impl<'a> Converter<'a> {
     /// The model routine for a program source routine: a primary-app routine, or
     /// a dependency routine of a cross-app model (S7.3). J2's answer (the first
-    /// non-symbol-only row at the node's declaration anchor), recorded at
-    /// assembly (#160 §4.7).
+    /// non-symbol-only row at the node's declaration anchor whose `node_of` is
+    /// the node; #160 step 11b §4.2), recorded at assembly (#160 §4.7).
     fn l3_routine(&self, id: &RoutineNodeId) -> Option<&'a ModelRoutine> {
         if !self.model_apps.contains(&id.object.app) {
             return None;
@@ -1482,7 +1558,7 @@ impl<'a> Converter<'a> {
             RouteTarget::AbiSymbol { key } if key.app == self.primary => Target::Outside,
             RouteTarget::AbiSymbol { .. } => Self::route_routine_id(route)
                 .and_then(|id| self.abi_rows.get(&id))
-                .and_then(|row| self.routine_by_id.get(row.as_str()).copied())
+                .and_then(|row| self.routine_pick.get(row.as_str()).copied())
                 .map_or(Target::Outside, Target::Model),
             RouteTarget::Builtin(_) | RouteTarget::Unresolved => Target::Outside,
         }
@@ -1534,6 +1610,7 @@ impl<'a> Converter<'a> {
     /// workspace callee has no L3 routine: the caller falls back to L3.
     fn call(
         &self,
+        ix: RoutineIx,
         r: &ModelRoutine,
         cs: &PCallSite,
         ce: &ClassifiedEdge,
@@ -1545,7 +1622,7 @@ impl<'a> Converter<'a> {
         // Dispatch kind from the L2 callee shape (ruling 4). A `Page.RunModal(..)`
         // style member call the program engine sees as a run takes the run kind
         // its receiver keyword names.
-        let mut e = CallEdge::base(&r.id, &cs.id, &cs.operation_id);
+        let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);
         e.dispatch_kind = match &cs.callee {
             PCallee::Bare { .. } => DispatchKind::Direct,
             PCallee::Member { receiver, .. }
@@ -1623,7 +1700,7 @@ impl<'a> Converter<'a> {
         };
         match shape {
             DispatchShape::Polymorphic => {
-                let edges = self.interface(r, cs, ce, &mut state, c)?;
+                let edges = self.interface(ix, r, cs, ce, &mut state, c)?;
                 return Some((edges, state.bindings));
             }
             DispatchShape::AmbiguousOverload => {
@@ -1971,6 +2048,7 @@ impl<'a> Converter<'a> {
     /// ambiguous.
     fn interface(
         &self,
+        ix: RoutineIx,
         r: &ModelRoutine,
         cs: &PCallSite,
         ce: &ClassifiedEdge,
@@ -2062,7 +2140,7 @@ impl<'a> Converter<'a> {
                 .collect(),
         };
         let base = || {
-            let mut e = CallEdge::base(&r.id, &cs.id, &cs.operation_id);
+            let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);
             e.dispatch_kind = DispatchKind::Interface;
             e
         };
@@ -2100,6 +2178,7 @@ impl<'a> Converter<'a> {
     /// (`implicit_edges::trigger_mapping`).
     fn triggers(
         &self,
+        ix: RoutineIx,
         r: &ModelRoutine,
         op: &ModelRecordOperation,
         ce: &ClassifiedEdge,
@@ -2166,7 +2245,7 @@ impl<'a> Converter<'a> {
         let fires = crate::engine::l4::combined_graph::trigger_fires(&op.op, op.run_trigger);
         tos.into_iter()
             .map(|to| {
-                let mut e = CallEdge::base(&r.id, &op.id, &op.id);
+                let mut e = CallEdge::base(ix, &r.id, &op.id, &op.id);
                 e.to = Some(to);
                 e.dispatch_kind = DispatchKind::ImplicitTrigger;
                 e.fires = Some(fires);
@@ -2297,7 +2376,6 @@ pub(crate) fn build_models_with(
         false,
         &ctx,
         &report.parenless_calls,
-        report.edge_view(),
     )
     .ok_or_else(|| {
         format!(
@@ -2610,11 +2688,13 @@ mod tests {
         );
     }
 
-    /// Precondition by assignment: the L3 caller's declaration anchor is moved
-    /// one column, so both its sites pair by key and callee but not by
-    /// caller.
+    /// #160 step 11b T4 (spec §4.2, §5.5; restated with the code it pins, I2's
+    /// exception): precondition by assignment, the model caller's declaration
+    /// anchor is moved one column. The key decides the site and the node decides
+    /// the caller, so a moved anchor ALONE no longer fails the caller check: both
+    /// sites pair (until 11b the anchor check made them `caller_mismatch`).
     #[test]
-    fn caller_anchor_disagreement_is_caller_mismatch() {
+    fn caller_anchor_disagreement_alone_is_matched() {
         let c = census_with(&[("src/m.al", TWO_CALLS.as_bytes())], |ws| {
             routine(ws, "Caller").source_anchor.start_column += 1;
         });
@@ -2623,7 +2703,7 @@ mod tests {
             SiteCensus {
                 l3_call_sites: 2,
                 program_sites: 2,
-                caller_mismatch: 2,
+                matched: 2,
                 ..Default::default()
             },
             "{c:#?}"
@@ -2667,45 +2747,35 @@ mod tests {
         );
     }
 
-    /// T9 (#160 §5.9): the caller check reads the declaration anchor captured
-    /// at assembly. Hand-stated: the program's declaration of `Caller` (read
-    /// from the `DeclSurface`, as assembly captures it) is recorded one column
-    /// off in `row_nodes.decl_anchor`; the row is untouched. Its sites are
-    /// `caller_mismatch`.
+    /// #160 step 11b T4 (spec §4.2, §5.5; replaces 11a's
+    /// `caller_check_reads_captured_decl_anchor`): the caller check is node
+    /// equality, `row_nodes.node_of[ri] == edge.from`. Hand-stated: `Caller`'s
+    /// row is given ANOTHER node (`Foo`'s) in `node_of` by assignment; its anchor
+    /// and its site keys are untouched. Both its sites are `caller_mismatch`.
     #[test]
-    fn caller_check_reads_captured_decl_anchor() {
+    fn caller_check_reads_node_of() {
         let c = census_rows_with(&[("src/m.al", TWO_CALLS.as_bytes())], |rows, ctx| {
-            let (line, col) = {
-                let row = rows
-                    .workspace
-                    .routines
-                    .iter()
-                    .find(|r| r.name == "Caller")
-                    .unwrap();
-                (row.source_anchor.start_line, row.source_anchor.start_column)
-            };
-            let node = ctx
-                .graph()
+            let ri = rows
+                .workspace
                 .routines
                 .iter()
-                .find(|n| n.id.object.app == ctx.primary_app_ref && &*n.id.name_lc == "caller")
-                .expect("precondition: a program node for Caller")
-                .id
-                .clone();
-            let surface = ctx.decl_surface();
-            let (meta, path) = surface
-                .get_with_path(&node)
-                .expect("precondition: Caller has a program declaration");
-            let file = ctx
-                .file_ix(ctx.primary_app_ref, path)
-                .expect("precondition: its file has a FileIx");
-            let (dl, dc) = (meta.origin.start.row, meta.origin.start.column);
+                .position(|r| r.name == "Caller")
+                .expect("precondition: a row for Caller");
+            let node_named = |name_lc: &str| {
+                ctx.graph()
+                    .routines
+                    .iter()
+                    .find(|n| n.id.object.app == ctx.primary_app_ref && &*n.id.name_lc == name_lc)
+                    .unwrap_or_else(|| panic!("precondition: a program node for {name_lc}"))
+                    .id
+                    .clone()
+            };
             assert_eq!(
-                (dl, dc),
-                (line, col),
-                "precondition: the row's anchor is the program's declaration"
+                rows.row_nodes.node_of[ri].as_ref(),
+                Some(&node_named("caller")),
+                "precondition: the row's node is Caller's"
             );
-            rows.row_nodes.decl_anchor.insert(node, (file, dl, dc + 1));
+            rows.row_nodes.node_of[ri] = Some(node_named("foo"));
         });
         assert_eq!(
             counts(&c),
@@ -3102,8 +3172,9 @@ mod tests {
     /// T7a (#160 §5.10; the `GetPurchaseHeaderPageID` shape): one procedure
     /// declared in `#if A` / `#else` arms at two lines, same signature. One node,
     /// two rows at two anchors; J2 = the second arm's row (the surface keeps the
-    /// last declaration); the first arm's site is `caller_mismatch` (today's
-    /// answer, R-RESIDUAL's shape).
+    /// last declaration), unchanged by 11b. Restated by 11b T3 (spec §5.4): the
+    /// first arm's site is now `matched` (the caller check is node equality, and
+    /// both arms' rows are the one node), no longer `caller_mismatch`.
     #[test]
     fn j2_row_two_anchors_one_node_is_the_last_arm() {
         let src = "codeunit 50100 \"S\"\n{\n#if A\n    procedure P()\n    begin\n        Message('a');\n    end;\n#else\n    procedure P()\n    begin\n        Message('b');\n    end;\n#endif\n\n    procedure Caller()\n    begin\n        P();\n    end;\n}\n";
@@ -3126,8 +3197,13 @@ mod tests {
             .collect();
         assert_eq!(
             mismatched,
-            [(5, "caller_mismatch")],
-            "the first arm's site is caller_mismatch"
+            Vec::<(u32, &str)>::new(),
+            "the first arm's site is matched, not caller_mismatch"
+        );
+        assert_eq!(
+            (c.caller_mismatch, c.matched),
+            (0, 3),
+            "every site pairs (both arms' Message, and Caller's P): {c:#?}"
         );
         assert_eq!(
             rows.row_nodes.j2_row.get(&nodes[0]).copied(),
@@ -3139,11 +3215,13 @@ mod tests {
     /// T7b's source: a split header whose `#if` arms differ in a parameter type.
     const ONE_ANCHOR_TWO_NODES: &str = "codeunit 50100 \"S\"\n{\n#if A\n    procedure P(X: Integer)\n#else\n    procedure P(X: Text)\n#endif\n    begin\n        Message('p');\n    end;\n\n    procedure Caller()\n    begin\n        P(1);\n        P('x');\n    end;\n}\n";
 
-    /// T7b (#160 §5.10; the `AcquireTokenFromCache` shape): a split header whose
-    /// arms differ in a parameter type. Two nodes, two rows at one anchor; J2 of
-    /// BOTH nodes = the first row (the recorded cross-node alias).
+    /// T7b restated by 11b T3 (#160 11b spec §4.2, §5.4; the
+    /// `AcquireTokenFromCache` shape): a split header whose arms differ in a
+    /// parameter type. Two nodes, two rows at one anchor; J2 is node-filtered, so
+    /// each node maps to its OWN row (until 11b both mapped to the first row, the
+    /// cross-node alias).
     #[test]
-    fn j2_row_one_anchor_two_nodes_is_the_first_row() {
+    fn j2_row_one_anchor_two_nodes_is_each_nodes_own_row() {
         let (_dir, ctx, _report, rows) = single_app(&[("src/s.al", ONE_ANCHOR_TWO_NODES)]);
         let p = rows_named(&rows, "P");
         assert_eq!(p.len(), 2, "precondition: two rows");
@@ -3158,12 +3236,20 @@ mod tests {
             (a.start_line, a.start_column)
         };
         assert_eq!(anchor(p[0]), anchor(p[1]), "precondition: one anchor");
-        let first = Some(u32::try_from(p[0]).unwrap());
-        for n in &nodes {
+        let own: std::collections::HashSet<_> = p
+            .iter()
+            .map(|&ri| rows.row_nodes.node_of[ri].clone())
+            .collect();
+        assert_eq!(own.len(), 2, "precondition: the two rows are two nodes");
+        for &ri in &p {
+            let n = rows.row_nodes.node_of[ri]
+                .clone()
+                .expect("precondition: each row has a node");
+            assert!(nodes.contains(&n), "precondition: a P node");
             assert_eq!(
-                rows.row_nodes.j2_row.get(n).copied(),
-                first,
-                "j2_row of {n:?} = the first row"
+                rows.row_nodes.j2_row.get(&n).copied(),
+                Some(u32::try_from(ri).unwrap()),
+                "j2_row of {n:?} = that node's own row {ri}"
             );
         }
     }

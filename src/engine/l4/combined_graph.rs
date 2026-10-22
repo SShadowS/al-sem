@@ -33,7 +33,7 @@ use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 // ---------------------------------------------------------------------------
 
 /// A resolved routine → routine combined edge (internal-id form).
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct CombinedEdge {
     pub from: String,
     pub to: String,
@@ -50,7 +50,7 @@ pub struct CombinedEdge {
 }
 
 /// How an `event-dispatch` edge may run (#107 Design 2).
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct DispatchMeta {
     /// The subscription may be skipped (`EventEdge::conditional`).
     pub conditional: bool,
@@ -60,7 +60,7 @@ pub struct DispatchMeta {
 }
 
 /// An uncertainty attached to a routine whose call site had no resolved target.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct UncertaintyEdge {
     pub from: String,
     pub uncertainty: Uncertainty,
@@ -68,7 +68,7 @@ pub struct UncertaintyEdge {
 
 /// The discriminated Uncertainty — kind + its single id reference (+ interfaceName
 /// for interface-open-world). Only the R3a-1-reachable variants are modelled.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct Uncertainty {
     pub kind: String,
     pub callsite_id: Option<String>,
@@ -79,7 +79,7 @@ pub struct Uncertainty {
 
 /// A typed `GraphEdge` (internal-id form). One flat struct over the discriminated
 /// union — only the fields legal for `kind` are populated (mirrors the TS union).
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct TypedEdge {
     pub kind: String,
     pub from: String,
@@ -104,7 +104,16 @@ pub struct TypedEdge {
 /// Whether an `implicit-trigger` edge's trigger runs every time its record
 /// operation executes. The op's own control context applies on top of this.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, salsa::SalsaValue,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+    salsa::SalsaValue,
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum TriggerFires {
@@ -129,7 +138,7 @@ pub fn trigger_fires(op: &str, run_trigger: Option<bool>) -> TriggerFires {
 }
 
 /// A ValueSource (internal form — table-field tableId is INTERNAL until projected).
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
 pub enum ValueSource {
     Literal {
         value: String,
@@ -146,12 +155,40 @@ pub enum ValueSource {
     Unknown,
 }
 
-/// The internal combined graph: the assembled edges + uncertainty edges + the
-/// typed edges + the sorted node list. `edges` flattened (already per-`from`
-/// sorted via `edges_by_from` at assembly).
+/// The internal combined graph: the Primary payload ([`PrimaryGraph`]: the
+/// assembled edges, uncertainty edges and the sorted node list) plus the typed
+/// edges (the Cone payload). It derefs to its [`PrimaryGraph`], so a reader of
+/// the Primary payload takes `&PrimaryGraph` and accepts either.
+/// [`crate::engine::l4::exec_relation::ExecRelation::new`] splits it (#160
+/// step 11b §4.4).
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct CombinedGraph {
-    /// Sorted internal routine ids.
+    pub primary: PrimaryGraph,
+    /// Typed edges in emission order.
+    pub typed_edges: Vec<TypedEdge>,
+}
+
+impl std::ops::Deref for CombinedGraph {
+    type Target = PrimaryGraph;
+    fn deref(&self) -> &PrimaryGraph {
+        &self.primary
+    }
+}
+
+impl std::ops::DerefMut for CombinedGraph {
+    fn deref_mut(&mut self) -> &mut PrimaryGraph {
+        &mut self.primary
+    }
+}
+
+/// The Primary payload (#160 step 11b §4.4): primary callers' call edges plus
+/// event dispatch, keyed by caller, and their uncertainty edges. No typed edges:
+/// a reader of [`crate::engine::l4::exec_relation::ExecRelation::primary`]
+/// cannot read the Cone payload.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct PrimaryGraph {
+    /// Sorted internal routine ids, each once (a collided id's rows are one
+    /// node, #160 step 11b §4.6).
     pub nodes: Vec<String>,
     /// from-id → its edgeSortKey-sorted edge list.
     pub edges_by_from: HashMap<String, Vec<CombinedEdge>>,
@@ -163,8 +200,11 @@ pub struct CombinedGraph {
     pub edges_from_order: Vec<String>,
     /// Sorted (uncertaintySortKey) uncertainty edges.
     pub uncertainty_edges: Vec<UncertaintyEdge>,
-    /// Typed edges in emission order.
-    pub typed_edges: Vec<TypedEdge>,
+    /// #160 step 11b §4.6 (`site_pick`): for every call site of a COLLIDED id,
+    /// the callee of its LAST OWNING row's first targeted call edge (`None` when
+    /// that row's site has none). Empty when no id is collided; a single-row
+    /// id's sites are never here.
+    pub collided_site_callee: HashMap<String, Option<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -278,12 +318,36 @@ pub(crate) fn assemble(
     let mut edges: Vec<CombinedEdge> = Vec::new();
     let mut uncertainty_edges: Vec<UncertaintyEdge> = Vec::new();
 
+    // #160 step 11b §4.6: a collided id's call sites belong to their LAST
+    // OWNING row (class P): R1b's one interface uncertainty per site and
+    // `site_pick`'s callee come from that row only.
+    let rows = crate::program::model::projection::RowsOfId::build(&workspace.routines);
+    let owners = crate::program::model::projection::site_owners(&rows, &workspace.routines);
+    let owns = |ce: &CallEdge| {
+        owners
+            .get(ce.callsite_id.as_str())
+            .is_none_or(|&o| o == ce.from_ix)
+    };
+    // Which callee a collided site reads: among the edges of its LAST owning
+    // row (`from_ix`), the FIRST with a target in `call_edges` order, i.e. the
+    // adapter's emission order (a multi-target interface site is emitted sorted
+    // by target id), the same within-row policy as R9. `None` when that row's
+    // site has no targeted edge (the slot is filled once, never overwritten).
+    let mut collided_site_callee: HashMap<String, Option<String>> =
+        owners.keys().map(|cs| ((*cs).to_string(), None)).collect();
+
     // Interface callsites that already received an "interface-open-world" uncertainty
     // (emit exactly once per callsite even with multiple "maybe" edges).
     let mut interface_open_world_emitted: HashSet<String> = HashSet::new();
 
     // --- call-derived edges + uncertainty records ---
     for ce in call_edges {
+        if ce.to.is_some()
+            && owners.get(ce.callsite_id.as_str()) == Some(&ce.from_ix)
+            && let Some(slot @ None) = collided_site_callee.get_mut(&ce.callsite_id)
+        {
+            slot.clone_from(&ce.to);
+        }
         // event-dispatch dispatchKind never appears in the model's calls; al-sem
         // skips it here regardless (event hops come from the event graph), so no
         // check is needed.
@@ -301,8 +365,10 @@ pub(crate) fn assemble(
                     dispatch: None,
                 });
             }
-            // Resolved interface dispatch ("maybe"): open-world uncertainty, once.
+            // Resolved interface dispatch ("maybe"): open-world uncertainty, once,
+            // from the site's (last owning) row.
             if ce.dispatch_kind == DispatchKind::Interface
+                && owns(ce)
                 && !interface_open_world_emitted.contains(&ce.callsite_id)
             {
                 interface_open_world_emitted.insert(ce.callsite_id.clone());
@@ -327,7 +393,7 @@ pub(crate) fn assemble(
         // to-less edge → typed uncertainty on the `from` routine.
         if ce.dispatch_kind == DispatchKind::Interface {
             // Zero-impl interface dispatch → "interface-open-world".
-            if !interface_open_world_emitted.contains(&ce.callsite_id) {
+            if owns(ce) && !interface_open_world_emitted.contains(&ce.callsite_id) {
                 interface_open_world_emitted.insert(ce.callsite_id.clone());
                 let interface_name = ce
                     .dispatch_meta
@@ -414,6 +480,9 @@ pub(crate) fn assemble(
     // --- assemble: sorted nodes, sorted per-from edge lists, sorted uncertainties ---
     let mut nodes: Vec<String> = workspace.routines.iter().map(|r| r.id.clone()).collect();
     nodes.sort();
+    // A collided id is one node (class K, #160 step 11b §4.6): its rows are one
+    // routine to every reader (the reverse graph, r3a1, d2, the cone, the SCCs).
+    nodes.dedup();
 
     let mut edges_by_from: HashMap<String, Vec<CombinedEdge>> = HashMap::new();
     // Track the first-appearance order of `from` keys (mirrors al-sem JS Map insertion
@@ -426,19 +495,51 @@ pub(crate) fn assemble(
         }
         edges_by_from.entry(e.from.clone()).or_default().push(e);
     }
-    for list in edges_by_from.values_mut() {
-        list.sort_by_key(edge_sort_key);
+    for (from, list) in &mut edges_by_from {
+        if rows.is_collided(from) {
+            // Class U, collided (#160 step 11b §4.6): the full-value union,
+            // ordered by the sort key, then the full value.
+            *list = crate::program::model::projection::union_by_value(
+                vec![std::mem::take(list)],
+                edge_sort_key,
+            );
+        } else {
+            list.sort_by_key(edge_sort_key);
+        }
     }
 
     uncertainty_edges.sort_by_key(uncertainty_sort_key);
+    // Class U, collided: the key starts with `from`, so one id's uncertainties
+    // are one run; a collided id's run is ordered by the full value on a key tie
+    // and equal items collapse.
+    let mut i = 0;
+    while i < uncertainty_edges.len() {
+        let from = &uncertainty_edges[i].from;
+        let j = i + uncertainty_edges[i..]
+            .iter()
+            .take_while(|u| &u.from == from)
+            .count();
+        if rows.is_collided(from) {
+            uncertainty_edges[i..j].sort_by(|a, b| {
+                uncertainty_sort_key(a)
+                    .cmp(&uncertainty_sort_key(b))
+                    .then_with(|| a.cmp(b))
+            });
+        }
+        i = j;
+    }
+    uncertainty_edges.dedup_by(|a, b| a == b && rows.is_collided(&a.from));
 
-    let typed_edges = build_typed_edges(workspace, call_edges, event_graph);
+    let typed_edges = build_typed_edges(workspace, call_edges, event_graph, &rows);
 
     CombinedGraph {
-        nodes,
-        edges_by_from,
-        edges_from_order,
-        uncertainty_edges,
+        primary: PrimaryGraph {
+            nodes,
+            edges_by_from,
+            edges_from_order,
+            uncertainty_edges,
+            collided_site_callee,
+        },
         typed_edges,
     }
 }
@@ -533,6 +634,7 @@ fn build_typed_edges(
     workspace: &ModelEntities,
     call_edges: &[CallEdge],
     event_graph: &EventGraph,
+    rows: &crate::program::model::projection::RowsOfId<'_>,
 ) -> Vec<TypedEdge> {
     // One pass over the routines:
     // - callsite id → &PCallSite (for callee details);
@@ -579,10 +681,15 @@ fn build_typed_edges(
             if !interface_edges_by_callsite.contains_key(&ce.callsite_id) {
                 interface_order.push(ce.callsite_id.clone());
             }
-            interface_edges_by_callsite
+            let group = interface_edges_by_callsite
                 .entry(ce.callsite_id.clone())
-                .or_default()
-                .push(ce);
+                .or_default();
+            // R1c (#160 step 11b §4.6): a collided id's site keeps one candidate
+            // per distinct implementer, so its rows do not count one implementer
+            // twice. A single-row id's site is untouched.
+            if !rows.is_collided(&ce.from) || !group.iter().any(|c| c.to == ce.to) {
+                group.push(ce);
+            }
         }
     }
 

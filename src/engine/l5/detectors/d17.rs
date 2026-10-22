@@ -256,7 +256,7 @@ mod tests {
     use std::collections::{BTreeSet, HashMap};
 
     use super::{cmp_version, detect_d17};
-    use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
+    use crate::engine::l4::combined_graph::{CombinedEdge, PrimaryGraph};
     use crate::engine::l5::detector_context::{DeclaredDep, DetectorArtifacts, detector_context};
     use crate::engine::l5::test_support::empty_artifacts;
     use crate::program::body::features::PAnchor;
@@ -465,12 +465,12 @@ mod tests {
             declared_dependencies: declared,
             app_versions,
             ..empty_artifacts(
-                CombinedGraph {
+                PrimaryGraph {
                     nodes,
                     edges_by_from,
                     edges_from_order,
                     uncertainty_edges: Vec::new(),
-                    typed_edges: Vec::new(),
+                    collided_site_callee: HashMap::new(),
                 },
                 HashMap::new(),
             )

@@ -443,7 +443,7 @@ mod tests {
 
     use super::*;
     use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
-    use crate::engine::l4::combined_graph::CombinedGraph;
+    use crate::engine::l4::combined_graph::PrimaryGraph;
     use crate::engine::l5::detector_context::{
         DetectorArtifacts, DetectorContext, detector_context,
     };
@@ -692,12 +692,12 @@ mod tests {
         let art = DetectorArtifacts {
             transaction_spans: spans,
             ..empty_artifacts(
-                CombinedGraph {
+                PrimaryGraph {
                     nodes: vec![],
                     edges_by_from: HashMap::new(),
                     edges_from_order: vec![],
                     uncertainty_edges: vec![],
-                    typed_edges: vec![],
+                    collided_site_callee: HashMap::new(),
                 },
                 HashMap::new(),
             )

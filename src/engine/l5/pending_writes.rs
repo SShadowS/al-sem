@@ -24,7 +24,7 @@
 //! subscribers of an event a span member raises (they run in an unknown order
 //! around the one that reaches the Commit) are not counted.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::engine::l4::cone_derived::{ConeDerivedStore, fact_is_known_temp, write_op_bit};
 use crate::engine::l5::full_summary::FullRoutineSummary;
@@ -79,17 +79,24 @@ pub(crate) fn toward_sites<'a>(
     (sites, unsited)
 }
 
+/// The run-wide lookups [`pending_before`] reads.
+#[derive(Clone, Copy)]
+pub(crate) struct PendingCtx<'a> {
+    pub fwd: &'a ForwardSites<'a>,
+    pub routines: &'a HashMap<&'a str, &'a ModelRoutine>,
+    pub summaries: &'a HashMap<String, FullRoutineSummary>,
+    pub cone_derived: &'a ConeDerivedStore,
+    /// The ids with two or more rows (#160 step 11b §4.6).
+    pub collided: &'a HashSet<&'a str>,
+}
+
 /// What `r` has pending when control reaches any of `targets`. With no tree, a
 /// target the tree does not hold, or `whole_body`, every site of `r` counts.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn pending_before(
     r: &ModelRoutine,
     targets: &[&str],
     whole_body: bool,
-    fwd: &ForwardSites<'_>,
-    routines: &HashMap<&str, &ModelRoutine>,
-    summaries: &HashMap<String, FullRoutineSummary>,
-    cone_derived: &ConeDerivedStore,
+    cx: &PendingCtx<'_>,
 ) -> Pending {
     let mut sites: BTreeSet<String> = BTreeSet::new();
     let mut all = whole_body || r.statement_tree.is_none();
@@ -127,7 +134,7 @@ pub(crate) fn pending_before(
         sites.remove(*t);
     }
     let targets: BTreeSet<&str> = targets.iter().copied().collect();
-    effects(r, &sites, &targets, fwd, routines, summaries, cone_derived)
+    effects(r, &sites, &targets, cx)
 }
 
 /// The effects of `sites` in `r`: its own physical writes and published events
@@ -140,18 +147,38 @@ fn effects(
     r: &ModelRoutine,
     sites: &BTreeSet<String>,
     targets: &BTreeSet<&str>,
-    fwd: &ForwardSites<'_>,
-    routines: &HashMap<&str, &ModelRoutine>,
-    summaries: &HashMap<String, FullRoutineSummary>,
-    cone_derived: &ConeDerivedStore,
+    cx: &PendingCtx<'_>,
 ) -> Pending {
+    let PendingCtx {
+        fwd,
+        routines,
+        summaries,
+        cone_derived,
+        collided,
+    } = *cx;
     let mut out = Pending::default();
     if let Some(s) = summaries.get(&r.id) {
+        // A collided id's direct facts are the union of its rows' facts, and
+        // its rows share site ids: a sited fact is this row's only if the row
+        // itself makes it (#160 step 11b §4.6, every piece of a key from one row).
+        // (Only a collided id's rows compute it, sorted for the lookup.)
+        let own = collided.contains(r.id.as_str()).then(|| {
+            let mut own = crate::engine::l4::capability_cone::direct_facts_for_routine(r, &[]).0;
+            own.sort();
+            own
+        });
         for f in &s.capability_facts_direct {
             let at = f
                 .witness_operation_id
                 .as_ref()
                 .or(f.witness_callsite_id.as_ref());
+            if at.is_some()
+                && own
+                    .as_ref()
+                    .is_some_and(|own| own.binary_search(f).is_err())
+            {
+                continue;
+            }
             // A fact with no site is the routine's own, at its entry (a
             // publisher's `publish`): before any target.
             // A target that is not ALSO before itself (a loop) adds its event only.

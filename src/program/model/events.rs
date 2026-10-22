@@ -11,7 +11,7 @@ use crate::program::attributes::{AttributeInfo, bool_arg, find_attribute};
 
 /// One evidence record. The R2c surface only ever carries `{source}` (+ an optional
 /// `note` on synthesized symbols).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Evidence {
     pub source: String,
     pub note: Option<String>,
@@ -41,7 +41,7 @@ impl Evidence {
 }
 
 /// One EventSymbol (publisher or synthesized). Ids in INTERNAL form.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EventSymbol {
     /// Internal event id (`${publisherObjectId}/event/${eventName_lc}`).
     pub id: String,
@@ -65,7 +65,7 @@ pub struct EventSymbol {
 }
 
 /// A bound event publisher that is not a routine of the detector model.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PublisherRef {
     /// A dependency routine. `target` is [`super::model_routine_key`]; `body` is
     /// the registry's body state (`None` when the registry has no entry).
@@ -80,7 +80,7 @@ pub enum PublisherRef {
 }
 
 /// One EventEdge. Ids in INTERNAL form.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EventEdge {
     pub event_id: String,
     pub subscriber_routine_id: String,
@@ -275,8 +275,8 @@ fn model_guids(ws: &super::workspace::ModelEntities) -> std::collections::HashSe
 ///   publisher routine (combined graph, cones, fan-out, d43, d45) therefore do not
 ///   change; `subscribers_by_event` gains the workspace subscribers of such events.
 ///
-/// Each subscriber row's program node is J5's answer recorded at assembly
-/// (`row_nodes.j5_node`, #160 §4.9); a row it does not map has no edges.
+/// Each subscriber row's program node is its true node (`row_nodes.node_of`,
+/// #160 step 11b §4.2); a row with no node has no edges.
 #[must_use]
 pub fn program_event_graph(
     ctx: &crate::program::resolve::full::ProgramContext,
@@ -312,14 +312,35 @@ pub fn program_event_graph(
     let mut events: Vec<EventSymbol> = Vec::new();
     let mut event_ix: HashMap<String, usize> = HashMap::new();
     let mut real: HashSet<String> = HashSet::new();
-    for r in &ws.routines {
-        if r.kind == "event-publisher" {
-            let s = build_event_symbol(r);
+    // One symbol per publisher row; a collided publisher's symbols are the
+    // full-value union of its rows', at its first row's place (#160 step 11b
+    // §4.6, R4b: equal arms make one symbol; `event_ix` names the last).
+    let rows = super::projection::RowsOfId::build(&ws.routines);
+    let is_publisher = |r: &&ModelRoutine| r.kind == "event-publisher";
+    let mut merged: HashSet<&str> = HashSet::new();
+    for r in ws.routines.iter().filter(is_publisher) {
+        let syms = if rows.is_collided(&r.id) {
+            if !merged.insert(r.id.as_str()) {
+                continue;
+            }
+            let per_row = rows
+                .rows(&r.id)
+                .iter()
+                .map(|ix| &ws.routines[ix.get()])
+                .filter(is_publisher)
+                .map(|q| vec![build_event_symbol(q)])
+                .collect();
+            super::projection::union_by_value(per_row, |s| s.id.clone())
+        } else {
+            vec![build_event_symbol(r)]
+        };
+        for s in syms {
             real.insert(s.id.clone());
             event_ix.insert(s.id.clone(), events.len());
             events.push(s);
         }
     }
+    drop(rows);
     // A symbol for an event no bound publisher stands behind (L3's synthesized
     // `maybe`/`unknown` symbols).
     fn synth(
@@ -352,13 +373,20 @@ pub fn program_event_graph(
 
     let mut edges: Vec<EventEdge> = Vec::new();
     // A routine declared in several `#if` arms is several model rows with ONE
-    // id, all standing for one program node (issue #103): only its first row
-    // that maps emits edges. A row counts only once it maps, so an unmapped
-    // first row (a dependency's declaration surface keeps the LAST same-id
-    // span) does not hide a later row that maps. `model_subscribers` and
-    // `unmapped_subscribers` stay per row (the latter only for ids no row
-    // maps); every later counter is per id.
+    // id (issue #103). The id emits the full-value union of the subscriptions
+    // of its rows' DISTINCT nodes (R4, #160 step 11b §4.6): each (id, node)
+    // emits once, and an id with two or more nodes has its edges sorted by full
+    // value and equal ones collapsed (`union_multi_node_edges`), at the place
+    // of its first edge, so they do not depend on row order. When the rows
+    // share one node (every CDO and corpus group) that is the first mapped
+    // row's edges, as before. A row without a node (`node_of` is `None`: a
+    // dependency row of an app the graph does not know, the fail-closed guard
+    // below) hides nothing. `model_subscribers` and `unmapped_subscribers` stay
+    // per row (the latter only for ids no row maps); every later counter is per
+    // (id, node), counted before the union.
     let mut processed: HashSet<&str> = HashSet::new();
+    let mut processed_nodes: HashSet<(&str, &RoutineNodeId)> = HashSet::new();
+    let mut multi_node: HashSet<&str> = HashSet::new();
     // Unmapped rows, by id: counted after the loop, and only for an id no row
     // mapped. An unmapped row of an id another row mapped loses nothing.
     let mut unmapped: Vec<&str> = Vec::new();
@@ -367,12 +395,18 @@ pub fn program_event_graph(
             continue;
         }
         c.model_subscribers += 1;
-        let Some(node) = row_nodes.j5(ri) else {
+        // `None` (a dependency row of an app the graph does not know) is the
+        // fail-closed guard (11b D7).
+        let Some(node) = row_nodes.node_of.get(ri).and_then(Option::as_ref) else {
             unmapped.push(r.id.as_str());
             continue;
         };
-        if !processed.insert(r.id.as_str()) {
+        let first_mapped_row = processed.insert(r.id.as_str());
+        if !processed_nodes.insert((r.id.as_str(), node)) {
             continue;
+        }
+        if !first_mapped_row {
+            multi_node.insert(r.id.as_str());
         }
         let subs = subs_by_node.get(node).map(Vec::as_slice).unwrap_or(&[]);
         if subs.is_empty() {
@@ -537,7 +571,7 @@ pub fn program_event_graph(
                     (id, "unknown")
                 }
             };
-            edges.push(EventEdge {
+            let edge = EventEdge {
                 event_id,
                 subscriber_routine_id: r.id.clone(),
                 subscriber_stable_routine_id: r.stable_routine_id.clone(),
@@ -546,17 +580,57 @@ pub fn program_event_graph(
                 provenance: vec![Evidence::tree_sitter()],
                 conditional: s.conditional_any,
                 mixed_readings: s.conditional_any && s.conditions.is_empty(),
-            });
+            };
+            edges.push(edge);
         }
     }
     c.unmapped_subscribers = unmapped
         .iter()
         .filter(|id| !processed.contains(*id))
         .count();
+    let edges = if multi_node.is_empty() {
+        edges
+    } else {
+        union_multi_node_edges(edges, &multi_node)
+    };
     ProgramEvents {
         graph: EventGraph { events, edges },
         census: c,
     }
+}
+
+/// R4's union for the subscriber ids of `multi` (two or more distinct nodes):
+/// each such id's edges, wherever its rows emitted them, are sorted by full
+/// value, equal ones collapse, and the run takes the place of the id's first
+/// edge. Every other edge keeps its place.
+fn union_multi_node_edges(
+    edges: Vec<EventEdge>,
+    multi: &std::collections::HashSet<&str>,
+) -> Vec<EventEdge> {
+    let mut groups: std::collections::HashMap<String, Vec<Vec<EventEdge>>> =
+        std::collections::HashMap::new();
+    // `Err(id)` marks where the id's run goes.
+    let mut slots: Vec<Result<EventEdge, String>> = Vec::with_capacity(edges.len());
+    for e in edges {
+        if multi.contains(e.subscriber_routine_id.as_str()) {
+            let group = groups.entry(e.subscriber_routine_id.clone()).or_default();
+            if group.is_empty() {
+                slots.push(Err(e.subscriber_routine_id.clone()));
+            }
+            group.push(vec![e]);
+        } else {
+            slots.push(Ok(e));
+        }
+    }
+    slots
+        .into_iter()
+        .flat_map(|slot| match slot {
+            Ok(e) => vec![e],
+            Err(id) => {
+                super::projection::union_by_value(groups.remove(&id).expect("the id's run"), |_| ())
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

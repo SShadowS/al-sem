@@ -17,7 +17,7 @@
 //!   - The internal `RoutineId` is ASCII slash-form, so `<` ordering on the
 //!     `String` matches al-sem's `a < b` on its `RoutineId` string.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::program::model::workspace::{ModelEntities, ModelObject, ModelRoutine};
 
@@ -92,7 +92,7 @@ fn canonical_kinds(set: &BTreeSet<String>) -> Vec<String> {
 /// Per-routine classification with full provenance (al-sem `RootClassification`).
 /// `sourceAnchor` is intentionally NOT carried here — the R4-F stable projection
 /// omits it, and no Rust consumer (d50/d51 lookup by routine id) needs it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RootClassification {
     /// Internal RoutineId (`${modelInstanceId}/${hash}`).
     pub routine_id: String,
@@ -294,30 +294,74 @@ pub fn classify_roots(workspace: &ModelEntities) -> Vec<RootClassification> {
         .map(|o| (o.id.as_str(), o))
         .collect();
 
-    let mut result: Vec<RootClassification> = Vec::new();
-    for routine in &workspace.routines {
-        let Some(object) = objects_by_id.get(routine.object_id.as_str()) else {
-            continue;
-        };
-        let kinds = kinds_for(routine, object);
-        if kinds.is_empty() {
-            continue;
-        }
-        let externally_reachable = kinds.iter().any(|k| is_externally_reachable_kind(k));
-        result.push(RootClassification {
-            routine_id: routine.id.clone(),
-            kinds,
-            externally_reachable,
-            source: "ast".to_string(),
-            confidence: "static".to_string(),
-            config_entry_id: None,
-            resolution_status: None,
-        });
-    }
+    let mut result: Vec<RootClassification> = workspace
+        .routines
+        .iter()
+        .filter_map(|routine| ast_classification(routine, &objects_by_id))
+        .collect();
 
     // Canonical sort for determinism — RoutineId is an ASCII slash-form string.
-    result.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
+    // The rows of one id keep one copy of each distinct classification (class
+    // K, #160 step 11b §4.6): the full value breaks a tie, equal copies collapse.
+    result.sort_by(|a, b| a.routine_id.cmp(&b.routine_id).then_with(|| a.cmp(b)));
+    result.dedup();
     result
+}
+
+/// One row's AST classification (`None` = not a root, or its object is missing).
+fn ast_classification(
+    routine: &ModelRoutine,
+    objects_by_id: &BTreeMap<&str, &ModelObject>,
+) -> Option<RootClassification> {
+    let object = objects_by_id.get(routine.object_id.as_str())?;
+    let kinds = kinds_for(routine, object);
+    if kinds.is_empty() {
+        return None;
+    }
+    let externally_reachable = kinds.iter().any(|k| is_externally_reachable_kind(k));
+    Some(RootClassification {
+        routine_id: routine.id.clone(),
+        kinds,
+        externally_reachable,
+        source: "ast".to_string(),
+        confidence: "static".to_string(),
+        config_entry_id: None,
+        resolution_status: None,
+    })
+}
+
+/// The classification lookups read ONE classification per routine id (d50/d51,
+/// policy `routine.rootKinds`, the config overlay's AST baseline): class P,
+/// #160 step 11b §4.6. An id with one entry in `roots` gets it. A collided id
+/// whose rows keep several distinct AST copies (class K, [`classify_roots`])
+/// gets the copy of its LAST row that has one (the last owning row), never the
+/// greatest by value.
+#[must_use]
+pub fn classification_per_id<'a>(
+    roots: &'a [RootClassification],
+    routines: &[ModelRoutine],
+    objects: &[ModelObject],
+) -> HashMap<&'a str, &'a RootClassification> {
+    let mut out: HashMap<&'a str, &'a RootClassification> = HashMap::new();
+    let mut several: HashSet<&'a str> = HashSet::new();
+    for rc in roots {
+        if out.insert(rc.routine_id.as_str(), rc).is_some() {
+            several.insert(rc.routine_id.as_str());
+        }
+    }
+    if several.is_empty() {
+        return out;
+    }
+    let objects_by_id: BTreeMap<&str, &ModelObject> =
+        objects.iter().map(|o| (o.id.as_str(), o)).collect();
+    for r in routines.iter().filter(|r| several.contains(r.id.as_str())) {
+        if let Some(own) = ast_classification(r, &objects_by_id)
+            && let Some(rc) = roots.iter().find(|rc| **rc == own)
+        {
+            out.insert(rc.routine_id.as_str(), rc);
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -518,23 +562,26 @@ fn overlay_config_roots(
 
     let mut diagnostics: Vec<InfraDiagnostic> = Vec::new();
 
-    let ast_by_routine: BTreeMap<String, RootClassification> = ast_roots
-        .iter()
-        .map(|r| (r.routine_id.clone(), r.clone()))
-        .collect();
-    let mut by_routine: BTreeMap<String, RootClassification> = ast_by_routine.clone();
+    // The AST baseline per id (class P: a collided id's LAST owning row's copy,
+    // #160 step 11b §4.6). `by_routine` holds only the ids a config entry
+    // decides; every other AST entry passes through as `classify_roots` made
+    // it, so a config never changes the entries of an id it does not name.
+    let ast_by_routine = classification_per_id(&ast_roots, &workspace.routines, &workspace.objects);
+    let mut by_routine: BTreeMap<String, RootClassification> = BTreeMap::new();
 
     for entry in &config.roots {
         let mut matches = resolve_target(&entry.target, workspace);
-        // Sort matches by internal id (ASCII ordinal), first wins.
+        // Sort matches by internal id (ASCII ordinal), first wins. The rows of
+        // one id are one match (#160 step 11b §4.6), never "ambiguous".
         matches.sort_by(|a, b| a.id.cmp(&b.id));
+        matches.dedup_by(|a, b| a.id == b.id);
 
         if matches.is_empty() {
             continue;
         }
         let ambiguous = matches.len() > 1;
         let winner = matches[0];
-        let existing_ast = ast_by_routine.get(&winner.id);
+        let existing_ast = ast_by_routine.get(winner.id.as_str()).copied();
         let cfg_kind_set: BTreeSet<String> = entry.kinds.iter().cloned().collect();
 
         let resolution_status = if ambiguous {
@@ -625,8 +672,12 @@ fn overlay_config_roots(
         }
     }
 
-    let mut roots: Vec<RootClassification> = by_routine.into_values().collect();
-    roots.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
+    let mut roots: Vec<RootClassification> = ast_roots
+        .into_iter()
+        .filter(|r| !by_routine.contains_key(&r.routine_id))
+        .collect();
+    roots.extend(by_routine.into_values());
+    roots.sort_by(|a, b| a.routine_id.cmp(&b.routine_id).then_with(|| a.cmp(b)));
     (roots, diagnostics)
 }
 

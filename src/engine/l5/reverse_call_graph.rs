@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::engine::l4::combined_graph::{CombinedEdge, CombinedGraph};
+use crate::engine::l4::combined_graph::{CombinedEdge, PrimaryGraph};
 
 /// Map of routineId → edges where that routine is the callee. Mirrors al-sem
 /// `ReverseCallGraph = Map<RoutineId, CombinedEdge[]>`.
@@ -33,8 +33,9 @@ pub type ReverseCallGraph = BTreeMap<String, Vec<CombinedEdge>>;
 /// list deterministic regardless of `HashMap` iteration order, we iterate the
 /// SORTED node list and, for each, its (already edge-sort-keyed) edge list — so
 /// the reverse list for any callee is a stable function of the inputs.
-pub fn build_reverse_call_graph(graph: &CombinedGraph) -> ReverseCallGraph {
+pub fn build_reverse_call_graph(graph: &PrimaryGraph) -> ReverseCallGraph {
     let mut reverse: ReverseCallGraph = BTreeMap::new();
+    // Each id once: `nodes` holds a collided id once (#160 step 11b §4.6).
     for node in &graph.nodes {
         if let Some(edges) = graph.edges_by_from.get(node) {
             for e in edges {

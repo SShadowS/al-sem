@@ -21,7 +21,7 @@ use crate::engine::gate::run::analyzer_diagnostics_of_view;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query_cli::temp_state_str;
 use crate::engine::l4::effect_store::SummaryBundle;
-use crate::engine::l4::routine_interner::RoutineIx;
+use crate::engine::l4::routine_interner::SolveIx;
 use crate::engine::l5::conditionality::EffectConditionality;
 use crate::engine::l5::diff_parser::{DiffFileKind, HunkChange, parse_unified_diff};
 use crate::engine::l5::digest::{
@@ -730,7 +730,7 @@ pub fn join_temp_states(
 /// class (#69 D4, [`join_temp_states`]).
 pub struct DbTempStates<'a> {
     bundle: &'a SummaryBundle,
-    ix_by_stable: HashMap<&'a str, RoutineIx>,
+    ix_by_stable: HashMap<&'a str, SolveIx>,
 }
 
 impl<'a> DbTempStates<'a> {

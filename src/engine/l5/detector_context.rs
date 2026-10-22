@@ -26,7 +26,7 @@ use crate::engine::l4::analysis::{CoreSummaries, L4Analysis, L4Request, build_l4
 use crate::engine::l4::capability_cone::{
     CapabilityFact, compose_cone_over_graph, direct_facts_for_routine,
 };
-use crate::engine::l4::combined_graph::CombinedGraph;
+use crate::engine::l4::combined_graph::{PrimaryGraph, TypedEdge};
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeOutput};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::reverse_index::ReverseEffectIndex;
@@ -43,6 +43,7 @@ use crate::engine::perf_trace as pt;
 use crate::program::body::features::PCallSite;
 use crate::program::model::calls::{CallEdge, UpgradedBinding};
 use crate::program::model::events::{EventGraph, EventSymbol};
+use crate::program::model::projection;
 use crate::program::model::workspace::{Model, ModelObject, ModelRoutine, ModelTable};
 
 /// A declared workspace dependency (`model.identity.primaryDependencies[]`): the
@@ -820,11 +821,13 @@ impl<'a> UncertaintyView<'a> {
 pub struct DetectorArtifacts {
     /// The substrate bits this was built with (`registry::substrate`).
     pub demanded: u32,
-    /// The view's `ExecRelation` graph (`rel.primary()`, shared by pointer;
-    /// #160 step 4): detectors read the Primary payload (`edges_by_from`, …)
-    /// and d43 the Cone payload (`typed_edges`) from the ctx here (al-sem
+    /// The view's `ExecRelation` Primary payload (`rel.primary()`, shared by
+    /// pointer; #160 step 4): detectors read `edges_by_from`, … here (al-sem
     /// passed it as the detector's `graph` arg).
-    pub graph: Arc<CombinedGraph>,
+    pub graph: Arc<PrimaryGraph>,
+    /// The view's `ExecRelation` Cone payload (`rel.cone()`, shared by
+    /// pointer; #160 step 11b §4.4): d43 reads it.
+    pub cone: Arc<Vec<TypedEdge>>,
     /// The raw L3 event graph (al-sem `model.eventGraph`). d12/d38 read its
     /// `events`/`edges`; the combined-graph build already constructs it, so it is
     /// captured here rather than recomputed.
@@ -1046,18 +1049,23 @@ impl<'v> DetectorContext<'v> {
         ordering: Option<&'v OrderingFactsMap>,
     ) -> Self {
         let _s = pt::span("context", "context.final_indexes");
-        let routine_by_id = routines.iter().map(|r| (r.id.as_str(), r)).collect();
+        // #160 step 11b §4.6: the routine lookup is the projection's class P
+        // pick (the LAST row of the id).
+        let routine_by_id = projection::last_per_id_borrowed(
+            &projection::RowsOfId::build(routines),
+            routines.iter().map(Some).collect(),
+        );
         let objects_by_id = objects.iter().map(|o| (o.id.as_str(), o)).collect();
         // G-5: REAL table wins an id collision with a tableextension stub (the stub's
         // id reuses the extension's own object number) — otherwise rootCause text
         // renders the EXTENSION's name for ops on the real table.
         let table_by_id = crate::program::model::workspace::table_by_id_preferring_real(tables);
-        let mut call_site_by_id: HashMap<&str, &PCallSite> = HashMap::new();
-        for r in routines {
-            for cs in &r.call_sites {
-                call_site_by_id.insert(cs.id.as_str(), cs);
-            }
-        }
+        // Class P per call-site id: the LAST owning row's site (a collided id's
+        // rows share site ids).
+        let call_site_by_id: HashMap<&str, &PCallSite> =
+            projection::last_per_key(routines.iter().flat_map(|r| &r.call_sites), |cs| {
+                cs.id.as_str()
+            });
         let fingerprint_index =
             crate::engine::l5::fingerprint::FingerprintIndex::build(routines, objects);
         let ctx = DetectorContext {
@@ -1249,17 +1257,24 @@ pub(crate) fn det_cone_inputs(resolved: &Model) -> DetConeInputs {
         }
     }
     let empty_pub: Vec<&EventSymbol> = Vec::new();
-    let mut direct_full: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
-    let mut coverage_in: HashMap<String, (String, Vec<String>)> = HashMap::new();
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
     // `direct=` times the per-routine extraction only, as at step 0.
     let t_direct = cones_census::start();
+    // #160 step 11b §4.6: per row, then the projection (R2a): a collided id's
+    // direct facts are the full-value union, its coverage the least complete.
+    let mut facts_per_row = Vec::with_capacity(ws.routines.len());
+    let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
-        coverage_in.insert(r.id.clone(), (status, reasons));
-        direct_full.insert(r.id.clone(), facts);
+        coverage_per_row.push(Some((status, reasons)));
+        facts_per_row.push(Some(facts));
     }
+    let rows = projection::RowsOfId::build(&ws.routines);
+    let coverage_in = projection::merge_per_id(&rows, coverage_per_row, projection::least_complete);
+    let direct_full = projection::merge_per_id(&rows, facts_per_row, |v| {
+        projection::union_by_value(v, |_| ())
+    });
     cones_census::add_since(&cones_census::DIRECT_NANOS, t_direct);
     DetConeInputs {
         nodes,
@@ -1281,7 +1296,8 @@ pub(crate) fn build_detector_artifacts(
     cross: Option<CrossAppInputs<'_>>,
 ) -> (DetectorArtifacts, Option<L4Analysis>) {
     // The Primary payload; `DetectorArtifacts.graph` shares it by pointer.
-    let graph: Arc<CombinedGraph> = Arc::clone(rel.primary());
+    let graph: Arc<PrimaryGraph> = Arc::clone(rel.primary());
+    let cone = Arc::clone(rel.cone_shared());
     use crate::engine::l5::registry::substrate;
     assert!(
         demanded & substrate::CORE_SUMMARIES == 0 || l4.is_some(),
@@ -1387,103 +1403,16 @@ pub(crate) fn build_detector_artifacts(
         for r in &ws.routines {
             let cone_entry = cones.remove(&r.id);
             let direct = direct_full.remove(&r.id);
-            // ⟨T1, corrected by the T3 fix wave (review M-3)⟩ Two AL routines can
-            // still COLLIDE on one internal routine id — gap G-18. Historically the
-            // usual shape was two same-name triggers in one object, because
-            // `compute_routine_id` had no member discriminator; ⟨T3⟩ added a
-            // conditional one, so TODAY the surviving shapes are the ones a flat
-            // member name cannot separate (XMLport same-name elements at different
-            // nesting paths; preproc `#if`/`#else` alternatives) plus any
-            // hand-stated id. See the ⟨T3⟩ paragraph below for the measured
-            // residual. Both `remove`s above are then consumed by the FIRST
-            // occurrence, so every LATER occurrence sees `None/None`.
-            //
-            // This used to write a fully degenerate summary for that later
-            // occurrence — no direct facts, no inherited facts, no coverage —
-            // and, because the map is keyed by id, that degenerate row is what
-            // SURVIVED: `cone_derived.forget(&r.id)` then dropped the real
-            // derived row to match, so the whole cone of an id shared by N
-            // routines was erased and every cone-derived detector on it went
-            // silent. That was never a decision — `build_detector_context_cross_app`
-            // reads its cone with `get()` and has never had the accident; the
-            // two builders simply disagreed. Measured, the collapse is not rare:
-            // 1 157 of 4 842 DO routines (23.9 %) and 16 906 of 100 941 8020
-            // routines (16.7 %) are erased by it (see
-            // `.superpowers/sdd/scope-routine-id-collision.md`).
-            //
-            // Now: the FIRST occurrence's real summary is written and every later
-            // occurrence is skipped, so the surviving summary is the real one.
-            // No clone is paid for this (the `remove()` drain the C1 arc chose
-            // over `get()` is kept — a `get()` would clone every routine's direct
-            // facts, including the ~80 % that never collide, 79.66 MB of pure
-            // duplicate on 8020).
-            //
-            // This is a PARTIAL fix and deliberately so. Loop 1 above builds
-            // `direct_full` with `insert()`, so a colliding id's DIRECT facts are
-            // already last-sibling-wins before the cone walk runs; the surviving
-            // summary's direct half therefore carries ONE arbitrary (deterministic,
-            // but arbitrary) sibling's facts attributed to all N. The INHERITED
-            // half is NOT one sibling's view: the combined graph files every
-            // sibling's out-edges under the one shared `from` key, so the cone walk
-            // consumes their union — the surviving cone is (last sibling's direct
-            // facts) ∪ (cone over the union of ALL siblings' callees), an
-            // over-approximation rather than one body's picked view. What this
-            // fixes is the strictly worse state of holding NO answer at all.
-            //
-            // ⟨T3⟩ The id schema itself now carries a CONDITIONAL enclosing-member
-            // discriminator (`ids::encode_canonical_routine_key`), so on real
-            // workspaces this path is very nearly unreachable: DO went from 262
-            // colliding groups to 0, 8020 from 3 058 to 15. It is NOT dead code —
-            // those 15 (XMLport same-name elements at different nesting paths;
-            // preproc `#if` alternatives, which the union-read design makes
-            // genuinely indistinguishable) still reach it, and it is the
-            // fail-closed behaviour for any hand-stated or future collision.
-            //
-            // ⟨fix M1⟩ `cone_entry.is_none() <=> direct.is_none()` today: both maps
-            // are built from the same `ws.routines` iteration and drained by the
-            // same per-id `remove()`, so a collision empties them together, never
-            // just one. Assert that invariant instead of merely relying on it —
-            // if a future change ever filters `nodes` (dep routines, bodyless
-            // routines, …) while `direct_full` kept every routine, the OLD `||`
-            // would zero a row whose surviving summary still carries direct
-            // facts, a silent findings loss once the parity oracle is retired.
-            // Keying on `direct.is_none()` alone is the correct long-term
-            // condition either way, since `direct` is what the surviving summary
-            // actually stores.
-            //
-            // ⟨final-branch-review M-2, corrected per fix wave finding 1⟩ Task 2 had
-            // added a second, reverse guard — the parity oracle's "the store cannot
-            // hold a row `summaries` does not" check — and Task 3 deleted it along
-            // with `cone_parity.rs` itself, which is also what returned
-            // `ConeDerivedStore`'s `routine_ids()`/`interner()`/`len()` to zero
-            // callers (deleted at M-2). That extra-row direction has NO guard today:
-            // this assert only sees ids present in `ws.routines` (it lives inside the
-            // `for r in &ws.routines` loop above), so a superset `nodes` — e.g. a
-            // future widening of the cone input to dep routines — would produce rows
-            // this loop never visits, and this assert would never fire against them,
-            // in debug or otherwise.
-            debug_assert_eq!(
-                cone_entry.is_none(),
-                direct.is_none(),
-                "cones and direct_full must collide identically — a mismatch means \
-                 `nodes` (cone input) and `ws.routines` (direct_full's source) have \
-                 silently diverged"
-            );
-            // ⟨T1⟩ The drain came back empty: this is a LATER occurrence of an id
-            // the first occurrence already consumed. That first occurrence wrote
-            // the real summary and `cone_derived` already holds the matching
-            // derived row, so the only correct action is to leave both alone.
-            // Falling through would overwrite the real summary with a degenerate
-            // one and then `forget()` the real derived row to match it.
+            // One summary per id (#160 step 11b §4.6): `direct_full` is already
+            // the projection's per-id input (a collided id's full-value union),
+            // and the cone is per id, so a collided id's first row files it and
+            // every later row of the id finds the drain empty and is skipped.
             let Some(direct) = direct else {
                 continue;
             };
             let (inherited, coverage) = match cone_entry {
                 Some(c) => (c.inherited, Some(c.coverage)),
-                // Unreachable while `nodes` is exactly `ws.routines`' ids (the
-                // `debug_assert_eq!` above pins that); kept fail-soft rather than
-                // `unwrap()` so a future divergence degrades one routine's coverage
-                // instead of panicking a release build.
+                // Fail-soft for an id the cone did not walk.
                 None => (Vec::new(), None),
             };
             // ⟨C1 Task 3⟩ `Some(inherited)` ONLY under `RAW_INHERITED_FACTS`;
@@ -1524,16 +1453,22 @@ pub(crate) fn build_detector_artifacts(
     // Public (default-access). A routine with NO entry is treated as Public by
     // `find_reachable_roots`, so we only need to insert the non-Public cases — but we
     // insert all parsed modifiers explicitly for clarity.
-    let mut access_modifiers: HashMap<String, AccessModifier> = HashMap::new();
-    for r in &ws.routines {
-        let access = match r.access_modifier.as_deref() {
-            Some("local") => AccessModifier::Local,
-            Some("internal") => AccessModifier::Internal,
-            // "protected" / None / any other value → public (al-sem default-access).
-            _ => AccessModifier::Public,
-        };
-        access_modifiers.insert(r.id.clone(), access);
-    }
+    // #160 step 11b §4.6: per row, then the projection (#11, class P: the LAST
+    // row of the id).
+    let access_per_row = ws
+        .routines
+        .iter()
+        .map(|r| {
+            Some(match r.access_modifier.as_deref() {
+                Some("local") => AccessModifier::Local,
+                Some("internal") => AccessModifier::Internal,
+                // "protected" / None / any other value → public (al-sem default-access).
+                _ => AccessModifier::Public,
+            })
+        })
+        .collect();
+    let access_modifiers: HashMap<String, AccessModifier> =
+        projection::last_per_id(&projection::RowsOfId::build(&ws.routines), access_per_row);
     // See `DetectorContext::internal_reachable_externally` doc: defaults to false
     // (the Rust model carries no `primaryInternalsVisibleTo`; source-only fixtures
     // never set `internalsVisibleTo`).
@@ -1592,7 +1527,7 @@ pub(crate) fn build_detector_artifacts(
     // `calls.edges` is not read after this point (`calls.upgraded_bindings` still
     // is), so take the edges by value instead of cloning each retained one.
     let resolved_call_edge_by_callsite =
-        first_resolved_edge_per_callsite(std::mem::take(&mut calls.edges));
+        first_resolved_edge_per_callsite(std::mem::take(&mut calls.edges), &ws.routines);
 
     let mut uncertainty_edges_by_from: HashMap<
         String,
@@ -1744,11 +1679,14 @@ pub(crate) fn build_detector_artifacts(
     let root_classifications_by_routine: HashMap<
         String,
         crate::engine::root_classification::RootClassification,
-    > = resolved
-        .root_classifications
-        .iter()
-        .map(|rc| (rc.routine_id.clone(), rc.clone()))
-        .collect();
+    > = crate::engine::root_classification::classification_per_id(
+        &resolved.root_classifications,
+        &resolved.workspace.routines,
+        &resolved.workspace.objects,
+    )
+    .into_iter()
+    .map(|(id, rc)| (id.to_string(), rc.clone()))
+    .collect();
 
     // ⟨substrate census⟩ `ALSEM_UNCERTAINTY_CENSUS=1` — see `UncertaintyIndex::emit_census`.
     uncertainties.emit_census(&uncertainties_by_node);
@@ -1756,6 +1694,7 @@ pub(crate) fn build_detector_artifacts(
     let art = DetectorArtifacts {
         demanded,
         graph,
+        cone,
         event_graph,
         reverse_call_graph,
         entry_points,
@@ -2026,20 +1965,30 @@ fn census_ordering_facts(m: &HashMap<String, crate::engine::l5::ordering_facts::
 /// read the callee's parameters and parameter roles; implementers share the
 /// interface's signature, but not their bodies. Analysing every implementer is
 /// a detector change, not a resolution one: see `docs/OUTSTANDING.md`.
-fn first_resolved_edge_per_callsite(edges: Vec<CallEdge>) -> HashMap<String, CallEdge> {
-    let mut by_callsite: HashMap<String, CallEdge> = HashMap::new();
-    for ce in edges {
-        if ce.to.is_none() {
-            continue;
-        }
-        by_callsite.entry(ce.callsite_id.clone()).or_insert(ce);
-    }
-    by_callsite
+///
+/// #160 step 11b §4.6 (R9, class P): a collided id's call site takes its LAST
+/// OWNING row's edges only (`CallEdge.from_ix`), so the edge comes from the row
+/// whose bindings R5 holds; inside that row the first targeted edge, as above.
+fn first_resolved_edge_per_callsite(
+    edges: Vec<CallEdge>,
+    routines: &[ModelRoutine],
+) -> HashMap<String, CallEdge> {
+    let owners = projection::site_owners(&projection::RowsOfId::build(routines), routines);
+    projection::first_per_key(
+        edges.into_iter().filter(|ce| {
+            ce.to.is_some()
+                && owners
+                    .get(ce.callsite_id.as_str())
+                    .is_none_or(|&o| o == ce.from_ix)
+        }),
+        |ce| ce.callsite_id.clone(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::model::ix::RoutineIx;
 
     /// States a routine-id collision across the WHOLE model, by assignment: every
     /// routine named `name` gets the id `shared`, and so does every precomputed
@@ -2083,11 +2032,12 @@ mod tests {
     #[test]
     fn the_first_targeted_edge_represents_a_call_site() {
         let mk = |to: Option<&str>| {
-            let mut e = CallEdge::base("caller", "cs1", "op1");
+            let mut e = CallEdge::base(RoutineIx(0), "caller", "cs1", "op1");
             e.to = to.map(str::to_string);
             e
         };
-        let map = first_resolved_edge_per_callsite(vec![mk(None), mk(Some("a")), mk(Some("b"))]);
+        let map =
+            first_resolved_edge_per_callsite(vec![mk(None), mk(Some("a")), mk(Some("b"))], &[]);
         assert_eq!(map.len(), 1);
         assert_eq!(map["cs1"].to.as_deref(), Some("a"));
     }
@@ -2101,7 +2051,7 @@ mod tests {
     fn model_calls_reach_detector_context_and_ordering_base() {
         use crate::program::model::calls::{CallEdge, ResolvedCalls};
         use crate::program::model::taxonomy::{DispatchKind, Resolution};
-        let mut edge = CallEdge::base("from-r", "distinct-callsite", "distinct-op");
+        let mut edge = CallEdge::base(RoutineIx(0), "from-r", "distinct-callsite", "distinct-op");
         edge.to = Some("to-r".to_string());
         // Dynamic so the coverage path (`dynamic_dispatch_sites`) shows it too.
         edge.dispatch_kind = DispatchKind::Dynamic;
@@ -2385,10 +2335,10 @@ page 50812 "CP2 Wizard"
     /// `hand_stated_id_collision_keeps_a_real_summary_and_derived_row`): two
     /// `OnAction` triggers with DIFFERENT bodies, B's `id` set to A's by
     /// assignment. R1: the combined graph files both rows' out-edges under the
-    /// one id (union). R2: the direct facts and coverage are the LAST row's
-    /// (`det_cone_inputs` inserts per row). R3: one summary, written by the FIRST
-    /// row, carrying R2's direct facts. 11a changes no rule, so this passes on
-    /// 11a unchanged; 11b flips it to the union rule.
+    /// one id (union). R2: since 11b stage B the direct facts are the rows'
+    /// full-value union and the coverage the least complete (it was the LAST
+    /// row's). R3: one summary per id, carrying R2's direct facts. The natural
+    /// `#if` form is `tests_11b::collision_rules_hand_stated` (T1).
     #[test]
     fn collision_rules_hand_stated() {
         use crate::engine::l4::capability_cone::direct_facts_for_routine;
@@ -2493,18 +2443,27 @@ page 50813 "CR Wizard"
             "precondition: the two rows have different coverage"
         );
 
-        // R2: direct facts and coverage, last row wins.
+        // R2 (11b, the one rule): direct facts are the full-value union of both
+        // rows' (here arm A is parse-incomplete, so it adds none), coverage the
+        // least complete (arm A's `unknown`) with the sorted union of reasons.
         let inputs = det_cone_inputs(&resolved);
+        let mut union = [a_direct.0.clone(), b_direct.0.clone()].concat();
+        union.sort();
+        union.dedup();
         assert_eq!(
             inputs.direct_full.get(SHARED_ID),
-            Some(&b_direct.0),
-            "R2: the direct facts are the LAST row's"
+            Some(&union),
+            "R2: the direct facts are the union of the rows'"
         );
+        let mut reasons = [a_direct.2.clone(), b_direct.2.clone()].concat();
+        reasons.sort();
+        reasons.dedup();
         assert_eq!(
             inputs.coverage_in.get(SHARED_ID),
-            Some(&(b_direct.1.clone(), b_direct.2.clone())),
-            "R2: the direct coverage is the LAST row's"
+            Some(&("unknown".to_string(), reasons)),
+            "R2: the direct coverage is the least complete row's, reasons unioned"
         );
+        assert_eq!(a_direct.1, "unknown", "precondition: arm A is unknown");
 
         let owned = build_detector_context(&resolved, substrate::SUMMARIES);
         let ctx = owned.ctx();
@@ -2519,12 +2478,12 @@ page 50813 "CR Wizard"
             to.contains(touch_a.as_str()) && to.contains(touch_b.as_str()),
             "R1: both rows' callees under the one id: {to:?}"
         );
-        // R3: one summary, the first row's, holding R2's direct facts.
+        // R3: one summary per id, holding R2's direct facts.
         let summary = ctx.summaries.get(SHARED_ID).expect("R3: a summary");
         assert!(summary.coverage.is_some(), "R3: not degenerate");
         assert_eq!(
-            summary.capability_facts_direct, b_direct.0,
-            "R3: the first row's summary holds the last row's direct facts"
+            summary.capability_facts_direct, union,
+            "R3: the summary holds the union of the rows' direct facts"
         );
     }
 
@@ -3070,3 +3029,8 @@ page 50813 "CP3 Wizard"
         );
     }
 }
+
+// #160 step 11b acceptance tests: a child module, for private access.
+#[cfg(test)]
+#[path = "detector_context_11b_tests.rs"]
+mod tests_11b;

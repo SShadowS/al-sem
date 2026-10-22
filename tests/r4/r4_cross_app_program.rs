@@ -273,7 +273,6 @@ fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
     };
     for ws in cross_app_fixtures() {
         let ctx = build_context(&ws).expect("context");
-        let report = al_sem::program::resolve::full::resolve_full_program_with(&ctx);
         let (model, _) = assemble_and_resolve_cross_app_from_program(
             &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
             MI,
@@ -281,7 +280,6 @@ fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
             &ctx,
             None,
             &Default::default(),
-            report.edge_view(),
         )
         .expect("program model");
         // Rank of each routine's block: 0 workspace, 1 ABI, 2 parsed dependency.
@@ -1732,13 +1730,12 @@ fn if_dup_dependency_workspace(dir: &Path) {
 /// maps. The unmapped first row loses nothing, so it is not counted in
 /// `unmapped_subscribers` (CR5): that counter is for lost subscriptions.
 ///
-/// Asserted precondition (#160 §5.10, replacing the stated limit "the first row
-/// does not map is NOT asserted, the span map is internal"): the recorded J5
-/// answer `row_nodes.j5_node` maps the second H row and not the first, read
-/// from the cross-app assembly before the attach. So this test keeps
-/// discriminating break 8 ("mark an id processed before it maps"). 11b, which
-/// corrects `j5_node` to `node_of`, fails this precondition by design and must
-/// restate the test.
+/// Asserted precondition, restated by #160 step 11b (spec §5.5, 11B-7): the event
+/// graph reads each row's true node (`row_nodes.node_of`), and both H rows map
+/// to ONE node, both `Some`. Break 8 ("mark an id processed before it maps") is
+/// vacuous on this case once both rows map, so the second case
+/// ([`a_dependencys_subscriber_with_an_unmapped_first_row_gets_each_edge_once`])
+/// keeps discriminating it with a hand-stated `None`.
 #[test]
 fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
     use al_sem::program::model::program_calls::{
@@ -1757,13 +1754,10 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
         .map(|(ri, _)| ri)
         .collect();
     assert_eq!(h.len(), 2, "precondition: two rows for H");
-    assert_eq!(
-        (
-            rows.row_nodes.j5(h[0]).is_some(),
-            rows.row_nodes.j5(h[1]).is_some()
-        ),
-        (false, true),
-        "precondition: J5 maps the second H row, not the first"
+    let node = |ri: usize| rows.row_nodes.node_of[ri].clone();
+    assert!(
+        node(h[0]).is_some() && node(h[0]) == node(h[1]),
+        "precondition: both H rows map to one node"
     );
     let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
         .expect("model")
@@ -1804,10 +1798,71 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
     assert_eq!(edges, [resolved("ona"), resolved("onb")]);
 }
 
+/// A8's second case (#160 step 11b, spec §5.5, D7, 11B-7): the event graph's
+/// `None` arm is a fail-closed guard. Hand-stated: H's FIRST row is given no
+/// node (`node_of = None`, the shape of a dependency row of an app the graph
+/// does not know) before the production `program_event_graph` runs
+/// (`cross_app_event_graph_after`). H still gets each of its edges exactly
+/// once, from its second row. Break 8 (mark an id processed before its row
+/// maps) loses both edges.
+#[test]
+fn a_dependencys_subscriber_with_an_unmapped_first_row_gets_each_edge_once() {
+    use al_sem::program::model::program_calls::cross_app_event_graph_after;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    if_dup_dependency_workspace(dir.path());
+    let mut h_ids: Vec<String> = Vec::new();
+    let graph = cross_app_event_graph_after(&read(dir.path()), MI, |rows| {
+        let h: Vec<usize> = rows
+            .workspace
+            .routines
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.name == "H" && r.kind == "event-subscriber")
+            .map(|(ri, _)| ri)
+            .collect();
+        assert_eq!(h.len(), 2, "precondition: two rows for H");
+        assert!(
+            rows.row_nodes.node_of[h[0]].is_some() && rows.row_nodes.node_of[h[1]].is_some(),
+            "precondition: both H rows had a node"
+        );
+        rows.row_nodes.node_of[h[0]] = None;
+        h_ids = h
+            .iter()
+            .map(|&ri| rows.workspace.routines[ri].id.clone())
+            .collect();
+    })
+    .expect("event graph");
+    assert_eq!(h_ids[0], h_ids[1], "precondition: H's rows share one id");
+    let mut edges: Vec<(String, String)> = graph
+        .edges
+        .iter()
+        .filter(|e| e.subscriber_routine_id == h_ids[0])
+        .map(|e| {
+            (
+                e.event_id.rsplit('/').next().unwrap().to_string(),
+                e.resolution.clone(),
+            )
+        })
+        .collect();
+    edges.sort();
+    assert_eq!(
+        edges,
+        [
+            ("ona".to_string(), "resolved".to_string()),
+            ("onb".to_string(), "resolved".to_string())
+        ],
+        "H gets each edge once, from its mapped second row"
+    );
+}
+
 /// T8a (#160 §5.10): J5's two shapes in a source-bearing dependency, as event
 /// subscribers. `Ha` is T7a's shape (two `#if` arms at two lines, one node);
 /// `Hb` is T7b's (a split header whose arms differ in a parameter type: two
-/// nodes, two rows at one anchor).
+/// nodes, two rows at one anchor). Changed by 11b T5 (spec §5.5, R1-07): `Hb`'s
+/// arms subscribe to DIFFERENT events (`OnA(X: Integer)` in the first arm, the
+/// new `OnB(X: Text)` in the second), so a row mapped to the other arm's node
+/// emits the other arm's event.
 fn j5_shapes_dependency_workspace(dir: &Path) {
     write(
         &dir.join("app.json"),
@@ -1835,6 +1890,7 @@ fn j5_shapes_dependency_workspace(dir: &Path) {
     procedure RaiseA()
     begin
         OnA(1);
+        OnB('x');
         P();
     end;
 
@@ -1843,6 +1899,11 @@ fn j5_shapes_dependency_workspace(dir: &Path) {
     begin
     end;
 
+    [IntegrationEvent(false, false)]
+    procedure OnB(X: Text)
+    begin
+    end;
+
 #if XSYM
     local procedure P()
     begin
@@ -1869,10 +1930,11 @@ fn j5_shapes_dependency_workspace(dir: &Path) {
     end;
 #endif
 
-    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnA', '', false, false)]
 #if XSYM
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnA', '', false, false)]
     local procedure Hb(X: Integer)
 #else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnB', '', false, false)]
     local procedure Hb(X: Text)
 #endif
     begin
@@ -1885,13 +1947,16 @@ fn j5_shapes_dependency_workspace(dir: &Path) {
     );
 }
 
-/// T8a (#160 §5.10): the recorded J5 answer keeps J5's two wrong answers
-/// (P9): `Ha`'s first arm maps to nothing (the dependency surface keeps the
-/// LAST declaration), and both `Hb` rows map to ONE node, the first of `Hb`'s
-/// two nodes in graph routine order (J5's first-wins on the shared span). The
-/// event graph's edges per subscriber are hand-stated.
+/// 11b T5 (#160 11b spec §4.2, §5.5, R1-07; replaces 11a's
+/// `j5_node_keeps_the_dependency_span_map_answers`): the event graph reads each
+/// subscriber row's true node (`row_nodes.node_of`). `Hb`'s two rows are two
+/// nodes whose subscriptions differ (`OnA` / `OnB`): each row emits its OWN
+/// node's event. `Ha`'s first arm, which J5 left unmapped, now maps, and `Ha`'s
+/// one id still gets its edge once. The event graph's edges per subscriber are
+/// hand-stated. Break: map a row to the first node at its span (J5's rule) ->
+/// `Hb`'s second row emits `OnA`.
 #[test]
-fn j5_node_keeps_the_dependency_span_map_answers() {
+fn event_graph_reads_node_of() {
     use al_sem::program::model::program_calls::{
         assemble_and_resolve_cross_app_program, cross_app_rows_before_attach,
     };
@@ -1942,7 +2007,35 @@ fn j5_node_keeps_the_dependency_span_map_answers() {
     assert_eq!(ha_nodes.len(), 1, "precondition: Ha is one node");
     assert_eq!(hb_nodes.len(), 2, "precondition: Hb is two nodes");
 
-    // Today's event graph (the span map's answer), per subscriber.
+    let node = |ri: usize| rows.row_nodes.node_of[ri].clone();
+    assert!(
+        node(ha[0]).is_some() && node(ha[0]) == node(ha[1]),
+        "precondition: Ha's rows are its one node: {:?}",
+        (node(ha[0]), node(ha[1]), &ha_nodes)
+    );
+    assert!(
+        hb.iter()
+            .all(|&ri| node(ri).is_some_and(|n| hb_nodes.contains(&n)))
+            && node(hb[0]) != node(hb[1]),
+        "precondition: Hb's rows are its two nodes"
+    );
+    let subscribes = |ri: usize| -> Vec<String> {
+        // The node's own subscription(s), read from the program's subscriber
+        // index (the event graph's source), by event name.
+        let n = node(ri).unwrap();
+        al_sem::program::resolve::index::SubscriberIndex::build(graph)
+            .subscriptions()
+            .iter()
+            .filter(|s| s.subscriber == n)
+            .map(|s| s.event_name_lc.clone())
+            .collect()
+    };
+    assert_eq!(
+        (subscribes(hb[0]), subscribes(hb[1])),
+        (vec!["ona".to_string()], vec!["onb".to_string()]),
+        "precondition: Hb's two nodes subscribe to different events"
+    );
+
     let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
         .expect("model")
         .resolved;
@@ -1960,82 +2053,399 @@ fn j5_node_keeps_the_dependency_span_map_answers() {
         })
         .collect();
     edges.sort();
-    // One edge for Ha's one id (its mapped second row); one per Hb row, each
-    // its own id (two nodes, two signatures), both bound to OnA.
+    // One edge for Ha's one id; one per Hb row, each its own id and its own
+    // node's event.
     let id = |ri: usize| rows.workspace.routines[ri].id.clone();
-    let edge = |ri: usize| ("ona".to_string(), id(ri), "resolved".to_string());
+    let edge = |ev: &str, ri: usize| (ev.to_string(), id(ri), "resolved".to_string());
     assert_eq!(id(ha[0]), id(ha[1]), "precondition: Ha's rows share one id");
     assert_ne!(id(hb[0]), id(hb[1]), "precondition: Hb's rows are two ids");
-    let mut want = vec![edge(ha[0]), edge(hb[0]), edge(hb[1])];
+    let mut want = vec![edge("ona", ha[0]), edge("ona", hb[0]), edge("onb", hb[1])];
     want.sort();
-    assert_eq!(edges, want, "today's event graph, per subscriber");
-
-    let j5 = |ri: usize| rows.row_nodes.j5(ri).cloned();
     assert_eq!(
-        (j5(ha[0]), j5(ha[1])),
-        (None, Some(ha_nodes[0].clone())),
-        "Ha: the first arm maps to nothing, the second to Ha's node"
+        edges, want,
+        "each subscriber row emits its own node's events"
     );
     assert_eq!(
-        (j5(hb[0]), j5(hb[1])),
-        (Some(hb_nodes[0].clone()), Some(hb_nodes[0].clone())),
-        "Hb: both rows map to the first Hb node in graph order"
+        m.events.census.unmapped_subscribers, 0,
+        "every subscriber row maps: {:?}",
+        m.events.census
     );
 }
 
-/// FP-01 / FP-10 (#160 §4.9, §4.10): J5 answers for event-subscriber rows only,
-/// and `j5_compat_rows` counts exactly those rows whose recorded answer is not
-/// their true node. The fixture holds both kinds of `#if` duplicate: the
-/// ordinary procedure `P` (two rows, one node, not a subscriber) and the
-/// subscribers `Ha` (first arm unmapped) and `Hb` (second row mapped to the
-/// first node). Only the two subscriber gaps count.
+/// 11b T1g (#160 11b spec §5.3, class P `scope_frames_by_routine` +
+/// `collect_dep_order_index`): a source-bearing dependency whose `Work` is
+/// declared in two arms that differ in their ops. Arm A (the first row) does
+/// its two record ops inside `if Flag then begin ... end` (a nested frame);
+/// arm B (the last row) does one record op at the top level. Today a row's ops
+/// are paired with ANOTHER row's frames (frames last-wins per id, ops from the
+/// first collected entry), so arm A's ops name a frame the entry does not hold.
+/// At B each `{id}/opN` and its scope frame come from that op's last owning
+/// row: `op0` is arm B's (its top-level frame), `op1` arm A's (the only owner),
+/// and every op's frame is in the entry. Break: today's pairing (frames LAST,
+/// ops FIRST). Stage B.
 #[test]
-fn j5_compat_rows_counts_the_subscriber_gaps_only() {
-    use al_sem::program::model::program_calls::cross_app_rows_before_attach;
-    use al_sem::program::model::workspace::{MODEL_INSTANCE_ID_DEFAULT as MI, collision_census};
+fn dep_order_index_pairs_frames_and_ops_of_one_row() {
+    use al_sem::engine::deps::dep_artifact_l4::{
+        ConsumerModel, collect_dep_order_index, dep_artifacts_from_model,
+    };
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Go.al"),
+        "codeunit 50201 \"Ws Go\"\n{\n    procedure Go()\n    var\n        D: Codeunit \"Dep Ord\";\n    begin\n        D.Work(true);\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/Ord.al",
+            r#"table 50172 "Dep T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50172 "Dep Ord"
+{
+#if XSYM
+    procedure Work(Flag: Boolean)
+    var
+        T: Record "Dep T";
+    begin
+        if Flag then begin
+            T.Insert();
+            T.Modify();
+        end;
+    end;
+#else
+    procedure Work(Flag: Boolean)
+    var
+        T: Record "Dep T";
+    begin
+        T.Insert();
+    end;
+#endif
+}
+"#,
+        )],
+        "",
+    );
+    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false).expect("model");
+    let rows: Vec<usize> = x
+        .resolved
+        .workspace
+        .routines
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.name == "Work")
+        .map(|(ri, _)| ri)
+        .collect();
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let row = |ri: usize| &x.resolved.workspace.routines[ri];
+    let id = row(rows[0]).id.clone();
+    assert_eq!(row(rows[1]).id, id, "precondition: one id");
+    assert_eq!(
+        (
+            row(rows[0]).record_operations.len(),
+            row(rows[1]).record_operations.len()
+        ),
+        (2, 1),
+        "precondition: arm A has two record ops, arm B (the last row) one"
+    );
+    let arts = dep_artifacts_from_model(&x);
+    let mut consumer = ConsumerModel::with_routine_ids(
+        x.resolved
+            .workspace
+            .routines
+            .iter()
+            .map(|r| r.id.clone())
+            .collect(),
+    );
+    collect_dep_order_index(&mut consumer, &arts);
+    let entry = consumer
+        .dep_routine_order_entries
+        .get(&id)
+        .unwrap_or_else(|| panic!("precondition: Work has an order entry: {consumer:?}"));
+    let frames: Vec<i64> = entry.scope_frames.iter().map(|f| f.frame_id).collect();
+    let ops: Vec<(String, i64)> = entry
+        .operation_orders
+        .iter()
+        .map(|o| (o.operation_id.clone(), o.frame_id))
+        .collect();
+    for suffix in ["op0", "op1"] {
+        assert!(
+            ops.iter().any(|(op, _)| op == &format!("{id}/{suffix}")),
+            "{suffix} is in the entry (the union of the rows' keys): {ops:?}"
+        );
+    }
+    for (op, frame) in &ops {
+        assert!(
+            frames.contains(frame),
+            "{op}'s frame {frame} is one of the entry's frames {frames:?}: frames and ops of one row"
+        );
+    }
+    let root = entry
+        .scope_frames
+        .iter()
+        .find(|f| f.parent_frame_id < 0 || f.kind == "root")
+        .map(|f| f.frame_id);
+    assert_eq!(
+        ops.iter()
+            .find(|(op, _)| op == &format!("{id}/op0"))
+            .map(|(_, f)| *f),
+        root,
+        "op0 is arm B's (the last owning row): its top-level frame: {ops:?} {:?}",
+        entry.scope_frames
+    );
+}
+
+/// 11b R4 (#160 11b spec §4.6): a subscriber id whose rows are DIFFERENT nodes
+/// emits the union of its distinct nodes' subscriptions. T5's `Hb` is two rows
+/// and two nodes subscribing to `OnA` / `OnB`; its second row is given the
+/// first row's id by assignment (the hand-stated precondition), before the
+/// production `program_event_graph` runs. The one id gets both edges, each
+/// once. Break: only the first row of an id with a node emits (the old
+/// `processed` rule) -> `OnB` is missing.
+#[test]
+fn a_subscriber_id_over_two_nodes_emits_both_nodes_subscriptions() {
+    use al_sem::program::model::program_calls::cross_app_event_graph_after;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     j5_shapes_dependency_workspace(dir.path());
-    let rows = cross_app_rows_before_attach(&read(dir.path()), MI).expect("rows");
-    let named = |name: &str| -> Vec<usize> {
-        rows.workspace
+    let mut id = String::new();
+    let graph = cross_app_event_graph_after(&read(dir.path()), MI, |rows| {
+        let hb: Vec<usize> = rows
+            .workspace
             .routines
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.name == name)
+            .filter(|(_, r)| r.name == "Hb" && r.kind == "event-subscriber")
             .map(|(ri, _)| ri)
-            .collect()
-    };
-    let node = |ri: usize| rows.row_nodes.node_of[ri].clone();
-    let j5 = |ri: usize| rows.row_nodes.j5(ri).cloned();
-    let p = named("P");
-    assert_eq!(p.len(), 2, "precondition: P has two rows");
-    assert!(
-        p.iter()
-            .all(|&ri| rows.workspace.routines[ri].kind != "event-subscriber"),
-        "precondition: P is not a subscriber"
+            .collect();
+        assert_eq!(hb.len(), 2, "precondition: two rows for Hb");
+        let node = |ri: usize| rows.row_nodes.node_of[ri].clone();
+        assert!(
+            node(hb[0]).is_some() && node(hb[1]).is_some() && node(hb[0]) != node(hb[1]),
+            "precondition: Hb's rows are two nodes"
+        );
+        id = rows.workspace.routines[hb[0]].id.clone();
+        let stable = rows.workspace.routines[hb[0]].stable_routine_id.clone();
+        rows.workspace.routines[hb[1]].id = id.clone();
+        rows.workspace.routines[hb[1]].stable_routine_id = stable;
+    })
+    .expect("event graph");
+    let mut edges: Vec<(String, String)> = graph
+        .edges
+        .iter()
+        .filter(|e| e.subscriber_routine_id == id)
+        .map(|e| {
+            (
+                e.event_id.rsplit('/').next().unwrap().to_string(),
+                e.resolution.clone(),
+            )
+        })
+        .collect();
+    edges.sort();
+    assert_eq!(
+        edges,
+        [
+            ("ona".to_string(), "resolved".to_string()),
+            ("onb".to_string(), "resolved".to_string())
+        ],
+        "the id emits both of its nodes' subscriptions, each once"
     );
+}
+
+/// 11b R4's union is order-free (#160 11b spec §4.6, final panel FP-08): the
+/// same two-node `Hb` id as above, built once in row order and once with its
+/// two rows (and their nodes) swapped by assignment. The whole event graph's
+/// edge list is equal in both orders: the id's edges are sorted by full value
+/// at the place of its first edge, not appended in row order. Break: append
+/// the second node's edges in row order (no union pass) -> the two lists differ.
+#[test]
+fn a_two_node_subscriber_ids_edges_do_not_depend_on_row_order() {
+    use al_sem::program::model::program_calls::cross_app_event_graph_after;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    j5_shapes_dependency_workspace(dir.path());
+    let run = |swap: bool| {
+        let graph = cross_app_event_graph_after(&read(dir.path()), MI, |rows| {
+            let hb: Vec<usize> = rows
+                .workspace
+                .routines
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.name == "Hb" && r.kind == "event-subscriber")
+                .map(|(ri, _)| ri)
+                .collect();
+            assert_eq!(hb.len(), 2, "precondition: two rows for Hb");
+            let id = rows.workspace.routines[hb[0]].id.clone();
+            let stable = rows.workspace.routines[hb[0]].stable_routine_id.clone();
+            rows.workspace.routines[hb[1]].id = id;
+            rows.workspace.routines[hb[1]].stable_routine_id = stable;
+            if swap {
+                rows.workspace.routines.swap(hb[0], hb[1]);
+                rows.row_nodes.node_of.swap(hb[0], hb[1]);
+            }
+        })
+        .expect("event graph");
+        graph
+            .edges
+            .iter()
+            .map(|e| format!("{e:?}"))
+            .collect::<Vec<String>>()
+    };
+    let (straight, swapped) = (run(false), run(true));
+    let to = |edges: &[String], ev: &str| {
+        edges
+            .iter()
+            .filter(|e| e.contains(&format!("/{ev}\"")))
+            .count()
+    };
     assert!(
-        node(p[0]).is_some() && node(p[0]) == node(p[1]),
-        "precondition: P's rows are one node"
+        to(&straight, "ona") > 0 && to(&straight, "onb") > 0,
+        "precondition: the graph holds OnA and OnB edges: {straight:#?}"
     );
     assert_eq!(
-        (j5(p[0]), j5(p[1])),
-        (None, None),
-        "J5 answers for no non-subscriber row"
+        straight, swapped,
+        "the edge list does not depend on the row order of a two-node id"
     );
-    let (ha, hb) = (named("Ha"), named("Hb"));
-    assert_eq!((ha.len(), hb.len()), (2, 2), "precondition: two rows each");
-    assert_ne!(
-        j5(ha[0]),
-        node(ha[0]),
-        "precondition: Ha's first arm is a gap"
+}
+
+/// 11b class P, `collect_dep_order_index`'s return summaries (#160 11b spec
+/// §4.6, final panel FP-11): a source-bearing dependency whose `Work` is
+/// declared in two arms with different return shapes. Arm A (the first row)
+/// returns normally; arm B (the last row) always raises an error. The consumer
+/// reads ONE return summary for the id, the LAST row's: every path errors.
+/// Break: keep a summary per row (the consumer takes the first) -> arm A's.
+#[test]
+fn dep_return_summary_is_the_last_rows() {
+    use al_sem::engine::deps::dep_artifact_l4::{
+        ConsumerModel, TriBool, collect_dep_order_index, compute_dep_return_summary,
+        dep_artifacts_from_model,
+    };
+    use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
     );
-    assert_eq!(j5(ha[1]), node(ha[1]), "precondition: Ha's second arm maps");
-    assert_ne!(node(hb[0]), node(hb[1]), "precondition: Hb is two nodes");
+    write(
+        &dir.join("src/Go.al"),
+        "codeunit 50201 \"Ws Go\"\n{\n    procedure Go()\n    var\n        D: Codeunit \"Dep Ret\";\n    begin\n        D.Work(true);\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[(
+            "src/Ret.al",
+            r#"table 50173 "Dep R"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50173 "Dep Ret"
+{
+#if XSYM
+    procedure Work(Flag: Boolean)
+    var
+        T: Record "Dep R";
+    begin
+        T.Insert();
+    end;
+#else
+    procedure Work(Flag: Boolean)
+    var
+        T: Record "Dep R";
+    begin
+        T.Modify();
+        Error('boom');
+    end;
+#endif
+}
+"#,
+        )],
+        "",
+    );
+    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false).expect("model");
+    let rows: Vec<usize> = x
+        .resolved
+        .workspace
+        .routines
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.name == "Work")
+        .map(|(ri, _)| ri)
+        .collect();
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let row = |ri: usize| &x.resolved.workspace.routines[ri];
+    let id = row(rows[0]).id.clone();
+    assert_eq!(row(rows[1]).id, id, "precondition: one id");
     assert!(
-        j5(hb[0]).is_some() && j5(hb[0]) == j5(hb[1]),
-        "precondition: both Hb rows map to one node, so exactly one is a gap"
+        row(rows[0]).source_anchor.start_line < row(rows[1]).source_anchor.start_line,
+        "precondition: arm A is the first row"
     );
-    let c = collision_census(&rows.workspace, &rows.row_nodes);
-    assert_eq!(c.j5_compat_rows, 2, "{c:?}");
+    assert_eq!(
+        (
+            compute_dep_return_summary(row(rows[0])).all_paths_error,
+            compute_dep_return_summary(row(rows[1])).all_paths_error
+        ),
+        (TriBool::False, TriBool::True),
+        "precondition: arm A returns normally, arm B always errors"
+    );
+    let arts = dep_artifacts_from_model(&x);
+    let mut consumer = ConsumerModel::with_routine_ids(
+        x.resolved
+            .workspace
+            .routines
+            .iter()
+            .map(|r| r.id.clone())
+            .collect(),
+    );
+    collect_dep_order_index(&mut consumer, &arts);
+    let per_row: Vec<TriBool> = arts
+        .iter()
+        .filter_map(|a| a.abi.dep_order_index.as_ref())
+        .flat_map(|idx| &idx.return_summaries)
+        .filter(|rs| rs.routine_id == id)
+        .map(|rs| rs.all_paths_error)
+        .collect();
+    assert_eq!(
+        per_row,
+        [TriBool::True],
+        "the artifact holds ONE return summary for the id, the LAST row's"
+    );
+    assert_eq!(
+        consumer
+            .dep_return_summaries
+            .get(&id)
+            .map(|rs| rs.all_paths_error),
+        Some(TriBool::True),
+        "the consumer reads the LAST row's return summary (arm B always errors)"
+    );
 }

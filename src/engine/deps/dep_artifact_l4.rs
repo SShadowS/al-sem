@@ -330,12 +330,10 @@ fn artifact_from_model(
     };
 
     // The operation-order walk per routine (order index source): each op/callsite
-    // carries `order`, the routine its `scope_frames`.
-    let mut scope_frames_by_routine: HashMap<String, Vec<DepScopeFrame>> = HashMap::new();
-    for r in &mut own {
-        let frames = apply_dep_operation_order(r);
-        scope_frames_by_routine.insert(r.id.clone(), frames);
-    }
+    // carries `order`, the routine its `scope_frames`. Per ROW (#160 step 11b
+    // §4.6): the rows of one id keep their own frames, paired with their own ops.
+    let scope_frames_per_row: Vec<Vec<DepScopeFrame>> =
+        own.iter_mut().map(apply_dep_operation_order).collect();
     let own_routine_ids: HashSet<String> = own.iter().map(|r| r.id.clone()).collect();
 
     // intraAppCallEdges: own-app -> own-app admitted edges, dedup by from|to
@@ -440,7 +438,7 @@ fn artifact_from_model(
         app_guid,
         &app.version,
         summary_mode,
-        &scope_frames_by_routine,
+        scope_frames_per_row,
     );
 
     let mut routines_ids: Vec<String> = own_routine_ids.into_iter().collect();
@@ -541,7 +539,7 @@ fn build_dep_order_index(
     app_guid: &str,
     version: &str,
     summary_mode: &str,
-    scope_frames_by_routine: &HashMap<String, Vec<DepScopeFrame>>,
+    mut scope_frames_per_row: Vec<Vec<DepScopeFrame>>,
 ) -> Option<DepOrderIndex> {
     if summary_mode != "full" {
         return None;
@@ -554,7 +552,7 @@ fn build_dep_order_index(
     let mut routine_entries: Vec<DepRoutineOrderEntry> = Vec::new();
     let mut return_summary_list: Vec<DepReturnSummaryRecord> = Vec::new();
 
-    for r in own {
+    for (ri, r) in own.iter().enumerate() {
         // FAITHFUL gate (al-sem `if (r.summary === undefined) continue`): `runSummaries`
         // assigns a summary to EVERY non-leaf dep-own routine — body-available OR not
         // (a bodyless routine's `computeRoutineReturnSummary` yields unknown/partial).
@@ -572,10 +570,7 @@ fn build_dep_order_index(
         // Order entry: only for routines with scope frames + ops/callsites. A bodyless
         // routine has no scope frames → it contributes a return summary but no order
         // entry (matches al-sem's `r.features?.scopeFrames` empty-skip below).
-        let scope_frames = scope_frames_by_routine
-            .get(&r.id)
-            .cloned()
-            .unwrap_or_default();
+        let scope_frames = std::mem::take(&mut scope_frames_per_row[ri]);
         if scope_frames.is_empty() {
             continue;
         }
@@ -623,7 +618,36 @@ fn build_dep_order_index(
     }
 
     return_summary_list.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
+    // A return summary is single-valued per id: a collided id's rows (adjacent
+    // after the stable sort, in row order) keep the LAST row's (#160 step 11b
+    // §4.6, class P; every row owns the id).
+    return_summary_list.dedup_by(|later, kept| {
+        let same = later.routine_id == kept.routine_id;
+        if same {
+            std::mem::swap(later, kept);
+        }
+        same
+    });
     routine_entries.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
+    // A collided id's rows (adjacent after the stable sort, in row order) make
+    // ONE entry (#160 step 11b §4.6, class P).
+    let mut merged: Vec<DepRoutineOrderEntry> = Vec::with_capacity(routine_entries.len());
+    let mut entries = routine_entries.into_iter().peekable();
+    while let Some(first) = entries.next() {
+        let mut group = vec![first];
+        while entries
+            .peek()
+            .is_some_and(|e| e.routine_id == group[0].routine_id)
+        {
+            group.extend(entries.next());
+        }
+        merged.push(if group.len() == 1 {
+            group.pop().expect("one entry")
+        } else {
+            merge_order_entries(group)
+        });
+    }
+    let routine_entries = merged;
 
     // Stamp: sourceContentHash empty (orchestrator fills packageSemanticHash later;
     // the freshness check treats empty as conservatively fresh). app_id/version
@@ -638,6 +662,74 @@ fn build_dep_order_index(
         routines: routine_entries,
         return_summaries: return_summary_list,
     })
+}
+
+/// The order entries of ONE collided id's rows, in row order, made one (#160
+/// step 11b §4.6, class P): each operation and call-site key comes from its
+/// LAST OWNING row, together with that row's scope frames. Frame ids are local
+/// to a row, so the last entry keeps its ids and every earlier contributing
+/// entry's frames (and its keys' frame ids) are shifted past them.
+fn merge_order_entries(group: Vec<DepRoutineOrderEntry>) -> DepRoutineOrderEntry {
+    let mut op_owner: HashMap<&str, usize> = HashMap::new();
+    let mut cs_owner: HashMap<&str, usize> = HashMap::new();
+    for (i, e) in group.iter().enumerate() {
+        for o in &e.operation_orders {
+            op_owner.insert(&o.operation_id, i);
+        }
+        for c in &e.callsite_orders {
+            cs_owner.insert(&c.callsite_id, i);
+        }
+    }
+    let owners: std::collections::BTreeSet<usize> = op_owner
+        .values()
+        .chain(cs_owner.values())
+        .copied()
+        .collect();
+    // The last contributing entry first, unshifted; then the others in row order.
+    let mut offset: HashMap<usize, i64> = HashMap::new();
+    let mut scope_frames: Vec<DepScopeFrame> = Vec::new();
+    let mut next = 0;
+    let last = owners.last().copied();
+    for i in last
+        .into_iter()
+        .chain(owners.iter().copied().filter(|&i| Some(i) != last))
+    {
+        let off = next;
+        offset.insert(i, off);
+        for f in &group[i].scope_frames {
+            let mut f = f.clone();
+            f.frame_id += off;
+            if f.parent_frame_id >= 0 {
+                f.parent_frame_id += off;
+            }
+            next = next.max(f.frame_id + 1);
+            scope_frames.push(f);
+        }
+    }
+    let mut operation_orders = Vec::new();
+    let mut callsite_orders = Vec::new();
+    for (i, e) in group.iter().enumerate() {
+        for o in &e.operation_orders {
+            if op_owner.get(o.operation_id.as_str()) == Some(&i) {
+                let mut o = o.clone();
+                o.frame_id += offset[&i];
+                operation_orders.push(o);
+            }
+        }
+        for c in &e.callsite_orders {
+            if cs_owner.get(c.callsite_id.as_str()) == Some(&i) {
+                let mut c = c.clone();
+                c.frame_id += offset[&i];
+                callsite_orders.push(c);
+            }
+        }
+    }
+    DepRoutineOrderEntry {
+        routine_id: group[0].routine_id.clone(),
+        scope_frames,
+        operation_orders,
+        callsite_orders,
+    }
 }
 
 /// Compute a dep routine's returnability summary (port of al-sem

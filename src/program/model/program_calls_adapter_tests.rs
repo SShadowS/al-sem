@@ -44,8 +44,20 @@ impl Adapted {
             .find(|cs| cs.callee_text == callee_text)
             .unwrap_or_else(|| panic!("no site {callee_text} in {caller}"))
     }
+    /// The edges at `callsite_id`, each checked to name its emitting row
+    /// (`from_ix`'s row has id `from`, #160 11b §4.3) and then normalized to
+    /// `RoutineIx(0)`, the value the expected-edge helpers state.
     fn edges(&self, callsite_id: &str) -> Vec<CallEdge> {
-        at(&self.calls, callsite_id)
+        let mut out = at(&self.calls, callsite_id);
+        for e in &mut out {
+            assert_eq!(
+                self.ws.routines[e.from_ix.get()].id,
+                e.from,
+                "from_ix names the emitting row: {e:?}"
+            );
+            e.from_ix = RoutineIx(0);
+        }
+        out
     }
     fn bindings(&self, callsite_id: &str) -> Vec<UpgradedBinding> {
         self.calls.upgraded_bindings[callsite_id].clone()
@@ -77,7 +89,7 @@ fn edge(
     kind: DispatchKind,
     res: Resolution,
 ) -> CallEdge {
-    let mut e = CallEdge::base(&from.id, &cs.id, &cs.operation_id);
+    let mut e = CallEdge::base(RoutineIx(0), &from.id, &cs.id, &cs.operation_id);
     e.to = to.map(|t| t.id.clone());
     e.dispatch_kind = kind;
     e.resolution = res;
@@ -1112,7 +1124,7 @@ fn implicit_trigger_to_workspace() {
         .find(|r| r.enclosing_member.as_deref() == Some("A"))
         .unwrap();
     let trig = |o: &ModelRecordOperation, to: &ModelRoutine, res: Resolution| {
-        let mut e = CallEdge::base(&caller.id, &o.id, &o.id);
+        let mut e = CallEdge::base(RoutineIx(0), &caller.id, &o.id, &o.id);
         e.to = Some(to.id.clone());
         e.dispatch_kind = DispatchKind::ImplicitTrigger;
         e.resolution = res;
@@ -1145,7 +1157,7 @@ fn implicit_trigger_to_workspace() {
 /// build it for (`Rename`, `Insert(true)`, `Modify(true)`) fires its trigger
 /// every time (#96 D1).
 fn trigger_edge(caller: &ModelRoutine, op: &ModelRecordOperation, to: &ModelRoutine) -> CallEdge {
-    let mut e = CallEdge::base(&caller.id, &op.id, &op.id);
+    let mut e = CallEdge::base(RoutineIx(0), &caller.id, &op.id, &op.id);
     e.to = Some(to.id.clone());
     e.dispatch_kind = DispatchKind::ImplicitTrigger;
     e.resolution = Resolution::Maybe;
