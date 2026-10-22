@@ -868,7 +868,7 @@ is never "merge with void recorded" and never a re-label.
 
 **A met-not-void bound MISSED (pre-stated, binding).** §10 F10.
 
-Numbers go to `docs/measurements/2026-10-2x-issue-160-steps10-11a.md`.
+Numbers go to `docs/measurements/2026-10-22-issue-160-steps10-11a.md`.
 
 ## 9. Amendments this spec asks the epic to take
 

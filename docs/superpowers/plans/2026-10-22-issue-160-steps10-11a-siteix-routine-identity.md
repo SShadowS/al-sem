@@ -288,7 +288,7 @@ doc's "Join keys"; move `model_key`/`program_key` here for the debug assertion),
 `_with_row_nodes` variant becomes `program_event_graph`), the oracle tests (T1, T7, T8 and
 their CDO variants, deleted), `links_keep_every_edge_and_qualify_by_app` (deleted),
 `can_fire_trigger_admits_the_resolver_ops` (its `op_name` half goes, spec §5.3),
-`CHANGELOG.md`, `docs/measurements/2026-10-2x-issue-160-steps10-11a.md` (new skeleton).
+`CHANGELOG.md`, `docs/measurements/2026-10-22-issue-160-steps10-11a.md` (new skeleton).
 
 - [ ] **Step 0: The licensing run (no commit).** On Task 2's commit, the same
   `agentflow run --name cdo-gate` command as Task 2 Step 0. Required: exit 0, T1/T7/T8 CDO

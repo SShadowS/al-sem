@@ -177,7 +177,7 @@ pub struct SiteCensus {
     pub implicit_trigger_matched: usize,
     pub implicit_trigger_unmatched: usize,
     /// Program edges sharing a site key with an earlier one (only the first
-    /// joins). The name (from the span join) is kept for the census's
+    /// joins). The name (from the former span join) is kept for the census's
     /// continuity.
     pub duplicate_program_span: usize,
     /// Model sites sharing a site key with an earlier site of the same category
@@ -1271,8 +1271,10 @@ fn key_join<'a>(
     }
 }
 
-/// The adapter's conversion of one join's pairs (#160: split from `adapter` so
-/// the parity oracle can convert both joins' pairs the same way).
+/// The adapter's conversion: the model's `ResolvedCalls` from the join's
+/// accepted pairs (call sites in routine order, then the trigger edges of the
+/// matched record ops), with the join's census plus the `adapter_*` counts.
+/// Callee rows are read from `row_nodes.j2_row` (J2, recorded at assembly).
 fn convert<'a>(
     j: Join<'a>,
     view: EdgeView<'a>,
@@ -2530,7 +2532,7 @@ mod tests {
 
     /// [`census_with`] whose `mutate` reaches the whole rows (`RowNodes`
     /// included) and sees the built context; the census reads the rows with
-    /// their `RowNodes` (#160 §4.8), as production does from Task 2.
+    /// their `RowNodes` (#160 §4.8), as production does.
     fn census_rows_with(
         files: &[(&str, &[u8])],
         mutate: impl FnOnce(&mut crate::program::model::workspace::ModelRows, &ProgramContext),

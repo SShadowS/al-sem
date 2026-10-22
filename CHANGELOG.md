@@ -36,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `ProgramContext`, keyed by app and path. The span join (J1), the source `texts` map and
     the op-name parse (J4, now the resolver's `fires`) are deleted, with `site_links.rs`.
     A debug assertion checks that every accepted pair has the same span on both sides. The
-    LSP's per-file re-resolve passes no file and stays unstamped. Speed-up on CDO: `<bench>`
-    (`b3.adapter`, `analyze.total`, kernel peak RSS; `docs/measurements/2026-10-2x-issue-160-steps10-11a.md`).
+    LSP's per-file re-resolve passes no file and stays unstamped. The CDO bench numbers
+    (`b3.adapter`, `analyze.total`, kernel peak RSS) are in
+    `docs/measurements/2026-10-22-issue-160-steps10-11a.md`.
   - **`RowNodes` (step 11a).** Built at the end of assembly and dropped at the attach: each
     row's true node (`node_of`), the program declaration anchor of every caller the join reads
     (`decl_anchor`, for the caller check), and today's J2 and J5 answers (`j2_row`,
