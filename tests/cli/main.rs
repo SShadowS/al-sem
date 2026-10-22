@@ -97,6 +97,7 @@ mod cli_query_differential;
 mod cli_s6_consumers;
 mod cli_sarif_rule_catalog;
 mod cli_stderr_logger;
+mod cli_step5_coverage_fold;
 mod cli_strict_events_policy;
 mod cli_workspace_fingerprint_closure;
 mod cli_workspace_source;

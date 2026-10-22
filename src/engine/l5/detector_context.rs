@@ -24,7 +24,8 @@ use std::sync::Arc;
 
 use crate::engine::l4::analysis::{CoreSummaries, L4Analysis, L4Request, build_l4};
 use crate::engine::l4::capability_cone::{
-    CapabilityFact, compose_cone_over_graph, direct_facts_for_routine,
+    CapabilityFact, callsite_local_coverage_reasons, compose_cone_over_graph,
+    direct_facts_for_routine, fold_uncertainty_reasons,
 };
 use crate::engine::l4::combined_graph::{PrimaryGraph, TypedEdge};
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeOutput};
@@ -1244,8 +1245,10 @@ pub(crate) struct DetConeInputs {
 }
 
 /// Builds [`DetConeInputs`]: the one assembly [`build_detector_artifacts`]
-/// and the step 7a oracle both compose over.
-pub(crate) fn det_cone_inputs(resolved: &Model) -> DetConeInputs {
+/// and the step 7a oracle both compose over. Each row's direct coverage folds
+/// the call-site-local uncertainty of both halves of `rel`
+/// ([`ExecRelation::uncertainty_all`]; #160 step 5), as every other producer.
+pub(crate) fn det_cone_inputs(resolved: &Model, rel: &ExecRelation) -> DetConeInputs {
     let ws = &resolved.workspace;
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
     for evt in &resolved.events.graph.events {
@@ -1264,10 +1267,13 @@ pub(crate) fn det_cone_inputs(resolved: &Model) -> DetConeInputs {
     // direct facts are the full-value union, its coverage the least complete.
     let mut facts_per_row = Vec::with_capacity(ws.routines.len());
     let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
+    let uncertainty_reasons = callsite_local_coverage_reasons(rel.uncertainty_all());
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
-        coverage_per_row.push(Some((status, reasons)));
+        let coverage =
+            fold_uncertainty_reasons(status, reasons, uncertainty_reasons.get(r.id.as_str()));
+        coverage_per_row.push(Some(coverage));
         facts_per_row.push(Some(facts));
     }
     let rows = projection::RowsOfId::build(&ws.routines);
@@ -1359,7 +1365,7 @@ pub(crate) fn build_detector_artifacts(
             nodes,
             mut direct_full,
             coverage_in,
-        } = det_cone_inputs(resolved);
+        } = det_cone_inputs(resolved, rel);
         // ⟨C1 Task 3⟩ `DerivedOnly` — the compact substrate only; the per-routine
         // raw inherited `Vec<CapabilityFact>` is never allocated. `Both` only when
         // the policy-only `RAW_INHERITED_FACTS` bit is demanded.
@@ -2446,7 +2452,7 @@ page 50813 "CR Wizard"
         // R2 (11b, the one rule): direct facts are the full-value union of both
         // rows' (here arm A is parse-incomplete, so it adds none), coverage the
         // least complete (arm A's `unknown`) with the sorted union of reasons.
-        let inputs = det_cone_inputs(&resolved);
+        let inputs = det_cone_inputs(&resolved, &ExecRelation::single_app(&resolved));
         let mut union = [a_direct.0.clone(), b_direct.0.clone()].concat();
         union.sort();
         union.dedup();
@@ -3034,3 +3040,9 @@ page 50813 "CP3 Wizard"
 #[cfg(test)]
 #[path = "detector_context_11b_tests.rs"]
 mod tests_11b;
+
+// #160 step 5 acceptance tests (one coverage policy): a child module, for
+// private access to `det_cone_inputs`.
+#[cfg(test)]
+#[path = "detector_context_step5_tests.rs"]
+mod tests_step5;

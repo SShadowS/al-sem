@@ -616,6 +616,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **#160 step 5: one coverage policy** (part of #160; #161 part 2). The detector context
+  (`det_cone_inputs`) and the cross-app base (`build_cross_app_base`) now fold the four
+  call-site-local uncertainty kinds (`ambiguous-overload`, `external-target`,
+  `interface-open-world`, `member-not-found`) into each routine's direct coverage, from both
+  uncertainty halves (`ExecRelation::uncertainty_all`: the Primary half, then the dependency
+  half), per row before the collided-id projection. Until now only the r3a3 projection and
+  the snapshot base folded them, so a routine making an ambiguous or open-world call read as
+  `complete` coverage to every detector. Readers that can now move: transaction spans and
+  d9 (a span reaching such a routine is incomplete), digest's and prove's
+  `transactionContext` (`unknown` where it was known), d35 (new UNKNOWN "may be reachable"
+  findings, longer reason text), d45's coverage text, `events fanout`'s
+  `capabilityComposition` and `--coverage-policy strict`, and the policy gate under
+  `requireCoverage: complete` (the bundled policy uses `partial` and cannot move). d2 can
+  lose a finding when its 500-node walk budget is spent on a newly entered branch (pinned
+  by T9). No existing golden moved. The test-only L4-solve fold
+  `compute_uncertainty_coverage_reasons` and its four tests (`check_oracle`'s fixture and
+  CDO oracles and the roles-cap oracle) are deleted: their "scan equals the solve's fold"
+  claim has no second side any more. Pinned by T1-T9
+  (`detector_context_step5_tests.rs`, `tests/cli/cli_step5_coverage_fold.rs`), each proven
+  to fail with the fold removed. Epic amendments 5-A1 to 5-A8 (spec
+  `docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md` §9): the
+  reader list, the policy proxy, the snapshot keeping its cut-graph fold until step 6, the
+  two kept fields with one chained accessor, the deletion moved here, the new fixtures, no
+  golden predicted, and the triage gate on the default mode at both scopes.
 - **The lowerer reads the `960ed312` grammar's expression `#if` shapes** (see Changed). An
   operand group (`1 + #if X Foo() #else Bar() #endif`, or a callee
   `#if X Foo #else Bar #endif (1)`) lowers as its first arm a build can take
