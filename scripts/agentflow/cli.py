@@ -21,7 +21,7 @@ from . import (budget, discoveries, eligibility, identity, incidents, lock, merg
                recovery, sanitize, supervise, worktrees)
 from .gh import Gh, GhError
 from .gitops import Git, GitError
-from .state import (Ctx, DryRunViolation, MutexTimeout, Paths, config, mutex, new_run_id, read_json,
+from .state import (Ctx, DryRunViolation, MutexTimeout, Paths, ci_waiver_deadline, config, mutex, new_run_id, read_json,
                     update_json, write_json)
 
 # `agent-regressed` is no longer spelled here: it comes from
@@ -1114,22 +1114,39 @@ def _gate_reasons(ctx, gh, git, pr: int):
     workflow = _ci_workflow_name(ctx)
     if workflow is None:
         reasons.append("ci-workflow-unknown")
-        return att, reasons, False
+        return att, reasons, False, None
     green = mergeops.ci_green(pr_info.get("statusCheckRollup", []), workflow)
-    if not green:
+    waived = None if green else _ci_waiver(ctx, git, att)
+    if not green and waived is None:
         reasons.append("ci-not-green")
-    return att, reasons, green
+    return att, reasons, green, waived
+
+
+def _ci_waiver(ctx: Ctx, git: Git, att: mergeops.Attestation) -> str | None:
+    """The operator's `ci_waiver_until` when it may stand in for GitHub CI, else
+    None. It may only while it has not expired (by `ctx.now`, so AGENTFLOW_NOW
+    holds) AND the attestation records every gate `attest` requires at exit 0:
+    the attested local gates are the evidence, so without them nothing is
+    waived. A `closes_by: ci-wait` entry is unaffected (`_ci_wait_unmet`)."""
+    until = config(ctx)["ci_waiver_until"]
+    deadline = ci_waiver_deadline(until)
+    if deadline is None or ctx.now() >= deadline:
+        return None
+    if _gate_failures(att.gates, _docs_only(git, att.B, att.final_head)):
+        return None
+    return until
 
 
 def cmd_merge_gate(args, ctx, gh, git):
-    _, reasons, green = _gate_reasons(ctx, gh, git, args.pr)
+    _, reasons, green, waived = _gate_reasons(ctx, gh, git, args.pr)
     # Read-only. Another session's merge not yet verified (`busy`), or one
     # whose run died (`orphaned`, until a `recover`): the base is about to
     # move, so a rebase now would be spent for nothing.
     _, lane = lock.lane_state(ctx)
     if lane in lock.LANE_REFUSED:
         reasons.append(f"merge-lane-{lane}")
-    return _emit({"reasons": reasons, "ci_green": green}, 0 if not reasons else 1)
+    return _emit({"reasons": reasons, "ci_green": green, "ci_waived": waived is not None,
+                  "ci_waived_until": waived}, 0 if not reasons else 1)
 
 
 def cmd_merge(args, ctx, gh, git):
@@ -1144,11 +1161,17 @@ def cmd_merge(args, ctx, gh, git):
         lock.take_lane(ctx, lk.issue, args.pr)
     except lock.LockHeld as e:
         raise Fail({"error": e.code, "detail": str(e)})
-    att, reasons, _ = _gate_reasons(ctx, gh, git, args.pr)
+    att, reasons, _, waived = _gate_reasons(ctx, gh, git, args.pr)
     if reasons:
         lock.release_lane(ctx)
         return _emit({"reasons": reasons}, 1)
     try:
+        if waived:
+            # Said in public BEFORE the merge, so no merge lands on a waiver
+            # silently; a comment that fails releases the lane, nothing merged.
+            gh.pr_comment(args.pr, f"agentflow run `{ctx.run_id}`: GitHub CI was **waived** for this "
+                                   f"merge (operator `ci_waiver_until` = {waived}). The evidence is the "
+                                   f"attested local gates: {json.dumps(att.gates, sort_keys=True)}.")
         sha = mergeops.merge(ctx, gh, args.pr, att, reasons)
     except mergeops.MergeShaUnavailable:
         raise          # GitHub merged: the lane stays for the post-merge/recovery
@@ -1160,8 +1183,9 @@ def cmd_merge(args, ctx, gh, git):
     # ATTESTATION, not from argv: the attestation is what bound this merge to
     # an issue, and `merge` has no `--issue` of its own to be wrong about.
     mergeops.write_merge_record(ctx, mergeops.MergeRecord(
-        issue=att.issue, pr=args.pr, merge_sha=sha, run_id=ctx.run_id, source="merge"))
-    return _emit({"merge_sha": sha})
+        issue=att.issue, pr=args.pr, merge_sha=sha, run_id=ctx.run_id, source="merge",
+        ci_waived_until=waived or ""))
+    return _emit({"merge_sha": sha, "ci_waived": waived is not None, "ci_waived_until": waived})
 
 
 def cmd_post_merge(args, ctx, gh, git):

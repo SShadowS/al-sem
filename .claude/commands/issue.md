@@ -538,6 +538,12 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
     has not started, `register-changed`, which means `findings.json` moved
     after the attestation, and `register-unresolvable`, which means this run's
     `claim.json` is gone so the attested register cannot be located at all.
+    `ci_waived: true` in the reply means the operator's timed waiver
+    (`ci_waiver_until` in `.agent/config.json`, operator-only: NEVER set or
+    extend it yourself) let a not-green CI pass because the attestation
+    records every required local gate at exit 0; `merge` then says so in a PR
+    comment and its merge record. Without a live waiver, `ci-not-green` is
+    handled as above.
     Both the CI-fix path and the `base-moved` path go
     back through step 11's rebase, which rewrites the ALREADY-pushed branch's
     history — a plain push would be rejected, so re-push with the one permitted

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An operator-set, time-limited GitHub CI waiver for the issue flow** (`scripts/agentflow`). During the
+  2026-10-22 GitHub Actions incident the operator decided to rely on local tests for 24 h. `ci_waiver_until`
+  in `.agent/config.json` (an ISO-8601 UTC time, operator-only, never set by the conductor) lets
+  `merge-gate`/`merge` accept a PR whose CI is not green, but only before that time and only when the
+  attestation records every required local gate (`ci-steps-all`, `check-goldens-coverage`, `check-goldens`,
+  and `cdo-gate` unless docs-only) at exit 0. Both commands then report `ci_waived: true` and the deadline;
+  `merge` posts a PR comment saying CI was waived and records `ci_waived_until` in its merge record. An
+  expired or absent waiver changes nothing, a malformed one is a `ConfigError`, and a `closes_by: ci-wait`
+  register entry still needs its green `ci-wait` record.
 - **A daily grammar-drift check** (`.github/workflows/grammar-drift.yml`). It compares tree-sitter-al
   `main`'s `node-types.json` with the committed `node-types.sha256` and, on a mismatch, opens one
   `grammar-drift` issue (none if one is already open) with an Acceptance section, so the grammar bump lands

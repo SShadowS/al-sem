@@ -12,6 +12,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -50,10 +51,33 @@ class ConfigError(ValueError):
 # caller's shell exported: on #107 a `post-merge` called without `CDO_WS` read
 # `cdo-gate`'s usage error as a red gate. Empty (the default) keeps reading
 # `CDO_WS` from the environment.
-CONFIG_DEFAULTS: dict[str, int | str] = {
+# `ci_waiver_until`: OPERATOR-ONLY, never set by the conductor. An ISO-8601 UTC
+# timestamp (`2026-10-23T12:00:00Z`); until then `merge-gate`/`merge` accept a
+# PR whose GitHub CI is not green when this run's attestation records every
+# required local gate at exit 0 (`ci_waived` in their output, and in the merge
+# record and a PR comment). For a GitHub Actions outage (2026-10-22: "for the
+# next 24h we rely on local tests and skip GH CI"). Time-limited on purpose: a
+# waiver nobody remembers to remove expires by itself. None (the default) is no
+# waiver; a malformed value raises like any other.
+CONFIG_DEFAULTS: dict[str, int | str | None] = {
     "slots": 1, "heavy_gates": 1, "min_free_gb": 40, "reserve_gb_per_run": 30,
-    "gate_wait_minutes": 180, "target_root": "", "cdo_ws": "",
+    "gate_wait_minutes": 180, "target_root": "", "cdo_ws": "", "ci_waiver_until": None,
 }
+
+
+def ci_waiver_deadline(value: Any) -> float | None:
+    """`ci_waiver_until` as epoch seconds, None for no waiver. Anything but None
+    or an ISO-8601 timestamp with a zero UTC offset raises `ConfigError`: a
+    naive time would be read in the machine's own zone."""
+    if value is None:
+        return None
+    try:
+        t = datetime.fromisoformat(value) if type(value) is str else None
+    except ValueError:
+        t = None
+    if t is None or t.utcoffset() != timedelta(0):
+        raise ConfigError(f"ci_waiver_until must be an ISO-8601 UTC timestamp, not {value!r}")
+    return t.timestamp()
 
 
 @dataclass(frozen=True)
@@ -222,7 +246,9 @@ def config(ctx: Ctx) -> dict[str, Any]:
     for key, value in data.items():
         if key not in CONFIG_DEFAULTS:
             raise ConfigError(f"{ctx.paths.config}: unknown key {key!r}")
-        if isinstance(CONFIG_DEFAULTS[key], str):
+        if key == "ci_waiver_until":
+            ci_waiver_deadline(value)
+        elif isinstance(CONFIG_DEFAULTS[key], str):
             if type(value) is not str:
                 raise ConfigError(f"{ctx.paths.config}: {key} must be a string, not {value!r}")
         elif type(value) is not int or value < 0:
