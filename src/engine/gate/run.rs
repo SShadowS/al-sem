@@ -1198,6 +1198,42 @@ mod tests {
         );
     }
 
+    fn model_with_primary_app() -> Model {
+        let mut m = crate::engine::l5::test_support::empty_resolved();
+        m.primary_app = Some(crate::engine::gate::app_attribution::App {
+            app_guid: "app".to_string(),
+            publisher: "probe".to_string(),
+            name: "Ws".to_string(),
+            version: "1.0.0.0".to_string(),
+        });
+        m
+    }
+
+    /// #220 review u-1: `is_primary_routine` decides by THE role rule in a
+    /// SINGLE-APP target too. Hand-stated: a row whose app guid differs from
+    /// the primary's reads not primary; the primary's (other case) reads
+    /// primary. Break: the single-app arm's constant `true` -> fails.
+    #[test]
+    fn single_app_is_primary_routine_uses_role() {
+        let target = super::AnalysisTarget::SingleApp(Box::new(model_with_primary_app()));
+        let mut r = crate::engine::l5::test_support::routine("r0", "procedure");
+        r.app_guid = "APP".to_string();
+        assert!(target.is_primary_routine(&r));
+        r.app_guid = "dep".to_string();
+        assert!(!target.is_primary_routine(&r));
+    }
+
+    /// #220 review u-3: an object id the index does not hold is not a
+    /// dependency object. Break: unknown -> `true` -> fails.
+    #[test]
+    fn dependency_object_predicate_unknown_object_is_false() {
+        let m = model_with_primary_app();
+        let idx = crate::engine::gate::projection::ProjectionIndex::build(&[], &[]);
+        assert!(!super::dependency_object_predicate(&m, &idx)(
+            "dep/Codeunit/1"
+        ));
+    }
+
     /// #91: `alsem analyze` builds its diagnostics through the one shared
     /// aggregation, not an inline copy of it. Its output cannot tell the two
     /// apart, so the call itself is pinned. Mutation: restore the inline

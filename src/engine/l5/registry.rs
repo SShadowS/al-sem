@@ -1302,6 +1302,37 @@ mod tests {
         );
     }
 
+    /// #220 review u-1: the SINGLE-APP arm of `finish_run` roles its routines by
+    /// THE role rule. Hand-stated: a single-app model whose one routine (`r0`,
+    /// the finding's anchor) carries an app guid other than the primary's. The
+    /// finding is dropped; with the row back on the primary app it is kept.
+    /// Break: the arm's constant `"primary"` -> the finding is kept, fails.
+    #[test]
+    fn single_app_scope_uses_role() {
+        let run_with_row_app = |app: &str| {
+            let mut m = empty_resolved();
+            m.primary_app = Some(crate::engine::gate::app_attribution::App {
+                app_guid: "app".to_string(),
+                publisher: "probe".to_string(),
+                name: "Ws".to_string(),
+                version: "1.0.0.0".to_string(),
+            });
+            let mut r = crate::engine::l5::test_support::routine("r0", "procedure");
+            r.app_guid = app.to_string();
+            m.workspace.routines.push(r);
+            let detectors = vec![Detector {
+                name: "d-ok".to_string(),
+                run: ok_detector,
+                requires: substrate::ALL,
+                rule_name: "Ok",
+                short_description: "test ok",
+            }];
+            run_detectors(&m, &detectors).findings.len()
+        };
+        assert_eq!(run_with_row_app("APP"), 1, "precondition: a primary row");
+        assert_eq!(run_with_row_app("dep"), 0, "a dependency row's finding");
+    }
+
     #[test]
     fn natural_orders_detectors_numerically() {
         assert_eq!(compare_natural("d2", "d10"), Ordering::Less);
