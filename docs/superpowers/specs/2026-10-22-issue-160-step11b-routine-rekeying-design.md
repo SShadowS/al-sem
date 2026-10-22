@@ -91,14 +91,35 @@ Words (the same as 10+11a, plus these):
 - **`rows_of_id` is transient (R1-12)**, built inside the projection from the current rows, so a
   hand-stated collision cannot leave it stale. The rule's fixtures use natural `#if` collisions
   where they can, and each asserts its group size first.
-- **The trace (R1-08)** read every path P6 left untraced (§3.2's new rows), and a whole-pipeline
-  order-swap test (T2) now guards against any merge point a read misses.
+- **The trace (R1-08)** read every path P6 left untraced (§3.2's new rows), and an order-swap
+  test (T2) was added (narrowed in round 2 to set-valued surfaces, §0.2).
 - **Fallbacks bounded (R1-10)**, **the identity run fail-closed (R1-11)** (new
   `identity-run.sh` / `idcheck.py`, re-run on the prototype: §3.4), **JSON compared beside
   SARIF (R1-21)**, **memory owned and counted (R1-09)**, **11B-8** (Decision 25, epic
   §5.3/§5.4/§5.9; R1-13), Q1-Q7 decided (§11), discoveries for step 6 (§12), full module
   paths (R1-14), the absent-J2 and `node_of == None` behaviour stated (R1-19, R1-20), C's
   leftovers listed (R1-22).
+
+### 0.2 What spec panel round 2 changed (R1-01, R1-04, R1-08, R1-11 re-raised; R2-01 to R2-04)
+
+- **Class U's collided lists get the full-value tie order** (R1-01): only where two or more
+  rows of one id contribute; pinned through production `edges_by_from` by T2u.
+- **The per-site consumers that bypass R9 go through one pick** (R1-04): `d37` and
+  `compose_roles_only` read `site_pick` (edge AND bindings from the LAST owning row; §4.6; T6b;
+  F11 if a single-row answer would move).
+- **A parameter's role and dispatch are single-valued** (R2-01): class P per
+  `(id, parameter index)`, LAST owning row, never a union (T1j).
+- **T2 is narrowed** (R1-08, R2-03): it compares set-valued surfaces only, with the arms'
+  anchors normalized; classes P, R and G are excluded by design; §4.7's "the pick cannot show"
+  is withdrawn; there is no claim of universal coverage. R4b and policy get production witnesses
+  (T1b, T1i). `p6b-trace.md`'s two unchecked paths are closed.
+- **R-MOVES is pinned by identity** (R1-11): `expect-C-exact.json` holds rule, fingerprint and
+  location per moved result. Re-run on the saved reports: 0 violations. A negative substitution
+  with another `d9` result fails as it must (§3.4).
+- **T9 runs through the production projection** (R2-02): `should_panic` in debug, the census
+  counter in release; the mutation removes the projection's call.
+- **No serialization tie-break** (R2-04): a total order (`Ord`) per payload type, asserted at
+  Task A (§4.6).
 
 ## Feasibility first
 
@@ -192,10 +213,10 @@ The class decides what A keys per row, and what B's projection does. Paths are u
 
 | Class | Points | Today | A (producer) | B's projection |
 |---|---|---|---|---|
-| **U** already a union, or order-free | R1 `edges_by_from` / `edges_from_order` (`engine/l4/combined_graph.rs:418-428`); #10 `uncertainty_edges_by_from` (`engine/l5/detector_context.rs:1597-1605`, `engine/l4/summary_runner.rs:1427-1431`); #12 entry points (`engine/l5/entry_points.rs:63-115`); R3b `uncertainties_by_node`, `parameter_roles_by_routine` (`detector_context.rs:1669-1696`) | union / id-pure | unchanged (they already take every row) | unchanged |
-| **S** set-valued INPUTS of a per-id computation, merged by a non-union rule | R2a `det_cone_inputs` (`detector_context.rs:1252-1261`); R2b cross-app base `direct_coverage` / `direct_full` / `leaf_summaries` (`engine/l4/capability_cone.rs:3936-3961`); R2c r3a3 builders (`:4368-4397`, `:4565-4577`, `:4726-4735`); #13 solve inputs `base_summaries`, `dispatch_by_id` (`summary_runner.rs:1362-1393`); R4 event `processed` (`program/model/events.rs:366-376`); R4b one `EventSymbol` per publisher row (`:313-320`); R1c interface candidates (`combined_graph.rs:573-672`); #14 `commits_by_routine` (`engine/l5/transaction_spans.rs:487-507`, primary rows only); #16 checked-run seeds (`:598-625`); #17 `prove_event_param_temps` (`program/model/event_param_temp.rs:59-130`) | last / first / per-row duplicate | per-row output | full-value union across the id's rows (§4.6); #17: the all-raises rule (§4.6) |
+| **U** already a union, or order-free | R1 `edges_by_from` / `edges_from_order` (`engine/l4/combined_graph.rs:418-428`); #10 `uncertainty_edges_by_from` (`engine/l5/detector_context.rs:1597-1605`, `engine/l4/summary_runner.rs:1427-1431`); #12 entry points (`engine/l5/entry_points.rs:63-115`); R3b `uncertainties_by_node`, `parameter_roles_by_routine` (`detector_context.rs:1669-1696`) | union / id-pure; R1 and #10 are stable-sorted by sort key only, so equal-key items keep EMISSION order | unchanged (they already take every row) | single-row ids: unchanged. A collided id's list (only where two or more rows contribute) is sorted by the sort key, then by the full value (`Ord`, §4.6), instead of keeping emission order on a tie (R1-01; T2u) |
+| **S** set-valued INPUTS of a per-id computation, merged by a non-union rule | R2a `det_cone_inputs` (`detector_context.rs:1252-1261`); R2b cross-app base `direct_coverage` / `direct_full` / `leaf_summaries` (`engine/l4/capability_cone.rs:3936-3961`); R2c r3a3 builders (`:4368-4397`, `:4565-4577`, `:4726-4735`); #13 solve input `base_summaries` (`summary_runner.rs:1383-1393`: its `db_effects`, `uncertainties` and the two flags; its `parameter_roles` are class P); R4 event `processed` (`program/model/events.rs:366-376`); R4b one `EventSymbol` per publisher row (`:313-320`); R1c interface candidates (`combined_graph.rs:573-672`); #14 `commits_by_routine` (`engine/l5/transaction_spans.rs:487-507`, primary rows only); #16 checked-run seeds (`:598-625`); #17 `prove_event_param_temps` (`program/model/event_param_temp.rs:59-130`) | last / first / per-row duplicate | per-row output | full-value union across the id's rows (§4.6); #17: the all-raises rule (§4.6) |
 | **K** per-row duplicates a reader sees k times | k-fold `CombinedGraph.nodes` (`combined_graph.rs:415-416`) → `engine/l5/reverse_call_graph.rs:37-41`, `pending_writes.rs:43-50`, `project_r3a1` `combined_edges` (`combined_graph.rs:1111-1115`); snapshot per-row reads (`engine/l5/snapshot.rs:1353-1385`, `:1862-1921` incl. `derive_callsite_evidence` `:1893-1917`, `:2311-2338`); `classify_roots` (`engine/root_classification.rs:298-319`); `build_dep_order_index` (`engine/deps/dep_artifact_l4.rs:557-619`); policy rule evaluation per row (`engine/gate/policy/policy_engine.rs:195-296`: counters double, two findings share an id); d1 seeds (`engine/l5/d1_graph.rs:201-253`) | k copies, equal or not | unchanged | full-value dedup across the id's rows: equal copies collapse to one, unequal ones stay, sorted by full value |
-| **P** single-valued lookups | R1b (`combined_graph.rs:283-331`), R1d (`:541-550`), R5 `upgraded_bindings` (`program/model/program_calls.rs:1352-1381`), R6 `routine_by_id` (`:1336`), R9 `first_resolved_edge_per_callsite` (`detector_context.rs:2028-2037`), #11 `access_modifiers` (`:1527-1535`), #13 `routines_by_id`, `body_avail_by_id`, `stable_map` (`summary_runner.rs:1349-1402`), #19 d46/d48/d61 maps, #20 snapshot anchors (`snapshot.rs:1405-1422`, `:1777-1986`, `:2349`, `:2437`) and `callee_display` / `result_consumed` / `under_asserterror` (`:1977-1985`), snapshot identities (`:1294`), #21 the lookup `collect`s (P6's 14, plus `engine/gate/projection.rs:58`, `gate/format_html.rs:159`, `gate/app_attribution.rs:42`, `engine/l5/fingerprint.rs:96`), #22 `OperationJoin` (`engine/l4/effect_query_cli.rs:462`), `root_classifications_by_routine` (`detector_context.rs:1744-1751`), `ast_by_routine` and `resolve_target` (`root_classification.rs:521-536`: two rows of one id read as "ambiguous"), `root_kinds_by_routine_id` (`policy_engine.rs:151`), `compute_return_summaries` (`engine/return_summary.rs:466-470`), `compute_ordering_facts` (`engine/l5/ordering_facts.rs:218-224`), `scope_frames_by_routine` + `collect_dep_order_index` (`dep_artifact_l4.rs:335-337`, `:986-993`: today a row's ops are paired with ANOTHER row's frames), `evidence_by_id` (`:379-431`), `unresolved_cone.rs:94-96` | mostly LW, some FW, some mixed | per `(RoutineIx, key)` where the key is a call site or an op | the LAST OWNING row per key, every piece of one key from that one row (§4.6) |
+| **P** single-valued lookups | R1b (`combined_graph.rs:283-331`), R1d (`:541-550`), R5 `upgraded_bindings` (`program/model/program_calls.rs:1352-1381`), R6 `routine_by_id` (`:1336`), R9 `first_resolved_edge_per_callsite` (`detector_context.rs:2028-2037`), #11 `access_modifiers` (`:1527-1535`), #13 `routines_by_id`, `body_avail_by_id`, `stable_map` (`summary_runner.rs:1349-1402`), #19 d46/d48/d61 maps, #20 snapshot anchors (`snapshot.rs:1405-1422`, `:1777-1986`, `:2349`, `:2437`) and `callee_display` / `result_consumed` / `under_asserterror` (`:1977-1985`), snapshot identities (`:1294`), #21 the lookup `collect`s (P6's 14, plus `engine/gate/projection.rs:58`, `gate/format_html.rs:159`, `gate/app_attribution.rs:42`, `engine/l5/fingerprint.rs:96`), #22 `OperationJoin` (`engine/l4/effect_query_cli.rs:462`), `root_classifications_by_routine` (`detector_context.rs:1744-1751`), `ast_by_routine` and `resolve_target` (`root_classification.rs:521-536`: two rows of one id read as "ambiguous"), `root_kinds_by_routine_id` (`policy_engine.rs:151`), `compute_return_summaries` (`engine/return_summary.rs:466-470`), `compute_ordering_facts` (`engine/l5/ordering_facts.rs:218-224`), `scope_frames_by_routine` + `collect_dep_order_index` (`dep_artifact_l4.rs:335-337`, `:986-993`: today a row's ops are paired with ANOTHER row's frames), `evidence_by_id` (`:379-431`), `unresolved_cone.rs:94-96`; **per parameter** (R2-01): the base summary's `parameter_roles` and `dispatch_by_id` (`summary_runner.rs:1362-1369`), keyed `(id, parameter index)`, read by taking the first record per index (`d37.rs:240-245`, `summary_runner.rs:846-860`) and one `ParamDispatch` per parameter; **per-site readers that bypass R9** (R1-04): `d37.rs:224-239` and `compose_roles_only` (`summary_runner.rs:790-860`) find "the first edge with this call-site id" in the unioned `edges_by_from[id]` and read `upgraded_bindings[cs.id]` (R5, LAST) | mostly LW, some FW, some mixed | per `(RoutineIx, key)` where the key is a call site, an op or a parameter index | the LAST OWNING row per key, every piece of one key from that one row (§4.6) |
 | **G** guard frames | R2d `guard_frames` (`capability_cone.rs:2383-2394`); #15 span `frames` (`transaction_spans.rs:148, :380`) | LW / FW per id | unchanged | **unchanged** (decision 5; defect filed for step 6, §12) |
 | **F** fail-closed | #18 `closed_world_temp` `dup_ids` (`engine/l5/closed_world_temp.rs:105-110, :198, :254`) | a duplicated id is never proven | unchanged | unchanged |
 | **R** reader-side finding choice over rows (11B-3: readers are not re-keyed) | `d1_reach.rs:836-860` groups, `d1_dataflow.rs:3164-3186` / `:3308-3322`, `d1_cohort.rs:575-590`; `detectors/d2.rs:253-261`, `:302-533`; `d3.rs:161-624`; `d13.rs:41-94`; `d18.rs:58-129`; `d47.rs:384-452`, `d49.rs:128-150`, `d51.rs:172-204`; `engine/gate/run.rs:565, :576, :617` `kept_ids` | FW / any | unchanged | **unchanged**: they read projected inputs and keep their own first-row choice; listed in the step-6/reader discovery (§12) |
@@ -236,13 +257,27 @@ The 14 results, keyed by span root (from the measured diff): `RunExportEDocRepor
 **Re-measured fail-closed in round 1 (R1-11, R1-21)** with `identity-run.sh` and `idcheck.py`
 (§8), base binary against the prototype: 3,952 analyzer runs (16 CDO, 246 fixture dirs × 2
 universes × 2 scopes × SARIF and JSON, each side), every one exit 0 and valid, 1,976 exhaustive
-diff reports. `accept` against `expect-C.json`: 0 violations. The ONLY differences are the 14
+diff reports. `accept` against the round-1 count expectation (`expect-C.json`, superseded by
+`expect-C-exact.json` below): 0 violations. The ONLY differences are the 14
 results above, in each of cross-app `--scope primary` and `--scope all`, in SARIF AND in JSON
 (the `rootCause` text), each message-only with the event count +1; every other report is
 identical (JSON apart from its `generatedAt` timestamp); the histogram is identical. The same
 reports checked against "everything identical" fail on exactly those 4 CDO reports (the script's
 negative check). Evidence: `/work/bench/160-11b/idrun-C/`, `idrun-C.log`, `idrun-C-summary.json`,
 `idrun-C-negcheck.json`.
+
+**Pinned by identity in round 2 (R1-11).** `idcheck.py` now records each differing result's
+IDENTITY: rule id, fingerprint (`fingerprints["al-sem/v1"]` in SARIF, `fingerprint` in JSON)
+and location (file, line, column). The 1,976 reports were regenerated from the saved outputs of
+that run (`idrun-C2/`; no new analyzer run). `idcheck.py pin` wrote
+`/work/bench/160-11b/expect-C-exact.json`: per cross-app CDO report, the exact set of 14 moved
+identities. That is R-MOVES, frozen. Each of the 4 reports holds 34 `d9` results, so 20 `d9`
+results per report must NOT move. `accept idrun-C2 expect-C-exact.json`: 1,976 reports, 0
+violations. **Negative substitution** (`neg-subst/`): a right-hand SARIF made from the left one
+with 13 of the 14 pinned moves applied and the 14th "+1" put on a DIFFERENT `d9` result (another
+span root's summary) instead. `accept` fails, exit 1, with exactly two violations: "unexpected
+moved result" (the substituted result) and "expected moved result did not move" (the missing
+pinned one).
 
 ### 3.5 What stages A and B are predicted to move
 
@@ -337,9 +372,11 @@ one starts.
   made after assembly (`force_shared_id`, `detector_context.rs:2051`) is therefore seen. Nothing
   retains it, which also keeps `batch` (two models in one process) safe without a model tag (Q3).
 - **Role homogeneity** (Q5): the projection checks that the rows of each collision group share
-  one role (all primary, or all of one dependency app, by `source_unit_id` / `app_guid`). It is a
-  `debug_assert!` and a census counter `groups_mixed_role`, which must read 0 (P11's line gains
-  it; test T9).
+  one role (all primary, or all of one dependency app, by `source_unit_id` / `app_guid`). The
+  check runs INSIDE the production projection, every time it runs. In a debug build it is a
+  `debug_assert!` with the message "collision group mixes roles"; in every build it increments
+  a census counter, `groups_mixed_role`, which must read 0 (P11's line gains it). Test T9 drives
+  it through the production path (R2-02).
 - The L4 interner's type is renamed `SolveIx` (11A-4). This is mechanical, in 12 files (P9).
   `alsem query` output does not change (`cli-query-goldens`).
 
@@ -401,15 +438,28 @@ one row is passed through untouched, R1-01):
     `interface_name`; a publisher's `parameters`, `signature_hash`, `isolated`) are all kept.
   - **Order**: today's sort key first (`edge_sort_key`, `uncertainty_sort_key`,
     `inherited_fact_key`, `combined_graph.rs:175-196`), then the full value as the tie-break,
-    compared on a canonical serialization (`serde_json::to_string` of the item, keys sorted;
-    the `Debug` text for an item type that is not `Serialize`; the plan names which per type).
-    So the result does not depend on row order (T2).
+    by a TOTAL ORDER on the payload type, never a serialization (R2-04: `serde_json` writes
+    struct fields in declaration order and maps in iteration order, and this crate's
+    `serde_json` pulls in `indexmap`, so no serialized form is canonical; `Debug` has the same
+    problem). Each payload type in a union derives `PartialOrd, Ord` (or, where a field has no
+    `Ord`, implements an explicit comparator over every field). Deriving `Ord` is itself the
+    check that no field is hash-ordered: `HashMap`/`HashSet` and `f32`/`f64` have no `Ord`, so
+    the derive does not compile. Task A asserts it per type, in a `--lib` test that names every
+    union payload type and calls a `fn total<T: Ord>()` on it. Read at this base, none of the
+    payload types has such a field: `CombinedEdge`, `TypedEdge`, `UncertaintyEdge`
+    (`combined_graph.rs:37, :64, :83`), `Uncertainty`, `DbEffect` (`engine/l4/summary.rs:68,
+    :87`), `CapabilityFact` (`program/body/capability/mod.rs:169`), `RootClassification`
+    (`engine/root_classification.rs:96`), `SnapshotCallsiteEvidence` (`snapshot.rs:749`);
+    `EventSymbol` and `EventEdge` (`program/model/events.rs:45, :84`) derive only `Debug, Clone`
+    today and gain `PartialEq, Eq, PartialOrd, Ord`. A nested type that cannot derive `Ord`
+    fails the build, which is the point. So the result does not depend on row order (T2, T2u).
   - **Scalars**: flags OR-ed. Coverage status: the least complete (direct `complete` <
     `partial` < `unknown`; inherited `complete` < `partial`; P8, decision 7). Reasons: a sorted
     union.
   - **Per point**: R2a/R2b/R2c direct facts, coverage and leaf summaries; #13 base summary
-    (`db_effects`, `uncertainties` and `parameter_roles` as full-value unions; the two flags
-    OR-ed) and dispatch bindings; R4b publisher symbols; R4: each subscriber id emits the
+    (`db_effects` and `uncertainties` as full-value unions; the two flags OR-ed; its
+    `parameter_roles` are NOT unioned, see class P below); class U's collided lists (R1, #10:
+    the tie order above, decision 1); R4b publisher symbols; R4: each subscriber id emits the
     full-value union of the subscriptions of its rows' distinct nodes (equal to today when an
     id's rows share a node, every CDO and corpus group); R1c interface candidates (one per
     distinct implementer, so `candidate_count` is no longer doubled); #14 commits and #16
@@ -439,6 +489,36 @@ one row is passed through untouched, R1-01):
   - Points that are FW today (R1b, R9, #22, `collect_dep_order_index`) change to it; LW ones
     already agree where the last row owns the key. `resolve_target` (root classification with a
     config) dedups its matches by id first, so two rows of one id no longer read as "ambiguous".
+  - **Per parameter, never a union** (decision 3; R2-01). A parameter's role
+    (`RecordRoleSummary`) and its dispatch (`ParamDispatch`) are single-valued, keyed
+    `(id, parameter index)`: every reader takes ONE record per index (`d37.rs:240-245`,
+    `summary_runner.rs:846-860`, the walker's one `ParamDispatch` per parameter), so two kept
+    records would mean "the first one", not their combination. The rows of one id share their
+    signature (same id ⇒ same parameter list), so every row owns every index and the pick is the
+    LAST row. That is today's answer for the base summary (`base_summaries` is LW, #13); the
+    change is that the union no longer touches the field. Tested with conflicting roles through a
+    caller and through d37 (T1j).
+  - **Per-site consumers go through the same pick** (decision 2; R1-04). `d37`
+    (`d37.rs:224-239`) and `compose_roles_only` (`summary_runner.rs:790-860`) today iterate a
+    row's own call sites, take "the first edge with this call-site id" from the UNIONED
+    `edges_by_from[id]` (which may be the other arm's edge), and read `upgraded_bindings[cs.id]`
+    (R5, the last row's bindings). At B both read one accessor, `site_pick(id, cs_key)`. It
+    returns the LAST owning row's `PCallSite`, its first targeted `CallEdge` (R9's within-row
+    policy, through `CallEdge.from_ix`) and its bindings, so edge and bindings always come from
+    one row. They iterate the id's owned call-site keys (the union of its rows' keys), not one
+    row's list.
+    **For a single-row id the answer does not change**: its owning row is its only row, its
+    bindings are R5's, and "the first targeted `CallEdge` of that site" equals "the first
+    `CombinedEdge` with that call-site id". Both lists hold that site's resolved targets in
+    target order: the adapter emits a multi-target (interface) site sorted by `to`, and
+    `edges_by_from` is stable-sorted by `kind|callsite|to` (`combined_graph.rs:175-183`), with
+    one kind per site. In A, `site_pick` is a COMPAT accessor that reproduces today's mix
+    exactly (the row's own `cs`, the first unioned edge, the LAST row's bindings), so A stays
+    byte-neutral. B switches it. The single-row equality is then proved two ways: by T6b's
+    single-row multi-implementer case (B's answer equals today's), and by B's identity run (every
+    CDO and fixture output identical). If either shows a changed single-row answer, the
+    exception is stated, and the accessor keeps today's edge choice for single-row ids with a
+    test of its own (F11).
 - **Class G (guard frames) is unchanged** (decision 5): R2d stays per id with the LAST row's
   frame, and #15 stays as today. Unioning conjunctive requirements of alternative arms would
   describe an impossible path, and LAST can prune another arm's commit. That defect is filed for
@@ -454,9 +534,11 @@ one row is passed through untouched, R1-01):
 full-value union is commutative and idempotent and its output is sorted by (sort key, full
 value), so set-valued output does not depend on which row comes first (T2). The LAST owning row
 depends on row order by design, and row order is fixed by assembly (workspace files, then ABI
-rows, then dependency source files, in path order); the whole-pipeline swap test (T2) uses a
-fixture whose rows agree on every shared key, so the pick cannot show there, and T6 pins the
-pick itself.
+rows, then dependency source files, in path order). It DOES show when the order is reversed:
+two arms sit at different lines, so a key both own (the routine id, a shared call site) gets a
+different anchor from a different row (R2-03; the earlier "the pick cannot show" was wrong).
+That is why T2 compares only set-valued surfaces with the collided rows' anchors normalized, and
+excludes classes P, R and G by design. T6 pins the pick itself.
 `rel.typed` keeps today's concatenation (Decision 43). The Primary SCC never sees duplicates:
 Tarjan skips repeated ids (P7), so `rel.scc` and every serialized SCC count are unchanged.
 
@@ -513,15 +595,23 @@ that also re-keys `cs.id` / `callsite_id`; `force_shared_id` re-keys only routin
 | Operation | Production use pinned by | Mutation → fails |
 |---|---|---|
 | compat projection (A) | the A identity run (§8) and every test below passing unchanged through A | swap one compat function's rule (LAST ↔ FIRST) → that point's test fails at A |
-| full-value union, S (B) | T1, T1b, T1c, T1e, T2 | first-row / last-row pick; dedup by sort key only |
-| full-value dedup, K (B) | T1d, T1g, T1h, T1i | keep per-row copies |
-| union tie order (B) | T2u | insertion order instead of full value |
+| full-value union, S (B) | T1, T1b (R4b, through the production event graph and `rel.primary().edges_by_from`), T1c, T1e, T2 | first-row / last-row pick; dedup by sort key only |
+| full-value dedup, K (B) | T1d, T1g, T1h, T1i (production `policy check`) | keep per-row copies |
+| union tie order, incl. class U's collided lists (B) | T2u (through production `edges_by_from` / `uncertainty_edges_by_from`) | emission order instead of full value |
+| total order per payload type | the `--lib` test of §4.6 (`fn total<T: Ord>()` per union payload type) | add a `HashMap` field to one payload → the build fails |
 | LAST owning row, P (B) | T6, T1g | `rows_of_id.last()` without the owning filter; edge and bindings from different rows |
+| per-parameter pick, P (B) | T1j (through a caller's summary and d37) | union the role records |
+| per-site consumers through `site_pick` (A compat, B consistent) | T6b (d37 and `compose_roles_only`) | read `edges_by_from` directly again |
 | within-row candidate policy (kept) | T6 | take the last implementer |
 | all-raises proof, #17 (B) | T1f, T1f-neg | inspect by LAST-row string index |
 | least-complete coverage (B) | T1-cov | LAST status; LAST reasons |
 | guard frames unchanged (G) | T-guard | union the arms' requirements |
-| role homogeneity check | T9 | skip the check |
+| role homogeneity check, in the production projection | T9 | remove the projection's call to the check |
+
+T2 covers set-valued surfaces only; classes P, R and G are excluded from it by design (T6, T6b,
+T1g and T1j pin P; R is out of scope by 11B-3; G is unchanged and T-guard pins it). No test
+claims to cover every possible merge point: T2 catches a missed SET-VALUED point on the surfaces
+it compares, and the per-operation tests above pin the rest.
 
 ### 5.1 T1: the collision fixture flips (the epic's proof row; rebuilt for R1-06)
 
@@ -549,37 +639,66 @@ precondition). At B, through the PRODUCTION consumers, the routine's coverage re
 `partial` (one reason) and arm B `complete`: status `partial`. Breaks: LAST status → the second
 case reads `complete`; LAST reasons → one reason missing.
 
-### 5.2 T2: the whole-pipeline order swap (R1-08, Opus I-4; lands at B)
+### 5.2 T2: the order swap over the set-valued surfaces (R1-08, R2-03; lands at B)
 
 A natural `#if` collision in a workspace routine. Its arms agree on every key both own: the same
 calls at `cs0`-`cs2`, the same operations, the same access modifier and declaration shape. Arm B
 alone owns extra keys: a call `cs3` to a routine that writes Z, a commit, and a raise of a
 published event. A `#[doc(hidden)]` test entry assembles the model with the rows of every
 collision group in REVERSED order (before `RowNodes` and the attach, so every row index stays
-consistent), and runs the full `analyze` pipeline: every detector, SARIF and JSON. The test
-asserts that both outputs are byte-equal to the normal order's (JSON without `generatedAt`).
-Because the shared keys are equal and the extra keys have one owner, any first-row or last-row
-choice left on a SET-VALUED point anywhere in the pipeline makes the two orders differ. That
-includes any point the trace missed. Preconditions: the group's size is 2; the arms' shared
-call sites have equal callee text; the reversed model really has the arms in the other order.
-Break: revert any one union to a first-row pick (recorded for R2a, #13, R4b and the snapshot's
-K dedup) → the outputs differ → fails. Revert. Before B the two orders differ (A's compat rules
-pick by row), so the test lands with B.
+consistent). The source is the same in both runs; only the row order differs.
+
+**What is compared** (R2-03): only SET-VALUED surfaces, built by the production code in both
+orders:
+- the per-id direct facts and coverage the cone takes (`det_cone_inputs`);
+- the collided id's projected base summary (`db_effects`, `uncertainties`, the flags);
+- the event graph (symbols and edges);
+- `rel.primary().edges_by_from[id]` and `uncertainty_edges_by_from[id]`;
+- the reverse call graph;
+- the transaction spans (seeds and commits);
+- the snapshot's capability facts and call-site evidence for the routine.
+
+**Location normalization**: every source anchor that falls inside either arm's declaration span
+is replaced by `(arm, line - arm start, column)`. The arm is named by its SOURCE position (first
+or second `#if` arm), which is the same in both runs. The routine's own declaration anchor and
+the anchors of the keys both arms own are masked, because a class P pick decides them.
+
+**Excluded by design**: class P lookups (anchors, display, bindings, the routine row), class R
+detectors' choice of finding, class G frames. These follow row order on purpose (§4.7) and are
+pinned elsewhere (§5.0).
+
+Preconditions:
+- the group's size is 2;
+- the arms' shared call sites have equal callee text;
+- the reversed model really has the arms in the other order;
+- the compared surfaces are non-empty and each mentions the collided id (listed by the test, so
+  a surface that silently drops the id fails the precondition).
+
+The test asserts that each compared surface, normalized, is equal in both orders. Break: revert
+any one union to a first-row pick (recorded for R2a, #13 and the snapshot's K dedup) → that
+surface differs → fails. Revert. Before B the two orders differ (A's compat rules pick by row),
+so the test lands with B. The R4b and policy unions are pinned by their own production witnesses
+(T1b, T1i), because this fixture's collided routine is not a publisher and `analyze` does not
+run the policy evaluation (R1-08).
 
 **T2u** (R1-01): the projection's union, called on hand-stated items with an equal sort key and
 different payloads (two edges `kind|{id}/cs0|to` differing in `resolution`; two uncertainties
 differing in `interface_name`; two publisher symbols differing in `signature_hash`), in both
 input orders: the outputs are equal, keep BOTH items, and are ordered by full value. Also
-through production: two collided rows' edges made so by assignment on `model.calls`, read back
-from `rel.primary().edges_by_from[id]` in both orders. Break: dedup by sort key → one item lost
+through production (decision 1), for class U: two collided rows' call edges with one call-site
+id and one target but different `resolution` and `dispatch`, made so by assignment on
+`model.calls` (each row's `from_ix` kept), are built into an `ExecRelation` in both row orders.
+`rel.primary().edges_by_from[id]` (and, with two uncertainties differing in `interface_name`,
+`uncertainty_edges_by_from[id]`) must be equal in both orders, hold both items, and order them
+by full value; today's stable sort keeps emission order, so the test fails before B. Break: dedup by sort key → one item lost
 → fails; insertion order → the two orders differ → fails. A single-row id with an internal
 duplicate is passed through untouched (asserted with the same mutation).
 
-### 5.3 T1b-T1i, T-guard, T9: one fixture per remaining class
+### 5.3 T1b-T1j, T-guard, T9: one fixture per remaining class
 
 | Test | Shape | Assertion at B (through C and A: today's behaviour) | Break → fails |
 |---|---|---|---|
-| T1b `collided_publisher_symbols_merge_by_value` | a publisher declared in two arms; a variant whose arms differ in a parameter | equal symbols → one `EventSymbol` and one dispatch edge per subscriber; differing symbols → both kept, full-value order (no per-row publisher facts are asserted, R1-17) | push a symbol per row |
+| T1b `collided_publisher_symbols_merge_by_value` (production witness for R4b) | a publisher declared in two arms, with a subscriber; a variant whose arms differ in a parameter | through the production assembly (`program_event_graph`) and the production relation (`rel.primary().edges_by_from[publisher id]`): equal symbols → one `EventSymbol` and ONE event-dispatch edge per subscriber; differing symbols → both kept, full-value order (no per-row publisher facts are asserted, R1-17) | push a symbol per row → two dispatch edges |
 | T1c `collided_interface_call_counts_each_implementer_once` | both arms make one interface call | `candidate_count` = the number of implementers | union without dedup |
 | T1d `collided_id_is_one_reverse_entry` | a collided caller | `reverse_call_graph` and r3a1 `combined_edges` list each edge once | walk duplicate `nodes` |
 | T1e `collided_commit_seeds_from_both_arms` | a primary routine; one arm commits, the other does not | the span seeds from the union of commits, one span per call-site id, the seed row is a row that owns the commit | seed `routine_by_id[id]` (last row) |
@@ -587,9 +706,10 @@ duplicate is passed through untouched (asserted with the same mutation).
 | T1f-neg `event_param_temp_mixed_raise_is_not_proven` (decision 6) | arm A passes a PHYSICAL record, arm B (the last row) a temp record, at the same `{id}/csN` | no rewrite on any subscriber row (today: proven, because both raises are read from the last row) | inspect raises through the LAST-row string index |
 | T1g `dep_order_index_pairs_frames_and_ops_of_one_row` | a source-bearing dependency with a collided routine whose arms differ in ops | each `{id}/opN` and its scope frame come from that op's last owning row | today's pairing (frames LAST, ops FIRST) |
 | T1h `collided_routine_classifies_once` | an entry-point trigger in two arms; a variant with a roots config naming it | one classification per distinct value; `resolve_target` resolves it (not "ambiguous") | keep per-row copies; count rows instead of ids |
-| T1i `policy_evaluates_a_collided_routine_once` | a policy rule matching a collided routine | `routines_*` counters count the id once; one finding | evaluate per row |
+| T1i `policy_evaluates_a_collided_routine_once` (production witness for the policy path) | a collided fixture plus a policy file with a rule matching the collided routine; run through the production `alsem policy check` entry (`gate/policy/pipeline.rs:273-277`), not the engine function | the report's `routines_*` counters count the id once; one finding, one finding id | evaluate per row |
+| T1j `collided_parameter_role_is_one_record` (R2-01) | two arms of a callee with the same parameters, whose bodies give parameter 1 CONFLICTING roles (one arm writes the record, the other only reads it); a caller passes a `var` record to it; d37's shape on the caller | the callee's projected `parameter_roles` hold ONE record for index 1, the LAST row's; the caller's composed role (through `compose_roles_only`) and d37's verdict both follow that record | union the role records → two records for index 1, and the caller's role follows the first |
 | T-guard (decision 5) | arms with opposite guard requirements, and a variant with one unguarded arm | the frame is the LAST row's at A and B (unchanged), and the cone and spans read it as today | union the arms' requirements |
-| T9 `collided_rows_share_one_role` | a group forced across two roles by assignment | the check function (called directly) reports `groups_mixed_role = 1`; on every natural fixture and on CDO it is 0 (the `debug_assert!` sits at the projection's call site, which this test does not run) | skip the check |
+| T9 `collided_rows_share_one_role` (R2-02) | a group forced across two roles by assignment (one row's `source_unit_id` set to a dependency unit), then the PRODUCTION projection run on that model (through `build_detector_context`) | in a debug build the projection's `debug_assert!` fires: `#[cfg_attr(debug_assertions, should_panic(expected = "collision group mixes roles"))]`; in a release build the census counter `groups_mixed_role` reads 1. Natural fixtures and CDO read 0 | remove the projection's call to the check → no panic (debug) and 0 (release) → fails |
 
 ### 5.4 T3: J2 restated (10+11a T7a-c)
 
@@ -646,6 +766,22 @@ edge FIRST row and bindings LAST row (today's mix) → the same-row assertion fa
 implementer → the `cs1` assertion fails. Revert each. Through C and A the test asserts today's
 mix (R9 first row, R5 last row), which is A's identity on this input.
 
+**T6b** (decision 2; R1-04): the same 5/4 fixture, read by the two per-site consumers that
+bypass R9 today:
+- d37's verdict on the caller (`d37.rs:224-245`);
+- the caller's composed parameter roles from `compose_roles_only` (`summary_runner.rs:790-860`).
+
+The setup: `cs0`'s two arm targets give the passed `var` record different roles (one writes it,
+one only reads it). At B both consumers follow arm B's target AND arm B's bindings (the LAST
+owning row), and they visit `cs4` (arm A's only), which today's code skips when the routine row
+it is handed is arm B. A single-row multi-implementer case on the same fixture asserts that B's
+answer equals today's (§4.6). Breaks:
+- read `edges_by_from[id]` directly again → the collided case follows the first arm's edge with
+  the last arm's bindings → fails;
+- iterate one row's call sites → `cs4` is missing → fails.
+
+Revert each. Through C and A the test asserts today's answers.
+
 ### 5.7 T7: `from_order` with a collision group
 
 d17's two-caller fixture (step 4) plus a collided caller: the projected sequence equals today's
@@ -661,7 +797,7 @@ re-recorded (restore the anchor check → the 5 reappear → fails).
 ### 5.9 Tests deleted or rewritten with the code they pin (I2's exception)
 
 - Rewritten: T3's J2 test; T4's two caller tests; T5's J5 test, its T8a fixture and A8; T1
-  (rebuilt fixture) and T1b-T1i, T6 (flipped at B);
+  (rebuilt fixture) and T1b-T1j, T6, T6b (flipped at B);
   `hand_stated_id_collision_keeps_a_real_summary_and_derived_row` (`detector_context.rs:2302`)
   and `colliding_ids_keep_the_full_summary_union_not_just_the_edges` (`:2811`), which encode R3a
   and are restated to the union at B on the same fixtures. A sibling test helper
@@ -680,12 +816,12 @@ Each is named in its commit.
 | A11b.1 | J2 alias gone | T3; C's CDO census `j2_alias_nodes=0` |
 | A11b.2 | J5 reads `node_of`, with a fail-closed guard | T5, A8 (both cases); C's CDO census `j5_compat_rows=0` |
 | A11b.3 | The 5 `caller_mismatch` sites leave the residual | T4; the CDO loss gate = 18 / 18 (or F3's set) |
-| A11b.4 | C moves exactly R-MOVES | C's identity run (`expect-C.json`, 0 violations): cross-app CDO differs at each scope in exactly the 14 `d9-transaction-span-summary` results of §3.4, in SARIF and JSON, each message-only, event count +1; every other report identical; the 8 golden targets and the histogram SHA identical |
+| A11b.4 | C moves exactly R-MOVES | C's identity run, `accept` against `expect-C-exact.json` with 0 violations: cross-app CDO differs at each scope in exactly the 14 pinned identities (rule + fingerprint + location) of §3.4, in SARIF and JSON, each message-only, event count +1, and no other result of any rule; every other report identical; the 8 golden targets and the histogram SHA identical |
 | A11b.5 | `RoutineIx` stored where producers need it; `SolveIx` | §4.3; `CallEdge.from_ix`; `rg -w RoutineIx src/engine/l4` hits only the model's type |
 | A11b.6 | Carrier split (M1, M2) | §4.4; `PrimaryGraph` has no `typed_edges` field |
 | A11b.7 | Every class S/K/P point produced per row and projected once, before its computation | §4.5; the plan's per-point checklist from §3.2 (classes S, K, P); classes U, G, F, R and kept: unchanged, stated |
 | A11b.8 | Stage A byte-neutral | the 8 golden targets and the `--lib` outcomes (apart from §5.9); A's identity run against C's head with `expect-identical.json`: 0 violations |
-| A11b.9 | The one rule | T1, T1-cov, T2, T2u, T1b-T1i, T6, T7, T-guard, T9 (§5.0's operation table, each with its mutation) |
+| A11b.9 | The one rule | T1, T1-cov, T2, T2u, T1b-T1j, T6, T6b, T7, T-guard, T9 and the total-order test (§5.0's operation table, each with its mutation) |
 | A11b.10 | Stage B byte-identical outside the hand-stated tests | B's identity run against A's head with `expect-identical.json`: 0 violations, or F5's bounded admission |
 | A11b.11 | Id-pattern counts per golden dir unchanged | P15 script, base vs head: 43 rows / 21,435 occurrences |
 | A11b.12 | CDO collision delta reported | the census line at each stage, both universes |
@@ -700,8 +836,9 @@ triage, §8). I3, I4, I5, I8 and I11 are untouched.
 
 - **A merge point the trace missed**: A's identity gate cannot see it (A reproduces whatever is
   there), so B would leave it on its old rule. Guards: the round-1 trace closed every path P6
-  left open (§3.2); T2, the whole-pipeline order swap, fails for ANY set-valued first-row or
-  last-row choice left anywhere in `analyze`, traced or not.
+  left open, and `p6b-trace.md` has no unread path left (§3.2). T2 fails for a set-valued
+  first-row or last-row choice on the surfaces it compares (§5.2), and the per-operation tests
+  of §5.0 pin the rest. No test claims to catch every possible missed point (R1-08).
 - **A compat function is not today's rule**: A's identity run fails (F4).
 - **A C move outside R-MOVES**: a defect (F2).
 - **Node equality accepts a pair the anchor check rejected for a reason other than `#if`
@@ -749,10 +886,15 @@ round-1 probe scripts (`run-base.sh`, `run-probe.sh`) are NOT reused for accepta
 
 It writes one machine-readable, exhaustive diff report per pair (`*.report.json`: both SHAs,
 the result counts, whether anything outside the results differs, and every differing result
-with its rule, a message-only flag and both texts), then the `accept` summary. The analyze
-JSON's `generatedAt` is the one field ignored, and only for `--format json`. Validated on the
-stage-C prototype in round 1 (§3.4: 0 violations against `expect-C.json`, and 4 violations, as
-it must, against `expect-identical.json`).
+with its IDENTITY, i.e. rule, fingerprint and location, plus a message-only flag and both
+texts), then the `accept` summary. An expectation names, per report, the exact set of
+identities that may move, the counter pattern and its delta. Any other moved result fails, of
+any rule, including another `d9`. So does a pinned result that did not move, or a changed
+identity. The analyze JSON's `generatedAt` is the one field ignored, and only for
+`--format json`. Validated on the stage-C prototype (§3.4):
+- 0 violations against `expect-C-exact.json`;
+- 4 violations, as it must, against `expect-identical.json`;
+- the negative substitution fails with the two expected violations.
 
 For each stage boundary (base → C, C → A, A → B), each side:
 1. `aldump --program-call-graph-stats $WS` JSON: byte-equal (SHA `c032c8db…a1594ef` at every
@@ -775,13 +917,14 @@ checks that (the prototype changed no fixture's analyze output, which is consist
 did not run the goldens). `scripts/cdo-gate` on the head covers the ratchets.
 
 **Reading the result (pre-stated, binding).**
-- **C:** `accept` with `/work/bench/160-11b/expect-C.json` must report 0 violations. That means
-  the 4 cross-app CDO reports (SARIF and JSON, both scopes) differ in exactly the 14 results of
-  §3.4, each a `d9-transaction-span-summary`, message-only, with "publishes N event(s)" +1 and
-  no other text changed, and every other report is identical. The census must read
+- **C:** `accept` with `/work/bench/160-11b/expect-C-exact.json` (frozen, R-MOVES) must report 0
+  violations. That means the 4 cross-app CDO reports (SARIF and JSON, both scopes) differ in
+  exactly the 14 pinned identities of §3.4 and in no other result, each one a
+  `d9-transaction-span-summary`, message-only, with "publishes N event(s)" +1 and no other text
+  changed, and every other report is identical. The census must read
   `j2_alias_nodes=0 j5_compat_rows=0`. The `cdo-measure` skill records the move: findings per
-  detector unchanged in count, fingerprint churn 0 (every result's `ruleId` and
-  `partialFingerprints` were identical on the prototype).
+  detector unchanged in count, fingerprint churn 0 (every moved result keeps its fingerprint by
+  construction of the identity check).
 - **A and B:** `accept` with `/work/bench/160-11b/expect-identical.json` (no admitted difference)
   must report 0 violations.
 - Anything else is F2 / F4 / F5.
@@ -807,8 +950,10 @@ Numbers go to `docs/measurements/<date>-issue-160-step11b.md`.
 - **11B-4: the merge inventory is 22 points from P6 plus about 30 from the round-1 trace, in
   eight classes (§3.2), not the epic's three; "one rule" is the full-value union across a
   collided id's rows for set-valued inputs (single-row ids untouched), plus one named pick (the
-  LAST OWNING row per key, every piece of a key from that row) for single-valued lookups.** A
-  row, or one call site's edge, cannot be unioned. Decision 6's "order-independent" holds for
+  LAST OWNING row per key, every piece of a key from that row; keys are call sites, ops, and
+  parameter indexes, so a parameter's role or dispatch is never unioned) for single-valued
+  lookups.** A row, one call site's edge, or one parameter's role cannot be unioned. Class U's
+  collided lists take the union's full-value tie order. Decision 6's "order-independent" holds for
   the set-valued inputs. Guard frames (class G) and the detectors' own finding choice (class R)
   keep today's rule in 11b, each stated with its reason.
 - **11B-5: one claim, three stages, C → A → B, each closed by its own fail-closed identity run;
@@ -838,15 +983,16 @@ stays, and the ledger records the reason.
 | # | If | Then (applied without a new panel round; recorded in the ledger) |
 |---|---|---|
 | F1 | The panel refuses 11B-1 (it wants byte identity at C too) | C leaves this claim and is filed as its own issue (the discovery, unchanged); 11b = A + B, both predicted byte-identical (§3.5) |
-| F2 | C's identity run: `accept` with `expect-C.json` reports any violation, or a census value ≠ 0, or the loss gate ≠ the residual minus 5 | A defect: the implementation is not the prototype's rules (`probe-final.patch`). Diff it against those rules, fix, re-run. Not closed in one attempt → stop at the base (nothing merges) |
-| F3 | The XmlPort fix (or any other change to the base) merges before C | Before C starts, the prototype patch is re-applied to the new base and the fail-closed identity run is repeated. **Admissible** (source-based, binding): only results that are `d9-transaction-span-summary`, message-only, whose only change is "publishes N event(s)" +1, and whose span root's cone reaches `PageManagement.GetPurchaseHeaderPageID` (the one call the correction restores is its first arm's `OnAfterGetPurchaseHeaderPageID`, source line 351). `expect-C.json` is then rewritten to the new count, the root list in §3.4 is updated, and the new R-RESIDUAL (the residual minus the 5) is the loss gate. Any other difference → the base change interacts with C: stop, re-panel C |
+| F2 | C's identity run: `accept` with `expect-C-exact.json` reports any violation, or a census value ≠ 0, or the loss gate ≠ the residual minus 5 | A defect: the implementation is not the prototype's rules (`probe-final.patch`). Diff it against those rules, fix, re-run. Not closed in one attempt → stop at the base (nothing merges) |
+| F3 | The XmlPort fix (or any other change to the base) merges before C | Before C starts, the prototype patch is re-applied to the new base and the fail-closed identity run is repeated. **Admissible** (source-based, binding): only results that are `d9-transaction-span-summary`, message-only, whose only change is "publishes N event(s)" +1, and whose span root's cone reaches `PageManagement.GetPurchaseHeaderPageID` (the one call the correction restores is its first arm's `OnAfterGetPurchaseHeaderPageID`, source line 351). `expect-C-exact.json` is then re-pinned (`idcheck.py pin`) from that run only if every moved identity passes the admissibility test above, the root list in §3.4 is updated, and the new R-RESIDUAL (the residual minus the 5) is the loss gate. Any other difference → the base change interacts with C: stop, re-panel C |
 | F4 | A's identity run fails (`accept` with `expect-identical.json` reports a violation, or a golden, or a `--lib` outcome outside §5.9) | A compat function is not today's rule. Bisect A's commits to the point, fix that function, re-run. Not closed in one attempt → stop at C's head (C alone may merge: its gate passed) |
 | F5 | B's identity run reports a violation (CDO or a fixture) | §3.5's prediction is wrong for some point. Each moved result is triaged to a §3.2 point and a collided id. **Admissible** (source-based, binding): a move that is exactly the union (S/K) or the LAST owning pick (P) applied to that collided id's rows as read from the AL source, or the propagation of such a move into a caller's result (a result whose subject's cone, witness or callee chain contains the collided id). The triage uses the `golden-diff-triager` agent for a golden, and `cdo-measure` + `triage-findings` for CDO. Every admitted move is listed in the numbers file with its source reading, and `expect-B.json` is written from that list. Anything else is a defect. ONE fix attempt; not closed → stop at A's head (C and A may merge) |
 | F6 | A merge point is found during implementation that §3.2 does not list | It joins the class whose rule fits (union for set-valued, LAST owning for single-valued, or "kept" with its reason), recorded in §3.2 and the ledger without a new round. If it needs a third rule beyond union and LAST owning (or a new "kept" exception), the claim stops and the spec goes back to the panel |
 | F7 | A census bucket grows more than 20 % at any stage | Name it; if a per-row output outlives its projection, make the projection consume it (§4.8); re-run the census once. Still > 20 % → reported in the numbers file and raised to the final panel (not a block: 11b has no peak bound) |
 | F8 | Making a point's producer per-row forces edits in more than 40 reader files | Make the producer per-row only; the readers keep the projected per-id value (11B-3); state it in §3.2 |
 | F9 | (decided, Q1) Twin-node fan-out | Not 11b: 10 routes on CDO (P10), handed to step 6 (§12); D2 stays |
-| F10 | (measured: true) No natural collided row differs in facts or coverage, so B has no CDO witness | Recorded as a stated limit: §5's fixtures (every operation of §5.0's table with its mutation, and T2's whole-pipeline swap) are the evidence of the rule |
+| F10 | (measured: true) No natural collided row differs in facts or coverage, so B has no CDO witness | Recorded as a stated limit: §5's fixtures (every operation of §5.0's table with its mutation, and T2's set-valued swap) are the evidence of the rule |
+| F11 | T6b's single-row case or B's identity run shows that routing `d37` / `compose_roles_only` through `site_pick` changes an answer for a SINGLE-row id (§4.6's equality of "first targeted `CallEdge`" and "first `CombinedEdge`" fails somewhere) | The accessor keeps today's edge choice (the first `CombinedEdge` with that call-site id) for single-row ids and uses the consistent pick only for collided ids. The exception is stated in §4.6 with the differing shape, and a test pins it (that single-row shape through d37 and `compose_roles_only`, today's answer). B's run is repeated once; still not identical → F5 |
 
 ## 11. Decisions taken in round 1, risks, and what is left open
 
@@ -867,7 +1013,7 @@ Risks:
    physical row (workspace) and from `source_routine_node_id` (dependency source). A wrong value
    would now pair silently where the anchor check used to fail. T4 pins the check; the loss gates
    in both universes catch an error across the population.
-2. **A merge point the trace missed.** T2's whole-pipeline swap catches any set-valued one; a
+2. **A merge point the trace missed.** T2 catches a set-valued one on the surfaces it compares; a
    missed single-valued one keeps its old rule (F6 decides).
 3. **Class R** detectors (d1, d2, d3, d13, d18, d47, d49, d51, the gate's `kept_ids`) keep their
    first-row choice when a collided id's arms differ at a shared key (§12).
