@@ -2833,3 +2833,146 @@ codeunit 50902 "VA Work"
         "arm A's Validate is flagged: arm B's call is not after it"
     );
 }
+
+/// NEW-1 (d37, a key both arms own): arm A validates `L`, then hands it at
+/// `cs0` to `WriteIt` (persists); arm B (the last row) hands it at `cs0` to
+/// `ReadIt` (does not persist). `site_pick` reads `cs0` from its LAST owning
+/// row, arm B, so for arm A's `Validate` it would pair arm A's site with arm
+/// B's callee and bindings and flag the `Validate`. The honest answer is
+/// unknown: no finding. Break: read the pick at a site another row owns last
+/// (drop the ownership check) -> the `Validate` is flagged.
+#[test]
+fn d37_reads_a_shared_key_owned_by_another_row_as_unknown() {
+    let src = r#"
+table 50903 "VB T"
+{
+    fields { field(1; "No."; Code[20]) { } field(2; Name; Text[30]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50903 "VB Work"
+{
+    procedure WriteIt(var R: Record "VB T")
+    begin
+        R.Modify();
+    end;
+
+    procedure ReadIt(var R: Record "VB T")
+    begin
+        if R.Name = '' then
+            exit;
+    end;
+
+#if A
+    procedure Work()
+    var
+        L: Record "VB T";
+    begin
+        L.Get('x');
+        L.Validate(Name, 'n');
+        WriteIt(L);
+    end;
+#else
+    procedure Work()
+    var
+        L: Record "VB T";
+    begin
+        L.Get('x');
+        ReadIt(L);
+    end;
+#endif
+}
+"#;
+    let m = build(src, "22222222-0000-0000-0000-00000011b041");
+    let (id, rows) = collided(&m, "Work");
+    let r = |ri: usize| &m.workspace.routines[ri];
+    let cs0 = format!("{id}/cs0");
+    assert!(
+        r(rows[0]).call_sites.len() == 1
+            && r(rows[1]).call_sites.len() == 1
+            && r(rows[0]).call_sites[0].id == cs0
+            && r(rows[1]).call_sites[0].id == cs0
+            && r(rows[0]).call_sites[0].callee_text.contains("WriteIt")
+            && r(rows[1]).call_sites[0].callee_text.contains("ReadIt"),
+        "precondition: both arms own cs0, arm A to WriteIt, arm B (last) to ReadIt"
+    );
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let pick = crate::program::model::projection::site_pick(
+        &ctx.graph,
+        &id,
+        &cs0,
+        &ctx.upgraded_bindings_by_callsite,
+    );
+    assert_eq!(
+        pick.callee,
+        Some(id_named(&m, "ReadIt").as_str()),
+        "precondition: cs0's pick is arm B's ReadIt"
+    );
+    let out = crate::engine::l5::detectors::d37::detect_d37(&m, &ctx).expect("d37");
+    assert!(
+        !out.findings
+            .iter()
+            .any(|f| f.id.starts_with(&format!("d37/{id}/"))),
+        "arm A's Validate is not judged by arm B's callee: unknown, no finding: {:?}",
+        out.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+    );
+}
+
+/// NEW-2 (snapshot, class K with FP-05's frame table): two EQUAL rows of one
+/// id (a row cloned by assignment, the stated precondition) give the same
+/// snapshot call-site evidence and frame table as the single row: equal rows
+/// share one frame block, so their evidence copies keep equal `order`s and
+/// collapse. Break: give every row its own block -> the evidence is listed
+/// twice and the table doubles.
+#[test]
+fn snapshot_equal_rows_share_one_frame_block() {
+    let src = r#"
+codeunit 50904 "SE Work"
+{
+    local procedure Helper()
+    begin
+    end;
+
+    procedure Work(F: Boolean)
+    begin
+        if F then
+            Helper();
+    end;
+}
+"#;
+    let single = build(src, "22222222-0000-0000-0000-00000011b042");
+    let mut m = build(src, "22222222-0000-0000-0000-00000011b042");
+    let ri = rows_named(&m, "Work")[0];
+    let copy = m.workspace.routines[ri].clone();
+    m.workspace.routines.push(copy);
+    collided(&m, "Work");
+    let stable = m.workspace.routines[ri].stable_routine_id.clone();
+    let view = |m: &Model| {
+        let snap = crate::engine::l5::snapshot::compose_snapshot(m);
+        let evidence: Vec<String> = snap
+            .callsite_index
+            .iter()
+            .filter(|c| c.routine == stable)
+            .map(|c| format!("{c:?}"))
+            .collect();
+        let table = snap
+            .routine_order_frames
+            .as_ref()
+            .and_then(|f| f.get(&stable))
+            .map(|t| t.to_vec())
+            .unwrap_or_default();
+        (evidence, table)
+    };
+    let (want_evidence, want_table) = view(&single);
+    assert!(
+        !want_evidence.is_empty() && want_table.len() > 1,
+        "precondition: Work has call-site evidence and a nested frame"
+    );
+    let (evidence, table) = view(&m);
+    assert_eq!(
+        evidence, want_evidence,
+        "the equal rows' evidence is listed once"
+    );
+    assert_eq!(table, want_table, "the equal rows share one frame block");
+}

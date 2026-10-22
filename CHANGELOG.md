@@ -64,7 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       collapse; one interface uncertainty per call site, from its last owning row (R1b);
       a collided id's interface site counts each implementer once (R1c);
     - the per-site consumers read one pick (`site_pick`): d37 (over the row's OWN call
-      sites: another arm's sites are never "after" this row's `Validate`),
+      sites: another arm's sites are never "after" this row's `Validate`; a site whose
+      LAST owning row is another row reads as unknown, since its callee and bindings
+      are that row's),
       `compose_roles_only` (over the id's owned call sites) and the role walker's call
       transfer (`cfg_walker`); R9 `resolved_call_edge_by_callsite` takes the owning row's
       edge;
@@ -89,10 +91,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       op/call site with its own row's frames) and return summaries, the snapshot's
       call-site resolutions (display, `underAsserterror`, `resultConsumed` and the
       representative edge from one row) and its operation index, whose orders name frames
-      of the id's one frame table (every row's frames, shifted per row), `OperationJoin`
+      of the id's one frame table (every row's frames, shifted per row; rows with equal
+      frame tables share one block, so equal rows' evidence still collapses), `OperationJoin`
       (`query effects` origins); policy evaluation (class P: one evaluation per collided
-      id, through its LAST row, because policy findings are keyed by routine id; an
-      earlier arm's distinct facts produce no policy finding).
+      id, through its LAST row, because policy findings are keyed by routine id; the
+      facts it reads are the id's unioned summary, but its row-level fields
+      (`routine.accessModifier`, `routine.kind`, the finding's anchor) are the LAST
+      row's, so an earlier arm's distinct row-level fields never match a rule).
 
     What deliberately stays: single-row ids (passed through untouched); guard frames (class
     G: the cone reads the last row's frame per id, and so do a span's callers; a defect is

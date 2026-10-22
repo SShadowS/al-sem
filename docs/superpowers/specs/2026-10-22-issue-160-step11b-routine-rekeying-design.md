@@ -234,11 +234,18 @@ decisions on the round-1 spec gaps:
 - **Policy evaluation is class P, not K** (FP-03): one evaluation per collided id, through its
   LAST row (`policy_engine.rs` `run_policy_engine`). Policy findings are keyed by routine id,
   and a class K dedup of per-row findings, which carry their row's anchor, cannot collapse
-  natural `#if` arms. LIMIT: an earlier arm's distinct facts produce no policy finding.
+  natural `#if` arms. LIMIT: the facts a rule reads are the id's unioned summary, but its
+  row-level fields (`routine.accessModifier`, `routine.kind`, the finding's anchor) are the
+  LAST row's, so an earlier arm's distinct row-level fields never match a rule (pinned by
+  `policy_evaluates_a_collided_routine_through_its_last_row`).
 - **d37 compares a row's `Validate` only with that row's own call sites** (FP-14), the same
   own-facts principle as `pending_writes`: another arm's sites sit at other source positions,
-  so "after the `Validate`" means nothing across arms. Each site's callee and bindings still
-  come from `site_pick`.
+  so "after the `Validate`" means nothing across arms. Each site's callee and bindings come
+  from `site_pick` (the site's LAST owning row); at a site another row owns last, a binding of
+  the validated record reads as `suppress-unknown` (final panel NEW-1: no pieces of one key
+  from two rows, and R5 keeps no per-row bindings).
+- The snapshot's frame table gives rows with EQUAL frame tables one shared block (NEW-2), so
+  equal rows keep equal `order`s and their class K evidence copies still collapse.
 - **LIMIT: order and position comparisons across arms** (FP-12): a collided id's merged
   dependency order entry (and the snapshot's operation index) holds keys of several rows,
   each with its own row's `order_id`; comparing two entries owned by different arms is not

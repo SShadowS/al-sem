@@ -1146,7 +1146,8 @@ fn compute_routine_order(r: &ModelRoutine) -> RoutineOrder {
 /// kept (the call-site evidence keeps every row's copy, class K, and each copy's
 /// `order` names its own row's frames), in blocks ordered by the row's
 /// declaration anchor, then row order, so the table does not depend on row
-/// order; each row's frame ids are shifted past the blocks before it. A
+/// order; each row's frame ids are shifted past the blocks before it, and rows
+/// with equal frame tables share one block. A
 /// single-row id is in neither map: its own frames, unshifted.
 struct CollidedRows<'a> {
     /// Call-site id -> its LAST OWNING row.
@@ -1180,7 +1181,16 @@ impl<'a> CollidedRows<'a> {
                 (a.source_unit_id.clone(), a.start_line, a.start_column, *ri)
             });
             let (mut table, mut next) = (Vec::new(), 0);
+            // Rows with EQUAL frame tables share one block (a frame table is pure
+            // structure), so equal rows keep equal `order`s and their evidence
+            // copies still collapse (class K).
+            let mut blocks: Vec<(Vec<ScopeFrame>, i64)> = Vec::new();
             for (ri, fs) in per_row {
+                if let Some((_, off)) = blocks.iter().find(|(b, _)| *b == fs) {
+                    frame_offset.insert(ri, *off);
+                    continue;
+                }
+                blocks.push((fs.clone(), next));
                 let off = next;
                 frame_offset.insert(ri, off);
                 for mut f in fs {
