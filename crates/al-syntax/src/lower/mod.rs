@@ -3181,7 +3181,7 @@ fn lower_expr(
         },
         // H-8: a leading comment (`(/* c */ Expr)`) must never be mistaken for the
         // real inner expression — see `structural_children`'s doc.
-        RawKind::ParenthesizedExpression => match structural_children(node).into_iter().next() {
+        RawKind::ParenthesizedExpression => match expr_children(node).into_iter().next() {
             Some(inner) => {
                 ExprKind::Parenthesized(lower_expr(inner, ir, issues, source, depth + 1))
             }
@@ -3235,7 +3235,7 @@ fn lower_expr(
             },
         },
         RawKind::ListLiteral => ExprKind::List(
-            structural_children(node)
+            expr_children(node)
                 .into_iter()
                 .map(|c| lower_expr(c, ir, issues, source, depth + 1))
                 .collect(),
@@ -3248,6 +3248,9 @@ fn lower_expr(
         RawKind::Decimal => ExprKind::Literal(Literal::Decimal(node.text(source).to_string())),
         RawKind::StringLiteral | RawKind::VerbatimString => {
             ExprKind::Literal(Literal::Text(node.text(source).to_string()))
+        }
+        RawKind::PreprocConditionalOperand => {
+            return lower_operand_group(node, ir, issues, source, depth);
         }
         _ => {
             // Unmodelled expression container: lower its non-trivia children so
@@ -3264,6 +3267,57 @@ fn lower_expr(
     ir.add_expr(Expr { kind, origin })
 }
 
+/// `preproc_conditional_operand` (grammar `main` 960ed312, B7b-2): an `#if` group in
+/// place of a whole operand (`1 + #if X Foo() #else Bar() #endif`, or a receiver,
+/// `#if X Foo #else Bar #endif (1)`), one `operand` per arm. An operand is one value,
+/// so this reads ONE arm, the first a build can take ([`conditional_list_arm`]), as
+/// the positional lists do: a union would be an expression no build has. The group
+/// becomes that arm's expression. The other arms' calls are not lowered, and a
+/// `SyntaxIssue` records that. Without this arm the group was an `Unknown`, which
+/// links no child, so every call in every arm vanished.
+fn lower_operand_group(
+    node: RawNode,
+    ir: &mut Ir,
+    issues: &mut Vec<SyntaxIssue>,
+    source: &str,
+    depth: u32,
+) -> ExprId {
+    issues.push(SyntaxIssue {
+        message: "`#if` group as an operand — only the first arm a build can take is \
+                  lowered (the other arms' calls are not modelled)"
+            .to_string(),
+        origin: origin_of(node),
+    });
+    let mut arm = Vec::new();
+    conditional_list_arm(node, source, &mut Run::default(), &mut arm);
+    match arm.into_iter().find(|n| !is_expr_continuation(n.kind())) {
+        Some(operand) => lower_expr(operand, ir, issues, source, depth + 1),
+        None => ir.add_expr(Expr {
+            kind: ExprKind::Unknown,
+            origin: origin_of(node),
+        }),
+    }
+}
+
+/// An `#if` tail or prefix that continues an expression across a directive (grammar
+/// B7b-2): a sibling of a value, never a value itself.
+fn is_expr_continuation(k: RawKind) -> bool {
+    matches!(
+        k,
+        RawKind::PreprocConditionalExpressionTail | RawKind::PreprocOperandPrefix
+    )
+}
+
+/// [`structural_children`] without the `#if` tails and prefixes (grammar 960ed312
+/// lets them stand beside the value of a parenthesis, a list element or an argument),
+/// so they never take a value's slot. Their own operands are not lowered.
+fn expr_children(node: RawNode) -> Vec<RawNode> {
+    structural_children(node)
+        .into_iter()
+        .filter(|c| !is_expr_continuation(c.kind()))
+        .collect()
+}
+
 /// An `argument_list`'s arguments, in document order.
 ///
 /// - H-8: a mid-argument comment (`P(a, /* c */ b)`) must never become a phantom
@@ -3278,6 +3332,9 @@ fn lower_expr(
 ///   continue across a `#if` (`P(1 #if X + 2 #endif)`), and the tail is a SIBLING of
 ///   the argument it continues. It is not an argument, so it is not counted; lowering
 ///   it would only add an `Unknown` argument, which carries no reachable call either.
+///   A `preproc_operand_prefix` before an argument (grammar 960ed312,
+///   `P(#if X 1 + #endif 2)`) is skipped the same way: it counted as an extra
+///   argument, so the call missed its target.
 fn lower_arguments(
     al: RawNode,
     ir: &mut Ir,
@@ -3286,14 +3343,13 @@ fn lower_arguments(
     depth: u32,
 ) -> Vec<ExprId> {
     let mut args = Vec::new();
-    for c in structural_children(al) {
+    for c in expr_children(al) {
         match c.kind() {
             // A directive line inside the list (`#pragma warning disable` between
             // two arguments) is no argument (S9.0e: it inflated the arity, so
             // the call missed its 6-parameter target). The statement lowerer
             // skips the same kinds.
             RawKind::Pragma | RawKind::PreprocRegion | RawKind::PreprocEndregion => {}
-            RawKind::PreprocConditionalExpressionTail => {}
             RawKind::PreprocConditionalArguments => {
                 issues.push(SyntaxIssue {
                     message: "`#if` inside an argument list — every arm's arguments are \
@@ -3301,10 +3357,8 @@ fn lower_arguments(
                         .to_string(),
                     origin: origin_of(c),
                 });
-                for a in structural_children(c) {
-                    if is_preproc_scaffold(a.kind())
-                        || a.kind() == RawKind::PreprocConditionalExpressionTail
-                    {
+                for a in expr_children(c) {
+                    if is_preproc_scaffold(a.kind()) {
                         continue;
                     }
                     args.push(lower_expr(a, ir, issues, source, depth + 1));
@@ -5358,6 +5412,120 @@ codeunit 50106 T
         let src = "codeunit 50108 T\n{\n    procedure P()\n    begin\n        Fo\n    end;\n}\n";
         let callees = stmt_callees(&parse(src));
         assert_eq!(callees, vec!["fo".to_string()]);
+    }
+
+    /// `(callee, arity)` of every call with a plain-identifier callee that is LINKED
+    /// under an assignment value, a call statement or an `if` condition (an arena
+    /// expression no parent links is not a call site, so it is not listed).
+    fn linked_calls(af: &crate::ir::AlFile) -> Vec<(String, usize)> {
+        fn walk(af: &crate::ir::AlFile, id: crate::ir::ExprId, out: &mut Vec<(String, usize)>) {
+            let k = &af.ir.expr(id).kind;
+            if let ExprKind::Call { function, args } = k
+                && let ExprKind::Identifier(n) = &af.ir.expr(*function).kind
+            {
+                out.push((n.to_ascii_lowercase(), args.len()));
+            }
+            for c in k.children() {
+                walk(af, c, out);
+            }
+        }
+        let mut out = Vec::new();
+        for s in af.ir.iter_stmts() {
+            match &s.kind {
+                StmtKind::Assignment { value, .. } => walk(af, *value, &mut out),
+                StmtKind::Call(e) => walk(af, *e, &mut out),
+                StmtKind::If { cond, .. } => walk(af, *cond, &mut out),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Grammar B7b-2 (`main` 960ed312): an `#if` group in place of a whole operand is
+    /// a `preproc_conditional_operand`, one `operand` field per arm, and as a callee
+    /// it is the call's `function` (VERIFIED with a real parse's `to_sexp`). The
+    /// first arm is the operand; the `#else` arm's call is not lowered (the stated
+    /// one-arm limit). It was an `Unknown`, which links no child, so both calls were
+    /// lost.
+    #[test]
+    fn operand_group_lowers_its_first_arm() {
+        let src = r#"
+codeunit 50109 T
+{
+    procedure P()
+    begin
+        I := 1 +
+#if X
+            Foo()
+#else
+            Bar()
+#endif
+            ;
+        I :=
+#if X
+            Baz
+#else
+            Qux
+#endif
+            (1);
+    end;
+}
+"#;
+        let calls = linked_calls(&parse(src));
+        assert_eq!(
+            calls,
+            vec![("foo".to_string(), 0), ("baz".to_string(), 1)],
+            "{calls:?}"
+        );
+    }
+
+    /// Grammar B7b-2 (`main` 960ed312): a `preproc_operand_prefix` may stand beside
+    /// an argument, a list element or a parenthesised value (VERIFIED with a real
+    /// parse's `to_sexp`). It is no value: it inflated the arity, so `Baz` had 3
+    /// arguments, and as a parenthesis's first child it hid `Quux()`.
+    #[test]
+    fn operand_prefix_takes_no_value_slot() {
+        let src = r#"
+codeunit 50110 T
+{
+    procedure P()
+    begin
+        Baz(
+#if X
+            1 +
+#endif
+            Qux(), 2);
+        I := (
+#if X
+            1 +
+#endif
+            Quux());
+        if I in [
+#if X
+            1 +
+#endif
+            Corge(), 2] then;
+    end;
+}
+"#;
+        let af = parse(src);
+        let calls = linked_calls(&af);
+        assert_eq!(
+            calls,
+            vec![
+                ("baz".to_string(), 2),
+                ("qux".to_string(), 0),
+                ("quux".to_string(), 0),
+                ("corge".to_string(), 0),
+            ],
+            "{calls:?}"
+        );
+        assert!(
+            af.ir
+                .iter_exprs()
+                .any(|e| matches!(&e.kind, ExprKind::List(items) if items.len() == 2)),
+            "the list literal has two elements"
+        );
     }
 
     /// Lowercased names of every `StmtKind::Call` whose callee is a plain identifier.
