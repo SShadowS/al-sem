@@ -628,14 +628,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transactionContext` (`unknown` where it was known), d35 (new UNKNOWN "may be reachable"
   findings, longer reason text), d45's coverage text, `events fanout`'s
   `capabilityComposition` and `--coverage-policy strict`, and the policy gate under
-  `requireCoverage: complete` (the bundled policy uses `partial` and cannot move). d2 can
+  `requireCoverage: complete`. The bundled policy uses `partial`, which fails only
+  `unknown` (`passes_coverage_gate`), and the fold never writes `unknown`, so it cannot
+  move; on CDO its `policy check` output is byte-identical to the parent's. d2 can
   lose a finding when its 500-node walk budget is spent on a newly entered branch (pinned
   by T9). No existing golden moved. The test-only L4-solve fold
   `compute_uncertainty_coverage_reasons` and its four tests (`check_oracle`'s fixture and
   CDO oracles and the roles-cap oracle) are deleted: their "scan equals the solve's fold"
   claim has no second side any more. Pinned by T1-T9
   (`detector_context_step5_tests.rs`, `tests/cli/cli_step5_coverage_fold.rs`), each proven
-  to fail with the fold removed. Epic amendments 5-A1 to 5-A8 (spec
+  to fail with its producer's fold broken. Epic amendments 5-A1 to 5-A8 (spec
   `docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md` §9): the
   reader list, the policy proxy, the snapshot keeping its cut-graph fold until step 6, the
   two kept fields with one chained accessor, the deletion moved here, the new fixtures, no

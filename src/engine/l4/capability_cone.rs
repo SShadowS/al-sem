@@ -3905,6 +3905,7 @@ pub(crate) fn build_cross_app_base(
         coverage_per_row.push(Some(coverage));
         facts_per_row.push(Some(facts));
     }
+    // The map borrows `rel`, which moves into the base below.
     drop(uncertainty_reasons);
     let leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary> =
         crate::program::model::projection::merge_per_id(
