@@ -387,16 +387,18 @@ Single-app is unchanged (no demand, primary only).
       /// row's `node`; dependency source rows from `source_routine_node_id`; ABI rows
       /// from J3's `node_id`. Read by the collision census; 11b's corrections read it.
       node_of: Vec<Option<RoutineNodeId>>,
-      /// The program's declaration anchor `(FileIx, start line, start col)` of EVERY node
-      /// of a model app (`model_apps`) that has a surface declaration, whether or not a
-      /// held row stands for it: one `DeclSurface::get_with_path` per such node, captured
-      /// here and never derived from a row. This is the domain J2 answers on today
-      /// (`l3_routine` asks the surface for any node of a model app, `:1178-1191`). The
-      /// caller check reads it (§4.8).
+      /// The program's declaration anchor `(FileIx, start line, start col)` of every node
+      /// a held row stands for (`node_of`), captured from `DeclSurface::get_with_path` and
+      /// never derived from a row. The caller check reads only `decl_anchor[from]`, and
+      /// after the demand filter (10A-2) `from` is always such a node (§4.8).
       decl_anchor: HashMap<RoutineNodeId, (FileIx, u32, u32)>,
-      /// J2's answer, recorded (§4.7): for every node in `decl_anchor`, the FIRST
-      /// non-symbol-only row (over all rows) whose anchor equals `decl_anchor[node]`;
-      /// absent when no row has that anchor (J2's `None`).
+      /// J2's answer, recorded (§4.7). Built by walking EVERY node of a model app
+      /// (`model_apps`) that has a surface declaration, whether or not a held row stands
+      /// for it (J2's domain: `l3_routine` asks the surface for any model-app node,
+      /// `:1178-1191`), and storing, for a node whose declaration anchor some
+      /// non-symbol-only row has, the FIRST such row over all rows. A node with no
+      /// declaration, or whose anchor no row has, is absent (J2's `None`), so the map
+      /// holds about one entry per row, not one per model-app node.
       j2_row: HashMap<RoutineNodeId, u32>,
       /// J5's answer, recorded (§4.9): per row, the node today's span map gives, or None.
       j5_node: Vec<Option<RoutineNodeId>>,
@@ -416,11 +418,12 @@ Single-app is unchanged (no demand, primary only).
 `Converter::l3_routine(node)` becomes `row_nodes.j2_row.get(node)`, restricted to model apps
 and to non-symbol-only rows (a symbol-only row's empty unit never equals a declaration's,
 so J2 never returned one; the restriction makes that explicit). `j2_row` is exactly J2, on
-J2's own domain: `decl_anchor` covers every node of a model app that has a surface
+J2's own domain: building `j2_row` walks every node of a model app that has a surface
 declaration (not only nodes a held row stands for), so a route into a node no row stands
 for, but whose declaration anchor coincides with some row's, gets that row exactly as
-today; `decl_anchor` is the surface's declaration (last write wins per node), and "first row
-at that anchor over all rows" is `by_decl`'s `entry().or_insert`. A node with no surface
+today; the anchor read per node is the surface's declaration (last write wins per node), and "first row
+at that anchor over all rows" is `by_decl`'s `entry().or_insert`. Only matched nodes are
+stored, so the walk costs time, not memory. A node with no surface
 declaration, or whose anchor no row has, is absent from `j2_row` (J2's `None`). It therefore keeps the
 cross-node alias (both `AcquireTokenFromCache` nodes → row `…4f4ac631`, which is what keeps
 R-PAIRS' two non-equivalent pairs byte-identical) and the two collision shapes:
@@ -513,7 +516,7 @@ lines. Task 2 / Task 3 is committed only after that record exists and is green.
 | `ClassifiedEdge.site` (`Option<ProgramSite>`, 16 B) | the program body, released at attach (Decision 35) | 16 B × ≈ 477,700 edges (46,328 workspace + 431,248 dependency body + publisher) ≈ 7.6 MB | `census.program` (`ResolvedProgram::census`), new bucket `program.edge_site` |
 | `ModelRoutine.{file, site_exprs}` | the model (retained) | 4 B × (81,745 + 33,290 + 33,493) sites + 3 × 24 B vector headers + 8 B per row × 31,658 rows ≈ 3.1 MB | `census_model_rows` (`program_calls.rs:717-737`), new bucket `model.site_exprs` |
 | `FileTable` | the `ProgramContext` | one entry per parsed file (`AppRef` + `String` path + map slot, ≈ 100-150 B); the file count was not read at spec time | `census.program`, new bucket `program.file_table` |
-| `RowNodes` | build-local (assembly → attach) | `node_of` and `j5_node` 72 B × 31,658 ≈ 2.3 MB each; `decl_anchor` and `j2_row` ≈ 31,700 entries × (72 + 12 or 4 + slot) / 0.875 load ≈ 3.2 MB and 2.9 MB; ≈ 11 MB | `census.program`, bucket `program.row_nodes`, marked at attach |
+| `RowNodes` | build-local (assembly → attach) | `node_of` and `j5_node` 72 B × 31,658 ≈ 2.3 MB each; `decl_anchor` (held nodes only) and `j2_row` (matched nodes only, ≈ one per row; the extra entries are the cross-node aliases) ≈ 31,700 entries × (72 + 12 or 4 + slot) / 0.875 load ≈ 3.2 MB and 2.9 MB; ≈ 11 MB | `census.program`, bucket `program.row_nodes`, marked at attach |
 | deleted: the join's `String`-keyed maps (`SiteLinks`, `program`, `consumed`, `l3_*`) | transient inside the join | not measured (P3 has no byte census) | — |
 
 Expected net growth at the process peak (set in attach, epic §5.12): ≈ 12-20 MB up, minus the
@@ -922,7 +925,7 @@ nothing switched), with the reason in the ledger.
 | # | If | Then (applied without a new panel round; recorded in the ledger) |
 |---|---|---|
 | F1 | T1 on r0 or `tests/fixtures` shows ANY difference (pairs, conversion or census) | Task 2 does not start. Triage the site's shape; if the extractor and the walk key different nodes for one construct, align the walk to the extractor's node in `ir_walk.rs` (the extractor decided the edge) in its own commit with its own test; re-run T1. Not closed by that one fix → stop at Task 1 |
-| F2 | T1 on CDO: the differing accepted pairs are not exactly R-PAIRS, or any conversion differs | Same as F1 for the new shape. R-PAIRS is never extended to admit a site whose conversion differs; it may be extended only by a pair whose conversion is identical AND whose shape is `#if`-split, with the evidence in the ledger |
+| F2 | T1 on CDO: the differing accepted pairs are not exactly R-PAIRS, or any conversion differs, or the census deltas of §5.1 point 3 differ | Same as F1 for the new shape. R-PAIRS is never extended to admit a site whose conversion differs; it may be extended only by a pair whose conversion is identical AND whose shape is `#if`-split, with the evidence in the ledger. The census deltas were derived from P15, not measured: a wrong derivation may be corrected (spec and ledger, with the measured numbers) only when the pairs are exactly R-PAIRS, every conversion is identical, and every counter that moved is traced to an `#if`-split duplicate; anything else is a defect (F4's rule) |
 | F3 | Part 1: CDO SARIF (either scope, either universe) or the histogram SHA differs | A defect (T1 says the converted calls are identical, so nothing downstream can move). Fix and re-run Part 1 and T1/T7/T8; not fixed in one attempt → the claim stops (blocked), nothing merges |
 | F4 | Part 1: a golden target or a `--lib` outcome outside §5.12 differs | Same as F3 |
 | F5 | T7 finds a node where `j2_row` ≠ J2 | `j2_row` is by construction J2's two maps evaluated once; a difference means the surface or the row set seen at assembly is not the adapter's. Make assembly read the same surface and rows (one source), re-run T7; not closed → stop at Task 1 |
