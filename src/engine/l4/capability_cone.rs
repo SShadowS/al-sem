@@ -3558,9 +3558,12 @@ pub(crate) fn capability_fact_sort_key(f: &PCapabilityFact) -> String {
 /// - a base summary never carries them:
 ///   `summary_runner::base_intraprocedural_summary` emits only `opaque-body` or
 ///   `parse-incomplete`;
-/// - `db_effect_solver::solve_side_facts` folds an entry into the shared set
-///   only behind `!is_callsite_local_kind` (`db_effect_solver.rs:1025`,
-///   `:1103`), and each SCC member takes back only its own entries (`:1143`).
+/// - `db_effect_solver::solve_side_facts` calls `fold_shared` (the set an SCC
+///   shares and its callers inherit) only under `if
+///   !is_callsite_local_kind(&u.kind)`, both for a member's base uncertainties
+///   and for its uncertainty edges; the kinds selected here go only to the
+///   member's own list (`own`, kept per member in `own_by_member`), and each
+///   member takes back only its own list (`own_by_member.remove(&m_ix)`).
 ///
 /// A `from` with no coverage row may get a key; readers look up row ids only.
 /// The map borrows from `edges`.
@@ -3905,8 +3908,6 @@ pub(crate) fn build_cross_app_base(
         coverage_per_row.push(Some(coverage));
         facts_per_row.push(Some(facts));
     }
-    // The map borrows `rel`, which moves into the base below.
-    drop(uncertainty_reasons);
     let leaf_summaries: HashMap<String, crate::engine::l4::summary::RoutineSummary> =
         crate::program::model::projection::merge_per_id(
             &rows,
@@ -6242,9 +6243,10 @@ codeunit 50111 "Cell Calls"
         "member-not-found",
     ];
 
-    /// The fixture roots under `tests/` the fixture oracles visit, with the app
-    /// dirs each holds today: a dir that stops being visited fails its oracle,
-    /// and a new fixture changes this one list.
+    /// The fixture roots under `tests/` that `scc_set_tests`'s fixture oracle
+    /// (`derived_only_matches_raw_fold_on_fixtures`) visits, with the app dirs
+    /// each holds today: a dir that stops being visited fails that oracle, and
+    /// a new fixture changes this one list.
     pub(super) const FIXTURE_ROOTS: [(&str, usize); 5] = [
         ("r0-corpus", 217),
         ("fixtures", 29),
@@ -6373,6 +6375,35 @@ codeunit 50111 "Cell Calls"
             );
             return;
         }
+        // Precondition: under the same cap, the L4 solve on CAP_SRC does cap
+        // (non-empty diagnostics, a `fixpoint-capped` member), so a base that
+        // ran the solve and printed its warnings would print a line here.
+        let m = model(CAP_SRC);
+        let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);
+        let scc = crate::engine::l4::analysis::graph_scc(&graph);
+        let fields = crate::engine::l4::analysis::field_index(&m.workspace);
+        let (summaries, diags) = with_roles_iteration_cap(1, || {
+            crate::engine::l4::summary_runner::compute_summaries_v2(
+                &m.workspace.routines,
+                &graph,
+                &scc,
+                &m.calls.upgraded_bindings,
+                &fields,
+            )
+        });
+        assert!(!diags.is_empty(), "precondition: the cap fires");
+        assert!(
+            summaries
+                .values()
+                .any(|s| s.uncertainties.iter().any(|u| u.kind == "fixpoint-capped")),
+            "precondition: a cycle member carries fixpoint-capped"
+        );
+        assert!(
+            crate::engine::l4::analysis::render_warnings(&diags)
+                .iter()
+                .any(|l| l.starts_with("warning: summarize:")),
+            "precondition: the cap renders a `warning: summarize:` line"
+        );
         let out = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
             .env(CHILD, "1")

@@ -633,9 +633,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   move; on CDO its `policy check` output is byte-identical to the parent's. d2 can
   lose a finding when its 500-node walk budget is spent on a newly entered branch (pinned
   by T9). No existing golden moved. The test-only L4-solve fold
-  `compute_uncertainty_coverage_reasons` and its four tests (`check_oracle`'s fixture and
-  CDO oracles and the roles-cap oracle) are deleted: their "scan equals the solve's fold"
-  claim has no second side any more. Pinned by T1-T9
+  `compute_uncertainty_coverage_reasons` is deleted with the three tests that pinned it (the
+  fixture and CDO oracles, both through the helper `check_oracle`, and the roles-cap
+  oracle): their "scan equals the solve's fold" claim has no second side any more.
+  **Stated limit until step 6:** cross-app, a dependency routine's L4 summary is solved over
+  the Primary payload only, so its own four-kind calls never reach its `uncertainties` or
+  `hasUnresolvedCalls`. Its folded coverage now names them (`partial`), so the r3a5
+  projection (`aldump --r3a5-cross-app-summary`) prints such a routine as `partial` with
+  empty `uncertainties`. The summary gap predates step 5; step 6's dependency solve
+  closes it. Pinned by T1-T9
   (`detector_context_step5_tests.rs`, `tests/cli/cli_step5_coverage_fold.rs`), each proven
   to fail with its producer's fold broken. Epic amendments 5-A1 to 5-A8 (spec
   `docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md` §9): the

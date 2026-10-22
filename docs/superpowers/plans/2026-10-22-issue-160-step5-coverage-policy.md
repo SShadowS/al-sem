@@ -152,7 +152,7 @@ Spec §4.1-§4.5, §5, A1-A5, A10, 5-A4, 5-A5.
     d45 text, fanout's `capabilityComposition` and `--coverage-policy strict`, the policy
     `complete` gate.
   - d2 can lose a finding through its walk budget (T9).
-  - The L4-solve fold and its four tests are deleted.
+  - The L4-solve fold and its three tests (with their helper `check_oracle`) are deleted.
   - Amendments 5-A1 to 5-A8.
 
 **Interfaces:**
@@ -170,7 +170,7 @@ Spec §4.1-§4.5, §5, A1-A5, A10, 5-A4, 5-A5.
 - [ ] **Step 2: Implement the scan, the accessor and the P-a fold** (files above). Run
   `cargo test -p al-sem --lib det_cone_inputs` and T1, T3, T4: green. T5 is still red.
 - [ ] **Step 3: Implement the P-b fold.** T5 green.
-- [ ] **Step 4: Delete the L4-solve fold and its four tests; rewrite the two docs.**
+- [ ] **Step 4: Delete the L4-solve fold and its three tests (and their helper `check_oracle`); rewrite the two docs.**
   `grep -rn compute_uncertainty_coverage_reasons src` gives 0 hits (A10).
 - [ ] **Step 5: Discrimination proofs**, one per test, with the break spec §5 names:
   - T1, T1b, T2, T3, T6, T7, T8, T9 (main): delete the fold call in `det_cone_inputs`.

@@ -1247,7 +1247,10 @@ pub(crate) struct DetConeInputs {
 /// Builds [`DetConeInputs`]: the one assembly [`build_detector_artifacts`]
 /// and the step 7a oracle both compose over. Each row's direct coverage folds
 /// the call-site-local uncertainty of both halves of `rel`
-/// ([`ExecRelation::uncertainty_all`]; #160 step 5), as every other producer.
+/// ([`ExecRelation::uncertainty_all`]; #160 step 5), the same fold, per row,
+/// as the cross-app base. The r3a3 projection and the snapshot base fold their
+/// own graph's edges; cross-app that is the cut graph (Primary callers only)
+/// until step 6 (spec 5-A3).
 pub(crate) fn det_cone_inputs(resolved: &Model, rel: &ExecRelation) -> DetConeInputs {
     let ws = &resolved.workspace;
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();

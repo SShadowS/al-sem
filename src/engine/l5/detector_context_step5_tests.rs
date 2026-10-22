@@ -368,9 +368,11 @@ fn dep_ambiguous_preconditions(base: &R3a5CrossAppBase) -> (String, String) {
 /// Cone carries it. `Inner` (dependency code) is `partial` by its own
 /// ambiguous call, and the workspace's `Go`, which reaches it through `Outer`,
 /// inherits `partial` with `Inner` in its `unknown_targets`. Go's status also
-/// equals an independent BFS over `rel.cone()` (partial iff a reached row's
-/// direct status is not `complete`). Break: fold `rel.primary()
-/// .uncertainty_edges` only -> `Inner` and `Go` are `complete`.
+/// equals a BFS over `rel.cone()` (partial iff a reached row's direct status is
+/// not `complete`). That BFS reads the same folded direct statuses, so it
+/// checks the Cone's propagation, not the fold: the explicit `Inner` and `Go`
+/// assertions carry the fold. Break: fold `rel.primary().uncertainty_edges`
+/// only -> `Inner` and `Go` are `complete`.
 #[test]
 fn step5_t4_dependency_half_folds_into_the_cross_app_context() {
     let dir = tempfile::tempdir().unwrap();
@@ -401,7 +403,8 @@ fn step5_t4_dependency_half_folds_into_the_cross_app_context() {
         "Inner is in Go's unknown_targets: {g:?}"
     );
 
-    // The independent oracle: a BFS over the Cone's typed edges from Go.
+    // A propagation check: a BFS over the Cone's typed edges from Go, over the
+    // same folded direct statuses (not independent of the fold).
     let mut succ: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for e in rel.cone() {
         if let Some(to) = &e.to {
@@ -556,10 +559,13 @@ codeunit 50122 "T9 Sub"
     )
 }
 
+/// What [`t9_run`] returns: the d2 findings' ids, `Wide`'s inherited status,
+/// and each `Ai`'s direct `(status, reasons)`.
+type T9Out = (Vec<String>, String, Vec<(String, Vec<String>)>);
+
 /// Builds T9's workspace with `n` callees under `Wide`, asserts the
-/// preconditions, and returns the d2 findings' ids and `Wide`'s inherited
-/// status.
-fn t9_run(n: usize) -> (Vec<String>, String) {
+/// preconditions, and returns [`T9Out`].
+fn t9_run(n: usize) -> T9Out {
     let m = build(&t9_src(n));
     let routines = &m.workspace.routines;
     let [s, wide, db] = ["S", "Wide", "Db"].map(|name| id_in(routines, name));
@@ -598,10 +604,32 @@ fn t9_run(n: usize) -> (Vec<String>, String) {
         callees.iter().map(String::as_str).collect::<BTreeSet<_>>(),
         "precondition: Wide calls A1..A{n}"
     );
+    // Each Ai makes exactly one uncertain call, the ambiguous `O(L)`.
+    for id in &callees {
+        let kinds: Vec<&str> = ctx
+            .graph
+            .uncertainty_edges
+            .iter()
+            .filter(|e| &e.from == id)
+            .map(|e| e.uncertainty.kind.as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["ambiguous-overload"],
+            "precondition: {id}'s one uncertain call is the ambiguous O(L)"
+        );
+    }
     let out = crate::engine::l5::detectors::d2::detect_d2(&m, &ctx).expect("d2 runs");
     let ids = out.findings.iter().map(|f| f.id.clone()).collect();
     let wide_status = coverage_of(&ctx.summaries, &wide).inherited_status.clone();
-    (ids, wide_status)
+    let callee_direct = callees
+        .iter()
+        .map(|id| {
+            let c = coverage_of(&ctx.summaries, id);
+            (c.direct_status.clone(), c.reasons.clone())
+        })
+        .collect();
+    (ids, wide_status, callee_direct)
 }
 
 /// T9 main variant (spec §5, §3.2): pins d2's use of the fold AND a known
@@ -613,7 +641,7 @@ fn t9_run(n: usize) -> (Vec<String>, String) {
 /// is emitted. A head loss on CDO is fallback F6.
 #[test]
 fn step5_t9_d2_budget_cost_main() {
-    let (ids, wide_status) = t9_run(500);
+    let (ids, wide_status, callee_direct) = t9_run(500);
     assert_eq!(
         ids,
         Vec::<String>::new(),
@@ -621,12 +649,19 @@ fn step5_t9_d2_budget_cost_main() {
          (Wide's inherited status: {wide_status})"
     );
     assert_eq!(wide_status, "partial", "Wide is partial by the fold");
+    let folded = (
+        "partial".to_string(),
+        vec!["ambiguous-overload".to_string()],
+    );
+    for (i, got) in callee_direct.iter().enumerate() {
+        assert_eq!(got, &folded, "A{}'s direct coverage folds its call", i + 1);
+    }
 }
 
 /// T9 control (spec §5): `Wide` calls one `A1`; the walk enters it and still
 /// reaches `Db`, so d2 emits its finding. Green on the base and on the head.
 #[test]
 fn step5_t9_d2_budget_cost_control() {
-    let (ids, _) = t9_run(1);
+    let (ids, _, _) = t9_run(1);
     assert_eq!(ids.len(), 1, "one d2 finding for L's loop: {ids:?}");
 }

@@ -1,7 +1,7 @@
 # #160 child spec: step 5 — one coverage policy
 
-Status: revised after spec panel rounds 1 and 2 (2026-10-22; findings R1-01 to R1-19 and
-R2-01 to R2-03 in `.agent/issue-160/findings.json`; §0.1, §0.2). Made from the pre-draft
+Status: converged in spec panel round 4 (2026-10-22; 23 findings, R1-01 to R1-19, R2-01 to
+R2-03 and R3-01, all accepted, in `.agent/issue-160/findings.json`; §0.1, §0.2). Made from the pre-draft
 `/work/bench/160-5/draft-step5-design.md` once the probes had run. §0 lists what the probes
 changed; §0.1 lists what round 1 changed.
 
@@ -256,6 +256,24 @@ does not change, so these keys must stay byte-identical. fingerprint, prove and 
 single-app only (`--single-app` exists on query, policy check, events, analyze and digest
 only); the cross-app snapshot is read by digest's `coverage` key (A5).
 
+**Stated limit until step 6 (final panel round 1, FQ-14): a dependency routine's solved
+summary does not carry its own four-kind calls.** Cross-app, the L4 solve runs over
+`rel.primary()` (workspace callers' calls), and a dependency routine's summary is a fixed
+leaf (`base_intraprocedural_summary`) or a fixed-role row. So its `uncertainties` never hold
+its own four-kind calls, and its `hasUnresolvedCalls` stays `false`. That predates step 5.
+Since step 5 its folded coverage names those calls (`partial`), so one output shows the two
+side by side:
+- the r3a5 projection (`project_r3a5_from_parts`: `aldump --r3a5-cross-app-summary`,
+  `tests/r3a5-goldens/`). Measured on the T4 shape (P6 fixture): `Inner` prints
+  `directStatus: partial`, reasons `ambiguous-overload`, `uncertainties: []`,
+  `hasUnresolvedCalls: false`. The goldens do not move: no r3a5 fixture has a dependency
+  four-kind call.
+
+The other readers of a summary's `uncertainties` print no coverage beside them: d2's walk
+evidence (`path_walker`, d2's confidence), d1's cohort records, and `confidence.rs`. For a
+dependency node they read the same empty list as before step 5. Step 6's dependency solve
+owns the fix (ledger discovery D4).
+
 ### 3.4 The policy gate
 
 `passes_coverage_gate` (`policy_engine.rs:72-79`): `any` passes everything; `partial` fails
@@ -440,8 +458,8 @@ not a fold kind (P7), and the prototype left it green. Predicted unchanged, unde
 
 ## 7. False-positive and failure shapes
 
-**Deleted tests (I2's exception, epic I2):** the four tests of §4.3 are deleted with the code
-they pin; no test is rewritten.
+**Deleted tests (I2's exception, epic I2):** the three tests of §4.3 (and their helper
+`check_oracle`) are deleted with the code they pin; no test is rewritten.
 
 **Verdicts (pre-stated, so they cannot drift).** Each added or changed item gets two verdicts.
 - **Epistemic**: is `partial` correct for the universe analysed? It GATES (the row's > 30 %
