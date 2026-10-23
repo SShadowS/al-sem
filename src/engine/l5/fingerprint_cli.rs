@@ -512,12 +512,8 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         witness_limit,
     };
 
-    let result = fingerprint_query(
-        &snap,
-        &filters,
-        roots_config_ignored,
-        &OwnerIndex::build(resolved),
-    );
+    let owners = OwnerIndex::build(resolved);
+    let result = fingerprint_query(&snap, &filters, roots_config_ignored, &owners);
 
     let selector_errors: Vec<&FingerprintQueryDiagnostic> = result
         .diagnostics
@@ -536,9 +532,26 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     if opts.format == FingerprintFormat::Human {
         if has_selector_errors {
             // Human selector errors → stderr, exit 2, no stdout (fingerprint.ts:301).
-            let owned: Vec<FingerprintQueryDiagnostic> =
-                selector_errors.into_iter().cloned().collect();
-            let msg = format_selector_errors_human(&owned);
+            // #239: an `<owner>::<routine>` selector whose owner declares no such
+            // routine gets one hint line naming the owners that do.
+            let idx = crate::engine::l5::selector_index::build_selector_indexes(&snap, None);
+            let mut msg = String::new();
+            for d in selector_errors {
+                msg.push_str(&format_selector_errors_human(std::slice::from_ref(d)));
+                if let FingerprintQueryDiagnostic::SelectorUnresolved { selector } = d {
+                    let declared = crate::engine::l5::selector_index::owner_check_candidates(
+                        selector,
+                        &idx,
+                        |id, display| owners.qualified(id, display),
+                    );
+                    if !declared.is_empty() {
+                        msg.push_str(&format!(
+                            "  no routine of that name on the named owner; declared as: {}\n",
+                            declared.join(", ")
+                        ));
+                    }
+                }
+            }
             return Ok(FingerprintRunResult {
                 output: FingerprintOutput::Text(String::new()),
                 exit_code: 2,

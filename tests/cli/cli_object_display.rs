@@ -634,10 +634,11 @@ fn unmatched(sel: &str) -> [String; 3] {
 
 /// A1 (#239, M1). An owner that declares no such routine matches nothing, in
 /// all three commands: never `Codeunit Sel B`'s `Persist`. The human
-/// fingerprint error says so.
+/// fingerprint error says so and names the owner that does declare it (B5).
 ///
-/// Break: restore the fallback -> digest, fingerprint and prove each select
-/// `Codeunit Sel B|<id>` at exit 0 (one assert shows all three).
+/// Breaks: restore the fallback -> digest, fingerprint and prove each select
+/// `Codeunit Sel B|<id>` at exit 0 (one assert shows all three); drop the hint
+/// -> the `declared as` assert fails.
 #[test]
 fn owner_qualified_selector_with_no_such_routine_is_unmatched() {
     let dir = tempfile::tempdir().unwrap();
@@ -658,6 +659,12 @@ fn owner_qualified_selector_with_no_such_routine_is_unmatched() {
     assert_eq!(code, 2, "{err}");
     assert!(
         err.contains(&format!("error: --routine '{sel}' did not match")),
+        "{err}"
+    );
+    assert!(
+        err.contains(&format!(
+            "\n  no routine of that name on the named owner; declared as: {SEL_B}::Persist"
+        )),
         "{err}"
     );
 }

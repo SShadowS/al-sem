@@ -143,17 +143,21 @@ pub(crate) struct SelectorMatches {
     owner: Option<OwnerPart>,
 }
 
-/// The object part of an `<owner>::<routine>` selector, as a display key.
+/// The object part of an `<owner>::<routine>` selector. `typed`: it starts with
+/// an object type word (`Codeunit "Sel A"`), so it names a full owner display;
+/// otherwise it is a bare object name (`Sel A`, `"Sel A"`). `wants`: its display
+/// keys, the AL-unquoted spelling first, then the spelling as written when it
+/// differs (an owner whose logical name is itself wrapped in `"`, displayed
+/// `Codeunit "Legacy"`). The first spelling that keeps a match wins.
 #[derive(Debug, PartialEq)]
-enum OwnerPart {
-    /// It starts with an object type word: `Codeunit "Sel A"` -> `codeunit sel a`.
-    Full(String),
-    /// A bare object name: `Sel A` or `"Sel A"` -> `sel a`.
-    Bare(String),
+struct OwnerPart {
+    typed: bool,
+    wants: Vec<String>,
 }
 
 /// The type words an owner display starts with (the model's `object_type`,
-/// `ir_object_type`), as display keys.
+/// `ir_object_type`; pinned by `object_type_words_are_the_model_types`), as
+/// display keys.
 const OBJECT_TYPE_WORDS: [&str; 14] = [
     "codeunit",
     "table",
@@ -171,15 +175,38 @@ const OBJECT_TYPE_WORDS: [&str; 14] = [
     "permissionset",
 ];
 
-/// An AL quoted identifier (`"A ""B"""`) -> its logical name (`A "B"`), the
-/// spelling owner and routine displays use (#240). Anything else comes back
-/// trimmed.
+/// One outer `"` pair removed (`"Post ""X"""` -> `Post ""X""`), nothing
+/// unescaped: a routine display is the raw source name, `""` kept (only object
+/// names are logical, #240). Anything else comes back trimmed.
+fn strip_quotes(s: &str) -> &str {
+    let s = s.trim();
+    s.strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .unwrap_or(s)
+}
+
+/// An AL quoted object name (`"A ""B"""`) -> its logical name (`A "B"`), the
+/// spelling owner displays use (#240). Anything else comes back trimmed.
 fn unquote(s: &str) -> String {
     let s = s.trim();
     match s.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
-        Some(inner) => inner.replace("\"\"", "\""),
+        Some(inner) => crate::program::body::scope::unescape_al_identifier(inner),
         None => s.to_string(),
     }
+}
+
+/// The byte offset of the last `::` outside AL quotes: `Codeunit X::"A::B"`
+/// splits after `X`.
+fn last_separator(s: &str) -> Option<usize> {
+    let (mut quoted, mut last) = (false, None);
+    for (i, c) in s.char_indices() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if !quoted && s[i..].starts_with("::") {
+            last = Some(i);
+        }
+    }
+    last
 }
 
 /// `None` for an empty object part: `::Run` is the bare routine name `Run`.
@@ -191,11 +218,18 @@ fn owner_part(part: &str) -> Option<OwnerPart> {
         return None;
     }
     let (word, rest) = part.split_once(char::is_whitespace).unwrap_or((part, ""));
-    if OBJECT_TYPE_WORDS.contains(&word.to_lowercase().as_str()) {
-        let full = format!("{word} {}", unquote(rest));
-        return Some(OwnerPart::Full(normalize_display_key(&full)));
+    let typed = OBJECT_TYPE_WORDS.contains(&word.to_lowercase().as_str());
+    let name = if typed { rest } else { part };
+    let key = |n: &str| match typed {
+        true => normalize_display_key(&format!("{word} {n}")),
+        false => normalize_display_key(n),
+    };
+    let mut wants = vec![key(&unquote(name))];
+    let as_written = key(name);
+    if as_written != wants[0] {
+        wants.push(as_written);
     }
-    Some(OwnerPart::Bare(normalize_display_key(&unquote(part))))
+    Some(OwnerPart { typed, wants })
 }
 
 /// `resolveSelector` (fingerprint-query.ts) — the 5-form cascade. Returns the
@@ -205,26 +239,53 @@ pub(crate) fn resolve_selector(
     selector: &str,
     idx: &SelectorIndexes,
 ) -> (SelectorMatches, &'static str) {
-    let (ids, form) = cascade(selector, idx);
-    let owner = match (form, selector.rfind("::")) {
-        ("object-qualified", Some(sep)) => owner_part(&selector[..sep]),
-        _ => None,
-    };
+    let (ids, form, owner) = cascade(selector, idx);
     (SelectorMatches { ids, owner }, form)
 }
 
-fn cascade(selector: &str, idx: &SelectorIndexes) -> (Vec<String>, &'static str) {
+/// #239: the routines a form-5 selector named before its owner check kept none,
+/// each labelled by `label(id, display)`: the hint for an unmatched selector.
+/// Empty for every other form.
+pub(crate) fn owner_check_candidates(
+    selector: &str,
+    idx: &SelectorIndexes,
+    label: impl Fn(&str, &str) -> String,
+) -> Vec<String> {
+    let (m, _) = resolve_selector(selector, idx);
+    if m.owner.is_none() {
+        return Vec::new();
+    }
+    m.ids
+        .iter()
+        .map(|id| {
+            label(
+                id,
+                idx.routine_display_by_id.get(id).map_or("", String::as_str),
+            )
+        })
+        .collect()
+}
+
+fn cascade(
+    selector: &str,
+    idx: &SelectorIndexes,
+) -> (Vec<String>, &'static str, Option<OwnerPart>) {
     // Form 1: exact StableRoutineId (case-sensitive).
     if idx.routine_display_by_id.contains_key(selector) {
-        return (vec![selector.to_string()], "stable-routine-id");
+        return (vec![selector.to_string()], "stable-routine-id", None);
     }
+    let sep = last_separator(selector);
 
-    // Form 2: full display name (normalized).
-    let key = normalize_display_key(selector);
+    // Form 2: full display name (normalized). A selector with no `::` is a
+    // routine name, its one outer quote pair removed as in form 5.
+    let key = normalize_display_key(match sep {
+        None => strip_quotes(selector),
+        Some(_) => selector,
+    });
     if let Some(full) = display_to_ids(idx, &key)
         && !full.is_empty()
     {
-        return (full.clone(), "full-display");
+        return (full.clone(), "full-display", None);
     }
 
     // Form 3: two-segment — strip leading type-word from the (already-normalized)
@@ -238,7 +299,7 @@ fn cascade(selector: &str, idx: &SelectorIndexes) -> (Vec<String>, &'static str)
         }
     }
     if !two.is_empty() {
-        return (two, "two-segment");
+        return (two, "two-segment", None);
     }
 
     // Form 4: one-segment — routine name after the last "::" in the bucket KEY.
@@ -253,22 +314,23 @@ fn cascade(selector: &str, idx: &SelectorIndexes) -> (Vec<String>, &'static str)
         }
     }
     if !one.is_empty() {
-        return (one, "one-segment");
+        return (one, "one-segment", None);
     }
 
-    // Form 5: object-qualified — routine segment after the LAST "::", an AL
-    // quoted name unquoted (`"Post Document"`). `resolve_selector` attaches the
-    // object part for the owner check.
-    if let Some(sep) = selector.rfind("::") {
-        let routine_key = normalize_display_key(&unquote(&selector[sep + 2..]));
+    // Form 5: object-qualified — routine segment after the last unquoted "::",
+    // one outer quote pair removed (`"Post Document"`), with the object part
+    // for the owner check.
+    if let Some(sep) = sep {
+        let routine_key = normalize_display_key(strip_quotes(&selector[sep + 2..]));
         if let Some(qualified) = display_to_ids(idx, &routine_key)
             && !qualified.is_empty()
         {
-            return (qualified.clone(), "object-qualified");
+            let owner = owner_part(&selector[..sep]);
+            return (qualified.clone(), "object-qualified", owner);
         }
     }
 
-    (Vec::new(), "")
+    (Vec::new(), "", None)
 }
 
 /// #78/#239: the matches of [`resolve_selector`]. A form-5 match
@@ -289,15 +351,24 @@ pub(crate) fn narrow_to_owner(
     let Some(owner) = owner else {
         return ids;
     };
-    ids.into_iter()
-        .filter(|id| {
-            let key = normalize_display_key(&owner_of(id));
-            match &owner {
-                OwnerPart::Full(want) => key == *want,
-                OwnerPart::Bare(want) => strip_type_word_prefix(&key) == Some(want.as_str()),
-            }
-        })
-        .collect()
+    let keyed: Vec<(String, String)> = ids
+        .into_iter()
+        .map(|id| (normalize_display_key(&owner_of(&id)), id))
+        .collect();
+    for want in &owner.wants {
+        let kept: Vec<String> = keyed
+            .iter()
+            .filter(|(key, _)| match owner.typed {
+                true => key == want,
+                false => strip_type_word_prefix(key) == Some(want.as_str()),
+            })
+            .map(|(_, id)| id.clone())
+            .collect();
+        if !kept.is_empty() {
+            return kept;
+        }
+    }
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -315,16 +386,41 @@ mod tests {
                 "a#" => "Codeunit Sel A",
                 "b#" => "Codeunit Sel B",
                 "c#" => "Table Codeunit Sel A",
+                "l#" => "Codeunit \"Legacy\"",
+                "m#" => "Codeunit Legacy",
                 _ => "Codeunit A \"B\" C",
             }
             .to_string()
         };
-        let sel = |selector: &str, ids: &[&str]| {
-            let rows: Vec<(&str, &str)> = ids.iter().map(|id| (*id, "Persist")).collect();
-            let idx = build_selector_indexes(&snap_with_identities(&rows), None);
+        // `(id, routine display)` rows.
+        let sel_rows = |selector: &str, rows: &[(&str, &str)]| {
+            let idx = build_selector_indexes(&snap_with_identities(rows), None);
             let (m, form) = resolve_selector(selector, &idx);
             narrow_to_owner(selector, form, m, owner)
         };
+        let sel = |selector: &str, ids: &[&str]| {
+            let rows: Vec<(&str, &str)> = ids.iter().map(|id| (*id, "Persist")).collect();
+            sel_rows(selector, &rows)
+        };
+        // B1: a routine display is the raw name (`""` kept); one outer quote pair
+        // goes, nothing is unescaped. B4: the same for a bare routine selector.
+        let raw = [("a#", "Post \"\"X\"\""), ("b#", "Persist")];
+        assert_eq!(sel_rows("Codeunit Sel A::\"Post \"\"X\"\"\"", &raw), ["a#"]);
+        assert_eq!(sel_rows("\"Post \"\"X\"\"\"", &raw), ["a#"]);
+        assert_eq!(sel("\"Persist\"", &["a#"]), ["a#"]);
+        // B3: the split ignores a `::` inside quotes.
+        assert_eq!(
+            sel_rows("Codeunit Sel A::\"A::B\"", &[("a#", "A::B")]),
+            ["a#"]
+        );
+        // B2: an owner whose logical name is wrapped in `"` (`"""Legacy"""`), by
+        // its AL and its displayed spelling; the unquoted spelling wins first.
+        assert_eq!(
+            sel("Codeunit \"\"\"Legacy\"\"\"::Persist", &["l#", "m#"]),
+            ["l#"]
+        );
+        assert_eq!(sel("Codeunit \"Legacy\"::Persist", &["l#"]), ["l#"]);
+        assert_eq!(sel("Codeunit \"Legacy\"::Persist", &["l#", "m#"]), ["m#"]);
         let ab = ["a#", "b#"];
         // The full owner, case and space folded; the bare name; AL quotes.
         assert_eq!(sel("codeunit  SEL a::Persist", &ab), ["a#"]);
@@ -350,6 +446,66 @@ mod tests {
         // Other forms are not narrowed.
         assert_eq!(sel("Persist", &ab), ab);
     }
+
+    /// #239 B9: `OBJECT_TYPE_WORDS` is exactly the type words the model's owner
+    /// displays use (`ir_object_type`). The match has no wildcard, so a new
+    /// `ObjectKind` stops the build here.
+    #[test]
+    fn object_type_words_are_the_model_types() {
+        use al_syntax::ir::ObjectKind::{self, *};
+        fn all(k: ObjectKind) -> ObjectKind {
+            match k {
+                Codeunit
+                | Table
+                | TableExtension
+                | Page
+                | PageExtension
+                | Report
+                | ReportExtension
+                | Query
+                | XmlPort
+                | Enum
+                | EnumExtension
+                | Interface
+                | ControlAddIn
+                | Entitlement
+                | PermissionSet
+                | PermissionSetExtension
+                | Profile
+                | Other => k,
+            }
+        }
+        let kinds = [
+            Codeunit,
+            Table,
+            TableExtension,
+            Page,
+            PageExtension,
+            Report,
+            ReportExtension,
+            Query,
+            XmlPort,
+            Enum,
+            EnumExtension,
+            Interface,
+            ControlAddIn,
+            Entitlement,
+            PermissionSet,
+            PermissionSetExtension,
+            Profile,
+            Other,
+        ];
+        let mut words: Vec<String> = kinds
+            .into_iter()
+            .filter_map(|k| crate::program::body::ir_walk::ir_object_type(&all(k)))
+            .map(str::to_lowercase)
+            .collect();
+        words.sort();
+        let mut list = OBJECT_TYPE_WORDS.map(str::to_string).to_vec();
+        list.sort();
+        assert_eq!(words, list);
+    }
+
     use crate::engine::l5::snapshot::SnapshotIdentityTable;
 
     fn snap_with_identities(rows: &[(&str, &str)]) -> CapabilitySnapshot {
