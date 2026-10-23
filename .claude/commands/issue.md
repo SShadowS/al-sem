@@ -23,6 +23,16 @@ call's `--cwd <worktree>`; the `agentflow` invocation itself never runs from
 inside the worktree. The lock, `HALT`, the budget file, and this run's directory
 all live under the MAIN checkout's `.agent/`, never the worktree's.
 
+**Model per dispatch.** Every Agent dispatch names its `model`; an unnamed one
+inherits the conductor's (Opus), and so do the agents IT spawns, so every
+briefing also states the model for anything it hands on. `opus`: implementers,
+spec and design authors, the Opus reviewer slot. `sonnet`: per-task reviewers,
+golden-diff triage, ledger, doc and CHANGELOG edits, and runs that measure or
+prototype and report numbers (benches, probes, gates). A design decision that
+rests on such numbers goes back to an `opus` agent with the numbers, not to the
+agent that waited on the run. (Step 6 of #160 kept an Opus author waiting on
+20-40 min prototype runs.)
+
 Ledger: `<worktree>/.agent/issue-N/ledger.md`. Findings register:
 `<worktree>/.agent/issue-N/findings.json`. Both are committed; nothing else under
 `.agent/` may be. Write the ledger as you go, one timeline line per phase with the
