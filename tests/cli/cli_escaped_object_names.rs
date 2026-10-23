@@ -183,7 +183,8 @@ fn colliding_written_names_bind_their_own_table() {
 /// the model resolves itself: a TableExtension's `extends` (its field merges onto
 /// the base table), a Page's `SourceTable`, a PageExtension of an escaped page
 /// (`extends`, then the base page's `SourceTable`), a codeunit's `TableNo`, a
-/// record variable, a report dataitem's table, and a
+/// record variable, a report dataitem's table (its trigger's `Rec`, and the
+/// dataitem's own name used as a record variable), and a
 /// `Codeunit.Run(Codeunit::"C ""Q"" U")` target object.
 ///
 /// Pass 2b of `record_types` (a variable outside `record_variables`) reads the
@@ -241,9 +242,22 @@ fn every_raw_reference_shape_binds_the_escaped_object() {
     );
     write(
         &ws.join("src/R.Report.al"),
-        "report 50170 \"T Report\"\n{\n    dataset\n    {\n        dataitem(D; \"T \"\"Q\"\" X\")\n        {\n            trigger OnAfterGetRecord()\n            begin\n                Rec.Insert();\n            end;\n        }\n    }\n}\n",
+        "report 50170 \"T Report\"\n{\n    dataset\n    {\n        dataitem(D; \"T \"\"Q\"\" X\")\n        {\n            trigger OnAfterGetRecord()\n            begin\n                Rec.Insert();\n            end;\n        }\n    }\n\n    trigger OnPreReport()\n    begin\n        D.Insert();\n    end;\n}\n",
     );
     let m = model(ws);
+    // A named dataitem is a record variable in every routine of the report. The
+    // body walk does not record an op on a dataitem receiver (`D.Insert()` here),
+    // so the variable's own table name and resolved table are asserted.
+    let dataitem_var = m
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.object_id == format!("{GUID}/Report/50170") && r.name == "OnPreReport")
+        .expect("routine OnPreReport")
+        .record_variables
+        .iter()
+        .find(|v| v.name == "D")
+        .map(|v| (v.table_name.clone(), v.table_id.clone()));
 
     let base = m
         .workspace
@@ -325,6 +339,11 @@ fn every_raw_reference_shape_binds_the_escaped_object() {
         ("trailing escape: Page SourceTable", table(50160)),
         ("Report dataitem table", table(50100)),
     ];
+    assert_eq!(
+        dataitem_var,
+        Some((Some("T \"Q\" X".to_string()), table(50100))),
+        "the named dataitem's record variable: logical table name and its table"
+    );
     assert_eq!(got, want);
 }
 

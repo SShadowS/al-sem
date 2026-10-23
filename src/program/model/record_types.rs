@@ -12,9 +12,11 @@
 //!      Table / Page / TableExtension / PageExtension, NEVER overriding an
 //!      explicit local `Rec` that pass (1)/(2) already resolved.
 //!
-//! Quoted identifiers (#240): every name the model stores is LOGICAL (a quoted
-//! name's `""` is one `"`), unescaped once where it is produced, so the lookups
-//! (which lower-case) compare logical with logical.
+//! Quoted identifiers (#240): every object/table name and every reference the
+//! lookups match is LOGICAL (a quoted name's `""` is one `"`), unescaped once where
+//! it is produced, so the lookups (which lower-case) compare logical with logical.
+//! Limit: `implements_interfaces` and `ModelPageControl.target` stay raw; no lookup
+//! reads them.
 //!   - `record_table_name_of` strips surrounding quotes from `declaredType`, then
 //!     unescapes.
 //!   - `extendsTargetName` / `sourceTableName` / record variable `tableName` are

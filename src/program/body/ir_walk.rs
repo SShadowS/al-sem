@@ -2169,7 +2169,8 @@ pub fn ir_record_variables(
             out.push(PRecordVariable {
                 id: format!("{}/rv/dataitem/{}", routine_id, di_name),
                 name: di_name.clone(),
-                table_name: Some(di_table.clone()),
+                // The IR keeps a `""`; the model stores the LOGICAL name (#240).
+                table_name: Some(super::scope::unescape_al_identifier(di_table)),
                 temp_state: ts_known(false),
                 is_parameter: false,
                 parameter_index: None,
