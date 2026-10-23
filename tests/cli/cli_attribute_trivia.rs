@@ -39,6 +39,7 @@ fn commit_by_routine(al: &str, fires: &[&str]) -> BTreeMap<String, bool> {
         true,  // deterministic
         None,  // max_paths
         false, // cross-app, the CLI default (#66)
+        false, // no --tests
     )
     .expect("digest runs");
     let v: serde_json::Value = serde_json::from_str(&r.json_text).expect("json");

@@ -89,6 +89,7 @@ fn digest_follows_the_program_engines_calls() {
         true,
         None,
         false,
+        false,
     )
     .expect("digest runs");
     assert!(r.json_text.contains("S6 Log"), "{}", r.json_text);

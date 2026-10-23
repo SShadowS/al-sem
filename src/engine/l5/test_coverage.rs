@@ -135,6 +135,19 @@ impl TestCoverage {
     pub fn to_json_value(&self) -> serde_json::Value {
         serde_json::to_value(self).expect("TestCoverage serializes")
     }
+
+    /// The human digest's one summary line (spec §Surface).
+    #[must_use]
+    pub fn human_line(&self) -> String {
+        let status = match self.coverage.reasons.as_slice() {
+            [] => "complete".to_string(),
+            r => format!("partial: {}", r.join(", ")),
+        };
+        format!(
+            "test coverage: {} of {} changed routines reached; {} [Test] procedures considered ({status})",
+            self.covered_changed_routines, self.changed_routines, self.test_procedures_considered
+        )
+    }
 }
 
 /// Shortest levels from one root: `[without crossing an event, after crossing one]`.
@@ -918,5 +931,32 @@ mod tests {
         assert_eq!(c.tests_with_unresolved_traversal, 4, "{c:?}");
         // OpenCardModally's `Page.RunModal` row.
         assert_eq!(c.tests_calling_dependency_code, 1, "{c:?}");
+    }
+
+    /// Matrix row 4, the precondition the CLI test `configured_test_kind_is_not_a_root`
+    /// cannot see: the fixture's `roots.config.json` really classifies
+    /// `Configured` as `test-procedure`, and the adapter still does not root it.
+    #[test]
+    fn configured_test_kind_is_not_a_root() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/digest-test-coverage-configured-root");
+        let m = crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(&ws)
+            .expect("model");
+        let r = m
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "Configured")
+            .expect("Configured");
+        let configured = m
+            .root_classifications
+            .iter()
+            .any(|c| c.routine_id == r.id && c.kinds.iter().any(|k| k == "test-procedure"));
+        assert!(configured, "precondition: {:?}", m.root_classifications);
+        let g =
+            CoverageGraph::from_snapshot(&crate::engine::l5::snapshot::compose_snapshot(&m), &m);
+        assert_eq!(g.roots.len(), 1, "{:?}", g.roots);
+        assert!(!g.roots.contains(&r.stable_routine_id));
+        assert!(!g.test_code.contains(&r.stable_routine_id));
     }
 }

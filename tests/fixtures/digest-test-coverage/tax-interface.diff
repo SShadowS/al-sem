@@ -1,0 +1,8 @@
+--- a/src/Tax.al
++++ b/src/Tax.al
+@@ -3,1 +3,1 @@
+-    procedure RatePct(): Integer;
++    procedure RatePct(): Decimal;
+@@ -44,1 +44,1 @@
+-        exit(24);
++        exit(25);

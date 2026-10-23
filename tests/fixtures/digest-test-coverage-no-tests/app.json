@@ -1,0 +1,13 @@
+{
+  "id": "2b6e4f0a-8c1d-4e57-9a3b-0d5c7e9f2a41",
+  "name": "Digest Test Coverage No Tests Fixture",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [
+    {
+      "from": 51000,
+      "to": 51009
+    }
+  ]
+}

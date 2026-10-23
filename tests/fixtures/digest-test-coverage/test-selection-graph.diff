@@ -1,0 +1,15 @@
+--- a/src/LegacyExport.al
++++ b/src/LegacyExport.al
+@@ -6,1 +6,1 @@
+-        exit(ItemNo + ';' + Format(Amount));
++        exit(ItemNo + ',' + Format(Amount));
+--- a/src/Loyalty.al
++++ b/src/Loyalty.al
+@@ -52,1 +52,1 @@
+-        exit(Points * 80 / 100);
++        exit(Points * 90 / 100);
+--- a/src/Tests.al
++++ b/src/Tests.al
+@@ -33,1 +33,1 @@
+-        if TaxCore.TaxAmount(100, Enum::"Acc Region"::DE) <> 20 then
++        if TaxCore.TaxAmount(100, Enum::"Acc Region"::DE) <> 19 then

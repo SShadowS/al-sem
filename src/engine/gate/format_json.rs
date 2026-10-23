@@ -85,9 +85,16 @@ pub fn sort_and_drop_nulls(value: serde_json::Value) -> serde_json::Value {
 /// This is the SINGLE canonical serializer used by both the JSON envelope and
 /// the A1 `serialize_detector_stats` wrapper.
 pub fn serialize_document_value(value: serde_json::Value) -> String {
-    let sorted = sort_and_drop_nulls(value);
+    serialize_normalized_value(&sort_and_drop_nulls(value))
+}
+
+/// [`serialize_document_value`]'s formatting for a value already passed through
+/// [`sort_and_drop_nulls`], so a caller can add a field whose `null` must stay
+/// (digest's `testCoverage.ratio`, #254). Keys stay sorted: serde_json's map
+/// is ordered without `preserve_order`.
+pub fn serialize_normalized_value(value: &serde_json::Value) -> String {
     let mut out =
-        serde_json::to_string_pretty(&sorted).expect("serde_json serialization of sorted Value");
+        serde_json::to_string_pretty(value).expect("serde_json serialization of sorted Value");
     out.push('\n');
     out
 }

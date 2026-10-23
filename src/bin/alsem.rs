@@ -663,6 +663,10 @@ struct DigestCli {
     /// at more memory and time.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// Add a testCoverage block: which changed routines a [Test] procedure reaches.
+    #[arg(long, default_value_t = false)]
+    tests: bool,
 }
 
 fn main() -> ExitCode {
@@ -1137,6 +1141,7 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         d.deterministic,
         d.max_paths,
         d.single_app,
+        d.tests,
     ) {
         Err(msg) => {
             // A DigestPipelineError (input/analyze phase) → write the message verbatim

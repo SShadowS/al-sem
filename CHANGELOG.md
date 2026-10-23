@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `alsem digest --tests` (#254) adds a `payload.testCoverage` block. It says which
+  changed routines a `[Test]` procedure of the workspace reaches through the resolved
+  call graph. Without the flag the document is unchanged (`schemaVersion` stays
+  `1.6.0`). With `--format human` it adds one line, for example `test coverage: 6 of
+  10 changed routines reached; 11 [Test] procedures considered (partial: …)`. The rules:
+  - A test root is a workspace routine with the `[Test]` attribute. A configured root
+    kind alone does not make one.
+  - `[Test]` procedures and every routine of a `Subtype = Test` codeunit leave the
+    count (`excludedTestCode` says how many).
+  - The search follows calls, implicit triggers, resolved object runs, every interface
+    candidate, event dispatch, and the handlers a test names in `[HandlerFunctions]`.
+  - A routine is `covered` when some test reaches it. `reachedFrom` names the test with
+    the lowest stable id. `viaEvent` is true when every shortest path from that test
+    crosses an event.
+  - Each `uncovered` routine has a `reason`: `declaration-only`,
+    `platform-event-subscriber`, `dependency-event-subscriber` or `no-path`.
+  - `ratio` is covered / changed, and `null` when no production routine changed.
+  - `coverage` is `partial` when a reached routine has a call the search cannot follow
+    (a dynamic target, an unresolved receiver or member, an ambiguous overload, an open
+    interface, an unresolved object run, a `TestPage`, a parse error, no coverage record)
+    or calls into dependency code. `reasons` lists them.
+    `testsWithUnresolvedTraversal` and `testsCallingDependencyCode` count those tests.
+
+  Limits: calls inside dependency code are not seen, so a subscriber to an event raised
+  only there is uncovered. Platform events have no publisher to reach. What a `TestPage`
+  drives is not followed. A test codeunit's `OnRun` is not a root.
 - `alsem analyze --format json`: every finding gains `looseFingerprint` (#247), a key
   that stays equal when the same problem moves to another routine of the same object.
   `fingerprint` is byte-identical: it is still the same problem in the same routine, and

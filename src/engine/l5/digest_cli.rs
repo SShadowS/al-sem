@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::engine::gate::format_json::serialize_document_value;
+use crate::engine::gate::format_json::{serialize_normalized_value, sort_and_drop_nulls};
 use crate::engine::gate::run::analyzer_diagnostics_of_view;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified, temp_state_str};
@@ -1323,7 +1323,8 @@ fn project_query_diagnostic(d: &DigestQueryDiagnostic) -> serde_json::Value {
 }
 
 /// Build the DocumentEnvelope<"digest", DigestPayload> as a serde_json::Value,
-/// then serialize with serialize_document_value (sorted keys, null-drop, trailing \n).
+/// then serialize it like serialize_document_value (sorted keys, null-drop,
+/// trailing \n). `test_coverage` (`--tests`, #254) is added after the null drop.
 #[allow(clippy::too_many_arguments)] // document-envelope fields; grouping would obscure
 pub fn project_digest_document(
     workspace_fp: &str,
@@ -1335,6 +1336,7 @@ pub fn project_digest_document(
     dependencies: &crate::program::resolve::full::LoadedDependencies,
     alsem_ver: &str,
     deterministic: bool,
+    test_coverage: Option<serde_json::Value>,
 ) -> String {
     // payload.summary
     // rootsRequested = roots.length + queryResult.diagnostics.length (contracts/digest.ts:443).
@@ -1416,9 +1418,15 @@ pub fn project_digest_document(
     // 1.6.0: `detail.tempState` is a per-operation join in the effect's class;
     // additive `temp-state-incoherent` entry diagnostic with factId, operationId
     // and reason (#69 D4).
+    // Still 1.6.0: `payload.testCoverage` is opt-in (`--tests`, #254) and additive.
     env.insert("schemaVersion".into(), "1.6.0".into());
 
-    serialize_document_value(serde_json::Value::Object(env))
+    // The block goes in after the null drop, so its `ratio: null` survives.
+    let mut doc = sort_and_drop_nulls(serde_json::Value::Object(env));
+    if let Some(block) = test_coverage {
+        doc["payload"]["testCoverage"] = block;
+    }
+    serialize_normalized_value(&doc)
 }
 
 pub struct ChangedInputContract {
@@ -1553,6 +1561,7 @@ pub fn run_digest_pipeline(
     deterministic: bool,
     _max_paths_override: Option<usize>,
     single_app: bool,
+    tests: bool,
 ) -> Result<DigestRunResult, String> {
     digest_pipeline_with(
         crate::engine::l5::detectors::default_detectors(),
@@ -1564,6 +1573,7 @@ pub fn run_digest_pipeline(
             alsem_ver,
             deterministic,
             single_app,
+            tests,
         },
     )
 }
@@ -1578,6 +1588,8 @@ pub(crate) struct DigestRequest<'a> {
     pub alsem_ver: &'a str,
     pub deterministic: bool,
     pub single_app: bool,
+    /// `--tests`: add `payload.testCoverage` (#254).
+    pub tests: bool,
 }
 
 /// [`run_digest_pipeline`] over a given detector set (#160 §4.4.4): the plan
@@ -1597,6 +1609,7 @@ pub(crate) fn digest_pipeline_with(
         alsem_ver,
         deterministic,
         single_app,
+        tests,
     } = req;
     // Assemble workspace (no model-instance id: `digest: could not compute
     // modelInstanceId`, `AnalysisTarget::build`).
@@ -1678,6 +1691,25 @@ pub(crate) fn digest_pipeline_with(
     );
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;
+    // #254: the coverage block reads the snapshot, so it is built before the drop.
+    let test_coverage = tests.then(|| {
+        use crate::engine::l5::test_coverage::{ChangedRoutine, CoverageGraph};
+        let changed: Vec<ChangedRoutine> = entries
+            .iter()
+            .map(|e| ChangedRoutine {
+                stable_id: e.routine_id.clone(),
+                display: e.routine_display.clone(),
+                object_display: e.object_display.clone(),
+                anchor: e
+                    .routine_anchor
+                    .as_ref()
+                    .and_then(|a| Some((a.file.clone()?, a.line?))),
+                declaration_only: e.declaration_only,
+            })
+            .collect();
+        let graph = CoverageGraph::from_snapshot(&snap, resolved);
+        crate::engine::l5::test_coverage::compute_test_coverage(&graph, &changed)
+    });
     // #69 D1.4: the query's inputs (the snapshot with its producer-solve arena,
     // the S4 entries, the L4 store) are dead here. Free them before the JSON
     // projection.
@@ -1706,11 +1738,16 @@ pub(crate) fn digest_pipeline_with(
         &dependencies,
         alsem_ver,
         deterministic,
+        test_coverage.as_ref().map(|t| t.to_json_value()),
     );
 
     // Human. The dependencies line appears only when apps were loaded, so a
     // workspace with no dependency reads the same in both modes.
-    let human_text = dependencies.prefix_human(format_digest_human(&entries));
+    let mut human_text = dependencies.prefix_human(format_digest_human(&entries));
+    if let Some(t) = &test_coverage {
+        human_text.push_str(&t.human_line());
+        human_text.push('\n');
+    }
 
     Ok(DigestRunResult {
         json_text,
@@ -1789,6 +1826,7 @@ mod tests {
                         alsem_ver: "test",
                         deterministic: true,
                         single_app: false,
+                        tests: false,
                     },
                 );
             },
