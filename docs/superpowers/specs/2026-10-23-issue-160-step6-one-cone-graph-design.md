@@ -1,8 +1,8 @@
 # #160 child spec: step 6 — one cone graph, one scoped witness pass
 
-Status: spec panel round 2 fixes applied (2026-10-23; findings R1-01 to R1-33 and R2-01,
-R2-02 in `.agent/issue-160/findings.json`, §0.1; round 2 re-raised R1-02, R1-17, R1-24,
-R1-28). Made from the pre-draft
+Status: spec panel round 3 fixes applied (2026-10-23; findings R1-01 to R1-33, R2-01,
+R2-02, R3-01 and R3-02 in `.agent/issue-160/findings.json`, §0.1; round 2 re-raised R1-02,
+R1-17, R1-24, R1-28). Made from the pre-draft
 `/work/bench/160-6/draft-step6-design.md` (master `5c42b8f3`) once the base probes had run;
 §0 lists what the probes changed, §0.1 what round 1 changed.
 
@@ -603,7 +603,7 @@ run dropped), pre-stated in the ledger before Task 2.
 | B2 (A6.3 peak) | `d`'s kernel peak | `Hm ≤ 1.03 × Pm` | none |
 | B3 (A6.4 wall, 6A-10) | `o`'s `analyze.total` span, its band on the same span | `Ho ≤ Po − S_P + K + T + E′ + Bo` (§8.4) | `Bo ≤ 0.05 × Po`; load as B1 |
 | B4 (A6.4 peak) | `o`'s kernel peak | `Hm ≤ 1.03 × Pm` | none |
-| B5 (policy peak, R1-24) | cross-app `policy check` kernel peak, Part 3's 3 rounds | `Hm ≤ Pm` (medians) | none |
+| B5 (policy peak, R1-24) | cross-app `policy check` kernel peak, Part 3's 3 rounds | `Hm ≤ 1.03 × Pm` (as B2/B4, R3-02) | none |
 | — post-attach peaks | not readable on Linux (#204) | reported "not measured" (6A-8) | — |
 
 A void check → re-run Part 2 once (fresh rounds), read every bound from the re-run alone;
@@ -651,7 +651,8 @@ E′, S_P and D_P (medians and bands) before Task 2.
   stops at the effects, so its peak is a lower bound for the command's; B2/B4 bound the whole
   command. **Policy** (R1-24): its `Raw` overlaps `det`, `l4` and the rule evaluation (§4.7),
   which the probe does not reach, so its peak is bounded on the final command instead: B5,
-  cross-app `policy check` kernel peak ≤ the parent's (13.67 GiB at the base), read in Part 3.
+  cross-app `policy check` kernel peak ≤ 1.03 × the parent's (13.67 GiB at the base), read in
+  Part 3.
   The probe still prints policy's composition peak as an early warning: over the parent's
   whole-command peak → F13 before Task 2.
 - S1 or S2 fails → **F2**, then F11, re-projecting after each. Still failing → the claim stops
@@ -693,7 +694,7 @@ continues; each is recorded in the ledger.
 | # | If | Then |
 |---|---|---|
 | F1 | — | withdrawn in round 1: raw is all alive when the composition returns, so releasing it after use cannot lower the peak (R1-01) |
-| F2 | S1 or S2 fails on `o` (first rung) | gate the raw walk by the three ordering bits (Decision 38, `map_op`'s vocabulary). Today a member's derived fold and its raw picks are built in ONE pass (`capability_cone.rs:2823-2930`: the singleton call `inherited_facts_for_singleton` does both under one `mode`; the BFS member's fold follows its walk), so the bits are known only after the walk. F2 therefore runs each subject FOLD FIRST: the member is composed with mode `(true, false)`, its row's three bits are read, and only a member with an ingredient is composed again with mode `(false, true)` for its raw (R2-02). The extra cost is the derived fold of every subject plus a second singleton/BFS pass for the kept ones; Task 1's probe prices it as a fourth configuration (`o` under F2: K, T, E′ and peak). T3's ordering arm proves the kept-root set unchanged |
+| F2 | S1 or S2 fails on `o` (first rung) | gate the raw walk by three ordering bits (Decision 38, `map_op`'s vocabulary). **The derived row does not have them today** (R3-01): its flags are table, commit, http, file and physical table (`cone_derived.rs:116-129`) plus the write-op mask (`:132-136`); there is no UI-sink bit, and its http/file bits key on `resource_kind`, not on `map_op`. So F2 first ADDS three `map_op`-keyed bits to the row and its fold (external IO = `HTTP`/`FILE`, UI sink = `UI_CONFIRM`/`UI_MESSAGE`/`UI_WINDOW_OPEN`, DB write = `DB_INSERT`/`DB_MODIFY`/`DB_DELETE`: the filter of `digest.rs:4035-4061`). Today a member's derived fold and its raw picks are built in ONE pass (`capability_cone.rs:2823-2930`: the singleton call `inherited_facts_for_singleton` does both under one `mode`; the BFS member's fold follows its walk), so the bits are known only after the walk. F2 therefore runs each subject FOLD FIRST: the member is composed with mode `(true, false)`, its row's three bits are read, and only a member with an ingredient is composed again with mode `(false, true)` for its raw (R2-02). The second walk runs inside the SAME SCC member loop of `compose_inherited_cones`, while the successor fact cones it reads are still alive (a cone is freed only after its last predecessor's member loop, `capability_cone.rs:2669-2700`), so it stays one composition and one `pd_solve`. The extra cost is the new bits, the derived fold of every subject and a second singleton/BFS pass for the kept ones; Task 1's probe prices all three as a fourth configuration (`o` under F2: K, T, E′ and peak). T3's ordering arm proves the kept-root set unchanged |
 | F3 | — | promoted into the design (§4.7, R1-07) |
 | F4 | T3's break (3) or a later reader is found to look past the subject | widen THAT reader's input to the subjects' callee closure (from `rel.cone()`), checked by T3's untouched oracle; never give a dependency routine raw (I5). Dormant: §3.2 shows no such reader today |
 | F5 | D1 cannot be made byte-identical on derived rows (Part 1 default-analyze SARIF differs) | a defect; not closed in one attempt → **stop at Task 1** and re-panel: a second composition contradicts A6.5 and 6A-1 (R1-18) |
@@ -704,7 +705,7 @@ continues; each is recorded in the ledger.
 | F10 | B1-B4 met-not-void but missed | name the miss (`trace_summary.py` span, census bucket); ONE fix from F2, F11 or F12; re-run Part 2 once; still missed → FAILS |
 | F11 | S1 short by the cross-app `direct=` time | #228: the cross-app `caps` fill reuses `build_cross_app_base`'s `direct_full`/`direct_coverage` (step 5's T5 pins the maps equal) |
 | F12 | `rel.dependency_calls` > 50 MB on CDO (P8) | keep it outside the relation, in the cross-app base, read only by `compose_tree`, dropped after (4) |
-| F13 | B5 misses, or the probe's policy composition peak already exceeds the parent's whole-command peak | run policy's rule engine right after (3), before `det` (the alternative of Q4), so `Raw` never overlaps `det` and `l4`; re-measure B5 once; still over → FAILS |
+| F13 | B5 misses, or the probe's policy composition peak already exceeds the parent's whole-command peak | run policy's rule engine right after (3), before `det` (the alternative of Q4), so `Raw` never overlaps `det` and `l4`. `det.summaries` does not exist yet then (R3-02), so the engine's `PolicyModel` is built from the cells that do: the summaries from `caps.direct_full` + `caps.coverage` (the values `det` would move into `FullRoutineSummary`), the raw from `Cell::Raw`, the events from `model.events.graph`; `Raw` is released right after, and `det` then takes `caps` as usual. Re-measure B5 once; still over → FAILS |
 
 ## 11. What #220 hands this step (re-cite after it merges)
 
