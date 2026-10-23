@@ -1,0 +1,563 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-239/ledger.md",
+    "line": 49,
+    "severity": "important",
+    "text": "Positive tests (M2/M3) do not pin the selected owner on every command; selecting Sel B would still pass fingerprint's block count and prove's exit code. Require the literal owner and stable id on digest, fingerprint and prove, plus a wrong-owner mutation.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: old M2 asserted only fingerprint block count and prove exit 0. M2/M3 now assert objectDisplay 'Codeunit Sel A' and Sel A's stable id on all three commands; A2 gains break (iii) (bare-name step keeps another owner's match -> asserts read Sel B).",
+    "anchor": ".agent/issue-239/ledger.md:53-61",
+    "anchor_hash": "497c0d8d9eb86cd0afaea6fbf7f95c4073a09de2b2a379124577480ab8360e63",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-239/ledger.md",
+    "line": 44,
+    "severity": "important",
+    "text": "Ambiguity row M4 promises candidates on surfaces that do not carry them (fingerprint JSON, prove) and A3 covered digest only.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: fingerprint JSON selector-ambiguous has no candidates (fingerprint_query.rs:1095-1101); prove drops selector diagnostics (prove.rs:906-944). Ambiguity paragraph now states the result per command; A3 (ledger line 62) runs all three commands, and its first-match break fails digest and fingerprint.",
+    "anchor": ".agent/issue-239/ledger.md:41-41",
+    "anchor_hash": "64cc08829f718372c0ffd1841f80ea640f6e0a8aaf44e5d6049ea9bed4f58a72",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-239/ledger.md",
+    "line": 61,
+    "severity": "important",
+    "text": "Failure shape (c) missed a fourth SelectorUnresolved site: the item16 oracle builds it as a struct literal and byte-compares the human line, so adding candidates breaks the cli test crate.",
+    "disposition": "fixed",
+    "evidence": "Confirmed at tests/cli/cli_b_fingerprint_oracles.rs:683-689. Fixed together with O2: the hint is dropped, rule 4 keeps narrow_to_owner -> Vec<String> and changes no diagnostic type, so the site is untouched.",
+    "anchor": ".agent/issue-239/ledger.md:39-39",
+    "anchor_hash": "5c0efb6552fd5b973f852e518bbd02993a105f57c0d235e115a6f94b69113478",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-239/ledger.md",
+    "line": 40,
+    "severity": "minor",
+    "text": "The hint is outside the Acceptance contract and uneven across surfaces; ponytail says T1 alone.",
+    "disposition": "fixed",
+    "evidence": "Acceptance (issue-239.md) asks only for selector-unmatched. Conductor decision: T2 dropped, tasks 2 -> 1; the hint is a Not-delivered line with its reason.",
+    "anchor": ".agent/issue-239/ledger.md:143-143",
+    "anchor_hash": "702e66229bd78081266c582ec07b3459516423ab5917adb3a3526fa04edab0e9",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-239/ledger.md",
+    "line": 38,
+    "severity": "minor",
+    "text": "Full-owner and bare-name comparisons are OR-ed with no precedence, so a full-owner selector can turn ambiguous through another object's bare name.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: strip_type_word_prefix (selector_index.rs:47-66) strips one word, so 'Table Codeunit Foo' strips to 'codeunit foo'. Rule 3 now keeps full-owner matches first, bare-name only when none. New row M6 + Table \"Codeunit Sel B\" fixture; A3 break (i) (one-pass OR) turns M6 into selector-ambiguous (ledger line 62).",
+    "anchor": ".agent/issue-239/ledger.md:38-38",
+    "anchor_hash": "defe47d83686e671669e60f1c2ecc16c4a58fe0f968e03ad812bdfc752b39fdc",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-239/ledger.md",
+    "line": 44,
+    "severity": "minor",
+    "text": "Fixtures do not fit the matrix: same_name_workspace gives Persist to both codeunits (no M1 shape), and adding a Table Sel B to it would break A7's two-candidate assert.",
+    "disposition": "fixed",
+    "evidence": "Confirmed at cli_object_display.rs:377-393, :474-477. same_name_workspace is unchanged (A7 intact); M1 gets one_owner_workspace (the issue's exact shape, so the fallback break gives exit 0 with Sel B, not ambiguity); M4/M6 get shared_name_workspace.",
+    "anchor": ".agent/issue-239/ledger.md:43-46",
+    "anchor_hash": "8b767bd26c03d411cfdbc92a7e50dc9b68f8fc61a8f3aa44bc0797ffac22b511",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-239/ledger.md",
+    "line": 26,
+    "severity": "minor",
+    "text": "Dropping the fallback assumes every selector-index id has an OwnerIndex owner, but the two use different primary predicates; unpinned.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: selector index uses role_of_stable_id (selector_index.rs:88-91), OwnerIndex uses routine_role (effect_query_cli.rs:355-357, :484-487). Recorded as stated limit (c) in Failure shapes.",
+    "anchor": ".agent/issue-239/ledger.md:72-72",
+    "anchor_hash": "2e0e82ee20c4e7e51a81a6444e480641fe4a71a9035d30567213ae1016a10d89",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-239/ledger.md",
+    "line": 58,
+    "severity": "minor",
+    "text": "U3 should pin the quote fold at unit level, and full-owner precedence if O3 is adopted.",
+    "disposition": "fixed",
+    "evidence": "U3 now asserts the quote fold (Codeunit \"Sel A\" -> [a]) and precedence ([a,b,c] -> [a]), each with its break (drop quote removal -> []; one-pass OR -> [a,c]).",
+    "anchor": ".agent/issue-239/ledger.md:63-69",
+    "anchor_hash": "a4425de9ad687eebf198d066f23b2ba8031d2ac6bf516f0c4bcd243306744e6e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "SN1",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-239/ledger.md",
+    "line": 76,
+    "severity": "minor",
+    "text": "The quote-removal fallback dropped M3 and A2(ii) but left U3's quote assertion, which L69 predicts fails without quote removal.",
+    "disposition": "fixed",
+    "evidence": "Fallback bullet now also drops U3's quote assert and its break when the quote removal is dropped.",
+    "anchor": ".agent/issue-239/ledger.md:76-76",
+    "anchor_hash": "5a1a148c9d67af2f1b27dec88dc2976055641ea524f1e8dcaaa5ed4235af1985",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR1",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 232,
+    "severity": "important",
+    "text": "The bare-name step runs even when the selector names an object type, so Codeunit \"Sel A\"::Persist can select a routine on Table \"Codeunit Sel A\".",
+    "disposition": "fixed",
+    "evidence": "owner_part decides once: a part whose first word is an object type word matches the full owner only; only an untyped (or quoted) part compares bare names. A4 typed_owner_never_matches_a_bare_name (sol F2's shape) is unmatched on digest, fingerprint and prove. Breaks B2 (typed part also matches bare names) and B8 (quoted bare name read as typed) each fail U3 and A4.",
+    "anchor": "src/engine/l5/selector_index.rs:212-233",
+    "anchor_hash": "c21906a41448d232c01fea2dd9bbd0bbe347fd79bd2105053adce59ad1c3cf26",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR2",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 217,
+    "severity": "minor",
+    "text": "Quotes are stripped from the owner part only; Codeunit \"Sel A\"::\"Post Document\" misses form 5.",
+    "disposition": "fixed",
+    "evidence": "Form 5 removes one outer quote pair from the routine part (strip_quotes; since final-1 B1 it no longer unescapes, because routine displays are raw). A2 selects Sel A for Codeunit \"Sel A\"::\"Persist\" on all three commands; proof B4 (keep the routine's quotes) makes it unmatched.",
+    "anchor": "src/engine/l5/selector_index.rs:320-331",
+    "anchor_hash": "8b228153da8297404f219c62d3ab0e7ccfa5d129fb565344dd3489410523b0ec",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR3",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 230,
+    "severity": "minor",
+    "text": "With no fallback, a selector naming the #if-shadowed object name (OwnerIndex last-name-wins) is now exit 2 where it used to resolve.",
+    "disposition": "fixed",
+    "evidence": "Stated Limit L1 (ledger Attempt 2): still reachable on b3686bde, OwnerIndex::build's name_by_object_id is a last-insert-wins HashMap and #241 is open. The shadowed name's <owner>:: selector is unmatched; its stable id and bare routine name still select it. Fixed by #241, not here.",
+    "anchor": "src/engine/l4/effect_query_cli.rs:475-479",
+    "anchor_hash": "af99d63bb50897b712a34a73766714104e31a4c5bf9a2386dc120fb896909683",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR4",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 217,
+    "severity": "important",
+    "text": "An empty owner part (::Persist) equals the empty owner key and selects only owner-unknown routines or nothing.",
+    "disposition": "fixed",
+    "evidence": "Chosen: treat it as the bare routine name. owner_part returns None for an empty part, so nothing is narrowed. A5 empty_owner_part_is_a_bare_routine_name selects the one Persist on all three commands; break B5 (narrow an empty part) makes it unmatched and fails U3.",
+    "anchor": "src/engine/l5/selector_index.rs:215-219",
+    "anchor_hash": "5eb823e90c9317dd407786ed477ef708b06eb6225626fd94efb05be445ac3e87",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR5",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/fingerprint_cli.rs",
+    "line": 301,
+    "severity": "minor",
+    "text": "When narrowing drops every match, the message has no list of the owners that do declare the routine.",
+    "disposition": "fixed",
+    "evidence": "Partly delivered in final-1 B5: fingerprint --format human adds 'declared as: <owner>::<routine>' (A1 asserts it; proof C5). Stated Limit L2 for the rest: the digest diagnostic and fingerprint JSON need new enum fields (fingerprint_query.rs is hands-off; digest_cli.rs beyond the call site), and prove has no channel. The CHANGELOG entry states it.",
+    "anchor": "CHANGELOG.md:36-39",
+    "anchor_hash": "761cd7c41b05e9f605eb8bb0a7ba72595f0413be6649c80021c343a1ad82cc62",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR6",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 204,
+    "severity": "important",
+    "text": "Owner narrowing is a separate step each caller must remember; a third caller that forgets it brings back the fallback.",
+    "disposition": "fixed",
+    "evidence": "resolve_selector returns SelectorMatches with private ids and the parsed form-5 object part; narrow_to_owner is the only way to read the ids, so a caller cannot skip it. Break B10 (digest reads matches.ids directly) fails to compile with E0616. Limit L3: still a second call, because folding owner_of into resolve_selector needs fingerprint_query.rs's call changed (hands-off); narrow_to_owner's _selector/_matched_form stay unused until then.",
+    "anchor": "src/engine/l5/selector_index.rs:137-144",
+    "anchor_hash": "3325b23471af34a459d0a06692ff0e65b1c447e4687f6d5f00fb83a09285a8a9",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR7",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "docs/superpowers/plans/2026-10-23-issue-239-selector-owner.md",
+    "line": 3,
+    "severity": "minor",
+    "text": "The plan cites .agent/issue-239/ledger.md, which is untracked on the branch.",
+    "disposition": "fixed",
+    "evidence": "The plan now names the flow ledger without a path, says it is flow state outside the tree, and states the attempt-2 rule itself.",
+    "anchor": "docs/superpowers/plans/2026-10-23-issue-239-selector-owner.md:1-5",
+    "anchor_hash": "28ff9178e577ebdd4b546ec5f0c29a5eb8d87928e3f6db3701501d531b2541bd",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1",
+    "source": "sol",
+    "round": "final-1",
+    "file": ".agent/issue-239/findings.json",
+    "line": 11,
+    "severity": "minor",
+    "text": "The register claims the first-match mutation fails digest and fingerprint; only digest was observed. B1 likewise never reaches fingerprint/prove.",
+    "disposition": "fixed",
+    "evidence": "Every CLI row is one assert_eq over per_command (digest, fingerprint JSON, prove), so a failure prints all three commands. Observed: B1 shows all three exit 0 with Codeunit Sel B (A1); B7 shows all three exit 0 on M4 (A3). Logs /work/bench/239a2/b1-fallback.log, b7-first-only.log.",
+    "anchor": "tests/cli/cli_object_display.rs:577-581",
+    "anchor_hash": "06b6ca553bb156997610739917c03f03aeb3a7c629a1faa73a059a0dab0f07e9",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F2",
+    "source": "sol",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 34,
+    "severity": "minor",
+    "text": "The CHANGELOG overstates unmatched-owner guarantees and candidate visibility (a Table \"Codeunit Sel B\" can be selected by Codeunit Sel B::Persist; fingerprint JSON has no candidates; prove only unknown).",
+    "disposition": "fixed",
+    "evidence": "CR1's rule closes the table case (A4). The entry now says a typed part matches only that full owner, and names each command's ambiguity output: digest and fingerprint human list candidates, fingerprint JSON has none, prove reports unknown.",
+    "anchor": "CHANGELOG.md:12-39",
+    "anchor_hash": "fd2af4d4920a0af8bbb08fded70bb45abd7688ae2488e42e8231e9d5654fdb47",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G1",
+    "source": "opus",
+    "round": "final-1",
+    "file": "tests/cli/cli_object_display.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "A1's doc comment claims all three commands exit 0 under the fallback mutation, which nobody observed (A1 stopped at digest).",
+    "disposition": "fixed",
+    "evidence": "A1 now asserts all three commands in one assert; under B1 the failure printed digest, fingerprint and prove each exit 0 with Codeunit Sel B (b1-fallback.log), which is what the doc comment says.",
+    "anchor": "tests/cli/cli_object_display.rs:635-641",
+    "anchor_hash": "122c9aaed95a0fa854f256ab82a2f945267650de48a088d7bb78348035f71bdd",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G2",
+    "source": "opus",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 33,
+    "severity": "minor",
+    "text": "The entry omits that a selector naming the right owner another way (e.g. Codeunit 50101::Persist) used to resolve via the fallback and is now exit 2.",
+    "disposition": "fixed",
+    "evidence": "The entry says an owner spelled any way the owner display does not, for example by object number (Codeunit 50101::Persist), is unmatched too.",
+    "anchor": "CHANGELOG.md:17-18",
+    "anchor_hash": "33c99c85724e705418b271cea7d4e43c4711d190c5c05cf60d7c32ef35d28727",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "M1",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 180,
+    "severity": "minor",
+    "text": "unquote re-implements the \"\" unescape instead of calling scope::unescape_al_identifier.",
+    "disposition": "fixed",
+    "evidence": "unquote calls crate::program::body::scope::unescape_al_identifier (applied by the coordinator, committed in 140c5b2e). It now serves only the object part; the routine part uses strip_quotes (final-1 B1). U3's #240 asserts pass.",
+    "anchor": "src/engine/l5/selector_index.rs:188-196",
+    "anchor_hash": "fb9fc55432553f8286550b781b35a611afe2a79b1ad85172e34e5113834b80cf",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B1",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 263,
+    "severity": "important",
+    "text": "Routine displays are the raw IR name (\"\" kept), but form 5 unescapes the routine part, so Codeunit A::\"Post \"\"X\"\"\" never matches.",
+    "disposition": "fixed",
+    "evidence": "Confirmed on the CLI: digest shows display 'Post \"\"X\"\"' and the selector was selector-unmatched. strip_quotes removes one outer pair and unescapes nothing; the doc comment now says routine displays are raw and only object names are logical. U3 asserts Codeunit Sel A::\"Post \"\"X\"\"\" -> a#; proof C1 (unquote the routine part) fails it. The CLI probe now selects it (exit 0).",
+    "anchor": "src/engine/l5/selector_index.rs:178-186",
+    "anchor_hash": "bf15de9dd7e349e7aa8c3a60580f821ffd90b2e1ef966f2c1c74c3b4351277a0",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B2",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 188,
+    "severity": "minor",
+    "text": "An owner whose logical name starts and ends with \" (\"\"\"Legacy\"\"\" -> \"Legacy\") cannot be selected by its displayed spelling.",
+    "disposition": "fixed",
+    "evidence": "Confirmed on the CLI (Codeunit \"Legacy\"::Run was unmatched). OwnerPart.wants holds the unquoted spelling then the as-written one; the first that keeps a match wins. U3: both spellings select l#, and the unquoted spelling wins when Codeunit Legacy also exists; proof C4 (drop the as-written spelling) fails U3. CLI probe now exit 0 for both spellings.",
+    "anchor": "src/engine/l5/selector_index.rs:220-233",
+    "anchor_hash": "468aaa629219ec274bd538dea868dcbdcf521004880367609073752033abf871",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B3",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 262,
+    "severity": "minor",
+    "text": "The rfind(\"::\") split ignores quotes, so Codeunit X::\"A::B\" mis-splits.",
+    "disposition": "fixed",
+    "evidence": "last_separator finds the last :: outside quotes (8 lines); cascade uses it for forms 2 and 5. U3 asserts Codeunit Sel A::\"A::B\" -> a#; proof C3 (back to rfind) fails it.",
+    "anchor": "src/engine/l5/selector_index.rs:198-210",
+    "anchor_hash": "1b818974c5d8c8a4e5da63128e7fb77a886fc7635cb02bf7217133bf13837cb0",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B4",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 223,
+    "severity": "minor",
+    "text": "Forms 2-4 do not strip quotes, so \"Post Document\" fails alone but works after ::.",
+    "disposition": "fixed",
+    "evidence": "A selector with no unquoted :: has one outer quote pair removed before forms 2-4 (no unescape, as B1). Selectors with :: and form 1 are unchanged, and the only selectors that change start and end with \", which matched no raw display before. U3 asserts \"Persist\" and \"Post \"\"X\"\"\" select; proof C2 fails U3. Whole suite green (3936 passed).",
+    "anchor": "src/engine/l5/selector_index.rs:277-284",
+    "anchor_hash": "f1a8b84bb10a9fe338eecf7e3743eafdb0c4b5079de81042b6c7823e4c386fc9",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B5",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/fingerprint_cli.rs",
+    "line": 301,
+    "severity": "minor",
+    "text": "When the owner check drops every match, the message still says 'did not match any routine'.",
+    "disposition": "fixed",
+    "evidence": "fingerprint_cli (not hands-off) re-runs the cascade via selector_index::owner_check_candidates and, for each unresolved form-5 selector, adds a line '  no routine of that name on the named owner; declared as: <owner>::<routine>, ...'. format_selector_errors_human is unchanged (its oracle stays green). A1 asserts the line; proof C5 fails A1. Digest, fingerprint JSON and prove stay without it (CR5's Limit L2).",
+    "anchor": "src/engine/l5/fingerprint_cli.rs:535-554",
+    "anchor_hash": "299b35df58a188ae07eac214b997bba23e9c37f52e7a1f2078a885d68e02c43e",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B6",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/fingerprint_query.rs",
+    "line": 662,
+    "severity": "minor",
+    "text": "fingerprint indexes all apps (None) but OwnerIndex holds only Primary routines, so a non-primary routine's <owner>:: selector can never match.",
+    "disposition": "refuted",
+    "evidence": "Not reachable: fingerprint (and prove) build the single-app model, ResolvedProgram::build(.., ProgramScope::Workspace) (resolved.rs:38-41: 'The workspace's routines ... The single-app model'), so the snapshot identity table (derive_identity_table over ws.routines) holds only workspace-source routines, which are all Primary (role_of_app: the primary app or no primary app). Digest, the cross-app one, filters its index to primary. L5 extended in the ledger for any future non-primary row. No fallback re-added.",
+    "anchor": "src/program/resolved.rs:38-41",
+    "anchor_hash": "9fe996cd00c09178ac78016a8b4ace5e7a4c3a3df4694337efb9cad74dfdc5e2",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B7",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 209,
+    "severity": "minor",
+    "text": "resolve_selector re-parses the object part instead of cascade returning the OwnerPart from its form-5 branch.",
+    "disposition": "fixed",
+    "evidence": "cascade returns (ids, form, Option<OwnerPart>); the form-5 branch builds the OwnerPart from the split it already made. The unused narrow_to_owner parameters stay (Limit L3).",
+    "anchor": "src/engine/l5/selector_index.rs:323-331",
+    "anchor_hash": "234e0e6b3ff8f9cffc002081f4b5c11a6a2fb9972bb5d555892fe229cd111ff7",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B8",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 180,
+    "severity": "minor",
+    "text": "unquote duplicates scope::unescape_al_identifier (same as opus M1).",
+    "disposition": "fixed",
+    "evidence": "Same change as M1: unquote calls scope::unescape_al_identifier.",
+    "anchor": "src/engine/l5/selector_index.rs:188-196",
+    "anchor_hash": "fb9fc55432553f8286550b781b35a611afe2a79b1ad85172e34e5113834b80cf",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B9",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 157,
+    "severity": "minor",
+    "text": "OBJECT_TYPE_WORDS copies the type list and re-parses strings; compare OwnerIndex's (object_type, name) fields instead if smaller.",
+    "disposition": "fixed",
+    "evidence": "Kept the list: narrow_to_owner only receives owner_of: Fn(&str) -> String (a display) from the hands-off fingerprint_query.rs call, so the fields are not reachable. Added object_type_words_are_the_model_types: the list equals ir_object_type's outputs, lowercased, and an exhaustive no-wildcard match over al_syntax ObjectKind breaks the build on a new kind. Proof C6 (xmlport -> xmlports) fails it.",
+    "anchor": "src/engine/l5/selector_index.rs:450-506",
+    "anchor_hash": "b3351fb9f0fa37f5a72db842adf8d747934b090eaa62a55f1e5e3bd5b4c71343",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "B10",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "tests/cli/cli_object_display.rs",
+    "line": 531,
+    "severity": "minor",
+    "text": "The added CLI tests may be slow; share workspaces (A1 and A5 both use one_owner_workspace).",
+    "disposition": "refuted",
+    "evidence": "Measured with cargo nextest (/work/bench/239a2/cli-r2.log): the five #239 CLI tests take 0.117-0.216 s each, about 0.84 s together, far below 10 s. Not shared.",
+    "anchor": "tests/cli/cli_object_display.rs:531-532",
+    "anchor_hash": "ceb4cc594ab9b73db0e216124045085e36aba4003f88e9955d2cfe066b02a97f",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "M2",
+    "source": "opus",
+    "round": "final-2",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "B2 as-written fallback can select a wrong owner when two objects differ only by wrapping quotes.",
+    "disposition": "deferred",
+    "evidence": "Stated limit on the reviewer's suggestion (narrow_to_owner has no owner list to tell no-owner from no-match without the hands-off call site); filed as a discovery.",
+    "anchor": ".agent/issue-239/ledger.md:356-360",
+    "anchor_hash": "51f0f01873b7d24f99890a0aa093363fc04a873c27963ba9c55fda26a64eca47",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "M3",
+    "source": "opus",
+    "round": "final-2",
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 0,
+    "severity": "minor",
+    "text": "last_separator misses a header-copied selector whose object name holds an odd number of quotes.",
+    "disposition": "deferred",
+    "evidence": "Stated limit (the AL spelling works); fix (fall back to rfind when no :: lies outside quotes) filed as a discovery.",
+    "anchor": ".agent/issue-239/ledger.md:356-360",
+    "anchor_hash": "51f0f01873b7d24f99890a0aa093363fc04a873c27963ba9c55fda26a64eca47",
+    "reviews": {
+      "sol": "unreviewed",
+      "opus": "accepted"
+    }
+  }
+]
