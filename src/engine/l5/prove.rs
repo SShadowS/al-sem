@@ -957,7 +957,7 @@ pub(crate) fn prove_pipeline_with(
         &tx_ctx_map,
         &temp_states,
         &changed_roots,
-        &object_display_by_stable_routine_id(&resolved),
+        &object_display_by_stable_routine_id(resolved),
     );
     // The bundle's only borrower is dead: release `l4` before the cone walk.
     drop(temp_states);

@@ -516,7 +516,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         &snap,
         &filters,
         roots_config_ignored,
-        &object_display_by_stable_routine_id(&resolved),
+        &object_display_by_stable_routine_id(resolved),
     );
 
     let selector_errors: Vec<&FingerprintQueryDiagnostic> = result
