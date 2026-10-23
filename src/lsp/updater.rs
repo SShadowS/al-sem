@@ -545,6 +545,16 @@ impl Updater {
                 return;
             }
         };
+        // A file first seen in this batch is a known spelling too (C1: a
+        // Windows `didSave` path is lowercased, the watcher's is not).
+        let key = match rc
+            .plans
+            .keys()
+            .find(|k| **k != rel && k.eq_ignore_ascii_case(&rel))
+        {
+            Some(twin) if key == rel => twin.clone(),
+            _ => key,
+        };
         // Rule 3: `key` is a known spelling that differs from `p` only in case.
         let (target, vp) = if key == rel {
             (p.to_path_buf(), rel)
@@ -647,7 +657,7 @@ impl Updater {
         self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let text = match crate::source_text::read_al_source(path) {
             Ok(t) => t,
-            Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+            Err(e) => return !is_absent(&e),
         };
         rc.staged.insert(vp.to_owned(), Some(stamp));
         if !own && known.is_some_and(|e| *e.text == *text) {
@@ -3169,6 +3179,37 @@ mod tests {
             rec,
             vec![(g, SwapScope::Full)],
             "T9(c): a failed rung 3 must not lose the config change"
+        );
+    }
+
+    /// C1: a new file reached under two spellings in one batch (Windows: the
+    /// watcher's disk case and `didSave`'s lowercased path) is one vp. The
+    /// case-blind file system is simulated through the `canonicalize` seam.
+    #[test]
+    fn c1_new_file_saved_under_another_spelling_in_one_batch_is_one_vp() {
+        let dir = fixture_dir();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        updater.canonicalize = |p: &Path| Ok(PathBuf::from(p.to_string_lossy().to_lowercase()));
+        let text = "codeunit 50199 \"NewFile\"\n{\n    procedure P()\n    begin\n    end;\n}\n";
+        let (disk, lower) = (dir.path().join("NewFile.al"), dir.path().join("newfile.al"));
+        std::fs::write(&disk, text).unwrap();
+        std::fs::write(&lower, text).unwrap();
+        assert!(!base.parsed.contains_key("NewFile.al"), "precondition: new");
+
+        let (snap, _) = updater
+            .apply_batch(
+                &base,
+                &[
+                    ChangeEvent::PathChanged(disk),
+                    ChangeEvent::FileSaved(lower),
+                ],
+            )
+            .expect("C1: the new file applies");
+        assert!(
+            snap.parsed.contains_key("NewFile.al") && !snap.parsed.contains_key("newfile.al"),
+            "C1: one vp, the disk spelling; got {:?}",
+            snap.parsed.keys().collect::<Vec<_>>()
         );
     }
 

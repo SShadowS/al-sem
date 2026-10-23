@@ -125,7 +125,9 @@ pub fn map_event(scope: &WatchScope, event: &Event) -> Vec<ChangeEvent> {
     let mut out = Vec::new();
     for p in &event.paths {
         let rel = rel_under_root(&scope.root, p);
-        let rel_is = |name: &str| rel.as_deref() == Some(Path::new(name));
+        // Compared normalized, as the loader opens them (F4: case-blind on Windows).
+        let rel_n = rel.as_deref().map(normalize_path);
+        let rel_is = |name: &str| rel_n.as_deref() == Some(Path::new(name));
         if rel_is(".al-sem.json") || rel_is(".al-call-hierarchy.json") {
             out.push(ChangeEvent::ConfigChanged);
             continue;
@@ -150,7 +152,7 @@ pub fn map_event(scope: &WatchScope, event: &Event) -> Vec<ChangeEvent> {
             }
             continue;
         }
-        if rel == Path::new("app.json") {
+        if rel_is("app.json") {
             out.push(ChangeEvent::DepsChanged);
             continue;
         }
@@ -247,17 +249,16 @@ impl WatchState {
             && !event.need_rescan()
             && !matches!(event.kind, EventKind::Access(_))
         {
-            if self.resync(backend) {
-                out.push(ChangeEvent::DepsChanged);
-            } else if is_structural(&event.kind) {
+            let changed = self.resync(backend);
+            let structural = is_structural(&event.kind);
+            if structural {
                 // A replaced folder keeps its name: the existence diff
-                // misses it, so re-watch it.
-                for c in cache_folders {
-                    if self.registered.remove(&c).is_some() {
-                        let _ = backend.unwatch(&c);
-                        self.register(backend, &c, RecursiveMode::NonRecursive);
-                    }
+                // misses it, whatever another candidate did (F5).
+                for c in &cache_folders {
+                    self.rearm(backend, c);
                 }
+            }
+            if changed || structural {
                 out.push(ChangeEvent::DepsChanged);
             }
         }
@@ -268,12 +269,35 @@ impl WatchState {
                 ChangeEvent::DepsChanged => {
                     self.resync(backend);
                 }
+                // Lost events or a replaced root (C2, F1-F3): the root's
+                // watch may be dead, a cache may have appeared unseen, the
+                // config may have changed unseen. Repair all three before
+                // the rebuild reads.
+                ChangeEvent::Overflow => {
+                    let root = self.scope.root.clone();
+                    if !self.rearm(backend, &root) {
+                        self.register(backend, &root, RecursiveMode::Recursive);
+                    }
+                    self.resync(backend);
+                    config.reload_from_disk();
+                }
                 _ => {}
             }
             if tx.send(ev).is_err() {
                 return false;
             }
         }
+        true
+    }
+
+    /// Unwatch and re-watch a registered path in its own mode (F6: a root
+    /// that is also a candidate stays recursive). False when not registered.
+    fn rearm(&mut self, backend: &mut dyn WatchBackend, p: &Path) -> bool {
+        let Some(mode) = self.registered.remove(p) else {
+            return false;
+        };
+        let _ = backend.unwatch(p);
+        self.register(backend, p, mode);
         true
     }
 
@@ -301,11 +325,13 @@ impl WatchState {
     }
 
     /// Retry the failed registrations (the loop's 5 s tick). After a success:
-    /// resync, then `Overflow` (the root came back) or `DepsChanged`.
-    /// Returns `false` once the updater's channel is closed.
+    /// resync, then `Overflow` (the root came back; the config is reloaded
+    /// first) or `DepsChanged`. Returns `false` once the updater's channel
+    /// is closed.
     pub fn retry_failed(
         &mut self,
         backend: &mut dyn WatchBackend,
+        config: &ConfigHandle,
         tx: &Sender<ChangeEvent>,
     ) -> bool {
         let mut any = false;
@@ -321,6 +347,7 @@ impl WatchState {
         }
         self.resync(backend);
         let ev = if root {
+            config.reload_from_disk();
             ChangeEvent::Overflow
         } else {
             ChangeEvent::DepsChanged
@@ -360,7 +387,7 @@ pub fn start_watching(
             let alive = alive
                 && (last_retry.elapsed() < Duration::from_secs(5) || {
                     last_retry = Instant::now();
-                    state.retry_failed(backend.as_mut(), &tx)
+                    state.retry_failed(backend.as_mut(), &config, &tx)
                 });
             if !alive {
                 info!("Updater channel found closed on a send; stopping the file watcher thread");
@@ -631,6 +658,26 @@ mod tests {
         );
     }
 
+    /// F4: Windows opens `app.json` and `.al-sem.json` without case, so a
+    /// raw event in another case is still that input. Runs only on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn t10_windows_special_names_in_another_case() {
+        let root = PathBuf::from(r"c:\users\me\ws");
+        let scope = WatchScope {
+            cache: CacheScope {
+                candidates: vec![root.join(".alpackages")],
+                walked_dirs: vec![],
+            },
+            root,
+        };
+        let kind = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+        let app = ev(kind, &[Path::new(r"C:\Users\Me\ws\APP.JSON")]);
+        assert_eq!(map_event(&scope, &app), vec![ChangeEvent::DepsChanged]);
+        let cfg = ev(kind, &[Path::new(r"C:\Users\Me\ws\.AL-SEM.JSON")]);
+        assert_eq!(map_event(&scope, &cfg), vec![ChangeEvent::ConfigChanged]);
+    }
+
     // ── T11: watch wiring through `WatchState::handle_raw` (fake backend) ──
 
     /// `<tmp>/parent/ws`: `parent` holds `.git`, so the walk stops there and
@@ -769,7 +816,7 @@ mod tests {
         r.fake.take_log();
         fs::create_dir(r.cache()).unwrap();
         r.fake.refuse.lock().unwrap().clear();
-        st.retry_failed(&mut r.fake, &r.tx);
+        st.retry_failed(&mut r.fake, &r.config, &r.tx);
         let log = r.fake.take_log();
         let parent = pos(
             &log,
@@ -827,7 +874,8 @@ mod tests {
             root: root.clone(),
         };
         let mut fake = FakeBackend::default();
-        WatchState::new(scope).start(&mut fake);
+        let mut st = WatchState::new(scope);
+        st.start(&mut fake);
         let root_watches: Vec<Rec> = fake
             .take_log()
             .into_iter()
@@ -835,8 +883,90 @@ mod tests {
             .collect();
         assert_eq!(
             root_watches,
-            vec![Rec::Watch(root, RecursiveMode::Recursive)],
+            vec![Rec::Watch(root.clone(), RecursiveMode::Recursive)],
             "T11(g)"
+        );
+
+        // F6: a structural event on it re-arms it, still recursive.
+        let (tx, _rx) = channel();
+        let config = ConfigHandle::new(root.clone(), false);
+        let e = ev(EventKind::Create(CreateKind::Folder), &[&root]);
+        st.handle_raw(&mut fake, Ok(e), &config, &tx);
+        assert_eq!(
+            fake.take_log(),
+            vec![
+                Rec::Unwatch(root.clone()),
+                Rec::Watch(root, RecursiveMode::Recursive)
+            ],
+            "T11(g): a re-arm keeps the root recursive"
+        );
+    }
+
+    /// C2, F1-F3: an overflow (or the root replaced) re-arms the root's
+    /// recursive watch, registers a cache folder created while events were
+    /// lost, and reloads the config, all before `Overflow` is sent.
+    #[test]
+    fn t11l_overflow_rearms_root_resyncs_caches_and_reloads_config() {
+        let mut r = rig(false);
+        let mut st = r.state();
+        st.start(&mut r.fake);
+        r.fake.take_log();
+        assert!(r.config.get().unused_procedures, "precondition");
+        fs::create_dir(r.cache()).unwrap();
+        fs::write(
+            r.ws.join(".al-sem.json"),
+            r#"{"diagnostics": {"unusedProcedures": false}}"#,
+        )
+        .unwrap();
+        let rescan = Event::new(EventKind::Other).set_flag(Flag::Rescan);
+        st.handle_raw(&mut r.fake, Ok(rescan), &r.config, &r.tx);
+        assert_eq!(
+            r.fake.take_log(),
+            vec![
+                Rec::Unwatch(r.ws.clone()),
+                Rec::Watch(r.ws.clone(), RecursiveMode::Recursive),
+                Rec::Watch(r.cache(), RecursiveMode::NonRecursive),
+                Rec::Sent(ChangeEvent::Overflow),
+            ],
+            "T11(l): re-arm and resync before the send"
+        );
+        assert!(!r.config.get().unused_procedures, "T11(l): config reloaded");
+
+        // The root removed: its re-registration fails and is retried.
+        r.fake.refuse.lock().unwrap().insert(r.ws.clone());
+        let ws = r.ws.clone();
+        r.raw(&mut st, EventKind::Remove(RemoveKind::Folder), &ws);
+        assert!(st.failed.contains_key(&ws), "T11(l): root retried");
+    }
+
+    /// F5: one candidate appearing must not hide another one's replacement.
+    #[test]
+    fn t11m_replaced_cache_is_rearmed_while_another_appears() {
+        let mut r = rig(false);
+        let (a, b) = (r.parent.join("a"), r.parent.join("b"));
+        fs::create_dir(&a).unwrap();
+        let scope = WatchScope {
+            cache: CacheScope {
+                candidates: vec![a.clone(), b.clone()],
+                walked_dirs: vec![r.parent.clone()],
+            },
+            root: r.ws.clone(),
+        };
+        let mut st = WatchState::new(scope);
+        st.start(&mut r.fake);
+        r.fake.take_log();
+        fs::remove_dir(&a).unwrap();
+        fs::create_dir(&a).unwrap();
+        fs::create_dir(&b).unwrap();
+        r.raw(&mut st, EventKind::Create(CreateKind::Folder), &a);
+        let log = r.fake.take_log();
+        let unwatch = pos(&log, &Rec::Unwatch(a.clone()));
+        let rewatch = log
+            .iter()
+            .rposition(|x| *x == Rec::Watch(a.clone(), RecursiveMode::NonRecursive));
+        assert!(
+            rewatch.is_some_and(|w| w > unwatch),
+            "T11(m): `a` re-armed; {log:?}"
         );
     }
 
@@ -886,7 +1016,7 @@ mod tests {
         fs::remove_dir(r.cache()).unwrap();
         st.resync(&mut r.fake);
         r.fake.refuse.lock().unwrap().clear();
-        st.retry_failed(&mut r.fake, &r.tx);
+        st.retry_failed(&mut r.fake, &r.config, &r.tx);
         assert_eq!(r.fake.take_log(), vec![], "T11(k)");
     }
 

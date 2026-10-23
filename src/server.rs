@@ -2197,6 +2197,10 @@ mod tests {
         }
     }
 
+    /// A publish that is expected: generous, so a loaded CI machine running a
+    /// debug build does not fail it (C6). Only an absent publish waits it out.
+    const T12_WAIT: Duration = Duration::from_secs(5);
+
     /// A `.al-sem.json` with every detector key explicit (O7: a developer's
     /// global config cannot leak in). Thresholds are the built-in defaults.
     fn write_explicit_config(dir: &Path, detectors_on: bool, unused: bool) {
@@ -2248,7 +2252,7 @@ mod tests {
         let w = watched_root(dir.path(), FakeBackend::default(), None);
         let st = w.root.state().expect("the fixture builds");
         let alpha_uri = path_to_uri(&st.shared.get().workspace_root.join("Alpha.al"));
-        let initial = next_publish_for(&w.client, &alpha_uri, Duration::from_millis(1000))
+        let initial = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
             .expect("precondition: the initial publish covers Alpha.al");
         assert!(has_extra_hint(&initial), "precondition: Extra() is unused");
         let g0 = st.shared.get().generation;
@@ -2261,7 +2265,7 @@ mod tests {
         .expect("rewrite Alpha.al");
         push_write(&w.raw, dir.path().join("Alpha.al"));
 
-        let after = next_publish_for(&w.client, &alpha_uri, Duration::from_millis(1000))
+        let after = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
             .expect("T12(b): a raw .al event must republish Alpha.al");
         assert!(after.is_empty(), "T12(b): the hint clears; got {after:#?}");
         assert!(st.shared.get().generation > g0, "T12(b): generation rises");
@@ -2275,14 +2279,14 @@ mod tests {
         let w = watched_root(dir.path(), FakeBackend::default(), None);
         let st = w.root.state().expect("the fixture builds");
         let alpha_uri = path_to_uri(&st.shared.get().workspace_root.join("Alpha.al"));
-        let initial = next_publish_for(&w.client, &alpha_uri, Duration::from_millis(1000))
+        let initial = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
             .expect("precondition: the initial publish covers Alpha.al");
         assert!(has_extra_hint(&initial), "precondition: Extra() is unused");
 
         write_explicit_config(dir.path(), true, false);
         push_write(&w.raw, dir.path().join(".al-sem.json"));
 
-        let after = next_publish_for(&w.client, &alpha_uri, Duration::from_millis(1000))
+        let after = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
             .expect("T12(c): a config edit must republish Alpha.al");
         assert!(
             after.is_empty(),
@@ -2298,14 +2302,14 @@ mod tests {
         let w = watched_root(dir.path(), FakeBackend::default(), None);
         let st = w.root.state().expect("the fixture builds");
         let alpha_uri = path_to_uri(&st.shared.get().workspace_root.join("Alpha.al"));
-        let initial = next_publish_for(&w.client, &alpha_uri, Duration::from_millis(1000))
+        let initial = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
             .expect("precondition: the initial publish covers Alpha.al");
         assert!(has_extra_hint(&initial), "precondition: Extra() is unused");
 
         write_explicit_config(dir.path(), false, false);
         push_write(&w.raw, dir.path().join(".al-sem.json"));
 
-        let after = next_publish_for(&w.client, &alpha_uri, Duration::from_millis(1000))
+        let after = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
             .expect("T12(d): disabling every detector must clear Alpha.al");
         assert!(after.is_empty(), "T12(d): one empty notification");
         assert_eq!(

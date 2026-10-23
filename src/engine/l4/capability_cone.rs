@@ -3080,8 +3080,8 @@ fn compose_inherited_cones(
 }
 
 // ===========================================================================
-// R3b WRAP SEAM — a public cone entry the Salsa `inherited_facts`/`coverage`
-// queries call. WRAPS the full cone (typed-edge graph build + Tarjan SCC +
+// CONE ENTRY — a public cone entry (it once served R3b's Salsa layer, deleted
+// with salsa in #221). WRAPS the full cone (typed-edge graph build + Tarjan SCC +
 // `compose_inherited_cones`) over the typed edges (`&[TypedEdge]`, the Cone
 // payload; #160 step 4) + per-routine direct facts +
 // direct coverage. Byte-identical to the cone path inside `project_r3a3` /
@@ -3123,7 +3123,7 @@ pub struct ConeOutcome {
 /// `coverage_in` maps routineId → `(direct_status, reasons)`.
 ///
 /// This is the EXACT cone substrate `project_r3a3` / `project_r3a5_cross_app`
-/// build inline; factored out so the R3b Salsa layer wraps it without re-porting.
+/// build inline, factored out.
 ///
 /// ⟨C1⟩ `mode` selects the output(s). `direct_in` doubles as the derived fold's
 /// SELF half — it is the raw, un-deduped direct-fact Vec every caller also stores
@@ -3665,9 +3665,7 @@ pub struct R3a5FullSummaryProjection {
 }
 
 /// The FULLY-ASSEMBLED cross-app L4 BASE — every from-scratch intermediate the
-/// R3a-5 projection (and the R3b Salsa wrap) consume, before the core/cone +
-/// projection. Extracted so the R3b Salsa layer can build its fine-grained inputs
-/// from EXACTLY the same base the from-scratch path uses (no divergent assembly).
+/// R3a-5 projection consumes, before the core/cone + projection.
 pub struct R3a5CrossAppBase {
     /// The program build's dependency coverage and ledger (`alsem analyze`'s
     /// preflight, engine-switch S8.3).
@@ -4138,10 +4136,7 @@ pub fn project_r3a5_cross_app(
 
 /// The R3a-5 PROJECTION TAIL — project the (core JACOBI summaries + cone) over the
 /// merged model into the stable full-RoutineSummary surface + the anti-degenerate
-/// counts. A pure function of its parts, shared by the from-scratch
-/// `project_r3a5_cross_app` AND the R3b Salsa wrap (which demands the
-/// `core_summaries` and `cones` through the Salsa queries — proving the wrapped
-/// projection is byte-identical to the from-scratch one).
+/// counts. A pure function of its parts, used by `project_r3a5_cross_app`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn project_r3a5_from_parts(
     ws_routines: &[ModelRoutine],
