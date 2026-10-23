@@ -517,9 +517,13 @@ impl WitnessHop {
 /// A raw witness path. Hops are shared (`Rc`): the BFS's paths share long
 /// prefixes, and up to `HARD_PATH_CAP` paths walk the same arena nodes, so each
 /// hop is built once and every path through it holds a pointer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct WitnessPath {
     hops: Vec<Rc<WitnessHop>>,
+    /// Hops of equal-JSON parallel edges beside `hops[i]`, as `(i, hop)`: the
+    /// same projected step, read only for conditionality, where the least
+    /// restrictive edge of a step counts (#69 D3).
+    alternatives: Vec<(usize, Rc<WitnessHop>)>,
 }
 
 /// Outcome of `reconstruct_witness_paths`: raw (un-projected) paths plus the
@@ -1131,6 +1135,9 @@ struct WitDag<'i> {
     /// Per-fact markings, by the sorted carriers at `dmin` (A2-09): facts that
     /// share their nearest carriers share one.
     markings: std::cell::RefCell<HashMap<Vec<&'i str>, Rc<Marking<'i>>>>,
+    /// Item 6's answer per carrier set (sorted): is a carrier behind the depth
+    /// frontier? Asked only by facts with no path.
+    behind_frontier: std::cell::RefCell<HashMap<Vec<&'i str>, bool>>,
 }
 
 /// A routine's DAG predecessors `(u, e)`, every one with `δ(u) = δ − 1`
@@ -1213,6 +1220,7 @@ impl<'i> WitDag<'i> {
             opaque,
             depth_frontier,
             markings: std::cell::RefCell::new(HashMap::new()),
+            behind_frontier: std::cell::RefCell::new(HashMap::new()),
         }
     }
 
@@ -1320,22 +1328,29 @@ impl Candidate<'_> {
     }
 }
 
+/// One trie node of [`TrieWalk`]: the routine its prefix ends at, the
+/// equal-JSON edges into it (the first is the representative), and its parent
+/// slot.
+type TrieNode<'i> = (&'i str, Vec<&'i SnapshotGraphEdge>, usize);
+
 /// The trie walk of spec §14.3.1 item 4 (b) over one fact's marking: one
-/// depth-first walk per candidate length over the trie of PROJECTED PREFIXES.
-/// A trie node is a projected prefix with its frontier, the marked routines it
-/// reaches; its children are the frontier's DAG out-edges into a marked routine
-/// whose bit set holds the length, grouped by projected hop JSON, in JSON
-/// order. Equal-JSON alternatives are one child, so each distinct candidate is
-/// produced once, in key order.
+/// depth-first walk per candidate length over the trie of PROJECTED PREFIXES,
+/// whose children are a node's DAG out-edges into a marked routine whose bit
+/// set holds the length, grouped by projected hop JSON, in JSON order. A hop's
+/// JSON carries its `toRoutineId`, so equal-JSON alternatives are parallel
+/// edges into ONE routine: a trie node's frontier is a single routine, and the
+/// group is one child. Each distinct candidate is produced once, in key order;
+/// the group's other edges are kept, because their hops can differ in
+/// conditionality where JSON does not show it (a trigger's operation and
+/// `fires`).
 struct TrieWalk<'w, 'i> {
     root_id: &'w str,
     idx: &'i FingerprintIndexes<'i>,
     dag: &'w WitDag<'i>,
     marking: &'w Marking<'i>,
     hop_cache: &'w mut HopCache<'i>,
-    /// Trie-node routines: (routine, the edge into it, parent). Slot 0 is the
-    /// root, the empty prefix.
-    arena: Vec<(&'i str, Option<&'i SnapshotGraphEdge>, usize)>,
+    /// The trie nodes. Slot 0 is the root, the empty prefix.
+    arena: Vec<TrieNode<'i>>,
     /// The candidates found, in key order: (arena slot, end key).
     found: Vec<(usize, EndKey)>,
     /// The CALLER's `cap + 1` (A1-04).
@@ -1343,109 +1358,83 @@ struct TrieWalk<'w, 'i> {
 }
 
 impl<'i> TrieWalk<'_, 'i> {
-    /// The candidates of length `l` below the trie node at depth `k`.
-    fn descend(&mut self, l: usize, k: usize, frontier: &[usize]) {
+    /// The candidates of length `l` below trie node `n`, at depth `k`.
+    fn descend(&mut self, l: usize, k: usize, n: usize) {
+        let routine = self.arena[n].0;
         if k == l {
-            // End keys in order: carrier, then opaque.
-            let ends = [
-                (EndKey::Carrier, self.marking_holds(frontier, l)),
-                (
-                    EndKey::Opaque,
-                    frontier
-                        .iter()
-                        .find(|&&n| l == 1 && self.dag.opaque.contains(self.arena[n].0))
-                        .copied(),
-                ),
-            ];
-            for (end, at) in ends {
-                if let Some(n) = at
-                    && self.found.len() < self.limit
-                {
+            // End keys in order: carrier, then opaque. A marked routine at
+            // depth `dmin` is one of the marking's carriers.
+            let carrier = self
+                .marking
+                .bits
+                .get(routine)
+                .is_some_and(|b| b & (1u128 << l) != 0);
+            let opaque = l == 1 && self.dag.opaque.contains(routine);
+            for (end, here) in [(EndKey::Carrier, carrier), (EndKey::Opaque, opaque)] {
+                if here && self.found.len() < self.limit {
                     self.found.push((n, end));
                 }
             }
             return;
         }
         let bit = 1u128 << l;
-        let mut kids: Vec<(Rc<NodeMemo>, &'i str, &'i SnapshotGraphEdge, usize)> = Vec::new();
-        for &n in frontier {
-            let outs: Vec<(&'i str, &'i SnapshotGraphEdge)> = if n == 0 {
-                self.dag.seeds.clone()
-            } else {
-                self.idx
-                    .outgoing_edges
-                    .get(self.arena[n].0)
-                    .into_iter()
-                    .flatten()
-                    .filter(|e| edge_has_hop(e))
-                    .filter_map(|&e| edge_to(e).map(|to| (to, e)))
-                    .filter(|&(to, _)| to != self.root_id)
-                    .collect()
-            };
-            for (to, e) in outs {
-                if self.dag.info.get(to).map(|&(d, _)| d) != Some(k + 1) {
-                    continue;
-                }
-                let marked = self.marking.bits.get(to).is_some_and(|b| b & bit != 0);
-                let opaque = n == 0 && l == 1 && self.dag.opaque.contains(to);
-                if marked || opaque {
-                    kids.push((self.hop_cache.get(e, self.idx), to, e, n));
-                }
+        let outs: Vec<(&'i str, &'i SnapshotGraphEdge)> = if n == 0 {
+            self.dag.seeds.clone()
+        } else {
+            self.idx
+                .outgoing_edges
+                .get(routine)
+                .into_iter()
+                .flatten()
+                .filter(|e| edge_has_hop(e))
+                .filter_map(|&e| edge_to(e).map(|to| (to, e)))
+                .filter(|&(to, _)| to != self.root_id)
+                .collect()
+        };
+        let mut keyed: Vec<(String, &'i str, &'i SnapshotGraphEdge)> = Vec::new();
+        for (to, e) in outs {
+            if self.dag.info.get(to).map(|&(d, _)| d) != Some(k + 1) {
+                continue;
+            }
+            let marked = self.marking.bits.get(to).is_some_and(|b| b & bit != 0);
+            let opaque = n == 0 && l == 1 && self.dag.opaque.contains(to);
+            if marked || opaque {
+                let memo = self.hop_cache.get(e, self.idx);
+                let json = memo
+                    .projected
+                    .as_ref()
+                    .expect("a walked edge projects")
+                    .json();
+                keyed.push((json.to_string(), to, e));
             }
         }
-        let json = |m: &NodeMemo| -> String {
-            m.projected
-                .as_ref()
-                .expect("a walked edge projects")
-                .json()
-                .to_string()
-        };
-        let mut keyed: Vec<(String, &'i str, &'i SnapshotGraphEdge, usize)> = kids
-            .into_iter()
-            .map(|(m, to, e, n)| (json(&m), to, e, n))
-            .collect();
         keyed.sort_by(|a, b| a.0.cmp(&b.0));
         for group in keyed.chunk_by(|a, b| a.0 == b.0) {
             if self.found.len() >= self.limit {
                 return;
             }
-            // shortcut: an equal-JSON group reads the first edge per routine,
-            // so its conditionality is that edge's; equal JSON needs one
-            // `from`, `to` and call site or anchor, which only duplicated edges
-            // share. Upgrade if a group's edges ever differ in control context.
-            let mut child: Vec<usize> = Vec::new();
-            for &(_, to, e, n) in group {
-                if !child.iter().any(|&c| self.arena[c].0 == to) {
-                    self.arena.push((to, Some(e), n));
-                    child.push(self.arena.len() - 1);
-                }
-            }
-            self.descend(l, k + 1, &child);
+            let to = group[0].1;
+            debug_assert!(
+                group.iter().all(|g| g.1 == to),
+                "equal hop JSON, one `toRoutineId`"
+            );
+            self.arena
+                .push((to, group.iter().map(|g| g.2).collect(), n));
+            self.descend(l, k + 1, self.arena.len() - 1);
         }
     }
 
-    /// The first frontier routine that is a carrier at `dmin = l`: a marked
-    /// routine at depth `dmin` is one of the marking's carriers.
-    fn marking_holds(&self, frontier: &[usize], l: usize) -> Option<usize> {
-        frontier.iter().copied().find(|&n| {
-            n != 0
-                && self
-                    .marking
-                    .bits
-                    .get(self.arena[n].0)
-                    .is_some_and(|b| b & (1u128 << l) != 0)
-        })
-    }
-
-    /// The raw edges of the prefix ending at arena slot `n`, root side first.
-    fn edges_to(&self, mut n: usize) -> Vec<&'i SnapshotGraphEdge> {
-        let mut edges = Vec::new();
-        while let (_, Some(e), parent) = self.arena[n] {
-            edges.push(e);
-            n = parent;
+    /// The prefix ending at arena slot `n`, root side first: each step's
+    /// equal-JSON edges, the representative first.
+    fn edges_to(&self, mut n: usize) -> Vec<Vec<&'i SnapshotGraphEdge>> {
+        let mut steps = Vec::new();
+        while n != 0 {
+            let (_, edges, parent) = &self.arena[n];
+            steps.push(edges.clone());
+            n = *parent;
         }
-        edges.reverse();
-        edges
+        steps.reverse();
+        steps
     }
 }
 
@@ -1490,6 +1479,7 @@ fn reconstruct_witness_paths<'i>(
             return WitnessOutcomeExt {
                 paths: vec![WitnessPath {
                     hops: vec![Rc::new(hop)],
+                    ..WitnessPath::default()
                 }],
                 truncated: false,
                 incomplete,
@@ -1510,6 +1500,7 @@ fn reconstruct_witness_paths<'i>(
             return WitnessOutcomeExt {
                 paths: vec![WitnessPath {
                     hops: vec![Rc::new(hop)],
+                    ..WitnessPath::default()
                 }],
                 truncated: false,
                 incomplete,
@@ -1531,6 +1522,7 @@ fn reconstruct_witness_paths<'i>(
                     line: None,
                     column: None,
                 })],
+                ..WitnessPath::default()
             }],
             truncated: false,
             incomplete: true,
@@ -1622,20 +1614,21 @@ fn reconstruct_witness_paths<'i>(
     if !dag.opaque.is_empty() {
         lengths |= 1 << 1;
     }
-    let found: Vec<(Vec<&SnapshotGraphEdge>, EndKey, &str)> = {
+    type Found<'f> = (Vec<Vec<&'f SnapshotGraphEdge>>, EndKey, &'f str);
+    let found: Vec<Found> = {
         let mut walk = TrieWalk {
             root_id,
             idx,
             dag: &dag,
             marking: &marking,
             hop_cache: &mut *hop_cache,
-            arena: vec![("", None, 0)],
+            arena: vec![("", Vec::new(), 0)],
             found: Vec::new(),
             limit: cap + 1,
         };
         for l in 1..=MAX_DEPTH {
             if lengths & (1u128 << l) != 0 && walk.found.len() < walk.limit {
-                walk.descend(l, 0, &[0]);
+                walk.descend(l, 0, 0);
             }
         }
         walk.found
@@ -1645,17 +1638,23 @@ fn reconstruct_witness_paths<'i>(
     };
     let mut candidates: Vec<Candidate> = found
         .into_iter()
-        .map(|(edges, end, routine)| {
-            let terminal = (end == EndKey::Carrier).then(|| {
-                let d = idx
-                    .direct_facts_by_routine
-                    .get(routine)
-                    .and_then(|ds| ds.iter().find(|d| is_bfs_carrier(d, fact)))
-                    .expect("a marked carrier carries the fact");
-                terminal_hop_from_fact(d, idx)
-            });
+        .filter_map(|(steps, end, routine)| {
+            // A carrier's terminal is its first carrier fact. A routine
+            // carries the fact by its subject, so only an inconsistent
+            // hand-built index lacks one: no candidate, as the old search
+            // gave none.
+            let terminal = match end {
+                EndKey::Carrier => Some(terminal_hop_from_fact(
+                    idx.direct_facts_by_routine
+                        .get(routine)?
+                        .iter()
+                        .find(|d| is_bfs_carrier(d, fact))?,
+                    idx,
+                )),
+                EndKey::Opaque => None,
+            };
             let opaque_end = (end == EndKey::Opaque).then_some(routine);
-            candidate(&edges, terminal, end, opaque_end, hop_cache, idx)
+            Some(candidate(&steps, terminal, end, opaque_end, hop_cache, idx))
         })
         .collect();
     // The proofs join the stream by key, each ending at its producer's own
@@ -1664,8 +1663,8 @@ fn reconstruct_witness_paths<'i>(
         .paths
         .iter()
         .map(|(edges, producer_fact)| {
-            let edges: Vec<&SnapshotGraphEdge> =
-                edges.iter().map(|&e| &idx.typed_edges[e]).collect();
+            let edges: Vec<Vec<&SnapshotGraphEdge>> =
+                edges.iter().map(|&e| vec![&idx.typed_edges[e]]).collect();
             let terminal = terminal_hop_from_fact(&idx.capability_facts[*producer_fact], idx);
             candidate(
                 &edges,
@@ -1725,7 +1724,7 @@ fn reconstruct_witness_paths<'i>(
     // carrier path and no proof, whose carrier lies behind the depth frontier.
     if dmin.is_none()
         && proofs.paths.is_empty()
-        && carrier_behind_frontier(root_id, &carriers, &dag.depth_frontier, idx)
+        && dag.carrier_behind_frontier(root_id, &carriers, idx)
     {
         diagnostics.push((
             "depth-exceeded".to_string(),
@@ -1769,17 +1768,18 @@ fn reconstruct_witness_paths<'i>(
     }
 }
 
-/// A [`Candidate`] over the raw path `edges` (+ `terminal`), its hops and
-/// projections taken from the root's [`HopCache`].
+/// A [`Candidate`] over the raw path `steps` (+ `terminal`): each step's
+/// equal-JSON edges, the first the representative and the rest its
+/// alternatives. Hops and projections come from the root's [`HopCache`].
 fn candidate<'i>(
-    edges: &[&'i SnapshotGraphEdge],
+    steps: &[Vec<&'i SnapshotGraphEdge>],
     terminal: Option<WitnessHop>,
     end: EndKey,
     opaque_end: Option<&'i str>,
     hop_cache: &mut HopCache<'i>,
     idx: &FingerprintIndexes,
 ) -> Candidate<'i> {
-    let memos: Vec<Rc<NodeMemo>> = edges.iter().map(|&e| hop_cache.get(e, idx)).collect();
+    let memos: Vec<Rc<NodeMemo>> = steps.iter().map(|s| hop_cache.get(s[0], idx)).collect();
     let projected = ProjPath(
         memos
             .iter()
@@ -1788,39 +1788,57 @@ fn candidate<'i>(
     );
     let mut hops: Vec<Rc<WitnessHop>> = memos.iter().map(|m| Rc::clone(&m.hop)).collect();
     hops.extend(terminal.map(Rc::new));
+    let alternatives = steps
+        .iter()
+        .enumerate()
+        .flat_map(|(i, s)| s[1..].iter().map(move |&e| (i, e)))
+        .map(|(i, e)| (i, Rc::clone(&hop_cache.get(e, idx).hop)))
+        .collect();
     Candidate {
         projected,
         end,
-        path: WitnessPath { hops },
+        path: WitnessPath { hops, alternatives },
         opaque_end,
     }
 }
 
-/// Spec §14.3.1 item 6: is a carrier reachable from the DAG's depth frontier?
-/// A reverse walk from the carriers (never through the root), stopped at the
-/// first frontier routine.
-fn carrier_behind_frontier(
-    root_id: &str,
-    carriers: &std::collections::HashSet<&str>,
-    frontier: &std::collections::HashSet<&str>,
-    idx: &FingerprintIndexes,
-) -> bool {
-    if frontier.is_empty() {
-        return false;
-    }
-    let mut seen: std::collections::HashSet<&str> = carriers.iter().copied().collect();
-    let mut queue: std::collections::VecDeque<&str> = seen.iter().copied().collect();
-    while let Some(v) = queue.pop_front() {
-        if frontier.contains(v) {
-            return true;
+impl<'i> WitDag<'i> {
+    /// Spec §14.3.1 item 6: is a carrier reachable from this DAG's depth
+    /// frontier? A reverse walk from the carriers over their ancestors (never
+    /// through the root), stopped at the first frontier routine; at worst it
+    /// visits every ancestor of the carriers. Answered once per carrier set and
+    /// cached, and never asked when the frontier is empty.
+    fn carrier_behind_frontier(
+        &self,
+        root_id: &str,
+        carriers: &std::collections::HashSet<&'i str>,
+        idx: &FingerprintIndexes,
+    ) -> bool {
+        if self.depth_frontier.is_empty() {
+            return false;
         }
-        for u in idx.incoming_edges.get(v).into_iter().flatten() {
-            if u != root_id && seen.insert(u.as_str()) {
-                queue.push_back(u.as_str());
+        let mut key: Vec<&'i str> = carriers.iter().copied().collect();
+        key.sort_unstable();
+        if let Some(&hit) = self.behind_frontier.borrow().get(&key) {
+            return hit;
+        }
+        let mut seen: std::collections::HashSet<&str> = carriers.iter().copied().collect();
+        let mut queue: std::collections::VecDeque<&str> = seen.iter().copied().collect();
+        let mut hit = false;
+        while let Some(v) = queue.pop_front() {
+            if self.depth_frontier.contains(v) {
+                hit = true;
+                break;
+            }
+            for u in idx.incoming_edges.get(v).into_iter().flatten() {
+                if u != root_id && seen.insert(u.as_str()) {
+                    queue.push_back(u.as_str());
+                }
             }
         }
+        self.behind_frontier.borrow_mut().insert(key, hit);
+        hit
     }
-    false
 }
 
 // ===========================================================================
@@ -2869,49 +2887,66 @@ fn compute_path_conditionality(
     op_ctx: &HashMap<&str, Option<&str>>,
 ) -> crate::engine::l5::conditionality::EffectConditionality {
     use crate::engine::l5::conditionality::{
-        CONDITIONAL, UNKNOWN, context_to_conditionality, path_conditionality,
+        CONDITIONAL, UNCONDITIONAL, UNKNOWN, context_to_conditionality, path_conditionality, rank,
+    };
+    // One non-terminal hop's own conditionality: the most restrictive of its
+    // contexts, `unknown` contaminating.
+    let hop_conditionality = |hop: &WitnessHop| match hop {
+        // #96 D5: the firing operation's own control context, plus the
+        // conditional floor when the trigger may not fire (`Maybe`).
+        WitnessHop::ImplicitTrigger {
+            operation_id,
+            fires,
+            ..
+        } => {
+            let op =
+                context_to_conditionality(op_ctx.get(operation_id.as_str()).copied().flatten());
+            if *fires == TriggerFires::Maybe {
+                path_conditionality(&[op, CONDITIONAL], UNCONDITIONAL)
+            } else {
+                op
+            }
+        }
+        _ => match hop_nonterminal_callsite_id(hop) {
+            Some(csid) => context_to_conditionality(cs_ctx.get(csid).copied().flatten()),
+            None => UNKNOWN,
+        },
     };
     let mut hop_contexts: Vec<crate::engine::l5::conditionality::EffectConditionality> = Vec::new();
     let mut terminal_ctx = UNKNOWN;
-    for hop in path.hops.iter().map(|h| &**h) {
-        match hop {
-            WitnessHop::Terminal {
-                operation_id,
-                callsite_id,
-                ..
-            } => {
-                terminal_ctx = if let Some(op) = operation_id {
-                    context_to_conditionality(op_ctx.get(op.as_str()).copied().flatten())
-                } else if let Some(cs) = callsite_id {
-                    context_to_conditionality(cs_ctx.get(cs.as_str()).copied().flatten())
-                } else {
-                    UNKNOWN
-                };
-            }
-            // #96 D5: the firing operation's own control context, plus the
-            // conditional floor when the trigger may not fire (`Maybe`).
-            WitnessHop::ImplicitTrigger {
-                operation_id,
-                fires,
-                ..
-            } => {
-                hop_contexts.push(context_to_conditionality(
-                    op_ctx.get(operation_id.as_str()).copied().flatten(),
-                ));
-                if *fires == TriggerFires::Maybe {
-                    hop_contexts.push(CONDITIONAL);
-                }
-            }
-            _ => {
-                if let Some(csid) = hop_nonterminal_callsite_id(hop) {
-                    hop_contexts.push(context_to_conditionality(
-                        cs_ctx.get(csid).copied().flatten(),
-                    ));
-                } else {
-                    hop_contexts.push(UNKNOWN);
-                }
-            }
+    for (i, hop) in path.hops.iter().map(|h| &**h).enumerate() {
+        if let WitnessHop::Terminal {
+            operation_id,
+            callsite_id,
+            ..
+        } = hop
+        {
+            terminal_ctx = if let Some(op) = operation_id {
+                context_to_conditionality(op_ctx.get(op.as_str()).copied().flatten())
+            } else if let Some(cs) = callsite_id {
+                context_to_conditionality(cs_ctx.get(cs.as_str()).copied().flatten())
+            } else {
+                UNKNOWN
+            };
+            continue;
         }
+        // A step's equal-JSON parallel edges: the least restrictive counts,
+        // as when each was its own path (the choices per step are
+        // independent, so the least restrictive path takes the least
+        // restrictive edge of every step).
+        let step = path
+            .alternatives
+            .iter()
+            .filter(|(at, _)| *at == i)
+            .map(|(_, alt)| hop_conditionality(alt))
+            .fold(hop_conditionality(hop), |best, c| {
+                match (rank(best), rank(c)) {
+                    (Some(b), Some(r)) if r >= b => best,
+                    (Some(_), None) => best,
+                    _ => c,
+                }
+            });
+        hop_contexts.push(step);
     }
     path_conditionality(&hop_contexts, terminal_ctx)
 }
@@ -4952,6 +4987,7 @@ mod tests {
             .into_iter()
             .map(Rc::new)
             .collect(),
+            ..WitnessPath::default()
         };
         // Path B: call to "routineZ" + same terminal. "g:Codeunit:1#zzz" > "g:Codeunit:1#aaa"
         // so path_a JSON < path_b JSON.
@@ -4979,6 +5015,7 @@ mod tests {
             .into_iter()
             .map(Rc::new)
             .collect(),
+            ..WitnessPath::default()
         };
 
         // Confirm JSON serialization order matches expectation.
@@ -5276,6 +5313,7 @@ mod tests {
             .into_iter()
             .map(Rc::new)
             .collect(),
+            ..WitnessPath::default()
         };
         let path_b = WitnessPath {
             hops: vec![
@@ -5301,6 +5339,7 @@ mod tests {
             .into_iter()
             .map(Rc::new)
             .collect(),
+            ..WitnessPath::default()
         };
 
         let ca = compute_path_conditionality(&path_a, &cs_ctx, &op_ctx);
@@ -7041,6 +7080,73 @@ codeunit 50410 DupProducer
         assert_eq!(effects[0].via_paths.len(), 1, "one witness, the shortest");
     }
 
+    /// Equal-JSON parallel edges fold into one candidate's conditionality. S
+    /// fires T's trigger through two operations with no anchor, so the two
+    /// hops have equal JSON (a trigger hop's JSON leaves out the operation and
+    /// `fires`): one witness `R → S → T`. The first operation is conditional,
+    /// the second top-level; the least restrictive wins, as the all-paths
+    /// merge kept it.
+    #[test]
+    fn equal_json_parallel_edges_fold_into_the_candidates_conditionality() {
+        use crate::engine::l5::snapshot::{SnapshotCallsiteEvidence, SnapshotOperationEvidence};
+        let mut snap = empty_snapshot();
+        for id in ["R#1", "S#1", "T#1"] {
+            snap.identities.stable_ids.push(id.to_string());
+            snap.identities.display_names.push(id.to_string());
+        }
+        let mut inherited = root_insert("cs1");
+        inherited.subject = "R#1".to_string();
+        snap.capability_facts = vec![ordinary_carrier("T#1", "opw"), inherited];
+        snap.typed_edges = vec![
+            call_edge("R#1", "S#1", "cs1"),
+            trigger_edge("S#1", "T#1", "opC"),
+            trigger_edge("S#1", "T#1", "opU"),
+        ];
+        snap.callsite_index = vec![SnapshotCallsiteEvidence {
+            callsite_id: "cs1".to_string(),
+            routine: "R#1".to_string(),
+            source_file: "su".to_string(),
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 1,
+            callee_display: "S".to_string(),
+            control_context: Some("top-level".to_string()),
+            order: None,
+            under_asserterror: None,
+        }];
+        let op = |id: &str, routine: &str, ctx: &str| SnapshotOperationEvidence {
+            operation_id: id.to_string(),
+            routine: routine.to_string(),
+            source_file: "su".to_string(),
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 1,
+            display_text: "Rec.Insert()".to_string(),
+            control_context: Some(ctx.to_string()),
+            order: None,
+            under_asserterror: None,
+        };
+        snap.operation_index = vec![
+            op("opC", "S#1", "conditional"),
+            op("opU", "S#1", "top-level"),
+            op("opw", "T#1", "top-level"),
+        ];
+        let entries = digest_query(&snap, &["R#1".to_string()], None, None, false);
+        let effects = &entries[0].effects;
+        assert_eq!(effects.len(), 1, "{effects:?}");
+        assert_eq!(
+            effects[0].via_paths.len(),
+            1,
+            "precondition: one projected path"
+        );
+        assert_eq!(
+            effects[0].conditionality,
+            crate::engine::l5::conditionality::UNCONDITIONAL
+        );
+    }
+
     /// W9 opaque seeds. Seeds: the carrier A, the opaque Z, and M, which
     /// reaches the non-seed opaque O and the carrier W. Z counts toward
     /// `cap + 1` and is reported only when kept; O is never reported. A fact
@@ -7283,10 +7389,9 @@ codeunit 50410 DupProducer
         fixtures.push(("(1) diamonds", s1));
         // (2) Two edges with EQUAL projected JSON (two trigger edges, no
         // anchor, from S to T). Equal JSON implies the same `toRoutineId`, so
-        // the spec's "into different nodes" cannot occur; the equal edges
-        // share T, and a walk over edges instead of the trie doubles T's paths,
-        // which then take the slots of V's later one (an object run sorts
-        // after a trigger).
+        // equal-JSON edges are parallel edges into one node. A walk over edges
+        // instead of the trie doubles T's paths, which then take the slots of
+        // V's later one (an object run sorts after a trigger).
         let mut s2 = empty_snapshot();
         s2.capability_facts = vec![
             ordinary_carrier("W1", "op1"),
