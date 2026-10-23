@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   different id from the graph (`model_object_id`) than from the dependency projection;
   existing ABI/graph object-kind mismatches (DotNetPackage, PermissionSetExtension,
   Profile, Entitlement) are unchanged.
+- **`alsem diff` no longer reports a critical `procedure-signature-changed` when a change adds
+  an Interface or ControlAddIn (#83).** Both objects had the id `…:Interface:0`, so the
+  untouched old one looked changed (named after the new one) when the new file sorted
+  last, and the addition went unreported when it sorted first. Now the diff reports only
+  the new object's `object-added` (info).
 - Lookups of an object by type and number (record typing's numeric `SourceTable`, an
   unresolved `Codeunit.Run(<number>)` target) no longer pick an arbitrary object without a
   number for number `0` (#83).

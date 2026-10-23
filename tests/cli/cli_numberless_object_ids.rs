@@ -13,6 +13,8 @@
 //! - T6: the full snapshot's identity table and contracts keep both interfaces.
 //! - T7: with a numbered and a numberless codeunit, the identity table stays
 //!   ordinal and the contracts stay `locale_compare`.
+//! - T8: `alsem diff` of a workspace that adds a second interface (or ControlAddIn)
+//!   reports only its `object-added`, never a critical change on the old one.
 
 use std::path::Path;
 
@@ -532,4 +534,84 @@ fn dependency_interface_graph_id_equals_its_model_object_id() {
         Some(model_object.object_key.as_str()),
         "object_key is the id's last segment"
     );
+}
+
+/// `alsem diff <old ws> <new ws> --format json`: the report's findings.
+fn diff_findings(old: &Path, new: &Path) -> Vec<serde_json::Value> {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("diff")
+        .arg(old)
+        .arg(new)
+        .args(["--deterministic", "--format", "json"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("run alsem diff");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "diff json: {e}; stdout={stdout}; stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    report["payload"]["findings"].as_array().unwrap().clone()
+}
+
+/// T8 (the CentralGauge regression): the old workspace has one numberless object
+/// `IFoo` with procedure `Run()`; the new one keeps it unchanged and ADDS a second,
+/// `IBar`, with the same `Run()`. Both orders of the two files are run: with a
+/// shared `…:<Kind>:0` id the two object contracts collided, the diff index kept
+/// the last row, and when `IBar`'s file sorted last `diff` reported a critical
+/// `procedure-signature-changed` on `…:<Kind>:0` (named `IBar`) for an untouched
+/// `IFoo`. When it sorted first, `IBar`'s addition was not reported at all.
+/// Now the only finding is `IBar`'s `object-added` (info).
+fn adding_a_numberless_object_is_not_a_break(kind: &str, file_kind: &str) {
+    let decl = |name: &str| format!("{kind} \"{name}\"\n{{\n    procedure Run();\n}}\n");
+    // `Zz` (the critical case) first, so a regression reports it.
+    for bar_file in [
+        format!("src/Zz.IBar.{file_kind}.al"),
+        format!("src/Aa.IBar.{file_kind}.al"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old");
+        let new = dir.path().join("new");
+        for ws in [&old, &new] {
+            app_json(ws, "");
+            write(&ws.join(format!("src/IFoo.{file_kind}.al")), &decl("IFoo"));
+        }
+        write(&new.join(&bar_file), &decl("IBar"));
+
+        let findings = diff_findings(&old, &new);
+        let got: Vec<(&str, &str, &str)> = findings
+            .iter()
+            .map(|f| {
+                (
+                    f["kind"].as_str().unwrap_or(""),
+                    f["severity"].as_str().unwrap_or(""),
+                    f["subject"]["newStableId"].as_str().unwrap_or(""),
+                )
+            })
+            .collect();
+        let bar_id = format!("{GUID}:{file_kind}:@ibar");
+        assert_eq!(
+            got,
+            vec![("object-added", "info", bar_id.as_str())],
+            "{bar_file}: findings {findings:#?}"
+        );
+    }
+}
+
+/// T8, Interface.
+///
+/// Red on master `3a2d5923` (2026-10-23): `procedure-signature-changed`,
+/// critical, on `…:Interface:0`. Discrimination (2026-10-23): `object_key(None, …)`
+/// returning `"0"` again fails this test; restored, it passes.
+#[test]
+fn diff_adding_an_interface_is_not_a_signature_change() {
+    adding_a_numberless_object_is_not_a_break("interface", "Interface");
+}
+
+/// T8, ControlAddIn (red on master the same way, on `…:ControlAddIn:0`).
+#[test]
+fn diff_adding_a_controladdin_is_not_a_signature_change() {
+    adding_a_numberless_object_is_not_a_break("controladdin", "ControlAddIn");
 }
