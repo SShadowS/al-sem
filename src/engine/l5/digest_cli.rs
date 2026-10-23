@@ -1788,7 +1788,7 @@ pub(crate) fn digest_pipeline_with(
     let temp_states = DbTempStates::new(resolved, &view.l4().bundle);
     let owners = OwnerIndex::build(resolved);
     let no_roots = DigestEffects::default();
-    let effects = if changed_roots.roots.is_empty() {
+    let effects = if changed_roots.roots.is_empty() && !tests {
         &no_roots
     } else {
         view.effects()
@@ -1806,13 +1806,17 @@ pub(crate) fn digest_pipeline_with(
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;
     // #254: the coverage block reads the graph the effects step built off the
-    // tree (#160 step 6: the tree itself is released inside `prepare`). No
-    // resolved root builds no tree and has no changed routine to cover.
+    // tree (#160 step 6: the tree itself is released inside `prepare`). A
+    // `--tests` plan always builds the tree, roots or not (`digest_plan`).
     let test_coverage = tests.then(|| {
-        use crate::engine::l5::test_coverage::{CoverageGraph, compute_test_coverage};
         let changed = coverage_changed_roots(&changed_roots.roots, &entries, &owners);
-        let none = CoverageGraph::default();
-        compute_test_coverage(effects.coverage_graph.as_ref().unwrap_or(&none), &changed)
+        crate::engine::l5::test_coverage::compute_test_coverage(
+            effects
+                .coverage_graph
+                .as_ref()
+                .expect("a --tests plan builds the coverage graph"),
+            &changed,
+        )
     });
     // #69 D1.4: the query's inputs (the effects, the L4 store) are dead here.
     // Free them before the JSON projection.

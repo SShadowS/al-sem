@@ -580,3 +580,43 @@ fn dependency_publisher_outside_model_is_a_blind_spot() {
         "{b}"
     );
 }
+
+/// #160 step 6 review: a `--tests` digest whose selector resolves no root
+/// still reports the workspace's tests (the graph covers the whole workspace,
+/// so digest builds its tree without a root). Expected = #254's own output at
+/// `adde813c` on this fixture and selector (exit 2, the block below).
+#[test]
+fn tests_block_with_no_resolved_root_is_the_workspaces() {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("digest")
+        .arg(graph_ws())
+        .args(["--routine", "NoSuchRoutine", "--tests"])
+        .args(["--format", "json", "--deterministic"])
+        .env("ALCH_DRIVER_VERSION_OVERRIDE", VERSION_OVERRIDE)
+        .output()
+        .expect("spawn alsem");
+    assert_eq!(out.status.code(), Some(2), "no root resolves: {out:?}");
+    let doc: Value = serde_json::from_slice(&out.stdout).expect("digest json");
+    let want = serde_json::json!({
+        "changedRoutines": 0,
+        "coverage": {
+            "reasons": [
+                "dynamic-target",
+                "object-run-unresolved",
+                "test-page",
+                "unfetched-dependency",
+                "unresolved-receiver-type"
+            ],
+            "status": "partial",
+            "testsCallingDependencyCode": 1,
+            "testsWithUnresolvedTraversal": 4
+        },
+        "covered": [],
+        "coveredChangedRoutines": 0,
+        "excludedTestCode": 0,
+        "ratio": null,
+        "testProceduresConsidered": TEST_COUNT,
+        "uncovered": []
+    });
+    assert_eq!(doc["payload"]["testCoverage"], want, "{doc}");
+}
