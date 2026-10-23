@@ -100,7 +100,8 @@ pub fn deserialize_snapshot(
 
 /// #220 D5.2: a v4 file names its `analysisUniverse` and every `apps[]` row's
 /// `role`, with exactly one `primary` row when `apps[]` is non-empty (an empty
-/// `apps[]`, no `app.json` id, stays accepted).
+/// `apps[]`, no `app.json` id, stays accepted; a missing or non-array `apps`
+/// does not).
 fn validate_universe_and_roles(snap: &CborValue) -> Result<(), String> {
     let CborValue::Map(m) = snap else {
         return Ok(());
@@ -121,7 +122,12 @@ fn validate_universe_and_roles(snap: &CborValue) -> Result<(), String> {
     }
     let apps = match m.get("apps") {
         Some(CborValue::Array(a)) => a.as_slice(),
-        _ => &[],
+        other => {
+            return Err(format!(
+                "deserializeSnapshot: apps must be an array (empty when the workspace has no app id), found {}",
+                shown(other)
+            ));
+        }
     };
     let mut primaries = 0;
     for (i, app) in apps.iter().enumerate() {
@@ -683,6 +689,7 @@ mod tests {
         let v = m(&[
             ("schemaVersion", CborValue::Int(V)),
             ("analysisUniverse", CborValue::Text("single-app".into())),
+            ("apps", CborValue::Array(Vec::new())),
             ("name", CborValue::Text("hello".into())),
         ]);
         let cbor_bytes = encode(&v);

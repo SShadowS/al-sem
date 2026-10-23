@@ -104,11 +104,12 @@ pub fn run_preflight(
         }
     }
 
-    // App identity mismatch — always fatal.
+    // App identity mismatch — always fatal. BC app guids are case-insensitive
+    // (as every other guid compare, O13).
     let old_app = primary_app_id(old_snap);
     let new_app = primary_app_id(new_snap);
     if let (Some(o), Some(n)) = (&old_app, &new_app)
-        && o != n
+        && !o.eq_ignore_ascii_case(n)
     {
         diagnostics.push(DiffDiagnostic {
             kind: "app-identity-mismatch".into(),
@@ -180,5 +181,22 @@ mod tests {
             r.diagnostics.iter().map(|d| &d.kind).collect::<Vec<_>>()
         );
         assert!(r.fatal);
+    }
+
+    /// Final panel C2: the same app guid in another case is the same app, so
+    /// no `app-identity-mismatch` (and no exit 1).
+    ///
+    /// Break: compare the guids with `!=` -> the diagnostic fires.
+    #[test]
+    fn preflight_identity_ignores_guid_case() {
+        let lower = "aaaa0220-0000-0000-0000-0000000000aa";
+        let upper = lower.to_ascii_uppercase();
+        assert_ne!(lower, upper, "precondition: the guids differ in case");
+        let r = run_preflight(&side(lower), &side(&upper), CoveragePolicy::Loose);
+        assert!(
+            r.diagnostics.is_empty() && !r.fatal,
+            "{:?}",
+            r.diagnostics.iter().map(|d| &d.kind).collect::<Vec<_>>()
+        );
     }
 }

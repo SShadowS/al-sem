@@ -2,7 +2,7 @@
 //! detection, snapshot/workspace loading, the `--strict` analyzer-diagnostic gate
 //! (workspace-mode sides only, before the rename overlay; #89), the rename
 //! overlay, format dispatch, `--out`, the ws-mode stderr note, and the exit gates
-//! (`--fail-on`, strict-coverage).
+//! (a fatal preflight first, #220; then strict-coverage and `--fail-on`).
 
 use std::path::Path;
 

@@ -558,11 +558,18 @@ fn vendored(name: &str) -> PathBuf {
 /// then `edit` applied.
 fn v4_copy(dir: &Path, name: &str, out: &str, edit: impl Fn(&mut Value)) -> PathBuf {
     let mut v: Value = serde_json::from_slice(&std::fs::read(vendored(name)).unwrap()).unwrap();
-    v["schemaVersion"] = Value::from(4);
-    v["analysisUniverse"] = Value::from("single-app");
-    for app in v["apps"].as_array_mut().unwrap() {
-        app["role"] = Value::from("primary");
-    }
+    // The vendored inputs carry D6's three edits themselves (final panel F5:
+    // asserted, never re-applied here, so a stale input header fails).
+    assert_eq!(v["schemaVersion"], 4, "precondition: {name} is v4");
+    assert_eq!(
+        v["analysisUniverse"], "single-app",
+        "precondition: {name} states its universe"
+    );
+    let apps = v["apps"].as_array().expect("precondition: apps[]");
+    assert!(
+        apps.len() == 1 && apps[0]["role"] == "primary",
+        "precondition: {name} has one primary apps[] row: {apps:?}"
+    );
     edit(&mut v);
     let p = dir.join(out);
     std::fs::write(&p, serde_json::to_string_pretty(&v).unwrap()).unwrap();
@@ -704,7 +711,9 @@ fn fatal_preflight_exits_one() {
 /// field (asserted): no `analysisUniverse`; `analysisUniverse: "both"`; an
 /// `apps[]` row without `role`; two `primary` rows; a dependency shard. Each is
 /// refused at load, exit 1, and the message names the field (the shard case
-/// names the hint). A v4 file with an empty `apps[]` (no `app.json` id) loads.
+/// names the hint). Final panel: an unknown role beside the primary (F4), and
+/// a missing or non-array `apps` (F3, G6), are refused too. A v4 file with an
+/// empty `apps[]` (no `app.json` id) loads.
 ///
 /// Break: drop each check in turn -> that copy loads.
 #[test]
@@ -755,6 +764,31 @@ fn diff_refuses_bad_universe_or_roles() {
             "dependency-shard",
             Box::new(|v: &mut Value| v["apps"][0]["role"] = Value::from("dependency")),
             "diff the full snapshot or the primary shard",
+        ),
+        (
+            // Final panel F4: a second row with an unknown role, beside the
+            // one primary, so only the role-value check can refuse it.
+            "unknown-role",
+            Box::new(|v: &mut Value| {
+                let mut second = v["apps"][0].clone();
+                second["appGuid"] = Value::from("dd000000-0000-0000-0000-0000000000ee");
+                second["role"] = Value::from("owner");
+                v["apps"].as_array_mut().unwrap().push(second);
+            }),
+            "apps[1].role",
+        ),
+        (
+            // Final panel F3/G6: no `apps` key at all is not an empty apps[].
+            "no-apps-key",
+            Box::new(|v: &mut Value| {
+                v.as_object_mut().unwrap().remove("apps");
+            }),
+            "apps must be an array",
+        ),
+        (
+            "apps-not-array",
+            Box::new(|v: &mut Value| v["apps"] = Value::Null),
+            "apps must be an array",
         ),
     ];
     for (name, edit, needle) in &cases {
@@ -967,15 +1001,21 @@ fn key_class_behaviour() {
 
 /// T9d Evidence (DD + R5B cross-app; S8, O3). DD: `Outer` is referenced by
 /// `CallChain`'s typed edge; `TouchCust`'s fact names `bbbb…/table/18`; in
-/// memory `Inner`'s operationIndex row and `Outer`'s callsiteIndex row exist.
+/// memory `Inner`'s operationIndex row exists. `Outer` has NO in-memory
+/// callsiteIndex row at this base (recorded deviation 1: `Outer -> Inner` is
+/// cone-only), so the "NOT `Outer`'s call-site row" arm is vacuous until
+/// step 6, and the test asserts that base truth.
 /// Serialized: `identities` holds `Outer`, `bbbb…:Table:18` and every primary
 /// id; `operationIndex` holds the primary rows (TouchCust's) and NOT
-/// `Inner`'s; `callsiteIndex` holds `CallChain`'s and NOT `Outer`'s. R5B: the
-/// `eeee…` rows are unreferenced and no `eeee…` id is serialized.
+/// `Inner`'s; `callsiteIndex` holds `CallChain`'s. R5B: the in-memory
+/// `identities` hold `eeee…` ids that nothing references, and no `eeee…` id
+/// is serialized.
 ///
 /// Break 1: emit every row -> `eeee…` ids and `Inner`'s operation appear.
-/// Break 2: primary only -> `Outer` missing. Break 4: drop primary rows from
-/// Evidence -> `TouchCust`'s operation missing. (Break 3 is T9-closure's.)
+/// Break 2: primary only -> `Outer` missing. (Break 3 is T9-closure's. Break
+/// 4, drop primary Evidence rows, cannot fail on a composed tree, where every
+/// primary Evidence row is also referenced; it is pinned on hand-built rows
+/// by `snapshot_full`'s `evidence_keeps_unreferenced_primary_rows`.)
 #[test]
 fn key_class_evidence() {
     let dir = dd_dir();
@@ -1082,18 +1122,14 @@ fn key_class_evidence() {
         serde_json::to_string(&core.operation_index).unwrap(),
     )
     .to_ascii_lowercase();
+    // Final panel G12: the in-memory identities themselves (not only the
+    // model's routines) hold an eeee… id, so "none serialized" can fail.
     assert!(
         core.identities
             .stable_ids
             .iter()
-            .any(|s| starts_ci(s, R5B_E))
-            || r.target
-                .resolved()
-                .workspace
-                .routines
-                .iter()
-                .any(|x| x.app_guid.eq_ignore_ascii_case(R5B_E)),
-        "precondition: eeee… rows exist"
+            .any(|s| starts_ci(s, R5B_E)),
+        "precondition: the in-memory identities hold an eeee… id"
     );
     assert!(
         !referencing.contains(R5B_E),
