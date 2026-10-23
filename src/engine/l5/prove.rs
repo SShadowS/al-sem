@@ -23,7 +23,7 @@
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::run::AnalysisTarget;
-use crate::engine::l4::effect_query_cli::{object_display_by_stable_routine_id, owner_qualified};
+use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::digest::compute_digest_effects_cli;
 use crate::engine::l5::digest_cli::{
@@ -894,8 +894,14 @@ pub(crate) fn prove_pipeline_with(
         routines: Some(vec![routine_selector.to_string()]),
         diff_text: None,
     };
-    let changed_roots =
-        resolve_changed_roots(&snap, resolved, &changed_input, primary_guid_of(resolved));
+    let owners = OwnerIndex::build(resolved);
+    let changed_roots = resolve_changed_roots(
+        &snap,
+        resolved,
+        &changed_input,
+        primary_guid_of(resolved),
+        &owners,
+    );
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
     if changed_roots.roots.is_empty() {
@@ -957,7 +963,7 @@ pub(crate) fn prove_pipeline_with(
         &tx_ctx_map,
         &temp_states,
         &changed_roots,
-        &object_display_by_stable_routine_id(resolved),
+        &owners,
     );
     // The bundle's only borrower is dead: release `l4` before the cone walk.
     drop(temp_states);

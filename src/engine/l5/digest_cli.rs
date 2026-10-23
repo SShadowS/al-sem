@@ -19,9 +19,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::run::analyzer_diagnostics_of_view;
 use crate::engine::l4::effect_lattice::TempStateKind;
-use crate::engine::l4::effect_query_cli::{
-    object_display_by_stable_routine_id, owner_qualified, temp_state_str,
-};
+use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified, temp_state_str};
 use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::SolveIx;
 use crate::engine::l5::conditionality::EffectConditionality;
@@ -159,7 +157,9 @@ pub fn auto_detect_changed(value: &str) -> ChangedAutoDetect {
 // or ordering (see that module's docs).
 // ---------------------------------------------------------------------------
 
-use crate::engine::l5::selector_index::{build_selector_indexes, resolve_selector};
+use crate::engine::l5::selector_index::{
+    build_selector_indexes, narrow_to_owner, resolve_selector,
+};
 
 /// Changed-roots diagnostics (mirrors ChangedRootsDiagnostic).
 #[derive(Debug, Clone)]
@@ -370,12 +370,14 @@ pub fn primary_guid_of(resolved: &Model) -> Option<&str> {
 /// the span index's `ws:` filter ([`build_routine_span_index`]).
 ///
 /// Files and diffs resolve by routine declaration span (#71); the result also
-/// carries, per root, the declarations the input touched.
+/// carries, per root, the declarations the input touched. `owners` narrows an
+/// `<owner>::<routine>` selector and labels ambiguity candidates (#78).
 pub fn resolve_changed_roots(
     snap: &CapabilitySnapshot,
     resolved: &Model,
     input: &ChangedInput,
     primary_app_guid: Option<&str>,
+    owners: &OwnerIndex<'_>,
 ) -> ChangedRootsResult {
     let mut roots: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut diagnostics: Vec<ChangedRootsDiagnostic> = Vec::new();
@@ -398,22 +400,25 @@ pub fn resolve_changed_roots(
 
     // 2. Routine selector matching (port of resolveSelector — 5-form cascade).
     for selector in input.routines.iter().flatten() {
-        let (matches, _matched_form) = resolve_selector(selector, &selector_idx);
+        let (matches, matched_form) = resolve_selector(selector, &selector_idx);
+        let matches = narrow_to_owner(selector, matched_form, matches, |id| {
+            owners.object_display(id)
+        });
         if matches.is_empty() {
             diagnostics.push(ChangedRootsDiagnostic::SelectorUnmatched {
                 selector: selector.clone(),
             });
         } else if matches.len() >= 2 {
-            // candidates = matches.map(id => routineDisplayById.get(id) ?? id)
+            // candidates = `<owner>::<display>` (display falls back to the id)
             // — deterministic (matches preserve identity-table / bucket order).
             let candidates: Vec<String> = matches
                 .iter()
                 .map(|id| {
-                    selector_idx
+                    let display = selector_idx
                         .routine_display_by_id
                         .get(id)
-                        .cloned()
-                        .unwrap_or_else(|| id.clone())
+                        .map_or(id.as_str(), String::as_str);
+                    owners.qualified(id, display)
                 })
                 .collect();
             diagnostics.push(ChangedRootsDiagnostic::SelectorAmbiguous {
@@ -758,9 +763,8 @@ impl<'a> DbTempStates<'a> {
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),
 /// produce DigestEntryFull for each root (order:false path). `changed` supplies
 /// the declaration spans and the touched declarations (#71); `roots` may be a
-/// subset of `changed.roots` (prove passes one). `object_display_by_id`: each
-/// root's owning object, from `object_display_by_stable_routine_id` (#78); `""`
-/// when absent.
+/// subset of `changed.roots` (prove passes one). `owners`: each root's owning
+/// object, from the model's [`OwnerIndex`] (#78); `""` when absent.
 pub fn run_digest_query_full_from_entries(
     snap: &CapabilitySnapshot,
     roots: &[String],
@@ -768,7 +772,7 @@ pub fn run_digest_query_full_from_entries(
     tx_ctx_map: &HashMap<String, TransactionContext>,
     temp_states: &DbTempStates<'_>,
     changed: &ChangedRootsResult,
-    object_display_by_id: &HashMap<String, String>,
+    owners: &OwnerIndex<'_>,
 ) -> DigestQueryFullResult {
     let (spans, touched) = (&changed.spans, &changed.touched);
     let mut query_diagnostics: Vec<DigestQueryDiagnostic> = Vec::new();
@@ -813,7 +817,7 @@ pub fn run_digest_query_full_from_entries(
 
     // The owning object comes from the model index, never the identity table
     // (#78); `""` when the id is absent, never an invented name.
-    let owner_of = |rid: &str| object_display_by_id.get(rid).cloned().unwrap_or_default();
+    let owner_of = |rid: &str| owners.object_display(rid);
 
     for rid in roots {
         // Routine anchor at the declaration (#71): the LAST touched declaration in
@@ -1644,8 +1648,14 @@ pub(crate) fn digest_pipeline_with(
         routines: changed_routines.clone(),
         diff_text: diff_text.clone(),
     };
-    let changed_roots =
-        resolve_changed_roots(&snap, resolved, &changed_input, primary_guid_of(resolved));
+    let owners = OwnerIndex::build(resolved);
+    let changed_roots = resolve_changed_roots(
+        &snap,
+        resolved,
+        &changed_input,
+        primary_guid_of(resolved),
+        &owners,
+    );
 
     // Compute S4 ordering effects for the changed roots alone (each root's pass is
     // independent, so this equals computing every reportable root and filtering).
@@ -1664,7 +1674,7 @@ pub(crate) fn digest_pipeline_with(
         &tx_ctx_map,
         &temp_states,
         &changed_roots,
-        &object_display_by_stable_routine_id(resolved),
+        &owners,
     );
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;

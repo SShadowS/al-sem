@@ -674,6 +674,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Inherited limit: two model objects with the same internal id (for example `#if`/`#else`
   declarations of one type and number under different names) show one surviving name, as
   `query effects` already does.
+- A routine selector copied from one of those headers, `<owner>::<routine>` (for example
+  `Codeunit Sel A::Persist`), now selects only that owner's routine in `digest`, `fingerprint`
+  and `prove` (#78). Before, the object part was ignored, so a routine name two objects
+  declare was ambiguous. When no matched routine has that owner, the selector matches as
+  before. An ambiguous selector's candidates now print `<owner>::<routine>` too (the digest
+  `candidates` list and fingerprint's error lines), and `query effects`/`query touches` build
+  their headers with the same rule. The owner lookup no longer builds a full routine join or
+  one string per workspace routine; it builds the owner of each id it is asked about.
 - LSP watcher: each root now watches its root `app.json`, its workspace `.al-sem.json` (reloaded live), and the ancestor `.alpackages` folders the loader reads, registered before the first build; folder renames and moves, and files replaced without their own event, are reconciled; an overflow or a replaced root re-arms the root's watch, re-syncs the caches and reloads the config. Stated limits: an edit to the global `~/.al-sem/config.json` and a `.git` created or removed at the root or an ancestor still need a server restart; a file replaced without its own event by one with the same length and modification time (and, on Unix, the same file id) is not re-read; a path whose watch cannot be registered is seen only once a 5 s retry succeeds; on Windows a folder event walks that folder's subtree (#221).
 - LSP updater: a `.al` file renamed, moved or replaced, a folder renamed, moved in or out, or replaced, and a `FileRemoved` for a file still on disk are reconciled from disk instead of leaving stale or missing declarations; a `.al` under `.alpackages`, `.snapshots` or `node_modules` no longer triggers a full rebuild (#221).
 - **#156: `alsem diff` reported private changes as ABI breaks, and a changed signature as two

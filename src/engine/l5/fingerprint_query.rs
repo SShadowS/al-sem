@@ -28,12 +28,14 @@ use std::collections::HashMap;
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::ids::sha256_hex;
-use crate::engine::l4::effect_query_cli::owner_qualified;
+use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::digest::{
     FingerprintIndexesPub, HumanHop, ProjectedPath, QueryWitnessHop, TerminalHopInfo,
     build_fingerprint_indexes_pub, reconstruct_witness_paths_pub,
 };
-use crate::engine::l5::selector_index::{build_selector_indexes, resolve_selector};
+use crate::engine::l5::selector_index::{
+    build_selector_indexes, narrow_to_owner, resolve_selector,
+};
 use crate::engine::l5::snapshot::{CapabilitySnapshot, SnapCapabilityExtra, SnapValueSource};
 
 // Re-export for use by the CLI module.
@@ -295,7 +297,7 @@ fn build_block(
     root: &crate::engine::l5::snapshot::SnapshotRootClassificationSlot,
     idx: &FingerprintIndexesPub<'_>,
     filters: &FingerprintFilters,
-    object_display_by_id: &HashMap<String, String>,
+    owners: &OwnerIndex<'_>,
 ) -> FingerprintBlock {
     let routine_display = idx
         .routine_display_by_id
@@ -303,7 +305,7 @@ fn build_block(
         .cloned()
         .unwrap_or_else(|| rid.to_string());
     // The owner comes from the model index, never the identity table (#78).
-    let object_display = object_display_by_id.get(rid).cloned().unwrap_or_default();
+    let object_display = owners.object_display(rid);
     let object_id = parse_object_id_from_routine(rid);
 
     // Coverage record.
@@ -643,13 +645,14 @@ fn build_block(
 /// of its own, so the caller (which resolved the workspace and knows both the
 /// flag and whether the file existed) computes and passes this in.
 ///
-/// `object_display_by_id`: each block's owning object, from
-/// `object_display_by_stable_routine_id` over the model (#78).
+/// `owners`: the model's [`OwnerIndex`] (#78). It names each block's owning
+/// object, narrows an `<owner>::<routine>` selector and labels ambiguity
+/// candidates.
 pub fn fingerprint_query(
     snap: &CapabilitySnapshot,
     filters: &FingerprintFilters,
     roots_config_ignored: bool,
-    object_display_by_id: &HashMap<String, String>,
+    owners: &OwnerIndex<'_>,
 ) -> FingerprintQueryResult {
     // Build shared indexes (reuse B1's public entry point).
     let idx = build_fingerprint_indexes_pub(snap);
@@ -665,25 +668,21 @@ pub fn fingerprint_query(
     let mut any_selector_failed = false;
     for sel in &filters.routine_selectors {
         let (matches, matched_form) = resolve_selector(sel, &selector_idx);
+        let matches = narrow_to_owner(sel, matched_form, matches, |id| owners.object_display(id));
         if matches.is_empty() {
             diagnostics.push(FingerprintQueryDiagnostic::SelectorUnresolved {
                 selector: sel.clone(),
             });
             any_selector_failed = true;
         } else if matches.len() >= 2 {
-            // candidates: (stableId, display) — display falls back to "" (TS:
-            // `routineDisplayById.get(id) ?? ""`), NOT to the id.
+            // candidates: (stableId, `<owner>::<display>`) — display falls back
+            // to "" (TS: `routineDisplayById.get(id) ?? ""`), NOT to the id.
             let candidates = matches
                 .iter()
                 .take(MAX_AMBIGUOUS_CANDIDATES)
                 .map(|id| {
-                    (
-                        id.clone(),
-                        idx.routine_display_by_id
-                            .get(id)
-                            .cloned()
-                            .unwrap_or_default(),
-                    )
+                    let display = idx.routine_display_by_id.get(id).map_or("", String::as_str);
+                    (id.clone(), owners.qualified(id, display))
                 })
                 .collect();
             diagnostics.push(FingerprintQueryDiagnostic::SelectorAmbiguous {
@@ -732,7 +731,7 @@ pub fn fingerprint_query(
     // Build blocks.
     let mut blocks: Vec<FingerprintBlock> = Vec::new();
     for root in root_pool {
-        let block = build_block(&root.routine_id, root, &idx, filters, object_display_by_id);
+        let block = build_block(&root.routine_id, root, &idx, filters, owners);
         blocks.push(block);
     }
 
@@ -1700,7 +1699,7 @@ mod tests {
             include_inherited: true,
             witness_limit: WitnessLimit::Disabled,
         };
-        let result = fingerprint_query(&snap, &filters, false, &HashMap::new());
+        let result = fingerprint_query(&snap, &filters, false, &OwnerIndex::default());
         assert_eq!(result.diagnostics.len(), 1);
         match &result.diagnostics[0] {
             FingerprintQueryDiagnostic::SelectorAmbiguous {

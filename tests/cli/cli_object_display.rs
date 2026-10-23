@@ -369,3 +369,129 @@ fn human_headers_name_the_owning_object() {
         "{prove}"
     );
 }
+
+const SEL_A: &str = "Codeunit Sel A";
+const SEL_B: &str = "Codeunit Sel B";
+
+/// Two codeunits that both declare `Persist`, so the bare name is ambiguous.
+fn same_name_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{GUID}","name":"Issue78Sel","publisher":"probe","version":"1.0.0.0","platform":"1.0.0.0","application":"1.0.0.0","idRanges":[{{"from":50100,"to":50199}}],"runtime":"14.0"}}"#
+        ),
+    );
+    for (file, num, name) in [("src/a.al", 50101, "Sel A"), ("src/b.al", 50102, "Sel B")] {
+        write(
+            &dir.join(file),
+            &format!(
+                "codeunit {num} \"{name}\"\n{{\n    procedure Persist()\n    begin\n        Message('p');\n    end;\n}}\n"
+            ),
+        );
+    }
+}
+
+/// Spawn `alsem <args>` -> (stdout, stderr, exit code).
+fn alsem_out(args: &[&str]) -> (String, String, i32) {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(args)
+        .env("ALCH_DRIVER_VERSION_OVERRIDE", VERSION_OVERRIDE)
+        .output()
+        .expect("spawn alsem");
+    (
+        String::from_utf8_lossy(&out.stdout).replace('\r', ""),
+        String::from_utf8_lossy(&out.stderr).replace('\r', ""),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+/// A6 (CR1). A header copied as a selector, `<owner>::<routine>`, selects that
+/// owner's routine in digest, fingerprint and prove, where the bare routine
+/// name is ambiguous.
+///
+/// Mutation: drop the owner narrowing -> each qualified selector is
+/// `selector-ambiguous` again (digest: no entry; fingerprint and prove: exit 2).
+#[test]
+fn owner_qualified_selector_narrows_to_its_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    same_name_workspace(dir.path());
+    let w = dir.path().to_str().unwrap();
+
+    // PRECONDITION: the bare name matches both codeunits (no root: exit 2).
+    let (d, code) = alsem(&["digest", w, "--routine", "Persist", "--deterministic"]);
+    assert_eq!(code, 2, "{d}");
+    assert_eq!(
+        d["payload"]["changedRootsDiagnostics"][0]["kind"], "selector-ambiguous",
+        "precondition: {d}"
+    );
+
+    let sel = format!("{SEL_A}::Persist");
+    let (d, code) = alsem(&["digest", w, "--routine", &sel, "--deterministic"]);
+    assert_eq!(code, 0, "{d}");
+    assert_eq!(
+        d["payload"]["changedRootsDiagnostics"],
+        Value::Array(Vec::new()),
+        "{d}"
+    );
+    let es = entries(&d);
+    assert_eq!(es.len(), 1, "{d}");
+    assert_eq!(es[0]["routine"]["objectDisplay"], SEL_A, "{d}");
+
+    let (fp, code) = alsem(&[
+        "fingerprint",
+        w,
+        "--routine",
+        &sel,
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 0, "{fp}");
+    let blocks = fp["payload"]["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 1, "{fp}");
+    assert_eq!(blocks[0]["routine"]["objectDisplay"], SEL_A, "{fp}");
+
+    let (p, code) = alsem(&["prove", w, &sel, "may-commit", "--deterministic"]);
+    assert_eq!(code, 0, "{p}");
+    assert_eq!(p["payload"]["routine"]["objectDisplay"], SEL_A, "{p}");
+}
+
+/// A7 (CR2). An ambiguous selector's candidates name their owners, in the
+/// digest diagnostic and in fingerprint's error lines.
+///
+/// Mutation: candidates print the bare routine -> `["Persist", "Persist"]` and
+/// `  - Persist  (`.
+#[test]
+fn ambiguous_selector_candidates_name_their_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    same_name_workspace(dir.path());
+    let w = dir.path().to_str().unwrap();
+
+    let (d, code) = alsem(&["digest", w, "--routine", "Persist", "--deterministic"]);
+    assert_eq!(code, 2, "{d}");
+    let diag = &d["payload"]["changedRootsDiagnostics"][0];
+    assert_eq!(diag["kind"], "selector-ambiguous", "{d}");
+    assert_eq!(
+        diag["candidates"],
+        serde_json::json!([format!("{SEL_A}::Persist"), format!("{SEL_B}::Persist")]),
+        "{d}"
+    );
+
+    let (_out, err, code) = alsem_out(&[
+        "fingerprint",
+        w,
+        "--routine",
+        "Persist",
+        "--format",
+        "human",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    for owner in [SEL_A, SEL_B] {
+        assert!(
+            err.lines()
+                .any(|l| l.starts_with(&format!("  - {owner}::Persist  ("))),
+            "{err}"
+        );
+    }
+}

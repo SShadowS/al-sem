@@ -196,9 +196,62 @@ pub(crate) fn resolve_selector(
     (Vec::new(), "")
 }
 
+/// #78: an object-qualified selector (`<owner>::<routine>`, as the human
+/// headers print it) keeps only the matches whose owner (`owner_of`) equals its
+/// object part, compared as display keys. When no match has that owner, the
+/// matches stay as form 5 found them: the object part may be a name the owner
+/// display does not spell (a bare object name, a dependency object).
+pub(crate) fn narrow_to_owner(
+    selector: &str,
+    matched_form: &str,
+    matches: Vec<String>,
+    owner_of: impl Fn(&str) -> String,
+) -> Vec<String> {
+    let Some(sep) = selector.rfind("::") else {
+        return matches;
+    };
+    if matched_form != "object-qualified" {
+        return matches;
+    }
+    let want = normalize_display_key(&selector[..sep]);
+    let narrowed: Vec<String> = matches
+        .iter()
+        .filter(|id| normalize_display_key(&owner_of(id)) == want)
+        .cloned()
+        .collect();
+    if narrowed.is_empty() {
+        matches
+    } else {
+        narrowed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #78: the owner narrows only an object-qualified match, compares as a
+    /// display key, and leaves the matches alone when no owner fits.
+    ///
+    /// Mutation: return `narrowed` when it is empty -> the last assert reads `[]`.
+    #[test]
+    fn narrow_to_owner_keeps_the_named_owner_or_everything() {
+        let ids = || vec!["a".to_string(), "b".to_string()];
+        let owner = |id: &str| match id {
+            "a" => "Codeunit Sel A".to_string(),
+            _ => "Codeunit Sel B".to_string(),
+        };
+        let sel = "codeunit  SEL a::Persist";
+        assert_eq!(
+            narrow_to_owner(sel, "object-qualified", ids(), owner),
+            vec!["a".to_string()]
+        );
+        assert_eq!(narrow_to_owner(sel, "full-display", ids(), owner), ids());
+        assert_eq!(
+            narrow_to_owner("Sel A::Persist", "object-qualified", ids(), owner),
+            ids()
+        );
+    }
     use crate::engine::l5::snapshot::SnapshotIdentityTable;
 
     fn snap_with_identities(rows: &[(&str, &str)]) -> CapabilitySnapshot {
