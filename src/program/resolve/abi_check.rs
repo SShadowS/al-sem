@@ -100,7 +100,7 @@ impl RawAbiIndex {
                 // Same key convention as ingest_abi / make_routine_route:
                 // non-zero id → (number, ""); name-only → (0, lowercase_name).
                 let (object_number, object_name_lc) =
-                    match ObjKey::from_abi(obj.object_number, &obj.name.fold_identifier()) {
+                    match ObjKey::from_abi(obj.object_number, || obj.name.fold_identifier()) {
                         ObjKey::Id(n) => (n, String::new()),
                         ObjKey::Name(s) => (0i64, s.to_string()),
                     };

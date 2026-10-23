@@ -69,7 +69,7 @@ impl AbiRoutineKey {
     /// the ABI gives none ([`crate::program::node::ObjKey::from_abi`]), as
     /// `abi_ingest` keys the object node.
     pub fn object_node_key(&self) -> crate::program::node::ObjKey {
-        crate::program::node::ObjKey::from_abi(self.object_number, &self.object_name_lc)
+        crate::program::node::ObjKey::from_abi(self.object_number, || self.object_name_lc.as_str())
     }
 }
 

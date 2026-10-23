@@ -417,7 +417,7 @@ pub(crate) fn abi_object_node_id(
     ObjectNodeId {
         app,
         kind: object_kind_from_abi_type(&abi_obj.object_type),
-        key: ObjKey::from_abi(abi_obj.object_number, &abi_obj.name.fold_identifier()),
+        key: ObjKey::from_abi(abi_obj.object_number, || abi_obj.name.fold_identifier()),
     }
 }
 

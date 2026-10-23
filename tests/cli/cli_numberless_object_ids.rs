@@ -548,6 +548,12 @@ fn diff_findings(old: &Path, new: &Path) -> Vec<serde_json::Value> {
         .env("RUST_LOG", "off")
         .output()
         .expect("run alsem diff");
+    assert!(
+        out.status.success(),
+        "alsem diff exit {:?}; stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!(

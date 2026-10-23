@@ -1889,7 +1889,8 @@ fn declaration_only_procedures_are_roots() {
         "(c) {doc}"
     );
     assert_ne!(got[0].1, got[1].1);
-    // #78: two interfaces sharing `<guid>/Interface/0` keep their own owners.
+    // #78: each interface's entry names its own owner (since #83 the two also
+    // have distinct object ids).
     let mut owners: Vec<(String, String)> = entries(&doc)
         .iter()
         .map(|e| {

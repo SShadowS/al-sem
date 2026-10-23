@@ -26,7 +26,7 @@ use crate::program::body::features::PCallee;
 use crate::program::model::calls::{CallEdge, ResolvedCalls};
 use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::taxonomy::{DispatchKind, Resolution};
-use crate::program::model::workspace::{Model, ModelEntities, ModelObject, ModelRoutine};
+use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
 // ---------------------------------------------------------------------------
 // Internal combined-graph model (NOT the serde projection shape). Ids INTERNAL.
@@ -591,10 +591,14 @@ fn object_run_target_id_source(callee: &PCallee) -> ValueSource {
 /// Derive the target ObjectId for an object-run callee when the targetRef is
 /// statically known but the routine entry wasn't resolved (al-sem
 /// `objectRunTargetObject`). Returns None when fully dynamic.
+///
+/// The lookups are the [`SymbolTable`]'s (last wins; an object without a number
+/// is never found by number, #83).
+///
+/// [`SymbolTable`]: crate::program::model::symbol_table::SymbolTable
 fn object_run_target_object(
     callee: &PCallee,
-    objects_by_type_number: &HashMap<String, String>,
-    objects_by_type_name: &HashMap<String, String>,
+    objects: &crate::program::model::symbol_table::SymbolTable<'_>,
 ) -> Option<String> {
     let PCallee::ObjectRun {
         target_type,
@@ -606,46 +610,12 @@ fn object_run_target_object(
         return None;
     };
     let target_ref = target_ref.as_ref()?;
-    if *target_is_name {
-        objects_by_type_name
-            .get(&format!(
-                "{}/{}",
-                target_type.to_lowercase(),
-                target_ref.to_lowercase()
-            ))
-            .cloned()
+    let object = if *target_is_name {
+        objects.object_by_type_name(target_type, target_ref)
     } else {
-        objects_by_type_number
-            .get(&format!("{}/{}", target_type.to_lowercase(), target_ref))
-            .cloned()
-    }
-}
-
-/// Object type+number / type+name → objectId (for an unresolved object-run target).
-/// An object without a number (`object_number` 0) is not indexed by number: every
-/// such object of a kind would share `type/0` (#83).
-fn object_run_indexes(
-    objects: &[ModelObject],
-) -> (HashMap<String, String>, HashMap<String, String>) {
-    let mut by_type_number: HashMap<String, String> = HashMap::new();
-    let mut by_type_name: HashMap<String, String> = HashMap::new();
-    for obj in objects {
-        if obj.object_number != 0 {
-            by_type_number.insert(
-                format!("{}/{}", obj.object_type.to_lowercase(), obj.object_number),
-                obj.id.clone(),
-            );
-        }
-        by_type_name.insert(
-            format!(
-                "{}/{}",
-                obj.object_type.to_lowercase(),
-                obj.name.to_lowercase()
-            ),
-            obj.id.clone(),
-        );
-    }
-    (by_type_number, by_type_name)
+        objects.object_by_type_number(target_type, target_ref.parse().ok()?)
+    };
+    object.map(|o| o.id.clone())
 }
 
 fn build_typed_edges(
@@ -669,7 +639,8 @@ fn build_typed_edges(
         object_id_by_routine.insert(routine.id.as_str(), routine.object_id.as_str());
         routine_name_by_id.insert(routine.id.as_str(), routine.name.as_str());
     }
-    let (objects_by_type_number, objects_by_type_name) = object_run_indexes(&workspace.objects);
+    let objects_by_type =
+        crate::program::model::symbol_table::SymbolTable::build(&workspace.objects, &[]);
 
     // Group interface "maybe" resolved edges by callsiteId (for candidateCount +
     // interfaceName), mirroring al-sem `interfaceEdgesByCallsite`. Preserve order.
@@ -847,11 +818,7 @@ fn build_typed_edges(
                     continue;
                 };
                 let target_id_source = object_run_target_id_source(&call_site.callee);
-                let target_object = object_run_target_object(
-                    &call_site.callee,
-                    &objects_by_type_number,
-                    &objects_by_type_name,
-                );
+                let target_object = object_run_target_object(&call_site.callee, &objects_by_type);
                 typed_edges.push(TypedEdge {
                     kind: "object-run-unresolved".to_string(),
                     from: ce.from.clone(),
@@ -1320,19 +1287,16 @@ mod tests {
     #[test]
     fn numberless_objects_are_not_an_object_run_target_by_number_zero() {
         let objects = [numberless("ifoo"), numberless("ibar")];
-        let (by_number, by_name) = object_run_indexes(&objects);
+        let table = crate::program::model::symbol_table::SymbolTable::build(&objects, &[]);
         let run = |target_ref: &str, target_is_name: bool| PCallee::ObjectRun {
             object_kind: "interface".into(),
             target_type: "Interface".into(),
             target_ref: Some(target_ref.into()),
             target_is_name,
         };
+        assert_eq!(object_run_target_object(&run("0", false), &table), None);
         assert_eq!(
-            object_run_target_object(&run("0", false), &by_number, &by_name),
-            None
-        );
-        assert_eq!(
-            object_run_target_object(&run("ifoo", true), &by_number, &by_name).as_deref(),
+            object_run_target_object(&run("ifoo", true), &table).as_deref(),
             Some("app/Interface/@ifoo")
         );
     }

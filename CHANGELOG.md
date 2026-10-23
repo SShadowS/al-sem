@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   digest schema version does not change. **Upgrade note:** a stored baseline or gate
   snapshot that holds a numberless object id (`…:Interface:0`, `…:ControlAddIn:0`), a
   dependency interface routine id, or a declaration-only id reports those objects as removed
-  and re-added once. Numbered ids are unchanged.
+  (critical) and re-added once; re-mint it with this version (see Fixed). Numbered ids are
+  unchanged.
 
 ### Fixed
 
@@ -47,18 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Interface, ControlAddIn) changes shape** from `{appId}:Interface:0` to
   `{appId}:Interface:@{name}` (e.g. `…:Interface:@repro%20transport`), because the number
   was the only part that told two such objects apart and they have none. A consumer with a
-  stored baseline (a fingerprint, gate snapshot or digest) sees those ids move once:
-  each such object is reported removed and re-added on the first diff against it.
-  CentralGauge, which reported #245, has no stored baseline yet.
+  stored baseline (a fingerprint, gate snapshot or digest) sees those ids move once. The
+  snapshot schema version stays 4, so `alsem diff` accepts a pre-#83 baseline (only the
+  `alsem-version-mismatch` warning fires), and **the first diff against it reports the old
+  `…:Interface:0` object and its routines as `object-removed` / `procedure-removed`
+  (critical)**, plus an `object-added` per new id. The remedy is to re-mint the baseline with
+  this version. CentralGauge, which reported #245, has no stored baseline yet.
 - Lookups of an object by type and number (record typing's numeric `SourceTable`, an
   unresolved `Codeunit.Run(<number>)` target) no longer pick an arbitrary object without a
   number for number `0` (#83).
 - `aldump --graphify-export` keys an object without a number by the engine's object key in
   its `al:obj:`, `al:rtn:` and `al:abi:` node ids (`…/interface/@i%20foo#…`). Before, a
   dependency object's `al:abi:` id carried `0`, and the other ids carried a lossy slug, so
-  `I Foo` and `I-Foo` (or two dependency interfaces with a same-named method) shared a node.
-  An LSP call-hierarchy item for such a dependency object carries its folded name in the
-  `al-preview:` URI's id segment, not `0` (#83).
+  `I Foo` and `I-Foo` (or two dependency interfaces with a same-named method) shared a node
+  (#83). The LSP `al-preview:` URI keeps its `Id` segment (`0` for such an object): it is
+  wire format, and the object's name is in the `Name` segment.
 - **`alsem diff` no longer reports a parameter appended to a `local` or `internal` event
   publisher as critical (#236).** For an `[IntegrationEvent]` or `[BusinessEvent]` publisher that
   is `local` or `internal` on both sides, adding parameters at the END is not a break

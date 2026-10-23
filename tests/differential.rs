@@ -270,24 +270,58 @@ fn diff_snapshots(
     out
 }
 
-/// One snapshot's objects keyed by `stableObjectId`. Two rows with one id is a
-/// hard failure naming the id: a map would keep only the last of them and hide the
+/// One snapshot's objects keyed by `stableObjectId`. Two rows with one id and one
+/// name are one logical object split across `#if` arms (legal; the last row is
+/// kept). Two rows with one id and DIFFERENT names are a collision and a hard
+/// failure naming the id: a map would keep only the last of them and hide the
 /// other from the comparison (#83).
 fn objects_by_id<'a>(
     fixture: &str,
     side: &str,
     snap: &'a IdentitySnapshot,
 ) -> BTreeMap<&'a str, &'a ObjectIdentity> {
-    let mut map = BTreeMap::new();
+    let mut map: BTreeMap<&str, &ObjectIdentity> = BTreeMap::new();
     for o in &snap.objects {
-        if map.insert(o.stable_object_id.as_str(), o).is_some() {
+        if let Some(prev) = map.insert(o.stable_object_id.as_str(), o)
+            && prev.name != o.name
+        {
             panic!(
-                "{fixture}: the {side} snapshot has two object rows with stableObjectId {:?}",
-                o.stable_object_id
+                "{fixture}: the {side} snapshot has two object rows with stableObjectId {:?} \
+                 ({:?} and {:?})",
+                o.stable_object_id, prev.name, o.name
             );
         }
     }
     map
+}
+
+/// CR5 (#83): an `#if`-split object (two rows, one id, one name) is accepted; two
+/// different objects on one id still panic.
+#[test]
+fn objects_by_id_accepts_a_split_object_and_rejects_a_collision() {
+    let row = |name: &str, fp: &str| ObjectIdentity {
+        stable_object_id: "g:Interface:@ifoo".to_string(),
+        name: name.to_string(),
+        kind: "Interface".to_string(),
+        signature_fingerprint: fp.to_string(),
+    };
+    let split = IdentitySnapshot {
+        objects: vec![row("IFoo", "a"), row("IFoo", "b")],
+        routines: Vec::new(),
+    };
+    let map = objects_by_id("t", "rust", &split);
+    assert_eq!(map.len(), 1);
+    assert_eq!(
+        map["g:Interface:@ifoo"].signature_fingerprint, "b",
+        "last row kept"
+    );
+
+    let collision = IdentitySnapshot {
+        objects: vec![row("IFoo", "a"), row("IBar", "a")],
+        routines: Vec::new(),
+    };
+    let panicked = std::panic::catch_unwind(|| objects_by_id("t", "rust", &collision).len());
+    assert!(panicked.is_err(), "two names on one id must panic");
 }
 
 fn obj_path(id: &str, field: &str) -> String {

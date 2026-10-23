@@ -450,12 +450,13 @@ pub fn owner_qualified(object_display: &str, routine_display: &str) -> String {
 
 /// Stable routine id -> its owning object, for every workspace-app routine and
 /// Interface / ControlAddIn declaration (#78). The owner comes from the model,
-/// never the snapshot identity table: every unnumbered object shares
-/// `<guid>:<Kind>:0` there, and a tableextension stub can overwrite the name of
-/// the real table with its own number. Declaration-only rows read their
+/// never the snapshot identity table: a tableextension stub can overwrite the
+/// name of the real table with its own number there. (An object's id segment is
+/// its key, `engine::ids::object_key`: the number, or `@` + the name for an
+/// unnumbered object, #83.) Declaration-only rows read their
 /// declaring object directly. Ordinary rows read the name `RoutineJoin` reads
 /// (last object per internal id), so two model objects with ONE internal id
-/// (`#if`-split object declarations, a missing number) share one name, as in
+/// (`#if`-split object declarations) share one name, as in
 /// `query effects`. Rows that share a stable id share its object (the stable id
 /// folds in the object), so they give one owner.
 ///

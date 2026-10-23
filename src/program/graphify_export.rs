@@ -718,12 +718,10 @@ fn app_slug(apps: &AppRegistry, app: AppRef) -> Option<String> {
 /// An object's key segment. A numbered object keeps its number. A numberless one is
 /// keyed by the engine's object key (`@` + the percent-encoded folded name,
 /// `engine::ids::object_key`), not a slug: the slug is lossy (`I Foo` and `I-Foo` both
-/// slug to `i-foo`), so two objects could share a node id (#83).
+/// slug to `i-foo`), so two objects could share a node id (#83). It is the model's
+/// own segment ([`ObjKey::model_key`]), so `"I""Foo"` gives the engine's `@i%22foo`.
 fn obj_key_str(key: &ObjKey) -> String {
-    match key {
-        ObjKey::Id(n) => n.to_string(),
-        ObjKey::Name(s) => crate::engine::ids::object_key(None, s),
-    }
+    key.model_key()
 }
 
 /// `al:obj:{app}/{kind}/{key}` — stable object node id.
@@ -1562,5 +1560,21 @@ mod tests {
             abi_id_str(&key(50100, ""), &apps),
             "al:abi:dep/interface/50100#bar/0"
         );
+    }
+
+    /// CR4 (#83): a source name key is the folded RAW name, inner `""` kept. The
+    /// graphify object id unescapes it as the engine does, so `interface "I""Foo"`
+    /// is `@i%22foo` here and in the model's object id.
+    #[test]
+    fn object_id_str_unescapes_a_quoted_name_like_the_engine() {
+        let mut apps = AppRegistry::default();
+        let a = apps.intern(&app_id("Dep"));
+        let oid = ObjectNodeId {
+            app: a,
+            kind: ObjectKind::Interface,
+            key: ObjKey::Name("i\"\"foo".into()),
+        };
+        assert_eq!(object_id_str(&oid, &apps), "al:obj:dep/interface/@i%22foo");
+        assert_eq!(oid.key.model_key(), "@i%22foo");
     }
 }

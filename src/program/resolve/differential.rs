@@ -163,14 +163,10 @@ fn object_kind_str(k: ObjectKind) -> String {
     format!("{k:?}").to_ascii_lowercase()
 }
 
-/// `ObjKey` → canonical string.
-///
-/// `Id(n)` → decimal integer string; `Name(s)` → the already-lowercased name.
+/// `ObjKey` → canonical string ([`ObjKey::raw_text`]): the decimal number, or the
+/// already-lowercased name.
 fn obj_key_lc(key: &ObjKey) -> String {
-    match key {
-        ObjKey::Id(n) => format!("{n}"),
-        ObjKey::Name(s) => s.to_string(),
-    }
+    key.raw_text()
 }
 
 /// Resolve `AppRef` → guid string via the registry.
