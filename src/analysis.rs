@@ -68,9 +68,12 @@ pub struct AnalysisResult {
     pub metrics: Vec<ProcedureMetrics>,
     pub findings: Vec<Finding>,
     pub summary: AnalysisSummary,
+    /// #253: per-`[Test]` assert counts. Last, so existing keys keep their order.
+    pub test_quality: TestQuality,
 }
 
 use crate::config::DiagnosticConfig;
+use crate::test_quality::{TestProcedure, TestQuality};
 
 /// Calculate quality score on a 0-10 scale
 /// Based on tree-sitter-mcp's quality score formula
@@ -281,34 +284,51 @@ pub fn analyze_project(
     });
     let graph = snap.as_ref().map(Graph::new);
     let app_guid = crate::source_text::read_root_app_guid(project);
+    let roots: HashMap<String, String> = files
+        .iter()
+        .map(|f| (f.rel_posix.clone(), app_root(project, &f.rel_posix)))
+        .collect();
 
     // Big-stack pool: the complexity walk recurses (see `big_stack`'s doc).
-    let per_file: Vec<(Vec<ProcedureMetrics>, Vec<Finding>)> = crate::big_stack::big_stack_pool()
-        .install(|| {
-            files
-                .par_iter()
-                .map(|f| {
-                    // A nested app's file belongs to another app: the root's
-                    // guid would mint a wrong routine_id, so it gets none.
-                    let guid = app_guid
-                        .as_deref()
-                        .filter(|_| !in_nested_app(project, &f.rel_posix));
-                    file_metrics(
-                        &f.rel_posix,
-                        &f.abs_path,
-                        graph.as_ref(),
-                        guid,
-                        config.unused_procedures,
-                    )
-                })
-                .collect()
-        });
+    let per_file: Vec<FileRows> = crate::big_stack::big_stack_pool().install(|| {
+        files
+            .par_iter()
+            .map(|f| {
+                // A nested app's file belongs to another app: the root's
+                // guid would mint a wrong routine_id, so it gets none.
+                let guid = app_guid
+                    .as_deref()
+                    .filter(|_| roots[&f.rel_posix].is_empty());
+                file_metrics(
+                    &f.rel_posix,
+                    &f.abs_path,
+                    graph.as_ref(),
+                    guid,
+                    config.unused_procedures,
+                )
+            })
+            .collect()
+    });
 
     let mut metrics = Vec::new();
     let mut unused = Vec::new();
-    for (m, u) in per_file {
+    let mut tests = Vec::new();
+    let mut own_at: HashMap<&str, HashMap<usize, usize>> = HashMap::new();
+    for (f, (m, u, t, own)) in files.iter().zip(per_file) {
         metrics.extend(m);
         unused.extend(u);
+        tests.extend(t);
+        own_at.insert(&f.rel_posix, own.into_iter().collect());
+    }
+    if let Some(g) = &graph {
+        let calls = crate::test_quality::CallMap::new(g.snap, &roots, &own_at);
+        for t in &mut tests {
+            if let (Some(id), Some(root)) = (&t.node, roots.get(&t.path)) {
+                let n = calls.reachable(root, id, t.assert_count);
+                t.assert_count_reachable = Some(n);
+                t.zero_assert = Some(n == 0);
+            }
+        }
     }
     let mut findings: Vec<Finding> = metrics
         .iter()
@@ -321,20 +341,35 @@ pub fn analyze_project(
         metrics,
         findings,
         summary,
+        test_quality: TestQuality::new(tests),
     })
 }
 
-/// Whether the file at `rel_posix` lies in a folder below `project` that holds
-/// its own `app.json` (a nested app; `discover_al_files` walks into those).
-fn in_nested_app(project: &Path, rel_posix: &str) -> bool {
+/// The app root of the file at `rel_posix`: the deepest folder below `project`
+/// that holds its own `app.json` (a nested app; `discover_al_files` walks into
+/// those), as a `/`-separated relative path, else `""` (the project itself).
+fn app_root(project: &Path, rel_posix: &str) -> String {
     let mut dir = project.to_path_buf();
     let mut folders: Vec<&str> = rel_posix.split('/').collect();
     folders.pop(); // the file name
-    folders.into_iter().any(|folder| {
+    let mut root_len = 0;
+    for (i, folder) in folders.iter().enumerate() {
         dir.push(folder);
-        dir.join("app.json").is_file()
-    })
+        if dir.join("app.json").is_file() {
+            root_len = i + 1;
+        }
+    }
+    folders[..root_len].join("/")
 }
+
+/// One file's metrics rows, `unused_procedure` findings, `[Test]` rows, and
+/// the own assert count of each routine with a body (by start byte).
+type FileRows = (
+    Vec<ProcedureMetrics>,
+    Vec<Finding>,
+    Vec<TestProcedure>,
+    Vec<(usize, usize)>,
+);
 
 /// One file's rows and `unused_procedure` findings. With a graph that holds
 /// the file, the rows come from the snapshot's OWN parse and join its
@@ -347,8 +382,9 @@ fn file_metrics(
     graph: Option<&Graph<'_>>,
     app_guid: Option<&str>,
     report_unused: bool,
-) -> (Vec<ProcedureMetrics>, Vec<Finding>) {
-    use crate::program::body::ir_walk::ir_routine_kind;
+) -> FileRows {
+    use crate::engine::ids::encode_object_id;
+    use crate::program::body::ir_walk::{ir_object_key, ir_object_type, ir_routine_kind};
     use crate::program::body::l2_workspace::{stable_object_id_ir, stable_routine_id_ir};
     use al_syntax::ir::{ObjectKind, RoutineKind};
 
@@ -367,7 +403,7 @@ fn file_metrics(
         Some((_, file, _)) => file.clone(),
         None => match crate::source_text::read_al_source(abs_path) {
             Ok(source) => std::sync::Arc::new(al_syntax::parse(&source)),
-            Err(_) => return (Vec::new(), Vec::new()),
+            Err(_) => return Default::default(),
         },
     };
     let file_name = abs_path
@@ -377,6 +413,8 @@ fn file_metrics(
 
     let mut metrics = Vec::new();
     let mut unused = Vec::new();
+    let mut tests = Vec::new();
+    let mut own_at = Vec::new();
     for obj in &file.objects {
         let object_type = object_kind_label(obj.kind);
         let object_name = obj.name.trim_matches('"').to_string();
@@ -386,6 +424,14 @@ fn file_metrics(
         let stable_object_id = app_guid
             .filter(|_| !signature_only)
             .and_then(|guid| stable_object_id_ir(guid, obj));
+        // The internal form of the same id (`<guid>/<Type>/<key>`), same nulls.
+        let internal_object_id = app_guid.filter(|_| !signature_only).and_then(|guid| {
+            Some(encode_object_id(
+                guid,
+                ir_object_type(&obj.kind)?,
+                &ir_object_key(obj),
+            ))
+        });
         for r in &obj.routines {
             let procedure_name = if r.name.is_empty() {
                 match r.kind {
@@ -426,6 +472,35 @@ fn file_metrics(
                 });
             }
 
+            let routine_id = stable_object_id
+                .as_deref()
+                .filter(|_| !r.name.is_empty())
+                .map(|o| stable_routine_id_ir(o, r));
+            let body = crate::test_quality::body_counts(&file.ir, obj, r);
+            if let Some(b) = &body {
+                own_at.push((r.origin.byte.start, b.own()));
+            }
+            if crate::test_quality::is_test(r) {
+                let b = body.unwrap_or_default();
+                tests.push(TestProcedure {
+                    path: rel_posix.to_string(),
+                    line,
+                    object_type: object_type.clone(),
+                    object_name: object_name.clone(),
+                    object_id: obj.id,
+                    object_stable_id: internal_object_id.clone(),
+                    procedure_name: procedure_name.clone(),
+                    routine_id: routine_id.clone(),
+                    assert_count: b.own(),
+                    assert_count_reachable: None,
+                    zero_assert: None,
+                    has_asserterror: b.asserterrors > 0,
+                    are_equal: b.are_equal,
+                    object_line: obj.origin.start.row + 1,
+                    node: decl.map(|(_, d)| d.id.clone()),
+                });
+            }
+
             metrics.push(ProcedureMetrics {
                 object_type: object_type.clone(),
                 object_name: object_name.clone(),
@@ -444,17 +519,14 @@ fn file_metrics(
                     .unwrap_or_else(|| "public".to_string()),
                 is_event_subscriber: ir_routine_kind(r) == "event-subscriber",
                 is_trigger: r.kind == RoutineKind::Trigger,
-                routine_id: stable_object_id
-                    .as_deref()
-                    .filter(|_| !r.name.is_empty())
-                    .map(|o| stable_routine_id_ir(o, r)),
+                routine_id,
                 fan_in: counted
                     .map(|(g, d)| crate::lsp::handlers::incoming_callers(g.snap, &d.id).len()),
                 fan_out: counted.map(|(g, d)| g.fan_out.get(&d.id).map_or(0, HashSet::len)),
             });
         }
     }
-    (metrics, unused)
+    (metrics, unused, tests, own_at)
 }
 
 /// Human-readable object-type label (e.g. `Codeunit`, `Pageextension`), matching
@@ -1222,14 +1294,15 @@ mod tests {
         let graph = Graph::new(&snap);
 
         // Precondition: the held file's uncalled procedure IS graph-backed and unused.
-        let (rows, unused) = file_metrics("Held.Codeunit.al", &held, Some(&graph), Some("g"), true);
+        let (rows, unused, ..) =
+            file_metrics("Held.Codeunit.al", &held, Some(&graph), Some("g"), true);
         assert_eq!(
             (rows.len(), rows[0].fan_in, rows[0].fan_out),
             (1, Some(0), Some(0))
         );
         assert_eq!(unused.len(), 1, "precondition: Held.Uncalled is unused");
 
-        let (rows, unused) = file_metrics(
+        let (rows, unused, ..) = file_metrics(
             "Missing.Codeunit.al",
             &missing,
             Some(&graph),

@@ -1,0 +1,8 @@
+{
+  "id": "25300000-0000-4000-8000-000000000253",
+  "name": "AnalyzeTestQuality253",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "idRanges": [{ "from": 50200, "to": 50299 }],
+  "runtime": "14.0"
+}

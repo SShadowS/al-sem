@@ -53,7 +53,7 @@ const NEW_KEYS: [&str; 8] = [
     "fan_out",
 ];
 
-fn repo_root() -> PathBuf {
+pub(crate) fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
@@ -71,11 +71,11 @@ fn output_with_empty_home(cmd: &mut Command) -> Output {
 
 /// Run the binary with cwd = repo root and a RELATIVE project path, so the
 /// text header (`Code Quality Analysis: <project>`) is checkout-independent.
-fn run_analyze(project: &str, format: &str) -> Output {
+pub(crate) fn run_analyze(project: &str, format: &str) -> Output {
     run_analyze_in(&repo_root(), project, format)
 }
 
-fn run_analyze_in(cwd: &std::path::Path, project: &str, format: &str) -> Output {
+pub(crate) fn run_analyze_in(cwd: &std::path::Path, project: &str, format: &str) -> Output {
     let out = output_with_empty_home(
         Command::new(env!("CARGO_BIN_EXE_al-call-hierarchy"))
             .current_dir(cwd)
@@ -90,7 +90,7 @@ fn run_analyze_in(cwd: &std::path::Path, project: &str, format: &str) -> Output 
     out
 }
 
-fn stdout_text(out: &Output) -> String {
+pub(crate) fn stdout_text(out: &Output) -> String {
     String::from_utf8(out.stdout.clone()).expect("utf8 stdout")
 }
 
@@ -523,8 +523,13 @@ fn legacy_fields_text_and_csv_byte_identical_to_base() {
     };
 
     // JSON: drop the new keys and the new findings, compare as parsed values.
+    // #253's `test_quality` block is a new top-level key after `summary`.
     let raw = stdout_text(&run_analyze(FIXTURE, "json"));
     let mut current: Value = serde_json::from_str(&raw).expect("json");
+    current
+        .as_object_mut()
+        .expect("top-level object")
+        .remove("test_quality");
     for r in current["metrics"].as_array_mut().expect("metrics") {
         let obj = r.as_object_mut().expect("row object");
         for k in NEW_KEYS {
@@ -545,6 +550,11 @@ fn legacy_fields_text_and_csv_byte_identical_to_base() {
     let mut keys: Option<Vec<String>> = None;
     for line in raw.lines() {
         let t = line.trim();
+        // The `metrics` array ends here; `test_quality` rows also carry
+        // `object_type` and are not metrics rows.
+        if t == "\"findings\": [" {
+            break;
+        }
         if t.starts_with("\"object_type\"") {
             keys = Some(Vec::new());
         }

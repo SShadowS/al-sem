@@ -68,6 +68,7 @@ mod cli_a_with_evidence;
 mod cli_analyze_call_hierarchy_json;
 mod cli_analyze_coverage_ledger;
 mod cli_analyze_program_calls;
+mod cli_analyze_test_quality;
 mod cli_attribute_trivia;
 mod cli_b_diff_differential;
 mod cli_b_digest_differential;
