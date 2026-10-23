@@ -24,7 +24,8 @@
 use indexmap::IndexMap;
 
 use crate::engine::gate::cbor::CborValue;
-use crate::engine::l5::snapshot_full::SNAPSHOT_SCHEMA_VERSION;
+use crate::engine::l5::snapshot_full::{ANALYSIS_UNIVERSES, SNAPSHOT_SCHEMA_VERSION};
+use crate::program::model::role::Role;
 
 /// On-disk snapshot format. Mirrors al-sem `SnapshotFormat` (the diff-relevant
 /// subset; `json` covers raw + enveloped).
@@ -90,9 +91,66 @@ pub fn deserialize_snapshot(
         }
     }
 
+    validate_universe_and_roles(&parsed)?;
+
     // Map key insertion order is already preserved (serde_json `preserve_order` is
     // on; the CBOR decoder uses IndexMap) — nothing more to do.
     Ok(parsed)
+}
+
+/// #220 D5.2: a v4 file names its `analysisUniverse` and every `apps[]` row's
+/// `role`, with exactly one `primary` row when `apps[]` is non-empty (an empty
+/// `apps[]`, no `app.json` id, stays accepted).
+fn validate_universe_and_roles(snap: &CborValue) -> Result<(), String> {
+    let CborValue::Map(m) = snap else {
+        return Ok(());
+    };
+    let shown = |v: Option<&CborValue>| match v {
+        Some(CborValue::Text(t)) => format!("{t:?}"),
+        Some(other) => format!("{other:?}"),
+        None => "none".to_string(),
+    };
+    match m.get("analysisUniverse") {
+        Some(CborValue::Text(u)) if ANALYSIS_UNIVERSES.contains(&u.as_str()) => {}
+        other => {
+            return Err(format!(
+                "deserializeSnapshot: analysisUniverse must be one of {ANALYSIS_UNIVERSES:?}, found {}",
+                shown(other)
+            ));
+        }
+    }
+    let apps = match m.get("apps") {
+        Some(CborValue::Array(a)) => a.as_slice(),
+        _ => &[],
+    };
+    let mut primaries = 0;
+    for (i, app) in apps.iter().enumerate() {
+        let role = match app {
+            CborValue::Map(a) => a.get("role"),
+            _ => None,
+        };
+        match role {
+            Some(CborValue::Text(r)) if r == Role::Primary.as_str() => primaries += 1,
+            Some(CborValue::Text(r)) if r == Role::Dependency.as_str() => {}
+            other => {
+                return Err(format!(
+                    "deserializeSnapshot: apps[{i}].role must be \"primary\" or \"dependency\", found {}",
+                    shown(other)
+                ));
+            }
+        }
+    }
+    if !apps.is_empty() && primaries != 1 {
+        let hint = if primaries == 0 {
+            " (a dependency shard is not a diff input: diff the full snapshot or the primary shard)"
+        } else {
+            ""
+        };
+        return Err(format!(
+            "deserializeSnapshot: apps[] must hold exactly one role \"primary\" row, found {primaries}{hint}"
+        ));
+    }
+    Ok(())
 }
 
 /// Auto-detect the snapshot format from the leading bytes (al-sem `detectFormat`).

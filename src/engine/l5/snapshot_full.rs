@@ -99,11 +99,15 @@ impl<'a> SnapshotUniverse<'a> {
     /// The `analysisUniverse` value.
     fn as_str(&self) -> &'static str {
         match self {
-            SnapshotUniverse::SingleApp => "single-app",
-            SnapshotUniverse::CrossApp(_) => "cross-app",
+            SnapshotUniverse::SingleApp => ANALYSIS_UNIVERSES[0],
+            SnapshotUniverse::CrossApp(_) => ANALYSIS_UNIVERSES[1],
         }
     }
 }
+
+/// The `analysisUniverse` values, single-app then cross-app; the loader
+/// refuses any other (#220 D5.2).
+pub const ANALYSIS_UNIVERSES: [&str; 2] = ["single-app", "cross-app"];
 
 /// Compose the FULL `CapabilitySnapshot` as an insertion-ordered `CborValue` tree,
 /// in the exact `composeSnapshot` literal key order. This is the single source for

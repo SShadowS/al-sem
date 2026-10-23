@@ -19,9 +19,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use al_sem::engine::gate::cbor::CborValue;
-use al_sem::engine::gate::diff::CoveragePolicy;
 use al_sem::engine::gate::diff::cli::{DiffCliOptions, DiffRunOutcome, run_diff};
+use al_sem::engine::gate::diff::{CoveragePolicy, Severity};
 use al_sem::engine::gate::run::AnalysisTarget;
+use al_sem::engine::gate::snapshot_deserialize::deserialize_snapshot;
 use al_sem::engine::l4::capability_cone::R3a5CrossAppBase;
 use al_sem::engine::l5::snapshot::compose_snapshot;
 use al_sem::engine::l5::snapshot_full::{
@@ -546,7 +547,7 @@ fn identity_app_missing_from_dependency_apps_fires() {
 }
 
 // ---------------------------------------------------------------------------
-// Preflight (D5): T7
+// Preflight (D5): T6, T6b, T7, T7b
 // ---------------------------------------------------------------------------
 
 fn vendored(name: &str) -> PathBuf {
@@ -609,6 +610,189 @@ fn diff_refuses_schema_3() {
         msg.contains("re-create it with 'alsem fingerprint'"),
         "{msg}"
     );
+}
+
+fn loads(p: &Path) -> Result<CborValue, String> {
+    deserialize_snapshot(&std::fs::read(p).unwrap(), None)
+}
+
+fn diag_kinds(outcome: &DiffRunOutcome) -> (Vec<String>, usize) {
+    let out: Value = serde_json::from_str(outcome.output.as_deref().expect("diff output")).unwrap();
+    let kinds = out["payload"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["kind"].as_str().unwrap().to_string())
+        .collect();
+    (kinds, out["payload"]["findings"].as_array().unwrap().len())
+}
+
+/// T6: two v4 files of the same app, `single-app` vs `cross-app` (both load).
+/// `analysis-universe-mismatch` in the diagnostics, no findings, exit 1.
+///
+/// Break: drop the check -> findings computed, exit 0.
+#[test]
+fn diff_refuses_mixed_universes() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = v4_copy(dir.path(), "event-added-old.snap.json", "old.json", |_| {});
+    let new = v4_copy(dir.path(), "event-added-new.snap.json", "new.json", |v| {
+        v["analysisUniverse"] = Value::from("cross-app");
+    });
+    for p in [&old, &new] {
+        if let Err(e) = loads(p) {
+            panic!("precondition: {} loads: {e}", p.display());
+        }
+    }
+    let outcome = diff(&old, &new);
+    let (kinds, findings) = diag_kinds(&outcome);
+    assert!(
+        kinds.iter().any(|k| k == "analysis-universe-mismatch"),
+        "{kinds:?}"
+    );
+    assert_eq!(findings, 0, "a fatal preflight computes no findings");
+    assert_eq!(outcome.exit_code, 1);
+}
+
+/// T6b (P9): two vendored inputs of DIFFERENT apps (both load): exit 1 with
+/// `app-identity-mismatch`, also under `--fail-on low`; stdout is the same
+/// with and without the threshold.
+///
+/// Break: drop the `fatal` exit gate -> exit 0.
+#[test]
+fn fatal_preflight_exits_one() {
+    let old = vendored("event-added-old.snap.json");
+    let new = vendored("schema-field-removed-new.snap.json");
+    for p in [&old, &new] {
+        if let Err(e) = loads(p) {
+            panic!("precondition: {} loads: {e}", p.display());
+        }
+    }
+    let app = |p: &Path| -> String {
+        let v: Value = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+        v["apps"][0]["appGuid"].as_str().unwrap().to_string()
+    };
+    assert_ne!(app(&old), app(&new), "precondition: different apps");
+    let outcome = diff(&old, &new);
+    let (kinds, _) = diag_kinds(&outcome);
+    assert!(
+        kinds.iter().any(|k| k == "app-identity-mismatch"),
+        "{kinds:?}"
+    );
+    assert_eq!(outcome.exit_code, 1, "a fatal preflight exits 1");
+
+    let (o, n) = (
+        old.to_string_lossy().to_string(),
+        new.to_string_lossy().to_string(),
+    );
+    let fail_on_low = run_diff(&DiffCliOptions {
+        old_arg: &o,
+        new_arg: &n,
+        format: "json",
+        out: None,
+        coverage_policy: CoveragePolicy::Loose,
+        renames_path: None,
+        fail_on: Some(Severity::Low),
+        strict: false,
+        deterministic: true,
+        driver_version: DRIVER,
+    });
+    assert_eq!(fail_on_low.exit_code, 1, "--fail-on low: still exit 1");
+    assert_eq!(fail_on_low.output, outcome.output, "stdout unchanged");
+}
+
+/// T7b (S14, O6): five temp copies, each differing from a valid v4 file in ONE
+/// field (asserted): no `analysisUniverse`; `analysisUniverse: "both"`; an
+/// `apps[]` row without `role`; two `primary` rows; a dependency shard. Each is
+/// refused at load, exit 1, and the message names the field (the shard case
+/// names the hint). A v4 file with an empty `apps[]` (no `app.json` id) loads.
+///
+/// Break: drop each check in turn -> that copy loads.
+#[test]
+fn diff_refuses_bad_universe_or_roles() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = "event-added-old.snap.json";
+    let valid = v4_copy(dir.path(), src, "valid.json", |_| {});
+    let other = v4_copy(
+        dir.path(),
+        "event-added-new.snap.json",
+        "other.json",
+        |_| {},
+    );
+    let valid_v: Value = serde_json::from_slice(&std::fs::read(&valid).unwrap()).unwrap();
+    type Edit = Box<dyn Fn(&mut Value)>;
+    let cases: Vec<(&str, Edit, &str)> = vec![
+        (
+            "no-universe",
+            Box::new(|v: &mut Value| {
+                v.as_object_mut().unwrap().remove("analysisUniverse");
+            }),
+            "analysisUniverse",
+        ),
+        (
+            "both",
+            Box::new(|v: &mut Value| v["analysisUniverse"] = Value::from("both")),
+            "analysisUniverse",
+        ),
+        (
+            "no-role",
+            Box::new(|v: &mut Value| {
+                v["apps"][0].as_object_mut().unwrap().remove("role");
+            }),
+            // The row's own field, not the exactly-one-primary rule that a
+            // single role-less row also breaks.
+            "apps[0].role",
+        ),
+        (
+            "two-primaries",
+            Box::new(|v: &mut Value| {
+                let mut second = v["apps"][0].clone();
+                second["appGuid"] = Value::from("dd000000-0000-0000-0000-0000000000ff");
+                v["apps"].as_array_mut().unwrap().push(second);
+            }),
+            "primary",
+        ),
+        (
+            "dependency-shard",
+            Box::new(|v: &mut Value| v["apps"][0]["role"] = Value::from("dependency")),
+            "diff the full snapshot or the primary shard",
+        ),
+    ];
+    for (name, edit, needle) in &cases {
+        let p = v4_copy(dir.path(), src, &format!("{name}.json"), |v| edit(v));
+        let v: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        // Precondition: exactly one top-level field differs from the valid file.
+        let changed: Vec<&String> = valid_v
+            .as_object()
+            .unwrap()
+            .keys()
+            .chain(v.as_object().unwrap().keys())
+            .filter(|k| valid_v.get(k.as_str()) != v.get(k.as_str()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        assert_eq!(
+            changed.len(),
+            1,
+            "precondition {name}: one field differs: {changed:?}"
+        );
+        let outcome = diff(&p, &other);
+        assert_eq!(outcome.exit_code, 1, "{name}: refused");
+        let msg = outcome.error_message.unwrap_or_default();
+        assert!(
+            msg.contains(needle),
+            "{name}: the message names {needle:?}: {msg}"
+        );
+    }
+    // The valid file itself loads, and so does one with an empty `apps[]`.
+    if let Err(e) = loads(&valid) {
+        panic!("the valid v4 file loads: {e}");
+    }
+    let no_apps = v4_copy(dir.path(), src, "no-apps.json", |v| {
+        v["apps"] = Value::Array(Vec::new());
+    });
+    if let Err(e) = loads(&no_apps) {
+        panic!("an empty apps[] v4 file loads: {e}");
+    }
 }
 
 // ---------------------------------------------------------------------------
