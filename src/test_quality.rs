@@ -71,7 +71,8 @@ pub struct TestProcedure {
     pub procedure_name: String,
     pub routine_id: Option<String>,
     pub assert_count: usize,
-    /// `None` without a call graph or a matching declaration, never a guess.
+    /// `None` without a call graph, never a guess. With a graph but no matching
+    /// declaration it is the test's own count (`fill_reachable`).
     pub assert_count_reachable: Option<usize>,
     pub zero_assert: Option<bool>,
     pub has_asserterror: bool,
