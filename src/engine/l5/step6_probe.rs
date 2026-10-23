@@ -61,7 +61,9 @@ fn file_roots(model: &Model, file: &str) -> Vec<String> {
         routines: None,
         diff_text: None,
     };
-    resolve_changed_roots(&table_only, model, &input, primary_guid_of(model)).roots
+    // `--file` roots never read the owner index (it narrows `<owner>::` selectors only).
+    let owners = crate::engine::l4::effect_query_cli::OwnerIndex::build(model);
+    resolve_changed_roots(&table_only, model, &input, primary_guid_of(model), &owners).roots
 }
 
 /// Lower-bound bytes of the dependency calls: the edges at capacity plus the
