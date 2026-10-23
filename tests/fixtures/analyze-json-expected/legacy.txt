@@ -1,0 +1,43 @@
+
+Code Quality Analysis: tests/fixtures/analyze-json
+
+═══════════════════════════════════════════════════════════════════════════════
+
+PROCEDURES (sorted by complexity):
+
+Procedure                                  CC  Lines Params    Score
+----------------------------------------------------------------------
+Probe Util.Target                           1      7      0    10.0
+Probe Util.CallerA                          1      5      0    10.0
+Probe Util.CallerB                          1      4      0    10.0
+Probe Util.One                              1      3      0    10.0
+Probe Util.Two                              1      3      0    10.0
+Probe Util.Three                            1      3      0    10.0
+Probe Util.NeverCalled                      1      3      4     9.0
+Probe Util.Over                             1      3      1    10.0
+Probe Util.Over                             1      3      1    10.0
+Probe Util.OnRaised                         1      3      0    10.0
+Probe Util.OnNeverRaised                    1      3      0    10.0
+Probe Util.OnSubscribedOnly                 1      3      0    10.0
+Probe Util.OnRun                            1     15      0     8.5
+Probe Subs.HandleRaised                     1      3      0    10.0
+Probe Subs.HandleSubscribedOnly             1      3      0    10.0
+Probe Greeter.Greet                         1      1      0    10.0
+Probe Greeter Impl.Greet                    1      3      0    10.0
+Probe Tests.TestSomething                   1      3      0    10.0
+Probe Tests.ConfirmYes                      1      4      2    10.0
+Probe Card.OnAction                         1      3      0    10.0
+  ... and 3 more procedures
+
+FINDINGS:
+
+  [WARNING] Util.Codeunit.al:34 - Parameter count 4 exceeds warning threshold of 4
+
+SUMMARY:
+
+  Total procedures:     23
+  Average complexity:   1.0
+  Average quality score: 9.9
+  Critical findings:    0
+  Warning findings:     1
+

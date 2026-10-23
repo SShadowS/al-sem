@@ -297,7 +297,9 @@ fn diagnostic_sort_key(d: &Diagnostic) -> (u32, u32, String) {
 // Unused-procedure rule (see the module doc's rule-inventory table)
 // ---------------------------------------------------------------------------
 
-fn is_unused_procedure(
+/// The unused-procedure rule, shared with `--analyze`'s `unused_procedure`
+/// findings (`crate::analysis`), which pass the same `incoming_count`.
+pub(crate) fn is_unused_procedure(
     decl: &DeclEntry,
     routine: &al_syntax::ir::RoutineDecl,
     incoming_count: usize,

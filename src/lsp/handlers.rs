@@ -142,6 +142,48 @@ pub(crate) fn resolve_virtual_path(snap: &LspSnapshot, uri: &str) -> Option<Stri
 // incoming
 // ---------------------------------------------------------------------------
 
+/// `id`'s incoming edges grouped by DISTINCT caller (`edge.from`; an event
+/// publisher is the caller of its subscriber), each with whether any of its
+/// edges is an `EventFlow` link. Shared by [`incoming`] and `--analyze`'s
+/// `fan_in`, so both count callers the same way; [`incoming`] then also drops
+/// a caller it cannot locate.
+///
+/// One pass: every `EdgeRef` is resolved once. (Re-filtering ALL refs per
+/// distinct caller was O(refs²); see the 2026-07-14 improvement-hunt F1
+/// finding.) A stale node has no refs: an empty map.
+pub(crate) fn incoming_callers<'s>(
+    snap: &'s LspSnapshot,
+    id: &RoutineNodeId,
+) -> HashMap<RoutineNodeId, (bool, Vec<&'s LspEdge>)> {
+    let mut groups: HashMap<RoutineNodeId, (bool, Vec<&LspEdge>)> = HashMap::new();
+    for r in snap.incoming(id) {
+        let e = snap.edge(r);
+        let entry = groups
+            .entry(e.from.clone())
+            .or_insert_with(|| (false, Vec::new()));
+        entry.0 |= e.kind == EdgeKind::EventFlow;
+        entry.1.push(e);
+    }
+    groups
+}
+
+/// Every workspace routine's DISTINCT outgoing targets, in one pass over the
+/// call edges (every file bucket) and the workspace event links (a
+/// publisher's subscribers). The same edges [`outgoing`] lists per routine,
+/// counted as distinct [`LspTarget`]s rather than one row per site and route:
+/// `--analyze`'s `fan_out`. Builtin and unresolved routes are never stored,
+/// so they never count; every candidate of a conditional site does.
+pub(crate) fn outgoing_targets_by_caller(
+    snap: &LspSnapshot,
+) -> HashMap<&RoutineNodeId, std::collections::HashSet<&LspTarget>> {
+    let mut out: HashMap<&RoutineNodeId, std::collections::HashSet<&LspTarget>> = HashMap::new();
+    let call_edges = snap.edges_by_file.values().flat_map(|edges| edges.iter());
+    for e in call_edges.chain(snap.ws_event_edges.iter()) {
+        out.entry(&e.from).or_default().extend(e.targets.iter());
+    }
+    out
+}
+
 /// `callHierarchy/incomingCalls`. Groups `snap.incoming[data.node]`'s
 /// `EdgeRef`s by `edge.from` (the caller/publisher routine) — one
 /// `CallHierarchyIncomingCall` per DISTINCT caller, carrying every from-range
@@ -158,19 +200,7 @@ pub fn incoming(
     enc: PositionEncoding,
     data: &ItemData,
 ) -> Vec<CallHierarchyIncomingCall> {
-    // One pass: resolve every EdgeRef exactly once, grouping by caller.
-    // (Previously this re-filtered ALL refs per distinct caller — O(refs²)
-    // with a string-hashed map lookup per pair; see the 2026-07-14
-    // improvement-hunt F1 finding.) A stale node has no refs: empty result.
-    let mut groups: HashMap<RoutineNodeId, (bool, Vec<&LspEdge>)> = HashMap::new();
-    for r in snap.incoming(&data.node) {
-        let e = snap.edge(r);
-        let entry = groups
-            .entry(e.from.clone())
-            .or_insert_with(|| (false, Vec::new()));
-        entry.0 |= e.kind == EdgeKind::EventFlow;
-        entry.1.push(e);
-    }
+    let groups = incoming_callers(snap, &data.node);
 
     let mut callers: Vec<RoutineNodeId> = groups.keys().cloned().collect();
     callers.sort();

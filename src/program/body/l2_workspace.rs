@@ -58,6 +58,42 @@ pub(crate) fn discover_al_files(workspace: &Path) -> std::io::Result<Vec<AlFile>
     crate::source_text::discover_al_files(workspace, NestedApps::Walk)
 }
 
+/// The stable object id (`{appGuid}:{ObjectType}:{number}`) of a source object:
+/// `None` for a kind with no object type ([`ir_walk::ir_object_type`]). The one
+/// composition shared by the L2 projection and `--analyze`'s `routine_id`.
+///
+/// [`ir_walk::ir_object_type`]: crate::program::body::ir_walk::ir_object_type
+pub(crate) fn stable_object_id_ir(app_guid: &str, o: &al_syntax::ir::ObjectDecl) -> Option<String> {
+    let object_type = crate::program::body::ir_walk::ir_object_type(&o.kind)?;
+    Some(to_stable_object_id(&encode_object_id(
+        app_guid,
+        object_type,
+        o.id.unwrap_or(0),
+    )))
+}
+
+/// A source routine's stable routine id (alsem's `stableRoutineId`): the
+/// canonical, return-type-aware signature hash, plus the enclosing-member
+/// discriminator for a member trigger (without it the N `trigger OnAction()`
+/// bodies of one page share one id; see `ids::to_stable_routine_id_from_parts`).
+/// The one composition shared by the L2 projection and `--analyze`.
+pub(crate) fn stable_routine_id_ir(
+    stable_object_id: &str,
+    r: &al_syntax::ir::RoutineDecl,
+) -> String {
+    use crate::program::body::ir_walk;
+    let param_specs: Vec<ParamSpec> = ir_walk::ir_parameter_symbols(r)
+        .iter()
+        .map(|p| ParamSpec {
+            type_text: p.type_text.clone(),
+            is_var: p.is_var,
+        })
+        .collect();
+    let norm_hash = normalized_signature_hash(&r.name, &param_specs, r.return_type.as_deref());
+    let enclosing_member = ir_walk::ir_enclosing_member(r);
+    to_stable_routine_id_from_parts(stable_object_id, &norm_hash, enclosing_member.as_deref())
+}
+
 /// The shared `.al` decoder: L2/L3 must see the same text as the program engine.
 pub(crate) use crate::source_text::read_al_source;
 
@@ -100,28 +136,13 @@ fn build_proutine(
     let (attributes, attributes_parsed) = ir_walk::ir_attributes(ir_routine, ir_file, source);
     let access_modifier = ir_routine.access_modifier.clone();
 
-    // Stable routine id — its normalizedSignatureHash is the canonical
-    // (return-type-aware) signature hash, identical on the ABI side.
     let parameters = ir_walk::ir_parameter_symbols(ir_routine);
-    let param_specs: Vec<ParamSpec> = parameters
-        .iter()
-        .map(|p| ParamSpec {
-            type_text: p.type_text.clone(),
-            is_var: p.is_var,
-        })
-        .collect();
     let return_type_text = ir_routine.return_type.clone();
-    let norm_hash = normalized_signature_hash(&rname, &param_specs, return_type_text.as_deref());
-
-    // The member-trigger discriminator: without it the N `trigger OnAction()`
-    // bodies of one page all hash to ONE internal id (see
-    // `ids::encode_canonical_routine_key`) AND to one stable id (see
-    // `ids::to_stable_routine_id_from_parts`). `None` for procedures /
-    // object-level triggers, which keep byte-identical ids. Computed ONCE, from
-    // `ir_enclosing_member` — the single normalization — and fed to BOTH ids.
+    // The member-trigger discriminator, fed to the internal id below; the
+    // stable id takes it from the same `ir_enclosing_member` inside
+    // `stable_routine_id_ir`.
     let enclosing_member = ir_walk::ir_enclosing_member(ir_routine);
-    let stable_routine_id =
-        to_stable_routine_id_from_parts(stable_object_id, &norm_hash, enclosing_member.as_deref());
+    let stable_routine_id = stable_routine_id_ir(stable_object_id, ir_routine);
     let routine_id = scope::compute_routine_id(
         app_guid,
         object_type,
@@ -269,8 +290,10 @@ fn project_file(
         let object_number = o.id.unwrap_or(0);
         let name = o.name.clone();
 
-        let internal_object_id = encode_object_id(app_guid, object_type, object_number);
-        let stable_object_id = to_stable_object_id(&internal_object_id);
+        // Some whenever `ir_object_type` is (checked just above).
+        let Some(stable_object_id) = stable_object_id_ir(app_guid, o) else {
+            continue;
+        };
 
         let (object_subtype, page_type, source_table_name, inherent_commit_behavior) =
             crate::program::body::ir_walk::ir_object_metadata(o, object_type);
@@ -446,8 +469,10 @@ pub fn project_named_routine(
             continue;
         };
         let object_number = o.id.unwrap_or(0);
-        let internal_object_id = encode_object_id(app_guid, object_type, object_number);
-        let stable_object_id = to_stable_object_id(&internal_object_id);
+        // Some whenever `ir_object_type` is (checked just above).
+        let Some(stable_object_id) = stable_object_id_ir(app_guid, o) else {
+            continue;
+        };
 
         let (_, _, source_table_name, _) =
             crate::program::body::ir_walk::ir_object_metadata(o, object_type);
