@@ -189,16 +189,25 @@ pub fn canonical_routine_signature(
 ) -> String {
     let params = parameters
         .iter()
-        .map(|p| {
-            let prefix = if p.is_var { "var " } else { "" };
-            format!("{prefix}{}", p.type_text.trim().to_lowercase())
-        })
+        .map(|p| canonical_param_spec(p, None))
         .collect::<Vec<_>>()
         .join(";");
 
     let ret = return_type_text.unwrap_or("").trim().to_lowercase();
 
     format!("{}({}):{}", name.to_lowercase(), params, ret)
+}
+
+/// One parameter as `canonical_routine_signature` renders it:
+/// `(var )?{type_lower_trimmed}`, or `(var )?{name_lower}: {type_lower_trimmed}`
+/// when `name` is given (#236: a contract fact's `parameters` entries). One
+/// function for both, so the list and the fingerprint never disagree.
+pub fn canonical_param_spec(p: &ParamSpec, name: Option<&str>) -> String {
+    let prefix = if p.is_var { "var " } else { "" };
+    let name = name
+        .map(|n| format!("{}: ", n.to_lowercase()))
+        .unwrap_or_default();
+    format!("{prefix}{name}{}", p.type_text.trim().to_lowercase())
 }
 
 /// SHA-256 hex of the canonical routine signature — the return-type-aware
