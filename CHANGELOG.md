@@ -24,11 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A bare name two owners share (`Codeunit "Sel B"` and `Table "Sel B"`) is ambiguous.
     The digest diagnostic and fingerprint's human error list both owners as candidates;
     fingerprint's JSON diagnostic has no candidate list, and prove reports `unknown`.
-  - The routine part may be quoted too (`Codeunit "Sel A"::"Post Document"`). An empty
-    object part (`::Persist`) is the bare routine name.
+  - The routine part may be quoted too (`Codeunit "Sel A"::"Post Document"`), and so may
+    a bare routine selector (`"Post Document"`). One outer quote pair is removed and
+    `""` stays, since routine names are shown as written in source (`Post ""X""`). A
+    `::` inside quotes does not split the selector. An empty object part (`::Persist`)
+    is the bare routine name.
   - The owner fallback that 2.0.3's #240 entry mentions is gone. The escaped spelling
-    (`Codeunit "A ""B"" C"::P`) is supported in the object part of such a selector.
-  - The unmatched diagnostic does not name the owners that do declare the routine.
+    (`Codeunit "A ""B"" C"::P`) is supported in the object part of such a selector. An
+    object whose name is itself quoted (`"""Legacy"""`, shown `Codeunit "Legacy"`) is
+    selected by either spelling.
+  - `fingerprint --format human` adds one line to an unmatched `<owner>::<routine>` error
+    naming the owners that do declare the routine
+    (`declared as: Codeunit Sel B::Persist`). The digest diagnostic, fingerprint's JSON
+    and prove do not name them.
 
 ## [2.0.3] - 2026-10-23
 
