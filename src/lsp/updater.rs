@@ -1351,8 +1351,9 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
 
 /// Per-path coalesce within one gathered batch: keep only the LAST event for
 /// a given path, while preserving first-seen ORDER for everything else.
-/// Which event survives matters only to rule 3's case fallback: every path
-/// event is reconciled from the disk. `DepsChanged`/`Overflow`/
+/// Which event survives matters only to rule 3's case fallback, so a
+/// `FileSaved` is never replaced: every path event is reconciled from the
+/// disk. `DepsChanged`/`Overflow`/
 /// `ConfigChanged` have no path — every occurrence is kept (idempotent to
 /// see more than once).
 fn coalesce_batch(events: Vec<ChangeEvent>) -> Vec<ChangeEvent> {
@@ -1364,7 +1365,9 @@ fn coalesce_batch(events: Vec<ChangeEvent>) -> Vec<ChangeEvent> {
             | ChangeEvent::FileRemoved(p)
             | ChangeEvent::PathChanged(p) => {
                 if let Some(&idx) = index_of.get(p) {
-                    out[idx] = ev;
+                    if !matches!(out[idx], ChangeEvent::FileSaved(_)) {
+                        out[idx] = ev;
+                    }
                 } else {
                     index_of.insert(p.clone(), out.len());
                     out.push(ev);
@@ -2972,6 +2975,11 @@ mod tests {
             [ChangeEvent::PathChanged(old), ChangeEvent::PathChanged(new)]
         };
         let got = updater.apply_batch(&base, &batch);
+        assert_eq!(
+            got.as_ref().map(|(_, r)| *r),
+            Some(Rung::Three),
+            "T7(a): the old spelling is gone, so its identity is unknown → rung 3"
+        );
         let snap = got.as_ref().map_or(&base, |(s, _)| s);
         assert!(
             snap.parsed.contains_key("alpha.al") && !snap.parsed.contains_key("Alpha.al"),
@@ -3162,6 +3170,29 @@ mod tests {
             vec![(g, SwapScope::Full)],
             "T9(c): a failed rung 3 must not lose the config change"
         );
+    }
+
+    /// CO-1: coalescing must not let a later `PathChanged` erase a save's
+    /// case fallback (rule 3): `target.al` exists only as `Target.al`.
+    #[test]
+    fn co1_path_changed_after_file_saved_keeps_the_save() {
+        let saved_alone = {
+            let dir = target_fixture();
+            let p = dir.path().join("target.al");
+            run_recording(dir.path(), |_| {}, vec![ChangeEvent::FileSaved(p)]).1
+        };
+        assert_eq!(saved_alone.len(), 1, "precondition: the save applies");
+        let dir = target_fixture();
+        let p = dir.path().join("target.al");
+        let (_, both) = run_recording(
+            dir.path(),
+            |_| {},
+            vec![
+                ChangeEvent::FileSaved(p.clone()),
+                ChangeEvent::PathChanged(p),
+            ],
+        );
+        assert_eq!(both, saved_alone, "CO-1: same plan as the save alone");
     }
 
     #[test]
