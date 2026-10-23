@@ -1,7 +1,8 @@
 # #160 child spec: step 6 — one cone graph, one scoped witness pass
 
-Status: spec panel round 1 fixes applied (2026-10-23; findings R1-01 to R1-33 in
-`.agent/issue-160/findings.json`, §0.1). Made from the pre-draft
+Status: spec panel round 2 fixes applied (2026-10-23; findings R1-01 to R1-33 and R2-01,
+R2-02 in `.agent/issue-160/findings.json`, §0.1; round 2 re-raised R1-02, R1-17, R1-24,
+R1-28). Made from the pre-draft
 `/work/bench/160-6/draft-step6-design.md` (master `5c42b8f3`) once the base probes had run;
 §0 lists what the probes changed, §0.1 what round 1 changed.
 
@@ -321,9 +322,14 @@ Deleted: `build_r3a3_source_only_base`, `_over`, the cut's clone of calls and ev
 diff and tests (`digest.rs:3969`, `:3982`; `snapshot.rs:2713`). It asserts the model has no
 dependency-role row (so the cut cannot come back under a new name, R1-09), builds the graph
 with `build_combined_graph(&model.workspace, &model.calls, &model.events.graph)` as today
-(counted `bcg`; no relation, so no extra Tarjan, R1-08), then `det_cone_inputs` over that graph,
+(counted `bcg`; no relation, so no extra Tarjan, R1-08), then the cone inputs over that graph,
 one composition `{derived: false, raw: All}` and `compose_tree`. Single-app the graph's typed
 edges are `rel.cone()`'s (P13), so its output is today's snapshot and its goldens do not move.
+`det_cone_inputs` takes `&ExecRelation` (`detector_context.rs:1254`) only to read
+`rel.uncertainty_all()` for the fold (`:1273`); it is split into a body that takes the
+uncertainty edges (`impl Iterator<Item = &UncertaintyEdge>`) and the existing wrapper, and the
+standalone path passes `&graph.primary.uncertainty_edges` (single-app the dependency half is
+empty, so this is the same fold).
 
 **`compose_full_snapshot`** (`snapshot_full.rs:80-95`) **[#220]**: single-app, through the
 standalone path above. Cross-app (`SnapshotUniverse::CrossApp`, #220, reached only from tests
@@ -339,8 +345,11 @@ states reachable from the subjects: start at `pd.by_routine[s]` for each subject
 root's states and follows links (`digest.rs:880-905`), so a state outside that closure is never
 read; T3 pins it. With `WitnessScope::All` the closure is every state: today's arena.
 
-**R6-4, the link rule.** `derive_typed_edges` skips a row that has no anchor (any kind,
-`snapshot.rs:1558-1600`); it records the keys it skipped. A cone link into a skipped row is
+**R6-4, the link rule.** `derive_typed_edges` skips a call-family or event-dispatch row that
+has no anchor (`snapshot.rs:1558-1650`), and an unmodelled kind (`_ => continue`); an
+`implicit-trigger` row is NEVER skipped, with or without an anchor (`:1659-1676`, #96 D4: the
+cone follows it, so the arena needs its row). It records the keys it skipped; the exemption
+means no implicit-trigger key is ever in that set. A cone link into a skipped row is
 dropped and counted `PD_EDGE_UNMAPPED`, as in release today. The `debug_assert!(false)`
 (`:1767`) becomes `debug_assert!(skipped.contains(&key))`: a link may miss only a row that was
 skipped for want of an anchor (R1-28). T6 hand-states one; the CDO gate asserts
@@ -495,10 +504,14 @@ the revert; both outcomes are recorded (I9, the `discrimination-proof` skill).
   production scope to `All` → the materialized count is > 0 → fails (R1-15). Break 2: make the
   tree fold its own coverage over the primary callers' uncertainty (the cut's fold) → the
   equality fails on a routine whose only four-kind edge is in dependency code.
-- **T9 (`--diff` roots, a USE pin)**: digest resolves its roots from the table it passes into
-  the plan, and on every cli-b diff fixture the roots equal today's. A second assertion: the
-  table is unfiltered (it holds the dependency fixture's dependency rows). Break: pass a table
-  with one primary routine's row removed → that root disappears → fails (R1-17).
+- **T9 (root resolution)**: only the `changedRoutines` selector path reads the identity table
+  (`build_selector_indexes`, `digest_cli.rs:386`, `:398-423`); file and diff roots come from
+  the span index (`:381`, `:436-510`). So T9 has two parts. (a) A USE pin on a ROUTINE-selector
+  input: digest resolves `--routine <name>` from the table it passes into the plan. Break: pass
+  a table with that primary routine's row removed → the selector finds no root → fails (R1-17).
+  (b) Diff parity: on every cli-b diff fixture the roots equal today's (no break needed; the
+  span index is unchanged code). A third assertion: the table is unfiltered (it holds the
+  dependency fixture's dependency rows).
 
 ### 5.9 Tests deleted or rewritten with the code they pin (I2's exception)
 
@@ -573,8 +586,8 @@ bench or build.
   `ALSEM_RETAINED_CENSUS=1` per side: §4.10's buckets and the I5 line.
 - **Part 2 (bounded).** `bench_ab.py run --rounds N` (N per §8.1), interleaved, `d` and `o`;
   then 3 rounds per side and command through `maxrss.py`.
-- **Part 3 (reported, no bound; Decision 58).** 3 rounds: cross-app `policy check` (wall and
-  peak, expected to DROP), cross-app default `analyze`.
+- **Part 3 (Decision 58: 3 rounds).** Cross-app `policy check`: wall reported, kernel peak
+  bounded by B5 (expected to DROP); cross-app default `analyze`: reported, no bound.
 
 ### 8.1 Bounds (bands from this bench's parent runs; I6, Decision 20)
 
@@ -590,6 +603,7 @@ run dropped), pre-stated in the ledger before Task 2.
 | B2 (A6.3 peak) | `d`'s kernel peak | `Hm ≤ 1.03 × Pm` | none |
 | B3 (A6.4 wall, 6A-10) | `o`'s `analyze.total` span, its band on the same span | `Ho ≤ Po − S_P + K + T + E′ + Bo` (§8.4) | `Bo ≤ 0.05 × Po`; load as B1 |
 | B4 (A6.4 peak) | `o`'s kernel peak | `Hm ≤ 1.03 × Pm` | none |
+| B5 (policy peak, R1-24) | cross-app `policy check` kernel peak, Part 3's 3 rounds | `Hm ≤ Pm` (medians) | none |
 | — post-attach peaks | not readable on Linux (#204) | reported "not measured" (6A-8) | — |
 
 A void check → re-run Part 2 once (fresh rounds), read every bound from the re-run alone;
@@ -615,20 +629,31 @@ head's exact configuration (R1-02): the cross-app base, `det_cone_inputs`, one c
 effects. It runs once per configuration: `d` = `{derived: true, raw: the 3 roots}` with the
 digest effects; `o` = `{derived: false, raw: reportable roots}` with the ordering cell; policy
 = `{derived: true, raw: every primary routine}`, no tree. Each prints: subjects, materialized
-raw `Vec`s and facts, `non_primary_members`, the composition ms (**K**), the tree derive ms
-(**T**), the effects ms (**E′**), scoped pd states/links, `PD_EDGE_UNMAPPED`, anchorless rows
-with links, ordering kept roots, `dependency_calls` count and bytes, single-app body-less rows.
-Each runs 3 rounds through `maxrss.py` in the quiet slot. **S_P** = the parent's
-`ordering.compose_snapshot` + `ordering.digest_query` for `o` (cut base + cut derive + cut
-effects), and `snapshot.r3a3_base` + `snapshot.derive` for `d`, both from 5 parent rounds in
-the same slot. The ledger records K, T, E′ and S_P (medians and bands) before Task 2.
+raw `Vec`s and facts, `non_primary_members`, **K** = the input assembly
+(`det_cone_inputs`, `detector_context.rs:1254-1293`) plus the composition, both timed (R1-02),
+the tree derive ms (**T**), the effects ms (**E′**: for `d` the S4 entries AND the roots'
+unresolved cones; for `o` the ordering cell), scoped pd states/links, `PD_EDGE_UNMAPPED`,
+anchorless rows with links, ordering kept roots, `dependency_calls` count and bytes, single-app
+body-less rows. Each runs 3 rounds through `maxrss.py` in the quiet slot.
 
-- **S1 (wall).** `d`: `K_d − det cone_P + T_d + E′_d − S_P(d) ≤ Bd`. `o`: `K_o + T_o + E′_o −
+**S_P** is measured by the same probe's PARENT-SHAPE arm (at Task 1 the cut builder still
+exists behind the old wiring), on the same binary and slot, 5 rounds: for `o`, the cut base +
+the cut derive + the ordering cell over the cut tree; for `d`, the cut base + the cut derive +
+the parent's effects, i.e. `compute_digest_effects_cli` over the roots (`digest_cli.rs:1655`)
+and their `unresolved_cone`s (`:990`) over the cut tree (R2-01). For `d` the parent's det cone
+(DerivedOnly over `rel.cone()`, with its inputs) is the arm's **D_P**. The ledger records K, T,
+E′, S_P and D_P (medians and bands) before Task 2.
+
+- **S1 (wall).** `d`: `K_d − D_P + T_d + E′_d − S_P(d) ≤ Bd`. `o`: `K_o + T_o + E′_o −
   S_P(o) ≤ 0.5 × Po` (the cap of 6A-10).
 - **S2 (memory).** The probe's process peak per configuration (KiB, `maxrss.py`), against the
-  parent's process peak of the same command: `o` and `d` ≤ 1.03 × parent; policy ≤ parent
-  (R1-04, R1-24). The probe stops at the effects, so its peak is a lower bound for the
-  command's; B2/B4 bound the whole command.
+  parent's process peak of the same command: `o` and `d` ≤ 1.03 × parent (R1-04). The probe
+  stops at the effects, so its peak is a lower bound for the command's; B2/B4 bound the whole
+  command. **Policy** (R1-24): its `Raw` overlaps `det`, `l4` and the rule evaluation (§4.7),
+  which the probe does not reach, so its peak is bounded on the final command instead: B5,
+  cross-app `policy check` kernel peak ≤ the parent's (13.67 GiB at the base), read in Part 3.
+  The probe still prints policy's composition peak as an early warning: over the parent's
+  whole-command peak → F13 before Task 2.
 - S1 or S2 fails → **F2**, then F11, re-projecting after each. Still failing → the claim stops
   at Task 1 (scope type, split output and cells merged behind the old wiring, nothing
   switched), files "step 6: cone-graph witnesses exceed budget on CDO" with the numbers, and the
@@ -668,7 +693,7 @@ continues; each is recorded in the ledger.
 | # | If | Then |
 |---|---|---|
 | F1 | — | withdrawn in round 1: raw is all alive when the composition returns, so releasing it after use cannot lower the peak (R1-01) |
-| F2 | S1 or S2 fails on `o` (first rung) | gate the raw walk by the three ordering bits (Decision 38, `map_op`'s vocabulary): the composition turns `derived` on for the ordering bits only and materializes raw only for roots with an ingredient; Task 1's probe prices the extra fold; T3's ordering arm proves the kept-root set unchanged |
+| F2 | S1 or S2 fails on `o` (first rung) | gate the raw walk by the three ordering bits (Decision 38, `map_op`'s vocabulary). Today a member's derived fold and its raw picks are built in ONE pass (`capability_cone.rs:2823-2930`: the singleton call `inherited_facts_for_singleton` does both under one `mode`; the BFS member's fold follows its walk), so the bits are known only after the walk. F2 therefore runs each subject FOLD FIRST: the member is composed with mode `(true, false)`, its row's three bits are read, and only a member with an ingredient is composed again with mode `(false, true)` for its raw (R2-02). The extra cost is the derived fold of every subject plus a second singleton/BFS pass for the kept ones; Task 1's probe prices it as a fourth configuration (`o` under F2: K, T, E′ and peak). T3's ordering arm proves the kept-root set unchanged |
 | F3 | — | promoted into the design (§4.7, R1-07) |
 | F4 | T3's break (3) or a later reader is found to look past the subject | widen THAT reader's input to the subjects' callee closure (from `rel.cone()`), checked by T3's untouched oracle; never give a dependency routine raw (I5). Dormant: §3.2 shows no such reader today |
 | F5 | D1 cannot be made byte-identical on derived rows (Part 1 default-analyze SARIF differs) | a defect; not closed in one attempt → **stop at Task 1** and re-panel: a second composition contradicts A6.5 and 6A-1 (R1-18) |
@@ -679,6 +704,7 @@ continues; each is recorded in the ledger.
 | F10 | B1-B4 met-not-void but missed | name the miss (`trace_summary.py` span, census bucket); ONE fix from F2, F11 or F12; re-run Part 2 once; still missed → FAILS |
 | F11 | S1 short by the cross-app `direct=` time | #228: the cross-app `caps` fill reuses `build_cross_app_base`'s `direct_full`/`direct_coverage` (step 5's T5 pins the maps equal) |
 | F12 | `rel.dependency_calls` > 50 MB on CDO (P8) | keep it outside the relation, in the cross-app base, read only by `compose_tree`, dropped after (4) |
+| F13 | B5 misses, or the probe's policy composition peak already exceeds the parent's whole-command peak | run policy's rule engine right after (3), before `det` (the alternative of Q4), so `Raw` never overlaps `det` and `l4`; re-measure B5 once; still over → FAILS |
 
 ## 11. What #220 hands this step (re-cite after it merges)
 
