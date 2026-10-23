@@ -257,7 +257,7 @@ mod tests {
             var_name: "v".into(),
             initializer: Box::new(ValueSource::Literal { value: "x".into() }),
         };
-        let s = FullRoutineSummary::new(
+        let s = FullRoutineSummary::with_inherited(
             "r1".into(),
             vec![fact("s", Some("t"), Some(boxed))],
             Some(vec![fact("s2", None, None)]),

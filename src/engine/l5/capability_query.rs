@@ -289,20 +289,6 @@ mod tests {
         assert_eq!(may_commit(&s), EffectPresence::Yes);
     }
 
-    /// ⟨C1 Task 3 — R6⟩ Applying a raw oracle to a summary whose cone was never
-    /// materialized must PANIC, not quietly answer from the direct half alone.
-    #[test]
-    #[should_panic(expected = "RAW_INHERITED_FACTS")]
-    fn raw_oracle_panics_on_a_derived_only_summary() {
-        let s = FullRoutineSummary::new(
-            "r".to_string(),
-            vec![fact("send", "http", None)],
-            None,
-            Some(coverage("complete")),
-        );
-        let _ = touches_db_of(&s);
-    }
-
     #[test]
     fn reachable_coverage_reports_inherited_status_or_unknown() {
         let s = summary("r", vec![], vec![], Some(coverage("complete")));

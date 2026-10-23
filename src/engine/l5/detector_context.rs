@@ -897,10 +897,8 @@ pub struct DetectorArtifacts {
     /// flags + interned table/event id-sets folded during the same cone walk that
     /// produces `summaries`, with zero `retag` clones. Every analyze-path consumer
     /// of the old `capability_facts_inherited` Vec reads only a derived predicate
-    /// off it, so this row REPLACES that Vec outright: since C1 Task 3 the analyze
-    /// path composes with no raw half and the raw Vec is never
-    /// built (`summaries[*].inherited_raw()` panics there — see
-    /// `FullRoutineSummary`). Parked here because the rows are `Range<u32>` windows into pools this store owns; a row alone
+    /// off it, so this row REPLACES that Vec outright: since C1 Task 3 no
+    /// summary carries a raw Vec (see `FullRoutineSummary`). Parked here because the rows are `Range<u32>` windows into pools this store owns; a row alone
     /// is meaningless. EMPTY when the `SUMMARIES` substrate was not demanded.
     pub cone_derived: ConeDerivedStore,
     /// The shared event-flow indexes (publisher/subscriber lookup tables) the
@@ -1184,13 +1182,9 @@ impl OwnedContext<'_> {
 ///   - `TRANSACTION_SPANS` — `transaction_spans`.
 ///   - `CLOSED_WORLD_TEMP` — `closed_world_temp_params`.
 ///
-/// ⟨C1 Task 3⟩ `demanded` additionally carries the policy-only
-/// `RAW_INHERITED_FACTS` bit (NOT part of `substrate::ALL` — see its doc). Without
-/// it the cone composes with no raw half: the per-routine raw
-/// `Vec<CapabilityFact>` is never allocated (it cost ~10.9 GB on the 8020 corpus)
-/// and every summary carries `capability_facts_inherited: None`. With it the cone
-/// composes `{ derived: true, raw: All }` — the derived substrate AND the raw Vecs,
-/// byte-identical to the pre-Task-3 build.
+/// ⟨C1 Task 3⟩ The cone composes with no raw half: the per-routine raw
+/// `Vec<CapabilityFact>` is never allocated (it cost ~10.9 GB on the 8020
+/// corpus). Raw facts come only from a `View`'s witness request (#160 step 6).
 ///
 /// #160 step 2: a SHIM (tests and `aldump`; no `alsem` command) over
 /// [`compose_detector_artifacts`]. It fills the ordering slot FIRST when the mask
@@ -1403,9 +1397,7 @@ pub(crate) fn compose_capabilities(
 
 /// The composing builder (#160 step 6 Task 2b-1, spec §14.5): ONE composition
 /// over `rel.cone()`, then [`build_detector_artifacts`] over it. The test shim
-/// and policy's RAW build compose here; a `View` composes in `prepare`. Under
-/// `RAW_INHERITED_FACTS` (policy only) the composition keeps every routine's
-/// raw and files it on its summary, as before step 6; Task 3 deletes that half.
+/// composes here; a `View` composes in `prepare`.
 pub(crate) fn compose_detector_artifacts(
     resolved: &Model,
     demanded: u32,
@@ -1415,56 +1407,17 @@ pub(crate) fn compose_detector_artifacts(
 ) -> (DetectorArtifacts, Option<L4Analysis>) {
     use crate::engine::l5::registry::substrate;
     let need_summaries = demanded & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
-    // ⟨C1 Task 3 — R1⟩ The gate is a MODE threaded into the cone walk, not a
-    // post-hoc check: the raw Vec is allocated INSIDE `compose_inherited_cones`,
-    // so a check here could only discard it — zero memory win.
-    let want_raw_inherited = demanded & substrate::RAW_INHERITED_FACTS != 0;
-    // ⟨C1 Task 3 review fix M-1⟩ `RAW_INHERITED_FACTS` without `SUMMARIES` (nor
-    // `TRANSACTION_SPANS`) is a SILENT no-op: `need_summaries` would be false, no
-    // summary is built, and `select_facts` (which reads through `summaries`) then
-    // returns an empty fact list for every routine — the exact silent-empty
-    // outcome R6 was designed to foreclose, reached through a different door.
-    // No current caller does this, but a future one could; fail loudly instead
-    // of degrading quietly.
-    debug_assert!(
-        !want_raw_inherited || need_summaries,
-        "RAW_INHERITED_FACTS demanded without SUMMARIES/TRANSACTION_SPANS — the raw \
-         cone would silently build empty; OR in substrate::SUMMARIES alongside it"
-    );
     // This composition repeats `View::prepare`'s (the scope, the span, the
-    // inputs) for the shim and policy's RAW build; #160 step 6 Task 3 moves
-    // policy onto the view's `Cell::Raw` and deletes the policy half.
-    let (caps, mut raw) = if need_summaries {
+    // inputs) for the shim, with no witness request.
+    let caps = need_summaries.then(|| {
         let scope = ConeScope {
             derived: true,
-            raw: if want_raw_inherited {
-                WitnessScope::All
-            } else {
-                WitnessScope::None
-            },
+            raw: WitnessScope::None,
         };
         let _s = pt::span("context", "context.capability_cones");
-        let (caps, raw) =
-            compose_capabilities(resolved, rel.cone(), det_cone_inputs(resolved, rel), scope);
-        (Some(caps), raw)
-    } else {
-        (None, HashMap::new())
-    };
-    let (mut art, l4) = build_detector_artifacts(resolved, demanded, rel, l4, cross, caps);
-    if want_raw_inherited {
-        // `Some` even for an empty cone: a materialized-but-empty cone is not
-        // `None` ("never built", R6).
-        for s in art.summaries.values_mut() {
-            let inherited = raw.remove(&s.routine_id).unwrap_or_default();
-            *s = FullRoutineSummary::new(
-                std::mem::take(&mut s.routine_id),
-                std::mem::take(&mut s.capability_facts_direct),
-                Some(inherited),
-                s.coverage.take(),
-            );
-        }
-    }
-    (art, l4)
+        compose_capabilities(resolved, rel.cone(), det_cone_inputs(resolved, rel), scope).0
+    });
+    build_detector_artifacts(resolved, demanded, rel, l4, cross, caps)
 }
 
 /// The owned detector substrates over the relation `rel`, at mask `demanded`:
@@ -1545,12 +1498,11 @@ pub(crate) fn build_detector_artifacts(
             let Some(direct) = direct else {
                 continue;
             };
-            // ⟨C1 Task 3⟩ `None`: "never materialized", so `inherited_raw()`
-            // panics instead of answering "empty cone" (R6). Only policy's
-            // composing builder files raw (`compose_detector_artifacts`).
+            // ⟨C1 Task 3⟩ No inherited half (R6): raw facts live in the view's
+            // witness pass, never on a summary.
             summaries.insert(
                 r.id.clone(),
-                FullRoutineSummary::new(r.id.clone(), direct, None, coverage),
+                FullRoutineSummary::new(r.id.clone(), direct, coverage),
             );
         }
         cones_census::add_since(&cones_census::ASSEMBLE_NANOS, _t_assemble);

@@ -29,8 +29,8 @@ use rayon::prelude::*;
 /// (T3), `fingerprint_index` (T1), and `root_classifications_by_routine`. The four
 /// EXPENSIVE substrates below are built only when some selected detector demands them;
 /// `run_detectors` folds every detector's `requires` into the union it passes here.
-/// A fifth bit, [`substrate::RAW_INHERITED_FACTS`], is NOT a substrate a detector may
-/// demand — it is the policy-only raw-cone escape hatch (see its own doc).
+/// No bit materializes raw inherited facts: a `View`'s witness request does
+/// (policy check's, #160 step 6 Task 3).
 ///
 /// Skipped substrates leave their ctx fields EMPTY (`HashMap::new()`/`Vec::new()`/
 /// `Default::default()`) — the field TYPES are unchanged, so no detector needs to
@@ -57,33 +57,15 @@ pub mod substrate {
     pub const TRANSACTION_SPANS: u32 = 1 << 2;
     /// Closed-world proven-temp params (`ctx.closed_world_temp_params`).
     pub const CLOSED_WORLD_TEMP: u32 = 1 << 3;
-    /// ⟨C1 Task 3⟩ Materialize the RAW per-routine `capability_facts_inherited`
-    /// `Vec<CapabilityFact>` alongside the compact derived cone substrate — i.e.
-    /// compose the cone with a raw half (`ConeScope { derived: true, raw: All }`).
-    ///
-    /// **POLICY-ONLY, and deliberately NOT part of [`ALL`].** This is the ~10.9 GB
-    /// (8020 corpus, ~100k routines × their full reachable cone) allocation the C1
-    /// arc exists to stop paying: every analyze-path consumer reads a derived
-    /// predicate off `ctx.cone_derived` instead. The ONE consumer that genuinely
-    /// needs the fact objects themselves is `gate::policy`'s `select_facts`
-    /// (rule `facts: inherited | any` iterates real `CapabilityFact`s and matches
-    /// their fields), so `gate/policy/pipeline.rs` passes
-    /// `substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS` explicitly, to a
-    /// command-local `compose_detector_artifacts` with no `l4` request (never a
-    /// `View` cell).
-    ///
-    /// A summary built WITHOUT this bit carries `capability_facts_inherited:
-    /// None`; `FullRoutineSummary::inherited_raw` then panics rather than
-    /// silently serving a direct-only view (R6).
-    pub const RAW_INHERITED_FACTS: u32 = 1 << 4;
+    // `1 << 4` was policy's raw-cone bit, deleted by #160 step 6 Task 3:
+    // policy reads the view's witness pass.
     /// ⟨Task 6⟩ The [`crate::engine::l4::reverse_index::ReverseEffectIndex`]
     /// transpose over the solve's bundle (`L4Analysis::bundle`), exposed as
     /// `ctx.reverse_effect_index`.
     ///
     /// **QUERY-ONLY, deliberately NOT part of [`ALL`], and — unlike every other
-    /// bit here — NOT a substrate a detector may declare in `requires`.** Same
-    /// contract as [`RAW_INHERITED_FACTS`], for a DIFFERENT and less obvious
-    /// reason, so read this before copying the pattern:
+    /// bit here — NOT a substrate a detector may declare in `requires`.** The
+    /// reason is less obvious, so read this before copying the pattern:
     ///
     /// `tests/gap/gap_detector_substrate_parity.rs` licenses each detector by
     /// building a "full" context from `substrate::ALL` and a "minimal" one from
@@ -132,14 +114,10 @@ pub mod substrate {
     /// its runs' `requires`. The callers left are the parity tests' "full"
     /// contexts and `tools/census-probe`.
     ///
-    /// ⟨C1 Task 3 — R2⟩ This is an EXPLICIT OR list, not "all bits set", and
-    /// [`RAW_INHERITED_FACTS`] is deliberately **excluded** from it: folding the
-    /// raw-cone bit in here would re-materialize the whole 10.9 GB on every
-    /// `ALL` caller. Anything that needs the raw facts ORs the bit in at its
-    /// own call site (policy check's RAW build).
-    ///
-    /// ⟨Task 6⟩ [`DB_EFFECT_REVERSE_INDEX`] is excluded for the same reason plus
-    /// one more (the detector-parity trap) — see its own doc.
+    /// This is an EXPLICIT OR list, not "all bits set". ⟨Task 6⟩
+    /// [`DB_EFFECT_REVERSE_INDEX`] is excluded: it would charge every `ALL`
+    /// caller for a transpose none of them reads, and it springs the
+    /// detector-parity trap — see its own doc.
     pub const ALL: u32 = SUMMARIES | CORE_SUMMARIES | TRANSACTION_SPANS | CLOSED_WORLD_TEMP;
 }
 

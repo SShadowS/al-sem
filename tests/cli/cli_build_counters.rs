@@ -676,11 +676,11 @@ fn policy_check_cross_app() {
         Row {
             program: 1,
             bcg: 1,
-            cone: 2,
+            cone: 1,
             v2: 1,
-            scc: 3,
-            pd: 2,
-            ctx: 2,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
             snap: 0,
             witness: 1,
         },
@@ -707,11 +707,11 @@ fn policy_check_single_app() {
         Row {
             program: 1,
             bcg: 1,
-            cone: 2,
+            cone: 1,
             v2: 1,
-            scc: 3,
-            pd: 2,
-            ctx: 2,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
             snap: 0,
             witness: 1,
         },
@@ -967,17 +967,18 @@ fn release_sequence(args: &[&str]) -> Vec<String> {
 }
 
 /// #160 final panel P1-5: each command drops its cells where the code says,
-/// read off the shipped binary's trace. Policy check releases `det`, `l4`
-/// and the ordering facts BEFORE its second (RAW) context build, and the
-/// relation after it; fingerprint and each `diff --strict` side release every
+/// read off the shipped binary's trace. Policy check releases `l4`, the
+/// ordering facts and the relation right after the run, and `det` and the raw
+/// facts after its rule engine (#160 step 6 Task 3, D7 (7)); fingerprint and
+/// each `diff --strict` side release every
 /// cell before snapshot composition; events releases `l4` right after the run
 /// and the rest after the report. Digest and prove (`finish_default_run`)
 /// release `det`, the ordering facts and the relation before the snapshot and
 /// `l4` after the query (§4.4.4). The relation's cell is `Cell::Rel` since
 /// #160 step 4 (it was `Cell::Graph`).
 ///
-/// DISCRIMINATION: deleting policy check's `release_all_but(&[Cell::Rel])`
-/// before the RAW build fails the policy case; deleting
+/// DISCRIMINATION: deleting policy check's `release_all_but(&[Cell::Det,
+/// Cell::Raw])` before the rule engine fails the policy case; deleting
 /// `finish_default_run`'s `release_all_but(&[Cell::L4])` fails digest and
 /// prove.
 #[test]
@@ -1011,12 +1012,11 @@ fn views_release_their_cells_before_the_next_build() {
             vec![
                 "ctx",
                 "rel:Caps",
-                "rel:Det",
                 "rel:L4",
                 "rel:Ordering",
-                "rel:Raw",
-                "ctx",
                 "rel:Rel",
+                "rel:Det",
+                "rel:Raw",
             ],
         ),
         (

@@ -185,8 +185,8 @@ pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: boo
     }
 }
 
-/// One run at primary scope, with nothing read after it: fingerprint,
-/// `diff --strict` and policy check.
+/// One run at primary scope, with nothing read after it: fingerprint and
+/// `diff --strict`.
 fn run_only_plan(detectors: Vec<Detector>) -> Plan {
     Plan {
         runs: vec![detectors],
@@ -223,9 +223,19 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
     }
 }
 
-/// `alsem policy check`.
+/// `alsem policy check`: the run, then the rule engine off `det.summaries`
+/// and the view's raw facts of every primary routine (`View::raw`; #160
+/// step 6 Task 3).
 pub fn policy_plan(detectors: Vec<Detector>) -> Plan {
-    run_only_plan(detectors)
+    Plan {
+        runs: vec![detectors],
+        scope_primary: true,
+        need_l4: false,
+        after_run: substrate::SUMMARIES,
+        witness: WitnessRequest::Primary,
+        needs_tree: false,
+        tests: false,
+    }
 }
 
 /// `alsem query`: no run, `l4` alone.
@@ -260,8 +270,7 @@ impl Plan {
         }
     }
 
-    /// The plan with `witness` (policy's `Primary` comes with #160 step 6
-    /// Task 3).
+    /// The plan with `witness`.
     #[cfg(test)]
     pub(crate) fn with_witness(self, witness: WitnessRequest) -> Plan {
         Plan { witness, ..self }
@@ -296,7 +305,6 @@ fn substrate_bit_name(bit: u32) -> &'static str {
         substrate::CORE_SUMMARIES => "CORE_SUMMARIES",
         substrate::TRANSACTION_SPANS => "TRANSACTION_SPANS",
         substrate::CLOSED_WORLD_TEMP => "CLOSED_WORLD_TEMP",
-        substrate::RAW_INHERITED_FACTS => "RAW_INHERITED_FACTS",
         substrate::DB_EFFECT_REVERSE_INDEX => "DB_EFFECT_REVERSE_INDEX",
         substrate::ORDERING_FACTS => "ORDERING_FACTS",
         _ => "an unnamed substrate bit",
@@ -413,10 +421,6 @@ impl View {
             missing == 0,
             "the plan reads {} off det after its run, but no run demands it",
             bit_names(missing)
-        );
-        assert!(
-            union & substrate::RAW_INHERITED_FACTS == 0,
-            "a det cell never carries RAW_INHERITED_FACTS"
         );
         // (b) a filled det covers the new plan, so output never depends on
         // fill state (A2.5).
@@ -775,8 +779,8 @@ mod tests {
     }
 
     /// Pins the factories, not their use (spec §8.4). DISCRIMINATION:
-    /// `after_run: 0` in `digest_plan`, separately in `events_plan`, fails
-    /// that case.
+    /// `after_run: 0` in `digest_plan`, separately in `events_plan` and in
+    /// `policy_plan`, fails that case.
     #[test]
     fn command_plans_declare_after_run() {
         for (name, plan, bit) in [
@@ -786,6 +790,7 @@ mod tests {
                 "TRANSACTION_SPANS",
             ),
             ("events", events_plan(vec![probe(0, noop)]), "SUMMARIES"),
+            ("policy", policy_plan(vec![probe(0, noop)]), "SUMMARIES"),
         ] {
             let msg = panic_text(
                 name,
@@ -903,23 +908,6 @@ mod tests {
             );
             assert!(msg.contains("L4 already filled"), "{name}: {msg}");
         }
-    }
-
-    /// Rule 1: a det cell never carries the RAW bit. DISCRIMINATION: deleting
-    /// the RAW assert fails this (no panic).
-    #[test]
-    #[should_panic(expected = "a det cell never carries RAW_INHERITED_FACTS")]
-    fn a_det_cell_never_carries_raw_inherited_facts() {
-        let plan = Plan::for_test(
-            vec![vec![probe(
-                substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS,
-                noop,
-            )]],
-            true,
-            false,
-            0,
-        );
-        view().prepare(&plan);
     }
 
     /// #160 step 6 D2/D7: the view composes once, `det` consumes it and
@@ -1090,11 +1078,8 @@ mod tests {
     /// deleting one arm of `substrate_bit_name` fails this.
     #[test]
     fn every_substrate_bit_has_a_name() {
-        let all = substrate::ALL
-            | substrate::RAW_INHERITED_FACTS
-            | substrate::DB_EFFECT_REVERSE_INDEX
-            | substrate::ORDERING_FACTS;
-        assert_eq!(all.count_ones(), 7, "precondition: seven bits");
+        let all = substrate::ALL | substrate::DB_EFFECT_REVERSE_INDEX | substrate::ORDERING_FACTS;
+        assert_eq!(all.count_ones(), 6, "precondition: six bits");
         for i in 0..u32::BITS {
             let bit = 1u32 << i;
             if all & bit != 0 {
