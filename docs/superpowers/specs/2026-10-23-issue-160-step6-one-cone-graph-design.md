@@ -765,7 +765,7 @@ ordering plan has no witness scope.
 ## 14. Amendment 6A-12: the split, and the DAG witness
 
 Added 2026-10-23 at attempt 8, after Task 1's stop rule failed (ledger `## Task 1 STOP`).
-**Revised the same day after the §14 panel rounds 1 to 3** (register entries A1-01 to A1-24, A2-01 to A2-09, A3-01) and
+**Revised the same day after the §14 panel rounds 1 to 4** (register entries A1-01 to A1-24, A2-01 to A2-09, A3-01, A4-01) and
 the operator's decision **B** for digest's output (§14.3.5): witnesses stop at the first
 dependency routine, and effects reached only through a dependency call are grouped per
 (boundary call site, effect type). **Where §14 and §0-§13 disagree, §14 wins**; §14.7 lists
@@ -886,13 +886,23 @@ For a root `r` and a first hop `h` of `r`:
    *Lengths.* A carrier candidate has `|P| = dmin`; an opaque seed candidate has `|P| = 1`; a boundary candidate
    has `|P| = δ(u)`, the depth of the last primary routine `u` before the boundary edge `u → b` (0 when the first
    hop enters dependency code). One fact can have candidates of several lengths (boundaries at depths 1, 2, 3 and
-   carriers at `dmin`), so the enumeration goes one LENGTH CLASS at a time.
+   carriers at `dmin`), so the enumeration goes one LENGTH CLASS at a time. Projected length equals DAG depth:
+   every DAG edge gives exactly one non-terminal hop (call, object run, event dispatch, variable-typed call,
+   interface dispatch, implicit trigger), and `project_hop` maps every one of those to `Some` and only `Terminal`
+   to `None` (`digest.rs:1986-2170`), so a path of `δ` edges projects to `δ` hops. W4b's oracle asserts it on every
+   path it enumerates (fixture (1) includes an event-dispatch and an object-run hop).
 
    *The walk.* (a) Mark the shortest-path sub-DAG that ends at `f`'s carriers at `dmin` (backward from them over
    the predecessor lists), and give each marked node `v` the bit set of candidate lengths reachable from it inside
    the marked sub-DAG (a carrier at `dmin`, or a marked boundary edge out of a node at depth `L`, sets bit `L`;
    bits propagate backward over primary nodes only, since under rule B a dependency node ends a path; one backward
-   pass, at most 65 bits since `MAX_DEPTH` = 64; with rule B off, every node counts as primary). (b) For each candidate length `L` in ascending order, do
+   pass, at most 65 bits since `MAX_DEPTH` = 64; with rule B off, every node counts as primary). **Opaque seeds are
+   accepting states of their own** (A4-01): an opaque seed (A1-19: a call-site or op seed that is opaque, as today)
+   has no out-edges and no direct facts (`digest.rs:1529-1551`), so it is never in the carrier sub-DAG; it is
+   marked separately, with length bit 1, for EVERY fact of the root, including a fact with no carrier at all (then
+   there is no `dmin`, the carrier sub-DAG is empty, and only length class 1 is walked). The trie root's frontier is
+   the root; at `L = 1` its children include the opaque seeds' first hops beside the marked nodes with bit 1. (b)
+   For each candidate length `L` in ascending order, do
    one depth-first walk over the TRIE OF PROJECTED PREFIXES, not over DAG nodes: a trie node is a projected prefix
    `P` together with its FRONTIER, the set of marked DAG nodes that `P` reaches. From a trie node, take the
    out-edges of the WHOLE frontier set that lead to a marked primary node whose bit set contains `L`; group them by
@@ -905,7 +915,11 @@ For a root `r` and a first hop `h` of `r`:
    (c) Stop after `cap + 1` candidates, where `cap` is the CALLER's cap (A1-04: `HARD_PATH_CAP` = 256 for digest
    and prove; the user's `--witness N` for the fingerprint query, `fingerprint_query.rs:575`, `:596`).
    `truncated` holds when `cap + 1` were found; `path-limit-reached cap=N` is pushed then, as today. Proof
-   candidates are merged into this stream by key, and the `cap + 1` count is over the merged stream.
+   candidates are merged into this stream by key, and the `cap + 1` count is over the merged stream. On the cut
+   (rule B off), a debug assertion checks that no two emitted candidates share a projected path: the end key
+   separates `carrier` from `opaque`, while today's merge (`key_cmp`, no end key) would count them as one, so an
+   equal projection would shift `truncated` by one. It is not expected to fire (an opaque call-site seed's hop and
+   a resolved call into a carrier differ in hop JSON); if it does, that is a finding.
 
    *Under rule B, after the stream:* the candidates are partitioned by end key (§14.3.5 item 3): each boundary
    identity's candidates are that group's via paths (distinct by construction); `carrier`/`opaque` candidates are
@@ -916,12 +930,14 @@ For a root `r` and a first hop `h` of `r`:
    empty via path `[]`.
 
    A non-seed opaque routine is reached by the DAG (no `valid_nodes` prune) but is never reported. Tests: W9 (both
-   opaque rules); W4b (brute-force key order and distinctness over: reconverging diamonds and two carriers;
-   two equal-JSON edges into different nodes whose later hops interleave in `key_cmp` order; one fact with boundary
-   candidates at depths 1, 2 and 3 plus carriers at `dmin`, with `cap` below the total; and a shared primary prefix
-   ending at two boundaries; breaks: walk DAG nodes instead of the prefix trie → order or count fails; one walk
-   over all lengths → the length-3 boundary sorts before the length-1 one → fails; key without the boundary →
-   one candidate lost → fails); W4c (`cap = 1`, an opaque seed and a carrier at `dmin = 1` whose projected JSON
+   opaque rules, and a fact whose ONLY candidate is an opaque seed, with no carrier anywhere → one `opaque` path
+   and the `opaque-or-unresolved-boundary` diagnostic; break: mark carriers only → no path → fails); W4b
+   (brute-force key order and distinctness over: reconverging diamonds and two carriers; two equal-JSON edges into
+   different nodes whose later hops interleave in `key_cmp` order; one fact with boundary candidates at depths 1, 2
+   and 3 plus carriers at `dmin`, with `cap` below the total; a shared primary prefix ending at two boundaries; and
+   an opaque seed beside carriers at `dmin = 2`; breaks: walk DAG nodes instead of the prefix trie → order or count
+   fails; one walk over all lengths → the length-3 boundary sorts before the length-1 one → fails; key without the
+   boundary → one candidate lost → fails; mark carriers only → the opaque candidate is missing → fails); W4c (`cap = 1`, an opaque seed and a carrier at `dmin = 1` whose projected JSON
    sorts first → the carrier path is kept; break: put opaque paths first → fails).
 5. **What does not change.** Direct facts (case A), the root's own proofs (`enumerate_proofs`, `digest.rs:880`, which
    keeps its own `MAX_STATES` limit and its `state-limit-exceeded` diagnostic), the opaque-boundary report for
@@ -949,7 +965,9 @@ The ordering cell runs the DAG (A1-23) at a measured neutral cost (§14.3.4). **
 **Cost** (A2-09, rewritten in round 3). Per root: one `O(V_h + E_h)` BFS per distinct first hop `h`. Per fact:
 (a) the marking and the length bit sets of item 4, one backward pass over the shortest-path sub-DAG `V_f`, `E_f`
 that ends at `f`'s carriers at `dmin` (never more than the DAG), cached per (DAG, set of carriers at `dmin`), so
-facts that share their nearest carriers (every resource behind one boundary in rule B) share it; (b) the trie walk.
+facts that share their nearest carriers (every resource behind one boundary in rule B) share it, plus the opaque
+seeds, marked once per root in `O(seeds)` and shared by every fact (A4-01); a fact with no carrier costs only
+that and the length-1 class; (b) the trie walk.
 The walk enters a trie child only if its frontier can still reach a candidate of the current length (the bit set),
 and it stops at `cap + 1` candidates, so every trie node it visits lies on the prefix of an emitted candidate or of
 the one walk that ends at the stop: at most `(cap + 1 + C) × L_max` trie nodes, `C` the number of length classes

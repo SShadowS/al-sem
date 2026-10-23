@@ -309,10 +309,13 @@ Acceptance: A6.21, A6.22 (corpus half), A6.19 (DAG half). Depends on Task 1′ p
     paths; (2) two successor edges with EQUAL projected hop JSON into different nodes whose later
     hops interleave in key order; (3) one fact with boundary candidates at depths 1, 2 and 3 plus
     carriers at `dmin`, `cap` below the total; (4) a shared primary prefix `R → Helper` ending at two
-    boundaries (`cs1`, `cs2`), plus two full paths that collapse to one (prefix, boundary). Breaks:
+    boundaries (`cs1`, `cs2`), plus two full paths that collapse to one (prefix, boundary); (5) an
+    opaque seed beside carriers at `dmin = 2` (A4-01). Fixture (1) also has an event-dispatch and an
+    object-run hop, and the oracle asserts projected length = DAG depth on every path. Breaks:
     walk DAG nodes instead of the prefix trie → (2) fails; one walk over all lengths → (3) fails; key
     without the boundary → (4) loses a candidate → fails; count duplicates toward `cap + 1` → (1) or
-    (2) truncation fails.
+    (2) truncation fails; mark carriers only → (5) loses the opaque candidate → fails. On the cut, a
+    `debug_assert!` that no two emitted candidates share a projected path (spec §14.3.1 item 4 (c)).
   - **W4c opaque and carrier tie** (A1-01). `cap = 1`; an opaque call-site seed and a carrier at
     `dmin = 1` both have projected length 1, and the carrier path's projected JSON sorts first: the
     carrier path is kept. Break: emit opaque seed paths before carrier paths → fails.
@@ -332,7 +335,9 @@ Acceptance: A6.21, A6.22 (corpus half), A6.19 (DAG half). Depends on Task 1′ p
     root with one first hop builds 1 DAG. Break: a fresh `DagCache` per call → 2 → fails.
   - **W9 opaque seeds.** An opaque call-site seed is reported and counts toward `cap + 1`; a
     non-seed opaque routine reached by the DAG is not reported. Break: report every opaque node
-    the DAG reaches → fails.
+    the DAG reaches → fails. (A4-01) A fact whose only candidate is an opaque seed, with no carrier
+    anywhere: one `opaque` path and the `opaque-or-unresolved-boundary` diagnostic. Break: mark
+    carriers only (no opaque accepting states) → no path → fails.
   - **W10 streaming merge = old merge.** For every effect of every corpus root, the streaming
     merge's printed paths, `viaPathsTruncated` and conditionality equal the old merge's (kept
     test-only); plus a hand-stated input with equal-JSON paths of different conditionality and a
