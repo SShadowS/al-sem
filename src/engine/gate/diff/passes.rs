@@ -118,16 +118,46 @@ pub(super) fn is_abi_surface(fact: &CborValue) -> bool {
     if get_str(fact, "routineKind") == Some("trigger") {
         return false;
     }
-    let publishes = get_array(fact, "attributes").is_some_and(|attrs| {
+    carries_attribute(fact, &EXTERNAL_EVENT_ATTRIBUTES)
+        || !matches!(get_str(fact, "visibility"), Some("local" | "internal"))
+}
+
+/// Whether the fact carries one of `names` (case-insensitive).
+fn carries_attribute(fact: &CborValue, names: &[&str]) -> bool {
+    get_array(fact, "attributes").is_some_and(|attrs| {
         attrs.iter().any(|a| {
-            get_str(a, "name").is_some_and(|n| {
-                EXTERNAL_EVENT_ATTRIBUTES
-                    .iter()
-                    .any(|e| n.eq_ignore_ascii_case(e))
-            })
+            get_str(a, "name").is_some_and(|n| names.iter().any(|e| n.eq_ignore_ascii_case(e)))
         })
-    });
-    publishes || !matches!(get_str(fact, "visibility"), Some("local" | "internal"))
+    })
+}
+
+/// #236: a `local` / `internal` `[IntegrationEvent]` / `[BusinessEvent]`
+/// publisher whose old `parameters` list is a strict prefix of the new one.
+/// AppSourceCop AS0025 allows adding a parameter to such an event (subscribers
+/// bind by name and need not take every parameter); removing, renaming,
+/// retyping or flipping `var` breaks them. Stricter than AS0025 on purpose: a
+/// middle insertion or a reorder is not an append here and stays breaking. A
+/// fact without `parameters` (an older snapshot) is never an append. Like
+/// `is_abi_surface`, `internal` ignores `internalsVisibleTo` friend apps that
+/// may raise the event; an append breaks them, which AS0025 accepts too.
+pub(super) fn is_non_breaking_event_append(old: &CborValue, new: &CborValue) -> bool {
+    let eligible = |f: &CborValue| {
+        get_str(f, "kind") == Some("routine")
+            && matches!(get_str(f, "visibility"), Some("local" | "internal"))
+            && carries_attribute(f, &["IntegrationEvent", "BusinessEvent"])
+    };
+    let (Some(old_params), Some(new_params)) =
+        (get_array(old, "parameters"), get_array(new, "parameters"))
+    else {
+        return false;
+    };
+    eligible(old)
+        && eligible(new)
+        && old_params.len() < new_params.len()
+        && old_params
+            .iter()
+            .zip(new_params)
+            .all(|p| matches!(p, (CborValue::Text(o), CborValue::Text(n)) if o == n))
 }
 
 pub fn diff_abi(indexes: &DiffIndexes) -> Vec<DiffFinding> {
@@ -238,7 +268,11 @@ pub fn diff_abi(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         // Signature fingerprint change.
         let old_sig = get_str(old_fact, "signatureFingerprint").unwrap_or("");
         let new_sig = get_str(new_fact, "signatureFingerprint").unwrap_or("");
-        if !old_sig.is_empty() && !new_sig.is_empty() && old_sig != new_sig {
+        if !old_sig.is_empty()
+            && !new_sig.is_empty()
+            && old_sig != new_sig
+            && !is_non_breaking_event_append(old_fact, new_fact)
+        {
             let kind = DiffKind::ProcedureSignatureChanged;
             out.push(make_finding(
                 DiffCategory::Abi,
@@ -520,6 +554,19 @@ fn event_severity(kind: DiffKind) -> Severity {
     }
 }
 
+/// #236: whether the publisher `routine` (a NEW id; both contract maps are keyed
+/// by it once #156 paired the signature change) only appended a parameter. No
+/// pair found means not an append, so the finding stays Critical.
+fn is_append_at(indexes: &DiffIndexes, routine: &str) -> bool {
+    match (
+        indexes.old_contracts_by_subject.get(routine),
+        indexes.new_contracts_by_subject.get(routine),
+    ) {
+        (Some(old), Some(new)) => is_non_breaking_event_append(old, new),
+        _ => false,
+    }
+}
+
 struct EventIdentity {
     publisher_object: String,
     event_name: String,
@@ -639,7 +686,7 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                 let new_id = get_str(new_decl, "eventId").unwrap_or("");
                 if old_id != new_id {
                     let routine = get_str(new_decl, "routine").unwrap_or("");
-                    out.push(event_finding(
+                    let mut f = event_finding(
                         DiffKind::EventPublisherSignatureChanged,
                         routine,
                         &parsed.event_name,
@@ -651,7 +698,11 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                             Some(new_id),
                         ),
                         indexes,
-                    ));
+                    );
+                    if is_append_at(indexes, routine) {
+                        f.severity = Severity::Low;
+                    }
+                    out.push(f);
                 }
             }
         }
@@ -725,7 +776,7 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         suppress_keys.insert(key.clone());
         let parsed = parse_event_identity(new_id);
         let routine = get_str(new_decl, "routine").unwrap_or("");
-        contract_findings.push(event_finding(
+        let mut f = event_finding(
             DiffKind::EventContractChangedWithAffectedSubscribers,
             routine,
             &parsed.event_name,
@@ -737,7 +788,11 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                 Some(new_id),
             ),
             indexes,
-        ));
+        );
+        if is_append_at(indexes, routine) {
+            f.severity = Severity::Low;
+        }
+        contract_findings.push(f);
     }
 
     // Filter out suppressed signature findings, then append contract findings.
@@ -1269,4 +1324,90 @@ pub fn diff_permissions(indexes: &DiffIndexes) -> Vec<DiffFinding> {
 
     sort_by_id(&mut out);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::ids::{ParamSpec, canonical_param_spec};
+
+    /// One `parameters` entry, rendered by the same formatter `derive_contracts` uses.
+    fn param(name: &str, type_text: &str, is_var: bool) -> CborValue {
+        let spec = ParamSpec {
+            type_text: type_text.into(),
+            is_var,
+        };
+        CborValue::Text(canonical_param_spec(&spec, Some(name)))
+    }
+
+    /// A routine contract fact; `attr` empty means no attribute at all.
+    fn fact(vis: &str, attr: &str, params: Option<Vec<CborValue>>) -> CborValue {
+        let mut m: IndexMap<String, CborValue> = IndexMap::new();
+        m.insert("kind".into(), CborValue::Text("routine".into()));
+        m.insert("visibility".into(), CborValue::Text(vis.into()));
+        let attrs = if attr.is_empty() {
+            vec![]
+        } else {
+            let mut a: IndexMap<String, CborValue> = IndexMap::new();
+            a.insert("name".into(), CborValue::Text(attr.into()));
+            vec![CborValue::Map(a)]
+        };
+        m.insert("attributes".into(), CborValue::Array(attrs));
+        if let Some(p) = params {
+            m.insert("parameters".into(), CborValue::Array(p));
+        }
+        CborValue::Map(m)
+    }
+
+    /// #236 test 1: which publisher signature changes are a non-breaking append.
+    /// The rename, retype and `var`-flip rows also append, so only the
+    /// per-parameter compare can reject them.
+    #[test]
+    fn non_breaking_event_append_matrix() {
+        let a = || param("Handled", "Boolean", true);
+        let b = || param("Qty", "Decimal", false);
+        let c = || param("Code", "Code[20]", false);
+        let check = |vis: &str, attr: &str, old: Vec<CborValue>, new: Vec<CborValue>| {
+            is_non_breaking_event_append(&fact(vis, attr, Some(old)), &fact(vis, attr, Some(new)))
+        };
+        for vis in ["local", "internal"] {
+            for attr in ["IntegrationEvent", "BusinessEvent", "integrationevent"] {
+                assert!(
+                    check(vis, attr, vec![a()], vec![a(), b()]),
+                    "{vis} [{attr}]"
+                );
+            }
+        }
+        for (vis, attr, why) in [
+            ("public", "IntegrationEvent", "public"),
+            ("protected", "IntegrationEvent", "protected"),
+            ("local", "ExternalBusinessEvent", "ExternalBusinessEvent"),
+            ("local", "", "plain local routine"),
+        ] {
+            assert!(!check(vis, attr, vec![a()], vec![a(), b()]), "{why}");
+        }
+        let local = |old, new| check("local", "IntegrationEvent", old, new);
+        assert!(!local(vec![a()], vec![a()]), "unchanged");
+        assert!(!local(vec![a(), b()], vec![a()]), "removed");
+        assert!(!local(vec![a(), b()], vec![a(), c(), b()]), "inserted");
+        assert!(!local(vec![a(), b()], vec![b(), a(), c()]), "reordered");
+        let renamed = param("IsHandled", "Boolean", true);
+        assert!(!local(vec![a()], vec![renamed, b()]), "rename+append");
+        let retyped = param("Handled", "Integer", true);
+        assert!(!local(vec![a()], vec![retyped, b()]), "retype+append");
+        let unvar = param("Handled", "Boolean", false);
+        assert!(!local(vec![a()], vec![unvar, b()]), "var+append");
+        let i = "IntegrationEvent";
+        assert!(
+            !is_non_breaking_event_append(
+                &fact("local", i, None),
+                &fact("local", i, Some(vec![a()]))
+            ),
+            "old without parameters"
+        );
+        assert!(
+            !is_non_breaking_event_append(&fact("local", i, Some(vec![])), &fact("local", i, None)),
+            "new without parameters"
+        );
+    }
 }

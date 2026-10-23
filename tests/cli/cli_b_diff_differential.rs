@@ -1691,18 +1691,46 @@ fn issue156_e2e_local_helper_signature_change_repro() {
 }
 
 /// #156 E2E-2 — the real pipeline emits what the ABI rule reads: added action and
-/// table triggers give no `abi` finding; a `local [IntegrationEvent]` publisher
-/// that gained a parameter is one `procedure-signature-changed`; its paired
-/// subscriber gives no `abi` and no subscriber-induced finding. The publisher and
-/// subscriber keep their capabilities and permissions, so nothing else shows; the
-/// added `OnInsert` trigger and action trigger have empty bodies, so they add no
-/// capability to the subscriber's `Log.Insert()` cone or anywhere else.
+/// table triggers give no `abi` finding; its paired subscriber gives no `abi` and
+/// no subscriber-induced finding. The publisher and subscriber keep their
+/// capabilities and permissions, so nothing else shows; the added `OnInsert`
+/// trigger and action trigger have empty bodies, so they add no capability to the
+/// subscriber's `Log.Insert()` cone or anywhere else.
+/// #236 (rebaselined): the `local [IntegrationEvent]` publisher only APPENDED a
+/// parameter (AS0025: allowed), so there is no `abi` finding and the one
+/// `events` finding is Low, not Critical.
 #[test]
 fn issue156_e2e_abi_surface_triggers_publishers_subscribers() {
     let fixture = fixtures_dir().join("ws-diff-abi-surface");
     let r = engine(
         &compose_ws(&fixture.join("a")),
         &compose_ws(&fixture.join("b")),
+        CoveragePolicy::Loose,
+    );
+    let row = |c: &str, k: &str, d: &str| (c.to_string(), k.to_string(), d.to_string());
+    assert_eq!(
+        summary_rows(&r),
+        vec![row(
+            "events",
+            "event-contract-changed-with-affected-subscribers",
+            "OnBeforeCalc"
+        )]
+    );
+    assert_eq!(
+        find_kind(&r, "event-contract-changed-with-affected-subscribers").severity,
+        Severity::Low
+    );
+}
+
+/// #236 — E2E-2 reversed: `OnBeforeCalc` LOSES `Qty: Decimal`. A removed event
+/// parameter breaks subscribers (AS0025), so both findings stay Critical. The
+/// removed triggers are not ABI and the `local` subscriber publishes nothing.
+#[test]
+fn issue236_removed_event_param_stays_critical() {
+    let fixture = fixtures_dir().join("ws-diff-abi-surface");
+    let r = engine(
+        &compose_ws(&fixture.join("b")),
+        &compose_ws(&fixture.join("a")),
         CoveragePolicy::Loose,
     );
     let row = |c: &str, k: &str, d: &str| (c.to_string(), k.to_string(), d.to_string());
@@ -1716,5 +1744,67 @@ fn issue156_e2e_abi_surface_triggers_publishers_subscribers() {
                 "OnBeforeCalc"
             ),
         ]
+    );
+    for k in [
+        "procedure-signature-changed",
+        "event-contract-changed-with-affected-subscribers",
+    ] {
+        assert_eq!(find_kind(&r, k).severity, Severity::Critical, "{k}");
+    }
+}
+
+/// #236 — a `local [IntegrationEvent]` publisher with NO subscriber appends a
+/// parameter: no `abi` finding, and the generic `event-publisher-signature-changed`
+/// is Low. Hand-built facts; the pair is found by object + name (#156).
+#[test]
+fn issue236_no_subscriber_append_is_low() {
+    let with_params = |fact: CborValue, params: &[&str]| {
+        let CborValue::Map(mut m) = fact else {
+            unreachable!()
+        };
+        m.insert(
+            "parameters".into(),
+            CborValue::Array(params.iter().map(|p| txt(p)).collect()),
+        );
+        CborValue::Map(m)
+    };
+    let side = |sig: &str, params: &[&str]| {
+        snap156(
+            vec![(
+                with_params(
+                    routine_fact(
+                        OBJ156,
+                        sig,
+                        "local",
+                        Some("event-publisher"),
+                        &["IntegrationEvent"],
+                    ),
+                    params,
+                ),
+                "OnX",
+            )],
+            vec![(
+                "eventDeclarations",
+                CborValue::Array(vec![event_decl(
+                    "publisher",
+                    &id156(sig),
+                    &format!("{OBJ156}::OnX::{sig}"),
+                )]),
+            )],
+        )
+    };
+    let r = engine(
+        &side("p1", &["a: integer"]),
+        &side("p2", &["a: integer", "b: integer"]),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(kinds_in(&r, "abi"), pairs(&[]));
+    assert_eq!(
+        kinds_in(&r, "events"),
+        pairs(&[("event-publisher-signature-changed", &id156("p2"))])
+    );
+    assert_eq!(
+        find_kind(&r, "event-publisher-signature-changed").severity,
+        Severity::Low
     );
 }

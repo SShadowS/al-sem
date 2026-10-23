@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`alsem diff` no longer reports a parameter appended to a `local` or `internal` event
+  publisher as critical (#236).** For an `[IntegrationEvent]` or `[BusinessEvent]` publisher that
+  is `local` or `internal` on both sides, adding parameters at the END is not a break
+  (AppSourceCop AS0025: subscribers bind by name). Such a change now gives no `abi`
+  `procedure-signature-changed` finding, and its `events` signature finding
+  (`event-publisher-signature-changed` or `event-contract-changed-with-affected-subscribers`)
+  is Low instead of Critical. Removing, renaming, retyping or flipping `var` on a parameter
+  stays critical, as do `public`/`protected` publishers and `ExternalBusinessEvent`. The rule is
+  **stricter than AS0025 on purpose**: AS0025 also allows a parameter inserted in the middle or
+  a reorder; here those stay critical. To see the parameters, a publisher's contract fact in the
+  snapshot gains a `parameters` list (e.g. `"var handled: boolean"`); a snapshot made before this
+  change has none, so its publisher changes stay critical.
+
 ## [2.0.1] - 2026-10-23
 
 ### Added
