@@ -244,16 +244,21 @@ Spec §14.4, §14.8, §14.9. No code on the branch.
   Its spec-panel round runs before Step 3.
 - [ ] **Step 3: Parent binaries** from `6a2b7c8b` in a clean detached worktree
   (`/work/bench/160-6/parent6a2-wt` → `/work/bench/160-6/parent6a2/`, `bins.sha`).
-- [ ] **Step 4: Probe binaries**: the branch head plus the prototype patch from
+- [ ] **Step 4: Probe binaries**: the branch head plus the rule-B prototype patch from
   `/work/bench/160-6/diag-wt` (`git -C /work/bench/160-6/diag-wt diff > /work/bench/160-6/split/proto.patch`;
-  it touches `digest.rs`, which master did not change, and `step6_probe.rs`), plus P-2's census
-  lines. Scratch worktree only, never the branch.
-- [ ] **Step 5: Run** `/work/bench/160-6/split/probes-todo.md` P-1 to P-3 in one slot job;
-  record medians, bands and the round rule in the ledger.
-- [ ] **Step 6: STOP — read** S1′ (`K − D_P + T + E′ − S_P ≤ 8,000 ms`) and S2′ (probe peak
-  ≤ `Pm(d)` + 3,145,728 KiB). `PD_EDGE_UNMAPPED == 0` and `non_primary_members == 0` on `d`.
-  Pass → freeze the terms in the ledger and go on. Fail → F-W1 or F-W2 once (as a scratch probe
-  first), re-read; still failing → the claim stops (spec §14.8 "end").
+  it touches `digest.rs`, `ordering_engine.rs`, `ordering_inter.rs`, `step6_probe.rs` and installs mimalloc in
+  `aldump.rs`), plus P-2's census arm (`digest.effects`, `digest.ordering`, DAG, merge window per root).
+  Scratch worktree only, never the branch. Every probe run sets `MIMALLOC_PURGE_DELAY=0` (spec §14.6).
+- [ ] **Step 5: Run** `/work/bench/160-6/split/probes-todo.md` P-1 to P-5 in one slot job: `d` and the
+  multi-root `h` (`src/Features/HandledState/CDOUnhandledSalesPagesMgt.Codeunit.al`), 3 rounds each, plus
+  the parent's whole-command `d` and `h` peaks and walls on `alsem`; P-4 (triage of every changed CDO effect on
+  the cut) and P-5 (corpus golden diff of the DAG rule) are REQUIRED. A round with a load tick > 8 is void and
+  re-run (A1-25). Record medians, bands and the round rule in the ledger.
+- [ ] **Step 6: STOP — read** S1′ (`d`: `K − D_P + T + E′ − S_P ≤ 8,000 ms`), S2′ (`d` probe peak
+  ≤ `Pm(d)` + 3,145,728 KiB) and S3′ (`h`: E′ ≤ 60,000 ms and probe peak ≤ 12,582,912 KiB).
+  `PD_EDGE_UNMAPPED == 0` and `non_primary_members == 0` on `d` and `h`. Pass → freeze the terms in the ledger
+  and go on. Fail → F-W1 or F-W2 once (as a scratch probe first), re-read; still failing → **D** (spec §14.8):
+  digest stays on the cut, Task 2b is not done, Task 2a and Task 3 go on.
 
 ---
 
@@ -262,13 +267,20 @@ Spec §14.4, §14.8, §14.9. No code on the branch.
 Acceptance: A6.21, A6.22 (corpus half), A6.19 (DAG half). Depends on Task 1′ passing its STOP.
 
 **Files:**
-- Modify `src/engine/l5/digest.rs`: `reconstruct_witness_paths`'s BFS half becomes the DAG rule.
-  `HopCache` gains the per-first-hop DAG map (key: first-hop kind + id; the cache is per root).
-  The reverse-BFS `valid_nodes` set is replaced by a carrier set per `ValidNodesKey` (the
-  prototype's `C|`-keyed entry; rename the cache to what it holds). `MAX_STATES` stays for
-  `enumerate_proofs` only. Close the depth gap (spec §14.3.1 item 6). Census line
-  `digest.witness_dags=N nodes=N preds=N`. Port from the prototype WITHOUT its `ALSEM_W6_*`
-  switches and its `diag` module; the old search is deleted, not kept behind a flag.
+- Modify `src/engine/l5/digest.rs`: `reconstruct_witness_paths`'s BFS half becomes the DAG rule
+  (spec §14.3.1). A new per-root `struct DagCache<'i>(HashMap<(FirstHopKind, String), Rc<WitDag<'i>>>)`
+  beside `HopCache` (which stays an edge → hop memo). The reverse-BFS `valid_nodes` set is replaced by a
+  carrier set per `ValidNodesKey` (rename the cache to what it holds). Paths are enumerated by the ordered
+  forward walk over marked DAG nodes, up to the CALLER's `cap + 1` (spec §14.3.1 item 4). Opaque seeds as
+  today. The per-fact depth rule (item 6). `MAX_STATES` stays for `enumerate_proofs` only. The streaming
+  top-k merge (§14.3.1a) replaces `all_paths`/`all_path_conds`; the old `merge_normalize_via_paths` stays
+  `#[cfg(test)]` as W10's oracle. Census line `digest.witness_dags=N nodes=N preds=N`. Port from the
+  prototype WITHOUT its `ALSEM_W6_*` switches and `diag` module; the old search is deleted, kept only as a
+  `#[cfg(test)]` oracle if a W test needs it.
+- `reconstruct_witness_paths_pub` takes `&mut HopCache` and `&mut DagCache`; `fingerprint_query.rs:560-600`
+  holds one pair per root (spec §14.3.1 item 3).
+- Modify `src/engine/l5/ordering_engine.rs` / `ordering_inter.rs`: the on-demand happens-before test and the
+  shared `Arc<[OrderedOp]>` group ops (spec §14.3.7). `build_hb_edges` stays (test oracle of O1).
 - Tests in `digest.rs`'s test module (hand-stated `FingerprintIndexes` over a literal snapshot,
   as the existing witness tests do). Each states its precondition literally and gets a proof row:
   - **W1 shortest only.** Root R, first hop `cs1` → A; A → W1 (carrier) and A → B → W2
@@ -278,35 +290,64 @@ Acceptance: A6.21, A6.22 (corpus half), A6.19 (DAG half). Depends on Task 1′ p
     only the first predecessor per routine (the CLRS breadth-first tree) → one path → fails.
   - **W3 one DAG per (root, first hop).** Two facts of R through `cs1`, one through `cs2`:
     `witness_dags` = 2. Break: skip the cache lookup → 3 → fails.
-  - **W4 truncation boundary.** A ladder of `k` diamonds under `cs1` (2^k shortest paths):
-    `k = 8` (256 paths) → `truncated == false`; `k = 9` (512) → `true`. Break: enumerate up to
-    `HARD_PATH_CAP` instead of `HARD_PATH_CAP + 1` → `k = 8` reads truncated → fails.
+  - **W4 truncation boundary, at the caller's cap.** A ladder of `k` diamonds under `cs1` (2^k
+    shortest paths): at cap 256, `k = 8` (256 paths) → `truncated == false`, `k = 9` → `true`; at
+    cap 3 (the fingerprint query's `--witness 3`), 3 paths → false, 4 → true, `path-limit-reached
+    cap=3`. Break: enumerate up to `cap` instead of `cap + 1` → fails; hard-code 256 → the cap-3
+    arm fails.
+  - **W4b ordered prefix.** More than `cap` shortest paths over two carriers and reconverging
+    diamonds: the returned paths are the first `cap` by (length, JSON) of ALL of them (computed by
+    brute force in the test). Break: enumerate in predecessor order → fails.
   - **W5 no state budget.** A fan-out that makes the old search expand more than 25,000 states
     before the carrier: the witness is found and there is no `state-limit-exceeded`
     diagnostic. Break: stop the DAG BFS after 25,000 pops → fails.
   - **W6 depth limit.** The only carrier sits 65 hops below the first hop: today's depth-limit
     diagnostic and `incomplete`, not `terminal-not-found`. Break: never set the depth flag →
     fails.
+  - **W6b depth is per fact.** (a) A carrier at 2 hops plus an unrelated 70-hop branch: no
+    diagnostic. (b) Two facts; only fact B's carrier is past 64: fact A carries no diagnostic.
+    Break: set the diagnostic whenever the DAG hit the depth frontier → fails.
+  - **W7 conditionality over shortest witnesses.** A guarded shortest path plus an unguarded
+    longer one → `conditional` (spec §14.3.1b). Break: read conditionality over all paths
+    (re-run the old search for it) → `unconditional-on-success` → fails.
+  - **W8 one DAG per root in the fingerprint query.** A fingerprint query over two facts of one
+    root with one first hop builds 1 DAG. Break: a fresh `DagCache` per call → 2 → fails.
+  - **W9 opaque seeds.** An opaque call-site seed is reported and counts toward `cap + 1`; a
+    non-seed opaque routine reached by the DAG is not reported. Break: report every opaque node
+    the DAG reaches → fails.
+  - **W10 streaming merge = old merge.** For every effect of every corpus root, the streaming
+    merge's printed paths, `viaPathsTruncated` and conditionality equal the old merge's (kept
+    test-only); plus a hand-stated input with equal-JSON paths of different conditionality and a
+    path evicted then offered again. Break: keep `MAX_PATHS` instead of `MAX_PATHS + 1` in the
+    window → truncation differs → fails.
+  - **O1 on-demand happens-before.** For every ordered pair of occurrences of every corpus
+    root's groups, the on-demand test equals membership in `build_hb_edges`'s output, duplicate
+    occurrence ids included. Break: drop the `!(…)` guard → fails.
 - `CHANGELOG.md` `[Unreleased]` → `### Changed`: "digest, prove and fingerprint witnesses are
   the shortest paths to the nearest carrier (one BFS per root and first hop, CLRS §22.2);
-  printed paths are no longer padded with longer ones; `viaPathsTruncated` means more than 256
-  shortest paths; the witness BFS has no state limit". Part of #160.
+  printed paths are no longer padded with longer ones; conditionality is read over the shortest
+  witnesses; the witness BFS has no state limit, and the depth diagnostic is per fact; the
+  ordering engine answers happens-before on demand (no change in d47/d49/d51 output)". Part of
+  #160.
 
-- [ ] **Step 1: Write W1-W6, red** (W1 and W5 fail on the old search; W3 and W6 fail to
-  compile without the new counter and flag). W2, and maybe W4, can pass on the old search: they
-  pin properties of the new code, and their breaks (Step 5) are what proves them. Record each
+- [ ] **Step 1: Write W1-W10, W4b, W6b, O1, red** (W1, W5 and W6b fail on the old search; W3, W6,
+  W8 fail to compile without the new counter and cache). W2, W4, W10 and O1 can pass before the change:
+  they pin properties of the new code, and their breaks (Step 5) are what proves them. Record each
   outcome.
-- [ ] **Step 2: Implement** the rule. W1-W6 green.
-- [ ] **Step 3: Goldens.** `scripts/check-goldens > <log>`. Allowed moves: `viaPaths`,
-  `viaPathsTruncated`, `conditionality` and witness diagnostics in digest, prove and
-  fingerprint-query goldens. Not allowed: `tests/r4-goldens/`, `tests/r4f-goldens/`,
-  `r4_cross_app_program`, any `.cbor`/`.cbor.gz`/shard, any `objectDisplay` or header. Triage
-  with `golden-diff-triager` (classes: padding removed, truncation flip, conditionality flip,
-  other = unexplained), then `--regen` and re-run.
+- [ ] **Step 2: Implement** the rule, the streaming merge and the on-demand happens-before test. All
+  green.
+- [ ] **Step 3: Goldens.** `scripts/check-goldens > <log>`. Allowed moves: spec §14.3.4's allowlist
+  (`viaPaths`, `viaPathsTruncated`, `conditionality`, the witness diagnostics, occurrence and fact ids
+  that hash the via paths, prove answers and blockers that read truncation or conditionality, the
+  fingerprint query's witness output). Not allowed: `tests/r4-goldens/`, `tests/r4f-goldens/`,
+  `r4_cross_app_program`, any `.cbor`/`.cbor.gz`/shard, any `objectDisplay` or header, effect
+  types/details/evidence. Triage with `golden-diff-triager` (classes: padding removed, truncation flip,
+  conditionality flip, recovered witness, id moved with its via path, prove answer moved; other =
+  unexplained), then `--regen` and re-run.
 - [ ] **Step 4: Early CDO check (slot job, ~2 min):** `o` SARIF `cmp` parent vs this head,
   cross-app at both scopes and `--single-app` (A6.22). Any difference → F-W3.
-- [ ] **Step 5: Discrimination proofs** for W1-W6 (break with Edit, revert with Edit, re-read
-  the line).
+- [ ] **Step 5: Discrimination proofs** for W1-W10, W4b, W6b, O1 (break with Edit, revert with
+  Edit, re-read the line).
 - [ ] **Step 6: Gate and commit** (`#160 step 6 Task 2a: the DAG witness (one BFS per root and first hop)`),
   `check-diff`, ledger lines.
 
@@ -328,7 +369,14 @@ T4, T5, T6, T7, T8 (coverage half), T9, the live-cell checkpoint; A6.1, A6.2, A6
   equivalent split; state the choice in the commit.
 - `src/engine/l5/detector_context.rs`: `build_detector_artifacts` takes `caps` by move and
   composes nothing (delete the det cone call). **`fill_ordering` and its cut snapshot are
-  unchanged.**
+  unchanged.** Policy's RAW build keeps working through a command-local composing builder
+  (`compose_policy_raw(model, rel) -> (DetectorArtifacts, …)`, today's body over `det_cone_inputs` with
+  `ConeScope { derived: true, raw: All }`), deleted by Task 3 (spec §14.5, A1-13).
+- `src/engine/l5/digest.rs`: rule B on digest's cone-graph tree only (spec §14.3.5): the tree carries
+  `boundary_witnesses: bool`; with it on, witness paths end at the first dependency routine with the
+  `enters <App>.<Routine>` callsite terminal, and boundary-only effects are keyed by (effect type,
+  boundary call site) with the group `detail` (`boundary`, `resourceCount`, `resources`: up to 10, in
+  resource-id order, display when present).
 - `src/engine/l5/digest_cli.rs`: before the composition, in one block that ends before
   `prepare`: `derive_identity_table(model)`, `OwnerIndex::build(model)`,
   `resolve_changed_roots(&identities, model, &input, primary_guid_of(model), &owners)` (the #78
@@ -351,29 +399,37 @@ T4, T5, T6, T7, T8 (coverage half), T9, the live-cell checkpoint; A6.1, A6.2, A6
   T7, T9, Review Focus 2), lib tests (T3 digest arm, T4, T6, T8 coverage half, the checkpoint,
   Review Focus 1); spec §5.9's rewrites except the ones on the cut builder that now stays
   (`detector_context.rs:2094`, `capability_cone.rs` cut-builder tests keep their subject).
-- `CHANGELOG.md` `### Fixed`: "#160 step 6: digest sees dependency effects (one cone graph,
-  #161 digest half); the `unfetched-dependency` ledger rule on the digest tree; the timings mode
-  deleted; d47/d49/d51 stay on the cut graph (follow-up under #161)".
+- `CHANGELOG.md` `### Fixed`: "#160 step 6: digest sees dependency effects (one cone graph, #161 digest
+  half)" with spec §14.3.6's reader note (grouped boundary effects, `enters <App>.<Routine>`, resource
+  count and up to 10 resources, witness paths stop at the boundary); the `unfetched-dependency` ledger rule
+  on the digest tree; the timings mode deleted; d47/d49/d51 stay on the cut graph (follow-up under #161),
+  with its I5 exception stated.
 
-**Interfaces:** consumes Task 1's. Produces `WitnessRequest` (above); `digest_plan(detectors,
+**Interfaces:** consumes Task 1's and 2a's. Produces `WitnessRequest` (above); `digest_plan(detectors,
 roots: BTreeSet<String>)`;
-`pub struct DigestEffects { pub entries: Vec<DigestEntryResult>, pub unresolved: BTreeMap<String, Vec<UnresolvedConeItem>>, pub coverage: Vec<SnapshotCoverageRecord>, pub identities: SnapshotIdentityTable }`;
+`pub struct DigestEffects { pub entries: Vec<DigestEntryResult>, pub unresolved: BTreeMap<String, UnresolvedCone>, pub coverage: Vec<SnapshotCoverageRecord>, pub identities: SnapshotIdentityTable }`
+where `UnresolvedCone` is today's result of `unresolved_cone` (items AND `UnresolvedTraversal`, A1-16);
 `View::effects(&self) -> &DigestEffects`; `View::raw(&self) -> &HashMap<String, Vec<CapabilityFact>>` (Task 3 reads it).
 
-- [ ] **Step 1: Tests red.** T1 (digest: DB_MODIFY on dependency Table 18 and COMMIT, path
-  `CallChain → Outer → Inner`), T3 digest arm, T4, T5 (spec §14.10 rows: digest
-  1/1/1/2/1/1/1/1; d47 row unchanged, witness 1), T6, T7 (a)(b), T8 coverage equality, T9
-  (a)(b), checkpoint, Review Focus 1 and 2.
+- [ ] **Step 1: Tests red.** T1 (digest, grouped shape: `CallChain` reports `DB_MODIFY` and `COMMIT` as
+  groups through the call into `Dep Lib.Outer`, Customer (18) in the `DB_MODIFY` group's resources), B1-B4
+  (spec §14.3.5), T3 digest arm, T4, T5 (spec §14.10 rows: digest 1/1/1/2/1/1/1/1; d47 row unchanged,
+  witness 1; the two-composition analyze row), T6, T7 (a)(b), T8 coverage equality (on `d`'s fixture, `h`
+  shape and policy; not `o`), T9 (a)(b), the traversal block test (A1-16), checkpoint, Review Focus 1 and
+  2; and the policy check: Task 2b alone keeps the policy goldens and CDO `policy check` byte-identical
+  (A1-13).
 - [ ] **Step 2: Cells, order, digest path.** Delete the det cone call.
 - [ ] **Step 3: Deletions** (timings mode, probe). `rg 'ConeOutput|issue160_full_graph|issue160_step6' src`
   empty.
 - [ ] **Step 4: Green.**
 - [ ] **Step 5: Goldens.** Allowed: cross-app digest expectations in
-  `cli_digest_query_dependencies` (cone graph, D6). Everything single-app and every r4/r4f
-  golden must not move (2a already took the DAG moves). Triage, regen, re-run.
-- [ ] **Step 6: Discrimination proofs**: T1 (tree over primary callers only), T3 (breaks 1, 2
-  under `Subjects`; break 3 as evidence), T4 (`Subjects(∅)` on `compose_tree`'s caller), T5
-  (extra det cone), T6, T7 (a)(b), T8, T9 (a), checkpoint.
+  `cli_digest_query_dependencies` (cone graph, D6, rule B's grouped effects). Everything single-app and
+  every r4/r4f golden must not move (2a already took the DAG moves; rule B is off on the cut). Triage,
+  regen, re-run.
+- [ ] **Step 6: Discrimination proofs**: T1 (tree over primary callers only), B1-B4 (spec §14.3.5), T3
+  (breaks 1, 2 under `Subjects`; break 3 as evidence), T4 (`Subjects(∅)` on `compose_tree`'s caller), T5
+  (extra det cone), T6, T7 (a)(b), T8, T9 (a), the traversal block test (drop `UnresolvedTraversal`
+  from `DigestEffects` → fails), checkpoint.
 - [ ] **Step 7: Gate and commit** (`#160 step 6 Task 2b: digest on the cone graph (#161, digest half)`),
   `check-diff`, ledger.
 
@@ -437,8 +493,8 @@ fallback fires (its own commit, tests, proofs, gate, `check-diff`).
 - [ ] **Step 1: Binaries**: head from the final head in `/work/bench/160-6/final/head-wt`;
   parent = `/work/bench/160-6/parent6a2/` (Task 1′). Bench script from
   `/work/bench/160-6/bench-draft.sh` into `/work/bench/160-6/final/bench.sh`, updated: B1′/B2′
-  with `C_d` = 8,000 ms and +3,145,728 KiB; B3/B4 plain no-regression; B5 with the Task 3
-  keep/revert rule.
+  with +8,000 ms and +3,145,728 KiB; B6/B7 for `h` (+60,000 ms, ≤ 12,582,912 KiB); B3/B4 plain
+  no-regression; B5 with the Task 3 keep/revert rule. Every peak on `alsem` (mimalloc).
 - [ ] **Step 2: Part 1.** Histogram SHA equal. SARIF `cmp`: default analyze both universes and
   scopes; `o` (d47/d49/d51) cross-app at `--scope primary` and `--scope all`, and
   `--single-app` (A6.22; any move → F-W3). Policy custom and bundled `cmp` (A6.7, only if Task
@@ -448,9 +504,10 @@ fallback fires (its own commit, tests, proofs, gate, `check-diff`).
   `digest.witness_dags`, §4.10's buckets. `PD_EDGE_UNMAPPED == 0` (F6).
 - [ ] **Step 3: Triage** (`cdo-measure`, `triage-findings`): the digest coverage/effects
   deltas, the truncation and conditionality flips. No d47/d49/d51 triage (none may move).
-- [ ] **Step 4: Parts 2 and 3** in the quiet slot: B1′, B2′, B3, B4, B5 (void checks first; one
-  re-run on void; F9 on void twice; a miss → F-W1/F-W2 for `d`, F10 with F11 for `o`; B5 → F13,
-  then keep/revert Task 3).
+- [ ] **Step 4: Parts 2 and 3** in the quiet slot: B1′, B2′, B6, B7, B3, B4, B5 (void checks first;
+  one re-run on void; F9 on void twice; a digest miss → F-W1/F-W2 once, then **D**: revert Task 2b's
+  commit, digest stays on the cut; an `o` miss → STOP and re-panel; B5 → F13, then keep/revert Task 3).
+  Part 1 also times the fingerprint query on CDO single-app (reported).
 - [ ] **Step 5: `cdo-gate`** on the final committed head (after any revert); exit 0.
 - [ ] **Step 6: Numbers file** `docs/measurements/2026-10-<dd>-issue-160-step6.md`: Task 1's
   STOP reading, the prototype numbers (spec §14.3.4, §14.4, §14.6), Task 1′'s re-measure,
@@ -465,10 +522,10 @@ fallback fires (its own commit, tests, proofs, gate, `check-diff`).
 |---|---|
 | A6.1, A6.9 (digest half) | Task 2b (T1); the d47 half → #161 follow-up |
 | A6.2 | Task 2b (T8 coverage half) |
-| A6.3 (B1′, B2′) | Task 1′ (S1′, S2′), Task 4 Step 4 |
+| A6.3 (B1′, B2′, B6, B7) | Task 1′ (S1′, S2′, S3′), Task 4 Step 4 |
 | A6.4 (B3, B4 no-regression) | Task 4 Step 4 |
 | A6.5 | Task 2b (T5) |
-| A6.6 | Task 3 (T8 break 1), Task 4 Step 2 (census) |
+| A6.6 | Task 3 (T8 break 1), Task 4 Step 2 (census on `d`, `h`, policy; `o` is the stated I5 exception) |
 | A6.7, A6.12 | Task 3 + Task 4 (only if B5 holds) |
 | A6.8 | Task 1 Step 10 |
 | A6.10 | Task 1 (T2), Task 2b (T3 digest arm) |
@@ -481,7 +538,8 @@ fallback fires (its own commit, tests, proofs, gate, `check-diff`).
 | A6.18 | Task 2b (checkpoint) |
 | A6.19 | Task 2a Step 3 (DAG), Task 2b Step 5 (cone graph, D6) |
 | A6.20 | Task 4 Step 3 |
-| A6.21 | Task 2a (W1-W6) |
+| A6.21 | Task 2a (W1-W10, W4b, W6b, O1), Task 2b (B1-B4) |
+| A6.23 | Task 1′ (P-4, P-5), Task 2a Step 3, Task 2b Step 5 |
 | A6.22 | Task 2a Step 4 (early), Task 4 Step 2 |
 | E14 | Task 4 Step 5 |
 | B5 (policy peak) | Task 4 Step 4; decides whether Task 3 stays |

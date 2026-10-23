@@ -504,7 +504,8 @@ the revert; both outcomes are recorded (I9, the `discrimination-proof` skill).
   resolved call into a symbol-only dependency routine is `unfetched-dependency`. Break (a):
   leave `dependency_calls` out → the leftover pass writes `resolved`, no flag → fails (R1-16).
   Break (b): keep the `"resolved"` arm → fails.
-- **T8 (I5, coverage equality)**: `witness.non_primary_members == 0` on CDO `d`, `o` and policy
+- **T8 (I5, coverage equality)**: `witness.non_primary_members == 0` on CDO `d` and policy (`o` struck by §14.7:
+  its cut composition is a stated I5 exception)
   (counted at the gate, by #220's `routine_role`); on the dependency fixture
   `tree.coverage[r] == det.summaries[r].coverage` for every routine. Break 1: set policy's
   production scope to `All` → the materialized count is > 0 → fails (R1-15). Break 2: make the
@@ -764,8 +765,11 @@ ordering plan has no witness scope.
 ## 14. Amendment 6A-12: the split, and the DAG witness
 
 Added 2026-10-23 at attempt 8, after Task 1's stop rule failed (ledger `## Task 1 STOP`).
-**Where §14 and §0-§13 disagree, §14 wins**; §14.7 lists every item it voids, keeps or
-changes. Citations in §14 are at master `6a2b7c8b` (the attempt-8 base; it differs from
+**Revised the same day after the §14 panel round 1** (register entries A1-01 to A1-28) and
+the operator's decision **B** for digest's output (§14.3.5): witnesses stop at the first
+dependency routine, and effects reached only through a dependency call are grouped per
+(boundary call site, effect type). **Where §14 and §0-§13 disagree, §14 wins**; §14.7 lists
+every item it voids, keeps or changes. Citations in §14 are at master `6a2b7c8b` (the attempt-8 base; it differs from
 `809fe684` only by the version bump in `CHANGELOG.md`, `Cargo.toml`, `Cargo.lock`) unless a
 commit is named. No number here is measured on `6a2b7c8b` yet: every number is from the Task 1
 bench (parent `7afa91a3`, `/work/bench/160-6/task1/m/`) or the witness prototype (scratch build
@@ -793,6 +797,20 @@ A prototype replaced the per-fact search with one BFS per (root, first hop) that
 (K 14.9 s + T 25.9 s for 5,479 subjects and 8.48 M raw facts) is past the 0.5 × Po cap of 6A-10. No witness design
 can bring `o` back, so the operator chose to split the step.
 
+The §14 panel round 1 then found three things the first text missed (scratch prototypes `w6/proto4.sh` to
+`proto9.sh`, outputs `w6/p4/` to `w6/p9/`):
+1. **The peaks were taken under the wrong allocator.** The probe runs in `aldump` (system malloc); production `alsem`
+   runs mimalloc with purge delay 0 (`alsem.rs:28`). Every peak in §14 is now taken under mimalloc (§14.6).
+2. **A digest of an ordinary file did not fit.** `CDOUnhandledSalesPagesMgt.Codeunit.al` (88 roots) with the
+   shortest-path witnesses alone: 301,356 effect facts, E′ 77.0 s, peak 22.5 GB. Digest's cost scaled with its
+   OUTPUT: every dependency write a root reaches became its own effect with full witness paths.
+3. **Digest's per-root ordering pass was quadratic.** `compute_ordering` materialized every happens-before pair of an
+   owner group and cloned the group's ops into every occurrence (§14.3.7). Cutting witnesses at the boundary alone
+   (option A) made it worse: `d` peak 28.3-29.0 GB, the 88-root file killed at 32 GB.
+
+Option B (§14.3.5) plus the on-demand happens-before test (§14.3.7) brings `d` to E′ 3.1 s at the parent's peak and
+the 88-root file to E′ 21.2-22.0 s at 3.1 GB (§14.4).
+
 ### 14.2 6A-12: the split
 
 **6A-12 (text for §9).** Step 6 moves **digest** onto the view's one composition over `rel.cone()` with the DAG
@@ -807,18 +825,18 @@ What it narrows in the epic's row 6 (`2026-10-18-issue-160-analysis-session-desi
 
 | Row 6 item | After 6A-12 |
 |---|---|
-| snapshot on `Transfer::Cone` | digest's tree only. The ordering cell, prove, fingerprint and diff keep the cut builder (prove/fingerprint/diff are single-app, where cut = cone, P13; 6A-9 unchanged) |
-| `WitnessScope`; one composition per view; G-1 | unchanged for digest, analyze-with-summaries and policy. The ordering plan has no witness scope (6A-6 void) |
+| snapshot on `Transfer::Cone` | digest's tree only, read with boundary witnesses and grouped boundary effects (§14.3.5). The cut builder keeps these readers (A1-17): the ordering cell (cross-app and single-app); prove, fingerprint and diff through `compose_snapshot` (single-app, where cut = cone, P13; 6A-9 unchanged); `compose_full_snapshot` cross-app (tests only until step 9); `compute_digest_effects` / `_with_ordering` (`digest.rs:3960`, `:3973`, the r4f projections); and a digest run whose plan includes an ordering detector (the ordering cell inside it) |
+| `WitnessScope`; one composition per view; G-1 | unchanged for digest, analyze-with-summaries and policy. The ordering plan has no witness scope (6A-6 void). **Exception (A1-18):** an analyze run with an ordering detector AND a detector that needs summaries (e.g. the transaction-integrity preset) composes twice: the det composition over the cone graph and the ordering cell's cut composition; §14.10 states its counter row |
 | `pd` arena in view identity; effects cells; `identities` cell (6A-11); G-2 retention | unchanged (digest is the one tree reader) |
 | `RAW_INHERITED_FACTS`, `ConeOutput::Both`, `inherited_raw` deleted | `ConeOutput` deleted (Task 1 already did); the other two only with Task 3 (§14.5) |
 | `LegacyCut` and `build_r3a3_source_only_base` deleted | **not in step 6.** The builder stays with one cross-app production reader, the ordering cell; its doc text says so and names #161. `aldump --issue160-full-graph-timings` is still deleted |
 | `unfetched-dependency` ledger rule (D6) | on the cone-graph tree only, as Task 1 built it (`TreeInputs::bodyless_dependency`, `None` on the cut). The cut keeps today's ledger, so D6 cannot move d47/d49/d51 |
 | R6-4 filter and link rule | unchanged (digest's tree; `PD_EDGE_UNMAPPED` 0 measured on `d`) |
-| #161 acceptance | the digest half (T1). The d47/d49/d51 half moves to the #161 follow-up |
+| #161 acceptance | the digest half (T1), in the grouped shape: `CallChain` reports `DB_MODIFY` and `COMMIT` through the boundary call into `Dep Lib.Outer`, with Customer (18) in the group's resources (§14.3.5). The d47/d49/d51 half moves to the #161 follow-up |
 | CDO digest wall and both peaks ≤ parent + band | **replaced by the cost bounds B1′ and B2′** (§14.4), a change to E15's "6 within parent" for `d` |
 | same for analyze with d47/d49/d51 | **restored as worded** (B3, B4 no-regression); 6A-10 void |
 | counters at the final row | §14.10 |
-| no raw `Vec` for any dependency subject | unchanged |
+| no raw `Vec` for any dependency subject | holds for every composition step 6 adds (digest, policy). **I5 exception (A1-06):** the cut composition the ordering cell keeps is `{false, All}` over every model routine, dependency rows included (`capability_cone.rs:4594-4609`), as today; it stays until the #161 follow-up moves the ordering cell. T8 and A6.6 therefore read `d` and policy only, not `o` (§14.7). If Task 3 is reverted (§14.5), policy's RAW build is a second exception, stated in the merge's CHANGELOG entry |
 | CDO `policy check` moves nothing | unchanged |
 | oracles: scoped-equals-unscoped (digest, prove, fingerprint, ordering) | digest arm kept; the ordering arm and the ordering root-set oracle (`Hyperlink`, rid-less) move to the #161 follow-up; prove/fingerprint arms stay with step 9 (6A-9) |
 | goldens: `r4_cross_app_program`, r4/r4f if d47/d49/d51 move | must NOT move (§14.3.4, A6.22) |
@@ -840,37 +858,90 @@ For a root `r` and a first hop `h` of `r`:
    Lemma 22.6); keeping all of them gives the predecessor DAG, whose source-to-`v` paths are exactly the shortest paths
    to `v`. Shortest paths are simple, so the old per-path visited set is not needed.
 3. **The DAG depends only on (r, h), never on the fact.** It is built on first use and shared by every effect fact of
-   `r` with first hop `h` (the root's `HopCache`, which is per root, `digest.rs:3315`).
+   `r` with first hop `h`, in a per-root `DagCache` (a map `(first-hop kind, id) → DAG`), separate from the
+   per-root hop memo `HopCache` (`digest.rs:1013-1043`, which stays an edge → hop memo; A1-27). Digest owns one
+   `DagCache` per root (`digest_one_root`). **The fingerprint query owns one per root too** (A1-05): today
+   `reconstruct_witness_paths_pub` builds a fresh `HopCache` per call (`digest.rs:4608-4615`); it takes the caller's
+   `&mut HopCache` and `&mut DagCache`, and `fingerprint_query.rs:560-600` holds one pair per root across that root's
+   rendered facts. Test W8 pins the build count.
 4. **Per fact `f`:** `C_f` = the carriers of `f` (`is_bfs_carrier`, the `(op, kind)` bucket, as today). `dmin` = the
-   least `δ(c)` over reached `c ∈ C_f`. The witnesses are the DAG paths from a seed to a carrier at `dmin`, carriers
-   in sorted id order, predecessors in recorded order, at most `HARD_PATH_CAP + 1` (257). `truncated` holds when
-   257 were found, i.e. more than `HARD_PATH_CAP` shortest paths exist. A carrier at `dmin` has no carrier before it
-   on its shortest path (that carrier would be nearer), so "stop at the first carrier on the path" is kept.
+   least `δ(c)` over reached `c ∈ C_f`. The witnesses are the DAG paths from a seed to a carrier at `dmin`. A
+   carrier at `dmin` has no carrier before it on its shortest path (that carrier would be nearer), so "stop at the
+   first carrier on the path" is kept. **Which paths, in which order** (A1-01): the paths are enumerated in the
+   order the merge sorts them, so the capped list is the true prefix. Backward from the carriers at `dmin`, the DAG
+   nodes that lie on a shortest path to one of them are marked; a forward depth-first walk from the seeds visits
+   only marked nodes and takes successor edges in the order of their hop JSON (the merge's tiebreak,
+   `ProjPath::key_cmp`). All these paths have length `dmin + 1`, so this order is the merge's (length, JSON)
+   order. The walk stops after `cap + 1` paths, where `cap` is the CALLER's cap (A1-04: `HARD_PATH_CAP` = 256 for
+   digest and prove; the user's `--witness N` for the fingerprint query, `fingerprint_query.rs:575`, `:596`).
+   `truncated` holds when `cap + 1` were found; `path-limit-reached cap=N` is pushed then, as today.
+   Opaque-boundary seed paths (A1-21) are found as today (call-site and op seeds only, 1 hop, before any carrier
+   path because they are shorter) and count toward `cap + 1`. A non-seed opaque routine is reached by the DAG (no
+   `valid_nodes` prune) but is never reported: only carrier paths are read off the DAG. Test W9 pins both.
 5. **What does not change.** Direct facts (case A), the root's own proofs (`enumerate_proofs`, `digest.rs:880`, which
    keeps its own `MAX_STATES` limit and its `state-limit-exceeded` diagnostic), the opaque-boundary report for
    call-site and op seeds, the event-hop rule (a subscriber that reaches no carrier gives no path: the old code pruned
    it by `valid_nodes`; the DAG gives it no path because only carrier paths are read), the first-hop contract, the
    merge, the sort, `MAX_PATHS` = 3 printed paths per effect, and `HARD_PATH_CAP` as the pre-capping bound.
-6. **Gap the prototype left, to close in Task 2a.** The prototype never sets `depth_exceeded`: a fact whose only
-   carrier lies past 64 hops reads `terminal-not-found` instead of today's depth-limit diagnostic. The DAG build
-   records whether it stopped expanding a node at `MAX_DEPTH` that had hop edges; when `dmin` is absent and that flag
-   is set, the outcome carries today's depth-limit diagnostic and `incomplete`. Test W6 pins it.
+6. **The depth limit is per fact** (A1-07). The DAG build records the nodes it did not expand at `MAX_DEPTH` (the
+   depth frontier). For fact `f`, the outcome carries today's `depth-exceeded` diagnostic and `incomplete` exactly
+   when `f` has no carrier path in the DAG, no proof path (`enumerate_proofs`), and a carrier of `f` is reachable
+   from a frontier node (checked against `f`'s carrier set by a reverse walk from the carriers, bounded by the
+   frontier; the walk is built only for facts with no path). A fact with a found witness never carries it. This is a
+   stated change: today `depth_exceeded` is set whenever the search pops any node past 64 before its cut, even when a
+   witness was found (`digest.rs:1473-1481`, `:1660-1667`). Tests W6 (no path, carrier past 64 → diagnostic) and W6b
+   (carrier at 2 hops plus an unrelated 70-hop branch → no diagnostic; a fact whose only carrier is on a different
+   deep branch → no diagnostic for this fact).
 
-**One rule for every consumer.** `reconstruct_witness_paths` serves digest, prove (`compute_digest_effects_cli`),
-fingerprint's query (`reconstruct_witness_paths_pub`, `digest.rs:4594`, called at `fingerprint_query.rs:575`, `:596`)
-and the ordering cell (`digest_query_with` with `ordering_witness_only`). The DAG replaces the search for all of them;
-keeping the old search beside it would be two answers to one question. Its cost on the cut is neutral (§14.3.4), so
-the ordering cell may keep it without a bound change.
+**One search rule for every consumer.** `reconstruct_witness_paths` serves digest, prove
+(`compute_digest_effects_cli`), fingerprint's query (`reconstruct_witness_paths_pub`, `digest.rs:4594`, called at
+`fingerprint_query.rs:575`, `:596`) and the ordering cell (`digest_query_with` with `ordering_witness_only`). The DAG
+replaces the per-fact search for all of them; keeping the old search beside it would be two answers to one question.
+The ordering cell runs the DAG (A1-28) at a measured neutral cost (§14.3.4). **The boundary rule and the grouping
+(§14.3.5) apply only to digest's cone-graph tree**: they are switched on by a flag the tree carries, so the cut
+(ordering, prove, fingerprint, diff, r4f) never sees them.
 
 **Cost.** Per root: one `O(V_h + E_h)` BFS per distinct first hop `h`, plus path enumeration bounded by
 257 × 64 hops per fact. The old cost was up to 25,000 expanded states per fact, times every effect fact. The new
 cost grows with the number of first hops, not with the number of inherited facts.
 
-**Rejected:** (a) capping the per-fact enumeration at `MAX_PATHS` (prototype "cap 3": `d` E′ 4.6-4.9 s, not 5.8-6.0 s):
-the merge sorts and dedupes ALL pre-capping paths across merged facts and computes per-path conditionality from them
-(`AccumulatedEffect::all_paths`, `all_path_conds`), so the printed paths would change for another reason. (b)
-Counting shortest paths by dynamic programming over the DAG to set `truncated` without enumerating: same objection,
-the merge needs the paths. (c) One DAG per root for all first hops: breaks the first-hop contract.
+**Rejected:** (a) capping the per-fact enumeration at `MAX_PATHS` instead of the caller's cap: it would change
+`viaPathsTruncated` and conditionality inputs for a reason unrelated to the witness rule (a cap is the caller's
+contract, A1-04). (b) Counting shortest paths by dynamic programming instead of enumerating `cap + 1`: it answers
+`truncated` but not the printed prefix; the ordered walk of item 4 answers both. (c) One DAG per root for all first
+hops: breaks the first-hop contract.
+
+#### 14.3.1a The streaming top-k merge (A1-02)
+
+The merge (`merge_normalize_via_paths`, `digest.rs:3164-3226`) keeps every deduped pre-capping path of an effect
+(`AccumulatedEffect::all_paths`, `all_path_conds`, `:3283-3291`) until the root is done, although every output it
+produces is a fold:
+- the printed paths are the first `MAX_PATHS` distinct paths in (length, JSON) order;
+- `viaPathsTruncated` is "an input was truncated, or more than `MAX_PATHS` distinct paths exist" (`:3215-3222`);
+- conditionality is `effect_conditionality` over all distinct paths (`conditionality.rs:90-122`): the least rank
+  (ranks are distinct, `:32-40`, so the least-rank value is unique), plus "has an unconditional path"; dedupe keeps
+  the least restrictive conditionality of equal paths (`digest.rs:3199-3212`), so the overall least is the same with
+  or without duplicates.
+
+So each effect keeps instead: the `MAX_PATHS + 1` smallest distinct paths with their conditionality (a bounded
+sorted window; a path larger than every kept one is dropped, and an evicted path can never return, since the window
+only ever keeps smaller ones), the running least rank, "has an unconditional path", "has a non-`unknown` path", and
+the OR of the inputs' truncation. Output is byte-equal to today's merge for any input sequence; test W10 is that
+equivalence over every effect of the corpus (old merge kept test-only as the oracle) plus a hand-stated input with
+equal-JSON paths of different conditionality. Memory per effect: O(`MAX_PATHS`).
+
+#### 14.3.1b Conditionality over shortest witnesses (A1-03, accepted, operator veto noted)
+
+An effect's conditionality is the least restrictive over its witness paths, as today; the witness paths are now the
+shortest ones (plus the proofs). Today, when the old search finished (no cut, no limit), its set was every simple path
+that stops at the first carrier, of any length. So if the shortest path is guarded and a longer path is unguarded,
+today said `unconditional-on-success`, the DAG says `conditional`. This is accepted as the rule's meaning: a
+witness is a shortest path, and conditionality is read over the witnesses. Measured on CDO on today's cut tree: 2 of
+138 effects changed conditionality, both `unknown` → `conditional` where the old search hit its state limit
+(§14.3.4). Test W7 pins it (a guarded shortest path plus an unguarded longer one → `conditional`). **Operator veto
+point:** the sound alternative (a carrier reachable at a depth greater than `dmin` turns the effect's
+conditionality to `unknown` unless a witness is unconditional) would mark most dependency effects `unknown`; it is
+not taken unless the operator says so.
 
 #### 14.3.2 Removed limit
 
@@ -880,8 +951,9 @@ comes only from `enumerate_proofs`. Its CDO count on the cut is part of Part 1 (
 #### 14.3.3 Determinism
 
 Seeds are sorted; out-edges are pre-sorted; the BFS queue is FIFO; predecessors are appended in that order;
-carriers at `dmin` are sorted. No hash-map iteration order reaches the output. The roots still run in parallel
-(`digest_query_with`, `roots.par_iter()`, `digest.rs:3044`), each with its own `HopCache`.
+carriers at `dmin` are sorted; the forward walk takes successors in hop-JSON order; a group's resources are a sorted
+set. No hash-map iteration order reaches the output. The roots still run in parallel (`digest_query_with`,
+`roots.par_iter()`, `digest.rs:3044`), each with its own `HopCache` and `DagCache`.
 
 #### 14.3.4 Output changes, measured on the prototype
 
@@ -904,49 +976,129 @@ Measured on CDO with production `alsem` built from the prototype, on TODAY's cut
 Reading: the old search filled the 3 printed slots with LONGER paths when fewer than 3 shortest ones existed
 ("padding"). The DAG prints shortest paths only, so 30 effects now print 2. The 4 effects still mixing lengths merge
 facts with different first hops or carriers. The 4 truncation flips and the 2 conditionality flips are expected
-where the old search hit its state limit (`incomplete` folds into truncated and makes conditionality `unknown`); the
-claim-time triage confirms each (P-4). These are intended changes of a Rust-owned output (CLAUDE.md, Testing
-Philosophy): every printed path is now a shortest witness, and truncation means "more than 256 shortest paths".
+where the old search hit its state limit (`incomplete` folds into truncated and makes conditionality `unknown`).
+These are intended changes of a Rust-owned output (CLAUDE.md, Testing Philosophy): every printed BFS path is now a
+shortest witness. The producer proofs (`enumerate_proofs`) are unchanged and may still be longer.
 
-Not yet measured: the corpus goldens. The rule may move digest, prove and fingerprint witness goldens (padding,
-truncation) and must not move r4/r4f or `r4_cross_app_program` (P-5). Single-app CDO digest is the DAG-only diff
-(no cone-graph change single-app, P13; no body-less rows single-app, Task 1).
+**`viaPathsTruncated` keeps its public meaning** (A1-08): an input witness set was truncated (the search reached its
+cap, or a proof was truncated or incomplete), or more than `MAX_PATHS` (3) distinct paths exist for the effect. What
+changes is only the path set it is read over (shortest witnesses), so the flag flips where that set changes.
+
+**The output-change allowlist** (A1-09) for the DAG rule, in any universe — a moved golden or CDO field outside it
+is unexplained:
+- `viaPaths` (padding gone; a witness the old search lost to its state limit now found) and `viaPathsTruncated`;
+- `conditionality`, and the `unknown`/`conditional` reasons that follow from it;
+- the diagnostics `state-limit-exceeded` (BFS half: gone), `depth-exceeded` (per fact, item 6),
+  `path-limit-reached` (now `cap + 1` shortest), `terminal-not-found`;
+- occurrence and fact ids (`factId`, `canonicalKey`, `linkSignature`): they hash the printed via paths
+  (`build_canonical_key`, `digest.rs:2780-2820`), so they move with them;
+- prove's answer and blockers where they read truncation or conditionality (`prove.rs:405-558`);
+- the fingerprint query's witness output.
+Moves allowed only for digest's cone-graph tree (§14.3.5): grouped effects, `enters <App>.<Routine>` terminals, the
+group `detail`. Never allowed: `o`'s SARIF (A6.22), r4/r4f, `r4_cross_app_program`, effect types/details/evidence on
+the cut. P-4 (triage of every changed CDO effect) and P-5 (the corpus goldens) are REQUIRED gates (A1-10): their
+results are recorded before Task 2a's commit.
+
+#### 14.3.5 Rule B: boundary witnesses and grouped boundary effects (operator decision, digest's tree only)
+
+The IFDS summary-edge idea (Reps, Horwitz and Sagiv, "Precise interprocedural dataflow analysis via graph
+reachability", POPL 1995): a callee's effect is used at the call site as a summary, without re-walking the callee.
+Here, applied to the dependency boundary of digest's cone-graph tree:
+
+1. **Boundary witness.** A witness path (item 4 of §14.3.1) ends at the first DEPENDENCY routine it enters (role by
+   #220's rule). The kept path is its primary-code prefix; its terminal hop is the boundary call:
+   `kind: callsite` at the call site of the edge into the dependency routine, display text
+   `enters <Dep App name>.<Routine display>`. An edge into the dependency routine that has no call site (an event
+   dispatch or an implicit trigger) gets a synthetic terminal with the same display. Paths inside dependency code
+   are never enumerated or printed. Paths that differ only inside dependency code become one path.
+2. **Grouping.** An effect whose witnesses all end at boundary terminals (it is reached only through a dependency
+   call) is keyed by (effect type, boundary call site) instead of `dedupe_key`'s (type, terminal, detail): all its
+   resources become ONE effect. The group's `detail` is
+   `{"boundary": "<Dep App name>.<Routine display>", "resourceCount": "<N>", "resources": "<r1>, <r2>, …"}` (detail
+   values stay strings, as today): N distinct resources, the first 10 in resource-id order, each its
+   `resourceDisplay` when present, else its `resourceId`. `evidence` is the boundary call site; `provenance`
+   `transitive`; `viaPaths` the primary prefixes. An effect with a primary-code terminal is unchanged.
+3. **Ordering.** The group is ONE effect and so ONE ordering occurrence (its terminal is the boundary call site).
+4. **Reads stay out.** Digest reports no reads today (`map_op` has no read op); grouping does not add any.
+5. **#161.** On the dependency fixture, `CallChain` reports `DB_MODIFY` and `COMMIT` as two groups through the call
+   into `Dep Lib.Outer`, Customer (18) in the `DB_MODIFY` group's resources. T1 asserts exactly that.
+
+Measured on CDO (prototype `w6/proto9.sh`, mimalloc, 3 rounds each; §14.4): `d`'s 15,983 effect facts give 1,020
+effects (56 groups, 19,509 printed hops; the shortest-path witnesses alone gave 15,983 effects and 1,230,675 hops);
+the 88-root file gives 22,232 effects (862 groups, 411,655 hops).
+
+Tests: B1 (T1's shape above; break: key by `dedupe_key` → one effect per resource → fails); B2 (a primary-terminal
+effect beside a boundary group is unchanged; break: group every transitive effect → fails); B3 (more than 10
+resources → `resourceCount` exact, 10 listed in order); B4 (the rule is off on the cut: the same fixture
+single-app prints today's per-resource effects; break: switch the flag on for the cut → fails).
+
+#### 14.3.6 What a reader of digest sees (the CHANGELOG note)
+
+"Digest (cross-app, the default) now reports what a changed routine does through dependency code: effects reached
+through a call into a dependency app are grouped per call and effect type, with the dependency routine named
+(`enters <App>.<Routine>`), the number of resources and up to 10 of them. Witness paths stop at the dependency
+boundary. Every printed witness path is a shortest one."
+
+#### 14.3.7 The ordering engine's happens-before test, on demand (A1-11)
+
+`compute_ordering` (`ordering_engine.rs:248`) built every happens-before pair of each owner group
+(`build_hb_edges`, `ordering.rs:181-205`, all pairs, two `String` clones per edge) and answered each query by a
+linear scan of all edges (`has_intra_edge`, `ordering_engine.rs:376-378`, called inside nested loops at `:555` to
+`:1430`); it also cloned the whole group's ops into every occurrence (`terminal_routine_ops`, `:394-401`; the field
+has no reader outside tests). With thousands of effects sharing an owner that is quadratic in memory and super-
+quadratic in time. Fix, byte-equal by construction:
+- `has_intra_edge(x, y)` is answered on demand: same group, positions `i` and `j`; for `i < j` it is
+  `OB(x,y) && MC(x,y)`; for `i > j` it is `!(OB(y,x) && MC(y,x)) && OB(x,y) && MC(x,y)` — exactly the edge
+  `build_hb_edges` emits for that pair (its `else if`). Position lookup through a map built once per call, from an
+  occurrence id to ALL its (group, position) pairs: the old scan matched an edge between any two occurrences with
+  those ids, so the on-demand test answers true when any pair of positions does.
+- each group's ops are built once and shared (`Arc<[OrderedOp]>`) by its occurrences.
+Measured (prototype): CDO `o` SARIF byte-identical (`--scope all`, `--scope primary`, `--single-app`; hash
+`60708358…`, the parent's); the cut digest JSON byte-identical to the DAG-only build; `d`'s per-root ordering pass
+2.5 → 0.2 CPU-s. Test O1: the on-demand test equals `build_hb_edges` for every ordered pair of every corpus root's
+groups (break: drop the `!(…)` guard → fails on a pair where both directions hold).
 
 ### 14.4 Cost bounds for `d` (replace B1, B2 and S1/S2 for `d`)
 
-`d` cannot stay within parent + band: on the cone graph each root carries ~116 times the effect facts, and that work
-is #161's point. So `d` gets a STATED cost, like 6A-10 gave `o` before this amendment voided it.
+`d` cannot stay within parent + band: on the cone graph its roots reach every write their dependency callees make,
+and reporting them is #161's point. So digest gets a STATED cost (operator decision 1), for `d` and, since a
+digest of a whole file is the ordinary case (A1-12), for a multi-root file:
 
-Measured terms (ms; DAG runs `w6/p1/d.out`, `d-2.out`, `w6/p2/full-{1,2,3}.out`; parent terms from Task 1):
+- `d` = cross-app `digest <WS> --file src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al` (3 roots);
+- `h` = cross-app `digest <WS> --file src/Features/HandledState/CDOUnhandledSalesPagesMgt.Codeunit.al` (88 roots).
 
-| Term | 5 DAG runs | median | quiet-run spread |
-|---|---|--:|--:|
-| K (inputs + compose) | 6,874.9 / 6,943.0 / 6,661.3 / 6,721.9 / 7,422.2 | 6,874.9 | 761 |
-| T (`compose_tree`) | 2,928.2 / 3,013.3 / 2,954.4 / 2,939.7 / 3,223.0 | 2,954.4 | 295 |
-| E′ (S4 entries + unresolved cones) | 5,908.2 / 6,016.8 / 5,805.8 / 10,562.7 / 6,698.8 | 6,016.8 | 893 (the 10.6 s run excluded: its ordering CPU tripled, a load mark) |
-| D_P (parent det cone, Task 1) | — | 6,894.9 | — |
-| S_P(d) (parent cut base + derive + effects, Task 1) | — | 2,901.4 | — |
+Measured on the rule-B prototype (`w6/proto9.sh`, output `w6/p9/`; the probe under mimalloc with purge delay 0,
+§14.6; 3 rounds each; ms and KiB). Parent terms are from Task 1 and are re-measured under the same rule at Task 1′.
 
-`S1′(d) = K − D_P + T + E′ − S_P = 6,874.9 − 6,894.9 + 2,954.4 + 6,016.8 − 2,901.4 = 6,049.8 ms` predicted extra wall.
+| Term | `d`, 3 rounds | `d` median | `h`, 3 rounds | `h` median |
+|---|---|--:|---|--:|
+| K (inputs + compose) | 6,132.8 / 6,012.1 / 5,885.9 | 6,012.1 | 6,212.4 / 6,932.8 / 6,351.9 | 6,351.9 |
+| T (`compose_tree`) | 2,321.0 / 2,243.3 / 2,228.1 | 2,243.3 | 2,530.2 / 2,617.4 / 2,589.4 | 2,589.4 |
+| E′ (S4 entries + unresolved cones) | 3,162.0 / 3,058.6 / 3,080.6 | 3,080.6 | 22,004.8 / 21,203.5 / 21,251.4 | 21,251.4 |
+| probe process peak | 3,100,628 / 3,116,448 / 3,098,464 | 3,100,628 | 3,115,068 / 3,104,576 / 3,122,936 | 3,115,068 |
+| effects (groups) | 1,020 (56) | | 22,232 (862) | |
+| digest's ordering pass, CPU-s | 0.2 | | 111.8-124.8 | |
+| D_P, S_P(d) (Task 1) | 6,894.9, 2,901.4 | | — | |
 
-Peaks (KiB, `maxrss.py`): DAG probe 5,981,948 / 5,997,136 / 6,008,664 / 6,010,304 / 6,013,060 (median 6,008,664,
-spread 31,112); parent whole `d` 3,108,076 / 3,128,520 / 3,180,684 (median 3,128,520). Increment 2,880,144 KiB
-(2.75 GiB). The probe stops after E′ but holds what the command holds at that point (model, rel, caps, tree, effects);
-later the tree is released and `det`/`l4` are the parent's, so the command's peak is the probe's peak (checked by B2′).
+`S1′(d) = K − D_P + T + E′ − S_P = 6,012.1 − 6,894.9 + 2,243.3 + 3,080.6 − 2,901.4 = 1,539.7 ms` predicted extra
+wall for `d`; the probe peak is the parent's whole-command peak (3,128,520 KiB) within noise.
 
-**The bounds:**
+**The bounds** (pre-stated; the operator's numbers):
 
-| Bound | Rule | Margin | Void check |
+| Bound | Rule | Measured | Void check |
 |---|---|---|---|
-| **S1′** (claim-time stop rule, probe) | `K − D_P + T + E′ − S_P ≤ C_d`, **C_d = 8,000 ms** | 1,950 ms (32 %) over 6,049.8 = the sum of the three terms' quiet spreads | probe rounds ≥ 3 in the quiet slot |
-| **S2′** (claim-time stop rule, probe) | probe peak `≤ Pm(d) + 3,145,728 KiB` (3.0 GiB) | 265,584 KiB over the measured increment (9 %; 8.5 × the probe spread) | none |
-| **B1′** (A6.3 wall, final bench) | `Hd ≤ Pd + C_d + Bd` | as S1′ | `Bd ≤ 0.05 × Pd`, no load tick > 8 (§8.1) |
-| **B2′** (A6.3 peak, final bench) | `Hm(d) ≤ Pm(d) + 3,145,728 KiB` | as S2′ | none |
+| **S1′** (Task 1′ stop rule, probe) | `d`: `K − D_P + T + E′ − S_P ≤ 8,000 ms` | 1,539.7 ms | probe rounds ≥ 3 in the quiet slot |
+| **S2′** (Task 1′ stop rule, probe) | `d`: probe peak `≤ Pm(d) + 3,145,728 KiB` (3.0 GiB) | ≈ Pm(d) | none |
+| **S3′** (Task 1′ stop rule, probe) | `h`: E′ `≤ 60,000 ms` and probe peak `≤ 12,582,912 KiB` (12 GiB) | 21,251.4 ms; 3,115,068 KiB | probe rounds ≥ 3 |
+| **B1′** (A6.3 wall, final bench) | `Hd ≤ Pd + 8,000 ms + Bd` | — | `Bd ≤ 0.05 × Pd`, no load tick > 8 (§8.1) |
+| **B2′** (A6.3 peak, final bench) | `Hm(d) ≤ Pm(d) + 3,145,728 KiB` | — | none |
+| **B6** (multi-root wall, final bench) | `Hh ≤ Ph + 60,000 ms + Bh` | — | `Bh ≤ 0.05 × Ph`, load as B1′ |
+| **B7** (multi-root peak, final bench) | `Hm(h) ≤ 12,582,912 KiB` | — | none |
 
-At `Pd` = 21.4 s and `Pm` = 3,128,520 KiB that is ≤ 29.6 s and ≤ 6,274,248 KiB (≈ 1.38 × and 2.0 × the parent).
-`Pd`, `Pm` and every term are re-measured at Task 1′ on `6a2b7c8b`; `C_d` and the 3.0 GiB increment are fixed here.
-The bounds are pre-stated: a later saving (§14.6) does not tighten them, and a miss is never relabelled. The
-post-attach peak stays "not measured" (6A-8).
+The `h` numbers set no tighter bound than the operator's: 12 GiB keeps four parallel `alsem` jobs inside the 32 GB
+tentacle limit with room for the OS, and 60 s is the slowest digest a review hook should wait for. `Pd`, `Pm`, `Ph`
+and every term are re-measured at Task 1′ on the branch's base; the bound constants are fixed here. A later saving
+does not tighten them, and a miss is never relabelled. The post-attach peak stays "not measured" (6A-8).
 
 ### 14.5 `o` and policy under the split
 
@@ -959,36 +1111,36 @@ post-attach peak stays "not measured" (6A-8).
   F13 runs once (§10); if it still misses, **Task 3's commit is reverted on the branch before the merge**
   (`git revert`, no force), `RAW_INHERITED_FACTS`, policy's RAW build and `inherited_raw` stay, and a follow-up is
   filed. Task 2 does not depend on Task 3.
+- **The rollback is independent of Task 2b** (A1-13). Task 2b turns `build_detector_artifacts` into an assembler
+  that consumes `caps` and composes nothing; today's policy RAW build calls it to compose (`pipeline.rs:255-272`).
+  So Task 2b keeps policy's RAW build working by giving it a command-local composing builder (the old body, over the
+  same `det_cone_inputs`, `ConeScope { derived: true, raw: All }`), used only by policy until Task 3 deletes it.
+  Tests: Task 2b's commit alone passes the policy goldens and the CDO `policy check` `cmp`; the state after a revert
+  of Task 3 is checked the same way before the merge if the revert fires.
 
 ### 14.6 Memory plan
 
-Measured on the prototype (`w6/p2/`, 3 rounds each):
+**Measurement rule (A1-14).** Every peak that a bound reads is taken under production `alsem`'s allocator: on
+`alsem` itself, or on a probe binary that installs mimalloc and runs with `MIMALLOC_PURGE_DELAY=0` (`alsem.rs:28`,
+`:31-63`). The first §14 text took its probe peaks on `aldump` under the system allocator, which inflated them
+(same `d` run: 6.0 GB system malloc, 4.79 GB mimalloc; `MALLOC_ARENA_MAX=2` alone gave 4.71 GB).
 
-| Configuration | Peak (KiB, median) | Over K+T |
-|---|--:|--:|
-| K + T only (effects skipped) | 3,509,788 | — |
-| effects, old search (Task 1 probe, median of 3) | 4,030,680 | +520,892 |
-| effects, DAG, every DAG of a root kept | 6,008,664 | +2,498,876 |
-| effects, DAG, "LRU-1": a root's DAG dropped when its next first hop's DAG is built | 6,007,148 | +2,497,360 |
+Where the memory went (`d`, mimalloc, `w6/p7/`, `w6/p9/`, KiB):
 
-**Dropping each first hop's DAG does not lower the peak.** LRU-1 is a stricter version of "drop each DAG after its
-facts" (it holds at most one DAG per root), and it saved 1,516 KiB, inside noise. It also doubled E′ (10.2-11.6 s),
-because a root's facts are not grouped by first hop, so DAGs were rebuilt. An order-preserving "drop after last use"
-(a pre-pass finds each first hop's last fact index; the effect order must not change, since `effect_map` keeps
-insertion order) would keep the 6 s E′ but, by the LRU-1 measurement, the same 6.0 GB. So it is NOT in the design.
+| Configuration | Peak |
+|---|--:|
+| K + T only (effects skipped) | 3,117,124-3,126,384 |
+| shortest-path DAG witnesses, no boundary | 4,784,684-4,793,032 |
+| same, one thread | 3,996,264 |
+| same, at most 3 paths per fact | 4,739,788 |
+| rule A alone (boundary witnesses, no grouping) | 28,269,536-29,036,648 |
+| **rule B + on-demand happens-before (the design)** | **3,098,464-3,116,448** |
 
-The +2.5 GB is therefore not DAGs kept across first hops. The likely owner is the DAGs live at the same time: one per
-root, and `d`'s 3 roots run in parallel. Unlike the old search, which only walked `valid_nodes` (routines that can
-reach a carrier), the DAG BFS reaches every routine within 64 hops of the first hop, and the prototype stores it as
-`HashMap<&str, (usize, Vec<(Option<&str>, &edge)>)>`: about 48 B per entry plus one heap `Vec` (≥ 96 B) per routine
-and 24 B per predecessor. This is an estimate, not a measurement; probe P-2 attributes it (a DAG census and a
-`RAYON_NUM_THREADS=1` run). If it holds, a compact DAG (routines as dense `u32` ordinals, distances in a `Vec<u32>`,
-predecessors in one flat `Vec<(u32, u32)>` indexed by offsets) stores about 8 B per predecessor and no per-routine
-allocation, a 4-6 × smaller DAG. Then the peak would be near 4.0-4.5 GB. That is the fallback F-W1, not the design:
-the stated B2′ is met without it.
-
-The bound: B2′ = parent + 3.0 GiB (§14.4). Justified because the prototype's worst run is 2.75 GiB over the parent,
-peaks repeat within 31 MB, and later phases do not exceed the parent's. The tentacle limit (32 GB) is far away.
+Attribution: not the DAGs (4 builds, 76,897 nodes, 95,061 predecessors for `d`), not the number of paths per fact
+(3 instead of 256 changed nothing), but the number of EFFECTS per root and digest's per-root ordering pass over them
+(§14.3.7), times the roots running in parallel. Rule B bounds the effects; §14.3.7 removes the quadratic. The merge's
+retained paths are bounded too (§14.3.1a). P-2 (a census arm, `digest.effects` and `digest.ordering` buckets per
+root) confirms this at Task 1′ on the port; a peak more than 10 % off the prototype's is a finding, as for time.
 
 ### 14.7 What is void, kept or changed
 
@@ -1007,8 +1159,11 @@ peaks repeat within 31 MB, and later phases do not exceed the parent's. The tent
 | F2 (ordering ingredient gate) | void: it was `o`'s first rung |
 | F4 | kept, dormant; its reader is now digest's per-root ordering pass only |
 | F5, F6, F7, F9 | kept |
-| F8 (> 30 % FP on new d47/d49/d51 findings) | void for step 6: no d47/d49/d51 finding may move (A6.22); a move is a defect (F-W3) |
-| F10 | replaced by F-W1/F-W2 for B1′/B2′; kept for B3/B4 with "one fix from F11" |
+| F8 (> 30 % FP on new d47/d49/d51 findings) | void for step 6: no d47/d49/d51 finding may move (A6.22); a move stops the claim (F-W3) |
+| F10 | replaced by F-W1/F-W2 for B1′/B2′/B6/B7. For B3/B4 (`o`): a miss STOPS the claim and goes to a re-panel (A1-15); F11 touches only digest's composition and cannot fix `o` |
+| T8, A6.6 (no raw for a dependency subject) | read on `d`, the multi-root `h` and policy only; `o` keeps the cut's `{false, All}` composition, a stated I5 exception (§14.2, A1-06) |
+| W-tests | W1-W6 as first written, plus W6b, W7, W8, W9, W10, B1-B4, O1 (§14.3) |
+| §4.7 `Cell::Effects` contents | each root keeps its S4 entry, its unresolved-cone items AND their `UnresolvedTraversal` (depth, truncation, visited routines; serialized at `digest_cli.rs:1230-1246`, read by prove's obligations at `prove.rs:207-224`), plus `identities` and `coverage` (A1-16). A test pins the serialized traversal block of a cli-b digest golden after the tree is released |
 | F11 (#228, reuse the base's direct maps) | kept, now only as a K reducer for `d` |
 | F12 (`dependency_calls` > 50 MB) | void unless P8 changes: 40,771,782 B measured |
 | F13 | kept for Task 3 |
@@ -1023,10 +1178,10 @@ peaks repeat within 31 MB, and later phases do not exceed the parent's. The tent
 
 | # | If | Then |
 |---|---|---|
-| F-W1 | S2′ or B2′ misses | the compact DAG of §14.6, plus the order-preserving last-use drop only if P-2 showed retention matters. One commit with W1-W6 re-run, identity gates re-run (golden targets, A6.22), Part 2 once more. Still missed → FAILS |
-| F-W2 | S1′ or B1′ misses (met-not-void) | name the span (`trace_summary.py`); ONE fix from F11 or F-W1 (a smaller DAG is also a faster DAG); re-run Part 2 once; still missed → FAILS |
-| F-W3 | the DAG moves any d47/d49/d51 finding (CDO Part 1, r4, r4f, `r4_cross_app_program`) | a defect of the identity claim; triage the finding's witness. Not closed in one attempt → stop |
-| end | any bound FAILS after its one fix, or S1′/S2′ fail at claim | the claim stops before Task 2b merges anything that switches digest, files "step 6 digest exceeds its stated cost on CDO" with the numbers, and the epic re-plans. No bound is relabelled. Task 1's groundwork (`edca9f0c`, cherry-picked from `72abd499`) stays as it is |
+| F-W1 | S2′, S3′'s peak, B2′ or B7 misses | name the owner with P-2's census (`digest.effects`, `digest.ordering`, DAG, merge window). ONE fix aimed at that owner (A1-12): cap the parallel roots of digest's effects step to the CPU count ÷ 2 if the owner is per-root and the roots overlap; or the compact DAG (dense `u32` ordinals, one flat predecessor `Vec`) if the DAG owns it. Re-run W-tests, identity gates (golden targets, A6.22) and Part 2 once. Still missed → **D** (below) |
+| F-W2 | S1′, S3′'s E′, B1′ or B6 misses (met-not-void) | name the span (`trace_summary.py`); ONE fix from F11 or F-W1's; re-run Part 2 once; still missed → **D** |
+| F-W3 | any d47/d49/d51 finding moves (CDO Part 1, r4, r4f, `r4_cross_app_program`) | stop and ask the operator (A1-26): a move may be a real improvement of a shortest witness, but A6.22 forbids it in this step without a decision |
+| **D** (pre-stated, automatic) | F-W1 or F-W2 failed, or S1′/S2′/S3′ fail at Task 1′ | step 6 keeps Task 1's groundwork (`edca9f0c`) and Task 3 (policy, if B5 holds); **digest stays on the cut**: Task 2b is not merged, Task 2a (the DAG rule, rule B's code paths off, the on-demand happens-before test) stays only if its own gates are green; the digest-on-cone-graph switch is filed as a follow-up with the numbers. No bound is relabelled |
 
 ### 14.9 Acceptance matrix and measurement plan deltas
 
@@ -1034,26 +1189,35 @@ Acceptance (§6):
 
 | # | Change |
 |---|---|
-| A6.1, A6.9 | T1, digest half; the d47 half → #161 follow-up |
-| A6.3 | **B1′, B2′** (cost bounds), feasible on the prototype's numbers |
+| A6.1, A6.9 | T1, digest half, in rule B's grouped shape (§14.3.5); the d47 half → #161 follow-up |
+| A6.3 | **B1′, B2′** (cost bounds), plus **B6, B7** for the multi-root file; feasible on the prototype's numbers (§14.4) |
+| A6.6 | T8 on `d`, `h` and policy; `o`'s cut composition is the stated I5 exception (§14.2) |
 | A6.4 | **B3, B4 no-regression**, feasible (measured neutral) |
 | A6.10 | digest arm of T3 only |
 | A6.11 | → #161 follow-up |
 | A6.15 | `ConeOutput`, the timings mode and (with Task 3) `RAW_INHERITED_FACTS` deleted; `build_r3a3_source_only_base` and the cut text STAY, the text rewritten to name the ordering cell and #161 |
 | A6.19 | digest goldens may move by the cone graph (cross-app, `cli_digest_query_dependencies`) AND by the DAG rule (any universe); prove and fingerprint witness goldens may move by the DAG rule only. Each move triaged and attributed (cone graph / DAG / D6). `r4_cross_app_program`, r4, r4f must not move |
-| **A6.21 (new)** | the DAG rule: tests W1-W6 (plan Task 2a) with discrimination proofs |
+| **A6.21 (new)** | the DAG rule, the streaming merge and the on-demand happens-before test: W1-W6, W6b, W7-W10, O1 (plan Task 2a) with discrimination proofs; rule B: B1-B4 (plan Task 2b) |
+| **A6.23 (new)** | the output-change allowlist (§14.3.4): every moved golden and CDO field is inside it; P-4 and P-5 recorded |
 | **A6.22 (new)** | d47/d49/d51 byte-identical: CDO SARIF `cmp` cross-app at `--scope primary` and `--scope all`, and `--single-app`; r4/r4f/`r4_cross_app_program` unmoved |
 | A6.7, A6.12 | Task 3 only if B5 holds (§14.5) |
 
 Measurement plan (§8):
 - `P` = the master the branch sits on (`6a2b7c8b`, or a later master after a rebase), release-fast, never
   `7afa91a3`.
-- **Task 1′ (claim time, before Task 2a):** the probe at `P` with the DAG (`probes-todo.md` P-1, P-2), read S1′/S2′.
+- **Task 1′ (claim time, before Task 2a):** the probe at `P` with the DAG, rule B and the on-demand happens-before
+  test, under mimalloc (§14.6), on `d` and `h` (`probes-todo.md` P-1, P-2 with its census arm), read S1′/S2′/S3′.
+  P-4 (triage of every changed CDO effect) and P-5 (corpus golden diff) are required and recorded before Task 2a's
+  commit. The E′ outlier rule (A1-25): a probe round whose load tick exceeds 8 is void and re-run; no round is
+  excluded by hand.
 - **Part 1** adds: `--single-app` digest JSON parent vs head = the DAG rule's effect alone (no cone-graph change
   single-app, P13); cross-app `d` JSON diff, each moved field attributed to cone graph, DAG or D6; the
   `state-limit-exceeded` count in `d` (cut parent vs head); A6.22's `cmp`s. Digest JSON is compared on `P` ≥
   `6b09105b`, so #78's `objectDisplay` is on both sides.
-- **Part 2:** `d` read against B1′/B2′, `o` against B3/B4. Round rule unchanged (§8.1).
+- **Part 2:** `d` read against B1′/B2′, `h` against B6/B7, `o` against B3/B4, every peak on `alsem` (mimalloc).
+  Round rule unchanged (§8.1).
+- Part 1 also times the fingerprint query on CDO single-app (`fingerprint <WS> --query …`, parent vs head), reported
+  (A1-05).
 - **Part 3:** B5 decides Task 3 (§14.5).
 - Census: one new line `digest.witness_dags=N nodes=N preds=N` per run (P-2's census, kept as a counter).
 
@@ -1065,8 +1229,11 @@ Measurement plan (§8):
 | digest cross-app / single-app | as §4.9 (1/1/1/2/1/1/1/1) | | | | | | | |
 | policy | as §4.9 if Task 3 stays; else today's (P9) | | | | | | | 1 / 1 |
 
+| analyze with d47 AND a summaries detector (A1-18) | 2 | 2 | 1 | 3 | 2 | 1 | 1 | 1 (the cut's) |
+
 The digest row assumes digest's plan wants no `ORDERING_FACTS` (true for the default detectors: d47/d49/d51 are
-opt-in). A digest run with an ordering detector would add the cut composition: stated, not tested.
+opt-in). A digest run with an ordering detector would add the cut composition: stated, not tested. The two-composition
+analyze row is pinned by T5.
 
 ### 14.11 Interactions with #78 (`6b09105b`, owner names)
 
@@ -1121,3 +1288,12 @@ All four were decided as recommended at the attempt-8 resume:
 3. **D6 on the cone tree only**; the cut keeps today's ledger until the #161 follow-up. It is what Task 1 built and
    it keeps d47/d49/d51 identical by construction.
 4. **`compose_full_snapshot` cross-app stays on the cut base until step 9** (it is test-only cross-app).
+5. **Digest's output for dependency effects is rule B** (after the §14 panel round 1): witnesses stop at the first
+   dependency routine; effects reached only through a dependency call are grouped per (boundary call site, effect
+   type) with a resource count and up to 10 resources. Grouping per resource (a finer opt-in) and full
+   in-dependency witnesses are possible later opt-ins, not in this step. Digest keeps reporting no reads.
+6. **Bounds** (§14.4): `d` E′ within +8 s and peak within +3.0 GiB; the multi-root file within 60 s E′ and 12 GiB
+   peak; d47/d49/d51 byte-identical. A miss after its one fix applies **D** automatically (§14.8): digest stays on
+   the cut.
+7. **Conditionality over shortest witnesses** (§14.3.1b) is accepted as recommended; the operator may veto it in
+   favour of the `unknown`-when-a-deeper-carrier-exists rule.
