@@ -277,7 +277,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it over the relation's cone graph (no second cone, graph, SCC or producer solve: build
   counters 1/1/1/2/1/1/1/1). The tree's call-site ledger reads the dependency routines' own
   calls too, and a resolved call whose every target is a body-less dependency routine is
-  `unfetched-dependency`. The tree is released as soon as each root's effects and
+  `unfetched-dependency`. The unresolved cone's order is now total (anchor column, then the
+  candidate list, then the call-site id break the old ties): two dependency rows with no
+  anchor, the same routine and the same callee kept hash order, so `--deterministic` output
+  differed between runs. The tree is released as soon as each root's effects and
   unresolved cone are read off it, before the detector run. d47/d49/d51 (the ordering
   cell), prove, fingerprint and diff stay on the cut graph; moving the ordering cell is the
   #161 follow-up, and until then its cut composition keeps raw facts for every routine
