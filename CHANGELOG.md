@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   findings. Needs both snapshots made with this version. When both snapshots carry the lists,
   these findings' `details` also hold `oldParameters` and `newParameters`, since their hashes
   and event ids can be equal.
+- **A `<owner>::<routine>` selector no longer falls back to other objects' routines (#239).**
+  In `digest`, `fingerprint` and `prove`, when no routine of that name belongs to the named
+  owner, the selector is now unmatched (digest `selector-unmatched`, fingerprint
+  `selector-unresolved`, prove `answer: unknown`, each exit 2). Before, it silently selected
+  another object's routine (2.0.1's #78 entry: "the selector matches as before"). The owner
+  may now also be written as the bare object name (`Sel A::Persist`) or with AL quotes
+  (`Codeunit "Sel A"::Persist`). The full owner wins over a bare name; a bare name two owners
+  share (`Codeunit "Sel B"` and `Table "Sel B"`) is ambiguous, with both owners as candidates.
 
 ## [2.0.1] - 2026-10-23
 

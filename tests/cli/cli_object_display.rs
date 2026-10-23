@@ -495,3 +495,225 @@ fn ambiguous_selector_candidates_name_their_owner() {
         );
     }
 }
+
+/// `<header>` + one `procedure <routine>()`, for #239's fixtures.
+fn object_with(header: &str, body: &str, routine: &str) -> String {
+    format!(
+        "{header}\n{{\n{body}    procedure {routine}()\n    begin\n        Message('p');\n    end;\n}}\n"
+    )
+}
+
+fn app_json(dir: &Path, name: &str) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{GUID}","name":"{name}","publisher":"probe","version":"1.0.0.0","platform":"1.0.0.0","application":"1.0.0.0","idRanges":[{{"from":50100,"to":50199}}],"runtime":"14.0"}}"#
+        ),
+    );
+}
+
+/// #239, the issue's exact shape: only `Codeunit "Sel B"` declares `Persist`.
+fn one_owner_workspace(dir: &Path) {
+    app_json(dir, "Issue239One");
+    write(
+        &dir.join("src/a.al"),
+        &object_with("codeunit 50101 \"Sel A\"", "", "Other"),
+    );
+    write(
+        &dir.join("src/b.al"),
+        &object_with("codeunit 50102 \"Sel B\"", "", "Persist"),
+    );
+}
+
+const TABLE_FIELDS: &str = "    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n\n";
+const TABLE_SEL_B: &str = "Table Sel B";
+
+/// #239: `Codeunit "Sel B"` and `Table "Sel B"` share the bare name `Sel B`;
+/// `Table "Codeunit Sel B"`'s bare name equals the codeunit's full owner.
+fn shared_name_workspace(dir: &Path) {
+    app_json(dir, "Issue239Shared");
+    write(
+        &dir.join("src/a.al"),
+        &object_with("codeunit 50101 \"Sel B\"", "", "Persist"),
+    );
+    write(
+        &dir.join("src/b.al"),
+        &object_with("table 50111 \"Sel B\"", TABLE_FIELDS, "Persist"),
+    );
+    write(
+        &dir.join("src/c.al"),
+        &object_with("table 50112 \"Codeunit Sel B\"", TABLE_FIELDS, "Persist"),
+    );
+}
+
+fn digest_sel(w: &str, sel: &str) -> (Value, i32) {
+    alsem(&["digest", w, "--routine", sel, "--deterministic"])
+}
+
+fn fingerprint_json(w: &str, sel: &str) -> (Value, i32) {
+    alsem(&[
+        "fingerprint",
+        w,
+        "--routine",
+        sel,
+        "--format",
+        "json",
+        "--deterministic",
+    ])
+}
+
+/// -> (stdout, stderr, exit code).
+fn fingerprint_human(w: &str, sel: &str) -> (String, String, i32) {
+    alsem_out(&[
+        "fingerprint",
+        w,
+        "--routine",
+        sel,
+        "--format",
+        "human",
+        "--deterministic",
+    ])
+}
+
+fn prove_sel(w: &str, sel: &str) -> (Value, i32) {
+    alsem(&["prove", w, sel, "may-commit", "--deterministic"])
+}
+
+/// `sel` selects exactly the routine `id` owned by `owner` in digest,
+/// fingerprint and prove (exit 0 each).
+fn assert_selects(w: &str, sel: &str, owner: &str, id: &str) {
+    let (d, code) = digest_sel(w, sel);
+    assert_eq!(code, 0, "{sel}: {d}");
+    let es = entries(&d);
+    assert_eq!(es.len(), 1, "{sel}: {d}");
+    assert_eq!(es[0]["routine"]["objectDisplay"], owner, "{sel}: {d}");
+    assert_eq!(es[0]["routine"]["stableId"], id, "{sel}: {d}");
+
+    let (fp, code) = fingerprint_json(w, sel);
+    assert_eq!(code, 0, "{sel}: {fp}");
+    let blocks = fp["payload"]["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 1, "{sel}: {fp}");
+    assert_eq!(blocks[0]["routine"]["objectDisplay"], owner, "{sel}: {fp}");
+    assert_eq!(blocks[0]["routine"]["stableId"], id, "{sel}: {fp}");
+
+    let (p, code) = prove_sel(w, sel);
+    assert_eq!(code, 0, "{sel}: {p}");
+    assert_eq!(
+        p["payload"]["routine"]["objectDisplay"], owner,
+        "{sel}: {p}"
+    );
+    assert_eq!(p["payload"]["routine"]["stableId"], id, "{sel}: {p}");
+}
+
+/// A1 (#239, M1). An owner that declares no such routine matches nothing: it
+/// never falls back to another object's routine.
+///
+/// Mutation: restore the fallback (`if narrowed.is_empty() { matches }`) ->
+/// all three exit 0 with `Codeunit Sel B`'s routine.
+#[test]
+fn owner_qualified_selector_with_no_such_routine_is_unmatched() {
+    let dir = tempfile::tempdir().unwrap();
+    one_owner_workspace(dir.path());
+    let w = dir.path().to_str().unwrap();
+    let sel = format!("{SEL_A}::Persist");
+
+    let (d, code) = digest_sel(w, &sel);
+    assert_eq!(code, 2, "{d}");
+    assert_eq!(
+        d["payload"]["changedRootsDiagnostics"],
+        serde_json::json!([{"kind": "selector-unmatched", "selector": sel}]),
+        "{d}"
+    );
+    assert_eq!(entries(&d), Vec::<Value>::new(), "{d}");
+
+    let (out, err, code) = fingerprint_human(w, &sel);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(
+        err.lines()
+            .any(|l| l.starts_with(&format!("error: --routine '{sel}' did not match"))),
+        "{err}"
+    );
+    assert!(!out.contains(SEL_B), "{out}");
+
+    let (p, code) = prove_sel(w, &sel);
+    assert_eq!(code, 2, "{p}");
+    assert_eq!(p["payload"]["result"]["answer"], "unknown", "{p}");
+    assert_eq!(p["payload"]["routine"]["objectDisplay"], "", "{p}");
+}
+
+/// A2 (#239, M2 + M3). The bare object name (`Sel A::Persist`) and the
+/// AL-quoted owner (`Codeunit "Sel A"::Persist`) select Sel A's routine.
+///
+/// Mutations: (i) drop the bare-name step -> M2 exit 2; (ii) drop the `"`
+/// removal -> M3 exit 2; (iii) the bare-name step keeps another owner's match
+/// -> the owner/id asserts read Sel B.
+#[test]
+fn bare_and_quoted_owner_selectors_select_that_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    same_name_workspace(dir.path());
+    let ws = dir.path();
+    let w = ws.to_str().unwrap();
+    let id = stable_id_of(ws, "src/a.al", "Persist");
+
+    assert_selects(w, "Sel A::Persist", SEL_A, &id);
+    assert_selects(w, "Codeunit \"Sel A\"::Persist", SEL_A, &id);
+}
+
+/// A3 (#239, M4 + M6). A bare name two owners share is ambiguous with both
+/// owners as candidates; a full owner wins over another object whose bare name
+/// spells it (`Table "Codeunit Sel B"`).
+///
+/// Mutations: (i) full owner OR bare name in one pass -> M6 exit 2
+/// `selector-ambiguous`; (ii) keep only the first bare-name match -> M4 digest
+/// and fingerprint exit 0.
+#[test]
+fn shared_bare_name_is_ambiguous_and_full_owner_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_name_workspace(dir.path());
+    let ws = dir.path();
+    let w = ws.to_str().unwrap();
+
+    // M4: `Sel B::Persist` -> both `Sel B` owners, never `Table Codeunit Sel B`.
+    let sel = "Sel B::Persist";
+    let (d, code) = digest_sel(w, sel);
+    assert_eq!(code, 2, "{d}");
+    let diag = &d["payload"]["changedRootsDiagnostics"][0];
+    assert_eq!(diag["kind"], "selector-ambiguous", "{d}");
+    let mut cands: Vec<String> = diag["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap().to_string())
+        .collect();
+    cands.sort();
+    assert_eq!(
+        cands,
+        vec![
+            format!("{SEL_B}::Persist"),
+            format!("{TABLE_SEL_B}::Persist")
+        ],
+        "{d}"
+    );
+
+    let (_out, err, code) = fingerprint_human(w, sel);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("is ambiguous"), "{err}");
+    let listed: Vec<&str> = err.lines().filter(|l| l.starts_with("  - ")).collect();
+    assert_eq!(listed.len(), 2, "{err}");
+    for owner in [SEL_B, TABLE_SEL_B] {
+        assert!(
+            listed
+                .iter()
+                .any(|l| l.starts_with(&format!("  - {owner}::Persist  ("))),
+            "{err}"
+        );
+    }
+
+    let (p, code) = prove_sel(w, sel);
+    assert_eq!(code, 2, "{p}");
+    assert_eq!(p["payload"]["result"]["answer"], "unknown", "{p}");
+
+    // M6: `Codeunit Sel B::Persist` -> the codeunit alone.
+    let id = stable_id_of(ws, "src/a.al", "Persist");
+    assert_selects(w, &format!("{SEL_B}::Persist"), SEL_B, &id);
+}

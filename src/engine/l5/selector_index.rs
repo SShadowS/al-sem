@@ -196,11 +196,12 @@ pub(crate) fn resolve_selector(
     (Vec::new(), "")
 }
 
-/// #78: an object-qualified selector (`<owner>::<routine>`, as the human
+/// #78/#239: an object-qualified selector (`<owner>::<routine>`, as the human
 /// headers print it) keeps only the matches whose owner (`owner_of`) equals its
-/// object part, compared as display keys. When no match has that owner, the
-/// matches stay as form 5 found them: the object part may be a name the owner
-/// display does not spell (a bare object name, a dependency object).
+/// object part, compared as display keys with `"` removed (so the AL spelling
+/// `Codeunit "X"` works). The full owner (`Codeunit X`) wins; only when no
+/// match has it does the bare object name (`X`) count. When neither fits, no
+/// match is kept, so the caller reports the selector as unmatched.
 pub(crate) fn narrow_to_owner(
     selector: &str,
     matched_form: &str,
@@ -213,43 +214,66 @@ pub(crate) fn narrow_to_owner(
     if matched_form != "object-qualified" {
         return matches;
     }
-    let want = normalize_display_key(&selector[..sep]);
-    let narrowed: Vec<String> = matches
-        .iter()
-        .filter(|id| normalize_display_key(&owner_of(id)) == want)
-        .cloned()
+    let want = normalize_display_key(&selector[..sep].replace('"', ""));
+    let keyed: Vec<(String, String)> = matches
+        .into_iter()
+        .map(|id| (normalize_display_key(&owner_of(&id)), id))
         .collect();
-    if narrowed.is_empty() {
-        matches
-    } else {
-        narrowed
+    let full: Vec<String> = keyed
+        .iter()
+        .filter(|(key, _)| *key == want)
+        .map(|(_, id)| id.clone())
+        .collect();
+    if !full.is_empty() {
+        return full;
     }
+    keyed
+        .into_iter()
+        .filter(|(key, _)| strip_type_word_prefix(key) == Some(want.as_str()))
+        .map(|(_, id)| id)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// #78: the owner narrows only an object-qualified match, compares as a
-    /// display key, and leaves the matches alone when no owner fits.
+    /// #78/#239: the owner narrows only an object-qualified match: full owner
+    /// first, then bare name, quotes removed, and nothing when no owner fits.
     ///
-    /// Mutation: return `narrowed` when it is empty -> the last assert reads `[]`.
+    /// Mutations: restore the fallback -> the `[]` assert reads `[a, b]`;
+    /// one-pass OR -> the precedence assert reads `[a, c]`; drop the `"`
+    /// removal -> the quote assert reads `[]`.
     #[test]
-    fn narrow_to_owner_keeps_the_named_owner_or_everything() {
-        let ids = || vec!["a".to_string(), "b".to_string()];
+    fn narrow_to_owner_keeps_the_named_owner_only() {
+        let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         let owner = |id: &str| match id {
             "a" => "Codeunit Sel A".to_string(),
-            _ => "Codeunit Sel B".to_string(),
+            "b" => "Codeunit Sel B".to_string(),
+            _ => "Table Codeunit Sel A".to_string(),
         };
-        let sel = "codeunit  SEL a::Persist";
+        let q = "object-qualified";
+        let ab = || v(&["a", "b"]);
         assert_eq!(
-            narrow_to_owner(sel, "object-qualified", ids(), owner),
-            vec!["a".to_string()]
+            narrow_to_owner("codeunit  SEL a::Persist", q, ab(), owner),
+            v(&["a"])
         );
-        assert_eq!(narrow_to_owner(sel, "full-display", ids(), owner), ids());
+        assert_eq!(narrow_to_owner("Sel A::Persist", q, ab(), owner), v(&["a"]));
         assert_eq!(
-            narrow_to_owner("Sel A::Persist", "object-qualified", ids(), owner),
-            ids()
+            narrow_to_owner("Codeunit \"Sel A\"::Persist", q, ab(), owner),
+            v(&["a"])
+        );
+        assert_eq!(
+            narrow_to_owner("Codeunit Sel A::Persist", q, v(&["a", "b", "c"]), owner),
+            v(&["a"])
+        );
+        assert_eq!(
+            narrow_to_owner("Codeunit Sel C::Persist", q, ab(), owner),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            narrow_to_owner("Sel A::Persist", "full-display", ab(), owner),
+            ab()
         );
     }
     use crate::engine::l5::snapshot::SnapshotIdentityTable;
