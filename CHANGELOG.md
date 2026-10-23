@@ -46,17 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross-app `routineInventory` that lists the workspace's own routines only.
 - **#220: `alsem diff` refuses inputs it cannot compare.** A file with no `analysisUniverse` or an
   unknown one, an `apps[]` row with no `role` or an unknown one, or a non-empty `apps[]` without
-  exactly one `primary` row is refused at load (exit 1). A dependency shard gets the hint "diff the
-  full snapshot or the primary shard". An empty `apps[]` (no `app.json` id) still loads.
+  exactly one `primary` row is refused at load (exit 1), and so is a file whose `apps` is missing
+  or not an array. A dependency shard gets the hint "diff the full snapshot or the primary shard".
+  An empty `apps[]` (no `app.json` id) still loads. The app-identity check compares guids
+  case-insensitively, so a guid whose letter case changed is the same app.
 - **#220, a behaviour change: a fatal `diff` preflight now exits 1.** Before, `app-identity-mismatch`
   and `alsem-version-mismatch` under `--coverage-policy strict` printed their diagnostic and exited 0, so
   CI could not see the refusal. The exit 1 comes before the coverage and `--fail-on` gates; the
   printed output is unchanged.
 - **#220: one role rule.** `Model::role_of_app` (and `role_of_stable_id` for readers that hold
   only ids) decides whether a row is the workspace's own or a dependency's, comparing app guids
-  case-insensitively. The per-site comparisons it replaces are gone. Analysis gaps are live again
-  for dependency rows: a cross-app snapshot keeps the gaps of dependency code the workspace can
-  reach (they were switched off).
+  case-insensitively. The per-site comparisons spec §3.1 lists now call it; the readers of
+  `dep_routine_ids` (entry points, transaction spans, event flow) read the set the rule builds,
+  and d1's all-primary anchor map is kept on purpose (spec §3.1). Analysis gaps for dependency
+  rows are now derived (the Rust port had always stubbed them off): a cross-app snapshot keeps the
+  gaps of dependency code the workspace can reach. A dependency routine that lost its body to a
+  parse error gets its `parse-incomplete` gap and does not mark its app as symbol-only.
 
 - #160 step 11b: routine identity corrections, `RoutineIx` re-keying, and one rule for rows
   that share one routine id (part of #160; spec
@@ -650,10 +655,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **#220: shards and the `diff` preflight took the first `apps[]` row as the workspace's app.**
   That held only while `apps[]` had one row. Both now read the row whose `role` is `"primary"`.
-  A shard now also keeps the identity, operation, call-site and edge rows that its own rows refer
-  to (repeated until nothing new is added), so a shard no longer names a row it does not carry.
-  It still carries no frame tables, as before. A shard matches its app's guid case-insensitively,
-  so an upper-case guid in `app.json` gives the same shard. No committed shard golden changed.
+  A shard is now closed over identity, operation, call-site and edge references: it also keeps
+  the rows of those four kinds that its own rows refer to (repeated until nothing new is added,
+  in the full snapshot's order; an anchor's internal routine id is mapped through the model).
+  Frame and app references are not closed, as before: a shard carries no frame tables, and the
+  analysis gaps it copies may name apps it has no `apps[]` row for. A shard matches its app's guid
+  case-insensitively, so an upper-case guid in `app.json` gives the same shard. No committed shard
+  golden moved beyond the schema-4 header and `role` changes.
 - **#160 step 5: one coverage policy** (part of #160; #161 part 2). The detector context
   (`det_cone_inputs`) and the cross-app base (`build_cross_app_base`) now fold the four
   call-site-local uncertainty kinds (`ambiguous-overload`, `external-target`,
