@@ -32,6 +32,7 @@ use crate::engine::ids::{
 };
 use crate::engine::l4::capability_cone::{
     CapabilityFact, R3a3SourceBase, R3a5CrossAppBase, build_r3a3_source_only_base,
+    routine_to_stable_of,
 };
 use crate::engine::l5::snapshot::{
     SnapshotAnalysisGap, compose_snapshot_from_base, stable_routine_id,
@@ -1471,9 +1472,11 @@ pub struct ShardFile {
 /// raw-JSON `CapabilitySnapshot` that inherits `generatedAt` from `tree` (so the
 /// determinism mode is ALREADY baked into the tree by `compose_full_snapshot` — no
 /// separate `deterministic` arg here). The manifest carries no diagnostics channel,
-/// so it takes none either.
+/// so it takes none either. `resolved` is the model the tree was composed from:
+/// the shard closure maps the anchors' internal routine ids through it.
 pub fn serialize_sharded(
     tree: &CborValue,
+    resolved: &Model,
     driver_version: &str,
     primary_only: bool,
 ) -> Vec<ShardFile> {
@@ -1506,22 +1509,23 @@ pub fn serialize_sharded(
     };
 
     let mut shard_entries: Vec<(String, String, String)> = Vec::new(); // (appGuid, role, file)
+    let routine_to_stable = routine_to_stable_of(&resolved.workspace);
 
     for app in &apps {
         let guid = app_guid(app);
         // #220 D5.4: the row's own `role`, never its position.
         let role = match app {
-            CborValue::Map(m) if matches!(m.get("role"), Some(CborValue::Text(r)) if r == "primary") => {
-                "primary"
+            CborValue::Map(m) if matches!(m.get("role"), Some(CborValue::Text(r)) if r == Role::Primary.as_str()) => {
+                Role::Primary
             }
-            _ => "dependency",
+            _ => Role::Dependency,
         };
-        if primary_only && role != "primary" {
+        if primary_only && role != Role::Primary {
             continue;
         }
         let mut shard = slice_for_app(snap, &guid);
-        close_shard(snap, &mut shard);
-        let file_base = if role == "primary" {
+        close_shard(snap, &mut shard, &routine_to_stable);
+        let file_base = if role == Role::Primary {
             "primary".to_string()
         } else {
             format!("dep-{guid}")
@@ -1533,7 +1537,7 @@ pub fn serialize_sharded(
             name: file_name.clone(),
             bytes,
         });
-        shard_entries.push((guid, role.to_string(), file_name));
+        shard_entries.push((guid, role.as_str().to_string(), file_name));
     }
 
     out.push(ShardFile {
@@ -1550,6 +1554,8 @@ fn slice_for_app(
     snap: &IndexMap<String, CborValue>,
     app_guid: &str,
 ) -> IndexMap<String, CborValue> {
+    // "Primary relative to `app_guid`": the role rule asked whether `s` is
+    // rooted in THIS shard's app, whichever role that app has.
     let in_app = |s: &str| role_of_stable_id(Some(app_guid), s) == Role::Primary;
 
     // Preserve the compose key order for the shard (it's a CapabilitySnapshot).
@@ -2757,13 +2763,16 @@ page 50818 "T5 I-3 Wizard Alpha"
     /// A primary fact's `witnessOperationId` names a dependency operation row
     /// (with an `order.frameId`, its routine's frame table in
     /// `routineOrderFrames`), and a primary edge targets a dependency routine.
-    /// The operation's routine identity is reached only through that row.
+    /// The operation's routine identity is reached only through that row. The
+    /// edge's `callAnchor` names a third dependency routine by its INTERNAL id
+    /// (`mi/anc`, as anchors do), which only the model maps (`shard_model`).
     fn shard_tree(primary: &str) -> CborValue {
         let dep = "00000000-0000-0000-0000-0000000000d0";
         let p_obj = format!("{primary}:Codeunit:50100");
         let p_r = format!("{primary}:Codeunit:50100#p1");
         let d_op_routine = format!("{dep}:Codeunit:10#op");
         let d_edge_target = format!("{dep}:Codeunit:10#to");
+        let d_anchor = format!("{dep}:Codeunit:10#anc");
         let app = |guid: &str, role: &str| {
             map(vec![
                 ("appGuid", txt(guid)),
@@ -2773,7 +2782,7 @@ page 50818 "T5 I-3 Wizard Alpha"
                 ("role", txt(role)),
             ])
         };
-        let ids: Vec<CborValue> = [&p_obj, &p_r, &d_op_routine, &d_edge_target]
+        let ids: Vec<CborValue> = [&p_obj, &p_r, &d_op_routine, &d_edge_target, &d_anchor]
             .iter()
             .map(|s| txt(s))
             .collect();
@@ -2830,6 +2839,10 @@ page 50818 "T5 I-3 Wizard Alpha"
                     ("from", txt(&p_r)),
                     ("kind", txt("direct-call")),
                     ("to", txt(&d_edge_target)),
+                    (
+                        "callAnchor",
+                        map(vec![("enclosingRoutineId", txt("mi/anc"))]),
+                    ),
                 ])]),
             ),
             (
@@ -2858,6 +2871,16 @@ page 50818 "T5 I-3 Wizard Alpha"
         ])
     }
 
+    /// The model T8's tree was "composed" from: one dependency routine whose
+    /// internal id `mi/anc` maps to the stable id the tree's identities hold.
+    fn shard_model() -> Model {
+        let mut model = crate::engine::l5::test_support::empty_resolved();
+        let mut r = crate::engine::l5::test_support::routine("mi/anc", "procedure");
+        r.stable_routine_id = "00000000-0000-0000-0000-0000000000d0:Codeunit:10#anc".into();
+        model.workspace.routines.push(r);
+        model
+    }
+
     /// T8 (#220 spec §5; O15, S3, S3N1, O3N1): shards read `role`, never the
     /// position `apps[0]`, and a shard is closed over the identity, operation,
     /// callsite and edge domains to a fixpoint, but NOT over frames.
@@ -2866,9 +2889,15 @@ page 50818 "T5 I-3 Wizard Alpha"
     /// -> the operation row is missing. Break 3: one pass instead of a fixpoint
     /// -> the operation's routine identity is missing. Break 4: close the frame
     /// domain too -> the shard gains `routineOrderFrames`.
+    ///
+    /// Final panel (C8, G4): the anchor's internal id adds its routine's
+    /// identity (break: close with an empty routine map -> missing), and the
+    /// added identities sit in the full tree's order (break: append -> the
+    /// order differs).
     #[test]
     fn shards_read_role_not_position() {
         let tree = shard_tree(P);
+        let model = shard_model();
         let dep = "00000000-0000-0000-0000-0000000000d0";
         assert!(
             locale_compare(dep, P) == std::cmp::Ordering::Less,
@@ -2885,7 +2914,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             "precondition: apps[0] is the dependency"
         );
 
-        let files = serialize_sharded(&tree, "v", false);
+        let files = serialize_sharded(&tree, &model, "v", false);
         let manifest = files
             .iter()
             .find(|f| f.name == "manifest.json")
@@ -2902,7 +2931,7 @@ page 50818 "T5 I-3 Wizard Alpha"
         assert_eq!(role_of(P).as_deref(), Some("primary"), "{manifest}");
         assert_eq!(role_of(dep).as_deref(), Some("dependency"), "{manifest}");
 
-        let only = serialize_sharded(&tree, "v", true);
+        let only = serialize_sharded(&tree, &model, "v", true);
         let names: Vec<&str> = only.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["primary.json", "manifest.json"]);
         let shard: serde_json::Value = serde_json::from_slice(&only[0].bytes).unwrap();
@@ -2931,6 +2960,18 @@ page 50818 "T5 I-3 Wizard Alpha"
             "the operation's routine identity (second pass): {ids:?}"
         );
         assert!(
+            ids.contains(&format!("{dep}:Codeunit:10#anc").as_str()),
+            "the anchor's routine identity, through the model: {ids:?}"
+        );
+        let full_order = [
+            format!("{P}:Codeunit:50100"),
+            format!("{P}:Codeunit:50100#p1"),
+            format!("{dep}:Codeunit:10#op"),
+            format!("{dep}:Codeunit:10#to"),
+            format!("{dep}:Codeunit:10#anc"),
+        ];
+        assert_eq!(ids, full_order, "the full tree's identity order");
+        assert!(
             shard.get("routineOrderFrames").is_none(),
             "a shard never carries routineOrderFrames"
         );
@@ -2945,7 +2986,7 @@ page 50818 "T5 I-3 Wizard Alpha"
         {
             a.insert("appGuid".into(), txt(&upper));
         }
-        let only = serialize_sharded(&tree, "v", true);
+        let only = serialize_sharded(&tree, &model, "v", true);
         let shard: serde_json::Value = serde_json::from_slice(&only[0].bytes).unwrap();
         assert_eq!(shard["apps"][0]["appGuid"], upper.as_str(), "{shard}");
         assert!(

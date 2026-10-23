@@ -1373,6 +1373,22 @@ fn closure_reports_each_dangling_domain() {
             }),
         ),
     ];
+    // Identity (final panel F1): only "unknown" or an id rooted in a guid the
+    // model does not hold is external; an empty, a malformed and an internal
+    // id rooted in no guid must resolve, so each is reported.
+    let identity_arms: Vec<Arm> = ["", "garbage", "e09e92b394f6df1a/nosuchroutine"]
+        .into_iter()
+        .map(|bad| -> Arm {
+            (
+                Domain::Identity,
+                bad,
+                Box::new(move |t: &mut CborValue| {
+                    set(t, "capabilityFacts", &|r| put(r, "resourceId", txt(bad)))
+                }),
+            )
+        })
+        .collect();
+    let arms: Vec<Arm> = arms.into_iter().chain(identity_arms).collect();
     let clean_violations = closure_violations(&clean, model, &universe);
     assert!(
         !clean_violations
@@ -1389,6 +1405,17 @@ fn closure_reports_each_dangling_domain() {
             "{domain:?}: the dangling {value} is reported: {got:?}"
         );
     }
+    // The external shape itself still passes: a guid no model app holds.
+    let external = "12345678-0000-0000-0000-000000000220:Table:9";
+    let mut tree = clean.clone();
+    set(&mut tree, "capabilityFacts", &|r| {
+        put(r, "resourceId", txt(external))
+    });
+    let got = closure_violations(&tree, model, &universe);
+    assert!(
+        !got.iter().any(|v| v.value == external),
+        "an id rooted in an unknown guid is external: {got:?}"
+    );
 }
 
 /// F25 is exactly "unanchored" (review fix 3): a resolution row with no

@@ -453,10 +453,11 @@ fn rows_of(v: &CborValue) -> &[CborValue] {
 /// (`<guid>:Table:N#F`) its table; an internal routine id its stable id; an
 /// internal table/field/key id `<guid>:Table:N` (`stable_table_from_internal`
 /// of its first three `/` segments, never a `/`->`:` rewrite); any other
-/// internal object-rooted id its stable object id. With an empty map (the
-/// shard closure, which has no model) only stable ids resolve exactly: an
-/// internal routine id falls to its object, and a `::`-bearing stable id is
-/// cut to its first three `:` segments.
+/// internal object-rooted id its stable object id. An internal routine id
+/// (`<model>/<hash>`, as the anchors' `enclosingRoutineId` carry it) resolves
+/// only through `routine_to_stable`; one the map lacks comes back unchanged and
+/// names no row. A `::`-bearing stable id (an event id) is cut to its first
+/// three `:` segments, its object.
 fn identity_key(v: &str, routine_to_stable: &HashMap<String, String>) -> Option<String> {
     if v == "unknown" {
         return None;
@@ -525,101 +526,178 @@ impl Referenced {
     }
 }
 
+/// The keys a shard is closed over, with each row's id field (`""`: the
+/// `identities` key, whose rows are its `stableIds`).
+const SHARD_CLOSED: [(&str, &str); 4] = [
+    ("identities", ""),
+    ("operationIndex", "operationId"),
+    ("callsiteIndex", "callsiteId"),
+    ("typedEdges", "edgeId"),
+];
+
 /// #220 (spec §4.4 "Sharding", S3, S3N1, O3N1): add to `shard` every row of
 /// `full` that a shard row references in the identity, operation, callsite or
 /// edge domain, and scan the added rows in turn, to a fixpoint. The frame and
 /// app domains are never closed: a shard has no `routineOrderFrames` and keeps
 /// one `apps[]` row. In single-app every reached row is primary and already
 /// sliced in, so nothing is added (F26).
+///
+/// `routine_to_stable` is the model's internal-to-stable routine map: anchors
+/// (`*Anchor.enclosingRoutineId`) name routines by their internal id, which
+/// only the model maps to an `identities` row.
 pub(crate) fn close_shard(
     full: &IndexMap<String, CborValue>,
     shard: &mut IndexMap<String, CborValue>,
+    routine_to_stable: &HashMap<String, String>,
 ) {
-    // A shard is cut from the tree alone, with no model, so `identity_key`
-    // runs on an empty routine-to-stable map. That is exact only while the
-    // tree's identity references are stable ids (the composer serializes
-    // stable ids); an internal routine id would resolve to its object's
-    // identity instead. A `::`-bearing stable id (an event id) is cut to its
-    // first three segments, its object, as in the full-tree closure.
-    let no_model = HashMap::new();
+    // Every row is scanned once: the first pass reads the sliced rows, each
+    // later pass only the rows the pass before added.
+    let mut refs = Referenced::default();
+    for (key, rows) in shard.iter() {
+        refs.add(key, rows, routine_to_stable);
+    }
+    let mut held: Vec<HashSet<String>> = SHARD_CLOSED
+        .iter()
+        .map(|(key, id_field)| {
+            column(shard.get(*key), "stableIds")
+                .iter()
+                .filter_map(|r| row_id(r, id_field))
+                .map(str::to_string)
+                .collect()
+        })
+        .collect();
     loop {
-        let mut refs = Referenced::default();
-        for (key, rows) in shard.iter() {
-            refs.add(key, rows, &no_model);
+        let mut next = Referenced::default();
+        let mut grew = false;
+        for (i, (key, id_field)) in SHARD_CLOSED.iter().enumerate() {
+            let wanted = [
+                &refs.identities,
+                &refs.operations,
+                &refs.callsites,
+                &refs.edges,
+            ][i];
+            let added = close_rows(full, shard, key, id_field, wanted, &mut held[i]);
+            if !added.is_empty() {
+                grew = true;
+                next.add(key, &CborValue::Array(added), routine_to_stable);
+            }
         }
-        let mut grew = close_rows(full, shard, "identities", "", &refs.identities);
-        grew |= close_rows(
-            full,
-            shard,
-            "operationIndex",
-            "operationId",
-            &refs.operations,
-        );
-        grew |= close_rows(full, shard, "callsiteIndex", "callsiteId", &refs.callsites);
-        grew |= close_rows(full, shard, "typedEdges", "edgeId", &refs.edges);
         if !grew {
             return;
         }
+        refs = next;
     }
 }
 
-/// Append to `shard[key]` the rows of `full[key]` whose id `wanted` names and
-/// the shard does not hold yet (for `identities`, its parallel `stableIds` and
-/// `displayNames`). Held rows are never re-selected, so a repeated id in the
-/// tree cannot pull extra rows in. Whether the shard grew.
+/// A row's id: the row itself for `identities` (`id_field` empty), else its
+/// `id_field`.
+fn row_id<'a>(row: &'a CborValue, id_field: &str) -> Option<&'a str> {
+    if id_field.is_empty() {
+        text(Some(row))
+    } else {
+        field(row, id_field)
+    }
+}
+
+/// A key's rows, borrowed: an array's items, or one column of `identities`.
+fn column<'a>(v: Option<&'a CborValue>, name: &str) -> &'a [CborValue] {
+    match v {
+        Some(CborValue::Map(m)) => match m.get(name) {
+            Some(CborValue::Array(a)) => a,
+            _ => &[],
+        },
+        Some(CborValue::Array(a)) => a,
+        _ => &[],
+    }
+}
+
+/// Merge into `shard[key]` the rows of `full[key]` whose id `wanted` names and
+/// `held` does not (the first row per id), in `full`'s order: the shard's rows
+/// are a subsequence of it, matched by id, so a held row is never re-selected
+/// and a repeated id adds one row. For `identities` the `displayNames` column
+/// follows. Only added rows are cloned. Returns them.
 fn close_rows(
     full: &IndexMap<String, CborValue>,
     shard: &mut IndexMap<String, CborValue>,
     key: &str,
     id_field: &str,
     wanted: &HashSet<String>,
-) -> bool {
-    let identities = key == "identities";
-    let id_of = |r: &CborValue| -> Option<String> {
-        if identities {
-            text(Some(r))
-        } else {
-            field(r, id_field)
-        }
-        .map(str::to_string)
-    };
-    let column = |v: Option<&CborValue>, name: &str| -> Vec<CborValue> {
-        match v {
-            Some(CborValue::Map(m)) if identities => {
-                m.get(name).map(rows_of).unwrap_or_default().to_vec()
-            }
-            Some(rows) if !identities => rows_of(rows).to_vec(),
-            _ => Vec::new(),
-        }
-    };
-    let mut rows = column(shard.get(key), "stableIds");
-    let held: HashSet<String> = rows.iter().filter_map(id_of).collect();
+    held: &mut HashSet<String>,
+) -> Vec<CborValue> {
     let all = column(full.get(key), "stableIds");
-    let added: Vec<usize> = (0..all.len())
-        .filter(|&i| id_of(&all[i]).is_some_and(|id| wanted.contains(&id) && !held.contains(&id)))
+    let mut new: HashSet<&str> = all
+        .iter()
+        .filter_map(|r| row_id(r, id_field))
+        .filter(|id| wanted.contains(*id) && !held.contains(*id))
         .collect();
-    if added.is_empty() {
-        return false;
+    let Some(slot) = shard.get_mut(key) else {
+        return Vec::new();
+    };
+    if new.is_empty() {
+        return Vec::new();
     }
-    rows.extend(added.iter().map(|&i| all[i].clone()));
-    let value = if identities {
-        let full_names = column(full.get(key), "displayNames");
-        let mut names = column(shard.get(key), "displayNames");
-        names.extend(added.iter().map(|&i| {
-            full_names
-                .get(i)
-                .cloned()
-                .unwrap_or(CborValue::Text(String::new()))
-        }));
+    let full_names = column(full.get(key), "displayNames");
+    let (rows, names) = match slot {
+        CborValue::Map(m) => {
+            let mut take = |name: &str| match m.get_mut(name) {
+                Some(CborValue::Array(a)) => std::mem::take(a),
+                _ => Vec::new(),
+            };
+            (take("stableIds"), Some(take("displayNames")))
+        }
+        CborValue::Array(a) => (std::mem::take(a), None),
+        _ => return Vec::new(),
+    };
+    let identities = names.is_some();
+    let mut kept = rows
+        .into_iter()
+        .zip(
+            names
+                .into_iter()
+                .flatten()
+                .map(Some)
+                .chain(std::iter::repeat(None)),
+        )
+        .peekable();
+    let (mut out_rows, mut out_names, mut added) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, r) in all.iter().enumerate() {
+        let id = row_id(r, id_field);
+        if kept.peek().is_some_and(|(k, _)| row_id(k, id_field) == id) {
+            let (k, n) = kept.next().unwrap_or((CborValue::Null, None));
+            out_rows.push(k);
+            out_names.push(n);
+        } else if let Some(id) = id
+            && new.remove(id)
+        {
+            held.insert(id.to_string());
+            out_rows.push(r.clone());
+            out_names.push(full_names.get(i).cloned());
+            added.push(r.clone());
+        }
+    }
+    // A sliced row the full tree does not hold in that order: kept, last.
+    for (k, n) in kept {
+        out_rows.push(k);
+        out_names.push(n);
+    }
+    *slot = if identities {
         let mut m = IndexMap::new();
-        m.insert("stableIds".to_string(), CborValue::Array(rows));
-        m.insert("displayNames".to_string(), CborValue::Array(names));
+        m.insert("stableIds".to_string(), CborValue::Array(out_rows));
+        let blank = || CborValue::Text(String::new());
+        m.insert(
+            "displayNames".to_string(),
+            CborValue::Array(
+                out_names
+                    .into_iter()
+                    .map(|n| n.unwrap_or_else(blank))
+                    .collect(),
+            ),
+        );
         CborValue::Map(m)
     } else {
-        CborValue::Array(rows)
+        CborValue::Array(out_rows)
     };
-    shard.insert(key.to_string(), value);
-    true
+    added
 }
 
 fn text(v: Option<&CborValue>) -> Option<&str> {
@@ -812,15 +890,17 @@ pub fn closure_violations(
                 .map(|a| a.guid.to_ascii_lowercase()),
         );
     }
+    // `EXTERNAL_IDENTITY_SHAPES` (spec §4.4): the literal "unknown", or an id
+    // rooted in a bare app guid the model does not hold. Anything else (an
+    // empty or malformed value, an internal id whose root is no guid) must
+    // resolve to an `identities` row.
     let external_identity = |v: &str| {
+        let root = v.split([':', '/']).next().unwrap_or("");
         v == "unknown"
-            || (!routine_to_stable.contains_key(v)
-                && !model_apps.contains(
-                    &v.split([':', '/'])
-                        .next()
-                        .unwrap_or("")
-                        .to_ascii_lowercase(),
-                ))
+            || (v.len() > root.len()
+                && is_bare_guid(root)
+                && !model_apps.contains(&root.to_ascii_lowercase())
+                && !routine_to_stable.contains_key(v))
     };
 
     let mut out = Vec::new();

@@ -501,7 +501,7 @@ fn shard_output_matches_goldens() {
     let ws = fixture_dir(SHARD_FIXTURE);
     let (tree, resolved, ws_path) = compose_full_for(SHARD_FIXTURE);
 
-    let shards = serialize_sharded(&tree, VERSION_OVERRIDE, false);
+    let shards = serialize_sharded(&tree, &resolved, VERSION_OVERRIDE, false);
     // Goldens live under shards/<fixture-name>/<shard-name>.
     let shard_dir = goldens_dir().join("shards").join(SHARD_FIXTURE);
 
