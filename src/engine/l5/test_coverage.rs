@@ -32,7 +32,7 @@ use crate::engine::l5::digest_cli::primary_guid_of;
 use crate::engine::l5::snapshot::CapabilitySnapshot;
 use al_syntax::IdentifierFoldExt;
 
-use crate::program::attributes::find_attribute;
+use crate::program::attributes::{find_attribute, string_arg};
 use crate::program::impact_graph::facts::{handler_names, test_page_target};
 use crate::program::model::events::PublisherRef;
 use crate::program::model::role::{Role, role_of_stable_id};
@@ -339,10 +339,17 @@ fn ledger_bucket(status: &str) -> Option<(bool, &'static str)> {
 /// The routine drives a `TestPage` / `TestRequestPage`, whose effects have no
 /// edge: one of its own parameters or locals is one, or an object global is one
 /// that its body names (a global alone would mark every sibling routine).
+/// `identifier_references` records plain identifiers only, so a global whose
+/// name needs quotes counts whenever it is in scope (an over-approximation).
 fn drives_test_page(r: &ModelRoutine) -> bool {
+    let plain = |n: &str| {
+        n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && n.chars().next().is_some_and(|c| !c.is_ascii_digit())
+    };
     r.variables.iter().any(|v| {
         test_page_target(&v.declared_type).is_some()
             && (v.scope.as_deref() != Some("global")
+                || !plain(&v.name)
                 || r.identifier_references.binary_search(&v.name).is_ok())
     })
 }
@@ -414,7 +421,8 @@ impl CoverageGraph {
                     .attributes_parsed
                     .iter()
                     .filter(|a| a.name.eq_ignore_ascii_case("HandlerFunctions"))
-                    .flat_map(|a| handler_names(&a.raw))
+                    .filter_map(|a| string_arg(a, 0))
+                    .flat_map(|list| handler_names(&list))
                 {
                     for h in by_name
                         .get(&(r.object_id.as_str(), name))
@@ -1270,9 +1278,8 @@ mod tests {
         );
     }
 
-    /// R2: a global `TestPage` marks only the routines whose body names it.
-    #[test]
-    fn adapter_global_test_page_needs_a_reference() {
+    /// The model of a one-file temp workspace holding `al`.
+    fn temp_model(al: &str) -> Model {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
@@ -1280,8 +1287,19 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(
-            dir.path().join("src/Tp.al"),
+        std::fs::write(dir.path().join("src/Tp.al"), al).unwrap();
+        crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(
+            dir.path(),
+        )
+        .expect("model")
+    }
+
+    /// R2: a global `TestPage` marks only the routines whose body names it.
+    /// FR20: a global whose name needs quotes is never in `identifier_references`,
+    /// so it marks every routine that has it in scope.
+    #[test]
+    fn adapter_global_test_page_needs_a_reference() {
+        let m = temp_model(
             r#"page 51020 "Tp Card"
 {
     PageType = Card;
@@ -1305,11 +1323,36 @@ codeunit 51021 "Tp Tests"
     begin
     end;
 }
+
+codeunit 51022 "Tp Quoted Tests"
+{
+    Subtype = Test;
+
+    var
+        "Tp Card Page": TestPage "Tp Card";
+
+    [Test]
+    procedure UsesQuoted()
+    begin
+        "Tp Card Page".OpenView();
+    end;
+}
 "#,
-        )
-        .unwrap();
-        let m = crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(dir.path())
-            .expect("model");
+        );
+        let quoted = m
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "UsesQuoted")
+            .unwrap();
+        assert!(
+            !quoted
+                .identifier_references
+                .iter()
+                .any(|i| i.contains("tp card page")),
+            "precondition: the quoted name is not recorded: {:?}",
+            quoted.identifier_references
+        );
         let id = |name: &str| {
             let r = m
                 .workspace
@@ -1327,7 +1370,7 @@ codeunit 51021 "Tp Tests"
             );
             r.stable_routine_id.clone()
         };
-        let (uses, ignores) = (id("UsesCard"), id("IgnoresCard"));
+        let (uses, ignores, quoted) = (id("UsesCard"), id("IgnoresCard"), id("UsesQuoted"));
         let g =
             CoverageGraph::from_snapshot(&crate::engine::l5::snapshot::compose_snapshot(&m), &m);
         assert!(
@@ -1339,6 +1382,108 @@ codeunit 51021 "Tp Tests"
             !reasons(&g.incomplete, &ignores).contains(&"test-page"),
             "{:?}",
             g.incomplete
+        );
+        assert!(
+            reasons(&g.incomplete, &quoted).contains(&"test-page"),
+            "{:?}",
+            g.incomplete
+        );
+    }
+
+    /// FR19: the handler list comes from the decoded first string argument, so an
+    /// apostrophe-quoted name inside a comment in the attribute is not read.
+    #[test]
+    fn adapter_handler_names_ignore_comments() {
+        let m = temp_model(
+            r#"codeunit 51023 "Tp Handler Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    [HandlerFunctions(/* 'WrongHandler' */ 'RightHandler')]
+    procedure OpensModal()
+    begin
+    end;
+
+    [ConfirmHandler]
+    procedure WrongHandler(Question: Text[1024]; var Reply: Boolean)
+    begin
+    end;
+
+    [ConfirmHandler]
+    procedure RightHandler(Question: Text[1024]; var Reply: Boolean)
+    begin
+    end;
+}
+"#,
+        );
+        let id = |name: &str| {
+            m.workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap()
+                .stable_routine_id
+                .clone()
+        };
+        let g =
+            CoverageGraph::from_snapshot(&crate::engine::l5::snapshot::compose_snapshot(&m), &m);
+        assert_eq!(
+            g.edges.get(&id("OpensModal")),
+            Some(&vec![(id("RightHandler"), false)]),
+            "{:?}",
+            g.edges
+        );
+    }
+
+    /// FR12: an interface call with known candidates AND an unresolved
+    /// remainder still follows the candidates (covered, lowest-id witness) and
+    /// makes the block partial with `interface-open-world`.
+    #[test]
+    fn open_interface_still_covers_its_known_candidates() {
+        let (m, mut snap) = selection_graph();
+        let row = snap
+            .callsite_resolutions
+            .iter_mut()
+            .find(|r| r.status == "polymorphic")
+            .expect("the fixture's polymorphic row");
+        assert_eq!(
+            row.candidates.as_ref().map(Vec::len),
+            Some(3),
+            "precondition"
+        );
+        row.unresolved_candidates = Some(vec![
+            crate::engine::l5::snapshot::SnapshotUnresolvedCandidate {
+                object_id: "x".to_string(),
+                reason: "unresolved".to_string(),
+            },
+        ]);
+        let candidates = row.candidates.clone().unwrap();
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        let changed: Vec<ChangedRoutine> = candidates.iter().map(|c| ch(c)).collect();
+        let tc = compute_test_coverage(&g, &changed);
+
+        let id_of = |name: &str| {
+            m.workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap()
+                .stable_routine_id
+                .clone()
+        };
+        let witness = id_of("GermanTax").min(id_of("InvoiceTotalRounds"));
+        let mut want: Vec<(&str, &str, bool)> = candidates
+            .iter()
+            .map(|c| (c.as_str(), witness.as_str(), false))
+            .collect();
+        want.sort();
+        assert_eq!(cov(&tc), want);
+        assert_eq!(tc.coverage.status, "partial");
+        assert!(
+            tc.coverage.reasons.contains(&"interface-open-world"),
+            "{:?}",
+            tc.coverage
         );
     }
 }
