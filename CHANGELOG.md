@@ -691,9 +691,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `local`/`internal` `[IntegrationEvent]` or `[BusinessEvent]` publisher that drops its
     attribute gets no `abi` finding; the events pass reports `event-publisher-removed` (medium).
     An `[ExternalBusinessEvent]` publisher that drops it gets no finding at all (the model does
-    not treat it as an event publisher, so there is no event declaration to lose). A user overlay
-    target is never auto-paired, and an old id the overlay maps to a target missing from new
-    stays a removal.
+    not treat it as an event publisher, so there is no event declaration to lose). A routine in
+    new that is a user overlay target is never auto-paired, and an old id the overlay maps to a
+    target missing from new stays a removal. Rename normalization is one hop: with overlay
+    `X → T`, an old-only routine whose own id is `T` can still be auto-paired to a same-name `U`,
+    and `X`'s facts then stay on `T` rather than following on to `U`.
 - **#220: shards and the `diff` preflight took the first `apps[]` row as the workspace's app.**
   That held only while `apps[]` had one row. Both now read the row whose `role` is `"primary"`.
   A shard is now closed over identity, operation, call-site and edge references: it also keeps
