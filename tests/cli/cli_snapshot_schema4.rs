@@ -8,7 +8,8 @@
 //! Fixtures: DD = `tests/common/dep_dispatch_fixture.rs` (`write_own`;
 //! embedded-source dependency `XBase`); R5B =
 //! `tests/r2-5b-fixtures/cross-app-resolution` (two symbol-only apps, `dddd…`
-//! reachable through `Host Mgt.DriveDeps`, `eeee…` not).
+//! reachable through `Host Mgt.DriveDeps`, `eeee…` not); R5B-F = a temp copy of
+//! R5B whose primary guid sorts LAST.
 //!
 //! "Hand-stated" = a field set by assignment on the assembled model before
 //! composing (CLAUDE.md).
@@ -24,7 +25,8 @@ use al_sem::engine::gate::run::AnalysisTarget;
 use al_sem::engine::l4::capability_cone::R3a5CrossAppBase;
 use al_sem::engine::l5::snapshot::compose_snapshot;
 use al_sem::engine::l5::snapshot_full::{
-    FullSnapshotOptions, SnapshotUniverse, compose_full_snapshot, to_sorted_json,
+    Domain, FullSnapshotOptions, NON_REFERENCE_FIELDS, REFERENCES, SNAPSHOT_KEYS, SnapshotUniverse,
+    build_inventory_envelope, closure_violations, compose_full_snapshot, to_sorted_json,
 };
 use al_sem::program::inputs::InputSet;
 use al_sem::program::model::workspace::Model;
@@ -33,6 +35,7 @@ use serde_json::Value;
 use crate::dep_dispatch_fixture as dd;
 
 const DRIVER: &str = "cli-b-v1";
+const R5B_PRIMARY: &str = "11111111-0000-0000-0000-0000000000aa";
 const R5B_D: &str = "dddddddd-0000-0000-0000-000000000001";
 const R5B_E: &str = "eeeeeeee-0000-0000-0000-000000000002";
 
@@ -523,6 +526,25 @@ fn opaque_gap_of_an_app_with_source_fires() {
     let _ = compose(&b);
 }
 
+/// F22 (review F4): a serialized identity's dependency app must be in
+/// `dependency_apps`; `project_apps` never guesses a row. DD with its
+/// dependency app hand-removed from `dependency_apps` (its identities, e.g.
+/// the referenced `Outer`, stay) fires the assertion.
+///
+/// Break: delete the `debug_assert!` -> no panic.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a serialized identity's app is missing from dependency_apps")]
+fn identity_app_missing_from_dependency_apps_fires() {
+    let dir = dd_dir();
+    let mut b = build(dir.path(), false);
+    let apps = &mut base_mut(&mut b.target).dependency_apps;
+    let before = apps.len();
+    apps.retain(|a| !a.guid.eq_ignore_ascii_case(dd::DEP_GUID));
+    assert_eq!(apps.len() + 1, before, "precondition: DD's dependency app");
+    let _ = compose(&b);
+}
+
 // ---------------------------------------------------------------------------
 // Preflight (D5): T7
 // ---------------------------------------------------------------------------
@@ -592,6 +614,865 @@ fn diff_refuses_schema_3() {
 // ---------------------------------------------------------------------------
 // Key classes (D4): T12
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Key classes (D4): T9a, T9b, T9d, T9-closure, T9e, T9f, T9-keys, T10, T12
+// ---------------------------------------------------------------------------
+
+/// T9a Inventory (DD cross-app). In memory: the model holds the dependency
+/// objects `Dep Lib`/`Dep Sub` (contractFacts' source) and the dependency
+/// table `Customer` (18) (schemaFacts', S15); the unfiltered core holds
+/// dependency `rootClassifications` and `eventDeclarations` rows; the model
+/// holds `Outer` (the inventory's source). Serialized cross-app: none of
+/// them, and the inventory doc's `routineInventory` is primary only.
+///
+/// Break: identity filter -> they appear.
+#[test]
+fn key_class_inventory() {
+    let dir = dd_dir();
+    let b = build(dir.path(), false);
+    let model = b.target.resolved();
+    let dep = dd::DEP_GUID;
+    for name in ["Dep Lib", "Dep Sub"] {
+        assert!(
+            model
+                .workspace
+                .objects
+                .iter()
+                .any(|o| o.name == name && o.app_guid.eq_ignore_ascii_case(dep)),
+            "precondition: dependency object {name}"
+        );
+    }
+    assert!(
+        model
+            .workspace
+            .tables
+            .iter()
+            .any(|t| t.table_number == 18 && t.app_guid.eq_ignore_ascii_case(dep)),
+        "precondition: dependency table Customer (18)"
+    );
+    let core = compose_snapshot(model);
+    assert!(
+        core.root_classifications.iter().any(|r| starts_ci(
+            serde_json::to_value(r).unwrap()["routineId"]
+                .as_str()
+                .unwrap_or(""),
+            dep
+        )),
+        "precondition: a dependency rootClassifications row"
+    );
+    assert!(
+        core.event_declarations.iter().any(|e| starts_ci(
+            serde_json::to_value(e).unwrap()["routine"]
+                .as_str()
+                .unwrap_or(""),
+            dep
+        )),
+        "precondition: a dependency eventDeclarations row"
+    );
+    let outer = stable(model, "Outer");
+
+    let tree = compose(&b);
+    let snap = json(&tree);
+    let dep_rows = |key: &str, field: &str| -> Vec<Value> {
+        rows(&snap, key)
+            .iter()
+            .filter(|r| starts_ci(r[field].as_str().unwrap_or(""), dep))
+            .cloned()
+            .collect()
+    };
+    for (key, field) in [
+        ("contractFacts", "stableId"),
+        ("schemaFacts", "stableId"),
+        ("permissionFacts", "subject"),
+        ("rootClassifications", "routineId"),
+        ("eventDeclarations", "routine"),
+    ] {
+        assert_eq!(
+            dep_rows(key, field),
+            Vec::<Value>::new(),
+            "{key}: no dependency row"
+        );
+    }
+    let inv: Value =
+        serde_json::from_str(&build_inventory_envelope(&tree, model, DRIVER, true)).unwrap();
+    let ids: Vec<&str> = inv["payload"]["routineInventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["stableRoutineId"].as_str().unwrap())
+        .collect();
+    assert!(
+        !ids.contains(&outer.as_str()),
+        "routineInventory lists no Outer"
+    );
+    assert!(
+        ids.iter().all(|id| starts_ci(id, dd::WS_GUID)),
+        "routineInventory is primary only: {ids:?}"
+    );
+}
+
+/// T9b Behaviour (DD cross-app). In memory `Inner` has direct capability
+/// facts and coverage. Serialized: no `capabilityFacts`/`coverage`/
+/// `typedEdges`/`callsiteResolutions` row with a dependency subject;
+/// `CallChain`'s rows present, and every in-memory primary fact.
+///
+/// Spec deviation (as T9d's): `CallChain` has NO capability fact in memory at
+/// this base (its facts come through `Outer -> Inner`, cone-only), so its
+/// present rows are its `typedEdges` and `callsiteResolutions` rows; the
+/// fact arm is carried by every primary fact.
+///
+/// Break: identity filter -> `Inner` appears.
+#[test]
+fn key_class_behaviour() {
+    let dir = dd_dir();
+    let b = build(dir.path(), false);
+    let model = b.target.resolved();
+    let inner = stable(model, "Inner");
+    let call_chain = stable(model, "CallChain");
+    let core = compose_snapshot(model);
+    assert!(
+        core.capability_facts.iter().any(|f| f.subject == inner),
+        "precondition: Inner has capability facts in memory"
+    );
+    assert!(
+        core.coverage.iter().any(|c| c.subject == inner),
+        "precondition: Inner has coverage in memory"
+    );
+    assert!(
+        !core
+            .capability_facts
+            .iter()
+            .any(|f| f.subject == call_chain),
+        "spec deviation recorded: CallChain has no in-memory fact on the cut; \
+         if it now has one, assert CallChain's facts stay"
+    );
+    let primary_facts = core
+        .capability_facts
+        .iter()
+        .filter(|f| starts_ci(&f.subject, dd::WS_GUID))
+        .count();
+    assert!(primary_facts > 0, "precondition: primary facts in memory");
+    let snap = json(&compose(&b));
+    assert_eq!(
+        rows(&snap, "capabilityFacts").len(),
+        primary_facts,
+        "every primary fact stays"
+    );
+    for key in ["typedEdges", "callsiteResolutions"] {
+        assert!(
+            rows(&snap, key)
+                .iter()
+                .any(|r| r["from"] == call_chain.as_str()),
+            "{key}: CallChain's rows stay"
+        );
+    }
+    for (key, field) in [
+        ("capabilityFacts", "subject"),
+        ("coverage", "subject"),
+        ("typedEdges", "from"),
+        ("callsiteResolutions", "from"),
+    ] {
+        let dep: Vec<&Value> = rows(&snap, key)
+            .iter()
+            .filter(|r| starts_ci(r[field].as_str().unwrap_or(""), dd::DEP_GUID))
+            .collect();
+        assert!(dep.is_empty(), "{key}: no dependency {field}: {dep:?}");
+    }
+}
+
+/// T9d Evidence (DD + R5B cross-app; S8, O3). DD: `Outer` is referenced by
+/// `CallChain`'s typed edge; `TouchCust`'s fact names `bbbb…/table/18`; in
+/// memory `Inner`'s operationIndex row and `Outer`'s callsiteIndex row exist.
+/// Serialized: `identities` holds `Outer`, `bbbb…:Table:18` and every primary
+/// id; `operationIndex` holds the primary rows (TouchCust's) and NOT
+/// `Inner`'s; `callsiteIndex` holds `CallChain`'s and NOT `Outer`'s. R5B: the
+/// `eeee…` rows are unreferenced and no `eeee…` id is serialized.
+///
+/// Break 1: emit every row -> `eeee…` ids and `Inner`'s operation appear.
+/// Break 2: primary only -> `Outer` missing. Break 4: drop primary rows from
+/// Evidence -> `TouchCust`'s operation missing. (Break 3 is T9-closure's.)
+#[test]
+fn key_class_evidence() {
+    let dir = dd_dir();
+    let b = build(dir.path(), false);
+    let model = b.target.resolved();
+    let (outer, inner, call_chain, touch) = (
+        stable(model, "Outer"),
+        stable(model, "Inner"),
+        stable(model, "CallChain"),
+        stable(model, "TouchCust"),
+    );
+    let core = compose_snapshot(model);
+    let dep_table = format!("{}/table/18", dd::DEP_GUID);
+    assert!(
+        core.typed_edges.iter().any(|e| {
+            let v = serde_json::to_value(e).unwrap();
+            v["from"] == call_chain.as_str() && v["to"] == outer.as_str()
+        }),
+        "precondition: CallChain's typed edge references Outer"
+    );
+    assert!(
+        core.capability_facts.iter().any(|f| f.subject == touch
+            && f.resource_id
+                .as_deref()
+                .is_some_and(|r| r.eq_ignore_ascii_case(&dep_table))),
+        "precondition: TouchCust's fact names {dep_table}"
+    );
+    assert!(
+        core.operation_index.iter().any(|o| o.routine == inner),
+        "precondition: Inner's operationIndex row exists in memory"
+    );
+    // The spec's precondition "in memory, `Outer`'s callsiteIndex row exists"
+    // does NOT hold at this base: `derive_callsite_evidence` keeps only call
+    // sites a cut fact or cut typed edge references, and `Outer -> Inner` is a
+    // dependency caller's call (cone-only). So the "NOT Outer's" arm below is
+    // vacuous until step 6 composes on the cone (ledger, acceptance tests).
+    assert!(
+        !core.callsite_index.iter().any(|c| c.routine == outer),
+        "spec deviation recorded: Outer has no in-memory call-site row on the cut; \
+         if it now has one, restore the spec's precondition here"
+    );
+    assert!(
+        core.operation_index.iter().any(|o| o.routine == touch),
+        "precondition: TouchCust has an operation row"
+    );
+    let primary_ids: Vec<&String> = core
+        .identities
+        .stable_ids
+        .iter()
+        .filter(|s| starts_ci(s, dd::WS_GUID))
+        .collect();
+
+    let snap = json(&compose(&b));
+    let ids: BTreeSet<&str> = snap["identities"]["stableIds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(outer.as_str()),
+        "Outer (referenced) is an identity"
+    );
+    let stable_table = format!("{}:Table:18", dd::DEP_GUID);
+    assert!(
+        ids.iter().any(|s| s.eq_ignore_ascii_case(&stable_table)),
+        "{stable_table} (referenced) is an identity"
+    );
+    for p in &primary_ids {
+        assert!(ids.contains(p.as_str()), "every primary id is kept: {p}");
+    }
+    let op_routines: Vec<&str> = rows(&snap, "operationIndex")
+        .iter()
+        .map(|o| o["routine"].as_str().unwrap())
+        .collect();
+    assert!(
+        op_routines.contains(&touch.as_str()),
+        "TouchCust's operation row"
+    );
+    assert!(
+        !op_routines.contains(&inner.as_str()),
+        "no Inner operation row"
+    );
+    let cs_routines: Vec<&str> = rows(&snap, "callsiteIndex")
+        .iter()
+        .map(|o| o["routine"].as_str().unwrap())
+        .collect();
+    assert!(
+        cs_routines.contains(&call_chain.as_str()),
+        "CallChain's call-site rows"
+    );
+    assert!(
+        !cs_routines.contains(&outer.as_str()),
+        "no Outer call-site row"
+    );
+
+    // R5B: the eeee… rows are unreferenced; none is serialized.
+    let r = build(&r5b(), false);
+    let core = compose_snapshot(r.target.resolved());
+    let referencing = format!(
+        "{}{}{}",
+        serde_json::to_string(&core.typed_edges).unwrap(),
+        serde_json::to_string(&core.callsite_resolutions).unwrap(),
+        serde_json::to_string(&core.operation_index).unwrap(),
+    )
+    .to_ascii_lowercase();
+    assert!(
+        core.identities
+            .stable_ids
+            .iter()
+            .any(|s| starts_ci(s, R5B_E))
+            || r.target
+                .resolved()
+                .workspace
+                .routines
+                .iter()
+                .any(|x| x.app_guid.eq_ignore_ascii_case(R5B_E)),
+        "precondition: eeee… rows exist"
+    );
+    assert!(
+        !referencing.contains(R5B_E),
+        "precondition: no edge, resolution or operation row references eeee…"
+    );
+    let snap = json(&compose(&r));
+    let e_ids: Vec<&str> = snap["identities"]["stableIds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .filter(|s| starts_ci(s, R5B_E))
+        .collect();
+    assert!(e_ids.is_empty(), "no eeee… identity: {e_ids:?}");
+}
+
+/// A path pattern of `REFERENCES` / `NON_REFERENCE_FIELDS` (the matching rule
+/// `snapshot_full::REFERENCES` documents) against a row-relative path.
+fn path_matches(pattern: &str, path: &[String]) -> bool {
+    if !pattern.contains('.') && !pattern.contains('*') {
+        return path.last().is_some_and(|l| l == pattern);
+    }
+    let pat: Vec<&str> = pattern.split('.').collect();
+    let seg = |p: &str, s: &str| -> bool {
+        match p.split_once('*') {
+            None => p == s,
+            Some((pre, post)) => s.starts_with(pre) && s.ends_with(post),
+        }
+    };
+    for (i, p) in pat.iter().enumerate() {
+        if *p == "*" && i == pat.len() - 1 {
+            return path.len() >= pat.len();
+        }
+        match path.get(i) {
+            Some(s) if seg(p, s) => {}
+            _ => return false,
+        }
+    }
+    path.len() == pat.len()
+}
+
+/// Whether `path` is a REFERENCE field of `key` (not its defining field).
+fn is_reference(key: &str, path: &[String]) -> bool {
+    REFERENCES
+        .iter()
+        .filter(|(k, _, _)| *k == key)
+        .any(|(_, _, refs)| refs.iter().any(|(f, _)| path_matches(f, path)))
+}
+
+fn classified(key: &str, path: &[String]) -> bool {
+    REFERENCES
+        .iter()
+        .filter(|(k, _, _)| *k == key)
+        .any(|(_, def, refs)| {
+            def.is_some_and(|d| path_matches(d, path))
+                || refs.iter().any(|(f, _)| path_matches(f, path))
+        })
+        || NON_REFERENCE_FIELDS.iter().any(|f| path_matches(f, path))
+}
+
+/// Every string leaf of a row with its row-relative path (array indices
+/// dropped).
+fn leaves(v: &CborValue, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, String)>) {
+    match v {
+        CborValue::Text(s) => out.push((path.clone(), s.clone())),
+        CborValue::Array(a) => a.iter().for_each(|x| leaves(x, path, out)),
+        CborValue::Map(m) => {
+            for (k, x) in m {
+                path.push(k.clone());
+                leaves(x, path, out);
+                path.pop();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every string leaf of `tree`, by top-level key. `routineOrderFrames` is
+/// walked per frame (its map key is the row's defining field).
+fn leaves_by_key(tree: &CborValue) -> Vec<(String, Vec<String>, String)> {
+    let CborValue::Map(m) = tree else {
+        panic!("a snapshot is a map")
+    };
+    let mut out = Vec::new();
+    for (key, v) in m {
+        let mut found = Vec::new();
+        match (key.as_str(), v) {
+            ("routineOrderFrames", CborValue::Map(frames)) => {
+                for f in frames.values() {
+                    leaves(f, &mut Vec::new(), &mut found);
+                }
+            }
+            _ => leaves(v, &mut Vec::new(), &mut found),
+        }
+        out.extend(found.into_iter().map(|(p, s)| (key.clone(), p, s)));
+    }
+    out
+}
+
+/// The id-shaped test of T9-closure: rooted in a model app guid, or equal to
+/// a model routine id or to an Evidence row id.
+fn id_shaped(model: &Model, evidence_ids: HashSet<String>) -> impl Fn(&str) -> bool + use<> {
+    let mut apps: HashSet<String> = model
+        .workspace
+        .routines
+        .iter()
+        .map(|r| r.app_guid.to_ascii_lowercase())
+        .chain(
+            model
+                .workspace
+                .objects
+                .iter()
+                .map(|o| o.app_guid.to_ascii_lowercase()),
+        )
+        .collect();
+    apps.insert(primary_guid(model).to_ascii_lowercase());
+    let routine_ids: HashSet<String> = model
+        .workspace
+        .routines
+        .iter()
+        .map(|r| r.id.clone())
+        .collect();
+    move |s: &str| {
+        let l = s.to_ascii_lowercase();
+        apps.iter().any(|a| l.starts_with(a.as_str()))
+            || routine_ids.contains(s)
+            || evidence_ids.contains(s)
+    }
+}
+
+fn evidence_ids(snap: &Value) -> HashSet<String> {
+    rows(snap, "operationIndex")
+        .iter()
+        .map(|o| o["operationId"].as_str().unwrap().to_string())
+        .chain(
+            rows(snap, "callsiteIndex")
+                .iter()
+                .map(|c| c["callsiteId"].as_str().unwrap().to_string()),
+        )
+        .collect()
+}
+
+/// T9-closure, field classification and Closure (DD + R5B cross-app; S9,
+/// SN2, SN4, ON3, ON4; the hand-stated literal, value-source and nested arms
+/// run on typed rows in `snapshot_full`'s lib tests, F30). DD's `TouchCust`
+/// fact carries `resourceId` `bbbb…/table/18` (asserted). Every id-shaped
+/// string sits under a field of `REFERENCES` or `NON_REFERENCE_FIELDS`, and
+/// the per-domain Closure of §4.4 holds (no violation), including no frame
+/// violation for a root frame's `parentFrameId = -1`.
+///
+/// Break 2: drop `tableId` from `REFERENCES` -> it is in neither list.
+/// Break 3: map internal tables by a `/`->`:` rewrite -> `bbbb…:table:18` is
+/// model-rooted and resolves to nothing, a violation. Break 4: treat
+/// `stableId` as a reference -> T10's unreferenced-table precondition fails.
+#[test]
+fn closure_fields_are_classified_and_closed() {
+    let dir = dd_dir();
+    for (label, b) in [
+        ("DD", build(dir.path(), false)),
+        ("R5B", build(&r5b(), false)),
+    ] {
+        let model = b.target.resolved();
+        let mut tree = compose(&b);
+        if label == "DD" {
+            let touch = stable(model, "TouchCust");
+            let dep_table = format!("{}/table/18", dd::DEP_GUID);
+            assert!(
+                compose_snapshot(model)
+                    .capability_facts
+                    .iter()
+                    .any(|f| f.subject == touch
+                        && f.resource_id
+                            .as_deref()
+                            .is_some_and(|r| r.eq_ignore_ascii_case(&dep_table))),
+                "precondition: TouchCust's fact carries resourceId {dep_table}"
+            );
+            // F28: neither DD nor R5B serializes a `table-field` value source,
+            // so one is hand-stated on a kept primary fact (TouchCust's).
+            let CborValue::Map(m) = &mut tree else {
+                unreachable!()
+            };
+            let Some(CborValue::Array(facts)) = m.get_mut("capabilityFacts") else {
+                panic!("capabilityFacts is an array")
+            };
+            let Some(CborValue::Map(fact)) = facts.iter_mut().find(|f| {
+                matches!(f, CborValue::Map(r)
+                    if matches!(r.get("subject"), Some(CborValue::Text(s)) if *s == touch))
+            }) else {
+                panic!("precondition: a kept TouchCust fact")
+            };
+            let mut source = indexmap::IndexMap::new();
+            source.insert("kind".to_string(), CborValue::Text("table-field".into()));
+            source.insert("tableId".to_string(), CborValue::Text(dep_table.clone()));
+            source.insert("fieldName".to_string(), CborValue::Text("No.".into()));
+            fact.insert("resourceArgSource".to_string(), CborValue::Map(source));
+            assert!(
+                leaves_by_key(&tree)
+                    .iter()
+                    .any(|(_, path, _)| path.last().is_some_and(|l| l == "tableId")),
+                "precondition: a kept fact carries a table-field source"
+            );
+        }
+        let tree = tree;
+        let snap = json(&tree);
+        let shaped = id_shaped(model, evidence_ids(&snap));
+        let unclassified: BTreeSet<String> = leaves_by_key(&tree)
+            .into_iter()
+            .filter(|(_, _, s)| shaped(s))
+            .filter(|(key, path, _)| !classified(key, path))
+            .map(|(key, path, _)| format!("{key}.{}", path.join(".")))
+            .collect();
+        assert!(
+            unclassified.is_empty(),
+            "{label}: id-shaped values under fields in neither REFERENCES nor NON_REFERENCE_FIELDS: {unclassified:?}"
+        );
+        let universe = SnapshotUniverse::of(&b.target);
+        let violations = closure_violations(&tree, model, &universe);
+        assert!(violations.is_empty(), "{label}: {violations:?}");
+    }
+}
+
+/// T9-closure, per-domain resolution (S3N3): one hand-stated dangling value
+/// per domain in a kept row of DD's cross-app tree (an unknown `operationId`,
+/// `callsiteId`, `edgeId`, an `order.frameId` absent from its table, a gap
+/// subject guid that owns no row): each is reported as a violation of its
+/// domain.
+///
+/// Break 8: allow any unresolved value in that domain as external -> that arm
+/// passes silently, fails.
+#[test]
+fn closure_reports_each_dangling_domain() {
+    let dir = dd_dir();
+    let b = build(dir.path(), false);
+    let model = b.target.resolved();
+    let universe = SnapshotUniverse::of(&b.target);
+    let clean = compose(&b);
+    let set = |tree: &mut CborValue, key: &str, edit: &dyn Fn(&mut CborValue)| {
+        let CborValue::Map(m) = tree else {
+            unreachable!()
+        };
+        let Some(CborValue::Array(rows)) = m.get_mut(key) else {
+            panic!("{key} is an array")
+        };
+        let row = rows
+            .first_mut()
+            .unwrap_or_else(|| panic!("precondition: a kept {key} row"));
+        edit(row);
+    };
+    let put = |row: &mut CborValue, field: &str, v: CborValue| {
+        let CborValue::Map(m) = row else {
+            unreachable!()
+        };
+        m.insert(field.to_string(), v);
+    };
+    let txt = |s: &str| CborValue::Text(s.to_string());
+    type Arm<'a> = (Domain, &'a str, Box<dyn Fn(&mut CborValue) + 'a>);
+    let arms: Vec<Arm> = vec![
+        (
+            Domain::Operation,
+            "mi/nohash/op99",
+            Box::new(|t: &mut CborValue| {
+                set(t, "capabilityFacts", &|r| {
+                    put(r, "witnessOperationId", txt("mi/nohash/op99"))
+                })
+            }),
+        ),
+        (
+            Domain::Callsite,
+            "mi/nohash/cs99",
+            Box::new(|t: &mut CborValue| {
+                set(t, "callsiteResolutions", &|r| {
+                    put(r, "callsiteId", txt("mi/nohash/cs99"))
+                })
+            }),
+        ),
+        (
+            Domain::Edge,
+            "nosuchedge00000",
+            Box::new(|t: &mut CborValue| {
+                set(t, "callsiteResolutions", &|r| {
+                    put(
+                        r,
+                        "resolvedEdges",
+                        CborValue::Array(vec![txt("nosuchedge00000")]),
+                    )
+                })
+            }),
+        ),
+        (
+            Domain::Frame,
+            "999",
+            Box::new(|t: &mut CborValue| {
+                set(t, "operationIndex", &|r| {
+                    let CborValue::Map(m) = r else { unreachable!() };
+                    let mut order = indexmap::IndexMap::new();
+                    order.insert("orderId".to_string(), CborValue::Int(0));
+                    order.insert("frameId".to_string(), CborValue::Int(999));
+                    order.insert("onSuccessPath".to_string(), CborValue::Bool(true));
+                    order.insert("dominatesSuccessReturn".to_string(), CborValue::Bool(false));
+                    m.insert("order".to_string(), CborValue::Map(order));
+                })
+            }),
+        ),
+        (
+            Domain::App,
+            "99999999-0000-0000-0000-000000000099",
+            Box::new(|t: &mut CborValue| {
+                let CborValue::Map(m) = t else { unreachable!() };
+                let Some(CborValue::Array(g)) = m.get_mut("analysisGaps") else {
+                    panic!("analysisGaps")
+                };
+                let mut row = indexmap::IndexMap::new();
+                row.insert("kind".to_string(), txt("symbol-only-boundary"));
+                row.insert(
+                    "subject".to_string(),
+                    txt("99999999-0000-0000-0000-000000000099"),
+                );
+                row.insert("detail".to_string(), txt("hand-stated"));
+                row.insert("role".to_string(), txt("dependency"));
+                g.push(CborValue::Map(row));
+            }),
+        ),
+    ];
+    let clean_violations = closure_violations(&clean, model, &universe);
+    assert!(
+        !clean_violations
+            .iter()
+            .any(|v| v.domain == Domain::Frame && v.value == "-1"),
+        "parentFrameId = -1 is no reference: {clean_violations:?}"
+    );
+    for (domain, value, arm) in &arms {
+        let mut tree = clean.clone();
+        arm(&mut tree);
+        let got = closure_violations(&tree, model, &universe);
+        assert!(
+            got.iter().any(|v| v.domain == *domain && v.value == *value),
+            "{domain:?}: the dangling {value} is reported: {got:?}"
+        );
+    }
+}
+
+/// T9e Input (DD single vs cross): `workspaceFingerprint` and `inputs` are
+/// equal across universes. The cross-app side states `analysisUniverse:
+/// "cross-app"` (else the arm would compare two unfiltered trees).
+///
+/// Break: filter `inputs` as Inventory -> the dependency `.app` rows vanish.
+#[test]
+fn key_class_input() {
+    let dir = dd_dir();
+    let single = json(&compose(&build(dir.path(), true)));
+    let cross = json(&compose(&build(dir.path(), false)));
+    assert_eq!(
+        cross["analysisUniverse"], "cross-app",
+        "precondition: the cross-app filter ran"
+    );
+    assert!(
+        rows(&single, "inputs")
+            .iter()
+            .any(|i| i["kind"] == "dep-package"),
+        "precondition: a dependency package input row"
+    );
+    assert_eq!(
+        single["workspaceFingerprint"],
+        cross["workspaceFingerprint"]
+    );
+    assert_eq!(single["inputs"], cross["inputs"]);
+}
+
+/// T9f Header and order (DD both universes; R5B-F, S8). `analysisUniverse`
+/// per universe; DD cross-app `apps` holds `bbbb…` with `role: "dependency"`,
+/// publisher `probe`; R5B-F (its primary guid sorts after `dddd…`, asserted)
+/// `apps[0]` is `ffff…` with `role: "primary"`, `dddd…` second, no `eeee…`.
+///
+/// Break: sort `apps[]` by guid only -> `dddd…` first.
+#[test]
+fn key_class_header_and_apps_order() {
+    let dir = dd_dir();
+    let single = json(&compose(&build(dir.path(), true)));
+    let cross = json(&compose(&build(dir.path(), false)));
+    assert_eq!(single["analysisUniverse"], "single-app");
+    assert_eq!(cross["analysisUniverse"], "cross-app");
+    assert_eq!(single["apps"][0]["role"], "primary");
+    let dep_app = rows(&cross, "apps")
+        .iter()
+        .find(|a| {
+            a["appGuid"]
+                .as_str()
+                .is_some_and(|g| g.eq_ignore_ascii_case(dd::DEP_GUID))
+        })
+        .unwrap_or_else(|| panic!("the dependency app row: {:?}", cross["apps"]));
+    assert_eq!(dep_app["role"], "dependency");
+    assert_eq!(dep_app["publisher"], "probe");
+    assert_eq!(cross["apps"][0]["role"], "primary");
+
+    // O13 (review F4): an upper-case manifest guid owns the lower-case
+    // identities. DD's manifest is lower-case, so the spelling is hand-stated
+    // on the dependency app; the row is matched case-insensitively and
+    // written as the manifest spells it.
+    let mut upper = build(dir.path(), false);
+    let upper_guid = dd::DEP_GUID.to_ascii_uppercase();
+    base_mut(&mut upper.target)
+        .dependency_apps
+        .iter_mut()
+        .find(|a| a.guid == dd::DEP_GUID)
+        .expect("precondition: the lower-case dependency app")
+        .guid = upper_guid.clone();
+    let snap = json(&compose(&upper));
+    assert!(
+        snap["identities"]["stableIds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s.as_str().unwrap_or("").starts_with(dd::DEP_GUID)),
+        "precondition: a lower-case dependency identity is serialized"
+    );
+    assert!(
+        rows(&snap, "apps")
+            .iter()
+            .any(|a| a["appGuid"] == upper_guid.as_str() && a["role"] == "dependency"),
+        "the upper-case dependency app owns its identities: {:?}",
+        snap["apps"]
+    );
+
+    let f = tempfile::tempdir().unwrap();
+    crate::copy_dir(&r5b(), f.path());
+    let app_json = std::fs::read_to_string(f.path().join("app.json")).unwrap();
+    let ffff = "ffffffff-0000-0000-0000-0000000000aa";
+    assert_eq!(app_json.matches(R5B_PRIMARY).count(), 1, "precondition");
+    std::fs::write(
+        f.path().join("app.json"),
+        app_json.replace(R5B_PRIMARY, ffff),
+    )
+    .unwrap();
+    assert!(ffff > R5B_D, "precondition: the primary sorts after dddd…");
+    let snap = json(&compose(&build(f.path(), false)));
+    let apps = rows(&snap, "apps");
+    assert_eq!(apps[0]["appGuid"], ffff, "{apps:?}");
+    assert_eq!(apps[0]["role"], "primary");
+    assert!(
+        apps.get(1)
+            .and_then(|a| a["appGuid"].as_str())
+            .is_some_and(|g| g.eq_ignore_ascii_case(R5B_D)),
+        "dddd… second: {apps:?}"
+    );
+    assert!(
+        apps.iter().all(|a| !a["appGuid"]
+            .as_str()
+            .unwrap_or("")
+            .eq_ignore_ascii_case(R5B_E)),
+        "no eeee… row: {apps:?}"
+    );
+}
+
+/// T9-keys (both universes, DD; O4): the composed keys are a subset of
+/// `SNAPSHOT_KEYS` and every required key is present. (The shard half is
+/// `snapshot_full`'s `slice_for_app_handles_every_classed_key`.)
+///
+/// Break: insert a new key without a class -> fails.
+#[test]
+fn composed_keys_are_classed() {
+    let dir = dd_dir();
+    let classed: Vec<&str> = SNAPSHOT_KEYS.iter().map(|(k, _)| *k).collect();
+    let optional = ["inputsMetadata", "routineOrderFrames"];
+    for single in [true, false] {
+        let tree = compose(&build(dir.path(), single));
+        let CborValue::Map(m) = &tree else {
+            unreachable!()
+        };
+        let keys: Vec<&str> = m.keys().map(String::as_str).collect();
+        for k in &keys {
+            assert!(
+                classed.contains(k),
+                "single_app={single}: {k} has no class ({classed:?})"
+            );
+        }
+        for k in &classed {
+            assert!(
+                optional.contains(k) || keys.contains(k),
+                "single_app={single}: required key {k} missing"
+            );
+        }
+    }
+}
+
+/// T10 (S7, O5, S10, SN2): a temp copy of `ws-d8-commit-in-tx` plus
+/// `src/Unused.al` (table 50199 no code touches). The cross-app base builds
+/// with no dependency; one primary routine hand-stated `parse_incomplete` in
+/// both models, so `analysisGaps` is non-empty; table `Unused` is an
+/// `identities` row no other field names (asserted). The full trees are equal
+/// except `analysisUniverse`.
+///
+/// Break 1: write the gap `role` only cross-app -> the single-app gap row
+/// lacks it. Break 2: Evidence keeps referenced ids only -> the unreferenced
+/// table vanishes cross-app.
+#[test]
+fn no_dependency_cross_equals_single() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::copy_dir(
+        &repo().join("tests/r0-corpus/ws-d8-commit-in-tx"),
+        dir.path(),
+    );
+    std::fs::write(
+        dir.path().join("src/Unused.al"),
+        "table 50199 Unused\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20])\n        {\n        }\n    }\n}\n",
+    )
+    .unwrap();
+    let mut single = build(dir.path(), true);
+    let mut cross = build(dir.path(), false);
+    assert!(
+        base(&cross.target).dep_routine_ids.is_empty(),
+        "precondition: no dependency routine"
+    );
+    let victim = single.target.resolved().workspace.routines[0].name.clone();
+    hand_state_parse_incomplete(&mut single.target, &[&victim]);
+    hand_state_parse_incomplete(&mut cross.target, &[&victim]);
+    let s_tree = compose(&single);
+    let s = json(&s_tree);
+    let c = json(&compose(&cross));
+    assert!(
+        !rows(&s, "analysisGaps").is_empty(),
+        "precondition: a non-empty analysisGaps"
+    );
+    let guid = primary_guid(single.target.resolved());
+    let unused_stable = format!("{guid}:Table:50199");
+    let unused_internal = format!("{guid}/table/50199");
+    let ids = s["identities"]["stableIds"].as_array().unwrap();
+    assert!(
+        ids.iter().any(|v| v == unused_stable.as_str()),
+        "precondition: Unused is an identities row"
+    );
+    // No REFERENCES field (a defining field is no reference, SN2) of any row
+    // names Unused; in the committed fixture every table is a permission
+    // target, so none would do.
+    let naming: Vec<String> = leaves_by_key(&s_tree)
+        .into_iter()
+        .filter(|(_, _, v)| v.starts_with(&unused_stable) || v.starts_with(&unused_internal))
+        .filter(|(key, path, _)| is_reference(key, path))
+        .map(|(key, path, v)| format!("{key}.{} = {v}", path.join(".")))
+        .collect();
+    assert!(
+        naming.is_empty(),
+        "precondition: no reference field names Unused: {naming:?}"
+    );
+
+    assert_eq!(s["analysisUniverse"], "single-app");
+    assert_eq!(c["analysisUniverse"], "cross-app");
+    assert!(
+        rows(&s, "analysisGaps")
+            .iter()
+            .all(|g| g["role"] == "primary"),
+        "the single-app gap rows carry role primary: {:?}",
+        s["analysisGaps"]
+    );
+    let strip = |mut v: Value| {
+        v.as_object_mut().unwrap().remove("analysisUniverse");
+        v
+    };
+    assert_eq!(
+        strip(s),
+        strip(c),
+        "the trees differ only in analysisUniverse"
+    );
+}
 
 /// T12 (O18): two cross-app targets built from the same workspace (equal
 /// routine ids, asserted). Composing target A's model with

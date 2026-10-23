@@ -36,11 +36,19 @@ use crate::engine::l4::capability_cone::{
 use crate::engine::l5::snapshot::{
     SnapshotAnalysisGap, compose_snapshot_from_base, stable_routine_id,
 };
+use crate::program::model::role::Role;
 use crate::program::model::workspace::Model;
 use crate::program::resolve::semantic_golden::ClosureErrorKind;
 
 mod to_cbor;
 pub use to_cbor::to_cbor_value;
+
+mod key_classes;
+pub(crate) use key_classes::filter_by_class;
+pub use key_classes::{
+    ClosureViolation, Domain, KeyClass, NON_REFERENCE_FIELDS, REFERENCES, SNAPSHOT_KEYS,
+    closure_violations,
+};
 
 /// The snapshot schema version: THE one constant (the composer, the loader and
 /// the shard manifest read it). 4 (#220): `analysisUniverse` and `apps[].role`.
@@ -134,15 +142,30 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     // rootClassifications, [routineOrderFrames]).
     // One base (cone + producer solve) for the core and the permission facts.
     let base = build_r3a3_source_only_base(resolved);
-    let core = compose_snapshot_from_base(resolved, &base);
+    // The composer's own copy: filtering it leaves every other in-memory
+    // snapshot unfiltered (I8).
+    let mut core = compose_snapshot_from_base(resolved, &base);
 
     let inputs = snapshot_rows(opts.inputs);
     let workspace_fingerprint = compute_workspace_fingerprint(inputs, opts.driver_version);
 
-    let apps = project_apps(resolved, &core.identities, &opts.universe);
+    // The three model-derived Inventory keys skip dependency rows by role.
     let contract_facts = derive_contracts(resolved);
     let schema_facts = derive_schema(resolved);
     let permission_facts = derive_permissions(resolved, &base);
+
+    // #220 D2/D4: cross-app, gaps by reach, then the key classes on the typed
+    // rows, before CBOR (O7). Single-app every row is primary (P3).
+    let mut referenced_apps = HashSet::new();
+    if let SnapshotUniverse::CrossApp(u) = &opts.universe {
+        core.analysis_gaps = reachable_gaps(&core.analysis_gaps, u.base, &base);
+        // No primary app: every row is primary, nothing to filter.
+        if let Some(p) = primary_app_guid(resolved) {
+            referenced_apps =
+                filter_by_class(&mut core, &permission_facts, p, &base.routine_to_stable);
+        }
+    }
+    let apps = project_apps(resolved, &core.identities, &referenced_apps, &opts.universe);
 
     // Serialize the consumed-core typed parts to ordered CborValues (their custom
     // `Serialize` impls drive the per-fact field order).
@@ -152,12 +175,7 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     let operation_index = to_cbor_value(&core.operation_index);
     let callsite_index = to_cbor_value(&core.callsite_index);
     let callsite_resolutions = to_cbor_value(&core.callsite_resolutions);
-    let analysis_gaps = match &opts.universe {
-        SnapshotUniverse::SingleApp => to_cbor_value(&core.analysis_gaps),
-        SnapshotUniverse::CrossApp(u) => {
-            to_cbor_value(&reachable_gaps(&core.analysis_gaps, u.base, &base))
-        }
-    };
+    let analysis_gaps = to_cbor_value(&core.analysis_gaps);
     let coverage = to_cbor_value(&core.coverage);
     let event_declarations = to_cbor_value(&core.event_declarations);
     let root_classifications = to_cbor_value(&core.root_classifications);
@@ -201,7 +219,6 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     m.insert("coverage".into(), coverage);
     m.insert("inputs".into(), to_cbor_inputs(inputs));
     m.insert("eventDeclarations".into(), event_declarations);
-
     // inputsMetadata + routineOrderFrames are attached AFTER ⇒ LAST (and only when
     // present, mirroring composeSnapshot's conditional `snap.x = …`).
     if opts.roots_config_ignored {
@@ -442,7 +459,6 @@ fn to_cbor_inputs(inputs: &[SnapshotInput]) -> CborValue {
 /// The routines (internal ids) reachable over `rel.cone()` from every primary
 /// routine of the model (spec §4.2: the cone, not the cut, F9).
 fn reach(x: &R3a5CrossAppBase) -> HashSet<String> {
-    use crate::program::model::role::Role;
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for e in x.rel.cone() {
         if let Some(to) = &e.to {
@@ -474,7 +490,6 @@ fn reachable_gaps(
     x: &R3a5CrossAppBase,
     source: &R3a3SourceBase,
 ) -> Vec<SnapshotAnalysisGap> {
-    use crate::program::model::role::Role;
     // The one case fold of an app guid, on both sides of the match (O13).
     let app_key = |guid: &str| guid.to_ascii_lowercase();
     let reach = reach(x);
@@ -514,12 +529,25 @@ fn reachable_gaps(
 // dependency app that owns an `identities` row, sorted by appGuid.
 // ===========================================================================
 
+/// The workspace's own app guid, when it has one.
+fn primary_app_guid(resolved: &Model) -> Option<&str> {
+    resolved
+        .primary_app
+        .as_ref()
+        .map(|a| a.app_guid.as_str())
+        .filter(|g| !g.is_empty())
+}
+
+/// Step (6) of the key classes (spec §4.4): `referenced_apps` holds the
+/// lower-case guids a kept gap references; a guid with no app metadata gets
+/// no row (O4N1).
 fn project_apps(
     resolved: &Model,
     identities: &crate::engine::l5::snapshot::SnapshotIdentityTable,
+    referenced_apps: &HashSet<String>,
     universe: &SnapshotUniverse,
 ) -> CborValue {
-    use crate::program::model::role::{Role, role_of_stable_id};
+    use crate::program::model::role::role_of_stable_id;
     let row = |guid: &str, publisher: &str, name: &str, version: &str, role: Role| {
         let mut m: IndexMap<String, CborValue> = IndexMap::new();
         m.insert("appGuid".into(), CborValue::Text(guid.to_string()));
@@ -530,11 +558,12 @@ fn project_apps(
         CborValue::Map(m)
     };
     let mut arr: Vec<CborValue> = Vec::new();
-    let primary = resolved
+    let primary_guid = primary_app_guid(resolved);
+    if let Some(app) = resolved
         .primary_app
         .as_ref()
-        .filter(|app| !app.app_guid.is_empty());
-    if let Some(app) = primary {
+        .filter(|_| primary_guid.is_some())
+    {
         arr.push(row(
             &app.app_guid,
             &app.publisher,
@@ -545,7 +574,6 @@ fn project_apps(
     }
     if let SnapshotUniverse::CrossApp(u) = universe {
         // The dependency apps owning an identity, matched case-insensitively (O13).
-        let primary_guid = primary.map(|a| a.app_guid.as_str());
         let owners: std::collections::HashSet<String> = identities
             .stable_ids
             .iter()
@@ -556,9 +584,13 @@ fn project_apps(
             .base
             .dependency_apps
             .iter()
-            .filter(|a| owners.contains(&a.guid.to_ascii_lowercase()))
+            .filter(|a| {
+                let g = a.guid.to_ascii_lowercase();
+                owners.contains(&g) || referenced_apps.contains(&g)
+            })
             .collect();
-        // F22: every dependency row comes from a required app.
+        // F22: every dependency row comes from a required app. A referenced
+        // gap guid with no metadata is the Closure check's to report (O4N1).
         debug_assert!(
             owners
                 .iter()
@@ -588,7 +620,12 @@ fn derive_contracts(resolved: &Model) -> CborValue {
     // (sort_key, CborValue) pairs.
     let mut rows: Vec<(String, CborValue)> = Vec::new();
 
-    for obj in &ws.objects {
+    // #220 Inventory: primary rows only (single-app every row is primary, P3).
+    for obj in ws
+        .objects
+        .iter()
+        .filter(|o| resolved.object_role(o) == Role::Primary)
+    {
         let stable_id = crate::engine::ids::to_stable_object_id(&obj.id);
         let mut m: IndexMap<String, CborValue> = IndexMap::new();
         m.insert("kind".into(), CborValue::Text("object".into()));
@@ -608,7 +645,11 @@ fn derive_contracts(resolved: &Model) -> CborValue {
         rows.push((stable_id, CborValue::Map(m)));
     }
 
-    for r in &ws.routines {
+    for r in ws
+        .routines
+        .iter()
+        .filter(|r| resolved.routine_role(r) == Role::Primary)
+    {
         // ⟨task-4-review.md finding I-1⟩ Read the stable id the assembly already
         // minted — do not re-derive it from parts. A future mint-site change (e.g.
         // the OUTSTANDING.md path-qualified-member wake condition) is not obligated
@@ -717,7 +758,12 @@ fn derive_schema(resolved: &Model) -> CborValue {
     let ws = &resolved.workspace;
     let mut rows: Vec<(String, CborValue)> = Vec::new();
 
-    for tbl in &ws.tables {
+    // #220 Inventory: primary tables only.
+    for tbl in ws
+        .tables
+        .iter()
+        .filter(|t| resolved.role_of_app(&t.app_guid) == Role::Primary)
+    {
         let stable_table = crate::engine::ids::to_stable_table_id(&tbl.app_guid, tbl.table_number);
         // table fact: shape {number, name}.
         let table_shape = sha256_hex(&format!(
@@ -823,7 +869,13 @@ fn derive_permissions(
 ) -> CborValue {
     let mut rows: Vec<(String, CborValue)> = Vec::new();
 
-    for r in &resolved.workspace.routines {
+    // #220 Inventory: primary subjects only.
+    for r in resolved
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| resolved.routine_role(r) == Role::Primary)
+    {
         // r.summary present iff the cone ran (base.cones has the routine).
         let Some(cone) = base.cones.get(&r.id) else {
             continue;
@@ -1336,10 +1388,12 @@ fn build_inventory_doc(
     // its own (the member is folded into the stable id); the secondary/tertiary
     // keys remain as fail-closed cover for the residual duplicate-stableRoutineId
     // shapes — see `inventory_row_cmp` (the sort below) and `case_insensitive_compare_opt`.
+    // #220: `routineInventory` is Inventory by `stableRoutineId` (primary only).
     let mut routine_rows: Vec<(String, Option<String>, Option<String>, CborValue)> = resolved
         .workspace
         .routines
         .iter()
+        .filter(|r| resolved.routine_role(r) == Role::Primary)
         .map(|r| {
             let mut m: IndexMap<String, CborValue> = IndexMap::new();
             m.insert("objectType".into(), CborValue::Text(r.object_type.clone()));
@@ -2301,6 +2355,378 @@ page 50818 "T5 I-3 Wizard Alpha"
         assert!(
             !dfc.contains_key("witnessFirstHopEventId"),
             "call fact derivedFromCapability: {dfc:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #220 (spec §5): key classes on hand-built rows.
+    // -----------------------------------------------------------------------
+
+    use crate::engine::l5::snapshot::{
+        CapabilitySnapshot, PdArena, RoutineOrderFrames, SnapCapabilityExtra, SnapValueSource,
+        SnapshotCallsiteEvidence, SnapshotCapabilityFact, SnapshotIdentityTable,
+        SnapshotOperationEvidence,
+    };
+    use crate::program::body::operation_order::{OperationOrder, ScopeFrame};
+
+    const P: &str = "aaaa0220-0000-0000-0000-0000000000aa";
+    const D: &str = "bbbb0220-0000-0000-0000-0000000000bb";
+
+    fn p_routine() -> String {
+        format!("{P}:Codeunit:50100#p1")
+    }
+
+    fn d_routine(n: u32) -> String {
+        format!("{D}:Codeunit:10#d{n}")
+    }
+
+    fn order(frame_id: i64) -> Option<OperationOrder> {
+        Some(OperationOrder {
+            order_id: 0,
+            frame_id,
+            on_success_path: true,
+            dominates_success_return: false,
+        })
+    }
+
+    fn frames() -> Vec<ScopeFrame> {
+        let frame = |frame_id: i64, parent_frame_id: i64, kind: &str| ScopeFrame {
+            frame_id,
+            parent_frame_id,
+            kind: kind.to_string(),
+            branch_always_terminates: None,
+            branch_may_fall_through: None,
+            branch_terminates_by: None,
+        };
+        vec![frame(0, -1, "block"), frame(1, 0, "loop")]
+    }
+
+    fn op_row(operation_id: &str, routine: &str) -> SnapshotOperationEvidence {
+        SnapshotOperationEvidence {
+            operation_id: operation_id.to_string(),
+            routine: routine.to_string(),
+            source_file: "dep:x:src/Lib.al".to_string(),
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 2,
+            display_text: "insert".to_string(),
+            control_context: None,
+            order: order(1),
+            under_asserterror: None,
+        }
+    }
+
+    fn cs_row(callsite_id: &str, routine: &str) -> SnapshotCallsiteEvidence {
+        SnapshotCallsiteEvidence {
+            callsite_id: callsite_id.to_string(),
+            routine: routine.to_string(),
+            source_file: "dep:x:src/Lib.al".to_string(),
+            start_line: 2,
+            start_column: 1,
+            end_line: 2,
+            end_column: 2,
+            callee_display: "Work".to_string(),
+            control_context: None,
+            order: order(1),
+            under_asserterror: None,
+        }
+    }
+
+    fn fact(subject: &str) -> SnapshotCapabilityFact {
+        SnapshotCapabilityFact {
+            subject: subject.to_string(),
+            op: "insert".to_string(),
+            resource_kind: "table".to_string(),
+            resource_id: None,
+            resource_arg_source: None,
+            confidence: "static".to_string(),
+            provenance: "direct".to_string(),
+            via: "self".to_string(),
+            witness_operation_id: None,
+            witness_callsite_id: None,
+            extra: None,
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
+        }
+    }
+
+    fn core_with(identities: &[String]) -> CapabilitySnapshot {
+        CapabilitySnapshot {
+            identities: SnapshotIdentityTable {
+                stable_ids: identities.to_vec(),
+                display_names: identities.iter().map(|_| "x".to_string()).collect(),
+            },
+            capability_facts: Vec::new(),
+            typed_edges: Vec::new(),
+            operation_index: Vec::new(),
+            callsite_index: Vec::new(),
+            callsite_resolutions: Vec::new(),
+            analysis_gaps: Vec::new(),
+            coverage: Vec::new(),
+            event_declarations: Vec::new(),
+            root_classifications: Vec::new(),
+            routine_order_frames: None,
+            pd_solution: PdArena::default(),
+        }
+    }
+
+    /// How often `needle` occurs in the serialized facts and indexes of `core`
+    /// plus `perms` (the "referenced nowhere else" preconditions).
+    fn occurrences(core: &CapabilitySnapshot, perms: &CborValue, needle: &str) -> usize {
+        let text = format!(
+            "{}{}{}{}",
+            to_sorted_json(&capability_facts_to_cbor(&core.capability_facts)),
+            to_sorted_json(&to_cbor_value(&core.operation_index)),
+            to_sorted_json(&to_cbor_value(&core.callsite_index)),
+            to_sorted_json(perms),
+        );
+        text.matches(needle).count()
+    }
+
+    /// T9g (#220 spec §5; SN1): a primary fact's `witnessOperationId` and
+    /// `witnessCallsiteId` name a DEPENDENCY routine's operation and call-site
+    /// rows (each with an `order.frameId` in that routine's frame table); the
+    /// routine is referenced by nothing else. Through the production filter,
+    /// both Evidence rows, the routine's frame table and its identity are kept.
+    ///
+    /// Break 1: match operation ids through the identity mapping (object
+    /// prefix) instead of verbatim -> the rows are dropped. Break 2: skip filter
+    /// step (4) -> the frame table and the identity are missing.
+    #[test]
+    fn evidence_follows_dependency_witness() {
+        let dr = d_routine(1);
+        let d_op = "mi/dhash/op0";
+        let d_cs = "mi/dhash/cs0";
+        let mut core = core_with(&[
+            format!("{P}:Codeunit:50100"),
+            p_routine(),
+            format!("{D}:Codeunit:10"),
+            dr.clone(),
+        ]);
+        let mut f = fact(&p_routine());
+        f.witness_operation_id = Some(d_op.to_string());
+        f.witness_callsite_id = Some(d_cs.to_string());
+        core.capability_facts.push(f);
+        core.operation_index.push(op_row(d_op, &dr));
+        core.callsite_index.push(cs_row(d_cs, &dr));
+        core.routine_order_frames = Some(RoutineOrderFrames::from_entries(vec![(
+            dr.clone(),
+            frames(),
+        )]));
+        let perms = CborValue::Array(Vec::new());
+        // Precondition: the dependency routine is named only by its two rows.
+        assert_eq!(occurrences(&core, &perms, &dr), 2, "precondition");
+        assert!(
+            frames().iter().any(|fr| fr.frame_id == 1),
+            "precondition: frameId 1 is in the routine's table"
+        );
+
+        filter_by_class(&mut core, &perms, P, &Default::default());
+
+        assert!(
+            core.operation_index.iter().any(|o| o.operation_id == d_op),
+            "the witnessed dependency operation row is kept"
+        );
+        assert!(
+            core.callsite_index.iter().any(|c| c.callsite_id == d_cs),
+            "the witnessed dependency call-site row is kept"
+        );
+        assert!(
+            core.routine_order_frames
+                .as_ref()
+                .and_then(|f| f.get(&dr))
+                .is_some(),
+            "the kept Evidence rows' frame table is kept"
+        );
+        assert!(
+            core.identities.stable_ids.contains(&dr),
+            "the kept Evidence rows' routine identity is kept"
+        );
+    }
+
+    /// T9d break 4 (#220 spec §5), on hand-built typed rows through the
+    /// production filter (as F30 allows): in a composed tree every primary
+    /// Evidence row is also referenced by its own routine's fact or typed
+    /// edge, so the "rows of a primary routine" arm of step (3) is visible
+    /// only on rows no kept row references. A primary routine's operation and
+    /// call-site rows, referenced by nothing (asserted), are kept.
+    ///
+    /// Break: drop primary rows from Evidence (referenced only) -> both
+    /// rows are dropped.
+    #[test]
+    fn evidence_keeps_unreferenced_primary_rows() {
+        let p_op = "mi/phash/op0";
+        let p_cs = "mi/phash/cs0";
+        let mut core = core_with(&[format!("{P}:Codeunit:50100"), p_routine()]);
+        core.operation_index.push(op_row(p_op, &p_routine()));
+        core.callsite_index.push(cs_row(p_cs, &p_routine()));
+        let perms = CborValue::Array(Vec::new());
+        assert_eq!(occurrences(&core, &perms, p_op), 1, "precondition");
+        assert_eq!(occurrences(&core, &perms, p_cs), 1, "precondition");
+
+        filter_by_class(&mut core, &perms, P, &Default::default());
+
+        assert!(
+            core.operation_index.iter().any(|o| o.operation_id == p_op),
+            "the primary routine's unreferenced operation row is kept"
+        );
+        assert!(
+            core.callsite_index.iter().any(|c| c.callsite_id == p_cs),
+            "the primary routine's unreferenced call-site row is kept"
+        );
+    }
+
+    /// T9-closure, the value-source and nested-reference arms (#220 spec §5,
+    /// S3N2; run on hand-built typed rows through the production filter, F30).
+    /// Each arm is a kept primary fact naming a DEPENDENCY table (or operation)
+    /// referenced nowhere else (asserted): a `tableId` in `resourceArgSource`,
+    /// in `extra.bodyArgSource`, in `extra.keyArgSource`, in
+    /// `extra.valueArgSource`, one inside a `constant-var` `initializer` two
+    /// levels deep, and a permission row's
+    /// `derivedFromCapability.witnessFirstHopOperationId` naming a dependency
+    /// operation. Each arm's identity (or operation row) is kept.
+    ///
+    /// Break 5: read only `resourceArgSource` -> the three `extra` arms fail.
+    /// Break 6: no recursion into `initializer` -> the nested arm fails.
+    /// Break 7: drop `witnessFirstHopOperationId` from `permissionFacts` -> its
+    /// operation row is dropped.
+    #[test]
+    fn closure_nested_references_keep_their_rows() {
+        let table = |n: u32| format!("{D}/table/{n}");
+        let stable_table = |n: u32| format!("{D}:Table:{n}");
+        let tf = |n: u32| SnapValueSource::TableField {
+            table_id: table(n),
+            field_name: "No.".to_string(),
+        };
+        let dr = d_routine(2);
+        let d_op = "mi/dhash2/op0";
+        let mut ids = vec![format!("{P}:Codeunit:50100"), p_routine(), dr.clone()];
+        ids.extend((1..=5).map(stable_table));
+        let mut core = core_with(&ids);
+
+        let mut resource = fact(&p_routine());
+        resource.resource_arg_source = Some(tf(1));
+        let mut body = fact(&p_routine());
+        body.resource_kind = "http".to_string();
+        body.extra = Some(SnapCapabilityExtra::Http {
+            method: "POST".to_string(),
+            body_arg_source: Some(tf(2)),
+        });
+        let mut storage = fact(&p_routine());
+        storage.resource_kind = "storage".to_string();
+        storage.extra = Some(SnapCapabilityExtra::Storage {
+            key_arg_source: Some(tf(3)),
+            value_arg_source: Some(tf(4)),
+            scope: None,
+        });
+        let mut nested = fact(&p_routine());
+        nested.resource_arg_source = Some(SnapValueSource::ConstantVar {
+            var_name: "A".to_string(),
+            initializer: Box::new(SnapValueSource::ConstantVar {
+                var_name: "B".to_string(),
+                initializer: Box::new(tf(5)),
+            }),
+        });
+        core.capability_facts = vec![resource, body, storage, nested];
+        core.operation_index.push(op_row(d_op, &dr));
+
+        let perm_fact = CapabilityFact {
+            subject: p_routine(),
+            op: "insert",
+            resource_kind: "table",
+            resource_id: None,
+            resource_arg_source: None,
+            confidence: "static",
+            provenance: "inherited",
+            via: "OnValidate",
+            witness_operation_id: None,
+            witness_callsite_id: None,
+            witness_first_hop_operation_id: Some(d_op.to_string()),
+            witness_first_hop_event_id: None,
+            extra: None,
+        };
+        let (_, perm_row) = make_required_perm(
+            &p_routine(),
+            &format!("{P}:Table:50100"),
+            "TableData",
+            "I",
+            &perm_fact,
+            "complete",
+        );
+        let perms = CborValue::Array(vec![perm_row]);
+
+        for n in 1..=5 {
+            assert_eq!(
+                occurrences(&core, &perms, &table(n)),
+                1,
+                "precondition: table {n} is referenced once"
+            );
+        }
+        assert_eq!(
+            occurrences(&core, &perms, d_op),
+            2,
+            "precondition: the operation is named by its own row and the permission row only"
+        );
+
+        filter_by_class(&mut core, &perms, P, &Default::default());
+
+        for (n, arm) in [
+            (1, "resourceArgSource"),
+            (2, "extra.bodyArgSource"),
+            (3, "extra.keyArgSource"),
+            (4, "extra.valueArgSource"),
+            (5, "constant-var initializer, two levels deep"),
+        ] {
+            assert!(
+                core.identities.stable_ids.contains(&stable_table(n)),
+                "{arm}: the referenced dependency table identity is kept"
+            );
+        }
+        assert!(
+            core.operation_index.iter().any(|o| o.operation_id == d_op),
+            "derivedFromCapability.witnessFirstHopOperationId: the operation row is kept"
+        );
+    }
+
+    /// T9-closure, the literal arm (#220 spec §5, S9; F30): a `literal` value
+    /// source in a kept primary fact carries a dependency stable id as its
+    /// `value`. The literal keeps nothing: that id is not serialized. The arm
+    /// also states the positive side (a `table-field` source in the same kept
+    /// fact set keeps its table), so the filter must have run.
+    ///
+    /// Break 1: read every `Text` -> the literal keeps its id.
+    #[test]
+    fn closure_literal_keeps_nothing() {
+        let literal_id = format!("{D}:Table:6");
+        let mut core = core_with(&[
+            format!("{P}:Codeunit:50100"),
+            p_routine(),
+            literal_id.clone(),
+            format!("{D}:Table:7"),
+        ]);
+        let mut lit = fact(&p_routine());
+        lit.resource_arg_source = Some(SnapValueSource::Literal {
+            value: literal_id.clone(),
+        });
+        let mut tf = fact(&p_routine());
+        tf.resource_arg_source = Some(SnapValueSource::TableField {
+            table_id: format!("{D}/table/7"),
+            field_name: "No.".to_string(),
+        });
+        core.capability_facts = vec![lit, tf];
+        let perms = CborValue::Array(Vec::new());
+        assert_eq!(occurrences(&core, &perms, &literal_id), 1, "precondition");
+
+        filter_by_class(&mut core, &perms, P, &Default::default());
+
+        assert!(
+            core.identities.stable_ids.contains(&format!("{D}:Table:7")),
+            "the table-field source keeps its table"
+        );
+        assert!(
+            !core.identities.stable_ids.contains(&literal_id),
+            "a literal value is data: it keeps nothing"
         );
     }
 }

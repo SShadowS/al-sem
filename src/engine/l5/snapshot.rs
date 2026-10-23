@@ -953,6 +953,17 @@ impl RoutineOrderFrames {
             .find(|(k, _)| k == routine_id)
             .map(|(_, v)| v.as_slice())
     }
+
+    /// Keep the frame tables whose routine passes `keep` (#220 key classes).
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        self.entries.retain(|(k, _)| keep(k));
+    }
+
+    /// Hand-built frame tables for tests (#220 T9g).
+    #[cfg(test)]
+    pub(crate) fn from_entries(entries: Vec<(String, Vec<ScopeFrame>)>) -> Self {
+        RoutineOrderFrames { entries }
+    }
 }
 
 impl Serialize for RoutineOrderFrames {
