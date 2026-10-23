@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "11111111-0000-0000-0000-00000000d460",
       "name": "D46 Commit In Lifecycle Pos",
       "publisher": "PT",
+      "role": "primary",
       "version": "1.0.0.0"
     }
   ],
@@ -735,7 +737,7 @@
       "stableId": "11111111-0000-0000-0000-00000000d460:Table:50000#K0"
     }
   ],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [
     {
       "callsiteId": "90eaac7fb2071324/fab9faa344f7180e7491d3606e58029233da35356177938a7150d65003093f5d/cs0",

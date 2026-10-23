@@ -84,6 +84,7 @@ fn full_snapshot_json(dir: &Path, resolved: &Model) -> Value {
         driver_version: "i100",
         deterministic: true,
         roots_config_ignored: false,
+        universe: al_sem::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
     };
     serde_json::from_str(&serialize_json(&compose_full_snapshot(resolved, &opts))).unwrap()
 }

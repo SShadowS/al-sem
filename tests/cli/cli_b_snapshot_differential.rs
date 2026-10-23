@@ -165,6 +165,7 @@ fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, Model, 
         driver_version: VERSION_OVERRIDE,
         deterministic: true,
         roots_config_ignored: false,
+        universe: al_sem::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
     };
     let tree = compose_full_snapshot(&resolved, &opts);
     (tree, resolved, fixture_dir)

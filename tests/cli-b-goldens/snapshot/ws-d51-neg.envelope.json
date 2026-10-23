@@ -6,11 +6,13 @@
   "kind": "capability-snapshot",
   "payload": {
     "analysisGaps": [],
+    "analysisUniverse": "single-app",
     "apps": [
       {
         "appGuid": "aaaabbbb-cccc-dddd-eeee-100000000d51",
         "name": "D51 Retry Side Effect Duplication Neg",
         "publisher": "PT",
+        "role": "primary",
         "version": "1.0.0.0"
       }
     ],
@@ -207,7 +209,7 @@
       ]
     },
     "schemaFacts": [],
-    "snapshotSchemaVersion": 3,
+    "snapshotSchemaVersion": 4,
     "typedEdges": [],
     "workspaceFingerprint": "cce9f4a181c0dc8ab6f329a35c9ae37a2adb0432613af167f388719bb9d5bb05"
   },

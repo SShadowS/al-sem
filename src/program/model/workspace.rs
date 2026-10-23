@@ -1550,6 +1550,7 @@ pub fn assemble_and_resolve_cross_app_from_program(
 pub struct DependencyApp {
     /// The app guid as its manifest spells it (the model rows' `app_guid`).
     pub guid: String,
+    pub publisher: String,
     pub name: String,
     pub version: String,
     /// Whether the snapshot holds its source (embedded or local).

@@ -6,11 +6,13 @@
   "kind": "capability-snapshot",
   "payload": {
     "analysisGaps": [],
+    "analysisUniverse": "single-app",
     "apps": [
       {
         "appGuid": "11111111-0000-0000-0000-00000000d461",
         "name": "D46 Commit In Lifecycle Neg",
         "publisher": "PT",
+        "role": "primary",
         "version": "1.0.0.0"
       }
     ],
@@ -388,7 +390,7 @@
         "stableId": "11111111-0000-0000-0000-00000000d461:Table:50000#K0"
       }
     ],
-    "snapshotSchemaVersion": 3,
+    "snapshotSchemaVersion": 4,
     "typedEdges": [
       {
         "callsiteId": "fe1e8919dd325793/3305a7339de83bb9cf50ad4ac8601b68eefca9f043048fa3050f85eda96362a3/cs0",

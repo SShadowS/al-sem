@@ -6,11 +6,13 @@
   "kind": "capability-snapshot",
   "payload": {
     "analysisGaps": [],
+    "analysisUniverse": "single-app",
     "apps": [
       {
         "appGuid": "11111111-0000-0000-0000-0000000d4902",
         "name": "D49 Pos Modify RunModal",
         "publisher": "PT",
+        "role": "primary",
         "version": "1.0.0.0"
       }
     ],
@@ -282,7 +284,7 @@
         "stableId": "11111111-0000-0000-0000-0000000d4902:Table:50100#K0"
       }
     ],
-    "snapshotSchemaVersion": 3,
+    "snapshotSchemaVersion": 4,
     "typedEdges": [
       {
         "callsiteId": "f0deb5e0a238c365/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda/cs0",

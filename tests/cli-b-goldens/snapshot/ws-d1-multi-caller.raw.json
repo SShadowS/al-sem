@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "11111111-0000-0000-0000-00000000d01a",
       "name": "D1 Multi Caller",
       "publisher": "PT",
+      "role": "primary",
       "version": "1.0.0.0"
     }
   ],
@@ -648,7 +650,7 @@
       "stableId": "11111111-0000-0000-0000-00000000d01a:Table:50101#K0"
     }
   ],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [
     {
       "callsiteId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/cs0",

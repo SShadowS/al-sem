@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "dd1f1e1d-0001-0001-0001-000000000001",
       "name": "Diff Removed Field App",
       "publisher": "DiffTest",
+      "role": "primary",
       "version": "1.0.0.0"
     }
   ],
@@ -69,7 +71,7 @@
       "stableId": "dd1f1e1d-0001-0001-0001-000000000001:Table:50100#K0"
     }
   ],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [],
   "workspaceFingerprint": "fb6b347b6bad29e3774789fb8d57eeadcc3cb2a5931aba9c6b4426e420e33e03"
 }

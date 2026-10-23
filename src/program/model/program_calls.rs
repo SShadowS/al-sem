@@ -1001,6 +1001,7 @@ fn cross_app_program_census(
         .into_iter()
         .map(|u| crate::program::model::workspace::DependencyApp {
             guid: u.id.guid.clone(),
+            publisher: u.id.publisher.clone(),
             name: u.id.name.clone(),
             version: u.id.version.clone(),
             has_source: u.source.is_some(),

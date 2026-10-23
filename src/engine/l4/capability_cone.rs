@@ -3717,6 +3717,9 @@ pub struct R3a5CrossAppBase {
     /// `dependencies[]`). The d17 MinVersion side. ADDITIVE — only the cross-app L5
     /// detector context reads it; NOT serialized into the r3a5 gate.
     pub declared_dependencies: Vec<crate::program::model::workspace::DeclaredDependencyDecl>,
+    /// Every dependency app the build loaded (the model's), `.app` path order:
+    /// the cross-app snapshot's `apps[]` dependency rows (#220).
+    pub dependency_apps: Vec<crate::program::model::workspace::DependencyApp>,
     /// Resolved dep `.app` versions keyed by appGuid (`model.apps[].version`). The d17
     /// resolved-version side. ADDITIVE — same gate-additivity note as above.
     pub resolved_app_versions: HashMap<String, String>,
@@ -3925,8 +3928,8 @@ pub(crate) fn build_cross_app_base(
     drop(rows);
 
     let declared_dependencies = std::mem::take(&mut x.declared_dependencies);
-    let resolved_app_versions = x
-        .dependency_apps
+    let dependency_apps = std::mem::take(&mut x.dependency_apps);
+    let resolved_app_versions = dependency_apps
         .iter()
         .map(|a| (a.guid.clone(), a.version.clone()))
         .collect();
@@ -3945,6 +3948,7 @@ pub(crate) fn build_cross_app_base(
         direct_full,
         direct_coverage,
         declared_dependencies,
+        dependency_apps,
         resolved_app_versions,
         loaded_apps,
     };
@@ -4037,6 +4041,16 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
         Tally::default().buf::<crate::program::model::workspace::DeclaredDependencyDecl>(
             b.declared_dependencies.len(),
         ),
+    );
+    emit(
+        "base.dependency_apps",
+        Tally::default()
+            .buf::<crate::program::model::workspace::DependencyApp>(b.dependency_apps.len())
+            .strs(
+                b.dependency_apps
+                    .iter()
+                    .flat_map(|a| [&a.guid, &a.publisher, &a.name, &a.version]),
+            ),
     );
     emit(
         "base.resolved_app_versions",

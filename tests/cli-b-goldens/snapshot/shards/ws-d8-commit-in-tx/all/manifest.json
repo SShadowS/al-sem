@@ -1,6 +1,6 @@
 {
   "kind": "snapshot-shard-manifest",
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "alsemVersion": "cli-b-v1",
   "workspaceFingerprint": "422fd5d79e0d95f73a850372a04ff8ed07ccc5ee82deecc2ee2bcf44aa4ef31f",
   "shards": [

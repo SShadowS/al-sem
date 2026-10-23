@@ -149,6 +149,7 @@ fn compose_full_for(
         driver_version: VERSION_OVERRIDE,
         deterministic: true,
         roots_config_ignored: false,
+        universe: al_sem::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
     };
     let tree = compose_full_snapshot(&resolved, &opts);
     (tree, resolved, ws)

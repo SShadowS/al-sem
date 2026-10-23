@@ -96,6 +96,7 @@ mod cli_p1_inventory;
 mod cli_query_differential;
 mod cli_s6_consumers;
 mod cli_sarif_rule_catalog;
+mod cli_snapshot_schema4;
 mod cli_stderr_logger;
 mod cli_step5_coverage_fold;
 mod cli_strict_events_policy;

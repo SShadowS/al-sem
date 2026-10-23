@@ -6,11 +6,13 @@
   "kind": "capability-snapshot",
   "payload": {
     "analysisGaps": [],
+    "analysisUniverse": "single-app",
     "apps": [
       {
         "appGuid": "11111111-0000-0000-0000-00000000d14a",
         "name": "D14 Dead Routine",
         "publisher": "PT",
+        "role": "primary",
         "version": "1.0.0.0"
       }
     ],
@@ -169,7 +171,7 @@
       ]
     },
     "schemaFacts": [],
-    "snapshotSchemaVersion": 3,
+    "snapshotSchemaVersion": 4,
     "typedEdges": [
       {
         "callsiteId": "99b2347c6aebdaf0/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2/cs0",

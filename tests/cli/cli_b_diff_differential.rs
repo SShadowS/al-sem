@@ -26,6 +26,7 @@ use al_sem::engine::gate::diff::format::format_diff;
 use al_sem::engine::gate::diff::renames::parse_rename_overlay;
 use al_sem::engine::gate::diff::{CoveragePolicy, DiffEngineOptions, Severity, run_diff_engine};
 use al_sem::engine::gate::snapshot_deserialize::{SnapshotFormat, deserialize_snapshot};
+use al_sem::engine::l5::snapshot_full::SNAPSHOT_SCHEMA_VERSION;
 
 use crate::regen;
 
@@ -203,6 +204,7 @@ fn compose_ws(dir: &std::path::Path) -> CborValue {
         driver_version: VERSION_OVERRIDE,
         deterministic: true,
         roots_config_ignored: false,
+        universe: al_sem::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
     };
     compose_full_snapshot(&resolved, &opts)
 }
@@ -487,14 +489,19 @@ fn txt(s: &str) -> CborValue {
 }
 
 /// A minimal snapshot with a given set of top-level fact arrays. `schemaVersion`
-/// defaults to 3 and `apps` to a single app guid `appguid-1` unless overridden.
+/// defaults to the build's, `analysisUniverse` to `single-app` and `apps` to a
+/// single primary app guid `appguid-1` unless overridden.
 fn snapshot(extra: Vec<(&str, CborValue)>) -> CborValue {
     let mut pairs: Vec<(&str, CborValue)> = vec![
-        ("schemaVersion", CborValue::Int(3)),
+        ("schemaVersion", CborValue::Int(SNAPSHOT_SCHEMA_VERSION)),
         ("alsemVersion", txt("cli-b-v1")),
+        ("analysisUniverse", txt("single-app")),
         (
             "apps",
-            CborValue::Array(vec![obj(vec![("appGuid", txt("appguid-1"))])]),
+            CborValue::Array(vec![obj(vec![
+                ("appGuid", txt("appguid-1")),
+                ("role", txt("primary")),
+            ])]),
         ),
         (
             "identities",
@@ -548,10 +555,14 @@ fn oracle_preflight_schema_version_mismatch_is_fatal() {
     let old = snapshot(vec![]);
     let mut new = snapshot(vec![]);
     if let CborValue::Map(m) = &mut new {
-        m.insert("schemaVersion".into(), CborValue::Int(3)); // keep new at 3...
+        // keep new at the build's version...
+        m.insert(
+            "schemaVersion".into(),
+            CborValue::Int(SNAPSHOT_SCHEMA_VERSION),
+        );
     }
     // ...but make OLD differ by mutating its schemaVersion to a sentinel. The
-    // deserializer gate rejects ≠3 inputs, but the engine itself must still
+    // deserializer gate rejects any other version, but the engine itself must still
     // short-circuit on a mismatch, so we feed the engine directly.
     let mut old_mut = old;
     if let CborValue::Map(m) = &mut old_mut {
@@ -614,7 +625,10 @@ fn oracle_preflight_app_identity_mismatch_is_fatal() {
     if let CborValue::Map(m) = &mut new {
         m.insert(
             "apps".into(),
-            CborValue::Array(vec![obj(vec![("appGuid", txt("appguid-2"))])]),
+            CborValue::Array(vec![obj(vec![
+                ("appGuid", txt("appguid-2")),
+                ("role", txt("primary")),
+            ])]),
         );
     }
     let r = engine(&old, &new, CoveragePolicy::Loose);

@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "11111111-0000-0000-0000-0000000d4706",
       "name": "D47 File Pos",
       "publisher": "PT",
+      "role": "primary",
       "version": "1.0.0.0"
     }
   ],
@@ -287,7 +289,7 @@
       "stableId": "11111111-0000-0000-0000-0000000d4706:Table:50100#K0"
     }
   ],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [],
   "workspaceFingerprint": "e50d20fccb69854fbbf2a517d67bd58d54002d8dc6f3519c8618126ba3683e47"
 }

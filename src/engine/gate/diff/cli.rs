@@ -136,6 +136,7 @@ fn load_snapshot_from_workspace(
         driver_version,
         deterministic,
         roots_config_ignored: false,
+        universe: crate::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
     };
     let snapshot = compose_full_snapshot(view.model(), &opts);
     drop(view);

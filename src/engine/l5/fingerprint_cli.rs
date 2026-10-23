@@ -432,6 +432,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             driver_version: opts.driver_version,
             deterministic: opts.deterministic,
             roots_config_ignored,
+            universe: crate::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
         };
         let tree = compose_full_snapshot(resolved, &full_opts);
 

@@ -36,8 +36,9 @@ use crate::program::resolve::semantic_golden::ClosureErrorKind;
 mod to_cbor;
 pub use to_cbor::to_cbor_value;
 
-/// The cli-b snapshot schema version (al-sem `SNAPSHOT_SCHEMA_VERSION = 3`).
-pub const SNAPSHOT_SCHEMA_VERSION: i64 = 3;
+/// The snapshot schema version: THE one constant (the composer, the loader and
+/// the shard manifest read it). 4 (#220): `analysisUniverse` and `apps[].role`.
+pub const SNAPSHOT_SCHEMA_VERSION: i64 = 4;
 
 /// Options for composing the full cli-b snapshot.
 pub struct FullSnapshotOptions<'a> {
@@ -51,6 +52,43 @@ pub struct FullSnapshotOptions<'a> {
     /// True when a `roots.config.json` existed but was ignored via --no-roots-config
     /// (sets `inputsMetadata.rootsConfigIgnored`). Pass false for the cli-b dump.
     pub roots_config_ignored: bool,
+    /// #220 (spec §4.3): which model the snapshot describes
+    /// (`analysisUniverse`). Production callers pass `SingleApp` until step 9.
+    pub universe: SnapshotUniverse<'a>,
+}
+
+/// #220 (spec §4.3): the snapshot's universe (`analysisUniverse`).
+pub enum SnapshotUniverse<'a> {
+    SingleApp,
+    CrossApp(CrossAppUniverse<'a>),
+}
+
+/// The cross-app universe. Field private: built only by
+/// [`SnapshotUniverse::of`], so `rel`, `dependency_apps` and the model all
+/// come from ONE base (O18).
+pub struct CrossAppUniverse<'a> {
+    base: &'a crate::engine::l4::capability_cone::R3a5CrossAppBase,
+}
+
+impl<'a> SnapshotUniverse<'a> {
+    /// SingleApp -> SingleApp; CrossApp(base) -> CrossApp { base }.
+    #[must_use]
+    pub fn of(target: &'a crate::engine::gate::run::AnalysisTarget) -> Self {
+        match target {
+            crate::engine::gate::run::AnalysisTarget::SingleApp(_) => SnapshotUniverse::SingleApp,
+            crate::engine::gate::run::AnalysisTarget::CrossApp(b) => {
+                SnapshotUniverse::CrossApp(CrossAppUniverse { base: b.as_ref() })
+            }
+        }
+    }
+
+    /// The `analysisUniverse` value.
+    fn as_str(&self) -> &'static str {
+        match self {
+            SnapshotUniverse::SingleApp => "single-app",
+            SnapshotUniverse::CrossApp(_) => "cross-app",
+        }
+    }
 }
 
 /// Compose the FULL `CapabilitySnapshot` as an insertion-ordered `CborValue` tree,
@@ -78,6 +116,14 @@ fn snapshot_rows(inputs: &crate::program::inputs::InputSet) -> &[SnapshotInput] 
 }
 
 pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> CborValue {
+    // O18: two revisions of one workspace share routine ids, so only a pointer
+    // check proves the model and the universe come from ONE base.
+    if let SnapshotUniverse::CrossApp(u) = &opts.universe {
+        assert!(
+            std::ptr::eq(resolved, &u.base.resolved),
+            "compose_full_snapshot: the model is not the cross-app universe's model"
+        );
+    }
     // The consumed-core (identities, capabilityFacts, typedEdges, …, eventDeclarations,
     // rootClassifications, [routineOrderFrames]).
     // One base (cone + producer solve) for the core and the permission facts.
@@ -87,7 +133,7 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     let inputs = snapshot_rows(opts.inputs);
     let workspace_fingerprint = compute_workspace_fingerprint(inputs, opts.driver_version);
 
-    let apps = project_apps(resolved);
+    let apps = project_apps(resolved, &core.identities, &opts.universe);
     let contract_facts = derive_contracts(resolved);
     let schema_facts = derive_schema(resolved);
     let permission_facts = derive_permissions(resolved, &base);
@@ -125,6 +171,10 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
         CborValue::Text(workspace_fingerprint),
     );
     m.insert("generatedAt".into(), CborValue::Text(generated_at));
+    m.insert(
+        "analysisUniverse".into(),
+        CborValue::Text(opts.universe.as_str().into()),
+    );
     m.insert("apps".into(), apps);
     m.insert("identities".into(), identities);
     m.insert("contractFacts".into(), contract_facts);
@@ -374,35 +424,69 @@ fn to_cbor_inputs(inputs: &[SnapshotInput]) -> CborValue {
 }
 
 // ===========================================================================
-// apps (compose.ts projectApps). Source-only: the single primary app.
-// Per-app field order: appGuid, publisher, name, version. Sorted by appGuid.
+// apps (compose.ts projectApps). Per-app field order: appGuid, publisher,
+// name, version, role (#220). The primary row first; cross-app, then every
+// dependency app that owns an `identities` row, sorted by appGuid.
 // ===========================================================================
 
-fn project_apps(resolved: &Model) -> CborValue {
-    let mut apps: Vec<(String, String, String, String)> = Vec::new();
-    if let Some(app) = &resolved.primary_app
-        && !app.app_guid.is_empty()
-    {
-        apps.push((
-            app.app_guid.clone(),
-            app.publisher.clone(),
-            app.name.clone(),
-            app.version.clone(),
+fn project_apps(
+    resolved: &Model,
+    identities: &crate::engine::l5::snapshot::SnapshotIdentityTable,
+    universe: &SnapshotUniverse,
+) -> CborValue {
+    use crate::program::model::role::{Role, role_of_stable_id};
+    let row = |guid: &str, publisher: &str, name: &str, version: &str, role: Role| {
+        let mut m: IndexMap<String, CborValue> = IndexMap::new();
+        m.insert("appGuid".into(), CborValue::Text(guid.to_string()));
+        m.insert("publisher".into(), CborValue::Text(publisher.to_string()));
+        m.insert("name".into(), CborValue::Text(name.to_string()));
+        m.insert("version".into(), CborValue::Text(version.to_string()));
+        m.insert("role".into(), CborValue::Text(role.as_str().into()));
+        CborValue::Map(m)
+    };
+    let mut arr: Vec<CborValue> = Vec::new();
+    let primary = resolved
+        .primary_app
+        .as_ref()
+        .filter(|app| !app.app_guid.is_empty());
+    if let Some(app) = primary {
+        arr.push(row(
+            &app.app_guid,
+            &app.publisher,
+            &app.name,
+            &app.version,
+            Role::Primary,
         ));
     }
-    // al-sem `projectApps`: `.sort((x,y) => x.appGuid.localeCompare(y.appGuid))`.
-    apps.sort_by(|a, b| locale_compare(&a.0, &b.0));
-    let arr = apps
-        .into_iter()
-        .map(|(guid, publisher, name, version)| {
-            let mut m: IndexMap<String, CborValue> = IndexMap::new();
-            m.insert("appGuid".into(), CborValue::Text(guid));
-            m.insert("publisher".into(), CborValue::Text(publisher));
-            m.insert("name".into(), CborValue::Text(name));
-            m.insert("version".into(), CborValue::Text(version));
-            CborValue::Map(m)
-        })
-        .collect();
+    if let SnapshotUniverse::CrossApp(u) = universe {
+        // The dependency apps owning an identity, matched case-insensitively (O13).
+        let primary_guid = primary.map(|a| a.app_guid.as_str());
+        let owners: std::collections::HashSet<String> = identities
+            .stable_ids
+            .iter()
+            .filter(|id| role_of_stable_id(primary_guid, id) == Role::Dependency)
+            .filter_map(|id| id.split_once(':').map(|(g, _)| g.to_ascii_lowercase()))
+            .collect();
+        let mut deps: Vec<&crate::program::model::workspace::DependencyApp> = u
+            .base
+            .dependency_apps
+            .iter()
+            .filter(|a| owners.contains(&a.guid.to_ascii_lowercase()))
+            .collect();
+        // F22: every dependency row comes from a required app.
+        debug_assert!(
+            owners
+                .iter()
+                .all(|g| deps.iter().any(|a| a.guid.eq_ignore_ascii_case(g))),
+            "a serialized identity's app is missing from dependency_apps"
+        );
+        // al-sem `projectApps`: `.sort((x,y) => x.appGuid.localeCompare(y.appGuid))`.
+        deps.sort_by(|a, b| locale_compare(&a.guid, &b.guid));
+        arr.extend(
+            deps.into_iter()
+                .map(|a| row(&a.guid, &a.publisher, &a.name, &a.version, Role::Dependency)),
+        );
+    }
     CborValue::Array(arr)
 }
 
@@ -1083,7 +1167,8 @@ pub fn build_inventory_envelope(
 /// 1.1.0 (engine-e2): additive optional per-routine fields `enclosingMember` and
 /// `originatingObject` for member-trigger routines (field/control/action/dataitem
 /// trigger). Rust-only projection (not in the byte-parity harness).
-pub const INVENTORY_SCHEMA_VERSION: &str = "1.1.0";
+/// 1.2.0 (#220): additive `apps[].role` and `payload.analysisUniverse`.
+pub const INVENTORY_SCHEMA_VERSION: &str = "1.2.0";
 
 /// Case-insensitive secondary-sort comparator for the inventory `enclosingMember`
 /// key (RE-6). `None` orders before `Some`; two `Some`s compare on their
@@ -1201,6 +1286,7 @@ fn build_inventory_doc(
 
     // Build the lean payload (omits all heavy keys).
     let mut payload: IndexMap<String, CborValue> = IndexMap::new();
+    payload.insert("analysisUniverse".into(), get("analysisUniverse"));
     payload.insert("apps".into(), apps);
     payload.insert("identities".into(), identities);
     payload.insert("routineInventory".into(), routine_inventory);

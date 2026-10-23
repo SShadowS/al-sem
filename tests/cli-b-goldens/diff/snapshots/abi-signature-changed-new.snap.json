@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "dd6a6b6i-0006-0006-0006-000000000006",
       "name": "Diff ABI Change App",
       "publisher": "DiffTest",
+      "role": "primary",
       "version": "1.0.0.1"
     }
   ],
@@ -177,7 +179,7 @@
       "stableId": "dd6a6b6i-0006-0006-0006-000000000006:Table:50600#K0"
     }
   ],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [],
   "workspaceFingerprint": "a515227e9a88078cf4dd089d940c87bfd148346967f6a92aa260ee724aefd897"
 }
