@@ -202,3 +202,14 @@ Both reviewers accepted all 14 round-5 ids (CR4 and CR5 as refutations). Two new
 | Q4 contract events branch drops them | rename | FAIL `event-contract-changed-with-affected-subscribers` | pass |
 
 None came back green. Logs `/work/bench/236/r6-*.log`. Gates at `34e0fc18`: check-diff no reasons before and after; `ci-steps task-affected` exit 0, 3816 passed (the first run failed dev clippy on `type_complexity`; fixed with a `Details` alias); `check-goldens` exit 0, 986 passed, no golden moved. The first commit attempt left out the CHANGELOG clause for G4 (the Edit did not apply); it was added and the unpushed commit amended, so it is still one commit.
+
+## Final panel round 3 and step 11 gates (conductor record)
+
+- Final panel (sol in slot astra, opus in slot flash; `--substitute astra=sol --substitute flash=opus`; built-in `code-review` at high in r1): r1 (final_rounds 1/5) 13 findings (sol F1-F4 "do not ship", opus G1-G3 "ship", code-review CR1-CR6) → `667840bf` (11 fixed, CR4/CR5 refuted with AS0025 quotes); r2 (2/5) all 14 marked ids accepted by both, new F5 (important) and G4 (minor) → `34e0fc18`; r3 (3/5) F5 and G4 accepted by both, no new findings, both **ship**. Register: 29 entries, 0 open, all accepted by both. Review files `.agent/runs/20261023-121852-e02c43/final-r{1,2,3}-{sol,opus}.md`, `final-r1-codereview.md`. Not filed (opus r3 note, not a finding): `argsHash` hashes raw argument text, so an append plus a case-only argument change (`False`→`false`) stays Critical (safe side, rare).
+- Draft PR #243.
+- **Step 11 full gate set** on H = `34e0fc18168414e9db80717e8dc82e7ba9a91db3`, B = `6a2b7c8b26d146c9540d1136ec28b7f38c56c0e5` (origin/master unmoved since the claim), all supervised, queued 0 s, `CDO_WS` from `.agent/config.json`, `cdo-gate` with no argument:
+  - `check-goldens-coverage`: exit 0. Log `.agent/runs/20261023-121852-e02c43/logs/check-goldens-coverage/20261023T132721-9a8a873b.log`.
+  - `ci-steps-all`: exit 0, 291.8 s. Log `…/logs/ci-steps-all/20261023T132721-4bf7dd8c.log`.
+  - `check-goldens`: exit 0, 0.1 s (tree-stamp skip after `ci-steps all` on the same tree). Log `…/logs/check-goldens/20261023T133213-d4f8ad7b.log`.
+  - `cdo-gate`: exit 0, 261.1 s. Log `…/logs/cdo-gate/20261023T133213-b9c20268.log`.
+- Discoveries: none to file (D1 fixed in this PR).
