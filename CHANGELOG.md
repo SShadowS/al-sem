@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-23
+
 ### Changed
 
 - Digest `stableId` values of #71's declaration-only roots change once (#83). With a unique
