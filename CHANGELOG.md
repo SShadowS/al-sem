@@ -32,8 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `snapshot_full`): each top-level key has a class that says which of its rows a cross-app
     snapshot keeps, and each field that names another row (an identity, an operation, a call
     site, an edge, a frame or an app) is listed with what it names. A cross-app snapshot keeps the
-    workspace's own rows plus every row they refer to, and `closure_violations` checks that no
-    kept reference points at a row that was left out.
+    workspace's own rows plus every row they refer to. `closure_violations` reports any kept
+    reference that points at a row that was left out; it is a test-time check only: no command
+    calls it, so nothing checks a snapshot's references when it is written or read.
   - A new fatal `diff` preflight diagnostic, `analysis-universe-mismatch`, for two snapshots of
     different universes.
 
