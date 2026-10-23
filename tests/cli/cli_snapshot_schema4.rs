@@ -421,6 +421,133 @@ fn gap_reach_follows_dependency_calls() {
     );
 }
 
+/// The E6 multi-hop shape (final panel G1): DD, but `XBase.Inner` calls
+/// `Z Deep.Work` of a third, symbol-only app `ZDeep` that `XBase` depends on.
+const ZDEEP_GUID: &str = "cccc7070-0000-0000-0000-000000000070";
+
+fn write_multi_hop(dir: &Path) {
+    dd::write_workspace(dir, "");
+    let lib = "codeunit 10 \"Dep Lib\"\n{\n    procedure Outer()\n    begin\n        Inner();\n    end;\n\n    procedure Inner()\n    var\n        Deep: Codeunit \"Z Deep\";\n    begin\n        Deep.Work();\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnDepEvent()\n    begin\n    end;\n}\n";
+    let customer = "table 18 Customer\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20])\n        {\n        }\n    }\n}\n";
+    let base_symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{}","Name":"XBase","Publisher":"probe","Version":"1.0.0.0"}}"#,
+        dd::DEP_GUID
+    );
+    crate::symbol_app::write_source_app(
+        &dir.join(".alpackages").join(dd::DEP_APP_FILE),
+        dd::DEP_GUID,
+        "XBase",
+        "1.0.0.0",
+        &base_symbols,
+        &[("src/Customer.al", customer), ("src/Lib.al", lib)],
+        &format!(
+            r#"<Dependencies><Dependency Id="{ZDEEP_GUID}" Name="ZDeep" Publisher="probe" MinVersion="1.0.0.0" /></Dependencies>"#
+        ),
+    );
+    let deep_symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":20,"Name":"Z Deep","Methods":[{{"Name":"Work","Parameters":[]}}]}}],"AppId":"{ZDEEP_GUID}","Name":"ZDeep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    crate::symbol_app::write_symbol_app(
+        &dir.join(".alpackages/probe_ZDeep_1.0.0.0.app"),
+        ZDEEP_GUID,
+        "ZDeep",
+        "1.0.0.0",
+        &deep_symbols,
+    );
+}
+
+/// Final panel G1: spec §4.4 step (6)'s "an app a kept gap references" arm.
+/// Multi-hop (`write_multi_hop`): `ZDeep` owns no serialized identity (no
+/// kept row on the cut names its routine) and its `symbol-only-boundary` gap
+/// is kept (reachable over the cone through `Inner`), both asserted. Its
+/// `apps[]` row exists with `role: "dependency"`, and the closure holds.
+///
+/// Break: drop `|| referenced_apps.contains(..)` from `project_apps` -> no
+/// `ZDeep` row, and the gap's app reference dangles.
+#[test]
+fn gap_app_gets_its_apps_row() {
+    let dir = tempfile::tempdir().unwrap();
+    write_multi_hop(dir.path());
+    let b = build(dir.path(), false);
+    let tree = compose(&b);
+    let snap = json(&tree);
+    let ids: Vec<&str> = snap["identities"]["stableIds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(
+        !ids.iter().any(|s| starts_ci(s, ZDEEP_GUID)),
+        "precondition: ZDeep owns no serialized identity: {ids:?}"
+    );
+    let sob = gaps(&snap, "symbol-only-boundary");
+    assert!(
+        sob.iter().any(|g| g["subject"]
+            .as_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case(ZDEEP_GUID))),
+        "precondition: ZDeep's symbol-only-boundary gap is kept: {sob:?}"
+    );
+    let apps = rows(&snap, "apps");
+    assert!(
+        apps.iter().any(|a| a["appGuid"]
+            .as_str()
+            .is_some_and(|g| g.eq_ignore_ascii_case(ZDEEP_GUID))
+            && a["role"] == "dependency"),
+        "ZDeep's apps[] row: {apps:?}"
+    );
+    let universe = SnapshotUniverse::of(&b.target);
+    let violations = closure_violations(&tree, b.target.resolved(), &universe);
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+/// Final panel C1: a dependency routine whose parse error left it with no
+/// body (hand-stated on DD's `Inner`: `parse_incomplete`, `body_available`
+/// false) does not make its app, which ships source, a `symbol-only-boundary`.
+/// Serialized cross-app: `Inner`'s `parse-incomplete` gap, and no app-level
+/// gap for DD's dependency.
+///
+/// Break: count `parse_incomplete` rows into the opaque apps -> the app gap
+/// appears (or the F21 `has_source` assert fires).
+#[test]
+fn parse_error_body_is_not_symbol_only() {
+    let dir = dd_dir();
+    let mut b = build(dir.path(), false);
+    {
+        let x = base(&b.target);
+        assert!(
+            x.dependency_apps
+                .iter()
+                .any(|a| a.guid.eq_ignore_ascii_case(dd::DEP_GUID) && a.has_source),
+            "precondition: DD's dependency ships source"
+        );
+    }
+    let m = model_mut(&mut b.target);
+    let r = m
+        .workspace
+        .routines
+        .iter_mut()
+        .find(|r| r.name == "Inner")
+        .expect("routine Inner");
+    r.parse_incomplete = true;
+    r.body_available = false;
+    let inner = stable(b.target.resolved(), "Inner");
+    let snap = json(&compose(&b));
+    assert!(
+        gaps(&snap, "parse-incomplete")
+            .iter()
+            .any(|g| g["subject"] == inner.as_str()),
+        "Inner's parse-incomplete gap: {:?}",
+        snap["analysisGaps"]
+    );
+    let sob = gaps(&snap, "symbol-only-boundary");
+    assert!(
+        !sob.iter()
+            .any(|g| starts_ci(g["subject"].as_str().unwrap_or(""), dd::DEP_GUID)),
+        "a parse error is not a symbol-only app: {sob:?}"
+    );
+}
+
 /// T5: a typed edge from `DriveDeps` targets a `dddd…` body-less row
 /// (asserted on `rel.cone()`). Serialized cross-app: `symbol-only-boundary`
 /// for `dddd…`, `role: "dependency"`.
@@ -1146,11 +1273,15 @@ fn key_class_evidence() {
     assert!(e_ids.is_empty(), "no eeee… identity: {e_ids:?}");
 }
 
-/// Every string leaf of a row with its row-relative path (array indices
-/// dropped).
+/// Every scalar leaf of a row (text, integer, float, bool, null) with its
+/// row-relative path (array indices dropped); a non-text value rendered.
 fn leaves(v: &CborValue, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, String)>) {
     match v {
         CborValue::Text(s) => out.push((path.clone(), s.clone())),
+        CborValue::Int(n) => out.push((path.clone(), n.to_string())),
+        CborValue::Float(f) => out.push((path.clone(), f.to_string())),
+        CborValue::Bool(b) => out.push((path.clone(), b.to_string())),
+        CborValue::Null | CborValue::Undefined => out.push((path.clone(), "null".into())),
         CborValue::Array(a) => a.iter().for_each(|x| leaves(x, path, out)),
         CborValue::Map(m) => {
             for (k, x) in m {
@@ -1159,7 +1290,6 @@ fn leaves(v: &CborValue, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, Str
                 path.pop();
             }
         }
-        _ => {}
     }
 }
 
@@ -1300,6 +1430,19 @@ fn closure_fields_are_classified_and_closed() {
         assert!(
             unclassified.is_empty(),
             "{label}: id-shaped values under fields in neither REFERENCES nor NON_REFERENCE_FIELDS: {unclassified:?}"
+        );
+        // Final panel F6: EVERY field of every row is classified, whatever
+        // its value (numbers and booleans included), not only id-shaped ones.
+        // A Header or Input key's own scalar (empty path) is not a row field.
+        let unlisted: BTreeSet<String> = leaves_by_key(&tree)
+            .into_iter()
+            .filter(|(_, path, _)| !path.is_empty())
+            .filter(|(key, path, _)| !is_classified(key, path))
+            .map(|(key, path, _)| format!("{key}.{}", path.join(".")))
+            .collect();
+        assert!(
+            unlisted.is_empty(),
+            "{label}: fields in neither REFERENCES nor NON_REFERENCE_FIELDS: {unlisted:?}"
         );
         let universe = SnapshotUniverse::of(&b.target);
         let violations = closure_violations(&tree, model, &universe);
@@ -1762,5 +1905,39 @@ fn cross_app_universe_binds_its_model() {
     assert_eq!(
         msg, "compose_full_snapshot: the model is not the cross-app universe's model",
         "the model-identity message"
+    );
+}
+
+/// Final panel G5: `SingleApp` binds a single-app model. DD's cross-app model
+/// (it holds dependency routines, asserted) composed as `SingleApp` panics;
+/// DD's single-app model composes.
+///
+/// Break: drop the `SingleApp` assert -> it composes, writing dependency rows
+/// under `"single-app"`.
+#[test]
+fn single_app_universe_binds_a_single_app_model() {
+    let dir = dd_dir();
+    let cross = build(dir.path(), false);
+    let m = cross.target.resolved();
+    assert!(
+        m.workspace
+            .routines
+            .iter()
+            .any(|r| r.app_guid.eq_ignore_ascii_case(dd::DEP_GUID)),
+        "precondition: the cross-app model holds dependency routines"
+    );
+    let _ = compose(&build(dir.path(), true));
+    let wrong = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compose_with(&cross, SnapshotUniverse::SingleApp)
+    }));
+    let err = wrong.expect_err("a cross-app model composed as SingleApp must panic");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert_eq!(
+        msg,
+        "compose_full_snapshot: SingleApp with a model that holds dependency routines"
     );
 }

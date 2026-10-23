@@ -209,7 +209,9 @@ pub const REFERENCES: &[KeyReferences] = &[
 /// Per key, the fields that are data, never references (spec §4.4, ON3),
 /// matched as [`REFERENCES`]' paths are: a bare name matches at any depth, but
 /// only inside its own key. Completed from the serde names of every row the
-/// composer emits (`snapshot.rs` row structs, `snapshot_full.rs` derivers).
+/// composer emits (`snapshot.rs` row structs, `snapshot_full.rs` derivers),
+/// numbers and booleans included; `closure_fields_are_classified_and_closed`
+/// checks every leaf of DD's and R5B's trees against both lists.
 /// Value sources nest (`initializer`), so their data names (`kind`, `value`,
 /// `enumName`, `member`, `varName`, `fieldName`; a literal's `value` is data,
 /// S9) stay bare in the two keys that carry them.
@@ -246,8 +248,10 @@ pub const NON_REFERENCE_FIELDS: &[(&str, &[&str])] = &[
             "confidence",
             "configEntryId",
             "resolutionStatus",
+            "externallyReachable",
             "sourceAnchor.sourceUnitId",
             "sourceAnchor.syntaxKind",
+            "sourceAnchor.range.*",
         ],
     ),
     (
@@ -257,6 +261,7 @@ pub const NON_REFERENCE_FIELDS: &[(&str, &[&str])] = &[
             "binding.eventName",
             "sourceAnchor.sourceUnitId",
             "sourceAnchor.syntaxKind",
+            "sourceAnchor.range.*",
         ],
     ),
     (
@@ -292,6 +297,7 @@ pub const NON_REFERENCE_FIELDS: &[(&str, &[&str])] = &[
             "objectType",
             "*Anchor.sourceUnitId",
             "*Anchor.syntaxKind",
+            "*Anchor.range.*",
             "value",
             "enumName",
             "member",
@@ -301,11 +307,35 @@ pub const NON_REFERENCE_FIELDS: &[(&str, &[&str])] = &[
     ),
     (
         "operationIndex",
-        &["sourceFile", "displayText", "controlContext"],
+        &[
+            "sourceFile",
+            "startLine",
+            "startColumn",
+            "endLine",
+            "endColumn",
+            "displayText",
+            "controlContext",
+            "order.orderId",
+            "order.onSuccessPath",
+            "order.dominatesSuccessReturn",
+            "underAsserterror",
+        ],
     ),
     (
         "callsiteIndex",
-        &["sourceFile", "calleeDisplay", "controlContext"],
+        &[
+            "sourceFile",
+            "startLine",
+            "startColumn",
+            "endLine",
+            "endColumn",
+            "calleeDisplay",
+            "controlContext",
+            "order.orderId",
+            "order.onSuccessPath",
+            "order.dominatesSuccessReturn",
+            "underAsserterror",
+        ],
     ),
     (
         "callsiteResolutions",
@@ -313,13 +343,24 @@ pub const NON_REFERENCE_FIELDS: &[(&str, &[&str])] = &[
             "calleeDisplay",
             "dispatchKind",
             "status",
+            "openWorld",
             "unresolvedCandidates.reason",
+            "resultConsumed",
+            "underAsserterror",
         ],
     ),
     ("analysisGaps", &["kind", "detail", "role"]),
     ("coverage", &["directStatus", "inheritedStatus", "reasons"]),
     ("inputs", &["kind", "path", "contentHash"]),
-    ("routineOrderFrames", &["kind", "branchTerminatesBy"]),
+    (
+        "routineOrderFrames",
+        &[
+            "kind",
+            "branchAlwaysTerminates",
+            "branchMayFallThrough",
+            "branchTerminatesBy",
+        ],
+    ),
 ];
 
 /// Whether `path` is a REFERENCE field of `key` (not its defining field).

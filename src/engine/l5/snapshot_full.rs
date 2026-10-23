@@ -143,6 +143,18 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
             "compose_full_snapshot: the model is not the cross-app universe's model"
         );
     }
+    // Final panel G5: `SingleApp` binds a single-app model, so a cross-app
+    // model cannot be written under `"analysisUniverse": "single-app"`.
+    if let SnapshotUniverse::SingleApp = &opts.universe {
+        assert!(
+            resolved
+                .workspace
+                .routines
+                .iter()
+                .all(|r| resolved.routine_role(r) == Role::Primary),
+            "compose_full_snapshot: SingleApp with a model that holds dependency routines"
+        );
+    }
     // The consumed-core (identities, capabilityFacts, typedEdges, …, eventDeclarations,
     // rootClassifications, [routineOrderFrames]).
     // One base (cone + producer solve) for the core and the permission facts.
@@ -495,6 +507,10 @@ fn reachable_gaps(
     x: &R3a5CrossAppBase,
     source: &R3a3SourceBase,
 ) -> Vec<SnapshotAnalysisGap> {
+    // No dependency gap (CDO: none, P5): nothing to test against the reach.
+    if gaps.iter().all(|g| g.role == Role::Primary.as_str()) {
+        return gaps.to_vec();
+    }
     // The one case fold of an app guid, on both sides of the match (O13).
     let app_key = |guid: &str| guid.to_ascii_lowercase();
     let reach = reach(x);

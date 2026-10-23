@@ -2397,9 +2397,12 @@ fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<Snapshot
     }
 
     // Symbol-only apps: any app guid in a body-unavailable dependency routine.
+    // A routine whose body a parse error lost is not a symbol: it has its
+    // `parse-incomplete` gap above (final panel C1, as the loop below).
     let mut opaque_apps: BTreeSet<String> = BTreeSet::new();
     for r in &base.ws_routines {
         if !r.body_available
+            && !r.parse_incomplete
             && is_dependency_role(r)
             && let Some(guid) = object_id_app_guid(&r.object_id)
         {

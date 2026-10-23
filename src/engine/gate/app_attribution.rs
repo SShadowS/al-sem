@@ -47,7 +47,7 @@ impl<'a> AttributionIndex<'a> {
     /// Resolve an internal `ObjectId` (`${appGuid}/${type}/${num}`) to its owning `App`.
     /// The appGuid is the first `/`-segment — extracted directly (no secondary lookup).
     fn app_for_object_id(&self, object_id: &str) -> Option<&'a App> {
-        let app_guid = object_id.split('/').next().filter(|s| !s.is_empty())?;
+        let app_guid = crate::engine::ids::object_id_app_guid(object_id)?;
         self.apps_by_guid.get(app_guid).copied()
     }
 
