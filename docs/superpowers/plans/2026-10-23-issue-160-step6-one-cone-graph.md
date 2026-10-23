@@ -274,9 +274,11 @@ Acceptance: A6.21, A6.22 (corpus half), A6.19 (DAG half). Depends on Task 1′ p
 - Modify `src/engine/l5/digest.rs`: `reconstruct_witness_paths`'s BFS half becomes the DAG rule
   (spec §14.3.1). A new per-root `struct DagCache<'i>(HashMap<(FirstHopKind, String), Rc<WitDag<'i>>>)`
   beside `HopCache` (which stays an edge → hop memo). The reverse-BFS `valid_nodes` set is replaced by a
-  carrier set per `ValidNodesKey` (rename the cache to what it holds). Paths are enumerated by the ordered
-  forward walk over marked DAG nodes, up to the CALLER's `cap + 1` (spec §14.3.1 item 4). Opaque seeds as
-  today. The per-fact depth rule (item 6). `MAX_STATES` stays for `enumerate_proofs` only. The streaming
+  carrier set per `ValidNodesKey` (rename the cache to what it holds). Candidates are enumerated by the trie
+  walk of spec §14.3.1 item 4: the marked sub-DAG with per-node length bit sets (cached per DAG and carrier
+  set), then one depth-first walk per candidate length over the trie of projected prefixes (frontier sets,
+  children grouped by projected hop JSON), keys (projected length, projected JSON, end key), up to the
+  CALLER's `cap + 1`. Opaque seeds as today, as `opaque` candidates. The per-fact depth rule (item 6). `MAX_STATES` stays for `enumerate_proofs` only. The streaming
   top-k merge (§14.3.1a) replaces `all_paths`/`all_path_conds`; the old `merge_normalize_via_paths` stays
   `#[cfg(test)]` as W10's oracle. Census line `digest.witness_dags=N nodes=N preds=N`. Port from the
   prototype WITHOUT its `ALSEM_W6_*` switches and `diag` module; the old search is deleted, kept only as a
@@ -299,12 +301,18 @@ Acceptance: A6.21, A6.22 (corpus half), A6.19 (DAG half). Depends on Task 1′ p
     cap 3 (the fingerprint query's `--witness 3`), 3 paths → false, 4 → true, `path-limit-reached
     cap=3`. Break: enumerate up to `cap` instead of `cap + 1` → fails; hard-code 256 → the cap-3
     arm fails.
-  - **W4b ordered prefix, distinct paths.** More than `cap` shortest paths over two carriers and
-    reconverging diamonds, two successor edges with EQUAL hop JSON into different nodes, and (with the
-    boundary flag on) two full paths that collapse to one prefix at the boundary: the returned paths are
-    the first `cap` DISTINCT paths by `key_cmp` of ALL of them (brute force in the test), and
-    `truncated` is false when only `cap` distinct ones exist. Breaks: enumerate in predecessor order →
-    fails; count duplicates toward `cap + 1` → truncation fails (spec §14.3.1 item 4, A2-06).
+  - **W4b key order and distinctness** (spec §14.3.1 item 4, the trie walk; A1-01, A2-06, A3-01). A
+    brute-force oracle in the test enumerates every DAG path, cuts it (with the boundary flag on) at
+    the first dependency node, keys it (projected length, projected JSON, end key) and dedupes by key;
+    the walk must return exactly the oracle's first `cap` keys in order, with `truncated` iff the
+    oracle has more than `cap`. Fixtures: (1) reconverging diamonds and two carriers, more than `cap`
+    paths; (2) two successor edges with EQUAL projected hop JSON into different nodes whose later
+    hops interleave in key order; (3) one fact with boundary candidates at depths 1, 2 and 3 plus
+    carriers at `dmin`, `cap` below the total; (4) a shared primary prefix `R → Helper` ending at two
+    boundaries (`cs1`, `cs2`), plus two full paths that collapse to one (prefix, boundary). Breaks:
+    walk DAG nodes instead of the prefix trie → (2) fails; one walk over all lengths → (3) fails; key
+    without the boundary → (4) loses a candidate → fails; count duplicates toward `cap + 1` → (1) or
+    (2) truncation fails.
   - **W4c opaque and carrier tie** (A1-01). `cap = 1`; an opaque call-site seed and a carrier at
     `dmin = 1` both have projected length 1, and the carrier path's projected JSON sorts first: the
     carrier path is kept. Break: emit opaque seed paths before carrier paths → fails.
@@ -453,7 +461,8 @@ where `UnresolvedCone` is today's result of `unresolved_cone` (items AND `Unreso
 
 - [ ] **Step 1: Tests red.** T1 (digest, grouped shape: `CallChain` reports `DB_MODIFY` and `COMMIT` as
   groups through the call into `Dep Lib.Outer`, Customer (18) in the `DB_MODIFY` group's resources, both
-  `conditionality: unknown`), B1-B8 (spec §14.3.5: partition and anchorless boundaries, primary carrier behind
+  `conditionality: unknown`), B1-B8 (spec §14.3.5: partition within one fact behind a shared first hop `R → Helper` with two
+  call sites and two anchorless triggers, primary carrier behind
   dependency code, conservative ordering, proofs and their class), T3 digest arm, T4, T5's digest row
   (1/1/1/2/1/1/1/1), T6, T7 (a)(b), T8 coverage equality (on `d`'s fixture, `h` shape and policy; not `o`), T9
   (a)(b), the traversal block test (A1-16), checkpoint, Review Focus 1 and 2.

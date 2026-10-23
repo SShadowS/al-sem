@@ -765,7 +765,7 @@ ordering plan has no witness scope.
 ## 14. Amendment 6A-12: the split, and the DAG witness
 
 Added 2026-10-23 at attempt 8, after Task 1's stop rule failed (ledger `## Task 1 STOP`).
-**Revised the same day after the §14 panel rounds 1 and 2** (register entries A1-01 to A1-24, A2-01 to A2-09) and
+**Revised the same day after the §14 panel rounds 1 to 3** (register entries A1-01 to A1-24, A2-01 to A2-09, A3-01) and
 the operator's decision **B** for digest's output (§14.3.5): witnesses stop at the first
 dependency routine, and effects reached only through a dependency call are grouped per
 (boundary call site, effect type). **Where §14 and §0-§13 disagree, §14 wins**; §14.7 lists
@@ -867,25 +867,62 @@ For a root `r` and a first hop `h` of `r`:
 4. **Per fact `f`:** `C_f` = the carriers of `f` (`is_bfs_carrier`, the `(op, kind)` bucket, as today). `dmin` = the
    least `δ(c)` over reached `c ∈ C_f`. The witnesses are the DAG paths from a seed to a carrier at `dmin`. A
    carrier at `dmin` has no carrier before it on its shortest path (that carrier would be nearer), so "stop at the
-   first carrier on the path" is kept. **Which paths, in which order** (A1-01, revised in round 2): the order is
-   the merge's, `ProjPath::key_cmp` (`digest.rs:1944-1957`): PROJECTED length first, then hop-by-hop projected
-   JSON. Projection drops terminal hops (`project_hop`, `digest.rs:1985-2002`), so a carrier path at `dmin` has
-   projected length `dmin` and an opaque-boundary seed path has projected length 1: at `dmin = 1` the two kinds
-   TIE in length and are ordered by JSON, not "opaque first". So the candidates are produced as one stream in
-   `key_cmp` order: (a) backward from the carriers at `dmin`, the DAG nodes on a shortest path to one of them are
-   marked; a forward depth-first walk from the seeds visits only marked nodes and takes successor edges in
-   projected-hop-JSON order, which yields the carrier paths in `key_cmp` order (all of projected length `dmin`);
-   (b) the opaque seed paths (A1-19: call-site and op seeds only, as today; projected length 1), sorted by
-   `key_cmp`; (c) the two sorted streams are merged by `key_cmp`. **Distinct paths only** (A2-06): a candidate
-   whose projected path equals the previous one (two successor edges with equal hop JSON, or, under rule B, two
-   full paths that collapse to one prefix at the boundary) is folded into it and not counted. The stream stops
-   after `cap + 1` DISTINCT paths, where `cap` is the CALLER's cap (A1-04: `HARD_PATH_CAP` = 256 for digest and
-   prove; the user's `--witness N` for the fingerprint query, `fingerprint_query.rs:575`, `:596`). `truncated`
-   holds when `cap + 1` distinct paths were found; `path-limit-reached cap=N` is pushed then, as today. A non-seed
-   opaque routine is reached by the DAG (no `valid_nodes` prune) but is never reported: only carrier paths are read
-   off the DAG. Tests: W9 (both opaque rules); W4b (brute-force prefix, with equal-JSON successor edges and with
-   rule-B prefixes that collapse); W4c (`cap = 1`, an opaque seed and a carrier at `dmin = 1` whose projected JSON
-   sorts first → the carrier path is the one kept; break: put opaque paths first → fails).
+   first carrier on the path" is kept. **Which paths, in which order — the one enumeration rule** (A1-01, A2-06,
+   A3-01; rewritten in round 3):
+
+   *The key.* The merge orders paths by `ProjPath::key_cmp` (`digest.rs:1944-1957`): PROJECTED length first, then
+   hop-by-hop projected JSON. Projection drops terminal hops (`project_hop`, `digest.rs:1985-2002`). A candidate
+   witness is a pair (projected path `P`, end), and its key is (`|P|`, `P`'s hop JSONs, end key). The end key is:
+   `carrier` for a path to a carrier at `dmin` (all carriers reached by one `P` coalesce into one candidate, as the
+   merge's dedupe coalesces equal projected paths today, keeping the least restrictive conditionality); `opaque`
+   for an opaque-boundary seed path (A1-19: call-site and op seeds only, as today; `|P| = 1`); and, under rule B,
+   the boundary identity (§14.3.5 item 2) for a path cut at a boundary. Two candidates are the same exactly when
+   their keys are equal. So, under rule B, two prefixes through the same primary routines that end at different
+   boundaries (`u` calls `DepA` at `cs1` and `DepB` at `cs2`; or the first hop itself is the boundary call, `P`
+   empty) are DIFFERENT candidates: the boundary is the last key, never folded away (A3-01). Producer proofs
+   (`enumerate_proofs`) give candidates with the same key and join the same order; a proof equal in key to a BFS
+   candidate is the same candidate.
+
+   *Lengths.* A carrier candidate has `|P| = dmin`; an opaque seed candidate has `|P| = 1`; a boundary candidate
+   has `|P| = δ(u)`, the depth of the last primary routine `u` before the boundary edge `u → b` (0 when the first
+   hop enters dependency code). One fact can have candidates of several lengths (boundaries at depths 1, 2, 3 and
+   carriers at `dmin`), so the enumeration goes one LENGTH CLASS at a time.
+
+   *The walk.* (a) Mark the shortest-path sub-DAG that ends at `f`'s carriers at `dmin` (backward from them over
+   the predecessor lists), and give each marked node `v` the bit set of candidate lengths reachable from it inside
+   the marked sub-DAG (a carrier at `dmin`, or a marked boundary edge out of a node at depth `L`, sets bit `L`;
+   bits propagate backward over primary nodes only, since under rule B a dependency node ends a path; one backward
+   pass, at most 65 bits since `MAX_DEPTH` = 64; with rule B off, every node counts as primary). (b) For each candidate length `L` in ascending order, do
+   one depth-first walk over the TRIE OF PROJECTED PREFIXES, not over DAG nodes: a trie node is a projected prefix
+   `P` together with its FRONTIER, the set of marked DAG nodes that `P` reaches. From a trie node, take the
+   out-edges of the WHOLE frontier set that lead to a marked primary node whose bit set contains `L`; group them by
+   projected hop JSON; each group, in JSON order, is one child trie node whose frontier is the union of the group's
+   targets. At depth `L`, emit the trie node's candidates in end-key order: its boundary edges (sorted by boundary
+   identity), `carrier` if `L = dmin` and the frontier holds a carrier, `opaque` if `L = 1` and the frontier holds
+   an opaque seed. Equal-JSON alternatives (two edges into different nodes) are one trie child, so each distinct
+   candidate is produced exactly once, and within a length class the depth-first order over JSON-sorted children
+   is `key_cmp` order; length classes in ascending order make it the full key order by construction.
+   (c) Stop after `cap + 1` candidates, where `cap` is the CALLER's cap (A1-04: `HARD_PATH_CAP` = 256 for digest
+   and prove; the user's `--witness N` for the fingerprint query, `fingerprint_query.rs:575`, `:596`).
+   `truncated` holds when `cap + 1` were found; `path-limit-reached cap=N` is pushed then, as today. Proof
+   candidates are merged into this stream by key, and the `cap + 1` count is over the merged stream.
+
+   *Under rule B, after the stream:* the candidates are partitioned by end key (§14.3.5 item 3): each boundary
+   identity's candidates are that group's via paths (distinct by construction); `carrier`/`opaque` candidates are
+   the fact's per-resource effect. **The printed via paths of a group are the projected primary prefixes `P`**
+   (ending at `u`); the `enters <App>.<Routine>` terminal is a terminal hop and is not printed in `viaPaths`
+   (projection drops it). The boundary shows in the group's `evidence` (the boundary call site's, operation's or
+   publish site's anchor) and in its `detail.boundary`. A group whose boundary is the root's own first hop has the
+   empty via path `[]`.
+
+   A non-seed opaque routine is reached by the DAG (no `valid_nodes` prune) but is never reported. Tests: W9 (both
+   opaque rules); W4b (brute-force key order and distinctness over: reconverging diamonds and two carriers;
+   two equal-JSON edges into different nodes whose later hops interleave in `key_cmp` order; one fact with boundary
+   candidates at depths 1, 2 and 3 plus carriers at `dmin`, with `cap` below the total; and a shared primary prefix
+   ending at two boundaries; breaks: walk DAG nodes instead of the prefix trie → order or count fails; one walk
+   over all lengths → the length-3 boundary sorts before the length-1 one → fails; key without the boundary →
+   one candidate lost → fails); W4c (`cap = 1`, an opaque seed and a carrier at `dmin = 1` whose projected JSON
+   sorts first → the carrier path is kept; break: put opaque paths first → fails).
 5. **What does not change.** Direct facts (case A), the root's own proofs (`enumerate_proofs`, `digest.rs:880`, which
    keeps its own `MAX_STATES` limit and its `state-limit-exceeded` diagnostic), the opaque-boundary report for
    call-site and op seeds, the event-hop rule (a subscriber that reaches no carrier gives no path: the old code pruned
@@ -909,14 +946,19 @@ The ordering cell runs the DAG (A1-23) at a measured neutral cost (§14.3.4). **
 (§14.3.5) apply only to digest's cone-graph tree**: they are switched on by a flag the tree carries, so the cut
 (ordering, prove, fingerprint, diff, r4f) never sees them.
 
-**Cost** (A2-09). Per root: one `O(V_h + E_h)` BFS per distinct first hop `h`. Per fact: the backward marking of
-item 4(a), `O(V_f + E_f)` where `V_f`, `E_f` is the shortest-path sub-DAG that ends at `f`'s carriers at `dmin`
-(never more than the DAG, `O(V_h + E_h)`), plus the walk bounded by `(cap + 1) × dmin` hops. The marking is cached
-per (DAG, set of carriers at `dmin`): facts that share their nearest carriers (every resource behind one boundary
-call in rule B) share one marking. The prototype's backward enumeration walked the same sub-DAG, so its E′ already
-contains this cost; Task 1′'s P-1 re-measures E′ with the ported marking + ordered walk on `d` and `h`, and a result
-more than 10 % off the prototype is a finding (§14.6). The old cost was up to 25,000 expanded states per fact,
-times every effect fact.
+**Cost** (A2-09, rewritten in round 3). Per root: one `O(V_h + E_h)` BFS per distinct first hop `h`. Per fact:
+(a) the marking and the length bit sets of item 4, one backward pass over the shortest-path sub-DAG `V_f`, `E_f`
+that ends at `f`'s carriers at `dmin` (never more than the DAG), cached per (DAG, set of carriers at `dmin`), so
+facts that share their nearest carriers (every resource behind one boundary in rule B) share it; (b) the trie walk.
+The walk enters a trie child only if its frontier can still reach a candidate of the current length (the bit set),
+and it stops at `cap + 1` candidates, so every trie node it visits lies on the prefix of an emitted candidate or of
+the one walk that ends at the stop: at most `(cap + 1 + C) × L_max` trie nodes, `C` the number of length classes
+(≤ 65) and `L_max ≤ dmin ≤ 64`. Each trie node costs the out-degree of its frontier SET, at most `E_f`. Equal-JSON
+alternatives coalesce into one trie node, so there is no exponential term: the work is bounded by DISTINCT
+candidates, not by DAG paths. Bound per fact: `O(V_f + E_f + (cap + 1 + C) × L_max × E_f)`; in practice the frontier
+sets hold a few nodes. The prototype enumerated full DAG paths backward and so did MORE work on equal-JSON fan-out;
+Task 1′'s P-1 re-measures E′ with the ported trie walk on `d` and `h`, and a result more than 10 % off the prototype
+is a finding (§14.6). The old cost was up to 25,000 expanded states per fact, times every effect fact.
 
 **Rejected:** (a) capping the per-fact enumeration at `MAX_PATHS` instead of the caller's cap: it would change
 `viaPathsTruncated` and conditionality inputs for a reason unrelated to the witness rule (a cap is the caller's
@@ -1026,8 +1068,9 @@ Here, applied to the dependency boundary of digest's cone-graph tree:
    through dependency code (a dependency routine that raises an event a primary subscriber handles, or fires a
    trigger whose primary code writes). The cut wins over the carrier: the kept path is the primary-code prefix up to
    the boundary, its terminal is the boundary (below), and the carrier's own operation is not printed. Paths inside
-   dependency code are never enumerated or printed; paths that differ only at or beyond the boundary become one
-   path (§14.3.1 item 4's "distinct paths only"). A witness that never enters dependency code is unchanged.
+   dependency code are never enumerated or printed; paths that differ only BEYOND the boundary (same prefix, same
+   boundary identity) are one candidate, while paths with the same prefix and DIFFERENT boundaries stay apart
+   (§14.3.1 item 4's key, A3-01). A witness that never enters dependency code is unchanged.
 2. **The boundary and its identity** (A2-01). The boundary is the edge `(u → b)` from the last primary routine `u`
    into the first dependency routine `b`. Its identity, in this order: the edge's call site id (a call); else the
    firing operation id (an implicit trigger, `kind: implicit-trigger`); else the event id (an event dispatch from
@@ -1036,9 +1079,9 @@ Here, applied to the dependency boundary of digest's cone-graph tree:
    `kind: operation` at the firing operation, or `kind: synthetic` naming the event for a dispatch, each with
    display text `enters <Dep App name>.<Routine display>`; `evidence` is that call site's, operation's, or the
    publish site's anchor.
-3. **Partition and grouping** (A2-01). A fact whose witnesses (the `cap + 1` distinct prefixes of §14.3.1 item 4)
-   all end at boundaries is split by boundary: it contributes to ONE group per distinct boundary identity among its
-   witnesses, each with only that boundary's prefixes as its via paths. The group key is (effect type with its
+3. **Partition and grouping** (A2-01). A fact's candidates (the `cap + 1` of §14.3.1 item 4, keyed with the
+   boundary as the last key) are partitioned by end key AFTER the enumeration: the fact contributes to ONE group per
+   distinct boundary identity among its candidates, each with only that boundary's prefixes as its via paths. The group key is (effect type with its
    class suffix, `|kt` for a known-temp DB effect as today, §14.3.1 item 5 / A2-04; boundary identity) instead of
    `dedupe_key`'s (type, terminal, detail). Every resource of every fact that reaches a boundary joins that
    boundary's group, so a resource reached through two boundary calls is counted in BOTH groups' `resourceCount`
@@ -1063,7 +1106,9 @@ Here, applied to the dependency boundary of digest's cone-graph tree:
 5. **Producer proofs** (A2-04). `enumerate_proofs` (`digest.rs:880`) walks the pd arena's link paths from the root's
    states down to a seed; the tree's arena is scoped to the subjects' state closure (§4.5), so a proof can descend
    into dependency code. Under rule B a proof path is cut the same way: at its first link edge into a dependency
-   routine, with the boundary terminal of item 2 and that boundary's identity, deduplicated with the BFS prefixes.
+   routine, with the boundary terminal of item 2 and that boundary's identity; a proof candidate is keyed as §14.3.1
+   item 4 says ((projected prefix, boundary identity), the boundary last), so it is the same candidate as a BFS
+   prefix with an equal key and a different one otherwise.
    Its class is kept: a proof carries the producer state's temp class (`TempStateKind`, the `kt` suffix of item 3's
    key), so a known-temp write proven through a parameter passed into dependency code groups apart from a physical
    write behind the same call. A proof that never enters dependency code is unchanged.
@@ -1085,9 +1130,12 @@ Tests (literal fixtures; each with its break): B1 (T1's shape; break: key by `de
 → fails); B2 (a primary-terminal effect beside a boundary group is unchanged; break: group every transitive effect →
 fails); B3 (more than 10 resources → `resourceCount` exact, 10 listed in order); B4 (the rule is off on the cut: the
 same fixture single-app prints today's per-resource effects; break: switch the flag on for the cut → fails); B5
-partition (R calls `DepA.X` at `cs1` and `DepB.Y` at `cs2`, both reaching Table 18 at `dmin`, and fires two distinct
-implicit triggers into dependency code: four groups with four distinct `factId`s, Table 18 counted in both call
-groups, and four ordering occurrences; break: key by the shortest witness's boundary only → two groups → fails);
+partition within ONE fact (A2-01, round 3): R's single first hop calls `Helper`; `Helper` calls `DepA.X` at `cs1` and
+`DepB.Y` at `cs2` and fires two distinct implicit triggers into dependency code (two operations), and all four reach
+Table 18 at `dmin`. The Table 18 fact of R has ONE first hop and one projected prefix (`R → Helper`) and four
+boundary candidates, so it yields four groups with four distinct `factId`s, Table 18 counted in each, and four
+ordering occurrences. Breaks: key candidates by the projected path only (no boundary in the key) → one group →
+fails; select only the fact's first boundary → one group → fails;
 B6 primary carrier behind dependency code (R calls `Dep.X`, which raises an event a primary subscriber handles with a
 write to Table 36: a group at `cs` into `Dep.X` with Table 36 in its resources and NO per-resource effect at the
 subscriber's operation; break: let a primary carrier win over the cut → fails); B7 conservative ordering (R calls
@@ -1129,8 +1177,8 @@ Measured (prototype): CDO `o` SARIF byte-identical (`--scope all`, `--scope prim
 `OB(x,y) && MC(x,y)`". The implementation states that reduction (with the asymmetry cited) instead of the guard.
 Test O1 (A1-11, revised in round 2): (a) equality with `build_hb_edges` for every ordered pair of every corpus
 root's groups; (b) a literal fixture of hand-built `OrderedOp`s: one group with `a`, `b` in the two arms of one
-`if` (ordered by id, `may_co_execute` false), `c` after the `if` (an edge from each), and a second group with `d`
-whose order id lies between `a`'s and `c`'s. Expected: no `a→b` edge, `a→c` and `b→c` edges, no edge between
+`if` (order ids 1 and 2, `may_co_execute` false), `c` after the `if` (order id 3; an edge from each), and a second
+group with `d` (order id 2, between `a`'s and `c`'s; as in the plan). Expected: no `a→b` edge, `a→c` and `b→c` edges, no edge between
 groups. Breaks, each made alone: drop `may_co_execute` → `a→b` appears → fails; drop the same-group check → `a→d`
 appears → fails.
 
