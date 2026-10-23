@@ -144,6 +144,8 @@ pub mod digest_cli;
 // fingerprint_query (routine selectors) — kept as ONE implementation so the two
 // call sites cannot drift apart (see module docs for the bug this fixed).
 pub mod selector_index;
+// #254 — `digest --tests`: which changed routines a `[Test]` procedure reaches.
+pub mod test_coverage;
 pub mod unresolved_cone;
 
 // cli-b/b2 — PROVE CLI (tristate absence-safety query + json/human formatters).
