@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `alsem analyze --format json`: every finding gains `looseFingerprint` (#247), a key
+  that stays equal when the same problem moves to another routine of the same object.
+  `fingerprint` is byte-identical: it is still the same problem in the same routine, and
+  baselines still use it. Inline suppression uses neither key (it matches check, file and
+  line). `looseFingerprint` is the fingerprint's five parts with the routine name blanked
+  and the anchor routine's id (internal or stable form, with its `/op3`-style ordinal
+  chain) cut out of the root-cause key; when the anchor is not a routine (d64) it equals
+  `fingerprint`. It is **not unique**: several findings can share one. So count new
+  findings per key: **new = Σ max(0, after(k) − before(k))** over `looseFingerprint`
+  values k. To name which findings are new, pair findings equal on both keys first, then
+  on `looseFingerprint`; equal `fingerprint` does not imply equal `looseFingerprint` (d48),
+  so only that order agrees with the count. Compare two reports only with no
+  `--baseline`, no `--limit`, and the same `--scope`, `--min-severity`,
+  `--detector`/`--preset` and dependency coverage, or findings drop out before the JSON is
+  written. Limits: the count cancels (fix one, add a same-key one in the same object = 0
+  new), and these checks keep a routine-bound part, so a move there changes the key:
+  local names (d4, d18, d22, d57, d60), parameter positions (d59, d39–d42), other cycle
+  members (d7), the event name (d12), the callee (d16), the event (d38), the caller (d43),
+  the loop routine (d48); d39–d42 carry no table, and two primary d45 publishers in one
+  object exposing one table share a key. JSON only: SARIF `fingerprints` would merge
+  results with an equal value. The `schemaVersion` does not change (the key is additive).
+
 ## [2.0.2] - 2026-10-23
 
 ### Changed
