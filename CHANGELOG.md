@@ -23,14 +23,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A routine is `covered` when some test reaches it. `reachedFrom` names the test with
     the lowest stable id. `viaEvent` is true when every shortest path from that test
     crosses an event.
-  - Each `uncovered` routine has a `reason`: `declaration-only`,
-    `platform-event-subscriber`, `dependency-event-subscriber` or `no-path`.
+  - Every changed root counts, even one the digest has no entry for.
+  - Each `uncovered` routine has one `reason` (the first that fits):
+    - `declaration-only`: an interface or ControlAddIn method. It has no body to run.
+    - `not-in-graph`: a changed root the digest found but has no entry for.
+    - `platform-event-subscriber`: it subscribes to a platform event, which no
+      routine raises. It is not used when it also subscribes to a workspace event.
+    - `dependency-event-subscriber`: it subscribes to an event a dependency raises,
+      and no test reaches that publisher. The same exception applies.
+    - `no-path`: no test reaches it.
   - `ratio` is covered / changed, and `null` when no production routine changed.
-  - `coverage` is `partial` when a reached routine has a call the search cannot follow
-    (a dynamic target, an unresolved receiver or member, an ambiguous overload, an open
-    interface, an unresolved object run, a `TestPage`, a parse error, no coverage record)
-    or calls into dependency code. `reasons` lists them.
-    `testsWithUnresolvedTraversal` and `testsCallingDependencyCode` count those tests.
+  - `coverage` is `partial` when a routine some test reaches has something the search
+    cannot follow. `reasons` lists the codes, and `testsWithUnresolvedTraversal` counts
+    the tests that hit one of these:
+    - `dynamic-target`, `unresolved-receiver-type`, `unresolved-member`: a call whose
+      target is not known.
+    - `ambiguous`: a call to one of several overloads.
+    - `interface-open-world`: an interface call whose implementations may not all be
+      known.
+    - `object-run-unresolved`: a `Run` of an object that is not known.
+    - `test-page`: a `TestPage` or `TestRequestPage` the routine uses. What it drives
+      is not followed.
+    - `parse-incomplete`: the routine did not parse fully.
+    - `body-unavailable`: a workspace routine with no body.
+    - `no-coverage-record`: the analysis has no record for the routine.
+    - `unknown-status`: a call status this version does not know.
+
+    `testsCallingDependencyCode` counts the tests that reach dependency code. Its codes
+    are `external` and `unfetched-dependency` (a call into a dependency), and
+    `dependency-code` and `opaque-dependency` (a dependency routine, with or without a
+    body).
 
   Limits: calls inside dependency code are not seen, so a subscriber to an event raised
   only there is uncovered. Platform events have no publisher to reach. What a `TestPage`
