@@ -98,6 +98,9 @@ pub(crate) struct Row {
     pub pd: u64,
     pub ctx: u64,
     pub snap: u64,
+    /// `build.witness_pass`: compositions that materialized raw facts (#160
+    /// step 6 §4.9, §14.10).
+    pub witness: u64,
 }
 
 /// Every cell is checked and every mismatch reported, so a break that moves
@@ -113,6 +116,7 @@ pub(crate) fn assert_row(case: &str, m: &BTreeMap<String, u64>, r: Row) {
         ("build.pd_solve", r.pd),
         ("build.detector_context", r.ctx),
         ("build.snapshot", r.snap),
+        ("build.witness_pass", r.witness),
         // A1.1: one workspace read per program build (final panel r1, F2-3).
         ("inputs.read", r.program),
     ];
@@ -204,6 +208,7 @@ fn analyze_cross_app_default() {
             pd: 1,
             ctx: 1,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -239,6 +244,7 @@ fn analyze_cross_app_d47() {
             pd: 1,
             ctx: 1,
             snap: 1,
+            witness: 1,
         },
     );
 }
@@ -258,6 +264,7 @@ fn analyze_single_app() {
             pd: 1,
             ctx: 1,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -296,6 +303,7 @@ fn analyze_cross_app_with_a_dependency_half() {
             pd: 1,
             ctx: 1,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -327,6 +335,39 @@ fn analyze_single_app_d47() {
             pd: 1,
             ctx: 1,
             snap: 1,
+            witness: 1,
+        },
+    );
+}
+
+/// #160 step 6 §14.10 (A1-18), T5: d47 beside a summaries detector is two
+/// compositions, the view's one (derived rows, no raw) and the ordering cell's
+/// cut (raw for every routine, so `witness` 1). Under the split the ordering
+/// cell keeps the cut until the #161 follow-up.
+#[test]
+fn analyze_cross_app_d47_with_a_summaries_detector() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "analyze",
+        &ws,
+        "--format",
+        "json",
+        "--detector",
+        "d47-io-unsafe-txn,d35-commit-in-event-subscriber",
+    ]);
+    assert_row(
+        "analyze cross-app d47 + d35",
+        &m,
+        Row {
+            program: 1,
+            bcg: 2,
+            cone: 2,
+            v2: 1,
+            scc: 3,
+            pd: 2,
+            ctx: 1,
+            snap: 1,
+            witness: 1,
         },
     );
 }
@@ -348,6 +389,7 @@ fn digest_cross_app() {
             pd: 2,
             ctx: 1,
             snap: 1,
+            witness: 1,
         },
     );
 }
@@ -381,6 +423,7 @@ fn digest_single_app() {
             pd: 2,
             ctx: 1,
             snap: 1,
+            witness: 1,
         },
     );
 }
@@ -401,6 +444,7 @@ fn prove() {
             pd: 2,
             ctx: 1,
             snap: 1,
+            witness: 1,
         },
     );
 }
@@ -450,6 +494,7 @@ const FINGERPRINT_ROW: Row = Row {
     pd: 2,
     ctx: 1,
     snap: 1,
+    witness: 1,
 };
 
 #[test]
@@ -505,6 +550,7 @@ fn diff_ws_ws() {
             pd: 2,
             ctx: 0,
             snap: 2,
+            witness: 2,
         },
     );
 }
@@ -534,6 +580,7 @@ fn diff_ws_ws_strict() {
             pd: 4,
             ctx: 2,
             snap: 2,
+            witness: 2,
         },
     );
 }
@@ -547,6 +594,7 @@ const EVENTS_CROSS_ROW: Row = Row {
     pd: 1,
     ctx: 1,
     snap: 0,
+    witness: 0,
 };
 
 #[test]
@@ -600,6 +648,7 @@ fn events_single_app() {
             pd: 1,
             ctx: 1,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -630,6 +679,7 @@ fn policy_check_cross_app() {
             pd: 2,
             ctx: 2,
             snap: 0,
+            witness: 1,
         },
     );
 }
@@ -660,6 +710,7 @@ fn policy_check_single_app() {
             pd: 2,
             ctx: 2,
             snap: 0,
+            witness: 1,
         },
     );
 }
@@ -673,6 +724,7 @@ const QUERY_CROSS_ROW: Row = Row {
     pd: 0,
     ctx: 0,
     snap: 0,
+    witness: 0,
 };
 
 #[test]
@@ -721,6 +773,7 @@ fn query_single_app() {
             pd: 0,
             ctx: 0,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -929,15 +982,20 @@ fn views_release_their_cells_before_the_next_build() {
     let (d, ws) = ws_dep();
     let policy = policy_yaml();
     let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
-    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Rel"];
-    let per_side: Vec<&str> = [&["ctx"][..], &all, &["snap"]].concat();
+    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Rel", "rel:Raw"];
+    // #160 step 6 D7 (6): the det fill consumes the view's one composition
+    // and `prepare` releases `Caps` right after it.
+    let det = ["ctx", "rel:Caps"];
+    let per_side: Vec<&str> = [&det[..], &all, &["snap"]].concat();
     // `finish_default_run`: every cell but `l4` before the snapshot, `l4`
     // after the query.
     let default_run = vec![
         "ctx",
+        "rel:Caps",
         "rel:Det",
         "rel:Ordering",
         "rel:Rel",
+        "rel:Raw",
         "snap",
         "rel:L4",
     ];
@@ -947,7 +1005,16 @@ fn views_release_their_cells_before_the_next_build() {
             vec![
                 "policy", "check", &ws, "--policy", &policy, "--format", "json",
             ],
-            vec!["ctx", "rel:Det", "rel:L4", "rel:Ordering", "ctx", "rel:Rel"],
+            vec![
+                "ctx",
+                "rel:Caps",
+                "rel:Det",
+                "rel:L4",
+                "rel:Ordering",
+                "rel:Raw",
+                "ctx",
+                "rel:Rel",
+            ],
         ),
         (
             "fingerprint",
@@ -962,7 +1029,7 @@ fn views_release_their_cells_before_the_next_build() {
         (
             "events fanout",
             vec!["events", "fanout", &ws, "--format", "json"],
-            [&["ctx", "rel:L4"][..], &all].concat(),
+            [&det[..], &["rel:L4"], &all].concat(),
         ),
         (
             "digest",
@@ -1549,6 +1616,7 @@ fn graph() {
             pd: 0,
             ctx: 0,
             snap: 0,
+            witness: 0,
         },
     );
 }

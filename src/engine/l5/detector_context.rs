@@ -1193,7 +1193,7 @@ impl OwnedContext<'_> {
 /// byte-identical to the pre-Task-3 build.
 ///
 /// #160 step 2: a SHIM (tests and `aldump`; no `alsem` command) over
-/// [`build_detector_artifacts`]. It fills the ordering slot FIRST when the mask
+/// [`compose_detector_artifacts`]. It fills the ordering slot FIRST when the mask
 /// has `ORDERING_FACTS`, builds the relation, and runs the solve iff the mask has
 /// `CORE_SUMMARIES`.
 pub fn build_detector_context(resolved: &Model, demanded: u32) -> OwnedContext<'_> {
@@ -1240,7 +1240,7 @@ pub(crate) fn build_detector_context_with<'a>(
         extra_diagnostics: vec![],
     });
     let cross = base.map(|b| b.cross_app_inputs());
-    let (art, l4) = build_detector_artifacts(resolved, demanded, &rel, l4, cross);
+    let (art, l4) = compose_detector_artifacts(resolved, demanded, &rel, l4, cross);
     OwnedContext {
         model: resolved,
         art,
@@ -1401,9 +1401,74 @@ pub(crate) fn compose_capabilities(
     )
 }
 
+/// The composing builder (#160 step 6 Task 2b-1, spec §14.5): ONE composition
+/// over `rel.cone()`, then [`build_detector_artifacts`] over it. The test shim
+/// and policy's RAW build compose here; a `View` composes in `prepare`. Under
+/// `RAW_INHERITED_FACTS` (policy only) the composition keeps every routine's
+/// raw and files it on its summary, as before step 6; Task 3 deletes that half.
+pub(crate) fn compose_detector_artifacts(
+    resolved: &Model,
+    demanded: u32,
+    rel: &ExecRelation,
+    l4: Option<L4Request>,
+    cross: Option<CrossAppInputs<'_>>,
+) -> (DetectorArtifacts, Option<L4Analysis>) {
+    use crate::engine::l5::registry::substrate;
+    let need_summaries = demanded & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
+    // ⟨C1 Task 3 — R1⟩ The gate is a MODE threaded into the cone walk, not a
+    // post-hoc check: the raw Vec is allocated INSIDE `compose_inherited_cones`,
+    // so a check here could only discard it — zero memory win.
+    let want_raw_inherited = demanded & substrate::RAW_INHERITED_FACTS != 0;
+    // ⟨C1 Task 3 review fix M-1⟩ `RAW_INHERITED_FACTS` without `SUMMARIES` (nor
+    // `TRANSACTION_SPANS`) is a SILENT no-op: `need_summaries` would be false, no
+    // summary is built, and `select_facts` (which reads through `summaries`) then
+    // returns an empty fact list for every routine — the exact silent-empty
+    // outcome R6 was designed to foreclose, reached through a different door.
+    // No current caller does this, but a future one could; fail loudly instead
+    // of degrading quietly.
+    debug_assert!(
+        !want_raw_inherited || need_summaries,
+        "RAW_INHERITED_FACTS demanded without SUMMARIES/TRANSACTION_SPANS — the raw \
+         cone would silently build empty; OR in substrate::SUMMARIES alongside it"
+    );
+    let (caps, mut raw) = if need_summaries {
+        let scope = ConeScope {
+            derived: true,
+            raw: if want_raw_inherited {
+                WitnessScope::All
+            } else {
+                WitnessScope::None
+            },
+        };
+        let _s = pt::span("context", "context.capability_cones");
+        let (caps, raw) =
+            compose_capabilities(resolved, rel.cone(), det_cone_inputs(resolved, rel), scope);
+        (Some(caps), raw)
+    } else {
+        (None, HashMap::new())
+    };
+    let (mut art, l4) = build_detector_artifacts(resolved, demanded, rel, l4, cross, caps);
+    if want_raw_inherited {
+        // `Some` even for an empty cone: a materialized-but-empty cone is not
+        // `None` ("never built", R6).
+        for s in art.summaries.values_mut() {
+            let inherited = raw.remove(&s.routine_id).unwrap_or_default();
+            *s = FullRoutineSummary::new(
+                std::mem::take(&mut s.routine_id),
+                std::mem::take(&mut s.capability_facts_direct),
+                Some(inherited),
+                s.coverage.take(),
+            );
+        }
+    }
+    (art, l4)
+}
+
 /// The owned detector substrates over the relation `rel`, at mask `demanded`:
-/// the cone (over `rel.cone()`) first, then (when `l4` is `Some`) ONE
-/// [`build_l4`] solve over `rel`, then the harvest of its core summaries.
+/// the summaries from `caps`, the caller's ONE composition (#160 step 6 D2;
+/// `Some` whenever the mask has `SUMMARIES` or `TRANSACTION_SPANS`), then
+/// (when `l4` is `Some`) ONE [`build_l4`] solve over `rel`, then the harvest
+/// of its core summaries. It composes nothing and never sees raw facts.
 /// Returns the solve's [`L4Analysis`] beside the artifacts. `l4: None` = no
 /// solve.
 pub(crate) fn build_detector_artifacts(
@@ -1412,6 +1477,7 @@ pub(crate) fn build_detector_artifacts(
     rel: &ExecRelation,
     l4: Option<L4Request>,
     cross: Option<CrossAppInputs<'_>>,
+    caps: Option<CapabilityAnalysis>,
 ) -> (DetectorArtifacts, Option<L4Analysis>) {
     // The Primary payload; `DetectorArtifacts.graph` shares it by pointer.
     let graph: Arc<PrimaryGraph> = Arc::clone(rel.primary());
@@ -1428,22 +1494,6 @@ pub(crate) fn build_detector_artifacts(
     // TRANSACTION_SPANS folds over the summaries map, so demand summaries whenever
     // either bit is set (see `compute_transaction_spans`).
     let need_summaries = demanded & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
-    // ⟨C1 Task 3 — R1⟩ The gate is a MODE threaded into the cone walk, not a
-    // post-hoc check: the raw Vec is allocated INSIDE `compose_inherited_cones`,
-    // so a check here could only discard it — zero memory win.
-    let want_raw_inherited = demanded & substrate::RAW_INHERITED_FACTS != 0;
-    // ⟨C1 Task 3 review fix M-1⟩ `RAW_INHERITED_FACTS` without `SUMMARIES` (nor
-    // `TRANSACTION_SPANS`) is a SILENT no-op: `need_summaries` would be false, the
-    // block below never runs, `summaries` stays empty, and `select_facts` (which
-    // reads through `summaries`) then returns an empty fact list for every
-    // routine — the exact silent-empty outcome R6 was designed to foreclose,
-    // reached through a different door. No current caller does this (`R2`'s table
-    // above), but a future one could; fail loudly instead of degrading quietly.
-    debug_assert!(
-        !want_raw_inherited || need_summaries,
-        "RAW_INHERITED_FACTS demanded without SUMMARIES/TRANSACTION_SPANS — the raw \
-         cone would silently build empty; OR in substrate::SUMMARIES alongside it"
-    );
 
     // --- L3→L4 substrate: the model's calls and events (the program engine's) ---
     let _symbols_span = pt::span("context", "context.symbols_resolve_calls");
@@ -1452,59 +1502,36 @@ pub(crate) fn build_detector_artifacts(
     drop(_symbols_span);
     let event_graph = resolved.events.graph.clone();
 
-    // Per-routine direct facts + direct coverage, then the inherited cone over
-    // the combined graph — the same assembly project_r3a3 does inline, here via
-    // the reusable `compose_cone_over_graph` seam. SUBSTRATE-GATED: built only when
-    // some selected detector demands SUMMARIES (or TRANSACTION_SPANS, which folds
+    // The summaries over the caller's composition (direct facts, coverage and
+    // derived rows of every routine). SUBSTRATE-GATED: built only when some
+    // selected detector demands SUMMARIES (or TRANSACTION_SPANS, which folds
     // over the summaries map). Skipped ⇒ empty `summaries` map.
     let _cones_span = pt::span("context", "context.capability_cones");
     // ⟨C1⟩ Assigned inside the block below (kept a separate binding so the whole
     // cone-assembly block stays at its original indentation).
     let mut cone_derived = ConeDerivedStore::default();
     let summaries: HashMap<String, FullRoutineSummary> = if need_summaries {
-        // ⟨C1 Task 4⟩ ONE direct-facts map, not two. This used to build a
-        // second, byte-identical `direct_in` (a `facts.clone()` per routine)
-        // purely to hand to the cone walk, which takes it by shared reference
-        // and only reads it — 79.66 MB of pure duplicate on the 8020 corpus,
-        // held for the rest of this block because Rust frees a local at its
-        // block's end, not at its last use. `direct_full` is not drained until
-        // the summary loop below, well after the walk's borrow ends, so the
-        // walk can simply read it. (Every OTHER `compose_cone_over_graph` call
-        // site — `project_r3a3`, `project_r3a5_cross_app`,
-        // `build_detector_context_cross_app` — already passed its `direct_full`
-        // directly; this was the one straggler.)
-        // ⟨C1 Task 3⟩ derived rows only — the per-routine raw inherited
-        // `Vec<CapabilityFact>` is never allocated; raw for every routine only
-        // when the policy-only `RAW_INHERITED_FACTS` bit is demanded.
-        let scope = ConeScope {
-            derived: true,
-            raw: if want_raw_inherited {
-                WitnessScope::All
-            } else {
-                WitnessScope::None
-            },
-        };
-        let (caps, mut raw) =
-            compose_capabilities(resolved, rel.cone(), det_cone_inputs(resolved, rel), scope);
         let CapabilityAnalysis {
             mut direct_full,
             coverage: mut cone_coverage,
             derived,
             pd,
-        } = caps;
+        } = caps.expect(
+            "SUMMARIES/TRANSACTION_SPANS demanded without a composition: the caller composes \
+             once and passes it (#160 step 6 D2)",
+        );
         cone_derived = derived;
         // #69 D1.4: the detectors read the solve only through the cone; its
         // arena (a snapshot input) is dead here.
         drop(pd);
 
-        // `cone_coverage`, `raw` and `direct_full` are locally owned and dead
-        // after this loop, so move their payloads into the summaries instead of
-        // cloning them out.
+        // `cone_coverage` and `direct_full` are owned and dead after this
+        // loop, so move their payloads into the summaries instead of cloning
+        // them out.
         let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
         let _t_assemble = cones_census::start();
         for r in &ws.routines {
             let coverage = cone_coverage.remove(&r.id);
-            let inherited = raw.remove(&r.id).unwrap_or_default();
             let direct = direct_full.remove(&r.id);
             // One summary per id (#160 step 11b §4.6): `direct_full` is already
             // the projection's per-id input (a collided id's full-value union),
@@ -1515,21 +1542,12 @@ pub(crate) fn build_detector_artifacts(
             let Some(direct) = direct else {
                 continue;
             };
-            // ⟨C1 Task 3⟩ `Some(inherited)` ONLY under `RAW_INHERITED_FACTS`;
-            // `None` records "never materialized" so `inherited_raw()` panics
-            // instead of answering "empty cone" (R6). The `Some(Vec::new())` case
-            // is still REAL and must stay distinct from `None` — a leaf routine
-            // with no callees has a materialized-but-empty cone. (It is no longer
-            // ALSO produced by the G-18 collision arm, which now `continue`s
-            // above rather than composing a drained entry.)
+            // ⟨C1 Task 3⟩ `None`: "never materialized", so `inherited_raw()`
+            // panics instead of answering "empty cone" (R6). Only policy's
+            // composing builder files raw (`compose_detector_artifacts`).
             summaries.insert(
                 r.id.clone(),
-                FullRoutineSummary::new(
-                    r.id.clone(),
-                    direct,
-                    want_raw_inherited.then_some(inherited),
-                    coverage,
-                ),
+                FullRoutineSummary::new(r.id.clone(), direct, None, coverage),
             );
         }
         cones_census::add_since(&cones_census::ASSEMBLE_NANOS, _t_assemble);
@@ -3115,7 +3133,7 @@ page 50813 "CP3 Wizard"
         let model = crate::engine::l5::test_support::empty_resolved();
         let rel = ExecRelation::single_app(&model);
         let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build_detector_artifacts(&model, substrate::CORE_SUMMARIES, &rel, None, None);
+            build_detector_artifacts(&model, substrate::CORE_SUMMARIES, &rel, None, None, None);
         }))
         .expect_err("CORE_SUMMARIES with l4: None must panic");
         let msg = err
