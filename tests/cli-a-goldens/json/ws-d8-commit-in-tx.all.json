@@ -32,6 +32,7 @@
           "safety": "low"
         },
         "id": "d8/323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2",
+        "looseFingerprint": "904b37f00430162c",
         "pathCount": 1,
         "primaryLocation": {
           "column": 9,
@@ -65,6 +66,7 @@
           "safety": "low"
         },
         "id": "d9/323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2",
+        "looseFingerprint": "19cd310b4d6e8a9c",
         "pathCount": 1,
         "primaryLocation": {
           "column": 5,
@@ -94,6 +96,7 @@
           "safety": "medium"
         },
         "id": "d35/323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2",
+        "looseFingerprint": "e48e52f11d776f68",
         "pathCount": 1,
         "primaryLocation": {
           "column": 9,
@@ -123,6 +126,7 @@
           "safety": "high"
         },
         "id": "d45/323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20|11111111-0000-0000-0000-00000000d80a/table/50100",
+        "looseFingerprint": "060eaa3798168a33",
         "pathCount": 1,
         "primaryLocation": {
           "column": 5,

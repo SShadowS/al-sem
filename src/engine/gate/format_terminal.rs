@@ -492,6 +492,7 @@ mod tests {
         FindingSummary {
             id: id.to_string(),
             fingerprint: id.to_string(),
+            loose_fingerprint: String::new(),
             detector: detector.to_string(),
             title: format!("Title {id}"),
             root_cause: format!("RootCause {id}"),

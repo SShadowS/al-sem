@@ -134,6 +134,49 @@ That last one matters more than it looks. If a dependency can't be read, the eng
 less of your program and therefore reports fewer problems. By default it warns; with this
 flag a CI build fails instead of going green for the wrong reason.
 
+### Comparing two reports: `fingerprint` and `looseFingerprint`
+
+Each finding in `--format json` carries two keys:
+
+- `fingerprint` — the same problem **in the same routine**. Baselines use it.
+- `looseFingerprint` — the same problem **in the same object**, with the routine ignored.
+  Move the code into another procedure of the same object (same variable names, same
+  parameter position) and it stays the same. It is **not unique**: several findings can
+  share one (same check, object and tables).
+
+Neither key drives inline `// al-sem-ignore` suppression; that matches check, file and line.
+
+To count **new** findings between a before and an after report, count per
+`looseFingerprint` value k: **new = Σ max(0, after(k) − before(k))**. To say *which*
+findings are new, first pair findings equal on **both** keys, then pair the rest on
+`looseFingerprint`; what is left unpaired in the after report is new. Pair in that order:
+an equal `fingerprint` does not always mean an equal `looseFingerprint`.
+
+Compare like with like: no `--baseline` and no `--limit`, and the same `--scope`,
+`--min-severity`, `--detector`/`--preset` and dependencies on both sides. Inline
+`// al-sem-ignore` suppression is always on, so a suppression comment added or removed
+between the two runs also makes a finding look fixed or new. Otherwise findings drop out
+before the JSON is written and look new or fixed.
+
+Limits:
+
+- Counting cancels out: fix one problem and add another with the same key in the same
+  object, and you get 0 new.
+- Some checks keep a part of the key that belongs to the routine, so a move there does
+  change `looseFingerprint`: renamed local variables (d4, d18, d22, d57, d60); a parameter
+  that changes position (d19, d32, d59, d39–d42); the other members of an event cycle (d7);
+  the event name (d12) or event (d38); the caller (d43); and the loop routine (d48). For
+  d48 a move between a direct and a transitive finding also changes the key.
+- d16 keeps the called routine. When a routine calls itself (an obsolete routine calling
+  itself), the caller and the callee are both the moved routine, so both are removed and
+  every such self-call in the object shares one key.
+- d45: two primary publishers in one object that expose the same table share a key.
+- d39–d42 carry no table, so two of their findings in one object on the same parameter
+  position share a key whatever the record's table.
+- A local variable named exactly like a site id (`op2`, `cs1`, `loop0`, `u3`) that comes
+  straight after the routine id in the key (d22, d57) is removed with it, so two such
+  variables in one object share a key.
+
 ## In your editor
 
 `al-call-hierarchy` is an LSP server, so any editor with an LSP client can drive it. It

@@ -6,9 +6,8 @@
 //! internal range to the 1-based SARIF/display line+column. The gate's SARIF + filter
 //! layers consume the projected `FindingSummary`, exactly as al-sem does.
 
-use std::collections::HashMap;
-
 use crate::engine::l5::finding::{Finding, SourceAnchor};
+use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::program::model::workspace::{ModelObject, ModelRoutine};
 
 /// `FindingLocation` (finding-summary.ts). `line`/`column` are 1-based.
@@ -30,6 +29,9 @@ pub struct FindingLocation {
 pub struct FindingSummary {
     pub id: String,
     pub fingerprint: String,
+    /// #247: `FingerprintIndex::loose_fingerprint_of` — the same problem in the same
+    /// object, the routine ignored. Not unique. Emitted in the analyze JSON only.
+    pub loose_fingerprint: String,
     pub detector: String,
     pub title: String,
     pub root_cause: String,
@@ -45,17 +47,17 @@ pub struct FindingSummary {
     pub path_count: usize,
 }
 
-/// Per-model id indexes for the projection (mirror `indexFor`).
+/// Per-model id indexes for the projection (mirror `indexFor`). The routine and
+/// object maps are the `FingerprintIndex`'s own, which also computes
+/// `looseFingerprint`.
 pub struct ProjectionIndex<'a> {
-    pub objects_by_id: HashMap<&'a str, &'a ModelObject>,
-    pub routines_by_id: HashMap<&'a str, &'a ModelRoutine>,
+    pub fingerprints: FingerprintIndex<'a>,
 }
 
 impl<'a> ProjectionIndex<'a> {
     pub fn build(objects: &'a [ModelObject], routines: &'a [ModelRoutine]) -> Self {
         ProjectionIndex {
-            objects_by_id: objects.iter().map(|o| (o.id.as_str(), o)).collect(),
-            routines_by_id: routines.iter().map(|r| (r.id.as_str(), r)).collect(),
+            fingerprints: FingerprintIndex::build(routines, objects),
         }
     }
 }
@@ -63,7 +65,8 @@ impl<'a> ProjectionIndex<'a> {
 /// `toLocation(anchor)` — resolve an internal anchor to a 1-based display location
 /// with the owning routine + object display names.
 fn to_location(anchor: &SourceAnchor, idx: &ProjectionIndex) -> FindingLocation {
-    let routine = idx.routines_by_id.get(anchor.enclosing_routine_id.as_str());
+    let idx = &idx.fingerprints;
+    let routine = idx.routine(anchor.enclosing_routine_id.as_str());
     // Object-level finding convention (d64): `enclosing_routine_id` IS the
     // object's own internal id when there is no routine to anchor on (e.g. a
     // declarative page with no routines at all). Fall back to a direct object
@@ -73,8 +76,8 @@ fn to_location(anchor: &SourceAnchor, idx: &ProjectionIndex) -> FindingLocation 
     // routine-anchored finding: the `or_else` only runs when the routine
     // branch already missed.
     let object = routine
-        .and_then(|r| idx.objects_by_id.get(r.object_id.as_str()))
-        .or_else(|| idx.objects_by_id.get(anchor.enclosing_routine_id.as_str()));
+        .and_then(|r| idx.object(r.object_id.as_str()))
+        .or_else(|| idx.object(anchor.enclosing_routine_id.as_str()));
     FindingLocation {
         file: anchor.source_unit_id.clone(),
         line: anchor.start_line + 1,
@@ -105,6 +108,7 @@ pub fn project_finding(finding: &Finding, idx: &ProjectionIndex) -> FindingSumma
             .fingerprint
             .clone()
             .unwrap_or_else(|| finding.id.clone()),
+        loose_fingerprint: idx.fingerprints.loose_fingerprint_of(finding),
         detector: finding.detector.clone(),
         title: finding.title.to_string(),
         root_cause: finding.root_cause.clone(),

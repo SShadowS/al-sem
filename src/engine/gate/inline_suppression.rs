@@ -299,6 +299,7 @@ mod tests {
         let mk = |line: u32| FindingSummary {
             id: format!("f{line}"),
             fingerprint: format!("fp{line}"),
+            loose_fingerprint: String::new(),
             detector: "d47-io-unsafe-txn".to_string(),
             title: String::new(),
             root_cause: String::new(),
@@ -340,6 +341,7 @@ mod tests {
         let finding = FindingSummary {
             id: "f".to_string(),
             fingerprint: "fp".to_string(),
+            loose_fingerprint: String::new(),
             detector: "d47-io-unsafe-txn".to_string(),
             title: String::new(),
             root_cause: String::new(),

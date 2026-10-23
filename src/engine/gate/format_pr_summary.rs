@@ -282,6 +282,7 @@ mod tests {
         FindingSummary {
             id: id.to_string(),
             fingerprint: id.to_string(),
+            loose_fingerprint: String::new(),
             detector: "d-test".to_string(),
             title: "Test finding".to_string(),
             root_cause: "test".to_string(),

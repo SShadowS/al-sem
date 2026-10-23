@@ -562,6 +562,7 @@ impl<'a> SpineCtx<'a> {
     /// `{routine}/loop{N}` with N = discovery order = `loops.len()`).
     fn enter_loop(&mut self, loop_type: &str, origin: &Origin) {
         let n = self.loops.len() as u32;
+        // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
         let id = format!("{}/loop{}", self.routine_id, n);
         let source_anchor = self.anchor(origin);
         self.loops.push(PLoop {
@@ -666,6 +667,7 @@ impl<'a> SpineCtx<'a> {
     fn loop_stack_ids(&self) -> Vec<String> {
         self.cur_loops
             .iter()
+            // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
             .map(|n| format!("{}/loop{}", self.routine_id, n))
             .collect()
     }
@@ -691,6 +693,7 @@ impl<'a> SpineCtx<'a> {
                 let exit_anchor = self.anchor(&self.file.ir.stmt(stmts[i]).origin);
                 let unreachable_anchor = self.anchor(&self.file.ir.stmt(stmts[i + 1]).origin);
                 self.unreachable_statements.push(PUnreachableStatement {
+                    // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
                     id: format!("{}/u{}", self.routine_id, self.unreachable_index),
                     exit_kind: exit_kind.to_string(),
                     exit_anchor,
@@ -987,6 +990,7 @@ impl<'a> SpineCtx<'a> {
             // #160 §4.2: the site's key in this file, the resolver's `site.expr`.
             let expr_ix = u32::try_from(eid.index()).expect("an expression index fits u32");
             if is_record_op || is_commit || is_error {
+                // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
                 let op_id = format!("{}/op{}", self.routine_id, self.op_index);
                 // Error advances the op counter but is NOT mapped (legacy
                 // op_id_by_node_id omits error — it renders as its cs "error" leaf).
@@ -1063,6 +1067,7 @@ impl<'a> SpineCtx<'a> {
                 self.op_index += 1;
             }
             if !is_record_op && !is_commit {
+                // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
                 let cs_id = format!("{}/cs{}", self.routine_id, self.cs_index);
                 self.cs_index += 1;
                 self.cs_id_by_expr.insert(eid, cs_id.clone());
@@ -1307,6 +1312,7 @@ pub fn walk_spine(
     // op_count is the final op total and i the call-site index (legacy body_walk tail).
     let op_count = ctx.op_index;
     for (i, cs) in ctx.call_sites.iter_mut().enumerate() {
+        // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
         cs.operation_id = format!("{}/op{}", routine_id, op_count + i as u32);
     }
     // Post-pass ordering to match legacy: var_assignments by source anchor,

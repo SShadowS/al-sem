@@ -99,6 +99,7 @@ mod tests {
         FindingSummary {
             id: format!("{detector}-id"),
             fingerprint: "fp".to_string(),
+            loose_fingerprint: String::new(),
             detector: detector.to_string(),
             title: "t".to_string(),
             root_cause: "rc".to_string(),
