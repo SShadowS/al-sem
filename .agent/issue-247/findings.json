@@ -7,13 +7,14 @@
     "line": "62-69",
     "severity": "important",
     "text": "Anchor-only removal misses transitive d48's identity routine (the loop routine); moving the loop changes the loose key.",
-    "disposition": "fixed — verified: d48.rs:520-525 keys on routine.id (loop routine) and anchors on matched.source_anchor (IO site). Not delivered for d48; stated in the limits table and the Discovery (conductor decision 1).",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:122-122",
     "anchor_hash": "7ae497204ac0b3d925eec7ef916c61ac1223b82c28235a6a78b16aaac65adfd7",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified: d48.rs:520-525 keys on routine.id (loop routine) and anchors on matched.source_anchor (IO site). Not delivered for d48; stated in the limits table and the Discovery (conductor decision 1)."
   },
   {
     "id": "S2",
@@ -23,13 +24,14 @@
     "line": "64-69",
     "severity": "important",
     "text": "d59 keeps a bare parameter index; a move to another position changes the key.",
-    "disposition": "fixed — verified d59.rs:66 `d59/{rid}/{p.index}`. Scoped: 'moved' keeps parameter position (ledger:58-60); d59 is in the limits table and the Discovery.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:114-114",
     "anchor_hash": "f3bc0c73c5bf58eb53558e53fe0188e52c2150e65453a2a0a88b827cf56c5558",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified d59.rs:66 `d59/{rid}/{p.index}`. Scoped: 'moved' keeps parameter position (ledger:58-60); d59 is in the limits table and the Discovery."
   },
   {
     "id": "S3",
@@ -39,13 +41,14 @@
     "line": "51-69",
     "severity": "important",
     "text": "Universal movement guarantee exceeds the formula: d12 publisher name, d7 other SCC routines, local names in d4/d18/d22/d57/d60.",
-    "disposition": "fixed — verified d12.rs:9-12,73; d7.rs:243; d18.rs:157-168; d4 id `d4/{routine}/{loop}/{varLower}/…`. Guarantee scoped to a listed detector set; others in the limits table; Acceptance 2 delivered only for the list; one Discovery.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:99-122",
     "anchor_hash": "2328a3d8f8dc21cd0fdfb3616162ffc5448f25cefd60c727fc8ec4e694ceacd5",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified d12.rs:9-12,73; d7.rs:243; d18.rs:157-168; d4 id `d4/{routine}/{loop}/{varLower}/…`. Guarantee scoped to a listed detector set; others in the limits table; Acceptance 2 delivered only for the list; one Discovery."
   },
   {
     "id": "S4",
@@ -55,13 +58,14 @@
     "line": "64-75",
     "severity": "important",
     "text": "d64's anchor is its object id, present in its key, so it would be stripped, contradicting loose == fingerprint for object-level findings.",
-    "disposition": "fixed — verified d64.rs:62 (enclosing_routine_id = o.id) and :162 (`d64/{o.id}`). Step 2 now runs only when routines_by_id holds the anchor; T5 pins d64 loose == fingerprint through analyze JSON.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:79-89",
     "anchor_hash": "da4b71a9c05a005256f3b2a1d17e8032e9955283a4b4aebfa1b6f278f0f78055",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified d64.rs:62 (enclosing_routine_id = o.id) and :162 (`d64/{o.id}`). Step 2 now runs only when routines_by_id holds the anchor; T5 pins d64 loose == fingerprint through analyze JSON."
   },
   {
     "id": "S5",
@@ -71,13 +75,14 @@
     "line": "110-111",
     "severity": "important",
     "text": "d45 primary publisher is the anchor and is stripped; d16 self-call strips the callee too.",
-    "disposition": "fixed — verified d45.rs:84-88 (primary_anchor None when publisher primary) and :207-210 (anchor = pub_routine); d16.rs id `{from}/{cs}/{to}`. Both stated in the limits table; d45 merge stated as accepted.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:118-121",
     "anchor_hash": "49b1b31e768851b1e694829495ab967e7c47464a07044fcd7533bf887448e42c",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified d45.rs:84-88 (primary_anchor None when publisher primary) and :207-210 (anchor = pub_routine); d16.rs id `{from}/{cs}/{to}`. Both stated in the limits table; d45 merge stated as accepted."
   },
   {
     "id": "S6",
@@ -87,13 +92,14 @@
     "line": "71,97",
     "severity": "important",
     "text": "d39-d42 have empty affected_tables; different-table problems can collide.",
-    "disposition": "fixed — the spec now states Acceptance 3 has no meaning for d39-d42 and is not delivered for them; the parameter table is not on the binding (d40.rs:140-176 has only source_kind/source_parameter_index), so no cheap loose-only subject; joins the Discovery.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:124-129",
     "anchor_hash": "335681cf44ee3aaccd600b25a8112293bd320651bdbcb9e489c7af0c2b973c12",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "the spec now states Acceptance 3 has no meaning for d39-d42 and is not delivered for them; the parameter table is not on the binding (d40.rs:140-176 has only source_kind/source_parameter_index), so no cheap loose-only subject; joins the Discovery."
   },
   {
     "id": "S7",
@@ -103,13 +109,14 @@
     "line": "97",
     "severity": "important",
     "text": "T3's 'drop detector' break cannot fail: keys start with dNN/ and tables differ.",
-    "disposition": "fixed — verified d11.rs:132, d19.rs:110 key prefixes. T3 is now a fingerprint.rs unit test on a hand-made pair with equal key, tables and anchor, differing only in detector.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:172-172",
     "anchor_hash": "bda2a93456c879b8efbed20f3d4b4c51f65b8af8c8ca533c8c8bb86eb3cdb7ff",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified d11.rs:132, d19.rs:110 key prefixes. T3 is now a fingerprint.rs unit test on a hand-made pair with equal key, tables and anchor, differing only in detector."
   },
   {
     "id": "S8",
@@ -119,13 +126,14 @@
     "line": "89-91",
     "severity": "important",
     "text": "New test file must be registered in the cli umbrella.",
-    "disposition": "fixed — verified tests/cli/main.rs lists `mod` items (e.g. :60-66). Spec requires `mod cli_loose_fingerprint;`.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:163-166",
     "anchor_hash": "21289246d5543e65ac44cd69c80a8f5b417da3fc0564f238cc4ae488ff5ea366",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified tests/cli/main.rs lists `mod` items (e.g. :60-66). Spec requires `mod cli_loose_fingerprint;`."
   },
   {
     "id": "S9",
@@ -135,13 +143,14 @@
     "line": "95",
     "severity": "minor",
     "text": "Field-only golden diff check over all tests/ cannot pass with new test files.",
-    "disposition": "fixed — the check is limited to golden paths; test changes are reviewed separately.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:170-170",
     "anchor_hash": "1a92646718a65a503a30b06b59a9276dd1519924236c69812fc23fbe67bef4ad",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "the check is limited to golden paths; test changes are reviewed separately."
   },
   {
     "id": "S10",
@@ -151,13 +160,14 @@
     "line": "32,110",
     "severity": "minor",
     "text": "d54's second routine is in id only; d18's segment is the record variable, not a table.",
-    "disposition": "fixed — verified d54.rs:126-127 and d18.rs:157-168. P6 corrected (d54 moved to shape a, d18 `{recVar}/{field}`); d54 listed as delivered.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:36-36",
     "anchor_hash": "73a891b1be3bc9bd885a9ecfb3c402f1c4b1ca8ef6db5e55156c0f6c2656da27",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified d54.rs:126-127 and d18.rs:157-168. P6 corrected (d54 moved to shape a, d18 `{recVar}/{field}`); d54 listed as delivered."
   },
   {
     "id": "S11",
@@ -167,13 +177,14 @@
     "line": "80-81",
     "severity": "minor",
     "text": "run.rs:1231 is a unit test, not a production projection.",
-    "disposition": "fixed — verified run.rs:1226-1235 (#[test]). Where now names run.rs:539 as the only production caller.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:134-135",
     "anchor_hash": "b389db77ac3e926dbf7359340f44e3db785cc7c34cdea5fb04f0579447bcb2ca",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified run.rs:1226-1235 (#[test]). Where now names run.rs:539 as the only production caller."
   },
   {
     "id": "S12",
@@ -183,13 +194,14 @@
     "line": "85-86",
     "severity": "minor",
     "text": "Inline suppression does not use fingerprint.",
-    "disposition": "fixed — verified inline_suppression.rs:228-238 matches detector + file + line. Docs text corrected.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:145-147",
     "anchor_hash": "76de097a8466372df175d5a9e525ddbe4cc78d754bcd234faeb7c7a7f9665bcd",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified inline_suppression.rs:228-238 matches detector + file + line. Docs text corrected."
   },
   {
     "id": "S13",
@@ -199,13 +211,14 @@
     "line": "84-86,105-111",
     "severity": "minor",
     "text": "README rule omits limits and comparison preconditions; baseline/limit filter before export.",
-    "disposition": "fixed — verified run.rs:578-622. Docs now state preconditions (no --baseline, no --limit, same scope/filters/coverage), cancellation and per-detector limits; Non-goals (ledger:73-74) say the metric is not implemented here.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:150-161",
     "anchor_hash": "f7f1f558bfbd21dd274c968ea674cfed382223a2f23dfcd68a0e99b061d8a543",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified run.rs:578-622. Docs now state preconditions (no --baseline, no --limit, same scope/filters/coverage), cancellation and per-detector limits; Non-goals (ledger:73-74) say the metric is not implemented here."
   },
   {
     "id": "S14",
@@ -215,13 +228,14 @@
     "line": "124",
     "severity": "minor",
     "text": "'Two hash maps' understates index cost.",
-    "disposition": "fixed — verified fingerprint.rs:59-74,96-141 (three maps, cloned stable_by_id strings, prefix list). Measurement plan priced; fallback has 1 % wall/RSS thresholds.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:194-199",
     "anchor_hash": "f52af88e9e27b3a5a93bcb76971e7986856bdd1d374d303b350f6a150bb7157b",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified fingerprint.rs:59-74,96-141 (three maps, cloned stable_by_id strings, prefix list). Measurement plan priced; fallback has 1 % wall/RSS thresholds."
   },
   {
     "id": "O1",
@@ -231,13 +245,14 @@
     "line": "Acceptance row 3",
     "severity": "important",
     "text": "T3 detector break cannot fail.",
-    "disposition": "fixed — same as S7: hand-made pair unit test with equal key/tables/anchor, differing only in detector.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:172-172",
     "anchor_hash": "bda2a93456c879b8efbed20f3d4b4c51f65b8af8c8ca533c8c8bb86eb3cdb7ff",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "same as S7: hand-made pair unit test with equal key/tables/anchor, differing only in detector."
   },
   {
     "id": "O2",
@@ -247,13 +262,14 @@
     "line": "Formula step 2",
     "severity": "important",
     "text": "Object-level d64 would have its object id stripped; equality claim false.",
-    "disposition": "fixed — same as S4: strip gated on routines_by_id holding the anchor; T5 pins it with a break.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:79-89",
     "anchor_hash": "da4b71a9c05a005256f3b2a1d17e8032e9955283a4b4aebfa1b6f278f0f78055",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "same as S4: strip gated on routines_by_id holding the anchor; T5 pins it with a break."
   },
   {
     "id": "O3",
@@ -263,13 +279,14 @@
     "line": "P7, limits bullet",
     "severity": "important",
     "text": "d45 primary publisher is the anchor and is stripped; claim of keeping it is wrong.",
-    "disposition": "fixed — verified d45.rs:84-88,207-210. P7 and the limits table corrected; the merge of two primary publishers on one table is stated as accepted.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:121-121",
     "anchor_hash": "1a1ef7858983d53e828da2e5a021b7eb6e09293c2612e6630781eb20909b320e",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified d45.rs:84-88,207-210. P7 and the limits table corrected; the merge of two primary publishers on one table is stated as accepted."
   },
   {
     "id": "O4",
@@ -279,13 +296,14 @@
     "line": "Acceptance row 2",
     "severity": "important",
     "text": "T1 never exercises the ordinal-chain strip on the production path.",
-    "disposition": "fixed — T1-B puts a record op before the moved statement, asserts the raw ids differ in /op{N}, and adds break 3 (keep the chain → red).",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:171-171",
     "anchor_hash": "dc29dc37b1c1f5e2624ec60484287387cf9c7fa2ced7805202e2a75427fb88d4",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "T1-B puts a record op before the moved statement, asserts the raw ids differ in /op{N}, and adds break 3 (keep the chain → red)."
   },
   {
     "id": "O5",
@@ -295,13 +313,14 @@
     "line": "P6",
     "severity": "minor",
     "text": "Shape census incomplete (d4, d7, d13, d29, d53, d58, d61, d64) and d54/d45 misfiled.",
-    "disposition": "fixed — verified d13.rs:90, d29.rs:190, d53.rs:82, d58.rs:92, d54.rs:126-127, d64.rs:162. P6 rewritten.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:36-36",
     "anchor_hash": "73a891b1be3bc9bd885a9ecfb3c402f1c4b1ca8ef6db5e55156c0f6c2656da27",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified d13.rs:90, d29.rs:190, d53.rs:82, d58.rs:92, d54.rs:126-127, d64.rs:162. P6 rewritten."
   },
   {
     "id": "O6",
@@ -311,13 +330,14 @@
     "line": "Ordinal-looking text bullet",
     "severity": "minor",
     "text": "d59 bare parameter index is not stripped, unlike d19's /p{N}.",
-    "disposition": "fixed — same as S2: stated as a limit in the table.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:114-114",
     "anchor_hash": "f3bc0c73c5bf58eb53558e53fe0188e52c2150e65453a2a0a88b827cf56c5558",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "same as S2: stated as a limit in the table."
   },
   {
     "id": "O7",
@@ -327,13 +347,14 @@
     "line": "Where + measurement plan",
     "severity": "minor",
     "text": "Second FingerprintIndex is three maps plus String clones; duplicate maps; no concrete census threshold.",
-    "disposition": "fixed — ProjectionIndex reads its maps through the held FingerprintIndex (no duplicates); cost stated; fallback threshold 1 % wall or peak RSS.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:139-142",
     "anchor_hash": "2e06b359d040644bddd14551399a6941d8ce99b31d6cd89be6cf7dfac7ab03bc",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "ProjectionIndex reads its maps through the held FingerprintIndex (no duplicates); cost stated; fallback threshold 1 % wall or peak RSS."
   },
   {
     "id": "O8",
@@ -343,14 +364,14 @@
     "line": "Docs",
     "severity": "minor",
     "text": "Count rule gives no per-finding identity; match fingerprint first, then loose.",
-    "disposition": "fixed — docs rule adds the two-step match.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:150-155",
     "anchor_hash": "cbca0fc780e671a188a0181617decafa12137bbf3f1e567b8358a67b1ab64ee7",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
     },
-    "evidence": " Round 2 (sol re-raise): equal fingerprint does not imply equal looseFingerprint (d48 overload move); the rule now pairs on BOTH keys first, then on looseFingerprint."
+    "evidence": "docs rule adds the two-step match.  Round 2 (sol re-raise): equal fingerprint does not imply equal looseFingerprint (d48 overload move); the rule now pairs on BOTH keys first, then on looseFingerprint."
   },
   {
     "id": "O9",
@@ -360,13 +381,14 @@
     "line": "Open questions",
     "severity": "minor",
     "text": "Move 'no schemaVersion bump' into Non-goals with the reason.",
-    "disposition": "fixed — verified cli_a_with_evidence.rs:212-222. Non-goal added with the reason; Open questions removed.",
+    "disposition": "fixed",
     "anchor": ".agent/issue-247/ledger.md:69-72",
     "anchor_hash": "faf78e0b66603325822cec187b8224875373c6513b4cf86ceb7e894b7a931a3a",
     "reviews": {
       "sol": "accepted",
       "opus": "accepted"
-    }
+    },
+    "evidence": "verified cli_a_with_evidence.rs:212-222. Non-goal added with the reason; Open questions removed."
   },
   {
     "id": "S15",

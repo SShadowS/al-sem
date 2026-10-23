@@ -20,7 +20,7 @@ is not touched, so no baseline, SARIF or r4 golden moves.
 ## Assumption probes
 
 Run 2026-10-23 on the base tree (code read) and on the pinned CDO workspace
-`/work/src/cdo-baseline/Cloud` (measurements). The CDO runs used the existing
+`<CDO_WS>` (measurements). The CDO runs used the existing
 `/work/alsem/target/cdo/{alsem,aldump}` binaries (built 2026-10-22, before base); they
 show key SHAPES, which no recent commit changed. Re-measure on a base build before quoting.
 Probe scripts: `scratchpad/loose_probe.py` (analyze JSON) and `scratchpad/loose_exact.py`
@@ -288,7 +288,7 @@ JSON goldens (`ws-txn-d47-pos-*`, `ws-txn-d49-pos-*`, `ws-d51-*`); removing the 
 did not suppress; d64 yields findings; the regen moved only `looseFingerprint` lines; CDO
 wall time and peak RSS stayed under +1 %).
 
-**Measurement (CDO).** Workspace `/work/src/cdo-baseline/Cloud` at `bc3ccb1`, 0 dirty paths.
+**Measurement (CDO).** Workspace `<CDO_WS>` at `bc3ccb1`, 0 dirty paths.
 Binaries: `cargo build --profile release-fast --bin alsem`, after = branch `bdc6dc30` (same
 code as HEAD), before = a scratch worktree at `40c84c13` with its OWN target dir. (A first
 base build sharing the branch's target dir came back "fresh" in 0.11 s and was byte-identical
