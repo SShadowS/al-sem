@@ -10,14 +10,16 @@
 //! Three arms: direct (a Commit in the body), yes (a Commit proven in the cone,
 //! title suffix " (via callee)") and unknown (below, its own title).
 //! evidence: 2 steps if direct (subscriber header + commit), 1 step otherwise.
-//! severity: high (all). confidence: likely(direct) / possible(yes, unknown).
+//! severity: high(direct, yes) / medium(unknown). confidence: likely(direct) /
+//! possible(yes, unknown).
 //!
 //! #148 — an UNKNOWN answer (no direct Commit, cone not proven commit-free) is
-//! not a found Commit. It keeps the id, severity and `possible` level, but says
+//! not a found Commit. It keeps the id and `possible` level, but says
 //! "may be reachable", names the coverage reasons (and up to three partly
 //! analysed routines) in the root cause, note and fix hint, and is capped by the
-//! subscriber's uncertainty set (`CORE_SUMMARIES`). The yes and direct arms are
-//! unchanged.
+//! subscriber's uncertainty set (`CORE_SUMMARIES`). #256 — it is reported at
+//! `medium` (the arm picks the severity, so a direct Commit with an unknown cone
+//! stays `high`). The yes and direct arms are unchanged.
 //!
 //! Within-detector sort by `a.id.cmp(&b.id)` (byte order).
 
@@ -96,13 +98,15 @@ pub fn detect_d35(
 
         // One arm per answer. A direct Commit wins, then a proven (`yes`) one in
         // the cone. #148: otherwise the answer is UNKNOWN — a commit is not ruled
-        // out, which is not the same as found, so that arm says so.
-        let (title, root_cause, path, fix_description, confidence): (
+        // out, which is not the same as found, so that arm says so — and, since
+        // #256, at `medium`: a found Commit (direct or via callee) stays `high`.
+        let (title, root_cause, path, fix_description, confidence, severity): (
             &str,
             String,
             Vec<EvidenceStep>,
             String,
             FindingConfidence,
+            &str,
         ) = match (direct_commit, summary_commits) {
             (Some(dc), _) => (
                 "Commit reachable from event subscriber",
@@ -124,6 +128,7 @@ pub fn detect_d35(
                 ],
                 REMOVE_FIX.to_string(),
                 to_confidence(&[], "likely"),
+                "high",
             ),
             (None, "yes") => (
                 "Commit reachable from event subscriber (via callee)",
@@ -139,6 +144,7 @@ pub fn detect_d35(
                 ))],
                 REMOVE_FIX.to_string(),
                 to_confidence(&[], "possible"),
+                "high",
             ),
             // `summary_commits` is "unknown" here ("no" was skipped above).
             (None, _) => {
@@ -169,6 +175,7 @@ pub fn detect_d35(
                          move it out of the subscriber or defer it."
                     ),
                     to_confidence(&lites, "possible"),
+                    "medium",
                 )
             }
         };
@@ -190,7 +197,7 @@ pub fn detect_d35(
             detector: DETECTOR.to_string(),
             title: title.into(),
             root_cause,
-            severity: "high".to_string(),
+            severity: severity.to_string(),
             confidence,
             primary_location: anchor,
             evidence_path: path,
@@ -273,7 +280,9 @@ mod tests {
 
     use super::*;
     use crate::engine::l4::summary::Uncertainty;
-    use crate::engine::l5::test_support::{coverage, minimal_ctx, routine, summary};
+    use crate::engine::l5::test_support::{
+        coverage, minimal_ctx, op_commit_routine, routine, summary,
+    };
     use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
     fn model_of(routines: &[ModelRoutine]) -> Model {
@@ -341,7 +350,24 @@ mod tests {
             .as_str()
         );
         assert_eq!(f.id, "d35/sub/transitive");
+        // #256: an unknown answer is not a found Commit.
+        assert_eq!(f.severity, "medium");
+    }
+
+    /// #256: a DIRECT Commit stays `high`/`likely` even when the cone answer is
+    /// unknown (no summary here) — severity follows the arm, not `summary_commits`.
+    #[test]
+    fn direct_commit_with_unknown_cone_stays_high() {
+        let routines = vec![op_commit_routine("sub", "event-subscriber", &["op1"])];
+        let owned = minimal_ctx(&routines, HashMap::new(), HashMap::new());
+        let ctx = owned.ctx();
+        let out = detect_d35(&model_of(&routines), &ctx).unwrap().findings;
+        assert_eq!(out.len(), 1, "expected one d35 finding, got {out:#?}");
+        let f = &out[0];
+        assert_eq!(&*f.title, "Commit reachable from event subscriber");
+        assert_eq!(f.id, "d35/sub/op1");
         assert_eq!(f.severity, "high");
+        assert_eq!(f.confidence, to_confidence(&[], "likely"));
     }
 
     #[test]
