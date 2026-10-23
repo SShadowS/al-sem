@@ -198,6 +198,11 @@ pub fn canonical_routine_signature(
     format!("{}({}):{}", name.to_lowercase(), params, ret)
 }
 
+/// #236: the publisher attributes whose contract fact carries `parameters` and
+/// to which AS0025's "a `local`/`internal` event may gain parameters" applies.
+/// Read by `derive_contracts` and `alsem diff`, so the field and the rule agree.
+pub const PARAMETER_EVENT_ATTRIBUTES: [&str; 2] = ["IntegrationEvent", "BusinessEvent"];
+
 /// One parameter as `canonical_routine_signature` renders it:
 /// `(var )?{type_lower_trimmed}`, or `(var )?{name_lower}: {type_lower_trimmed}`
 /// when `name` is given (#236: a contract fact's `parameters` entries). One

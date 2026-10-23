@@ -1702,11 +1702,39 @@ fn issue156_e2e_local_helper_signature_change_repro() {
 #[test]
 fn issue156_e2e_abi_surface_triggers_publishers_subscribers() {
     let fixture = fixtures_dir().join("ws-diff-abi-surface");
-    let r = engine(
-        &compose_ws(&fixture.join("a")),
-        &compose_ws(&fixture.join("b")),
-        CoveragePolicy::Loose,
+    let new = compose_ws(&fixture.join("b"));
+    // #236 F2: the production `parameters` text, `var` included, pinned literally.
+    let CborValue::Map(snap) = &new else {
+        unreachable!()
+    };
+    let Some(CborValue::Array(facts)) = snap.get("contractFacts") else {
+        panic!("contractFacts is an array")
+    };
+    let lists: Vec<Vec<String>> = facts
+        .iter()
+        .filter_map(|f| match f {
+            CborValue::Map(m) => match m.get("parameters") {
+                Some(CborValue::Array(p)) => Some(
+                    p.iter()
+                        .map(|v| match v {
+                            CborValue::Text(s) => s.clone(),
+                            _ => panic!("a parameters entry is text"),
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        lists,
+        vec![vec![
+            "var handled: boolean".to_string(),
+            "qty: decimal".to_string()
+        ]]
     );
+    let r = engine(&compose_ws(&fixture.join("a")), &new, CoveragePolicy::Loose);
     let row = |c: &str, k: &str, d: &str| (c.to_string(), k.to_string(), d.to_string());
     assert_eq!(
         summary_rows(&r),
@@ -1758,44 +1786,9 @@ fn issue236_removed_event_param_stays_critical() {
 /// is Low. Hand-built facts; the pair is found by object + name (#156).
 #[test]
 fn issue236_no_subscriber_append_is_low() {
-    let with_params = |fact: CborValue, params: &[&str]| {
-        let CborValue::Map(mut m) = fact else {
-            unreachable!()
-        };
-        m.insert(
-            "parameters".into(),
-            CborValue::Array(params.iter().map(|p| txt(p)).collect()),
-        );
-        CborValue::Map(m)
-    };
-    let side = |sig: &str, params: &[&str]| {
-        snap156(
-            vec![(
-                with_params(
-                    routine_fact(
-                        OBJ156,
-                        sig,
-                        "local",
-                        Some("event-publisher"),
-                        &["IntegrationEvent"],
-                    ),
-                    params,
-                ),
-                "OnX",
-            )],
-            vec![(
-                "eventDeclarations",
-                CborValue::Array(vec![event_decl(
-                    "publisher",
-                    &id156(sig),
-                    &format!("{OBJ156}::OnX::{sig}"),
-                )]),
-            )],
-        )
-    };
     let r = engine(
-        &side("p1", &["a: integer"]),
-        &side("p2", &["a: integer", "b: integer"]),
+        &publisher_side("p1", &["a: integer"], false),
+        &publisher_side("p2", &["a: integer", "b: integer"], false),
         CoveragePolicy::Loose,
     );
     assert_eq!(kinds_in(&r, "abi"), pairs(&[]));
@@ -1807,4 +1800,90 @@ fn issue236_no_subscriber_append_is_low() {
         find_kind(&r, "event-publisher-signature-changed").severity,
         Severity::Low
     );
+}
+
+/// #236: one snapshot side holding a `local [IntegrationEvent]` publisher `OnX`
+/// (member-less id `{OBJ156}#{sig}`) with the given `parameters`, optionally
+/// with one subscriber declaration.
+fn publisher_side(sig: &str, params: &[&str], subscriber: bool) -> CborValue {
+    let CborValue::Map(mut fact) = routine_fact(
+        OBJ156,
+        sig,
+        "local",
+        Some("event-publisher"),
+        &["IntegrationEvent"],
+    ) else {
+        unreachable!()
+    };
+    fact.insert(
+        "parameters".into(),
+        CborValue::Array(params.iter().map(|p| txt(p)).collect()),
+    );
+    let event_id = format!("{OBJ156}::OnX::{sig}");
+    let mut decls = vec![event_decl("publisher", &id156(sig), &event_id)];
+    if subscriber {
+        decls.push(event_decl(
+            "subscriber",
+            "appguid-1:Codeunit:8#s1",
+            &event_id,
+        ));
+    }
+    snap156(
+        vec![(CborValue::Map(fact), "OnX")],
+        vec![("eventDeclarations", CborValue::Array(decls))],
+    )
+}
+
+/// #236 F1: a same-type reorder keeps the fingerprint and the eventId (names
+/// are in neither), so only `parameters` shows it. It breaks subscribers that
+/// bind by name: Critical in both passes. No subscriber: the generic finding.
+#[test]
+fn issue236_same_type_reorder_is_critical() {
+    let r = engine(
+        &publisher_side("p1", &["a: integer", "b: integer"], false),
+        &publisher_side("p1", &["b: integer", "a: integer"], false),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-signature-changed", &id156("p1"))])
+    );
+    assert_eq!(
+        kinds_in(&r, "events"),
+        pairs(&[("event-publisher-signature-changed", &id156("p1"))])
+    );
+    for k in [
+        "procedure-signature-changed",
+        "event-publisher-signature-changed",
+    ] {
+        assert_eq!(find_kind(&r, k).severity, Severity::Critical, "{k}");
+    }
+}
+
+/// #236 F1/D1: a pure parameter rename (AS0025 example 3) is Critical in both
+/// passes. With a subscriber: the contract finding.
+#[test]
+fn issue236_pure_rename_is_critical() {
+    let r = engine(
+        &publisher_side("p1", &["i: integer"], true),
+        &publisher_side("p1", &["j: integer"], true),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-signature-changed", &id156("p1"))])
+    );
+    assert_eq!(
+        kinds_in(&r, "events"),
+        pairs(&[(
+            "event-contract-changed-with-affected-subscribers",
+            &id156("p1")
+        )])
+    );
+    for k in [
+        "procedure-signature-changed",
+        "event-contract-changed-with-affected-subscribers",
+    ] {
+        assert_eq!(find_kind(&r, k).severity, Severity::Critical, "{k}");
+    }
 }

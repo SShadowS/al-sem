@@ -15,12 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (AppSourceCop AS0025: subscribers bind by name). Such a change now gives no `abi`
   `procedure-signature-changed` finding, and its `events` signature finding
   (`event-publisher-signature-changed` or `event-contract-changed-with-affected-subscribers`)
-  is Low instead of Critical. Removing, renaming, retyping or flipping `var` on a parameter
-  stays critical, as do `public`/`protected` publishers and `ExternalBusinessEvent`. The rule is
-  **stricter than AS0025 on purpose**: AS0025 also allows a parameter inserted in the middle or
-  a reorder; here those stay critical. To see the parameters, a publisher's contract fact in the
-  snapshot gains a `parameters` list (e.g. `"var handled: boolean"`); a snapshot made before this
-  change has none, so its publisher changes stay critical.
+  is Low instead of Critical. Removing, retyping or flipping `var` on a parameter stays critical,
+  as does an append that also changes the event attribute's arguments (e.g. `IncludeSender`),
+  and so do `public`/`protected` publishers and `ExternalBusinessEvent`. The rule is **stricter
+  than AS0025 on purpose**: a parameter inserted in the middle, or a reorder, is critical here
+  too. To see the parameters, a publisher's contract fact in the snapshot gains a `parameters`
+  list (e.g. `"var handled: boolean"`); a snapshot made before this change has none, so its
+  publisher changes stay critical.
+- **`alsem diff` now reports a renamed or reordered event parameter (#236).** The signature
+  fingerprint holds parameter types only, so a pure rename (AS0025: breaks subscribers, which
+  bind by name) or a reorder of same-type parameters used to give no finding at all. For an
+  `[IntegrationEvent]` or `[BusinessEvent]` publisher whose `parameters` list changed, `alsem
+  diff` now gives the Critical `abi` `procedure-signature-changed` and `events` signature
+  findings. Needs both snapshots made with this version.
 
 ## [2.0.1] - 2026-10-23
 

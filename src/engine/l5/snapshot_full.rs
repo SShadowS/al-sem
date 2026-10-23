@@ -27,8 +27,8 @@ use indexmap::IndexMap;
 
 use crate::engine::gate::cbor::CborValue;
 use crate::engine::ids::{
-    ParamSpec, canonical_param_spec, canonical_routine_signature, locale_compare,
-    object_id_app_guid, object_signature_fingerprint, sha256_hex,
+    PARAMETER_EVENT_ATTRIBUTES, ParamSpec, canonical_param_spec, canonical_routine_signature,
+    locale_compare, object_id_app_guid, object_signature_fingerprint, sha256_hex,
 };
 use crate::engine::l4::capability_cone::{
     CapabilityFact, R3a3SourceBase, R3a5CrossAppBase, build_r3a3_source_only_base,
@@ -706,13 +706,20 @@ fn derive_contracts(resolved: &Model) -> CborValue {
         // #236: `alsem diff` reads it to tell an appended event parameter from a
         // breaking change. Only on publishers, the one place the rule needs it.
         if r.attributes_parsed.iter().any(|a| {
-            a.name.eq_ignore_ascii_case("IntegrationEvent")
-                || a.name.eq_ignore_ascii_case("BusinessEvent")
-        }) {
-            let list = params
+            PARAMETER_EVENT_ATTRIBUTES
                 .iter()
-                .zip(&r.parameters)
-                .map(|(spec, p)| CborValue::Text(canonical_param_spec(spec, Some(&p.name))))
+                .any(|e| a.name.eq_ignore_ascii_case(e))
+        }) {
+            let list = r
+                .parameters
+                .iter()
+                .map(|p| {
+                    let spec = ParamSpec {
+                        type_text: p.type_text.clone(),
+                        is_var: p.is_var,
+                    };
+                    CborValue::Text(canonical_param_spec(&spec, Some(&p.name)))
+                })
                 .collect();
             m.insert("parameters".into(), CborValue::Array(list));
         }
