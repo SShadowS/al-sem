@@ -15,7 +15,10 @@
 //! rule here depends on rename pairing or on file/folder typing.
 //!
 //! Stated limits: an edit to the global `~/.al-sem/config.json` and a `.git`
-//! created or removed at the root or an ancestor need a server restart.
+//! created or removed at the root or an ancestor need a server restart. The
+//! watch thread has no stop signal: it notices that the updater has gone
+//! only when it next tries to send, so it lingers until the next event that
+//! maps to one.
 
 use log::{info, warn};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -93,27 +96,6 @@ impl WatchScope {
             .find(|c| normalize_path(c) == p)
             .cloned()
     }
-}
-
-/// Every path to register and how: the root recursive, each walked ancestor
-/// and each existing outside candidate non-recursive. `Recursive` wins when
-/// a path is planned twice (only when the root itself is a candidate).
-pub fn watch_plan(scope: &WatchScope) -> BTreeMap<PathBuf, RecursiveMode> {
-    let mut plan = BTreeMap::new();
-    let mut add = |p: &Path, mode: RecursiveMode| {
-        let e = plan.entry(p.to_path_buf()).or_insert(mode);
-        if mode == RecursiveMode::Recursive {
-            *e = mode;
-        }
-    };
-    add(&scope.root, RecursiveMode::Recursive);
-    for d in &scope.cache.walked_dirs {
-        add(d, RecursiveMode::NonRecursive);
-    }
-    for c in scope.outside_candidates().filter(|c| c.is_dir()) {
-        add(c, RecursiveMode::NonRecursive);
-    }
-    plan
 }
 
 /// `Create`, `Remove` and renames say an entry appeared, vanished or moved;
@@ -210,15 +192,14 @@ impl WatchState {
 
     /// Register the root and the walked dirs FIRST, then stat the candidates
     /// and register the existing ones: a cache folder created between the
-    /// two steps is seen by its parent's watch (S7).
+    /// two steps is seen by its parent's watch (S7). The root is recursive,
+    /// everything else not; a root that is itself a candidate stays
+    /// recursive, because `resync` skips a registered path.
     pub fn start(&mut self, backend: &mut dyn WatchBackend) {
-        let plan = watch_plan(&self.scope);
-        let parents: Vec<PathBuf> = std::iter::once(&self.scope.root)
-            .chain(&self.scope.cache.walked_dirs)
-            .cloned()
-            .collect();
-        for p in parents {
-            self.register(backend, &p, plan[&p]);
+        let root = self.scope.root.clone();
+        self.register(backend, &root, RecursiveMode::Recursive);
+        for d in self.scope.cache.walked_dirs.clone() {
+            self.register(backend, &d, RecursiveMode::NonRecursive);
         }
         self.resync(backend);
     }
@@ -257,24 +238,27 @@ impl WatchState {
             }
         };
         let mut out = Vec::new();
-        if !event.need_rescan() && !matches!(event.kind, EventKind::Access(_)) {
-            for c in event
-                .paths
-                .iter()
-                .filter_map(|p| self.scope.outside_candidate(p))
-                .collect::<Vec<_>>()
-            {
-                if self.resync(backend) {
-                    out.push(ChangeEvent::DepsChanged);
-                } else if is_structural(&event.kind) {
-                    // A replaced folder keeps its name: the existence diff
-                    // misses it, so re-watch it.
+        let cache_folders: Vec<PathBuf> = event
+            .paths
+            .iter()
+            .filter_map(|p| self.scope.outside_candidate(p))
+            .collect();
+        if !cache_folders.is_empty()
+            && !event.need_rescan()
+            && !matches!(event.kind, EventKind::Access(_))
+        {
+            if self.resync(backend) {
+                out.push(ChangeEvent::DepsChanged);
+            } else if is_structural(&event.kind) {
+                // A replaced folder keeps its name: the existence diff
+                // misses it, so re-watch it.
+                for c in cache_folders {
                     if self.registered.remove(&c).is_some() {
                         let _ = backend.unwatch(&c);
                         self.register(backend, &c, RecursiveMode::NonRecursive);
                     }
-                    out.push(ChangeEvent::DepsChanged);
                 }
+                out.push(ChangeEvent::DepsChanged);
             }
         }
         out.extend(map_event(&self.scope, &event));
@@ -294,7 +278,8 @@ impl WatchState {
     }
 
     /// Re-stat every outside candidate: watch each that now exists, unwatch
-    /// each that is gone. Returns whether any existence changed.
+    /// each that is gone (and stop retrying it). Returns whether any
+    /// existence changed.
     pub fn resync(&mut self, backend: &mut dyn WatchBackend) -> bool {
         let candidates: Vec<PathBuf> = self.scope.outside_candidates().cloned().collect();
         let mut changed = false;
@@ -304,9 +289,12 @@ impl WatchState {
             let registered = self.registered.contains_key(&c);
             if exists && !registered {
                 self.register(backend, &c, RecursiveMode::NonRecursive);
-            } else if !exists && registered {
-                let _ = backend.unwatch(&c);
-                self.registered.remove(&c);
+            } else if !exists {
+                self.failed.remove(&c);
+                if registered {
+                    let _ = backend.unwatch(&c);
+                    self.registered.remove(&c);
+                }
             }
         }
         changed
@@ -375,7 +363,7 @@ pub fn start_watching(
                     state.retry_failed(backend.as_mut(), &tx)
                 });
             if !alive {
-                info!("Updater channel closed; stopping the file watcher thread");
+                info!("Updater channel found closed on a send; stopping the file watcher thread");
                 return;
             }
         }
@@ -555,6 +543,12 @@ mod tests {
             map(kind, &["/p/ws/.alpackages"]),
             vec![ChangeEvent::DepsChanged]
         );
+    }
+
+    #[test]
+    fn t10_touched_root_cache_folder_is_nothing() {
+        let kind = EventKind::Modify(ModifyKind::Any);
+        assert_eq!(map(kind, &["/p/ws/.alpackages"]), vec![]);
     }
 
     #[test]
@@ -832,11 +826,6 @@ mod tests {
             },
             root: root.clone(),
         };
-        assert_eq!(
-            watch_plan(&scope).get(&root),
-            Some(&RecursiveMode::Recursive),
-            "T11(g): plan"
-        );
         let mut fake = FakeBackend::default();
         WatchState::new(scope).start(&mut fake);
         let root_watches: Vec<Rec> = fake
@@ -882,6 +871,23 @@ mod tests {
             vec![Rec::Sent(ChangeEvent::DepsChanged)],
             "T11(i): the root watch owns that folder"
         );
+    }
+
+    /// F2: a cache folder whose registration failed and which is then
+    /// deleted is no longer retried.
+    #[test]
+    fn t11k_deleted_cache_folder_stops_being_retried() {
+        let mut r = rig(true);
+        r.fake.refuse.lock().unwrap().insert(r.cache());
+        let mut st = r.state();
+        st.start(&mut r.fake);
+        assert!(st.failed.contains_key(&r.cache()), "precondition: failed");
+        r.fake.take_log();
+        fs::remove_dir(r.cache()).unwrap();
+        st.resync(&mut r.fake);
+        r.fake.refuse.lock().unwrap().clear();
+        st.retry_failed(&mut r.fake, &r.tx);
+        assert_eq!(r.fake.take_log(), vec![], "T11(k)");
     }
 
     /// Review focus: VS Code runs `git status` on every save, which rewrites
