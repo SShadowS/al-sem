@@ -173,6 +173,9 @@ Limits:
 - d45: two primary publishers in one object that expose the same table share a key.
 - d39–d42 carry no table, so two of their findings in one object on the same parameter
   position share a key whatever the record's table.
+- A local variable named exactly like a site id (`op2`, `cs1`, `loop0`, `u3`) that comes
+  straight after the routine id in the key (d22, d57) is removed with it, so two such
+  variables in one object share a key.
 
 ## In your editor
 

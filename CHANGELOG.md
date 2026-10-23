@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line). `looseFingerprint` is the fingerprint's five parts with the routine name blanked
   and the anchor routine's id (internal or stable form) cut out of the root-cause key,
   together with the one site id minted on it (`/op3`, `/cs1`, `/loop0`, `/u2`). What
-  follows that segment stays, so a variable named `p1` or `op2` is kept, and so is a
-  parameter position `/p{N}` (d19, d32). When the anchor is not a routine (d64) it equals
+  follows that segment stays (d60's `…/loop0/p1` keeps `p1`), and so does a parameter
+  position `/p{N}` (d19, d32). When the anchor is not a routine (d64) it equals
   `fingerprint`. It is **not unique**: several findings can share one. So count new
   findings per key: **new = Σ max(0, after(k) − before(k))** over `looseFingerprint`
   values k. To name which findings are new, pair findings equal on both keys first, then
@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (d48; a direct↔transitive move also changes it). d16 keeps the callee, but a self-call
   strips both ids, so every obsolete self-call in one object shares a key. d39–d42 carry
   no table, and two primary d45 publishers in one object exposing one table share a key.
+  A local variable named exactly like a site id (`op2`, `cs1`, `loop0`, `u3`) that comes
+  straight after the routine id (d22, d57) is stripped with it, so two such variables in
+  one object share a key.
   JSON only: SARIF `fingerprints` would merge results with an equal value. The
   `schemaVersion` does not change (the key is additive).
 
