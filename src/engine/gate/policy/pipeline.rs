@@ -28,7 +28,7 @@ use crate::engine::gate::policy::policy_loader::{
 };
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
 use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view, diagnostic_lines};
-use crate::engine::l5::detector_context::build_detector_artifacts;
+use crate::engine::l5::detector_context::compose_detector_artifacts;
 use crate::engine::l5::detectors::default_detectors;
 use crate::engine::l5::registry::substrate;
 use crate::engine::root_classification::classify_roots;
@@ -263,7 +263,9 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             // carries the bit, and the raw cone is alive only after the run. It
             // shares the view's relation. `SUMMARIES` is all `PolicyModel` reads
             // beside `event_graph` (built under every mask), so it is enough.
-            let (raw, _) = build_detector_artifacts(
+            // #160 step 6 §14.5: its own composition until Task 3 reads the
+            // view's `Cell::Raw` instead.
+            let (raw, _) = compose_detector_artifacts(
                 resolved,
                 substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS,
                 view.rel(),

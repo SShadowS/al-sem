@@ -1,24 +1,27 @@
 //! #160 step 2 (spec §4.4.3): the `View` a command builds its detector runs
 //! and its L4 analysis on.
 //!
-//! A `View` owns its target and a few cells (`rel`, `l4`, `det`,
-//! `ordering`), each filled at most once, by [`View::prepare`] alone, from a
-//! [`Plan`] that only this module's factories build. No interior mutability:
-//! every fill is on `&mut self`, every reader takes `&self` (rule 4).
+//! A `View` owns its target and a few cells (`rel`, `caps`, `raw`, `l4`,
+//! `det`, `ordering`), each filled at most once, by [`View::prepare`] alone,
+//! from a [`Plan`] that only this module's factories build. No interior
+//! mutability: every fill is on `&mut self`, every reader takes `&self` (rule 4).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::analysis::{L4Analysis, L4Request, build_l4};
+use crate::engine::l4::capability_cone::CapabilityFact;
 use crate::engine::l4::combined_graph::PrimaryGraph;
+use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::summary_runner::SummarizeDiagnostic;
 use crate::engine::l5::detector_context::{
-    self as dc, DetectorArtifacts, DetectorContext, OrderingFactsMap,
+    self as dc, CapabilityAnalysis, DetectorArtifacts, DetectorContext, OrderingFactsMap,
 };
 use crate::engine::l5::registry::{self, Detector, RunOutput, substrate};
 use crate::engine::perf_trace as pt;
+use crate::program::model::role::Role;
 use crate::program::model::workspace::Model;
 
 /// One command's model and the cells built over it (spec §4.4.3).
@@ -31,6 +34,12 @@ pub struct View {
     /// single-app the SCC lives from the relation's build, before the det
     /// fill's cone, until `release(Cell::Rel)` (spec §4.4, bounded in §7).
     rel: Option<Arc<ExecRelation>>,
+    /// The view's ONE composition over `rel.cone()` (#160 step 6 D2): filled
+    /// right after `rel`, consumed by the det fill, released by `prepare`.
+    caps: Option<CapabilityAnalysis>,
+    /// The witness subjects' raw inherited facts, from the same composition;
+    /// filled only under a [`WitnessRequest`].
+    raw: Option<HashMap<String, Vec<CapabilityFact>>>,
     l4: Option<L4Analysis>,
     det: Option<DetectorArtifacts>,
     /// One bit per [`Cell`] released; a released cell is never refilled.
@@ -58,6 +67,38 @@ pub struct Plan {
     /// report's coverage read). `prepare` asserts every run's union holds
     /// them, naming the missing bit (A2.10).
     after_run: u32,
+    /// Whose raw inherited facts the view's composition keeps (#160 step 6
+    /// D3), fixed before it runs.
+    witness: WitnessRequest,
+}
+
+/// The routines a plan wants raw inherited facts for (#160 step 6 D3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WitnessRequest {
+    None,
+    /// These internal routine ids (digest's changed roots).
+    Roots(BTreeSet<String>),
+    /// Every `Role::Primary` routine (policy check).
+    Primary,
+}
+
+impl WitnessRequest {
+    /// The composition's raw scope over `model`.
+    fn scope(&self, model: &Model) -> WitnessScope {
+        match self {
+            WitnessRequest::None => WitnessScope::None,
+            WitnessRequest::Roots(ids) => WitnessScope::Subjects(ids.clone()),
+            WitnessRequest::Primary => WitnessScope::Subjects(
+                model
+                    .workspace
+                    .routines
+                    .iter()
+                    .filter(|r| model.routine_role(r) == Role::Primary)
+                    .map(|r| r.id.clone())
+                    .collect(),
+            ),
+        }
+    }
 }
 
 /// The cells [`View::release`] drops.
@@ -67,10 +108,13 @@ pub enum Cell {
     L4,
     Ordering,
     Rel,
+    Caps,
+    Raw,
 }
 
 impl Cell {
-    const ALL: [Cell; 4] = [Cell::Det, Cell::L4, Cell::Ordering, Cell::Rel];
+    /// Every cell a command can hold past `prepare`: `Caps` never outlives it.
+    const ALL: [Cell; 5] = [Cell::Det, Cell::L4, Cell::Ordering, Cell::Rel, Cell::Raw];
 
     fn bit(self) -> u8 {
         1 << self as u8
@@ -84,6 +128,7 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
         scope_primary,
         need_l4: false,
         after_run: 0,
+        witness: WitnessRequest::None,
     }
 }
 
@@ -95,6 +140,7 @@ pub fn digest_plan(detectors: Vec<Detector>) -> Plan {
         scope_primary: true,
         need_l4: true,
         after_run: substrate::TRANSACTION_SPANS,
+        witness: WitnessRequest::None,
     }
 }
 
@@ -106,6 +152,7 @@ fn run_only_plan(detectors: Vec<Detector>) -> Plan {
         scope_primary: true,
         need_l4: false,
         after_run: 0,
+        witness: WitnessRequest::None,
     }
 }
 
@@ -127,6 +174,7 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
         scope_primary: true,
         need_l4: false,
         after_run: substrate::SUMMARIES,
+        witness: WitnessRequest::None,
     }
 }
 
@@ -142,6 +190,7 @@ pub fn query_plan() -> Plan {
         scope_primary: true,
         need_l4: true,
         after_run: 0,
+        witness: WitnessRequest::None,
     }
 }
 
@@ -158,7 +207,15 @@ impl Plan {
             scope_primary,
             need_l4,
             after_run,
+            witness: WitnessRequest::None,
         }
+    }
+
+    /// The plan with `witness`. No factory sets one yet: digest's roots come
+    /// with #160 step 6 Task 2b-2, policy's `Primary` with Task 3.
+    #[cfg(test)]
+    pub(crate) fn with_witness(self, witness: WitnessRequest) -> Plan {
+        Plan { witness, ..self }
     }
 
     /// The key of each run, in plan order.
@@ -207,11 +264,24 @@ fn bit_names(bits: u32) -> String {
         .join(" | ")
 }
 
+/// Mark `cell` released: one `view.release` trace instant naming it, so a
+/// CLI test can see when a command drops what.
+fn note_release(released: &mut u8, cell: Cell) {
+    pt::instant_lazy(
+        "view",
+        "view.release",
+        || serde_json::json!({ "cell": format!("{cell:?}") }),
+    );
+    *released |= cell.bit();
+}
+
 impl View {
     pub fn new(target: AnalysisTarget) -> View {
         View {
             target,
             rel: None,
+            caps: None,
+            raw: None,
             l4: None,
             det: None,
             released: 0,
@@ -220,10 +290,12 @@ impl View {
         }
     }
 
-    /// Fill every cell `plan` needs that is still empty, in order: ordering,
-    /// rel, det (its cone, then `l4`, then its harvest), then the runs. A
-    /// plan with no run: rel, then `l4` alone. Rule 1's asserts (a), (b),
-    /// (c) and the `after_run` assertion hold in release builds too.
+    /// Fill every cell `plan` needs that is still empty, in order (#160 step 6
+    /// D7): ordering, rel, ONE composition into `caps` and `raw`, det (it
+    /// consumes `caps`, then `l4`, then its harvest; `Caps` is released), then
+    /// the runs. A plan with no run: rel, then `l4` alone. Rule 1's asserts
+    /// (a), (b), (c), the one-witness assertion and the `after_run` assertion
+    /// hold in release builds too.
     pub fn prepare(&mut self, plan: &Plan) {
         self.prepare_inner(plan, vec![]);
     }
@@ -250,7 +322,17 @@ impl View {
         let core = union & substrate::CORE_SUMMARIES != 0;
         let need_l4 = plan.need_l4 || core;
         let need_ordering = union & substrate::ORDERING_FACTS != 0;
-        let need_rel = need_det || need_l4;
+        // The derived rows are the det fill's (TRANSACTION_SPANS folds over
+        // the summaries); the raw half is the witness request's.
+        let need_derived = union & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
+        let need_raw = plan.witness != WitnessRequest::None;
+        let need_caps = (need_det && self.det.is_none() && need_derived) || need_raw;
+        let need_rel = need_det || need_l4 || need_raw;
+        // D3: the subjects are fixed once, before the one composition.
+        assert!(
+            !need_raw || (self.raw.is_none() && self.released & Cell::Raw.bit() == 0),
+            "a View takes at most one witness request"
+        );
         // (a) a released cell is never refilled: a refill after
         // `release(Det)` would find no `CoreSummaries`.
         for (cell, needed) in [
@@ -258,6 +340,7 @@ impl View {
             (Cell::Rel, need_rel),
             (Cell::Det, need_det),
             (Cell::L4, need_l4),
+            (Cell::Caps, need_caps),
         ] {
             assert!(
                 !needed || self.released & cell.bit() == 0,
@@ -288,11 +371,13 @@ impl View {
         let View {
             target,
             rel,
+            caps,
+            raw,
             l4,
             det,
+            released,
             ordering,
             runs,
-            ..
         } = self;
         let target = &*target;
         let model = target.resolved();
@@ -321,6 +406,21 @@ impl View {
                 None => Arc::new(ExecRelation::single_app(model)),
             });
         }
+        // D2: ONE composition over `rel.cone()`, the det cone's inputs.
+        if need_caps {
+            let r = rel.as_ref().expect("rel filled above");
+            let scope = ConeScope {
+                derived: need_derived,
+                raw: plan.witness.scope(model),
+            };
+            let _s = pt::span("context", "context.capability_cones");
+            let (c, w) =
+                dc::compose_capabilities(model, r.cone(), dc::det_cone_inputs(model, r), scope);
+            *caps = Some(c);
+            if need_raw {
+                *raw = Some(w);
+            }
+        }
         if need_det && det.is_none() {
             let r = rel.as_ref().expect("rel filled above");
             // (c) `CoreSummaries` is a local of the det fill's own solve, so a
@@ -332,12 +432,23 @@ impl View {
             let req = need_l4.then(|| L4Request {
                 extra_diagnostics: std::mem::take(&mut extra_diagnostics),
             });
-            let (art, solved) =
-                dc::build_detector_artifacts(model, union, r, req, target.cross_app_inputs());
+            let (art, solved) = dc::build_detector_artifacts(
+                model,
+                union,
+                r,
+                req,
+                target.cross_app_inputs(),
+                caps.take(),
+            );
             *det = Some(art);
             if need_l4 {
                 *l4 = solved;
             }
+        }
+        // D7 (6): nothing reads the composition past the det fill.
+        if need_caps {
+            *caps = None;
+            note_release(released, Cell::Caps);
         }
         drop(fill_span);
         // A plan with no run (query) fills `l4` alone.
@@ -378,17 +489,14 @@ impl View {
     /// release is one `view.release` trace instant naming the cell, so a CLI
     /// test can see when a command drops what.
     pub fn release(&mut self, cell: Cell) {
-        pt::instant_lazy(
-            "view",
-            "view.release",
-            || serde_json::json!({ "cell": format!("{cell:?}") }),
-        );
-        self.released |= cell.bit();
+        note_release(&mut self.released, cell);
         match cell {
             Cell::Det => self.det = None,
             Cell::L4 => self.l4 = None,
             Cell::Ordering => self.ordering = None,
             Cell::Rel => self.rel = None,
+            Cell::Caps => self.caps = None,
+            Cell::Raw => self.raw = None,
         }
     }
 
@@ -421,6 +529,11 @@ impl View {
 
     pub fn det(&self) -> &DetectorArtifacts {
         self.det.as_ref().expect("det cell not filled")
+    }
+
+    /// The witness subjects' raw inherited facts (#160 step 6 D2).
+    pub fn raw(&self) -> &HashMap<String, Vec<CapabilityFact>> {
+        self.raw.as_ref().expect("raw cell not filled")
     }
 
     /// The stored output of a run `prepare` ran. An `Arc`: a caller may
@@ -687,6 +800,44 @@ mod tests {
         view().prepare(&plan);
     }
 
+    /// #160 step 6 D2/D7: the view composes once, `det` consumes it and
+    /// `prepare` releases `Caps`; `Raw` is filled only under a witness request.
+    /// DISCRIMINATION: skipping the `Caps` release fails the first assertion;
+    /// filling `Raw` whatever the request fails the second.
+    #[test]
+    fn caps_die_with_the_det_fill_and_raw_needs_a_witness_request() {
+        let run = || vec![vec![probe(substrate::SUMMARIES, noop)]];
+        let mut v = view();
+        v.prepare(&Plan::for_test(run(), true, false, 0));
+        assert!(
+            v.caps.is_none() && v.released & Cell::Caps.bit() != 0,
+            "Caps released after the det fill"
+        );
+        assert!(v.raw.is_none(), "no witness request, no raw");
+        let mut v = view();
+        v.prepare(&Plan::for_test(run(), true, false, 0).with_witness(WitnessRequest::Primary));
+        assert!(v.raw().is_empty(), "the empty model's primary raw is empty");
+    }
+
+    /// #160 step 6 D3: one witness request per view. DISCRIMINATION: deleting
+    /// the assertion fails this (no panic).
+    #[test]
+    #[should_panic(expected = "a View takes at most one witness request")]
+    fn a_view_takes_one_witness_request() {
+        let plan = || {
+            Plan::for_test(
+                vec![vec![probe(substrate::SUMMARIES, noop)]],
+                true,
+                false,
+                0,
+            )
+            .with_witness(WitnessRequest::Primary)
+        };
+        let mut v = view();
+        v.prepare(&plan());
+        v.prepare(&plan());
+    }
+
     /// `take_run` removes the stored output: a second take, or a `run` of the
     /// key, panics naming it. DISCRIMINATION: `take_run` returning a clone
     /// (`self.run(key)`) without removing the entry fails both cases.
@@ -736,7 +887,7 @@ mod tests {
         assert!(v.l4.is_some(), "the kept cell stays");
         assert_eq!(
             v.released,
-            Cell::Det.bit() | Cell::Ordering.bit() | Cell::Rel.bit()
+            Cell::Det.bit() | Cell::Ordering.bit() | Cell::Rel.bit() | Cell::Raw.bit()
         );
     }
 
