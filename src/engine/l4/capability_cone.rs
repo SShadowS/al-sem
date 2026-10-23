@@ -3723,6 +3723,15 @@ pub struct R3a5CrossAppBase {
 }
 
 impl R3a5CrossAppBase {
+    /// Each loaded dependency app's name, by lowercase guid: the `<App>` of
+    /// digest's rule-B groups (#160 step 6, spec §14.3.5 item 2).
+    pub(crate) fn loaded_app_names(&self) -> HashMap<String, String> {
+        self.dependency_apps
+            .iter()
+            .map(|a| (a.guid.to_ascii_lowercase(), a.name.clone()))
+            .collect()
+    }
+
     /// Every model routine: the workspace's, then each dependency's.
     pub fn ws_routines(&self) -> &Vec<ModelRoutine> {
         &self.resolved.workspace.routines
@@ -4506,10 +4515,12 @@ pub struct R3a3SourceBase {
 /// assembly, returning the parts). Fail-closed callers get an empty base via the
 /// resolved workspace having zero routines.
 ///
-/// The LEGACY CUT (#160 step 4, amendment M9): this base builds its own graph
+/// The cut graph (#160 step 4, amendment M9): this base builds its own graph
 /// over `resolved.calls`, which cross-app is the primary half only, without
-/// the dependency typed edges the view's `ExecRelation` carries. The snapshot
-/// stays on it until step 6 deletes it.
+/// the dependency typed edges the view's `ExecRelation` carries. Digest left it
+/// at #160 step 6 (`compose_tree` over `rel.cone()`); its one cross-app
+/// production reader is the ordering cell (d47/d49/d51, `fill_ordering`),
+/// which moves to the cone graph in the #161 follow-up.
 pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
     // Not `r3a3.calls_graph`: that span also covered the input clones, now
@@ -4627,77 +4638,6 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
         routine_to_stable,
         pd_solution,
     }
-}
-
-/// `aldump --issue160-full-graph-timings` (#160 §4.1.6): the snapshot's cost over
-/// today's CUT graph and over the cross-app base's FULL graph, from one binary.
-/// Measurement only; deleted when step 6 lands. The cone wall and the solve are
-/// read off the cone census, so the caller runs it with `ALSEM_CONES_CENSUS=1`;
-/// without it this returns `Err` rather than print zeros. `Ok(None)`: the
-/// workspace has no cross-app base.
-#[doc(hidden)]
-pub fn issue160_full_graph_timings(
-    workspace: &std::path::Path,
-) -> Result<Option<String>, &'static str> {
-    use crate::engine::l5::detector_context::cones_census as cc;
-    use std::sync::atomic::Ordering;
-    if !cc::enabled() {
-        return Err("--issue160-full-graph-timings needs ALSEM_CONES_CENSUS=1");
-    }
-    let Some(base) = build_cross_app_base(
-        &crate::program::inputs::InputSet::read(workspace, &Default::default()),
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-    )
-    .ok() else {
-        return Ok(None);
-    };
-    let cone_nanos = || {
-        [
-            &cc::WALK_GRAPH_NANOS,
-            &cc::WALK_SCC_NANOS,
-            &cc::WALK_DEDUP_NANOS,
-            &cc::WALK_COMPOSE_NANOS,
-        ]
-        .iter()
-        .map(|c| c.load(Ordering::Relaxed))
-        .sum::<u64>()
-    };
-    let ms = |n: u64| n as f64 / 1e6;
-    let mut out = String::new();
-    for side in ["cut", "full"] {
-        let (cone0, pd0) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
-        let sb = if side == "cut" {
-            build_r3a3_source_only_base(&base.resolved)
-        } else {
-            build_r3a3_source_only_base_over(
-                &base.resolved,
-                CombinedGraph {
-                    primary: (**base.rel.primary()).clone(),
-                    typed_edges: base.rel.cone().to_vec(),
-                },
-            )
-        };
-        let (cone1, pd1) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
-        let t = std::time::Instant::now();
-        let snap = crate::engine::l5::snapshot::compose_snapshot_from_base(&base.resolved, &sb);
-        let derive = t.elapsed().as_nanos() as u64;
-        drop(snap);
-        let inherited: usize = sb.raw.values().map(Vec::len).sum();
-        // §4.1.6's raw population in bytes, by the census rule (each cone's
-        // buffer plus every fact's owned heap).
-        let inherited_bytes: usize = sb
-            .raw
-            .values()
-            .map(|v| super::cone_census::facts_tally(v).bytes)
-            .sum();
-        out.push_str(&format!(
-            "{side} cone_wall_ms={:.3}\n{side} pd_solve_ms={:.3}\n{side} snapshot_derive_ms={:.3}\n{side} inherited_facts={inherited}\n{side} inherited_bytes={inherited_bytes}\n",
-            ms(cone1 - cone0),
-            ms(pd1 - pd0),
-            ms(derive),
-        ));
-    }
-    Ok(Some(out))
 }
 
 // ===========================================================================
@@ -5898,6 +5838,8 @@ mod step4_tests {
         let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
         view.prepare(&digest_plan(
             crate::engine::l5::detectors::default_detectors(),
+            std::collections::BTreeSet::new(),
+            false,
         ));
         let det = view.det();
         let name = |id: &str| -> String {

@@ -19,9 +19,9 @@ pub mod combined_graph;
 // output) when the env var is unset.
 pub mod cone_census;
 // C1 — the compact derived cone substrate (`ConeDerivedStore` + the fold + the
-// `ConeOutput` mode) that REPLACED the per-routine inherited `Vec<CapabilityFact>`
-// on the analyze path: since Task 3 that Vec is not built there at all
-// (`ConeOutput::DerivedOnly`). Lives beside `capability_cone`, which folds into it
+// `ConeScope` / `WitnessScope` scope) that REPLACED the per-routine inherited
+// `Vec<CapabilityFact>` on the analyze path: since Task 3 that Vec is not built
+// there at all (no raw half). Lives beside `capability_cone`, which folds into it
 // at its own `retag` sites.
 pub mod cone_derived;
 pub mod db_effect_solver;

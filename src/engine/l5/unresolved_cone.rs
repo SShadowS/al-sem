@@ -300,6 +300,7 @@ mod tests {
             root_classifications: Vec::new(),
             routine_order_frames: None,
             pd_solution: Default::default(),
+            boundary: None,
         }
     }
 

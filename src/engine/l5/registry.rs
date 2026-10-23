@@ -59,7 +59,7 @@ pub mod substrate {
     pub const CLOSED_WORLD_TEMP: u32 = 1 << 3;
     /// ⟨C1 Task 3⟩ Materialize the RAW per-routine `capability_facts_inherited`
     /// `Vec<CapabilityFact>` alongside the compact derived cone substrate — i.e.
-    /// compose the cone under `ConeOutput::Both` instead of `DerivedOnly`.
+    /// compose the cone with a raw half (`ConeScope { derived: true, raw: All }`).
     ///
     /// **POLICY-ONLY, and deliberately NOT part of [`ALL`].** This is the ~10.9 GB
     /// (8020 corpus, ~100k routines × their full reachable cone) allocation the C1

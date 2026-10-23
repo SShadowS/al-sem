@@ -534,7 +534,8 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             // Human selector errors → stderr, exit 2, no stdout (fingerprint.ts:301).
             // #239: an `<owner>::<routine>` selector whose owner declares no such
             // routine gets one hint line naming the owners that do.
-            let idx = crate::engine::l5::selector_index::build_selector_indexes(&snap, None);
+            let idx =
+                crate::engine::l5::selector_index::build_selector_indexes(&snap.identities, None);
             let mut msg = String::new();
             for d in selector_errors {
                 msg.push_str(&format_selector_errors_human(std::slice::from_ref(d)));

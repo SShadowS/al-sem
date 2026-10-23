@@ -372,26 +372,43 @@ fn analyze_cross_app_d47_with_a_summaries_detector() {
     );
 }
 
+/// #160 step 6 §4.9 (T5): digest composes once, over the view's relation:
+/// the tree takes the composition's raw facts and its pd arena, so there is no
+/// cut graph, no second cone, no second SCC and no second producer solve.
+const DIGEST_ROW: Row = Row {
+    program: 1,
+    bcg: 1,
+    cone: 1,
+    v2: 1,
+    scc: 2,
+    pd: 1,
+    ctx: 1,
+    snap: 1,
+    witness: 1,
+};
+
 #[test]
 fn digest_cross_app() {
     let (d, ws) = ws_dep();
     let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
     let m = run(&["digest", &ws, "--diff", &diff, "--deterministic"]);
-    assert_row(
-        "digest cross-app",
-        &m,
-        Row {
-            program: 1,
-            bcg: 2,
-            cone: 2,
-            v2: 1,
-            scc: 3,
-            pd: 2,
-            ctx: 1,
-            snap: 1,
-            witness: 1,
-        },
+    assert_row("digest cross-app", &m, DIGEST_ROW);
+}
+
+/// Review Focus 2: a digest that resolves no root keeps no witness request
+/// and builds no tree, and exits 2.
+#[test]
+fn digest_with_no_resolved_root_builds_no_tree() {
+    let (_d, ws) = ws_dep();
+    let (out, m) = spawn_traced(&["digest", &ws, "--routine", "NoSuchRoutine"], &[]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(
+        count(&m, "build.detector_context"),
+        1,
+        "precondition: the run\n{m:?}"
     );
+    assert_eq!(count(&m, "build.snapshot"), 0, "{m:?}");
+    assert_eq!(count(&m, "build.witness_pass"), 0, "{m:?}");
 }
 
 #[test]
@@ -411,21 +428,7 @@ fn digest_single_app() {
         "--deterministic",
         "--single-app",
     ]);
-    assert_row(
-        "digest single-app",
-        &m,
-        Row {
-            program: 1,
-            bcg: 2,
-            cone: 2,
-            v2: 1,
-            scc: 3,
-            pd: 2,
-            ctx: 1,
-            snap: 1,
-            witness: 1,
-        },
-    );
+    assert_row("digest single-app", &m, DIGEST_ROW);
 }
 
 #[test]
@@ -1027,14 +1030,29 @@ fn views_release_their_cells_before_the_next_build() {
             [&per_side[..], &per_side].concat(),
         ),
         (
+            // `release_all_but` skips the `l4` events already released.
             "events fanout",
             vec!["events", "fanout", &ws, "--format", "json"],
-            [&det[..], &["rel:L4"], &all].concat(),
+            [&det[..], &["rel:L4"], &all[..1], &all[2..]].concat(),
         ),
         (
+            // #160 step 6 D7: the tree first (it takes `Raw`, and is released
+            // once the effects are read off it), then the run; `Effects` dies
+            // after the query, beside `l4`.
             "digest",
             vec!["digest", &ws, "--diff", &diff, "--deterministic"],
-            default_run.clone(),
+            vec![
+                "snap",
+                "rel:Raw",
+                "rel:Tree",
+                "ctx",
+                "rel:Caps",
+                "rel:Det",
+                "rel:Ordering",
+                "rel:Rel",
+                "rel:L4",
+                "rel:Effects",
+            ],
         ),
         (
             "prove",
@@ -1050,6 +1068,45 @@ fn views_release_their_cells_before_the_next_build() {
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// #160 step 6 §4.7 (R1-30, A6.18), the live-cell checkpoint: at digest's
+/// first run the view holds its effects, but no tree, no pd arena and no raw
+/// facts (D7: the tree and the composition's raw half die before `det`).
+#[test]
+fn digest_holds_no_tree_at_its_first_run() {
+    let (d, ws) = ws_dep();
+    let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["digest", &ws, "--diff", &diff, "--deterministic"],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let live: Vec<Vec<String>> = events
+        .iter()
+        .filter(|e| e.get("name").and_then(Value::as_str) == Some("view.live"))
+        .map(|e| {
+            e["args"]["cells"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.as_str().map(str::to_string))
+                .collect()
+        })
+        .collect();
+    assert_eq!(live.len(), 1, "one checkpoint: {live:?}");
+    let cells = &live[0];
+    assert!(
+        cells.contains(&"Effects".to_string()),
+        "precondition: {cells:?}"
+    );
+    for gone in ["Tree", "PdArena", "Raw", "Caps"] {
+        assert!(
+            !cells.contains(&gone.to_string()),
+            "{gone} alive: {cells:?}"
+        );
+    }
 }
 
 /// Spec §4.1.4: `ALSEM_TRACE_EXIT_AFTER` exits from a span guard, where the

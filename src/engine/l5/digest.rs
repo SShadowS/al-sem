@@ -33,7 +33,7 @@
 //! - Conditionality / transactionContext / guarantees / scopedGuarantees are STAGE 4
 //!   and EXCLUDED from this projection.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::rc::Rc;
 
@@ -189,6 +189,16 @@ struct FingerprintIndexes<'a> {
     pd: &'a PdArena,
     typed_edges: &'a [SnapshotGraphEdge],
     capability_facts: &'a [Fact],
+    /// Rule B (spec §14.3.5): the tree's dependency routines; `None` = off.
+    boundary: Option<&'a crate::engine::l5::snapshot::BoundaryRule>,
+}
+
+impl FingerprintIndexes<'_> {
+    /// Under rule B, whether a witness ends on entering `routine`.
+    fn is_dependency(&self, routine: &str) -> bool {
+        self.boundary
+            .is_some_and(|b| b.dependency_app.contains_key(routine))
+    }
 }
 
 fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_> {
@@ -310,6 +320,7 @@ fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_
         pd: &snap.pd_solution,
         typed_edges: &snap.typed_edges,
         capability_facts: &snap.capability_facts,
+        boundary: snap.boundary.as_ref(),
     }
 }
 
@@ -548,8 +559,20 @@ struct WitnessOutcomeExt {
     projected: Option<Vec<ProjPath>>,
     /// Case C only: raw paths with the same key as a returned one (another
     /// terminal behind an equal projection). Read only for conditionality,
-    /// where the least restrictive wins (#69 D3).
+    /// where the least restrictive wins (#69 D3). Never a boundary path's.
     twins: Vec<WitnessPath>,
+    /// Case C under rule B (spec §14.3.5): `ends[i]` is the boundary `paths[i]`
+    /// was cut at. Empty (no boundary) everywhere else.
+    ends: Vec<Option<Rc<BoundaryEnd>>>,
+}
+
+/// A rule-B boundary (spec §14.3.5 item 2): its identity (`cs:` call site,
+/// else `op:` firing operation, else `ev:` event) and `<App>.<Routine>`, the
+/// dependency routine it enters.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct BoundaryEnd {
+    id: String,
+    display: String,
 }
 
 /// `buildDirectTerminal` (witness.ts).
@@ -1149,8 +1172,19 @@ type Preds<'i> = Vec<(Option<&'i str>, &'i SnapshotGraphEdge)>;
 /// (spec §14.3.1 item 4 (a)). On the cut (rule B off) every routine is primary
 /// and the carriers are the only accepting states it marks, so every set is
 /// `{dmin}`; the opaque seeds' length 1 lives on the DAG.
+///
+/// Under rule B (spec §14.3.5 item 1) a dependency routine ends a path: it is
+/// marked (the pass walks through it to reach the primary code above it) but
+/// carries no bits, and a marked edge `u → b` from a primary `u` into a
+/// dependency `b` is a boundary candidate of length `δ(u)` (`None` = the root,
+/// length 0).
 struct Marking<'i> {
+    /// Every marked routine; a dependency routine's bits are 0.
     bits: HashMap<&'i str, u128>,
+    /// The PRIMARY carriers at `dmin`: a path's `carrier` ends.
+    carriers: std::collections::HashSet<&'i str>,
+    /// Marked boundary edges, by the primary routine they leave.
+    boundary: HashMap<Option<&'i str>, Vec<&'i SnapshotGraphEdge>>,
 }
 
 impl<'i> WitDag<'i> {
@@ -1225,30 +1259,63 @@ impl<'i> WitDag<'i> {
     }
 
     /// The marking of the carriers `at_min` (sorted), all at `dmin`: one
-    /// backward pass over the predecessor lists, level by level, so a
-    /// routine's bits are complete before they propagate.
-    fn marking(&self, at_min: &[&'i str], dmin: usize) -> Rc<Marking<'i>> {
+    /// backward pass over the predecessor lists, level by level (every
+    /// predecessor is one level up), so a routine's bits are complete before
+    /// they propagate. Bits propagate over primary routines only.
+    fn marking(
+        &self,
+        at_min: &[&'i str],
+        dmin: usize,
+        idx: &FingerprintIndexes,
+    ) -> Rc<Marking<'i>> {
         if let Some(m) = self.markings.borrow().get(at_min) {
             return Rc::clone(m);
         }
-        let mut bits: HashMap<&'i str, u128> = at_min.iter().map(|&c| (c, 1u128 << dmin)).collect();
+        let mut bits: HashMap<&'i str, u128> = HashMap::new();
+        let mut carriers = std::collections::HashSet::new();
+        for &c in at_min {
+            let primary = !idx.is_dependency(c);
+            bits.insert(c, if primary { 1u128 << dmin } else { 0 });
+            if primary {
+                carriers.insert(c);
+            }
+        }
+        let mut boundary: HashMap<Option<&'i str>, Vec<&'i SnapshotGraphEdge>> = HashMap::new();
         let mut level: Vec<&'i str> = at_min.to_vec();
         while !level.is_empty() {
             let mut next = Vec::new();
             for w in level {
-                let bw = bits[w];
-                for &(u, _) in &self.info[w].1 {
-                    let Some(u) = u else { continue };
-                    let bu = bits.entry(u).or_insert(0);
-                    if *bu == 0 {
+                let (bw, w_dep) = (bits[w], idx.is_dependency(w));
+                for &(u, e) in &self.info[w].1 {
+                    let Some(u) = u else {
+                        // The first hop itself enters dependency code.
+                        if w_dep {
+                            boundary.entry(None).or_default().push(e);
+                        }
+                        continue;
+                    };
+                    if !bits.contains_key(u) {
                         next.push(u);
                     }
-                    *bu |= bw;
+                    let bu = bits.entry(u).or_insert(0);
+                    if idx.is_dependency(u) {
+                        continue;
+                    }
+                    if w_dep {
+                        *bu |= 1u128 << self.info[u].0;
+                        boundary.entry(Some(u)).or_default().push(e);
+                    } else {
+                        *bu |= bw;
+                    }
                 }
             }
             level = next;
         }
-        let m = Rc::new(Marking { bits });
+        let m = Rc::new(Marking {
+            bits,
+            carriers,
+            boundary,
+        });
         self.markings
             .borrow_mut()
             .insert(at_min.to_vec(), Rc::clone(&m));
@@ -1303,11 +1370,99 @@ impl<'i> DagCache<'i> {
     }
 }
 
-/// A candidate's end key (spec §14.3.1 item 4), in key order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// A candidate's end key (spec §14.3.1 item 4), in key order: a rule-B
+/// boundary (by its identity), a carrier, an opaque seed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum EndKey {
+    Boundary(Rc<BoundaryEnd>),
     Carrier,
     Opaque,
+}
+
+/// Rule B's boundary of edge `e` (spec §14.3.5 item 2), from a primary
+/// routine into the dependency routine `to`: its identity and its terminal
+/// hop, `enters <App>.<Routine>` at the call site (a call), else the firing
+/// operation (an implicit trigger), else the publish site (an event dispatch).
+fn boundary_terminal(e: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> (BoundaryEnd, WitnessHop) {
+    let to = edge_to(e).expect("a boundary edge has a hop, so a target");
+    let app = idx
+        .boundary
+        .and_then(|b| b.dependency_app.get(to))
+        .map_or("", |a| &**a);
+    let routine = idx.routine_display_by_id.get(to).map_or(to, String::as_str);
+    let display = format!("{app}.{routine}");
+    let display_text = format!("enters {display}");
+    let at = |a: &crate::engine::l5::snapshot::SnapshotSourceAnchor| {
+        (
+            Some(a.source_unit_id.clone()),
+            Some(a.range.start_line),
+            Some(a.range.start_column),
+        )
+    };
+    let (id, evidence_kind, operation_id, callsite_id, (source_file, line, column)) = match e {
+        SnapshotGraphEdge::ImplicitTrigger {
+            operation_id,
+            anchor,
+            ..
+        } => {
+            let src = match idx.operation_by_id.get(operation_id.as_str()) {
+                Some(ev) => (
+                    Some(ev.source_file.clone()),
+                    Some(ev.start_line),
+                    Some(ev.start_column),
+                ),
+                None => anchor.as_ref().map_or((None, None, None), at),
+            };
+            (
+                format!("op:{operation_id}"),
+                TerminalKind::Operation,
+                Some(operation_id.clone()),
+                None,
+                src,
+            )
+        }
+        SnapshotGraphEdge::EventDispatch {
+            event_id,
+            publish_anchor,
+            ..
+        } => (
+            format!("ev:{event_id}"),
+            TerminalKind::Synthetic,
+            None,
+            None,
+            at(publish_anchor),
+        ),
+        _ => {
+            let cs = edge_callsite_id(e).expect("a call-family edge has a call site");
+            let src = match idx.callsite_by_id.get(cs) {
+                Some(ev) => (
+                    Some(ev.source_file.clone()),
+                    Some(ev.start_line),
+                    Some(ev.start_column),
+                ),
+                None => (None, None, None),
+            };
+            (
+                format!("cs:{cs}"),
+                TerminalKind::Callsite,
+                None,
+                Some(cs.to_string()),
+                src,
+            )
+        }
+    };
+    (
+        BoundaryEnd { id, display },
+        WitnessHop::Terminal {
+            evidence_kind,
+            operation_id,
+            callsite_id,
+            display_text,
+            source_file,
+            line,
+            column,
+        },
+    )
 }
 
 /// One witness candidate: its key (projected path, end key) and the raw path
@@ -1351,28 +1506,48 @@ struct TrieWalk<'w, 'i> {
     hop_cache: &'w mut HopCache<'i>,
     /// The trie nodes. Slot 0 is the root, the empty prefix.
     arena: Vec<TrieNode<'i>>,
-    /// The candidates found, in key order: (arena slot, end key).
-    found: Vec<(usize, EndKey)>,
+    /// The candidates found, in key order: (arena slot, end key, the boundary
+    /// edge of a boundary end).
+    found: Vec<Found<'i>>,
     /// The CALLER's `cap + 1` (A1-04).
     limit: usize,
+    /// The fact's `dmin` (`None`: no carrier reached).
+    dmin: Option<usize>,
 }
+
+/// One candidate of [`TrieWalk`]: arena slot, end key, boundary edge.
+type Found<'i> = (usize, EndKey, Option<&'i SnapshotGraphEdge>);
 
 impl<'i> TrieWalk<'_, 'i> {
     /// The candidates of length `l` below trie node `n`, at depth `k`.
     fn descend(&mut self, l: usize, k: usize, n: usize) {
         let routine = self.arena[n].0;
         if k == l {
-            // End keys in order: carrier, then opaque. A marked routine at
-            // depth `dmin` is one of the marking's carriers.
-            let carrier = self
-                .marking
-                .bits
-                .get(routine)
-                .is_some_and(|b| b & (1u128 << l) != 0);
-            let opaque = l == 1 && self.dag.opaque.contains(routine);
-            for (end, here) in [(EndKey::Carrier, carrier), (EndKey::Opaque, opaque)] {
-                if here && self.found.len() < self.limit {
-                    self.found.push((n, end));
+            // End keys in order: the boundaries (by identity; edges of one
+            // identity are one candidate), the carrier, then opaque.
+            let from = (n != 0).then_some(routine);
+            let mut ends: Vec<(EndKey, Option<&'i SnapshotGraphEdge>)> = Vec::new();
+            if let Some(edges) = self.marking.boundary.get(&from) {
+                let mut bs: Vec<(BoundaryEnd, &'i SnapshotGraphEdge)> = edges
+                    .iter()
+                    .map(|&e| (boundary_terminal(e, self.idx).0, e))
+                    .collect();
+                bs.sort_by(|a, b| a.0.cmp(&b.0));
+                bs.dedup_by(|a, b| a.0.id == b.0.id);
+                ends.extend(
+                    bs.into_iter()
+                        .map(|(b, e)| (EndKey::Boundary(Rc::new(b)), Some(e))),
+                );
+            }
+            if n != 0 && self.dmin == Some(l) && self.marking.carriers.contains(routine) {
+                ends.push((EndKey::Carrier, None));
+            }
+            if l == 1 && self.dag.opaque.contains(routine) {
+                ends.push((EndKey::Opaque, None));
+            }
+            for (end, edge) in ends {
+                if self.found.len() < self.limit {
+                    self.found.push((n, end, edge));
                 }
             }
             return;
@@ -1487,6 +1662,7 @@ fn reconstruct_witness_paths<'i>(
                 diagnostics,
                 projected: None,
                 twins: Vec::new(),
+                ends: Vec::new(),
             };
         }
         // Case B: only witnessCallsiteId → terminal "callsite".
@@ -1508,6 +1684,7 @@ fn reconstruct_witness_paths<'i>(
                 diagnostics,
                 projected: None,
                 twins: Vec::new(),
+                ends: Vec::new(),
             };
         }
         // Direct with no witness anchor → synthetic + missing-witness-anchor (detail=subject).
@@ -1533,6 +1710,7 @@ fn reconstruct_witness_paths<'i>(
             )],
             projected: None,
             twins: Vec::new(),
+            ends: Vec::new(),
         };
     }
 
@@ -1550,6 +1728,7 @@ fn reconstruct_witness_paths<'i>(
             diagnostics: vec![("first-hop-not-found".to_string(), Some(fact.via.clone()))],
             projected: None,
             twins: Vec::new(),
+            ends: Vec::new(),
         };
     };
 
@@ -1575,6 +1754,7 @@ fn reconstruct_witness_paths<'i>(
             diagnostics: vec![("first-hop-not-found".to_string(), Some(first_hop.id()))],
             projected: None,
             twins: Vec::new(),
+            ends: Vec::new(),
         };
     }
 
@@ -1606,16 +1786,30 @@ fn reconstruct_witness_paths<'i>(
         .filter(|c| dmin.is_some() && dag.info.get(c).map(|&(d, _)| d) == dmin)
         .collect();
     at_min.sort_unstable();
-    let marking = dag.marking(&at_min, dmin.unwrap_or(0));
+    let marking = dag.marking(&at_min, dmin.unwrap_or(0), idx);
 
     // The candidate lengths, one trie walk each, ascending (spec §14.3.1 item
-    // 4 (b)), until the CALLER's `cap + 1` candidates are found (item 4 (c)).
-    let mut lengths: u128 = dmin.map_or(0, |d| 1u128 << d);
+    // 4 (b)), until the CALLER's `cap + 1` candidates are found (item 4 (c)):
+    // the lengths reachable from the marked seeds, 0 when the first hop itself
+    // is a rule-B boundary, 1 for an opaque seed.
+    let mut lengths: u128 = dag
+        .seeds
+        .iter()
+        .filter_map(|(to, _)| marking.bits.get(to))
+        .fold(0, |a, b| a | b);
+    if marking.boundary.contains_key(&None) {
+        lengths |= 1;
+    }
     if !dag.opaque.is_empty() {
         lengths |= 1 << 1;
     }
-    type Found<'f> = (Vec<Vec<&'f SnapshotGraphEdge>>, EndKey, &'f str);
-    let found: Vec<Found> = {
+    type Walked<'f> = (
+        Vec<Vec<&'f SnapshotGraphEdge>>,
+        EndKey,
+        &'f str,
+        Option<&'f SnapshotGraphEdge>,
+    );
+    let found: Vec<Walked> = {
         let mut walk = TrieWalk {
             root_id,
             idx,
@@ -1625,24 +1819,25 @@ fn reconstruct_witness_paths<'i>(
             arena: vec![("", Vec::new(), 0)],
             found: Vec::new(),
             limit: cap + 1,
+            dmin,
         };
-        for l in 1..=MAX_DEPTH {
+        for l in 0..=MAX_DEPTH {
             if lengths & (1u128 << l) != 0 && walk.found.len() < walk.limit {
                 walk.descend(l, 0, 0);
             }
         }
         walk.found
             .iter()
-            .map(|&(n, end)| (walk.edges_to(n), end, walk.arena[n].0))
+            .map(|(n, end, edge)| (walk.edges_to(*n), end.clone(), walk.arena[*n].0, *edge))
             .collect()
     };
     let mut candidates: Vec<Candidate> = found
         .into_iter()
-        .filter_map(|(steps, end, routine)| {
+        .filter_map(|(steps, end, routine, edge)| {
             // A carrier's terminal is its first carrier fact. A routine
             // carries the fact by its subject, so only an inconsistent
             // hand-built index lacks one: no candidate, as the old search
-            // gave none.
+            // gave none. A boundary's is the boundary (rule B).
             let terminal = match end {
                 EndKey::Carrier => Some(terminal_hop_from_fact(
                     idx.direct_facts_by_routine
@@ -1651,6 +1846,7 @@ fn reconstruct_witness_paths<'i>(
                         .find(|d| is_bfs_carrier(d, fact))?,
                     idx,
                 )),
+                EndKey::Boundary(_) => Some(boundary_terminal(edge?, idx).1),
                 EndKey::Opaque => None,
             };
             let opaque_end = (end == EndKey::Opaque).then_some(routine);
@@ -1659,21 +1855,30 @@ fn reconstruct_witness_paths<'i>(
         .collect();
     // The proofs join the stream by key, each ending at its producer's own
     // operation; a proof equal in key to another candidate is that candidate.
+    // Under rule B a proof is cut at its first edge into dependency code, with
+    // that boundary's terminal and identity (spec §14.3.5 item 5).
     let mut proof_candidates: Vec<Candidate> = proofs
         .paths
         .iter()
         .map(|(edges, producer_fact)| {
-            let edges: Vec<Vec<&SnapshotGraphEdge>> =
-                edges.iter().map(|&e| vec![&idx.typed_edges[e]]).collect();
-            let terminal = terminal_hop_from_fact(&idx.capability_facts[*producer_fact], idx);
-            candidate(
-                &edges,
-                Some(terminal),
-                EndKey::Carrier,
-                None,
-                hop_cache,
-                idx,
-            )
+            let edges: Vec<&SnapshotGraphEdge> =
+                edges.iter().map(|&e| &idx.typed_edges[e]).collect();
+            let cut = edges
+                .iter()
+                .position(|e| edge_to(e).is_some_and(|to| idx.is_dependency(to)));
+            let (prefix, terminal, end) = match cut {
+                Some(i) => {
+                    let (b, t) = boundary_terminal(edges[i], idx);
+                    (&edges[..i], t, EndKey::Boundary(Rc::new(b)))
+                }
+                None => (
+                    &edges[..],
+                    terminal_hop_from_fact(&idx.capability_facts[*producer_fact], idx),
+                    EndKey::Carrier,
+                ),
+            };
+            let steps: Vec<Vec<&SnapshotGraphEdge>> = prefix.iter().map(|&e| vec![e]).collect();
+            candidate(&steps, Some(terminal), end, None, hop_cache, idx)
         })
         .collect();
     proof_candidates.sort_by(|a, b| a.key_cmp(b));
@@ -1695,11 +1900,13 @@ fn reconstruct_witness_paths<'i>(
     // `opaque`, and today's merge (`key_cmp`, no end key) would count two such
     // candidates with one projection as one. An opaque seed's hop and a call
     // into a carrier differ in hop JSON, so this never fires; if it does, that
-    // is a finding (spec §14.3.1 item 4 (c)).
+    // is a finding (spec §14.3.1 item 4 (c)). Under rule B one prefix may end
+    // at several boundaries: distinct candidates (A3-01).
     debug_assert!(
-        merged
-            .windows(2)
-            .all(|w| w[0].0.projected.key_cmp(&w[1].0.projected) != std::cmp::Ordering::Equal),
+        idx.boundary.is_some()
+            || merged
+                .windows(2)
+                .all(|w| w[0].0.projected.key_cmp(&w[1].0.projected) != std::cmp::Ordering::Equal),
         "two witness candidates share a projected path"
     );
     let truncated = merged.len() > cap || proofs.truncated;
@@ -1750,10 +1957,19 @@ fn reconstruct_witness_paths<'i>(
     let mut paths: Vec<WitnessPath> = Vec::with_capacity(merged.len());
     let mut projected: Vec<ProjPath> = Vec::with_capacity(merged.len());
     let mut twins: Vec<WitnessPath> = Vec::new();
+    let mut ends: Vec<Option<Rc<BoundaryEnd>>> = Vec::with_capacity(merged.len());
     for (c, t) in merged {
         paths.push(c.path);
         projected.push(c.projected);
-        twins.extend(t);
+        match c.end {
+            // A group's conditionality is `unknown` (spec §14.3.5 item 4): its
+            // twins count for nothing.
+            EndKey::Boundary(b) => ends.push(Some(b)),
+            _ => {
+                ends.push(None);
+                twins.extend(t);
+            }
+        }
     }
     // Spec D3: only a NON-EMPTY path set is "not known complete".
     let limit_hit = limit_hit && !paths.is_empty();
@@ -1765,6 +1981,7 @@ fn reconstruct_witness_paths<'i>(
         diagnostics,
         projected: Some(projected),
         twins,
+        ends,
     }
 }
 
@@ -2810,6 +3027,9 @@ fn occurrence_id_from_key(canonical_key: &str, ordinal: u32) -> String {
 #[derive(Debug, Clone)]
 pub struct DigestEffectResult {
     pub effect_type: String,
+    /// Rule B (spec §14.3.5): a grouped boundary effect. Not serialized (its
+    /// `detail.boundary` shows it); the ordering engine never grades it.
+    pub boundary_group: bool,
     pub detail: Vec<(String, String)>,
     pub provenance: &'static str,
     pub evidence: ProjectedEvidence,
@@ -3357,10 +3577,11 @@ fn merge_normalize_via_paths(
 /// Per-identity dedup state (see `effect_fact_loop_identity`'s doc and
 /// `digest_one_root`'s identity-duplicate handling).
 enum IdentitySeen {
-    /// First occurrence's contribution landed at this `effect_map` position (via
-    /// either a fresh insert or a live merge into a pre-existing entry from a
-    /// DIFFERENT identity sharing the same `dedupe_key`).
-    First(usize),
+    /// First occurrence's contribution landed at these `effect_map` positions
+    /// (via either a fresh insert or a live merge into a pre-existing entry
+    /// from a DIFFERENT identity sharing the same key): one per part, the
+    /// per-resource effect and each rule-B group (spec §14.3.5 item 3).
+    First(Vec<usize>),
     /// A duplicate has already been merge-normalized into the entry above; the
     /// normalized list is a fixed point for any further identical duplicate (see
     /// the `IdentitySeen::First` match arm's comment in `digest_one_root`).
@@ -3422,6 +3643,9 @@ fn digest_one_root<'i>(
             fact_subject: String,
             /// Every merged fact's originating `witness_operation_id` (#65).
             origin_operation_ids: BTreeSet<String>,
+            /// Rule B (spec §14.3.5 item 3): a grouped boundary effect, its
+            /// boundary and its resources (resource id → display or id).
+            group: Option<(Rc<BoundaryEnd>, BTreeMap<String, String>)>,
         }
         let mut effect_map: Vec<(String, AccumulatedEffect)> = Vec::new();
         // O(1) key → position index over effect_map (same keys, same positions —
@@ -3480,25 +3704,28 @@ fn digest_one_root<'i>(
                     // function's doc) — so there is nothing left to do here.
                     continue;
                 }
-                Some(&IdentitySeen::First(pos)) => {
+                Some(IdentitySeen::First(positions)) => {
                     // FIRST duplicate of this identity, WITHOUT re-running the
-                    // witness. Its own paths are a proven subset of the entry's
+                    // witness. Its own paths are a proven subset of the entries'
                     // (identical inputs ⇒ identical outcome — see
                     // `effect_fact_loop_identity`'s doc), and offering a window
-                    // paths it already holds changes nothing, so only the temp
-                    // state is merged.
-                    #[cfg(test)]
-                    {
-                        shadows[pos].merge(&[], &[], false);
-                    }
-                    let acc = &mut effect_map[pos].1;
-                    // temp_state is NOT assumed idempotent (unlike the paths above):
-                    // a different identity sharing this entry's dedupe_key may have
-                    // mutated it since this identity's first occurrence, so it is
-                    // cheaply recomputed for real with the SAME merge formula and
-                    // this duplicate's own (non-BFS, plain field) tempState.
+                    // paths it already holds changes nothing (nor adding a group a
+                    // resource it already lists), so only the temp state is
+                    // merged, into every entry the identity reached.
                     let dup_temp_state = fact_temp_state_of(fact);
-                    acc.temp_state = merge_temp_state(&acc.temp_state, &dup_temp_state);
+                    for &pos in positions {
+                        #[cfg(test)]
+                        {
+                            shadows[pos].merge(&[], &[], false);
+                        }
+                        let acc = &mut effect_map[pos].1;
+                        // temp_state is NOT assumed idempotent (unlike the paths
+                        // above): a different identity sharing this entry's key may
+                        // have mutated it since this identity's first occurrence, so
+                        // it is cheaply recomputed for real with the SAME merge
+                        // formula and this duplicate's own tempState.
+                        acc.temp_state = merge_temp_state(&acc.temp_state, &dup_temp_state);
+                    }
 
                     identity_seen.insert(identity, IdentitySeen::Normalized);
                     continue;
@@ -3517,6 +3744,7 @@ fn digest_one_root<'i>(
                     diagnostics: Vec::new(),
                     projected: None,
                     twins: Vec::new(),
+                    ends: Vec::new(),
                 }
             } else {
                 reconstruct_witness_paths(
@@ -3530,25 +3758,6 @@ fn digest_one_root<'i>(
                 )
             };
 
-            let shortest = outcome.paths.first();
-            let terminal = shortest.and_then(|p| find_terminal(&p.hops));
-
-            let evidence = evidence_from_terminal(terminal);
-            let evidence_operation_id = match terminal {
-                Some(WitnessHop::Terminal {
-                    operation_id: Some(op),
-                    ..
-                }) => Some(op.clone()),
-                _ => None,
-            };
-            let evidence_callsite_id = match terminal {
-                Some(WitnessHop::Terminal {
-                    callsite_id: Some(cs),
-                    ..
-                }) => Some(cs.clone()),
-                _ => None,
-            };
-
             // Project all paths to QueryWitnessHop[][] AND compute each raw path's
             // conditionality from its OWN terminal hop (#8 — must be done before
             // projection, which strips terminals).
@@ -3560,20 +3769,6 @@ fn digest_one_root<'i>(
                     .map(|p| ProjPath::from_hops(project_path(p, rid, &display, idx)))
                     .collect(),
             };
-            let path_conds: Vec<crate::engine::l5::conditionality::EffectConditionality> = outcome
-                .paths
-                .iter()
-                .map(|p| compute_path_conditionality(p, cs_ctx, op_ctx))
-                .collect();
-
-            let key = dedupe_key(effect_type, terminal, fact, &detail);
-
-            // tempState of the originating table-write fact (physical-write filter).
-            let fact_temp_state: Option<SnapTempState> = fact_temp_state_of(fact);
-
-            // Find existing in ordered effect_map.
-            let existing_pos = effect_index.get(&key).copied();
-
             // The twins' conditionality counts too (their projection is a kept
             // path's).
             let twin_conds: Vec<crate::engine::l5::conditionality::EffectConditionality> = outcome
@@ -3582,71 +3777,163 @@ fn digest_one_root<'i>(
                 .map(|p| compute_path_conditionality(p, cs_ctx, op_ctx))
                 .collect();
             let input_truncated = outcome.truncated || outcome.limit_hit;
-            // Merge into the effect (or, for a new effect, into an empty window):
-            // ONE path serves both branches (#69 D3), so the truncation fold
-            // cannot be dropped from only one of them.
-            let merge = |acc: &mut AccumulatedEffect| {
-                for (p, &c) in projected_paths.iter().zip(&path_conds) {
-                    acc.via.offer(p.clone(), c);
-                }
-                for &c in &twin_conds {
-                    acc.via.fold_cond(c);
-                }
-                acc.via.truncated |= input_truncated;
-            };
+            // tempState of the originating table-write fact (physical-write filter).
+            let fact_temp_state: Option<SnapTempState> = fact_temp_state_of(fact);
 
-            let final_pos = if let Some(pos) = existing_pos {
-                let merged_temp = merge_temp_state(&effect_map[pos].1.temp_state, &fact_temp_state);
-                let acc = &mut effect_map[pos].1;
-                merge(acc);
-                acc.temp_state = merged_temp;
-                acc.origin_operation_ids
-                    .extend(fact.witness_operation_id.iter().cloned());
-                pos
-            } else {
-                let pos = effect_map.len();
-                effect_index.insert(key.clone(), pos);
-                let mut acc = AccumulatedEffect {
-                    effect_type,
-                    detail,
-                    provenance: if fact.provenance == "direct" {
-                        "direct"
-                    } else {
-                        "transitive"
-                    },
-                    evidence,
-                    evidence_operation_id,
-                    evidence_callsite_id,
-                    via: ViaWindow::default(),
-                    temp_state: fact_temp_state,
-                    fact_subject: fact.subject.clone(),
-                    origin_operation_ids: fact.witness_operation_id.iter().cloned().collect(),
-                };
-                merge(&mut acc);
-                effect_map.push((key, acc));
-                pos
-            };
-            // W10's oracle, fed what the all-paths merge was fed: each path,
-            // twins included (test builds only).
-            #[cfg(test)]
-            {
-                if shadows.len() == final_pos {
-                    shadows.push(MergeShadow::default());
+            // Rule B (spec §14.3.5 item 3): the fact's candidates partitioned by
+            // end key, AFTER the enumeration. The paths with no boundary are the
+            // fact's per-resource effect (a fact with no path keeps that one,
+            // empty); each boundary identity is its own group with only its own
+            // paths. Off rule B every path is in the first part.
+            let end_of = |i: usize| outcome.ends.get(i).cloned().flatten();
+            let plain: Vec<usize> = (0..outcome.paths.len())
+                .filter(|&i| end_of(i).is_none())
+                .collect();
+            let mut parts: Vec<(Option<Rc<BoundaryEnd>>, Vec<usize>)> = Vec::new();
+            if !plain.is_empty() || outcome.paths.is_empty() {
+                parts.push((None, plain));
+            }
+            for i in 0..outcome.paths.len() {
+                if let Some(b) = end_of(i) {
+                    match parts
+                        .iter_mut()
+                        .find(|(k, _)| k.as_ref().is_some_and(|k| k.id == b.id))
+                    {
+                        Some(part) => part.1.push(i),
+                        None => parts.push((Some(b), vec![i])),
+                    }
                 }
-                let twin_paths: Vec<ProjPath> = outcome
-                    .twins
-                    .iter()
-                    .map(|p| ProjPath::from_hops(project_path(p, rid, &display, idx)))
-                    .collect();
-                let paths = [projected_paths.clone(), twin_paths].concat();
-                let conds = [path_conds.clone(), twin_conds.clone()].concat();
-                shadows[final_pos].merge(&paths, &conds, input_truncated);
+            }
+
+            let mut positions: Vec<usize> = Vec::with_capacity(parts.len());
+            for (bnd, ix) in parts {
+                let terminal = ix
+                    .first()
+                    .and_then(|&i| find_terminal(&outcome.paths[i].hops));
+                let evidence = evidence_from_terminal(terminal);
+                let evidence_operation_id = match terminal {
+                    Some(WitnessHop::Terminal {
+                        operation_id: Some(op),
+                        ..
+                    }) => Some(op.clone()),
+                    _ => None,
+                };
+                let evidence_callsite_id = match terminal {
+                    Some(WitnessHop::Terminal {
+                        callsite_id: Some(cs),
+                        ..
+                    }) => Some(cs.clone()),
+                    _ => None,
+                };
+                let paths: Vec<ProjPath> = ix.iter().map(|&i| projected_paths[i].clone()).collect();
+                // A group's terminal context is `unknown` (the callee is not
+                // analysed, spec §14.3.5 item 4), so each of its paths is.
+                let conds: Vec<crate::engine::l5::conditionality::EffectConditionality> = match &bnd
+                {
+                    Some(_) => vec![crate::engine::l5::conditionality::UNKNOWN; ix.len()],
+                    None => ix
+                        .iter()
+                        .map(|&i| compute_path_conditionality(&outcome.paths[i], cs_ctx, op_ctx))
+                        .collect(),
+                };
+                let part_twins: &[crate::engine::l5::conditionality::EffectConditionality] =
+                    if bnd.is_some() { &[] } else { &twin_conds };
+                let key = match &bnd {
+                    // (effect type with its temp class, boundary identity).
+                    Some(b) => format!(
+                        "B|{effect_type}|{}|{}",
+                        if is_known_temp_snap(fact) { "kt" } else { "nt" },
+                        b.id
+                    ),
+                    None => dedupe_key(effect_type, terminal, fact, &detail),
+                };
+                // Merge into the effect (or, for a new effect, into an empty
+                // window): ONE path serves both branches (#69 D3), so the
+                // truncation fold cannot be dropped from only one of them.
+                let merge = |acc: &mut AccumulatedEffect| {
+                    for (p, &c) in paths.iter().zip(&conds) {
+                        acc.via.offer(p.clone(), c);
+                    }
+                    for &c in part_twins {
+                        acc.via.fold_cond(c);
+                    }
+                    acc.via.truncated |= input_truncated;
+                    if let (Some((_, resources)), Some(r)) = (&mut acc.group, &fact.resource_id) {
+                        resources.entry(r.clone()).or_insert_with(|| {
+                            resource_display_of(fact, &idx.stable_id_to_display)
+                                .unwrap_or_else(|| r.clone())
+                        });
+                    }
+                };
+
+                let final_pos = if let Some(pos) = effect_index.get(&key).copied() {
+                    let merged_temp =
+                        merge_temp_state(&effect_map[pos].1.temp_state, &fact_temp_state);
+                    let acc = &mut effect_map[pos].1;
+                    merge(acc);
+                    acc.temp_state = merged_temp;
+                    if acc.group.is_none() {
+                        acc.origin_operation_ids
+                            .extend(fact.witness_operation_id.iter().cloned());
+                    }
+                    pos
+                } else {
+                    let pos = effect_map.len();
+                    effect_index.insert(key.clone(), pos);
+                    let mut acc = AccumulatedEffect {
+                        effect_type,
+                        detail: detail.clone(),
+                        provenance: if fact.provenance == "direct" {
+                            "direct"
+                        } else {
+                            "transitive"
+                        },
+                        evidence,
+                        evidence_operation_id,
+                        evidence_callsite_id,
+                        via: ViaWindow::default(),
+                        temp_state: fact_temp_state.clone(),
+                        fact_subject: fact.subject.clone(),
+                        // A group names its resources, not the dependency's
+                        // operations: no `detail.tempState` join (#65).
+                        origin_operation_ids: if bnd.is_some() {
+                            BTreeSet::new()
+                        } else {
+                            fact.witness_operation_id.iter().cloned().collect()
+                        },
+                        group: bnd.clone().map(|b| (b, BTreeMap::new())),
+                    };
+                    merge(&mut acc);
+                    effect_map.push((key, acc));
+                    pos
+                };
+                // W10's oracle, fed what the all-paths merge was fed: each path,
+                // twins included (test builds only).
+                #[cfg(test)]
+                {
+                    if shadows.len() == final_pos {
+                        shadows.push(MergeShadow::default());
+                    }
+                    let twin_paths: Vec<ProjPath> = if bnd.is_some() {
+                        Vec::new()
+                    } else {
+                        outcome
+                            .twins
+                            .iter()
+                            .map(|p| ProjPath::from_hops(project_path(p, rid, &display, idx)))
+                            .collect()
+                    };
+                    let all = [paths.clone(), twin_paths].concat();
+                    let all_conds = [conds.clone(), part_twins.to_vec()].concat();
+                    shadows[final_pos].merge(&all, &all_conds, input_truncated);
+                }
+                positions.push(final_pos);
             }
 
             // Record where this identity's own (first) contribution landed, so a
-            // later duplicate can normalize the SAME entry without re-running BFS
-            // — see `IdentitySeen`'s doc and the match above.
-            identity_seen.insert(identity, IdentitySeen::First(final_pos));
+            // later duplicate can normalize the SAME entries without re-running
+            // the witness — see `IdentitySeen`'s doc and the match above.
+            identity_seen.insert(identity, IdentitySeen::First(positions));
         }
 
         // Materialize effects from effectMap.values() insertion order.
@@ -3662,17 +3949,38 @@ fn digest_one_root<'i>(
                     .check(&acc.via);
             }
             let via_paths = acc.via.printed();
-            // Occurrence-build (canonical key + factId).
-            let terminal_evidence_kind = if acc.evidence_operation_id.is_some() {
-                "operation"
-            } else {
-                "callsite"
+            // Occurrence-build (canonical key + factId). A group's terminal is
+            // its boundary, so two groups of one fact never share an id.
+            let (terminal_evidence_kind, terminal_evidence_id) = match &acc.group {
+                Some((b, _)) => ("boundary", b.id.clone()),
+                None if acc.evidence_operation_id.is_some() => (
+                    "operation",
+                    acc.evidence_operation_id.clone().unwrap_or_default(),
+                ),
+                None => (
+                    "callsite",
+                    acc.evidence_callsite_id.clone().unwrap_or_default(),
+                ),
             };
-            let terminal_evidence_id = acc
-                .evidence_operation_id
-                .clone()
-                .or_else(|| acc.evidence_callsite_id.clone())
-                .unwrap_or_default();
+            // A group's detail (spec §14.3.5 item 3): the dependency routine it
+            // enters, its distinct resources' count and the first 10 of them,
+            // in resource-id order. Values stay strings.
+            let detail = match &acc.group {
+                Some((b, resources)) => vec![
+                    ("boundary".to_string(), b.display.clone()),
+                    ("resourceCount".to_string(), resources.len().to_string()),
+                    (
+                        "resources".to_string(),
+                        resources
+                            .values()
+                            .take(10)
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                ],
+                None => acc.detail,
+            };
 
             // A kt DB effect's key carries its class (#69 D3), so a kt and an nt
             // write never share an occurrence id; nt keys are unchanged.
@@ -3699,7 +4007,8 @@ fn digest_one_root<'i>(
 
             effects.push(DigestEffectResult {
                 effect_type: acc.effect_type.to_string(),
-                detail: acc.detail,
+                boundary_group: acc.group.is_some(),
+                detail,
                 provenance: acc.provenance,
                 evidence: ProjectedEvidence {
                     source_kind: acc.evidence.source_kind,
@@ -3780,6 +4089,7 @@ fn digest_one_root<'i>(
                             temp_state: e.temp_state.clone(),
                             occurrence_id: e.fact_id.clone(),
                             conditionality: e.conditionality,
+                            boundary: e.boundary_group,
                         },
                     )
                     .collect();
@@ -4722,6 +5032,8 @@ fn pub_idx_as_private<'i>(idx: &'i FingerprintIndexesPub<'_>) -> FingerprintInde
         pd: idx.pd_solution,
         typed_edges: idx.typed_edges,
         capability_facts: idx.capability_facts,
+        // The fingerprint query reads the cut: rule B is off.
+        boundary: None,
     }
 }
 
@@ -4949,6 +5261,7 @@ mod tests {
             root_classifications: vec![],
             routine_order_frames: None,
             pd_solution: Default::default(),
+            boundary: None,
         }
     }
 
@@ -7613,5 +7926,434 @@ codeunit 50102 "W10 Merge"
         }
         assert!(crate::engine::l5::ordering_engine::O1_PAIRS.load(Ordering::Relaxed) - pairs > 100);
         assert!(crate::engine::l5::ordering_engine::O1_EDGES.load(Ordering::Relaxed) > edges);
+    }
+
+    // -----------------------------------------------------------------------
+    // #160 step 6 rule B (spec §14.3.5): boundary witnesses and grouped
+    // boundary effects, on hand-stated trees. Routine ids are `<Name>#`;
+    // `Dep*` routines are the dependency app `XDep`'s.
+    // -----------------------------------------------------------------------
+
+    /// A tree over `routines` (displays = the names), the tables `tables`
+    /// (`x:Table:<n>` → name), rule B on with `deps` as dependency routines.
+    fn rb_snapshot(routines: &[&str], deps: &[&str], tables: &[(u32, &str)]) -> CapabilitySnapshot {
+        let mut snap = empty_snapshot();
+        let mut ids: Vec<(String, String)> = routines
+            .iter()
+            .map(|r| (format!("{r}#"), r.to_string()))
+            .chain(
+                tables
+                    .iter()
+                    .map(|(n, t)| (format!("x:Table:{n}"), t.to_string())),
+            )
+            .collect();
+        ids.sort();
+        snap.identities = SnapshotIdentityTable {
+            stable_ids: ids.iter().map(|p| p.0.clone()).collect(),
+            display_names: ids.iter().map(|p| p.1.clone()).collect(),
+        };
+        snap.boundary = Some(crate::engine::l5::snapshot::BoundaryRule {
+            dependency_app: deps
+                .iter()
+                .map(|d| (format!("{d}#"), std::sync::Arc::from("XDep")))
+                .collect(),
+        });
+        snap
+    }
+
+    /// A physical `op` on table `n` by `subject#`: direct with its operation
+    /// `opid`, or inherited with first hop `cs`.
+    fn rb_fact(subject: &str, op: &str, n: u32, opid: Option<&str>, cs: Option<&str>) -> Fact {
+        let prov = if cs.is_some() { "inherited" } else { "direct" };
+        let mut f = make_fact(op, "table", Some(&format!("x/table/{n}")), prov, opid, cs);
+        f.subject = format!("{subject}#");
+        f.extra = Some(SnapCapabilityExtra::Table {
+            op_subtype: None,
+            record_variable_id: None,
+            temp_state: Some(SnapTempState::Known { value: false }),
+        });
+        f
+    }
+
+    fn rb_call(from: &str, to: &str, cs: &str) -> SnapshotGraphEdge {
+        call_edge(&format!("{from}#"), &format!("{to}#"), cs)
+    }
+
+    /// Root `R`'s digest effects.
+    fn rb_effects(snap: &CapabilitySnapshot) -> Vec<DigestEffectResult> {
+        let entries = digest_query(snap, &["R#".to_string()], None, None, false);
+        entries.into_iter().next().expect("R's entry").effects
+    }
+
+    fn rb_detail<'e>(e: &'e DigestEffectResult, key: &str) -> Option<&'e str> {
+        e.detail
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Each printed via path as `from>to` displays, `,`-joined.
+    fn rb_via(e: &DigestEffectResult) -> Vec<String> {
+        e.via_paths
+            .iter()
+            .map(|p| {
+                p.iter()
+                    .map(|h| {
+                        format!(
+                            "{}>{}",
+                            h.inner.from_display,
+                            h.inner.to_display.as_deref().unwrap_or("")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .collect()
+    }
+
+    /// B1 (T1's shape): R calls the dependency's `DepOuter`, whose `DepInner`
+    /// modifies tables 18 and 36. One `DB_MODIFY` group at the call: boundary
+    /// `XDep.DepOuter`, both resources (resource-id order), `unknown`, the
+    /// empty via path (the root's own call is the boundary).
+    #[test]
+    fn b1_effects_behind_one_call_are_one_group_per_type() {
+        let mut snap = rb_snapshot(
+            &["R", "DepOuter", "DepInner"],
+            &["DepOuter", "DepInner"],
+            &[(18, "Customer"), (36, "Sales Header")],
+        );
+        snap.typed_edges = vec![
+            rb_call("R", "DepOuter", "cs1"),
+            rb_call("DepOuter", "DepInner", "cs-oi"),
+        ];
+        snap.capability_facts = vec![
+            rb_fact("DepInner", "modify", 18, Some("op18"), None),
+            rb_fact("DepInner", "modify", 36, Some("op36"), None),
+            rb_fact("R", "modify", 18, None, Some("cs1")),
+            rb_fact("R", "modify", 36, None, Some("cs1")),
+        ];
+        let effects = rb_effects(&snap);
+        assert_eq!(effects.len(), 1, "{effects:?}");
+        let g = &effects[0];
+        assert!(g.boundary_group);
+        assert_eq!(g.effect_type, "DB_MODIFY");
+        assert_eq!(
+            g.detail,
+            vec![
+                ("boundary".to_string(), "XDep.DepOuter".to_string()),
+                ("resourceCount".to_string(), "2".to_string()),
+                (
+                    "resources".to_string(),
+                    "Customer, Sales Header".to_string()
+                ),
+            ]
+        );
+        assert_eq!(g.conditionality, crate::engine::l5::conditionality::UNKNOWN);
+        assert_eq!(rb_via(g), vec![String::new()]);
+        assert_eq!(g.evidence_callsite_id.as_deref(), Some("cs1"));
+    }
+
+    /// B2: a primary-terminal effect beside a boundary group is unchanged: R's
+    /// write through its own `P` keeps its per-resource effect.
+    #[test]
+    fn b2_a_primary_witness_keeps_its_per_resource_effect() {
+        let mut snap = rb_snapshot(
+            &["R", "P", "DepOuter"],
+            &["DepOuter"],
+            &[(18, "Customer"), (50, "Ws Log")],
+        );
+        snap.typed_edges = vec![rb_call("R", "P", "cs0"), rb_call("R", "DepOuter", "cs1")];
+        snap.capability_facts = vec![
+            rb_fact("P", "modify", 50, Some("op50"), None),
+            rb_fact("DepOuter", "modify", 18, Some("op18"), None),
+            rb_fact("R", "modify", 50, None, Some("cs0")),
+            rb_fact("R", "modify", 18, None, Some("cs1")),
+        ];
+        let effects = rb_effects(&snap);
+        let plain: Vec<_> = effects.iter().filter(|e| !e.boundary_group).collect();
+        assert_eq!(plain.len(), 1, "{effects:?}");
+        assert_eq!(rb_detail(plain[0], "resourceId"), Some("x/table/50"));
+        assert_eq!(rb_detail(plain[0], "boundary"), None);
+        assert_eq!(rb_via(plain[0]), vec!["R>P".to_string()]);
+        assert_eq!(plain[0].evidence_operation_id.as_deref(), Some("op50"));
+        let groups: Vec<_> = effects.iter().filter(|e| e.boundary_group).collect();
+        assert_eq!(groups.len(), 1, "{effects:?}");
+        assert_eq!(rb_detail(groups[0], "resources"), Some("Customer"));
+    }
+
+    /// B3: more than 10 resources: `resourceCount` is exact and the first 10
+    /// are listed, in resource-id order.
+    #[test]
+    fn b3_a_group_lists_its_first_ten_resources() {
+        let tables: Vec<(u32, String)> = (101..=112).map(|n| (n, format!("T{n}"))).collect();
+        let named: Vec<(u32, &str)> = tables.iter().map(|(n, t)| (*n, t.as_str())).collect();
+        let mut snap = rb_snapshot(&["R", "DepOuter"], &["DepOuter"], &named);
+        snap.typed_edges = vec![rb_call("R", "DepOuter", "cs1")];
+        // Root facts first, in reverse: the list order is the resource ids'.
+        for (n, _) in tables.iter().rev() {
+            snap.capability_facts
+                .push(rb_fact("R", "insert", *n, None, Some("cs1")));
+            snap.capability_facts.push(rb_fact(
+                "DepOuter",
+                "insert",
+                *n,
+                Some(&format!("op{n}")),
+                None,
+            ));
+        }
+        let effects = rb_effects(&snap);
+        assert_eq!(effects.len(), 1, "{effects:?}");
+        assert_eq!(rb_detail(&effects[0], "resourceCount"), Some("12"));
+        let want: Vec<String> = (101..=110).map(|n| format!("T{n}")).collect();
+        assert_eq!(
+            rb_detail(&effects[0], "resources"),
+            Some(want.join(", ").as_str())
+        );
+    }
+
+    /// B5: partition within ONE fact (A2-01). R's single first hop calls the
+    /// primary `Helper`, which calls `DepA` at `cs1` and `DepB` at `cs2` and
+    /// fires two implicit triggers into `DepT1` (`op1`) and `DepT2` (`op2`);
+    /// all four carry table 18's insert, at `dmin` = 2. R's one fact has one
+    /// projected prefix (`R > Helper`) and four boundaries: four groups, four
+    /// fact ids, table 18 in each, four ordering occurrences.
+    #[test]
+    fn b5_one_fact_behind_four_boundaries_is_four_groups() {
+        let deps = ["DepA", "DepB", "DepT1", "DepT2"];
+        let mut snap = rb_snapshot(
+            &["R", "Helper", "DepA", "DepB", "DepT1", "DepT2"],
+            &deps,
+            &[(18, "Customer")],
+        );
+        snap.typed_edges = vec![
+            rb_call("R", "Helper", "cs-h"),
+            rb_call("Helper", "DepA", "cs1"),
+            rb_call("Helper", "DepB", "cs2"),
+            trigger_edge("Helper#", "DepT1#", "op1"),
+            trigger_edge("Helper#", "DepT2#", "op2"),
+        ];
+        snap.capability_facts = deps
+            .iter()
+            .map(|d| rb_fact(d, "insert", 18, Some(&format!("w-{d}")), None))
+            .chain([rb_fact("R", "insert", 18, None, Some("cs-h"))])
+            .collect();
+        let effects = rb_effects(&snap);
+        let groups: Vec<(&str, Vec<String>, &str)> = effects
+            .iter()
+            .filter(|e| e.boundary_group)
+            .map(|e| {
+                (
+                    rb_detail(e, "boundary").unwrap_or(""),
+                    rb_via(e),
+                    rb_detail(e, "resources").unwrap_or(""),
+                )
+            })
+            .collect();
+        let want: Vec<(&str, Vec<String>, &str)> =
+            ["XDep.DepA", "XDep.DepB", "XDep.DepT1", "XDep.DepT2"]
+                .into_iter()
+                .map(|b| (b, vec!["R>Helper".to_string()], "Customer"))
+                .collect();
+        let mut got = groups.clone();
+        got.sort();
+        assert_eq!(got, want, "{effects:?}");
+        assert_eq!(effects.len(), 4, "no per-resource effect: {effects:?}");
+        let ids: BTreeSet<&str> = effects.iter().map(|e| e.fact_id.as_str()).collect();
+        assert_eq!(ids.len(), 4, "four distinct fact ids");
+    }
+
+    /// W4b's key under rule B: (projected length, projected hop JSONs, end),
+    /// the end `boundary:<identity>`, `carrier` or `opaque` (key order).
+    type W4bCutKey = (usize, Vec<String>, String);
+
+    /// W4b's brute-force oracle with the boundary flag on: every walk of
+    /// length `dmin` from Root's first hop that ends at a carrier (dependency
+    /// carriers included), cut at its first dependency routine, keyed and
+    /// deduplicated by key, in key order.
+    fn w4b_cut_oracle(snap: &CapabilitySnapshot, f: &Fact) -> Vec<W4bCutKey> {
+        let idx = build_fingerprint_indexes(snap);
+        let json = |e: &SnapshotGraphEdge| -> String {
+            let from = edge_from(e);
+            let display = idx
+                .routine_display_by_id
+                .get(from)
+                .cloned()
+                .unwrap_or_else(|| from.to_string());
+            let hop = edge_to_hop(e, &idx).expect("a walked edge has a hop");
+            query_hop_json(&project_hop(&hop, from, &display, &idx).expect("every hop projects"))
+        };
+        let identity = |e: &SnapshotGraphEdge| match e {
+            SnapshotGraphEdge::ImplicitTrigger { operation_id, .. } => format!("op:{operation_id}"),
+            SnapshotGraphEdge::EventDispatch { event_id, .. } => format!("ev:{event_id}"),
+            _ => format!("cs:{}", edge_callsite_id(e).unwrap()),
+        };
+        let carrier = |r: &str| {
+            idx.direct_facts_by_routine
+                .get(r)
+                .is_some_and(|ds| ds.iter().any(|d| is_bfs_carrier(d, f)))
+        };
+        let seeds: Vec<&SnapshotGraphEdge> = idx.outgoing_edges["R#"]
+            .iter()
+            .copied()
+            .filter(|e| is_first_hop(e, f) && edge_has_hop(e))
+            .collect();
+        fn walks<'e>(
+            idx: &FingerprintIndexes<'e>,
+            prefix: &mut Vec<&'e SnapshotGraphEdge>,
+            len: usize,
+            out: &mut Vec<Vec<&'e SnapshotGraphEdge>>,
+        ) {
+            if prefix.len() == len {
+                out.push(prefix.clone());
+                return;
+            }
+            let at = edge_to(prefix.last().expect("a seed")).expect("a hop edge has a target");
+            for &e in idx.outgoing_edges.get(at).into_iter().flatten() {
+                if edge_has_hop(e) && edge_to(e) != Some("R#") {
+                    prefix.push(e);
+                    walks(idx, prefix, len, out);
+                    prefix.pop();
+                }
+            }
+        }
+        let mut keys: Vec<W4bCutKey> = Vec::new();
+        for len in 1..=8 {
+            let mut all = Vec::new();
+            for &s in &seeds {
+                walks(&idx, &mut vec![s], len, &mut all);
+            }
+            let found: Vec<_> = all
+                .into_iter()
+                .filter(|w| carrier(edge_to(w.last().unwrap()).unwrap()))
+                .collect();
+            if found.is_empty() {
+                continue;
+            }
+            for w in found {
+                let cut = w
+                    .iter()
+                    .position(|e| idx.is_dependency(edge_to(e).unwrap()));
+                let n = cut.unwrap_or(w.len());
+                // Every hop projects: the prefix's projected length is its depth.
+                let hops: Vec<String> = w[..n].iter().map(|e| json(e)).collect();
+                let end = match cut {
+                    Some(i) => format!("boundary:{}", identity(w[i])),
+                    None => "carrier".to_string(),
+                };
+                keys.push((n, hops, end));
+            }
+            break;
+        }
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    /// The witness's rule-B keys, in its order.
+    fn w4b_cut_keys(o: &WitnessOutcomeExt) -> Vec<W4bCutKey> {
+        let projected = o.projected.as_ref().expect("a case-C witness");
+        o.paths
+            .iter()
+            .zip(projected)
+            .enumerate()
+            .map(|(i, (p, q))| {
+                let end = match o.ends.get(i).cloned().flatten() {
+                    Some(b) => format!("boundary:{}", b.id),
+                    None if matches!(
+                        p.hops.last().map(|h| &**h),
+                        Some(WitnessHop::Terminal { .. })
+                    ) =>
+                    {
+                        "carrier".to_string()
+                    }
+                    None => "opaque".to_string(),
+                };
+                (
+                    q.0.len(),
+                    q.0.iter().map(|h| h.json().to_string()).collect(),
+                    end,
+                )
+            })
+            .collect()
+    }
+
+    /// W4b's rule-B fixtures (spec §14.3.1 item 4, A3-01): at every cap the
+    /// witness is exactly the cut oracle's first `cap` keys in order,
+    /// truncated iff the oracle has more. (3) boundary candidates at depths 1,
+    /// 2 and 3 plus a carrier at `dmin` = 4 (length classes ascending); (4) a
+    /// shared primary prefix `R > Helper` ending at two boundaries (`cs1`,
+    /// `cs2`), and two full paths through `DepA` that collapse into one
+    /// (prefix, boundary) candidate.
+    #[test]
+    fn w4b_rule_b_cut_keys_equal_the_brute_force_order() {
+        let mut fixtures: Vec<(&str, CapabilitySnapshot, usize)> = Vec::new();
+        let mut s3 = rb_snapshot(
+            &[
+                "R", "A", "B", "C", "W", "DepD1", "DepX", "DepW1", "DepD2", "DepW2", "DepD3",
+            ],
+            &["DepD1", "DepX", "DepW1", "DepD2", "DepW2", "DepD3"],
+            &[(18, "Customer")],
+        );
+        s3.typed_edges = vec![
+            rb_call("R", "A", "cs-root"),
+            rb_call("A", "DepD1", "cs-ad1"),
+            rb_call("DepD1", "DepX", "cs-d1x"),
+            rb_call("DepX", "DepW1", "cs-xw1"),
+            rb_call("A", "B", "cs-ab"),
+            rb_call("B", "DepD2", "cs-bd2"),
+            rb_call("DepD2", "DepW2", "cs-d2w2"),
+            rb_call("B", "C", "cs-bc"),
+            rb_call("C", "DepD3", "cs-cd3"),
+            rb_call("C", "W", "cs-cw"),
+        ];
+        s3.capability_facts = ["DepW1", "DepW2", "DepD3", "W"]
+            .iter()
+            .map(|c| rb_fact(c, "insert", 18, Some(&format!("w-{c}")), None))
+            .collect();
+        fixtures.push(("(3) boundary lengths", s3, 4));
+        let mut s4 = rb_snapshot(
+            &[
+                "R", "Helper", "DepA", "DepX1", "DepX2", "DepC", "DepB", "DepY", "DepC2",
+            ],
+            &["DepA", "DepX1", "DepX2", "DepC", "DepB", "DepY", "DepC2"],
+            &[(18, "Customer")],
+        );
+        s4.typed_edges = vec![
+            rb_call("R", "Helper", "cs-root"),
+            rb_call("Helper", "DepA", "cs1"),
+            rb_call("Helper", "DepB", "cs2"),
+            rb_call("DepA", "DepX1", "cs-ax1"),
+            rb_call("DepA", "DepX2", "cs-ax2"),
+            rb_call("DepX1", "DepC", "cs-x1c"),
+            rb_call("DepX2", "DepC", "cs-x2c"),
+            rb_call("DepB", "DepY", "cs-by"),
+            rb_call("DepY", "DepC2", "cs-yc2"),
+        ];
+        s4.capability_facts = ["DepC", "DepC2"]
+            .iter()
+            .map(|c| rb_fact(c, "insert", 18, Some(&format!("w-{c}")), None))
+            .collect();
+        fixtures.push(("(4) shared prefix", s4, 2));
+
+        let f = rb_fact("R", "insert", 18, None, Some("cs-root"));
+        for (name, snap, n) in &fixtures {
+            let oracle = w4b_cut_oracle(snap, &f);
+            assert_eq!(oracle.len(), *n, "{name}: precondition: {oracle:?}");
+            let idx = build_fingerprint_indexes(snap);
+            for cap in 1..=oracle.len() + 1 {
+                let out = reconstruct_witness_paths(
+                    "R#",
+                    &f,
+                    &idx,
+                    cap,
+                    &mut HopCache::default(),
+                    &mut DagCache::default(),
+                    &CarrierCache::default(),
+                );
+                let k = oracle.len().min(cap);
+                assert_eq!(w4b_cut_keys(&out), oracle[..k], "{name} cap {cap}");
+                assert_eq!(out.truncated, oracle.len() > cap, "{name} cap {cap}");
+            }
+        }
     }
 }

@@ -395,7 +395,7 @@ pub(crate) mod cones_census {
     /// entries, the candidate scan over every out-edge's callee cone
     /// (`SCAN_CONE`), the scan over the subject's own producer-solve entries
     /// (`SCAN_OWN`), and the raw materialization (`retag` + `sort_inherited`,
-    /// skipped under `ConeOutput::DerivedOnly`). Since #160 step 7b the scans
+    /// skipped for a member with no raw half). Since #160 step 7b the scans
     /// run for the raw half only (0 in `analyze`), and the derived row is
     /// folded from memoized closed-set rows: memo-row builds and destruction
     /// (`MEMO`; the destruction runs in the refcount-free loop and is added to
@@ -898,7 +898,7 @@ pub struct DetectorArtifacts {
     /// produces `summaries`, with zero `retag` clones. Every analyze-path consumer
     /// of the old `capability_facts_inherited` Vec reads only a derived predicate
     /// off it, so this row REPLACES that Vec outright: since C1 Task 3 the analyze
-    /// path composes under `ConeOutput::DerivedOnly` and the raw Vec is never
+    /// path composes with no raw half and the raw Vec is never
     /// built (`summaries[*].inherited_raw()` panics there — see
     /// `FullRoutineSummary`). Parked here because the rows are `Range<u32>` windows into pools this store owns; a row alone
     /// is meaningless. EMPTY when the `SUMMARIES` substrate was not demanded.
@@ -1186,10 +1186,10 @@ impl OwnedContext<'_> {
 ///
 /// ⟨C1 Task 3⟩ `demanded` additionally carries the policy-only
 /// `RAW_INHERITED_FACTS` bit (NOT part of `substrate::ALL` — see its doc). Without
-/// it the cone composes under [`ConeOutput::DerivedOnly`]: the per-routine raw
+/// it the cone composes with no raw half: the per-routine raw
 /// `Vec<CapabilityFact>` is never allocated (it cost ~10.9 GB on the 8020 corpus)
 /// and every summary carries `capability_facts_inherited: None`. With it the cone
-/// composes under [`ConeOutput::Both`] — the derived substrate AND the raw Vecs,
+/// composes `{ derived: true, raw: All }` — the derived substrate AND the raw Vecs,
 /// byte-identical to the pre-Task-3 build.
 ///
 /// #160 step 2: a SHIM (tests and `aldump`; no `alsem` command) over
@@ -1431,6 +1431,9 @@ pub(crate) fn compose_detector_artifacts(
         "RAW_INHERITED_FACTS demanded without SUMMARIES/TRANSACTION_SPANS — the raw \
          cone would silently build empty; OR in substrate::SUMMARIES alongside it"
     );
+    // This composition repeats `View::prepare`'s (the scope, the span, the
+    // inputs) for the shim and policy's RAW build; #160 step 6 Task 3 moves
+    // policy onto the view's `Cell::Raw` and deletes the policy half.
     let (caps, mut raw) = if need_summaries {
         let scope = ConeScope {
             derived: true,

@@ -318,7 +318,7 @@ fn anchor_from_panchor(a: &PAnchor, enclosing_routine_id: &str) -> SnapshotSourc
 // ===========================================================================
 
 /// Interning table — parallel stableIds[] / displayNames[], sorted by stableId.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SnapshotIdentityTable {
     #[serde(rename = "stableIds")]
     pub stable_ids: Vec<String>,
@@ -905,6 +905,18 @@ pub struct CapabilitySnapshot {
     /// #69 D2: the producer solve (`l4::pd_solve`) over `typed_edges`. Never
     /// serialized: the serialized snapshot moves only where fact values move.
     pub pd_solution: PdArena,
+    /// #160 step 6 rule B (spec §14.3.5): set only on digest's tree over the
+    /// cone graph ([`compose_tree`]); `None` on the cut. Never serialized.
+    pub boundary: Option<BoundaryRule>,
+}
+
+/// Rule B's input (spec §14.3.5): the tree's dependency routines, by the role
+/// rule (#220), each with its app's name. A witness ends at the first routine
+/// listed here.
+#[derive(Debug, Clone, Default)]
+pub struct BoundaryRule {
+    /// Stable routine id of every `Role::Dependency` routine → its app's name.
+    pub dependency_app: HashMap<String, std::sync::Arc<str>>,
 }
 
 /// Index into `PdArena::states`.
@@ -1256,6 +1268,12 @@ impl<'a> CollidedRows<'a> {
 
 /// Compose the consumed-core `CapabilitySnapshot` for a resolved source-only
 /// workspace. `resolved` carries the workspace routines + root classifications.
+///
+/// Over the cut graph (`build_r3a3_source_only_base`: workspace callers only).
+/// Its readers since #160 step 6 (digest reads [`compose_tree`]): the ordering
+/// cell, cross-app and single-app, until the #161 follow-up moves it; prove,
+/// fingerprint and diff, single-app, where the cut equals the cone graph; the
+/// r4f projections and tests. Rule B is off here (`boundary: None`).
 pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
     let base = {
         let _s = crate::engine::perf_trace::span("snapshot", "snapshot.r3a3_base");
@@ -1316,6 +1334,7 @@ pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> Ca
         root_classifications,
         routine_order_frames,
         pd_solution,
+        boundary: None,
     })
 }
 
@@ -1347,8 +1366,9 @@ struct TreeInputs<'a> {
 /// `rel.cone()`, the ledger over `model.calls` then `dependency_calls`, the
 /// direct facts and coverage from `caps`, the raw facts of the subjects drained
 /// by move, the pd arena taken from `caps` and scoped to the subjects' state
-/// closure. `identities`: a table the caller already built (digest), else a
-/// fresh one.
+/// closure. `identities`: a table the caller already built, else a fresh one.
+/// Rule B is on (spec §14.3.5): every dependency routine is named by its app,
+/// `app_names` (lowercase app guid → name, the loaded apps).
 pub(crate) fn compose_tree(
     model: &Model,
     typed: &[TypedEdge],
@@ -1356,10 +1376,12 @@ pub(crate) fn compose_tree(
     caps: &mut crate::engine::l5::detector_context::CapabilityAnalysis,
     mut raw: HashMap<String, Vec<CapabilityFact>>,
     identities: Option<SnapshotIdentityTable>,
+    app_names: &HashMap<String, String>,
 ) -> CapabilitySnapshot {
     crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
     let ws = &model.workspace;
+    let boundary = boundary_rule(model, app_names);
     let bodyless: std::collections::HashSet<&str> = ws
         .routines
         .iter()
@@ -1421,7 +1443,29 @@ pub(crate) fn compose_tree(
         root_classifications,
         routine_order_frames,
         pd_solution,
+        boundary: Some(boundary),
     })
+}
+
+/// Rule B's dependency routines of `model` (THE role rule, #220), each named
+/// by its app from `app_names` (lowercase guid → name).
+pub(crate) fn boundary_rule(model: &Model, app_names: &HashMap<String, String>) -> BoundaryRule {
+    use crate::program::model::role::Role;
+    let mut names: HashMap<String, std::sync::Arc<str>> = HashMap::new();
+    let mut dependency_app = HashMap::new();
+    for r in &model.workspace.routines {
+        if model.routine_role(r) != Role::Dependency {
+            continue;
+        }
+        let guid = r.app_guid.to_ascii_lowercase();
+        let name = names.entry(guid).or_insert_with_key(|g| {
+            // A dependency row's app is one the build loaded, so it is named;
+            // the guid stands in only if the loaded-apps list lacks it.
+            std::sync::Arc::from(app_names.get(g).map_or(g.as_str(), String::as_str))
+        });
+        dependency_app.insert(r.stable_routine_id.clone(), std::sync::Arc::clone(name));
+    }
+    BoundaryRule { dependency_app }
 }
 
 /// The census of a composed snapshot, when it is on.
@@ -3176,7 +3220,15 @@ mod step6_tree_tests {
                     raw: WitnessScope::All,
                 },
             );
-            let tree = compose_tree(&m, rel.cone(), rel.dependency_calls(), &mut caps, raw, None);
+            let tree = compose_tree(
+                &m,
+                rel.cone(),
+                rel.dependency_calls(),
+                &mut caps,
+                raw,
+                None,
+                &HashMap::new(),
+            );
             with_inherited += usize::from(
                 cut.capability_facts
                     .iter()
@@ -3195,5 +3247,108 @@ mod step6_tree_tests {
         );
         assert!(with_pd > 0, "precondition: a dir with pd states");
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// T6 (R6-4, spec §4.5): a hand-stated cone edge `R → A` at `csX`, a call
+    /// site absent from `R`'s `call_sites`, carrying a pd link (R's state
+    /// reached from A's seed across it). `derive_typed_edges` keeps no row for
+    /// it and records it skipped; the arena drops the link, counts
+    /// `PD_EDGE_UNMAPPED` once, and the debug check passes (the key was
+    /// skipped).
+    #[test]
+    fn t6_an_anchorless_cone_edge_has_no_row_and_its_link_is_dropped() {
+        use crate::engine::l4::capability_cone::TypedOutEdge;
+        use crate::engine::l4::pd_solve::{ConeArena, ConeLink, ConeState, Producer};
+        use crate::engine::l4::summary::TempState;
+        use crate::engine::l5::detector_context::cones_census;
+        use crate::engine::l5::test_support::{fact, routine};
+        use std::sync::atomic::Ordering;
+        let ws_routines = vec![routine("R", "procedure"), routine("A", "procedure")];
+        assert!(
+            ws_routines.iter().all(|r| r.call_sites.is_empty()),
+            "precondition: no routine has a call site"
+        );
+        let typed = vec![TypedEdge {
+            kind: "direct-call".to_string(),
+            from: "R".to_string(),
+            to: Some("A".to_string()),
+            callsite_id: Some("csX".to_string()),
+            operation_id: None,
+            event_id: None,
+            receiver_type: None,
+            interface_name: None,
+            candidate_count: None,
+            target_object: None,
+            object_type: None,
+            target_id_source: None,
+            trigger_kind: None,
+            fires: None,
+        }];
+        let routine_to_stable: HashMap<String, String> = [("R", "R#"), ("A", "A#")]
+            .into_iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        let event_graph = EventGraph::default();
+        let (direct_full, coverage) = (HashMap::new(), HashMap::new());
+        let inp = TreeInputs {
+            ws_routines: &ws_routines,
+            typed_edges: &typed,
+            calls: &[],
+            dependency_calls: &[],
+            event_graph: &event_graph,
+            direct_full: &direct_full,
+            coverage: &coverage,
+            routine_to_stable: &routine_to_stable,
+            bodyless_dependency: None,
+        };
+        let (rows, skipped) = derive_typed_edges(&inp);
+        assert!(rows.is_empty(), "no typedEdges row: {rows:?}");
+        assert_eq!(skipped.len(), 1, "the row is recorded skipped");
+
+        let mut producer_fact = fact("insert", "table", Some("T"));
+        producer_fact.subject = "A".to_string();
+        producer_fact.witness_operation_id = Some("opA".to_string());
+        let state = |routine: &str, seed: bool, links: std::ops::Range<usize>| ConeState {
+            producer: 0,
+            routine: std::sync::Arc::from(routine),
+            t: TempState::Known(false),
+            reqs: Vec::new(),
+            seed,
+            dist: usize::from(!seed),
+            links,
+        };
+        let cone = ConeArena {
+            producers: vec![Producer {
+                fact: std::sync::Arc::new(producer_fact.clone()),
+                owner: std::sync::Arc::from("A"),
+                operation_id: "opA".to_string(),
+            }],
+            states: vec![state("A", true, 0..0), state("R", false, 0..1)],
+            links: vec![ConeLink {
+                callee_state: 0,
+                edge: 0,
+            }],
+            edges: vec![TypedOutEdge::new(
+                "A".to_string(),
+                "direct-call".to_string(),
+                Some("csX".to_string()),
+                None,
+                None,
+            )],
+            by_routine: [("A", 0), ("R", 1)]
+                .into_iter()
+                .map(|(r, s)| (std::sync::Arc::from(r), vec![s]))
+                .collect(),
+        };
+        let facts = vec![snapshot_fact(&producer_fact, "A#")];
+        let before = cones_census::PD_EDGE_UNMAPPED.load(Ordering::Relaxed);
+        let arena = derive_pd_arena(&inp, &cone, None, &rows, &facts, &skipped);
+        assert_eq!(
+            cones_census::PD_EDGE_UNMAPPED.load(Ordering::Relaxed) - before,
+            1,
+            "the link is counted unmapped"
+        );
+        assert_eq!(arena.states.len(), 2, "both states are kept");
+        assert!(arena.links.is_empty(), "the link is dropped");
     }
 }

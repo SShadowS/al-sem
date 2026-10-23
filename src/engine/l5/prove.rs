@@ -25,10 +25,9 @@ use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
-use crate::engine::l5::digest::compute_digest_effects_cli;
 use crate::engine::l5::digest_cli::{
-    ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, finish_default_run,
-    primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
+    ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, digest_effects,
+    finish_default_run, primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::snapshot::compose_snapshot;
 use crate::engine::l5::unresolved_cone::unresolved_cone;
@@ -875,16 +874,18 @@ pub(crate) fn prove_pipeline_with(
         .ok_or_else(|| "prove: workspace did not resolve".to_string())?;
 
     // One View, digest's plan (#160 §4.4.4): the envelope diagnostics of the
-    // default run and the tx map, read before the snapshot is composed.
+    // default run and the tx map, read before the snapshot is composed. Prove
+    // keeps its standalone single-app snapshot (6A-9), so its plan has no
+    // roots: no witness request, no tree.
     let mut view = View::new(AnalysisTarget::SingleApp(Box::new(resolved)));
-    let plan = digest_plan(detectors);
+    let plan = digest_plan(detectors, std::collections::BTreeSet::new(), false);
     let key = plan.keys().remove(0);
     view.prepare(&plan);
     let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
     let resolved = view.model();
 
     // Compose snapshot
-    let snap = compose_snapshot(resolved);
+    let mut snap = compose_snapshot(resolved);
     let workspace_fp =
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
 
@@ -896,7 +897,7 @@ pub(crate) fn prove_pipeline_with(
     };
     let owners = OwnerIndex::build(resolved);
     let changed_roots = resolve_changed_roots(
-        &snap,
+        &snap.identities,
         resolved,
         &changed_input,
         primary_guid_of(resolved),
@@ -947,26 +948,39 @@ pub(crate) fn prove_pipeline_with(
     // Use first root (prove always passes a single routine selector)
     let root_id = &changed_roots.roots[0];
 
-    // Compute S4 ordering effects for the root alone (each root's pass is
-    // independent, so this equals computing every routine and picking it).
-    let all_s4_entries =
-        compute_digest_effects_cli(&snap, resolved, Some(std::slice::from_ref(root_id)));
+    // Compute gaps_in_cone count: run unresolved_cone for its visited_ids, then
+    // count snap.analysis_gaps whose subject intersects the cone. Before
+    // `digest_effects`, which moves the identity table out of the snapshot.
+    let gaps_in_cone_count = {
+        let cone_result = unresolved_cone(&snap, root_id);
+        let gap_subjects: Vec<&str> = snap
+            .analysis_gaps
+            .iter()
+            .map(|g| g.subject.as_str())
+            .collect();
+        count_gaps_in_cone(&gap_subjects, &cone_result.visited_ids)
+    };
+
+    // The S4 entry and the unresolved cone of the root alone (each root's pass
+    // is independent, so this equals computing every routine and picking it).
+    let effects = digest_effects(&mut snap, resolved, std::slice::from_ref(root_id), false);
+    drop(snap);
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's `l4`.
     let temp_states = DbTempStates::new(resolved, &view.l4().bundle);
 
     // Run full digest query for this single root
     let query_full = run_digest_query_full_from_entries(
-        &snap,
+        &effects,
         std::slice::from_ref(root_id),
-        &all_s4_entries,
         &tx_ctx_map,
         &temp_states,
         &changed_roots,
         &owners,
     );
-    // The bundle's only borrower is dead: release `l4` before the cone walk.
+    // The bundle's only borrower is dead: release `l4`.
     drop(temp_states);
+    drop(effects);
     view.release(Cell::L4);
 
     if query_full.entries.is_empty() {
@@ -974,16 +988,6 @@ pub(crate) fn prove_pipeline_with(
     }
 
     let entry = &query_full.entries[0];
-
-    // Compute gaps_in_cone count: re-run unresolved_cone to get the visited_ids,
-    // then count snap.analysis_gaps whose subject intersects the cone.
-    let cone_result = unresolved_cone(&snap, root_id);
-    let gap_subjects: Vec<&str> = snap
-        .analysis_gaps
-        .iter()
-        .map(|g| g.subject.as_str())
-        .collect();
-    let gaps_in_cone_count = count_gaps_in_cone(&gap_subjects, &cone_result.visited_ids);
 
     // Parse question (already validated at CLI layer, but re-check cleanly)
     let parsed_question = parse_question(question_text)

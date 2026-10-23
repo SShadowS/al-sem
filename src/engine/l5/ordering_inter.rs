@@ -1211,6 +1211,7 @@ mod tests {
             root_classifications: vec![],
             routine_order_frames: None,
             pd_solution: Default::default(),
+            boundary: None,
         }
     }
 
