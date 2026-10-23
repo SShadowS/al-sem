@@ -9,6 +9,7 @@ use super::{
     SnapshotUniverse, capability_facts_to_cbor, stable_table_from_internal, to_cbor_value,
 };
 use crate::engine::gate::cbor::CborValue;
+use crate::engine::l4::capability_cone::routine_to_stable_of;
 use crate::engine::l5::snapshot::CapabilitySnapshot;
 use crate::program::model::role::{Role, role_of_stable_id};
 use crate::program::model::workspace::Model;
@@ -203,84 +204,148 @@ pub const REFERENCES: &[KeyReferences] = &[
     ),
 ];
 
-/// Fields that are data, never references (spec §4.4, ON3), matched as
-/// [`REFERENCES`]' paths are. Completed from the serde names of every row the
+/// Per key, the fields that are data, never references (spec §4.4, ON3),
+/// matched as [`REFERENCES`]' paths are: a bare name matches at any depth, but
+/// only inside its own key. Completed from the serde names of every row the
 /// composer emits (`snapshot.rs` row structs, `snapshot_full.rs` derivers).
-pub const NON_REFERENCE_FIELDS: &[&str] = &[
-    // Every row and value source.
-    "kind",
-    // Value sources (read by `kind`): a literal's `value` is data (S9).
-    "value",
-    "enumName",
-    "member",
-    "varName",
-    "fieldName",
-    // Source anchors.
-    "sourceUnitId",
-    "syntaxKind",
-    // capabilityFacts (and `extra`).
-    "op",
-    "resourceKind",
-    "confidence",
-    "provenance",
-    "via",
-    "opSubtype",
-    "recordVariableId",
-    "objectType",
-    "eventClass",
-    "method",
-    "scope",
-    // typedEdges.
-    "receiverType",
-    "interfaceName",
-    "triggerKind",
-    "fires",
-    // operationIndex / callsiteIndex.
-    "sourceFile",
-    "displayText",
-    "calleeDisplay",
-    "controlContext",
-    // callsiteResolutions.
-    "dispatchKind",
-    "status",
-    "reason",
-    // analysisGaps.
-    "detail",
-    "role",
-    // coverage.
-    "directStatus",
-    "inheritedStatus",
-    "reasons",
-    // eventDeclarations.
-    "eventName",
-    // rootClassifications.
-    "kinds",
-    "source",
-    "configEntryId",
-    "resolutionStatus",
-    // identities.
-    "displayNames",
-    // apps.
-    "publisher",
-    "name",
-    "version",
-    // contractFacts / schemaFacts.
-    "visibility",
-    "signatureFingerprint",
-    "attributes.*",
-    "obsoleteState",
-    "obsoleteReason",
-    "shapeFingerprint",
-    // permissionFacts.
-    "targetKind",
-    "rights",
-    "coverage",
-    // inputs.
-    "path",
-    "contentHash",
-    // routineOrderFrames.
-    "branchTerminatesBy",
+/// Value sources nest (`initializer`), so their data names (`kind`, `value`,
+/// `enumName`, `member`, `varName`, `fieldName`; a literal's `value` is data,
+/// S9) stay bare in the two keys that carry them.
+pub const NON_REFERENCE_FIELDS: &[(&str, &[&str])] = &[
+    ("apps", &["publisher", "name", "version", "role"]),
+    ("identities", &["displayNames"]),
+    (
+        "contractFacts",
+        &[
+            "kind",
+            "visibility",
+            "signatureFingerprint",
+            "attributes.*",
+            "obsoleteState",
+            "obsoleteReason",
+        ],
+    ),
+    ("schemaFacts", &["kind", "shapeFingerprint"]),
+    (
+        "permissionFacts",
+        &[
+            "kind",
+            "targetKind",
+            "rights",
+            "coverage",
+            "derivedFromCapability.op",
+        ],
+    ),
+    (
+        "rootClassifications",
+        &[
+            "kinds",
+            "source",
+            "confidence",
+            "configEntryId",
+            "resolutionStatus",
+            "sourceAnchor.sourceUnitId",
+            "sourceAnchor.syntaxKind",
+        ],
+    ),
+    (
+        "eventDeclarations",
+        &[
+            "kind",
+            "binding.eventName",
+            "sourceAnchor.sourceUnitId",
+            "sourceAnchor.syntaxKind",
+        ],
+    ),
+    (
+        "capabilityFacts",
+        &[
+            "op",
+            "resourceKind",
+            "confidence",
+            "provenance",
+            "via",
+            "opSubtype",
+            "recordVariableId",
+            "objectType",
+            "eventClass",
+            "method",
+            "scope",
+            "kind",
+            "value",
+            "enumName",
+            "member",
+            "varName",
+            "fieldName",
+        ],
+    ),
+    (
+        "typedEdges",
+        &[
+            "kind",
+            "receiverType",
+            "interfaceName",
+            "triggerKind",
+            "fires",
+            "objectType",
+            "*Anchor.sourceUnitId",
+            "*Anchor.syntaxKind",
+            "value",
+            "enumName",
+            "member",
+            "varName",
+            "fieldName",
+        ],
+    ),
+    (
+        "operationIndex",
+        &["sourceFile", "displayText", "controlContext"],
+    ),
+    (
+        "callsiteIndex",
+        &["sourceFile", "calleeDisplay", "controlContext"],
+    ),
+    (
+        "callsiteResolutions",
+        &[
+            "calleeDisplay",
+            "dispatchKind",
+            "status",
+            "unresolvedCandidates.reason",
+        ],
+    ),
+    ("analysisGaps", &["kind", "detail", "role"]),
+    ("coverage", &["directStatus", "inheritedStatus", "reasons"]),
+    ("inputs", &["kind", "path", "contentHash"]),
+    ("routineOrderFrames", &["kind", "branchTerminatesBy"]),
 ];
+
+/// Whether `path` is a REFERENCE field of `key` (not its defining field).
+#[doc(hidden)]
+#[must_use]
+pub fn is_reference<S: AsRef<str>>(key: &str, path: &[S]) -> bool {
+    REFERENCES
+        .iter()
+        .filter(|(k, _, _)| *k == key)
+        .any(|(_, _, refs)| refs.iter().any(|(f, _)| path_matches(f, path)))
+}
+
+/// Whether `path` of a `key` row is classified: its defining field, a
+/// reference field or a data field of that key (T9-closure reads it).
+#[doc(hidden)]
+#[must_use]
+pub fn is_classified<S: AsRef<str>>(key: &str, path: &[S]) -> bool {
+    let defining = REFERENCES
+        .iter()
+        .filter(|(k, _, _)| *k == key)
+        .any(|(_, def, _)| def.is_some_and(|d| path_matches(d, path)));
+    defining
+        || is_reference(key, path)
+        || NON_REFERENCE_FIELDS
+            .iter()
+            .filter(|(k, _)| *k == key)
+            .any(|(_, data)| data.iter().any(|f| path_matches(f, path)))
+}
 
 /// One reference of a serialized row that resolves to no serialized row of
 /// its domain (spec §4.4 "Closure").
@@ -295,7 +360,8 @@ pub struct ClosureViolation {
 }
 
 /// [`REFERENCES`]' path rule (its doc) against a row-relative path.
-fn path_matches(pattern: &str, path: &[&str]) -> bool {
+fn path_matches<S: AsRef<str>>(pattern: &str, path: &[S]) -> bool {
+    let path: Vec<&str> = path.iter().map(AsRef::as_ref).collect();
     if !pattern.contains('.') && !pattern.contains('*') {
         return path.last() == Some(&pattern);
     }
@@ -354,7 +420,7 @@ fn row_references(key: &str, row: &CborValue, out: &mut dyn FnMut(&str, Domain, 
         };
         let domains: Vec<Domain> = refs
             .iter()
-            .filter(|(p, _)| path_matches(p, path))
+            .filter(|(p, _)| path_matches(p, path.as_slice()))
             .map(|(_, d)| *d)
             .collect();
         let domain = match domains.as_slice() {
@@ -461,14 +527,26 @@ pub(crate) fn filter_by_class(
     routine_to_stable: &HashMap<String, String>,
 ) -> HashSet<String> {
     let is_primary = |id: &str| role_of_stable_id(Some(primary_app_guid), id) == Role::Primary;
-    // (1) Inventory and Behaviour rows by subject.
-    core.capability_facts.retain(|f| is_primary(&f.subject));
-    core.coverage.retain(|c| is_primary(&c.subject));
-    core.callsite_resolutions.retain(|r| is_primary(&r.from));
-    core.typed_edges.retain(|e| is_primary(e.edge_from()));
-    core.root_classifications
-        .retain(|r| is_primary(&r.routine_id));
-    core.event_declarations.retain(|e| is_primary(&e.routine));
+    // (1) Inventory and Behaviour rows by subject: the key's class in
+    // `SNAPSHOT_KEYS` decides; a subject-classed key with no arm is a bug.
+    for (key, class) in SNAPSHOT_KEYS {
+        match (class, *key) {
+            (KeyClass::Header | KeyClass::Input | KeyClass::Gap | KeyClass::Evidence, _) => {}
+            (_, "capabilityFacts") => core.capability_facts.retain(|f| is_primary(&f.subject)),
+            (_, "coverage") => core.coverage.retain(|c| is_primary(&c.subject)),
+            (_, "callsiteResolutions") => core.callsite_resolutions.retain(|r| is_primary(&r.from)),
+            (_, "typedEdges") => core.typed_edges.retain(|e| is_primary(e.edge_from())),
+            (_, "rootClassifications") => core
+                .root_classifications
+                .retain(|r| is_primary(&r.routine_id)),
+            (_, "eventDeclarations") => core.event_declarations.retain(|e| is_primary(&e.routine)),
+            // Derived primary-only by the composer (`derive_*`), step (6)
+            // (`project_apps`), and step (4) (frame tables).
+            (_, "contractFacts" | "schemaFacts" | "permissionFacts" | "apps")
+            | (_, "routineOrderFrames") => {}
+            (_, other) => unreachable!("{other}: a subject-classed key with no subject filter"),
+        }
+    }
     // The producer solve indexes the unfiltered facts and edges; it is never
     // serialized, so the composer's copy drops it rather than keep stale indices.
     core.pd_solution = Default::default();
@@ -542,7 +620,8 @@ pub(crate) fn filter_by_class(
 /// exceptions: an identity value `"unknown"`, or rooted in a guid that is
 /// neither the primary nor a `dependency_apps` guid and equal to no model
 /// routine id (`EXTERNAL_IDENTITY_SHAPES`); a frame's `parentFrameId = -1`;
-/// and (F25) the `callsiteId` of a resolution row with no `resolvedEdges`.
+/// and (F25) the `callsiteId` of a resolution row with no `resolvedEdges`
+/// that no kept typed edge or fact witness names.
 #[must_use]
 pub fn closure_violations(
     tree: &CborValue,
@@ -599,12 +678,19 @@ pub fn closure_violations(
             frames.insert(routine, ids.collect());
         }
     }
-    let routine_to_stable: HashMap<String, String> = resolved
-        .workspace
-        .routines
-        .iter()
-        .map(|r| (r.id.clone(), r.stable_routine_id.clone()))
-        .collect();
+    let routine_to_stable = routine_to_stable_of(&resolved.workspace);
+    // The call sites a kept typed edge or fact witness names: the anchors
+    // `derive_callsite_evidence` keeps an index row for (F25's complement).
+    let mut anchored: HashSet<String> = HashSet::new();
+    for key in ["typedEdges", "capabilityFacts", "permissionFacts"] {
+        for row in snap.get(key).map(rows_of).unwrap_or_default() {
+            row_references(key, row, &mut |_, domain, value| {
+                if domain == Callsite {
+                    anchored.insert(value);
+                }
+            });
+        }
+    }
     let mut model_apps: HashSet<String> = HashSet::new();
     if let Some(p) = &resolved.primary_app {
         model_apps.insert(p.app_guid.to_ascii_lowercase());
@@ -633,7 +719,8 @@ pub fn closure_violations(
         // F25 (#220 discovery, pre-existing on the base): the ledger has a row
         // per syntactic call site, but `derive_callsite_evidence` keeps only
         // call sites a fact witnesses or a typed edge anchors, so an
-        // unresolved site's `callsiteId` (no `resolvedEdges`) has no index row.
+        // unanchored site's `callsiteId` (no `resolvedEdges`, named by no kept
+        // edge or fact witness) has no index row.
         let unanchored_site = key == "callsiteResolutions"
             && matches!(row, CborValue::Map(m)
                 if matches!(m.get("resolvedEdges"), Some(CborValue::Array(e)) if e.is_empty()));
@@ -647,7 +734,8 @@ pub fn closure_violations(
                 App => apps.contains(&value.to_ascii_lowercase()),
                 Operation => operations.contains(value.as_str()),
                 Callsite => {
-                    callsites.contains(value.as_str()) || (unanchored_site && path == "callsiteId")
+                    callsites.contains(value.as_str())
+                        || (unanchored_site && path == "callsiteId" && !anchored.contains(&value))
                 }
                 Edge => edges.contains(value.as_str()),
                 Frame => {

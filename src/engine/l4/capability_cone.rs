@@ -4521,6 +4521,15 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     build_r3a3_source_only_base_over(resolved, graph)
 }
 
+/// Internal routine id → stable routine id over every routine of `ws`: the
+/// one builder (`R3a3SourceBase::routine_to_stable`, the snapshot closure).
+pub fn routine_to_stable_of(ws: &ModelEntities) -> HashMap<String, String> {
+    ws.routines
+        .iter()
+        .map(|r| (r.id.clone(), r.stable_routine_id.clone()))
+        .collect()
+}
+
 /// [`build_r3a3_source_only_base`] with the graph taken as a parameter (#160
 /// §4.1.6): calls and event graph still cloned from `resolved`, the direct facts,
 /// the uncertainty fold (a scan of `graph`'s uncertainty edges, no L4 solve) and
@@ -4599,11 +4608,7 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
         ConeOutput::RawOnly,
     );
 
-    let routine_to_stable: HashMap<String, String> = ws
-        .routines
-        .iter()
-        .map(|r| (r.id.clone(), r.stable_routine_id.clone()))
-        .collect();
+    let routine_to_stable = routine_to_stable_of(ws);
 
     R3a3SourceBase {
         ws_routines: ws.routines.clone(),

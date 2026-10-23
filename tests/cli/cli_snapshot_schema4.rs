@@ -25,8 +25,8 @@ use al_sem::engine::gate::run::AnalysisTarget;
 use al_sem::engine::l4::capability_cone::R3a5CrossAppBase;
 use al_sem::engine::l5::snapshot::compose_snapshot;
 use al_sem::engine::l5::snapshot_full::{
-    Domain, FullSnapshotOptions, NON_REFERENCE_FIELDS, REFERENCES, SNAPSHOT_KEYS, SnapshotUniverse,
-    build_inventory_envelope, closure_violations, compose_full_snapshot, to_sorted_json,
+    Domain, FullSnapshotOptions, SNAPSHOT_KEYS, SnapshotUniverse, build_inventory_envelope,
+    closure_violations, compose_full_snapshot, is_classified, is_reference, to_sorted_json,
 };
 use al_sem::program::inputs::InputSet;
 use al_sem::program::model::workspace::Model;
@@ -926,50 +926,6 @@ fn key_class_evidence() {
     assert!(e_ids.is_empty(), "no eeee… identity: {e_ids:?}");
 }
 
-/// A path pattern of `REFERENCES` / `NON_REFERENCE_FIELDS` (the matching rule
-/// `snapshot_full::REFERENCES` documents) against a row-relative path.
-fn path_matches(pattern: &str, path: &[String]) -> bool {
-    if !pattern.contains('.') && !pattern.contains('*') {
-        return path.last().is_some_and(|l| l == pattern);
-    }
-    let pat: Vec<&str> = pattern.split('.').collect();
-    let seg = |p: &str, s: &str| -> bool {
-        match p.split_once('*') {
-            None => p == s,
-            Some((pre, post)) => s.starts_with(pre) && s.ends_with(post),
-        }
-    };
-    for (i, p) in pat.iter().enumerate() {
-        if *p == "*" && i == pat.len() - 1 {
-            return path.len() >= pat.len();
-        }
-        match path.get(i) {
-            Some(s) if seg(p, s) => {}
-            _ => return false,
-        }
-    }
-    path.len() == pat.len()
-}
-
-/// Whether `path` is a REFERENCE field of `key` (not its defining field).
-fn is_reference(key: &str, path: &[String]) -> bool {
-    REFERENCES
-        .iter()
-        .filter(|(k, _, _)| *k == key)
-        .any(|(_, _, refs)| refs.iter().any(|(f, _)| path_matches(f, path)))
-}
-
-fn classified(key: &str, path: &[String]) -> bool {
-    REFERENCES
-        .iter()
-        .filter(|(k, _, _)| *k == key)
-        .any(|(_, def, refs)| {
-            def.is_some_and(|d| path_matches(d, path))
-                || refs.iter().any(|(f, _)| path_matches(f, path))
-        })
-        || NON_REFERENCE_FIELDS.iter().any(|f| path_matches(f, path))
-}
-
 /// Every string leaf of a row with its row-relative path (array indices
 /// dropped).
 fn leaves(v: &CborValue, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, String)>) {
@@ -1118,7 +1074,7 @@ fn closure_fields_are_classified_and_closed() {
         let unclassified: BTreeSet<String> = leaves_by_key(&tree)
             .into_iter()
             .filter(|(_, _, s)| shaped(s))
-            .filter(|(key, path, _)| !classified(key, path))
+            .filter(|(key, path, _)| !is_classified(key, path))
             .map(|(key, path, _)| format!("{key}.{}", path.join(".")))
             .collect();
         assert!(
@@ -1249,6 +1205,57 @@ fn closure_reports_each_dangling_domain() {
             "{domain:?}: the dangling {value} is reported: {got:?}"
         );
     }
+}
+
+/// F25 is exactly "unanchored" (review fix 3): a resolution row with no
+/// `resolvedEdges` whose call site a kept typed edge still names, and whose
+/// `callsiteIndex` row is gone (hand-stated on DD's tree), IS a violation.
+///
+/// Break: drop the "no kept edge or witness names it" condition from F25 ->
+/// the anchored site passes as external, fails.
+#[test]
+fn closure_anchored_unresolved_site_is_a_violation() {
+    let dir = dd_dir();
+    let b = build(dir.path(), false);
+    let model = b.target.resolved();
+    let mut tree = compose(&b);
+    let CborValue::Map(m) = &mut tree else {
+        unreachable!()
+    };
+    let text = |row: &CborValue, f: &str| match row {
+        CborValue::Map(r) => match r.get(f) {
+            Some(CborValue::Text(s)) => Some(s.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let edge_sites: HashSet<String> = match m.get("typedEdges") {
+        Some(CborValue::Array(a)) => a.iter().filter_map(|e| text(e, "callsiteId")).collect(),
+        _ => HashSet::new(),
+    };
+    let Some(CborValue::Array(res)) = m.get_mut("callsiteResolutions") else {
+        panic!("callsiteResolutions")
+    };
+    let row = res
+        .iter_mut()
+        .find(|r| text(r, "callsiteId").is_some_and(|c| edge_sites.contains(&c)))
+        .expect("precondition: a resolution whose site a kept typed edge names");
+    let site = text(row, "callsiteId").unwrap();
+    let CborValue::Map(r) = row else {
+        unreachable!()
+    };
+    r.insert("resolvedEdges".to_string(), CborValue::Array(Vec::new()));
+    let Some(CborValue::Array(index)) = m.get_mut("callsiteIndex") else {
+        panic!("callsiteIndex")
+    };
+    index.retain(|c| text(c, "callsiteId").as_deref() != Some(site.as_str()));
+    let got = closure_violations(&tree, model, &SnapshotUniverse::of(&b.target));
+    assert!(
+        got.iter().any(|v| v.domain == Domain::Callsite
+            && v.key == "callsiteResolutions"
+            && v.value == site),
+        "the anchored site {site} is reported: {got:?}"
+    );
 }
 
 /// T9e Input (DD single vs cross): `workspaceFingerprint` and `inputs` are

@@ -47,7 +47,7 @@ mod key_classes;
 pub(crate) use key_classes::filter_by_class;
 pub use key_classes::{
     ClosureViolation, Domain, KeyClass, NON_REFERENCE_FIELDS, REFERENCES, SNAPSHOT_KEYS,
-    closure_violations,
+    closure_violations, is_classified, is_reference,
 };
 
 /// The snapshot schema version: THE one constant (the composer, the loader and
