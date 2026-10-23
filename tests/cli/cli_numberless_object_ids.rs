@@ -15,6 +15,8 @@
 //!   ordinal and the contracts stay `locale_compare`.
 //! - T8: `alsem diff` of a workspace that adds a second interface (or ControlAddIn)
 //!   reports only its `object-added`, never a critical change on the old one.
+//! - T9: GitHub #245's repro (`tests/fixtures/ws-diff-interface-added`), through
+//!   `alsem fingerprint` and a diff of the two snapshot files.
 
 use std::path::Path;
 
@@ -614,4 +616,87 @@ fn diff_adding_an_interface_is_not_a_signature_change() {
 #[test]
 fn diff_adding_a_controladdin_is_not_a_signature_change() {
     adding_a_numberless_object_is_not_a_break("controladdin", "ControlAddIn");
+}
+
+/// T9: GitHub #245's repro, as CentralGauge runs it (`tests/fixtures/
+/// ws-diff-interface-added`): `alsem fingerprint` of `start/` and `final/`, then
+/// `alsem diff start.json final.json`. `final/` adds "Repro Transport" beside
+/// "Repro Strategy". The two interfaces carry distinct stable ids, and the diff
+/// reports only the new one's `object-added`.
+///
+/// Red on master `3a2d5923` (2026-10-23): both fingerprints hold the one id
+/// `…:Interface:0`, and the diff's only finding is a critical
+/// `procedure-signature-changed` named "Repro Transport". Discrimination
+/// (2026-10-23): `object_key(None, …)` returning `"0"` again fails this test;
+/// restored, it passes.
+#[test]
+fn diff_issue_245_interface_added_fixture() {
+    const APP: &str = "11111111-2222-4333-8444-555555555555";
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ws-diff-interface-added");
+    let out_dir = tempfile::tempdir().unwrap();
+    let fingerprint = |side: &str| {
+        let out = out_dir.path().join(format!("{side}.json"));
+        let run = std::process::Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("fingerprint")
+            .arg(fixture.join(side))
+            .args(["--format", "json", "--deterministic", "--out"])
+            .arg(&out)
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("run alsem fingerprint");
+        assert!(
+            run.status.success(),
+            "fingerprint {side}: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let text = std::fs::read_to_string(&out).unwrap();
+        (
+            out,
+            serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        )
+    };
+    let (start, _) = fingerprint("start");
+    let (final_, final_json) = fingerprint("final");
+
+    let strategy = format!("{APP}:Interface:@repro%20strategy");
+    let transport = format!("{APP}:Interface:@repro%20transport");
+    let mut interface_ids: Vec<String> = final_json["payload"]["contractFacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "object")
+        .filter_map(|c| c["stableId"].as_str())
+        .filter(|i| i.contains(":Interface:"))
+        .map(str::to_string)
+        .collect();
+    interface_ids.sort();
+    assert_eq!(
+        interface_ids,
+        vec![strategy, transport.clone()],
+        "distinct ids"
+    );
+
+    let findings = diff_findings(&start, &final_);
+    let got: Vec<(&str, &str, &str, &str)> = findings
+        .iter()
+        .map(|f| {
+            (
+                f["kind"].as_str().unwrap_or(""),
+                f["severity"].as_str().unwrap_or(""),
+                f["subject"]["displayName"].as_str().unwrap_or(""),
+                f["subject"]["newStableId"].as_str().unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![(
+            "object-added",
+            "info",
+            "Repro Transport",
+            transport.as_str()
+        )],
+        "findings {findings:#?}"
+    );
 }

@@ -40,10 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing ABI/graph object-kind mismatches (DotNetPackage, PermissionSetExtension,
   Profile, Entitlement) are unchanged.
 - **`alsem diff` no longer reports a critical `procedure-signature-changed` when a change adds
-  an Interface or ControlAddIn (#83).** Both objects had the id `…:Interface:0`, so the
+  an Interface or ControlAddIn (#83, #245).** Both objects had the id `…:Interface:0`, so the
   untouched old one looked changed (named after the new one) when the new file sorted
   last, and the addition went unreported when it sorted first. Now the diff reports only
-  the new object's `object-added` (info).
+  the new object's `object-added` (info). **The stable id of an object without a number
+  (Interface, ControlAddIn) changes shape** from `{appId}:Interface:0` to
+  `{appId}:Interface:@{name}` (e.g. `…:Interface:@repro%20transport`), because the number
+  was the only part that told two such objects apart and they have none. A consumer with a
+  stored baseline (a fingerprint, gate snapshot or digest) sees those ids move once:
+  each such object is reported removed and re-added on the first diff against it.
+  CentralGauge, which reported #245, has no stored baseline yet.
 - Lookups of an object by type and number (record typing's numeric `SourceTable`, an
   unresolved `Codeunit.Run(<number>)` target) no longer pick an arbitrary object without a
   number for number `0` (#83).
