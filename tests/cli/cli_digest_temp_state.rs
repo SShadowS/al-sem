@@ -1211,18 +1211,21 @@ fn digest_insert_parts(e: &Value) -> Vec<(String, String, String)> {
     out
 }
 
-/// #70 row 3b. On `tests/common/dep_dispatch_fixture.rs`, the cross-app digest
-/// entry of `RaiseDep` (which raises the dependency's `OnDepEvent`) has EXACTLY
-/// the two dispatch inserts, each `detail.tempState == known(false)`:
+/// #70 row 3b. On `tests/common/dep_dispatch_fixture.rs`, `query effects
+/// RaiseDep` (cross-app; `RaiseDep` raises the dependency's `OnDepEvent`) has
+/// EXACTLY the two dispatch inserts, each `tempState == known(false)`:
 /// `Customer` from the dependency's `HandleDep`, `Ws Flag` from the workspace's
-/// `HandleInWs`; no `temp-state-incoherent` item; and the same
-/// `(table, origin, tempState)` parts as `query effects RaiseDep` (cross-app).
-/// `--single-app` has neither insert (the precondition that the dependency
-/// matters: `Lib.OnDepEvent()` does not resolve there).
+/// `HandleInWs`. The cross-app digest reaches both through the call into the
+/// dependency's publisher, so since #160 step 6 rule B (spec §14.3.5) they are
+/// ONE `DB_INSERT` group at that call (`enters XBase.OnDepEvent`) listing the
+/// same two tables, with no per-resource insert and no `temp-state-incoherent`
+/// item (a group names resources, not the dependency's operations, so it has
+/// no `detail.tempState`). `--single-app` has no insert (the precondition that
+/// the dependency matters: `Lib.OnDepEvent()` does not resolve there).
 ///
 /// Mutation: reinstate dependency publishers as fixed leaves (the defect) ->
-/// `tempState` absent and the query empty -> fails. Stated relaxation (spec 3b):
-/// which builder produced the store is not observable here.
+/// no group and the query empty -> fails. Stated relaxation (spec 3b): which
+/// builder produced the store is not observable here.
 #[test]
 fn cross_app_digest_reads_the_cross_app_store() {
     use crate::dep_dispatch_fixture::write_own;
@@ -1261,10 +1264,25 @@ fn cross_app_digest_reads_the_cross_app_store() {
             "known(false)".to_string(),
         ),
     ];
-    let got = digest_insert_parts(e);
-    if got != want {
+    let groups: Vec<(String, String, Option<String>)> = of_type(e, "DB_INSERT")
+        .iter()
+        .map(|x| {
+            (
+                x["detail"]["boundary"].as_str().unwrap_or("").to_string(),
+                x["detail"]["resources"].as_str().unwrap_or("").to_string(),
+                temp_state(x).map(str::to_string),
+            )
+        })
+        .collect();
+    let want_groups = vec![(
+        "XBase.OnDepEvent".to_string(),
+        // Resource-id order: the workspace's table id sorts first.
+        "Ws Flag, Customer".to_string(),
+        None,
+    )];
+    if groups != want_groups {
         failures.push(format!(
-            "RaiseDep digest inserts: want {want:?}, got {got:?}"
+            "RaiseDep digest inserts: want {want_groups:?}, got {groups:?}"
         ));
     }
 
@@ -1290,9 +1308,9 @@ fn cross_app_digest_reads_the_cross_app_store() {
         })
         .collect();
     query_parts.sort();
-    if query_parts != got {
+    if query_parts != want {
         failures.push(format!(
-            "RaiseDep: digest parts {got:?} != query effects parts {query_parts:?}"
+            "RaiseDep: query effects parts {query_parts:?} != {want:?}"
         ));
     }
 

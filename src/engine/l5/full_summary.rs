@@ -13,7 +13,8 @@
 //! "unknown", matching al-sem's `s.coverage?.inheritedStatus ?? "unknown"`).
 //!
 //! ⟨C1 Task 3 — R6⟩ The inherited half is now **absent by default**. The analyze
-//! path composes its cone under [`ConeOutput::DerivedOnly`], which never
+//! path composes its cone with no raw half ([`ConeScope`] `{ derived: true,
+//! raw: WitnessScope::None }`), which never
 //! materializes the per-routine `Vec<CapabilityFact>` at all (that Vec was
 //! ~10.9 GB on the 8020 corpus), so a summary built there carries `None` rather
 //! than an empty Vec. The old `reachable()` / `reachable_iter()` helpers are
@@ -25,7 +26,7 @@
 //! Every other consumer reads the compact derived substrate
 //! (`ctx.cone_derived`) instead.
 //!
-//! [`ConeOutput::DerivedOnly`]: crate::engine::l4::cone_derived::ConeOutput::DerivedOnly
+//! [`ConeScope`]: crate::engine::l4::cone_derived::ConeScope
 //!
 //! Task 2b, when it assembles these from the real pipeline, may add
 //! `db_effects` / `parameter_roles` / `uncertainties` / `in_recursive_cycle` /
@@ -51,7 +52,7 @@ pub struct FullRoutineSummary {
     /// not its whole reachable cone).
     pub capability_facts_direct: Vec<CapabilityFact>,
     /// Capability facts inherited from the transitive reachable closure —
-    /// `None` unless the cone ran with `ConeOutput::{RawOnly, Both}`, i.e.
+    /// `None` unless the cone ran with a raw half (`ConeScope.raw` not `None`), i.e.
     /// unless `substrate::RAW_INHERITED_FACTS` was demanded. `Some(vec![])` is a
     /// materialized-but-empty cone and is NOT the same thing as `None`.
     capability_facts_inherited: Option<Vec<CapabilityFact>>,
@@ -64,7 +65,7 @@ pub struct FullRoutineSummary {
 
 impl FullRoutineSummary {
     /// Assemble a summary. Pass `Some` for `capability_facts_inherited` only when
-    /// the cone actually materialized them (`ConeOutput::{RawOnly, Both}`);
+    /// the cone actually materialized them (a raw half in its `ConeScope`);
     /// `None` records "never built", which [`inherited_raw`](Self::inherited_raw)
     /// then refuses to serve.
     pub fn new(
@@ -114,8 +115,7 @@ impl FullRoutineSummary {
     /// The RAW inherited capability facts, in `sort_inherited` order.
     ///
     /// # Panics
-    /// Panics when this summary came from a `ConeOutput::DerivedOnly`
-    /// composition. That is deliberate (R6): returning an empty slice here would
+    /// Panics when this summary came from a composition with no raw half. That is deliberate (R6): returning an empty slice here would
     /// silently answer "this routine's whole reachable cone is empty" for every
     /// routine in the workspace. A caller that needs these facts must demand
     /// `substrate::RAW_INHERITED_FACTS` when it builds its `DetectorContext`.
@@ -125,7 +125,7 @@ impl FullRoutineSummary {
             None => panic!(
                 "FullRoutineSummary::inherited_raw called for routine {:?}, but this context was \
                  built WITHOUT `substrate::RAW_INHERITED_FACTS` — the cone ran in \
-                 `ConeOutput::DerivedOnly` and the raw inherited Vec was never materialized. \
+                 a scope with no raw half and the raw inherited Vec was never materialized. \
                  Read `ctx.cone_derived` instead, or demand the bit.",
                 self.routine_id
             ),

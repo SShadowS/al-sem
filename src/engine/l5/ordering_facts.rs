@@ -224,20 +224,6 @@ pub fn compute_ordering_facts(resolved: &Model) -> HashMap<String, OrderingFacts
         .collect()
 }
 
-/// [`compute_ordering_facts`] over a given tree (#160 step 6 probe).
-pub(crate) fn compute_ordering_facts_over(
-    snap: &crate::engine::l5::snapshot::CapabilitySnapshot,
-    resolved: &Model,
-) -> HashMap<String, OrderingFacts> {
-    crate::engine::l5::digest::compute_digest_effects_for_ordering_over(snap, resolved, |entry| {
-        ordering_facts_of_entry(&entry)
-    })
-    .into_iter()
-    .flatten()
-    .map(|of| (of.routine_id.clone(), of))
-    .collect()
-}
-
 /// One root's ordering facts, or `None` when it has none.
 fn ordering_facts_of_entry(entry: &DigestEntryResult) -> Option<OrderingFacts> {
     // occurrenceId → (anchor, type, detail). factId == occurrence id.

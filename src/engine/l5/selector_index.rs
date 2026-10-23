@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l5::snapshot::CapabilitySnapshot;
+use crate::engine::l5::snapshot::SnapshotIdentityTable;
 
 const ROUTINE_ID_SEPARATOR: char = '#';
 
@@ -82,7 +82,7 @@ pub(crate) struct SelectorIndexes {
 /// routines; without this a bare `OnRun` would be ambiguous with every
 /// dependency's. `None` keeps every routine.
 pub(crate) fn build_selector_indexes(
-    snap: &CapabilitySnapshot,
+    identities: &SnapshotIdentityTable,
     primary_app_guid: Option<&str>,
 ) -> SelectorIndexes {
     let is_primary = |id: &str| {
@@ -93,19 +93,9 @@ pub(crate) fn build_selector_indexes(
     let mut display_to_stable_ids: Vec<(String, Vec<String>)> = Vec::new();
     let mut key_pos: HashMap<String, usize> = HashMap::new();
 
-    for i in 0..snap.identities.stable_ids.len() {
-        let id = snap
-            .identities
-            .stable_ids
-            .get(i)
-            .cloned()
-            .unwrap_or_default();
-        let display = snap
-            .identities
-            .display_names
-            .get(i)
-            .cloned()
-            .unwrap_or_default();
+    for i in 0..identities.stable_ids.len() {
+        let id = identities.stable_ids.get(i).cloned().unwrap_or_default();
+        let display = identities.display_names.get(i).cloned().unwrap_or_default();
         if id.is_empty() {
             continue;
         }
@@ -252,31 +242,13 @@ mod tests {
             ids()
         );
     }
-    use crate::engine::l5::snapshot::SnapshotIdentityTable;
-
-    fn snap_with_identities(rows: &[(&str, &str)]) -> CapabilitySnapshot {
-        let mut ids = SnapshotIdentityTable {
-            stable_ids: Vec::new(),
-            display_names: Vec::new(),
-        };
+    fn snap_with_identities(rows: &[(&str, &str)]) -> SnapshotIdentityTable {
+        let mut ids = SnapshotIdentityTable::default();
         for (id, display) in rows {
             ids.stable_ids.push((*id).into());
             ids.display_names.push((*display).into());
         }
-        CapabilitySnapshot {
-            identities: ids,
-            capability_facts: Vec::new(),
-            typed_edges: Vec::new(),
-            operation_index: Vec::new(),
-            callsite_index: Vec::new(),
-            callsite_resolutions: Vec::new(),
-            analysis_gaps: Vec::new(),
-            coverage: Vec::new(),
-            event_declarations: Vec::new(),
-            root_classifications: Vec::new(),
-            routine_order_frames: None,
-            pd_solution: Default::default(),
-        }
+        ids
     }
 
     // --- #6 resolveSelector cascade ---------------------------------------

@@ -64,6 +64,10 @@ pub struct OrderingEffectInput {
     /// Effect-level conditionality — used by COMMIT_ON_SUCCESS_PATH rule.
     /// Pre-computed before the ordering call (mirrors TS eff.conditionality field).
     pub conditionality: &'static str,
+    /// A rule-B boundary group (spec §14.3.5 item 4): the callee MAY do the
+    /// effect. It stays in every MAY relation, is left out of the commit set
+    /// the MUST labels read, and never carries a MUST label.
+    pub boundary: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -521,11 +525,18 @@ pub fn compute_ordering(
                 labels.push("COMMIT_REACHABLE");
             }
 
+            // Rule B (spec §14.3.5 item 4): a boundary group never satisfies a
+            // MUST condition and never carries a MUST label, so the three MUST
+            // labels below read the group's other occurrences only.
+            let is_boundary = effects[idx].boundary;
+            let must = |i: &usize| !effects[*i].boundary;
+            let must_commit_idxs: Vec<usize> = commit_idxs.iter().copied().filter(must).collect();
+
             // COMMIT_ON_SUCCESS_PATH (on COMMIT effects):
             // any commit in the group has conditionality = "unconditional-on-success".
             // Mirrors TS: `commitOccs.some(o => o.conditionality === "unconditional-on-success")`.
-            if occ.effect_type == "COMMIT" {
-                let has_commit_on_success = commit_idxs
+            if occ.effect_type == "COMMIT" && !is_boundary {
+                let has_commit_on_success = must_commit_idxs
                     .iter()
                     .any(|&ci| effects[ci].conditionality == "unconditional-on-success");
                 if has_commit_on_success {
@@ -534,19 +545,19 @@ pub fn compute_ordering(
             }
 
             // COMMIT_DOMINATES_RETURN (on COMMIT effects): this commit dominates return.
-            if occ.effect_type == "COMMIT" && dominates_return(op) {
+            if occ.effect_type == "COMMIT" && !is_boundary && dominates_return(op) {
                 labels.push("COMMIT_DOMINATES_RETURN");
             }
 
             // WRITE_COMMITTED_BEFORE_RETURN (on COMMIT effects):
             // dominatesReturn(op) AND there is a write w with dom(w, op) AND
             // the nearest commit after w (by orderId) is this commit.
-            if occ.effect_type == "COMMIT" && dominates_return(op) {
+            if occ.effect_type == "COMMIT" && !is_boundary && dominates_return(op) {
                 // nearest_commit_after(write_occ): find commit with smallest orderId > write's orderId.
                 let nearest_commit_after = |write_op_id: u32| -> Option<String> {
                     let mut nearest_id: Option<u32> = None;
                     let mut nearest_occ_id: Option<String> = None;
-                    for &ci in &commit_idxs {
+                    for &ci in &must_commit_idxs {
                         let Some(cop) = occurrences[ci].ordered_op.as_ref() else {
                             continue;
                         };
@@ -560,7 +571,7 @@ pub fn compute_ordering(
                     nearest_occ_id
                 };
 
-                let has_write_committed = write_idxs.iter().any(|&wi| {
+                let has_write_committed = write_idxs.iter().filter(|i| must(i)).any(|&wi| {
                     let w_occ = &occurrences[wi];
                     let Some(write_op) = w_occ.ordered_op.as_ref() else {
                         return false;
@@ -974,8 +985,8 @@ pub fn compute_ordering(
                 callsite_by_id,
             );
 
-        // Root-scope COMMIT_DOMINATES_RETURN.
-        if commit_dom_root {
+        // Root-scope COMMIT_DOMINATES_RETURN, never on a rule-B boundary group.
+        if commit_dom_root && !effects[commit_idx].boundary {
             root_scoped[commit_idx].push(ScopedGuarantee {
                 label: "COMMIT_DOMINATES_RETURN",
                 scope: "root",
@@ -1724,6 +1735,7 @@ mod tests {
             root_classifications: vec![],
             routine_order_frames: None,
             pd_solution: Default::default(),
+            boundary: None,
         }
     }
 

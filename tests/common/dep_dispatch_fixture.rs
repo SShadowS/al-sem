@@ -121,10 +121,15 @@ pub fn write_workspace(dir: &Path, extra_al: &str) {
 /// is appended to `Lib.al` as a comment, so two revisions differ in bytes
 /// and in nothing the analysis reads.
 pub fn write_dependency(app_path: &Path, revision: u32) {
+    write_dependency_lib(app_path, revision, DEP_LIB_AL);
+}
+
+/// [`write_dependency`] with `Lib.al` = `lib_al`.
+fn write_dependency_lib(app_path: &Path, revision: u32, lib_al: &str) {
     let symbols = format!(
         r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":18,"Name":"Customer","Fields":[{{"Id":1,"Name":"No.","TypeDefinition":{{"Name":"Code"}}}}]}}],"Codeunits":[{{"Id":10,"Name":"Dep Lib","Methods":[{{"Name":"Outer","Parameters":[]}},{{"Name":"Inner","Parameters":[]}},{{"Name":"OnDepEvent","Parameters":[],"Attributes":[{{"Name":"IntegrationEvent","Arguments":[{{"Value":"False"}},{{"Value":"False"}}]}}]}}]}},{{"Id":11,"Name":"Dep Sub","Methods":[]}}],"AppId":"{DEP_GUID}","Name":"XBase","Publisher":"probe","Version":"1.0.0.0"}}"#
     );
-    let lib = format!("{DEP_LIB_AL}// revision {revision}\n");
+    let lib = format!("{lib_al}// revision {revision}\n");
     crate::symbol_app::write_source_app(
         app_path,
         DEP_GUID,
@@ -143,4 +148,17 @@ pub const DEP_APP_FILE: &str = "probe_XBase_1.0.0.0.app";
 pub fn write_own(dir: &Path, extra_al: &str) {
     write_workspace(dir, extra_al);
     write_dependency(&dir.join(".alpackages").join(DEP_APP_FILE), 0);
+}
+
+/// #161's text: [`write_own`] whose `Inner` does `Cust.Modify()` instead of
+/// `Cust.Insert()`.
+pub fn write_own_modify(dir: &Path, extra_al: &str) {
+    let lib = DEP_LIB_AL.replacen(
+        "Cust.Insert();\n        Commit();",
+        "Cust.Modify();\n        Commit();",
+        1,
+    );
+    assert_ne!(lib, DEP_LIB_AL, "fixture: Inner's insert is replaced");
+    write_workspace(dir, extra_al);
+    write_dependency_lib(&dir.join(".alpackages").join(DEP_APP_FILE), 0, &lib);
 }

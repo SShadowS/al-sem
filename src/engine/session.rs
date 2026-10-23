@@ -19,7 +19,9 @@ use crate::engine::l4::summary_runner::SummarizeDiagnostic;
 use crate::engine::l5::detector_context::{
     self as dc, CapabilityAnalysis, DetectorArtifacts, DetectorContext, OrderingFactsMap,
 };
+use crate::engine::l5::digest_cli::DigestEffects;
 use crate::engine::l5::registry::{self, Detector, RunOutput, substrate};
+use crate::engine::l5::snapshot::CapabilitySnapshot;
 use crate::engine::perf_trace as pt;
 use crate::program::model::role::Role;
 use crate::program::model::workspace::Model;
@@ -40,6 +42,11 @@ pub struct View {
     /// The witness subjects' raw inherited facts, from the same composition;
     /// filled only under a [`WitnessRequest`].
     raw: Option<HashMap<String, Vec<CapabilityFact>>>,
+    /// Digest's tree over the cone graph (#160 step 6 D4): filled from `caps`
+    /// and `raw` (by move), released by `prepare` once `effects` is read off it.
+    tree: Option<CapabilitySnapshot>,
+    /// Digest's per-root effects (D7 (5)), read by its query after the run.
+    effects: Option<DigestEffects>,
     l4: Option<L4Analysis>,
     det: Option<DetectorArtifacts>,
     /// One bit per [`Cell`] released; a released cell is never refilled.
@@ -70,13 +77,19 @@ pub struct Plan {
     /// Whose raw inherited facts the view's composition keeps (#160 step 6
     /// D3), fixed before it runs.
     witness: WitnessRequest,
+    /// Digest's tree and effects (D3, D7 (4)-(5)) over the `Roots` request.
+    needs_tree: bool,
+    /// Digest's `--tests` (#254): the effects keep the tree's test-coverage
+    /// graph.
+    tests: bool,
 }
 
 /// The routines a plan wants raw inherited facts for (#160 step 6 D3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WitnessRequest {
     None,
-    /// These internal routine ids (digest's changed roots).
+    /// Digest's changed roots, by stable id: every row of each id is a subject
+    /// (a collided id's rows share its cone).
     Roots(BTreeSet<String>),
     /// Every `Role::Primary` routine (policy check).
     Primary,
@@ -87,7 +100,15 @@ impl WitnessRequest {
     fn scope(&self, model: &Model) -> WitnessScope {
         match self {
             WitnessRequest::None => WitnessScope::None,
-            WitnessRequest::Roots(ids) => WitnessScope::Subjects(ids.clone()),
+            WitnessRequest::Roots(ids) => WitnessScope::Subjects(
+                model
+                    .workspace
+                    .routines
+                    .iter()
+                    .filter(|r| ids.contains(&r.stable_routine_id))
+                    .map(|r| r.id.clone())
+                    .collect(),
+            ),
             WitnessRequest::Primary => WitnessScope::Subjects(
                 model
                     .workspace
@@ -110,10 +131,14 @@ pub enum Cell {
     Rel,
     Caps,
     Raw,
+    Tree,
+    Effects,
 }
 
 impl Cell {
-    /// Every cell a command can hold past `prepare`: `Caps` never outlives it.
+    /// Every cell a command can hold past `prepare` and `finish_default_run`
+    /// drops: `Caps` and `Tree` never outlive `prepare`, and digest keeps
+    /// `Effects` (with `L4`) for its query, then releases both.
     const ALL: [Cell; 5] = [Cell::Det, Cell::L4, Cell::Ordering, Cell::Rel, Cell::Raw];
 
     fn bit(self) -> u8 {
@@ -129,18 +154,33 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
         need_l4: false,
         after_run: 0,
         witness: WitnessRequest::None,
+        needs_tree: false,
+        tests: false,
     }
 }
 
 /// `alsem digest` and `alsem prove`: the run, then the tx map off
-/// `det.transaction_spans` and the query off `l4`.
-pub fn digest_plan(detectors: Vec<Detector>) -> Plan {
+/// `det.transaction_spans` and the query off `l4`. Digest passes its changed
+/// roots (stable ids, resolved before the composition, #160 step 6 D3): the
+/// view composes their raw facts, builds the tree over the cone graph and
+/// keeps their effects ([`View::effects`]). No root (prove, which keeps
+/// its standalone snapshot, or a digest that resolved none): neither. `tests`
+/// (`digest --tests`, #254): the effects also keep the tree's test-coverage
+/// graph.
+pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: bool) -> Plan {
+    let needs_tree = !roots.is_empty();
     Plan {
         runs: vec![detectors],
         scope_primary: true,
         need_l4: true,
         after_run: substrate::TRANSACTION_SPANS,
-        witness: WitnessRequest::None,
+        witness: if needs_tree {
+            WitnessRequest::Roots(roots)
+        } else {
+            WitnessRequest::None
+        },
+        needs_tree,
+        tests,
     }
 }
 
@@ -153,6 +193,8 @@ fn run_only_plan(detectors: Vec<Detector>) -> Plan {
         need_l4: false,
         after_run: 0,
         witness: WitnessRequest::None,
+        needs_tree: false,
+        tests: false,
     }
 }
 
@@ -175,6 +217,8 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
         need_l4: false,
         after_run: substrate::SUMMARIES,
         witness: WitnessRequest::None,
+        needs_tree: false,
+        tests: false,
     }
 }
 
@@ -191,6 +235,8 @@ pub fn query_plan() -> Plan {
         need_l4: true,
         after_run: 0,
         witness: WitnessRequest::None,
+        needs_tree: false,
+        tests: false,
     }
 }
 
@@ -208,11 +254,13 @@ impl Plan {
             need_l4,
             after_run,
             witness: WitnessRequest::None,
+            needs_tree: false,
+            tests: false,
         }
     }
 
-    /// The plan with `witness`. No factory sets one yet: digest's roots come
-    /// with #160 step 6 Task 2b-2, policy's `Primary` with Task 3.
+    /// The plan with `witness` (policy's `Primary` comes with #160 step 6
+    /// Task 3).
     #[cfg(test)]
     pub(crate) fn with_witness(self, witness: WitnessRequest) -> Plan {
         Plan { witness, ..self }
@@ -282,6 +330,8 @@ impl View {
             rel: None,
             caps: None,
             raw: None,
+            tree: None,
+            effects: None,
             l4: None,
             det: None,
             released: 0,
@@ -291,11 +341,14 @@ impl View {
     }
 
     /// Fill every cell `plan` needs that is still empty, in order (#160 step 6
-    /// D7): ordering, rel, ONE composition into `caps` and `raw`, det (it
+    /// D7): ordering, rel, ONE composition into `caps` and `raw`; under
+    /// `needs_tree` the tree (it takes `raw` by move and `caps.pd`; `Raw` is
+    /// released) and the effects off it (then `Tree` is released); det (it
     /// consumes `caps`, then `l4`, then its harvest; `Caps` is released), then
     /// the runs. A plan with no run: rel, then `l4` alone. Rule 1's asserts
     /// (a), (b), (c), the one-witness assertion and the `after_run` assertion
-    /// hold in release builds too.
+    /// hold in release builds too. A view composes once, so a witness request
+    /// comes with its first composing `prepare` or not at all.
     pub fn prepare(&mut self, plan: &Plan) {
         self.prepare_inner(plan, vec![]);
     }
@@ -328,10 +381,17 @@ impl View {
         let need_raw = plan.witness != WitnessRequest::None;
         let need_caps = (need_det && self.det.is_none() && need_derived) || need_raw;
         let need_rel = need_det || need_l4 || need_raw;
-        // D3: the subjects are fixed once, before the one composition.
+        // D3: the subjects are fixed once, before the one composition: a
+        // second request, or a request after the view composed without one.
         assert!(
-            !need_raw || (self.raw.is_none() && self.released & Cell::Raw.bit() == 0),
-            "a View takes at most one witness request"
+            !need_raw
+                || (self.raw.is_none()
+                    && self.released & (Cell::Raw.bit() | Cell::Caps.bit()) == 0),
+            "a View takes at most one witness request, in its one composing prepare"
+        );
+        assert!(
+            !plan.needs_tree || matches!(plan.witness, WitnessRequest::Roots(_)),
+            "a tree is composed over a Roots witness request"
         );
         // (a) a released cell is never refilled: a refill after
         // `release(Det)` would find no `CoreSummaries`.
@@ -373,6 +433,8 @@ impl View {
             rel,
             caps,
             raw,
+            tree,
+            effects,
             l4,
             det,
             released,
@@ -421,6 +483,31 @@ impl View {
                 *raw = Some(w);
             }
         }
+        // D7 (4)-(5): digest's tree over the cone graph, its effects read off
+        // it, then the tree is released, all before `det` takes `caps`.
+        if let (true, WitnessRequest::Roots(roots)) = (plan.needs_tree, &plan.witness) {
+            let r = rel.as_ref().expect("rel filled above");
+            let app_names = cross_base.map(|b| b.loaded_app_names()).unwrap_or_default();
+            *tree = Some(crate::engine::l5::snapshot::compose_tree(
+                model,
+                r.cone(),
+                r.dependency_calls(),
+                caps.as_mut().expect("caps filled above"),
+                raw.take().expect("raw filled above"),
+                None,
+                &app_names,
+            ));
+            note_release(released, Cell::Raw);
+            let roots: Vec<String> = roots.iter().cloned().collect();
+            *effects = Some(crate::engine::l5::digest_cli::digest_effects(
+                tree.as_mut().expect("tree filled above"),
+                model,
+                &roots,
+                plan.tests,
+            ));
+            *tree = None;
+            note_release(released, Cell::Tree);
+        }
         if need_det && det.is_none() {
             let r = rel.as_ref().expect("rel filled above");
             // (c) `CoreSummaries` is a local of the det fill's own solve, so a
@@ -463,6 +550,33 @@ impl View {
             return;
         }
         let art = det.as_ref().expect("det filled above");
+        // The live-cell checkpoint (spec §4.7, A6.18): what is alive at the
+        // first run. No tree, no pd arena and no raw facts of digest's (D7).
+        if plan
+            .runs
+            .iter()
+            .any(|run| !runs.contains_key(&plan.key(run)))
+        {
+            let pd = caps.as_ref().is_some_and(|c| c.pd.is_some()) || tree.is_some();
+            let live: Vec<&str> = [
+                ("Rel", rel.is_some()),
+                ("Caps", caps.is_some()),
+                ("PdArena", pd),
+                ("Raw", raw.is_some()),
+                ("Tree", tree.is_some()),
+                ("Effects", effects.is_some()),
+                ("L4", l4.is_some()),
+                ("Det", true),
+                ("Ordering", ordering.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(name, filled)| filled.then_some(name))
+            .collect();
+            if crate::engine::census::enabled() {
+                eprintln!("[retained-census] view.live cells={}", live.join(","));
+            }
+            pt::instant_lazy("view", "view.live", || serde_json::json!({ "cells": live }));
+        }
         for run in &plan.runs {
             let key = plan.key(run);
             if runs.contains_key(&key) {
@@ -497,15 +611,17 @@ impl View {
             Cell::Rel => self.rel = None,
             Cell::Caps => self.caps = None,
             Cell::Raw => self.raw = None,
+            Cell::Tree => self.tree = None,
+            Cell::Effects => self.effects = None,
         }
     }
 
-    /// [`View::release`] every cell except `keep`: the one way a command
-    /// drops what it no longer reads, so no cell (`Ordering` included) is
-    /// kept alive by a forgotten line.
+    /// [`View::release`] every cell except `keep` and those already released:
+    /// the one way a command drops what it no longer reads, so no cell
+    /// (`Ordering` included) is kept alive by a forgotten line.
     pub fn release_all_but(&mut self, keep: &[Cell]) {
         for cell in Cell::ALL {
-            if !keep.contains(&cell) {
+            if !keep.contains(&cell) && self.released & cell.bit() == 0 {
                 self.release(cell);
             }
         }
@@ -534,6 +650,11 @@ impl View {
     /// The witness subjects' raw inherited facts (#160 step 6 D2).
     pub fn raw(&self) -> &HashMap<String, Vec<CapabilityFact>> {
         self.raw.as_ref().expect("raw cell not filled")
+    }
+
+    /// Digest's effects (#160 step 6 D7 (5)), read by its query at (8).
+    pub fn effects(&self) -> &DigestEffects {
+        self.effects.as_ref().expect("effects cell not filled")
     }
 
     /// The stored output of a run `prepare` ran. An `Arc`: a caller may
@@ -660,7 +781,7 @@ mod tests {
         for (name, plan, bit) in [
             (
                 "digest",
-                digest_plan(vec![probe(0, noop)]),
+                digest_plan(vec![probe(0, noop)], BTreeSet::new(), false),
                 "TRANSACTION_SPANS",
             ),
             ("events", events_plan(vec![probe(0, noop)]), "SUMMARIES"),
@@ -836,6 +957,75 @@ mod tests {
         let mut v = view();
         v.prepare(&plan());
         v.prepare(&plan());
+    }
+
+    /// #160 step 6 D3 (Task 2b-1 review): a witness request after the view
+    /// composed WITHOUT one names the witness rule, not the generic refill.
+    /// DISCRIMINATION: dropping `Cell::Caps` from the assertion's released
+    /// bits gives the "Caps released" text and fails this.
+    #[test]
+    fn a_witness_request_after_a_composition_names_the_rule() {
+        let plain = Plan::for_test(
+            vec![vec![probe(substrate::SUMMARIES, noop)]],
+            true,
+            false,
+            0,
+        );
+        let msg = panic_text(
+            "witness after a composition",
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut v = view();
+                v.prepare(&plain);
+                let with =
+                    Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::Primary);
+                v.prepare(&with);
+            })),
+        );
+        assert!(
+            msg.contains("a View takes at most one witness request, in its one composing prepare"),
+            "{msg}"
+        );
+    }
+
+    /// #160 step 6 D7 (Task 2b-1 review): a composition that only a witness
+    /// request asked for (no det fill consumes it) still dies in `prepare`.
+    /// DISCRIMINATION: deleting `*caps = None` fails the first assertion.
+    #[test]
+    fn a_raw_only_composition_is_released_by_prepare() {
+        let mut v = view();
+        v.prepare(&Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::Primary));
+        assert!(v.caps.is_none(), "Caps dropped");
+        assert!(v.released & Cell::Caps.bit() != 0, "Caps released");
+        assert!(v.raw.is_some(), "precondition: the raw half was filled");
+    }
+
+    /// #160 step 6 D3: digest's plan carries its roots as a `Roots` request
+    /// with a tree; a digest with no root (prove, or none resolved) has
+    /// neither. `Roots` scopes every row of each stable id.
+    #[test]
+    fn digest_plan_asks_a_tree_only_for_roots() {
+        let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
+        let p = digest_plan(vec![probe(0, noop)], roots.clone(), false);
+        assert_eq!(p.witness, WitnessRequest::Roots(roots));
+        assert!(p.needs_tree);
+        let p = digest_plan(vec![probe(0, noop)], BTreeSet::new(), false);
+        assert_eq!(p.witness, WitnessRequest::None);
+        assert!(!p.needs_tree);
+        let mut m = crate::engine::l5::test_support::empty_resolved();
+        for id in ["r1", "r2", "r3"] {
+            let mut r = crate::engine::l5::test_support::routine(id, "procedure");
+            r.stable_routine_id = if id == "r3" {
+                "other#"
+            } else {
+                "a:Codeunit:1#x"
+            }
+            .into();
+            m.workspace.routines.push(r);
+        }
+        assert_eq!(
+            WitnessRequest::Roots(["a:Codeunit:1#x".to_string()].into()).scope(&m),
+            WitnessScope::Subjects(["r1".to_string(), "r2".to_string()].into())
+        );
     }
 
     /// `take_run` removes the stored output: a second take, or a `run` of the

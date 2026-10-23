@@ -255,7 +255,7 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             // ⟨C1 Task 3 — R2⟩ The ONE call site that ORs in `RAW_INHERITED_FACTS`.
             // `policy_engine::select_facts` iterates the real inherited
             // `CapabilityFact` objects for `facts: inherited | any` rules, so this
-            // path must compose the cone under `ConeOutput::Both`. The bit is
+            // path must compose the cone with a raw half (`{ derived, raw: All }`). The bit is
             // deliberately NOT in `substrate::ALL`: folding it in would
             // re-materialize ~10.9 GB of cone Vecs on every other caller.
             //

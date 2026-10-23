@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effect merge keeps the 4 smallest distinct paths instead of every path (same output). The
   witness census line `digest.witness_dags=N nodes=N preds=N` joins `ALSEM_CONES_CENSUS=1`.
 
+### Removed
+
+- `aldump --issue160-full-graph-timings` and `aldump --issue160-step6-probe`, the
+  measurement-only modes of #160 step 6.
+
 ## [2.0.3] - 2026-10-23
 
 ### Added
@@ -192,6 +197,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     input to `edgeId`. The program engine's graph names (`ObjKey::Name`, receiver
     type text) stay raw, so the call resolver still compares raw source names with
     logical dependency names (#250).
+- #160 step 6: digest sees dependency effects (one cone graph, #161 digest half). Digest
+  (cross-app, the default) now reports what a changed routine does through dependency code:
+  effects reached through a call into a dependency app are grouped per call and effect
+  type, with the dependency routine named (`enters <App>.<Routine>`), the number of
+  resources and up to 10 of them. These groups are reported, not graded: their
+  conditionality is `unknown`, and they never carry a must-guarantee. Witness paths stop at
+  the dependency boundary. Every printed witness path is a shortest one.
+
+  A group is one digest effect: `detail` is `{"boundary": "<App>.<Routine>",
+  "resourceCount": "<N>", "resources": "<r1>, <r2>, …"}` (the first 10 distinct resources in
+  resource-id order, each by its display name when it has one); `evidence` is the boundary
+  call site (else the firing record operation of a trigger, else the publish site of an
+  event), and `viaPaths` are the workspace-code prefixes up to it (`[]` when the root's own
+  call is the boundary). A dependency effect behind a workspace subscriber or trigger that
+  dependency code reaches also groups at the boundary. A group has no `detail.tempState`.
+
+  How: digest resolves its changed roots from the model before the view composes, so the
+  view's one composition keeps those roots' raw facts and the digest tree is composed from
+  it over the relation's cone graph (no second cone, graph, SCC or producer solve: build
+  counters 1/1/1/2/1/1/1/1). The tree's call-site ledger reads the dependency routines' own
+  calls too, and a resolved call whose every target is a body-less dependency routine is
+  `unfetched-dependency`. The tree is released as soon as each root's effects and
+  unresolved cone are read off it, before the detector run. d47/d49/d51 (the ordering
+  cell), prove, fingerprint and diff stay on the cut graph; moving the ordering cell is the
+  #161 follow-up, and until then its cut composition keeps raw facts for every routine
+  (dependency rows included), the stated I5 exception. `digest --tests` (#254) builds its
+  coverage graph off the same tree, so its traversal now follows the calls dependency code
+  makes (a test that reaches workspace code only through dependency code covers it) and
+  reads the dependency callers' ledger rows.
 
 ## [2.0.2] - 2026-10-23
 

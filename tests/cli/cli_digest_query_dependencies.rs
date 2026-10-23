@@ -561,3 +561,99 @@ fn without_dependencies_cross_app_equals_single_app() {
     }
     assert!(compared >= 58, "compared only {compared} outputs");
 }
+
+/// One digest effect, as the rule-B tests read it: (type, `detail.boundary`,
+/// `detail.resourceCount`, `detail.resources`, conditionality, via paths as
+/// `from>to` chains, evidence line).
+type GroupView = (String, String, String, String, String, Vec<String>, u64);
+
+fn effects_of(doc: &Value, routine: &str) -> Vec<GroupView> {
+    let entry = doc["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["routine"]["display"] == routine)
+        .unwrap_or_else(|| panic!("no {routine} entry: {doc}"));
+    let s = |v: &Value| v.as_str().unwrap_or("").to_string();
+    let mut out: Vec<GroupView> = entry["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            let via = f["viaPaths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| {
+                    p.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|h| format!("{}>{}", s(&h["fromDisplay"]), s(&h["toDisplay"])))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .collect();
+            (
+                s(&f["type"]),
+                s(&f["detail"]["boundary"]),
+                s(&f["detail"]["resourceCount"]),
+                s(&f["detail"]["resources"]),
+                s(&f["conditionality"]),
+                via,
+                f["evidence"]["line"].as_u64().unwrap_or(0),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// T1 (#161, digest half; spec §14.3.5 item 7): on #161's fixture (`Inner`
+/// does `Cust.Modify()` and commits), cross-app `digest --routine CallChain`
+/// reports `DB_MODIFY` and `COMMIT` as two groups through the call into the
+/// dependency's `Outer` (`enters XBase.Outer`, the root's own call, so the via
+/// path is empty), Customer (18) in the `DB_MODIFY` group's resources, both
+/// `conditionality: unknown`; the two groups have distinct fact ids.
+///
+/// Discrimination: composing the tree over the primary callers' typed edges
+/// only (the cut) loses both effects.
+#[test]
+fn t1_call_chain_reports_the_dependency_modify_and_commit_as_groups() {
+    use crate::dep_dispatch_fixture::write_own_modify;
+    let dir = tempfile::tempdir().unwrap();
+    write_own_modify(dir.path(), "");
+    let ws = dir.path().to_string_lossy().to_string();
+    let (doc, code) = json(&["digest", &ws, "--routine", "CallChain"]);
+    assert_eq!(code, 0, "{doc}");
+    // `Lib.Outer();` is line 16 of `src/Work.al`.
+    let line = crate::dep_dispatch_fixture::WS_AL
+        .lines()
+        .position(|l| l.trim() == "Lib.Outer();")
+        .expect("fixture: the call") as u64;
+    let group = |ty: &str, count: &str, resources: &str| -> GroupView {
+        (
+            ty.to_string(),
+            "XBase.Outer".to_string(),
+            count.to_string(),
+            resources.to_string(),
+            "unknown".to_string(),
+            vec![String::new()],
+            line,
+        )
+    };
+    assert_eq!(
+        effects_of(&doc, "CallChain"),
+        vec![
+            group("COMMIT", "0", ""),
+            group("DB_MODIFY", "1", "Customer"),
+        ],
+        "{doc}"
+    );
+    let ids: std::collections::BTreeSet<&str> = doc["payload"]["entries"][0]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["factId"].as_str())
+        .collect();
+    assert_eq!(ids.len(), 2, "two groups, two fact ids: {doc}");
+}

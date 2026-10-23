@@ -435,7 +435,9 @@ impl CoverageGraph {
                 flag(&mut g.incomplete, id, "test-page");
             }
             if dependency {
-                // The snapshot holds no dependency-internal calls (P6).
+                // Dependency code is a boundary (P6). Since #160 step 6 digest's
+                // tree is the cone graph, so its dependency-internal calls are
+                // edges too and the traversal follows them.
                 flag(&mut g.boundary, id, "dependency-code");
                 if !r.body_available {
                     flag(&mut g.boundary, id, "opaque-dependency");
