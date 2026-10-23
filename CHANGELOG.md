@@ -651,6 +651,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - #160 step 2: `effect_query_cli::build_db_effect_bundle`, `cross_app_db_effect_bundle`, `QuerySubstrate::from_cross_app_base` / `from_resolved`, `run::analyzer_diagnostic_lines`, and `digest_cli` / `prove`'s `compute_tx_context_map`. Each was a second build of something the `View` now builds once.
+- The unused `salsa` dependency and its 23 `SalsaValue` derives in `src/engine/l4` (#221). Byte-neutral; `Cargo.lock` drops 15 packages.
 
 ### Fixed
 

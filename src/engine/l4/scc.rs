@@ -29,14 +29,14 @@ pub struct SccInputGraph<'a> {
 
 /// One strongly-connected component. `members` in internal-id sorted order;
 /// `recursive` = size > 1 OR a self-edge.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scc {
     pub members: Vec<String>,
     pub recursive: bool,
 }
 
 /// The SCC result: the reverse-topological SCC list + a member→index map.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SccResult {
     /// SCCs in reverse-topological order: callees before callers. ORDER IS PART OF
     /// THE SURFACE.

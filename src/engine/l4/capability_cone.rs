@@ -51,7 +51,7 @@ use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
 /// A `ValueSource` (internal form — table-field tableId is INTERNAL until
 /// projected). Mirrors al-sem `ValueSource`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ValueSource {
     Literal {
         value: String,
@@ -80,7 +80,7 @@ pub enum ValueSource {
 /// vector-exercised families produce are modelled with structure; the rest pass
 /// through as opaque JSON for projection (so the full corpus in Task 3 can be
 /// extended without reshaping the cone).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CapabilityExtra {
     Table {
         record_variable_id: Option<String>,
@@ -113,7 +113,7 @@ pub enum CapabilityExtra {
 /// kept for `repKey` tie-break parity but excluded from the projection.
 /// `Ord` (#160 step 11b §4.6): a collided id's direct facts are a full-value
 /// union, ordered by this total order.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CapabilityFact {
     pub subject: String,
     /// ⟨C1 Task 4⟩ `op` / `resource_kind` / `confidence` / `provenance` / `via`
@@ -126,10 +126,7 @@ pub struct CapabilityFact {
     /// `&'static str` they are pointer copies into the binary's read-only data
     /// and the struct itself is 40 B smaller. The six genuinely-open fields
     /// (`subject`, `resource_id`, `resource_arg_source`, `witness_operation_id`,
-    /// `witness_callsite_id`, `extra`) stay owned. `salsa::SalsaValue` still
-    /// derives (salsa 0.28 replaced `Update` with `SalsaValue` + `PartialEq`):
-    /// a `&'static str` — unlike the `&'db T` salsa's own doc warns about — can
-    /// never dangle or change under a revision.
+    /// `witness_callsite_id`, `extra`) stay owned.
     pub op: &'static str,
     pub resource_kind: &'static str,
     /// Internal resourceId (TableId / EventId / ObjectId) — projected to stable.
@@ -154,7 +151,7 @@ pub struct CapabilityFact {
 
 /// One per-routine coverage record (internal form). Mirrors al-sem
 /// `CoverageRecord`.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoverageRecord {
     pub subject: String,
     pub direct_status: String,
@@ -3093,7 +3090,7 @@ fn compose_inherited_cones(
 
 /// One routine's cone result in PUBLIC (internal-id) form. Field-for-field the
 /// private `InheritedConeResult`.
-#[derive(Debug, Clone, PartialEq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConeResultPub {
     pub inherited: Vec<CapabilityFact>,
     pub coverage: CoverageRecord,

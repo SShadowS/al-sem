@@ -709,7 +709,7 @@ sizings marked pre-arc).
   and the strict-subset minimal-invalidation fixtures — is preserved in
   `docs/superpowers/notes/2026-07-24-r3b-incremental-l4-design-intent.md`. Wake: a
   real incremental-analyze consumer.
-- [ ] **`salsa` derive-only dependency** — after the R3b `incremental/` deletion
+- [x] **`salsa` derive-only dependency** — done in #221. After the R3b `incremental/` deletion
   (Task B1), nothing in the crate consumes `#[salsa::db]`/`#[salsa::input]`/
   `#[salsa::tracked]`/`#[salsa::interned]` any more; the only surviving usage is
   `#[derive(salsa::Update)]` on a handful of `l4` types (`summary.rs`,
