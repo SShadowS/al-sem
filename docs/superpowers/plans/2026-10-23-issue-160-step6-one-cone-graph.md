@@ -29,18 +29,31 @@ agent.
 `docs/superpowers/specs/2026-10-18-issue-160-analysis-session-design.md` §9 row 6. Base
 probes: `.agent/issue-160/ledger.md` `## Assumption probes`, `/work/bench/160-6/probe/`.
 
-There are four tasks:
-- **Task 1** rebases onto #220, lands the scope type and the tree builder (not yet wired), the
-  measurement-only probe, and runs the stop rule's measurements. **It ends at a STOP**: the
-  stop rule (spec §8.4) is read and its fallbacks fire or the claim stops, before any switch.
-- **Task 2** switches digest and the ordering cell onto the view's composition and deletes the
-  cut graph. One red-to-green commit.
-- **Task 3** switches policy onto `Cell::Raw` and deletes `RAW_INHERITED_FACTS`. One
-  red-to-green commit.
-- **Task 4** is the CDO identity, triage, bench and `cdo-gate` on the final head.
+**Split (spec §14, amendment 6A-12, 2026-10-23).** Task 1's stop rule failed (ledger
+`## Task 1 STOP`). Step 6 now moves **digest only** onto the cone graph; the ordering cell
+(d47/d49/d51) and the cut builder stay until a #161 follow-up, and one BFS predecessor-DAG
+witness rule (spec §14.3) replaces the per-fact search. The Goal and Architecture above are
+narrowed accordingly: the cut graph is NOT deleted, #161 is closed for digest only, and
+`RAW_INHERITED_FACTS` goes only if Task 3 stays. Where this plan's Task 1 text and the tasks
+below disagree, the tasks below win.
 
-Identity/comparison runs and bench runs happen only at stage boundaries (Task 1's STOP, Task
-4 on the final head), per the operator's speed decision.
+The tasks:
+- **Task 1** (done, STOPPED): the scope type and the tree builder (not wired), the probe, the
+  stop-rule measurements. Commit `72abd499`, cherry-picked at attempt 8 as `edca9f0c`.
+- **Task 1′** (claim time, no code on the branch): rebase, re-measure with the DAG prototype,
+  read S1′/S2′. STOP if either fails.
+- **Task 2a**: the DAG witness rule, on today's trees (every consumer). One red-to-green
+  commit that may move witness goldens. Nothing else moves.
+- **Task 2b**: digest on the view's one composition over the cone graph. One red-to-green
+  commit.
+- **Task 3**: policy on `Cell::Raw` (kept only if B5 holds in Task 4).
+- **Task 4**: CDO identity, triage, bench, `cdo-gate`, numbers file.
+
+Splitting the old Task 2 into 2a and 2b keeps each golden move attributable to one cause: 2a's
+moves are the DAG rule, 2b's are the cone graph or D6.
+
+Identity/comparison runs and bench runs happen only at stage boundaries (Task 1′'s STOP, Task
+2a's early CDO check, Task 4 on the final head), per the operator's speed decision.
 
 ## Global Constraints
 
@@ -63,7 +76,9 @@ Identity/comparison runs and bench runs happen only at stage boundaries (Task 1'
      `scripts/check-goldens --regen`. Any other move: stop and explain it.
   3. The pre-commit hook passes unmodified (never `--no-verify`).
 - **After each commit,** from `/work/alsem`:
-  `python3 scripts/agentflow --root /work/alsem --run-id 20261023-000639-b5e936 check-diff --base master --head HEAD --issue 160 --cwd /work/al-sem-issue-160-a7`.
+  `python3 scripts/agentflow --root /work/alsem --run-id 20261023-120326-46d656 check-diff --base origin/master --head HEAD --issue 160 --cwd /work/al-sem-issue-160-a8`
+  (attempt 8; attempt 7 used run `20261023-000639-b5e936` and `/work/al-sem-issue-160-a7`,
+  which every run id and worktree below now replace).
   Required `reasons: []`; anything else is fixed forward in a new commit, never amended.
 - **Staging.** Stage by name; never `git add -A`; never stage `.agent/`.
 - **Discrimination proof** for every test a task turns green (spec §5 names each break): break
@@ -71,34 +86,39 @@ Identity/comparison runs and bench runs happen only at stage boundaries (Task 1'
   record the pass. One ledger row per proof under `## Discrimination proofs`
   (`test | mutation | fail | pass | commit`). A break that stays green: stop and report.
 - **Heavy runs and benches go through the shared slot**, output to `/work/bench/160-6/`:
-  `python3 /work/alsem/scripts/agentflow --root /work/alsem --run-id 20261023-000639-b5e936 run --name bench --timeout 60 --cwd <dir> -- <command>`.
+  `python3 /work/alsem/scripts/agentflow --root /work/alsem --run-id 20261023-120326-46d656 run --name bench --timeout 60 --cwd <dir> -- <command>`.
   **Quiet slot** (spec §8): a load gate (1-min load ≤ 4, wait ≤ 15 min, then fail closed) at
   the start; a load tick > 8 during a timed part voids that part (one re-run). Schedule when
   the other session runs no bench or build.
 - **The licensing `cdo-gate`** runs on a COMMITTED head with a clean `src tests crates` tree:
-  `CDO_WS=$(jq -er .cdo_ws /work/alsem/.agent/config.json) python3 /work/alsem/scripts/agentflow --root /work/alsem --run-id 20261023-000639-b5e936 run --name cdo-gate --timeout 60 --cwd /work/al-sem-issue-160-a7 -- bash scripts/cdo-gate`.
+  `CDO_WS=$(jq -er .cdo_ws /work/alsem/.agent/config.json) python3 /work/alsem/scripts/agentflow --root /work/alsem --run-id 20261023-120326-46d656 run --name cdo-gate --timeout 60 --cwd /work/al-sem-issue-160-a8 -- bash scripts/cdo-gate`.
 - **Binaries** for any measurement: `cargo build --profile release-fast --bin alsem --bin aldump`
   in a clean detached worktree under `/work/bench/160-6/`, copied out with a `bins.sha`.
 
 ## Review Focus
 
 1. **A collided id (11b)** among the subjects: every row of the id is a subject (spec §4.3),
-   the cone is per id, so the raw entry exists once. Pinned in Task 2 by T3 on the r0 corpus's
+   the cone is per id, so the raw entry exists once. Pinned in Task 2b by T3 on the r0 corpus's
    collided fixture (if one exists; else a hand-stated two-row id in T2's fixture).
 2. **A digest with no resolved root** keeps `WitnessScope::None`, builds no tree, exits 2
-   (`digest_cli.rs:1682`). Task 2 adds a CLI test: `digest --routine NoSuchRoutine` exits 2
-   and the trace shows `build.snapshot 0`.
+   (`digest_cli.rs:1690` at `6a2b7c8b`). Task 2b adds a CLI test: `digest --routine NoSuchRoutine`
+   exits 2 and the trace shows `build.snapshot 0`.
 3. **A routine that is both a digest root and an ordering subject** in one future batch: out
    of scope (one job per view, 6A-3); `prepare` asserts a plan has one witness request.
 4. **A single-app model with body-less ABI rows** (spec §4.6): D6 may move single-app ordering
-   output. Task 1 counts them; Task 4 lists every D6-explained move.
+   output. Task 1 counts them; Task 4 lists every D6-explained move. *Since the split:* D6 is on
+   the cone-graph tree only and ordering stays on the cut, so it cannot move ordering output;
+   Task 1 measured 0 single-app body-less rows.
 5. **An empty subject set with `needs_tree`** (an ordering plan on a workspace with no
-   reportable root): the tree is built with no raw, the ordering cell is empty. Task 2 adds a
-   unit test on an r0 dir whose only routine is body-less.
+   reportable root). *Void since the split*: the ordering plan has no witness scope.
 
 ---
 
 ## Task 1 — rebase, scope type, tree builder, probe, and the STOP
+
+**Done; STOPPED at Step 10** (S1 and S2 failed on `d` and `o`, ledger `## Task 1 STOP`).
+Code commit `72abd499` (attempt 7) = `edca9f0c` (attempt 8 cherry-pick). Kept as written for
+the record; Task 1′ continues from here.
 
 Spec §0, §4.1, §4.4-§4.6 (builder only), §8.1 rounds rule, §8.4, §11; T2.
 
@@ -209,81 +229,164 @@ Spec §0, §4.1, §4.4-§4.6 (builder only), §8.1 rounds rule, §8.4, §11; T2.
 
 ---
 
-## Task 2 — digest and ordering on the view's composition; the cut graph deleted
+## Task 1′ — rebase and re-measure (claim time)
 
-Spec §4.2-§4.8 (except policy), §4.9, §5 T1, T3, T4, T5, T6, T7, T8 (coverage half), T9, the
-live-cell checkpoint; A6.1-A6.5, A6.9-A6.11, A6.13-A6.19. Depends on Task 1 passing its STOP.
+Spec §14.4, §14.8, §14.9. No code on the branch.
 
-**Files:**
-- Modify `src/engine/session.rs`: `Cell::{Caps, Raw, Tree, Effects}`, the fields, `Plan`'s
-  `witness: WitnessRequest` and `needs_tree: bool`, the fill order of spec §4.7, the
-  `view.live` census line, `prepare` asserting one witness request per plan.
-- Modify `src/engine/l5/detector_context.rs`: `build_detector_artifacts` takes `caps` by move
-  and composes nothing; `fill_ordering(model, &tree)`; delete the det cone call.
-- Modify `src/engine/l5/digest.rs`: `compute_digest_effects_for_ordering_with` takes the tree;
-  delete its `compose_snapshot`.
-- Modify `src/engine/l5/digest_cli.rs`: roots from `derive_identity_table(model)` before
-  `prepare`; `resolve_changed_roots(&SnapshotIdentityTable, ..)`; the query reads
-  `DigestEffects`.
-- Modify `src/engine/l5/snapshot.rs`, `snapshot_full.rs`: `compose_snapshot` becomes the
-  standalone single-app path (asserts no dependency-role row; `build_combined_graph` +
-  `det_cone_inputs_over(&graph.primary.uncertainty_edges)` + `{false, All}` + `compose_tree`);
-  `compose_full_snapshot` in both universes (spec §4.4); delete `compose_snapshot_from_base`.
-- Modify `src/engine/l4/capability_cone.rs`: delete `build_r3a3_source_only_base`, `_over`,
-  `R3a3SourceBase`, `issue160_full_graph_timings` and the "legacy cut" text; `src/bin/aldump.rs`:
-  delete the timings mode and the step-6 probe; delete `src/engine/l5/step6_probe.rs`.
-- Modify `src/engine/l4/combined_graph.rs:309` doc text.
-- Tests: `tests/common/dep_dispatch_fixture.rs` (the `Modify` variant), `tests/cli/` (T1, T5
-  rows in `cli_build_counters.rs`, T7, T9, Review Focus 2), lib tests for T3, T4, T6, T8, the
-  checkpoint and Review Focus 5; spec §5.9's rewrites (`detector_context.rs:2094`,
-  `detector_context_step5_tests.rs:283`, `detector_context_11b_tests.rs:1968`,
-  `capability_cone.rs:6333`, `:6371`, `tests/cli/aldump_smoke.rs:100`).
-- Modify `CHANGELOG.md` (`[Unreleased]` → `### Fixed`, "#160 step 6: one cone graph", Part of
-  #160, closes #161 by text only, no keyword): the snapshot tree on the cone graph; digest and
-  d47/d49/d51 see dependency effects; the `unfetched-dependency` ledger rule; the deletions;
-  amendments 6A-1 to 6A-11.
-
-**Interfaces:**
-- Consumes Task 1's.
-- Produces: `pub enum WitnessRequest { None, ReportableRoots, Roots(BTreeSet<String>), Primary }`
-  (resolved against the model inside `prepare`); `digest_plan(detectors, roots: BTreeSet<String>)`;
-  `pub struct DigestEffects { pub entries: Vec<DigestEntryResult>, pub unresolved: BTreeMap<String, Vec<UnresolvedConeItem>>, pub coverage: Vec<SnapshotCoverageRecord>, pub identities: SnapshotIdentityTable }`;
-  `View::effects(&self) -> &DigestEffects`; `View::raw(&self) -> &HashMap<String, Vec<CapabilityFact>>` (Task 3 reads it).
-
-- [ ] **Step 1: Write the tests, red.** T1 (`CallChain` → DB_MODIFY on dependency Table 18 and
-  COMMIT, path `CallChain → Outer → Inner`, on the `Modify` fixture variant), T3 (untouched
-  `All` arm vs production scope: cli-b `c.diff` roots, dependency fixtures, r0 ordering with the
-  `Hyperlink` and rid-less fixtures, CDO single-app CDO-gated arm), T4, T5 (rows of spec §4.9),
-  T6, T7 (a)(b), T8 coverage equality, T9 (a)(b), the checkpoint, Review Focus 1 (a two-row
-  collided id among T3's subjects: one raw entry, equal to the `All` arm's), 2 and 5. Record
-  each red outcome.
-- [ ] **Step 2: Implement the cells and the order** (spec §4.2, §4.3, §4.7) and the digest and
-  ordering paths. Delete the det cone call. `prepare` asserts at most one `WitnessRequest`
-  other than `None` per plan (Review Focus 3).
-- [ ] **Step 3: Implement the standalone path and `compose_full_snapshot`; delete the cut
-  builder, `compose_snapshot_from_base`, the timings mode and the probe.** `rg
-  'build_r3a3_source_only_base|R3a3SourceBase|ConeOutput|issue160_full_graph|legacy cut' src`
-  is empty (A6.15).
-- [ ] **Step 4: Green.** All Step 1 tests pass.
-- [ ] **Step 5: Goldens.** `scripts/check-goldens`. Allowed moves (A6.19): the cross-app
-  digest expectations in `cli_digest_query_dependencies`; `r4_cross_app_program` and r4/r4f
-  only for findings the cone graph or D6 explains. Triage each with `golden-diff-triager`,
-  attributing it to the cone graph or to D6; then `--regen` and re-run. Single-app goldens must
-  not move except D6-explained ordering findings (Review Focus 4), each listed.
-- [ ] **Step 6: Discrimination proofs**, the breaks spec §5 names: T1 (tree over primary
-  callers only), T3 (breaks 1, 2 under `Subjects` only; break 3 recorded as evidence), T4
-  (`Subjects(∅)`), T5 (extra det cone), T6 (default anchor), T7 (a) omit `dependency_calls`,
-  (b) keep `"resolved"`, T8 (tree folds over the cut's uncertainty), T9 (a) row removed, the
-  checkpoint (skip `release(Cell::Tree)`).
-- [ ] **Step 7: Gate and commit** (`#160 step 6 Task 2: digest and ordering on the cone graph (#161)`),
-  `check-diff`, ledger Timeline line and proof rows.
+- [ ] **Step 1: Rebase.** Done at attempt 8 by cherry-picking the parked branch (`10266644`
+  ..`2a4a867f`) onto master `6a2b7c8b`: the one textual conflict in `capability_cone.rs` was
+  resolved by keeping Task 1's `ConeOutcome` doc and dropping the #221-era `ConeResultPub`
+  (Task 1 = `edca9f0c`); #78's compile break in `step6_probe.rs` is fixed in its own commit
+  (`6a94aeac`, `OwnerIndex::build(model)`; `--file` roots never read it). `ci-steps
+  task-affected` on `6a94aeac`: 3812/3812 pass. Still to run on that tree before Step 3:
+  `scripts/check-goldens > <log>` and `scripts/ci-steps clippy`; both must be byte-neutral.
+- [x] **Step 2: Spec commit.** The amendment is spec §14 (`4eca8a3b`, `check-diff` clean).
+  Its spec-panel round runs before Step 3.
+- [ ] **Step 3: Parent binaries** from `6a2b7c8b` in a clean detached worktree
+  (`/work/bench/160-6/parent6a2-wt` → `/work/bench/160-6/parent6a2/`, `bins.sha`).
+- [ ] **Step 4: Probe binaries**: the branch head plus the prototype patch from
+  `/work/bench/160-6/diag-wt` (`git -C /work/bench/160-6/diag-wt diff > /work/bench/160-6/split/proto.patch`;
+  it touches `digest.rs`, which master did not change, and `step6_probe.rs`), plus P-2's census
+  lines. Scratch worktree only, never the branch.
+- [ ] **Step 5: Run** `/work/bench/160-6/split/probes-todo.md` P-1 to P-3 in one slot job;
+  record medians, bands and the round rule in the ledger.
+- [ ] **Step 6: STOP — read** S1′ (`K − D_P + T + E′ − S_P ≤ 8,000 ms`) and S2′ (probe peak
+  ≤ `Pm(d)` + 3,145,728 KiB). `PD_EDGE_UNMAPPED == 0` and `non_primary_members == 0` on `d`.
+  Pass → freeze the terms in the ledger and go on. Fail → F-W1 or F-W2 once (as a scratch probe
+  first), re-read; still failing → the claim stops (spec §14.8 "end").
 
 ---
 
-## Task 3 — policy on `Cell::Raw`; `RAW_INHERITED_FACTS` deleted
+## Task 2a — the DAG witness (D8, spec §14.3)
+
+Acceptance: A6.21, A6.22 (corpus half), A6.19 (DAG half). Depends on Task 1′ passing its STOP.
+
+**Files:**
+- Modify `src/engine/l5/digest.rs`: `reconstruct_witness_paths`'s BFS half becomes the DAG rule.
+  `HopCache` gains the per-first-hop DAG map (key: first-hop kind + id; the cache is per root).
+  The reverse-BFS `valid_nodes` set is replaced by a carrier set per `ValidNodesKey` (the
+  prototype's `C|`-keyed entry; rename the cache to what it holds). `MAX_STATES` stays for
+  `enumerate_proofs` only. Close the depth gap (spec §14.3.1 item 6). Census line
+  `digest.witness_dags=N nodes=N preds=N`. Port from the prototype WITHOUT its `ALSEM_W6_*`
+  switches and its `diag` module; the old search is deleted, not kept behind a flag.
+- Tests in `digest.rs`'s test module (hand-stated `FingerprintIndexes` over a literal snapshot,
+  as the existing witness tests do). Each states its precondition literally and gets a proof row:
+  - **W1 shortest only.** Root R, first hop `cs1` → A; A → W1 (carrier) and A → B → W2
+    (carrier of the same fact). Expect one path, to W1. Break: read every reached carrier
+    instead of those at `dmin` → two paths → fails.
+  - **W2 all shortest.** `cs1` → X; X → A → W and X → B → W. Expect both paths. Break: keep
+    only the first predecessor per routine (the CLRS breadth-first tree) → one path → fails.
+  - **W3 one DAG per (root, first hop).** Two facts of R through `cs1`, one through `cs2`:
+    `witness_dags` = 2. Break: skip the cache lookup → 3 → fails.
+  - **W4 truncation boundary.** A ladder of `k` diamonds under `cs1` (2^k shortest paths):
+    `k = 8` (256 paths) → `truncated == false`; `k = 9` (512) → `true`. Break: enumerate up to
+    `HARD_PATH_CAP` instead of `HARD_PATH_CAP + 1` → `k = 8` reads truncated → fails.
+  - **W5 no state budget.** A fan-out that makes the old search expand more than 25,000 states
+    before the carrier: the witness is found and there is no `state-limit-exceeded`
+    diagnostic. Break: stop the DAG BFS after 25,000 pops → fails.
+  - **W6 depth limit.** The only carrier sits 65 hops below the first hop: today's depth-limit
+    diagnostic and `incomplete`, not `terminal-not-found`. Break: never set the depth flag →
+    fails.
+- `CHANGELOG.md` `[Unreleased]` → `### Changed`: "digest, prove and fingerprint witnesses are
+  the shortest paths to the nearest carrier (one BFS per root and first hop, CLRS §22.2);
+  printed paths are no longer padded with longer ones; `viaPathsTruncated` means more than 256
+  shortest paths; the witness BFS has no state limit". Part of #160.
+
+- [ ] **Step 1: Write W1-W6, red** (W1 and W5 fail on the old search; W3 and W6 fail to
+  compile without the new counter and flag). W2, and maybe W4, can pass on the old search: they
+  pin properties of the new code, and their breaks (Step 5) are what proves them. Record each
+  outcome.
+- [ ] **Step 2: Implement** the rule. W1-W6 green.
+- [ ] **Step 3: Goldens.** `scripts/check-goldens > <log>`. Allowed moves: `viaPaths`,
+  `viaPathsTruncated`, `conditionality` and witness diagnostics in digest, prove and
+  fingerprint-query goldens. Not allowed: `tests/r4-goldens/`, `tests/r4f-goldens/`,
+  `r4_cross_app_program`, any `.cbor`/`.cbor.gz`/shard, any `objectDisplay` or header. Triage
+  with `golden-diff-triager` (classes: padding removed, truncation flip, conditionality flip,
+  other = unexplained), then `--regen` and re-run.
+- [ ] **Step 4: Early CDO check (slot job, ~2 min):** `o` SARIF `cmp` parent vs this head,
+  cross-app at both scopes and `--single-app` (A6.22). Any difference → F-W3.
+- [ ] **Step 5: Discrimination proofs** for W1-W6 (break with Edit, revert with Edit, re-read
+  the line).
+- [ ] **Step 6: Gate and commit** (`#160 step 6 Task 2a: the DAG witness (one BFS per root and first hop)`),
+  `check-diff`, ledger lines.
+
+---
+
+## Task 2b — digest on the view's composition over the cone graph
+
+Spec §4.2-§4.7 for digest only, §4.9 as amended (§14.10), T1 (digest half), T3 (digest arm),
+T4, T5, T6, T7, T8 (coverage half), T9, the live-cell checkpoint; A6.1, A6.2, A6.5, A6.10
+(digest), A6.13-A6.19. Depends on Task 2a.
+
+**Files:**
+- `src/engine/session.rs`: `Cell::{Caps, Raw, Tree, Effects}`; `Plan` gains
+  `witness: WitnessRequest` and `needs_tree: bool`;
+  `pub enum WitnessRequest { None, Roots(BTreeSet<String>), Primary }` (no `ReportableRoots`:
+  6A-6 is void); fill order of spec §4.7; the `view.live` census line; `prepare` asserts at most
+  one non-`None` witness request. Digest needs the model before the composition: add
+  `View::prepare_model(&plan)` (cells 1-2) and let `prepare` continue from there, or an
+  equivalent split; state the choice in the commit.
+- `src/engine/l5/detector_context.rs`: `build_detector_artifacts` takes `caps` by move and
+  composes nothing (delete the det cone call). **`fill_ordering` and its cut snapshot are
+  unchanged.**
+- `src/engine/l5/digest_cli.rs`: before the composition, in one block that ends before
+  `prepare`: `derive_identity_table(model)`, `OwnerIndex::build(model)`,
+  `resolve_changed_roots(&identities, model, &input, primary_guid_of(model), &owners)` (the #78
+  signature, with the table instead of the snapshot). At (8): `OwnerIndex::build(view.model())`
+  again and `run_digest_query_full_from_entries(&effects, .., &changed_roots, &owners)`. No
+  resolved root → `WitnessRequest::None`, `needs_tree: false`, exit 2.
+- `src/engine/l5/snapshot.rs`: `compose_tree` becomes digest's production path.
+  `compose_snapshot` and `compose_snapshot_from_base` STAY (ordering cross-app; prove,
+  fingerprint, diff single-app); their doc says which readers remain and names #161. No
+  single-app assertion.
+- `src/engine/l4/capability_cone.rs`: delete `issue160_full_graph_timings` only; rewrite the
+  "legacy cut" text (`build_r3a3_source_only_base`'s doc) to name its one cross-app reader, the
+  ordering cell, and #161. `src/engine/l4/combined_graph.rs:300` (the "legacy cut" doc line at
+  `6a2b7c8b`) the same.
+- `src/bin/aldump.rs`: delete the timings mode and `--issue160-step6-probe`; delete
+  `src/engine/l5/step6_probe.rs` and `tests/cli/aldump_smoke.rs`'s timings test.
+- `snapshot_full.rs`: unchanged (`compose_full_snapshot` stays on the cut base until step 9,
+  spec §14.7).
+- Tests: `tests/common/dep_dispatch_fixture.rs` (`Modify` variant), `tests/cli/` (T1, T5 rows,
+  T7, T9, Review Focus 2), lib tests (T3 digest arm, T4, T6, T8 coverage half, the checkpoint,
+  Review Focus 1); spec §5.9's rewrites except the ones on the cut builder that now stays
+  (`detector_context.rs:2094`, `capability_cone.rs` cut-builder tests keep their subject).
+- `CHANGELOG.md` `### Fixed`: "#160 step 6: digest sees dependency effects (one cone graph,
+  #161 digest half); the `unfetched-dependency` ledger rule on the digest tree; the timings mode
+  deleted; d47/d49/d51 stay on the cut graph (follow-up under #161)".
+
+**Interfaces:** consumes Task 1's. Produces `WitnessRequest` (above); `digest_plan(detectors,
+roots: BTreeSet<String>)`;
+`pub struct DigestEffects { pub entries: Vec<DigestEntryResult>, pub unresolved: BTreeMap<String, Vec<UnresolvedConeItem>>, pub coverage: Vec<SnapshotCoverageRecord>, pub identities: SnapshotIdentityTable }`;
+`View::effects(&self) -> &DigestEffects`; `View::raw(&self) -> &HashMap<String, Vec<CapabilityFact>>` (Task 3 reads it).
+
+- [ ] **Step 1: Tests red.** T1 (digest: DB_MODIFY on dependency Table 18 and COMMIT, path
+  `CallChain → Outer → Inner`), T3 digest arm, T4, T5 (spec §14.10 rows: digest
+  1/1/1/2/1/1/1/1; d47 row unchanged, witness 1), T6, T7 (a)(b), T8 coverage equality, T9
+  (a)(b), checkpoint, Review Focus 1 and 2.
+- [ ] **Step 2: Cells, order, digest path.** Delete the det cone call.
+- [ ] **Step 3: Deletions** (timings mode, probe). `rg 'ConeOutput|issue160_full_graph|issue160_step6' src`
+  empty.
+- [ ] **Step 4: Green.**
+- [ ] **Step 5: Goldens.** Allowed: cross-app digest expectations in
+  `cli_digest_query_dependencies` (cone graph, D6). Everything single-app and every r4/r4f
+  golden must not move (2a already took the DAG moves). Triage, regen, re-run.
+- [ ] **Step 6: Discrimination proofs**: T1 (tree over primary callers only), T3 (breaks 1, 2
+  under `Subjects`; break 3 as evidence), T4 (`Subjects(∅)` on `compose_tree`'s caller), T5
+  (extra det cone), T6, T7 (a)(b), T8, T9 (a), checkpoint.
+- [ ] **Step 7: Gate and commit** (`#160 step 6 Task 2b: digest on the cone graph (#161, digest half)`),
+  `check-diff`, ledger.
+
+---
+
+## Task 3 — policy on `Cell::Raw`; `RAW_INHERITED_FACTS` deleted (conditional)
 
 Spec §4.7 policy paragraph, §4.8, T3's policy arm, T8 (materialized half), A6.6, A6.7, A6.12;
-F13 if pre-decided. Depends on Task 2.
+F13 if pre-decided. Depends on Task 2b. `witness: WitnessRequest::Primary`. **Kept only if B5
+holds** (spec §14.5): its own commit so Task 4 can revert it cleanly. F13 only if Task 4's B5
+misses. If B5 still misses after F13: `git revert` the Task 3 commit (and the F13 commit),
+re-run the per-task gate, file the follow-up; `RAW_INHERITED_FACTS`, policy's RAW build and
+`inherited_raw` stay, and A6.7/A6.12 read "policy unchanged".
 
 **Files:**
 - Modify `src/engine/gate/policy/pipeline.rs`: delete the RAW build (`:255-272`); the rule
@@ -300,7 +403,7 @@ F13 if pre-decided. Depends on Task 2.
 - Rewrite `tests/cli/cli_events_policy_dependencies.rs:439` on `Cell::Raw`.
 - Tests: T3 policy arm (selected facts per primary routine against the parent's
   `inherited_raw()` path, recorded as a fixture file before the switch), T8 break 1.
-- `CHANGELOG.md`: add the policy line to Task 2's entry.
+- `CHANGELOG.md`: add the policy line to Task 2b's entry.
 
 **F13 (only if Task 1 pre-decided it, or B5 later misses):** the rule engine runs right after
 the composition, before `det`; `PolicyModel.summaries` is a temporary
@@ -309,7 +412,7 @@ for the primary routines only (decision: copies, not a borrowed-slices refactor 
 `PolicyModel`; primary direct facts are small next to raw, and the copy dies with the rule
 engine). Then `Raw` is released and `det` takes `caps`.
 
-- [ ] **Step 1: Record the oracle fixture** on Task 2's head: for every r0 dir and the
+- [ ] **Step 1: Record the oracle fixture** on Task 2b's head: for every r0 dir and the
   dependency fixtures, the facts each policy rule selects per primary routine (today's path).
 - [ ] **Step 2: Write T3's policy arm and T8 break 1's assertion** (`witness.non_primary_members == 0`
   on a cross-app policy run of the dependency fixture). Red: the policy arm fails to compile
@@ -325,53 +428,61 @@ engine). Then `Raw` is released and `det` takes `caps`.
 
 ## Task 4 — CDO identity, triage, bench, cdo-gate (the final head)
 
-Spec §7, §8, A6.3, A6.4, A6.7, A6.17, A6.20, E14; B1-B5; F6, F8-F13.
+Spec §7, §8 with §14.9's deltas, A6.3, A6.4, A6.7, A6.17, A6.20, A6.22, E14; bounds B1′, B2′,
+B3, B4, B5; F6, F9, F11, F13, F-W1 to F-W3.
 
 **Files:** create `docs/measurements/2026-10-<dd>-issue-160-step6.md`. Code only if a
 fallback fires (its own commit, tests, proofs, gate, `check-diff`).
 
-- [ ] **Step 1: Head binaries** from the final head in `/work/bench/160-6/final/head-wt`;
-  parent = `/work/bench/160-6/parent220/`. Update `/work/bench/160-6/bench-draft.sh` into
-  `/work/bench/160-6/final/bench.sh` for 6A-10 (B3 rule with the frozen allowance), B5, the
-  round rule from Task 1, D6 attribution in Part 1.
-- [ ] **Step 2: Part 1 (identity and moves)**, one slot job: histogram SHA equal; SARIF `cmp`
-  default analyze both universes and scopes; single-app d47/d49/d51 `cmp` except listed D6
-  moves; `policy check` custom and bundled `cmp` (A6.7; F7 if not); single-app fingerprint
-  `cmp`; cross-app `o` SARIF and `d` JSON diffed; the census lines (`non_primary_members=0`,
-  §4.10 buckets); `PD_EDGE_UNMAPPED == 0` (F6).
-- [ ] **Step 3: Triage** (`cdo-measure` comp, `triage-findings`): every moved d47/d49/d51
-  finding, attributed to the cone graph or D6, and the digest coverage/effects deltas. > 30 %
-  FP → F8 (root-cause fix first).
-- [ ] **Step 4: Parts 2 and 3 (bounds)** in the quiet slot, through `agentflow run --name bench`:
-  read B1-B5 per spec §8.1 (void checks first; one re-run on void; F9 on void twice; F10 on a
-  miss, one fix from F2, F11, F12 or F13).
-- [ ] **Step 5: The licensing `cdo-gate`** on the final committed head; exit 0.
-- [ ] **Step 6: Commit the numbers file** (`docs(#160): step 6 CDO measurement, triage and bench`):
-  Task 1's stop-rule reading, Part 1-3 results, the bounds, the triage table, fallbacks fired,
-  the `cdo-gate` record. `check-diff`, ledger `## Gate results` rows.
+- [ ] **Step 1: Binaries**: head from the final head in `/work/bench/160-6/final/head-wt`;
+  parent = `/work/bench/160-6/parent6a2/` (Task 1′). Bench script from
+  `/work/bench/160-6/bench-draft.sh` into `/work/bench/160-6/final/bench.sh`, updated: B1′/B2′
+  with `C_d` = 8,000 ms and +3,145,728 KiB; B3/B4 plain no-regression; B5 with the Task 3
+  keep/revert rule.
+- [ ] **Step 2: Part 1.** Histogram SHA equal. SARIF `cmp`: default analyze both universes and
+  scopes; `o` (d47/d49/d51) cross-app at `--scope primary` and `--scope all`, and
+  `--single-app` (A6.22; any move → F-W3). Policy custom and bundled `cmp` (A6.7, only if Task
+  3 stays). Single-app fingerprint `cmp` except 2a's DAG moves. Digest: `--single-app` JSON diff
+  (the DAG rule alone) and cross-app JSON diff (cone graph + D6 + DAG), each moved field
+  attributed. `state-limit-exceeded` count parent vs head. Census: `non_primary_members=0`,
+  `digest.witness_dags`, §4.10's buckets. `PD_EDGE_UNMAPPED == 0` (F6).
+- [ ] **Step 3: Triage** (`cdo-measure`, `triage-findings`): the digest coverage/effects
+  deltas, the truncation and conditionality flips. No d47/d49/d51 triage (none may move).
+- [ ] **Step 4: Parts 2 and 3** in the quiet slot: B1′, B2′, B3, B4, B5 (void checks first; one
+  re-run on void; F9 on void twice; a miss → F-W1/F-W2 for `d`, F10 with F11 for `o`; B5 → F13,
+  then keep/revert Task 3).
+- [ ] **Step 5: `cdo-gate`** on the final committed head (after any revert); exit 0.
+- [ ] **Step 6: Numbers file** `docs/measurements/2026-10-<dd>-issue-160-step6.md`: Task 1's
+  STOP reading, the prototype numbers (spec §14.3.4, §14.4, §14.6), Task 1′'s re-measure,
+  Parts 1-3, the bounds, triage, fallbacks fired, Task 3's fate, `cdo-gate`. `check-diff`,
+  ledger `## Gate results`.
 
 ---
 
-## Acceptance map (spec §6)
+## Acceptance map (spec §6, as amended by §14.9)
 
 | Acceptance | Where |
 |---|---|
-| A6.1, A6.9 | Task 2 (T1) |
-| A6.2 | Task 2 (T8 coverage half) |
-| A6.3, A6.4 | Task 1 STOP (S1, S2), Task 4 Step 4 (B1-B4) |
-| A6.5 | Task 2 (T5) |
+| A6.1, A6.9 (digest half) | Task 2b (T1); the d47 half → #161 follow-up |
+| A6.2 | Task 2b (T8 coverage half) |
+| A6.3 (B1′, B2′) | Task 1′ (S1′, S2′), Task 4 Step 4 |
+| A6.4 (B3, B4 no-regression) | Task 4 Step 4 |
+| A6.5 | Task 2b (T5) |
 | A6.6 | Task 3 (T8 break 1), Task 4 Step 2 (census) |
-| A6.7 | Task 4 Step 2 |
+| A6.7, A6.12 | Task 3 + Task 4 (only if B5 holds) |
 | A6.8 | Task 1 Step 10 |
-| A6.10, A6.11 | Task 1 (T2), Task 2 (T3) |
-| A6.12 | Task 3 (T3 policy arm) |
-| A6.13 | Task 2 (T9, T3 digest arm) |
-| A6.14 | Task 2 (T4) |
-| A6.15 | Task 2 Step 3, Task 3 Step 3 |
-| A6.16 | Task 2 (T7) |
-| A6.17 | Task 2 (T6), Task 4 Step 2 |
-| A6.18 | Task 2 (checkpoint) |
-| A6.19 | Task 2 Step 5 |
+| A6.10 | Task 1 (T2), Task 2b (T3 digest arm) |
+| A6.11 | #161 follow-up |
+| A6.13 | Task 2b (T9, T3 digest arm) |
+| A6.14 | Task 2b (T4) |
+| A6.15 | Task 2b Step 3 (cut builder kept), Task 3 |
+| A6.16 | Task 2b (T7) |
+| A6.17 | Task 2b (T6), Task 4 Step 2 |
+| A6.18 | Task 2b (checkpoint) |
+| A6.19 | Task 2a Step 3 (DAG), Task 2b Step 5 (cone graph, D6) |
 | A6.20 | Task 4 Step 3 |
+| A6.21 | Task 2a (W1-W6) |
+| A6.22 | Task 2a Step 4 (early), Task 4 Step 2 |
 | E14 | Task 4 Step 5 |
-| B5 (policy peak) | Task 4 Step 4; F13 in Task 3 if pre-decided |
+| B5 (policy peak) | Task 4 Step 4; decides whether Task 3 stays |
+| Review Focus 5 (ordering with no subject) | void (ordering has no witness scope) |
