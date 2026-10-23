@@ -12,11 +12,17 @@
 //!      Table / Page / TableExtension / PageExtension, NEVER overriding an
 //!      explicit local `Rec` that pass (1)/(2) already resolved.
 //!
-//! Quoted-identifier parity (MUST match TS EXACTLY, do NOT "fix"):
-//!   - `record_table_name_of` strips surrounding quotes from `declaredType`.
-//!   - `extendsTargetName` / `sourceTableName` are stored already-stripped at
-//!     index time (al-sem `extractExtendsTargetName` / SourceTable unquote), then
-//!     passed RAW to `table_by_name` / `object_by_type_name` (which lower-case).
+//! Quoted identifiers (#240): every object/table name and every reference the
+//! lookups match is LOGICAL (a quoted name's `""` is one `"`), unescaped once where
+//! it is produced, so the lookups (which lower-case) compare logical with logical.
+//! Limit: `implements_interfaces` and `ModelPageControl.target` stay raw; no lookup
+//! reads them.
+//!   - `record_table_name_of` strips surrounding quotes from `declaredType`, then
+//!     unescapes.
+//!   - `extendsTargetName` / `sourceTableName` / record variable `tableName` are
+//!     stored already-stripped and logical by their producers (`project_ir`,
+//!     `ir_walk`, the ABI projection), then passed as is to `table_by_name` /
+//!     `object_by_type_name`.
 
 use super::symbol_table::SymbolTable;
 use super::workspace::{ModelObject, ModelRoutine};
@@ -53,7 +59,11 @@ pub fn record_table_name_of(declared_type: &str) -> Option<String> {
     if rest.is_empty() {
         return None;
     }
-    let name = strip_quotes(rest).trim().to_string();
+    // The LOGICAL name (#240): a quoted name's `""` is one `"`. Source text and a
+    // dependency's already-quoted parameter type (`Record "A""B"`) keep the escape;
+    // a dependency's Full-shape type text (`Record "<Subtype>"`) never holds a `"`
+    // inside the quotes, so the unescape is a no-op there.
+    let name = crate::program::body::scope::unescape_al_identifier(strip_quotes(rest).trim());
     if name.is_empty() { None } else { Some(name) }
 }
 
@@ -479,6 +489,15 @@ mod tests {
         assert_eq!(
             record_table_name_of("Record Customer temporary").as_deref(),
             Some("Customer")
+        );
+        // #240: the logical name, a `""` unescaped once (a trailing one too).
+        assert_eq!(
+            record_table_name_of("Record \"A\"\"B\" temporary").as_deref(),
+            Some("A\"B")
+        );
+        assert_eq!(
+            record_table_name_of("Record \"Q \"\"X\"\"\"").as_deref(),
+            Some("Q \"X\"")
         );
         assert_eq!(record_table_name_of("Integer"), None);
         assert_eq!(record_table_name_of("Codeunit \"Foo\""), None);

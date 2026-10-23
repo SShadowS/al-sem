@@ -169,9 +169,9 @@ fn full_snapshot_keeps_both_numberless_interfaces() {
         sorted_pairs(identities_with(&snap, &format!("{GUID}:Interface:"))),
         sorted_pairs(vec![
             (stable[0].clone(), "IEmpty".to_string()),
-            // The display name is the model's `name`, which keeps the source's
-            // doubled quote.
-            (stable[1].clone(), "Ø \"\"Q\"\" /:#%@ If".to_string()),
+            // The display name is the model's `name`, the logical name: the
+            // source's doubled quote is one quote (#249).
+            (stable[1].clone(), "Ø \"Q\" /:#%@ If".to_string()),
         ]),
         "identity table"
     );

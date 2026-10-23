@@ -151,9 +151,10 @@ fn extract_from_ir(file: &al_syntax::ir::AlFile, app_guid: &str, out: &mut Ident
         let Some(object_type) = object_type_label_ir(obj.kind) else {
             continue;
         };
-        // `strip_quotes` is idempotent on an already-unquoted IR name; applying it
-        // keeps parity with al-sem's `extractObjectName` regardless.
-        let name = strip_quotes(&obj.name).to_string();
+        // The logical name, as the model holds it (#240). Not wrapped in
+        // `strip_quotes`: the IR name is already outer-stripped, and stripping after
+        // the unescape would eat a name like `""X""`.
+        let name = crate::program::body::ir_walk::ir_object_name(obj);
 
         let key = crate::program::body::ir_walk::ir_object_key(obj);
         let internal_object_id = encode_object_id(app_guid, object_type, &key);

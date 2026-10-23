@@ -1,0 +1,512 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": "src/program/model/symbol_table.rs",
+    "line": 104,
+    "severity": "important",
+    "text": "Exact-first lookup can bind a raw source reference to the wrong numbered source object: tables \"A\"\"B\" (logical A\"B) and \"A\"\"\"\"B\" (logical A\"\"B) together; the reference \"A\"\"B\" exact-matches the second.",
+    "disposition": "fixed",
+    "evidence": "Verified by reading: the round-1 rule tried the query as given first, and a raw query A\"\"B equals the second table's logical key. Fixed by the conductor's D4 decision: the four lookups take a NameRef (Raw is unescaped exactly once, Logical is used as is), and each caller states its provenance (Design step 4, caller table). A raw reference is never matched before it is unescaped. Pinned by T6 (both tables declared, each reference binds its own table) with two breaks. Round 2 (sol re-raise = opus O9): T6 now adds a Logical guard (direct Logical lookup + implicit-Rec op in table 50111) whose Logical-arm break fails (ledger L141).",
+    "anchor": ".agent/issue-240/ledger.md:L171-L191",
+    "anchor_hash": "689912aac5c779b434812f655920969fe44c7f21fbe22de8fe0bd3d294aa0f99",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": "src/engine/l5/snapshot_full.rs",
+    "line": 813,
+    "severity": "important",
+    "text": "The table schemaFacts.shapeFingerprint also hashes tbl.name and changes; the compatibility note omits it.",
+    "disposition": "fixed",
+    "evidence": "Verified: snapshot_full.rs:816 hashes json_string(&tbl.name); the base output's raw shape hash c5147399... equals sha256({\"name\":\"T \\\"\\\"Q\\\"\\\" X\",\"number\":50100}) (P17). The CHANGELOG note (step 9) now names it and says diff's schema pass compares shape fingerprints only for fields and enum values (passes.rs:423-470, :522). T4 asserts the literal logical value 2a4b0802040e2ccd6d6779e6bd3fa4e7c1f158e6992f194ce03991b395cbea2c.",
+    "anchor": ".agent/issue-240/ledger.md:L236-L240",
+    "anchor_hash": "47bcc0437fda4b247619950d44414e83ab10a35da724e69d0a0d4d81031941b1",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": 1,
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 222,
+    "severity": "important",
+    "text": "The claim that escaped selectors stop matching is not universally true: narrow_to_owner falls back to the original matches when no owner matches.",
+    "disposition": "fixed",
+    "evidence": "Verified: selector_index.rs:222-226 returns `matches` when `narrowed` is empty. Per the conductor, the behaviour is not changed here (#239 removes the fallback). The design now states it as a Limit: the escaped spelling is not supported, and it may still match through the owner fallback until #239. The CHANGELOG line says the escaped spelling is not supported, with no claim that it stops matching.",
+    "anchor": ".agent/issue-240/ledger.md:L120-L123",
+    "anchor_hash": "c0413ce1190d7e794bbb2b680992a986f42b76d2bf8e05a6568a0e058f2ea2fa",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": 1,
+    "file": "src/engine/l5/table_display.rs",
+    "line": 59,
+    "severity": "important",
+    "text": "Unresolved-reference displays stay escaped: table_display tier 2 prints raw rv.table_name, and d52.rs:107 uses the same raw fallback.",
+    "disposition": "fixed",
+    "evidence": "Verified the provenance (P15): both read the record variable of an OPERATION's routine (table_display.rs:51-58, d52.rs:108-113). ABI routines carry record variables (abi_rows.rs:151) but no operations (abi_rows.rs:199 record_operations: Vec::new()), so only source text reaches these two displays. Design step 5 unescapes once at both, with a comment naming why. Pinned by T9 (unloaded table \"Missing \"\"Z\"\" T\"), fallback F6 if no default detector prints it.",
+    "anchor": ".agent/issue-240/ledger.md:L220-L223",
+    "anchor_hash": "cee9db1cc197224d7582792cb69b54deecddc1095b141adc331a3ccf46555ed4",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": 1,
+    "file": "tests/cli/cli_numberless_object_ids.rs",
+    "line": 243,
+    "severity": "minor",
+    "text": "The R0 and L2 producer changes lack escaped-name regression tests; extend the multi-producer test and prove each producer's revert fails.",
+    "disposition": "fixed",
+    "evidence": "Verified: no golden has an escaped name (P7), so reverting step 3 left the suite green. Added T5: in-process snapshot_workspace and project_workspace on the P6 fixture; R0 name A \"B\" C, R0 signatureFingerprint equal to the literal e9c79d08... that T4 asserts for the model contract, L2 name A \"B\" C; each producer reverted alone must fail. Step 3 REPLACES strip_quotes in R0.",
+    "anchor": ".agent/issue-240/ledger.md:L166-L170",
+    "anchor_hash": "748cd02f17c3360604beb461a9d6045591b026d603816737507e9636555acd7b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": "src/program/body/ir_walk.rs",
+    "line": 2094,
+    "severity": "important",
+    "text": "Two more raw producers reach the lookups: codeunit TableNo (synthetic implicit Rec) and pass 2b record_table_name_of(declared_type). Pin them in T5.",
+    "disposition": "fixed",
+    "evidence": "Verified: ir_walk.rs:2094-2095 prop(\"tableno\").map(strip_q) keeps inner \"\"; it reaches pass 1 via direct_rec_table (:2103); record_types.rs:187-190 feeds record_table_name_of(decl) to table_by_name. The caller table in Design step 4 lists both with the owning object's provenance (Raw for source). T7 covers TableNo, pass 2b (or states that it shares pass 1's input), SourceTable, extends, PageExtension and ObjectRun, each checked under the Raw-arm break (F5).",
+    "anchor": ".agent/issue-240/ledger.md:L171-L191",
+    "anchor_hash": "689912aac5c779b434812f655920969fe44c7f21fbe22de8fe0bd3d294aa0f99",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/snapshot.rs",
+    "line": 156,
+    "severity": "important",
+    "text": "Step 3 (R0 + L2) has no test; R0's strip_quotes must be REPLACED by the helper, not wrapped (unescape then strip_quotes eats \"\"X\"\").",
+    "disposition": "fixed",
+    "evidence": "Verified: snapshot.rs:153-156 applies strip_quotes to the already outer-stripped IR name; R0 and project_workspace reach only aldump and the differential goldens. Design step 3 now says REPLACE and retires the parity comment. T5 is the in-process test with a per-producer revert proof (same as S5).",
+    "anchor": ".agent/issue-240/ledger.md:L166-L170",
+    "anchor_hash": "748cd02f17c3360604beb461a9d6045591b026d603816737507e9636555acd7b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l5/snapshot_full.rs",
+    "line": 816,
+    "severity": "minor",
+    "text": "The table shapeFingerprint moves too; name it in the CHANGELOG and say diff ignores table shapes.",
+    "disposition": "fixed",
+    "evidence": "Same as S2. CHANGELOG note in step 9 names schemaFacts.shapeFingerprint and states that diff's schema pass compares shapes only for fields and enum values; T4 asserts the literal logical hash.",
+    "anchor": ".agent/issue-240/ledger.md:L236-L240",
+    "anchor_hash": "47bcc0437fda4b247619950d44414e83ab10a35da724e69d0a0d4d81031941b1",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": "src/program/model/program_calls.rs",
+    "line": 2086,
+    "severity": "minor",
+    "text": "The uncertainty edge's interfaceName stays raw (graph node name, an edgeId input); the d52 fallback text also stays raw. List as Limits.",
+    "disposition": "fixed",
+    "evidence": "Verified: program_calls.rs:2086-2092 takes o.name from the graph; l5/snapshot.rs:1033 pushes interface_name into the edgeId hash. Listed under Limits (interfaceName stays raw). The d52 fallback is not a Limit: P15 shows it only sees source text, so step 5 unescapes it (see S4).",
+    "anchor": ".agent/issue-240/ledger.md:L116-L119",
+    "anchor_hash": "bd56b372e2948fa439b41d95a5e9f33d8dddb082df6e25af07feead8b96dc8a5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-240/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "T4 computes its expected hash with the production helper; assert literal hex instead.",
+    "disposition": "fixed",
+    "evidence": "T4 now asserts literal sha256 hex computed with sha256sum (P17): e9c79d08c44fa746cf5789db704e01146d67291e7228b0d33f050e449979c616 (Interface), f84fcc77443651f307b410f7ccea4d9d323f27c59f5598871eab95197f9a391b (Codeunit), 2a4b0802040e2ccd6d6779e6bd3fa4e7c1f158e6992f194ce03991b395cbea2c (table shape). The matrix header says hashes are never computed with a production helper.",
+    "anchor": ".agent/issue-240/ledger.md:L146-L146",
+    "anchor_hash": "6463ff72e5b397a2c160b192b1858ba051fca471fd587d11c40bafc4eb897bcf",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-240/ledger.md",
+    "line": 0,
+    "severity": "minor",
+    "text": "The fix also makes a source reference written with \"\" resolve to a dependency table whose ABI name is logical; that is a behaviour change to mention in the CHANGELOG.",
+    "disposition": "fixed",
+    "evidence": "Verified: P4/P9, the base lookup is raw (source) vs logical (ABI key) and misses. With NameRef the source caller is Raw and is unescaped, so it hits. CHANGELOG line added in step 9; T8 (CLI, symbol-only dependency table T \"Q\" X, workspace Record \"T \"\"Q\"\" X\") pins it with a Raw-arm break.",
+    "anchor": ".agent/issue-240/ledger.md:L241-L242",
+    "anchor_hash": "1de14d46e35897a956a54cb4e8eea9b503c5841a51a0dce24d5feca0a6fa0a21",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": 1,
+    "file": "src/program/body/scope.rs",
+    "line": 90,
+    "severity": "minor",
+    "text": "unescape_al_identifier's doc lists its callers to warn about double unescape; the new callers make it stale.",
+    "disposition": "fixed",
+    "evidence": "Verified scope.rs:90-97 names exactly three callers. Design step 8 updates the list (ir_object_name, NameRef's Raw arm, the two source displays, the census) and keeps the exactly-once warning.",
+    "anchor": ".agent/issue-240/ledger.md:L231-L233",
+    "anchor_hash": "d7fe6c82e9014edbe61b6e46da58f858720ae607814999c707cbbd348205e155",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": 1,
+    "file": "src/program/model/census.rs",
+    "line": 248,
+    "severity": "minor",
+    "text": "No existing check asserts object_fact_census; add an explicit census.rs unit test.",
+    "disposition": "fixed",
+    "evidence": "Verified: gate/run.rs:330 only collects it and switch_dump.rs:75 only dumps it (P13). T10 is a census.rs unit test on the P6 shape asserting no name line; break: drop the graph-side unescape of step 6.",
+    "anchor": ".agent/issue-240/ledger.md:L224-L227",
+    "anchor_hash": "0792273cd886d289b3478eae3a07b162d79d65ebac2751213d457644337f7b69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-240/ledger.md",
+    "line": 141,
+    "severity": "important",
+    "text": "T6 second break (unescape Logical names too) cannot fail: R1/R2 are both Raw.",
+    "disposition": "fixed",
+    "evidence": "T6 adds table_by_name(Logical(\"A\\\"\\\"B\")) -> 50111 and an implicit-Rec Insert in a trigger of table 50111 (Logical re-lookup, record_types.rs:204-205,:113); under the break both bind 50110, so the assertion fails.",
+    "anchor": ".agent/issue-240/ledger.md:L149-L149",
+    "anchor_hash": "13f790bf73efab92318adc290ba3779a9554f2dc0f76b39c2dbbdb95d9a150b3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1",
+    "source": "sol",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "important",
+    "text": "ABI parameter references in the already-quoted shape (Record \"A\"\"B\") were looked up as Logical with the escape kept, misbinding.",
+    "disposition": "fixed",
+    "evidence": "05d24133: record_table_name_of unescapes the already-quoted ABI type once; T8b binds 50111->50110 correctly; break N10 restores the misbind.",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G1",
+    "source": "opus",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "minor",
+    "text": "name_origin() returns a fn pointer; not the simplest form.",
+    "disposition": "fixed",
+    "evidence": "05d24133: name_origin/NameRef removed entirely (normalize at production).",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G2",
+    "source": "opus",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "minor",
+    "text": "CHANGELOG omits the R0 signatureFingerprint change.",
+    "disposition": "fixed",
+    "evidence": "05d24133: CHANGELOG names the R0 signatureFingerprint (aldump R0 dump).",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR1",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "important",
+    "text": "TableNo uses trim_matches('\"'), eating a trailing escaped quote.",
+    "disposition": "fixed",
+    "evidence": "05d24133: strips exactly one outer quote pair then unescapes; T7 table \"Q \"\"X\"\"\"\" via TableNo; break N7b fails only that shape.",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR2",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "important",
+    "text": "name_origin keyed on source_anchor, an unrelated field.",
+    "disposition": "fixed",
+    "evidence": "05d24133: removed; no provenance at lookup.",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR3",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "important",
+    "text": "Model mixed spellings: object names logical, stored references raw; every lookup/display needed provenance.",
+    "disposition": "fixed",
+    "evidence": "05d24133: every model-stored name is unescaped once at production (source: workspace.rs source_table_name/extends_target_name, parse_record_table_name, TableNo, dataitem, Run target, record_table_name_of; ABI: unquote_abi_name for quoted values, already-quoted parameter types). Lookups take logical &str. Proofs N1-N13. Final round 2 (sol re-raise): a missed producer (named dataitem record variables) fixed in afeea4cb (F2/G3).",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR4",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "important",
+    "text": "Program engine (node_extract ObjectNode.name, receiver.rs unquote_identifier) still compares raw source names with logical ABI names.",
+    "disposition": "fixed",
+    "evidence": "Fixed for this issue by stating it: pre-existing and outside the model layer, recorded as a Limit (Design, CHANGELOG) pointing to #250, which owns the program-graph fix (every ObjKey::Name holds the folded LOGICAL name). Resolver untouched.",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR5",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "minor",
+    "text": "Event and L2 record-variable tableName carry raw doubled quotes after the parser fix.",
+    "disposition": "fixed",
+    "evidence": "05d24133: parse_record_table_name returns the logical name, so event tableName and L2 PRecordVariable.tableName are logical; no golden moved. Final round 2 (sol re-raise): a missed producer (named dataitem record variables) fixed in afeea4cb (F2/G3).",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR6",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "minor",
+    "text": "ABI SourceTable/TargetObject and parameter type text are source-shaped but treated as Logical.",
+    "disposition": "fixed",
+    "evidence": "05d24133: unquote_abi_name unescapes a quoted value once; already-quoted parameter types unescaped in record_table_name_of; unit test quoted_source_table_and_target_object_are_logical; break N11.",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR7",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "minor",
+    "text": "Ownerless routine defaults to Raw, double-unescaping logical ABI names.",
+    "disposition": "fixed",
+    "evidence": "Moot in 05d24133: no provenance at lookup; ABI names are normalized once at production only when quoted.",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR8",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "minor",
+    "text": "NameRef::logical allocates on every Raw lookup (hot path).",
+    "disposition": "fixed",
+    "evidence": "05d24133: removed; unescape happens once at production.",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR9",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "minor",
+    "text": "fn-pointer dispatch hard to read.",
+    "disposition": "fixed",
+    "evidence": "05d24133: removed.",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR10",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-240/ledger.md",
+    "line": 413,
+    "severity": "minor",
+    "text": "ir_object_name and NameRef::logical are pub, defeating unescape_al_identifier's pub(crate) guard.",
+    "disposition": "fixed",
+    "evidence": "05d24133: ir_object_name is pub(crate); NameRef removed.",
+    "anchor": ".agent/issue-240/ledger.md:L413-L420",
+    "anchor_hash": "6edbafe926220a7734688ce07c889b1b1ce7ca1753ff373d34bfdc2e4f541687",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F2",
+    "source": "sol",
+    "round": "final-2",
+    "file": "src/program/body/ir_walk.rs",
+    "line": 2172,
+    "severity": "important",
+    "text": "Named report/XMLport dataitem record variables still store the raw di_table; their table_id is lost and L2 tableName stays escaped.",
+    "disposition": "fixed",
+    "evidence": "afeea4cb: unescaped once at production; T7 asserts dataitem D table_name T \"Q\" X and table id …/table/50100; break N8b fails T7.",
+    "anchor": ".agent/issue-240/ledger.md:L460-L476",
+    "anchor_hash": "27cb5078fffb4420dc93f141a0bdb64622e778fb0d93d01e16a3911e8abac95f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G3",
+    "source": "opus",
+    "round": "final-2",
+    "file": "src/program/body/ir_walk.rs",
+    "line": 2172,
+    "severity": "important",
+    "text": "Same as F2: per-dataitem record variables keep the doubled quotes from ObjectDecl.dataitems.",
+    "disposition": "fixed",
+    "evidence": "afeea4cb (see F2). Other o.dataitems readers feed the program graph or LSP hash and stay raw under #250.",
+    "anchor": ".agent/issue-240/ledger.md:L460-L476",
+    "anchor_hash": "27cb5078fffb4420dc93f141a0bdb64622e778fb0d93d01e16a3911e8abac95f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G4",
+    "source": "opus",
+    "round": "final-2",
+    "file": "src/program/model/record_types.rs",
+    "line": 15,
+    "severity": "minor",
+    "text": "Docs claim every model-stored name is logical; implements_interfaces and ModelPageControl.target stay raw.",
+    "disposition": "fixed",
+    "evidence": "afeea4cb: docs narrowed to names/references the lookups match; the two fields named as a Limit.",
+    "anchor": ".agent/issue-240/ledger.md:L460-L476",
+    "anchor_hash": "27cb5078fffb4420dc93f141a0bdb64622e778fb0d93d01e16a3911e8abac95f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]

@@ -47,9 +47,10 @@ pub struct ModelObject {
     /// minted the id, never re-parsed from it (#83).
     pub object_key: String,
     pub name: String,
-    /// Page / PageExtension `SourceTable` (unquoted), else None.
+    /// Page / PageExtension `SourceTable` (unquoted, LOGICAL: `""` is one `"`,
+    /// #240), else None.
     pub source_table_name: Option<String>,
-    /// TableExtension / PageExtension `extends` target (unquoted), else None.
+    /// TableExtension / PageExtension `extends` target (unquoted, LOGICAL), else None.
     pub extends_target_name: Option<String>,
     /// Implemented interfaces (Codeunit / Enum / Interface): `Some([])` known-none,
     /// `Some([...])` listed, `None` unknown. Other object types: `None`.
@@ -797,7 +798,8 @@ fn project_ir(
         // object KEY, which is unique for a numberless object too (#83).
         let object_number = o.id.unwrap_or(0);
         let object_key = crate::program::body::ir_walk::ir_object_key(o);
-        let name = o.name.clone();
+        // The logical name (#240); `ModelTable.name` takes it too (`index_table_ir`).
+        let name = crate::program::body::ir_walk::ir_object_name(o);
         let object_id = encode_object_id(app_guid, object_type, &object_key);
 
         // Read an object-level property value from the IR (lowercased name match).
@@ -817,10 +819,16 @@ fn project_ir(
         // ws-report-dataitem).
         let source_table_name = if object_type == "Page" || object_type == "PageExtension" {
             crate::program::node_extract::singular_object_ref_text(o, "sourcetable")
+                .map(|s| crate::program::body::scope::unescape_al_identifier(&s))
         } else {
             None
         };
-        let extends_target_name = o.extends_target.clone();
+        // Both references are stored by their LOGICAL name, like the object names
+        // they are looked up against (#240): the IR text keeps a `""`.
+        let extends_target_name = o
+            .extends_target
+            .as_deref()
+            .map(crate::program::body::scope::unescape_al_identifier);
         let implements_interfaces =
             if object_type == "Codeunit" || object_type == "Enum" || object_type == "Interface" {
                 Some(o.implements.clone())

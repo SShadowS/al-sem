@@ -2251,8 +2251,8 @@ fn quoted_interface_name_is_unescaped_in_the_id() {
         .workspace
         .objects
         .iter()
-        .find(|o| o.name == "I\"\"Foo")
-        .expect("the IR keeps the escaped inner text");
+        .find(|o| o.name == "I\"Foo")
+        .expect("the model holds the logical name (#249)");
     let ids: Vec<&str> = quoted
         .declaration_only_routines
         .iter()
