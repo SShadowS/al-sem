@@ -27,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bind by name) or a reorder of same-type parameters used to give no finding at all. For an
   `[IntegrationEvent]` or `[BusinessEvent]` publisher whose `parameters` list changed, `alsem
   diff` now gives the Critical `abi` `procedure-signature-changed` and `events` signature
-  findings. Needs both snapshots made with this version.
+  findings. Needs both snapshots made with this version. When both snapshots carry the lists,
+  these findings' `details` also hold `oldParameters` and `newParameters`, since their hashes
+  and event ids can be equal.
 
 ## [2.0.1] - 2026-10-23
 

@@ -1857,7 +1857,28 @@ fn issue236_same_type_reorder_is_critical() {
         "event-publisher-signature-changed",
     ] {
         assert_eq!(find_kind(&r, k).severity, Severity::Critical, "{k}");
+        // G4: equal hashes and event ids; the lists show the reorder.
+        assert_eq!(
+            detail_list(find_kind(&r, k), "newParameters"),
+            Some(vec!["b: integer".to_string(), "a: integer".to_string()]),
+            "{k}"
+        );
     }
+}
+
+/// A text-array detail of a finding (#236 G4's parameter lists).
+fn detail_list(f: &al_sem::engine::gate::diff::DiffFinding, key: &str) -> Option<Vec<String>> {
+    f.details.iter().find_map(|(k, v)| match v {
+        CborValue::Array(a) if k == key => Some(
+            a.iter()
+                .map(|x| match x {
+                    CborValue::Text(s) => s.clone(),
+                    _ => panic!("{key} holds text"),
+                })
+                .collect(),
+        ),
+        _ => None,
+    })
 }
 
 /// #236 F1/D1: a pure parameter rename (AS0025 example 3) is Critical in both
@@ -1885,5 +1906,18 @@ fn issue236_pure_rename_is_critical() {
         "event-contract-changed-with-affected-subscribers",
     ] {
         assert_eq!(find_kind(&r, k).severity, Severity::Critical, "{k}");
+        // G4: the hashes and event ids are equal here, so the details carry the
+        // two parameter lists to show what changed.
+        let list = |key: &str| detail_list(find_kind(&r, k), key);
+        assert_eq!(
+            list("oldParameters"),
+            Some(vec!["i: integer".to_string()]),
+            "{k}"
+        );
+        assert_eq!(
+            list("newParameters"),
+            Some(vec!["j: integer".to_string()]),
+            "{k}"
+        );
     }
 }

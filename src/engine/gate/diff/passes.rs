@@ -171,12 +171,18 @@ fn texts_eq(a: &[CborValue], b: &[CborValue]) -> bool {
             .all(|p| matches!(p, (CborValue::Text(o), CborValue::Text(n)) if o == n))
 }
 
-/// The `(name, argsHash)` of each attribute, in order.
-fn attribute_keys(fact: &CborValue) -> Vec<(Option<&str>, Option<&str>)> {
+/// The `(name, argsHash)` of each attribute as a sorted set. AL names are
+/// case-insensitive and attribute order carries no meaning (F5).
+fn attribute_keys(fact: &CborValue) -> BTreeSet<(Option<String>, Option<&str>)> {
     get_array(fact, "attributes")
         .unwrap_or(&[])
         .iter()
-        .map(|a| (get_str(a, "name"), get_str(a, "argsHash")))
+        .map(|a| {
+            (
+                get_str(a, "name").map(str::to_lowercase),
+                get_str(a, "argsHash"),
+            )
+        })
         .collect()
 }
 
@@ -327,11 +333,14 @@ pub fn diff_abi(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                 subject,
                 None,
                 vec![subject.clone()],
-                vec![
+                [
                     ("kind".into(), CborValue::Text(kind.as_str().into())),
                     ("oldSignatureHash".into(), CborValue::Text(old_sig.into())),
                     ("newSignatureHash".into(), CborValue::Text(new_sig.into())),
-                ],
+                ]
+                .into_iter()
+                .chain(parameter_details(old_fact, new_fact))
+                .collect(),
                 indexes,
             ));
         }
@@ -609,24 +618,41 @@ fn publisher_signature_severity(
     indexes: &DiffIndexes,
     old_decl: &CborValue,
     new_decl: &CborValue,
-) -> Option<Severity> {
+) -> Option<(Severity, Details)> {
     let routine = get_str(new_decl, "routine").unwrap_or("");
-    let change = match (
+    let (change, extra) = match (
         indexes.old_contracts_by_subject.get(routine),
         indexes.new_contracts_by_subject.get(routine),
     ) {
-        (Some(old), Some(new)) => signature_change(old, new),
-        _ => SignatureChange::Unchanged,
+        (Some(old), Some(new)) => (signature_change(old, new), parameter_details(old, new)),
+        _ => (SignatureChange::Unchanged, Vec::new()),
     };
-    match change {
-        SignatureChange::NonBreakingAppend => Some(Severity::Low),
-        SignatureChange::Breaking => Some(Severity::Critical),
+    let severity = match change {
+        SignatureChange::NonBreakingAppend => Severity::Low,
+        SignatureChange::Breaking => Severity::Critical,
         SignatureChange::Unchanged
             if get_str(old_decl, "eventId") != get_str(new_decl, "eventId") =>
         {
-            Some(Severity::Critical)
+            Severity::Critical
         }
-        SignatureChange::Unchanged => None,
+        SignatureChange::Unchanged => return None,
+    };
+    Some((severity, extra))
+}
+
+/// A finding's `details` entries.
+type Details = Vec<(String, CborValue)>;
+
+/// #236 G4: `oldParameters` / `newParameters` details when both facts carry
+/// the list. A pure rename or reorder has equal hashes and event ids, so these
+/// are what shows the change. Details are not hashed into finding ids.
+fn parameter_details(old: &CborValue, new: &CborValue) -> Details {
+    match (get_array(old, "parameters"), get_array(new, "parameters")) {
+        (Some(o), Some(n)) => vec![
+            ("oldParameters".into(), CborValue::Array(o.to_vec())),
+            ("newParameters".into(), CborValue::Array(n.to_vec())),
+        ],
+        _ => Vec::new(),
     }
 }
 
@@ -725,9 +751,9 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         }
     }
 
-    // #236: one severity per kept publisher whose signature changed, read by
-    // the generic and the contract finding alike.
-    let changed: IndexMap<&String, Severity> = old_publishers
+    // #236: one severity (and the G4 parameter details) per kept publisher whose
+    // signature changed, read by the generic and the contract finding alike.
+    let changed: IndexMap<&String, (Severity, Details)> = old_publishers
         .iter()
         .filter_map(|(key, old_decl)| {
             let new_decl = new_publishers.get(key)?;
@@ -759,20 +785,22 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
             }
             Some(new_decl) => {
                 let new_id = get_str(new_decl, "eventId").unwrap_or("");
-                if let Some(&severity) = changed.get(key) {
+                if let Some((severity, extra)) = changed.get(key) {
                     let routine = get_str(new_decl, "routine").unwrap_or("");
+                    let mut details = event_details(
+                        DiffKind::EventPublisherSignatureChanged,
+                        &parsed.publisher_object,
+                        &parsed.event_name,
+                        Some(old_id),
+                        Some(new_id),
+                    );
+                    details.extend(extra.iter().cloned());
                     out.push(event_finding(
                         DiffKind::EventPublisherSignatureChanged,
-                        severity,
+                        *severity,
                         routine,
                         &parsed.event_name,
-                        event_details(
-                            DiffKind::EventPublisherSignatureChanged,
-                            &parsed.publisher_object,
-                            &parsed.event_name,
-                            Some(old_id),
-                            Some(new_id),
-                        ),
+                        details,
                         indexes,
                     ));
                 }
@@ -837,7 +865,7 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         };
         let old_id = get_str(old_decl, "eventId").unwrap_or("");
         let new_id = get_str(new_decl, "eventId").unwrap_or("");
-        let Some(&severity) = changed.get(key) else {
+        let Some((severity, extra)) = changed.get(key) else {
             continue;
         };
         let has_subs = old_subs_by_event.get(key).map(|v| v.len()).unwrap_or(0)
@@ -849,18 +877,20 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         suppress_keys.insert(key.clone());
         let parsed = parse_event_identity(new_id);
         let routine = get_str(new_decl, "routine").unwrap_or("");
+        let mut details = event_details(
+            DiffKind::EventContractChangedWithAffectedSubscribers,
+            &parsed.publisher_object,
+            &parsed.event_name,
+            Some(old_id),
+            Some(new_id),
+        );
+        details.extend(extra.iter().cloned());
         contract_findings.push(event_finding(
             DiffKind::EventContractChangedWithAffectedSubscribers,
-            severity,
+            *severity,
             routine,
             &parsed.event_name,
-            event_details(
-                DiffKind::EventContractChangedWithAffectedSubscribers,
-                &parsed.publisher_object,
-                &parsed.event_name,
-                Some(old_id),
-                Some(new_id),
-            ),
+            details,
             indexes,
         ));
     }
@@ -1509,6 +1539,14 @@ mod tests {
                 &fact_args("local", i, "h2", Some(vec![a(), b()]))
             ),
             "attribute args changed + append"
+        );
+        // F5: attribute names keep their source case; the compare ignores it.
+        assert!(
+            is_non_breaking_event_append(
+                &fact("local", "IntegrationEvent", Some(vec![a()])),
+                &fact("local", "integrationevent", Some(vec![a(), b()]))
+            ),
+            "attribute name case changed + append"
         );
     }
 
