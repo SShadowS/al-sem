@@ -1090,6 +1090,7 @@ mod tests {
 
     fn unresolved_item(open_world: Option<bool>) -> UnresolvedConeItem {
         UnresolvedConeItem {
+            callsite_id: "cs".to_string(),
             callsite_file: Some("ws:src/Test.al".to_string()),
             callsite_line: Some(10),
             callsite_column: Some(8),
