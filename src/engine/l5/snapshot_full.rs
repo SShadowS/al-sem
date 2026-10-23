@@ -36,7 +36,7 @@ use crate::engine::l4::capability_cone::{
 use crate::engine::l5::snapshot::{
     SnapshotAnalysisGap, compose_snapshot_from_base, stable_routine_id,
 };
-use crate::program::model::role::Role;
+use crate::program::model::role::{Role, role_of_stable_id};
 use crate::program::model::workspace::Model;
 use crate::program::resolve::semantic_golden::ClosureErrorKind;
 
@@ -44,11 +44,11 @@ mod to_cbor;
 pub use to_cbor::to_cbor_value;
 
 mod key_classes;
-pub(crate) use key_classes::filter_by_class;
 pub use key_classes::{
     ClosureViolation, Domain, KeyClass, NON_REFERENCE_FIELDS, REFERENCES, SNAPSHOT_KEYS,
     closure_violations, is_classified, is_reference,
 };
+pub(crate) use key_classes::{close_shard, filter_by_class};
 
 /// The snapshot schema version: THE one constant (the composer, the loader and
 /// the shard manifest read it). 4 (#220): `analysisUniverse` and `apps[].role`.
@@ -547,7 +547,6 @@ fn project_apps(
     referenced_apps: &HashSet<String>,
     universe: &SnapshotUniverse,
 ) -> CborValue {
-    use crate::program::model::role::role_of_stable_id;
     let row = |guid: &str, publisher: &str, name: &str, version: &str, role: Role| {
         let mut m: IndexMap<String, CborValue> = IndexMap::new();
         m.insert("appGuid".into(), CborValue::Text(guid.to_string()));
@@ -1502,20 +1501,22 @@ pub fn serialize_sharded(
         }
     };
 
-    let primary_guid = app_guid(&apps[0]);
     let mut shard_entries: Vec<(String, String, String)> = Vec::new(); // (appGuid, role, file)
 
     for app in &apps {
         let guid = app_guid(app);
-        let role = if guid == primary_guid {
-            "primary"
-        } else {
-            "dependency"
+        // #220 D5.4: the row's own `role`, never its position.
+        let role = match app {
+            CborValue::Map(m) if matches!(m.get("role"), Some(CborValue::Text(r)) if r == "primary") => {
+                "primary"
+            }
+            _ => "dependency",
         };
         if primary_only && role != "primary" {
             continue;
         }
-        let shard = slice_for_app(snap, &guid);
+        let mut shard = slice_for_app(snap, &guid);
+        close_shard(snap, &mut shard);
         let file_base = if role == "primary" {
             "primary".to_string()
         } else {
@@ -1539,13 +1540,13 @@ pub fn serialize_sharded(
 }
 
 /// Narrow the snapshot to a single app's facts (mirrors `sliceForApp`). A fact
-/// belongs to the shard whose appGuid prefixes its stableId (`${appGuid}:`).
+/// belongs to the shard whose appGuid prefixes its stableId (`${appGuid}:`,
+/// case-insensitive: #220 O13, the role rule over ids).
 fn slice_for_app(
     snap: &IndexMap<String, CborValue>,
     app_guid: &str,
 ) -> IndexMap<String, CborValue> {
-    let prefix = format!("{app_guid}:");
-    let in_app = |s: &str| s.starts_with(&prefix);
+    let in_app = |s: &str| role_of_stable_id(Some(app_guid), s) == Role::Primary;
 
     // Preserve the compose key order for the shard (it's a CapabilitySnapshot).
     // NOTE: al-sem `sliceForApp` builds a fresh `CapabilitySnapshot` literal that
@@ -1572,7 +1573,7 @@ fn slice_for_app(
                         arr.iter()
                             .filter(|a| match a {
                                 CborValue::Map(m) => {
-                                    matches!(m.get("appGuid"), Some(CborValue::Text(g)) if g == app_guid)
+                                    matches!(m.get("appGuid"), Some(CborValue::Text(g)) if g.eq_ignore_ascii_case(app_guid))
                                 }
                                 _ => false,
                             })
@@ -1583,7 +1584,7 @@ fn slice_for_app(
                     v.clone()
                 }
             }
-            "identities" => slice_identities(v, &prefix),
+            "identities" => slice_identities(v, &in_app),
             "contractFacts" | "schemaFacts" => filter_array_by_field(v, "stableId", &in_app),
             "permissionFacts" => filter_permission_facts(v, &in_app),
             "rootClassifications" => filter_array_by_field(v, "routineId", &in_app),
@@ -1600,7 +1601,7 @@ fn slice_for_app(
     shard
 }
 
-fn slice_identities(v: &CborValue, prefix: &str) -> CborValue {
+fn slice_identities(v: &CborValue, keep: &dyn Fn(&str) -> bool) -> CborValue {
     let CborValue::Map(m) = v else {
         return v.clone();
     };
@@ -1616,7 +1617,7 @@ fn slice_identities(v: &CborValue, prefix: &str) -> CborValue {
     let mut out_names: Vec<CborValue> = Vec::new();
     for (i, id) in stable_ids.iter().enumerate() {
         if let CborValue::Text(s) = id
-            && s.starts_with(prefix)
+            && keep(s)
         {
             out_ids.push(id.clone());
             out_names.push(
@@ -2728,5 +2729,274 @@ page 50818 "T5 I-3 Wizard Alpha"
             !core.identities.stable_ids.contains(&literal_id),
             "a literal value is data: it keeps nothing"
         );
+    }
+
+    fn txt(s: &str) -> CborValue {
+        CborValue::Text(s.to_string())
+    }
+
+    fn map(pairs: Vec<(&str, CborValue)>) -> CborValue {
+        CborValue::Map(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
+
+    fn texts(v: &CborValue, out: &mut Vec<String>) {
+        match v {
+            CborValue::Text(s) => out.push(s.clone()),
+            CborValue::Array(a) => a.iter().for_each(|x| texts(x, out)),
+            CborValue::Map(m) => m.values().for_each(|x| texts(x, out)),
+            _ => {}
+        }
+    }
+
+    /// T8's tree: `apps[]` lists a dependency (`0000…d0`) BEFORE the primary.
+    /// A primary fact's `witnessOperationId` names a dependency operation row
+    /// (with an `order.frameId`, its routine's frame table in
+    /// `routineOrderFrames`), and a primary edge targets a dependency routine.
+    /// The operation's routine identity is reached only through that row.
+    fn shard_tree(primary: &str) -> CborValue {
+        let dep = "00000000-0000-0000-0000-0000000000d0";
+        let p_obj = format!("{primary}:Codeunit:50100");
+        let p_r = format!("{primary}:Codeunit:50100#p1");
+        let d_op_routine = format!("{dep}:Codeunit:10#op");
+        let d_edge_target = format!("{dep}:Codeunit:10#to");
+        let app = |guid: &str, role: &str| {
+            map(vec![
+                ("appGuid", txt(guid)),
+                ("publisher", txt("probe")),
+                ("name", txt(guid)),
+                ("version", txt("1.0.0.0")),
+                ("role", txt(role)),
+            ])
+        };
+        let ids: Vec<CborValue> = [&p_obj, &p_r, &d_op_routine, &d_edge_target]
+            .iter()
+            .map(|s| txt(s))
+            .collect();
+        let names: Vec<CborValue> = ids.iter().map(|_| txt("x")).collect();
+        let frame = |id: i64, parent: i64| {
+            map(vec![
+                ("frameId", CborValue::Int(id)),
+                ("parentFrameId", CborValue::Int(parent)),
+                ("kind", txt("block")),
+            ])
+        };
+        let mut frames_map: IndexMap<String, CborValue> = IndexMap::new();
+        frames_map.insert(
+            d_op_routine.clone(),
+            CborValue::Array(vec![frame(0, -1), frame(1, 0)]),
+        );
+        map(vec![
+            ("schemaVersion", CborValue::Int(4)),
+            ("alsemVersion", txt("v")),
+            ("workspaceFingerprint", txt("fp")),
+            ("generatedAt", txt("1970-01-01T00:00:00Z")),
+            ("analysisUniverse", txt("cross-app")),
+            (
+                "apps",
+                CborValue::Array(vec![app(dep, "dependency"), app(primary, "primary")]),
+            ),
+            (
+                "identities",
+                map(vec![
+                    ("stableIds", CborValue::Array(ids)),
+                    ("displayNames", CborValue::Array(names)),
+                ]),
+            ),
+            ("contractFacts", CborValue::Array(vec![])),
+            ("schemaFacts", CborValue::Array(vec![])),
+            ("permissionFacts", CborValue::Array(vec![])),
+            ("rootClassifications", CborValue::Array(vec![])),
+            (
+                "capabilityFacts",
+                CborValue::Array(vec![map(vec![
+                    ("subject", txt(&p_r)),
+                    ("op", txt("insert")),
+                    ("resourceKind", txt("table")),
+                    ("confidence", txt("static")),
+                    ("provenance", txt("inherited")),
+                    ("via", txt("call")),
+                    ("witnessOperationId", txt("mi/dop/op0")),
+                ])]),
+            ),
+            (
+                "typedEdges",
+                CborValue::Array(vec![map(vec![
+                    ("edgeId", txt("e1")),
+                    ("from", txt(&p_r)),
+                    ("kind", txt("direct-call")),
+                    ("to", txt(&d_edge_target)),
+                ])]),
+            ),
+            (
+                "operationIndex",
+                CborValue::Array(vec![map(vec![
+                    ("operationId", txt("mi/dop/op0")),
+                    ("routine", txt(&d_op_routine)),
+                    (
+                        "order",
+                        map(vec![
+                            ("orderId", CborValue::Int(0)),
+                            ("frameId", CborValue::Int(1)),
+                            ("onSuccessPath", CborValue::Bool(true)),
+                            ("dominatesSuccessReturn", CborValue::Bool(false)),
+                        ]),
+                    ),
+                ])]),
+            ),
+            ("callsiteIndex", CborValue::Array(vec![])),
+            ("callsiteResolutions", CborValue::Array(vec![])),
+            ("analysisGaps", CborValue::Array(vec![])),
+            ("coverage", CborValue::Array(vec![])),
+            ("inputs", CborValue::Array(vec![])),
+            ("eventDeclarations", CborValue::Array(vec![])),
+            ("routineOrderFrames", CborValue::Map(frames_map)),
+        ])
+    }
+
+    /// T8 (#220 spec §5; O15, S3, S3N1, O3N1): shards read `role`, never the
+    /// position `apps[0]`, and a shard is closed over the identity, operation,
+    /// callsite and edge domains to a fixpoint, but NOT over frames.
+    ///
+    /// Break 1: read `apps[0]` -> roles swapped. Break 2: close identities only
+    /// -> the operation row is missing. Break 3: one pass instead of a fixpoint
+    /// -> the operation's routine identity is missing. Break 4: close the frame
+    /// domain too -> the shard gains `routineOrderFrames`.
+    #[test]
+    fn shards_read_role_not_position() {
+        let tree = shard_tree(P);
+        let dep = "00000000-0000-0000-0000-0000000000d0";
+        assert!(
+            locale_compare(dep, P) == std::cmp::Ordering::Less,
+            "precondition: the dependency sorts first"
+        );
+        let CborValue::Map(m) = &tree else {
+            unreachable!()
+        };
+        let Some(CborValue::Array(apps)) = m.get("apps") else {
+            unreachable!()
+        };
+        assert!(
+            matches!(&apps[0], CborValue::Map(a) if matches!(a.get("appGuid"), Some(CborValue::Text(g)) if g == dep)),
+            "precondition: apps[0] is the dependency"
+        );
+
+        let files = serialize_sharded(&tree, "v", false);
+        let manifest = files
+            .iter()
+            .find(|f| f.name == "manifest.json")
+            .expect("manifest");
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest.bytes).unwrap();
+        let role_of = |guid: &str| {
+            manifest["shards"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["appGuid"] == guid)
+                .map(|s| s["role"].as_str().unwrap().to_string())
+        };
+        assert_eq!(role_of(P).as_deref(), Some("primary"), "{manifest}");
+        assert_eq!(role_of(dep).as_deref(), Some("dependency"), "{manifest}");
+
+        let only = serialize_sharded(&tree, "v", true);
+        let names: Vec<&str> = only.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["primary.json", "manifest.json"]);
+        let shard: serde_json::Value = serde_json::from_slice(&only[0].bytes).unwrap();
+        assert_eq!(shard["apps"][0]["appGuid"], P, "the primary's shard");
+
+        let ids: Vec<&str> = shard["identities"]["stableIds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(
+            shard["operationIndex"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|o| o["operationId"] == "mi/dop/op0"),
+            "the witnessed dependency operation row is in the primary shard"
+        );
+        assert!(
+            ids.contains(&format!("{dep}:Codeunit:10#to").as_str()),
+            "the edge target's identity: {ids:?}"
+        );
+        assert!(
+            ids.contains(&format!("{dep}:Codeunit:10#op").as_str()),
+            "the operation's routine identity (second pass): {ids:?}"
+        );
+        assert!(
+            shard.get("routineOrderFrames").is_none(),
+            "a shard never carries routineOrderFrames"
+        );
+    }
+
+    /// T9-keys, the shard half (#220 spec §5; O4): every key of
+    /// `SNAPSHOT_KEYS` is one `slice_for_app` handles. A tree holding every key,
+    /// each row of a FOREIGN app, sliced for the primary: Header, Input and Gap
+    /// keys are copied verbatim, `routineOrderFrames` is skipped, and every
+    /// other key keeps no foreign string. A classed key the slice does not
+    /// match is copied whole and fails.
+    #[test]
+    fn slice_for_app_handles_every_classed_key() {
+        assert!(
+            !SNAPSHOT_KEYS.is_empty(),
+            "SNAPSHOT_KEYS lists every top-level key"
+        );
+        let foreign = "ffff0220-0000-0000-0000-0000000000ff";
+        let fid = format!("{foreign}:Codeunit:1#f");
+        let row = map(vec![
+            ("kind", txt("required")),
+            ("subject", txt(&fid)),
+            ("stableId", txt(&fid)),
+            ("routineId", txt(&fid)),
+            ("routine", txt(&fid)),
+            ("from", txt(&fid)),
+            ("to", txt(&fid)),
+            ("permissionSet", txt(&fid)),
+            ("binding", map(vec![("publisherObject", txt(&fid))])),
+        ]);
+        let mut snap: IndexMap<String, CborValue> = IndexMap::new();
+        for (key, class) in SNAPSHOT_KEYS {
+            let v = match (*key, class) {
+                (_, KeyClass::Header | KeyClass::Input | KeyClass::Gap) => {
+                    CborValue::Array(vec![txt(&fid)])
+                }
+                ("apps", _) => CborValue::Array(vec![
+                    map(vec![("appGuid", txt(P)), ("role", txt("primary"))]),
+                    map(vec![("appGuid", txt(foreign)), ("role", txt("dependency"))]),
+                ]),
+                ("identities", _) => map(vec![
+                    ("stableIds", CborValue::Array(vec![txt(&fid)])),
+                    ("displayNames", CborValue::Array(vec![txt("x")])),
+                ]),
+                ("routineOrderFrames", _) => map(vec![(fid.as_str(), CborValue::Array(vec![]))]),
+                _ => CborValue::Array(vec![row.clone()]),
+            };
+            snap.insert((*key).to_string(), v);
+        }
+        let shard = slice_for_app(&snap, P);
+        for (key, class) in SNAPSHOT_KEYS {
+            match (*key, class) {
+                (_, KeyClass::Header | KeyClass::Input | KeyClass::Gap) => {
+                    assert_eq!(
+                        format!("{:?}", shard.get(*key)),
+                        format!("{:?}", snap.get(*key)),
+                        "{key} is copied verbatim"
+                    );
+                }
+                ("routineOrderFrames", _) => {
+                    assert!(shard.get(*key).is_none(), "a shard has no {key}");
+                }
+                _ => {
+                    let mut got = Vec::new();
+                    texts(shard.get(*key).expect("key kept"), &mut got);
+                    assert!(
+                        got.iter().all(|s| !s.starts_with(foreign)),
+                        "{key} is narrowed by the slice: {got:?}"
+                    );
+                }
+            }
+        }
     }
 }

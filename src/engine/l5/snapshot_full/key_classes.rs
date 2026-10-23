@@ -5,8 +5,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use indexmap::IndexMap;
+
 use super::{
-    SnapshotUniverse, capability_facts_to_cbor, stable_table_from_internal, to_cbor_value,
+    SnapshotUniverse, capability_facts_to_cbor, filter_array_by_field, slice_identities,
+    stable_table_from_internal, to_cbor_value,
 };
 use crate::engine::gate::cbor::CborValue;
 use crate::engine::l4::capability_cone::routine_to_stable_of;
@@ -487,6 +490,9 @@ struct Referenced {
     identities: HashSet<String>,
     operations: HashSet<String>,
     callsites: HashSet<String>,
+    /// Read by the shard closure only: the cross-app filter keeps edges by
+    /// their own subject.
+    edges: HashSet<String>,
     /// Lower-case app guids.
     apps: HashSet<String>,
 }
@@ -507,11 +513,103 @@ impl Referenced {
                 App => {
                     self.apps.insert(value.to_ascii_lowercase());
                 }
-                // Edges are Behaviour rows kept by their own subject; a frame
-                // table follows its Evidence row (step 4).
-                Edge | Frame => {}
+                Edge => {
+                    self.edges.insert(value);
+                }
+                // A frame table follows its Evidence row (step 4).
+                Frame => {}
             });
         }
+    }
+}
+
+/// #220 (spec §4.4 "Sharding", S3, S3N1, O3N1): add to `shard` every row of
+/// `full` that a shard row references in the identity, operation, callsite or
+/// edge domain, and scan the added rows in turn, to a fixpoint. The frame and
+/// app domains are never closed: a shard has no `routineOrderFrames` and keeps
+/// one `apps[]` row. In single-app every reached row is primary and already
+/// sliced in, so nothing is added (F26).
+pub(crate) fn close_shard(
+    full: &IndexMap<String, CborValue>,
+    shard: &mut IndexMap<String, CborValue>,
+) {
+    // A shard is cut from the tree alone, with no model: an internal routine
+    // id resolves to its object's identity (`identity_key`'s fallback).
+    let no_model = HashMap::new();
+    loop {
+        let mut refs = Referenced::default();
+        for (key, rows) in shard.iter() {
+            refs.add(key, rows, &no_model);
+        }
+        let mut grew = close_rows(full, shard, "identities", "", &refs.identities);
+        grew |= close_rows(
+            full,
+            shard,
+            "operationIndex",
+            "operationId",
+            &refs.operations,
+        );
+        grew |= close_rows(full, shard, "callsiteIndex", "callsiteId", &refs.callsites);
+        grew |= close_rows(full, shard, "typedEdges", "edgeId", &refs.edges);
+        if !grew {
+            return;
+        }
+    }
+}
+
+/// `shard[key]` becomes the rows of `full[key]` whose id it already holds or
+/// `wanted` names, in `full`'s order (the slice's own filters). Whether a
+/// wanted row was missing. For `identities` the ids are its `stableIds`.
+fn close_rows(
+    full: &IndexMap<String, CborValue>,
+    shard: &mut IndexMap<String, CborValue>,
+    key: &str,
+    id_field: &str,
+    wanted: &HashSet<String>,
+) -> bool {
+    let ids = |v: Option<&CborValue>| -> HashSet<String> {
+        let rows = match v {
+            Some(CborValue::Map(m)) if key == "identities" => m.get("stableIds"),
+            other => other,
+        };
+        rows.map(rows_of)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| text(Some(r)).or_else(|| field(r, id_field)))
+            .map(str::to_string)
+            .collect()
+    };
+    let had = ids(shard.get(key));
+    if !ids(full.get(key))
+        .iter()
+        .any(|i| !had.contains(i) && wanted.contains(i))
+    {
+        return false;
+    }
+    let keep = |i: &str| had.contains(i) || wanted.contains(i);
+    let Some(all) = full.get(key) else {
+        return false;
+    };
+    let rows = if key == "identities" {
+        slice_identities(all, &keep)
+    } else {
+        filter_array_by_field(all, id_field, &keep)
+    };
+    shard.insert(key.to_string(), rows);
+    true
+}
+
+fn text(v: Option<&CborValue>) -> Option<&str> {
+    match v {
+        Some(CborValue::Text(s)) => Some(s),
+        _ => None,
+    }
+}
+
+fn field<'a>(row: &'a CborValue, f: &str) -> Option<&'a str> {
+    match row {
+        CborValue::Map(m) => text(m.get(f)),
+        _ => None,
     }
 }
 
@@ -631,18 +729,6 @@ pub fn closure_violations(
     let CborValue::Map(snap) = tree else {
         return Vec::new();
     };
-    fn text(v: Option<&CborValue>) -> Option<&str> {
-        match v {
-            Some(CborValue::Text(s)) => Some(s),
-            _ => None,
-        }
-    }
-    fn field<'a>(row: &'a CborValue, f: &str) -> Option<&'a str> {
-        match row {
-            CborValue::Map(m) => text(m.get(f)),
-            _ => None,
-        }
-    }
     let ids_of = |key: &str, f: &str| -> HashSet<&str> {
         snap.get(key)
             .map(rows_of)
