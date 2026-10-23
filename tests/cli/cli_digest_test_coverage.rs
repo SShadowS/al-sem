@@ -37,7 +37,7 @@ fn diff_file(name: &str) -> PathBuf {
 }
 
 /// `alsem digest <ws> <args> --format json --deterministic` -> (raw stdout, doc).
-/// Panics with stderr when the run fails (today: clap rejects `--tests`).
+/// Panics with stderr when the run fails.
 fn digest_raw(ws: &Path, args: &[&str]) -> (String, Value) {
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .arg("digest")
@@ -517,4 +517,66 @@ fn configured_test_kind_is_not_a_root() {
         "{b}"
     );
     assert_eq!(b["covered"][0]["display"], "Charged", "{b}");
+}
+
+/// A `[Test]` that reaches a dependency publisher: `RaisesDep` -> `Ws Work.RaiseDep`
+/// -> `Dep Lib.OnDepEvent` (the source-bearing dependency of
+/// `tests/common/dep_dispatch_fixture.rs`), to which the workspace's
+/// `Ws Sub.HandleInWs` subscribes.
+const DEP_TESTS_AL: &str = r#"codeunit 50172 "Ws Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure RaisesDep()
+    var
+        Work: Codeunit "Ws Work";
+    begin
+        Work.RaiseDep();
+    end;
+}
+"#;
+
+/// R1: cross-app (the default) the model holds the dependency publisher, so a
+/// test that reaches it covers the workspace subscriber, through the event.
+#[test]
+fn dependency_publisher_reached_covers_subscriber() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::dep_dispatch_fixture::write_own(dir.path(), DEP_TESTS_AL);
+    let (_, doc) = with_tests(dir.path(), &routines(&["HandleInWs"]));
+    let b = block(&doc);
+    let raises = {
+        let (_, d) = digest_raw(dir.path(), &["--routine", "RaisesDep"]);
+        d["payload"]["entries"][0]["routine"]["stableId"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        covered(&b),
+        vec![("HandleInWs".to_string(), raises, true)],
+        "{b}"
+    );
+}
+
+/// R1: `--single-app` the dependency publisher is not in the model: the
+/// subscriber is a blind spot, reported as such.
+#[test]
+fn dependency_publisher_outside_model_is_a_blind_spot() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::dep_dispatch_fixture::write_own(dir.path(), DEP_TESTS_AL);
+    let mut args = routines(&["HandleInWs"]);
+    args.push("--single-app".to_string());
+    let (_, doc) = with_tests(dir.path(), &args);
+    let b = block(&doc);
+    assert_eq!(covered(&b), vec![], "{b}");
+    assert_eq!(
+        uncovered(&b),
+        vec![unc(
+            "HandleInWs",
+            "Codeunit Ws Sub",
+            "dependency-event-subscriber"
+        )],
+        "{b}"
+    );
 }

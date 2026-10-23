@@ -206,8 +206,22 @@ fn object_facts(
     }
 }
 
+/// The object kind a `TestPage X` / `TestRequestPage X` type drives (`Page` /
+/// `Report`) and the rest of the text; `None` for any other type. Shared with
+/// `digest --tests` (`l5::test_coverage`), so both read a test page alike.
+pub(crate) fn test_page_target(text: &str) -> Option<(&'static str, &str)> {
+    let t = text.trim();
+    let (head, rest) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
+    match head.to_ascii_lowercase().as_str() {
+        "testpage" => Some(("Page", rest)),
+        "testrequestpage" => Some(("Report", rest)),
+        _ => None,
+    }
+}
+
 /// The names in `[HandlerFunctions('A,B')]`'s first string argument, folded.
-fn handler_names(raw: &str) -> Vec<String> {
+/// Shared with `digest --tests` (`l5::test_coverage`).
+pub(crate) fn handler_names(raw: &str) -> Vec<String> {
     let Some(start) = raw.find('\'') else {
         return Vec::new();
     };
@@ -264,18 +278,13 @@ fn runnable_type(
     index: &ResolveIndex,
 ) -> Option<RunTarget> {
     let t = text.trim();
-    let (head, rest) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
     let rewritten;
-    let t = match head.to_ascii_lowercase().as_str() {
-        "testpage" => {
-            rewritten = format!("Page {rest}");
+    let t = match test_page_target(t) {
+        Some((kind, rest)) => {
+            rewritten = format!("{kind} {rest}");
             rewritten.as_str()
         }
-        "testrequestpage" => {
-            rewritten = format!("Report {rest}");
-            rewritten.as_str()
-        }
-        _ => t,
+        None => t,
     };
     match classify_type_text(t) {
         ParsedType::Object { kind, object_ref } => resolve(from, kind, &object_ref, graph, index),

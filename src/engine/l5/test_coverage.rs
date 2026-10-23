@@ -14,8 +14,15 @@
 //!     routine is its witness; `viaEvent` is true when every shortest path from
 //!     the witness crosses an `event-dispatch` edge.
 //!
-//! Determinism: the output lists are built from `BTreeMap`/`BTreeSet`s or sorted;
-//! the `HashMap`s below are lookups only.
+//! Every changed root counts (minus test code). One the digest query has no entry
+//! for is `uncovered` with reason `not-in-graph`; the other reasons are
+//! `declaration-only`, `platform-event-subscriber`, `dependency-event-subscriber`
+//! and `no-path`.
+//!
+//! Determinism: the output lists are built from `BTreeMap`/`BTreeSet`s or sorted.
+//! The `HashMap`s are lookups, or are iterated only into order-independent results
+//! (a per-root BFS level map whose entries go into a first-root-wins map and into
+//! sets).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
@@ -23,18 +30,29 @@ use serde::Serialize;
 
 use crate::engine::l5::digest_cli::primary_guid_of;
 use crate::engine::l5::snapshot::CapabilitySnapshot;
-use crate::program::attributes::{find_attribute, string_arg};
+use al_syntax::IdentifierFoldExt;
+
+use crate::program::attributes::find_attribute;
+use crate::program::impact_graph::facts::{handler_names, test_page_target};
 use crate::program::model::events::PublisherRef;
 use crate::program::model::role::{Role, role_of_stable_id};
-use crate::program::model::workspace::Model;
+use crate::program::model::workspace::{Model, ModelRoutine};
+use crate::program::resolve::receiver::unquote_identifier;
 
 /// Why a subscriber is out of reach, beyond "no path" (spec §Why `uncovered`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SubscriberFacts {
     /// It subscribes to a platform event: no publisher routine exists.
     pub(crate) platform: bool,
-    /// The dependency publishers of the events it subscribes to.
+    /// It subscribes to a dependency event whose publisher is not a model
+    /// routine (its app has none in the model, e.g. `--single-app`): no test
+    /// can reach that publisher.
+    pub(crate) outside_publisher: bool,
+    /// The dependency publishers (model routines) of the events it subscribes to.
     pub(crate) dependency_publishers: BTreeSet<String>,
+    /// It also subscribes to an event a primary-app routine publishes: being
+    /// unreached is then a plain `no-path`, not a blind spot.
+    pub(crate) primary_publisher: bool,
 }
 
 /// The coverage search's input, keyed by stable routine id.
@@ -54,7 +72,18 @@ pub struct CoverageGraph {
     pub(crate) subscriber_facts: BTreeMap<String, SubscriberFacts>,
 }
 
-/// One changed routine of the digest (one per digest entry).
+/// What a changed root is to the search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangedShape {
+    /// A routine with a digest entry.
+    Routine,
+    /// An interface / ControlAddIn method declaration: no body, never a node.
+    DeclarationOnly,
+    /// A resolved root the digest query has no entry for (`root-not-in-snapshot`).
+    NotInGraph,
+}
+
+/// One changed root of the digest.
 #[derive(Debug, Clone)]
 pub struct ChangedRoutine {
     pub stable_id: String,
@@ -62,8 +91,7 @@ pub struct ChangedRoutine {
     pub object_display: String,
     /// The entry's own `(file, line)` anchor, unchanged.
     pub anchor: Option<(String, u32)>,
-    /// An interface / ControlAddIn method declaration: no body, never a node.
-    pub declaration_only: bool,
+    pub shape: ChangedShape,
 }
 
 /// The `reason` of an `uncovered` item; first match wins, in this order.
@@ -71,6 +99,7 @@ pub struct ChangedRoutine {
 #[serde(rename_all = "kebab-case")]
 pub enum UncoveredReason {
     DeclarationOnly,
+    NotInGraph,
     PlatformEventSubscriber,
     DependencyEventSubscriber,
     NoPath,
@@ -187,7 +216,9 @@ pub fn compute_test_coverage(g: &CoverageGraph, changed: &[ChangedRoutine]) -> T
         })
         .collect();
 
-    // routine → (witness, viaEvent); roots ascend, so the first insert wins.
+    // routine → (witness, viaEvent); roots ascend, so the first insert wins. Each
+    // root's level map is iterated in hash order, which reaches only this
+    // first-wins map (one root per pass) and the reason sets.
     let mut witness: HashMap<&str, (&str, bool)> = HashMap::new();
     let mut reasons: BTreeSet<&'static str> = BTreeSet::new();
     let (mut unresolved_tests, mut dependency_tests) = (0, 0);
@@ -221,7 +252,7 @@ pub fn compute_test_coverage(g: &CoverageGraph, changed: &[ChangedRoutine]) -> T
     let mut covered = Vec::new();
     let mut uncovered = Vec::new();
     for (&id, c) in distinct.iter().filter(|(id, _)| !is_test_code(id)) {
-        let hit = witness.get(id).filter(|_| !c.declaration_only);
+        let hit = witness.get(id).filter(|_| c.shape == ChangedShape::Routine);
         if let Some(&(w, via_event)) = hit {
             covered.push(CoveredItem {
                 stable_id: id.to_string(),
@@ -231,21 +262,28 @@ pub fn compute_test_coverage(g: &CoverageGraph, changed: &[ChangedRoutine]) -> T
             });
             continue;
         }
-        let facts = g.subscriber_facts.get(id);
-        let reason = if c.declaration_only {
-            UncoveredReason::DeclarationOnly
-        } else if facts.is_some_and(|f| f.platform) {
-            UncoveredReason::PlatformEventSubscriber
-        } else if facts.is_some_and(|f| {
-            !f.dependency_publishers.is_empty()
-                && !f
-                    .dependency_publishers
-                    .iter()
-                    .any(|p| witness.contains_key(p.as_str()))
-        }) {
-            UncoveredReason::DependencyEventSubscriber
-        } else {
-            UncoveredReason::NoPath
+        // A blind spot only when no primary-published subscription could have
+        // reached it.
+        let facts = g.subscriber_facts.get(id).filter(|f| !f.primary_publisher);
+        let reason = match c.shape {
+            ChangedShape::DeclarationOnly => UncoveredReason::DeclarationOnly,
+            ChangedShape::NotInGraph => UncoveredReason::NotInGraph,
+            ChangedShape::Routine if facts.is_some_and(|f| f.platform) => {
+                UncoveredReason::PlatformEventSubscriber
+            }
+            ChangedShape::Routine
+                if facts.is_some_and(|f| {
+                    f.outside_publisher
+                        || (!f.dependency_publishers.is_empty()
+                            && !f
+                                .dependency_publishers
+                                .iter()
+                                .any(|p| witness.contains_key(p.as_str())))
+                }) =>
+            {
+                UncoveredReason::DependencyEventSubscriber
+            }
+            ChangedShape::Routine => UncoveredReason::NoPath,
         };
         uncovered.push(UncoveredItem {
             stable_id: id.to_string(),
@@ -298,20 +336,20 @@ fn ledger_bucket(status: &str) -> Option<(bool, &'static str)> {
     })
 }
 
-/// `TestPage X` / `TestRequestPage X`: what such a variable drives has no edge.
-fn is_test_page_type(declared: &str) -> bool {
-    let head = declared.split_whitespace().next().unwrap_or("");
-    head.eq_ignore_ascii_case("testpage") || head.eq_ignore_ascii_case("testrequestpage")
+/// The routine drives a `TestPage` / `TestRequestPage`, whose effects have no
+/// edge: one of its own parameters or locals is one, or an object global is one
+/// that its body names (a global alone would mark every sibling routine).
+fn drives_test_page(r: &ModelRoutine) -> bool {
+    r.variables.iter().any(|v| {
+        test_page_target(&v.declared_type).is_some()
+            && (v.scope.as_deref() != Some("global")
+                || r.identifier_references.binary_search(&v.name).is_ok())
+    })
 }
 
-/// The handler names of a `[HandlerFunctions('A,B')]` attribute, lowercased.
-fn handler_names(attr: &crate::program::attributes::AttributeInfo) -> Vec<String> {
-    string_arg(attr, 0)
-        .unwrap_or_default()
-        .split(',')
-        .map(|n| n.trim().trim_matches('"').to_lowercase())
-        .filter(|n| !n.is_empty())
-        .collect()
+/// A routine name folded the way [`handler_names`] folds a handler name.
+fn folded(name: &str) -> String {
+    unquote_identifier(name).fold_identifier()
 }
 
 impl CoverageGraph {
@@ -330,34 +368,64 @@ impl CoverageGraph {
         }
 
         let recorded: BTreeSet<&str> = snap.coverage.iter().map(|r| r.subject.as_str()).collect();
-        for r in ws
-            .routines
-            .iter()
-            .filter(|r| !r.stable_routine_id.is_empty())
-        {
+        let routines = || {
+            ws.routines
+                .iter()
+                .filter(|r| !r.stable_routine_id.is_empty())
+        };
+        // (owning object, folded name) → ids: the `[HandlerFunctions]` lookup.
+        let mut by_name: HashMap<(&str, String), Vec<&str>> = HashMap::new();
+        for r in routines() {
+            by_name
+                .entry((r.object_id.as_str(), folded(&r.name)))
+                .or_default()
+                .push(&r.stable_routine_id);
+        }
+        for r in routines() {
             let id = r.stable_routine_id.as_str();
-            if resolved.routine_role(r) == Role::Dependency {
+            let dependency = resolved.routine_role(r) == Role::Dependency;
+            // The routine's OWN state: a record's reasons are inherited from the
+            // whole cone, so they are not read here.
+            if r.parse_incomplete {
+                flag(&mut g.incomplete, id, "parse-incomplete");
+            }
+            if drives_test_page(r) {
+                flag(&mut g.incomplete, id, "test-page");
+            }
+            if dependency {
                 // The snapshot holds no dependency-internal calls (P6).
                 flag(&mut g.boundary, id, "dependency-code");
+                if !r.body_available {
+                    flag(&mut g.boundary, id, "opaque-dependency");
+                }
                 continue;
+            }
+            if !r.body_available {
+                flag(&mut g.incomplete, id, "body-unavailable");
+            }
+            if !recorded.contains(id) {
+                flag(&mut g.incomplete, id, "no-coverage-record");
             }
             if find_attribute(&r.attributes_parsed, "Test").is_some() {
                 g.roots.insert(id.to_string());
                 g.test_code.insert(id.to_string());
                 // The platform runs each named handler during the test.
-                let handlers: BTreeSet<String> = r
+                for name in r
                     .attributes_parsed
                     .iter()
                     .filter(|a| a.name.eq_ignore_ascii_case("HandlerFunctions"))
-                    .flat_map(handler_names)
-                    .collect();
-                for h in ws.routines.iter().filter(|h| {
-                    h.object_id == r.object_id && handlers.contains(&h.name.to_lowercase())
-                }) {
-                    g.edges
-                        .entry(id.to_string())
-                        .or_default()
-                        .push((h.stable_routine_id.clone(), false));
+                    .flat_map(|a| handler_names(&a.raw))
+                {
+                    for h in by_name
+                        .get(&(r.object_id.as_str(), name))
+                        .into_iter()
+                        .flatten()
+                    {
+                        g.edges
+                            .entry(id.to_string())
+                            .or_default()
+                            .push((h.to_string(), false));
+                    }
                 }
             }
             let test_codeunit = objects.get(r.object_id.as_str()).is_some_and(|o| {
@@ -368,23 +436,6 @@ impl CoverageGraph {
             });
             if test_codeunit {
                 g.test_code.insert(id.to_string());
-            }
-            if r.variables
-                .iter()
-                .any(|v| is_test_page_type(&v.declared_type))
-            {
-                flag(&mut g.incomplete, id, "test-page");
-            }
-            // The routine's OWN state: a record's reasons are inherited from the
-            // whole cone, so they are not read here.
-            if r.parse_incomplete {
-                flag(&mut g.incomplete, id, "parse-incomplete");
-            }
-            if !r.body_available {
-                flag(&mut g.boundary, id, "opaque-dependency");
-            }
-            if !recorded.contains(id) {
-                flag(&mut g.incomplete, id, "no-coverage-record");
             }
         }
 
@@ -436,24 +487,22 @@ impl CoverageGraph {
             let Some(sym) = symbols.get(edge.event_id.as_str()) else {
                 continue;
             };
-            let dependency_publisher = match (&sym.publisher_ref, &sym.publisher_stable_routine_id)
-            {
-                (Some(PublisherRef::Platform { .. }), _) => None,
-                (Some(PublisherRef::Dependency { target, .. }), _) => Some(target.clone()),
-                (None, Some(p)) if role_of_stable_id(primary, p) == Role::Dependency => {
-                    Some(p.clone())
-                }
-                _ => continue,
-            };
             let facts = g
                 .subscriber_facts
                 .entry(edge.subscriber_stable_routine_id.clone())
                 .or_default();
-            match dependency_publisher {
-                None => facts.platform = true,
-                Some(p) => {
-                    facts.dependency_publishers.insert(p);
+            match (&sym.publisher_ref, &sym.publisher_stable_routine_id) {
+                (Some(PublisherRef::Platform { .. }), _) => facts.platform = true,
+                // Set only when the publisher's app has no routine in the model
+                // (`program_event_graph`'s `in_model` gate), so it is no node.
+                (Some(PublisherRef::Dependency { .. }), _) => facts.outside_publisher = true,
+                // A model publisher: the snapshot's event-dispatch edge joins it
+                // to the subscriber.
+                (None, Some(p)) if role_of_stable_id(primary, p) == Role::Dependency => {
+                    facts.dependency_publishers.insert(p.clone());
                 }
+                (None, Some(_)) => facts.primary_publisher = true,
+                (None, None) => {}
             }
         }
         g
@@ -486,7 +535,7 @@ mod tests {
             display: format!("D{id}"),
             object_display: "Codeunit X".to_string(),
             anchor: None,
-            declaration_only: false,
+            shape: ChangedShape::Routine,
         }
     }
 
@@ -690,7 +739,7 @@ mod tests {
     fn declaration_only_stays_uncovered() {
         let g = graph(&["t"], &[("t", "a", false)]);
         let mut decl = ch("i");
-        decl.declaration_only = true;
+        decl.shape = ChangedShape::DeclarationOnly;
         decl.anchor = Some(("src/I.al".to_string(), 3));
         let tc = compute_test_coverage(&g, &[decl, ch("a")]);
         assert_eq!(tc.changed_routines, 2);
@@ -717,18 +766,27 @@ mod tests {
                 ..Default::default()
             },
         );
+        // The cross-app shape: the dependency publisher is a model routine, joined
+        // to the subscriber by the snapshot's event-dispatch edge.
         let dep = SubscriberFacts {
-            platform: false,
             dependency_publishers: ["dep:pub".to_string()].into(),
+            ..Default::default()
         };
         g.subscriber_facts.insert("sub2".to_string(), dep);
-        let ids = changed(&["sub1", "sub2"]);
+        // The single-app shape: the publisher is no node at all.
+        let outside = SubscriberFacts {
+            outside_publisher: true,
+            ..Default::default()
+        };
+        g.subscriber_facts.insert("sub3".to_string(), outside);
+        let ids = changed(&["sub1", "sub2", "sub3"]);
         let tc = compute_test_coverage(&g, &ids);
         assert_eq!(
             unc(&tc),
             vec![
                 ("sub1", UncoveredReason::PlatformEventSubscriber),
                 ("sub2", UncoveredReason::DependencyEventSubscriber),
+                ("sub3", UncoveredReason::DependencyEventSubscriber),
             ]
         );
         let json = tc.to_json_value();
@@ -748,8 +806,53 @@ mod tests {
         assert_eq!(cov(&tc), vec![("sub2", "t", true)]);
         assert_eq!(
             unc(&tc),
-            vec![("sub1", UncoveredReason::PlatformEventSubscriber)]
+            vec![
+                ("sub1", UncoveredReason::PlatformEventSubscriber),
+                ("sub3", UncoveredReason::DependencyEventSubscriber),
+            ]
         );
+    }
+
+    /// R14: a subscriber that also subscribes to a primary-published event is an
+    /// ordinary `no-path` when unreached, not a blind spot.
+    #[test]
+    fn primary_subscription_is_no_path() {
+        let g = {
+            let mut g = graph(&["t"], &[]);
+            for (id, platform) in [("sub1", true), ("sub2", false)] {
+                g.subscriber_facts.insert(
+                    id.to_string(),
+                    SubscriberFacts {
+                        platform,
+                        outside_publisher: !platform,
+                        primary_publisher: true,
+                        ..Default::default()
+                    },
+                );
+            }
+            g
+        };
+        let tc = compute_test_coverage(&g, &changed(&["sub1", "sub2"]));
+        assert_eq!(
+            unc(&tc),
+            vec![
+                ("sub1", UncoveredReason::NoPath),
+                ("sub2", UncoveredReason::NoPath)
+            ]
+        );
+    }
+
+    /// R4: a changed root the digest query dropped still counts, as
+    /// `not-in-graph`, even when a test would reach its id.
+    #[test]
+    fn not_in_graph_root_counts_uncovered() {
+        let g = graph(&["t"], &[("t", "gone", false)]);
+        let mut gone = ch("gone");
+        gone.shape = ChangedShape::NotInGraph;
+        let tc = compute_test_coverage(&g, &[gone]);
+        assert_eq!(tc.changed_routines, 1);
+        assert_eq!(unc(&tc), vec![("gone", UncoveredReason::NotInGraph)]);
+        assert_eq!(tc.to_json_value()["uncovered"][0]["reason"], "not-in-graph");
     }
 
     #[test]
@@ -958,5 +1061,284 @@ mod tests {
         assert_eq!(g.roots.len(), 1, "{:?}", g.roots);
         assert!(!g.roots.contains(&r.stable_routine_id));
         assert!(!g.test_code.contains(&r.stable_routine_id));
+    }
+
+    // R12: each adapter branch through `from_snapshot`, on the
+    // test-selection-graph model and snapshot with the branch's precondition
+    // stated by hand (a field set, a record removed, a ledger row added).
+
+    fn selection_graph() -> (Model, CapabilitySnapshot) {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/test-selection-graph");
+        let m = crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(&ws)
+            .expect("model");
+        let snap = crate::engine::l5::snapshot::compose_snapshot(&m);
+        (m, snap)
+    }
+
+    /// The one model row named `name`.
+    fn row<'m>(m: &'m mut Model, name: &str) -> &'m mut ModelRoutine {
+        let mut rows = m.workspace.routines.iter_mut().filter(|r| r.name == name);
+        let r = rows.next().unwrap_or_else(|| panic!("no `{name}`"));
+        assert!(rows.next().is_none(), "`{name}` is not unique");
+        r
+    }
+
+    /// Makes `name` a dependency routine: its app is no longer the primary one.
+    fn make_dependency(m: &mut Model, name: &str) -> String {
+        let r = row(m, name);
+        r.app_guid = "ffffffff-0000-0000-0000-00000000dead".to_string();
+        r.stable_routine_id.clone()
+    }
+
+    fn reasons(map: &BTreeMap<String, BTreeSet<&'static str>>, id: &str) -> Vec<&'static str> {
+        map.get(id)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn adapter_parse_incomplete_on_primary_and_dependency() {
+        let (mut m, snap) = selection_graph();
+        let ping = {
+            let r = row(&mut m, "Ping");
+            r.parse_incomplete = true;
+            r.stable_routine_id.clone()
+        };
+        let export = make_dependency(&mut m, "ExportLine");
+        row(&mut m, "ExportLine").parse_incomplete = true;
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        assert_eq!(reasons(&g.incomplete, &ping), vec!["parse-incomplete"]);
+        assert_eq!(reasons(&g.incomplete, &export), vec!["parse-incomplete"]);
+        assert_eq!(reasons(&g.boundary, &export), vec!["dependency-code"]);
+    }
+
+    #[test]
+    fn adapter_body_unavailable_primary_is_incomplete() {
+        let (mut m, snap) = selection_graph();
+        let ping = {
+            let r = row(&mut m, "Ping");
+            r.body_available = false;
+            r.stable_routine_id.clone()
+        };
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        assert_eq!(reasons(&g.incomplete, &ping), vec!["body-unavailable"]);
+        assert_eq!(reasons(&g.boundary, &ping), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn adapter_opaque_dependency_is_boundary() {
+        let (mut m, snap) = selection_graph();
+        let export = make_dependency(&mut m, "ExportLine");
+        row(&mut m, "ExportLine").body_available = false;
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        assert_eq!(
+            reasons(&g.boundary, &export),
+            vec!["dependency-code", "opaque-dependency"]
+        );
+        assert_eq!(reasons(&g.incomplete, &export), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn adapter_dependency_code_and_no_dependency_root() {
+        let (mut m, snap) = selection_graph();
+        let german = make_dependency(&mut m, "GermanTax");
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        assert_eq!(reasons(&g.boundary, &german), vec!["dependency-code"]);
+        // A dependency `[Test]` is never a root.
+        assert_eq!(g.roots.len(), 10, "{:?}", g.roots);
+        assert!(!g.roots.contains(&german));
+    }
+
+    #[test]
+    fn adapter_no_coverage_record_primary_only() {
+        let (mut m, mut snap) = selection_graph();
+        let ping = row(&mut m, "Ping").stable_routine_id.clone();
+        let export = make_dependency(&mut m, "ExportLine");
+        let before = snap.coverage.len();
+        snap.coverage
+            .retain(|c| c.subject != ping && c.subject != export);
+        assert_eq!(
+            snap.coverage.len(),
+            before - 2,
+            "precondition: both had records"
+        );
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        assert_eq!(reasons(&g.incomplete, &ping), vec!["no-coverage-record"]);
+        assert_eq!(reasons(&g.incomplete, &export), Vec::<&str>::new());
+    }
+
+    /// The fixture's one polymorphic row (`TaxRate.RatePct()`), re-homed onto
+    /// `from` with `edit` applied.
+    fn polymorphic_row(
+        snap: &CapabilitySnapshot,
+        from: &str,
+        edit: impl FnOnce(&mut crate::engine::l5::snapshot::SnapshotCallsiteResolution),
+    ) -> crate::engine::l5::snapshot::SnapshotCallsiteResolution {
+        let mut row = snap
+            .callsite_resolutions
+            .iter()
+            .find(|r| r.status == "polymorphic")
+            .expect("the fixture's polymorphic row")
+            .clone();
+        assert!(row.candidates.as_ref().is_some_and(|c| c.len() == 3));
+        assert!(row.unresolved_candidates.is_none());
+        row.from = from.to_string();
+        edit(&mut row);
+        row
+    }
+
+    #[test]
+    fn adapter_interface_open_world_shapes() {
+        let (mut m, mut snap) = selection_graph();
+        let [a, b, c, d] = ["Ping", "ExportLine", "ApplyDecay", "RoundToNickel"]
+            .map(|n| row(&mut m, n).stable_routine_id.clone());
+        let rows = [
+            polymorphic_row(&snap, &a, |r| r.candidates = None),
+            polymorphic_row(&snap, &b, |r| {
+                r.unresolved_candidates = Some(vec![
+                    crate::engine::l5::snapshot::SnapshotUnresolvedCandidate {
+                        object_id: "x".to_string(),
+                        reason: "unresolved".to_string(),
+                    },
+                ])
+            }),
+            polymorphic_row(&snap, &c, |r| {
+                r.candidates
+                    .as_mut()
+                    .unwrap()
+                    .push("ffffffff-0000-0000-0000-00000000dead:Codeunit:1#00".to_string())
+            }),
+            // The closed shape: followed, no reason.
+            polymorphic_row(&snap, &d, |_| {}),
+        ];
+        snap.callsite_resolutions.extend(rows);
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        for id in [&a, &b, &c] {
+            assert_eq!(
+                reasons(&g.incomplete, id),
+                vec!["interface-open-world"],
+                "{id}"
+            );
+        }
+        assert_eq!(reasons(&g.incomplete, &d), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn adapter_ambiguous_row_is_incomplete() {
+        let (mut m, mut snap) = selection_graph();
+        let ping = row(&mut m, "Ping").stable_routine_id.clone();
+        let amb = polymorphic_row(&snap, &ping, |r| r.status = "ambiguous".to_string());
+        snap.callsite_resolutions.push(amb);
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        assert_eq!(reasons(&g.incomplete, &ping), vec!["ambiguous"]);
+    }
+
+    /// R14's adapter half: a subscriber to a workspace publisher carries
+    /// `primary_publisher`; one to a platform event carries `platform` only.
+    #[test]
+    fn adapter_subscriber_facts_by_publisher() {
+        let (mut m, snap) = selection_graph();
+        let cash = row(&mut m, "CashRoundOnInvoiceTotal")
+            .stable_routine_id
+            .clone();
+        let ledger = row(&mut m, "OnAfterInsertLedger").stable_routine_id.clone();
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        let f = &g.subscriber_facts[&cash];
+        assert!(
+            f.primary_publisher && !f.platform && !f.outside_publisher,
+            "{f:?}"
+        );
+        let f = &g.subscriber_facts[&ledger];
+        assert!(f.platform && !f.primary_publisher, "{f:?}");
+    }
+
+    /// R15: a handler row with no stable id gives no edge to `""`.
+    #[test]
+    fn adapter_handler_edges_skip_empty_ids() {
+        let (mut m, snap) = selection_graph();
+        let open = row(&mut m, "OpenCardModally").stable_routine_id.clone();
+        let handler = row(&mut m, "CardHandler").stable_routine_id.clone();
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        assert!(g.edges[&open].contains(&(handler, false)), "precondition");
+        row(&mut m, "CardHandler").stable_routine_id = String::new();
+        let g = CoverageGraph::from_snapshot(&snap, &m);
+        assert!(
+            g.edges[&open].iter().all(|(to, _)| !to.is_empty()),
+            "{:?}",
+            g.edges[&open]
+        );
+    }
+
+    /// R2: a global `TestPage` marks only the routines whose body names it.
+    #[test]
+    fn adapter_global_test_page_needs_a_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f","name":"Tp","publisher":"al-sem tests","version":"1.0.0.0","runtime":"17.0","idRanges":[{"from":51020,"to":51029}]}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/Tp.al"),
+            r#"page 51020 "Tp Card"
+{
+    PageType = Card;
+}
+
+codeunit 51021 "Tp Tests"
+{
+    Subtype = Test;
+
+    var
+        Card: TestPage "Tp Card";
+
+    [Test]
+    procedure UsesCard()
+    begin
+        Card.OpenView();
+    end;
+
+    [Test]
+    procedure IgnoresCard()
+    begin
+    end;
+}
+"#,
+        )
+        .unwrap();
+        let m = crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(dir.path())
+            .expect("model");
+        let id = |name: &str| {
+            let r = m
+                .workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap();
+            let sees_global = r
+                .variables
+                .iter()
+                .any(|v| test_page_target(&v.declared_type).is_some());
+            assert!(
+                sees_global,
+                "precondition: `{name}` has the global in scope"
+            );
+            r.stable_routine_id.clone()
+        };
+        let (uses, ignores) = (id("UsesCard"), id("IgnoresCard"));
+        let g =
+            CoverageGraph::from_snapshot(&crate::engine::l5::snapshot::compose_snapshot(&m), &m);
+        assert!(
+            reasons(&g.incomplete, &uses).contains(&"test-page"),
+            "{:?}",
+            g.incomplete
+        );
+        assert!(
+            !reasons(&g.incomplete, &ignores).contains(&"test-page"),
+            "{:?}",
+            g.incomplete
+        );
     }
 }

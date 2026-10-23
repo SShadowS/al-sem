@@ -1532,6 +1532,45 @@ pub fn format_digest_human(entries: &[DigestEntryFull]) -> String {
 // Top-level run_digest (used by the CLI command)
 // ---------------------------------------------------------------------------
 
+/// The changed roots as `digest --tests` counts them (#254): EVERY resolved root,
+/// from its entry when the query built one, else `not-in-graph` (the query drops
+/// a `root-not-in-snapshot` root, which must not leave the denominator).
+fn coverage_changed_roots(
+    roots: &[String],
+    entries: &[DigestEntryFull],
+    owners: &OwnerIndex<'_>,
+) -> Vec<crate::engine::l5::test_coverage::ChangedRoutine> {
+    use crate::engine::l5::test_coverage::{ChangedRoutine, ChangedShape};
+    let by_id: HashMap<&str, &DigestEntryFull> =
+        entries.iter().map(|e| (e.routine_id.as_str(), e)).collect();
+    roots
+        .iter()
+        .map(|rid| match by_id.get(rid.as_str()) {
+            Some(e) => ChangedRoutine {
+                stable_id: rid.clone(),
+                display: e.routine_display.clone(),
+                object_display: e.object_display.clone(),
+                anchor: e
+                    .routine_anchor
+                    .as_ref()
+                    .and_then(|a| Some((a.file.clone()?, a.line?))),
+                shape: if e.declaration_only {
+                    ChangedShape::DeclarationOnly
+                } else {
+                    ChangedShape::Routine
+                },
+            },
+            None => ChangedRoutine {
+                stable_id: rid.clone(),
+                display: rid.clone(),
+                object_display: owners.object_display(rid),
+                anchor: None,
+                shape: ChangedShape::NotInGraph,
+            },
+        })
+        .collect()
+}
+
 /// Result from run_digest_pipeline.
 pub struct DigestRunResult {
     pub json_text: String,
@@ -1693,22 +1732,9 @@ pub(crate) fn digest_pipeline_with(
     let query_diagnostics = query_full.query_diagnostics;
     // #254: the coverage block reads the snapshot, so it is built before the drop.
     let test_coverage = tests.then(|| {
-        use crate::engine::l5::test_coverage::{ChangedRoutine, CoverageGraph};
-        let changed: Vec<ChangedRoutine> = entries
-            .iter()
-            .map(|e| ChangedRoutine {
-                stable_id: e.routine_id.clone(),
-                display: e.routine_display.clone(),
-                object_display: e.object_display.clone(),
-                anchor: e
-                    .routine_anchor
-                    .as_ref()
-                    .and_then(|a| Some((a.file.clone()?, a.line?))),
-                declaration_only: e.declaration_only,
-            })
-            .collect();
-        let graph = CoverageGraph::from_snapshot(&snap, resolved);
-        crate::engine::l5::test_coverage::compute_test_coverage(&graph, &changed)
+        use crate::engine::l5::test_coverage::{CoverageGraph, compute_test_coverage};
+        let changed = coverage_changed_roots(&changed_roots.roots, &entries, &owners);
+        compute_test_coverage(&CoverageGraph::from_snapshot(&snap, resolved), &changed)
     });
     // #69 D1.4: the query's inputs (the snapshot with its producer-solve arena,
     // the S4 entries, the L4 store) are dead here. Free them before the JSON
@@ -1831,6 +1857,19 @@ mod tests {
                 );
             },
         );
+    }
+
+    /// #254 R4: a resolved root the query built no entry for (stated by hand: no
+    /// entries at all) still reaches the coverage count, as `not-in-graph`.
+    #[test]
+    fn coverage_counts_roots_without_an_entry() {
+        use crate::engine::l5::test_coverage::ChangedShape;
+        let m = crate::engine::l5::test_support::empty_resolved();
+        let owners = OwnerIndex::build(&m);
+        let changed = coverage_changed_roots(&["gone".to_string()], &[], &owners);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].stable_id, "gone");
+        assert_eq!(changed[0].shape, ChangedShape::NotInGraph);
     }
 
     // The #6 resolveSelector-cascade + normalize_display_key unit tests now live
