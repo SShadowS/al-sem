@@ -546,13 +546,15 @@ impl Updater {
             }
         };
         // A file first seen in this batch is a known spelling too (C1: a
-        // Windows `didSave` path is lowercased, the watcher's is not).
+        // Windows `didSave` path is lowercased, the watcher's is not). An
+        // exact published or planned spelling always wins (F2N1).
+        let exact = cur.parsed.contains_key(&rel) || rc.plans.contains_key(&rel);
         let key = match rc
             .plans
             .keys()
             .find(|k| **k != rel && k.eq_ignore_ascii_case(&rel))
         {
-            Some(twin) if key == rel => twin.clone(),
+            Some(twin) if key == rel && !exact => twin.clone(),
             _ => key,
         };
         // Rule 3: `key` is a known spelling that differs from `p` only in case.
@@ -3211,6 +3213,52 @@ mod tests {
             "C1: one vp, the disk spelling; got {:?}",
             snap.parsed.keys().collect::<Vec<_>>()
         );
+    }
+
+    /// F2N1: with case twins `Target.al` and `target.al` both indexed,
+    /// deleting `target.al` removes it, whichever spelling's event comes first.
+    fn f2n1_delete_one_case_twin(target_first: bool) {
+        let dir = target_fixture();
+        if fs_is_case_insensitive(dir.path()) {
+            eprintln!("F2N1: case-insensitive file system; twins cannot exist");
+            return;
+        }
+        let twin = dir.path().join("target.al");
+        std::fs::write(&twin, TWIN).unwrap();
+        let (base, parsed) = build(dir.path());
+        assert!(base.parsed.contains_key("target.al"), "precondition: twins");
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        std::fs::remove_file(&twin).unwrap();
+        let upper = ChangeEvent::PathChanged(dir.path().join("Target.al"));
+        let lower = ChangeEvent::PathChanged(twin);
+        let batch = if target_first {
+            [upper, lower]
+        } else {
+            [lower, upper]
+        };
+        let got = updater.apply_batch(&base, &batch);
+        assert_eq!(
+            got.as_ref().map(|(_, r)| *r),
+            Some(Rung::Two),
+            "F2N1: each spelling reconciles as itself (no rung-3 fallback)"
+        );
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            !snap.parsed.contains_key("target.al") && snap.parsed.contains_key("Target.al"),
+            "F2N1: the deleted twin must go; got {:?}",
+            snap.parsed.keys().collect::<Vec<_>>()
+        );
+        assert_same_as_fresh(snap, dir.path(), "F2N1");
+    }
+
+    #[test]
+    fn f2n1_deleting_a_case_twin_upper_event_first() {
+        f2n1_delete_one_case_twin(true);
+    }
+
+    #[test]
+    fn f2n1_deleting_a_case_twin_lower_event_first() {
+        f2n1_delete_one_case_twin(false);
     }
 
     /// CO-1: coalescing must not let a later `PathChanged` erase a save's

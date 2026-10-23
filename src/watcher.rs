@@ -76,13 +76,14 @@ impl WatchScope {
         }
     }
 
-    /// The candidate cache folders not strictly inside the root (the root's
-    /// own `.alpackages` is covered by the recursive root watch).
+    /// The candidate cache folders outside the root: the root's own
+    /// `.alpackages` is covered by the recursive root watch, and a root that
+    /// is itself a candidate keeps its own recursive watch and retry (F3, F6).
     fn outside_candidates(&self) -> impl Iterator<Item = &PathBuf> {
         self.cache
             .candidates
             .iter()
-            .filter(|c| !self.strictly_inside(c))
+            .filter(|c| rel_under_root(&self.root, c).is_none())
     }
 
     fn strictly_inside(&self, p: &Path) -> bool {
@@ -137,13 +138,14 @@ pub fn map_event(scope: &WatchScope, event: &Event) -> Vec<ChangeEvent> {
                 out.push(ChangeEvent::DepsChanged);
                 continue;
             }
-            Some(Role::CacheFolder) => {
+            // The root itself, even when it is a candidate, is rule 6's.
+            Some(Role::CacheFolder) if !rel_is("") => {
                 if scope.strictly_inside(p) && structural {
                     out.push(ChangeEvent::DepsChanged);
                 }
                 continue;
             }
-            None => {}
+            _ => {}
         }
         let Some(rel) = rel else { continue };
         if rel.as_os_str().is_empty() {
@@ -269,17 +271,25 @@ impl WatchState {
                 ChangeEvent::DepsChanged => {
                     self.resync(backend);
                 }
-                // Lost events or a replaced root (C2, F1-F3): the root's
+                // Lost events or a replaced root (C2, F1-F3): any native
                 // watch may be dead, a cache may have appeared unseen, the
-                // config may have changed unseen. Repair all three before
-                // the rebuild reads.
+                // config may have changed unseen. Re-arm the root and every
+                // registered cache folder, re-sync, reload, and send
+                // `ConfigChanged` too so even a failed rebuild republishes.
                 ChangeEvent::Overflow => {
                     let root = self.scope.root.clone();
                     if !self.rearm(backend, &root) {
                         self.register(backend, &root, RecursiveMode::Recursive);
                     }
+                    let caches: Vec<PathBuf> = self.scope.outside_candidates().cloned().collect();
+                    for c in &caches {
+                        self.rearm(backend, c);
+                    }
                     self.resync(backend);
                     config.reload_from_disk();
+                    if tx.send(ChangeEvent::ConfigChanged).is_err() {
+                        return false;
+                    }
                 }
                 _ => {}
             }
@@ -348,6 +358,9 @@ impl WatchState {
         self.resync(backend);
         let ev = if root {
             config.reload_from_disk();
+            if tx.send(ChangeEvent::ConfigChanged).is_err() {
+                return false;
+            }
             ChangeEvent::Overflow
         } else {
             ChangeEvent::DepsChanged
@@ -896,9 +909,20 @@ mod tests {
             fake.take_log(),
             vec![
                 Rec::Unwatch(root.clone()),
-                Rec::Watch(root, RecursiveMode::Recursive)
+                Rec::Watch(root.clone(), RecursiveMode::Recursive)
             ],
             "T11(g): a re-arm keeps the root recursive"
+        );
+
+        // F3/F6/C2: the root is never a cache candidate to the watch, so a
+        // failed re-arm stays on the root's own retry list.
+        fake.refuse.lock().unwrap().insert(root.clone());
+        let e = ev(EventKind::Remove(RemoveKind::Folder), &[&root]);
+        st.handle_raw(&mut fake, Ok(e), &config, &tx);
+        assert_eq!(
+            st.failed.get(&root),
+            Some(&RecursiveMode::Recursive),
+            "T11(g): the root is retried recursive"
         );
     }
 
@@ -926,11 +950,25 @@ mod tests {
                 Rec::Unwatch(r.ws.clone()),
                 Rec::Watch(r.ws.clone(), RecursiveMode::Recursive),
                 Rec::Watch(r.cache(), RecursiveMode::NonRecursive),
+                Rec::Sent(ChangeEvent::ConfigChanged),
                 Rec::Sent(ChangeEvent::Overflow),
             ],
             "T11(l): re-arm and resync before the send"
         );
         assert!(!r.config.get().unused_procedures, "T11(l): config reloaded");
+
+        // F2: an already registered cache folder may hold a dead native
+        // watch too, so the next overflow re-arms it.
+        let rescan = Event::new(EventKind::Other).set_flag(Flag::Rescan);
+        st.handle_raw(&mut r.fake, Ok(rescan), &r.config, &r.tx);
+        let log = r.fake.take_log();
+        let unwatch = pos(&log, &Rec::Unwatch(r.cache()));
+        let rewatch = pos(&log, &Rec::Watch(r.cache(), RecursiveMode::NonRecursive));
+        let sent = pos(&log, &Rec::Sent(ChangeEvent::Overflow));
+        assert!(
+            unwatch < rewatch && rewatch < sent,
+            "T11(l): existing cache re-armed; {log:?}"
+        );
 
         // The root removed: its re-registration fails and is retried.
         r.fake.refuse.lock().unwrap().insert(r.ws.clone());
