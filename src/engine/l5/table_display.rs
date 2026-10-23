@@ -56,6 +56,9 @@ pub fn describe_table(
             && let Some(table_name) = &rv.table_name
             && !table_name.is_empty()
         {
+            // Source text (only routines with a body have operations), so a `""`
+            // is still doubled: show the logical name (#240).
+            let table_name = crate::program::body::scope::unescape_al_identifier(table_name);
             return format!("{table_name} (type not loaded)");
         }
     }

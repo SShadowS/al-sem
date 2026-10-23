@@ -110,7 +110,10 @@ pub fn detect_d52(
                         .record_variables
                         .iter()
                         .find(|rv| rv.name.to_lowercase() == var_key)
-                        .and_then(|rv| rv.table_name.clone())
+                        // Source text (only routines with a body have
+                        // operations): show the logical name (#240).
+                        .and_then(|rv| rv.table_name.as_deref())
+                        .map(crate::program::body::scope::unescape_al_identifier)
                 })
                 .unwrap_or_else(|| "unknown table".to_string());
 

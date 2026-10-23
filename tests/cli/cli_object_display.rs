@@ -496,3 +496,243 @@ fn ambiguous_selector_candidates_name_their_owner() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// #240 / #249: a quoted object name that holds an escaped quote (`"A ""B"" C"`)
+// is shown by its LOGICAL name (`A "B" C`) everywhere, the name the ids use (#83).
+// ---------------------------------------------------------------------------
+
+const ESC_GUID: &str = "24024024-0000-0000-0000-000000000240";
+
+/// The issue's workspace: an interface, a table and a codeunit whose names each
+/// hold `""`; the codeunit implements the interface and its `P` inserts into the
+/// table through a record variable written with the escaped spelling.
+fn escaped_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{ESC_GUID}","name":"Ws240","publisher":"probe","version":"1.0.0.0","platform":"1.0.0.0","application":"1.0.0.0","idRanges":[{{"from":50100,"to":50199}}],"runtime":"14.0"}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Iface.Interface.al"),
+        "interface \"A \"\"B\"\" C\"\n{\n    procedure P();\n}\n",
+    );
+    write(
+        &dir.join("src/T.Table.al"),
+        "table 50100 \"T \"\"Q\"\" X\"\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20])\n        {\n        }\n    }\n}\n",
+    );
+    write(
+        &dir.join("src/Cu.Codeunit.al"),
+        "codeunit 50101 \"C \"\"Q\"\" U\" implements \"A \"\"B\"\" C\"\n{\n    procedure P()\n    var\n        R: Record \"T \"\"Q\"\" X\";\n    begin\n        R.Insert();\n    end;\n}\n",
+    );
+}
+
+fn esc_table_id() -> String {
+    format!("{ESC_GUID}/table/50100")
+}
+
+/// T1 (#240). `query effects` names the owner and the table by their logical
+/// names, and the write still binds the real table.
+///
+/// Discrimination: revert the model unescape (`workspace.rs`, `name = o.name.clone()`)
+/// -> `Codeunit C ""Q"" U`; fails. Restored, it passes.
+#[test]
+fn escaped_names_are_logical_in_query_effects() {
+    let dir = tempfile::tempdir().unwrap();
+    escaped_workspace(dir.path());
+    let w = dir.path().to_str().unwrap();
+    let (q, code) = alsem(&[
+        "query",
+        "effects",
+        w,
+        "--routine",
+        "P",
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 0, "{q}");
+    let p = &q["payload"];
+    assert_eq!(
+        p["routine"]["routine"]["objectDisplay"], "Codeunit C \"Q\" U",
+        "{q}"
+    );
+    let effects = p["effects"].as_array().unwrap();
+    assert_eq!(effects.len(), 1, "{q}");
+    assert_eq!(effects[0]["tableName"], "T \"Q\" X", "{q}");
+    assert_eq!(effects[0]["tableId"], esc_table_id(), "{q}");
+    assert_eq!(
+        effects[0]["origin"]["routine"]["objectDisplay"], "Codeunit C \"Q\" U",
+        "{q}"
+    );
+}
+
+/// T2 (#240). The digest names both owners and the written table by their
+/// logical names; the write binds the real table.
+///
+/// Discrimination: the same revert -> `Interface A ""B"" C`; fails.
+#[test]
+fn escaped_names_are_logical_in_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    escaped_workspace(dir.path());
+    let ws = dir.path();
+    let mut owners = Vec::new();
+    let mut resources = Vec::new();
+    for file in ["src/Cu.Codeunit.al", "src/Iface.Interface.al"] {
+        let (doc, code) = digest_file(ws, file);
+        assert_eq!(code, 0, "{doc}");
+        for e in entries(&doc) {
+            owners.push(e["routine"]["objectDisplay"].as_str().unwrap().to_string());
+            for f in e["effects"].as_array().unwrap() {
+                resources.push((
+                    f["detail"]["resourceDisplay"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string(),
+                    f["detail"]["resourceId"].as_str().unwrap_or("").to_string(),
+                ));
+            }
+        }
+    }
+    owners.sort();
+    assert_eq!(owners, vec!["Codeunit C \"Q\" U", "Interface A \"B\" C"]);
+    assert_eq!(
+        resources,
+        vec![("T \"Q\" X".to_string(), esc_table_id())],
+        "{resources:?}"
+    );
+}
+
+/// The full fingerprint document of the escaped workspace.
+fn escaped_fingerprint(ws: &Path) -> Value {
+    let (doc, code) = alsem(&[
+        "fingerprint",
+        ws.to_str().unwrap(),
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 0, "{doc}");
+    doc
+}
+
+/// T3 (#249). The identity table holds each object's logical name at its id.
+///
+/// Discrimination: the same revert -> `C ""Q"" U`; fails.
+#[test]
+fn escaped_names_are_logical_in_fingerprint_identities() {
+    let dir = tempfile::tempdir().unwrap();
+    escaped_workspace(dir.path());
+    let doc = escaped_fingerprint(dir.path());
+    let ids = doc["payload"]["identities"]["stableIds"]
+        .as_array()
+        .unwrap();
+    let names = doc["payload"]["identities"]["displayNames"]
+        .as_array()
+        .unwrap();
+    let name_of = |id: String| {
+        let at = ids
+            .iter()
+            .position(|i| *i == id.as_str())
+            .unwrap_or_else(|| panic!("`{id}` in identities: {doc}"));
+        names[at].as_str().unwrap().to_string()
+    };
+    assert_eq!(name_of(format!("{ESC_GUID}:Codeunit:50101")), "C \"Q\" U");
+    assert_eq!(
+        name_of(format!("{ESC_GUID}:Interface:@a%20%22b%22%20c")),
+        "A \"B\" C"
+    );
+    assert_eq!(name_of(format!("{ESC_GUID}:Table:50100")), "T \"Q\" X");
+}
+
+/// T4 (#249). The contracts and the table shape hash the logical name. The
+/// literals are `sha256("Interface|0|A \"B\" C")`, `sha256("Codeunit|50101|C \"Q\" U")`,
+/// `sha256("Table|50100|T \"Q\" X")` and `sha256({"name":"T \"Q\" X","number":50100})`,
+/// computed outside the engine.
+///
+/// Discrimination: the same revert -> the raw hashes (`32465fdc…`, `936e2be9…`,
+/// `b594178c…`, `c5147399…`); fails.
+#[test]
+fn escaped_names_are_logical_in_contract_and_shape_hashes() {
+    let dir = tempfile::tempdir().unwrap();
+    escaped_workspace(dir.path());
+    let doc = escaped_fingerprint(dir.path());
+    let contract = |id: String| {
+        doc["payload"]["contractFacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["kind"] == "object" && c["stableId"] == id.as_str())
+            .unwrap_or_else(|| panic!("contract `{id}`: {doc}"))["signatureFingerprint"]
+            .clone()
+    };
+    assert_eq!(
+        contract(format!("{ESC_GUID}:Interface:@a%20%22b%22%20c")),
+        "e9c79d08c44fa746cf5789db704e01146d67291e7228b0d33f050e449979c616"
+    );
+    assert_eq!(
+        contract(format!("{ESC_GUID}:Codeunit:50101")),
+        "f84fcc77443651f307b410f7ccea4d9d323f27c59f5598871eab95197f9a391b"
+    );
+    assert_eq!(
+        contract(format!("{ESC_GUID}:Table:50100")),
+        "c9718004312f70984d402cfee4699dd5d4e9773175b3ca51e137e262dfb98cc4"
+    );
+    let shape = doc["payload"]["schemaFacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "table" && s["stableId"] == format!("{ESC_GUID}:Table:50100"))
+        .unwrap_or_else(|| panic!("table schema fact: {doc}"))["shapeFingerprint"]
+        .clone();
+    assert_eq!(
+        shape,
+        "2a4b0802040e2ccd6d6779e6bd3fa4e7c1f158e6992f194ce03991b395cbea2c"
+    );
+}
+
+/// T9. A record variable of a table that is not loaded is described by its
+/// declared type text, unescaped once: d1's "type not loaded" text and d52's
+/// fallback both read `Missing "Z" T`. Both detectors are default, so this runs
+/// the real `alsem analyze`.
+///
+/// Discrimination: revert the unescape in `table_display::describe_table` tier 2
+/// -> `Missing ""Z"" T (type not loaded)`; fails. Revert it in d52 -> d52's text
+/// reads `(Missing ""Z"" T)`; fails. Each restored, it passes.
+#[test]
+fn unloaded_escaped_table_is_described_by_its_logical_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    escaped_workspace(ws);
+    write(
+        &ws.join("src/Del.Codeunit.al"),
+        "codeunit 50102 \"Del Cu\"\n{\n    procedure Wipe(var R: Record \"Missing \"\"Z\"\" T\")\n    begin\n        R.DeleteAll();\n    end;\n\n    procedure Loop()\n    var\n        L: Record \"Missing \"\"Z\"\" T\";\n        i: Integer;\n    begin\n        for i := 1 to 10 do\n            L.Insert();\n    end;\n}\n",
+    );
+    let (doc, code) = alsem(&[
+        "analyze",
+        ws.to_str().unwrap(),
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 0, "{doc}");
+    let causes: Vec<&str> = doc["payload"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["rootCause"].as_str())
+        .collect();
+    assert!(
+        causes
+            .iter()
+            .any(|c| c.contains("Insert on Missing \"Z\" T (type not loaded).")),
+        "d1: {causes:#?}"
+    );
+    assert!(
+        causes
+            .iter()
+            .any(|c| c.contains("var record parameter R (Missing \"Z\" T) without")),
+        "d52: {causes:#?}"
+    );
+}

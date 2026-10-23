@@ -290,7 +290,7 @@ fn project_file(
             continue;
         };
         let object_key = crate::program::body::ir_walk::ir_object_key(o);
-        let name = o.name.clone();
+        let name = crate::program::body::ir_walk::ir_object_name(o);
 
         // Some whenever `ir_object_type` is (checked just above).
         let Some(stable_object_id) = stable_object_id_ir(app_guid, o) else {

@@ -12,13 +12,15 @@
 //!      Table / Page / TableExtension / PageExtension, NEVER overriding an
 //!      explicit local `Rec` that pass (1)/(2) already resolved.
 //!
-//! Quoted-identifier parity (MUST match TS EXACTLY, do NOT "fix"):
+//! Quoted identifiers:
 //!   - `record_table_name_of` strips surrounding quotes from `declaredType`.
 //!   - `extendsTargetName` / `sourceTableName` are stored already-stripped at
-//!     index time (al-sem `extractExtendsTargetName` / SourceTable unquote), then
-//!     passed RAW to `table_by_name` / `object_by_type_name` (which lower-case).
+//!     index time, a `""` still doubled. The lookups (which lower-case) match them
+//!     against the model's LOGICAL names, so each is passed as a [`NameRef`] that
+//!     states its spelling: the owning object's [`ModelObject::name_origin`] for
+//!     written text, `Logical` for a model name (#240).
 
-use super::symbol_table::SymbolTable;
+use super::symbol_table::{NameRef, SymbolTable};
 use super::workspace::{ModelObject, ModelRoutine};
 use al_syntax::IdentifierFoldExt;
 
@@ -106,11 +108,14 @@ fn strip_trailing_temporary(s: &str) -> String {
 /// object number, e.g. `"5992"`) — to its internal `ModelTable.id`. A numeric ref is
 /// routed through the `Table` object-number index to recover the table name, then
 /// to the `ModelTable`. Returns `None` when nothing resolves (out-of-source table).
-fn resolve_table_ref_to_id(symbols: &SymbolTable, table_ref: &str) -> Option<String> {
-    if let Ok(number) = table_ref.trim().parse::<i64>() {
+fn resolve_table_ref_to_id(symbols: &SymbolTable, table_ref: NameRef) -> Option<String> {
+    let (NameRef::Raw(text) | NameRef::Logical(text)) = table_ref;
+    if let Ok(number) = text.trim().parse::<i64>() {
         // Numeric (dep-symbol) form: object-number → table object → name → ModelTable.
         let obj = symbols.object_by_type_number("Table", number)?;
-        return symbols.table_by_name(&obj.name).map(|t| t.id.clone());
+        return symbols
+            .table_by_name(NameRef::Logical(&obj.name))
+            .map(|t| t.id.clone());
     }
     symbols.table_by_name(table_ref).map(|t| t.id.clone())
 }
@@ -123,6 +128,14 @@ pub fn resolve_routine_record_types(
     object: Option<&ModelObject>,
     symbols: &SymbolTable,
 ) {
+    // How this routine's written table names are spelled (#240): source text is
+    // raw, dependency symbol text logical. A routine with no owning object is
+    // source.
+    let as_written: fn(&str) -> NameRef<'_> = match object {
+        Some(o) => o.name_origin(),
+        None => |s| NameRef::Raw(s),
+    };
+
     // --- pass 1: resolve declared record variables ---------------------------
     // name (lowercased) -> index into record_variables, for matching ops below.
     use std::collections::HashMap;
@@ -134,7 +147,7 @@ pub fn resolve_routine_record_types(
             // `resolve_table_ref_to_id` accepts a NAME or a NUMBER — a synthetic
             // implicit `Rec` seeded from a codeunit `TableNo = <number>` carries the
             // number string, which `table_by_name` alone could not resolve.
-            if let Some(tid) = resolve_table_ref_to_id(symbols, table_name) {
+            if let Some(tid) = resolve_table_ref_to_id(symbols, as_written(table_name)) {
                 variable.table_id = Some(tid);
             }
         }
@@ -187,7 +200,7 @@ pub fn resolve_routine_record_types(
         let Some(table_name) = record_table_name_of(decl) else {
             continue;
         };
-        if let Some(table) = symbols.table_by_name(&table_name) {
+        if let Some(table) = symbols.table_by_name(as_written(&table_name)) {
             op.table_id = Some(table.id.clone());
         }
     }
@@ -202,19 +215,19 @@ pub fn resolve_routine_record_types(
     //                    extends target, then read ITS source_table_name).
     let own_table_id: Option<String> = match object {
         Some(obj) => match obj.object_type.as_str() {
-            "Table" => resolve_table_ref_to_id(symbols, &obj.name),
+            "Table" => resolve_table_ref_to_id(symbols, NameRef::Logical(&obj.name)),
             "Page" => obj
                 .source_table_name
                 .as_deref()
-                .and_then(|st| resolve_table_ref_to_id(symbols, st)),
+                .and_then(|st| resolve_table_ref_to_id(symbols, as_written(st))),
             "TableExtension" => obj
                 .extends_target_name
                 .as_deref()
-                .and_then(|et| resolve_table_ref_to_id(symbols, et)),
+                .and_then(|et| resolve_table_ref_to_id(symbols, as_written(et))),
             "PageExtension" => obj.extends_target_name.as_ref().and_then(|et| {
-                let base_page = symbols.object_by_type_name("Page", et)?;
+                let base_page = symbols.object_by_type_name("Page", as_written(et))?;
                 let st = base_page.source_table_name.as_deref()?;
-                resolve_table_ref_to_id(symbols, st)
+                resolve_table_ref_to_id(symbols, base_page.name_origin()(st))
             }),
             _ => None,
         },

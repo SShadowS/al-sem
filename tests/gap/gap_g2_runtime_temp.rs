@@ -27,6 +27,7 @@ use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
 use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
+use al_sem::program::model::symbol_table::NameRef::Logical;
 
 const APP_GUID: &str = "11111111-0000-0000-0000-0000000g2abc";
 
@@ -141,7 +142,7 @@ fn guarded_table_is_temporary_by_contract_and_ops_resolve_known_true() {
 
     // The guard marks the table temporary by contract (both call shapes).
     let table = resolved
-        .table_by_name("G2 Guarded Buffer")
+        .table_by_name(Logical("G2 Guarded Buffer"))
         .expect("guarded table must be indexed");
     assert!(
         table.is_temporary(),
@@ -149,7 +150,7 @@ fn guarded_table_is_temporary_by_contract_and_ops_resolve_known_true() {
          the table is_temporary (runtime contract — every instance is temp)",
     );
     let no_parens = resolved
-        .table_by_name("G2 Guarded NoParens")
+        .table_by_name(Logical("G2 Guarded NoParens"))
         .expect("no-parens guarded table must be indexed");
     assert!(
         no_parens.is_temporary(),
@@ -202,7 +203,7 @@ fn control_plain_table_stays_physical_and_d1_fires() {
     ];
     let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
     let table = resolved
-        .table_by_name("G2 Plain Buffer")
+        .table_by_name(Logical("G2 Plain Buffer"))
         .expect("plain table must be indexed");
     assert!(
         !table.is_temporary(),
@@ -236,7 +237,7 @@ fn control_non_negated_istemporary_trigger_is_not_a_guard() {
     ];
     let resolved = assemble_and_resolve_inline_program_default(&files, APP_GUID);
     let table = resolved
-        .table_by_name("G2 NonGuard Buffer")
+        .table_by_name(Logical("G2 NonGuard Buffer"))
         .expect("non-guard table must be indexed");
     assert!(
         !table.is_temporary(),

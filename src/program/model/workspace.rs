@@ -109,6 +109,24 @@ pub struct ModelObject {
     pub declaration_only_routines: Vec<ModelDeclarationOnlyRoutine>,
 }
 
+impl ModelObject {
+    /// How this object's written references (`extends`, `SourceTable`, record
+    /// variable types) are spelled, for a [`NameRef`] lookup (#240): `Raw` for an
+    /// object built from source (`project_ir`, which always sets `source_anchor`),
+    /// `Logical` for one built from dependency symbols (`abi_rows`, which never
+    /// does). A new producer must keep that rule or set the marker accordingly.
+    ///
+    /// [`NameRef`]: super::symbol_table::NameRef
+    pub fn name_origin(&self) -> fn(&str) -> super::symbol_table::NameRef<'_> {
+        use super::symbol_table::NameRef;
+        if self.source_anchor.is_some() {
+            |s| NameRef::Raw(s)
+        } else {
+            |s| NameRef::Logical(s)
+        }
+    }
+}
+
 /// An Interface / ControlAddIn procedure declaration (#71). Not a `ModelRoutine`
 /// (the model keeps skipping those object kinds); digest reads these to make a
 /// changed declaration a root.
@@ -797,7 +815,8 @@ fn project_ir(
         // object KEY, which is unique for a numberless object too (#83).
         let object_number = o.id.unwrap_or(0);
         let object_key = crate::program::body::ir_walk::ir_object_key(o);
-        let name = o.name.clone();
+        // The logical name (#240); `ModelTable.name` takes it too (`index_table_ir`).
+        let name = crate::program::body::ir_walk::ir_object_name(o);
         let object_id = encode_object_id(app_guid, object_type, &object_key);
 
         // Read an object-level property value from the IR (lowercased name match).
@@ -2452,8 +2471,8 @@ impl Model {
 
     /// Find a table by name (case-insensitive, LAST-wins — matching the symbol
     /// table the resolution queried).
-    pub fn table_by_name(&self, name: &str) -> Option<TableView<'_>> {
-        let want = name.to_lowercase();
+    pub fn table_by_name(&self, name: super::symbol_table::NameRef) -> Option<TableView<'_>> {
+        let want = name.logical().to_lowercase();
         let mut found = None;
         for t in &self.workspace.tables {
             if t.name.to_lowercase() == want {

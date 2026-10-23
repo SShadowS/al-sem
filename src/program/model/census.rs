@@ -245,7 +245,13 @@ pub fn object_fact_census(
                 out.push(format!("{field}\t{}\tmodel={m}\tprogram={p}", o.id));
             }
         };
-        differ("name", o.name.clone(), n.name.to_string());
+        // The model name is logical, the graph's raw (workspace objects only), so
+        // the graph side is unescaped once (#240).
+        differ(
+            "name",
+            o.name.clone(),
+            crate::program::body::scope::unescape_al_identifier(&n.name),
+        );
         differ(
             "number",
             o.object_number.to_string(),
@@ -369,5 +375,43 @@ mod tests {
         // Unexplained: the moved row, the extra row, and BOTH copies of the
         // duplicated span (an ambiguous match claims neither row).
         assert_eq!(c.unexplained_routine_rows(), 4, "{:#?}", c);
+    }
+
+    /// #240: an object whose quoted name holds `""` is NOT a name difference. The
+    /// model holds the logical name and the program graph the raw one, which the
+    /// census unescapes once. Runs `build_analysis_model`, the census's producer.
+    ///
+    /// Discrimination: compare `n.name` without the unescape -> a `name` line for
+    /// each of the three escaped objects; fails. Restored, it passes.
+    #[test]
+    fn escaped_object_names_are_not_a_name_difference() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        let write = |rel: &str, text: &str| {
+            let p = ws.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        write(
+            "app.json",
+            r#"{"id":"24024024-0000-0000-0000-0000000002c0","name":"Ws240","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50100,"to":50199}]}"#,
+        );
+        write(
+            "src/Iface.Interface.al",
+            "interface \"A \"\"B\"\" C\"\n{\n    procedure P();\n}\n",
+        );
+        write(
+            "src/T.Table.al",
+            "table 50100 \"T \"\"Q\"\" X\"\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20])\n        {\n        }\n    }\n}\n",
+        );
+        write(
+            "src/Cu.Codeunit.al",
+            "codeunit 50101 \"C \"\"Q\"\" U\" implements \"A \"\"B\"\" C\"\n{\n    procedure P()\n    var\n        R: Record \"T \"\"Q\"\" X\";\n    begin\n        R.Insert();\n    end;\n}\n",
+        );
+        let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+        let facts = crate::engine::gate::run::build_analysis_model(&inputs, true)
+            .object_facts
+            .expect("the model builds");
+        assert_eq!(facts, vec!["compared\t3".to_string()]);
     }
 }

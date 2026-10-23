@@ -89,10 +89,14 @@ pub fn canonicalize_type_text(raw: &str) -> String {
 /// (The raw IR value is only outer-quote-stripped.)
 ///
 /// `pub(crate)` deliberately: the callers are [`super::ir_walk::ir_enclosing_member`]
-/// (the member discriminator), [`super::ir_walk::ir_object_key`] (a numberless
-/// object's id segment, #83) and [`crate::program::model::model_object_id`] (the
-/// same segment from a graph node's folded name key), each unescaping its RAW
-/// value exactly once. Keeping the visibility crate-internal stops an
+/// (the member discriminator), [`super::ir_walk::ir_object_name`] (a source
+/// object's logical name, which [`super::ir_walk::ir_object_key`] keys a numberless
+/// object on, #83/#240), [`crate::program::model::model_object_id`] (the same
+/// segment from a graph node's folded name key), the `Raw` arm of
+/// [`crate::program::model::symbol_table::NameRef`] (a written reference looked up
+/// against the logical model names), the two record-variable type displays
+/// (`table_display::describe_table` tier 2, d52) and the object-fact census's graph
+/// side, each unescaping its RAW value exactly once. Keeping the visibility crate-internal stops an
 /// out-of-crate consumer from unescaping a second time (not idempotent for a
 /// member like `a""""b`) and minting a divergent id. ⟨task-3 fix wave, review M-5⟩
 pub(crate) fn unescape_al_identifier(inner: &str) -> String {

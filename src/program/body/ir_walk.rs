@@ -1987,7 +1987,8 @@ pub fn project_routine_features_ir_with(
 
 /// Table name from a `Record …` type string (`Record Customer` /
 /// `Record "Sales Header"` / `Record Customer temporary`). None if not a record /
-/// no subtype.
+/// no subtype. A quoted name is returned as written inside the quotes: an escaped
+/// `""` stays doubled and does not end the name (`Record "A ""B"" C"` -> `A ""B"" C`).
 pub(crate) fn parse_record_table_name(ty: &str) -> Option<String> {
     let t = ty.trim();
     if !is_record_type_str(t) {
@@ -1998,8 +1999,16 @@ pub(crate) fn parse_record_table_name(ty: &str) -> Option<String> {
         return None;
     }
     if let Some(after) = rest.strip_prefix('"') {
-        let end = after.find('"')?;
-        Some(after[..end].to_string())
+        let bytes = after.as_bytes();
+        let mut i = 0;
+        loop {
+            i += after[i..].find('"')?;
+            if bytes.get(i + 1) == Some(&b'"') {
+                i += 2;
+                continue;
+            }
+            return Some(after[..i].to_string());
+        }
     } else {
         rest.split_whitespace().next().map(|w| w.to_string())
     }
@@ -2692,7 +2701,14 @@ pub fn ir_object_type(kind: &al_syntax::ir::ObjectKind) -> Option<&'static str> 
 /// or its LOGICAL name (the IR keeps a quoted name's inner `""`, unescaped here) when
 /// it has none. The one derivation every source-side id producer uses (#83).
 pub fn ir_object_key(o: &al_syntax::ir::ObjectDecl) -> String {
-    crate::engine::ids::object_key(o.id, &super::scope::unescape_al_identifier(&o.name))
+    crate::engine::ids::object_key(o.id, &ir_object_name(o))
+}
+
+/// A source object's LOGICAL name: the IR keeps a quoted name's inner `""`, which
+/// is one `"` (#240). Every producer of a source object's or table's name (the
+/// model, R0, L2) takes it here, so the name is unescaped exactly once.
+pub fn ir_object_name(o: &al_syntax::ir::ObjectDecl) -> String {
+    super::scope::unescape_al_identifier(&o.name)
 }
 
 // ---- object metadata (subtype / pageType / sourceTable / inherentCommit) ----
