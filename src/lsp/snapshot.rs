@@ -49,7 +49,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::AlFile;
 use rayon::prelude::*;
 
@@ -1165,10 +1164,7 @@ pub(crate) fn recompute_file(
 
     let mut decls: Vec<DeclEntry> = Vec::new();
     for obj in &pf.file.objects {
-        let obj_key = match obj.id {
-            Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(obj.name.fold_identifier().into()),
-        };
+        let obj_key = ObjKey::from_source(obj.id, &obj.name);
         let obj_node_id = ObjectNodeId {
             app: primary_app_ref,
             kind: obj.kind,

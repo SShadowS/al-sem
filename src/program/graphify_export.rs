@@ -716,10 +716,11 @@ fn app_slug(apps: &AppRegistry, app: AppRef) -> Option<String> {
 }
 
 /// An object's key segment. A numbered object keeps its number. A numberless one is
-/// keyed by the engine's object key (`@` + the percent-encoded folded name,
+/// keyed by the engine's object key (`@` + the percent-encoded folded logical name,
 /// `engine::ids::object_key`), not a slug: the slug is lossy (`I Foo` and `I-Foo` both
 /// slug to `i-foo`), so two objects could share a node id (#83). It is the model's
-/// own segment ([`ObjKey::model_key`]), so `"I""Foo"` gives the engine's `@i%22foo`.
+/// own segment ([`ObjKey::model_key`]); the key already holds the logical name, so
+/// `"I""Foo"` gives the engine's `@i%22foo`.
 fn obj_key_str(key: &ObjKey) -> String {
     key.model_key()
 }
@@ -1562,9 +1563,9 @@ mod tests {
         );
     }
 
-    /// CR4 (#83): a source name key is the folded RAW name, inner `""` kept. The
-    /// graphify object id unescapes it as the engine does, so `interface "I""Foo"`
-    /// is `@i%22foo` here and in the model's object id.
+    /// CR4 (#83, restated #250): a source name key is the folded LOGICAL name
+    /// (`ObjKey::from_source` unescapes the IR's raw `I""Foo` once), so
+    /// `interface "I""Foo"` is `@i%22foo` here and in the model's object id.
     #[test]
     fn object_id_str_unescapes_a_quoted_name_like_the_engine() {
         let mut apps = AppRegistry::default();
@@ -1572,9 +1573,29 @@ mod tests {
         let oid = ObjectNodeId {
             app: a,
             kind: ObjectKind::Interface,
-            key: ObjKey::Name("i\"\"foo".into()),
+            key: ObjKey::from_source(None, "I\"\"Foo"),
         };
         assert_eq!(object_id_str(&oid, &apps), "al:obj:dep/interface/@i%22foo");
         assert_eq!(oid.key.model_key(), "@i%22foo");
+    }
+
+    /// #250: an ABI name key is already logical, so `a"b` and `a""b` stay apart.
+    #[test]
+    fn object_id_str_keeps_logical_abi_names_with_quotes_apart() {
+        let mut apps = AppRegistry::default();
+        let a = apps.intern(&app_id("Dep"));
+        let oid = |name_lc: &str| ObjectNodeId {
+            app: a,
+            kind: ObjectKind::Interface,
+            key: ObjKey::from_abi(0, || name_lc),
+        };
+        assert_eq!(
+            object_id_str(&oid("a\"b"), &apps),
+            "al:obj:dep/interface/@a%22b"
+        );
+        assert_eq!(
+            object_id_str(&oid("a\"\"b"), &apps),
+            "al:obj:dep/interface/@a%22%22b"
+        );
     }
 }

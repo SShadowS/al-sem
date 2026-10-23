@@ -538,6 +538,193 @@ fn dependency_interface_graph_id_equals_its_model_object_id() {
     );
 }
 
+/// #250's dependency symbols: interfaces `A""B` (logical; JSON `A\"\"B`) and
+/// `IPlain` without `Id`, codeunit 50200 `C""D` and codeunit 50201 `Impl`
+/// implementing both interfaces.
+const DEP_250_SYMBOLS: &str = r##"{"RuntimeVersion":"13.0","Interfaces":[{"Name":"A\"\"B","Methods":[{"Name":"Go","Parameters":[]}]},{"Name":"IPlain","Methods":[{"Name":"Go","Parameters":[]}]}],"Codeunits":[{"Id":50200,"Name":"C\"\"D","Methods":[{"Name":"Run2","Parameters":[]}]},{"Id":50201,"Name":"Impl","ImplementedInterfaces":["A\"\"B","IPlain"],"Methods":[{"Name":"Go","Parameters":[]}]}],"AppId":"83830000-0000-0000-0000-0000000000de","Name":"Dep83","Publisher":"probe","Version":"1.0.0.0"}"##;
+
+fn dep_250_entry() -> String {
+    format!(r#"{{"id":"{DEP_GUID}","name":"Dep83","publisher":"probe","version":"1.0.0.0"}}"#)
+}
+
+/// T1 (#250). A symbol-only dependency declares `interface "A""""B"` (logical
+/// `A""B`, no `Id`). Its graph key is the folded logical name `a""b`, and its
+/// graph id (P3) equals its projected `ModelObject` id (P8), both keeping both
+/// quotes: `@a%22%22b`.
+///
+/// Discrimination (2026-10-23): `ObjKey::model_key` unescaping again gives P3
+/// `@a%22b` and fails; restored, it passes.
+#[test]
+fn dependency_interface_with_escaped_quotes_graph_id_equals_its_model_object_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    app_json(ws, &dep_250_entry());
+    write(
+        &ws.join("src/W.Codeunit.al"),
+        "codeunit 50101 W\n{\n    procedure Caller()\n    var\n        X: Interface \"A\"\"\"\"B\";\n        P: Interface IPlain;\n        C: Codeunit \"C\"\"\"\"D\";\n    begin\n        X.Go();\n        P.Go();\n        C.Run2();\n    end;\n}\n",
+    );
+    crate::symbol_app::write_symbol_app(
+        &ws.join(".alpackages/probe_Dep83_1.0.0.0.app"),
+        DEP_GUID,
+        "Dep83",
+        "1.0.0.0",
+        DEP_250_SYMBOLS,
+    );
+
+    let inputs = read(ws);
+    let cross = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
+        &inputs, MI, true,
+    )
+    .expect("cross-app model");
+    let model_object = cross
+        .resolved
+        .workspace
+        .objects
+        .iter()
+        .find(|o| o.object_type == "Interface" && o.app_guid == DEP_GUID && o.name == "A\"\"B")
+        .expect("the dependency interface A\"\"B is in the model");
+
+    let (ctx, _, _) = al_sem::program::resolve::full::build_program_with_coverage_profiled(
+        &inputs,
+        al_sem::program::profile::BuildProfile::FULL,
+    )
+    .unwrap();
+    let graph = ctx.graph();
+    let node = graph
+        .objects
+        .iter()
+        .find(|o| {
+            o.id.kind == al_syntax::ir::ObjectKind::Interface
+                && graph.apps.resolve(o.id.app).guid == DEP_GUID
+                && &*o.name == "A\"\"B"
+        })
+        .expect("the dependency interface A\"\"B is in the graph");
+    assert_eq!(
+        node.id.key,
+        al_sem::program::node::ObjKey::Name("a\"\"b".into()),
+        "the graph key is the folded logical name"
+    );
+    let expected = format!("{DEP_GUID}/Interface/@a%22%22b");
+    assert_eq!(model_object_id(graph, &node.id), expected, "P3");
+    assert_eq!(model_object.id, expected, "P8");
+    assert_eq!(
+        model_object.id.rsplit('/').next(),
+        Some(model_object.object_key.as_str()),
+        "object_key is the id's last segment"
+    );
+}
+
+/// T2's caller: one call through `X: Interface "A""""B"`, one on
+/// `C: Codeunit "C""""D"`.
+const T2_CALLER: &str = "codeunit 50101 W\n{\n    procedure Caller()\n    var\n        X: Interface \"A\"\"\"\"B\";\n        C: Codeunit \"C\"\"\"\"D\";\n    begin\n        X.Go();\n        C.Run2();\n    end;\n}\n";
+const T2_IFACE: &str = "interface \"A\"\"\"\"B\"\n{\n    procedure Go();\n}\n";
+
+/// T2 asserts on one workspace: the source interface `A""""B` of app `guid` has
+/// model id `…/Interface/@a%22%22b`, `X.Go()` reaches `Impl.Go` (codeunit `impl`)
+/// and `C.Run2()` reaches codeunit `cd`'s `Run2`.
+fn assert_t2(ws: &Path, guid: &str, impl_no: i64, cd_no: i64) {
+    use al_sem::program::node::ObjKey;
+    use al_sem::program::resolve::edge::RouteTarget;
+
+    let inputs = read(ws);
+    let (ctx, _, _) = al_sem::program::resolve::full::build_program_with_coverage_profiled(
+        &inputs,
+        al_sem::program::profile::BuildProfile::FULL,
+    )
+    .unwrap();
+    assert_eq!(
+        graph_ids(ctx.graph(), al_syntax::ir::ObjectKind::Interface, guid)
+            .iter()
+            .filter(|id| id.ends_with("/@a%22%22b"))
+            .collect::<Vec<_>>(),
+        vec![&format!("{guid}/Interface/@a%22%22b")],
+        "the source interface keeps its model id"
+    );
+
+    let (_g, edges, _primary) =
+        al_sem::program::resolve::full::resolve_full_program_for_export(ws).unwrap();
+    let reaches = |no: i64, name_lc: &str| {
+        edges.iter().any(|e| {
+            &*e.edge.from.name_lc == "caller"
+                && e.edge.routes.iter().any(|r| {
+                    matches!(&r.target, RouteTarget::Routine(t)
+                        if t.object.key == ObjKey::Id(no) && &*t.name_lc == name_lc)
+                })
+        })
+    };
+    assert!(reaches(impl_no, "go"), "X.Go() reaches Impl.Go");
+    assert!(reaches(cd_no, "run2"), "C.Run2() reaches C\"\"D.Run2");
+}
+
+/// T2 (#250), the control. Where both sides are source (S2), or the dependency
+/// ships its source (S3, tier `EmbeddedSource`), the source interface `A""""B`
+/// keeps its model id `@a%22%22b`, and both escaped-name calls resolve.
+///
+/// Discrimination (2026-10-23): `ObjKey::from_source` keying on `fold(raw)` (no
+/// unescape, `model_key` unchanged) gives `@a%22%22%22%22b` and fails; so does a
+/// second unescape in `model_key` (`@a%22b`); restored, it passes.
+#[test]
+fn source_objects_with_escaped_quotes_keep_ids_and_resolution() {
+    // S2: both sides source.
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    app_json(ws, "");
+    write(&ws.join("src/AB.Interface.al"), T2_IFACE);
+    write(
+        &ws.join("src/CD.Codeunit.al"),
+        "codeunit 50103 \"C\"\"\"\"D\"\n{\n    procedure Run2()\n    begin\n    end;\n}\n",
+    );
+    write(
+        &ws.join("src/Impl.Codeunit.al"),
+        "codeunit 50102 Impl implements \"A\"\"\"\"B\"\n{\n    procedure Go()\n    begin\n    end;\n}\n",
+    );
+    write(&ws.join("src/W.Codeunit.al"), T2_CALLER);
+    assert_t2(ws, GUID, 50102, 50103);
+
+    // S3: the dependency ships its source.
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    app_json(ws, &dep_250_entry());
+    write(&ws.join("src/W.Codeunit.al"), T2_CALLER);
+    crate::symbol_app::write_source_app(
+        &ws.join(".alpackages/probe_Dep83_1.0.0.0.app"),
+        DEP_GUID,
+        "Dep83",
+        "1.0.0.0",
+        DEP_250_SYMBOLS,
+        &[
+            ("src/AB.Interface.al", T2_IFACE),
+            (
+                "src/IPlain.Interface.al",
+                "interface IPlain\n{\n    procedure Go();\n}\n",
+            ),
+            (
+                "src/CD.Codeunit.al",
+                "codeunit 50200 \"C\"\"\"\"D\"\n{\n    procedure Run2()\n    begin\n    end;\n}\n",
+            ),
+            (
+                "src/Impl.Codeunit.al",
+                "codeunit 50201 Impl implements \"A\"\"\"\"B\", IPlain\n{\n    procedure Go()\n    begin\n    end;\n}\n",
+            ),
+        ],
+        "",
+    );
+    let inputs = read(ws);
+    let (ctx, _, _) = al_sem::program::resolve::full::build_program_with_coverage_profiled(
+        &inputs,
+        al_sem::program::profile::BuildProfile::FULL,
+    )
+    .unwrap();
+    assert!(
+        ctx.graph().objects.iter().any(|o| {
+            ctx.graph().apps.resolve(o.id.app).guid == DEP_GUID
+                && o.tier == al_sem::snapshot::TrustTier::EmbeddedSource
+        }),
+        "precondition: the dependency is read from its embedded source"
+    );
+    assert_t2(ws, DEP_GUID, 50201, 50200);
+}
+
 /// `alsem diff <old ws> <new ws> --format json`: the report's findings.
 fn diff_findings(old: &Path, new: &Path) -> Vec<serde_json::Value> {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_alsem"))

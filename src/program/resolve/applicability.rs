@@ -20,7 +20,7 @@ use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
 use crate::program::graph::ProgramGraph;
-use crate::program::node::{ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{ObjectNodeId, RoutineNodeId};
 use crate::program::resolve::index::ResolveIndex;
 use crate::program::resolve::member_catalog::{MemberCatalogKind, member_builtin};
 use crate::program::resolve::receiver::FrameworkKind;
@@ -282,19 +282,15 @@ pub fn implicit_trigger_route_applicable(
         return true;
     }
 
-    // Look up the base table's lowercased name for the extension index.
-    let table_name_lc: String = match &ctx.table.key {
-        ObjKey::Name(s) => s.to_string(),
-        ObjKey::Id(_) => {
-            // Resolve the name from the graph (needed when the table is id-keyed).
-            graph
-                .objects
-                .iter()
-                .find(|o| o.id == ctx.table)
-                .map(|n| n.name.fold_identifier())
-                .unwrap_or_default()
-        }
-    };
+    // Look up the base table's folded name for the extension index. It is the
+    // node's (raw) name, whatever the key arm: the index is keyed by the raw
+    // `extends_target`, and a name key holds the logical name (#250).
+    let table_name_lc: String = graph
+        .objects
+        .iter()
+        .find(|o| o.id == ctx.table)
+        .map(|n| n.name.fold_identifier())
+        .unwrap_or_default();
 
     if table_name_lc.is_empty() {
         return false;
@@ -735,6 +731,49 @@ mod tests {
         assert!(
             implicit_trigger_route_applicable(&ctx, &target, &graph, &index),
             "TableExtension of Customer also fires OnInsert"
+        );
+    }
+
+    /// T3 (#250). A numberless table `T""""1` (logical `T""1`) is keyed by its
+    /// folded LOGICAL name; its node name and the extension's `extends_target`
+    /// stay raw. The tested trigger belongs to the EXTENSION, so the
+    /// `target.object == ctx.table` shortcut cannot pass it: only the
+    /// table-extension index lookup, by the node's name, can.
+    ///
+    /// Discrimination (2026-10-23): returning the key text in a `Name` arm fails
+    /// it; restored, it passes.
+    #[test]
+    fn trigger_applicable_insert_extension_of_numberless_escaped_table_true() {
+        let (apps, app) = make_app();
+        let mut table = make_obj(app, ObjectKind::Table, "T\"\"\"\"1", vec![], None);
+        table.id.key = ObjKey::Name("t\"\"1".into());
+        let ext = make_obj(
+            app,
+            ObjectKind::TableExtension,
+            "TExt",
+            vec![],
+            Some("T\"\"\"\"1"),
+        );
+        let table_id = table.id.clone();
+        let ext_id = ext.id.clone();
+        let ext_oninsert = make_routine(&ext_id, "oninsert", 0, None);
+        let (graph, index) = build_graph(apps, vec![table, ext], vec![ext_oninsert]);
+        let ctx = RecordOpCtx {
+            kind: RecordOpKind::Insert,
+            table: table_id,
+            field: None,
+            run_trigger: RunTrigger::True,
+        };
+        let target = RoutineNodeId {
+            object: ext_id,
+            name_lc: "oninsert".into(),
+            enclosing_member_lc: None,
+            params_count: 0,
+            sig_fp: 0,
+        };
+        assert!(
+            implicit_trigger_route_applicable(&ctx, &target, &graph, &index),
+            "the extension of the numberless table `T\"\"1` fires OnInsert"
         );
     }
 

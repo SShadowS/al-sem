@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A numberless object of a symbol-only dependency whose logical name holds `""` now has
+  the same id in the program graph and in the model (#250). Every `ObjKey::Name` now
+  holds the folded logical name, built for source objects by one helper
+  (`ObjKey::from_source`), and `ObjKey::model_key` no longer unescapes it.
+- `alsem graph` node ids of numberless source objects whose name holds `""` change once.
+
 ## [2.0.3] - 2026-10-23
 
 ### Added

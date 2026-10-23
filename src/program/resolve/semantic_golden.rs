@@ -988,10 +988,7 @@ fn build_fan_out_site_context(
             }
 
             for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
-                let obj_key = match obj.id {
-                    Some(n) => ObjKey::Id(n),
-                    None => ObjKey::Name(obj.name.fold_identifier().into()),
-                };
+                let obj_key = ObjKey::from_source(obj.id, &obj.name);
                 let obj_node_id = ObjectNodeId {
                     app: primary_app_ref,
                     kind: obj.kind,
@@ -1142,15 +1139,14 @@ fn target_is_on_table_or_extension(
     if target_object == table_id {
         return true;
     }
-    let table_name_lc: String = match &table_id.key {
-        ObjKey::Name(s) => s.to_string(),
-        ObjKey::Id(_) => graph
-            .objects
-            .iter()
-            .find(|o| &o.id == table_id)
-            .map(|n| n.name.fold_identifier())
-            .unwrap_or_default(),
-    };
+    // The node's (raw) name, whatever the key arm: the extension index is keyed by
+    // the raw `extends_target`, and a name key holds the logical name (#250).
+    let table_name_lc: String = graph
+        .objects
+        .iter()
+        .find(|o| &o.id == table_id)
+        .map(|n| n.name.fold_identifier())
+        .unwrap_or_default();
     if table_name_lc.is_empty() {
         return false;
     }
@@ -2155,6 +2151,78 @@ mod tests {
             report.implicit_trigger_violations, 0,
             "a Rec.Rename() site with an OnRename trigger on the table must be \
              APPLICABLE (no violation)"
+        );
+    }
+
+    /// T3b (#250). A numberless table `T""""1` (logical `T""1`) is keyed by its
+    /// folded LOGICAL name, while its node name and the table extension's
+    /// `extends_target` stay raw. A `Validate` route to the EXTENSION's trigger
+    /// takes the coarse table-or-extension check, which must look the extension
+    /// up by the node's (raw) name, not by the key text.
+    ///
+    /// Discrimination (2026-10-23): returning the key text in a `Name` arm gives
+    /// one violation and fails; restored, it passes.
+    #[test]
+    fn implicit_trigger_validate_route_finds_extension_of_numberless_escaped_table() {
+        let (apps, app) = make_app();
+        let mut table = make_obj(app, ObjectKind::Table, "T\"\"\"\"1", vec![]);
+        table.id.key = ObjKey::Name("t\"\"1".into());
+        let table_id = table.id.clone();
+        let mut ext = make_obj(app, ObjectKind::TableExtension, "TExt", vec![]);
+        ext.extends_target = Some("T\"\"\"\"1".into());
+        let ext_id = ext.id.clone();
+        let ext_onvalidate = make_routine_node(&ext_id, "onvalidate", 0);
+        let (graph, index) = build_synth_graph(apps, vec![table, ext], vec![ext_onvalidate]);
+
+        let caller_rid = RoutineNodeId {
+            object: table_id.clone(),
+            name_lc: "go".into(),
+            enclosing_member_lc: None,
+            params_count: 0,
+            sig_fp: 0,
+        };
+        let target_rid = RoutineNodeId {
+            object: ext_id,
+            name_lc: "onvalidate".into(),
+            enclosing_member_lc: None,
+            params_count: 0,
+            sig_fp: 0,
+        };
+        let site = SiteId {
+            caller: caller_rid.clone(),
+            span: test_span(1),
+            callee_fingerprint: 1,
+        };
+        let edge = Edge {
+            from: caller_rid,
+            site: site.clone(),
+            kind: EdgeKind::ImplicitTrigger,
+            shape: DispatchShape::Multicast,
+            completeness: SetCompleteness::Partial {
+                reason: OpenWorldReason::ReverseDependentExtensions,
+            },
+            routes: vec![source_route(target_rid)],
+        };
+        let mut ctx: HashMap<SiteId, FanOutSiteContext> = HashMap::new();
+        ctx.insert(
+            site,
+            FanOutSiteContext::Trigger(RecordOpCtx {
+                kind: RecordOpKind::Validate,
+                table: table_id,
+                field: None,
+                run_trigger: RunTrigger::Guarded,
+            }),
+        );
+
+        let raw_abi = empty_raw_abi();
+        let report = route_applicability(&[edge], &raw_abi, &graph, &index, &ctx, &[]);
+        assert_eq!(
+            report.implicit_trigger_routes_checked, 1,
+            "the route is checked"
+        );
+        assert_eq!(
+            report.implicit_trigger_violations, 0,
+            "the extension of the numberless table `T\"\"1` is found"
         );
     }
 

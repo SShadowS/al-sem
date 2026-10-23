@@ -93,6 +93,21 @@ impl ObjKey {
         }
     }
 
+    /// The key of a SOURCE object: its number, or its folded LOGICAL name. `raw` is
+    /// the IR's outer-stripped name (inner `""` kept), unescaped here exactly once.
+    /// Never pass an already-logical name (an ABI name): `A""B` would become `A"B`.
+    pub fn from_source(number: Option<i64>, raw: &str) -> ObjKey {
+        use al_syntax::IdentifierFoldExt;
+        match number {
+            Some(n) => ObjKey::Id(n),
+            None => ObjKey::Name(
+                crate::program::body::scope::unescape_al_identifier(raw)
+                    .fold_identifier()
+                    .into(),
+            ),
+        }
+    }
+
     /// The key as plain text: the number, or the name as stored.
     pub fn raw_text(&self) -> String {
         match self {
@@ -102,16 +117,13 @@ impl ObjKey {
     }
 
     /// The model's object-id segment for this key (`engine::ids::object_key`): the
-    /// number, or `@` + the encoded name. A source name key is the folded RAW name
-    /// (inner `""` kept), so it is unescaped first; an ABI name key is already the
-    /// folded logical name (see the #83 spec's Limits for one that holds `""`).
+    /// number, or `@` + the encoded name. Every name key, source
+    /// ([`Self::from_source`]) and ABI ([`Self::from_abi`]) alike, is already the
+    /// folded logical name, so it is encoded as it is (#250).
     pub fn model_key(&self) -> String {
         match self {
             ObjKey::Id(n) => n.to_string(),
-            ObjKey::Name(n) => crate::engine::ids::object_key(
-                None,
-                &crate::program::body::scope::unescape_al_identifier(n),
-            ),
+            ObjKey::Name(n) => crate::engine::ids::object_key(None, n),
         }
     }
 }
@@ -347,6 +359,27 @@ mod tests {
         assert_ne!(
             na, nb,
             "same type+name in different apps must be distinct nodes"
+        );
+    }
+
+    /// #250: a name key is already the folded logical name; `model_key` encodes it
+    /// as it is, so an ABI `a""b` keeps both quotes.
+    #[test]
+    fn model_key_encodes_a_logical_name_key_as_it_is() {
+        assert_eq!(ObjKey::Name("a\"\"b".into()).model_key(), "@a%22%22b");
+    }
+
+    /// #250: a source key is the number, or the folded name unescaped once.
+    #[test]
+    fn from_source_keys_on_the_number_or_the_folded_logical_name() {
+        assert_eq!(
+            ObjKey::from_source(None, "A\"\"\"\"B"),
+            ObjKey::Name("a\"\"b".into())
+        );
+        assert_eq!(ObjKey::from_source(Some(7), "x"), ObjKey::Id(7));
+        assert_eq!(
+            ObjKey::from_source(None, "IFoo"),
+            ObjKey::Name("ifoo".into())
         );
     }
 

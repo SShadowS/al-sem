@@ -13,7 +13,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{Origin, RoutineDecl};
 use serde::{Deserialize, Serialize};
 
@@ -118,10 +117,7 @@ pub(crate) fn file_routine_meta(
     // One text for the file, shared by every routine in it.
     let virtual_path = SharedStr::from(virtual_path);
     for obj in &file.objects {
-        let key = match obj.id {
-            Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(obj.name.fold_identifier().into()),
-        };
+        let key = ObjKey::from_source(obj.id, &obj.name);
         let obj_id = ObjectNodeId {
             app,
             kind: obj.kind,

@@ -31,8 +31,8 @@ use crate::program::node::{ObjectNodeId, RoutineNodeId};
 /// The model's object id for a program object (`encode_object_id`'s
 /// `"{app guid}/{type}/{object key}"`), the same string the model writes for it.
 ///
-/// The key segment is [`ObjKey::model_key`] (a source name key is unescaped to the
-/// folded logical name the model keys on).
+/// The key segment is [`ObjKey::model_key`] (every name key, source and ABI alike,
+/// already holds the folded logical name the model keys on, #250).
 ///
 /// [`ObjKey::model_key`]: crate::program::node::ObjKey::model_key
 pub fn model_object_id(graph: &ProgramGraph, id: &ObjectNodeId) -> String {
