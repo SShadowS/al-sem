@@ -34,6 +34,7 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::program::attributes::{find_attribute, string_arg};
 use crate::program::body::features::PCallee;
+use crate::program::body::scope::unescape_al_identifier;
 use crate::program::impact_graph::facts::{handler_names, test_page_target};
 use crate::program::model::events::PublisherRef;
 use crate::program::model::role::{Role, role_of_stable_id};
@@ -358,18 +359,34 @@ fn drives_test_page(r: &ModelRoutine) -> bool {
         test_page_target(&v.declared_type).is_some()
             && (v.scope.as_deref() != Some("global")
                 || r.identifier_references.binary_search(&v.name).is_ok()
-                || receivers.contains(&folded(&v.name)))
+                // The model stores a variable's name still escaped (`card ""a""`).
+                || receivers.contains(&unescape_al_identifier(&v.name).fold_identifier()))
     })
 }
 
 /// The variable a receiver text starts with, folded: `"Tp Card".OK()` → `tp card`.
+/// A quoted head ends at the first LONE `"` (`""` inside it is an escaped `"`)
+/// and is decoded to its logical name: `"Card ""A""".OpenView()` → `card "a"`.
 fn receiver_head(receiver: &str) -> String {
     let t = receiver.trim();
     let head = match t.strip_prefix('"') {
-        Some(rest) => rest.split('"').next().unwrap_or(""),
-        None => t.split(['.', '(', '[']).next().unwrap_or(""),
+        Some(rest) => {
+            let b = rest.as_bytes();
+            let mut end = 0;
+            while end < b.len() {
+                if b[end] == b'"' {
+                    if b.get(end + 1) != Some(&b'"') {
+                        break;
+                    }
+                    end += 1;
+                }
+                end += 1;
+            }
+            unescape_al_identifier(&rest[..end])
+        }
+        None => t.split(['.', '(', '[']).next().unwrap_or("").to_string(),
     };
-    folded(head.trim())
+    head.trim().fold_identifier()
 }
 
 /// A routine name folded the way [`handler_names`] folds a handler name.
@@ -1386,6 +1403,25 @@ codeunit 51024 "Tp Spelling Tests"
     begin
     end;
 }
+
+codeunit 51025 "Tp Escaped Tests"
+{
+    Subtype = Test;
+
+    var
+        "Card ""A""": TestPage "Tp Card";
+
+    [Test]
+    procedure UsesEscaped()
+    begin
+        "Card ""A""".OpenView();
+    end;
+
+    [Test]
+    procedure IgnoresEscaped()
+    begin
+    end;
+}
 "#,
         );
         let quoted = m
@@ -1460,7 +1496,29 @@ codeunit 51024 "Tp Spelling Tests"
                 g.incomplete
             );
         }
-        for name in ["IgnoresQuoted", "IgnoresBoth"] {
+        // FR20: an escaped quoted name. Precondition: the model stores the global's
+        // name still ESCAPED, so both it and the receiver are decoded once
+        // (`unescape_al_identifier`) before they are compared.
+        let escaped = m
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "UsesEscaped")
+            .unwrap();
+        let names: Vec<&str> = escaped
+            .variables
+            .iter()
+            .filter(|v| test_page_target(&v.declared_type).is_some())
+            .map(|v| v.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["card \"\"a\"\""], "precondition: stored name");
+        assert!(
+            reasons(&g.incomplete, &id("UsesEscaped")).contains(&"test-page"),
+            "UsesEscaped: {:?}",
+            g.incomplete
+        );
+        assert_eq!(receiver_head("\"Card \"\"A\"\"\".OpenView()"), "card \"a\"");
+        for name in ["IgnoresQuoted", "IgnoresBoth", "IgnoresEscaped"] {
             assert!(
                 !reasons(&g.incomplete, &id(name)).contains(&"test-page"),
                 "{name}: {:?}",
