@@ -1,4 +1,4 @@
---- OnBeforePrintSafe ---
+--- Codeunit D35 Demo::OnBeforePrintSafe ---
   question: reaches-ui
   answer:   yes
   evidence: 1 effect(s)

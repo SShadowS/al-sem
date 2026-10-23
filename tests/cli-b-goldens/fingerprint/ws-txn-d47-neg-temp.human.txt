@@ -1,6 +1,6 @@
 Rendering 1 root classification.
 
-::SendAfterTempInsert  [public-procedure]
+Codeunit D47 Sender::SendAfterTempInsert  [public-procedure]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-0000000d4705/table/50100"
   http:       "https://example.test/ping"

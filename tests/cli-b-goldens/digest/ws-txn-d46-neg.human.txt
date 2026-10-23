@@ -1,4 +1,4 @@
---- DoSetup ---
+--- Codeunit Normal Handler::DoSetup ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/NormalCU.al:35 "commit"
@@ -8,7 +8,7 @@
     detail: resourceId=11111111-0000-0000-0000-00000000d461/table/50000, resourceDisplay=My Setup, tempState=known(false)
     via: 1 path(s)
 
---- RunSetup ---
+--- Codeunit Normal Handler::RunSetup ---
   coverage: complete
   [COMMIT] transitive
     evidence: ws:src/NormalCU.al:35 "commit"

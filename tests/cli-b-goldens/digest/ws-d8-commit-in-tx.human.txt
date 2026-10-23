@@ -1,4 +1,4 @@
---- PostSalesDoc ---
+--- Codeunit D8PostingChain::PostSalesDoc ---
   coverage: complete
   [COMMIT] transitive
     evidence: ws:src/subscriber.al:10 "commit"
@@ -25,7 +25,7 @@
     via: 1 path(s)
   diagnostic: evidence-unavailable (EVENT_PUBLISH)
 
---- OnAfterPostSalesDoc ---
+--- Codeunit D8PostingChain::OnAfterPostSalesDoc ---
   coverage: complete
   [COMMIT] transitive
     evidence: ws:src/subscriber.al:10 "commit"
@@ -40,7 +40,7 @@
     via: 1 path(s)
   diagnostic: evidence-unavailable (EVENT_PUBLISH)
 
---- HandlePosted ---
+--- Codeunit D8BadSubscriber::HandlePosted ---
   coverage: complete
   [COMMIT] direct
     evidence: ws:src/subscriber.al:10 "commit"

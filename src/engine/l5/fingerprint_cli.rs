@@ -28,6 +28,7 @@
 //!   - `--format cbor.gz` + query → exit 1 (error).
 
 use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view};
+use crate::engine::l4::effect_query_cli::OwnerIndex;
 use crate::engine::l5::detectors::default_detectors;
 use crate::engine::l5::fingerprint_query::{
     FingerprintFilters, FingerprintQueryDiagnostic, WitnessLimit, fingerprint_query,
@@ -511,7 +512,12 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         witness_limit,
     };
 
-    let result = fingerprint_query(&snap, &filters, roots_config_ignored);
+    let result = fingerprint_query(
+        &snap,
+        &filters,
+        roots_config_ignored,
+        &OwnerIndex::build(resolved),
+    );
 
     let selector_errors: Vec<&FingerprintQueryDiagnostic> = result
         .diagnostics

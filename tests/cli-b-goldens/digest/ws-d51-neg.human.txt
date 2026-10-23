@@ -1,4 +1,4 @@
---- GetThenError ---
+--- Codeunit D51 NegSender::GetThenError ---
   coverage: complete
   [ERROR_THROW] direct
     evidence: ws:src/Sender.Codeunit.al:13 "error-call"

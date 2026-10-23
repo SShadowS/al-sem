@@ -23,6 +23,7 @@
 
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::gate::run::AnalysisTarget;
+use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::digest::compute_digest_effects_cli;
 use crate::engine::l5::digest_cli::{
@@ -734,11 +735,7 @@ pub fn format_prove_human(
     let mut lines: Vec<String> = Vec::new();
 
     // Routine header
-    let routine_header = if !object_display.is_empty() {
-        format!("{}::{}", object_display, routine_display)
-    } else {
-        routine_display.to_string()
-    };
+    let routine_header = owner_qualified(object_display, routine_display);
     lines.push(format!("--- {} ---", routine_header));
     lines.push(format!("  question: {}", question));
     lines.push(format!("  answer:   {}", prove_result.answer.as_str()));
@@ -897,8 +894,14 @@ pub(crate) fn prove_pipeline_with(
         routines: Some(vec![routine_selector.to_string()]),
         diff_text: None,
     };
-    let changed_roots =
-        resolve_changed_roots(&snap, resolved, &changed_input, primary_guid_of(resolved));
+    let owners = OwnerIndex::build(resolved);
+    let changed_roots = resolve_changed_roots(
+        &snap,
+        resolved,
+        &changed_input,
+        primary_guid_of(resolved),
+        &owners,
+    );
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
     if changed_roots.roots.is_empty() {
@@ -959,8 +962,8 @@ pub(crate) fn prove_pipeline_with(
         &all_s4_entries,
         &tx_ctx_map,
         &temp_states,
-        &changed_roots.spans,
-        &changed_roots.touched,
+        &changed_roots,
+        &owners,
     );
     // The bundle's only borrower is dead: release `l4` before the cone walk.
     drop(temp_states);

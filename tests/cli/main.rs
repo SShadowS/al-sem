@@ -91,6 +91,7 @@ mod cli_events_policy_dependencies;
 mod cli_graph_export;
 mod cli_implicit_trigger_cone;
 mod cli_inputs_frozen;
+mod cli_object_display;
 mod cli_p1_enclosing_member;
 mod cli_p1_inventory;
 mod cli_query_differential;

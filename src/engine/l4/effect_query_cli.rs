@@ -374,6 +374,13 @@ pub struct RoutineRef {
     pub column: u32,
 }
 
+impl RoutineRef {
+    /// The one header rule, [`owner_qualified`], for this routine (#78).
+    pub fn qualified(&self) -> String {
+        owner_qualified(&self.object_display, &self.display)
+    }
+}
+
 /// The join table: internal routine id -> its `ModelRoutine`, plus object names.
 pub struct RoutineJoin<'a> {
     by_id: HashMap<&'a str, &'a ModelRoutine>,
@@ -414,14 +421,101 @@ impl<'a> RoutineJoin<'a> {
             .unwrap_or("");
         RoutineRef {
             display: r.name.clone(),
-            object_display: format!("{} {}", r.object_type, object_name)
-                .trim()
-                .to_string(),
+            object_display: object_display(&r.object_type, object_name),
             stable_id: r.stable_routine_id.clone(),
             file: r.source_anchor.source_unit_id.clone(),
             line: r.source_anchor.start_line,
             column: r.source_anchor.start_column,
         }
+    }
+}
+
+/// The one owner rule: `"<ObjectType> <ObjectName>"`, the bare type when the
+/// name is missing. `query effects`, digest, fingerprint and prove all print it
+/// (#78).
+pub fn object_display(object_type: &str, object_name: &str) -> String {
+    format!("{object_type} {object_name}").trim().to_string()
+}
+
+/// The one human-header rule: `<owner>::<routine>`, or the bare routine when
+/// the owner is unknown (never `::<routine>`). The digest, fingerprint, prove
+/// and `query` headers and the selector candidates all print it (#78).
+pub fn owner_qualified(object_display: &str, routine_display: &str) -> String {
+    if object_display.is_empty() {
+        routine_display.to_string()
+    } else {
+        format!("{object_display}::{routine_display}")
+    }
+}
+
+/// Stable routine id -> its owning object, for every workspace-app routine and
+/// Interface / ControlAddIn declaration (#78). The owner comes from the model,
+/// never the snapshot identity table: every unnumbered object shares
+/// `<guid>:<Kind>:0` there, and a tableextension stub can overwrite the name of
+/// the real table with its own number. Declaration-only rows read their
+/// declaring object directly. Ordinary rows read the name `RoutineJoin` reads
+/// (last object per internal id), so two model objects with ONE internal id
+/// (`#if`-split object declarations, a missing number) share one name, as in
+/// `query effects`. Rows that share a stable id share its object (the stable id
+/// folds in the object), so they give one owner.
+///
+/// The index holds borrowed rows only; a display string is built on lookup, so
+/// a run pays for the roots and candidates it asks about.
+#[derive(Default)]
+pub struct OwnerIndex<'a> {
+    /// stable routine id -> (object type, object name).
+    by_stable_id: HashMap<&'a str, (&'a str, &'a str)>,
+}
+
+impl<'a> OwnerIndex<'a> {
+    pub fn build(resolved: &'a Model) -> Self {
+        use crate::program::model::role::Role;
+        let ws = &resolved.workspace;
+        let name_by_object_id: HashMap<&str, &str> = ws
+            .objects
+            .iter()
+            .map(|o| (o.id.as_str(), o.name.as_str()))
+            .collect();
+        let mut by_stable_id: HashMap<&'a str, (&'a str, &'a str)> = HashMap::new();
+        for r in ws
+            .routines
+            .iter()
+            .filter(|r| is_primary_routine(resolved, r))
+        {
+            let name = name_by_object_id
+                .get(r.object_id.as_str())
+                .copied()
+                .unwrap_or("");
+            by_stable_id
+                .entry(r.stable_routine_id.as_str())
+                .or_insert((r.object_type.as_str(), name));
+        }
+        for o in ws
+            .objects
+            .iter()
+            .filter(|o| resolved.object_role(o) == Role::Primary)
+        {
+            for d in &o.declaration_only_routines {
+                by_stable_id
+                    .entry(d.stable_routine_id.as_str())
+                    .or_insert((o.object_type.as_str(), o.name.as_str()));
+            }
+        }
+        OwnerIndex { by_stable_id }
+    }
+
+    /// The owner's `object_display`, or `""` when the id is not a workspace
+    /// routine: a fail-closed placeholder, never an invented name.
+    pub fn object_display(&self, stable_id: &str) -> String {
+        self.by_stable_id
+            .get(stable_id)
+            .map(|(t, n)| object_display(t, n))
+            .unwrap_or_default()
+    }
+
+    /// `owner_qualified(owner, routine_display)`: a selector candidate's label.
+    pub fn qualified(&self, stable_id: &str, routine_display: &str) -> String {
+        owner_qualified(&self.object_display(stable_id), routine_display)
     }
 }
 
@@ -487,10 +581,7 @@ fn origin_json(origin: Option<&OperationRef>) -> Value {
 /// `Object::Routine at file:line` — the human rendering of an effect's origin.
 fn origin_human(origin: Option<&OperationRef>, operation_id: &str) -> String {
     match origin {
-        Some(o) => format!(
-            "{}::{} at {}:{}",
-            o.owner.object_display, o.owner.display, o.file, o.line
-        ),
+        Some(o) => format!("{} at {}:{}", o.owner.qualified(), o.file, o.line),
         None => format!("(outside the workspace: {operation_id})"),
     }
 }
@@ -831,8 +922,10 @@ fn render_query_touches_body(
                 let internal = query.bundle().routine_id(ix);
                 match join.get(internal) {
                     Some(rr) => human.push_str(&format!(
-                        "    {}::{} — {}:{}\n",
-                        rr.object_display, rr.display, rr.file, rr.line
+                        "    {} — {}:{}\n",
+                        rr.qualified(),
+                        rr.file,
+                        rr.line
                     )),
                     None => human.push_str(&format!("    {internal}\n")),
                 }
@@ -856,8 +949,8 @@ fn render_query_touches_body(
                     json!({ "answerable": false, "reason": "routine has no db-effect row" }),
                 );
                 human.push_str(&format!(
-                    "--- {}::{} vs {table_label} ---\n  not answerable: routine has no db-effect row\n",
-                    rr.object_display, rr.display
+                    "--- {} vs {table_label} ---\n  not answerable: routine has no db-effect row\n",
+                    rr.qualified()
                 ));
                 return QueryRunResult {
                     json_text: envelope(
@@ -872,10 +965,7 @@ fn render_query_touches_body(
                 };
             };
 
-            human.push_str(&format!(
-                "--- {}::{} vs {table_label} ---\n",
-                rr.object_display, rr.display
-            ));
+            human.push_str(&format!("--- {} vs {table_label} ---\n", rr.qualified()));
 
             let touches_down = query.touches_table(rix, &table.id);
             if direction.wants_down() {
@@ -973,7 +1063,7 @@ fn render_query_touches_body(
                 for a in &ups {
                     let internal = query.bundle().routine_id(a.touch.routine);
                     let label = match join.get(internal) {
-                        Some(x) => format!("{}::{}", x.object_display, x.display),
+                        Some(x) => x.qualified(),
                         None => internal.to_string(),
                     };
                     human.push_str(&format!(
@@ -1092,8 +1182,8 @@ fn render_query_effects_body(
             "reason": "routine has no db-effect row",
         });
         let human = format!(
-            "--- effects of {}::{} ---\n  not answerable: routine has no db-effect row\n",
-            rr.object_display, rr.display
+            "--- effects of {} ---\n  not answerable: routine has no db-effect row\n",
+            rr.qualified()
         );
         return QueryRunResult {
             json_text: envelope("query.effects", payload, deps, alsem_ver, deterministic),
@@ -1122,7 +1212,7 @@ fn render_query_effects_body(
             .collect::<Vec<_>>(),
     });
 
-    let mut human = format!("--- effects of {}::{} ---\n", rr.object_display, rr.display);
+    let mut human = format!("--- effects of {} ---\n", rr.qualified());
     human.push_str(&format!("  {} effect(s)\n", effects.len()));
     for e in &effects {
         let table = if is_unknown_table(e.table_id) {
@@ -1153,7 +1243,7 @@ fn render_query_effects_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::model::workspace::ModelTable;
+    use crate::program::model::workspace::{ModelDeclarationOnlyRoutine, ModelObject, ModelTable};
 
     fn table(app: &str, number: i64, name: &str, stub: bool) -> ModelTable {
         ModelTable {
@@ -1166,6 +1256,126 @@ mod tests {
             is_temporary: false,
             is_extension_stub: stub,
         }
+    }
+
+    fn object(
+        app: &str,
+        object_type: &str,
+        number: i64,
+        name: &str,
+        decls: &[&str],
+    ) -> ModelObject {
+        ModelObject {
+            id: format!("{app}/{object_type}/{number}"),
+            app_guid: app.to_string(),
+            object_type: object_type.to_string(),
+            object_number: number,
+            name: name.to_string(),
+            source_table_name: None,
+            extends_target_name: None,
+            implements_interfaces: None,
+            object_subtype: None,
+            page_type: None,
+            inherent_commit_behavior: None,
+            source_table_temporary: None,
+            page_controls: Vec::new(),
+            single_instance: None,
+            editable: None,
+            insert_allowed: None,
+            modify_allowed: None,
+            delete_allowed: None,
+            source_anchor: None,
+            declaration_only_routines: decls
+                .iter()
+                .map(|s| ModelDeclarationOnlyRoutine {
+                    name: (*s).to_string(),
+                    stable_routine_id: (*s).to_string(),
+                    source_anchor: crate::engine::l5::test_support::dummy_anchor(),
+                    declaration_start_line: 0,
+                })
+                .collect(),
+        }
+    }
+
+    /// A routine of `obj`, by assignment over the shared test row.
+    fn routine(obj: &ModelObject, id: &str, stable: &str) -> ModelRoutine {
+        let mut r = crate::engine::l5::test_support::routine(id, "procedure");
+        r.stable_routine_id = stable.to_string();
+        r.object_id = obj.id.clone();
+        r.object_type = obj.object_type.clone();
+        r.app_guid = obj.app_guid.clone();
+        r.object_number = obj.object_number;
+        r
+    }
+
+    /// #78: a header names the owner when known and never prints `::<routine>`.
+    ///
+    /// Mutation: drop the empty-owner branch -> the second assert reads `::Run`.
+    #[test]
+    fn owner_qualified_omits_an_unknown_owner() {
+        assert_eq!(owner_qualified("Codeunit Foo", "Run"), "Codeunit Foo::Run");
+        assert_eq!(owner_qualified("", "Run"), "Run");
+    }
+
+    /// #78: the owner index holds workspace-app rows only, a declaration-only
+    /// row reads its own object, the `#if` arms of one routine (rows of ONE
+    /// object sharing a stable id) give that object, two model objects with one
+    /// internal id give the name `RoutineJoin` keeps (the last), and an unknown
+    /// id gives `""`.
+    ///
+    /// Mutations: drop the routine role filter -> (b) `Codeunit DepCu`; drop the
+    /// object role filter -> (c) `Interface DepIface`; key the name map first-wins
+    /// -> (f) `Codeunit Old`.
+    #[test]
+    fn owner_index_filters_to_primary_and_follows_routine_join() {
+        let alpha = object("ws", "Codeunit", 1, "Alpha", &[]);
+        let ws_iface = object("ws", "Interface", 3, "WsIface", &["decl-ws"]);
+        let dep_cu = object("dep", "Codeunit", 4, "DepCu", &[]);
+        let dep_iface = object("dep", "Interface", 5, "DepIface", &["decl-dep"]);
+        // Two declarations with one internal id (`#if`-split objects).
+        let old = object("ws", "Codeunit", 6, "Old", &[]);
+        let new = object("ws", "Codeunit", 6, "New", &[]);
+        assert_eq!(old.id, new.id, "precondition: one internal object id");
+        let routines = vec![
+            routine(&alpha, "r-alpha", "s-alpha"),
+            routine(&dep_cu, "r-dep", "s-dep"),
+            routine(&alpha, "r-arm1", "s-arms"),
+            routine(&alpha, "r-arm2", "s-arms"),
+            routine(&old, "r-split", "s-split"),
+        ];
+        let mut resolved = crate::engine::l5::test_support::empty_resolved();
+        resolved.workspace.objects = vec![alpha, ws_iface, dep_cu, dep_iface, old, new];
+        resolved.workspace.routines = routines;
+        resolved.primary_app = Some(crate::engine::gate::app_attribution::App {
+            app_guid: "ws".to_string(),
+            publisher: String::new(),
+            name: String::new(),
+            version: String::new(),
+        });
+        let owners = OwnerIndex::build(&resolved);
+        // (a) primary routine
+        assert_eq!(owners.object_display("s-alpha"), "Codeunit Alpha");
+        // (b) dependency routine absent
+        assert_eq!(owners.object_display("s-dep"), "");
+        // (c) dependency declaration-only row absent
+        assert_eq!(owners.object_display("decl-dep"), "");
+        // (d) primary declaration-only row
+        assert_eq!(owners.object_display("decl-ws"), "Interface WsIface");
+        // (e) the arms of one routine
+        assert_eq!(owners.object_display("s-arms"), "Codeunit Alpha");
+        // (f) one internal id, two names: RoutineJoin's (last) name, as `query effects`
+        assert_eq!(
+            owners.object_display("s-split"),
+            RoutineJoin::build(&resolved)
+                .get("r-split")
+                .unwrap()
+                .object_display
+        );
+        assert_eq!(owners.object_display("s-split"), "Codeunit New");
+        // (g) unknown id
+        assert_eq!(owners.object_display("nope"), "");
+        assert_eq!(owners.qualified("nope", "Run"), "Run");
+        assert_eq!(owners.qualified("s-alpha", "Run"), "Codeunit Alpha::Run");
     }
 
     fn resolved_id(r: Resolution<TableRef>) -> String {

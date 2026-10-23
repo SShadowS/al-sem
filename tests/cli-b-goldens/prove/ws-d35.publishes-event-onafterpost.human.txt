@@ -1,4 +1,4 @@
---- OnBeforePrintSafe ---
+--- Codeunit D35 Demo::OnBeforePrintSafe ---
   question: publishes-event:OnAfterPost
   answer:   no
   obligations: all clear
