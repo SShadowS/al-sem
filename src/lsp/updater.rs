@@ -102,10 +102,17 @@
 //!   toward silently taking rung 1): rebuild the workspace layer
 //!   (`assemble_program_graph` over the cached, UNCHANGED [`DepLayer`]) and
 //!   re-resolve EVERY workspace file — see [`Updater::apply_rung2`].
-//! - **Rung 3** (`DepsChanged`/`Overflow`, OR a `FileSaved`/`FileRemoved`
-//!   path that isn't workspace-shaped at all — e.g. under `.alpackages/`,
-//!   the Task-4-review dep-file-boundary scenario): full rebuild via
+//! - **Rung 3** (`DepsChanged`/`Overflow`, an event path outside the
+//!   workspace root or the root itself, a folder walk that fails, or a
+//!   case-only spelling whose file identity cannot be told — see
+//!   [`Updater::reconcile`]): full rebuild via
 //!   [`LspSnapshot::build_full_with_parsed`] — see [`Updater::apply_rung3`].
+//!   A path under a skipped folder (`.alpackages`, `.snapshots`,
+//!   `node_modules`) is read by nothing and changes nothing (#221).
+//! - **Disk reconciliation** (#221): `FileSaved`, `FileRemoved` and
+//!   `PathChanged` all go through [`Updater::reconcile`], which plans from the
+//!   disk and the per-file stamps alone, never from the event kind, so a
+//!   rename, a move or a replaced folder ends equal to a fresh build.
 //! - **Batch semantics** (binding): one coalesced batch may name several
 //!   files; the rung actually taken is the MAX rung any single event in the
 //!   batch requires (a single rebuild serves the whole batch — never one
@@ -136,7 +143,9 @@ use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::emit_event_flow_edges;
 use crate::program::resolve::full::app_object_map;
 use crate::program::resolve::index::ResolveIndex;
+use crate::protocol::normalize_path;
 use crate::snapshot::{DependencySource, ParsedFile, ParsedUnit, Provenance, TrustTier};
+use crate::source_text::{NestedApps, discover_al_files, has_al_extension};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -176,19 +185,85 @@ impl SharedSnapshot {
     }
 }
 
-/// One coalesced input event. `FileSaved`/`FileRemoved` carry an ABSOLUTE
-/// filesystem path (the caller — `didSave`/watcher wiring, a later task —
-/// is responsible for handing over paths that share a consistent prefix
-/// with the `workspace_root` an [`Updater`] was constructed with; this
-/// module does no canonicalization of its own, since `FileRemoved`'s path
-/// may no longer exist on disk by the time it's processed, and
-/// `Path::canonicalize` requires existence).
-#[derive(Clone, Debug)]
+/// One coalesced input event. The path events carry an ABSOLUTE filesystem
+/// path, placed under the `workspace_root` an [`Updater`] was built with by
+/// [`rel_under_root`]. None of them is trusted for what happened: each is a
+/// hint that something at that path changed, and [`Updater::reconcile`]
+/// reads the disk to find out what (#221). A `FileRemoved` for a file still
+/// on disk therefore keeps it.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChangeEvent {
+    /// An editor save (`didSave`). Unlike `PathChanged`, a save whose path
+    /// differs only in case from a known file falls back to that file.
     FileSaved(PathBuf),
     FileRemoved(PathBuf),
+    /// Something at this path changed: a file or a folder, of any kind.
+    PathChanged(PathBuf),
+    /// The workspace diagnostics config changed: republish every file.
+    ConfigChanged,
     DepsChanged,
     Overflow,
+}
+
+/// `p` relative to `root`, or `None` when `p` is not under it. Containment
+/// compares the [`crate::protocol::normalize_path`] forms component by
+/// component (a Windows root is lowercased); the result keeps `p`'s own
+/// components, in the disk's case. `p == root` gives an empty path.
+pub fn rel_under_root(root: &Path, p: &Path) -> Option<PathBuf> {
+    let (root_n, p_n) = (normalize_path(root), normalize_path(p));
+    let n = root_n.components().count();
+    p_n.components()
+        .take(n)
+        .eq(root_n.components())
+        .then(|| p.components().skip(n).collect())
+}
+
+/// [`rel_under_root`] as a `virtual_path`: `/`-separated, as the build's
+/// walk (`crate::source_text::discover_al_files`) spells it.
+fn rel_posix(root: &Path, p: &Path) -> Option<String> {
+    let rel = rel_under_root(root, p)?;
+    Some(
+        rel.components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// What the updater saw of a file right before it last read it (#221,
+/// "Stamps"): a stamp only ever vouches for text the updater itself read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    id: (u64, u64),
+}
+
+impl FileStamp {
+    fn of(m: &std::fs::Metadata) -> Self {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        FileStamp {
+            len: m.len(),
+            modified: m.modified().ok(),
+            #[cfg(unix)]
+            id: (m.dev(), m.ino()),
+        }
+    }
+}
+
+/// Stamps taken while one batch is classified: `None` drops the vp's stamp.
+/// Committed only when the batch's plan is applied (or it was a no-op);
+/// discarded on rung 3 ("Staged stamps").
+type StagedStamps = HashMap<String, Option<FileStamp>>;
+
+/// True for the errors that mean "nothing is at this path".
+fn is_absent(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
 }
 
 /// Which rung an apply actually took — the brief's "test hook," exposed
@@ -245,19 +320,29 @@ pub struct Updater {
     /// The server's process-level dependency tier; a rung-3 rebuild reuses
     /// another root's entry instead of building a private copy.
     dep_cache: Arc<DepCache>,
+    /// Per vp, the stamp taken right before the updater's last read of it.
+    /// Empty after every full build (never seeded from a post-build stat:
+    /// that cannot prove the indexed text is current).
+    stamps: HashMap<String, FileStamp>,
+    /// The canonicalize the case-match branch of [`Self::reconcile`] uses
+    /// (a field so a test can make it fail).
+    canonicalize: fn(&Path) -> std::io::Result<PathBuf>,
+    /// Test seam: counts source reads made while classifying.
+    #[cfg(test)]
+    reads: std::sync::atomic::AtomicUsize,
 }
 
 /// The classification outcome for one coalesced batch — shared by
 /// [`Updater::apply_batch`] and [`spawn_updater`]'s hot loop so the two
 /// paths can never disagree about which rung a batch requires.
 enum Decision {
-    /// Every event was resolved as a fingerprint-equal `FileSaved` on a
-    /// known workspace file — `(virtual_path, fresh ParsedFile)` pairs.
+    /// Every plan is a fingerprint-equal save of a known workspace file —
+    /// `(virtual_path, fresh ParsedFile)` pairs.
     Rung1(Vec<(String, ParsedFile)>),
     Rung2(Vec<Planned>),
     Rung3,
-    /// Every event in the batch was a no-op (e.g. an IO race on every
-    /// `FileSaved` — see [`Updater::classify`]).
+    /// The disk matches the published snapshot: nothing to apply (see
+    /// [`Updater::reconcile`]).
     Noop,
 }
 
@@ -271,6 +356,10 @@ impl Updater {
             decl_multiplicity: None,
             dependency_source: DependencySource::default(),
             dep_cache: Arc::default(),
+            stamps: HashMap::new(),
+            canonicalize: |p| std::fs::canonicalize(p),
+            #[cfg(test)]
+            reads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -309,8 +398,12 @@ impl Updater {
     ) -> Option<(LspSnapshot, Rung)> {
         self.flush_pending();
 
-        match self.classify(cur, batch) {
-            Decision::Noop => None,
+        let (decision, staged) = self.classify(cur, batch);
+        match decision {
+            Decision::Noop => {
+                self.commit_stamps(staged);
+                None
+            }
             Decision::Rung1(saves) => {
                 let index = ResolveIndex::build(&cur.graph);
                 // T3 Task 12: rebuild ONLY the local (workspace) tier and
@@ -333,10 +426,27 @@ impl Updater {
                 );
                 drop(surface);
                 self.flush_pending();
+                self.commit_stamps(staged);
                 Some((snapshot, Rung::One))
             }
-            Decision::Rung2(planned) => Some((self.apply_rung2(cur, planned), Rung::Two)),
+            Decision::Rung2(planned) => {
+                let snapshot = self.apply_rung2(cur, planned);
+                self.commit_stamps(staged);
+                Some((snapshot, Rung::Two))
+            }
+            // The staged stamps are dropped: a rung-3 success empties the
+            // map, and a failure must not vouch for reads never indexed.
             Decision::Rung3 => self.apply_rung3(cur),
+        }
+    }
+
+    /// Apply one batch's staged stamps (see [`StagedStamps`]).
+    fn commit_stamps(&mut self, staged: StagedStamps) {
+        for (vp, stamp) in staged {
+            match stamp {
+                Some(s) => self.stamps.insert(vp, s),
+                None => self.stamps.remove(&vp),
+            };
         }
     }
 
@@ -356,17 +466,26 @@ impl Updater {
         batch: &[ChangeEvent],
         ctx: &Rung1Context<'_>,
     ) -> Option<(LspSnapshot, Rung1Delta)> {
-        match self.classify(cur, batch) {
-            Decision::Rung1(saves) => Some(apply_rung1_core(
-                cur,
-                saves,
-                &ctx.index,
-                &ctx.surface,
-                &ctx.obj_node_map,
-                &mut self.pending,
-                &mut self.decl_multiplicity,
-            )),
-            _ => None,
+        let (decision, staged) = self.classify(cur, batch);
+        match decision {
+            Decision::Rung1(saves) => {
+                let applied = apply_rung1_core(
+                    cur,
+                    saves,
+                    &ctx.index,
+                    &ctx.surface,
+                    &ctx.obj_node_map,
+                    &mut self.pending,
+                    &mut self.decl_multiplicity,
+                );
+                self.commit_stamps(staged);
+                Some(applied)
+            }
+            Decision::Noop => {
+                self.commit_stamps(staged);
+                None
+            }
+            Decision::Rung2(_) | Decision::Rung3 => None,
         }
     }
 
@@ -385,112 +504,262 @@ impl Updater {
     }
 
     /// Classify one batch against `cur` (the currently-published snapshot),
-    /// per file/event, escalating per the module doc's rung summary.
-    /// Read-only (`&self`) — never mutates `self`, so it composes freely
-    /// with an outstanding `DeclSurface` borrow of `self.workspace`.
-    fn classify(&self, cur: &LspSnapshot, batch: &[ChangeEvent]) -> Decision {
-        if batch.is_empty() {
-            return Decision::Noop;
-        }
-
-        let mut planned: Vec<Planned> = Vec::new();
-        let mut force_rung3 = false;
-
+    /// escalating per the module doc's rung summary. Returns the decision
+    /// and the stamps its reads took, staged (see [`StagedStamps`]). Never
+    /// mutates `self`, so it composes freely with an outstanding
+    /// `DeclSurface` borrow of `self.workspace`.
+    fn classify(&self, cur: &LspSnapshot, batch: &[ChangeEvent]) -> (Decision, StagedStamps) {
+        let mut rc = Reconciled::default();
         for ev in batch {
             match ev {
-                ChangeEvent::DepsChanged | ChangeEvent::Overflow => force_rung3 = true,
-                ChangeEvent::FileRemoved(path) => {
-                    match classify_path(&self.workspace_root, path, &cur.parsed) {
-                        PathClass::Workspace(vp) => planned.push(Planned::Remove { vp }),
-                        // Task-4 review Hunt-3 scenario: a path that isn't
-                        // workspace-shaped at all (e.g. under `.alpackages/`) —
-                        // we have no rung-2 primitive for "one dependency file
-                        // changed" (rung 2 only ever touches the WORKSPACE
-                        // ParsedUnit, over an unchanged cached `DepLayer`), so
-                        // the only sound response is the same one `DepsChanged`
-                        // gets.
-                        PathClass::NotWorkspaceSource => force_rung3 = true,
-                    }
-                }
-                ChangeEvent::FileSaved(path) => {
-                    match classify_path(&self.workspace_root, path, &cur.parsed) {
-                        PathClass::NotWorkspaceSource => force_rung3 = true,
-                        PathClass::Workspace(vp) => {
-                            // A rare race (saved-then-deleted between the event
-                            // firing and this batch being processed): skip THIS
-                            // file only — fail-closed does not mean "never make
-                            // progress," it means "never fabricate content";
-                            // leaving the file's last-known-good state untouched
-                            // satisfies that without discarding the rest of a
-                            // legitimate batch.
-                            let Ok(text) = crate::source_text::read_al_source(path) else {
-                                continue;
-                            };
-                            let provenance = self.file_provenance(cur, &vp);
-                            let file = Arc::new(al_syntax::parse(&text));
-                            let text: Arc<str> = text.into();
-                            // Fail-closed: a `Recovered` parse cannot be trusted
-                            // for rung 1's fingerprint-equality shortcut — the
-                            // IR may have silently dropped content (see
-                            // `crate::snapshot::parse::recovered_file_paths`'s
-                            // doc), so force this file's own "changed" verdict
-                            // regardless of what its computed fingerprint says.
-                            let recovered = file.parse_status != ParseStatus::Clean;
-                            let pf = ParsedFile {
-                                virtual_path: vp.clone(),
-                                file,
-                                provenance,
-                                text,
-                            };
-                            let fingerprint_changed = recovered
-                                || match cur.parsed.get(&vp) {
-                                    Some(old) => old.surface != def_surface_fingerprint(&pf),
-                                    None => true, // brand-new file: no prior surface to compare
-                                };
-                            planned.push(Planned::Save {
-                                vp,
-                                pf: Box::new(pf),
-                                fingerprint_changed,
-                            });
-                        }
-                    }
+                ChangeEvent::DepsChanged | ChangeEvent::Overflow => rc.force_rung3 = true,
+                // Republishing is `spawn_updater`'s job: nothing to plan.
+                ChangeEvent::ConfigChanged => {}
+                ChangeEvent::FileSaved(path) => self.reconcile(cur, path, true, &mut rc),
+                ChangeEvent::FileRemoved(path) | ChangeEvent::PathChanged(path) => {
+                    self.reconcile(cur, path, false, &mut rc);
                 }
             }
         }
-
-        if force_rung3 {
-            return Decision::Rung3;
-        }
-
-        let any_rung2 = planned.iter().any(|p| {
-            matches!(
-                p,
-                Planned::Remove { .. }
-                    | Planned::Save {
-                        fingerprint_changed: true,
-                        ..
-                    }
-            )
-        });
-
-        if any_rung2 {
-            return Decision::Rung2(planned);
-        }
-        if planned.is_empty() {
-            return Decision::Noop;
-        }
-        let saves = planned
-            .into_iter()
-            .map(|p| match p {
-                Planned::Save { vp, pf, .. } => (vp, *pf),
-                Planned::Remove { .. } => {
-                    unreachable!("any_rung2 is false, so no Remove reached here")
-                }
-            })
-            .collect();
-        Decision::Rung1(saves)
+        let decision = if rc.force_rung3 {
+            Decision::Rung3
+        } else {
+            decide(rc.plans.into_values().collect())
+        };
+        (decision, rc.staged)
     }
 
+    /// Reconcile one event path with the disk (#221, "Updater: one disk
+    /// reconciliation", rules 1-7). The plan depends only on what is at the
+    /// path now and on the recorded stamps, never on the event kind or on
+    /// coalescing; `saved` (a `FileSaved`) only picks rule 3's case fallback.
+    fn reconcile(&self, cur: &LspSnapshot, p: &Path, saved: bool, rc: &mut Reconciled) {
+        let root = &self.workspace_root;
+        // Rules 1-2: outside the root or the root itself → rung 3 (fail
+        // closed); under a skipped folder → read by nothing.
+        let (rel, key) = match (rel_posix(root, p), classify_path(root, p, &cur.parsed)) {
+            (Some(rel), PathClass::Workspace(key)) => (rel, key),
+            (_, PathClass::Ignored) => return,
+            _ => {
+                rc.force_rung3 = true;
+                return;
+            }
+        };
+        // Rule 3: `key` is a known spelling that differs from `p` only in case.
+        let (target, vp) = if key == rel {
+            (p.to_path_buf(), rel)
+        } else {
+            let twin = root.join(&key);
+            match (self.twin_identity(p, &twin), saved) {
+                // Identity unknown, or a case-only rename (the new spelling
+                // must come from a fresh walk).
+                (Twin::Unknown, _) | (Twin::Same, false) => {
+                    rc.force_rung3 = true;
+                    return;
+                }
+                // The H-10 fallback: the save is of the known file.
+                (Twin::Same | Twin::Absent, true) => (twin, key),
+                (Twin::Absent, false) => return,
+                // Case twins on a case-sensitive file system: two vps.
+                (Twin::Different, _) => (p.to_path_buf(), rel),
+            }
+        };
+
+        // Rule 4: what is at the target now, whatever the event said.
+        let mut found: HashSet<String> = HashSet::new();
+        match std::fs::metadata(&target) {
+            Ok(m) if m.is_dir() => {
+                // The one folder rule: the build's own walk, whole subtree.
+                let Ok(files) = discover_al_files(&target, NestedApps::Walk) else {
+                    rc.force_rung3 = true;
+                    return;
+                };
+                for f in files {
+                    let fvp = format!("{vp}/{}", f.rel_posix);
+                    if self.observe(cur, &f.abs_path, &fvp, false, rc) {
+                        found.insert(fvp);
+                    }
+                }
+            }
+            Ok(m) if m.is_file() && has_al_extension(&target) => {
+                if self.observe(cur, &target, &vp, true, rc) {
+                    found.insert(vp.clone());
+                }
+            }
+            // A non-`.al` file (or a special file): no source here.
+            Ok(_) => {}
+            Err(e) if is_absent(&e) => {}
+            Err(_) => {
+                rc.force_rung3 = true;
+                return;
+            }
+        }
+
+        // Rule 5: every vp at or under the target (known, or planned earlier
+        // in this batch) that is not there any more.
+        let prefix = format!("{vp}/");
+        let gone: Vec<String> = cur
+            .parsed
+            .keys()
+            .chain(rc.plans.keys())
+            .filter(|k| (**k == vp || k.starts_with(&prefix)) && !found.contains(*k))
+            .cloned()
+            .collect();
+        for k in gone {
+            rc.staged.insert(k.clone(), None);
+            if cur.parsed.contains_key(&k) {
+                rc.plans.insert(k.clone(), Planned::Remove { vp: k });
+            } else {
+                rc.plans.shift_remove(&k);
+            }
+        }
+    }
+
+    /// Rules 4 and 6 for one file found at `path`: read it unless it is a
+    /// known file, other than the event's `own` file, whose stamp has not
+    /// moved; plan a save when its text is new (the event's own file is
+    /// always planned, so an unchanged editor save still takes rung 1).
+    /// Returns whether the file is still there: a stat or read error other
+    /// than "absent" keeps the vp's last-known state (fail closed).
+    fn observe(
+        &self,
+        cur: &LspSnapshot,
+        path: &Path,
+        vp: &str,
+        own: bool,
+        rc: &mut Reconciled,
+    ) -> bool {
+        // The stamp is taken BEFORE the read, so a write racing the read
+        // leaves an older stamp that forces a re-read next time.
+        let stamp = match std::fs::metadata(path) {
+            Ok(m) => FileStamp::of(&m),
+            Err(e) => return !is_absent(&e),
+        };
+        let known = cur.parsed.get(vp);
+        let recorded = match rc.staged.get(vp) {
+            Some(staged) => *staged,
+            None => self.stamps.get(vp).copied(),
+        };
+        if !own && known.is_some() && recorded == Some(stamp) {
+            return true;
+        }
+        #[cfg(test)]
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let text = match crate::source_text::read_al_source(path) {
+            Ok(t) => t,
+            Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+        };
+        rc.staged.insert(vp.to_owned(), Some(stamp));
+        if !own && known.is_some_and(|e| *e.text == *text) {
+            // Already published; a later observation wins (rule 7).
+            rc.plans.shift_remove(vp);
+            return true;
+        }
+        let plan = self.plan_save(cur, vp.to_owned(), text);
+        rc.plans.insert(vp.to_owned(), plan);
+        true
+    }
+
+    /// Parse `text` as the new content of `vp` and plan its save.
+    fn plan_save(&self, cur: &LspSnapshot, vp: String, text: String) -> Planned {
+        let provenance = self.file_provenance(cur, &vp);
+        let file = Arc::new(al_syntax::parse(&text));
+        let text: Arc<str> = text.into();
+        // Fail-closed: a `Recovered` parse cannot be trusted for rung 1's
+        // fingerprint-equality shortcut — the IR may have silently dropped
+        // content (see `crate::snapshot::parse::recovered_file_paths`'s doc),
+        // so force this file's own "changed" verdict regardless of what its
+        // computed fingerprint says.
+        let recovered = file.parse_status != ParseStatus::Clean;
+        let pf = ParsedFile {
+            virtual_path: vp.clone(),
+            file,
+            provenance,
+            text,
+        };
+        let fingerprint_changed = recovered
+            || match cur.parsed.get(&vp) {
+                Some(old) => old.surface != def_surface_fingerprint(&pf),
+                None => true, // brand-new file: no prior surface to compare
+            };
+        Planned::Save {
+            vp,
+            pf: Box::new(pf),
+            fingerprint_changed,
+        }
+    }
+
+    /// Whether `p` and `twin` (a known spelling differing only in case) are
+    /// the same file, through the [`Self::canonicalize`] seam.
+    fn twin_identity(&self, p: &Path, twin: &Path) -> Twin {
+        let p_id = match (self.canonicalize)(p) {
+            Ok(id) => id,
+            Err(e) if is_absent(&e) => return Twin::Absent,
+            Err(_) => return Twin::Unknown,
+        };
+        match (self.canonicalize)(twin) {
+            Ok(id) if id == p_id => Twin::Same,
+            Ok(_) => Twin::Different,
+            Err(_) => Twin::Unknown,
+        }
+    }
+}
+
+/// [`Updater::twin_identity`]'s answer.
+enum Twin {
+    /// The event path does not exist.
+    Absent,
+    /// Both spellings name one file (a case-insensitive file system).
+    Same,
+    /// Two files (a case-sensitive file system holding both).
+    Different,
+    /// A canonicalize failed while the event path exists.
+    Unknown,
+}
+
+/// One batch's reconciliation so far: plans keyed by vp (a later
+/// observation replaces an earlier one), the staged stamps, and whether
+/// any event forces rung 3.
+#[derive(Default)]
+struct Reconciled {
+    plans: indexmap::IndexMap<String, Planned>,
+    staged: StagedStamps,
+    force_rung3: bool,
+}
+
+/// The rung a batch's plans need: rung 2 for any removal, new file or
+/// surface change; otherwise rung 1, or nothing.
+fn decide(planned: Vec<Planned>) -> Decision {
+    let any_rung2 = planned.iter().any(|p| {
+        matches!(
+            p,
+            Planned::Remove { .. }
+                | Planned::Save {
+                    fingerprint_changed: true,
+                    ..
+                }
+        )
+    });
+
+    if any_rung2 {
+        return Decision::Rung2(planned);
+    }
+    if planned.is_empty() {
+        return Decision::Noop;
+    }
+    let saves = planned
+        .into_iter()
+        .map(|p| match p {
+            Planned::Save { vp, pf, .. } => (vp, *pf),
+            Planned::Remove { .. } => {
+                unreachable!("any_rung2 is false, so no Remove reached here")
+            }
+        })
+        .collect();
+    Decision::Rung1(saves)
+}
+
+impl Updater {
     // -----------------------------------------------------------------------
     // Rung 2: definition-surface change / file add / file delete
     // -----------------------------------------------------------------------
@@ -667,6 +936,8 @@ impl Updater {
         snapshot.generation = cur.generation + 1;
         self.workspace = workspace;
         self.pending.clear();
+        // The rebuild read every file itself: no stamp vouches for its text.
+        self.stamps.clear();
         // A rung-3 rebuild replaces `decls_by_file` wholesale (fresh disk
         // read) — invalidate the cached multiplicity so the next rung-1
         // call lazily rebuilds it from the NEW snapshot's `decls_by_file`
@@ -998,20 +1269,26 @@ enum Planned {
 }
 
 enum PathClass {
-    /// A `.al` file inside `workspace_root`, not under a dependency/output
-    /// directory — `String` is its `virtual_path` (workspace-root-relative,
-    /// `/`-separated, mirroring `crate::snapshot::provider`'s own
-    /// construction).
+    /// A path strictly inside `workspace_root`, not under a skipped folder,
+    /// of any kind (a file, a folder, or nothing any more) — `String` is its
+    /// `virtual_path` key (workspace-root-relative, `/`-separated, as the
+    /// build's walk spells it), or the known key it matches ignoring case.
     Workspace(String),
-    /// Outside `workspace_root` entirely, under a skipped dependency/output
-    /// directory (`crate::source_text::SKIP_DIRS`, any case — the list the
-    /// shared workspace walk skips), or not a `.al` file at all.
+    /// Under a skipped dependency/output folder (`crate::source_text::
+    /// SKIP_DIRS`, any case): nothing the LSP build reads (#221, W7).
+    Ignored,
+    /// Outside `workspace_root`, or the root itself: rung 3 (fail closed).
     NotWorkspaceSource,
 }
 
 /// Classify an absolute path against `workspace_root`, purely lexically (no
-/// filesystem access — see [`ChangeEvent`]'s doc for why: a `FileRemoved`
-/// path may no longer exist).
+/// filesystem access: [`Updater::reconcile`] looks at the disk afterwards).
+///
+/// A key "matches" when it equals the path's `virtual_path` or lies under
+/// it (`<vp>/...`, a folder). With no exact match, the smallest known key
+/// that matches ignoring ASCII case is returned instead (its spelling of
+/// the path part); `reconcile` then decides from the disk whether it is
+/// the same file (rule 3).
 ///
 /// **Case-insensitive fallback against `known_paths` (CDO H-10 no-op-save
 /// review finding, t3.14):** the incoming path's case need not exactly
@@ -1036,26 +1313,34 @@ fn classify_path(
     path: &Path,
     known_paths: &HashMap<String, Arc<ParsedFileEntry>>,
 ) -> PathClass {
-    let Ok(rel) = path.strip_prefix(workspace_root) else {
+    let Some(rel) = rel_posix(workspace_root, path).filter(|r| !r.is_empty()) else {
         return PathClass::NotWorkspaceSource;
     };
-    // The shared walk's name rules (`crate::source_text`), applied lexically.
-    let is_al = crate::source_text::has_al_extension(path);
-    let under_skip_dir = rel
-        .components()
-        .any(|c| crate::source_text::is_skipped_dir_name(c.as_os_str()));
-    if !is_al || under_skip_dir {
-        return PathClass::NotWorkspaceSource;
-    }
-    let rel_str = rel.to_string_lossy().replace('\\', "/");
-    if !known_paths.contains_key(&rel_str)
-        && let Some(existing) = known_paths
-            .keys()
-            .find(|k| k.eq_ignore_ascii_case(&rel_str))
+    // The shared walk's skip rule (`crate::source_text`), applied lexically.
+    if rel
+        .split('/')
+        .any(|c| crate::source_text::is_skipped_dir_name(std::ffi::OsStr::new(c)))
     {
-        return PathClass::Workspace(existing.clone());
+        return PathClass::Ignored;
     }
-    PathClass::Workspace(rel_str)
+    if known_paths.contains_key(&rel) {
+        return PathClass::Workspace(rel);
+    }
+    let mut twin: Option<&str> = None;
+    for k in known_paths.keys() {
+        let Some(head) = k.get(..rel.len()) else {
+            continue;
+        };
+        let at_boundary = k.len() == rel.len() || k.as_bytes()[rel.len()] == b'/';
+        if !at_boundary || !head.eq_ignore_ascii_case(&rel) {
+            continue;
+        }
+        if head == rel {
+            return PathClass::Workspace(rel); // a known file under the folder `rel`
+        }
+        twin = Some(twin.map_or(head, |t| t.min(head)));
+    }
+    PathClass::Workspace(twin.map_or(rel, str::to_owned))
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,17 +1350,19 @@ fn classify_path(
 const DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
 
 /// Per-path coalesce within one gathered batch: keep only the LAST event for
-/// a given path (a save immediately followed by a remove for the SAME path
-/// keeps the remove — "last wins," matching real editor semantics), while
-/// preserving first-seen ORDER for everything else. `DepsChanged`/`Overflow`
-/// have no path — every occurrence is kept (idempotent to see more than
-/// once: both force rung 3 regardless of count).
+/// a given path, while preserving first-seen ORDER for everything else.
+/// Which event survives matters only to rule 3's case fallback: every path
+/// event is reconciled from the disk. `DepsChanged`/`Overflow`/
+/// `ConfigChanged` have no path — every occurrence is kept (idempotent to
+/// see more than once).
 fn coalesce_batch(events: Vec<ChangeEvent>) -> Vec<ChangeEvent> {
     let mut index_of: HashMap<PathBuf, usize> = HashMap::new();
     let mut out: Vec<ChangeEvent> = Vec::new();
     for ev in events {
         match &ev {
-            ChangeEvent::FileSaved(p) | ChangeEvent::FileRemoved(p) => {
+            ChangeEvent::FileSaved(p)
+            | ChangeEvent::FileRemoved(p)
+            | ChangeEvent::PathChanged(p) => {
                 if let Some(&idx) = index_of.get(p) {
                     out[idx] = ev;
                 } else {
@@ -1083,7 +1370,9 @@ fn coalesce_batch(events: Vec<ChangeEvent>) -> Vec<ChangeEvent> {
                     out.push(ev);
                 }
             }
-            ChangeEvent::DepsChanged | ChangeEvent::Overflow => out.push(ev),
+            ChangeEvent::DepsChanged | ChangeEvent::Overflow | ChangeEvent::ConfigChanged => {
+                out.push(ev)
+            }
         }
     }
     out
@@ -1182,7 +1471,10 @@ pub fn spawn_updater(
             // — `ctx.obj_node_map`'s references stay valid through every
             // rung-1 swap because rung 1 always reuses the SAME underlying
             // `Arc<ProgramGraph>` (`apply_rung1_core` never rebuilds `graph`).
-            let (new_cur, decision) = {
+            //
+            // A batch holding `ConfigChanged` publishes `SwapScope::Full`
+            // whatever its rung, even with nothing to apply (#221, O12).
+            let (new_cur, (decision, staged, config_changed)) = {
                 let ctx = Rung1Context::build(&cur, &updater.workspace);
 
                 let mut inner_cur = Arc::clone(&cur);
@@ -1190,8 +1482,15 @@ pub fn spawn_updater(
                     let Some(batch) = gather_batch(&rx) else {
                         return; // sender dropped — shut down cleanly
                     };
-                    match updater.classify(&inner_cur, &batch) {
-                        Decision::Noop => {}
+                    let config_changed = batch.contains(&ChangeEvent::ConfigChanged);
+                    let (decision, staged) = updater.classify(&inner_cur, &batch);
+                    match decision {
+                        Decision::Noop => {
+                            updater.commit_stamps(staged);
+                            if config_changed {
+                                on_swap(&inner_cur, &SwapScope::Full);
+                            }
+                        }
                         Decision::Rung1(saves) => {
                             let (new_snapshot, delta) = apply_rung1_core(
                                 &inner_cur,
@@ -1202,12 +1501,20 @@ pub fn spawn_updater(
                                 &mut updater.pending,
                                 &mut updater.decl_multiplicity,
                             );
+                            updater.commit_stamps(staged);
                             let new_arc = Arc::new(new_snapshot);
                             shared.swap(Arc::clone(&new_arc));
-                            on_swap(&new_arc, &SwapScope::Rung1(delta));
+                            let scope = if config_changed {
+                                SwapScope::Full
+                            } else {
+                                SwapScope::Rung1(delta)
+                            };
+                            on_swap(&new_arc, &scope);
                             inner_cur = new_arc;
                         }
-                        decision @ (Decision::Rung2(_) | Decision::Rung3) => break decision,
+                        decision @ (Decision::Rung2(_) | Decision::Rung3) => {
+                            break (decision, staged, config_changed);
+                        }
                     }
                 };
                 (inner_cur, escalated)
@@ -1217,17 +1524,22 @@ pub fn spawn_updater(
             match decision {
                 Decision::Rung2(planned) => {
                     let new_snapshot = updater.apply_rung2(&cur, planned);
+                    updater.commit_stamps(staged);
                     let new_arc = Arc::new(new_snapshot);
                     shared.swap(Arc::clone(&new_arc));
                     on_swap(&new_arc, &SwapScope::Full);
                     cur = new_arc;
                 }
+                // The staged stamps are dropped (see `Updater::apply_batch`).
                 Decision::Rung3 => {
                     if let Some((new_snapshot, _)) = updater.apply_rung3(&cur) {
                         let new_arc = Arc::new(new_snapshot);
                         shared.swap(Arc::clone(&new_arc));
                         on_swap(&new_arc, &SwapScope::Full);
                         cur = new_arc;
+                    } else if config_changed {
+                        // The old snapshot stays; the config change is not lost.
+                        on_swap(&cur, &SwapScope::Full);
                     }
                 }
                 Decision::Noop | Decision::Rung1(_) => {
@@ -1352,7 +1664,7 @@ mod tests {
                  (that would duplicate the file's edges/decls under a second \
                  map entry)"
             ),
-            PathClass::NotWorkspaceSource => {
+            PathClass::NotWorkspaceSource | PathClass::Ignored => {
                 panic!("alpha.al is workspace source; must not be NotWorkspaceSource")
             }
         }
@@ -1433,11 +1745,17 @@ mod tests {
         let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
         let mismatched_case_path = dir.path().join("target.al");
         let batch = vec![ChangeEvent::FileSaved(mismatched_case_path)];
-        let Some((after, _rung)) = updater.apply_batch(&base, &batch) else {
-            // Case-sensitive filesystem: the mismatched-case read failed and
-            // the save was skipped entirely (Noop) — safe, nothing to check.
-            return;
-        };
+        // #221 T7(c): no early return any more. On a case-sensitive file
+        // system only `Target.al` exists, so the save reconciles
+        // `root.join("Target.al")` (the H-10 fallback) and still takes rung 1.
+        let (after, rung) = updater
+            .apply_batch(&base, &batch)
+            .expect("T7(c): a FileSaved for a case-mismatched known file must apply");
+        assert_eq!(
+            rung,
+            Rung::One,
+            "T7(c): a no-op save of a known file (via its other spelling) is rung 1"
+        );
 
         assert_eq!(
             after.parsed.len(),
@@ -1841,36 +2159,29 @@ mod tests {
         assert_eq!(dep(&rebuilt), (true, TrustTier::SymbolOnly));
     }
 
-    // ── (e) FileSaved outside the workspace source set → escalates to rung 3 ──
+    // ── (e) a `.al` under `.alpackages` is not an input of the LSP build ──
+    // (#221: renamed from `file_saved_under_dependency_dir_escalates_to_rung3`;
+    // its premise was false — the loader reads only `*.app` directly inside a
+    // cache folder, probe P8 — so the save is ignored, not a full rebuild.)
 
     #[test]
-    fn file_saved_under_dependency_dir_escalates_to_rung3() {
+    fn file_saved_under_dependency_dir_is_ignored() {
         let dir = fixture_dir();
         let (base, parsed) = build(dir.path());
         let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
 
-        // A path under `.alpackages/` — never part of `ws_file_set`/
-        // `prev.parsed` — reaching a `didSave`-shaped event (Task-4 review
-        // Hunt-3 scenario). It doesn't even need to exist on disk: path
-        // classification is purely lexical.
-        let dep_path = dir
-            .path()
-            .join(".alpackages")
-            .join("SomeDep")
-            .join("Foo.al");
+        let dep_dir = dir.path().join(".alpackages").join("SomeDep");
+        std::fs::create_dir_all(&dep_dir).unwrap();
+        let dep_path = dep_dir.join("Foo.al");
+        std::fs::write(&dep_path, "codeunit 50190 \"Foo\" { }\n").unwrap();
+        assert!(dep_path.is_file(), "precondition: the file exists");
 
         let batch = vec![ChangeEvent::FileSaved(dep_path)];
-        let (new_snap, rung) = updater
-            .apply_batch(&base, &batch)
-            .expect("apply_batch must succeed (rebuilds from disk unchanged)");
-
+        let got = updater.apply_batch(&base, &batch).map(|(_, rung)| rung);
         assert_eq!(
-            rung,
-            Rung::Three,
-            "a path outside the workspace source set must escalate past rung 1 AND \
-             past rung 2 (we have no rung-2 primitive for a dependency-scoped change)"
+            got, None,
+            "a `.al` under `.alpackages` is read by nothing: no new generation"
         );
-        assert_eq!(new_snap.generation, base.generation + 1);
     }
 
     // ── ChangeEvent::Overflow forces rung 3, exactly like DepsChanged ───────
@@ -2316,6 +2627,710 @@ mod tests {
              POST-rung-2 graph — proves the thread rebuilt its cached context \
              after the escalation"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // #221: one disk reconciliation (T1-T9, T13, T15). Every test states its
+    // disk precondition and compares the result with a fresh build of the
+    // same disk (the parity style of `tests/lsp/lsp_incremental_parity.rs`).
+    // -----------------------------------------------------------------------
+
+    type Canon = (
+        std::collections::BTreeMap<String, (String, Vec<RoutineNodeId>, usize)>,
+        std::collections::BTreeMap<RoutineNodeId, Vec<String>>,
+    );
+
+    /// Per vp: its text, its sorted decl ids and its edge count; per
+    /// incoming id: the sorted caller files.
+    fn canon(s: &LspSnapshot) -> Canon {
+        let files = s
+            .parsed
+            .iter()
+            .map(|(vp, e)| {
+                let mut ids: Vec<RoutineNodeId> = s
+                    .decls_by_file
+                    .get(vp)
+                    .map(|d| d.iter().map(|x| x.id.clone()).collect())
+                    .unwrap_or_default();
+                ids.sort();
+                let edges = s.edges_by_file.get(vp).map_or(0, |e| e.len());
+                (vp.clone(), (e.text.to_string(), ids, edges))
+            })
+            .collect();
+        let incoming = s
+            .ws_incoming
+            .iter()
+            .map(|(id, refs)| {
+                let mut f: Vec<String> = refs.iter().map(|r| r.file.to_string()).collect();
+                f.sort();
+                (id.clone(), f)
+            })
+            .collect();
+        (files, incoming)
+    }
+
+    fn assert_same_as_fresh(snap: &LspSnapshot, dir: &Path, ctx: &str) {
+        let (fresh, _) = build(dir);
+        assert_eq!(
+            canon(snap),
+            canon(&fresh),
+            "{ctx}: the updated snapshot must equal a fresh build of the same disk"
+        );
+    }
+
+    /// The fixture with its three files moved under `src/`.
+    fn src_fixture() -> tempfile::TempDir {
+        let dir = fixture_dir();
+        let src = dir.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        for f in ["Alpha.al", "Beta.al", "Gamma.al"] {
+            std::fs::rename(dir.path().join(f), src.join(f)).unwrap();
+        }
+        dir
+    }
+
+    /// `Alpha.al` with a second call: same object, different content and length.
+    const ALPHA_EDITED: &str = "codeunit 50100 \"Alpha\"\n{\n    procedure DoWork()\n    var\n        \
+         Beta: Codeunit \"Beta\";\n    begin\n        Beta.Process();\n        Beta.Process();\n    \
+         end;\n}\n";
+
+    /// Replace `<dir>/src` by a same-named folder whose `Alpha.al` is
+    /// [`ALPHA_EDITED`] (`mv src <outside>/src_old; mv src_new src`). The old
+    /// folder leaves the root so no object is declared twice.
+    fn replace_src_with_edited_copy(dir: &Path, outside: &Path) {
+        let src = dir.join("src");
+        let staged = outside.join("src_new");
+        std::fs::create_dir(&staged).unwrap();
+        for f in ["Beta.al", "Gamma.al"] {
+            std::fs::copy(src.join(f), staged.join(f)).unwrap();
+        }
+        std::fs::write(staged.join("Alpha.al"), ALPHA_EDITED).unwrap();
+        let old_len = std::fs::metadata(src.join("Alpha.al")).unwrap().len();
+        assert_ne!(
+            old_len,
+            ALPHA_EDITED.len() as u64,
+            "precondition: the replacement Alpha.al differs in length"
+        );
+        std::fs::rename(&src, outside.join("src_old")).unwrap();
+        std::fs::rename(&staged, &src).unwrap();
+    }
+
+    fn reads(u: &Updater) -> usize {
+        u.reads.load(Ordering::SeqCst)
+    }
+
+    fn fs_is_case_insensitive(dir: &Path) -> bool {
+        let p = dir.join("case_probe.tmp");
+        std::fs::write(&p, "").unwrap();
+        let insensitive = dir.join("CASE_PROBE.TMP").exists();
+        std::fs::remove_file(&p).unwrap();
+        insensitive
+    }
+
+    /// A workspace with `Target.al` and `Caller.al` (the H-10 shape).
+    fn target_fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id": "55555555-0000-0000-0000-000000000221", "name": "Case Twins", "publisher": "probe", "version": "1.0.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Target.al"),
+            "codeunit 50300 \"Target\"\n{\n    procedure DoIt()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Caller.al"),
+            "codeunit 50301 \"Caller\"\n{\n    procedure CallIt()\n    var\n        T: Codeunit \"Target\";\n    \
+             begin\n        T.DoIt();\n    end;\n}\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    const TWIN: &str =
+        "codeunit 50302 \"TargetTwin\"\n{\n    procedure Twin()\n    begin\n    end;\n}\n";
+
+    #[test]
+    fn t1_al_renamed_inside_root_equals_fresh_build() {
+        let dir = fixture_dir();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let (a, b) = (dir.path().join("Alpha.al"), dir.path().join("Delta.al"));
+        std::fs::rename(&a, &b).unwrap();
+        assert!(base.parsed.contains_key("Alpha.al") && !a.exists() && b.is_file());
+
+        let got = updater.apply_batch(
+            &base,
+            &[ChangeEvent::PathChanged(a), ChangeEvent::PathChanged(b)],
+        );
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            !snap.parsed.contains_key("Alpha.al"),
+            "T1: the old name's decls must be gone"
+        );
+        assert_same_as_fresh(snap, dir.path(), "T1");
+    }
+
+    #[test]
+    fn t2_al_moved_out_of_root_is_removed_and_an_absent_unknown_path_is_nothing() {
+        let dir = fixture_dir();
+        let outside = tempfile::tempdir().unwrap();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let gamma = dir.path().join("Gamma.al");
+        std::fs::rename(&gamma, outside.path().join("Gamma.al")).unwrap();
+        assert!(base.parsed.contains_key("Gamma.al") && !gamma.exists());
+
+        let (snap, rung) = updater
+            .apply_batch(&base, &[ChangeEvent::PathChanged(gamma)])
+            .expect("T2: a known file that vanished must apply");
+        assert_eq!(rung, Rung::Two, "T2: a removal is rung 2");
+        assert!(!snap.parsed.contains_key("Gamma.al"), "T2: the vp is gone");
+
+        let tmp = dir.path().join(".a.al.tmp");
+        assert!(!tmp.exists(), "precondition: the temp path is absent");
+        let got = updater
+            .apply_batch(&snap, &[ChangeEvent::PathChanged(tmp)])
+            .map(|(_, r)| r);
+        assert_eq!(got, None, "T2: an absent unknown path plans nothing");
+    }
+
+    #[test]
+    fn t3_folder_renamed_inside_root_equals_fresh_build() {
+        let dir = src_fixture();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let (src, src2) = (dir.path().join("src"), dir.path().join("src2"));
+        std::fs::rename(&src, &src2).unwrap();
+        assert!(base.parsed.contains_key("src/Alpha.al") && !src.exists());
+
+        let got = updater.apply_batch(
+            &base,
+            &[
+                ChangeEvent::PathChanged(src),
+                ChangeEvent::PathChanged(src2),
+            ],
+        );
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            !snap.parsed.keys().any(|k| k.starts_with("src/")),
+            "T3: every src/* vp must be gone; got {:?}",
+            snap.parsed.keys().collect::<Vec<_>>()
+        );
+        assert_same_as_fresh(snap, dir.path(), "T3");
+    }
+
+    #[test]
+    fn t4_folder_moved_into_root_equals_fresh_build() {
+        let dir = fixture_dir();
+        let outside = tempfile::tempdir().unwrap();
+        let staged = outside.path().join("pkg");
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(
+            staged.join("Pkg.al"),
+            "codeunit 50110 \"Pkg\"\n{\n    procedure P()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let pkg = dir.path().join("pkg");
+        std::fs::rename(&staged, &pkg).unwrap();
+
+        let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(pkg)]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            snap.parsed.contains_key("pkg/Pkg.al"),
+            "T4: the moved-in folder's file must be indexed"
+        );
+        assert_same_as_fresh(snap, dir.path(), "T4");
+    }
+
+    #[test]
+    fn t5_al_under_a_skip_dir_is_ignored_for_saves_and_path_changes() {
+        let dir = fixture_dir();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        for skip in ["node_modules", ".snapshots", ".alpackages"] {
+            let folder = dir.path().join(skip).join("x");
+            std::fs::create_dir_all(&folder).unwrap();
+            let p = folder.join("Foo.al");
+            std::fs::write(&p, "codeunit 50191 \"Foo\" { }\n").unwrap();
+            for ev in [
+                ChangeEvent::FileSaved(p.clone()),
+                ChangeEvent::PathChanged(p.clone()),
+            ] {
+                let got = updater
+                    .apply_batch(&base, std::slice::from_ref(&ev))
+                    .map(|(_, r)| r);
+                assert_eq!(got, None, "T5: {ev:?} must not produce a generation");
+            }
+        }
+    }
+
+    #[test]
+    fn t6a_folder_replaced_by_a_regular_file_removes_its_files() {
+        let dir = src_fixture();
+        let outside = tempfile::tempdir().unwrap();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let src = dir.path().join("src");
+        std::fs::rename(&src, outside.path().join("src_old")).unwrap();
+        std::fs::write(&src, "not a folder").unwrap();
+        assert!(src.is_file(), "precondition: src is now a regular file");
+
+        let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src)]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            !snap.parsed.keys().any(|k| k.starts_with("src/")),
+            "T6(a): src/* must be removed"
+        );
+        assert_same_as_fresh(snap, dir.path(), "T6(a)");
+    }
+
+    #[test]
+    fn t6b_known_al_file_replaced_by_an_al_named_folder() {
+        let dir = fixture_dir();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let alpha = dir.path().join("Alpha.al");
+        std::fs::remove_file(&alpha).unwrap();
+        std::fs::create_dir(&alpha).unwrap();
+        std::fs::write(
+            alpha.join("B.al"),
+            "codeunit 50120 \"B\"\n{\n    procedure P()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        assert!(alpha.is_dir(), "precondition: Alpha.al is now a folder");
+
+        let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(alpha)]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            !snap.parsed.contains_key("Alpha.al") && snap.parsed.contains_key("Alpha.al/B.al"),
+            "T6(b): Alpha.al removed, Alpha.al/B.al added; got {:?}",
+            snap.parsed.keys().collect::<Vec<_>>()
+        );
+        assert_same_as_fresh(snap, dir.path(), "T6(b)");
+    }
+
+    #[test]
+    fn t6c_al_named_folder_moved_in() {
+        let dir = fixture_dir();
+        let outside = tempfile::tempdir().unwrap();
+        let staged = outside.path().join("x.al");
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(
+            staged.join("X.al"),
+            "codeunit 50121 \"X\"\n{\n    procedure P()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let moved = dir.path().join("x.al");
+        std::fs::rename(&staged, &moved).unwrap();
+
+        let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(moved)]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            snap.parsed.contains_key("x.al/X.al"),
+            "T6(c): the folder's file must be indexed"
+        );
+        assert_same_as_fresh(snap, dir.path(), "T6(c)");
+    }
+
+    #[test]
+    fn t6d_folder_replaced_by_same_named_folder_with_changed_content() {
+        let dir = src_fixture();
+        let outside = tempfile::tempdir().unwrap();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        replace_src_with_edited_copy(dir.path(), outside.path());
+
+        let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(dir.path().join("src"))]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert_eq!(
+            &*snap.parsed["src/Alpha.al"].text, ALPHA_EDITED,
+            "T6(d): the replacement's content must be indexed"
+        );
+        assert_same_as_fresh(snap, dir.path(), "T6(d)");
+    }
+
+    fn t7a_case_only_rename(new_first: bool) {
+        let dir = fixture_dir();
+        if fs_is_case_insensitive(dir.path()) {
+            eprintln!("T7(a): case-insensitive file system; covered by T7(d)");
+            return;
+        }
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let (old, new) = (dir.path().join("Alpha.al"), dir.path().join("alpha.al"));
+        std::fs::rename(&old, &new).unwrap();
+        let batch = if new_first {
+            [ChangeEvent::PathChanged(new), ChangeEvent::PathChanged(old)]
+        } else {
+            [ChangeEvent::PathChanged(old), ChangeEvent::PathChanged(new)]
+        };
+        let got = updater.apply_batch(&base, &batch);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            snap.parsed.contains_key("alpha.al") && !snap.parsed.contains_key("Alpha.al"),
+            "T7(a): the vp must follow the new spelling; got {:?}",
+            snap.parsed.keys().collect::<Vec<_>>()
+        );
+        assert_same_as_fresh(snap, dir.path(), "T7(a)");
+    }
+
+    #[test]
+    fn t7a_case_only_rename_new_spelling_first() {
+        t7a_case_only_rename(true);
+    }
+
+    #[test]
+    fn t7a_case_only_rename_old_spelling_first() {
+        t7a_case_only_rename(false);
+    }
+
+    fn t7b_case_twin(ev: fn(PathBuf) -> ChangeEvent) {
+        let dir = target_fixture();
+        if fs_is_case_insensitive(dir.path()) {
+            eprintln!("T7(b): case-insensitive file system; twins cannot exist");
+            return;
+        }
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let twin = dir.path().join("target.al");
+        std::fs::write(&twin, TWIN).unwrap();
+        assert!(dir.path().join("Target.al").is_file() && twin.is_file());
+
+        let got = updater.apply_batch(&base, &[ev(twin)]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            snap.parsed.contains_key("Target.al") && snap.parsed.contains_key("target.al"),
+            "T7(b): case twins are two vps; got {:?}",
+            snap.parsed.keys().collect::<Vec<_>>()
+        );
+        assert_same_as_fresh(snap, dir.path(), "T7(b)");
+    }
+
+    #[test]
+    fn t7b_new_case_twin_file_saved_is_its_own_vp() {
+        t7b_case_twin(ChangeEvent::FileSaved);
+    }
+
+    #[test]
+    fn t7b_new_case_twin_path_changed_is_its_own_vp() {
+        t7b_case_twin(ChangeEvent::PathChanged);
+    }
+
+    /// Runs only where the file system is case-insensitive (Windows CI).
+    #[test]
+    fn t7d_case_only_rename_on_a_case_insensitive_fs_takes_rung3() {
+        let dir = fixture_dir();
+        if !fs_is_case_insensitive(dir.path()) {
+            eprintln!("T7(d): case-sensitive file system; covered by T7(a)");
+            return;
+        }
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        std::fs::rename(dir.path().join("Alpha.al"), dir.path().join("alpha.al")).unwrap();
+        let (_, rung) = updater
+            .apply_batch(
+                &base,
+                &[ChangeEvent::PathChanged(dir.path().join("alpha.al"))],
+            )
+            .expect("T7(d): must apply");
+        assert_eq!(rung, Rung::Three, "T7(d): a case-only rename takes rung 3");
+    }
+
+    #[test]
+    fn t7e_one_sided_canonicalize_failure_takes_rung3() {
+        let dir = target_fixture();
+        if fs_is_case_insensitive(dir.path()) {
+            eprintln!("T7(e): case-insensitive file system; twins cannot exist");
+            return;
+        }
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        updater.canonicalize = |p: &Path| {
+            if p.file_name() == Some(std::ffi::OsStr::new("target.al")) {
+                Err(std::io::Error::other("#221 injected canonicalize failure"))
+            } else {
+                std::fs::canonicalize(p)
+            }
+        };
+        let twin = dir.path().join("target.al");
+        std::fs::write(&twin, TWIN).unwrap();
+
+        let (snap, rung) = updater
+            .apply_batch(&base, &[ChangeEvent::FileSaved(twin)])
+            .expect("T7(e): must apply");
+        assert_eq!(rung, Rung::Three, "T7(e): identity unknown → rung 3");
+        assert_same_as_fresh(&snap, dir.path(), "T7(e)");
+    }
+
+    #[test]
+    fn t8_file_removed_for_a_file_still_on_disk_keeps_it() {
+        let dir = fixture_dir();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let gamma = dir.path().join("Gamma.al");
+        assert!(gamma.is_file(), "precondition: Gamma.al is on disk");
+
+        let got = updater.apply_batch(
+            &base,
+            &[
+                ChangeEvent::FileSaved(gamma.clone()),
+                ChangeEvent::FileRemoved(gamma),
+            ],
+        );
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            snap.parsed.contains_key("Gamma.al"),
+            "T8: a FileRemoved for a file still on disk must not drop it"
+        );
+        assert_same_as_fresh(snap, dir.path(), "T8");
+    }
+
+    type Recorded = Arc<std::sync::Mutex<Vec<(u64, SwapScope)>>>;
+
+    /// Build, run `after_build` on the disk, then run `events` through
+    /// `spawn_updater`; returns the base generation and every `on_swap` call.
+    fn run_recording(
+        dir: &Path,
+        after_build: impl FnOnce(&Path),
+        events: Vec<ChangeEvent>,
+    ) -> (u64, Vec<(u64, SwapScope)>) {
+        let (snapshot, parsed) = build(dir);
+        after_build(dir);
+        let base_generation = snapshot.generation;
+        let shared = Arc::new(SharedSnapshot::new(Arc::new(snapshot)));
+        let (tx, rx) = mpsc::channel();
+        let recorded: Recorded = Arc::default();
+        let rec = Arc::clone(&recorded);
+        let handle = spawn_updater(
+            shared,
+            rx,
+            dir.to_path_buf(),
+            parsed,
+            DependencySource::default(),
+            Arc::default(),
+            move |new, scope| rec.lock().unwrap().push((new.generation, scope.clone())),
+        );
+        for ev in events {
+            tx.send(ev).unwrap();
+        }
+        drop(tx);
+        handle.join().expect("updater thread must exit cleanly");
+        let out = recorded.lock().unwrap().clone();
+        (base_generation, out)
+    }
+
+    #[test]
+    fn t9a_config_changed_alone_republishes_full_on_the_same_generation() {
+        let dir = fixture_dir();
+        let (g, rec) = run_recording(dir.path(), |_| {}, vec![ChangeEvent::ConfigChanged]);
+        assert_eq!(rec, vec![(g, SwapScope::Full)], "T9(a)");
+    }
+
+    #[test]
+    fn t9b_config_changed_with_a_rung1_save_publishes_full() {
+        let dir = fixture_dir();
+        let alpha = dir.path().join("Alpha.al");
+        let (g, rec) = run_recording(
+            dir.path(),
+            |d| std::fs::write(d.join("Alpha.al"), ALPHA_EDITED).unwrap(),
+            vec![ChangeEvent::FileSaved(alpha), ChangeEvent::ConfigChanged],
+        );
+        assert_eq!(
+            rec,
+            vec![(g + 1, SwapScope::Full)],
+            "T9(b): a rung-1 batch holding ConfigChanged publishes Full"
+        );
+    }
+
+    #[test]
+    fn t9c_config_changed_with_a_failed_rung3_republishes_full_on_the_old_snapshot() {
+        let dir = fixture_dir();
+        let (g, rec) = run_recording(
+            dir.path(),
+            |d| std::fs::remove_file(d.join("app.json")).unwrap(),
+            vec![ChangeEvent::DepsChanged, ChangeEvent::ConfigChanged],
+        );
+        assert_eq!(
+            rec,
+            vec![(g, SwapScope::Full)],
+            "T9(c): a failed rung 3 must not lose the config change"
+        );
+    }
+
+    #[test]
+    fn t13a_folder_event_reads_known_files_once_then_never_again() {
+        let dir = src_fixture();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let src = dir.path().join("src");
+        assert_eq!(reads(&updater), 0, "precondition: no read yet");
+
+        let first = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src.clone())]);
+        assert!(first.is_none(), "T13(a): an unchanged folder plans nothing");
+        assert_eq!(
+            reads(&updater),
+            3,
+            "T13(a): stamps start empty, so each known file under src is read once"
+        );
+        let second = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src)]);
+        assert!(second.is_none(), "T13(a): still nothing to plan");
+        assert_eq!(reads(&updater), 3, "T13(a): stamped files are not re-read");
+    }
+
+    #[test]
+    fn t13b_new_file_in_a_stamped_folder_is_the_only_read() {
+        let dir = src_fixture();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let src = dir.path().join("src");
+        let _ = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src.clone())]);
+        std::fs::write(
+            src.join("New.al"),
+            "codeunit 50103 \"New\"\n{\n    procedure N()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        let before = reads(&updater);
+
+        let (snap, rung) = updater
+            .apply_batch(&base, &[ChangeEvent::PathChanged(src)])
+            .expect("T13(b): a new file must apply");
+        assert_eq!(rung, Rung::Two, "T13(b): a new file is rung 2");
+        assert_eq!(reads(&updater) - before, 1, "T13(b): exactly one read");
+        assert!(snap.parsed.contains_key("src/New.al"));
+    }
+
+    #[test]
+    fn t13c_subfolder_moved_out_is_removed_by_the_parent_folder_event() {
+        let dir = src_fixture();
+        let outside = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("src").join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(
+            sub.join("A.al"),
+            "codeunit 50130 \"A\"\n{\n    procedure P()\n    begin\n    end;\n}\n",
+        )
+        .unwrap();
+        let (base, parsed) = build(dir.path());
+        assert!(base.parsed.contains_key("src/sub/A.al"), "precondition");
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        std::fs::rename(&sub, outside.path().join("sub")).unwrap();
+
+        let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(dir.path().join("src"))]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert!(
+            !snap.parsed.contains_key("src/sub/A.al"),
+            "T13(c): a nested vp under the event folder must be removed"
+        );
+        assert_same_as_fresh(snap, dir.path(), "T13(c)");
+    }
+
+    #[test]
+    fn t13d_replacement_then_touch_in_one_debounce_window_equals_fresh_build() {
+        let dir = src_fixture();
+        let outside = tempfile::tempdir().unwrap();
+        let (snapshot, parsed) = build(dir.path());
+        let shared = Arc::new(SharedSnapshot::new(Arc::new(snapshot)));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_updater(
+            Arc::clone(&shared),
+            rx,
+            dir.path().to_path_buf(),
+            parsed,
+            DependencySource::default(),
+            Arc::default(),
+            |_, _| {},
+        );
+        replace_src_with_edited_copy(dir.path(), outside.path());
+        let src = dir.path().join("src");
+        tx.send(ChangeEvent::PathChanged(src.clone())).unwrap();
+        tx.send(ChangeEvent::PathChanged(src)).unwrap();
+        drop(tx);
+        handle.join().unwrap();
+        assert_same_as_fresh(&shared.get(), dir.path(), "T13(d)");
+    }
+
+    #[test]
+    fn t13e_stamped_file_rewritten_without_its_own_event_is_reread() {
+        let dir = src_fixture();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let src = dir.path().join("src");
+        let warm = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src.clone())]);
+        assert!(
+            warm.is_none(),
+            "precondition: the warm-up event plans nothing"
+        );
+        std::fs::write(src.join("Alpha.al"), ALPHA_EDITED).unwrap();
+
+        let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src)]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert_eq!(&*snap.parsed["src/Alpha.al"].text, ALPHA_EDITED, "T13(e)");
+        assert_same_as_fresh(snap, dir.path(), "T13(e)");
+    }
+
+    /// The folder is replaced after the build's read and before the updater
+    /// thread starts: where a post-build stamp seeding would sit (S4N1).
+    #[test]
+    fn t15_folder_replaced_between_build_read_and_updater_start() {
+        let dir = src_fixture();
+        let outside = tempfile::tempdir().unwrap();
+        let (snapshot, parsed) = build(dir.path());
+        replace_src_with_edited_copy(dir.path(), outside.path());
+        let shared = Arc::new(SharedSnapshot::new(Arc::new(snapshot)));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_updater(
+            Arc::clone(&shared),
+            rx,
+            dir.path().to_path_buf(),
+            parsed,
+            DependencySource::default(),
+            Arc::default(),
+            |_, _| {},
+        );
+        tx.send(ChangeEvent::PathChanged(dir.path().join("src")))
+            .unwrap();
+        drop(tx);
+        handle.join().unwrap();
+        assert_same_as_fresh(&shared.get(), dir.path(), "T15");
+    }
+
+    /// Staged stamps (A2O1): reads made by a batch whose rung 3 fails must
+    /// not vouch for text that was never indexed.
+    #[test]
+    fn t15b_failed_rung3_discards_the_stamps_of_its_reads() {
+        let dir = src_fixture();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let src = dir.path().join("src");
+        let app_json = dir.path().join("app.json");
+        let app_text = std::fs::read_to_string(&app_json).unwrap();
+        std::fs::write(src.join("Alpha.al"), ALPHA_EDITED).unwrap();
+        std::fs::remove_file(&app_json).unwrap();
+
+        let failed = updater.apply_batch(
+            &base,
+            &[
+                ChangeEvent::PathChanged(src.join("Alpha.al")),
+                ChangeEvent::DepsChanged,
+            ],
+        );
+        assert!(failed.is_none(), "precondition: the rung-3 rebuild fails");
+        std::fs::write(&app_json, app_text).unwrap();
+
+        let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src)]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert_eq!(
+            &*snap.parsed["src/Alpha.al"].text, ALPHA_EDITED,
+            "T15(b): the edit must be re-read and indexed"
+        );
+        assert_same_as_fresh(snap, dir.path(), "T15(b)");
     }
 
     // -----------------------------------------------------------------------

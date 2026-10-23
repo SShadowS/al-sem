@@ -655,6 +655,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- LSP updater: a `.al` file renamed, moved or replaced, a folder renamed, moved in or out, or replaced, and a `FileRemoved` for a file still on disk are reconciled from disk instead of leaving stale or missing declarations; a `.al` under `.alpackages`, `.snapshots` or `node_modules` no longer triggers a full rebuild (#221).
 - **#220: shards and the `diff` preflight took the first `apps[]` row as the workspace's app.**
   That held only while `apps[]` had one row. Both now read the row whose `role` is `"primary"`.
   A shard is now closed over identity, operation, call-site and edge references: it also keeps
