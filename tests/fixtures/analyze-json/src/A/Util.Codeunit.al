@@ -72,5 +72,11 @@ codeunit 50100 "Probe Util"
         Greeter := GreeterImpl;
         Greeter.Greet();
         ProbeBase.ExtProc();
+        Dispatch(GreeterImpl);
+    end;
+
+    procedure Dispatch(AnyGreeter: Interface "Probe Greeter")
+    begin
+        AnyGreeter.Greet();
     end;
 }

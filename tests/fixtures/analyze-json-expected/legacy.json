@@ -139,9 +139,20 @@
       "file": "Util.Codeunit.al",
       "line": 61,
       "complexity": 1,
-      "line_count": 15,
+      "line_count": 16,
       "parameter_count": 0,
-      "quality_score": 8.5
+      "quality_score": 8.35
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "Dispatch",
+      "file": "Util.Codeunit.al",
+      "line": 78,
+      "complexity": 1,
+      "line_count": 4,
+      "parameter_count": 1,
+      "quality_score": 10.0
     },
     {
       "object_type": "Codeunit",
@@ -181,6 +192,17 @@
       "object_name": "Probe Greeter Impl",
       "procedure_name": "Greet",
       "file": "GreeterImpl.Codeunit.al",
+      "line": 3,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Greeter Impl2",
+      "procedure_name": "Greet",
+      "file": "GreeterImpl2.Codeunit.al",
       "line": 3,
       "complexity": 1,
       "line_count": 3,
@@ -264,9 +286,9 @@
     }
   ],
   "summary": {
-    "total_procedures": 23,
+    "total_procedures": 25,
     "avg_complexity": 1.0,
-    "avg_quality_score": 9.891304,
+    "avg_quality_score": 9.894,
     "critical_findings": 0,
     "warning_findings": 1
   }

@@ -11,11 +11,13 @@ Codeunit,Probe Util,Over,Util.Codeunit.al,42,1,3,1,10.0
 Codeunit,Probe Util,OnRaised,Util.Codeunit.al,47,1,3,0,10.0
 Codeunit,Probe Util,OnNeverRaised,Util.Codeunit.al,52,1,3,0,10.0
 Codeunit,Probe Util,OnSubscribedOnly,Util.Codeunit.al,57,1,3,0,10.0
-Codeunit,Probe Util,OnRun,Util.Codeunit.al,61,1,15,0,8.5
+Codeunit,Probe Util,OnRun,Util.Codeunit.al,61,1,16,0,8.4
+Codeunit,Probe Util,Dispatch,Util.Codeunit.al,78,1,4,1,10.0
 Codeunit,Probe Subs,HandleRaised,Util.Codeunit.al,4,1,3,0,10.0
 Codeunit,Probe Subs,HandleSubscribedOnly,Util.Codeunit.al,9,1,3,0,10.0
 Interface,Probe Greeter,Greet,Greeter.Interface.al,3,1,1,0,10.0
 Codeunit,Probe Greeter Impl,Greet,GreeterImpl.Codeunit.al,3,1,3,0,10.0
+Codeunit,Probe Greeter Impl2,Greet,GreeterImpl2.Codeunit.al,3,1,3,0,10.0
 Codeunit,Probe Tests,TestSomething,Tests.Codeunit.al,6,1,3,0,10.0
 Codeunit,Probe Tests,ConfirmYes,Tests.Codeunit.al,11,1,4,2,10.0
 Page,Probe Card,OnAction,Card.Page.al,22,1,3,0,10.0

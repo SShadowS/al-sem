@@ -57,15 +57,31 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Run `cmd` with an empty home directory, so a developer's
+/// `~/.al-sem/config.json` (diagnostic thresholds, `unusedProcedures`) cannot
+/// change what the tests see.
+fn output_with_empty_home(cmd: &mut Command) -> Output {
+    let home = tempfile::tempdir().expect("empty home");
+    cmd.env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .output()
+        .expect("spawn")
+}
+
 /// Run the binary with cwd = repo root and a RELATIVE project path, so the
 /// text header (`Code Quality Analysis: <project>`) is checkout-independent.
 fn run_analyze(project: &str, format: &str) -> Output {
-    let out = Command::new(env!("CARGO_BIN_EXE_al-call-hierarchy"))
-        .current_dir(repo_root())
-        .args(["--project", project, "--analyze", "--format", format])
-        .arg("--no-telemetry")
-        .output()
-        .expect("spawn al-call-hierarchy");
+    run_analyze_in(&repo_root(), project, format)
+}
+
+fn run_analyze_in(cwd: &std::path::Path, project: &str, format: &str) -> Output {
+    let out = output_with_empty_home(
+        Command::new(env!("CARGO_BIN_EXE_al-call-hierarchy"))
+            .current_dir(cwd)
+            .args(["--project", project, "--analyze", "--format", format])
+            .arg("--no-telemetry"),
+    );
     assert!(
         out.status.success(),
         "al-call-hierarchy --analyze --format {format} failed: {}",
@@ -142,6 +158,18 @@ fn fan_in_and_fan_out_count_distinct() {
     let never = row(&v, "Probe Util", "NeverCalled");
     assert_eq!(field(never, "fan_in"), 0);
     assert_eq!(field(never, "fan_out"), 0);
+    // Dispatch calls Greet through an interface parameter: BOTH
+    // implementations are candidates, and each counts.
+    let dispatch = row(&v, "Probe Util", "Dispatch");
+    assert_eq!(
+        field(dispatch, "fan_out"),
+        2,
+        "every candidate counts: {dispatch}"
+    );
+    // An interface member is a signature, never a call target: null, not 0.
+    let sig = row(&v, "Probe Greeter", "Greet");
+    assert_eq!(field(sig, "fan_in"), &Value::Null, "{sig}");
+    assert_eq!(field(sig, "fan_out"), &Value::Null, "{sig}");
 
     // Contract with the call-hierarchy panel on every declaration: distinct
     // callers from `incoming` and distinct targets from `outgoing`. Equal here
@@ -151,6 +179,9 @@ fn fan_in_and_fan_out_count_distinct() {
     for (virtual_path, decls) in &snap.decls_by_file {
         for decl in decls.iter() {
             let r = row_at(&v, virtual_path, decl.origin.start.row + 1);
+            if r["object_type"] == "Interface" {
+                continue; // null by design, asserted above
+            }
             let data = ItemData {
                 node: decl.id.clone(),
             };
@@ -185,11 +216,18 @@ fn unused_procedure_findings_equal_the_lsp_diagnostics() {
         .iter()
         .filter(|f| f["category"] == "unused_procedure")
         .collect();
-    let cli: BTreeSet<(String, String)> = unused
+    // (workspace-relative path, 1-based line, procedure) of each finding; the
+    // line is the one in `location` (`<base name>:<line>`).
+    let cli: BTreeSet<(String, u32, String)> = unused
         .iter()
         .map(|f| {
+            let location = f["location"].as_str().expect("location");
+            let (base, line) = location.rsplit_once(':').expect("file:line");
+            let path = f["path"].as_str().expect("unused finding carries `path`");
+            assert!(path.ends_with(base), "path {path} vs location {location}");
             (
-                f["location"].as_str().expect("location").to_string(),
+                path.to_string(),
+                line.parse().expect("line"),
                 f["procedure"].as_str().expect("procedure").to_string(),
             )
         })
@@ -199,8 +237,9 @@ fn unused_procedure_findings_equal_the_lsp_diagnostics() {
     // reported: the called procedures, both subscribers (R2), the trigger
     // (R1), the unraised IntegrationEvent (R4), the subscribed-only
     // InternalEvent (R5), the interface method (R6), [Test]/[ConfirmHandler] (R3).
-    let expected: BTreeSet<(String, String)> = [(
-        "Util.Codeunit.al:34".to_string(),
+    let expected: BTreeSet<(String, u32, String)> = [(
+        "src/A/Util.Codeunit.al".to_string(),
+        34,
         "Probe Util.NeverCalled".to_string(),
     )]
     .into();
@@ -212,22 +251,34 @@ fn unused_procedure_findings_equal_the_lsp_diagnostics() {
             "Procedure 'Probe Util.NeverCalled' is never called"
         );
     }
+    // Existing findings keep their exact shape: no `path` key.
+    for f in all.iter().filter(|f| f["category"] != "unused_procedure") {
+        assert!(f.get("path").is_none(), "legacy finding gained `path`: {f}");
+    }
 
     // The same set the LSP's diagnostics publish, computed by the library on
-    // the same fixture: (file base name, 1-based line).
+    // the same fixture: (workspace-relative path, 1-based line).
     let snap = snapshot();
-    let lsp: BTreeSet<String> =
+    let root_uri = format!(
+        "{}/",
+        al_sem::protocol::path_to_uri(&snap.workspace_root).as_str()
+    );
+    let lsp: BTreeSet<(String, u32)> =
         compute_all(&snap, PositionEncoding::Utf16, &DiagnosticConfig::default())
             .into_iter()
             .flat_map(|(uri, diags)| {
-                let base = uri.rsplit('/').next().expect("uri base").to_string();
+                let rel = uri
+                    .strip_prefix(&root_uri)
+                    .unwrap_or_else(|| panic!("{uri} not under {root_uri}"))
+                    .to_string();
                 diags.into_iter().filter_map(move |d| {
                     (d.code == Some(lsp_types::NumberOrString::String("unused-procedure".into())))
-                        .then(|| format!("{base}:{}", d.range.start.line + 1))
+                        .then(|| (rel.clone(), d.range.start.line + 1))
                 })
             })
             .collect();
-    let cli_locations: BTreeSet<String> = cli.iter().map(|(loc, _)| loc.clone()).collect();
+    let cli_locations: BTreeSet<(String, u32)> =
+        cli.iter().map(|(p, l, _)| (p.clone(), *l)).collect();
     assert_eq!(cli_locations, lsp, "CLI unused set vs LSP diagnostics");
 
     // Appended after every existing finding.
@@ -330,18 +381,18 @@ fn object_id_access_and_kind_flags() {
 fn routine_id_equals_alsem_stable_routine_id() {
     let v = analyze_json(FIXTURE);
 
-    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
-        .current_dir(repo_root())
-        .args([
-            "fingerprint",
-            FIXTURE,
-            "--inventory-only",
-            "--format",
-            "json",
-        ])
-        .arg("--deterministic")
-        .output()
-        .expect("spawn alsem");
+    let out = output_with_empty_home(
+        Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .current_dir(repo_root())
+            .args([
+                "fingerprint",
+                FIXTURE,
+                "--inventory-only",
+                "--format",
+                "json",
+            ])
+            .arg("--deterministic"),
+    );
     assert!(
         out.status.success(),
         "{}",
@@ -397,11 +448,60 @@ fn routine_id_equals_alsem_stable_routine_id() {
     );
     assert_eq!(cli, alsem, "routine_id vs alsem stableRoutineId");
 
-    for key in [(50100, "Over"), (50107, "OnAction")] {
-        let ids = &cli[&(key.0, key.1.to_string())];
-        assert_eq!(ids.len(), 2, "{key:?}");
-        assert_ne!(ids[0], ids[1], "{key:?} must get distinct routine_ids");
+    // Each overload and each member trigger has ITS id, pinned per row (by
+    // path + line) against the id formula stated by hand, so swapping two
+    // rows' ids fails even though the multisets above would still match.
+    use al_sem::engine::ids::{
+        ParamSpec, normalized_signature_hash, to_stable_routine_id_from_parts,
+    };
+    const APP: &str = "15900000-0000-4000-8000-000000000159";
+    let util = format!("{APP}:Codeunit:50100");
+    let card = format!("{APP}:Page:50107");
+    let param = |t: &str| ParamSpec {
+        type_text: t.to_string(),
+        is_var: false,
+    };
+    let on_action = normalized_signature_hash("OnAction", &[], None);
+    let pinned = [
+        (
+            "src/A/Util.Codeunit.al",
+            38,
+            to_stable_routine_id_from_parts(
+                &util,
+                &normalized_signature_hash("Over", &[param("Integer")], None),
+                None,
+            ),
+        ),
+        (
+            "src/A/Util.Codeunit.al",
+            42,
+            to_stable_routine_id_from_parts(
+                &util,
+                &normalized_signature_hash("Over", &[param("Text")], None),
+                None,
+            ),
+        ),
+        (
+            "src/D/Card.Page.al",
+            22,
+            to_stable_routine_id_from_parts(&card, &on_action, Some("First")),
+        ),
+        (
+            "src/D/Card.Page.al",
+            28,
+            to_stable_routine_id_from_parts(&card, &on_action, Some("Second")),
+        ),
+    ];
+    for (path, line, want) in &pinned {
+        let r = row_at(&v, path, *line);
+        assert_eq!(
+            field(r, "routine_id"),
+            want.as_str(),
+            "routine_id of {path}:{line}: {r}"
+        );
     }
+    assert_ne!(pinned[0].2, pinned[1].2);
+    assert_ne!(pinned[2].2, pinned[3].2);
 
     // Stable across runs on the same tree.
     let again = analyze_json(FIXTURE);
@@ -504,9 +604,71 @@ fn no_app_json_degrades_to_null() {
             .all(|f| f["category"] != "unused_procedure"),
         "no unused findings without a graph"
     );
+    // The warning names the reason and only the graph fields; it makes no
+    // claim about routine_id, which does not depend on the graph.
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let warning = format!(
+        "warning: call graph unavailable for {NOAPP_FIXTURE} (no app.json at the project root): \
+         fan_in and fan_out are null and unused procedures are not reported"
+    );
     assert!(
-        stderr.contains("call graph unavailable"),
-        "stderr must say why the graph fields are null: {stderr}"
+        stderr.lines().any(|l| l == warning),
+        "stderr must carry exactly {warning:?}; got {stderr}"
+    );
+    assert!(
+        !stderr.contains("routine_id"),
+        "the warning must not claim routine_id is null: {stderr}"
+    );
+}
+
+// ── A nested app's files get no routine_id (the root guid is not theirs) ──
+
+#[test]
+fn nested_app_files_get_no_routine_id() {
+    let ws = tempfile::tempdir().expect("workspace");
+    let app = |guid: &str, name: &str| {
+        format!(
+            r#"{{"id":"{guid}","name":"{name}","publisher":"t","version":"1.0.0.0","idRanges":[{{"from":50100,"to":50199}}],"runtime":"14.0"}}"#
+        )
+    };
+    let unit = |id: u32, name: &str| {
+        format!("codeunit {id} \"{name}\"\n{{\n    trigger OnRun()\n    begin\n    end;\n}}\n")
+    };
+    std::fs::write(
+        ws.path().join("app.json"),
+        app("15900000-0000-4000-8000-0000000000aa", "Root"),
+    )
+    .unwrap();
+    std::fs::write(
+        ws.path().join("Root.Codeunit.al"),
+        unit(50100, "Probe Root"),
+    )
+    .unwrap();
+    std::fs::create_dir(ws.path().join("Sub")).unwrap();
+    std::fs::write(
+        ws.path().join("Sub/app.json"),
+        app("15900000-0000-4000-8000-0000000000bb", "Sub"),
+    )
+    .unwrap();
+    std::fs::write(
+        ws.path().join("Sub/Nested.Codeunit.al"),
+        unit(50101, "Probe Nested"),
+    )
+    .unwrap();
+
+    let out = run_analyze_in(ws.path(), ".", "json");
+    let v: Value = serde_json::from_str(&stdout_text(&out)).expect("json");
+    let root = row(&v, "Probe Root", "OnRun");
+    let nested = row(&v, "Probe Nested", "OnRun");
+    assert!(
+        field(root, "routine_id").as_str().is_some_and(
+            |id| id.starts_with("15900000-0000-4000-8000-0000000000aa:Codeunit:50100#")
+        ),
+        "a root-app file keeps its routine_id: {root}"
+    );
+    assert_eq!(
+        field(nested, "routine_id"),
+        &Value::Null,
+        "a nested-app file must not get an id minted with the root's guid: {nested}"
     );
 }

@@ -19,15 +19,15 @@ Probe Util.Over                             1      3      1    10.0
 Probe Util.OnRaised                         1      3      0    10.0
 Probe Util.OnNeverRaised                    1      3      0    10.0
 Probe Util.OnSubscribedOnly                 1      3      0    10.0
-Probe Util.OnRun                            1     15      0     8.5
+Probe Util.OnRun                            1     16      0     8.4
+Probe Util.Dispatch                         1      4      1    10.0
 Probe Subs.HandleRaised                     1      3      0    10.0
 Probe Subs.HandleSubscribedOnly             1      3      0    10.0
 Probe Greeter.Greet                         1      1      0    10.0
 Probe Greeter Impl.Greet                    1      3      0    10.0
+Probe Greeter Impl2.Greet                   1      3      0    10.0
 Probe Tests.TestSomething                   1      3      0    10.0
-Probe Tests.ConfirmYes                      1      4      2    10.0
-Probe Card.OnAction                         1      3      0    10.0
-  ... and 3 more procedures
+  ... and 5 more procedures
 
 FINDINGS:
 
@@ -35,7 +35,7 @@ FINDINGS:
 
 SUMMARY:
 
-  Total procedures:     23
+  Total procedures:     25
   Average complexity:   1.0
   Average quality score: 9.9
   Critical findings:    0

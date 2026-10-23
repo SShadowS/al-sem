@@ -24,12 +24,13 @@ pub struct ProcedureMetrics {
     pub access: String,
     pub is_event_subscriber: bool,
     pub is_trigger: bool,
-    /// alsem's `stableRoutineId`; `None` without an app id, for Interface /
-    /// ControlAddIn members, object kinds alsem gives no id, and nameless
-    /// routines. Independent of the call graph.
+    /// alsem's `stableRoutineId`; `None` without an app id, for a file in a
+    /// nested app, for Interface / ControlAddIn members, object kinds alsem
+    /// gives no id, and nameless routines. Independent of the call graph.
     pub routine_id: Option<String>,
     /// Distinct callers in the resolved call graph; `None` = no graph for
-    /// this row (no snapshot, or no matching declaration), never `0`.
+    /// this row (no snapshot, or no matching declaration), never `0`, and
+    /// for Interface / ControlAddIn members (never a call target).
     pub fan_in: Option<usize>,
     /// Distinct callees (routine and dependency-symbol targets); `None` as
     /// for `fan_in`.
@@ -44,6 +45,11 @@ pub struct Finding {
     pub location: String,
     pub procedure: String,
     pub description: String,
+    /// Workspace-relative POSIX path (#159). Set on `unused_procedure`
+    /// findings only and omitted otherwise, so existing findings keep their
+    /// exact shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// Summary statistics for the analysis
@@ -104,6 +110,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
     // Complexity findings
     if config.complexity_enabled && metrics.complexity >= config.complexity_critical {
         findings.push(Finding {
+            path: None,
             category: "high_complexity".to_string(),
             severity: "critical".to_string(),
             location: location.clone(),
@@ -115,6 +122,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
         });
     } else if config.complexity_enabled && metrics.complexity >= config.complexity_warning {
         findings.push(Finding {
+            path: None,
             category: "high_complexity".to_string(),
             severity: "warning".to_string(),
             location: location.clone(),
@@ -129,6 +137,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
     // Length findings
     if config.length_enabled && metrics.line_count >= config.length_critical {
         findings.push(Finding {
+            path: None,
             category: "long_method".to_string(),
             severity: "critical".to_string(),
             location: location.clone(),
@@ -140,6 +149,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
         });
     } else if config.length_enabled && metrics.line_count >= config.length_warning {
         findings.push(Finding {
+            path: None,
             category: "long_method".to_string(),
             severity: "warning".to_string(),
             location: location.clone(),
@@ -154,6 +164,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
     // Parameter findings
     if config.params_enabled && metrics.parameter_count >= config.params_critical {
         findings.push(Finding {
+            path: None,
             category: "too_many_parameters".to_string(),
             severity: "critical".to_string(),
             location: location.clone(),
@@ -165,6 +176,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
         });
     } else if config.params_enabled && metrics.parameter_count >= config.params_warning {
         findings.push(Finding {
+            path: None,
             category: "too_many_parameters".to_string(),
             severity: "warning".to_string(),
             location,
@@ -213,7 +225,7 @@ pub fn build_summary(metrics: &[ProcedureMetrics], findings: &[Finding]) -> Anal
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::lsp::snapshot::{LspSnapshot, LspTarget};
+use crate::lsp::snapshot::{DeclEntry, LspSnapshot, LspTarget};
 use crate::program::RoutineNodeId;
 use crate::snapshot::DependencySource;
 
@@ -238,8 +250,8 @@ impl<'s> Graph<'s> {
 ///
 /// `graph: Some(source)` builds the LSP's call graph with that dependency
 /// source and fills `fan_in`/`fan_out` and the unused findings; `None` skips
-/// it (text/CSV print none of that). When the graph cannot be built (no
-/// readable `app.json`), one warning goes to stderr and those stay empty.
+/// it (text/CSV print none of that). When the graph cannot be built, one
+/// warning with the reason goes to stderr and those stay empty.
 pub fn analyze_project(
     project: &Path,
     graph: Option<DependencySource>,
@@ -252,8 +264,15 @@ pub fn analyze_project(
     let snap = graph.and_then(|source| {
         let snap = LspSnapshot::build_full_with(project, source);
         if snap.is_none() {
+            // The builder reports no reason; the one we can tell apart is a
+            // missing root app.json.
+            let reason = if project.join("app.json").is_file() {
+                "the program snapshot could not be built"
+            } else {
+                "no app.json at the project root"
+            };
             eprintln!(
-                "warning: call graph unavailable for {} (no readable app.json?): \
+                "warning: call graph unavailable for {} ({reason}): \
                  fan_in and fan_out are null and unused procedures are not reported",
                 project.display()
             );
@@ -269,11 +288,16 @@ pub fn analyze_project(
             files
                 .par_iter()
                 .map(|f| {
+                    // A nested app's file belongs to another app: the root's
+                    // guid would mint a wrong routine_id, so it gets none.
+                    let guid = app_guid
+                        .as_deref()
+                        .filter(|_| !in_nested_app(project, &f.rel_posix));
                     file_metrics(
                         &f.rel_posix,
                         &f.abs_path,
                         graph.as_ref(),
-                        app_guid.as_deref(),
+                        guid,
                         config.unused_procedures,
                     )
                 })
@@ -300,6 +324,18 @@ pub fn analyze_project(
     })
 }
 
+/// Whether the file at `rel_posix` lies in a folder below `project` that holds
+/// its own `app.json` (a nested app; `discover_al_files` walks into those).
+fn in_nested_app(project: &Path, rel_posix: &str) -> bool {
+    let mut dir = project.to_path_buf();
+    let mut folders: Vec<&str> = rel_posix.split('/').collect();
+    folders.pop(); // the file name
+    folders.into_iter().any(|folder| {
+        dir.push(folder);
+        dir.join("app.json").is_file()
+    })
+}
+
 /// One file's rows and `unused_procedure` findings. With a graph that holds
 /// the file, the rows come from the snapshot's OWN parse and join its
 /// declarations on the routine's byte offset, so the two cannot describe
@@ -316,9 +352,16 @@ fn file_metrics(
     use crate::program::body::l2_workspace::{stable_object_id_ir, stable_routine_id_ir};
     use al_syntax::ir::{ObjectKind, RoutineKind};
 
+    // The file's declarations by start byte: one lookup per routine.
     let in_snapshot = graph.and_then(|g| {
         let entry = g.snap.parsed.get(rel_posix)?;
-        Some((g, entry.file.clone(), g.snap.decls_by_file.get(rel_posix)))
+        let decl_at: HashMap<usize, &DeclEntry> = g
+            .snap
+            .decls_by_file
+            .get(rel_posix)
+            .map(|decls| decls.iter().map(|d| (d.origin.byte.start, d)).collect())
+            .unwrap_or_default();
+        Some((g, entry.file.clone(), decl_at))
     });
     let file = match &in_snapshot {
         Some((_, file, _)) => file.clone(),
@@ -337,9 +380,11 @@ fn file_metrics(
     for obj in &file.objects {
         let object_type = object_kind_label(obj.kind);
         let object_name = obj.name.trim_matches('"').to_string();
-        let has_routine_ids = !matches!(obj.kind, ObjectKind::Interface | ObjectKind::ControlAddIn);
+        // Interface and ControlAddIn members are signatures: never a call
+        // target, so no routine_id and no fan_in/fan_out (null, not 0).
+        let signature_only = matches!(obj.kind, ObjectKind::Interface | ObjectKind::ControlAddIn);
         let stable_object_id = app_guid
-            .filter(|_| has_routine_ids)
+            .filter(|_| !signature_only)
             .and_then(|guid| stable_object_id_ir(guid, obj));
         for r in &obj.routines {
             let procedure_name = if r.name.is_empty() {
@@ -357,12 +402,10 @@ fn file_metrics(
             let quality_score = calculate_quality_score(complexity, line_count, parameter_count);
             let line = r.origin.start.row + 1;
 
-            let decl = in_snapshot.as_ref().and_then(|(g, _, decls)| {
-                let d = (*decls)?
-                    .iter()
-                    .find(|d| d.origin.byte.start == r.origin.byte.start)?;
-                Some((*g, d))
-            });
+            let decl = in_snapshot
+                .as_ref()
+                .and_then(|(g, _, decl_at)| Some((*g, *decl_at.get(&r.origin.byte.start)?)));
+            let counted = decl.filter(|_| !signature_only);
             if report_unused
                 && let Some((g, d)) = decl
                 && crate::lsp::diagnostics::is_unused_procedure(
@@ -379,6 +422,7 @@ fn file_metrics(
                     description: format!(
                         "Procedure '{object_name}.{procedure_name}' is never called"
                     ),
+                    path: Some(rel_posix.to_string()),
                 });
             }
 
@@ -404,9 +448,9 @@ fn file_metrics(
                     .as_deref()
                     .filter(|_| !r.name.is_empty())
                     .map(|o| stable_routine_id_ir(o, r)),
-                fan_in: decl
+                fan_in: counted
                     .map(|(g, d)| crate::lsp::handlers::incoming_callers(g.snap, &d.id).len()),
-                fan_out: decl.map(|(g, d)| g.fan_out.get(&d.id).map_or(0, HashSet::len)),
+                fan_out: counted.map(|(g, d)| g.fan_out.get(&d.id).map_or(0, HashSet::len)),
             });
         }
     }
@@ -1124,8 +1168,10 @@ mod tests {
                 location: "test.al:30".to_string(),
                 procedure: "Test.Proc2".to_string(),
                 description: "test".to_string(),
+                path: None,
             },
             Finding {
+                path: None,
                 category: "long_method".to_string(),
                 severity: "warning".to_string(),
                 location: "test.al:30".to_string(),

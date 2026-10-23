@@ -21,8 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     when the app id, the object type or number, the routine's name, a parameter type or `var`, the
     return type, or (for a member trigger) the enclosing member changes; matching a changed routine
     across two versions is left to the consumer. `null` without an app id (no readable
-    `app.json`), and, independent of the call graph, for Interface and ControlAddIn members, object
-    kinds alsem gives no id, and nameless routines.
+    `app.json`), for a file inside a nested app (a folder below the project with its own
+    `app.json`: the root's app id is not its own), and, independent of the call graph, for
+    Interface and ControlAddIn members (signatures; `alsem digest` does mint a `stableId` for
+    them, this field does not), object kinds alsem gives no id, and nameless routines.
   - `fan_in` / `fan_out`: the number of DISTINCT callers / callees in the resolved call graph the
     LSP serves. A publisher counts as a caller of its wired subscriber; a publisher's subscribers
     count as its callees. `fan_out` counts distinct targets, not the call-hierarchy panel's rows:
@@ -30,25 +32,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     3), builtin and unresolved calls never do. The panel also hides a caller it cannot locate
     (a symbols-only dependency publisher), so `fan_in` can exceed its row count. `null` (never
     `0`) when there is no graph for the row: the graph could not be built, or the row has no
-    matching declaration.
+    matching declaration; also `null` for Interface and ControlAddIn members, which are never a
+    call target.
 
   `findings[]` gains category `unused_procedure` (severity `info`), appended after every existing
   finding, for exactly the procedures the LSP's `unused-procedure` diagnostic reports (the same
-  rule and code), behind the same `unusedProcedures` setting; `summary` does not count them. A
-  subscribed but never raised publisher has `fan_in: 0` and is not unused (the rule counts its
-  subscribers). When the graph cannot be built, one warning goes to stderr, `fan_in`/`fan_out`
-  are `null`, and no unused procedure is reported, so their absence is then no evidence.
+  rule and code), behind the same `unusedProcedures` setting; `summary` does not count them.
+  Each carries an extra `path` (workspace-relative), so two files with the same base name are told
+  apart; existing findings have no `path` key. A subscribed but never raised publisher has
+  `fan_in: 0` and is not unused (the rule counts its subscribers). When the graph cannot be
+  built, one warning with the reason goes to stderr (`no app.json at the project root`, else `the
+  program snapshot could not be built`), `fan_in`/`fan_out` are `null`, and no unused procedure is
+  reported, so their absence is then no evidence.
   The graph uses `--dependency-source` (default `embedded`, as the LSP; measured on a small
-  workspace with the Microsoft Base Application in `.alpackages`: about +2.4 s and +550 MB per
+  workspace with the Microsoft Base Application in `.alpackages`: about +2.5 s and ~565 MB per
   run, or +1.2 s and +160 MB with `--dependency-source symbols`). Dependencies are read only from
   `.alpackages` folders (the workspace's own, then each parent's up to the git boundary); to use
   a symbol store kept elsewhere, make `<ws>/.alpackages` a symlink to it. Without the dependency
   `.app`s, every subscriber to a dependency event is reported `unused_procedure` with `fan_in: 0`,
   exactly as in the editor.
-  `analysis::analyze_project` is the library entry point; the unused rule, the caller grouping
-  (`lsp::handlers::incoming_callers`, now also behind the call-hierarchy panel) and the stable-id
-  composition (`stable_object_id_ir`/`stable_routine_id_ir`, now also behind the L2 projection)
-  are each one shared implementation.
+  `analysis::analyze_project` is the library entry point. It shares the LSP's unused rule and its
+  caller grouping (`lsp::handlers::incoming_callers`, now also behind the call-hierarchy panel),
+  and the L2 projection's stable-id helpers (`stable_object_id_ir`/`stable_routine_id_ir`).
+  `program::model::workspace` and `engine::snapshot` still compose `stableRoutineId` on their
+  own; the `--analyze` test pins its ids to `alsem fingerprint --inventory-only`.
 - **An operator-set, time-limited GitHub CI waiver for the issue flow** (`scripts/agentflow`). During the
   2026-10-22 GitHub Actions incident the operator decided to rely on local tests for 24 h. `ci_waiver_until`
   in `.agent/config.json` (an ISO-8601 UTC time, operator-only, never set by the conductor) lets

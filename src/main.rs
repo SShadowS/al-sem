@@ -292,16 +292,18 @@ fn print_text(
         println!("  ... and {} more procedures", sorted_metrics.len() - 20);
     }
 
-    // Findings. Text output is unchanged by #159: it never shows the
-    // JSON-only `unused_procedure` category, even if a graph was built.
-    let findings: Vec<&analysis::Finding> = result
-        .findings
-        .iter()
-        .filter(|f| f.category != "unused_procedure")
-        .collect();
-    if !findings.is_empty() {
+    // Findings. Text output is unchanged by #159: `run_analysis` builds no
+    // call graph for text, so the JSON-only `unused_procedure` never exists here.
+    debug_assert!(
+        result
+            .findings
+            .iter()
+            .all(|f| f.category != "unused_procedure"),
+        "text output must not get unused_procedure findings"
+    );
+    if !result.findings.is_empty() {
         println!("\nFINDINGS:\n");
-        for f in findings {
+        for f in &result.findings {
             let severity_str = match f.severity.as_str() {
                 "critical" => "[CRITICAL]",
                 "warning" => "[WARNING]",
