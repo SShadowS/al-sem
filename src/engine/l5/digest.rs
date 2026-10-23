@@ -3695,7 +3695,7 @@ fn digest_one_root<'i>(
 /// Roots = stable ids of reportable workspace routines, deduped + sorted.
 /// `isReportableRoutine` = primary && body_available && !parse_incomplete, where
 /// "primary" is THE role rule (`Model::routine_role`, #220).
-fn reportable_roots(resolved: &Model) -> Vec<String> {
+pub(crate) fn reportable_roots(resolved: &Model) -> Vec<String> {
     let mut roots: Vec<String> = Vec::new();
     for r in &resolved.workspace.routines {
         // A cross-app model (engine-switch S8.0) holds every dependency routine,
@@ -4003,11 +4003,21 @@ pub fn compute_digest_effects_for_ordering_with<T: Send>(
     resolved: &Model,
     reduce: impl Fn(DigestEntryResult) -> T + Sync,
 ) -> Vec<T> {
-    use crate::engine::perf_trace as pt;
     let snap = {
-        let _s = pt::span("ordering", "ordering.compose_snapshot");
+        let _s = crate::engine::perf_trace::span("ordering", "ordering.compose_snapshot");
         compose_snapshot(resolved)
     };
+    compute_digest_effects_for_ordering_over(&snap, resolved, reduce)
+}
+
+/// [`compute_digest_effects_for_ordering_with`] over a given tree (#160 step 6:
+/// the step-6 probe reads it over the cone-graph tree).
+pub(crate) fn compute_digest_effects_for_ordering_over<T: Send>(
+    snap: &CapabilitySnapshot,
+    resolved: &Model,
+    reduce: impl Fn(DigestEntryResult) -> T + Sync,
+) -> Vec<T> {
+    use crate::engine::perf_trace as pt;
     let all_roots = reportable_roots(resolved);
 
     // Per the 5 ordering labels (`is_relevant_label`), a root can produce an ordering
@@ -4023,31 +4033,8 @@ pub fn compute_digest_effects_for_ordering_with<T: Send>(
     // (subject = the cone owner) with the original op preserved, so cone presence is a
     // flat lookup. A correct SUPERSET of the producing-root set (ingredient presence,
     // not order — the engine still decides the actual order).
-    let mut ext_io: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut ui_sink: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut db_write: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for f in &snap.capability_facts {
-        match map_op(&f.op) {
-            Some("HTTP") | Some("FILE") => {
-                ext_io.insert(f.subject.as_str());
-            }
-            Some("UI_CONFIRM") | Some("UI_MESSAGE") | Some("UI_WINDOW_OPEN") => {
-                ui_sink.insert(f.subject.as_str());
-            }
-            Some("DB_INSERT") | Some("DB_MODIFY") | Some("DB_DELETE") => {
-                db_write.insert(f.subject.as_str());
-            }
-            _ => {}
-        }
-    }
     let all_roots_len = all_roots.len();
-    let roots: Vec<String> = all_roots
-        .into_iter()
-        .filter(|r| {
-            let r = r.as_str();
-            ext_io.contains(r) || (ui_sink.contains(r) && db_write.contains(r))
-        })
-        .collect();
+    let roots = ordering_kept_roots(snap, all_roots);
     pt::counter("ordering.roots_all", all_roots_len as u64);
     pt::counter("ordering.roots_kept", roots.len() as u64);
     pt::counter(
@@ -4069,7 +4056,40 @@ pub fn compute_digest_effects_for_ordering_with<T: Send>(
         Some(&isolated)
     };
     let _s = pt::span("ordering", "ordering.digest_query");
-    digest_query_with(&snap, &roots, Some(&summaries), isolated_opt, true, reduce)
+    digest_query_with(snap, &roots, Some(&summaries), isolated_opt, true, reduce)
+}
+
+/// The roots of `all_roots` whose cone carries an ordering ingredient: an
+/// external IO, or a UI sink and a DB write (the filter documented in
+/// [`compute_digest_effects_for_ordering_over`]).
+pub(crate) fn ordering_kept_roots(
+    snap: &CapabilitySnapshot,
+    all_roots: Vec<String>,
+) -> Vec<String> {
+    let mut ext_io: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut ui_sink: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut db_write: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for f in &snap.capability_facts {
+        match map_op(&f.op) {
+            Some("HTTP") | Some("FILE") => {
+                ext_io.insert(f.subject.as_str());
+            }
+            Some("UI_CONFIRM") | Some("UI_MESSAGE") | Some("UI_WINDOW_OPEN") => {
+                ui_sink.insert(f.subject.as_str());
+            }
+            Some("DB_INSERT") | Some("DB_MODIFY") | Some("DB_DELETE") => {
+                db_write.insert(f.subject.as_str());
+            }
+            _ => {}
+        }
+    }
+    all_roots
+        .into_iter()
+        .filter(|r| {
+            let r = r.as_str();
+            ext_io.contains(r) || (ui_sink.contains(r) && db_write.contains(r))
+        })
+        .collect()
 }
 
 /// Compute the per-root digest effects for the CLI-B digest pipeline.
