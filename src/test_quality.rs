@@ -148,15 +148,23 @@ pub struct TestQuality {
 
 impl TestQuality {
     /// Sums `procedures` (already in `metrics` order) per object and overall.
+    /// One object is `(path, object_type, object_id)`, so a file holding the
+    /// same object in two `#if` arms gives one row; an object with no number
+    /// falls back to its start line.
     pub fn new(procedures: Vec<TestProcedure>) -> Self {
         let mut codeunits: Vec<TestCodeunit> = Vec::new();
         let mut workspace = TestSums::default();
         for p in &procedures {
             workspace.add(p);
-            let same = codeunits
-                .last()
-                .is_some_and(|c| c.path == p.path && c.line == p.object_line);
-            if !same {
+            let same = |c: &TestCodeunit| {
+                c.path == p.path
+                    && match p.object_id {
+                        Some(id) => c.object_type == p.object_type && c.object_id == Some(id),
+                        None => c.object_id.is_none() && c.line == p.object_line,
+                    }
+            };
+            let at = codeunits.iter().rposition(same);
+            if at.is_none() {
                 codeunits.push(TestCodeunit {
                     path: p.path.clone(),
                     line: p.object_line,
@@ -167,7 +175,8 @@ impl TestQuality {
                     sums: TestSums::default(),
                 });
             }
-            codeunits.last_mut().expect("pushed").sums.add(p);
+            let i = at.unwrap_or(codeunits.len() - 1);
+            codeunits[i].sums.add(p);
         }
         TestQuality {
             procedures,
@@ -311,7 +320,7 @@ impl Walker<'_> {
             && self.is_assert_receiver(*object)
         {
             self.counts.assert_calls += 1;
-            let method = member.trim_matches('"').fold_identifier();
+            let method = unquote_member(member).fold_identifier();
             if matches!(
                 method.as_str(),
                 "areequal" | "arenotequal" | "arenearlyequal"
@@ -335,10 +344,8 @@ impl Walker<'_> {
     fn is_assert_receiver(&self, e: ExprId) -> bool {
         let ty = match &self.ir.expr(e).kind {
             ExprKind::Identifier(name) | ExprKind::QuotedIdentifier(name) => {
-                let hit = |n: &str| {
-                    n.trim_matches('"')
-                        .eq_fold_identifier(name.trim_matches('"'))
-                };
+                // IR names are already unquoted (one outer pair removed).
+                let hit = |n: &str| n.eq_fold_identifier(name);
                 self.r
                     .locals
                     .iter()
@@ -357,21 +364,29 @@ impl Walker<'_> {
                 if matches!(&self.ir.expr(*object).kind,
                     ExprKind::Identifier(t) if t.eq_fold_identifier("this")) =>
             {
-                self.global_type(member)
+                self.global_type(unquote_member(member))
             }
             _ => None,
         };
         ty.flatten().is_some_and(is_assert_type)
     }
 
+    /// `name` is an unquoted IR name.
     fn global_type(&self, name: &str) -> Option<Option<&str>> {
-        let name = name.trim_matches('"');
         self.obj
             .globals
             .iter()
-            .find(|v| v.name.trim_matches('"').eq_fold_identifier(name))
+            .find(|v| v.name.eq_fold_identifier(name))
             .map(|v| v.ty.as_deref())
     }
+}
+
+/// A `Member`'s name is raw source text: remove exactly one outer quote pair,
+/// as the lowerer does for every other name.
+fn unquote_member(m: &str) -> &str {
+    m.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(m)
 }
 
 /// `Codeunit Assert` or `Codeunit "Library Assert"` (namespace and quotes
@@ -396,15 +411,28 @@ fn literal_expected(ir: &Ir, mut e: ExprId) -> bool {
         ExprKind::Literal(_) | ExprKind::QualifiedEnum { .. } | ExprKind::DatabaseReference(_) => {
             true
         }
+        ExprKind::Unknown => is_unmodelled_literal(ir, e),
         ExprKind::Unary {
             op: UnaryOp::Neg | UnaryOp::Plus,
             operand,
-        } => matches!(
-            ir.expr(*operand).kind,
-            ExprKind::Literal(Literal::Int(_) | Literal::Decimal(_))
-        ),
+        } => {
+            matches!(
+                ir.expr(*operand).kind,
+                ExprKind::Literal(Literal::Int(_) | Literal::Decimal(_))
+            ) || ir.expr(*operand).origin.kind_text == "biginteger_literal"
+        }
         _ => false,
     }
+}
+
+/// The lowerer models no date, time, datetime or BigInteger literal
+/// (`0D`, `0T`, `0DT`, `20261023D`, `123L`): they are `Unknown`, with the
+/// grammar's kind kept in `origin.kind_text`.
+fn is_unmodelled_literal(ir: &Ir, e: ExprId) -> bool {
+    matches!(
+        ir.expr(e).origin.kind_text,
+        "date_literal" | "time_literal" | "datetime_literal" | "biginteger_literal"
+    )
 }
 
 /// The resolved call graph the reachable count walks, per app root.
@@ -597,5 +625,42 @@ mod tests {
         };
         w.block(group);
         assert_eq!(w.counts.assert_calls, 2);
+    }
+
+    /// F2: the IR name of `"Assert"""` is `Assert""` (one outer quote pair
+    /// removed by the lowerer). It is a different variable from `Assert`, so it
+    /// must not hide the global assert codeunit.
+    #[test]
+    fn escaped_quote_name_does_not_hide_assert() {
+        let src = "codeunit 50100 \"U\"\n{\n    var\n        Assert: Codeunit Assert;\n\n    procedure P()\n    var\n        \"Assert\"\"\": Integer;\n    begin\n        Assert.IsTrue(true, '');\n    end;\n}\n";
+        let f = al_syntax::parse(src);
+        let r = &f.objects[0].routines[0];
+        assert!(!r.parse_incomplete, "precondition: clean parse");
+        assert_eq!(r.locals[0].name, "Assert\"\"", "precondition: IR name");
+        let counts = body_counts(&f.ir, &f.objects[0], r).expect("body");
+        assert_eq!(counts.assert_calls, 1);
+    }
+
+    /// F1: date, time, datetime and BigInteger literals lower to `Unknown`
+    /// with their grammar kind kept in `origin.kind_text`.
+    #[test]
+    fn unknown_literal_kinds_are_literal() {
+        let src = "codeunit 50100 \"U\"\n{\n    var\n        Assert: Codeunit Assert;\n\n    procedure P()\n    var\n        X: Integer;\n    begin\n        Assert.AreEqual(0D, X, '');\n        Assert.AreEqual(0T, X, '');\n        Assert.AreEqual(0DT, X, '');\n        Assert.AreEqual(20261023D, X, '');\n        Assert.AreEqual(123L, X, '');\n        Assert.AreEqual(-123L, X, '');\n        Assert.AreEqual(X, X, '');\n    end;\n}\n";
+        let f = al_syntax::parse(src);
+        let r = &f.objects[0].routines[0];
+        let mut firsts = Vec::new();
+        for item in &f.ir.block(r.body.expect("body")).items {
+            let BlockItem::Stmt(s) = item else {
+                panic!("precondition: plain statements")
+            };
+            let StmtKind::Call(e) = &f.ir.stmt(*s).kind else {
+                panic!("precondition: call statements")
+            };
+            let ExprKind::Call { args, .. } = &f.ir.expr(*e).kind else {
+                panic!("precondition: a call")
+            };
+            firsts.push(literal_expected(&f.ir, args[0]));
+        }
+        assert_eq!(firsts, [true, true, true, true, true, true, false]);
     }
 }

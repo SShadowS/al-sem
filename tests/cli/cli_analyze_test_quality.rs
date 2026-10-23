@@ -25,6 +25,8 @@ const NOAPP_FIXTURE: &str = "tests/fixtures/analyze-test-quality-noapp";
 const GUID: &str = "25300000-0000-4000-8000-000000000253";
 const MAIN: &str = "src/Tests/Main.Codeunit.al";
 const SPLIT: &str = "src/Tests/Split.Codeunit.al";
+/// One codeunit (50205) written whole in both arms of an `#if`: two objects.
+const SPLIT_OBJECT: &str = "src/Tests/SplitObject.Codeunit.al";
 const NESTED: &str = "nested/src/NestedTests.Codeunit.al";
 
 /// The `--format json` stdout of a tempdir copy of [`FIXTURE`] with its
@@ -119,9 +121,12 @@ fn hand_tests() -> Vec<(&'static str, u64, &'static str)> {
         (MAIN, 186, "CallsNested"),
         (MAIN, 192, "CallsTwin"),
         (MAIN, 198, "DirectOnly"),
+        (MAIN, 207, "DateTimeBigIntegerLiterals"),
         (SPLIT, 9, "U"),
         (SPLIT, 16, "T"),
         (SPLIT, 23, "T"),
+        (SPLIT_OBJECT, 10, "W"),
+        (SPLIT_OBJECT, 24, "W"),
     ]
 }
 
@@ -156,7 +161,7 @@ fn fixtures_parse_without_error() {
             files += 1;
         }
     }
-    assert_eq!(files, 10, "fixture precondition: .al file count");
+    assert_eq!(files, 11, "fixture precondition: .al file count");
 }
 
 // ── A1: the row set, and the join with `metrics` ─────────────────────────
@@ -269,6 +274,42 @@ fn a3_are_equal_literal_and_expression_split() {
         field(r, "are_equal"),
         &serde_json::json!({"total": 9, "literal_expected": 6, "expression_expected": 3}),
     );
+}
+
+// ── F1: date, time, datetime and BigInteger literals ─────────────────────
+
+#[test]
+fn f1_date_time_and_biginteger_literals_are_literal() {
+    let v = analyze(FIXTURE);
+    let r = proc_at(&v, MAIN, 207);
+    assert_eq!(counts(r), c(6, 6, false), "DateTimeBigIntegerLiterals");
+    // 0D, 0T, 0DT, 20261023D, 123L, -123L.
+    assert_eq!(
+        field(r, "are_equal"),
+        &serde_json::json!({"total": 6, "literal_expected": 6, "expression_expected": 0}),
+    );
+}
+
+// ── CR6: one object written in both #if arms is one codeunit row ─────────
+
+#[test]
+fn cr6_object_split_across_if_arms_is_one_codeunit_row() {
+    let v = analyze(FIXTURE);
+    // Precondition: two `[Test]` rows, one per object declaration.
+    let lines: Vec<&Value> = procedures(&v)
+        .iter()
+        .filter(|r| r["path"] == SPLIT_OBJECT)
+        .map(|r| &r["line"])
+        .collect();
+    assert_eq!(lines, [10, 24], "precondition: both arms' tests");
+    let rows: Vec<&Value> = codeunits(&v)
+        .iter()
+        .filter(|cu| cu["path"] == SPLIT_OBJECT)
+        .collect();
+    assert_eq!(rows.len(), 1, "one row for codeunit 50205: {rows:#?}");
+    assert_eq!(field(rows[0], "object_id"), 50205);
+    assert_eq!(field(rows[0], "line"), 2, "the first declaration's line");
+    assert_eq!(field(rows[0], "test_procedures"), 2);
 }
 
 // ── A6: handlers, permissions and helpers are not tests ──────────────────
@@ -451,8 +492,9 @@ fn a4_sums_equal_their_procedures() {
     // Hand totals: (assert, reachable, zero, asserterror, tests), are_equal.
     let hand = [
         (NESTED, vec![1, 2, 0, 0, 1], vec![0, 0, 0]),
-        (MAIN, vec![28, 33, 4, 2, 14], vec![9, 6, 3]),
+        (MAIN, vec![34, 39, 4, 2, 15], vec![15, 12, 3]),
         (SPLIT, vec![3, 12, 0, 0, 3], vec![0, 0, 0]),
+        (SPLIT_OBJECT, vec![2, 2, 0, 0, 2], vec![0, 0, 0]),
     ];
     assert_eq!(codeunits(&v).len(), hand.len(), "one row per test codeunit");
     let all: Vec<&Value> = procedures(&v).iter().collect();
@@ -479,7 +521,7 @@ fn a4_sums_equal_their_procedures() {
     assert_eq!(read(ws), (sum(&all), are_equal(&all)), "workspace computed");
     assert_eq!(
         read(ws),
-        (vec![32, 47, 4, 2, 18], vec![9, 6, 3]),
+        (vec![40, 55, 4, 2, 21], vec![15, 12, 3]),
         "workspace hand totals"
     );
 }

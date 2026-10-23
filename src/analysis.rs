@@ -255,6 +255,8 @@ impl<'s> Graph<'s> {
 /// source and fills `fan_in`/`fan_out` and the unused findings; `None` skips
 /// it (text/CSV print none of that). When the graph cannot be built, one
 /// warning with the reason goes to stderr and those stay empty.
+/// `test_quality` (#253) is filled only with `graph: Some` (JSON, the one
+/// format that prints it), so text and CSV pay for no body walk.
 pub fn analyze_project(
     project: &Path,
     graph: Option<DependencySource>,
@@ -262,6 +264,7 @@ pub fn analyze_project(
 ) -> anyhow::Result<AnalysisResult> {
     use rayon::prelude::*;
 
+    let want_tests = graph.is_some();
     let files =
         crate::source_text::discover_al_files(project, crate::source_text::NestedApps::Walk)?;
     let snap = graph.and_then(|source| {
@@ -305,6 +308,7 @@ pub fn analyze_project(
                     graph.as_ref(),
                     guid,
                     config.unused_procedures,
+                    want_tests,
                 )
             })
             .collect()
@@ -314,21 +318,15 @@ pub fn analyze_project(
     let mut unused = Vec::new();
     let mut tests = Vec::new();
     let mut own_at: HashMap<&str, HashMap<usize, usize>> = HashMap::new();
-    for (f, (m, u, t, own)) in files.iter().zip(per_file) {
-        metrics.extend(m);
-        unused.extend(u);
-        tests.extend(t);
-        own_at.insert(&f.rel_posix, own.into_iter().collect());
+    for (f, rows) in files.iter().zip(per_file) {
+        metrics.extend(rows.metrics);
+        unused.extend(rows.unused);
+        tests.extend(rows.tests);
+        own_at.insert(&f.rel_posix, rows.own_at.into_iter().collect());
     }
     if let Some(g) = &graph {
         let calls = crate::test_quality::CallMap::new(g.snap, &roots, &own_at);
-        for t in &mut tests {
-            if let (Some(id), Some(root)) = (&t.node, roots.get(&t.path)) {
-                let n = calls.reachable(root, id, t.assert_count);
-                t.assert_count_reachable = Some(n);
-                t.zero_assert = Some(n == 0);
-            }
-        }
+        fill_reachable(&mut tests, &calls, &roots);
     }
     let mut findings: Vec<Finding> = metrics
         .iter()
@@ -362,14 +360,34 @@ fn app_root(project: &Path, rel_posix: &str) -> String {
     folders[..root_len].join("/")
 }
 
-/// One file's metrics rows, `unused_procedure` findings, `[Test]` rows, and
-/// the own assert count of each routine with a body (by start byte).
-type FileRows = (
-    Vec<ProcedureMetrics>,
-    Vec<Finding>,
-    Vec<TestProcedure>,
-    Vec<(usize, usize)>,
-);
+/// With a call graph, every test's reachable count. A test the graph does not
+/// hold (no matching declaration) has no known callees, so it gets its own
+/// count: one such test must not make the codeunit and workspace sums `null`.
+fn fill_reachable(
+    tests: &mut [TestProcedure],
+    calls: &crate::test_quality::CallMap<'_>,
+    roots: &HashMap<String, String>,
+) {
+    for t in tests {
+        let n = match (&t.node, roots.get(&t.path)) {
+            (Some(id), Some(root)) => calls.reachable(root, id, t.assert_count),
+            _ => t.assert_count,
+        };
+        t.assert_count_reachable = Some(n);
+        t.zero_assert = Some(n == 0);
+    }
+}
+
+/// What [`file_metrics`] finds in one file.
+#[derive(Default)]
+struct FileRows {
+    metrics: Vec<ProcedureMetrics>,
+    unused: Vec<Finding>,
+    /// One row per `[Test]` routine (empty unless asked for).
+    tests: Vec<TestProcedure>,
+    /// Each routine with a body: (start byte, own assert count).
+    own_at: Vec<(usize, usize)>,
+}
 
 /// One file's rows and `unused_procedure` findings. With a graph that holds
 /// the file, the rows come from the snapshot's OWN parse and join its
@@ -382,10 +400,11 @@ fn file_metrics(
     graph: Option<&Graph<'_>>,
     app_guid: Option<&str>,
     report_unused: bool,
+    want_tests: bool,
 ) -> FileRows {
-    use crate::engine::ids::encode_object_id;
+    use crate::engine::ids::{encode_object_id, to_stable_object_id};
     use crate::program::body::ir_walk::{ir_object_key, ir_object_type, ir_routine_kind};
-    use crate::program::body::l2_workspace::{stable_object_id_ir, stable_routine_id_ir};
+    use crate::program::body::l2_workspace::stable_routine_id_ir;
     use al_syntax::ir::{ObjectKind, RoutineKind};
 
     // The file's declarations by start byte: one lookup per routine.
@@ -421,10 +440,10 @@ fn file_metrics(
         // Interface and ControlAddIn members are signatures: never a call
         // target, so no routine_id and no fan_in/fan_out (null, not 0).
         let signature_only = matches!(obj.kind, ObjectKind::Interface | ObjectKind::ControlAddIn);
-        let stable_object_id = app_guid
-            .filter(|_| !signature_only)
-            .and_then(|guid| stable_object_id_ir(guid, obj));
-        // The internal form of the same id (`<guid>/<Type>/<key>`), same nulls.
+        // The internal object id `<guid>/<Type>/<key>` (`test_quality`'s
+        // `object_stable_id`, the issue's object key), computed once; the
+        // stable `<guid>:<Type>:<key>` form behind `routine_id` comes from it,
+        // so both are null in the same cases.
         let internal_object_id = app_guid.filter(|_| !signature_only).and_then(|guid| {
             Some(encode_object_id(
                 guid,
@@ -432,6 +451,7 @@ fn file_metrics(
                 &ir_object_key(obj),
             ))
         });
+        let stable_object_id = internal_object_id.as_deref().map(to_stable_object_id);
         for r in &obj.routines {
             let procedure_name = if r.name.is_empty() {
                 match r.kind {
@@ -476,11 +496,13 @@ fn file_metrics(
                 .as_deref()
                 .filter(|_| !r.name.is_empty())
                 .map(|o| stable_routine_id_ir(o, r));
-            let body = crate::test_quality::body_counts(&file.ir, obj, r);
+            let body = want_tests
+                .then(|| crate::test_quality::body_counts(&file.ir, obj, r))
+                .flatten();
             if let Some(b) = &body {
                 own_at.push((r.origin.byte.start, b.own()));
             }
-            if crate::test_quality::is_test(r) {
+            if want_tests && crate::test_quality::is_test(r) {
                 let b = body.unwrap_or_default();
                 tests.push(TestProcedure {
                     path: rel_posix.to_string(),
@@ -526,7 +548,12 @@ fn file_metrics(
             });
         }
     }
-    (metrics, unused, tests, own_at)
+    FileRows {
+        metrics,
+        unused,
+        tests,
+        own_at,
+    }
 }
 
 /// Human-readable object-type label (e.g. `Codeunit`, `Pageextension`), matching
@@ -1294,21 +1321,30 @@ mod tests {
         let graph = Graph::new(&snap);
 
         // Precondition: the held file's uncalled procedure IS graph-backed and unused.
-        let (rows, unused, ..) =
-            file_metrics("Held.Codeunit.al", &held, Some(&graph), Some("g"), true);
+        let held_rows = file_metrics(
+            "Held.Codeunit.al",
+            &held,
+            Some(&graph),
+            Some("g"),
+            true,
+            true,
+        );
+        let (rows, unused) = (held_rows.metrics, held_rows.unused);
         assert_eq!(
             (rows.len(), rows[0].fan_in, rows[0].fan_out),
             (1, Some(0), Some(0))
         );
         assert_eq!(unused.len(), 1, "precondition: Held.Uncalled is unused");
 
-        let (rows, unused, ..) = file_metrics(
+        let missing_rows = file_metrics(
             "Missing.Codeunit.al",
             &missing,
             Some(&graph),
             Some("g"),
             true,
+            true,
         );
+        let (rows, unused) = (missing_rows.metrics, missing_rows.unused);
         assert_eq!(rows.len(), 1, "the missing file is still analyzed");
         assert_eq!(
             rows[0].fan_in, None,
@@ -1322,5 +1358,65 @@ mod tests {
             unused.is_empty(),
             "join miss: no unused finding: {unused:?}"
         );
+    }
+
+    /// #253 CR1: with a graph, a `[Test]` the graph does not hold (a join
+    /// miss, stated by hand as above) gets its own count as its reachable
+    /// count, so the sums stay numeric. `null` is only for "no graph".
+    #[test]
+    fn join_missed_test_keeps_its_own_count() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"25300000-0000-4000-8000-000000000009","name":"JoinMiss","publisher":"t","version":"1.0.0.0","idRanges":[{"from":50100,"to":50199}],"runtime":"14.0"}"#,
+        )
+        .expect("app.json");
+        let unit = |id: u32, name: &str, asserts: &str| {
+            format!(
+                "codeunit {id} \"{name}\"\n{{\n    Subtype = Test;\n\n    var\n        Assert: Codeunit Assert;\n\n    [Test]\n    procedure T()\n    begin\n{asserts}    end;\n}}\n"
+            )
+        };
+        let one = "        Assert.IsTrue(true, '');\n";
+        let held = dir.path().join("Held.Codeunit.al");
+        std::fs::write(&held, unit(50100, "Held", one)).expect("held");
+        let snap = LspSnapshot::build_full(dir.path()).expect("snapshot");
+        let missing = dir.path().join("Missing.Codeunit.al");
+        std::fs::write(&missing, unit(50101, "Missing", &one.repeat(2))).expect("missing");
+        let graph = Graph::new(&snap);
+
+        let mut tests = Vec::new();
+        let mut own_at: HashMap<&str, HashMap<usize, usize>> = HashMap::new();
+        let mut roots = HashMap::new();
+        for (rel, abs) in [
+            ("Held.Codeunit.al", &held),
+            ("Missing.Codeunit.al", &missing),
+        ] {
+            let rows = file_metrics(rel, abs, Some(&graph), Some("g"), false, true);
+            own_at.insert(rel, rows.own_at.into_iter().collect());
+            tests.extend(rows.tests);
+            roots.insert(rel.to_string(), String::new());
+        }
+        assert_eq!(tests.len(), 2, "precondition: two test rows");
+        assert!(
+            tests[0].node.is_some(),
+            "precondition: Held.T is in the graph"
+        );
+        assert!(
+            tests[1].node.is_none(),
+            "precondition: Missing.T is a join miss"
+        );
+
+        let calls = crate::test_quality::CallMap::new(&snap, &roots, &own_at);
+        fill_reachable(&mut tests, &calls, &roots);
+        assert_eq!(tests[0].assert_count_reachable, Some(1));
+        assert_eq!(
+            tests[1].assert_count_reachable,
+            Some(2),
+            "own count, not null"
+        );
+        assert_eq!(tests[1].zero_assert, Some(false));
+        let tq = TestQuality::new(tests);
+        assert_eq!(tq.workspace.assert_count_reachable, Some(3));
+        assert_eq!(tq.workspace.zero_assert_procedures, Some(0));
     }
 }

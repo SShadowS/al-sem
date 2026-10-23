@@ -202,4 +202,20 @@ codeunit 50200 "TQ Main Tests"
         Assert.IsTrue(true, '');
         Cust.FindFirst();
     end;
+
+    [Test]
+    procedure DateTimeBigIntegerLiterals()
+    var
+        Dt: Date;
+        Tm: Time;
+        DtTm: DateTime;
+        Big: BigInteger;
+    begin
+        Assert.AreEqual(0D, Dt, '');
+        Assert.AreEqual(0T, Tm, '');
+        Assert.AreEqual(0DT, DtTm, '');
+        Assert.AreEqual(20261023D, Dt, '');
+        Assert.AreEqual(123L, Big, '');
+        Assert.AreEqual(-123L, Big, '');
+    end;
 }
