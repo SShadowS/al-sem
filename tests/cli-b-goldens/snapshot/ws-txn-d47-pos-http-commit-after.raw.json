@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "11111111-0000-0000-0000-0000000d4702",
       "name": "D47 HTTP Commit After Pos",
       "publisher": "PT",
+      "role": "primary",
       "version": "1.0.0.0"
     }
   ],
@@ -298,7 +300,7 @@
       "stableId": "11111111-0000-0000-0000-0000000d4702:Table:50100#K0"
     }
   ],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [],
   "workspaceFingerprint": "b8c1a945e4edfea887c05e1dfe4a05cd92953972fc5ee005c195f03c170a5e84"
 }

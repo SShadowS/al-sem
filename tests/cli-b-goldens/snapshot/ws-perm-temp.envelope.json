@@ -6,11 +6,13 @@
   "kind": "capability-snapshot",
   "payload": {
     "analysisGaps": [],
+    "analysisUniverse": "single-app",
     "apps": [
       {
         "appGuid": "11111111-0000-0000-0000-00000000e130",
         "name": "Perm Temp",
         "publisher": "PT",
+        "role": "primary",
         "version": "1.0.0.0"
       }
     ],
@@ -421,7 +423,7 @@
         "stableId": "11111111-0000-0000-0000-00000000e130:Table:50300#K0"
       }
     ],
-    "snapshotSchemaVersion": 3,
+    "snapshotSchemaVersion": 4,
     "typedEdges": [],
     "workspaceFingerprint": "fa51bcfce9d2a57cc00d3dac8b02a81defbfeef3ce8212afcf017cf9def216a2"
   },

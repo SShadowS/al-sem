@@ -13,5 +13,12 @@ Task 3.3 (al-sem parity retirement):
   cli_b_diff_differential`) and witness-diffed — all 24 are byte-identical
   to the witness copy.
 
+The 12 `snapshots/*.snap.json` inputs were upgraded by hand from snapshot
+schema 3 to schema 4 for #220 (2026-10-22), with exactly three edits each and
+nothing else: `"schemaVersion": 3` became `4`; `"analysisUniverse":
+"single-app"` was added (in its sorted place, after `analysisGaps`); and
+`"role": "primary"` was added to the one `apps[]` row. Every diff output stayed
+byte-identical.
+
 `al-sem-OBOLETE` (the source of the witness copies) is a frozen, read-only
 archive — it is never a live oracle for this repo.

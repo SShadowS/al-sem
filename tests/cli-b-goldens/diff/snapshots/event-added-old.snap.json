@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "dd7e7f7g-0007-0007-0007-000000000007",
       "name": "Diff Event Added App",
       "publisher": "DiffTest",
+      "role": "primary",
       "version": "1.0.0.0"
     }
   ],
@@ -172,7 +174,7 @@
       "stableId": "dd7e7f7g-0007-0007-0007-000000000007:Table:50700#K0"
     }
   ],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [],
   "workspaceFingerprint": "ed1cd6b40029641e0f6617ffd3292c10490becc4842094b6d2d6aa02f6a76dd6"
 }

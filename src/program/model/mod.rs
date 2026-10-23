@@ -20,6 +20,7 @@ pub mod ix;
 pub mod program_calls;
 pub mod projection;
 pub mod record_types;
+pub mod role;
 pub mod symbol_table;
 pub mod taxonomy;
 pub mod workspace;

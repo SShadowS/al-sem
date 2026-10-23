@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "aaaabbbb-cccc-dddd-eeee-000000000d51",
       "name": "D51 Retry Side Effect Duplication JobQueue",
       "publisher": "PT",
+      "role": "primary",
       "version": "1.0.0.0"
     }
   ],
@@ -211,7 +213,7 @@
     ]
   },
   "schemaFacts": [],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [],
   "workspaceFingerprint": "37a0814c1077c76f9f8ac81ad844302230b98ba1e215572a5cc7a9a3541c2f28"
 }

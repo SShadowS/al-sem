@@ -407,4 +407,116 @@ mod tests {
         total::<crate::program::model::events::EventSymbol>();
         total::<crate::program::model::events::EventEdge>();
     }
+
+    fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+        std::fs::create_dir_all(dst).unwrap();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let to = dst.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_dir(&entry.path(), &to);
+            } else {
+                std::fs::copy(entry.path(), &to).unwrap();
+            }
+        }
+    }
+
+    /// T1c (#220 spec §5; supplementary agreement check, not use coverage,
+    /// S13): 11b's `role_of` (kept, spec §3.1) agrees with THE role rule on
+    /// every row of a cross-app model holding both kinds of dependency row: the
+    /// symbol-only ABI rows of R5B's two apps, and the `dep:` source rows of an
+    /// embedded-source dependency whose manifest guid is UPPER case.
+    ///
+    /// For every row, `role_of(r)` is `None` exactly when
+    /// `routine_role(r) == Primary`, and otherwise `Some` of the row's lowercase
+    /// `app_guid`. Break 1: `role_of` treats `dep:` as primary -> fails. Break 2:
+    /// `role_of` drops the lowercase step -> the upper-case guid fails.
+    #[test]
+    fn projection_role_of_agrees_with_rule() {
+        use crate::program::model::role::Role;
+        use std::io::Write;
+        const DEP: &str = "CCCC0220-0000-0000-0000-0000000220CC";
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        let r5b = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r2-5b-fixtures/cross-app-resolution");
+        copy_dir(&r5b, &ws);
+        std::fs::write(
+            ws.join("app.json"),
+            format!(
+                r#"{{"id":"11111111-0000-0000-0000-0000000000aa","name":"R2.5b Host","publisher":"TestPub","version":"1.0.0.0","runtime":"11.0","idRanges":[{{"from":50000,"to":99999}}],"dependencies":[{{"id":"dddddddd-0000-0000-0000-000000000001","name":"Lib Core","publisher":"TestPub","version":"1.0.0.0"}},{{"id":"eeeeeeee-0000-0000-0000-000000000002","name":"Lib Ext","publisher":"TestPub","version":"1.0.0.0"}},{{"id":"{DEP}","name":"XSrc","publisher":"probe","version":"1.0.0.0"}}]}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            ws.join("src/CallSrc.al"),
+            "codeunit 70100 \"Host Src\"\n{\n    procedure Go()\n    var\n        D: Codeunit \"Src Lib\";\n    begin\n        D.Work();\n    end;\n}\n",
+        )
+        .unwrap();
+        let dep_al = "codeunit 50320 \"Src Lib\"\n{\n    procedure Work()\n    begin\n        Helper();\n    end;\n\n    procedure Helper()\n    begin\n    end;\n}\n";
+        let manifest = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{DEP}" Name="XSrc" Publisher="probe" Version="1.0.0.0" Runtime="13.0" /></Package>"#
+        );
+        let symbols = format!(
+            r#"{{"RuntimeVersion":"13.0","AppId":"{DEP}","Name":"XSrc","Publisher":"probe","Version":"1.0.0.0"}}"#
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut bytes);
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, text) in [
+                ("NavxManifest.xml", manifest.as_str()),
+                ("SymbolReference.json", symbols.as_str()),
+                ("src/Lib.al", dep_al),
+            ] {
+                zip.start_file(name, opts).unwrap();
+                zip.write_all(text.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let mut out =
+            std::fs::File::create(ws.join(".alpackages").join("probe_XSrc_1.0.0.0.app")).unwrap();
+        out.write_all(&[0u8; 40]).unwrap();
+        out.write_all(bytes.get_ref()).unwrap();
+
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
+            .expect("cross-app base");
+        let model = &base.resolved;
+        let routines = &model.workspace.routines;
+        // Preconditions: both kinds of dependency row, and an upper-case guid.
+        assert!(
+            routines
+                .iter()
+                .any(|r| r.source_anchor.source_unit_id.is_empty()
+                    && r.app_guid
+                        .eq_ignore_ascii_case("dddddddd-0000-0000-0000-000000000001")),
+            "precondition: a symbol-only dependency row"
+        );
+        assert!(
+            routines
+                .iter()
+                .any(|r| r.source_anchor.source_unit_id.starts_with("dep:")
+                    && r.app_guid.chars().any(|c| c.is_ascii_uppercase())),
+            "precondition: a `dep:` source row with an upper-case app guid: {:?}",
+            routines
+                .iter()
+                .map(|r| (&r.source_anchor.source_unit_id, &r.app_guid))
+                .collect::<Vec<_>>()
+        );
+        for r in routines {
+            let want = match model.routine_role(r) {
+                Role::Primary => None,
+                Role::Dependency => Some(r.app_guid.to_ascii_lowercase()),
+            };
+            assert_eq!(
+                super::role_of(r),
+                want,
+                "{} ({}, unit {:?})",
+                r.name,
+                r.app_guid,
+                r.source_anchor.source_unit_id
+            );
+        }
+    }
 }

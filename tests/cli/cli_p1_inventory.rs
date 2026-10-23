@@ -89,8 +89,9 @@ fn inventory_only_projection_subset_self_consistency() {
         serde_json::from_str(&inv_json).expect("inventory doc must parse as JSON");
 
     // (a) Envelope header checks: kind must be "routine-inventory", schemaVersion
-    //     must be "1.1.0" for the inventory doc (engine-e2: additive enclosingMember/
-    //     originatingObject fields).
+    //     must be "1.2.0" for the inventory doc (engine-e2: additive enclosingMember/
+    //     originatingObject fields; #220 (T11): additive `apps[].role` and
+    //     `payload.analysisUniverse`).
     assert_eq!(
         inv_doc["kind"].as_str().unwrap_or(""),
         "routine-inventory",
@@ -98,8 +99,16 @@ fn inventory_only_projection_subset_self_consistency() {
     );
     assert_eq!(
         inv_doc["schemaVersion"].as_str().unwrap_or(""),
-        "1.1.0",
-        "inventory doc schemaVersion must be '1.1.0'"
+        "1.2.0",
+        "inventory doc schemaVersion must be '1.2.0'"
+    );
+    assert_eq!(
+        inv_doc["payload"]["apps"][0]["role"], "primary",
+        "#220: the inventory doc's apps rows carry role"
+    );
+    assert_eq!(
+        inv_doc["payload"]["analysisUniverse"], "single-app",
+        "#220: the inventory payload carries analysisUniverse"
     );
 
     // (a) Projection-subset self-consistency: apps, coverage, rootClassifications,
@@ -472,8 +481,8 @@ fn object_level_trigger_row_has_no_member_keys() {
         );
     }
 
-    // schemaVersion is 1.1.0 on this doc too.
-    assert_eq!(doc["schemaVersion"].as_str(), Some("1.1.0"));
+    // schemaVersion is 1.2.0 on this doc too (#220).
+    assert_eq!(doc["schemaVersion"].as_str(), Some("1.2.0"));
 }
 
 /// `--inventory-only` with a query selector (e.g. `--routine`) must be REJECTED.

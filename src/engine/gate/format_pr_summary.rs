@@ -316,7 +316,9 @@ mod tests {
             name: "DoThing".to_string(),
             kind: "procedure".to_string(),
             attributes_parsed: vec![],
-            app_guid: object_id.split('/').next().unwrap_or("").to_string(),
+            app_guid: crate::engine::ids::object_id_app_guid(object_id)
+                .unwrap_or("")
+                .to_string(),
             object_number: 50000,
             normalized_signature_hash: "hash".to_string(),
             body_available: true,

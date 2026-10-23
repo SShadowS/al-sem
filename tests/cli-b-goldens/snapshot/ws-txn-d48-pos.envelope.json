@@ -6,11 +6,13 @@
   "kind": "capability-snapshot",
   "payload": {
     "analysisGaps": [],
+    "analysisUniverse": "single-app",
     "apps": [
       {
         "appGuid": "11111111-0000-0000-0000-00000000d480",
         "name": "D48 IO In Loop Pos",
         "publisher": "PT",
+        "role": "primary",
         "version": "1.0.0.0"
       }
     ],
@@ -522,7 +524,7 @@
       ]
     },
     "schemaFacts": [],
-    "snapshotSchemaVersion": 3,
+    "snapshotSchemaVersion": 4,
     "typedEdges": [
       {
         "callsiteId": "0b1ef04c0e266459/f873cf14844a1f76705035492ed87950710976b98936aa66391b519d9b334e3f/cs0",

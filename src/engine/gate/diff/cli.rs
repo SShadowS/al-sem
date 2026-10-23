@@ -2,7 +2,7 @@
 //! detection, snapshot/workspace loading, the `--strict` analyzer-diagnostic gate
 //! (workspace-mode sides only, before the rename overlay; #89), the rename
 //! overlay, format dispatch, `--out`, the ws-mode stderr note, and the exit gates
-//! (`--fail-on`, strict-coverage).
+//! (a fatal preflight first, #220; then strict-coverage and `--fail-on`).
 
 use std::path::Path;
 
@@ -136,6 +136,7 @@ fn load_snapshot_from_workspace(
         driver_version,
         deterministic,
         roots_config_ignored: false,
+        universe: crate::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
     };
     let snapshot = compose_full_snapshot(view.model(), &opts);
     drop(view);
@@ -297,7 +298,8 @@ pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
         .iter()
         .any(|d| d.kind == "coverage-incomplete");
     let mut exit_code: u8 = 0;
-    if opts.coverage_policy == CoveragePolicy::Strict && strict_coverage_failed {
+    // #220 D5.5: a fatal preflight (the diff did not run) exits 1, first.
+    if result.fatal || (opts.coverage_policy == CoveragePolicy::Strict && strict_coverage_failed) {
         exit_code = 1;
     } else if let Some(threshold) = opts.fail_on {
         let t = threshold.rank();

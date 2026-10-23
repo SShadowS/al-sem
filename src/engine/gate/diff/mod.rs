@@ -104,6 +104,8 @@ pub struct DiffEngineResult {
     pub findings: Vec<DiffFinding>,
     pub diagnostics: Vec<DiffDiagnostic>,
     pub summary: DiffSummary,
+    /// A fatal preflight stopped the diff (#220 D5.5: the CLI exits 1).
+    pub fatal: bool,
 }
 
 pub struct DiffEngineOptions {
@@ -149,6 +151,7 @@ pub fn run_diff_engine(
             findings: Vec::new(),
             diagnostics,
             summary: empty_summary(),
+            fatal: true,
         };
     }
 
@@ -179,6 +182,7 @@ pub fn run_diff_engine(
         findings: sorted,
         diagnostics,
         summary,
+        fatal: false,
     }
 }
 

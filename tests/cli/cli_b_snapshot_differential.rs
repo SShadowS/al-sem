@@ -165,6 +165,7 @@ fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, Model, 
         driver_version: VERSION_OVERRIDE,
         deterministic: true,
         roots_config_ignored: false,
+        universe: al_sem::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
     };
     let tree = compose_full_snapshot(&resolved, &opts);
     (tree, resolved, fixture_dir)
@@ -301,11 +302,11 @@ fn cbor_gz_matches_goldens() {
 
 #[test]
 fn shards_match_goldens() {
-    let (tree, _resolved, _ws_dir) = compose_for(SHARD_FIXTURE);
+    let (tree, resolved, _ws_dir) = compose_for(SHARD_FIXTURE);
     let shards_base = goldens_dir().join("shards").join(SHARD_FIXTURE);
 
     for (variant, primary_only) in [("all", false), ("primary", true)] {
-        let files = serialize_sharded(&tree, VERSION_OVERRIDE, primary_only);
+        let files = serialize_sharded(&tree, &resolved, VERSION_OVERRIDE, primary_only);
         let dir = shards_base.join(variant);
         if regen::regen_mode() {
             // Fresh write of the exact shard set (clear stale files first).

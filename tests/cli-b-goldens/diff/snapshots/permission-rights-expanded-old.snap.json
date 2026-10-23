@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "dd3p3e3f-0003-0003-0003-000000000003",
       "name": "Diff Permission Expanded App",
       "publisher": "DiffTest",
+      "role": "primary",
       "version": "1.0.0.0"
     }
   ],
@@ -186,7 +188,7 @@
       "stableId": "dd3p3e3f-0003-0003-0003-000000000003:Table:50300#K0"
     }
   ],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [],
   "workspaceFingerprint": "6b1cf0515c4d6d37cb43765bba14585dadc42160b01bb8a335e68fee22705a16"
 }

@@ -24,6 +24,8 @@
 use indexmap::IndexMap;
 
 use crate::engine::gate::cbor::CborValue;
+use crate::engine::l5::snapshot_full::{ANALYSIS_UNIVERSES, SNAPSHOT_SCHEMA_VERSION};
+use crate::program::model::role::Role;
 
 /// On-disk snapshot format. Mirrors al-sem `SnapshotFormat` (the diff-relevant
 /// subset; `json` covers raw + enveloped).
@@ -34,14 +36,11 @@ pub enum SnapshotFormat {
     CborGz,
 }
 
-/// The cli-b snapshot schema version (al-sem `SNAPSHOT_SCHEMA_VERSION = 3`).
-const SNAPSHOT_SCHEMA_VERSION: i64 = 3;
-
 /// Deserialize a snapshot from bytes into an insertion-ordered [`CborValue`] map.
 ///
 /// Auto-detects the format unless `format_hint` is given. Asserts the snapshot
-/// `schemaVersion == 3` (pre-release policy: old versions are rejected with a
-/// clear error, never a panic).
+/// `schemaVersion == SNAPSHOT_SCHEMA_VERSION` (pre-release policy: old versions
+/// are rejected with a clear error and the remedy, never a panic).
 pub fn deserialize_snapshot(
     bytes: &[u8],
     format_hint: Option<SnapshotFormat>,
@@ -84,7 +83,7 @@ pub fn deserialize_snapshot(
         Some(SNAPSHOT_SCHEMA_VERSION) => {}
         Some(other) => {
             return Err(format!(
-                "deserializeSnapshot: unknown schemaVersion {other} (this build only handles v{SNAPSHOT_SCHEMA_VERSION})"
+                "deserializeSnapshot: snapshot schemaVersion {other} is not supported by this build (v{SNAPSHOT_SCHEMA_VERSION}); re-create it with 'alsem fingerprint'"
             ));
         }
         None => {
@@ -92,9 +91,72 @@ pub fn deserialize_snapshot(
         }
     }
 
+    validate_universe_and_roles(&parsed)?;
+
     // Map key insertion order is already preserved (serde_json `preserve_order` is
     // on; the CBOR decoder uses IndexMap) — nothing more to do.
     Ok(parsed)
+}
+
+/// #220 D5.2: a v4 file names its `analysisUniverse` and every `apps[]` row's
+/// `role`, with exactly one `primary` row when `apps[]` is non-empty (an empty
+/// `apps[]`, no `app.json` id, stays accepted; a missing or non-array `apps`
+/// does not).
+fn validate_universe_and_roles(snap: &CborValue) -> Result<(), String> {
+    let CborValue::Map(m) = snap else {
+        return Ok(());
+    };
+    let shown = |v: Option<&CborValue>| match v {
+        Some(CborValue::Text(t)) => format!("{t:?}"),
+        Some(other) => format!("{other:?}"),
+        None => "none".to_string(),
+    };
+    match m.get("analysisUniverse") {
+        Some(CborValue::Text(u)) if ANALYSIS_UNIVERSES.contains(&u.as_str()) => {}
+        other => {
+            return Err(format!(
+                "deserializeSnapshot: analysisUniverse must be one of {ANALYSIS_UNIVERSES:?}, found {}",
+                shown(other)
+            ));
+        }
+    }
+    let apps = match m.get("apps") {
+        Some(CborValue::Array(a)) => a.as_slice(),
+        other => {
+            return Err(format!(
+                "deserializeSnapshot: apps must be an array (empty when the workspace has no app id), found {}",
+                shown(other)
+            ));
+        }
+    };
+    let mut primaries = 0;
+    for (i, app) in apps.iter().enumerate() {
+        let role = match app {
+            CborValue::Map(a) => a.get("role"),
+            _ => None,
+        };
+        match role {
+            Some(CborValue::Text(r)) if r == Role::Primary.as_str() => primaries += 1,
+            Some(CborValue::Text(r)) if r == Role::Dependency.as_str() => {}
+            other => {
+                return Err(format!(
+                    "deserializeSnapshot: apps[{i}].role must be \"primary\" or \"dependency\", found {}",
+                    shown(other)
+                ));
+            }
+        }
+    }
+    if !apps.is_empty() && primaries != 1 {
+        let hint = if primaries == 0 {
+            " (a dependency shard is not a diff input: diff the full snapshot or the primary shard)"
+        } else {
+            ""
+        };
+        return Err(format!(
+            "deserializeSnapshot: apps[] must hold exactly one role \"primary\" row, found {primaries}{hint}"
+        ));
+    }
+    Ok(())
 }
 
 /// Auto-detect the snapshot format from the leading bytes (al-sem `detectFormat`).
@@ -451,7 +513,7 @@ mod tests {
     #[test]
     fn roundtrip_simple_object() {
         let v = m(&[
-            ("schemaVersion", CborValue::Int(3)),
+            ("schemaVersion", CborValue::Int(V)),
             ("name", CborValue::Text("hello".into())),
             ("flag", CborValue::Bool(true)),
             ("none", CborValue::Null),
@@ -474,7 +536,7 @@ mod tests {
     fn roundtrip_nested() {
         let inner = m(&[("a", CborValue::Int(65536)), ("b", CborValue::Int(255))]);
         let v = m(&[
-            ("schemaVersion", CborValue::Int(3)),
+            ("schemaVersion", CborValue::Int(V)),
             ("nested", inner),
             (
                 "list",
@@ -531,32 +593,49 @@ mod tests {
         assert_eq!(detect_format(&[0xb9, 0x00, 0x00]), SnapshotFormat::Cbor);
     }
 
+    /// The build's snapshot schema version (#220: the one pub constant).
+    const V: i64 = crate::engine::l5::snapshot_full::SNAPSHOT_SCHEMA_VERSION;
+
     #[test]
     fn deserialize_json_raw() {
-        let json = r#"{"schemaVersion":3,"alsemVersion":"cli-b-v1","apps":[]}"#;
+        let json = format!(
+            r#"{{"schemaVersion":{V},"alsemVersion":"cli-b-v1","analysisUniverse":"single-app","apps":[]}}"#
+        );
         let tree = deserialize_snapshot(json.as_bytes(), None).expect("deserialize");
         let CborValue::Map(m) = tree else {
             panic!("not a map")
         };
-        assert!(matches!(m.get("schemaVersion"), Some(CborValue::Int(3))));
+        assert!(matches!(m.get("schemaVersion"), Some(CborValue::Int(v)) if *v == V));
     }
 
     #[test]
     fn deserialize_json_enveloped() {
-        let json = r#"{"kind":"capability-snapshot","schemaVersion":"1.1.0","alsemVersion":"cli-b-v1","deterministic":true,"generatedAt":"1970-01-01T00:00:00Z","diagnostics":[],"payload":{"snapshotSchemaVersion":3,"apps":[]}}"#;
+        let json = format!(
+            r#"{{"kind":"capability-snapshot","schemaVersion":"1.1.0","alsemVersion":"cli-b-v1","deterministic":true,"generatedAt":"1970-01-01T00:00:00Z","diagnostics":[],"payload":{{"snapshotSchemaVersion":{V},"analysisUniverse":"single-app","apps":[]}}}}"#
+        );
         let tree = deserialize_snapshot(json.as_bytes(), None).expect("deserialize");
         let CborValue::Map(m) = tree else {
             panic!("not a map")
         };
         // schemaVersion lifted from snapshotSchemaVersion.
-        assert!(matches!(m.get("schemaVersion"), Some(CborValue::Int(3))));
+        assert!(matches!(m.get("schemaVersion"), Some(CborValue::Int(v)) if *v == V));
         assert!(matches!(m.get("alsemVersion"), Some(CborValue::Text(s)) if s == "cli-b-v1"));
     }
 
+    /// #220 (D5.1): schema 3 is refused too, with the remedy.
     #[test]
     fn wrong_schema_version_errors() {
-        let json = r#"{"schemaVersion":2}"#;
-        assert!(deserialize_snapshot(json.as_bytes(), None).is_err());
+        for v in [2, 3] {
+            let json = format!(r#"{{"schemaVersion":{v}}}"#);
+            let err = deserialize_snapshot(json.as_bytes(), None)
+                .expect_err(&format!("schemaVersion {v} is refused"));
+            if v == 3 {
+                assert!(
+                    err.contains("re-create it with 'alsem fingerprint'"),
+                    "{err}"
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -608,7 +687,9 @@ mod tests {
         use std::io::Write as _;
 
         let v = m(&[
-            ("schemaVersion", CborValue::Int(3)),
+            ("schemaVersion", CborValue::Int(V)),
+            ("analysisUniverse", CborValue::Text("single-app".into())),
+            ("apps", CborValue::Array(Vec::new())),
             ("name", CborValue::Text("hello".into())),
         ]);
         let cbor_bytes = encode(&v);
@@ -624,7 +705,7 @@ mod tests {
         let CborValue::Map(map) = tree else {
             panic!("not a map")
         };
-        assert!(matches!(map.get("schemaVersion"), Some(CborValue::Int(3))));
+        assert!(matches!(map.get("schemaVersion"), Some(CborValue::Int(v)) if *v == V));
         assert!(matches!(map.get("name"), Some(CborValue::Text(s)) if s == "hello"));
     }
 }

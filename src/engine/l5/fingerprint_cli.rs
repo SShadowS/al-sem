@@ -432,6 +432,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             driver_version: opts.driver_version,
             deterministic: opts.deterministic,
             roots_config_ignored,
+            universe: crate::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
         };
         let tree = compose_full_snapshot(resolved, &full_opts);
 
@@ -467,7 +468,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         } else if let Some(mode) = opts.shard {
             // serialize_sharded: primaryOnly = (mode == PrimaryOnly).
             let primary_only = mode == ShardMode::PrimaryOnly;
-            let shards = serialize_sharded(&tree, opts.driver_version, primary_only);
+            let shards = serialize_sharded(&tree, resolved, opts.driver_version, primary_only);
             FingerprintOutput::Shards(shards.into_iter().map(|s| (s.name, s.bytes)).collect())
         } else if opts.format == FingerprintFormat::Cbor {
             FingerprintOutput::Binary(serialize_cbor(&tree))

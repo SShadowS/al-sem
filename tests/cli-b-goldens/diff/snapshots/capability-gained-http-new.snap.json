@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "dd2c2a2b-0002-0002-0002-000000000002",
       "name": "Diff New Capability App",
       "publisher": "DiffTest",
+      "role": "primary",
       "version": "1.0.0.1"
     }
   ],
@@ -142,7 +144,7 @@
     ]
   },
   "schemaFacts": [],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [],
   "workspaceFingerprint": "ce4704d0f0ec6dfc8a8679e636fdb2468549e452779e20b66721e78bf841d851"
 }

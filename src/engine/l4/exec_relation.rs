@@ -356,16 +356,15 @@ mod tests {
             failures.push(format!("{where_}: no cross-app model built"));
             return;
         };
-        let Some(primary) = x.resolved.primary_app.as_ref() else {
+        if x.resolved.primary_app.is_none() {
             failures.push(format!("{where_}: cross-app model has no primary app"));
             return;
-        };
-        let primary = primary.app_guid.to_ascii_lowercase();
+        }
         let ws = &x.resolved.workspace;
         let dep_ids: BTreeSet<String> = ws
             .routines
             .iter()
-            .filter(|r| r.app_guid.to_ascii_lowercase() != primary)
+            .filter(|r| x.resolved.routine_role(r) == crate::program::model::role::Role::Dependency)
             .map(|r| r.id.clone())
             .collect();
         check_case(

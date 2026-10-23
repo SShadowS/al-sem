@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "11111111-0000-0000-0000-00000000d340",
       "name": "D34 Commit In Loop",
       "publisher": "PT",
+      "role": "primary",
       "version": "1.0.0.0"
     }
   ],
@@ -489,7 +491,7 @@
     ]
   },
   "schemaFacts": [],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [
     {
       "callsiteId": "e09e92b394f6df1a/5bf249a23dc88d7f4b70ae320b08debd53d26bf9a6eb6a46584f9deee1d574bf/cs0",

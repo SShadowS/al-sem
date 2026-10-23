@@ -1,11 +1,13 @@
 {
   "alsemVersion": "cli-b-v1",
   "analysisGaps": [],
+  "analysisUniverse": "single-app",
   "apps": [
     {
       "appGuid": "dd5c5n5o-0005-0005-0005-000000000005",
       "name": "Diff Coverage Narrowed App",
       "publisher": "DiffTest",
+      "role": "primary",
       "version": "1.0.0.1"
     }
   ],
@@ -138,7 +140,7 @@
     ]
   },
   "schemaFacts": [],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "typedEdges": [
     {
       "callsiteId": "4823a6a1208a12ad/c45d5f611d7163033bb7acb99f27902ae05d8425bd5e4fcd7b1642f36e1a417a/cs0",

@@ -353,10 +353,7 @@ pub fn resolve_routine_selector<'a>(
 /// effect origin or an ancestor reached through an event. No primary app identity
 /// keeps every routine.
 fn is_primary_routine(resolved: &Model, r: &ModelRoutine) -> bool {
-    resolved
-        .primary_app
-        .as_ref()
-        .is_none_or(|a| r.app_guid.eq_ignore_ascii_case(&a.app_guid))
+    resolved.routine_role(r) == crate::program::model::role::Role::Primary
 }
 
 // ---------------------------------------------------------------------------

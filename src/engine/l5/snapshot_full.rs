@@ -21,23 +21,39 @@
 //! serde [`Serializer`] that targets `CborValue` and preserves map insertion order
 //! (`to_cbor_value`). The header derivers build their `CborValue` directly.
 
+use std::collections::{HashMap, HashSet};
+
 use indexmap::IndexMap;
 
 use crate::engine::gate::cbor::CborValue;
 use crate::engine::ids::{
-    ParamSpec, canonical_routine_signature, locale_compare, object_signature_fingerprint,
-    sha256_hex,
+    ParamSpec, canonical_routine_signature, locale_compare, object_id_app_guid,
+    object_signature_fingerprint, sha256_hex,
 };
-use crate::engine::l4::capability_cone::{CapabilityFact, build_r3a3_source_only_base};
-use crate::engine::l5::snapshot::compose_snapshot_from_base;
+use crate::engine::l4::capability_cone::{
+    CapabilityFact, R3a3SourceBase, R3a5CrossAppBase, build_r3a3_source_only_base,
+    routine_to_stable_of,
+};
+use crate::engine::l5::snapshot::{
+    SnapshotAnalysisGap, compose_snapshot_from_base, stable_routine_id,
+};
+use crate::program::model::role::{Role, role_of_stable_id};
 use crate::program::model::workspace::Model;
 use crate::program::resolve::semantic_golden::ClosureErrorKind;
 
 mod to_cbor;
 pub use to_cbor::to_cbor_value;
 
-/// The cli-b snapshot schema version (al-sem `SNAPSHOT_SCHEMA_VERSION = 3`).
-pub const SNAPSHOT_SCHEMA_VERSION: i64 = 3;
+mod key_classes;
+pub use key_classes::{
+    ClosureViolation, Domain, KeyClass, NON_REFERENCE_FIELDS, REFERENCES, SNAPSHOT_KEYS,
+    closure_violations, is_classified, is_reference,
+};
+pub(crate) use key_classes::{close_shard, filter_by_class};
+
+/// The snapshot schema version: THE one constant (the composer, the loader and
+/// the shard manifest read it). 4 (#220): `analysisUniverse` and `apps[].role`.
+pub const SNAPSHOT_SCHEMA_VERSION: i64 = 4;
 
 /// Options for composing the full cli-b snapshot.
 pub struct FullSnapshotOptions<'a> {
@@ -51,7 +67,48 @@ pub struct FullSnapshotOptions<'a> {
     /// True when a `roots.config.json` existed but was ignored via --no-roots-config
     /// (sets `inputsMetadata.rootsConfigIgnored`). Pass false for the cli-b dump.
     pub roots_config_ignored: bool,
+    /// #220 (spec §4.3): which model the snapshot describes
+    /// (`analysisUniverse`). Production callers pass `SingleApp` until step 9.
+    pub universe: SnapshotUniverse<'a>,
 }
+
+/// #220 (spec §4.3): the snapshot's universe (`analysisUniverse`).
+pub enum SnapshotUniverse<'a> {
+    SingleApp,
+    CrossApp(CrossAppUniverse<'a>),
+}
+
+/// The cross-app universe. Field private: built only by
+/// [`SnapshotUniverse::of`], so `rel`, `dependency_apps` and the model all
+/// come from ONE base (O18).
+pub struct CrossAppUniverse<'a> {
+    base: &'a crate::engine::l4::capability_cone::R3a5CrossAppBase,
+}
+
+impl<'a> SnapshotUniverse<'a> {
+    /// SingleApp -> SingleApp; CrossApp(base) -> CrossApp { base }.
+    #[must_use]
+    pub fn of(target: &'a crate::engine::gate::run::AnalysisTarget) -> Self {
+        match target {
+            crate::engine::gate::run::AnalysisTarget::SingleApp(_) => SnapshotUniverse::SingleApp,
+            crate::engine::gate::run::AnalysisTarget::CrossApp(b) => {
+                SnapshotUniverse::CrossApp(CrossAppUniverse { base: b.as_ref() })
+            }
+        }
+    }
+
+    /// The `analysisUniverse` value.
+    fn as_str(&self) -> &'static str {
+        match self {
+            SnapshotUniverse::SingleApp => ANALYSIS_UNIVERSES[0],
+            SnapshotUniverse::CrossApp(_) => ANALYSIS_UNIVERSES[1],
+        }
+    }
+}
+
+/// The `analysisUniverse` values, single-app then cross-app; the loader
+/// refuses any other (#220 D5.2).
+pub const ANALYSIS_UNIVERSES: [&str; 2] = ["single-app", "cross-app"];
 
 /// Compose the FULL `CapabilitySnapshot` as an insertion-ordered `CborValue` tree,
 /// in the exact `composeSnapshot` literal key order. This is the single source for
@@ -78,19 +135,56 @@ fn snapshot_rows(inputs: &crate::program::inputs::InputSet) -> &[SnapshotInput] 
 }
 
 pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> CborValue {
+    // O18: two revisions of one workspace share routine ids, so only a pointer
+    // check proves the model and the universe come from ONE base.
+    if let SnapshotUniverse::CrossApp(u) = &opts.universe {
+        assert!(
+            std::ptr::eq(resolved, &u.base.resolved),
+            "compose_full_snapshot: the model is not the cross-app universe's model"
+        );
+    }
+    // Final panel G5: `SingleApp` binds a single-app model, so a cross-app
+    // model cannot be written under `"analysisUniverse": "single-app"`. Every
+    // row kind with an app guid is checked: objects and tables are serialized
+    // as identities whether or not a routine of their app is.
+    if let SnapshotUniverse::SingleApp = &opts.universe {
+        let ws = &resolved.workspace;
+        let primary = |guid: &str| resolved.role_of_app(guid) == Role::Primary;
+        assert!(
+            ws.routines.iter().all(|r| primary(&r.app_guid))
+                && ws.objects.iter().all(|o| primary(&o.app_guid))
+                && ws.tables.iter().all(|t| primary(&t.app_guid)),
+            "compose_full_snapshot: SingleApp with a model that holds dependency rows"
+        );
+    }
     // The consumed-core (identities, capabilityFacts, typedEdges, …, eventDeclarations,
     // rootClassifications, [routineOrderFrames]).
     // One base (cone + producer solve) for the core and the permission facts.
     let base = build_r3a3_source_only_base(resolved);
-    let core = compose_snapshot_from_base(resolved, &base);
+    // The composer's own copy: filtering it leaves every other in-memory
+    // snapshot unfiltered (I8).
+    let mut core = compose_snapshot_from_base(resolved, &base);
 
     let inputs = snapshot_rows(opts.inputs);
     let workspace_fingerprint = compute_workspace_fingerprint(inputs, opts.driver_version);
 
-    let apps = project_apps(resolved);
+    // The three model-derived Inventory keys skip dependency rows by role.
     let contract_facts = derive_contracts(resolved);
     let schema_facts = derive_schema(resolved);
     let permission_facts = derive_permissions(resolved, &base);
+
+    // #220 D2/D4: cross-app, gaps by reach, then the key classes on the typed
+    // rows, before CBOR (O7). Single-app every row is primary (P3).
+    let mut referenced_apps = HashSet::new();
+    if let SnapshotUniverse::CrossApp(u) = &opts.universe {
+        core.analysis_gaps = reachable_gaps(&core.analysis_gaps, u.base, &base);
+        // No primary app: every row is primary, nothing to filter.
+        if let Some(p) = primary_app_guid(resolved) {
+            referenced_apps =
+                filter_by_class(&mut core, &permission_facts, p, &base.routine_to_stable);
+        }
+    }
+    let apps = project_apps(resolved, &core.identities, &referenced_apps, &opts.universe);
 
     // Serialize the consumed-core typed parts to ordered CborValues (their custom
     // `Serialize` impls drive the per-fact field order).
@@ -125,6 +219,10 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
         CborValue::Text(workspace_fingerprint),
     );
     m.insert("generatedAt".into(), CborValue::Text(generated_at));
+    m.insert(
+        "analysisUniverse".into(),
+        CborValue::Text(opts.universe.as_str().into()),
+    );
     m.insert("apps".into(), apps);
     m.insert("identities".into(), identities);
     m.insert("contractFacts".into(), contract_facts);
@@ -140,7 +238,6 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     m.insert("coverage".into(), coverage);
     m.insert("inputs".into(), to_cbor_inputs(inputs));
     m.insert("eventDeclarations".into(), event_declarations);
-
     // inputsMetadata + routineOrderFrames are attached AFTER ⇒ LAST (and only when
     // present, mirroring composeSnapshot's conditional `snap.x = …`).
     if opts.roots_config_ignored {
@@ -374,35 +471,161 @@ fn to_cbor_inputs(inputs: &[SnapshotInput]) -> CborValue {
 }
 
 // ===========================================================================
-// apps (compose.ts projectApps). Source-only: the single primary app.
-// Per-app field order: appGuid, publisher, name, version. Sorted by appGuid.
+// Gaps, serialized cross-app (#220 D2): every primary gap; a dependency gap
+// only when its subject is reachable over the cone.
 // ===========================================================================
 
-fn project_apps(resolved: &Model) -> CborValue {
-    let mut apps: Vec<(String, String, String, String)> = Vec::new();
-    if let Some(app) = &resolved.primary_app
-        && !app.app_guid.is_empty()
+/// The routines (internal ids) reachable over `rel.cone()` from every primary
+/// routine of the model (spec §4.2: the cone, not the cut, F9).
+fn reach(x: &R3a5CrossAppBase) -> HashSet<String> {
+    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in x.rel.cone() {
+        if let Some(to) = &e.to {
+            adj.entry(e.from.as_str()).or_default().push(to.as_str());
+        }
+    }
+    let m = &x.resolved;
+    let mut stack: Vec<&str> = m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| m.routine_role(r) == Role::Primary)
+        .map(|r| r.id.as_str())
+        .collect();
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Some(id) = stack.pop() {
+        if seen.insert(id.to_string()) {
+            stack.extend(adj.get(id).into_iter().flatten().copied());
+        }
+    }
+    seen
+}
+
+/// Keep a gap when it is primary, or its subject is a reachable routine's
+/// stable id, or a bare app guid owning a reachable routine (`object_id`'s
+/// first segment, case-insensitive).
+fn reachable_gaps(
+    gaps: &[SnapshotAnalysisGap],
+    x: &R3a5CrossAppBase,
+    source: &R3a3SourceBase,
+) -> Vec<SnapshotAnalysisGap> {
+    // No dependency gap (CDO: none, P5): nothing to test against the reach.
+    if gaps.iter().all(|g| g.role == Role::Primary.as_str()) {
+        return gaps.to_vec();
+    }
+    // The one case fold of an app guid, on both sides of the match (O13).
+    let app_key = |guid: &str| guid.to_ascii_lowercase();
+    let reach = reach(x);
+    let mut routines: HashSet<String> = HashSet::new();
+    let mut apps: HashSet<String> = HashSet::new();
+    for r in x.resolved.workspace.routines.iter() {
+        if reach.contains(&r.id) {
+            routines.insert(stable_routine_id(&r.id, &source.routine_to_stable));
+            apps.extend(object_id_app_guid(&r.object_id).map(app_key));
+        }
+    }
+    let kept: Vec<_> = gaps
+        .iter()
+        .filter(|g| {
+            g.role == Role::Primary.as_str()
+                || routines.contains(&g.subject)
+                || apps.contains(&app_key(&g.subject))
+        })
+        .cloned()
+        .collect();
+    // F21: an opaque boundary is a source-less app.
+    debug_assert!(
+        kept.iter()
+            .filter(|g| g.kind == "symbol-only-boundary")
+            .all(|g| !x
+                .dependency_apps
+                .iter()
+                .any(|a| a.guid.eq_ignore_ascii_case(&g.subject) && a.has_source)),
+        "a symbol-only-boundary gap names an app with source"
+    );
+    kept
+}
+
+// ===========================================================================
+// apps (compose.ts projectApps). Per-app field order: appGuid, publisher,
+// name, version, role (#220). The primary row first; cross-app, then every
+// dependency app that owns an `identities` row, sorted by appGuid.
+// ===========================================================================
+
+/// The workspace's own app guid, when it has one.
+fn primary_app_guid(resolved: &Model) -> Option<&str> {
+    resolved
+        .primary_app
+        .as_ref()
+        .map(|a| a.app_guid.as_str())
+        .filter(|g| !g.is_empty())
+}
+
+/// Step (6) of the key classes (spec §4.4): `referenced_apps` holds the
+/// lower-case guids a kept gap references; a guid with no app metadata gets
+/// no row (O4N1).
+fn project_apps(
+    resolved: &Model,
+    identities: &crate::engine::l5::snapshot::SnapshotIdentityTable,
+    referenced_apps: &HashSet<String>,
+    universe: &SnapshotUniverse,
+) -> CborValue {
+    let row = |guid: &str, publisher: &str, name: &str, version: &str, role: Role| {
+        let mut m: IndexMap<String, CborValue> = IndexMap::new();
+        m.insert("appGuid".into(), CborValue::Text(guid.to_string()));
+        m.insert("publisher".into(), CborValue::Text(publisher.to_string()));
+        m.insert("name".into(), CborValue::Text(name.to_string()));
+        m.insert("version".into(), CborValue::Text(version.to_string()));
+        m.insert("role".into(), CborValue::Text(role.as_str().into()));
+        CborValue::Map(m)
+    };
+    let mut arr: Vec<CborValue> = Vec::new();
+    let primary_guid = primary_app_guid(resolved);
+    if let Some(app) = resolved
+        .primary_app
+        .as_ref()
+        .filter(|_| primary_guid.is_some())
     {
-        apps.push((
-            app.app_guid.clone(),
-            app.publisher.clone(),
-            app.name.clone(),
-            app.version.clone(),
+        arr.push(row(
+            &app.app_guid,
+            &app.publisher,
+            &app.name,
+            &app.version,
+            Role::Primary,
         ));
     }
-    // al-sem `projectApps`: `.sort((x,y) => x.appGuid.localeCompare(y.appGuid))`.
-    apps.sort_by(|a, b| locale_compare(&a.0, &b.0));
-    let arr = apps
-        .into_iter()
-        .map(|(guid, publisher, name, version)| {
-            let mut m: IndexMap<String, CborValue> = IndexMap::new();
-            m.insert("appGuid".into(), CborValue::Text(guid));
-            m.insert("publisher".into(), CborValue::Text(publisher));
-            m.insert("name".into(), CborValue::Text(name));
-            m.insert("version".into(), CborValue::Text(version));
-            CborValue::Map(m)
-        })
-        .collect();
+    if let SnapshotUniverse::CrossApp(u) = universe {
+        // The dependency apps owning an identity, matched case-insensitively (O13).
+        let owners: std::collections::HashSet<String> = identities
+            .stable_ids
+            .iter()
+            .filter(|id| role_of_stable_id(primary_guid, id) == Role::Dependency)
+            .filter_map(|id| id.split_once(':').map(|(g, _)| g.to_ascii_lowercase()))
+            .collect();
+        let mut deps: Vec<&crate::program::model::workspace::DependencyApp> = u
+            .base
+            .dependency_apps
+            .iter()
+            .filter(|a| {
+                let g = a.guid.to_ascii_lowercase();
+                owners.contains(&g) || referenced_apps.contains(&g)
+            })
+            .collect();
+        // F22: every dependency row comes from a required app. A referenced
+        // gap guid with no metadata is the Closure check's to report (O4N1).
+        debug_assert!(
+            owners
+                .iter()
+                .all(|g| deps.iter().any(|a| a.guid.eq_ignore_ascii_case(g))),
+            "a serialized identity's app is missing from dependency_apps"
+        );
+        // al-sem `projectApps`: `.sort((x,y) => x.appGuid.localeCompare(y.appGuid))`.
+        deps.sort_by(|a, b| locale_compare(&a.guid, &b.guid));
+        arr.extend(
+            deps.into_iter()
+                .map(|a| row(&a.guid, &a.publisher, &a.name, &a.version, Role::Dependency)),
+        );
+    }
     CborValue::Array(arr)
 }
 
@@ -419,7 +642,12 @@ fn derive_contracts(resolved: &Model) -> CborValue {
     // (sort_key, CborValue) pairs.
     let mut rows: Vec<(String, CborValue)> = Vec::new();
 
-    for obj in &ws.objects {
+    // #220 Inventory: primary rows only (single-app every row is primary, P3).
+    for obj in ws
+        .objects
+        .iter()
+        .filter(|o| resolved.object_role(o) == Role::Primary)
+    {
         let stable_id = crate::engine::ids::to_stable_object_id(&obj.id);
         let mut m: IndexMap<String, CborValue> = IndexMap::new();
         m.insert("kind".into(), CborValue::Text("object".into()));
@@ -439,7 +667,11 @@ fn derive_contracts(resolved: &Model) -> CborValue {
         rows.push((stable_id, CborValue::Map(m)));
     }
 
-    for r in &ws.routines {
+    for r in ws
+        .routines
+        .iter()
+        .filter(|r| resolved.routine_role(r) == Role::Primary)
+    {
         // ⟨task-4-review.md finding I-1⟩ Read the stable id the assembly already
         // minted — do not re-derive it from parts. A future mint-site change (e.g.
         // the OUTSTANDING.md path-qualified-member wake condition) is not obligated
@@ -548,7 +780,12 @@ fn derive_schema(resolved: &Model) -> CborValue {
     let ws = &resolved.workspace;
     let mut rows: Vec<(String, CborValue)> = Vec::new();
 
-    for tbl in &ws.tables {
+    // #220 Inventory: primary tables only.
+    for tbl in ws
+        .tables
+        .iter()
+        .filter(|t| resolved.role_of_app(&t.app_guid) == Role::Primary)
+    {
         let stable_table = crate::engine::ids::to_stable_table_id(&tbl.app_guid, tbl.table_number);
         // table fact: shape {number, name}.
         let table_shape = sha256_hex(&format!(
@@ -654,7 +891,13 @@ fn derive_permissions(
 ) -> CborValue {
     let mut rows: Vec<(String, CborValue)> = Vec::new();
 
-    for r in &resolved.workspace.routines {
+    // #220 Inventory: primary subjects only.
+    for r in resolved
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| resolved.routine_role(r) == Role::Primary)
+    {
         // r.summary present iff the cone ran (base.cones has the routine).
         let Some(cone) = base.cones.get(&r.id) else {
             continue;
@@ -1083,7 +1326,8 @@ pub fn build_inventory_envelope(
 /// 1.1.0 (engine-e2): additive optional per-routine fields `enclosingMember` and
 /// `originatingObject` for member-trigger routines (field/control/action/dataitem
 /// trigger). Rust-only projection (not in the byte-parity harness).
-pub const INVENTORY_SCHEMA_VERSION: &str = "1.1.0";
+/// 1.2.0 (#220): additive `apps[].role` and `payload.analysisUniverse`.
+pub const INVENTORY_SCHEMA_VERSION: &str = "1.2.0";
 
 /// Case-insensitive secondary-sort comparator for the inventory `enclosingMember`
 /// key (RE-6). `None` orders before `Some`; two `Some`s compare on their
@@ -1166,10 +1410,12 @@ fn build_inventory_doc(
     // its own (the member is folded into the stable id); the secondary/tertiary
     // keys remain as fail-closed cover for the residual duplicate-stableRoutineId
     // shapes — see `inventory_row_cmp` (the sort below) and `case_insensitive_compare_opt`.
+    // #220: `routineInventory` is Inventory by `stableRoutineId` (primary only).
     let mut routine_rows: Vec<(String, Option<String>, Option<String>, CborValue)> = resolved
         .workspace
         .routines
         .iter()
+        .filter(|r| resolved.routine_role(r) == Role::Primary)
         .map(|r| {
             let mut m: IndexMap<String, CborValue> = IndexMap::new();
             m.insert("objectType".into(), CborValue::Text(r.object_type.clone()));
@@ -1201,6 +1447,7 @@ fn build_inventory_doc(
 
     // Build the lean payload (omits all heavy keys).
     let mut payload: IndexMap<String, CborValue> = IndexMap::new();
+    payload.insert("analysisUniverse".into(), get("analysisUniverse"));
     payload.insert("apps".into(), apps);
     payload.insert("identities".into(), identities);
     payload.insert("routineInventory".into(), routine_inventory);
@@ -1243,9 +1490,11 @@ pub struct ShardFile {
 /// raw-JSON `CapabilitySnapshot` that inherits `generatedAt` from `tree` (so the
 /// determinism mode is ALREADY baked into the tree by `compose_full_snapshot` — no
 /// separate `deterministic` arg here). The manifest carries no diagnostics channel,
-/// so it takes none either.
+/// so it takes none either. `resolved` is the model the tree was composed from:
+/// the shard closure maps the anchors' internal routine ids through it.
 pub fn serialize_sharded(
     tree: &CborValue,
+    resolved: &Model,
     driver_version: &str,
     primary_only: bool,
 ) -> Vec<ShardFile> {
@@ -1277,21 +1526,24 @@ pub fn serialize_sharded(
         }
     };
 
-    let primary_guid = app_guid(&apps[0]);
     let mut shard_entries: Vec<(String, String, String)> = Vec::new(); // (appGuid, role, file)
+    let routine_to_stable = routine_to_stable_of(&resolved.workspace);
 
     for app in &apps {
         let guid = app_guid(app);
-        let role = if guid == primary_guid {
-            "primary"
-        } else {
-            "dependency"
+        // #220 D5.4: the row's own `role`, never its position.
+        let role = match app {
+            CborValue::Map(m) if matches!(m.get("role"), Some(CborValue::Text(r)) if r == Role::Primary.as_str()) => {
+                Role::Primary
+            }
+            _ => Role::Dependency,
         };
-        if primary_only && role != "primary" {
+        if primary_only && role != Role::Primary {
             continue;
         }
-        let shard = slice_for_app(snap, &guid);
-        let file_base = if role == "primary" {
+        let mut shard = slice_for_app(snap, &guid);
+        close_shard(snap, &mut shard, &routine_to_stable);
+        let file_base = if role == Role::Primary {
             "primary".to_string()
         } else {
             format!("dep-{guid}")
@@ -1303,7 +1555,7 @@ pub fn serialize_sharded(
             name: file_name.clone(),
             bytes,
         });
-        shard_entries.push((guid, role.to_string(), file_name));
+        shard_entries.push((guid, role.as_str().to_string(), file_name));
     }
 
     out.push(ShardFile {
@@ -1314,13 +1566,15 @@ pub fn serialize_sharded(
 }
 
 /// Narrow the snapshot to a single app's facts (mirrors `sliceForApp`). A fact
-/// belongs to the shard whose appGuid prefixes its stableId (`${appGuid}:`).
+/// belongs to the shard whose appGuid prefixes its stableId (`${appGuid}:`,
+/// case-insensitive: #220 O13, the role rule over ids).
 fn slice_for_app(
     snap: &IndexMap<String, CborValue>,
     app_guid: &str,
 ) -> IndexMap<String, CborValue> {
-    let prefix = format!("{app_guid}:");
-    let in_app = |s: &str| s.starts_with(&prefix);
+    // "Primary relative to `app_guid`": the role rule asked whether `s` is
+    // rooted in THIS shard's app, whichever role that app has.
+    let in_app = |s: &str| role_of_stable_id(Some(app_guid), s) == Role::Primary;
 
     // Preserve the compose key order for the shard (it's a CapabilitySnapshot).
     // NOTE: al-sem `sliceForApp` builds a fresh `CapabilitySnapshot` literal that
@@ -1341,7 +1595,8 @@ fn slice_for_app(
             | "analysisGaps"
             | "inputsMetadata" => v.clone(),
             "apps" => {
-                // Keep only this app.
+                // Keep only this app. Exact compare: `serialize_sharded` passes
+                // this row's own `appGuid`, whatever its case.
                 if let CborValue::Array(arr) = v {
                     CborValue::Array(
                         arr.iter()
@@ -1358,7 +1613,7 @@ fn slice_for_app(
                     v.clone()
                 }
             }
-            "identities" => slice_identities(v, &prefix),
+            "identities" => slice_identities(v, &in_app),
             "contractFacts" | "schemaFacts" => filter_array_by_field(v, "stableId", &in_app),
             "permissionFacts" => filter_permission_facts(v, &in_app),
             "rootClassifications" => filter_array_by_field(v, "routineId", &in_app),
@@ -1375,7 +1630,7 @@ fn slice_for_app(
     shard
 }
 
-fn slice_identities(v: &CborValue, prefix: &str) -> CborValue {
+fn slice_identities(v: &CborValue, keep: &dyn Fn(&str) -> bool) -> CborValue {
     let CborValue::Map(m) = v else {
         return v.clone();
     };
@@ -1391,7 +1646,7 @@ fn slice_identities(v: &CborValue, prefix: &str) -> CborValue {
     let mut out_names: Vec<CborValue> = Vec::new();
     for (i, id) in stable_ids.iter().enumerate() {
         if let CborValue::Text(s) = id
-            && s.starts_with(prefix)
+            && keep(s)
         {
             out_ids.push(id.clone());
             out_names.push(
@@ -2131,5 +2386,1003 @@ page 50818 "T5 I-3 Wizard Alpha"
             !dfc.contains_key("witnessFirstHopEventId"),
             "call fact derivedFromCapability: {dfc:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // #220 (spec §5): key classes on hand-built rows.
+    // -----------------------------------------------------------------------
+
+    use crate::engine::l5::snapshot::{
+        CapabilitySnapshot, PdArena, RoutineOrderFrames, SnapCapabilityExtra, SnapValueSource,
+        SnapshotCallsiteEvidence, SnapshotCapabilityFact, SnapshotIdentityTable,
+        SnapshotOperationEvidence,
+    };
+    use crate::program::body::operation_order::{OperationOrder, ScopeFrame};
+
+    const P: &str = "aaaa0220-0000-0000-0000-0000000000aa";
+    const D: &str = "bbbb0220-0000-0000-0000-0000000000bb";
+
+    fn p_routine() -> String {
+        format!("{P}:Codeunit:50100#p1")
+    }
+
+    fn d_routine(n: u32) -> String {
+        format!("{D}:Codeunit:10#d{n}")
+    }
+
+    fn order(frame_id: i64) -> Option<OperationOrder> {
+        Some(OperationOrder {
+            order_id: 0,
+            frame_id,
+            on_success_path: true,
+            dominates_success_return: false,
+        })
+    }
+
+    fn frames() -> Vec<ScopeFrame> {
+        let frame = |frame_id: i64, parent_frame_id: i64, kind: &str| ScopeFrame {
+            frame_id,
+            parent_frame_id,
+            kind: kind.to_string(),
+            branch_always_terminates: None,
+            branch_may_fall_through: None,
+            branch_terminates_by: None,
+        };
+        vec![frame(0, -1, "block"), frame(1, 0, "loop")]
+    }
+
+    fn op_row(operation_id: &str, routine: &str) -> SnapshotOperationEvidence {
+        SnapshotOperationEvidence {
+            operation_id: operation_id.to_string(),
+            routine: routine.to_string(),
+            source_file: "dep:x:src/Lib.al".to_string(),
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 2,
+            display_text: "insert".to_string(),
+            control_context: None,
+            order: order(1),
+            under_asserterror: None,
+        }
+    }
+
+    fn cs_row(callsite_id: &str, routine: &str) -> SnapshotCallsiteEvidence {
+        SnapshotCallsiteEvidence {
+            callsite_id: callsite_id.to_string(),
+            routine: routine.to_string(),
+            source_file: "dep:x:src/Lib.al".to_string(),
+            start_line: 2,
+            start_column: 1,
+            end_line: 2,
+            end_column: 2,
+            callee_display: "Work".to_string(),
+            control_context: None,
+            order: order(1),
+            under_asserterror: None,
+        }
+    }
+
+    fn fact(subject: &str) -> SnapshotCapabilityFact {
+        SnapshotCapabilityFact {
+            subject: subject.to_string(),
+            op: "insert".to_string(),
+            resource_kind: "table".to_string(),
+            resource_id: None,
+            resource_arg_source: None,
+            confidence: "static".to_string(),
+            provenance: "direct".to_string(),
+            via: "self".to_string(),
+            witness_operation_id: None,
+            witness_callsite_id: None,
+            extra: None,
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
+        }
+    }
+
+    fn core_with(identities: &[String]) -> CapabilitySnapshot {
+        CapabilitySnapshot {
+            identities: SnapshotIdentityTable {
+                stable_ids: identities.to_vec(),
+                display_names: identities.iter().map(|_| "x".to_string()).collect(),
+            },
+            capability_facts: Vec::new(),
+            typed_edges: Vec::new(),
+            operation_index: Vec::new(),
+            callsite_index: Vec::new(),
+            callsite_resolutions: Vec::new(),
+            analysis_gaps: Vec::new(),
+            coverage: Vec::new(),
+            event_declarations: Vec::new(),
+            root_classifications: Vec::new(),
+            routine_order_frames: None,
+            pd_solution: PdArena::default(),
+        }
+    }
+
+    /// How often `needle` occurs in the serialized facts and indexes of `core`
+    /// plus `perms` (the "referenced nowhere else" preconditions).
+    fn occurrences(core: &CapabilitySnapshot, perms: &CborValue, needle: &str) -> usize {
+        let text = format!(
+            "{}{}{}{}",
+            to_sorted_json(&capability_facts_to_cbor(&core.capability_facts)),
+            to_sorted_json(&to_cbor_value(&core.operation_index)),
+            to_sorted_json(&to_cbor_value(&core.callsite_index)),
+            to_sorted_json(perms),
+        );
+        text.matches(needle).count()
+    }
+
+    /// T9g (#220 spec §5; SN1): a primary fact's `witnessOperationId` and
+    /// `witnessCallsiteId` name a DEPENDENCY routine's operation and call-site
+    /// rows (each with an `order.frameId` in that routine's frame table); the
+    /// routine is referenced by nothing else. Through the production filter,
+    /// both Evidence rows, the routine's frame table and its identity are kept.
+    ///
+    /// Break 1: match operation ids through the identity mapping (object
+    /// prefix) instead of verbatim -> the rows are dropped. Break 2: skip filter
+    /// step (4) -> the frame table and the identity are missing.
+    #[test]
+    fn evidence_follows_dependency_witness() {
+        let dr = d_routine(1);
+        let d_op = "mi/dhash/op0";
+        let d_cs = "mi/dhash/cs0";
+        let mut core = core_with(&[
+            format!("{P}:Codeunit:50100"),
+            p_routine(),
+            format!("{D}:Codeunit:10"),
+            dr.clone(),
+        ]);
+        let mut f = fact(&p_routine());
+        f.witness_operation_id = Some(d_op.to_string());
+        f.witness_callsite_id = Some(d_cs.to_string());
+        core.capability_facts.push(f);
+        core.operation_index.push(op_row(d_op, &dr));
+        core.callsite_index.push(cs_row(d_cs, &dr));
+        core.routine_order_frames = Some(RoutineOrderFrames::from_entries(vec![(
+            dr.clone(),
+            frames(),
+        )]));
+        let perms = CborValue::Array(Vec::new());
+        // Precondition: the dependency routine is named only by its two rows.
+        assert_eq!(occurrences(&core, &perms, &dr), 2, "precondition");
+        assert!(
+            frames().iter().any(|fr| fr.frame_id == 1),
+            "precondition: frameId 1 is in the routine's table"
+        );
+
+        filter_by_class(&mut core, &perms, P, &Default::default());
+
+        assert!(
+            core.operation_index.iter().any(|o| o.operation_id == d_op),
+            "the witnessed dependency operation row is kept"
+        );
+        assert!(
+            core.callsite_index.iter().any(|c| c.callsite_id == d_cs),
+            "the witnessed dependency call-site row is kept"
+        );
+        assert!(
+            core.routine_order_frames
+                .as_ref()
+                .and_then(|f| f.get(&dr))
+                .is_some(),
+            "the kept Evidence rows' frame table is kept"
+        );
+        assert!(
+            core.identities.stable_ids.contains(&dr),
+            "the kept Evidence rows' routine identity is kept"
+        );
+    }
+
+    /// T9d break 4 (#220 spec §5), on hand-built typed rows through the
+    /// production filter (as F30 allows): in a composed tree every primary
+    /// Evidence row is also referenced by its own routine's fact or typed
+    /// edge, so the "rows of a primary routine" arm of step (3) is visible
+    /// only on rows no kept row references. A primary routine's operation and
+    /// call-site rows, referenced by nothing (asserted), are kept.
+    ///
+    /// Break: drop primary rows from Evidence (referenced only) -> both
+    /// rows are dropped.
+    #[test]
+    fn evidence_keeps_unreferenced_primary_rows() {
+        let p_op = "mi/phash/op0";
+        let p_cs = "mi/phash/cs0";
+        let mut core = core_with(&[format!("{P}:Codeunit:50100"), p_routine()]);
+        core.operation_index.push(op_row(p_op, &p_routine()));
+        core.callsite_index.push(cs_row(p_cs, &p_routine()));
+        let perms = CborValue::Array(Vec::new());
+        assert_eq!(occurrences(&core, &perms, p_op), 1, "precondition");
+        assert_eq!(occurrences(&core, &perms, p_cs), 1, "precondition");
+
+        filter_by_class(&mut core, &perms, P, &Default::default());
+
+        assert!(
+            core.operation_index.iter().any(|o| o.operation_id == p_op),
+            "the primary routine's unreferenced operation row is kept"
+        );
+        assert!(
+            core.callsite_index.iter().any(|c| c.callsite_id == p_cs),
+            "the primary routine's unreferenced call-site row is kept"
+        );
+    }
+
+    /// T9-closure, the value-source and nested-reference arms (#220 spec §5,
+    /// S3N2; run on hand-built typed rows through the production filter, F30).
+    /// Each arm is a kept primary fact naming a DEPENDENCY table (or operation)
+    /// referenced nowhere else (asserted): a `tableId` in `resourceArgSource`,
+    /// in `extra.bodyArgSource`, in `extra.keyArgSource`, in
+    /// `extra.valueArgSource`, one inside a `constant-var` `initializer` two
+    /// levels deep, and a permission row's
+    /// `derivedFromCapability.witnessFirstHopOperationId` naming a dependency
+    /// operation. Each arm's identity (or operation row) is kept.
+    ///
+    /// Break 5: read only `resourceArgSource` -> the three `extra` arms fail.
+    /// Break 6: no recursion into `initializer` -> the nested arm fails.
+    /// Break 7: drop `witnessFirstHopOperationId` from `permissionFacts` -> its
+    /// operation row is dropped.
+    #[test]
+    fn closure_nested_references_keep_their_rows() {
+        let table = |n: u32| format!("{D}/table/{n}");
+        let stable_table = |n: u32| format!("{D}:Table:{n}");
+        let tf = |n: u32| SnapValueSource::TableField {
+            table_id: table(n),
+            field_name: "No.".to_string(),
+        };
+        let dr = d_routine(2);
+        let d_op = "mi/dhash2/op0";
+        let mut ids = vec![format!("{P}:Codeunit:50100"), p_routine(), dr.clone()];
+        ids.extend((1..=5).map(stable_table));
+        let mut core = core_with(&ids);
+
+        let mut resource = fact(&p_routine());
+        resource.resource_arg_source = Some(tf(1));
+        let mut body = fact(&p_routine());
+        body.resource_kind = "http".to_string();
+        body.extra = Some(SnapCapabilityExtra::Http {
+            method: "POST".to_string(),
+            body_arg_source: Some(tf(2)),
+        });
+        let mut storage = fact(&p_routine());
+        storage.resource_kind = "storage".to_string();
+        storage.extra = Some(SnapCapabilityExtra::Storage {
+            key_arg_source: Some(tf(3)),
+            value_arg_source: Some(tf(4)),
+            scope: None,
+        });
+        let mut nested = fact(&p_routine());
+        nested.resource_arg_source = Some(SnapValueSource::ConstantVar {
+            var_name: "A".to_string(),
+            initializer: Box::new(SnapValueSource::ConstantVar {
+                var_name: "B".to_string(),
+                initializer: Box::new(tf(5)),
+            }),
+        });
+        core.capability_facts = vec![resource, body, storage, nested];
+        core.operation_index.push(op_row(d_op, &dr));
+
+        let perm_fact = CapabilityFact {
+            subject: p_routine(),
+            op: "insert",
+            resource_kind: "table",
+            resource_id: None,
+            resource_arg_source: None,
+            confidence: "static",
+            provenance: "inherited",
+            via: "OnValidate",
+            witness_operation_id: None,
+            witness_callsite_id: None,
+            witness_first_hop_operation_id: Some(d_op.to_string()),
+            witness_first_hop_event_id: None,
+            extra: None,
+        };
+        let (_, perm_row) = make_required_perm(
+            &p_routine(),
+            &format!("{P}:Table:50100"),
+            "TableData",
+            "I",
+            &perm_fact,
+            "complete",
+        );
+        let perms = CborValue::Array(vec![perm_row]);
+
+        for n in 1..=5 {
+            assert_eq!(
+                occurrences(&core, &perms, &table(n)),
+                1,
+                "precondition: table {n} is referenced once"
+            );
+        }
+        assert_eq!(
+            occurrences(&core, &perms, d_op),
+            2,
+            "precondition: the operation is named by its own row and the permission row only"
+        );
+
+        filter_by_class(&mut core, &perms, P, &Default::default());
+
+        for (n, arm) in [
+            (1, "resourceArgSource"),
+            (2, "extra.bodyArgSource"),
+            (3, "extra.keyArgSource"),
+            (4, "extra.valueArgSource"),
+            (5, "constant-var initializer, two levels deep"),
+        ] {
+            assert!(
+                core.identities.stable_ids.contains(&stable_table(n)),
+                "{arm}: the referenced dependency table identity is kept"
+            );
+        }
+        assert!(
+            core.operation_index.iter().any(|o| o.operation_id == d_op),
+            "derivedFromCapability.witnessFirstHopOperationId: the operation row is kept"
+        );
+    }
+
+    /// T9-closure, the literal arm (#220 spec §5, S9; F30): a `literal` value
+    /// source in a kept primary fact carries a dependency stable id as its
+    /// `value`. The literal keeps nothing: that id is not serialized. The arm
+    /// also states the positive side (a `table-field` source in the same kept
+    /// fact set keeps its table), so the filter must have run.
+    ///
+    /// Break 1: read every `Text` -> the literal keeps its id.
+    #[test]
+    fn closure_literal_keeps_nothing() {
+        let literal_id = format!("{D}:Table:6");
+        let mut core = core_with(&[
+            format!("{P}:Codeunit:50100"),
+            p_routine(),
+            literal_id.clone(),
+            format!("{D}:Table:7"),
+        ]);
+        let mut lit = fact(&p_routine());
+        lit.resource_arg_source = Some(SnapValueSource::Literal {
+            value: literal_id.clone(),
+        });
+        let mut tf = fact(&p_routine());
+        tf.resource_arg_source = Some(SnapValueSource::TableField {
+            table_id: format!("{D}/table/7"),
+            field_name: "No.".to_string(),
+        });
+        core.capability_facts = vec![lit, tf];
+        let perms = CborValue::Array(Vec::new());
+        assert_eq!(occurrences(&core, &perms, &literal_id), 1, "precondition");
+
+        filter_by_class(&mut core, &perms, P, &Default::default());
+
+        assert!(
+            core.identities.stable_ids.contains(&format!("{D}:Table:7")),
+            "the table-field source keeps its table"
+        );
+        assert!(
+            !core.identities.stable_ids.contains(&literal_id),
+            "a literal value is data: it keeps nothing"
+        );
+    }
+
+    fn txt(s: &str) -> CborValue {
+        CborValue::Text(s.to_string())
+    }
+
+    fn map(pairs: Vec<(&str, CborValue)>) -> CborValue {
+        CborValue::Map(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
+
+    fn texts(v: &CborValue, out: &mut Vec<String>) {
+        match v {
+            CborValue::Text(s) => out.push(s.clone()),
+            CborValue::Array(a) => a.iter().for_each(|x| texts(x, out)),
+            CborValue::Map(m) => m.values().for_each(|x| texts(x, out)),
+            _ => {}
+        }
+    }
+
+    /// T8's tree: `apps[]` lists a dependency (`0000…d0`) BEFORE the primary.
+    /// A primary fact's `witnessOperationId` names a dependency operation row
+    /// (with an `order.frameId`, its routine's frame table in
+    /// `routineOrderFrames`), and a primary edge targets a dependency routine.
+    /// The operation's routine identity is reached only through that row. The
+    /// edge's `callAnchor` names a third dependency routine by its INTERNAL id
+    /// (`mi/anc`, as anchors do), which only the model maps (`shard_model`).
+    fn shard_tree(primary: &str) -> CborValue {
+        let dep = "00000000-0000-0000-0000-0000000000d0";
+        let p_obj = format!("{primary}:Codeunit:50100");
+        let p_r = format!("{primary}:Codeunit:50100#p1");
+        let d_op_routine = format!("{dep}:Codeunit:10#op");
+        let d_edge_target = format!("{dep}:Codeunit:10#to");
+        let d_anchor = format!("{dep}:Codeunit:10#anc");
+        let app = |guid: &str, role: &str| {
+            map(vec![
+                ("appGuid", txt(guid)),
+                ("publisher", txt("probe")),
+                ("name", txt(guid)),
+                ("version", txt("1.0.0.0")),
+                ("role", txt(role)),
+            ])
+        };
+        let ids: Vec<CborValue> = [&p_obj, &p_r, &d_op_routine, &d_edge_target, &d_anchor]
+            .iter()
+            .map(|s| txt(s))
+            .collect();
+        let names: Vec<CborValue> = ids.iter().map(|_| txt("x")).collect();
+        let frame = |id: i64, parent: i64| {
+            map(vec![
+                ("frameId", CborValue::Int(id)),
+                ("parentFrameId", CborValue::Int(parent)),
+                ("kind", txt("block")),
+            ])
+        };
+        let mut frames_map: IndexMap<String, CborValue> = IndexMap::new();
+        frames_map.insert(
+            d_op_routine.clone(),
+            CborValue::Array(vec![frame(0, -1), frame(1, 0)]),
+        );
+        map(vec![
+            ("schemaVersion", CborValue::Int(4)),
+            ("alsemVersion", txt("v")),
+            ("workspaceFingerprint", txt("fp")),
+            ("generatedAt", txt("1970-01-01T00:00:00Z")),
+            ("analysisUniverse", txt("cross-app")),
+            (
+                "apps",
+                CborValue::Array(vec![app(dep, "dependency"), app(primary, "primary")]),
+            ),
+            (
+                "identities",
+                map(vec![
+                    ("stableIds", CborValue::Array(ids)),
+                    ("displayNames", CborValue::Array(names)),
+                ]),
+            ),
+            ("contractFacts", CborValue::Array(vec![])),
+            ("schemaFacts", CborValue::Array(vec![])),
+            ("permissionFacts", CborValue::Array(vec![])),
+            ("rootClassifications", CborValue::Array(vec![])),
+            (
+                "capabilityFacts",
+                CborValue::Array(vec![map(vec![
+                    ("subject", txt(&p_r)),
+                    ("op", txt("insert")),
+                    ("resourceKind", txt("table")),
+                    ("confidence", txt("static")),
+                    ("provenance", txt("inherited")),
+                    ("via", txt("call")),
+                    ("witnessOperationId", txt("mi/dop/op0")),
+                ])]),
+            ),
+            (
+                "typedEdges",
+                CborValue::Array(vec![map(vec![
+                    ("edgeId", txt("e1")),
+                    ("from", txt(&p_r)),
+                    ("kind", txt("direct-call")),
+                    ("to", txt(&d_edge_target)),
+                    (
+                        "callAnchor",
+                        map(vec![("enclosingRoutineId", txt("mi/anc"))]),
+                    ),
+                ])]),
+            ),
+            (
+                "operationIndex",
+                CborValue::Array(vec![map(vec![
+                    ("operationId", txt("mi/dop/op0")),
+                    ("routine", txt(&d_op_routine)),
+                    (
+                        "order",
+                        map(vec![
+                            ("orderId", CborValue::Int(0)),
+                            ("frameId", CborValue::Int(1)),
+                            ("onSuccessPath", CborValue::Bool(true)),
+                            ("dominatesSuccessReturn", CborValue::Bool(false)),
+                        ]),
+                    ),
+                ])]),
+            ),
+            ("callsiteIndex", CborValue::Array(vec![])),
+            ("callsiteResolutions", CborValue::Array(vec![])),
+            ("analysisGaps", CborValue::Array(vec![])),
+            ("coverage", CborValue::Array(vec![])),
+            ("inputs", CborValue::Array(vec![])),
+            ("eventDeclarations", CborValue::Array(vec![])),
+            ("routineOrderFrames", CborValue::Map(frames_map)),
+        ])
+    }
+
+    /// The model T8's tree was "composed" from: one dependency routine whose
+    /// internal id `mi/anc` maps to the stable id the tree's identities hold.
+    fn shard_model() -> Model {
+        let mut model = crate::engine::l5::test_support::empty_resolved();
+        let mut r = crate::engine::l5::test_support::routine("mi/anc", "procedure");
+        r.stable_routine_id = "00000000-0000-0000-0000-0000000000d0:Codeunit:10#anc".into();
+        model.workspace.routines.push(r);
+        model
+    }
+
+    /// T8 (#220 spec §5; O15, S3, S3N1, O3N1): shards read `role`, never the
+    /// position `apps[0]`, and a shard is closed over the identity, operation,
+    /// callsite and edge domains to a fixpoint, but NOT over frames.
+    ///
+    /// Break 1: read `apps[0]` -> roles swapped. Break 2: close identities only
+    /// -> the operation row is missing. Break 3: one pass instead of a fixpoint
+    /// -> the operation's routine identity is missing. Break 4: close the frame
+    /// domain too -> the shard gains `routineOrderFrames`.
+    ///
+    /// Final panel (C8, G4): the anchor's internal id adds its routine's
+    /// identity (break: close with an empty routine map -> missing), and the
+    /// added identities sit in the full tree's order (break: append -> the
+    /// order differs).
+    #[test]
+    fn shards_read_role_not_position() {
+        let tree = shard_tree(P);
+        let model = shard_model();
+        let dep = "00000000-0000-0000-0000-0000000000d0";
+        assert!(
+            locale_compare(dep, P) == std::cmp::Ordering::Less,
+            "precondition: the dependency sorts first"
+        );
+        let CborValue::Map(m) = &tree else {
+            unreachable!()
+        };
+        let Some(CborValue::Array(apps)) = m.get("apps") else {
+            unreachable!()
+        };
+        assert!(
+            matches!(&apps[0], CborValue::Map(a) if matches!(a.get("appGuid"), Some(CborValue::Text(g)) if g == dep)),
+            "precondition: apps[0] is the dependency"
+        );
+
+        let files = serialize_sharded(&tree, &model, "v", false);
+        let manifest = files
+            .iter()
+            .find(|f| f.name == "manifest.json")
+            .expect("manifest");
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest.bytes).unwrap();
+        let role_of = |guid: &str| {
+            manifest["shards"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["appGuid"] == guid)
+                .map(|s| s["role"].as_str().unwrap().to_string())
+        };
+        assert_eq!(role_of(P).as_deref(), Some("primary"), "{manifest}");
+        assert_eq!(role_of(dep).as_deref(), Some("dependency"), "{manifest}");
+
+        let only = serialize_sharded(&tree, &model, "v", true);
+        let names: Vec<&str> = only.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["primary.json", "manifest.json"]);
+        let shard: serde_json::Value = serde_json::from_slice(&only[0].bytes).unwrap();
+        assert_eq!(shard["apps"][0]["appGuid"], P, "the primary's shard");
+
+        let ids: Vec<&str> = shard["identities"]["stableIds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(
+            shard["operationIndex"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|o| o["operationId"] == "mi/dop/op0"),
+            "the witnessed dependency operation row is in the primary shard"
+        );
+        assert!(
+            ids.contains(&format!("{dep}:Codeunit:10#to").as_str()),
+            "the edge target's identity: {ids:?}"
+        );
+        assert!(
+            ids.contains(&format!("{dep}:Codeunit:10#op").as_str()),
+            "the operation's routine identity (second pass): {ids:?}"
+        );
+        assert!(
+            ids.contains(&format!("{dep}:Codeunit:10#anc").as_str()),
+            "the anchor's routine identity, through the model: {ids:?}"
+        );
+        let full_order = [
+            format!("{P}:Codeunit:50100"),
+            format!("{P}:Codeunit:50100#p1"),
+            format!("{dep}:Codeunit:10#op"),
+            format!("{dep}:Codeunit:10#to"),
+            format!("{dep}:Codeunit:10#anc"),
+        ];
+        assert_eq!(ids, full_order, "the full tree's identity order");
+        assert!(
+            shard.get("routineOrderFrames").is_none(),
+            "a shard never carries routineOrderFrames"
+        );
+
+        // O13: the manifest guid in upper case, every id in lower case. The
+        // primary shard still holds its `apps[]` row and the primary rows.
+        let upper = P.to_ascii_uppercase();
+        let mut tree = tree;
+        if let CborValue::Map(m) = &mut tree
+            && let Some(CborValue::Array(apps)) = m.get_mut("apps")
+            && let CborValue::Map(a) = &mut apps[1]
+        {
+            a.insert("appGuid".into(), txt(&upper));
+        }
+        let only = serialize_sharded(&tree, &model, "v", true);
+        let shard: serde_json::Value = serde_json::from_slice(&only[0].bytes).unwrap();
+        assert_eq!(shard["apps"][0]["appGuid"], upper.as_str(), "{shard}");
+        assert!(
+            shard["capabilityFacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["subject"] == format!("{P}:Codeunit:50100#p1")),
+            "an upper-case manifest guid keeps the primary's lower-case rows: {shard}"
+        );
+    }
+
+    /// T9-keys, the shard half (#220 spec §5; O4): every key of
+    /// `SNAPSHOT_KEYS` is one `slice_for_app` handles. A tree holding every key,
+    /// each row of a FOREIGN app, sliced for the primary: Header, Input and Gap
+    /// keys are copied verbatim, `routineOrderFrames` is skipped, and every
+    /// other key keeps no foreign string. A classed key the slice does not
+    /// match is copied whole and fails.
+    #[test]
+    fn slice_for_app_handles_every_classed_key() {
+        assert!(
+            !SNAPSHOT_KEYS.is_empty(),
+            "SNAPSHOT_KEYS lists every top-level key"
+        );
+        let foreign = "ffff0220-0000-0000-0000-0000000000ff";
+        let fid = format!("{foreign}:Codeunit:1#f");
+        let row = map(vec![
+            ("kind", txt("required")),
+            ("subject", txt(&fid)),
+            ("stableId", txt(&fid)),
+            ("routineId", txt(&fid)),
+            ("routine", txt(&fid)),
+            ("from", txt(&fid)),
+            ("to", txt(&fid)),
+            ("permissionSet", txt(&fid)),
+            ("binding", map(vec![("publisherObject", txt(&fid))])),
+        ]);
+        let mut snap: IndexMap<String, CborValue> = IndexMap::new();
+        for (key, class) in SNAPSHOT_KEYS {
+            let v = match (*key, class) {
+                (_, KeyClass::Header | KeyClass::Input | KeyClass::Gap) => {
+                    CborValue::Array(vec![txt(&fid)])
+                }
+                ("apps", _) => CborValue::Array(vec![
+                    map(vec![("appGuid", txt(P)), ("role", txt("primary"))]),
+                    map(vec![("appGuid", txt(foreign)), ("role", txt("dependency"))]),
+                ]),
+                ("identities", _) => map(vec![
+                    ("stableIds", CborValue::Array(vec![txt(&fid)])),
+                    ("displayNames", CborValue::Array(vec![txt("x")])),
+                ]),
+                ("routineOrderFrames", _) => map(vec![(fid.as_str(), CborValue::Array(vec![]))]),
+                _ => CborValue::Array(vec![row.clone()]),
+            };
+            snap.insert((*key).to_string(), v);
+        }
+        let shard = slice_for_app(&snap, P);
+        for (key, class) in SNAPSHOT_KEYS {
+            match (*key, class) {
+                (_, KeyClass::Header | KeyClass::Input | KeyClass::Gap) => {
+                    assert_eq!(
+                        format!("{:?}", shard.get(*key)),
+                        format!("{:?}", snap.get(*key)),
+                        "{key} is copied verbatim"
+                    );
+                }
+                ("routineOrderFrames", _) => {
+                    assert!(shard.get(*key).is_none(), "a shard has no {key}");
+                }
+                _ => {
+                    let mut got = Vec::new();
+                    texts(shard.get(*key).expect("key kept"), &mut got);
+                    assert!(
+                        got.iter().all(|s| !s.starts_with(foreign)),
+                        "{key} is narrowed by the slice: {got:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every leaf path of `v` (array indices dropped), whatever its value.
+    fn leaf_paths(v: &CborValue, path: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+        match v {
+            CborValue::Array(a) => a.iter().for_each(|x| leaf_paths(x, path, out)),
+            CborValue::Map(m) => {
+                for (k, x) in m {
+                    path.push(k.clone());
+                    leaf_paths(x, path, out);
+                    path.pop();
+                }
+            }
+            _ => out.push(path.clone()),
+        }
+    }
+
+    /// Final panel F6 (round 2): EVERY variant of every serialized row type,
+    /// built by hand with every optional field present, has each leaf field
+    /// classified (`is_classified`): every `SnapValueSource` variant (as
+    /// `resourceArgSource`, nested in `initializer`, inside `extra` and as
+    /// `targetIdSource`), every `SnapTempState`, every `SnapCapabilityExtra`,
+    /// every `SnapshotGraphEdge`, the Evidence rows, a resolution, a branch
+    /// frame, `inputsMetadata`, a root classification, an event declaration
+    /// with its binding, a coverage record and a gap. DD and R5B emit only
+    /// some of them.
+    ///
+    /// Break: drop one data name (`modal`) from `NON_REFERENCE_FIELDS` -> it
+    /// is reported.
+    #[test]
+    fn every_row_variant_field_is_classified() {
+        use crate::engine::l4::combined_graph::TriggerFires;
+        use crate::engine::l5::snapshot::{
+            SnapTempState, SnapshotAnalysisGap, SnapshotCallsiteResolution, SnapshotCoverageRecord,
+            SnapshotEventDeclaration, SnapshotGraphEdge, SnapshotRange,
+            SnapshotRootClassificationSlot, SnapshotSourceAnchor, SnapshotSubscriberBinding,
+            SnapshotUnresolvedCandidate,
+        };
+        let s = |x: &str| x.to_string();
+        let temps = || {
+            vec![
+                SnapTempState::Known { value: true },
+                SnapTempState::ParameterDependent { parameter_index: 1 },
+                SnapTempState::Unknown,
+            ]
+        };
+        let mut sources = vec![
+            SnapValueSource::Literal { value: s("x") },
+            SnapValueSource::Enum {
+                enum_name: s("E"),
+                member: Some(s("M")),
+            },
+            SnapValueSource::Parameter {
+                index: 0,
+                var_name: s("p"),
+            },
+        ];
+        sources.push(SnapValueSource::TableField {
+            table_id: format!("{P}/table/1"),
+            field_name: s("No."),
+        });
+        sources.push(SnapValueSource::Expression);
+        sources.push(SnapValueSource::Unknown);
+        let nested: Vec<SnapValueSource> = sources
+            .iter()
+            .map(|v| SnapValueSource::ConstantVar {
+                var_name: s("c"),
+                initializer: Box::new(v.clone()),
+            })
+            .collect();
+        sources.extend(nested);
+        let mut extras: Vec<SnapCapabilityExtra> = temps()
+            .into_iter()
+            .map(|t| SnapCapabilityExtra::Table {
+                op_subtype: Some(s("o")),
+                record_variable_id: Some(s("r")),
+                temp_state: Some(t),
+            })
+            .collect();
+        extras.push(SnapCapabilityExtra::Dispatch {
+            object_type: s("Page"),
+            modal: Some(true),
+        });
+        extras.push(SnapCapabilityExtra::Event {
+            event_class: s("integration"),
+            include_sender: Some(true),
+        });
+        for v in &sources {
+            extras.push(SnapCapabilityExtra::Http {
+                method: s("GET"),
+                body_arg_source: Some(v.clone()),
+            });
+            extras.push(SnapCapabilityExtra::Storage {
+                key_arg_source: Some(v.clone()),
+                value_arg_source: Some(v.clone()),
+                scope: Some(s("company")),
+            });
+        }
+        let routine = format!("{P}:Codeunit:1#a");
+        let full_fact = |kind: &str, extra: SnapCapabilityExtra, src: SnapValueSource| {
+            let mut f = fact(&routine);
+            f.resource_kind = s(kind);
+            f.resource_id = Some(format!("{P}/table/1"));
+            f.resource_arg_source = Some(src);
+            f.witness_operation_id = Some(s("mi/h/op0"));
+            f.witness_callsite_id = Some(s("mi/h/cs0"));
+            f.extra = Some(extra);
+            f.witness_first_hop_operation_id = Some(s("mi/h/op1"));
+            f.witness_first_hop_event_id = Some(s("mi/h::E"));
+            f
+        };
+        let mut facts = Vec::new();
+        for (i, e) in extras.iter().enumerate() {
+            let src = sources[i % sources.len()].clone();
+            for kind in ["table", "event", "http"] {
+                facts.push(full_fact(kind, e.clone(), src.clone()));
+            }
+        }
+        let anchor = SnapshotSourceAnchor {
+            source_unit_id: s("u"),
+            range: SnapshotRange {
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 2,
+            },
+            enclosing_routine_id: s("mi/h"),
+            syntax_kind: s("call"),
+        };
+        let (cs, from, to, eid) = (s("mi/h/cs0"), routine.clone(), routine.clone(), s("e0"));
+        let mut edges = vec![
+            SnapshotGraphEdge::DirectCall {
+                kind: "direct-call",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::VariableTypedCall {
+                kind: "variable-typed-call",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                receiver_type: s("Codeunit X"),
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::InterfaceDispatch {
+                kind: "interface-dispatch",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                interface_name: s("I"),
+                candidate_count: 2,
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::ObjectRunResolved {
+                kind: "object-run",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                target_object: format!("{P}:Codeunit:1"),
+                object_type: s("Codeunit"),
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::EventDispatch {
+                kind: "event-dispatch",
+                from: from.clone(),
+                to: to.clone(),
+                event_id: s("mi/h::E"),
+                publish_anchor: anchor.clone(),
+                subscriber_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::ImplicitTrigger {
+                kind: "implicit-trigger",
+                from: from.clone(),
+                to: to.clone(),
+                operation_id: s("mi/h/op0"),
+                trigger_kind: s("OnValidate"),
+                fires: TriggerFires::Maybe,
+                anchor: Some(anchor.clone()),
+                edge_id: eid.clone(),
+            },
+        ];
+        for v in &sources {
+            edges.push(SnapshotGraphEdge::ObjectRunUnresolved {
+                kind: "object-run-unresolved",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                target_object: Some(format!("{P}:Codeunit:1")),
+                target_id_source: v.clone(),
+                object_type: s("Codeunit"),
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            });
+        }
+        let mut op = op_row("mi/h/op0", &routine);
+        op.control_context = Some(s("loop"));
+        op.under_asserterror = Some(true);
+        let mut csr = cs_row("mi/h/cs0", &routine);
+        csr.control_context = Some(s("loop"));
+        csr.under_asserterror = Some(true);
+        let resolution = SnapshotCallsiteResolution {
+            callsite_id: cs.clone(),
+            from: from.clone(),
+            callee_display: s("X.Y"),
+            dispatch_kind: s("direct"),
+            status: s("resolved"),
+            resolved_edges: vec![eid.clone()],
+            candidates: Some(vec![to.clone()]),
+            open_world: Some(true),
+            unresolved_candidates: Some(vec![SnapshotUnresolvedCandidate {
+                object_id: format!("{P}:Codeunit:1"),
+                reason: s("r"),
+            }]),
+            result_consumed: Some(true),
+            under_asserterror: Some(true),
+        };
+        let mut frame = frames().remove(1);
+        frame.branch_always_terminates = Some(true);
+        frame.branch_may_fall_through = Some(false);
+        frame.branch_terminates_by = Some(s("error"));
+        let mut meta: IndexMap<String, CborValue> = IndexMap::new();
+        meta.insert("rootsConfigIgnored".into(), CborValue::Bool(true));
+
+        let rows: Vec<(&str, CborValue)> = vec![
+            ("capabilityFacts", capability_facts_to_cbor(&facts)),
+            ("typedEdges", to_cbor_value(&edges)),
+            ("operationIndex", to_cbor_value(&vec![op])),
+            ("callsiteIndex", to_cbor_value(&vec![csr])),
+            ("callsiteResolutions", to_cbor_value(&vec![resolution])),
+            ("routineOrderFrames", to_cbor_value(&vec![frame])),
+            ("inputsMetadata", CborValue::Map(meta)),
+            (
+                "rootClassifications",
+                to_cbor_value(&vec![SnapshotRootClassificationSlot {
+                    routine_id: routine.clone(),
+                    kinds: vec![s("trigger")],
+                    externally_reachable: true,
+                    source: s("config"),
+                    confidence: s("static"),
+                    source_anchor: Some(anchor.clone()),
+                    config_entry_id: Some(s("c1")),
+                    resolution_status: Some(s("resolved")),
+                }]),
+            ),
+            (
+                "eventDeclarations",
+                to_cbor_value(&vec![SnapshotEventDeclaration {
+                    kind: s("subscriber"),
+                    routine: routine.clone(),
+                    event_id: s("mi/h::E"),
+                    binding: Some(SnapshotSubscriberBinding {
+                        publisher_object: format!("{P}:Codeunit:1"),
+                        event_name: s("OnX"),
+                    }),
+                    source_anchor: anchor.clone(),
+                }]),
+            ),
+            (
+                "coverage",
+                to_cbor_value(&vec![SnapshotCoverageRecord {
+                    subject: routine.clone(),
+                    direct_status: s("complete"),
+                    inherited_status: s("partial"),
+                    reasons: vec![s("r")],
+                    unknown_targets: vec![routine.clone()],
+                }]),
+            ),
+            (
+                "analysisGaps",
+                to_cbor_value(&vec![SnapshotAnalysisGap {
+                    kind: s("parse-incomplete"),
+                    subject: routine.clone(),
+                    detail: s("d"),
+                    role: s("primary"),
+                }]),
+            ),
+        ];
+        let mut unlisted: std::collections::BTreeSet<String> = Default::default();
+        let mut seen = 0usize;
+        for (key, v) in &rows {
+            let mut paths = Vec::new();
+            leaf_paths(v, &mut Vec::new(), &mut paths);
+            seen += paths.len();
+            for p in paths {
+                if !is_classified(key, &p) {
+                    unlisted.insert(format!("{key}.{}", p.join(".")));
+                }
+            }
+        }
+        assert!(
+            seen > 500,
+            "precondition: every variant built ({seen} leaves)"
+        );
+        assert!(unlisted.is_empty(), "unclassified fields: {unlisted:?}");
     }
 }
