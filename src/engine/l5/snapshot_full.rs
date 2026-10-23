@@ -21,6 +21,8 @@
 //! serde [`Serializer`] that targets `CborValue` and preserves map insertion order
 //! (`to_cbor_value`). The header derivers build their `CborValue` directly.
 
+use std::collections::{HashMap, HashSet};
+
 use indexmap::IndexMap;
 
 use crate::engine::gate::cbor::CborValue;
@@ -28,8 +30,12 @@ use crate::engine::ids::{
     ParamSpec, canonical_routine_signature, locale_compare, object_signature_fingerprint,
     sha256_hex,
 };
-use crate::engine::l4::capability_cone::{CapabilityFact, build_r3a3_source_only_base};
-use crate::engine::l5::snapshot::compose_snapshot_from_base;
+use crate::engine::l4::capability_cone::{
+    CapabilityFact, R3a3SourceBase, R3a5CrossAppBase, build_r3a3_source_only_base,
+};
+use crate::engine::l5::snapshot::{
+    SnapshotAnalysisGap, compose_snapshot_from_base, stable_routine_id,
+};
 use crate::program::model::workspace::Model;
 use crate::program::resolve::semantic_golden::ClosureErrorKind;
 
@@ -146,7 +152,12 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     let operation_index = to_cbor_value(&core.operation_index);
     let callsite_index = to_cbor_value(&core.callsite_index);
     let callsite_resolutions = to_cbor_value(&core.callsite_resolutions);
-    let analysis_gaps = to_cbor_value(&core.analysis_gaps);
+    let analysis_gaps = match &opts.universe {
+        SnapshotUniverse::SingleApp => to_cbor_value(&core.analysis_gaps),
+        SnapshotUniverse::CrossApp(u) => {
+            to_cbor_value(&reachable_gaps(&core.analysis_gaps, u.base, &base))
+        }
+    };
     let coverage = to_cbor_value(&core.coverage);
     let event_declarations = to_cbor_value(&core.event_declarations);
     let root_classifications = to_cbor_value(&core.root_classifications);
@@ -421,6 +432,84 @@ fn to_cbor_inputs(inputs: &[SnapshotInput]) -> CborValue {
         })
         .collect();
     CborValue::Array(arr)
+}
+
+// ===========================================================================
+// Gaps, serialized cross-app (#220 D2): every primary gap; a dependency gap
+// only when its subject is reachable over the cone.
+// ===========================================================================
+
+/// The routines (internal ids) reachable over `rel.cone()` from every primary
+/// routine of the model (spec §4.2: the cone, not the cut, F9).
+fn reach(x: &R3a5CrossAppBase) -> HashSet<String> {
+    use crate::program::model::role::Role;
+    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in x.rel.cone() {
+        if let Some(to) = &e.to {
+            adj.entry(e.from.as_str()).or_default().push(to.as_str());
+        }
+    }
+    let m = &x.resolved;
+    let mut stack: Vec<&str> = m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| m.routine_role(r) == Role::Primary)
+        .map(|r| r.id.as_str())
+        .collect();
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Some(id) = stack.pop() {
+        if seen.insert(id.to_string()) {
+            stack.extend(adj.get(id).into_iter().flatten().copied());
+        }
+    }
+    seen
+}
+
+/// Keep a gap when it is primary, or its subject is a reachable routine's
+/// stable id, or a bare app guid owning a reachable routine (`object_id`'s
+/// first segment, case-insensitive).
+fn reachable_gaps(
+    gaps: &[SnapshotAnalysisGap],
+    x: &R3a5CrossAppBase,
+    source: &R3a3SourceBase,
+) -> Vec<SnapshotAnalysisGap> {
+    use crate::program::model::role::Role;
+    let reach = reach(x);
+    let mut routines: HashSet<String> = HashSet::new();
+    let mut apps: HashSet<String> = HashSet::new();
+    for r in x.resolved.workspace.routines.iter() {
+        if reach.contains(&r.id) {
+            routines.insert(stable_routine_id(&r.id, &source.routine_to_stable));
+            apps.insert(
+                r.object_id
+                    .split('/')
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase(),
+            );
+        }
+    }
+    let kept: Vec<_> = gaps
+        .iter()
+        .filter(|g| {
+            g.role == Role::Primary.as_str()
+                || routines.contains(&g.subject)
+                || apps.contains(&g.subject.to_ascii_lowercase())
+        })
+        .cloned()
+        .collect();
+    // F21: an opaque boundary is a source-less app.
+    debug_assert!(
+        kept.iter()
+            .filter(|g| g.kind == "symbol-only-boundary")
+            .all(|g| !x
+                .dependency_apps
+                .iter()
+                .any(|a| a.guid.eq_ignore_ascii_case(&g.subject) && a.has_source)),
+        "a symbol-only-boundary gap names an app with source"
+    );
+    kept
 }
 
 // ===========================================================================

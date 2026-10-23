@@ -808,12 +808,14 @@ pub struct SnapshotUnresolvedCandidate {
     pub reason: String,
 }
 
-/// Non-callsite unknown. al-sem `AnalysisGap`: kind, subject, detail.
+/// Non-callsite unknown. al-sem `AnalysisGap`: kind, subject, detail; #220
+/// adds `role` (`"primary"` only for a primary `parse-incomplete`).
 #[derive(Debug, Clone, Serialize)]
 pub struct SnapshotAnalysisGap {
     pub kind: String,
     pub subject: String,
     pub detail: String,
+    pub role: String,
 }
 
 /// Per-routine coverage record. al-sem `CoverageRecord`: subject, directStatus,
@@ -1026,7 +1028,7 @@ fn compute_edge_id(e: &EdgeIdentity) -> String {
 // ===========================================================================
 
 /// Internal RoutineId → StableRoutineId; pass through if unmapped.
-fn stable_routine_id(internal: &str, map: &HashMap<String, String>) -> String {
+pub(crate) fn stable_routine_id(internal: &str, map: &HashMap<String, String>) -> String {
     map.get(internal)
         .cloned()
         .unwrap_or_else(|| internal.to_string())
@@ -1258,7 +1260,7 @@ pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> Ca
     let operation_index = derive_operation_evidence(base, &collided);
     let callsite_index = derive_callsite_evidence(base, &collided);
     let callsite_resolutions = derive_callsite_resolutions(base, &typed_edges, &collided);
-    let analysis_gaps = derive_analysis_gaps(base);
+    let analysis_gaps = derive_analysis_gaps(resolved, base);
     let coverage = derive_coverage(base);
     let event_declarations = derive_event_declarations(base);
     let root_classifications = derive_root_classifications(resolved, base);
@@ -2350,16 +2352,19 @@ fn classify_resolution(
 
 // ---------------------------------------------------------------------------
 // deriveAnalysisGaps — non-callsite unknowns. Sort by (kind|subject), dedup
-// adjacent. The source-only corpus has zero gaps (no parse-incomplete / no opaque
-// deps), so this is empty for the 5 fixtures — implemented faithfully regardless.
+// adjacent. Every gap of the model, unfiltered (#220 I8: `prove` intersects it
+// with its own cone; the cross-app serialization filters it by reach).
 //
 // M8: kind (fixed lowercase) | subject (stable id / guid, lowercase) → ordinal-safe.
 // ---------------------------------------------------------------------------
 
-fn derive_analysis_gaps(base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
+fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
+    use crate::program::model::role::Role;
     use std::collections::BTreeSet;
 
     let map = &base.routine_to_stable;
+    let is_dependency_role = |r: &ModelRoutine| resolved.routine_role(r) == Role::Dependency;
+    let dependency = || Role::Dependency.as_str().to_string();
     let mut out: Vec<SnapshotAnalysisGap> = Vec::new();
 
     // Source-only: no coverage.routinesParseIncomplete plumbed through the base, so
@@ -2371,6 +2376,7 @@ fn derive_analysis_gaps(base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
                 subject: stable_routine_id(&r.id, map),
                 detail: "routine body had a parse error; structural extraction was partial"
                     .to_string(),
+                role: resolved.routine_role(r).as_str().to_string(),
             });
         }
     }
@@ -2392,6 +2398,7 @@ fn derive_analysis_gaps(base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
             subject: guid.clone(),
             detail: "dependency app has symbols only (no parseable source); its cones are opaque"
                 .to_string(),
+            role: dependency(),
         });
     }
 
@@ -2411,6 +2418,7 @@ fn derive_analysis_gaps(base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
             kind: "body-unavailable".to_string(),
             subject: stable_routine_id(&r.id, map),
             detail: "routine has no parseable body".to_string(),
+            role: dependency(),
         });
     }
 
@@ -2426,12 +2434,6 @@ fn derive_analysis_gaps(base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
         }
     }
     deduped
-}
-
-/// Source-only workspaces have no dependency routines; this is always false here
-/// but kept for faithfulness with al-sem's `roleOf(r) === "dependency"`.
-fn is_dependency_role(_r: &ModelRoutine) -> bool {
-    false
 }
 
 // ---------------------------------------------------------------------------
