@@ -51,6 +51,17 @@ pub struct FindingEvidence {
 /// dropping any `Value::Null` entries (mirrors JS `undefined`-drop). Arrays
 /// keep their order; primitives are returned as-is.
 pub fn sort_and_drop_nulls(value: serde_json::Value) -> serde_json::Value {
+    sort_keys(value, true)
+}
+
+/// [`sort_and_drop_nulls`] that KEEPS `null`s: for a value with a field whose
+/// `null` is meaningful (digest's `testCoverage.ratio`, #254), sorted without
+/// relying on serde_json's `Map` order.
+pub fn sort_keys_keep_nulls(value: serde_json::Value) -> serde_json::Value {
+    sort_keys(value, false)
+}
+
+fn sort_keys(value: serde_json::Value, drop_nulls: bool) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => {
             // Collect, drop nulls, sort by key, recurse into values.
@@ -64,15 +75,15 @@ pub fn sort_and_drop_nulls(value: serde_json::Value) -> serde_json::Value {
             // this drop would silently squelch it — revisit then.
             let mut pairs: Vec<(String, serde_json::Value)> = map
                 .into_iter()
-                .filter(|(_, v)| !v.is_null())
-                .map(|(k, v)| (k, sort_and_drop_nulls(v)))
+                .filter(|(_, v)| !(drop_nulls && v.is_null()))
+                .map(|(k, v)| (k, sort_keys(v, drop_nulls)))
                 .collect();
             pairs.sort_by(|a, b| a.0.cmp(&b.0));
             let sorted: serde_json::Map<String, serde_json::Value> = pairs.into_iter().collect();
             serde_json::Value::Object(sorted)
         }
         serde_json::Value::Array(arr) => {
-            serde_json::Value::Array(arr.into_iter().map(sort_and_drop_nulls).collect())
+            serde_json::Value::Array(arr.into_iter().map(|v| sort_keys(v, drop_nulls)).collect())
         }
         other => other,
     }
@@ -88,10 +99,9 @@ pub fn serialize_document_value(value: serde_json::Value) -> String {
     serialize_normalized_value(&sort_and_drop_nulls(value))
 }
 
-/// [`serialize_document_value`]'s formatting for a value already passed through
-/// [`sort_and_drop_nulls`], so a caller can add a field whose `null` must stay
-/// (digest's `testCoverage.ratio`, #254). Keys stay sorted: serde_json's map
-/// is ordered without `preserve_order`.
+/// [`serialize_document_value`]'s formatting for a value whose keys are already
+/// sorted ([`sort_and_drop_nulls`] / [`sort_keys_keep_nulls`]), so a caller can
+/// keep a field whose `null` must stay (digest's `testCoverage.ratio`, #254).
 pub fn serialize_normalized_value(value: &serde_json::Value) -> String {
     let mut out =
         serde_json::to_string_pretty(value).expect("serde_json serialization of sorted Value");
@@ -471,6 +481,37 @@ pub fn pinned_or_now_iso8601(deterministic: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #254 R8: the digest's coverage block keeps `null` and is key-sorted
+    /// whatever order its map was built in.
+    #[test]
+    fn sort_keys_keep_nulls_sorts_and_keeps_null() {
+        let mut inner = serde_json::Map::new();
+        inner.insert("z".into(), serde_json::Value::Null);
+        inner.insert("a".into(), 1.into());
+        let mut outer = serde_json::Map::new();
+        outer.insert("y".into(), serde_json::Value::Object(inner));
+        outer.insert("b".into(), serde_json::Value::Null);
+        let text =
+            serialize_normalized_value(&sort_keys_keep_nulls(serde_json::Value::Object(outer)));
+        assert_eq!(
+            text,
+            "{\n  \"b\": null,\n  \"y\": {\n    \"a\": 1,\n    \"z\": null\n  }\n}\n"
+        );
+    }
+
+    /// #254 R8: pins that serde_json's `Map` iterates in key order (no
+    /// `preserve_order` in this build). Every serializer here re-sorts anyway;
+    /// this fails loudly if a dependency turns `preserve_order` on, so the
+    /// assumption is never silent.
+    #[test]
+    fn serde_json_map_iterates_in_key_order() {
+        let mut m = serde_json::Map::new();
+        m.insert("b".into(), 1.into());
+        m.insert("a".into(), 2.into());
+        let keys: Vec<&str> = m.keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["a", "b"]);
+    }
 
     #[test]
     fn sorted_keys_basic() {

@@ -16,7 +16,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::engine::gate::format_json::{serialize_normalized_value, sort_and_drop_nulls};
+use crate::engine::gate::format_json::{
+    serialize_normalized_value, sort_and_drop_nulls, sort_keys_keep_nulls,
+};
 use crate::engine::gate::run::analyzer_diagnostics_of_view;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified, temp_state_str};
@@ -1421,10 +1423,12 @@ pub fn project_digest_document(
     // Still 1.6.0: `payload.testCoverage` is opt-in (`--tests`, #254) and additive.
     env.insert("schemaVersion".into(), "1.6.0".into());
 
-    // The block goes in after the null drop, so its `ratio: null` survives.
+    // The block goes in after the null drop, so its `ratio: null` survives; the
+    // keep-nulls sort then orders it (and the payload key it lands in).
     let mut doc = sort_and_drop_nulls(serde_json::Value::Object(env));
     if let Some(block) = test_coverage {
         doc["payload"]["testCoverage"] = block;
+        doc = sort_keys_keep_nulls(doc);
     }
     serialize_normalized_value(&doc)
 }
