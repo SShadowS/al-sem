@@ -101,7 +101,8 @@ pub fn extract_source_facts(
                             .attributes_parsed
                             .iter()
                             .filter(|a| a.name.eq_ignore_ascii_case("handlerfunctions"))
-                            .flat_map(|a| handler_names(&a.raw))
+                            .filter_map(|a| first_string_arg(&pf.file, a))
+                            .flat_map(|list| handler_names(&list))
                             .collect(),
                         runs: routine
                             .params
@@ -206,18 +207,48 @@ fn object_facts(
     }
 }
 
-/// The names in `[HandlerFunctions('A,B')]`'s first string argument, folded.
-fn handler_names(raw: &str) -> Vec<String> {
-    let Some(start) = raw.find('\'') else {
-        return Vec::new();
-    };
-    let rest = &raw[start + 1..];
-    let end = rest.find('\'').unwrap_or(rest.len());
-    rest[..end]
-        .split(',')
+/// The object kind a `TestPage X` / `TestRequestPage X` type drives (`Page` /
+/// `Report`) and the rest of the text; `None` for any other type. Shared with
+/// `digest --tests` (`l5::test_coverage`), so both read a test page alike.
+pub(crate) fn test_page_target(text: &str) -> Option<(&'static str, &str)> {
+    let t = text.trim();
+    let (head, rest) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
+    match head.to_ascii_lowercase().as_str() {
+        "testpage" => Some(("Page", rest)),
+        "testrequestpage" => Some(("Report", rest)),
+        _ => None,
+    }
+}
+
+/// The names in `[HandlerFunctions('A,B')]`, folded, from the attribute's
+/// decoded first string argument `list` (`A,B`). Each reader decodes that
+/// argument from its own structured form, never by scanning the raw text, which
+/// would read an apostrophe-quoted name inside a comment. Shared with
+/// `digest --tests` (`l5::test_coverage`).
+pub(crate) fn handler_names(list: &str) -> Vec<String> {
+    list.split(',')
         .map(|n| unquote_identifier(n.trim()).fold_identifier())
         .filter(|n| !n.is_empty())
         .collect()
+}
+
+/// The decoded first argument of an IR attribute when it is a string literal.
+fn first_string_arg(
+    file: &al_syntax::ir::AlFile,
+    a: &al_syntax::ir::AttributeIr,
+) -> Option<String> {
+    let e = file.ir.expr(*a.args.first()?);
+    match &e.kind {
+        al_syntax::ir::ExprKind::Literal(al_syntax::ir::Literal::Text(t)) => {
+            let t = t.trim();
+            let inner = t
+                .strip_prefix('\'')
+                .and_then(|s| s.strip_suffix('\''))
+                .unwrap_or(t);
+            Some(inner.replace("''", "'"))
+        }
+        _ => None,
+    }
 }
 
 /// A property's object reference: `"Customer List"`, `22`, `Page::"X"`.
@@ -264,18 +295,13 @@ fn runnable_type(
     index: &ResolveIndex,
 ) -> Option<RunTarget> {
     let t = text.trim();
-    let (head, rest) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
     let rewritten;
-    let t = match head.to_ascii_lowercase().as_str() {
-        "testpage" => {
-            rewritten = format!("Page {rest}");
+    let t = match test_page_target(t) {
+        Some((kind, rest)) => {
+            rewritten = format!("{kind} {rest}");
             rewritten.as_str()
         }
-        "testrequestpage" => {
-            rewritten = format!("Report {rest}");
-            rewritten.as_str()
-        }
-        _ => t,
+        None => t,
     };
     match classify_type_text(t) {
         ParsedType::Object { kind, object_ref } => resolve(from, kind, &object_ref, graph, index),
@@ -304,10 +330,10 @@ mod tests {
     #[test]
     fn handler_names_split_and_fold() {
         assert_eq!(
-            handler_names("[HandlerFunctions('ConfirmYes, \"Modal Handler\"')]"),
+            handler_names("ConfirmYes, \"Modal Handler\""),
             vec!["confirmyes".to_string(), "modal handler".to_string()]
         );
-        assert_eq!(handler_names("[HandlerFunctions]"), Vec::<String>::new());
+        assert_eq!(handler_names(""), Vec::<String>::new());
     }
 
     #[test]

@@ -1,0 +1,13 @@
+{
+  "id": "7d1c3a52-9e4b-4f60-8b2a-1c5e7f9a3d62",
+  "name": "Digest Test Coverage Configured Root Fixture",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [
+    {
+      "from": 51010,
+      "to": 51019
+    }
+  ]
+}

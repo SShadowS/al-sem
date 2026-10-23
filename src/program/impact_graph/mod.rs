@@ -69,7 +69,7 @@
 //! a caller of every node), plus every node with `hiddenCallers` that reaches a
 //! workspace routine.
 
-mod facts;
+pub(crate) mod facts;
 mod project;
 
 use std::collections::{HashMap, HashSet};

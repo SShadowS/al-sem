@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "roots": [
+    {
+      "id": "configured-test-procedure",
+      "target": {
+        "objectId": "7d1c3a52-9e4b-4f60-8b2a-1c5e7f9a3d62/Codeunit/51010",
+        "routineName": "Configured"
+      },
+      "kinds": ["test-procedure"],
+      "note": "#254: a configured test kind without [Test] is not a coverage root."
+    }
+  ]
+}

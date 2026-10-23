@@ -201,6 +201,7 @@ fn digest(publisher: &str, subscriber: &str, routine: &str) -> Value {
         true,
         None,
         true,
+        false,
     )
     .expect("digest runs");
     serde_json::from_str(&result.json_text).expect("digest json")

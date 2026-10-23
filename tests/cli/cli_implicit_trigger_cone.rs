@@ -226,6 +226,7 @@ fn digest(ws: &Path, file: &str, single_app: bool) -> Value {
         true,
         None,
         single_app,
+        false,
     )
     .expect("digest runs");
     serde_json::from_str(&result.json_text).expect("digest json")
