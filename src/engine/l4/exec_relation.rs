@@ -37,8 +37,8 @@ pub struct ExecRelation {
     /// Tarjan over the Primary payload, computed in [`ExecRelation::new`].
     scc: Arc<SccResult>,
     /// The dependency half's uncertainty edges, in the order the half-build
-    /// sorts them. No production reader: kept for step 5's coverage policy,
-    /// read today only by tests and the census.
+    /// sorts them. Read by the coverage fold through
+    /// [`ExecRelation::uncertainty_all`] (#160 step 5) and by the census.
     dependency_uncertainty: Vec<UncertaintyEdge>,
 }
 
@@ -129,9 +129,20 @@ impl ExecRelation {
         &self.scc
     }
 
-    /// The dependency half's uncertainty edges (no production reader yet).
+    /// The dependency half's uncertainty edges. The coverage fold reads them
+    /// through [`ExecRelation::uncertainty_all`].
     pub fn dependency_uncertainty(&self) -> &[UncertaintyEdge] {
         &self.dependency_uncertainty
+    }
+
+    /// The uncertainty edges of every caller the Cone carries: the Primary half,
+    /// then the dependency half. Read by the coverage fold only; the solve and
+    /// the context's indexes read `primary().uncertainty_edges`.
+    pub fn uncertainty_all(&self) -> impl Iterator<Item = &UncertaintyEdge> {
+        self.primary
+            .uncertainty_edges
+            .iter()
+            .chain(&self.dependency_uncertainty)
     }
 }
 

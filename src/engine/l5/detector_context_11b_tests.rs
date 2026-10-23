@@ -166,7 +166,7 @@ fn collision_rules_hand_stated() {
     );
     let (touch_a, touch_b) = (id_named(&m, "TouchA"), id_named(&m, "TouchB"));
 
-    let inputs = det_cone_inputs(&m);
+    let inputs = det_cone_inputs(&m, &ExecRelation::single_app(&m));
     let direct = inputs.direct_full.get(&id).expect("direct facts of Work");
     for f in &a_direct {
         assert!(direct.contains(f), "A's insert in the direct facts: {f:?}");
@@ -337,7 +337,7 @@ codeunit 50817 "SW Work"
 /// `Debug`), in the order the production code holds it.
 fn swap_surfaces(m: &Model, id: &str) -> Vec<(&'static str, Vec<String>)> {
     let dbg = |v: &dyn std::fmt::Debug| format!("{v:?}");
-    let inputs = det_cone_inputs(m);
+    let inputs = det_cone_inputs(m, &ExecRelation::single_app(m));
     let owned = build_detector_context(m, substrate::ALL);
     let ctx = owned.ctx();
     let bundle = &owned.l4().expect("CORE_SUMMARIES").bundle;

@@ -609,6 +609,68 @@ pub fn write_fixture_dep_uncertainty(ws: &std::path::Path) {
     write_ws_with_dep(ws, ws_al, r#"[{"Name":"DepCaller","Parameters":[]}]"#, lib);
 }
 
+/// #160 step 5 (spec `2026-10-22-issue-160-step5-coverage-policy-design.md`
+/// §5 T4, probe P6): a dependency routine `Inner` makes one ambiguous call and
+/// one `Modify`; the dependency's `Outer` calls `Inner`; the workspace's
+/// `Ws Call::Go` calls `Outer`. So the only call-site-local uncertainty is in
+/// dependency code, and `Go` is `partial` only when the dependency half is
+/// folded. Shared with step 6's acceptance.
+///
+/// NOT compilable AL: `O(L)` passes a Codeunit, which is neither a `Text` nor
+/// an implementation of `Dep ILog`. It works because our overload resolver is
+/// lenient (the `ws-overload-negatives` `O` shape). The tests that use it
+/// assert the ambiguous edge exists, so a stricter resolver fails them loudly.
+pub fn write_fixture_dep_ambiguous(ws: &std::path::Path) {
+    let lib = r#"interface "Dep ILog"
+{
+    procedure Touch();
+}
+
+codeunit 12 "Dep Rec Lib"
+{
+    procedure Outer()
+    begin
+        Inner();
+    end;
+
+    procedure Inner()
+    var
+        L: Codeunit "Dep Rec Lib";
+        R: Record Customer;
+    begin
+        O(L);
+        R.Modify();
+    end;
+
+    procedure O(X: Interface "Dep ILog"): Integer
+    begin
+        exit(0);
+    end;
+
+    procedure O(X: Text): Integer
+    begin
+        exit(1);
+    end;
+}
+"#;
+    let ws_al = r#"codeunit 50181 "Ws Call"
+{
+    procedure Go()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.Outer();
+    end;
+}
+"#;
+    write_ws_with_dep(
+        ws,
+        ws_al,
+        r#"[{"Name":"Outer","Parameters":[]},{"Name":"Inner","Parameters":[]}]"#,
+        lib,
+    );
+}
+
 /// The dependency half `ExecRelation::new` receives (spec §5.2, S2-3): the
 /// cross-app model built a second time, independently, with the call
 /// `build_cross_app_base` makes, and its UNCUT `resolved.calls.edges` kept
