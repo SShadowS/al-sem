@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- d35 (Commit in an event subscriber) now reports an unknown answer — no Commit found in
+  the subscriber or proven in its callees, but call coverage incomplete — at medium
+  severity instead of high (#256). A Commit found directly or via a callee stays high.
+  Confidence, ids, fingerprints and loose fingerprints are unchanged, so baselines and
+  suppressions keep matching. Such findings no longer trip `analyze --fail-on high` or
+  show under `--min-severity high`; SARIF reports them as warnings. `alsem policy check`
+  is unchanged. On the pinned CDO workspace, 41 of 52 d35 findings (primary scope; 83 of
+  162 at `--scope all`) move to medium; primary `bySeverity.high` drops from 577 to 536.
+  This supersedes #148's note that the unknown answer keeps severity high.
+- Digest, prove and fingerprint witnesses are the shortest paths to the nearest carrier (one
+  BFS per root and first hop, CLRS §22.2); printed paths are no longer padded with longer
+  ones; conditionality is read over the shortest witnesses; the witness BFS has no state
+  limit, and the depth diagnostic is per fact; the ordering engine answers happens-before on
+  demand (no change in d47/d49/d51 output). Part of #160 (step 6, D8). The BFS keeps every
+  shortest-path predecessor (a DAG of all shortest paths), built once per (root, first hop)
+  and shared by that root's facts, in digest and in the fingerprint query alike. A fact's
+  witnesses are its distinct projected paths to the carriers at the least distance, plus
+  the opaque call-site and op seeds, in (projected length, projected JSON) order, up to the
+  caller's cap: an opaque seed and a carrier one hop away now sort by their hop JSON, not
+  by raw hop count. `state-limit-exceeded` now comes only from the producer proofs, and
+  `depth-exceeded` only marks a fact with no witness whose carrier lies past 64 hops. The
+  effect merge keeps the 4 smallest distinct paths instead of every path (same output). The
+  witness census line `digest.witness_dags=N nodes=N preds=N` joins `ALSEM_CONES_CENSUS=1`.
+
 ## [2.0.3] - 2026-10-23
 
 ### Added
@@ -129,18 +155,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one object share a key.
   JSON only: SARIF `fingerprints` would merge results with an equal value. The
   `schemaVersion` does not change (the key is additive).
-
-### Changed
-
-- d35 (Commit in an event subscriber) now reports an unknown answer — no Commit found in
-  the subscriber or proven in its callees, but call coverage incomplete — at medium
-  severity instead of high (#256). A Commit found directly or via a callee stays high.
-  Confidence, ids, fingerprints and loose fingerprints are unchanged, so baselines and
-  suppressions keep matching. Such findings no longer trip `analyze --fail-on high` or
-  show under `--min-severity high`; SARIF reports them as warnings. `alsem policy check`
-  is unchanged. On the pinned CDO workspace, 41 of 52 d35 findings (primary scope; 83 of
-  162 at `--scope all`) move to medium; primary `bySeverity.high` drops from 577 to 536.
-  This supersedes #148's note that the unknown answer keeps severity high.
 
 ### Fixed
 

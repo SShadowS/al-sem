@@ -19,8 +19,7 @@ use std::collections::{HashMap, HashSet};
 use crate::engine::ids::sha256_hex;
 use crate::engine::l5::digest::QueryWitnessHop;
 use crate::engine::l5::ordering::{
-    HBEdge, OrderedOp, Quantifier, build_hb_edges, dom, dominates_return, may_co_execute,
-    ordered_before,
+    HbIndex, OrderedOp, Quantifier, dom, dominates_return, may_co_execute, ordered_before,
 };
 use crate::engine::l5::ordering_inter::{
     CallChain, CallsiteByIdMap, OccurrenceWithChain, ResolutionByCallsiteId, error_escapes_chain,
@@ -240,6 +239,43 @@ impl<'s> OrderingIndex<'s> {
     }
 }
 
+// O1's counters (test builds): the ordered occurrence pairs checked, and the
+// edges among them.
+#[cfg(test)]
+pub(crate) static O1_PAIRS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+pub(crate) static O1_EDGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// O1 (a), in test builds: for every ordered pair of one call's occurrence ids
+/// (duplicates included), the on-demand test equals membership in
+/// `build_hb_edges`' output.
+#[cfg(test)]
+fn o1_check(groups: &[Vec<OrderedOp>]) {
+    use std::sync::atomic::Ordering;
+    let edges: HashSet<(String, String)> = groups
+        .iter()
+        .flat_map(|g| crate::engine::l5::ordering::build_hb_edges(g))
+        .map(|e| (e.from, e.to))
+        .collect();
+    let hb = HbIndex::new(groups.to_vec());
+    let ids: Vec<&str> = groups
+        .iter()
+        .flatten()
+        .map(|o| o.occurrence_id.as_str())
+        .collect();
+    for x in &ids {
+        for y in &ids {
+            assert_eq!(
+                hb.has_edge(x, y),
+                edges.contains(&(x.to_string(), y.to_string())),
+                "O1: {x} -> {y}"
+            );
+        }
+    }
+    O1_PAIRS.fetch_add(ids.len() * ids.len(), Ordering::Relaxed);
+    O1_EDGES.fetch_add(edges.len(), Ordering::Relaxed);
+}
+
 // ---------------------------------------------------------------------------
 // compute_ordering — order:false path.
 // ---------------------------------------------------------------------------
@@ -363,19 +399,19 @@ pub fn compute_ordering(
         }
     }
 
-    // Build HB edges per group (never cross-group).
-    let mut all_hb_edges: Vec<HBEdge> = Vec::new();
-    for (_owner, idxs) in &groups {
-        let group_ops: Vec<OrderedOp> = idxs
-            .iter()
-            .map(|&i| occurrences[i].ordered_op.clone().unwrap())
-            .collect();
-        let group_edges = build_hb_edges(&group_ops);
-        all_hb_edges.extend(group_edges);
-    }
-    let has_intra_edge = |from: &str, to: &str| -> bool {
-        all_hb_edges.iter().any(|e| e.from == from && e.to == to)
-    };
+    // Happens-before per group (never cross-group), answered on demand.
+    let group_ops: Vec<Vec<OrderedOp>> = groups
+        .iter()
+        .map(|(_owner, idxs)| {
+            idxs.iter()
+                .map(|&i| occurrences[i].ordered_op.clone().unwrap())
+                .collect()
+        })
+        .collect();
+    #[cfg(test)]
+    o1_check(&group_ops);
+    let hb = HbIndex::new(group_ops);
+    let has_intra_edge = |from: &str, to: &str| -> bool { hb.has_edge(from, to) };
 
     // --- OccurrenceWithChain per effect (None when no order data / not placeable). ---
     let mut multi_path_occurrence_ids: HashSet<String> = HashSet::new();
@@ -390,16 +426,11 @@ pub fn compute_ordering(
 
             let owner = resolve_owning_routine(eff)?;
 
-            // terminalRoutineOps for the owning group.
-            let terminal_routine_ops: Vec<OrderedOp> = groups
+            // terminalRoutineOps for the owning group, shared.
+            let terminal_routine_ops: std::sync::Arc<[OrderedOp]> = groups
                 .iter()
-                .find(|(r, _)| *r == owner)
-                .map(|(_, idxs)| {
-                    idxs.iter()
-                        .map(|&i| occurrences[i].ordered_op.clone().unwrap())
-                        .collect()
-                })
-                .unwrap_or_default();
+                .position(|(r, _)| *r == owner)
+                .map_or_else(|| Vec::new().into(), |g| hb.group(g));
 
             if via_paths.is_empty() {
                 if owner != routine_id {
