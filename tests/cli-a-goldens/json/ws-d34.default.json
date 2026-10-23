@@ -21,6 +21,7 @@
           "safety": "low"
         },
         "id": "d19/e09e92b394f6df1a/fa250c46e1b1f092b4ad05328c01f834e55f7f1479de12e04c243e4cbac4b0ba/p0",
+        "looseFingerprint": "d423df5be6102f86",
         "pathCount": 1,
         "primaryLocation": {
           "column": 5,
@@ -50,6 +51,7 @@
           "safety": "low"
         },
         "id": "d19/e09e92b394f6df1a/691053475741d64edaba80206bad8ba185061558aec4c24c10047904deb88158/p0",
+        "looseFingerprint": "d423df5be6102f86",
         "pathCount": 1,
         "primaryLocation": {
           "column": 5,
@@ -79,6 +81,7 @@
           "safety": "medium"
         },
         "id": "d34/e09e92b394f6df1a/ff0824dbeb922a1ff22cfdbb22a7ea3405e3d8a50860e66d0b1f6fe7db78d750/e09e92b394f6df1a/ff0824dbeb922a1ff22cfdbb22a7ea3405e3d8a50860e66d0b1f6fe7db78d750/loop1/e09e92b394f6df1a/ff0824dbeb922a1ff22cfdbb22a7ea3405e3d8a50860e66d0b1f6fe7db78d750/op0",
+        "looseFingerprint": "95d5ae8e23c2da74",
         "pathCount": 1,
         "primaryLocation": {
           "column": 17,
@@ -108,6 +111,7 @@
           "safety": "medium"
         },
         "id": "d34/e09e92b394f6df1a/5bf249a23dc88d7f4b70ae320b08debd53d26bf9a6eb6a46584f9deee1d574bf/e09e92b394f6df1a/5bf249a23dc88d7f4b70ae320b08debd53d26bf9a6eb6a46584f9deee1d574bf/loop0/e09e92b394f6df1a/5bf249a23dc88d7f4b70ae320b08debd53d26bf9a6eb6a46584f9deee1d574bf/cs0",
+        "looseFingerprint": "95d5ae8e23c2da74",
         "pathCount": 1,
         "primaryLocation": {
           "column": 13,
@@ -137,6 +141,7 @@
           "safety": "medium"
         },
         "id": "d34/e09e92b394f6df1a/10608aafc963ede74520763dee2ab35a9ba82a2c8720ab9055245be79b97d11d/e09e92b394f6df1a/10608aafc963ede74520763dee2ab35a9ba82a2c8720ab9055245be79b97d11d/loop0/e09e92b394f6df1a/10608aafc963ede74520763dee2ab35a9ba82a2c8720ab9055245be79b97d11d/op0",
+        "looseFingerprint": "95d5ae8e23c2da74",
         "pathCount": 1,
         "primaryLocation": {
           "column": 13,

@@ -466,6 +466,7 @@ fn serialize_baseline_matches_committed_fingerprints() {
     let mk = |fp: &str| FindingSummary {
         id: fp.to_string(),
         fingerprint: fp.to_string(),
+        loose_fingerprint: String::new(),
         detector: "d8-commit-in-transaction".to_string(),
         title: String::new(),
         root_cause: String::new(),

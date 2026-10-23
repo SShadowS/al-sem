@@ -188,6 +188,13 @@ fn finding_summary_to_value(s: &FindingSummary, ev: Option<&FindingEvidence>) ->
 
     obj.insert("id".to_string(), s.id.clone().into());
 
+    // #247: the routine-independent key (JSON only — never SARIF `fingerprints`,
+    // where an equal value would merge distinct results).
+    obj.insert(
+        "looseFingerprint".to_string(),
+        s.loose_fingerprint.clone().into(),
+    );
+
     // pathCount — always emit (even 1); `pathCount` is defined as `number`
     // (not `number | undefined`) after projectFinding always assigns it.
     obj.insert(

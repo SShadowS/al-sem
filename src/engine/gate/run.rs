@@ -412,8 +412,8 @@ pub fn dependency_object_predicate<'a>(
     idx: &'a ProjectionIndex<'a>,
 ) -> impl Fn(&str) -> bool + 'a {
     move |obj_id: &str| {
-        idx.objects_by_id
-            .get(obj_id)
+        idx.fingerprints
+            .object(obj_id)
             .is_some_and(|o| resolved.object_role(o) == Role::Dependency)
     }
 }

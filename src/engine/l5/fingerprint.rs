@@ -141,13 +141,52 @@ impl<'a> FingerprintIndex<'a> {
         }
     }
 
+    /// The model routine with internal id `id`.
+    pub fn routine(&self, id: &str) -> Option<&'a ModelRoutine> {
+        self.routines_by_id.get(id).copied()
+    }
+
+    /// The model object with internal id `id`.
+    pub fn object(&self, id: &str) -> Option<&'a ModelObject> {
+        self.objects_by_id.get(id).copied()
+    }
+
     /// Compute the finding's fingerprint. Internal routine ids in `rootCauseKey`
     /// (directly, or as the prefix of operation/callsite/loop ids) are replaced with
     /// their stable ids before hashing (mirrors al-sem's stabilizing substitution —
     /// see module docs). Returns the first 16 hex chars of `sha256(parts.join("|"))`.
     pub fn fingerprint_of(&self, finding: &Finding) -> String {
+        let (routine, obj_part) = self.anchor_of(finding);
+        let routine_name = routine.map(|r| r.name.clone()).unwrap_or_default();
+        let key = self.stabilize(&finding.root_cause_key);
+        hash_parts(finding, obj_part, routine_name, key)
+    }
+
+    /// #247: the routine-independent key. The fingerprint's parts with `routineName`
+    /// blanked and, when the anchor is a routine, every occurrence of the anchor's
+    /// internal or stable id in `rootCauseKey` (with the `/op3`-style ordinal chain
+    /// after it) replaced by `~`. So the same problem moved to another routine of the
+    /// same object keeps this key. Not unique: several findings can share one. When
+    /// the anchor is not a routine (d64's object id, an unresolved id) it equals
+    /// `fingerprint_of`.
+    pub fn loose_fingerprint_of(&self, finding: &Finding) -> String {
+        let (routine, obj_part) = self.anchor_of(finding);
+        let key = match routine {
+            Some(r) => strip_anchor(
+                &finding.root_cause_key,
+                &[r.id.as_str(), r.stable_routine_id.as_str()],
+            ),
+            None => finding.root_cause_key.clone(),
+        };
+        let key = self.stabilize(&key);
+        hash_parts(finding, obj_part, String::new(), key)
+    }
+
+    /// The anchor routine (`primaryLocation.enclosingRoutineId`, when it is one) and
+    /// the `objectType/objectKey` part of its owning object (empty when unresolved).
+    fn anchor_of(&self, finding: &Finding) -> (Option<&'a ModelRoutine>, String) {
         let enclosing = finding.primary_location.enclosing_routine_id.as_str();
-        let routine = self.routines_by_id.get(enclosing);
+        let routine = self.routines_by_id.get(enclosing).copied();
         // Object-level finding convention (d64 — the first detector to anchor a
         // finding directly on an object rather than a routine, e.g. a
         // declarative page with no routines at all): `enclosing_routine_id` IS
@@ -167,31 +206,71 @@ impl<'a> FingerprintIndex<'a> {
             Some(o) => format!("{}/{}", o.object_type, o.object_key),
             None => String::new(),
         };
-        let routine_name = routine.map(|r| r.name.clone()).unwrap_or_default();
-
-        // Stabilize every internal routine id embedded in the rootCauseKey (mirrors
-        // al-sem's stabilizing reduce). For an empty model stable_by_id is empty, so
-        // this branch is skipped and the key is used verbatim.
-        let stable_root_cause_key = if self.stable_by_id.is_empty() {
-            finding.root_cause_key.clone()
-        } else {
-            substitute_stable_ids(
-                finding.root_cause_key.as_str(),
-                &self.stable_by_id,
-                &self.model_instance_prefixes,
-            )
-        };
-
-        let parts = [
-            finding.detector.clone(),
-            obj_part,
-            routine_name,
-            finding.affected_tables.join(","),
-            stable_root_cause_key,
-        ];
-        let joined = parts.join("|");
-        sha256_hex(&joined)[..16].to_string()
+        (routine, obj_part)
     }
+
+    /// Stabilize every internal routine id embedded in a rootCauseKey (mirrors
+    /// al-sem's stabilizing reduce). For an empty model stable_by_id is empty, so
+    /// the key is used verbatim.
+    fn stabilize(&self, key: &str) -> String {
+        if self.stable_by_id.is_empty() {
+            key.to_string()
+        } else {
+            substitute_stable_ids(key, &self.stable_by_id, &self.model_instance_prefixes)
+        }
+    }
+}
+
+/// `sha256(detector | obj_part | routine_name | affectedTables | key)[..16]`.
+fn hash_parts(finding: &Finding, obj_part: String, routine_name: String, key: String) -> String {
+    let parts = [
+        finding.detector.clone(),
+        obj_part,
+        routine_name,
+        finding.affected_tables.join(","),
+        key,
+    ];
+    let joined = parts.join("|");
+    sha256_hex(&joined)[..16].to_string()
+}
+
+/// Replace every occurrence of any of `ids` in `key`, plus the chain of
+/// `/(op|cs|loop|u|p)<digits>` segments right after it, with `~`.
+fn strip_anchor(key: &str, ids: &[&str]) -> String {
+    let mut out = String::with_capacity(key.len());
+    let mut pos = 0usize;
+    'outer: while pos < key.len() {
+        for id in ids.iter().filter(|id| !id.is_empty()) {
+            if key[pos..].starts_with(id) {
+                out.push('~');
+                pos += id.len();
+                while let Some(n) = ordinal_segment_len(&key[pos..]) {
+                    pos += n;
+                }
+                continue 'outer;
+            }
+        }
+        let ch = key[pos..].chars().next().expect("non-empty slice");
+        out.push(ch);
+        pos += ch.len_utf8();
+    }
+    out
+}
+
+/// The byte length of a leading `/(op|cs|loop|u|p)<digits>` segment of `rest`, when
+/// the digits end at the end of `rest` or before a non-alphanumeric byte (so a
+/// variable named `/p2x` is not an ordinal).
+fn ordinal_segment_len(rest: &str) -> Option<usize> {
+    let after_slash = rest.strip_prefix('/')?;
+    ["op", "cs", "loop", "u", "p"].iter().find_map(|tag| {
+        let after = after_slash.strip_prefix(tag)?;
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let ends = after
+            .as_bytes()
+            .get(digits)
+            .is_none_or(|b| !b.is_ascii_alphanumeric());
+        (digits > 0 && ends).then_some(1 + tag.len() + digits)
+    })
 }
 
 /// Replace every stable_by_id KEY occurring in `key` with its value, scanning
@@ -636,5 +715,81 @@ mod tests {
                 "divergence (16-hex mid) on key: {k}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // #247 looseFingerprint
+    // -----------------------------------------------------------------------
+
+    /// Two routines `rA`/`rB` of one codeunit, with stable ids `S#A`/`S#B` that do
+    /// NOT contain the internal ids (else stripping the internal id alone would also
+    /// erase the stable form and hide a missing stable-id strip).
+    fn two_routine_model() -> (Vec<ModelRoutine>, Vec<ModelObject>) {
+        let obj = "obj/Codeunit/50100";
+        let mut a = minimal_routine("rA", obj, "First");
+        let mut b = minimal_routine("rB", obj, "Second");
+        a.stable_routine_id = "S#A".to_string();
+        b.stable_routine_id = "S#B".to_string();
+        (vec![a, b], vec![minimal_object(obj, "Codeunit", 50100)])
+    }
+
+    /// T3: the detector part. Equal key, tables and anchor; only the detector
+    /// differs. On the production path the key's `dNN/` prefix already differs, so
+    /// only a hand-made pair can show the part is hashed. Break: drop `detector`
+    /// from the loose parts.
+    #[test]
+    fn loose_fingerprint_hashes_the_detector() {
+        let (routines, objects) = two_routine_model();
+        let idx = FingerprintIndex::build(&routines, &objects);
+        let a = dummy_finding("d11-modify-without-get", "x/rA/op0", "rA");
+        let b = dummy_finding("d21-other", "x/rA/op0", "rA");
+        assert_ne!(idx.loose_fingerprint_of(&a), idx.loose_fingerprint_of(&b));
+    }
+
+    /// The anchor id and its ordinal chain go; the rest of the key stays.
+    #[test]
+    fn strip_anchor_shapes() {
+        let ids = ["rA", "S#A"];
+        // The whole ordinal chain after the anchor (d1/d18 shape).
+        assert_eq!(strip_anchor("d1/rA/loop0/cs3/op25", &ids), "d1/~");
+        assert_eq!(
+            strip_anchor("d18/rA/rA/loop0/rec/field", &ids),
+            "d18/~/~/rec/field"
+        );
+        // A variable named like an ordinal but longer is not an ordinal.
+        assert_eq!(strip_anchor("d60/rA/p2x", &ids), "d60/~/p2x");
+        assert_eq!(strip_anchor("d19/rA/p2", &ids), "d19/~");
+        // d16: the callee id is the subject and stays.
+        assert_eq!(strip_anchor("d16/rA/rA/cs1/rB", &ids), "d16/~/~/rB");
+        // d47: the anchor's stable id.
+        assert_eq!(strip_anchor("d47/S#A", &ids), "d47/~");
+        // No anchor in the key: unchanged.
+        assert_eq!(strip_anchor("d2/event", &ids), "d2/event");
+    }
+
+    /// Moving a finding between routines of one object keeps the loose key (internal
+    /// and stable id forms) and changes the fingerprint; a callee id is kept.
+    #[test]
+    fn loose_fingerprint_ignores_the_anchor_routine() {
+        let (routines, objects) = two_routine_model();
+        let idx = FingerprintIndex::build(&routines, &objects);
+        let pairs = [
+            ("d1/rA/loop0/op3", "rA", "d1/rB/loop1/op7", "rB"),
+            ("d47/S#A", "rA", "d47/S#B", "rB"),
+        ];
+        for (ka, aa, kb, ab) in pairs {
+            let a = dummy_finding("dX", ka, aa);
+            let b = dummy_finding("dX", kb, ab);
+            assert_ne!(idx.fingerprint_of(&a), idx.fingerprint_of(&b), "{ka}");
+            assert_eq!(
+                idx.loose_fingerprint_of(&a),
+                idx.loose_fingerprint_of(&b),
+                "{ka}"
+            );
+        }
+        // d16: the same caller anchor, different callees → different loose keys.
+        let a = dummy_finding("d16", "d16/rA/rA/cs1/rB", "rA");
+        let b = dummy_finding("d16", "d16/rA/rA/cs1/rA", "rA");
+        assert_ne!(idx.loose_fingerprint_of(&a), idx.loose_fingerprint_of(&b));
     }
 }

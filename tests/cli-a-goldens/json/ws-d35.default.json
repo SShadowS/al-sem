@@ -27,6 +27,7 @@
           "safety": "medium"
         },
         "id": "d35/2ffd4af23d76aec9/939ecc3af3daa4cb1820b33d65e175d7c8af0fca371ac5e9ec5bf0648dceb282/transitive",
+        "looseFingerprint": "4776b1d5e2bb9eaa",
         "pathCount": 1,
         "primaryLocation": {
           "column": 5,
@@ -56,6 +57,7 @@
           "safety": "medium"
         },
         "id": "d35/2ffd4af23d76aec9/54db1217a95bcf580507f08e916cf526fdca91452213bbb8d2649e65c4a3495e/2ffd4af23d76aec9/54db1217a95bcf580507f08e916cf526fdca91452213bbb8d2649e65c4a3495e/op0",
+        "looseFingerprint": "4776b1d5e2bb9eaa",
         "pathCount": 1,
         "primaryLocation": {
           "column": 9,

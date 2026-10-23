@@ -282,6 +282,7 @@ fn scope_primary_drops_a_finding_on_another_apps_object() {
     let finding = |id: &str, object: &str| FindingSummary {
         id: id.to_string(),
         fingerprint: "fp".to_string(),
+        loose_fingerprint: String::new(),
         detector: "d".to_string(),
         title: "t".to_string(),
         root_cause: "rc".to_string(),

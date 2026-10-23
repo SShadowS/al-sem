@@ -21,6 +21,7 @@
           "safety": "medium"
         },
         "id": "d51/aaaabbbb-cccc-dddd-eeee-000000000d51:Codeunit:50101#f4545c36e8d4a0d57b209e7b5fa30d1ee4a266cc2379d6e3ba408699af2356ed/IO_BEFORE_ESCAPING_ERROR|f3a404acb14ebd93|dde7b942651b2dee|",
+        "looseFingerprint": "a689e3fc35cac7c7",
         "pathCount": 1,
         "primaryLocation": {
           "column": 9,
