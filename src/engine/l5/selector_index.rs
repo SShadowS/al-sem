@@ -134,13 +134,86 @@ fn display_to_ids<'a>(idx: &'a SelectorIndexes, key: &str) -> Option<&'a Vec<Str
         .map(|(_, v)| v)
 }
 
+/// The cascade's matches, in deterministic order. A form-5 match still owes its
+/// owner check (#239), so the ids are private: [`narrow_to_owner`] is the only
+/// way to read them, and no caller can skip the check and fall back to another
+/// object's routine.
+pub(crate) struct SelectorMatches {
+    ids: Vec<String>,
+    owner: Option<OwnerPart>,
+}
+
+/// The object part of an `<owner>::<routine>` selector, as a display key.
+#[derive(Debug, PartialEq)]
+enum OwnerPart {
+    /// It starts with an object type word: `Codeunit "Sel A"` -> `codeunit sel a`.
+    Full(String),
+    /// A bare object name: `Sel A` or `"Sel A"` -> `sel a`.
+    Bare(String),
+}
+
+/// The type words an owner display starts with (the model's `object_type`,
+/// `ir_object_type`), as display keys.
+const OBJECT_TYPE_WORDS: [&str; 14] = [
+    "codeunit",
+    "table",
+    "tableextension",
+    "page",
+    "pageextension",
+    "report",
+    "reportextension",
+    "query",
+    "xmlport",
+    "enum",
+    "enumextension",
+    "interface",
+    "controladdin",
+    "permissionset",
+];
+
+/// An AL quoted identifier (`"A ""B"""`) -> its logical name (`A "B"`), the
+/// spelling owner and routine displays use (#240). Anything else comes back
+/// trimmed.
+fn unquote(s: &str) -> String {
+    let s = s.trim();
+    match s.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+        Some(inner) => inner.replace("\"\"", "\""),
+        None => s.to_string(),
+    }
+}
+
+/// `None` for an empty object part: `::Run` is the bare routine name `Run`.
+/// An unquoted bare name whose first word is a type word (`Page Management`)
+/// reads as typed; write it `"Page Management"` to select it by bare name.
+fn owner_part(part: &str) -> Option<OwnerPart> {
+    let part = part.trim();
+    if part.is_empty() {
+        return None;
+    }
+    let (word, rest) = part.split_once(char::is_whitespace).unwrap_or((part, ""));
+    if OBJECT_TYPE_WORDS.contains(&word.to_lowercase().as_str()) {
+        let full = format!("{word} {}", unquote(rest));
+        return Some(OwnerPart::Full(normalize_display_key(&full)));
+    }
+    Some(OwnerPart::Bare(normalize_display_key(&unquote(part))))
+}
+
 /// `resolveSelector` (fingerprint-query.ts) — the 5-form cascade. Returns the
-/// matched stable IDs in deterministic order, plus the name of the form that
+/// matches (read through [`narrow_to_owner`]), plus the name of the form that
 /// matched (`""` when unresolved) for diagnostics that report it.
 pub(crate) fn resolve_selector(
     selector: &str,
     idx: &SelectorIndexes,
-) -> (Vec<String>, &'static str) {
+) -> (SelectorMatches, &'static str) {
+    let (ids, form) = cascade(selector, idx);
+    let owner = match (form, selector.rfind("::")) {
+        ("object-qualified", Some(sep)) => owner_part(&selector[..sep]),
+        _ => None,
+    };
+    (SelectorMatches { ids, owner }, form)
+}
+
+fn cascade(selector: &str, idx: &SelectorIndexes) -> (Vec<String>, &'static str) {
     // Form 1: exact StableRoutineId (case-sensitive).
     if idx.routine_display_by_id.contains_key(selector) {
         return (vec![selector.to_string()], "stable-routine-id");
@@ -183,9 +256,11 @@ pub(crate) fn resolve_selector(
         return (one, "one-segment");
     }
 
-    // Form 5: object-qualified — routine segment after the LAST "::".
+    // Form 5: object-qualified — routine segment after the LAST "::", an AL
+    // quoted name unquoted (`"Post Document"`). `resolve_selector` attaches the
+    // object part for the owner check.
     if let Some(sep) = selector.rfind("::") {
-        let routine_key = normalize_display_key(&selector[sep + 2..]);
+        let routine_key = normalize_display_key(&unquote(&selector[sep + 2..]));
         if let Some(qualified) = display_to_ids(idx, &routine_key)
             && !qualified.is_empty()
         {
@@ -196,61 +271,84 @@ pub(crate) fn resolve_selector(
     (Vec::new(), "")
 }
 
-/// #78: an object-qualified selector (`<owner>::<routine>`, as the human
-/// headers print it) keeps only the matches whose owner (`owner_of`) equals its
-/// object part, compared as display keys. When no match has that owner, the
-/// matches stay as form 5 found them: the object part may be a name the owner
-/// display does not spell (a bare object name, a dependency object).
+/// #78/#239: the matches of [`resolve_selector`]. A form-5 match
+/// (`<owner>::<routine>`, as the human headers print it) is kept only when its
+/// owner (`owner_of`, a display key) is the named one: the full owner for a typed
+/// object part, the owner without its type word for a bare one. When none is,
+/// nothing is kept and the caller reports the selector as unmatched.
+///
+/// shortcut: `_selector` and `_matched_form` are unused (`matches` carries the
+/// object part); they stay while `fingerprint_query.rs`'s call passes them.
 pub(crate) fn narrow_to_owner(
-    selector: &str,
-    matched_form: &str,
-    matches: Vec<String>,
+    _selector: &str,
+    _matched_form: &str,
+    matches: SelectorMatches,
     owner_of: impl Fn(&str) -> String,
 ) -> Vec<String> {
-    let Some(sep) = selector.rfind("::") else {
-        return matches;
+    let SelectorMatches { ids, owner } = matches;
+    let Some(owner) = owner else {
+        return ids;
     };
-    if matched_form != "object-qualified" {
-        return matches;
-    }
-    let want = normalize_display_key(&selector[..sep]);
-    let narrowed: Vec<String> = matches
-        .iter()
-        .filter(|id| normalize_display_key(&owner_of(id)) == want)
-        .cloned()
-        .collect();
-    if narrowed.is_empty() {
-        matches
-    } else {
-        narrowed
-    }
+    ids.into_iter()
+        .filter(|id| {
+            let key = normalize_display_key(&owner_of(id));
+            match &owner {
+                OwnerPart::Full(want) => key == *want,
+                OwnerPart::Bare(want) => strip_type_word_prefix(&key) == Some(want.as_str()),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// #78: the owner narrows only an object-qualified match, compares as a
-    /// display key, and leaves the matches alone when no owner fits.
-    ///
-    /// Mutation: return `narrowed` when it is empty -> the last assert reads `[]`.
+    /// #78/#239 (U3): a form-5 match is kept only for the named owner, through
+    /// `resolve_selector` + `narrow_to_owner` as every caller runs them. Each
+    /// row is a routine displayed `Persist` (the shape that reaches form 5).
+    /// Breaks: see the ledger's proof table (#239 attempt 2).
     #[test]
-    fn narrow_to_owner_keeps_the_named_owner_or_everything() {
-        let ids = || vec!["a".to_string(), "b".to_string()];
-        let owner = |id: &str| match id {
-            "a" => "Codeunit Sel A".to_string(),
-            _ => "Codeunit Sel B".to_string(),
+    fn narrow_to_owner_keeps_the_named_owner_only() {
+        let owner = |id: &str| {
+            match id {
+                "a#" => "Codeunit Sel A",
+                "b#" => "Codeunit Sel B",
+                "c#" => "Table Codeunit Sel A",
+                _ => "Codeunit A \"B\" C",
+            }
+            .to_string()
         };
-        let sel = "codeunit  SEL a::Persist";
+        let sel = |selector: &str, ids: &[&str]| {
+            let rows: Vec<(&str, &str)> = ids.iter().map(|id| (*id, "Persist")).collect();
+            let idx = build_selector_indexes(&snap_with_identities(&rows), None);
+            let (m, form) = resolve_selector(selector, &idx);
+            narrow_to_owner(selector, form, m, owner)
+        };
+        let ab = ["a#", "b#"];
+        // The full owner, case and space folded; the bare name; AL quotes.
+        assert_eq!(sel("codeunit  SEL a::Persist", &ab), ["a#"]);
+        assert_eq!(sel("Sel A::Persist", &ab), ["a#"]);
+        assert_eq!(sel("Codeunit \"Sel A\"::Persist", &ab), ["a#"]);
+        // No fallback to another owner.
+        assert!(sel("Codeunit Sel C::Persist", &ab).is_empty());
+        // CR1: a typed object part never matches a bare name (`c#`'s is
+        // `Codeunit Sel A`); a quoted one is a bare name.
+        assert_eq!(sel("Codeunit Sel A::Persist", &["a#", "b#", "c#"]), ["a#"]);
+        assert!(sel("Codeunit \"Sel A\"::Persist", &["b#", "c#"]).is_empty());
+        assert_eq!(sel("\"Codeunit Sel A\"::Persist", &["a#", "c#"]), ["c#"]);
+        // CR2: the routine part is unquoted too.
+        assert_eq!(sel("Codeunit \"Sel A\"::\"Persist\"", &ab), ["a#"]);
+        // CR4: an empty object part is the bare routine name.
+        assert_eq!(sel("::Persist", &ab), ab);
+        // #240: a logical name holding `"`, in AL and in display spelling.
         assert_eq!(
-            narrow_to_owner(sel, "object-qualified", ids(), owner),
-            vec!["a".to_string()]
+            sel("Codeunit \"A \"\"B\"\" C\"::Persist", &["a#", "d#"]),
+            ["d#"]
         );
-        assert_eq!(narrow_to_owner(sel, "full-display", ids(), owner), ids());
-        assert_eq!(
-            narrow_to_owner("Sel A::Persist", "object-qualified", ids(), owner),
-            ids()
-        );
+        assert_eq!(sel("Codeunit A \"B\" C::Persist", &["a#", "d#"]), ["d#"]);
+        // Other forms are not narrowed.
+        assert_eq!(sel("Persist", &ab), ab);
     }
     use crate::engine::l5::snapshot::SnapshotIdentityTable;
 
@@ -286,7 +384,7 @@ mod tests {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
         let idx = build_selector_indexes(&snap, None);
         assert_eq!(
-            resolve_selector("app:Codeunit:1#abc", &idx).0,
+            resolve_selector("app:Codeunit:1#abc", &idx).0.ids,
             vec!["app:Codeunit:1#abc".to_string()]
         );
     }
@@ -296,7 +394,7 @@ mod tests {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
         let idx = build_selector_indexes(&snap, None);
         assert_eq!(
-            resolve_selector("codeunit \"x\"::run", &idx).0,
+            resolve_selector("codeunit \"x\"::run", &idx).0.ids,
             vec!["app:Codeunit:1#abc".to_string()]
         );
     }
@@ -307,7 +405,7 @@ mod tests {
         let idx = build_selector_indexes(&snap, None);
         // Drop the leading "Codeunit " type-word.
         assert_eq!(
-            resolve_selector("\"X\"::Run", &idx).0,
+            resolve_selector("\"X\"::Run", &idx).0.ids,
             vec!["app:Codeunit:1#abc".to_string()]
         );
     }
@@ -317,7 +415,7 @@ mod tests {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
         let idx = build_selector_indexes(&snap, None);
         assert_eq!(
-            resolve_selector("Run", &idx).0,
+            resolve_selector("Run", &idx).0.ids,
             vec!["app:Codeunit:1#abc".to_string()]
         );
     }
@@ -331,7 +429,7 @@ mod tests {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "OnRun")]);
         let idx = build_selector_indexes(&snap, None);
         assert_eq!(
-            resolve_selector("Codeunit \"X\"::OnRun", &idx).0,
+            resolve_selector("Codeunit \"X\"::OnRun", &idx).0.ids,
             vec!["app:Codeunit:1#abc".to_string()]
         );
     }
@@ -345,7 +443,7 @@ mod tests {
             ("app:Codeunit:2#bbb", "Codeunit \"B\"::Run"),
         ]);
         let idx = build_selector_indexes(&snap, None);
-        let m = resolve_selector("Run", &idx).0;
+        let m = resolve_selector("Run", &idx).0.ids;
         assert_eq!(
             m,
             vec![
@@ -370,7 +468,7 @@ mod tests {
             ("app:Codeunit:4#ddd", "Codeunit \"D\"::Run"),
         ]);
         let idx = build_selector_indexes(&snap, None);
-        let m = resolve_selector("Run", &idx).0;
+        let m = resolve_selector("Run", &idx).0.ids;
         assert_eq!(
             m,
             vec![
@@ -395,19 +493,24 @@ mod tests {
         ]);
         let idx = build_selector_indexes(&snap, Some("AAAA"));
         assert_eq!(
-            resolve_selector("OnRun", &idx).0,
+            resolve_selector("OnRun", &idx).0.ids,
             vec!["aaaa:Codeunit:1#ws".to_string()]
         );
-        assert!(resolve_selector("bbbb:Codeunit:2#dep", &idx).0.is_empty());
+        assert!(
+            resolve_selector("bbbb:Codeunit:2#dep", &idx)
+                .0
+                .ids
+                .is_empty()
+        );
         let all = build_selector_indexes(&snap, None);
-        assert_eq!(resolve_selector("OnRun", &all).0.len(), 3);
+        assert_eq!(resolve_selector("OnRun", &all).0.ids.len(), 3);
     }
 
     #[test]
     fn selector_unmatched_returns_empty() {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
         let idx = build_selector_indexes(&snap, None);
-        assert!(resolve_selector("DoesNotExist", &idx).0.is_empty());
+        assert!(resolve_selector("DoesNotExist", &idx).0.ids.is_empty());
     }
 
     #[test]

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- An `<owner>::<routine>` selector no longer falls back to another object's routine
+  (#239). In `digest`, `fingerprint` and `prove`, when the named owner declares no routine
+  of that name, the selector is unmatched: digest `selector-unmatched`, fingerprint
+  `selector-unresolved`, prove `answer: unknown`, each exit 2. Before, it silently selected
+  another object's routine (2.0.1's #78 entry: "the selector matches as before"). An owner
+  spelled any way the owner display does not, for example by object number
+  (`Codeunit 50101::Persist`), is unmatched too.
+  - The object part is either typed (`Codeunit Sel A`, `Codeunit "Sel A"`, `Codeunit "A
+    ""B"" C"`), which matches only that full owner, or a bare object name (`Sel A`,
+    `"Sel A"`), which matches every owner of that name. So `Codeunit "Sel A"::Persist`
+    never selects a `Table "Codeunit Sel A"`. An unquoted bare name whose first word is a
+    type word (`Page Management`) reads as typed; quote it to select it by bare name.
+  - A bare name two owners share (`Codeunit "Sel B"` and `Table "Sel B"`) is ambiguous.
+    The digest diagnostic and fingerprint's human error list both owners as candidates;
+    fingerprint's JSON diagnostic has no candidate list, and prove reports `unknown`.
+  - The routine part may be quoted too (`Codeunit "Sel A"::"Post Document"`). An empty
+    object part (`::Persist`) is the bare routine name.
+  - The owner fallback that 2.0.3's #240 entry mentions is gone. The escaped spelling
+    (`Codeunit "A ""B"" C"::P`) is supported in the object part of such a selector.
+  - The unmatched diagnostic does not name the owners that do declare the routine.
+
 ## [2.0.3] - 2026-10-23
 
 ### Added
