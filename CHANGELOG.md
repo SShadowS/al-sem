@@ -290,6 +290,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   toward `testsWithUnresolvedTraversal`. With no resolved root the block still reports every
   workspace test, as before.
 
+  `policy check` reads the same view (Task 3): its one composition keeps the raw inherited
+  facts of the workspace (primary) routines only, and the rule engine reads them beside the
+  run's summaries. Policy no longer composes a second cone over every routine, dependency
+  rows included (build counters 1/1/1/2/1/1/0/1, from 1/2/1/3/2/2/0/1). Output is unchanged.
+  The policy-only `RAW_INHERITED_FACTS` substrate bit is deleted, and a summary's raw
+  inherited half is now test-only.
+
 ## [2.0.2] - 2026-10-23
 
 ### Changed

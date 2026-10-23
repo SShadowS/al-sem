@@ -1586,18 +1586,14 @@ mod tests {
                     unknown_targets: Vec::new(),
                 })
             };
-            // ⟨C1 Task 3⟩ `None` inherited — the DERIVED-ONLY shape the analyze
-            // path now produces. The two tri-states must resolve entirely off the
-            // store's flags + the summary's coverage, never touching a raw Vec
+            // ⟨C1 Task 3⟩ No inherited half — the DERIVED-ONLY shape production
+            // builds. The two tri-states must resolve entirely off the store's
+            // flags + the summary's coverage, never touching a raw Vec
             // (`inherited_raw()` would panic if they did).
-            let complete_summary = FullRoutineSummary::new(
-                "r/complete".to_string(),
-                Vec::new(),
-                None,
-                cov("complete"),
-            );
+            let complete_summary =
+                FullRoutineSummary::new("r/complete".to_string(), Vec::new(), cov("complete"));
             let partial_summary =
-                FullRoutineSummary::new("r/partial".to_string(), Vec::new(), None, cov("partial"));
+                FullRoutineSummary::new("r/partial".to_string(), Vec::new(), cov("partial"));
             assert_eq!(
                 touches_db_derived(&out.derived, &complete_summary),
                 EffectPresence::No,

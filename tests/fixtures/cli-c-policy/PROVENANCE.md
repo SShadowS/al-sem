@@ -33,5 +33,6 @@ half of a capability cone (a fact that reaches the matched root only through a
 callee). `no-commit-in-triggers` (`root.kinds: trigger-table`, `capability.op:
 commit`) matches here purely via `Table.al`'s `OnInsert` trigger calling
 `Helper.al`'s `PostAndCommit`, which is the one that calls `Commit()` — without
-`select_facts` reading the inherited half (`policy_engine.rs`'s
-`s.inherited_raw()`), this fixture's golden would go from a match to a pass.
+`select_facts` reading the inherited half (`policy_engine.rs`'s `raw`, the
+view's witness pass since #160 step 6), this fixture's golden would go from a
+match to a pass.

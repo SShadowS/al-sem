@@ -237,15 +237,15 @@ pub fn coverage(inherited_status: &str) -> CoverageRecord {
 /// A `FullRoutineSummary` from direct + inherited facts + optional coverage.
 /// ⟨C1 Task 3⟩ Fixture summaries are always MATERIALIZED (`Some(inherited)`) —
 /// they carry their inherited facts as INPUT rather than as a cone output, so
-/// `inherited_raw()` is always legal on them. A test that wants the derived-only
-/// shape builds it with `FullRoutineSummary::new(.., None, ..)` directly.
+/// `inherited_raw()` is always legal on them. A test that wants the production
+/// (derived-only) shape builds it with `FullRoutineSummary::new` directly.
 pub fn summary(
     routine_id: &str,
     direct: Vec<CapabilityFact>,
     inherited: Vec<CapabilityFact>,
     cov: Option<CoverageRecord>,
 ) -> FullRoutineSummary {
-    FullRoutineSummary::new(routine_id.to_string(), direct, Some(inherited), cov)
+    FullRoutineSummary::with_inherited(routine_id.to_string(), direct, Some(inherited), cov)
 }
 
 // ---------------------------------------------------------------------------

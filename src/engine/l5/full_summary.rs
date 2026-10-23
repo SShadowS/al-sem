@@ -12,21 +12,16 @@
 //! and the coverage tri-state honours `coverage.inheritedStatus` (None ⇒
 //! "unknown", matching al-sem's `s.coverage?.inheritedStatus ?? "unknown"`).
 //!
-//! ⟨C1 Task 3 — R6⟩ The inherited half is now **absent by default**. The analyze
-//! path composes its cone with no raw half ([`ConeScope`] `{ derived: true,
-//! raw: WitnessScope::None }`), which never
-//! materializes the per-routine `Vec<CapabilityFact>` at all (that Vec was
-//! ~10.9 GB on the 8020 corpus), so a summary built there carries `None` rather
-//! than an empty Vec. The old `reachable()` / `reachable_iter()` helpers are
-//! GONE: they would have kept compiling and silently returned a direct-only view
-//! — the exact silent-wrong-answer hazard R6 names. The one consumer that
-//! genuinely needs the raw facts (the `policy` subcommand) demands
-//! `substrate::RAW_INHERITED_FACTS`, and reads them through
-//! [`FullRoutineSummary::inherited_raw`], which PANICS when they were not built.
-//! Every other consumer reads the compact derived substrate
-//! (`ctx.cone_derived`) instead.
-//!
-//! [`ConeScope`]: crate::engine::l4::cone_derived::ConeScope
+//! ⟨C1 Task 3 — R6⟩ A production summary has **no inherited half**. The det
+//! composition derives the compact substrate (`ctx.cone_derived`) and keeps raw
+//! inherited facts only for a `View`'s witness subjects, APART from the
+//! summaries (#160 step 6 D2): policy check reads them through `View::raw`
+//! (Task 3). The old `reachable()` / `reachable_iter()` helpers are GONE: they
+//! would have kept compiling and silently returned a direct-only view — the
+//! exact silent-wrong-answer hazard R6 names. The raw half and
+//! `FullRoutineSummary::inherited_raw` (which PANICS when the half was not
+//! supplied) survive under `#[cfg(test)]` only, as fixture input for the raw
+//! oracles (`capability_query`) and `test_support::cone_store_of`.
 //!
 //! Task 2b, when it assembles these from the real pipeline, may add
 //! `db_effects` / `parameter_roles` / `uncertainties` / `in_recursive_cycle` /
@@ -36,13 +31,13 @@
 
 use crate::engine::l4::capability_cone::{CapabilityFact, CoverageRecord};
 
-/// A per-routine composite: the routine's direct capability facts, OPTIONALLY its
-/// raw inherited ones, and its coverage record. Consumers honour
-/// `coverage.inherited_status` for the tri-state / G6 semantics.
+/// A per-routine composite: the routine's direct capability facts and its
+/// coverage record (in tests, OPTIONALLY raw inherited facts as fixture input).
+/// Consumers honour `coverage.inherited_status` for the tri-state / G6 semantics.
 ///
-/// Build with [`FullRoutineSummary::new`] — `capability_facts_inherited` is
-/// deliberately private so no call site can read it without going through
-/// [`inherited_raw`](Self::inherited_raw)'s absence check.
+/// Build with [`FullRoutineSummary::new`] — the test-only
+/// `capability_facts_inherited` is deliberately private so no call site can
+/// read it without going through `inherited_raw`'s absence check.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FullRoutineSummary {
     /// The routine's INTERNAL id (matches `ModelRoutine::id`).
@@ -51,10 +46,11 @@ pub struct FullRoutineSummary {
     /// (this half was never the memory problem — it is one routine's OWN facts,
     /// not its whole reachable cone).
     pub capability_facts_direct: Vec<CapabilityFact>,
-    /// Capability facts inherited from the transitive reachable closure —
-    /// `None` unless the cone ran with a raw half (`ConeScope.raw` not `None`), i.e.
-    /// unless `substrate::RAW_INHERITED_FACTS` was demanded. `Some(vec![])` is a
-    /// materialized-but-empty cone and is NOT the same thing as `None`.
+    /// Test fixtures only: capability facts inherited from the transitive
+    /// reachable closure, supplied as INPUT ([`Self::with_inherited`]).
+    /// `Some(vec![])` is a supplied-but-empty cone and is NOT the same thing as
+    /// `None` ("never supplied").
+    #[cfg(test)]
     capability_facts_inherited: Option<Vec<CapabilityFact>>,
     /// Coverage status for the direct + inherited cone. `None` ⇒ helpers treat
     /// `inherited_status` as "unknown" (al-sem `s.coverage?.inheritedStatus ??
@@ -64,69 +60,84 @@ pub struct FullRoutineSummary {
 }
 
 impl FullRoutineSummary {
-    /// Assemble a summary. Pass `Some` for `capability_facts_inherited` only when
-    /// the cone actually materialized them (a raw half in its `ConeScope`);
-    /// `None` records "never built", which [`inherited_raw`](Self::inherited_raw)
-    /// then refuses to serve.
+    /// Assemble a summary: no inherited half.
     pub fn new(
+        routine_id: String,
+        capability_facts_direct: Vec<CapabilityFact>,
+        coverage: Option<CoverageRecord>,
+    ) -> Self {
+        Self {
+            routine_id,
+            capability_facts_direct,
+            #[cfg(test)]
+            capability_facts_inherited: None,
+            coverage,
+        }
+    }
+
+    /// A fixture summary carrying `capability_facts_inherited` as input.
+    /// `None` records "never supplied", which [`inherited_raw`](Self::inherited_raw)
+    /// then refuses to serve.
+    #[cfg(test)]
+    pub fn with_inherited(
         routine_id: String,
         capability_facts_direct: Vec<CapabilityFact>,
         capability_facts_inherited: Option<Vec<CapabilityFact>>,
         coverage: Option<CoverageRecord>,
     ) -> Self {
         Self {
-            routine_id,
-            capability_facts_direct,
             capability_facts_inherited,
-            coverage,
+            ..Self::new(routine_id, capability_facts_direct, coverage)
         }
     }
 
-    /// True when the raw inherited facts were materialized — i.e. when
+    /// True when the fixture supplied raw inherited facts — i.e. when
     /// [`inherited_raw`](Self::inherited_raw) will not panic.
-    ///
-    /// ⟨C1 Task 3 review fix M-3⟩ `#[cfg(test)]`-only: it had zero non-test
-    /// callers, and it is precisely the API a future caller could use to branch
-    /// on presence and silently skip the missing half — the same silent partial
-    /// answer R6's panic-on-read was designed to foreclose, reached through a
-    /// different door. Tests/diagnostics that need to assert "was this bit
-    /// demanded" may still use it; production code must call `inherited_raw`
-    /// (or the derived-substrate queries) and let it panic.
     #[cfg(test)]
     pub fn has_inherited_raw(&self) -> bool {
         self.capability_facts_inherited.is_some()
     }
 
-    /// The census tally of both fact halves this summary holds: the direct facts
-    /// and, when the cone kept them, the raw inherited ones (#160 §4.1.5). It
-    /// returns a byte and allocation count, never the facts, so it is no door to
-    /// a silently empty inherited half (M-3 above).
+    /// The census tally of the facts this summary holds (#160 §4.1.5): the
+    /// direct facts and, on a fixture, the supplied inherited ones. It returns
+    /// a byte and allocation count, never the facts, so it is no door to a
+    /// silently empty inherited half (M-3 above).
     pub(crate) fn census_facts_tally(&self) -> crate::engine::census::Tally {
         use crate::engine::l4::cone_census::facts_tally;
         let mut t = facts_tally(&self.capability_facts_direct);
-        if let Some(inherited) = &self.capability_facts_inherited {
-            let i = facts_tally(inherited);
-            t.bytes += i.bytes;
-            t.allocs += i.allocs;
-        }
+        let i = facts_tally(self.supplied_inherited());
+        t.bytes += i.bytes;
+        t.allocs += i.allocs;
         t
     }
 
-    /// The RAW inherited capability facts, in `sort_inherited` order.
+    /// The fixture's inherited facts (none when not supplied).
+    #[cfg(test)]
+    fn supplied_inherited(&self) -> &[CapabilityFact] {
+        self.capability_facts_inherited.as_deref().unwrap_or(&[])
+    }
+
+    /// A production summary has no inherited half.
+    #[cfg(not(test))]
+    fn supplied_inherited(&self) -> &[CapabilityFact] {
+        &[]
+    }
+
+    /// The fixture's RAW inherited capability facts, in `sort_inherited` order.
     ///
     /// # Panics
-    /// Panics when this summary came from a composition with no raw half. That is deliberate (R6): returning an empty slice here would
-    /// silently answer "this routine's whole reachable cone is empty" for every
-    /// routine in the workspace. A caller that needs these facts must demand
-    /// `substrate::RAW_INHERITED_FACTS` when it builds its `DetectorContext`.
+    /// Panics when the fixture supplied none. That is deliberate (R6):
+    /// returning an empty slice here would silently answer "this routine's
+    /// whole reachable cone is empty". Production raw facts live in the view's
+    /// witness pass (`View::raw`), never on a summary.
+    #[cfg(test)]
     pub fn inherited_raw(&self) -> &[CapabilityFact] {
         match &self.capability_facts_inherited {
             Some(v) => v,
             None => panic!(
-                "FullRoutineSummary::inherited_raw called for routine {:?}, but this context was \
-                 built WITHOUT `substrate::RAW_INHERITED_FACTS` — the cone ran in \
-                 a scope with no raw half and the raw inherited Vec was never materialized. \
-                 Read `ctx.cone_derived` instead, or demand the bit.",
+                "FullRoutineSummary::inherited_raw called for routine {:?}, but no inherited \
+                 facts were supplied (a production summary has none: read `ctx.cone_derived`, \
+                 or a View's witness pass)",
                 self.routine_id
             ),
         }
@@ -166,10 +177,8 @@ mod tests {
         assert_eq!(got, vec!["modify", "commit"]);
     }
 
-    /// A materialized-but-EMPTY cone is `Some(vec![])`, not absence — it must
-    /// serve an empty slice rather than panic. This is the shape the `policy`
-    /// path sees for a routine whose cone entry was drained by the G-18
-    /// routine-id collision.
+    /// A supplied-but-EMPTY cone is `Some(vec![])`, not absence — it must
+    /// serve an empty slice rather than panic.
     #[test]
     fn materialized_empty_cone_is_not_absence() {
         let s = summary("r", vec![], vec![], None);
@@ -179,9 +188,9 @@ mod tests {
 
     /// ⟨R6⟩ The absent case must FAIL LOUDLY, never answer "empty cone".
     #[test]
-    #[should_panic(expected = "RAW_INHERITED_FACTS")]
+    #[should_panic(expected = "no inherited facts were supplied")]
     fn inherited_raw_panics_when_never_materialized() {
-        let s = FullRoutineSummary::new("r/x".to_string(), Vec::new(), None, None);
+        let s = FullRoutineSummary::new("r/x".to_string(), Vec::new(), None);
         assert!(!s.has_inherited_raw());
         let _ = s.inherited_raw();
     }
@@ -192,14 +201,9 @@ mod tests {
     #[test]
     fn inherited_status_is_independent_of_the_raw_vec() {
         use crate::engine::l5::test_support::coverage;
-        let s = FullRoutineSummary::new(
-            "r/x".to_string(),
-            Vec::new(),
-            None,
-            Some(coverage("complete")),
-        );
+        let s = FullRoutineSummary::new("r/x".to_string(), Vec::new(), Some(coverage("complete")));
         assert_eq!(s.inherited_status(), "complete");
-        let s = FullRoutineSummary::new("r/x".to_string(), Vec::new(), None, None);
+        let s = FullRoutineSummary::new("r/x".to_string(), Vec::new(), None);
         assert_eq!(s.inherited_status(), "unknown");
     }
 }
