@@ -1571,13 +1571,14 @@ fn slice_for_app(
             | "analysisGaps"
             | "inputsMetadata" => v.clone(),
             "apps" => {
-                // Keep only this app.
+                // Keep only this app. Exact compare: `serialize_sharded` passes
+                // this row's own `appGuid`, whatever its case.
                 if let CborValue::Array(arr) = v {
                     CborValue::Array(
                         arr.iter()
                             .filter(|a| match a {
                                 CborValue::Map(m) => {
-                                    matches!(m.get("appGuid"), Some(CborValue::Text(g)) if g.eq_ignore_ascii_case(app_guid))
+                                    matches!(m.get("appGuid"), Some(CborValue::Text(g)) if g == app_guid)
                                 }
                                 _ => false,
                             })
@@ -2932,6 +2933,28 @@ page 50818 "T5 I-3 Wizard Alpha"
         assert!(
             shard.get("routineOrderFrames").is_none(),
             "a shard never carries routineOrderFrames"
+        );
+
+        // O13: the manifest guid in upper case, every id in lower case. The
+        // primary shard still holds its `apps[]` row and the primary rows.
+        let upper = P.to_ascii_uppercase();
+        let mut tree = tree;
+        if let CborValue::Map(m) = &mut tree
+            && let Some(CborValue::Array(apps)) = m.get_mut("apps")
+            && let CborValue::Map(a) = &mut apps[1]
+        {
+            a.insert("appGuid".into(), txt(&upper));
+        }
+        let only = serialize_sharded(&tree, "v", true);
+        let shard: serde_json::Value = serde_json::from_slice(&only[0].bytes).unwrap();
+        assert_eq!(shard["apps"][0]["appGuid"], upper.as_str(), "{shard}");
+        assert!(
+            shard["capabilityFacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["subject"] == format!("{P}:Codeunit:50100#p1")),
+            "an upper-case manifest guid keeps the primary's lower-case rows: {shard}"
         );
     }
 

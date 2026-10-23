@@ -8,8 +8,7 @@ use std::collections::{HashMap, HashSet};
 use indexmap::IndexMap;
 
 use super::{
-    SnapshotUniverse, capability_facts_to_cbor, filter_array_by_field, slice_identities,
-    stable_table_from_internal, to_cbor_value,
+    SnapshotUniverse, capability_facts_to_cbor, stable_table_from_internal, to_cbor_value,
 };
 use crate::engine::gate::cbor::CborValue;
 use crate::engine::l4::capability_cone::routine_to_stable_of;
@@ -454,7 +453,10 @@ fn rows_of(v: &CborValue) -> &[CborValue] {
 /// (`<guid>:Table:N#F`) its table; an internal routine id its stable id; an
 /// internal table/field/key id `<guid>:Table:N` (`stable_table_from_internal`
 /// of its first three `/` segments, never a `/`->`:` rewrite); any other
-/// internal object-rooted id its stable object id.
+/// internal object-rooted id its stable object id. With an empty map (the
+/// shard closure, which has no model) only stable ids resolve exactly: an
+/// internal routine id falls to its object, and a `::`-bearing stable id is
+/// cut to its first three `:` segments.
 fn identity_key(v: &str, routine_to_stable: &HashMap<String, String>) -> Option<String> {
     if v == "unknown" {
         return None;
@@ -533,8 +535,12 @@ pub(crate) fn close_shard(
     full: &IndexMap<String, CborValue>,
     shard: &mut IndexMap<String, CborValue>,
 ) {
-    // A shard is cut from the tree alone, with no model: an internal routine
-    // id resolves to its object's identity (`identity_key`'s fallback).
+    // A shard is cut from the tree alone, with no model, so `identity_key`
+    // runs on an empty routine-to-stable map. That is exact only while the
+    // tree's identity references are stable ids (the composer serializes
+    // stable ids); an internal routine id would resolve to its object's
+    // identity instead. A `::`-bearing stable id (an event id) is cut to its
+    // first three segments, its object, as in the full-tree closure.
     let no_model = HashMap::new();
     loop {
         let mut refs = Referenced::default();
@@ -557,9 +563,10 @@ pub(crate) fn close_shard(
     }
 }
 
-/// `shard[key]` becomes the rows of `full[key]` whose id it already holds or
-/// `wanted` names, in `full`'s order (the slice's own filters). Whether a
-/// wanted row was missing. For `identities` the ids are its `stableIds`.
+/// Append to `shard[key]` the rows of `full[key]` whose id `wanted` names and
+/// the shard does not hold yet (for `identities`, its parallel `stableIds` and
+/// `displayNames`). Held rows are never re-selected, so a repeated id in the
+/// tree cannot pull extra rows in. Whether the shard grew.
 fn close_rows(
     full: &IndexMap<String, CborValue>,
     shard: &mut IndexMap<String, CborValue>,
@@ -567,35 +574,51 @@ fn close_rows(
     id_field: &str,
     wanted: &HashSet<String>,
 ) -> bool {
-    let ids = |v: Option<&CborValue>| -> HashSet<String> {
-        let rows = match v {
-            Some(CborValue::Map(m)) if key == "identities" => m.get("stableIds"),
-            other => other,
-        };
-        rows.map(rows_of)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|r| text(Some(r)).or_else(|| field(r, id_field)))
-            .map(str::to_string)
-            .collect()
+    let identities = key == "identities";
+    let id_of = |r: &CborValue| -> Option<String> {
+        if identities {
+            text(Some(r))
+        } else {
+            field(r, id_field)
+        }
+        .map(str::to_string)
     };
-    let had = ids(shard.get(key));
-    if !ids(full.get(key))
-        .iter()
-        .any(|i| !had.contains(i) && wanted.contains(i))
-    {
+    let column = |v: Option<&CborValue>, name: &str| -> Vec<CborValue> {
+        match v {
+            Some(CborValue::Map(m)) if identities => {
+                m.get(name).map(rows_of).unwrap_or_default().to_vec()
+            }
+            Some(rows) if !identities => rows_of(rows).to_vec(),
+            _ => Vec::new(),
+        }
+    };
+    let mut rows = column(shard.get(key), "stableIds");
+    let held: HashSet<String> = rows.iter().filter_map(id_of).collect();
+    let all = column(full.get(key), "stableIds");
+    let added: Vec<usize> = (0..all.len())
+        .filter(|&i| id_of(&all[i]).is_some_and(|id| wanted.contains(&id) && !held.contains(&id)))
+        .collect();
+    if added.is_empty() {
         return false;
     }
-    let keep = |i: &str| had.contains(i) || wanted.contains(i);
-    let Some(all) = full.get(key) else {
-        return false;
-    };
-    let rows = if key == "identities" {
-        slice_identities(all, &keep)
+    rows.extend(added.iter().map(|&i| all[i].clone()));
+    let value = if identities {
+        let full_names = column(full.get(key), "displayNames");
+        let mut names = column(shard.get(key), "displayNames");
+        names.extend(added.iter().map(|&i| {
+            full_names
+                .get(i)
+                .cloned()
+                .unwrap_or(CborValue::Text(String::new()))
+        }));
+        let mut m = IndexMap::new();
+        m.insert("stableIds".to_string(), CborValue::Array(rows));
+        m.insert("displayNames".to_string(), CborValue::Array(names));
+        CborValue::Map(m)
     } else {
-        filter_array_by_field(all, id_field, &keep)
+        CborValue::Array(rows)
     };
-    shard.insert(key.to_string(), rows);
+    shard.insert(key.to_string(), value);
     true
 }
 
