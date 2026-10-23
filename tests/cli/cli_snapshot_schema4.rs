@@ -172,5 +172,8 @@ fn cross_app_universe_binds_its_model() {
         .cloned()
         .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_default();
-    assert!(msg.contains("model"), "the model-identity message: {msg}");
+    assert_eq!(
+        msg, "compose_full_snapshot: the model is not the cross-app universe's model",
+        "the model-identity message"
+    );
 }
