@@ -1,0 +1,390 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 50,
+    "severity": "important",
+    "text": "Unit rows for isolated rename/retype/var pass on the length check alone, so the name/type/var compares are unguarded",
+    "disposition": "fixed",
+    "evidence": "Rename, retype and var rows now also append a parameter; one break per compare",
+    "anchor": ".agent/issue-236/ledger.md:50-50",
+    "anchor_hash": "ed669b022784a75a95f64f63828feda89103380f219c31501e9b28ace2458994",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 41,
+    "severity": "important",
+    "text": "The no-subscriber event-publisher-signature-changed downgrade is unpinned",
+    "disposition": "fixed",
+    "evidence": "Test 4 added: subscriber-free append, Low, no abi row, break on the generic branch",
+    "anchor": ".agent/issue-236/ledger.md:53-53",
+    "anchor_hash": "ae2881ab25629a047c0b2629ee58dd4be9a4543aa0087d39225691ac89a7ae93",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 53,
+    "severity": "important",
+    "text": "closure_fields_are_classified_and_closed never sees a non-empty parameters leaf, so the key-class break cannot fail",
+    "disposition": "fixed",
+    "evidence": "Confirmed: DD publisher is a dependency row, R5B OnHostStarted() has no params, leaves() skips []; test 5 hand-states the leaf like F28 (cli_snapshot_schema4.rs:1395-1419)",
+    "anchor": ".agent/issue-236/ledger.md:54-54",
+    "anchor_hash": "50d80badd8bc1f790e7ecf0917a1993727365e9d51eac698de2872480e6ebcf6",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 61,
+    "severity": "minor",
+    "text": "Golden prediction conflates diff/snapshots (static inputs) with generated outputs",
+    "disposition": "fixed",
+    "evidence": "diff/snapshots are loaded by load_snap (cli_b_diff_differential.rs:137); exact 9-file set stated (spec r3: + snapshot CBOR pair; spec r4: + fingerprint CBOR pair), inputs kept as legacy on purpose",
+    "anchor": ".agent/issue-236/ledger.md:66-66",
+    "anchor_hash": "d5a01b2c603443982d183b8c4f9fbc1c66a5454f9ee63c3cbd3a5e9f9dfb00e0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 57,
+    "severity": "minor",
+    "text": "Fallbacks do not diagnose their triggers; normalising cannot repair a missing pairing",
+    "disposition": "fixed",
+    "evidence": "Fallbacks rewritten: stop and diagnose unexplained churn; a missed lookup means failed pairing and stays Critical; test-5 fallback now fixes the injection, never widens the field",
+    "anchor": ".agent/issue-236/ledger.md:58-62",
+    "anchor_hash": "689ab00bf1b2d41add20ed06dc4997054942afb3a802726849f69da64ee9eb76",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 53,
+    "severity": "important",
+    "text": "Test 4 break is false: the closure test emits only empty parameters",
+    "disposition": "fixed",
+    "evidence": "Same as S3; fixed once in test 5",
+    "anchor": ".agent/issue-236/ledger.md:54-54",
+    "anchor_hash": "50d80badd8bc1f790e7ecf0917a1993727365e9d51eac698de2872480e6ebcf6",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 61,
+    "severity": "important",
+    "text": "Golden prediction wrong: diff/snapshots are vendored inputs; ws-d8 fingerprint shard will move",
+    "disposition": "fixed",
+    "evidence": "Full set is 9 files: snapshot raw/envelope JSON, snapshot .cbor and .cbor.gz (cli_b_snapshot_differential.rs:227-302), two snapshot shards, fingerprint shard, fingerprint .cbor and .cbor.gz (cli_b_fingerprint_differential.rs:162-200; grep -a / zcat show the IntegrationEvent fact); manifests do not move (input-derived workspaceFingerprint)",
+    "anchor": ".agent/issue-236/ledger.md:66-66",
+    "anchor_hash": "d5a01b2c603443982d183b8c4f9fbc1c66a5454f9ee63c3cbd3a5e9f9dfb00e0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 47,
+    "severity": "important",
+    "text": "New fixture not needed: reversed ws-diff-abi-surface is the removed-parameter case",
+    "disposition": "fixed",
+    "evidence": "diff a/b Surface.al: reversed only removes Qty: Decimal plus non-ABI triggers; test 3 is the reversed E2E",
+    "anchor": ".agent/issue-236/ledger.md:47-47",
+    "anchor_hash": "e77289ea10e0fea2f6b6c301b899e361457c52cf5525fe5d22f4b57cea254415",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 33,
+    "severity": "minor",
+    "text": "Rule is stricter than AS0025 (insertion and reorder), not stated",
+    "disposition": "fixed",
+    "evidence": "Stated as on purpose per the issue Capability (reordered -> critical); also in Not delivered",
+    "anchor": ".agent/issue-236/ledger.md:33-33",
+    "anchor_hash": "bdb45aca82d2ae7b460e8b50235175fa1a53b59f2ce2c63c47424629bfe72c90",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 30,
+    "severity": "minor",
+    "text": "A pure parameter rename gives no finding; line 30 reads as if handled",
+    "disposition": "fixed",
+    "evidence": "Line 30 reworded; D1 now fixed in 667840bf: signature_change compares publisher parameters lists when fingerprints are equal (issue236_pure_rename_is_critical, issue236_same_type_reorder_is_critical)",
+    "anchor": ".agent/issue-236/ledger.md:120-120",
+    "anchor_hash": "4ae752cf2c9fe2c484319250d64e9edc4bdac15f5384678508386c2003ef854d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 39,
+    "severity": "minor",
+    "text": "No-subscriber path never pinned",
+    "disposition": "fixed",
+    "evidence": "Same as S2; test 4",
+    "anchor": ".agent/issue-236/ledger.md:53-53",
+    "anchor_hash": "ae2881ab25629a047c0b2629ee58dd4be9a4543aa0087d39225691ac89a7ae93",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 51,
+    "severity": "minor",
+    "text": "Predicate-returns-false break disables both call sites at once",
+    "disposition": "fixed",
+    "evidence": "Per-call-site breaks recorded in tests 2 and 4",
+    "anchor": ".agent/issue-236/ledger.md:51-51",
+    "anchor_hash": "5e8f53e9af64eeab82c4f9a3d4797f1efc474f605e0b88a1b6b20b20155dbdeb",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 41,
+    "severity": "minor",
+    "text": "Parameter text must match canonical_routine_signature normalisation",
+    "disposition": "fixed",
+    "evidence": "Per-parameter formatter pulled out of ids.rs:191-194 and shared",
+    "anchor": ".agent/issue-236/ledger.md:39-41",
+    "anchor_hash": "39e465661ea3da8f062358b2349bf0c869fede74fa046ec2f7f33d49d4e56e12",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-236/ledger.md",
+    "line": 30,
+    "severity": "minor",
+    "text": "internal events can be raised by internalsVisibleTo friends",
+    "disposition": "fixed",
+    "evidence": "One doc line pointing at is_abi_surface's shortcut (passes.rs:110-112)",
+    "anchor": ".agent/issue-236/ledger.md:41-41",
+    "anchor_hash": "e1f698e6a3311e6aa72319143e6dc800e273280002126c482f6cdd58cec15af4",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1", "source": "sol", "round": 5,
+    "file": "src/engine/gate/diff/passes.rs", "line": 272, "severity": "important",
+    "text": "Same-type parameter reorders stay invisible: names are in neither the fingerprint nor the eventId",
+    "disposition": "fixed",
+    "evidence": "667840bf: signature_change reads the parameters list; issue236_same_type_reorder_is_critical; proofs P1, P2",
+    "anchor": ".agent/issue-236/ledger.md:151-151",
+    "anchor_hash": "41e46a848bc6404b639d51c4fc8061907eedb619356798b37d47aa8d1ccd9477",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "F2", "source": "sol", "round": 5,
+    "file": "src/engine/l5/snapshot_full.rs", "line": 715, "severity": "important",
+    "text": "No test pins the production serialization of var in parameters",
+    "disposition": "fixed",
+    "evidence": "667840bf: E2E-2 asserts the emitted list literally; proof P6 (is_var: false) fails it",
+    "anchor": ".agent/issue-236/ledger.md:152-152",
+    "anchor_hash": "1f2450a5f33745d6659044e27671c2e02de42f903e9975a01eea53664a4b3fdc",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "F3", "source": "sol", "round": 5,
+    "file": "src/engine/gate/diff/passes.rs", "line": 1369, "severity": "minor",
+    "text": "Both-side eligibility is not tested independently",
+    "disposition": "fixed",
+    "evidence": "667840bf: matrix rows local->public and public->local; proofs P4, P5",
+    "anchor": ".agent/issue-236/ledger.md:153-153",
+    "anchor_hash": "2348bc86d553c955d414097c868615dda3928b6b3b1ebd4661b4a48ceba7ad88",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "F4", "source": "sol", "round": 5,
+    "file": "CHANGELOG.md", "line": 18, "severity": "minor",
+    "text": "CHANGELOG says renaming stays critical, but a pure rename gave no finding",
+    "disposition": "fixed",
+    "evidence": "667840bf: renames and reorders are now detected (F1) and the CHANGELOG has a second Fixed entry saying so",
+    "anchor": ".agent/issue-236/ledger.md:154-154",
+    "anchor_hash": "3b49ae6ee062df15d7ac2fcef2a489cfdc2805dab62148f99327231a70cdbf56",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "G1", "source": "opus", "round": 5,
+    "file": "CHANGELOG.md", "line": 18, "severity": "minor",
+    "text": "CHANGELOG over-claims that renames are caught (duplicate of F4, D1)",
+    "disposition": "fixed",
+    "evidence": "667840bf: fixed with F1/F4",
+    "anchor": ".agent/issue-236/ledger.md:155-155",
+    "anchor_hash": "22dfdfe4178171afcbaeffd9f9c7c2e991acf4d20195e729b6e0bf4eb8665261",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "G2", "source": "opus", "round": 5,
+    "file": "src/engine/gate/diff/passes.rs", "line": 143, "severity": "minor",
+    "text": "An append plus an attribute-argument flip (IncludeSender) is reported Low",
+    "disposition": "fixed",
+    "evidence": "667840bf: fixed with CR1",
+    "anchor": ".agent/issue-236/ledger.md:156-156",
+    "anchor_hash": "a6e63ee6d289fc0494387d13df79d1ca56df24a40c61528d57c21c8146b1b701",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "G3", "source": "opus", "round": 5,
+    "file": "src/engine/l5/snapshot_full.rs", "line": 706, "severity": "minor",
+    "text": "The publisher attribute set is spelled in two places",
+    "disposition": "fixed",
+    "evidence": "667840bf: fixed with CR3",
+    "anchor": ".agent/issue-236/ledger.md:157-157",
+    "anchor_hash": "46f9832e00ebbd7266b907c0b4c853380cb7c4c027917fe26e40e8723429fe20",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "CR1", "source": "code-review", "round": 5,
+    "file": "src/engine/gate/diff/passes.rs", "line": 144, "severity": "minor",
+    "text": "is_non_breaking_event_append checks attribute names only, never argsHash",
+    "disposition": "fixed",
+    "evidence": "667840bf: attribute_keys (name, argsHash) must be equal; matrix row 'attribute args changed + append'; proof P3",
+    "anchor": ".agent/issue-236/ledger.md:158-158",
+    "anchor_hash": "9064ec26fdb6ee35c9809495a09e97b45c291bf87cd164dc97e6af6c8dcaf30f",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "CR2", "source": "code-review", "round": 5,
+    "file": "src/engine/gate/diff/passes.rs", "line": 702, "severity": "minor",
+    "text": "Severity patched after event_finding at two sites",
+    "disposition": "fixed",
+    "evidence": "667840bf: publisher_signature_severity decides once per publisher key; event_finding takes the severity; proof P7",
+    "anchor": ".agent/issue-236/ledger.md:159-159",
+    "anchor_hash": "34f8931b677ecc2f9cb09e4a4eecc25dbb2906599364138f6aec39913b94acb6",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "CR3", "source": "code-review", "round": 5,
+    "file": "src/engine/l5/snapshot_full.rs", "line": 706, "severity": "minor",
+    "text": "Publisher attribute set written separately in derive_contracts and passes.rs",
+    "disposition": "fixed",
+    "evidence": "667840bf: PARAMETER_EVENT_ATTRIBUTES in ids.rs, read by both",
+    "anchor": ".agent/issue-236/ledger.md:160-160",
+    "anchor_hash": "252e22d7a36ac00324fa09d161601688e50d79a0041859d88401fb40a6e45af1",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "CR4", "source": "code-review", "round": 5,
+    "file": "src/engine/gate/diff/passes.rs", "line": 147, "severity": "minor",
+    "text": "BusinessEvent treated like IntegrationEvent for the append rule",
+    "disposition": "refuted",
+    "evidence": "AS0025 (ms.date 2026-10-01) covers 'Business type and Integration type events'; its non-triggering example is a local [BusinessEvent] gaining a parameter",
+    "anchor": ".agent/issue-236/ledger.md:161-161",
+    "anchor_hash": "f22b04def49e93e1b7af6f4949aa7cdfedf756ff78f931461ec90710bd723c72",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "CR5", "source": "code-review", "round": 5,
+    "file": "src/engine/gate/diff/passes.rs", "line": 145, "severity": "minor",
+    "text": "internal publishers eligible though internalsVisibleTo friends can raise them",
+    "disposition": "refuted",
+    "evidence": "AS0025: 'For local or internal events, it is allowed to add parameters to the event.' Rule kept; friend-app risk stated in the predicate doc (667840bf)",
+    "anchor": ".agent/issue-236/ledger.md:162-162",
+    "anchor_hash": "661e2f74aa6ab52c34e699f08cb465a27a88000b69cd7c7d6ba4542c1237072f",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "CR6", "source": "code-review", "round": 5,
+    "file": "src/engine/l5/snapshot_full.rs", "line": 711, "severity": "minor",
+    "text": "params.iter().zip(&r.parameters) rebuilds pairs from a 1:1 copy",
+    "disposition": "fixed",
+    "evidence": "667840bf: derive_contracts maps r.parameters directly",
+    "anchor": ".agent/issue-236/ledger.md:163-163",
+    "anchor_hash": "9138252b7c7ddeb6772511a8e7f9ff80045500ab5f902270071cf3d3dc22d7ed",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "F5", "source": "sol", "round": 6,
+    "file": "src/engine/gate/diff/passes.rs", "line": 178, "severity": "important",
+    "text": "attribute_keys compares names case-sensitively and in order: an append plus an attribute-name case change gives a false Critical",
+    "disposition": "fixed",
+    "evidence": "34e0fc18: case-folded name + argsHash as a sorted set; matrix row 'attribute name case changed + append'; proof Q1",
+    "anchor": ".agent/issue-236/ledger.md:194-194",
+    "anchor_hash": "157ec3ef82406f0949fd1fee9f638c75e68ebed16f5384705b3d74abb44eb17b",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  },
+  {
+    "id": "G4", "source": "opus", "round": 6,
+    "file": "src/engine/gate/diff/passes.rs", "line": 327, "severity": "minor",
+    "text": "Pure rename/reorder findings show identical old and new hashes and event ids",
+    "disposition": "fixed",
+    "evidence": "34e0fc18: ids hash only category|kind|subject|secondaryKey (fingerprint.rs:134-146), not details; oldParameters/newParameters added to the abi and both events findings; proofs Q2-Q4",
+    "anchor": ".agent/issue-236/ledger.md:195-195",
+    "anchor_hash": "ecd61f835f69839a6ed1aa383f9612690beebbb6293c05fd711c7ef8db1eb2c9",
+    "reviews": {"sol": "accepted", "opus": "accepted"}
+  }
+]
