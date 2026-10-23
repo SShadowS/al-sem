@@ -4,9 +4,10 @@ Design: `.agent/issue-247/ledger.md`, section `## Design` (accepted by both revi
 
 **Rule.** `looseFingerprint` = the fingerprint's five parts with `routineName` blanked
 and, only when the anchor (`primaryLocation.enclosingRoutineId`) is a known routine,
-every occurrence of the anchor's internal or stable id in `rootCauseKey`, plus the
-`/(op|cs|loop|u|p)<digits>` chain after it, replaced by `~`. `fingerprint` bytes do
-not change.
+every occurrence of the anchor's internal or stable id in `rootCauseKey`, plus the one
+`/(op|cs|loop|u)<digits>` site-id segment minted on it (ending at `/`, `|` or the key's
+end), replaced by `~`. A parameter position `/p{N}` is kept (final review round 1,
+CR1/CR2). `fingerprint` bytes do not change.
 
 Acceptance tests (already red): `tests/cli/cli_loose_fingerprint.rs` T1, T2, T4, T5.
 

@@ -153,16 +153,26 @@ findings are new, first pair findings equal on **both** keys, then pair the rest
 an equal `fingerprint` does not always mean an equal `looseFingerprint`.
 
 Compare like with like: no `--baseline` and no `--limit`, and the same `--scope`,
-`--min-severity`, `--detector`/`--preset` and dependencies on both sides. Otherwise findings
-drop out before the JSON is written and look new or fixed.
+`--min-severity`, `--detector`/`--preset` and dependencies on both sides. Inline
+`// al-sem-ignore` suppression is always on, so a suppression comment added or removed
+between the two runs also makes a finding look fixed or new. Otherwise findings drop out
+before the JSON is written and look new or fixed.
 
-Limits: counting cancels out (fix one problem and add another with the same key in the same
-object, and you get 0 new). Some checks keep a routine-bound part in the key, so a move
-there does change `looseFingerprint`: renamed local variables (d4, d18, d22, d57, d60), a
-moved parameter (d59, d39–d42), the other members of an event cycle (d7), the callee
-(d16), the event name (d12) or event (d38), the caller (d43) and the loop routine (d48).
-d39–d42 carry no table, so two of their findings in one object on the same parameter
-position share a key whatever the record's table.
+Limits:
+
+- Counting cancels out: fix one problem and add another with the same key in the same
+  object, and you get 0 new.
+- Some checks keep a part of the key that belongs to the routine, so a move there does
+  change `looseFingerprint`: renamed local variables (d4, d18, d22, d57, d60); a parameter
+  that changes position (d19, d32, d59, d39–d42); the other members of an event cycle (d7);
+  the event name (d12) or event (d38); the caller (d43); and the loop routine (d48). For
+  d48 a move between a direct and a transitive finding also changes the key.
+- d16 keeps the called routine. When a routine calls itself (an obsolete routine calling
+  itself), the caller and the callee are both the moved routine, so both are removed and
+  every such self-call in the object shares one key.
+- d45: two primary publishers in one object that expose the same table share a key.
+- d39–d42 carry no table, so two of their findings in one object on the same parameter
+  position share a key whatever the record's table.
 
 ## In your editor
 

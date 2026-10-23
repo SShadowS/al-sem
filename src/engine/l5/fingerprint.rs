@@ -62,8 +62,8 @@ pub struct FingerprintIndex<'a> {
     /// EVERY routine's internal id → stable routine id (source AND dep). Used to
     /// substitute internal routine-id occurrences in the `rootCauseKey` before
     /// hashing, making the fingerprint edit-/cache-independent. EMPTY only for an
-    /// empty model → `fingerprint_of` is then a no-op.
-    stable_by_id: HashMap<String, String>,
+    /// empty model → `fingerprint_of` is then a no-op. Borrows the model's strings.
+    stable_by_id: HashMap<&'a str, &'a str>,
     /// The distinct `"{modelInstanceId}/"` prefixes present in `stable_by_id`'s
     /// keys (each key up to and including its first `/`), longest-first. Internal
     /// RoutineIds have the fixed shape `"{modelInstanceId}/{64 lowercase hex}"`
@@ -79,8 +79,7 @@ impl FingerprintIndex<'_> {
         let mut t = crate::engine::census::Tally::default();
         t.buf::<(&str, &ModelRoutine)>(self.routines_by_id.len())
             .buf::<(&str, &ModelObject)>(self.objects_by_id.len())
-            .buf::<(String, String)>(self.stable_by_id.len())
-            .strs(self.stable_by_id.iter().flat_map(|(k, v)| [k, v]))
+            .buf::<(&str, &str)>(self.stable_by_id.len())
             .buf::<String>(self.model_instance_prefixes.len())
             .strs(&self.model_instance_prefixes);
         t
@@ -111,10 +110,10 @@ impl<'a> FingerprintIndex<'a> {
         // non-empty `normalized_signature_hash`), so this skip is conservative
         // rather than wrong, and the comment above states only the case where the
         // rationale actually applies.
-        let stable_by_id: HashMap<String, String> = routines
+        let stable_by_id: HashMap<&str, &str> = routines
             .iter()
             .filter(|r| !r.normalized_signature_hash.is_empty())
-            .map(|r| (r.id.clone(), r.stable_routine_id.clone()))
+            .map(|r| (r.id.as_str(), r.stable_routine_id.as_str()))
             .collect();
 
         // Distinct `"{modelInstanceId}/"` prefixes (key up to and including its
@@ -164,8 +163,8 @@ impl<'a> FingerprintIndex<'a> {
 
     /// #247: the routine-independent key. The fingerprint's parts with `routineName`
     /// blanked and, when the anchor is a routine, every occurrence of the anchor's
-    /// internal or stable id in `rootCauseKey` (with the `/op3`-style ordinal chain
-    /// after it) replaced by `~`. So the same problem moved to another routine of the
+    /// internal or stable id in `rootCauseKey` (with the one `/op3`-style site-id
+    /// segment minted on it) replaced by `~`. So the same problem moved to another routine of the
     /// same object keeps this key. Not unique: several findings can share one. When
     /// the anchor is not a routine (d64's object id, an unresolved id) it equals
     /// `fingerprint_of`.
@@ -234,8 +233,14 @@ fn hash_parts(finding: &Finding, obj_part: String, routine_name: String, key: St
     sha256_hex(&joined)[..16].to_string()
 }
 
-/// Replace every occurrence of any of `ids` in `key`, plus the chain of
-/// `/(op|cs|loop|u|p)<digits>` segments right after it, with `~`.
+/// The site-id tags minted on a routine id as `{routineId}/{tag}{n}`, ONE segment
+/// deep: `op`/`cs`/`loop`/`u` in `program/body/ir_walk.rs` (each minting site points
+/// back here). A detector's own `/p{N}` (d19, d32: a parameter index) is not one of
+/// them: a parameter belongs to its routine, so it stays in the loose key.
+const ROUTINE_SITE_TAGS: [&str; 4] = ["op", "cs", "loop", "u"];
+
+/// Replace every occurrence of any of `ids` in `key`, plus the ONE site-id segment
+/// minted on it (`/op3`, `/cs1`, `/loop0`, `/u2`) when present, with `~`.
 fn strip_anchor(key: &str, ids: &[&str]) -> String {
     let mut out = String::with_capacity(key.len());
     let mut pos = 0usize;
@@ -244,9 +249,7 @@ fn strip_anchor(key: &str, ids: &[&str]) -> String {
             if key[pos..].starts_with(id) {
                 out.push('~');
                 pos += id.len();
-                while let Some(n) = ordinal_segment_len(&key[pos..]) {
-                    pos += n;
-                }
+                pos += site_segment_len(&key[pos..]).unwrap_or(0);
                 continue 'outer;
             }
         }
@@ -257,18 +260,15 @@ fn strip_anchor(key: &str, ids: &[&str]) -> String {
     out
 }
 
-/// The byte length of a leading `/(op|cs|loop|u|p)<digits>` segment of `rest`, when
-/// the digits end at the end of `rest` or before a non-alphanumeric byte (so a
-/// variable named `/p2x` is not an ordinal).
-fn ordinal_segment_len(rest: &str) -> Option<usize> {
+/// The byte length of a leading `/{tag}<digits>` site-id segment of `rest`. The
+/// digits must end the key or be followed by a key separator (`/`, or `|` as in
+/// d43's `{caller}/cs1|…`), so a variable named `p1_old` or `op2x` is not one.
+fn site_segment_len(rest: &str) -> Option<usize> {
     let after_slash = rest.strip_prefix('/')?;
-    ["op", "cs", "loop", "u", "p"].iter().find_map(|tag| {
+    ROUTINE_SITE_TAGS.iter().find_map(|tag| {
         let after = after_slash.strip_prefix(tag)?;
         let digits = after.bytes().take_while(u8::is_ascii_digit).count();
-        let ends = after
-            .as_bytes()
-            .get(digits)
-            .is_none_or(|b| !b.is_ascii_alphanumeric());
+        let ends = matches!(after.as_bytes().get(digits), None | Some(b'/' | b'|'));
         (digits > 0 && ends).then_some(1 + tag.len() + digits)
     })
 }
@@ -287,7 +287,7 @@ fn ordinal_segment_len(rest: &str) -> Option<usize> {
 /// `structural_substitution_matches_scan_oracle` equivalence test.
 fn substitute_stable_ids(
     key: &str,
-    stable_by_id: &HashMap<String, String>,
+    stable_by_id: &HashMap<&str, &str>,
     prefixes: &[String],
 ) -> String {
     let bytes = key.as_bytes();
@@ -684,9 +684,10 @@ mod tests {
             format!("{mid}/short-not-hex"), // prefix but not 64-hex
             id_a.clone(),                   // exact
         ];
+        let bmap: HashMap<&str, &str> = map.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         for k in &keys {
             assert_eq!(
-                substitute_stable_ids(k, &map, &["r0/".to_string()]),
+                substitute_stable_ids(k, &bmap, &["r0/".to_string()]),
                 oracle_substitute(k, &map),
                 "divergence on key: {k}"
             );
@@ -708,9 +709,13 @@ mod tests {
             format!("{mid16}/short"),
             "plain".to_string(),
         ];
+        let bmap16: HashMap<&str, &str> = map16
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         for k in &keys16 {
             assert_eq!(
-                substitute_stable_ids(k, &map16, &prefixes16),
+                substitute_stable_ids(k, &bmap16, &prefixes16),
                 oracle_substitute(k, &map16),
                 "divergence (16-hex mid) on key: {k}"
             );
@@ -746,25 +751,48 @@ mod tests {
         assert_ne!(idx.loose_fingerprint_of(&a), idx.loose_fingerprint_of(&b));
     }
 
-    /// The anchor id and its ordinal chain go; the rest of the key stays.
+    /// The anchor id and the ONE site-id segment minted on it go; the rest of the
+    /// key stays. Keys are the real detector layouts (`rA` = the anchor's internal
+    /// id, `S#A` its stable id).
     #[test]
     fn strip_anchor_shapes() {
         let ids = ["rA", "S#A"];
-        // The whole ordinal chain after the anchor (d1/d18 shape).
-        assert_eq!(strip_anchor("d1/rA/loop0/cs3/op25", &ids), "d1/~");
+        // d1/d10/d11: `{rid}/{opId}`.
+        assert_eq!(strip_anchor("d11/rA/rA/op12", &ids), "d11/~/~");
+        // d18: `{rid}/{loopId}/{recVar}/{field}`.
         assert_eq!(
             strip_anchor("d18/rA/rA/loop0/rec/field", &ids),
             "d18/~/~/rec/field"
         );
-        // A variable named like an ordinal but longer is not an ordinal.
-        assert_eq!(strip_anchor("d60/rA/p2x", &ids), "d60/~/p2x");
-        assert_eq!(strip_anchor("d19/rA/p2", &ids), "d19/~");
+        // d60: `{rid}/{loopId}/{var}` — a variable named like a site id after the
+        // loop segment is the subject and stays (#247 CR1).
+        assert_eq!(strip_anchor("d60/rA/rA/loop0/p1", &ids), "d60/~/~/p1");
+        assert_eq!(strip_anchor("d60/rA/rA/loop0/op2", &ids), "d60/~/~/op2");
+        // A segment must end at `/`, `|` or the key's end.
+        assert_eq!(strip_anchor("d57/rA/p1_old", &ids), "d57/~/p1_old");
+        assert_eq!(strip_anchor("d57/rA/op1_old", &ids), "d57/~/op1_old");
+        assert_eq!(strip_anchor("d57/rA/op2x", &ids), "d57/~/op2x");
+        // d19: the parameter position `/p{N}` is kept (#247 CR2).
+        assert_eq!(strip_anchor("d19/rA/p2", &ids), "d19/~/p2");
+        // d43: `|`-separated, the anchor's call site ends at `|`.
+        assert_eq!(strip_anchor("d43/ev|rA/cs1|rB|t", &ids), "d43/ev|~|rB|t");
         // d16: the callee id is the subject and stays.
         assert_eq!(strip_anchor("d16/rA/rA/cs1/rB", &ids), "d16/~/~/rB");
         // d47: the anchor's stable id.
         assert_eq!(strip_anchor("d47/S#A", &ids), "d47/~");
         // No anchor in the key: unchanged.
         assert_eq!(strip_anchor("d2/event", &ids), "d2/event");
+    }
+
+    /// #247 CR1/CR8: two d60 findings in one routine on variables `p1` and `p2` (the
+    /// real key layout) keep different loose keys.
+    #[test]
+    fn loose_fingerprint_keeps_the_variable_after_the_site_id() {
+        let (routines, objects) = two_routine_model();
+        let idx = FingerprintIndex::build(&routines, &objects);
+        let a = dummy_finding("d60", "d60/rA/rA/loop0/p1", "rA");
+        let b = dummy_finding("d60", "d60/rA/rA/loop0/p2", "rA");
+        assert_ne!(idx.loose_fingerprint_of(&a), idx.loose_fingerprint_of(&b));
     }
 
     /// Moving a finding between routines of one object keeps the loose key (internal
@@ -774,7 +802,8 @@ mod tests {
         let (routines, objects) = two_routine_model();
         let idx = FingerprintIndex::build(&routines, &objects);
         let pairs = [
-            ("d1/rA/loop0/op3", "rA", "d1/rB/loop1/op7", "rB"),
+            ("d1/rA/rA/op3", "rA", "d1/rB/rB/op7", "rB"),
+            ("d18/rA/rA/loop0/r/f", "rA", "d18/rB/rB/loop2/r/f", "rB"),
             ("d47/S#A", "rA", "d47/S#B", "rB"),
         ];
         for (ka, aa, kb, ab) in pairs {

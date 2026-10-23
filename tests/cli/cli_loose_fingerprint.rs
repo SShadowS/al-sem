@@ -12,6 +12,9 @@
 //! - T4: the loose key is deterministic across runs and workspace paths (pinned literal).
 //! - T5: an object-level finding (d64, no routine anchor) has `looseFingerprint ==
 //!   fingerprint`.
+//! - T6: two d60 findings in one routine on record variables `P1` and `P2` (key
+//!   `d60/{rid}/{loopId}/{var}`) keep different loose keys: the variable after the
+//!   loop segment is not a site id to strip (final review CR1).
 //!
 //! T3 (the detector part) is a unit test in `src/engine/l5/fingerprint.rs`: on the
 //! production path the detector part is redundant with the key's `dNN/` prefix.
@@ -284,4 +287,51 @@ fn t5_object_level_finding_loose_equals_fingerprint() {
             "{f:#}"
         );
     }
+}
+
+/// T6: one upgrade trigger, two row-by-row loops on `P1` and `P2` (same table).
+const T6: &str = r#"
+codeunit 50248 Loose247Upgrade
+{
+    Subtype = Upgrade;
+
+    trigger OnUpgradePerCompany()
+    var
+        P1: Record Item;
+        P2: Record Item;
+    begin
+        if P1.FindSet() then
+            repeat
+                P1."No." := 'X';
+                P1.Modify();
+            until P1.Next() = 0;
+        if P2.FindSet() then
+            repeat
+                P2."No." := 'Y';
+                P2.Modify();
+            until P2.Next() = 0;
+    end;
+}
+"#;
+
+/// T6 (final review CR1/CR8): a variable named like a site id (`p1`, `p2`) after
+/// the loop segment of d60's key is the subject, so the two findings keep different
+/// loose keys. The old chain walk stripped `/loop0/p1` and `/loop1/p2` alike.
+#[test]
+fn t6_variable_after_the_loop_segment_is_kept() {
+    let (_g, ws) = temp_workspace("t6", T6);
+    // d60 is opt-in (the `bcquality` preset), so select it.
+    let d60 = "d60-upgrade-loop-should-be-datatransfer";
+    let fs = findings_of(&analyze_json_with(&ws, Some(d60)), d60);
+    assert_eq!(fs.len(), 2, "two d60 findings expected: {fs:#?}");
+    // Precondition: one routine, same tables.
+    assert_eq!(
+        fs[0]["primaryLocation"]["routineId"],
+        fs[1]["primaryLocation"]["routineId"]
+    );
+    assert_eq!(fs[0]["affectedTables"], fs[1]["affectedTables"]);
+    assert_ne!(
+        str_of(&fs[0], "looseFingerprint"),
+        str_of(&fs[1], "looseFingerprint"),
+    );
 }
