@@ -6255,7 +6255,7 @@ codeunit 50111 "Cell Calls"
     /// a new fixture changes this one list.
     pub(super) const FIXTURE_ROOTS: [(&str, usize); 5] = [
         ("r0-corpus", 217),
-        ("fixtures", 29),
+        ("fixtures", 33),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),
         ("r2-5b-fixtures", 1),

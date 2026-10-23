@@ -40,6 +40,10 @@ pub struct DiffIndexes<'a> {
     pub new_coverage_by_subject: IndexMap<String, &'a CborValue>,
 
     pub rename_diagnostics: Vec<DiffDiagnostic>,
+
+    /// The rename table the OLD side was normalized with (user overlay + #156
+    /// signature pairs), for old ids read out of fact bodies.
+    rename_table: RenameTable,
 }
 
 fn normalize(id: &str, table: &RenameTable) -> String {
@@ -95,7 +99,8 @@ pub fn build_diff_indexes<'a>(
             .unwrap_or_default();
         let normalized = normalize(id, rename_table);
         old_display_by_stable_id.insert(normalized.clone(), display);
-        let rename_applied = normalized != id;
+        // A #156 signature pair is the same routine, not a rename.
+        let rename_applied = rename_table.get(id).is_some_and(|e| !e.auto);
         origin_by_normalized.insert(
             normalized,
             SubjectOrigin {
@@ -157,19 +162,27 @@ pub fn build_diff_indexes<'a>(
     }
 
     // SchemaFacts — keyed by stableId.
+    // A field fact's `name` (#156) is its display name; identities still win.
     let mut old_schema_by_subject: IndexMap<String, Vec<&CborValue>> = IndexMap::new();
     for fact in snapshot_array(old_snap, "schemaFacts") {
         if let Some(sid) = get_str(fact, "stableId") {
-            push_by_key(
-                &mut old_schema_by_subject,
-                normalize(sid, rename_table),
-                fact,
-            );
+            let normalized = normalize(sid, rename_table);
+            if let Some(name) = get_str(fact, "name") {
+                old_display_by_stable_id
+                    .entry(normalized.clone())
+                    .or_insert_with(|| name.to_string());
+            }
+            push_by_key(&mut old_schema_by_subject, normalized, fact);
         }
     }
     let mut new_schema_by_subject: IndexMap<String, Vec<&CborValue>> = IndexMap::new();
     for fact in snapshot_array(new_snap, "schemaFacts") {
         if let Some(sid) = get_str(fact, "stableId") {
+            if let Some(name) = get_str(fact, "name") {
+                new_display_by_stable_id
+                    .entry(sid.to_string())
+                    .or_insert_with(|| name.to_string());
+            }
             push_by_key(&mut new_schema_by_subject, sid.to_string(), fact);
         }
     }
@@ -276,11 +289,12 @@ pub fn build_diff_indexes<'a>(
         old_coverage_by_subject,
         new_coverage_by_subject,
         rename_diagnostics,
+        rename_table: rename_table.clone(),
     }
 }
 
 /// Read `identities.<field>` as an array slice (empty when absent).
-fn identities_field<'a>(snap: &'a CborValue, field: &str) -> &'a [CborValue] {
+pub(super) fn identities_field<'a>(snap: &'a CborValue, field: &str) -> &'a [CborValue] {
     match snap {
         CborValue::Map(m) => match m.get("identities") {
             Some(ident) => get_array(ident, field).unwrap_or(&[]),
@@ -299,6 +313,12 @@ impl<'a> DiffIndexes<'a> {
             .or_else(|| self.old_display_by_stable_id.get(subject_id))
             .cloned()
             .unwrap_or_else(|| subject_id.to_string())
+    }
+
+    /// An OLD-side id read from a fact body (e.g. an event declaration's
+    /// `routine`), normalized the way the index keys are.
+    pub fn normalize_old(&self, id: &str) -> String {
+        normalize(id, &self.rename_table)
     }
 
     /// The origin (oldOriginalStableId / newStableId) for a normalized subject.

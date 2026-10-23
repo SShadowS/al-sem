@@ -227,9 +227,10 @@ pub const NON_REFERENCE_FIELDS: &[(&str, &[&str])] = &[
             "attributes.*",
             "obsoleteState",
             "obsoleteReason",
+            "routineKind",
         ],
     ),
-    ("schemaFacts", &["kind", "shapeFingerprint"]),
+    ("schemaFacts", &["kind", "shapeFingerprint", "name"]),
     (
         "permissionFacts",
         &[

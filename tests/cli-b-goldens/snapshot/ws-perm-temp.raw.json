@@ -121,6 +121,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "0ac57cca433b45d89b3195745a0f2d12bd7417cb1b40f77024fe0a690e8df386",
       "stableId": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#0ac57cca433b45d89b3195745a0f2d12bd7417cb1b40f77024fe0a690e8df386",
       "visibility": "public"
@@ -128,6 +129,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee",
       "stableId": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee",
       "visibility": "public"
@@ -135,6 +137,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e",
       "stableId": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e",
       "visibility": "public"
@@ -410,6 +413,7 @@
     },
     {
       "kind": "field",
+      "name": "No.",
       "shapeFingerprint": "26839cc5e09f3400e05e701c85022ec2bacd89495b27312a0730169c5fd8604d",
       "stableId": "11111111-0000-0000-0000-00000000e130:Table:50300#1"
     },

@@ -113,6 +113,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "8eddb8fcb017e354df7f111bc5a03539c310344f795db1755a2e0bf490ecd9f5",
       "stableId": "11111111-0000-0000-0000-0000000d4706:Codeunit:50000#8eddb8fcb017e354df7f111bc5a03539c310344f795db1755a2e0bf490ecd9f5",
       "visibility": "public"
@@ -275,11 +276,13 @@
     },
     {
       "kind": "field",
+      "name": "No.",
       "shapeFingerprint": "26839cc5e09f3400e05e701c85022ec2bacd89495b27312a0730169c5fd8604d",
       "stableId": "11111111-0000-0000-0000-0000000d4706:Table:50100#1"
     },
     {
       "kind": "field",
+      "name": "Name",
       "shapeFingerprint": "af2f8a90d76f97de64eae9dfb5b852b0d10dc35125da0871a6e71e637447d8b3",
       "stableId": "11111111-0000-0000-0000-0000000d4706:Table:50100#2"
     },

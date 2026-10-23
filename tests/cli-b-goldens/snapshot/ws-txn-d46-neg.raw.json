@@ -152,6 +152,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
       "stableId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
       "visibility": "local"
@@ -159,6 +160,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "b8669e55319108c890634c4a59a65673f0a99a138ff874f926b31d5f202b118b",
       "stableId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#b8669e55319108c890634c4a59a65673f0a99a138ff874f926b31d5f202b118b",
       "visibility": "public"
@@ -372,11 +374,13 @@
     },
     {
       "kind": "field",
+      "name": "Primary Key",
       "shapeFingerprint": "c704a753e408a4452820ffa52a4794b9a526cfcb43831cc4156d4fdae71f42c2",
       "stableId": "11111111-0000-0000-0000-00000000d461:Table:50000#1"
     },
     {
       "kind": "field",
+      "name": "Description",
       "shapeFingerprint": "c6d6e6c422e554c234dc411ad41fd5f57ed04e3dc94188c26601f65a9f0214b4",
       "stableId": "11111111-0000-0000-0000-00000000d461:Table:50000#2"
     },

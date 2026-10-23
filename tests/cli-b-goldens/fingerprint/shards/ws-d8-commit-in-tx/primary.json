@@ -284,6 +284,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "2e5621326f8bababbcb4016a11968674e37ac0be41cdb950e2e16bf34125f1b1",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#2e5621326f8bababbcb4016a11968674e37ac0be41cdb950e2e16bf34125f1b1",
       "visibility": "public"
@@ -296,6 +297,7 @@
         }
       ],
       "kind": "routine",
+      "routineKind": "event-publisher",
       "signatureFingerprint": "eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec",
       "visibility": "public"
@@ -315,6 +317,7 @@
         }
       ],
       "kind": "routine",
+      "routineKind": "event-subscriber",
       "signatureFingerprint": "715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0",
       "visibility": "local"
@@ -668,16 +671,19 @@
     },
     {
       "kind": "field",
+      "name": "No.",
       "shapeFingerprint": "d45c6f5aaa93a9d7b25b6943991d9d2292f40e6a6fee95b9ad930448031da73b",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Table:36#1"
     },
     {
       "kind": "field",
+      "name": "Status Posted",
       "shapeFingerprint": "ee98699d70f319d798921b62b2e9071fcf05ed39cef5d1d148cb4e8f6e3f8510",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Table:36#50"
     },
     {
       "kind": "field",
+      "name": "Last Posting Date",
       "shapeFingerprint": "9708da55f862778791052f7869e58c2780a4dc14b09162efe623558f57fe10a5",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Table:36#60"
     },
@@ -688,11 +694,13 @@
     },
     {
       "kind": "field",
+      "name": "Document No.",
       "shapeFingerprint": "d45c6f5aaa93a9d7b25b6943991d9d2292f40e6a6fee95b9ad930448031da73b",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Table:37#1"
     },
     {
       "kind": "field",
+      "name": "Status Posted",
       "shapeFingerprint": "ee98699d70f319d798921b62b2e9071fcf05ed39cef5d1d148cb4e8f6e3f8510",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Table:37#50"
     },
@@ -703,11 +711,13 @@
     },
     {
       "kind": "field",
+      "name": "Entry No.",
       "shapeFingerprint": "26839cc5e09f3400e05e701c85022ec2bacd89495b27312a0730169c5fd8604d",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Table:50100#1"
     },
     {
       "kind": "field",
+      "name": "Doc No.",
       "shapeFingerprint": "d45c6f5aaa93a9d7b25b6943991d9d2292f40e6a6fee95b9ad930448031da73b",
       "stableId": "11111111-0000-0000-0000-00000000d80a:Table:50100#2"
     }

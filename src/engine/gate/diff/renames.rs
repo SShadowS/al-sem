@@ -1,7 +1,7 @@
 //! The rename overlay → rename table, with chain/overlap/stale diagnostics.
 //! Port of al-sem `src/diff/diff-renames.ts`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 
@@ -16,6 +16,10 @@ pub type RenameOverlay = IndexMap<String, String>;
 #[derive(Debug, Clone)]
 pub struct RenameEntry {
     pub new_id: String,
+    /// #156: minted by [`pair_signature_changes`], not by the user overlay. An auto
+    /// entry is not a rename: it sets no `oldOriginalStableId` and is not counted in
+    /// `renamesApplied`.
+    pub auto: bool,
 }
 
 /// `oldId -> RenameEntry`. Identity mappings (`oldId == newId`) are dropped.
@@ -57,6 +61,7 @@ pub fn build_rename_table(overlay: &RenameOverlay) -> (RenameTable, Vec<DiffDiag
             old_id.clone(),
             RenameEntry {
                 new_id: new_id.clone(),
+                auto: false,
             },
         );
         new_to_olds
@@ -136,6 +141,95 @@ fn stale(stale_id: &str, reason: &str) -> DiffDiagnostic {
             ("reason".into(), CborValue::Text(reason.to_string())),
         ],
     }
+}
+
+/// #156: pair each routine whose signature changed. A routine's stable id is
+/// `{object}#{signatureFingerprint}`, so a parameter change looks like a removal
+/// plus an addition. A routine only in old and a routine only in new, in the same
+/// object with the same name (AL names ignore case), are one routine when that
+/// (object, name) group holds exactly one of each. An ambiguous group (two
+/// overloads changed at once) stays unpaired. Only member-less ids pair: a member
+/// trigger's id hashes its member in, so two `OnAction`s share name and signature
+/// but are different triggers. Ids the user overlay maps (either end) never pair.
+/// Returns `(old_id, new_id)` pairs in old-snapshot order.
+pub fn pair_signature_changes(
+    old_snap: &CborValue,
+    new_snap: &CborValue,
+    user: &RenameTable,
+) -> Vec<(String, String)> {
+    let user_targets: HashSet<&str> = user.values().map(|e| e.new_id.as_str()).collect();
+    let normalize = |id: &str| user.get(id).map_or(id, |e| e.new_id.as_str()).to_string();
+    let old_rows = routine_rows(old_snap);
+    let new_rows = routine_rows(new_snap);
+    let old_ids: HashSet<String> = old_rows.iter().map(|r| normalize(&r.id)).collect();
+    let new_ids: HashSet<&str> = new_rows.iter().map(|r| r.id.as_str()).collect();
+
+    // (object, lowercased name) → (old-only candidates, new-only candidates).
+    type Group<'a> = (Vec<&'a RoutineRow>, Vec<&'a RoutineRow>);
+    let mut groups: IndexMap<(String, String), Group> = IndexMap::new();
+    for r in &old_rows {
+        if r.pairable && !user.contains_key(&r.id) && !new_ids.contains(r.id.as_str()) {
+            groups.entry(r.key()).or_default().0.push(r);
+        }
+    }
+    for r in &new_rows {
+        if r.pairable && !user_targets.contains(r.id.as_str()) && !old_ids.contains(&r.id) {
+            groups.entry(r.key()).or_default().1.push(r);
+        }
+    }
+    groups
+        .into_values()
+        .filter_map(|(olds, news)| match (olds.as_slice(), news.as_slice()) {
+            ([o], [n]) if o.sig != n.sig => Some((o.id.clone(), n.id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+struct RoutineRow {
+    id: String,
+    object: String,
+    name: String,
+    sig: String,
+    /// Member-less (`id == {object}#{sig}`) and named.
+    pairable: bool,
+}
+
+impl RoutineRow {
+    fn key(&self) -> (String, String) {
+        (self.object.clone(), self.name.to_lowercase())
+    }
+}
+
+/// The routine contract facts of one snapshot, with their display names.
+fn routine_rows(snap: &CborValue) -> Vec<RoutineRow> {
+    let ids = super::indexes::identities_field(snap, "stableIds");
+    let names = super::indexes::identities_field(snap, "displayNames");
+    let name_of: HashMap<&str, &str> = ids
+        .iter()
+        .zip(names)
+        .filter_map(|(i, n)| match (i, n) {
+            (CborValue::Text(i), CborValue::Text(n)) => Some((i.as_str(), n.as_str())),
+            _ => None,
+        })
+        .collect();
+    super::snapshot_array(snap, "contractFacts")
+        .iter()
+        .filter(|f| super::get_str(f, "kind") == Some("routine"))
+        .filter_map(|f| {
+            let id = super::get_str(f, "stableId")?;
+            let sig = super::get_str(f, "signatureFingerprint").unwrap_or("");
+            let name = name_of.get(id).copied().unwrap_or("");
+            let (object, suffix) = id.rsplit_once('#')?;
+            Some(RoutineRow {
+                id: id.to_string(),
+                object: object.to_string(),
+                name: name.to_string(),
+                sig: sig.to_string(),
+                pairable: !name.is_empty() && !sig.is_empty() && suffix == sig,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

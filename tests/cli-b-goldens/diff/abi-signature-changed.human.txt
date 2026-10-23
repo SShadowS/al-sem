@@ -1,13 +1,6 @@
-Diff: 7 finding(s). critical=1 high=1 medium=2 low=1 info=2
+Diff: 2 finding(s). critical=1 high=0 medium=0 low=0 info=1
 
 Contract:
-  [critical] procedure-removed: CreateInvoice
-  [info] procedure-added: CreateInvoice
+  [critical] procedure-signature-changed: CreateInvoice
   [info] table-field-added: dd6a6b6i-0006-0006-0006-000000000006:Table:50600#3
-
-Effects:
-  [high] permission-target-added: CreateInvoice
-  [medium] capability-gained-write: CreateInvoice [cov old=unknown new=complete]
-  [medium] capability-lost-under-coverage: CreateInvoice [cov old=complete new=unknown]
-  [low] permission-target-removed: CreateInvoice
 

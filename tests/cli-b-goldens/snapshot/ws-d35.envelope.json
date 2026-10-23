@@ -178,6 +178,7 @@
           }
         ],
         "kind": "routine",
+        "routineKind": "event-subscriber",
         "signatureFingerprint": "1be0eff0fbb25b77ecb6f9f1b24ebe73871f6247c771631252866fb39fabeb93",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#1be0eff0fbb25b77ecb6f9f1b24ebe73871f6247c771631252866fb39fabeb93",
         "visibility": "local"
@@ -190,6 +191,7 @@
           }
         ],
         "kind": "routine",
+        "routineKind": "event-subscriber",
         "signatureFingerprint": "70651530caee0c1d7a5bff0fa6da803446a7a10092730ec1ad3d142da9620c7f",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#70651530caee0c1d7a5bff0fa6da803446a7a10092730ec1ad3d142da9620c7f",
         "visibility": "local"
@@ -197,6 +199,7 @@
       {
         "attributes": [],
         "kind": "routine",
+        "routineKind": "procedure",
         "signatureFingerprint": "a48ec94ff9566709129af3e35f12ad569c376df0c9883faaebb98023a0e9da4a",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#a48ec94ff9566709129af3e35f12ad569c376df0c9883faaebb98023a0e9da4a",
         "visibility": "local"
@@ -204,6 +207,7 @@
       {
         "attributes": [],
         "kind": "routine",
+        "routineKind": "procedure",
         "signatureFingerprint": "c937f452b226f2394cc4c00d2efb29e7f15730196e2230b656bab5c00ec98d1a",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#c937f452b226f2394cc4c00d2efb29e7f15730196e2230b656bab5c00ec98d1a",
         "visibility": "public"
@@ -216,6 +220,7 @@
           }
         ],
         "kind": "routine",
+        "routineKind": "event-subscriber",
         "signatureFingerprint": "efdfd5305f3740f85650f1d429eb33b8150f1c17402c8d89f568453390c1e050",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#efdfd5305f3740f85650f1d429eb33b8150f1c17402c8d89f568453390c1e050",
         "visibility": "local"

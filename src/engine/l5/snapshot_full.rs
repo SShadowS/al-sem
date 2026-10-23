@@ -703,6 +703,8 @@ fn derive_contracts(resolved: &Model) -> CborValue {
             "attributes".into(),
             fingerprint_attributes(&r.attributes_parsed),
         );
+        // #156: `alsem diff` reads it — a trigger is not callable from another app.
+        m.insert("routineKind".into(), CborValue::Text(r.kind.clone()));
         rows.push((stable_id, CborValue::Map(m)));
     }
 
@@ -818,6 +820,8 @@ fn derive_schema(resolved: &Model) -> CborValue {
             fm.insert("kind".into(), CborValue::Text("field".into()));
             fm.insert("stableId".into(), CborValue::Text(stable_field.clone()));
             fm.insert("shapeFingerprint".into(), CborValue::Text(field_shape));
+            // #156: the display name `alsem diff` shows for field findings.
+            fm.insert("name".into(), CborValue::Text(fld.name.clone()));
             rows.push((stable_field, CborValue::Map(fm)));
         }
 

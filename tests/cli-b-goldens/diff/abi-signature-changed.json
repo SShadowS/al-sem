@@ -10,120 +10,16 @@
       {
         "category": "abi",
         "comparisonCone": [
-          "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#3a947e8ad729d9df93fcb0986aee321b938ab16c8d4f9d1af0bf7962efd5fb3f"
+          "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076"
         ],
         "details": {
-          "kind": "procedure-removed"
+          "kind": "procedure-signature-changed",
+          "newSignatureHash": "941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076",
+          "oldSignatureHash": "3a947e8ad729d9df93fcb0986aee321b938ab16c8d4f9d1af0bf7962efd5fb3f"
         },
-        "id": "3d79b827667840e6",
-        "kind": "procedure-removed",
+        "id": "b75721345c71961c",
+        "kind": "procedure-signature-changed",
         "severity": "critical",
-        "subject": {
-          "displayName": "CreateInvoice",
-          "normalizedStableId": "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#3a947e8ad729d9df93fcb0986aee321b938ab16c8d4f9d1af0bf7962efd5fb3f"
-        }
-      },
-      {
-        "category": "permissions",
-        "comparisonCone": [
-          "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076"
-        ],
-        "details": {
-          "kind": "permission-target-added",
-          "newRights": [
-            "I"
-          ],
-          "targetId": "dd6a6b6i-0006-0006-0006-000000000006:Table:50600",
-          "targetKind": "TableData"
-        },
-        "id": "e4252549d5ac5660",
-        "kind": "permission-target-added",
-        "severity": "high",
-        "subject": {
-          "displayName": "CreateInvoice",
-          "newStableId": "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076",
-          "normalizedStableId": "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076"
-        }
-      },
-      {
-        "category": "capabilities",
-        "comparisonCone": [
-          "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076"
-        ],
-        "coverageState": {
-          "new": "complete",
-          "old": "unknown"
-        },
-        "details": {
-          "kind": "capability-gained-write",
-          "op": "insert",
-          "resourceId": "dd6a6b6i-0006-0006-0006-000000000006/table/50600",
-          "resourceKind": "table"
-        },
-        "id": "0c7e11f7359bb52a",
-        "kind": "capability-gained-write",
-        "severity": "medium",
-        "subject": {
-          "displayName": "CreateInvoice",
-          "newStableId": "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076",
-          "normalizedStableId": "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076"
-        }
-      },
-      {
-        "category": "capabilities",
-        "comparisonCone": [
-          "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#3a947e8ad729d9df93fcb0986aee321b938ab16c8d4f9d1af0bf7962efd5fb3f"
-        ],
-        "coverageState": {
-          "new": "unknown",
-          "old": "complete"
-        },
-        "details": {
-          "kind": "capability-lost",
-          "op": "insert",
-          "resourceId": "dd6a6b6i-0006-0006-0006-000000000006/table/50600",
-          "resourceKind": "table"
-        },
-        "id": "bf1cff2d5672752e",
-        "kind": "capability-lost-under-coverage",
-        "severity": "medium",
-        "subject": {
-          "displayName": "CreateInvoice",
-          "normalizedStableId": "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#3a947e8ad729d9df93fcb0986aee321b938ab16c8d4f9d1af0bf7962efd5fb3f"
-        }
-      },
-      {
-        "category": "permissions",
-        "comparisonCone": [
-          "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#3a947e8ad729d9df93fcb0986aee321b938ab16c8d4f9d1af0bf7962efd5fb3f"
-        ],
-        "details": {
-          "kind": "permission-target-removed",
-          "oldRights": [
-            "I"
-          ],
-          "targetId": "dd6a6b6i-0006-0006-0006-000000000006:Table:50600",
-          "targetKind": "TableData"
-        },
-        "id": "4fb992aa5cfdb458",
-        "kind": "permission-target-removed",
-        "severity": "low",
-        "subject": {
-          "displayName": "CreateInvoice",
-          "normalizedStableId": "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#3a947e8ad729d9df93fcb0986aee321b938ab16c8d4f9d1af0bf7962efd5fb3f"
-        }
-      },
-      {
-        "category": "abi",
-        "comparisonCone": [
-          "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076"
-        ],
-        "details": {
-          "kind": "procedure-added"
-        },
-        "id": "c097ba1dd51a363b",
-        "kind": "procedure-added",
-        "severity": "info",
         "subject": {
           "displayName": "CreateInvoice",
           "newStableId": "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076",
@@ -150,18 +46,18 @@
     "summary": {
       "coverageIncompleteCones": 0,
       "findingsByCategory": {
-        "abi": 2,
-        "capabilities": 2,
+        "abi": 1,
+        "capabilities": 0,
         "events": 0,
-        "permissions": 2,
+        "permissions": 0,
         "schema": 1
       },
       "findingsBySeverity": {
         "critical": 1,
-        "high": 1,
-        "info": 2,
-        "low": 1,
-        "medium": 2
+        "high": 0,
+        "info": 1,
+        "low": 0,
+        "medium": 0
       },
       "renamesApplied": 0
     }

@@ -401,7 +401,7 @@ mod tests {
         // corpus dir fails it too: bump the count here when you add one.
         for (root, want) in [
             ("r0-corpus", 217),
-            ("fixtures", 29),
+            ("fixtures", 33),
             ("r3a4-fixtures", 1),
             ("r3a5-fixtures", 1),
             ("r2-5b-fixtures", 1),
@@ -440,7 +440,7 @@ mod tests {
             "exec_relation parity: {} cases, {} with a dependency half and event dispatch, {} with dependency uncertainty",
             stats.cases, stats.dep_half_with_dispatch, stats.dep_uncertainty
         );
-        assert_eq!(stats.cases, 2 * (217 + 29 + 3 + 2), "cases run");
+        assert_eq!(stats.cases, 2 * (217 + 33 + 3 + 2), "cases run");
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 
