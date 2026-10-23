@@ -130,6 +130,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JSON only: SARIF `fingerprints` would merge results with an equal value. The
   `schemaVersion` does not change (the key is additive).
 
+### Changed
+
+- d35 (Commit in an event subscriber) now reports an unknown answer — no Commit found in
+  the subscriber or proven in its callees, but call coverage incomplete — at medium
+  severity instead of high (#256). A Commit found directly or via a callee stays high.
+  Confidence, ids, fingerprints and loose fingerprints are unchanged, so baselines and
+  suppressions keep matching. Such findings no longer trip `analyze --fail-on high` or
+  show under `--min-severity high`; SARIF reports them as warnings. `alsem policy check`
+  is unchanged. On the pinned CDO workspace, 41 of 52 d35 findings (primary scope; 83 of
+  162 at `--scope all`) move to medium; primary `bySeverity.high` drops from 577 to 536.
+  This supersedes #148's note that the unknown answer keeps severity high.
+
 ### Fixed
 
 - An object or table whose quoted name holds an escaped quote (`"A ""B"" C"`) is shown
