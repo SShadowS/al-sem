@@ -452,6 +452,77 @@ fn symbol_only_callee_has_its_gap() {
     );
 }
 
+fn base_mut(t: &mut AnalysisTarget) -> &mut R3a5CrossAppBase {
+    match t {
+        AnalysisTarget::CrossApp(b) => b,
+        AnalysisTarget::SingleApp(_) => panic!("a cross-app target"),
+    }
+}
+
+/// Review F-3a: the app-subject match is case-insensitive. The REACHED
+/// `dddd…` rows get an upper-case `object_id` guid (hand-stated), the
+/// unreached ones keep the lower-case spelling, so the lower-case
+/// `symbol-only-boundary` gap names an app whose reached rows are spelled
+/// differently. It is still serialized.
+///
+/// Break: drop the case folding in `reachable_gaps` -> the gap is dropped.
+#[test]
+fn gap_app_subject_matches_case_insensitively() {
+    let mut b = build(&r5b(), false);
+    let reach = cone_reach(base(&b.target));
+    let upper = R5B_D.to_ascii_uppercase();
+    let x = base_mut(&mut b.target);
+    let (mut reached, mut unreached_bodyless) = (0, 0);
+    for r in x.resolved.workspace.routines.iter_mut() {
+        if !r.app_guid.eq_ignore_ascii_case(R5B_D) {
+            continue;
+        }
+        if reach.contains(&r.id) {
+            r.object_id = r.object_id.replacen(R5B_D, &upper, 1);
+            assert!(r.object_id.starts_with(&upper), "the hand-state applied");
+            reached += 1;
+        } else if !r.body_available {
+            unreached_bodyless += 1;
+        }
+    }
+    assert!(reached > 0, "precondition: a reached dddd… row");
+    assert!(
+        unreached_bodyless > 0,
+        "precondition: an unreached body-less dddd… row keeps the lower-case spelling"
+    );
+    let mem = memory_gaps(b.target.resolved());
+    assert!(
+        mem.iter()
+            .any(|g| g["kind"] == "symbol-only-boundary" && g["subject"] == R5B_D),
+        "precondition: a lower-case dddd… gap in memory: {mem:?}"
+    );
+    let snap = json(&compose(&b));
+    let sob = gaps(&snap, "symbol-only-boundary");
+    assert!(
+        sob.iter().any(|g| g["subject"] == R5B_D),
+        "the lower-case dddd… gap is kept: {sob:?}"
+    );
+}
+
+/// Review F-3b: the F21 assertion fires when an app WITH source owns a
+/// reached body-less row (`dddd…`'s `has_source` hand-stated `true`).
+///
+/// Break: delete the `debug_assert!` -> no panic.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a symbol-only-boundary gap names an app with source")]
+fn opaque_gap_of_an_app_with_source_fires() {
+    let mut b = build(&r5b(), false);
+    let app = base_mut(&mut b.target)
+        .dependency_apps
+        .iter_mut()
+        .find(|a| a.guid.eq_ignore_ascii_case(R5B_D))
+        .expect("precondition: dddd… is a dependency app");
+    assert!(!app.has_source, "precondition: dddd… is symbol-only");
+    app.has_source = true;
+    let _ = compose(&b);
+}
+
 // ---------------------------------------------------------------------------
 // Preflight (D5): T7
 // ---------------------------------------------------------------------------

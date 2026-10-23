@@ -36,7 +36,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::engine::ids::to_stable_object_id;
+use crate::engine::ids::{object_id_app_guid, to_stable_object_id};
 use crate::engine::l4::capability_cone::{
     CapabilityExtra, CapabilityFact, R3a3SourceBase, ValueSource, build_r3a3_source_only_base,
 };
@@ -2355,7 +2355,11 @@ fn classify_resolution(
 // adjacent. Every gap of the model, unfiltered (#220 I8: `prove` intersects it
 // with its own cone; the cross-app serialization filters it by reach).
 //
-// M8: kind (fixed lowercase) | subject (stable id / guid, lowercase) → ordinal-safe.
+// M8: kind (fixed lowercase) | subject (stable id / bare app guid) → ordinal-safe.
+// A subject keeps the app guid's model casing (`encode_object_id` keeps it
+// verbatim): `prove`'s `count_gaps_in_cone` matches an app subject as a
+// case-sensitive `{guid}:` prefix of the cone's stable ids, so lowercasing it
+// here would hide the gap of an upper-case manifest guid.
 // ---------------------------------------------------------------------------
 
 fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
@@ -2386,8 +2390,7 @@ fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<Snapshot
     for r in &base.ws_routines {
         if !r.body_available
             && is_dependency_role(r)
-            && let Some(guid) = r.object_id.split('/').next()
-            && !guid.is_empty()
+            && let Some(guid) = object_id_app_guid(&r.object_id)
         {
             opaque_apps.insert(guid.to_string());
         }
@@ -2410,8 +2413,7 @@ fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<Snapshot
         if !is_dependency_role(r) {
             continue;
         }
-        let guid = r.object_id.split('/').next().unwrap_or("");
-        if opaque_apps.contains(guid) {
+        if object_id_app_guid(&r.object_id).is_some_and(|g| opaque_apps.contains(g)) {
             continue;
         }
         out.push(SnapshotAnalysisGap {

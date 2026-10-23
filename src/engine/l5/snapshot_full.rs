@@ -27,8 +27,8 @@ use indexmap::IndexMap;
 
 use crate::engine::gate::cbor::CborValue;
 use crate::engine::ids::{
-    ParamSpec, canonical_routine_signature, locale_compare, object_signature_fingerprint,
-    sha256_hex,
+    ParamSpec, canonical_routine_signature, locale_compare, object_id_app_guid,
+    object_signature_fingerprint, sha256_hex,
 };
 use crate::engine::l4::capability_cone::{
     CapabilityFact, R3a3SourceBase, R3a5CrossAppBase, build_r3a3_source_only_base,
@@ -475,19 +475,15 @@ fn reachable_gaps(
     source: &R3a3SourceBase,
 ) -> Vec<SnapshotAnalysisGap> {
     use crate::program::model::role::Role;
+    // The one case fold of an app guid, on both sides of the match (O13).
+    let app_key = |guid: &str| guid.to_ascii_lowercase();
     let reach = reach(x);
     let mut routines: HashSet<String> = HashSet::new();
     let mut apps: HashSet<String> = HashSet::new();
     for r in x.resolved.workspace.routines.iter() {
         if reach.contains(&r.id) {
             routines.insert(stable_routine_id(&r.id, &source.routine_to_stable));
-            apps.insert(
-                r.object_id
-                    .split('/')
-                    .next()
-                    .unwrap_or("")
-                    .to_ascii_lowercase(),
-            );
+            apps.extend(object_id_app_guid(&r.object_id).map(app_key));
         }
     }
     let kept: Vec<_> = gaps
@@ -495,7 +491,7 @@ fn reachable_gaps(
         .filter(|g| {
             g.role == Role::Primary.as_str()
                 || routines.contains(&g.subject)
-                || apps.contains(&g.subject.to_ascii_lowercase())
+                || apps.contains(&app_key(&g.subject))
         })
         .cloned()
         .collect();

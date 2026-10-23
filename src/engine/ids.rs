@@ -131,6 +131,15 @@ pub fn encode_object_id(app_guid: &str, object_type: &str, object_number: i64) -
     format!("{app_guid}/{object_type}/{object_number}")
 }
 
+/// The app guid of an internal object id (its first `/` segment), verbatim
+/// casing; `None` when it is empty.
+pub fn object_id_app_guid(internal_object_id: &str) -> Option<&str> {
+    internal_object_id
+        .split('/')
+        .next()
+        .filter(|g| !g.is_empty())
+}
+
 /// Stable object id: replace every `/` in the internal id with `:`.
 pub fn to_stable_object_id(internal_object_id: &str) -> String {
     internal_object_id.replace('/', ":")
