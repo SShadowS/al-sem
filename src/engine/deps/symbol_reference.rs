@@ -543,11 +543,14 @@ fn raw_table_is_temporary(properties: &Option<Vec<RawProperty>>) -> bool {
         .unwrap_or(false)
 }
 
-/// Strip surrounding double-quotes (AL quoted-identifier syntax).
+/// Strip surrounding double-quotes (AL quoted-identifier syntax). A quoted value is
+/// source-shaped, so its `""` is one `"`: it is returned by its LOGICAL name, like
+/// every object name (#240). A bare value is already logical and is left alone.
 fn unquote_abi_name(raw: &str) -> String {
     let chars: Vec<char> = raw.chars().collect();
     if chars.len() >= 2 && chars[0] == '"' && chars[chars.len() - 1] == '"' {
-        chars[1..chars.len() - 1].iter().collect()
+        let inner: String = chars[1..chars.len() - 1].iter().collect();
+        crate::program::body::scope::unescape_al_identifier(&inner)
     } else {
         raw.to_string()
     }
@@ -1513,6 +1516,33 @@ mod tests {
         let b = classify_abi_arg(&Some(Value::String("''".to_string())));
         assert_eq!(b.kind, "string_literal");
         assert_eq!(b.value.as_deref(), Some(""));
+    }
+
+    /// #240: a quoted, source-shaped `SourceTable` / `TargetObject` is projected by
+    /// its LOGICAL name (`""` is one `"`); a bare one is already logical and is
+    /// left alone.
+    ///
+    /// Discrimination: drop the unescape in `unquote_abi_name` -> the quoted
+    /// values read `A""B`; fails. Restored, it passes.
+    #[test]
+    fn quoted_source_table_and_target_object_are_logical() {
+        let abi = parse_symbol_reference(
+            r#"{"AppId":"g","Name":"D","Publisher":"p","Version":"1.0.0.0",
+            "Pages":[{"Id":1,"Name":"P1","Properties":[{"Name":"SourceTable","Value":"\"A\"\"B\""}]},
+                     {"Id":2,"Name":"P2","Properties":[{"Name":"SourceTable","Value":"A\"B"}]}],
+            "TableExtensions":[{"Id":3,"Name":"E","TargetObject":"\"A\"\"B\""}]}"#,
+        );
+        assert_eq!(abi.error, None);
+        let by_name = |n: &str| abi.objects.iter().find(|o| o.name == n).unwrap();
+        // Compared once, so a failure shows every value.
+        assert_eq!(
+            [
+                by_name("P1").source_table_name.as_deref(),
+                by_name("P2").source_table_name.as_deref(),
+                by_name("E").extends_target_name.as_deref(),
+            ],
+            [Some("A\"B"); 3]
+        );
     }
 
     #[test]

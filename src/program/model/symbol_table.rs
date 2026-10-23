@@ -14,29 +14,7 @@
 //! differently.
 
 use super::workspace::{ModelObject, ModelTable};
-use std::borrow::Cow;
 use std::collections::HashMap;
-
-/// A name looked up against the model's object and table names, which are
-/// LOGICAL (#240). The caller states where its text came from, so each name is
-/// unescaped exactly once (`unescape_al_identifier` is not idempotent).
-#[derive(Clone, Copy, Debug)]
-pub enum NameRef<'a> {
-    /// Source text as written inside the quotes: a `""` is still doubled.
-    Raw(&'a str),
-    /// Already the logical name: a model name, or dependency symbol (ABI) text.
-    Logical(&'a str),
-}
-
-impl<'a> NameRef<'a> {
-    /// The logical name: `Raw` unescaped once, `Logical` as is.
-    pub fn logical(self) -> Cow<'a, str> {
-        match self {
-            NameRef::Raw(s) => Cow::Owned(crate::program::body::scope::unescape_al_identifier(s)),
-            NameRef::Logical(s) => Cow::Borrowed(s),
-        }
-    }
-}
 
 /// A read-only lookup index over a workspace model's objects and tables.
 ///
@@ -123,18 +101,14 @@ impl<'a> SymbolTable<'a> {
         self.by_type_number.get(&key).map(|&i| &self.objects[i])
     }
 
-    pub fn object_by_type_name(&self, object_type: &str, name: NameRef) -> Option<&ModelObject> {
-        let key = format!(
-            "{}/{}",
-            object_type.to_lowercase(),
-            name.logical().to_lowercase()
-        );
+    pub fn object_by_type_name(&self, object_type: &str, name: &str) -> Option<&ModelObject> {
+        let key = format!("{}/{}", object_type.to_lowercase(), name.to_lowercase());
         self.by_type_name.get(&key).map(|&i| &self.objects[i])
     }
 
-    pub fn table_by_name(&self, name: NameRef) -> Option<&ModelTable> {
+    pub fn table_by_name(&self, name: &str) -> Option<&ModelTable> {
         self.tables_by_name
-            .get(&name.logical().to_lowercase())
+            .get(&name.to_lowercase())
             .map(|&i| &self.tables[i])
     }
 
@@ -183,7 +157,7 @@ pub(crate) mod tests {
         assert!(symbols.object_by_type_number("Interface", 0).is_none());
         assert_eq!(
             symbols
-                .object_by_type_name("Interface", NameRef::Logical("ifoo"))
+                .object_by_type_name("Interface", "ifoo")
                 .map(|o| o.id.as_str()),
             Some("app/Interface/@ifoo")
         );

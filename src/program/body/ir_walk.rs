@@ -369,7 +369,8 @@ impl<'a> SpineCtx<'a> {
         {
             let tn = tn.trim();
             if tn.starts_with('"') {
-                target_ref = Some(strip_quote_chars(tn));
+                // The LOGICAL name, as the model's object names (#240).
+                target_ref = Some(super::scope::unescape_al_identifier(&strip_quote_chars(tn)));
                 target_is_name = true;
             } else if tn.parse::<i64>().is_ok() {
                 target_ref = Some(tn.to_string());
@@ -1987,8 +1988,8 @@ pub fn project_routine_features_ir_with(
 
 /// Table name from a `Record …` type string (`Record Customer` /
 /// `Record "Sales Header"` / `Record Customer temporary`). None if not a record /
-/// no subtype. A quoted name is returned as written inside the quotes: an escaped
-/// `""` stays doubled and does not end the name (`Record "A ""B"" C"` -> `A ""B"" C`).
+/// no subtype. A quoted name is returned by its LOGICAL name (#240): an escaped
+/// `""` does not end the name and is one `"` (`Record "A ""B"" C"` -> `A "B" C`).
 pub(crate) fn parse_record_table_name(ty: &str) -> Option<String> {
     let t = ty.trim();
     if !is_record_type_str(t) {
@@ -2007,7 +2008,7 @@ pub(crate) fn parse_record_table_name(ty: &str) -> Option<String> {
                 i += 2;
                 continue;
             }
-            return Some(after[..i].to_string());
+            return Some(super::scope::unescape_al_identifier(&after[..i]));
         }
     } else {
         rest.split_whitespace().next().map(|w| w.to_string())
@@ -2099,17 +2100,24 @@ pub fn ir_record_variables(
             .find(|p| p.name == name)
             .map(|p| p.value.as_str())
     };
-    let strip_q = |s: &str| s.trim().trim_matches('"').to_string();
+    // Exactly one outer quote pair, then the LOGICAL name (#240): `trim_matches`
+    // would also eat a trailing escaped quote (`"Q ""X"""`).
+    let logical =
+        |s: &str| super::scope::unescape_al_identifier(super::node_util::strip_quotes(s.trim()));
     let codeunit_tableno = if o.kind == ObjectKind::Codeunit {
-        prop("tableno").map(strip_q).filter(|s| !s.is_empty())
+        prop("tableno").map(logical).filter(|s| !s.is_empty())
     } else {
         None
     };
     // A report DATAITEM trigger's implicit `Rec` is typed to its enclosing dataitem's
     // source table (set directly, like codeunit TableNo). The two are mutually
     // exclusive (a routine is in a codeunit OR a report); mirror legacy precedence
-    // (dataitem first) for `direct_rec_table`.
-    let direct_rec_table = routine.dataitem_source_table.clone().or(codeunit_tableno);
+    // (dataitem first) for `direct_rec_table`. The IR's dataitem table keeps a `""`.
+    let direct_rec_table = routine
+        .dataitem_source_table
+        .as_deref()
+        .map(super::scope::unescape_al_identifier)
+        .or(codeunit_tableno);
     // Page implicit Rec is gated on the RESOLVED source_table_name (as in
     // `implicit_base_receiver`), not merely the SourceTable property's presence —
     // mirroring `project_routine_features`'s `source_table_name` arg.
@@ -2707,7 +2715,7 @@ pub fn ir_object_key(o: &al_syntax::ir::ObjectDecl) -> String {
 /// A source object's LOGICAL name: the IR keeps a quoted name's inner `""`, which
 /// is one `"` (#240). Every producer of a source object's or table's name (the
 /// model, R0, L2) takes it here, so the name is unescaped exactly once.
-pub fn ir_object_name(o: &al_syntax::ir::ObjectDecl) -> String {
+pub(crate) fn ir_object_name(o: &al_syntax::ir::ObjectDecl) -> String {
     super::scope::unescape_al_identifier(&o.name)
 }
 

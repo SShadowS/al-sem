@@ -13,7 +13,6 @@
 //! walked in al-sem's deterministic ingestion order, two extensions colliding on
 //! a field number resolve identically on both sides: the FIRST-ingested wins.
 
-use super::symbol_table::NameRef;
 use super::workspace::{ModelEntities, ModelField, ModelTable};
 use crate::engine::ids::{encode_field_id, encode_table_id};
 use std::collections::HashSet;
@@ -44,9 +43,7 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
         let Some(extends_target) = &object.extends_target_name else {
             continue;
         };
-        let Some(base_idx) =
-            table_index_by_name(&workspace.tables, object.name_origin()(extends_target))
-        else {
+        let Some(base_idx) = table_index_by_name(&workspace.tables, extends_target) else {
             continue;
         };
         let extension_table_id = encode_table_id(&object.app_guid, object.object_number);
@@ -84,8 +81,8 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
 }
 
 /// `tableByName` semantics: case-insensitive, LAST-wins on collision.
-fn table_index_by_name(tables: &[ModelTable], name: NameRef) -> Option<usize> {
-    let want = name.logical().to_lowercase();
+fn table_index_by_name(tables: &[ModelTable], name: &str) -> Option<usize> {
+    let want = name.to_lowercase();
     let mut found = None;
     for (i, t) in tables.iter().enumerate() {
         if t.name.to_lowercase() == want {

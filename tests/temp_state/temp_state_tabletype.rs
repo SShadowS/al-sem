@@ -14,7 +14,6 @@
 //! the structural `TableType` property (Part A), so the upgrade is sound.
 
 use al_sem::program::model::program_calls::assemble_and_resolve_inline_program_default;
-use al_sem::program::model::symbol_table::NameRef::Logical;
 
 const APP_GUID: &str = "2a000000-0000-0000-0000-0000000002aa";
 
@@ -49,7 +48,7 @@ codeunit 50801 "Probe"
 
     // Part A: the table is structurally temporary.
     let table = resolved
-        .table_by_name(Logical("ThatTable"))
+        .table_by_name("ThatTable")
         .expect("ThatTable must be indexed");
     assert!(
         table.is_temporary(),
@@ -141,7 +140,7 @@ codeunit 50801 "Probe"
          adds Known(true) on temp tables, never downgrades or false-upgrades",
     );
     let phys = resolved
-        .table_by_name(Logical("PhysTable"))
+        .table_by_name("PhysTable")
         .expect("PhysTable must be indexed");
     assert!(
         !phys.is_temporary(),

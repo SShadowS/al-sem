@@ -47,9 +47,10 @@ pub struct ModelObject {
     /// minted the id, never re-parsed from it (#83).
     pub object_key: String,
     pub name: String,
-    /// Page / PageExtension `SourceTable` (unquoted), else None.
+    /// Page / PageExtension `SourceTable` (unquoted, LOGICAL: `""` is one `"`,
+    /// #240), else None.
     pub source_table_name: Option<String>,
-    /// TableExtension / PageExtension `extends` target (unquoted), else None.
+    /// TableExtension / PageExtension `extends` target (unquoted, LOGICAL), else None.
     pub extends_target_name: Option<String>,
     /// Implemented interfaces (Codeunit / Enum / Interface): `Some([])` known-none,
     /// `Some([...])` listed, `None` unknown. Other object types: `None`.
@@ -107,24 +108,6 @@ pub struct ModelObject {
     /// Interface / ControlAddIn procedure declarations (#71); empty for every other
     /// object kind. They are not `ModelRoutine`s.
     pub declaration_only_routines: Vec<ModelDeclarationOnlyRoutine>,
-}
-
-impl ModelObject {
-    /// How this object's written references (`extends`, `SourceTable`, record
-    /// variable types) are spelled, for a [`NameRef`] lookup (#240): `Raw` for an
-    /// object built from source (`project_ir`, which always sets `source_anchor`),
-    /// `Logical` for one built from dependency symbols (`abi_rows`, which never
-    /// does). A new producer must keep that rule or set the marker accordingly.
-    ///
-    /// [`NameRef`]: super::symbol_table::NameRef
-    pub fn name_origin(&self) -> fn(&str) -> super::symbol_table::NameRef<'_> {
-        use super::symbol_table::NameRef;
-        if self.source_anchor.is_some() {
-            |s| NameRef::Raw(s)
-        } else {
-            |s| NameRef::Logical(s)
-        }
-    }
 }
 
 /// An Interface / ControlAddIn procedure declaration (#71). Not a `ModelRoutine`
@@ -836,10 +819,16 @@ fn project_ir(
         // ws-report-dataitem).
         let source_table_name = if object_type == "Page" || object_type == "PageExtension" {
             crate::program::node_extract::singular_object_ref_text(o, "sourcetable")
+                .map(|s| crate::program::body::scope::unescape_al_identifier(&s))
         } else {
             None
         };
-        let extends_target_name = o.extends_target.clone();
+        // Both references are stored by their LOGICAL name, like the object names
+        // they are looked up against (#240): the IR text keeps a `""`.
+        let extends_target_name = o
+            .extends_target
+            .as_deref()
+            .map(crate::program::body::scope::unescape_al_identifier);
         let implements_interfaces =
             if object_type == "Codeunit" || object_type == "Enum" || object_type == "Interface" {
                 Some(o.implements.clone())
@@ -2471,8 +2460,8 @@ impl Model {
 
     /// Find a table by name (case-insensitive, LAST-wins — matching the symbol
     /// table the resolution queried).
-    pub fn table_by_name(&self, name: super::symbol_table::NameRef) -> Option<TableView<'_>> {
-        let want = name.logical().to_lowercase();
+    pub fn table_by_name(&self, name: &str) -> Option<TableView<'_>> {
+        let want = name.to_lowercase();
         let mut found = None;
         for t in &self.workspace.tables {
             if t.name.to_lowercase() == want {

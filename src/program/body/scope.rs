@@ -92,11 +92,13 @@ pub fn canonicalize_type_text(raw: &str) -> String {
 /// (the member discriminator), [`super::ir_walk::ir_object_name`] (a source
 /// object's logical name, which [`super::ir_walk::ir_object_key`] keys a numberless
 /// object on, #83/#240), [`crate::program::model::model_object_id`] (the same
-/// segment from a graph node's folded name key), the `Raw` arm of
-/// [`crate::program::model::symbol_table::NameRef`] (a written reference looked up
-/// against the logical model names), the two record-variable type displays
-/// (`table_display::describe_table` tier 2, d52) and the object-fact census's graph
-/// side, each unescaping its RAW value exactly once. Keeping the visibility crate-internal stops an
+/// segment from a graph node's folded name key), and the producers of every
+/// reference the model stores (#240: the model's `SourceTable` / `extends`,
+/// `ir_walk`'s record-variable table, `TableNo`, dataitem table and `Codeunit.Run`
+/// target, `record_types::record_table_name_of`, and the ABI projection's quoted
+/// `SourceTable` / `TargetObject`), plus the object-fact census's graph side (the
+/// graph stays raw, #250), each unescaping its RAW value exactly once. Every
+/// consumer reads the stored logical name and must NOT unescape again. Keeping the visibility crate-internal stops an
 /// out-of-crate consumer from unescaping a second time (not idempotent for a
 /// member like `a""""b`) and minting a divergent id. ⟨task-3 fix wave, review M-5⟩
 pub(crate) fn unescape_al_identifier(inner: &str) -> String {

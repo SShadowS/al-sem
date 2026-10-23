@@ -611,11 +611,7 @@ fn object_run_target_object(
     };
     let target_ref = target_ref.as_ref()?;
     let object = if *target_is_name {
-        // Raw: the reference is routine-body text, and only source routines have one.
-        objects.object_by_type_name(
-            target_type,
-            crate::program::model::symbol_table::NameRef::Raw(target_ref),
-        )
+        objects.object_by_type_name(target_type, target_ref)
     } else {
         objects.object_by_type_number(target_type, target_ref.parse().ok()?)
     };

@@ -212,6 +212,7 @@ pub fn object_fact_census(
     model: &ModelEntities,
     graph: &crate::program::graph::ProgramGraph,
 ) -> Vec<String> {
+    use crate::program::body::scope::unescape_al_identifier;
     use crate::program::node_extract::ObjectRef;
     use al_syntax::IdentifierFoldExt;
 
@@ -222,7 +223,7 @@ pub fn object_fact_census(
             .or_insert(&r.node);
     }
     let fold_ref = |r: &ObjectRef| match r {
-        ObjectRef::Name { normalized_lc, .. } => normalized_lc.clone(),
+        ObjectRef::Name { normalized_lc, .. } => unescape_al_identifier(normalized_lc),
         ObjectRef::Id(n) => n.to_string(),
     };
     let mut out = Vec::new();
@@ -245,13 +246,10 @@ pub fn object_fact_census(
                 out.push(format!("{field}\t{}\tmodel={m}\tprogram={p}", o.id));
             }
         };
-        // The model name is logical, the graph's raw (workspace objects only), so
-        // the graph side is unescaped once (#240).
-        differ(
-            "name",
-            o.name.clone(),
-            crate::program::body::scope::unescape_al_identifier(&n.name),
-        );
+        // The model's names and references are logical, the graph's raw (workspace
+        // objects only; #250 would make the graph logical too), so the graph side
+        // is unescaped once (#240).
+        differ("name", o.name.clone(), unescape_al_identifier(&n.name));
         differ(
             "number",
             o.object_number.to_string(),
@@ -265,7 +263,9 @@ pub fn object_fact_census(
             ),
             format!(
                 "{:?}",
-                n.extends_target.as_ref().map(|s| s.fold_identifier())
+                n.extends_target
+                    .as_ref()
+                    .map(|s| unescape_al_identifier(s).fold_identifier())
             ),
         );
         if matches!(o.object_type.as_str(), "Page" | "PageExtension") {
@@ -381,8 +381,11 @@ mod tests {
     /// model holds the logical name and the program graph the raw one, which the
     /// census unescapes once. Runs `build_analysis_model`, the census's producer.
     ///
-    /// Discrimination: compare `n.name` without the unescape -> a `name` line for
-    /// each of the three escaped objects; fails. Restored, it passes.
+    /// The same for a reference (`extends`, `SourceTable`): the model stores it
+    /// logical, the graph raw.
+    ///
+    /// Discrimination: drop the graph-side unescape of `name`, of `extends` or of
+    /// the source-table ref -> that field's line appears; fails. Restored, it passes.
     #[test]
     fn escaped_object_names_are_not_a_name_difference() {
         let dir = tempfile::tempdir().unwrap();
@@ -408,10 +411,18 @@ mod tests {
             "src/Cu.Codeunit.al",
             "codeunit 50101 \"C \"\"Q\"\" U\" implements \"A \"\"B\"\" C\"\n{\n    procedure P()\n    var\n        R: Record \"T \"\"Q\"\" X\";\n    begin\n        R.Insert();\n    end;\n}\n",
         );
+        write(
+            "src/TExt.TableExt.al",
+            "tableextension 50102 \"T Ext\" extends \"T \"\"Q\"\" X\"\n{\n}\n",
+        );
+        write(
+            "src/P.Page.al",
+            "page 50103 \"T Page\"\n{\n    SourceTable = \"T \"\"Q\"\" X\";\n}\n",
+        );
         let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
         let facts = crate::engine::gate::run::build_analysis_model(&inputs, true)
             .object_facts
             .expect("the model builds");
-        assert_eq!(facts, vec!["compared\t3".to_string()]);
+        assert_eq!(facts, vec!["compared\t5".to_string()]);
     }
 }
