@@ -269,6 +269,72 @@ impl DiagnosticConfig {
     }
 }
 
+/// One root's live [`DiagnosticConfig`], shared by the server, the
+/// diagnostics publisher and the watch loop (#221). `reloaded` records that
+/// a watcher reload already stored a config read from disk.
+pub struct ConfigHandle {
+    root: PathBuf,
+    no_diagnostics: bool,
+    inner: std::sync::RwLock<(DiagnosticConfig, bool)>,
+}
+
+impl ConfigHandle {
+    pub fn new(root: PathBuf, no_diagnostics: bool) -> Self {
+        let mut cfg = DiagnosticConfig::default();
+        if no_diagnostics {
+            cfg.disable_all();
+        }
+        ConfigHandle {
+            root,
+            no_diagnostics,
+            inner: std::sync::RwLock::new((cfg, false)),
+        }
+    }
+
+    /// A clone of the current config; the lock is released on return.
+    pub fn get(&self) -> DiagnosticConfig {
+        self.inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0
+            .clone()
+    }
+
+    /// The startup install. Stores only while no reload has run: a reload
+    /// during startup read the file later, so it wins in either order (SN1).
+    pub fn install_initial(&self, cfg: DiagnosticConfig) {
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !inner.1 {
+            inner.0 = cfg;
+        }
+    }
+
+    /// Store a config the watcher read from disk.
+    pub fn reload(&self, cfg: DiagnosticConfig) {
+        *self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (cfg, true);
+    }
+
+    /// This root's config as it is on disk now, `--no-diagnostics` applied.
+    pub fn read_disk(&self) -> DiagnosticConfig {
+        let mut cfg = DiagnosticConfig::load(&self.root);
+        if self.no_diagnostics {
+            cfg.disable_all();
+        }
+        cfg
+    }
+
+    /// [`Self::read_disk`], then [`Self::reload`] it.
+    pub fn reload_from_disk(&self) {
+        self.reload(self.read_disk());
+    }
+}
+
 /// Telemetry section of `~/.al-sem/config.json`. All fields optional;
 /// the telemetry subsystem applies its own defaults from the spec.
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -395,6 +461,34 @@ mod tests {
         assert_eq!(
             config.complexity_warning, 8,
             "an install that predates the rename must not silently revert to defaults"
+        );
+    }
+
+    /// #221 T14 (SN1): a reload that ran during startup read the file later,
+    /// so it wins over the startup install in either order.
+    #[test]
+    fn t14_config_reload_during_startup_beats_the_initial_install() {
+        let old = DiagnosticConfig::default();
+        let new = DiagnosticConfig {
+            unused_procedures: false,
+            ..DiagnosticConfig::default()
+        };
+        assert!(old.unused_procedures, "precondition: old and new differ");
+
+        let h = ConfigHandle::new(PathBuf::from("/ws"), false);
+        h.reload(new.clone());
+        h.install_initial(old.clone());
+        assert!(
+            !h.get().unused_procedures,
+            "T14: reload then install_initial must keep the reloaded config"
+        );
+
+        let h = ConfigHandle::new(PathBuf::from("/ws"), false);
+        h.install_initial(old);
+        h.reload(new);
+        assert!(
+            !h.get().unused_procedures,
+            "T14: install_initial then reload must end on the reloaded config"
         );
     }
 

@@ -33,7 +33,7 @@ use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 // ---------------------------------------------------------------------------
 
 /// A resolved routine → routine combined edge (internal-id form).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CombinedEdge {
     pub from: String,
     pub to: String,
@@ -50,7 +50,7 @@ pub struct CombinedEdge {
 }
 
 /// How an `event-dispatch` edge may run (#107 Design 2).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DispatchMeta {
     /// The subscription may be skipped (`EventEdge::conditional`).
     pub conditional: bool,
@@ -60,7 +60,7 @@ pub struct DispatchMeta {
 }
 
 /// An uncertainty attached to a routine whose call site had no resolved target.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct UncertaintyEdge {
     pub from: String,
     pub uncertainty: Uncertainty,
@@ -68,7 +68,7 @@ pub struct UncertaintyEdge {
 
 /// The discriminated Uncertainty — kind + its single id reference (+ interfaceName
 /// for interface-open-world). Only the R3a-1-reachable variants are modelled.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Uncertainty {
     pub kind: String,
     pub callsite_id: Option<String>,
@@ -79,7 +79,7 @@ pub struct Uncertainty {
 
 /// A typed `GraphEdge` (internal-id form). One flat struct over the discriminated
 /// union — only the fields legal for `kind` are populated (mirrors the TS union).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TypedEdge {
     pub kind: String,
     pub from: String,
@@ -104,16 +104,7 @@ pub struct TypedEdge {
 /// Whether an `implicit-trigger` edge's trigger runs every time its record
 /// operation executes. The op's own control context applies on top of this.
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
-    salsa::SalsaValue,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum TriggerFires {
@@ -138,7 +129,7 @@ pub fn trigger_fires(op: &str, run_trigger: Option<bool>) -> TriggerFires {
 }
 
 /// A ValueSource (internal form — table-field tableId is INTERNAL until projected).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ValueSource {
     Literal {
         value: String,
@@ -161,7 +152,7 @@ pub enum ValueSource {
 /// the Primary payload takes `&PrimaryGraph` and accepts either.
 /// [`crate::engine::l4::exec_relation::ExecRelation::new`] splits it (#160
 /// step 11b §4.4).
-#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CombinedGraph {
     pub primary: PrimaryGraph,
     /// Typed edges in emission order.
@@ -185,7 +176,7 @@ impl std::ops::DerefMut for CombinedGraph {
 /// event dispatch, keyed by caller, and their uncertainty edges. No typed edges:
 /// a reader of [`crate::engine::l4::exec_relation::ExecRelation::primary`]
 /// cannot read the Cone payload.
-#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrimaryGraph {
     /// Sorted internal routine ids, each once (a collided id's rows are one
     /// node, #160 step 11b §4.6).

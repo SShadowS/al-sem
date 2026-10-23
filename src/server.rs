@@ -67,7 +67,8 @@
 //! `workspace/didChangeWorkspaceFolders` (dynamic add/remove of a root after
 //! `initialize`) is NOT implemented — see [`handle_notification`]'s arm for
 //! that method for why (a real blocker, not laziness: safe REMOVAL needs a
-//! cancellation signal `AlFileWatcher`'s loop doesn't have today) and
+//! stop signal the watch loop (`crate::watcher::start_watching`) doesn't
+//! have today) and
 //! `docs/OUTSTANDING.md` for the tracked follow-up. `al-call-hierarchy/
 //! dependencyDocumentSymbol`'s synthetic `al-preview://` uri also has no
 //! per-root discriminator yet (see [`dispatch_dependency_document_symbol`]'s
@@ -93,7 +94,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::config::DiagnosticConfig;
+use crate::config::{ConfigHandle, DiagnosticConfig};
 use crate::lsp::custom::{
     DependencyDocumentSymbol, DependencyDocumentSymbolParams, EventPublishersInFileParams,
     EventReferenceAtPositionParams, SymbolPropertiesParams, action_properties,
@@ -108,7 +109,6 @@ use crate::lsp::snapshot::LspSnapshot;
 use crate::lsp::updater::{ChangeEvent, Rung1Delta, SharedSnapshot, SwapScope, spawn_updater};
 use crate::protocol::uri_to_path;
 use crate::snapshot::DependencySource;
-use crate::watcher::{AlFileWatcher, FileChange};
 use al_sem::program::dep_cache::DepCache;
 
 /// Everything the server needs once a valid workspace snapshot exists for
@@ -126,7 +126,9 @@ struct ServerState {
     #[allow(dead_code)]
     updater_handle: JoinHandle<()>,
     encoding: PositionEncoding,
-    config: DiagnosticConfig,
+    /// Shared with the diagnostics publisher and the watch loop, which
+    /// reloads it when the workspace `.al-sem.json` changes.
+    config: Arc<ConfigHandle>,
 }
 
 /// A sink for outbound `Message`s, owned by each [`RootState`] so a root
@@ -165,6 +167,12 @@ struct RootBuild {
     /// The process-level dependency tier every root shares (one per server):
     /// roots loading the same dependency apps hold one copy of their nodes.
     dep_cache: Arc<DepCache>,
+    /// Makes this root's watch backend (production: `RecommendedWatcher`),
+    /// so tests inject a fake.
+    watch_backend: crate::watcher::BackendFactory,
+    /// Test seam: runs at the start of this root's build.
+    #[cfg(test)]
+    build_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// One configured workspace root plus — once anything actually asks for it
@@ -214,24 +222,38 @@ impl RootState {
     fn state(&self) -> Option<&ServerState> {
         self.state
             .get_or_init(|| {
-                let mut config = DiagnosticConfig::load(&self.root);
-                if self.build.no_diagnostics {
-                    config.disable_all();
+                let (tx, rx) = mpsc::channel::<ChangeEvent>();
+                let config = Arc::new(ConfigHandle::new(
+                    self.root.clone(),
+                    self.build.no_diagnostics,
+                ));
+                // Every watch exists before the build reads (S7): a change
+                // after registration is evented, one before it is in the read.
+                if self.build.start_watcher {
+                    crate::watcher::start_watching(
+                        &self.root,
+                        &self.build.watch_backend,
+                        Arc::clone(&config),
+                        tx.clone(),
+                    );
                 }
+                #[cfg(test)]
+                if let Some(hook) = &self.build.build_hook {
+                    hook();
+                }
+                config.install_initial(config.read_disk());
                 let built = build_server_state(
                     &self.root,
                     self.build.encoding,
                     config,
+                    (tx, rx),
                     &self.build.sink,
                     self.build.dependency_source,
                     &self.build.dep_cache,
                 );
                 match &built {
-                    Some(st) => {
+                    Some(_) => {
                         info!("Built program snapshot for workspace root {}", self.root.display());
-                        if self.build.start_watcher {
-                            start_file_watcher(st.tx.clone(), self.root.clone());
-                        }
                     }
                     None => warn!(
                         "Failed to build the program snapshot for workspace root {}                          (missing/invalid app.json?) — every request under this root                          will return an empty result until a valid single-app AL                          workspace is opened there; other configured roots are                          unaffected.",
@@ -403,7 +425,7 @@ pub fn run_server(
     // Dropping each root's `tx` is a best-effort shutdown signal to ITS
     // updater thread — but we deliberately do NOT `st.updater_handle.join()`
     // here: when that root's file watcher is running, it holds its OWN
-    // clone of `tx` (`start_file_watcher`) for as long as ITS OWN infinite
+    // clone of `tx` (`watcher::start_watching`) for as long as ITS OWN
     // loop runs — which has no stop signal of its own (matching legacy's
     // watcher thread, which also never exits early; out of Task 15's
     // "event forwarding only" scope for `watcher.rs` to add one). That
@@ -546,13 +568,15 @@ fn primary_workspace_root(params: &InitializeParams) -> Option<PathBuf> {
 }
 
 /// Build the initial snapshot, publish its diagnostics, and spawn the
-/// background updater. Returns `None` when [`LspSnapshot::build_full_with_parsed`]
-/// fails (see the module doc's "no valid workspace" section) — the caller
-/// logs the reason.
+/// background updater on `channel` (created by the caller, so the watch can
+/// start before this build reads). Returns `None` when
+/// [`LspSnapshot::build_full_with_parsed`] fails (see the module doc's "no
+/// valid workspace" section) — the caller logs the reason.
 fn build_server_state(
     workspace_root: &Path,
     encoding: PositionEncoding,
-    config: DiagnosticConfig,
+    config: Arc<ConfigHandle>,
+    (tx, rx): (mpsc::Sender<ChangeEvent>, mpsc::Receiver<ChangeEvent>),
     sink: &MessageSink,
     dependency_source: DependencySource,
     dep_cache: &Arc<DepCache>,
@@ -575,14 +599,15 @@ fn build_server_state(
     // Diagnostics gate: with every detector disabled `compute_all` can only
     // return an empty set, so skip the whole-workspace analysis rather than
     // computing findings nothing will consume.
-    if config.any_enabled() {
+    let initial_cfg = config.get();
+    if initial_cfg.any_enabled() {
         let sink_initial = Arc::clone(sink);
         publish_full_diagnostics_diff(
             move |m| sink_initial(m),
             &diag_state,
             &initial,
             encoding,
-            &config,
+            &initial_cfg,
         );
     } else {
         debug!(
@@ -591,10 +616,9 @@ fn build_server_state(
         );
     }
 
-    let (tx, rx) = mpsc::channel::<ChangeEvent>();
     let diag_state_bg = Arc::clone(&diag_state);
     let sink_bg = Arc::clone(sink);
-    let config_bg = config.clone();
+    let config_bg = Arc::clone(&config);
     let updater_handle = spawn_updater(
         Arc::clone(&shared),
         rx,
@@ -603,14 +627,22 @@ fn build_server_state(
         dependency_source,
         Arc::clone(dep_cache),
         move |new, scope| {
-            if !config_bg.any_enabled() {
-                return;
-            }
+            let cfg = config_bg.get();
             let sink = Arc::clone(&sink_bg);
             let send = move |m| sink(m);
+            if !cfg.any_enabled() {
+                // Clear whatever was published, without `compute_all`;
+                // sends nothing when nothing was published.
+                let cleared = diag_state_bg
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .diff(Default::default());
+                publish_changed(send, cleared);
+                return;
+            }
             match scope {
                 SwapScope::Full => {
-                    publish_full_diagnostics_diff(send, &diag_state_bg, new, encoding, &config_bg);
+                    publish_full_diagnostics_diff(send, &diag_state_bg, new, encoding, &cfg);
                 }
                 SwapScope::Rung1(delta) => {
                     publish_rung1_diagnostics_diff(
@@ -618,7 +650,7 @@ fn build_server_state(
                         &diag_state_bg,
                         new,
                         encoding,
-                        &config_bg,
+                        &cfg,
                         delta,
                     );
                 }
@@ -678,6 +710,9 @@ fn build_workspace(
                 no_diagnostics,
                 dependency_source,
                 dep_cache: Arc::clone(&dep_cache),
+                watch_backend: crate::watcher::recommended_backend(),
+                #[cfg(test)]
+                build_hook: None,
             },
         })
         .collect();
@@ -780,80 +815,6 @@ fn publish_changed(send: impl Fn(Message), changed: Vec<(String, Vec<Diagnostic>
         );
         send(Message::Notification(notification));
     }
-}
-
-/// Start the file watcher thread for incremental updates: every raw
-/// [`FileChange`] is mapped onto the updater's [`ChangeEvent`] vocabulary
-/// (see [`to_change_event`]) and pushed onto the SAME channel `didSave`
-/// notifications use — one coalesced queue, so a save followed immediately
-/// by the watcher's own notification of that same write no longer causes two
-/// separate rebuilds (legacy's didSave + watcher paths each reindexed
-/// independently).
-fn start_file_watcher(tx: mpsc::Sender<ChangeEvent>, workspace_root: PathBuf) {
-    thread::spawn(move || {
-        let watcher = match AlFileWatcher::new(&workspace_root) {
-            Ok(w) => w,
-            Err(e) => {
-                warn!(
-                    "Failed to create file watcher for {}: {}",
-                    workspace_root.display(),
-                    e
-                );
-                return;
-            }
-        };
-        info!(
-            "File watcher thread started for {}",
-            workspace_root.display()
-        );
-
-        loop {
-            let Some(change) = watcher.recv_timeout(Duration::from_millis(100)) else {
-                continue;
-            };
-            if tx.send(to_change_event(change)).is_err() {
-                info!("Updater channel closed; stopping file watcher thread");
-                return;
-            }
-        }
-    });
-}
-
-/// Map a raw filesystem [`FileChange`] to the updater's [`ChangeEvent`]
-/// vocabulary: a change under `.alpackages` (a dependency add/update/remove
-/// — legacy never watched these at all, freezing dependency resolution at
-/// startup) escalates to `DepsChanged` regardless of which side of the
-/// Modified/Deleted split it came from; a backend-reported overflow escalates
-/// to `Overflow` (also a forced full rebuild — see `ChangeEvent`'s doc);
-/// everything else is a workspace `.al` file (the only other kind
-/// [`AlFileWatcher`] forwards — see its own widened filter) and maps 1:1 onto
-/// `FileSaved`/`FileRemoved`.
-fn to_change_event(change: FileChange) -> ChangeEvent {
-    match change {
-        FileChange::Overflow => ChangeEvent::Overflow,
-        FileChange::Modified(path) => {
-            if path_is_dependency_source(&path) {
-                ChangeEvent::DepsChanged
-            } else {
-                ChangeEvent::FileSaved(path)
-            }
-        }
-        FileChange::Deleted(path) => {
-            if path_is_dependency_source(&path) {
-                ChangeEvent::DepsChanged
-            } else {
-                ChangeEvent::FileRemoved(path)
-            }
-        }
-    }
-}
-
-fn path_is_dependency_source(path: &Path) -> bool {
-    path.components().any(|c| {
-        c.as_os_str()
-            .to_str()
-            .is_some_and(|s| s.eq_ignore_ascii_case(".alpackages"))
-    })
 }
 
 /// Main message processing loop. Takes `connection` BY VALUE — see
@@ -1164,7 +1125,7 @@ fn dispatch_request(req: &Request, workspace: &Workspace) -> Result<Value> {
                 return Ok(Value::Array(Vec::new()));
             };
             let snap = state.shared.get();
-            let result = code_lenses(&snap, state.encoding, uri, &state.config);
+            let result = code_lenses(&snap, state.encoding, uri, &state.config.get());
             Ok(serde_json::to_value(result)?)
         }
         "al-call-hierarchy/fieldProperties" => {
@@ -1220,7 +1181,9 @@ fn dispatch_request(req: &Request, workspace: &Workspace) -> Result<Value> {
 /// Handle an LSP notification. Only `didSave` does anything: it routes the
 /// saved document's uri to its owning root ([`route_uri_or_warn`]) and
 /// queues a [`ChangeEvent::FileSaved`] onto the SAME channel that root's
-/// file watcher feeds (see [`start_file_watcher`]'s doc) —
+/// file watcher feeds (`crate::watcher::start_watching`), so a save and the
+/// watcher's own event for that write coalesce into one batch; the updater
+/// reconciles both from disk —
 /// `didOpen`/`didClose`/`didChange` are no-ops, mirroring legacy
 /// (`text_document_sync.change` is negotiated as `NONE`, so the server never
 /// relies on editor-buffer content anyway). `workspace/
@@ -1266,7 +1229,7 @@ fn handle_notification(workspace: &Workspace, notif: &lsp_server::Notification) 
             warn!(
                 "workspace/didChangeWorkspaceFolders received but NOT implemented — \
                  dynamic add/remove of a workspace root requires a stop signal for \
-                 AlFileWatcher's loop that doesn't exist yet (see the module doc's \
+                 the watch loop that doesn't exist yet (see the module doc's \
                  multi-root section and docs/OUTSTANDING.md); configured roots are \
                  fixed for the life of this session. Restart the server to pick up \
                  folder changes."
@@ -1373,10 +1336,13 @@ mod tests {
 
         let (server_conn, client_conn) = Connection::memory();
         let sink = message_sink(&server_conn);
+        let config = Arc::new(ConfigHandle::new(dir.path().to_path_buf(), false));
+        config.install_initial(DiagnosticConfig::default());
         let state = build_server_state(
             dir.path(),
             PositionEncoding::Utf8,
-            DiagnosticConfig::default(),
+            config,
+            mpsc::channel(),
             &sink,
             DependencySource::default(),
             &Arc::default(),
@@ -1403,6 +1369,8 @@ mod tests {
                     no_diagnostics: false,
                     dependency_source: DependencySource::default(),
                     dep_cache: Arc::default(),
+                    watch_backend: crate::watcher::recommended_backend(),
+                    build_hook: None,
                 },
             )],
         };
@@ -2112,10 +2080,13 @@ mod tests {
 
         let (server_conn, client_conn) = Connection::memory();
         let sink = message_sink(&server_conn);
+        let config = Arc::new(ConfigHandle::new(dir.path().to_path_buf(), false));
+        config.install_initial(cfg);
         let state = build_server_state(
             dir.path(),
             PositionEncoding::Utf8,
-            cfg,
+            config,
+            mpsc::channel(),
             &sink,
             DependencySource::default(),
             &Arc::default(),
@@ -2134,5 +2105,217 @@ mod tests {
             .updater_handle
             .join()
             .expect("updater thread must exit cleanly");
+    }
+
+    // ── #221 T12: server end to end through `RootState::state` ───────────
+    //
+    // The root is built with a fake watch backend; raw notify events are
+    // pushed into the sender the backend factory received.
+
+    use crate::watcher::fake::{FakeBackend, Rec};
+    use crate::watcher::{BackendFactory, WatchBackend};
+    use notify::event::{DataChange, ModifyKind};
+    use notify::{Event, EventKind, RecursiveMode};
+
+    type RawSlot = Arc<Mutex<Option<mpsc::Sender<notify::Result<Event>>>>>;
+
+    struct WatchedRoot {
+        root: RootState,
+        raw: RawSlot,
+        client: Connection,
+        _server: Connection,
+    }
+
+    fn watched_root(
+        dir: &Path,
+        fake: FakeBackend,
+        build_hook: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> WatchedRoot {
+        let (server_conn, client_conn) = Connection::memory();
+        let raw: RawSlot = Arc::default();
+        let slot = Arc::clone(&raw);
+        let factory: BackendFactory = Arc::new(move |raw_tx| {
+            *slot.lock().unwrap() = Some(raw_tx);
+            Ok(Box::new(fake.clone()) as Box<dyn WatchBackend>)
+        });
+        let root = RootState {
+            root: crate::protocol::normalize_path(dir),
+            state: OnceCell::new(),
+            build: RootBuild {
+                encoding: PositionEncoding::Utf8,
+                sink: message_sink(&server_conn),
+                start_watcher: true,
+                no_diagnostics: false,
+                dependency_source: DependencySource::default(),
+                dep_cache: Arc::default(),
+                watch_backend: factory,
+                build_hook,
+            },
+        };
+        WatchedRoot {
+            root,
+            raw,
+            client: client_conn,
+            _server: server_conn,
+        }
+    }
+
+    fn raw_sender(slot: &RawSlot) -> mpsc::Sender<notify::Result<Event>> {
+        slot.lock()
+            .unwrap()
+            .clone()
+            .expect("T12: the root's watch backend was never created (factory not called)")
+    }
+
+    fn push_write(slot: &RawSlot, path: PathBuf) {
+        let e = Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content))).add_path(path);
+        raw_sender(slot).send(Ok(e)).expect("watch loop alive");
+    }
+
+    /// The next `publishDiagnostics` for `uri` within `within`, if any.
+    fn next_publish_for(
+        client: &Connection,
+        uri: &Uri,
+        within: Duration,
+    ) -> Option<Vec<Diagnostic>> {
+        let deadline = Instant::now() + within;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            let msg = client.receiver.recv_timeout(remaining).ok()?;
+            if let Message::Notification(n) = msg
+                && n.method == "textDocument/publishDiagnostics"
+            {
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(n.params).expect("valid publishDiagnostics params");
+                if params.uri.as_str() == uri.as_str() {
+                    return Some(params.diagnostics);
+                }
+            }
+        }
+    }
+
+    /// A publish that is expected: generous, so a loaded CI machine running a
+    /// debug build does not fail it (C6). Only an absent publish waits it out.
+    const T12_WAIT: Duration = Duration::from_secs(5);
+
+    /// A `.al-sem.json` with every detector key explicit (O7: a developer's
+    /// global config cannot leak in). Thresholds are the built-in defaults.
+    fn write_explicit_config(dir: &Path, detectors_on: bool, unused: bool) {
+        let on = detectors_on;
+        std::fs::write(
+            dir.join(".al-sem.json"),
+            format!(
+                r#"{{"diagnostics": {{
+    "complexity": {{ "enabled": {on}, "warning": 5, "critical": 10 }},
+    "parameters": {{ "enabled": {on}, "warning": 4, "critical": 7 }},
+    "lineCount": {{ "enabled": {on}, "warning": 20, "critical": 50 }},
+    "fanIn": {{ "enabled": {on}, "warning": 20 }},
+    "unusedProcedures": {unused}
+}}}}"#
+            ),
+        )
+        .expect("write .al-sem.json");
+    }
+
+    fn has_extra_hint(diags: &[Diagnostic]) -> bool {
+        diags
+            .iter()
+            .any(|d| d.message.contains("Extra") && d.message.contains("never called"))
+    }
+
+    #[test]
+    fn t12a_watcher_registers_the_root_before_the_build() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_fixture_workspace(dir.path());
+        let fake = FakeBackend::default();
+        let log = Arc::clone(&fake.log);
+        let root = crate::protocol::normalize_path(dir.path());
+        let hook: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let log = log.lock().unwrap().clone();
+            assert!(
+                log.contains(&Rec::Watch(root.clone(), RecursiveMode::Recursive)),
+                "T12(a): the root must be registered before the build reads; log {log:?}"
+            );
+        });
+        let w = watched_root(dir.path(), fake, Some(hook));
+        assert!(w.root.state().is_some(), "the fixture builds");
+    }
+
+    #[test]
+    fn t12b_raw_al_event_reaches_the_published_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_fixture_workspace(dir.path());
+        write_explicit_config(dir.path(), true, true);
+        let w = watched_root(dir.path(), FakeBackend::default(), None);
+        let st = w.root.state().expect("the fixture builds");
+        let alpha_uri = path_to_uri(&st.shared.get().workspace_root.join("Alpha.al"));
+        let initial = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
+            .expect("precondition: the initial publish covers Alpha.al");
+        assert!(has_extra_hint(&initial), "precondition: Extra() is unused");
+        let g0 = st.shared.get().generation;
+
+        std::fs::write(
+            dir.path().join("Alpha.al"),
+            "codeunit 50100 \"Alpha\"\n{\n    procedure DoWork()\n    var\n        Beta: Codeunit \"Beta\";\n    \
+             begin\n        Beta.Process();\n        Extra();\n    end;\n\n    procedure Extra()\n    begin\n    end;\n}\n",
+        )
+        .expect("rewrite Alpha.al");
+        push_write(&w.raw, dir.path().join("Alpha.al"));
+
+        let after = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
+            .expect("T12(b): a raw .al event must republish Alpha.al");
+        assert!(after.is_empty(), "T12(b): the hint clears; got {after:#?}");
+        assert!(st.shared.get().generation > g0, "T12(b): generation rises");
+    }
+
+    #[test]
+    fn t12c_config_edit_reloads_and_republishes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_fixture_workspace(dir.path());
+        write_explicit_config(dir.path(), true, true);
+        let w = watched_root(dir.path(), FakeBackend::default(), None);
+        let st = w.root.state().expect("the fixture builds");
+        let alpha_uri = path_to_uri(&st.shared.get().workspace_root.join("Alpha.al"));
+        let initial = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
+            .expect("precondition: the initial publish covers Alpha.al");
+        assert!(has_extra_hint(&initial), "precondition: Extra() is unused");
+
+        write_explicit_config(dir.path(), true, false);
+        push_write(&w.raw, dir.path().join(".al-sem.json"));
+
+        let after = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
+            .expect("T12(c): a config edit must republish Alpha.al");
+        assert!(
+            after.is_empty(),
+            "T12(c): unusedProcedures off; got {after:#?}"
+        );
+    }
+
+    #[test]
+    fn t12d_disabling_every_detector_clears_published_diagnostics() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_fixture_workspace(dir.path());
+        write_explicit_config(dir.path(), true, true);
+        let w = watched_root(dir.path(), FakeBackend::default(), None);
+        let st = w.root.state().expect("the fixture builds");
+        let alpha_uri = path_to_uri(&st.shared.get().workspace_root.join("Alpha.al"));
+        let initial = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
+            .expect("precondition: the initial publish covers Alpha.al");
+        assert!(has_extra_hint(&initial), "precondition: Extra() is unused");
+
+        write_explicit_config(dir.path(), false, false);
+        push_write(&w.raw, dir.path().join(".al-sem.json"));
+
+        let after = next_publish_for(&w.client, &alpha_uri, T12_WAIT)
+            .expect("T12(d): disabling every detector must clear Alpha.al");
+        assert!(after.is_empty(), "T12(d): one empty notification");
+        assert_eq!(
+            next_publish_for(&w.client, &alpha_uri, Duration::from_millis(300)),
+            None,
+            "T12(d): exactly one notification for Alpha.al"
+        );
     }
 }

@@ -597,8 +597,8 @@ sizings marked pre-arc).
   different routine in a different root). Single-root byte-identical (no marker/
   warnings ever emitted; the pre-existing dispatch test's assertions untouched). New
   follow-up surfaced by this work: `workspace/didChangeWorkspaceFolders` is NOT
-  implemented — safe root removal needs an `AlFileWatcher` cancellation signal that
-  doesn't exist yet (see `server.rs`'s module doc); the notification now warns loudly
+  implemented — safe root removal needs a stop signal for the watch loop
+  (`watcher::start_watching`) that doesn't exist yet (see `server.rs`'s module doc); the notification now warns loudly
   instead of being silently swallowed. Report: `.superpowers/sdd/multiroot-report.md`
 - [x] **Snapshot-scoped LineTable cache** — DONE 2026-07-17. `ParsedFileEntry` gained
   a `OnceLock<LineTable>`-backed cache (rides the existing Arc-forwarding
@@ -628,7 +628,8 @@ sizings marked pre-arc).
 
 - [ ] **Multi-root follow-ups** (from the 6470e3e review): (a)
   `workspace/didChangeWorkspaceFolders` deferred — safe root REMOVAL needs an
-  `AlFileWatcher` cancellation signal that doesn't exist (warns loudly today); (b)
+  stop signal for the watch loop (`watcher::start_watching`) that doesn't exist
+  (warns loudly today); (b)
   nested-root diagnostics overlap — two nested AL app roots can both publish
   diagnostics for the same URI (last-write-wins clobber); routing handles nesting,
   the publish side lacks URI-ownership arbitration. Both narrow; build when a real
@@ -709,15 +710,9 @@ sizings marked pre-arc).
   and the strict-subset minimal-invalidation fixtures — is preserved in
   `docs/superpowers/notes/2026-07-24-r3b-incremental-l4-design-intent.md`. Wake: a
   real incremental-analyze consumer.
-- [ ] **`salsa` derive-only dependency** — after the R3b `incremental/` deletion
-  (Task B1), nothing in the crate consumes `#[salsa::db]`/`#[salsa::input]`/
-  `#[salsa::tracked]`/`#[salsa::interned]` any more; the only surviving usage is
-  `#[derive(salsa::Update)]` on a handful of `l4` types (`summary.rs`,
-  `combined_graph.rs`, `scc.rs`, `capability_cone.rs`). A full salsa-ectomy
-  (drop the derives + the `Cargo.toml` dep) is a legitimate future cleanup — not
-  urgent, no correctness or perf stake, just dead-weight-dependency hygiene.
-  Wake: convenient piggyback on an unrelated touch of those types, or a
-  dependency-audit pass.
+- [x] **`salsa` derive-only dependency** — done in #221: the dependency and its
+  23 `SalsaValue` derives in `l4` (left over after the R3b `incremental/`
+  deletion, Task B1) were removed, byte-neutral.
 - [ ] **L-3 globals sharing is retained-only — the transient build-then-discard
   allocation cost survives** (`feat/l3-substrate-and-parked-items` Task 5 /
   lever L-3; `task-5-review.md` finding F1). `ir_variables`

@@ -51,7 +51,7 @@ use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
 /// A `ValueSource` (internal form — table-field tableId is INTERNAL until
 /// projected). Mirrors al-sem `ValueSource`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ValueSource {
     Literal {
         value: String,
@@ -80,7 +80,7 @@ pub enum ValueSource {
 /// vector-exercised families produce are modelled with structure; the rest pass
 /// through as opaque JSON for projection (so the full corpus in Task 3 can be
 /// extended without reshaping the cone).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CapabilityExtra {
     Table {
         record_variable_id: Option<String>,
@@ -113,7 +113,7 @@ pub enum CapabilityExtra {
 /// kept for `repKey` tie-break parity but excluded from the projection.
 /// `Ord` (#160 step 11b §4.6): a collided id's direct facts are a full-value
 /// union, ordered by this total order.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CapabilityFact {
     pub subject: String,
     /// ⟨C1 Task 4⟩ `op` / `resource_kind` / `confidence` / `provenance` / `via`
@@ -126,10 +126,7 @@ pub struct CapabilityFact {
     /// `&'static str` they are pointer copies into the binary's read-only data
     /// and the struct itself is 40 B smaller. The six genuinely-open fields
     /// (`subject`, `resource_id`, `resource_arg_source`, `witness_operation_id`,
-    /// `witness_callsite_id`, `extra`) stay owned. `salsa::SalsaValue` still
-    /// derives (salsa 0.28 replaced `Update` with `SalsaValue` + `PartialEq`):
-    /// a `&'static str` — unlike the `&'db T` salsa's own doc warns about — can
-    /// never dangle or change under a revision.
+    /// `witness_callsite_id`, `extra`) stay owned.
     pub op: &'static str,
     pub resource_kind: &'static str,
     /// Internal resourceId (TableId / EventId / ObjectId) — projected to stable.
@@ -154,7 +151,7 @@ pub struct CapabilityFact {
 
 /// One per-routine coverage record (internal form). Mirrors al-sem
 /// `CoverageRecord`.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoverageRecord {
     pub subject: String,
     pub direct_status: String,
@@ -3083,8 +3080,8 @@ fn compose_inherited_cones(
 }
 
 // ===========================================================================
-// R3b WRAP SEAM — a public cone entry the Salsa `inherited_facts`/`coverage`
-// queries call. WRAPS the full cone (typed-edge graph build + Tarjan SCC +
+// CONE ENTRY — a public cone entry (it once served R3b's Salsa layer, deleted
+// with salsa in #221). WRAPS the full cone (typed-edge graph build + Tarjan SCC +
 // `compose_inherited_cones`) over the typed edges (`&[TypedEdge]`, the Cone
 // payload; #160 step 4) + per-routine direct facts +
 // direct coverage. Byte-identical to the cone path inside `project_r3a3` /
@@ -3093,7 +3090,7 @@ fn compose_inherited_cones(
 
 /// One routine's cone result in PUBLIC (internal-id) form. Field-for-field the
 /// private `InheritedConeResult`.
-#[derive(Debug, Clone, PartialEq, salsa::SalsaValue)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConeResultPub {
     pub inherited: Vec<CapabilityFact>,
     pub coverage: CoverageRecord,
@@ -3126,7 +3123,7 @@ pub struct ConeOutcome {
 /// `coverage_in` maps routineId → `(direct_status, reasons)`.
 ///
 /// This is the EXACT cone substrate `project_r3a3` / `project_r3a5_cross_app`
-/// build inline; factored out so the R3b Salsa layer wraps it without re-porting.
+/// build inline, factored out.
 ///
 /// ⟨C1⟩ `mode` selects the output(s). `direct_in` doubles as the derived fold's
 /// SELF half — it is the raw, un-deduped direct-fact Vec every caller also stores
@@ -3668,9 +3665,7 @@ pub struct R3a5FullSummaryProjection {
 }
 
 /// The FULLY-ASSEMBLED cross-app L4 BASE — every from-scratch intermediate the
-/// R3a-5 projection (and the R3b Salsa wrap) consume, before the core/cone +
-/// projection. Extracted so the R3b Salsa layer can build its fine-grained inputs
-/// from EXACTLY the same base the from-scratch path uses (no divergent assembly).
+/// R3a-5 projection consumes, before the core/cone + projection.
 pub struct R3a5CrossAppBase {
     /// The program build's dependency coverage and ledger (`alsem analyze`'s
     /// preflight, engine-switch S8.3).
@@ -4141,10 +4136,7 @@ pub fn project_r3a5_cross_app(
 
 /// The R3a-5 PROJECTION TAIL — project the (core JACOBI summaries + cone) over the
 /// merged model into the stable full-RoutineSummary surface + the anti-degenerate
-/// counts. A pure function of its parts, shared by the from-scratch
-/// `project_r3a5_cross_app` AND the R3b Salsa wrap (which demands the
-/// `core_summaries` and `cones` through the Salsa queries — proving the wrapped
-/// projection is byte-identical to the from-scratch one).
+/// counts. A pure function of its parts, used by `project_r3a5_cross_app`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn project_r3a5_from_parts(
     ws_routines: &[ModelRoutine],

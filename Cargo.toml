@@ -122,12 +122,6 @@ flate2 = { version = "1", default-features = false, features = ["zlib-ng"] }
 # Error handling
 anyhow = "1"
 
-# Incremental query framework (L4 incrementality, Phase R3b). PINNED exactly (moved
-# 0.27.0 -> 0.28.5 on 2026-10-16) to a stable crates.io release (the new-Salsa `#[salsa::db]` / `#[salsa::input]`
-# / `#[salsa::tracked]` / `#[salsa::interned]` API). The interning + cycle-handling
-# behavior differs materially across Salsa versions — keep this pinned.
-salsa = "=0.28.5"
-
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 

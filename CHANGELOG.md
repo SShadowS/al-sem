@@ -651,9 +651,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - #160 step 2: `effect_query_cli::build_db_effect_bundle`, `cross_app_db_effect_bundle`, `QuerySubstrate::from_cross_app_base` / `from_resolved`, `run::analyzer_diagnostic_lines`, and `digest_cli` / `prove`'s `compute_tx_context_map`. Each was a second build of something the `View` now builds once.
+- The unused `salsa` dependency and its 23 `SalsaValue` derives in `src/engine/l4` (#221). Byte-neutral; `Cargo.lock` drops 15 packages.
 
 ### Fixed
 
+- LSP watcher: each root now watches its root `app.json`, its workspace `.al-sem.json` (reloaded live), and the ancestor `.alpackages` folders the loader reads, registered before the first build; folder renames and moves, and files replaced without their own event, are reconciled; an overflow or a replaced root re-arms the root's watch, re-syncs the caches and reloads the config. Stated limits: an edit to the global `~/.al-sem/config.json` and a `.git` created or removed at the root or an ancestor still need a server restart; a file replaced without its own event by one with the same length and modification time (and, on Unix, the same file id) is not re-read; a path whose watch cannot be registered is seen only once a 5 s retry succeeds; on Windows a folder event walks that folder's subtree (#221).
+- LSP updater: a `.al` file renamed, moved or replaced, a folder renamed, moved in or out, or replaced, and a `FileRemoved` for a file still on disk are reconciled from disk instead of leaving stale or missing declarations; a `.al` under `.alpackages`, `.snapshots` or `node_modules` no longer triggers a full rebuild (#221).
 - **#220: shards and the `diff` preflight took the first `apps[]` row as the workspace's app.**
   That held only while `apps[]` had one row. Both now read the row whose `role` is `"primary"`.
   A shard is now closed over identity, operation, call-site and edge references: it also keeps
