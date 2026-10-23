@@ -33,6 +33,7 @@ use crate::engine::l5::snapshot::CapabilitySnapshot;
 use al_syntax::IdentifierFoldExt;
 
 use crate::program::attributes::{find_attribute, string_arg};
+use crate::program::body::features::PCallee;
 use crate::program::impact_graph::facts::{handler_names, test_page_target};
 use crate::program::model::events::PublisherRef;
 use crate::program::model::role::{Role, role_of_stable_id};
@@ -339,19 +340,36 @@ fn ledger_bucket(status: &str) -> Option<(bool, &'static str)> {
 /// The routine drives a `TestPage` / `TestRequestPage`, whose effects have no
 /// edge: one of its own parameters or locals is one, or an object global is one
 /// that its body names (a global alone would mark every sibling routine).
-/// `identifier_references` records plain identifiers only, so a global whose
-/// name needs quotes counts whenever it is in scope (an over-approximation).
+/// "Names" is `identifier_references` (plain identifiers only) OR the head of a
+/// member call's receiver (`Card.OpenView()`, `"Card".OpenView()`,
+/// `Action.OK().Invoke()`), which also covers quoted and keyword-lexed names.
+/// A global used only outside a call (passed as an argument, say) is missed
+/// here; a callee whose parameter is a `TestPage` is marked itself.
 fn drives_test_page(r: &ModelRoutine) -> bool {
-    let plain = |n: &str| {
-        n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            && n.chars().next().is_some_and(|c| !c.is_ascii_digit())
-    };
+    let receivers: BTreeSet<String> = r
+        .call_sites
+        .iter()
+        .filter_map(|cs| match &cs.callee {
+            PCallee::Member { receiver, .. } => Some(receiver_head(receiver)),
+            _ => None,
+        })
+        .collect();
     r.variables.iter().any(|v| {
         test_page_target(&v.declared_type).is_some()
             && (v.scope.as_deref() != Some("global")
-                || !plain(&v.name)
-                || r.identifier_references.binary_search(&v.name).is_ok())
+                || r.identifier_references.binary_search(&v.name).is_ok()
+                || receivers.contains(&folded(&v.name)))
     })
+}
+
+/// The variable a receiver text starts with, folded: `"Tp Card".OK()` → `tp card`.
+fn receiver_head(receiver: &str) -> String {
+    let t = receiver.trim();
+    let head = match t.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(""),
+        None => t.split(['.', '(', '[']).next().unwrap_or(""),
+    };
+    folded(head.trim())
 }
 
 /// A routine name folded the way [`handler_names`] folds a handler name.
@@ -1336,6 +1354,37 @@ codeunit 51022 "Tp Quoted Tests"
     begin
         "Tp Card Page".OpenView();
     end;
+
+    [Test]
+    procedure IgnoresQuoted()
+    begin
+    end;
+}
+
+codeunit 51024 "Tp Spelling Tests"
+{
+    Subtype = Test;
+
+    var
+        Card: TestPage "Tp Card";
+        Action: TestPage "Tp Card";
+
+    [Test]
+    procedure UsesCardQuoted()
+    begin
+        "Card".OpenView();
+    end;
+
+    [Test]
+    procedure UsesKeywordName()
+    begin
+        Action.OK().Invoke();
+    end;
+
+    [Test]
+    procedure IgnoresBoth()
+    begin
+    end;
 }
 "#,
         );
@@ -1388,6 +1437,36 @@ codeunit 51022 "Tp Quoted Tests"
             "{:?}",
             g.incomplete
         );
+        // FR20: a plain name used quoted, and a name that lexes as a keyword
+        // identifier, are not in `identifier_references` either; the call
+        // receivers find them. The siblings that never name a global stay clean.
+        for name in ["UsesCardQuoted", "UsesKeywordName"] {
+            let r = m
+                .workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap();
+            assert!(
+                !r.identifier_references
+                    .iter()
+                    .any(|i| i == "card" || i == "action"),
+                "precondition: `{name}` records no plain reference: {:?}",
+                r.identifier_references
+            );
+            assert!(
+                reasons(&g.incomplete, &id(name)).contains(&"test-page"),
+                "{name}: {:?}",
+                g.incomplete
+            );
+        }
+        for name in ["IgnoresQuoted", "IgnoresBoth"] {
+            assert!(
+                !reasons(&g.incomplete, &id(name)).contains(&"test-page"),
+                "{name}: {:?}",
+                g.incomplete
+            );
+        }
     }
 
     /// FR19: the handler list comes from the decoded first string argument, so an
