@@ -253,7 +253,7 @@ Spec §14.4, §14.8, §14.9. No code on the branch.
   multi-root `h` (`src/Features/HandledState/CDOUnhandledSalesPagesMgt.Codeunit.al`), 3 rounds each, plus
   the parent's whole-command `d` and `h` peaks and walls on `alsem`; P-4 (triage of every changed CDO effect on
   the cut) and P-5 (corpus golden diff of the DAG rule) are REQUIRED. A round with a load tick > 8 is void and
-  re-run (A1-25). Record medians, bands and the round rule in the ledger.
+  re-run (A1-20). Record medians, bands and the round rule in the ledger.
 - [ ] **Step 6: STOP — read** S1′ (`d`: `K − D_P + T + E′ − S_P ≤ 8,000 ms`), S2′ (`d` probe peak
   ≤ `Pm(d)` + 3,145,728 KiB) and S3′ (`h`: E′ ≤ 60,000 ms and probe peak ≤ 12,582,912 KiB).
   `PD_EDGE_UNMAPPED == 0` and `non_primary_members == 0` on `d` and `h`. Pass → freeze the terms in the ledger

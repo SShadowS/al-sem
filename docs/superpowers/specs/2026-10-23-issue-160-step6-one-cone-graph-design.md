@@ -765,7 +765,7 @@ ordering plan has no witness scope.
 ## 14. Amendment 6A-12: the split, and the DAG witness
 
 Added 2026-10-23 at attempt 8, after Task 1's stop rule failed (ledger `## Task 1 STOP`).
-**Revised the same day after the §14 panel round 1** (register entries A1-01 to A1-28) and
+**Revised the same day after the §14 panel round 1** (register entries A1-01 to A1-24) and
 the operator's decision **B** for digest's output (§14.3.5): witnesses stop at the first
 dependency routine, and effects reached only through a dependency call are grouped per
 (boundary call site, effect type). **Where §14 and §0-§13 disagree, §14 wins**; §14.7 lists
@@ -859,7 +859,7 @@ For a root `r` and a first hop `h` of `r`:
    to `v`. Shortest paths are simple, so the old per-path visited set is not needed.
 3. **The DAG depends only on (r, h), never on the fact.** It is built on first use and shared by every effect fact of
    `r` with first hop `h`, in a per-root `DagCache` (a map `(first-hop kind, id) → DAG`), separate from the
-   per-root hop memo `HopCache` (`digest.rs:1013-1043`, which stays an edge → hop memo; A1-27). Digest owns one
+   per-root hop memo `HopCache` (`digest.rs:1013-1043`, which stays an edge → hop memo; A1-22). Digest owns one
    `DagCache` per root (`digest_one_root`). **The fingerprint query owns one per root too** (A1-05): today
    `reconstruct_witness_paths_pub` builds a fresh `HopCache` per call (`digest.rs:4608-4615`); it takes the caller's
    `&mut HopCache` and `&mut DagCache`, and `fingerprint_query.rs:560-600` holds one pair per root across that root's
@@ -875,7 +875,7 @@ For a root `r` and a first hop `h` of `r`:
    order. The walk stops after `cap + 1` paths, where `cap` is the CALLER's cap (A1-04: `HARD_PATH_CAP` = 256 for
    digest and prove; the user's `--witness N` for the fingerprint query, `fingerprint_query.rs:575`, `:596`).
    `truncated` holds when `cap + 1` were found; `path-limit-reached cap=N` is pushed then, as today.
-   Opaque-boundary seed paths (A1-21) are found as today (call-site and op seeds only, 1 hop, before any carrier
+   Opaque-boundary seed paths (A1-19) are found as today (call-site and op seeds only, 1 hop, before any carrier
    path because they are shorter) and count toward `cap + 1`. A non-seed opaque routine is reached by the DAG (no
    `valid_nodes` prune) but is never reported: only carrier paths are read off the DAG. Test W9 pins both.
 5. **What does not change.** Direct facts (case A), the root's own proofs (`enumerate_proofs`, `digest.rs:880`, which
@@ -897,7 +897,7 @@ For a root `r` and a first hop `h` of `r`:
 (`compute_digest_effects_cli`), fingerprint's query (`reconstruct_witness_paths_pub`, `digest.rs:4594`, called at
 `fingerprint_query.rs:575`, `:596`) and the ordering cell (`digest_query_with` with `ordering_witness_only`). The DAG
 replaces the per-fact search for all of them; keeping the old search beside it would be two answers to one question.
-The ordering cell runs the DAG (A1-28) at a measured neutral cost (§14.3.4). **The boundary rule and the grouping
+The ordering cell runs the DAG (A1-23) at a measured neutral cost (§14.3.4). **The boundary rule and the grouping
 (§14.3.5) apply only to digest's cone-graph tree**: they are switched on by a flag the tree carries, so the cut
 (ordering, prove, fingerprint, diff, r4f) never sees them.
 
@@ -1140,7 +1140,7 @@ Attribution: not the DAGs (4 builds, 76,897 nodes, 95,061 predecessors for `d`),
 (3 instead of 256 changed nothing), but the number of EFFECTS per root and digest's per-root ordering pass over them
 (§14.3.7), times the roots running in parallel. Rule B bounds the effects; §14.3.7 removes the quadratic. The merge's
 retained paths are bounded too (§14.3.1a). P-2 (a census arm, `digest.effects` and `digest.ordering` buckets per
-root) confirms this at Task 1′ on the port; a peak more than 10 % off the prototype's is a finding, as for time.
+root) confirms this at Task 1′ on the port; a peak more than 10 % off the prototype's is a finding, as for time (A1-24).
 
 ### 14.7 What is void, kept or changed
 
@@ -1180,7 +1180,7 @@ root) confirms this at Task 1′ on the port; a peak more than 10 % off the prot
 |---|---|---|
 | F-W1 | S2′, S3′'s peak, B2′ or B7 misses | name the owner with P-2's census (`digest.effects`, `digest.ordering`, DAG, merge window). ONE fix aimed at that owner (A1-12): cap the parallel roots of digest's effects step to the CPU count ÷ 2 if the owner is per-root and the roots overlap; or the compact DAG (dense `u32` ordinals, one flat predecessor `Vec`) if the DAG owns it. Re-run W-tests, identity gates (golden targets, A6.22) and Part 2 once. Still missed → **D** (below) |
 | F-W2 | S1′, S3′'s E′, B1′ or B6 misses (met-not-void) | name the span (`trace_summary.py`); ONE fix from F11 or F-W1's; re-run Part 2 once; still missed → **D** |
-| F-W3 | any d47/d49/d51 finding moves (CDO Part 1, r4, r4f, `r4_cross_app_program`) | stop and ask the operator (A1-26): a move may be a real improvement of a shortest witness, but A6.22 forbids it in this step without a decision |
+| F-W3 | any d47/d49/d51 finding moves (CDO Part 1, r4, r4f, `r4_cross_app_program`) | stop and ask the operator (A1-21): a move may be a real improvement of a shortest witness, but A6.22 forbids it in this step without a decision |
 | **D** (pre-stated, automatic) | F-W1 or F-W2 failed, or S1′/S2′/S3′ fail at Task 1′ | step 6 keeps Task 1's groundwork (`edca9f0c`) and Task 3 (policy, if B5 holds); **digest stays on the cut**: Task 2b is not merged, Task 2a (the DAG rule, rule B's code paths off, the on-demand happens-before test) stays only if its own gates are green; the digest-on-cone-graph switch is filed as a follow-up with the numbers. No bound is relabelled |
 
 ### 14.9 Acceptance matrix and measurement plan deltas
@@ -1208,7 +1208,7 @@ Measurement plan (§8):
 - **Task 1′ (claim time, before Task 2a):** the probe at `P` with the DAG, rule B and the on-demand happens-before
   test, under mimalloc (§14.6), on `d` and `h` (`probes-todo.md` P-1, P-2 with its census arm), read S1′/S2′/S3′.
   P-4 (triage of every changed CDO effect) and P-5 (corpus golden diff) are required and recorded before Task 2a's
-  commit. The E′ outlier rule (A1-25): a probe round whose load tick exceeds 8 is void and re-run; no round is
+  commit. The E′ outlier rule (A1-20): a probe round whose load tick exceeds 8 is void and re-run; no round is
   excluded by hand.
 - **Part 1** adds: `--single-app` digest JSON parent vs head = the DAG rule's effect alone (no cone-graph change
   single-app, P13); cross-app `d` JSON diff, each moved field attributed to cone graph, DAG or D6; the
