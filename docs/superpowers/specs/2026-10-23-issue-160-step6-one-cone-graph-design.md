@@ -14,7 +14,8 @@ findings G-1, G-2, G-4, R6-4; open questions 12, 13, 14. The shape follows
 disagree, this document is wrong, EXCEPT the numbered amendments of §9 (6A-1 to 6A-11). Each
 gives its reason; until the epic takes it, it is an open question for the panel.
 
-Base for the citations: master `459294f1` (step 5's merge, #223), worktree
+Base for the citations: master `7afa91a3` (#220's merge, #229; re-cited from `459294f1`,
+step 5's merge, #223: only the files #220 edits moved), worktree
 `/work/al-sem-issue-160-a7`. Every fact the design rests on is a row of the ledger's
 `## Assumption probes` table (`.agent/issue-160/ledger.md`). Scripts and raw output:
 `/work/bench/160-6/` (`probe-base.sh`, `probe-base2.sh`, `probe/`). Nothing from the probes is
@@ -33,14 +34,14 @@ Words:
 - **Universe** = every routine row of the view. **Subject** = a routine whose raw inherited
   facts some job reads. **`WitnessScope`** = the subject set.
 - **Cut graph** = the snapshot's own `build_combined_graph` over `model.calls`
-  (`capability_cone.rs:4505-4513`), which cross-app holds primary callers only ("legacy cut",
+  (`capability_cone.rs:4514-4522`), which cross-app holds primary callers only ("legacy cut",
   epic M9; there is no `LegacyCut` symbol, only that doc text). **Cone graph** = `rel.cone()`
   (`exec_relation.rs:111-114`): the primary half's typed edges with event dispatch, then the
   dependency half's.
 - **Raw** = a routine's `Vec<CapabilityFact>` of inherited facts. **Derived** = its
   `ConeDerivedStore` row. **pd** = the producer solve's `ConeArena`
-  (`capability_cone.rs:2640`).
-- **Tree** = the view's `CapabilitySnapshot` (`snapshot.rs:881`) **[#220]**. **Effects** = the
+  (`capability_cone.rs:2641`).
+- **Tree** = the view's `CapabilitySnapshot` (`snapshot.rs:883`) **[#220]**. **Effects** = the
   per-root digest entries (with their unresolved cones) and the ordering facts computed from the
   tree.
 - **The bound commands** (epic row 6): `d` = cross-app `digest <WS> --file
@@ -72,7 +73,7 @@ Words:
    of 21.6 s); `o`'s `analyze.total` band is 2.6 s on the clean side (14 %), 12.3 s on the
    side a load spike hit. 10+11a measured `d`'s band at 0.2 s in a quiet slot. §8 re-measures
    `o`'s parent band in the Task 1 slot and pre-states the band rule before any code (R1-26).
-4. **The cone is still keyed by string id after 11b** (`capability_cone.rs:2585`), so
+4. **The cone is still keyed by string id after 11b** (`capability_cone.rs:2586`), so
    `WitnessScope` holds string ids.
 5. **#220 delivers the gap half of Decision 8** with `rel.cone()` reach (6A-4; §11).
 6. **prove, fingerprint and diff stay on a standalone composition** (6A-9).
@@ -124,8 +125,8 @@ session); base numbers indicative until the post-#220 re-measure.
 ## 1. Goal
 
 1. **One cone graph.** The view's tree is composed over `rel.cone()`. The cut graph's builder
-   (`build_r3a3_source_only_base`, `_over`, `R3a3SourceBase`, `capability_cone.rs:4476-4609`)
-   and the measurement-only `aldump --issue160-full-graph-timings` (`:4611-4680`,
+   (`build_r3a3_source_only_base`, `_over`, `R3a3SourceBase`, `capability_cone.rs:4485-4623`)
+   and the measurement-only `aldump --issue160-full-graph-timings` (`:4625-4694`,
    `aldump.rs:61-70`, `:223`) are deleted. This closes #161: a workspace routine's digest
    effects include what its dependency callees do, and the tree's coverage is the context's
    (step 5's limit 5-A3 closes).
@@ -152,7 +153,7 @@ session); base numbers indicative until the post-#220 re-measure.
   `rel.primary()` (epic M5).
 - **The guarantee "no unscoped cross-app raw" covers alsem's commands only.** `aldump
   --r3a5-cross-app-summary` (`aldump.rs:446` → `project_r3a5_cross_app`,
-  `capability_cone.rs:4063-4131`) keeps composing raw for every routine of whatever workspace
+  `capability_cone.rs:4072-4140`) keeps composing raw for every routine of whatever workspace
   it is given, through `WitnessScope::All`; it is a diagnostic tool for fixtures, stated here as
   the one exception. `project_r3a3` likewise.
 - **Discoveries deferred** (§12): #215, #216, #217, #227, #228 (kept as fallback F11).
@@ -161,27 +162,27 @@ session); base numbers indicative until the post-#220 re-measure.
 
 ### 3.1 The compositions today
 
-| Command (cross-app) | det cone (`detector_context.rs:1387-1394`, over `rel.cone()`) | snapshot cone (`capability_cone.rs:4582-4591`, over the cut) | counters `cone`/`pd`/`scc` (`tests/cli/cli_build_counters.rs`) |
+| Command (cross-app) | det cone (`detector_context.rs:1387-1394`, over `rel.cone()`) | snapshot cone (`capability_cone.rs:4600-4609`, over the cut) | counters `cone`/`pd`/`scc` (`tests/cli/cli_build_counters.rs`) |
 |---|---|---|---|
 | analyze default | `DerivedOnly`, every routine | none | 1/1/2 (`:192`) |
-| analyze `--detector d47` | none (no `SUMMARIES`/`TRANSACTION_SPANS`, `:1321`) | `RawOnly`, every routine, from `fill_ordering` (`detector_context.rs:1114-1121` → `digest.rs:4016-4019`) | 1/1/2 (`:233`) |
+| analyze `--detector d47` | none (no `SUMMARIES`/`TRANSACTION_SPANS`, `:1321`) | `RawOnly`, every routine, from `fill_ordering` (`detector_context.rs:1114-1121` → `digest.rs:4007-4010`) | 1/1/2 (`:233`) |
 | digest | `DerivedOnly` | `RawOnly`, after `det` is released (`digest_cli.rs:1632-1639`) | 2/2/3 (`:335`) |
 | prove (single-app) | `DerivedOnly` | `RawOnly` (`prove.rs:890`) | 2/2/3 (`:389`) |
 | policy check | `DerivedOnly` (the run) + `Both`, EVERY routine incl. dependency rows (`gate/policy/pipeline.rs:266-272`) | none | 2/2/3 (`:624`) |
-| fingerprint (single-app) | `DerivedOnly` | `RawOnly` (`fingerprint_cli.rs:497`; json path through `compose_full_snapshot`, `:436` → `snapshot_full.rs:84`) | 2/2/3 (`:444`) |
+| fingerprint (single-app) | `DerivedOnly` | `RawOnly` (`fingerprint_cli.rs:498`; json path through `compose_full_snapshot`, `:437` → `snapshot_full.rs:163`) | 2/2/3 (`:444`) |
 
-Both compositions call `compose_inherited_cones` (`capability_cone.rs:2579`). Its
-`routine_ids` is both the emission set and the raw-walk set (`:2819-2822`); its `mode` gates
-the raw walk (`:2836`, recursive SCCs) and the singleton's raw half
-(`inherited_facts_for_singleton`, `:2885-2898`). The fact cones (`fact_cone_for_scc`,
-`:2713-2715`) and coverage cones (`:2729-2742`) are built for every non-root SCC whatever the
+Both compositions call `compose_inherited_cones` (`capability_cone.rs:2580`). Its
+`routine_ids` is both the emission set and the raw-walk set (`:2820-2823`); its `mode` gates
+the raw walk (`:2837`, recursive SCCs) and the singleton's raw half
+(`inherited_facts_for_singleton`, `:2886-2899`). The fact cones (`fact_cone_for_scc`,
+`:2714-2716`) and coverage cones (`:2730-2743`) are built for every non-root SCC whatever the
 mode, so a per-member raw gate changes no other routine's output. Every member's result goes
-into one `out` map returned at the end (`:2938-2955`): all raw is alive together when the
+into one `out` map returned at the end (`:2939-2956`): all raw is alive together when the
 composition returns.
 
 ### 3.2 What the tree's readers read
 
-- digest S4 entries (`compute_digest_effects_cli`, `digest.rs:4094`): the root's own facts
+- digest S4 entries (`compute_digest_effects_cli`, `digest.rs:4085`): the root's own facts
   (`facts_by_routine.get(rid)`, `:3260`), every routine's DIRECT facts (`:243-315`), typed
   edges, the pd arena. Direct facts stay per routine of the view; only raw is scoped.
 - the digest query (`run_digest_query_full_from_entries`, `digest_cli.rs:766`): `coverage`
@@ -189,7 +190,7 @@ composition returns.
   typed edges that collects every visited routine's `callsite_index` and
   `callsite_resolutions` rows (`unresolved_cone.rs:94-140`). Cross-app it walks into
   dependency routines, so it is the reader of dependency callers' ledger rows (D6).
-- the ordering filter (`digest.rs:4035-4061`): `map_op` over every fact; a root is kept on its
+- the ordering filter (`digest.rs:4026-4052`): `map_op` over every fact; a root is kept on its
   own facts, and the root is a subject.
 - the ordering engine (`ordering_engine.rs:170-215`): `operation_index`, `callsite_index`,
   `callsite_resolutions` read only for the ROOT (`resolutions_from(routine_id)`, `:1028`),
@@ -198,24 +199,25 @@ composition returns.
   non-subject's fact** (Q3, decided statically, R1-20): the http lookup runs only when the IO
   chain's terminal routine is the root (`:1323-1333`), the background lookup only for the
   root's own call sites (`:1028-1050`), and an inherited fact's `witness_callsite_id` is its
-  OWN subject's first hop (`retag`, `capability_cone.rs:1666-1672`). So a non-subject's
+  OWN subject's first hop (`retag`, `capability_cone.rs:1667-1673`). So a non-subject's
   inherited fact carries a non-subject's call site, never a root's. T3 keeps a break as
   evidence; F4 is dormant.
 - root resolution (`resolve_changed_roots`, `digest_cli.rs:372`): `build_selector_indexes`
   (`selector_index.rs:84`) reads `snap.identities` and nothing else, and keeps primary ids
-  only (`:114`); file and diff matching use `build_routine_span_index(model)` (P5).
+  only (`:112`); file and diff matching use `build_routine_span_index(model)` (P5).
 - policy (`select_facts`, `policy_engine.rs:110-125`): `inherited_raw()` of primary routines
   only (`pipeline.rs:276-285`).
-- the full snapshot (`compose_full_snapshot`, `snapshot_full.rs:80-95`) **[#220]**: the core
-  plus `derive_permissions(resolved, &base)` (`:651`), which reads `base.cones[r].inherited` and
-  `base.direct_full` for primary routines.
+- the full snapshot (`compose_full_snapshot`, `snapshot_full.rs:137-189`) **[#220]**: the core
+  plus `derive_permissions(resolved, &base)` (`:888`), which reads `base.cones[r].inherited` and
+  `base.direct_full` for primary routines (`Role::Primary`, #220). Cross-app it also reads the
+  cut base's `routine_to_stable` (`reachable_gaps`, `:507`; `filter_by_class`, `:184`).
 
 ### 3.3 The pd arena
 
-`derive_pd_arena` (`snapshot.rs:1701-1787`) **[#220]** maps every cone state into the tree:
+`derive_pd_arena` (`snapshot.rs:1714-1800`) **[#220]** maps every cone state into the tree:
 `EdgeIx` into the tree's sorted `typed_edges`, `producer_fact` into its `capability_facts`
-(`expect`ed, `:1745-1747`). A cone link whose edge has no tree row is dropped and counted
-(`PD_EDGE_UNMAPPED`, `:1764-1769`; a `debug_assert!(false)` in debug).
+(`expect`ed, `:1758-1760`). A cone link whose edge has no tree row is dropped and counted
+(`PD_EDGE_UNMAPPED`, `:1777-1782`; a `debug_assert!(false)` in debug).
 
 ## 4. Design
 
@@ -232,7 +234,7 @@ impl WitnessScope { fn contains(&self, id: &str) -> bool }
 In `compose_inherited_cones` every member of `routine_ids` gets its coverage record and (when
 `derived`) its derived row, as today. The member's raw half runs only when
 `scope.raw.contains(m)`: the member's mode is `(derived, raw.contains(m))`, passed where `mode`
-is passed today (`:2836`, `:2876`, `:2885-2898`). Mode `(false, false)` (a non-subject of a
+is passed today (`:2837`, `:2877`, `:2886-2899`). Mode `(false, false)` (a non-subject of a
 derived-free composition, e.g. `o`) skips the member's walk entirely, singleton and BFS; the
 fact and coverage cones are built as before (R1-21). Old modes map 1:1: `DerivedOnly` =
 `{true, None}`, `RawOnly` = `{false, All}`, `Both` = `{true, All}`.
@@ -266,7 +268,7 @@ the one fold). A plan that needs neither derived rows nor witnesses (query) fill
 
 `build_detector_artifacts` (`:1300`) stops composing: it takes `caps` (direct, coverage,
 derived) by move and never sees `raw`; it asserts so (I5). The summary assembly
-(`:1408-1445`) is unchanged except its source. The resolved own entries (`capability_cone.rs:2649`)
+(`:1408-1445`) is unchanged except its source. The resolved own entries (`capability_cone.rs:2650`)
 stay a local of the one call: nothing is retained, nothing re-solves (G-1). The Cone-SCC pair
 stays inside the composition (6A-2).
 
@@ -281,11 +283,11 @@ graph (`pd_solve.rs:91-105`).
 | Plan | `witness` | `needs_tree` |
 |---|---|---|
 | analyze without `ORDERING_FACTS`, events, query; fingerprint/diff/prove (standalone, §4.4) | none | no |
-| analyze with `ORDERING_FACTS` (d47/d49/d51) | the internal ids of the rows of `reportable_roots(model)` (`digest.rs:3698-3727` returns stable ids; mapped back through `stable_routine_id`, every row of a collided id) | yes |
+| analyze with `ORDERING_FACTS` (d47/d49/d51) | the internal ids of the rows of `reportable_roots(model)` (`digest.rs:3698-3718` returns stable ids, by #220's role rule; mapped back through `stable_routine_id`, every row of a collided id) | yes |
 | digest | the changed roots, resolved before `prepare` (below) | yes |
 | policy check | every `Role::Primary` routine (#220's rule; today `is_primary_routine`, `pipeline.rs:276-285`) | no |
 
-Digest builds `derive_identity_table(model)` (`snapshot.rs:1372`, model only) before `prepare`,
+Digest builds `derive_identity_table(model)` (`snapshot.rs:1385`, model only) before `prepare`,
 resolves its roots from it (`resolve_changed_roots` takes `&SnapshotIdentityTable` instead of
 `&CapabilitySnapshot`, P5) and passes them in the plan; the table moves into the tree. It is a
 command-local, not a View cell, until step 12 (6A-11). A digest with no resolved root keeps
@@ -296,30 +298,30 @@ the raw is over budget.
 
 ### 4.4 D4: the tree, composed from `caps`, `raw` and `rel` (replaces `R3a3SourceBase`)
 
-`compose_snapshot_from_base(model, &R3a3SourceBase)` (`snapshot.rs:1250-1290`) **[#220]**
+`compose_snapshot_from_base(model, &R3a3SourceBase)` (`snapshot.rs:1263-1303`) **[#220]**
 becomes `compose_tree(model, typed: &[TypedEdge], dependency_calls: &[CallEdge], caps:
 &mut CapabilityAnalysis, raw: HashMap<..>) -> CapabilitySnapshot`. `R3a3SourceBase` becomes a
 struct of BORROWS with the same field roles, so each deriver keeps its body:
 
 | Deriver (`snapshot.rs` **[#220]**) | Today reads | After |
 |---|---|---|
-| `derive_identity_table` (`:1372`) | model | digest's table (moved in) or a fresh one |
-| `derive_capability_facts` (`:1443-1486`) | `base.direct_full` + `base.cones[*].inherited` (cloned) | `caps.direct_full` (borrowed) + `raw` **by move**: each subject's `Vec` is drained into snapshot facts and dropped as it goes, so raw exists once (Decision 24, R1-01) |
-| `derive_typed_edges` (`:1501`) | `base.graph.typed_edges` (cut) | `typed` = `rel.cone()` |
-| `derive_operation_evidence`, `derive_callsite_evidence` (`:1842`, `:1968`) | `base.ws_routines` (a clone, `capability_cone.rs:4600`) | `&model.workspace.routines`, borrowed |
-| `derive_callsite_resolutions` (`:2057`) | `base.calls` (cut, a clone `:4524`) | `model.calls.edges` then `dependency_calls` (D6) |
-| `derive_coverage` (`:2442`) | the snapshot's own fold over the cut (`:4544`) | `caps.coverage`: step 5's fold over `rel.uncertainty_all()` (closes 5-A3) |
+| `derive_identity_table` (`:1385`) | model | digest's table (moved in) or a fresh one |
+| `derive_capability_facts` (`:1456-1499`) | `base.direct_full` + `base.cones[*].inherited` (cloned) | `caps.direct_full` (borrowed) + `raw` **by move**: each subject's `Vec` is drained into snapshot facts and dropped as it goes, so raw exists once (Decision 24, R1-01) |
+| `derive_typed_edges` (`:1514`) | `base.graph.typed_edges` (cut) | `typed` = `rel.cone()` |
+| `derive_operation_evidence`, `derive_callsite_evidence` (`:1855`, `:1981`) | `base.ws_routines` (a clone, `capability_cone.rs:4614`) | `&model.workspace.routines`, borrowed |
+| `derive_callsite_resolutions` (`:2070`) | `base.calls` (cut, a clone `:4542`) | `model.calls.edges` then `dependency_calls` (D6) |
+| `derive_coverage` (`:2460`) | the snapshot's own fold over the cut (`:4562`) | `caps.coverage`: step 5's fold over `rel.uncertainty_all()` (closes 5-A3) |
 | `derive_event_declarations`, `derive_root_classifications`, `derive_routine_order_frames` | base | model (`model.events.graph`, borrowed) |
-| `derive_pd_arena` (`:1701`) | `base.pd_solution` | `caps.pd.take()`, scoped (D5); the cone arena is dropped as soon as the tree's arena is built (R1-27) |
-| `derive_analysis_gaps` (`:2359`) | base | as #220 leaves it (its role rule, `rel.cone()` reach) |
-| `derive_permissions` (`snapshot_full.rs:651`) **[#220]** | `base.cones[r].inherited` + `base.direct_full`, primary routines | the tree's inputs, same routines |
+| `derive_pd_arena` (`:1714`) | `base.pd_solution` | `caps.pd.take()`, scoped (D5); the cone arena is dropped as soon as the tree's arena is built (R1-27) |
+| `derive_analysis_gaps` (`:2376`) | base | as #220 leaves it (its role rule, `rel.cone()` reach) |
+| `derive_permissions` (`snapshot_full.rs:888`) **[#220]** | `base.cones[r].inherited` + `base.direct_full`, primary routines | the tree's inputs, same routines |
 
 Deleted: `build_r3a3_source_only_base`, `_over`, the cut's clone of calls and event graph
-(`capability_cone.rs:4523-4526`) and its own fold (`:4542-4575`), the timings mode, and the
-"legacy cut" doc text (`:4501-4504`, `combined_graph.rs:309`).
+(`capability_cone.rs:4541-4544`) and its own fold (`:4560-4593`), the timings mode, and the
+"legacy cut" doc text (`:4510-4513`, `combined_graph.rs:309`).
 
 **`compose_snapshot(model)` stays as the single-app convenience** for prove, fingerprint,
-diff and tests (`digest.rs:3969`, `:3982`; `snapshot.rs:2713`). It asserts the model has no
+diff and tests (`digest.rs:3960`, `:3973`; `snapshot.rs:2731`). It asserts the model has no
 dependency-role row (so the cut cannot come back under a new name, R1-09), builds the graph
 with `build_combined_graph(&model.workspace, &model.calls, &model.events.graph)` as today
 (counted `bcg`; no relation, so no extra Tarjan, R1-08), then the cone inputs over that graph,
@@ -331,7 +333,7 @@ uncertainty edges (`impl Iterator<Item = &UncertaintyEdge>`) and the existing wr
 standalone path passes `&graph.primary.uncertainty_edges` (single-app the dependency half is
 empty, so this is the same fold).
 
-**`compose_full_snapshot`** (`snapshot_full.rs:80-95`) **[#220]**: single-app, through the
+**`compose_full_snapshot`** (`snapshot_full.rs:137-189`) **[#220]**: single-app, through the
 standalone path above. Cross-app (`SnapshotUniverse::CrossApp`, #220, reached only from tests
 until step 9): over `base.rel.cone()` with `Subjects(every Role::Primary routine)`, which is
 everything `derive_permissions` and #220's class filter keep (R1-09).
@@ -346,12 +348,12 @@ root's states and follows links (`digest.rs:880-905`), so a state outside that c
 read; T3 pins it. With `WitnessScope::All` the closure is every state: today's arena.
 
 **R6-4, the link rule.** `derive_typed_edges` skips a call-family or event-dispatch row that
-has no anchor (`snapshot.rs:1558-1650`), and an unmodelled kind (`_ => continue`); an
-`implicit-trigger` row is NEVER skipped, with or without an anchor (`:1659-1676`, #96 D4: the
+has no anchor (`snapshot.rs:1571-1663`), and an unmodelled kind (`_ => continue`); an
+`implicit-trigger` row is NEVER skipped, with or without an anchor (`:1672-1689`, #96 D4: the
 cone follows it, so the arena needs its row). It records the keys it skipped; the exemption
 means no implicit-trigger key is ever in that set. A cone link into a skipped row is
 dropped and counted `PD_EDGE_UNMAPPED`, as in release today. The `debug_assert!(false)`
-(`:1767`) becomes `debug_assert!(skipped.contains(&key))`: a link may miss only a row that was
+(`:1780`) becomes `debug_assert!(skipped.contains(&key))`: a link may miss only a row that was
 skipped for want of an anchor (R1-28). T6 hand-states one; the CDO gate asserts
 `PD_EDGE_UNMAPPED == 0` on `d` and `o` (F6 if not).
 
@@ -361,15 +363,15 @@ skipped for want of an anchor (R1-28). T6 hand-states one; the CDO gate asserts
 Vec<CallEdge>` (the `dependency` argument, today dropped after assembly), read only by
 `derive_callsite_resolutions`, printed as a `rel.dependency_calls` census bucket. Its reader is
 `unresolved_cone` (digest; §3.2), which walks into dependency routines: without these rows the
-leftover-typed-edge pass (`snapshot.rs:2211-2255`) still writes a row for each dependency call
+leftover-typed-edge pass (`snapshot.rs:2224-2268`) still writes a row for each dependency call
 site, but always as `status: "resolved"`, `dispatch_kind: "direct"`, no
 `result_consumed`/`under_asserterror`, so a dependency routine's unresolved or builtin call
 would be misreported (R1-11). It lives in every cross-app view; its bytes are measured at Task
 1 (P8) and F12 applies if they are large (R1-29).
 
-In `classify_resolution` (`snapshot.rs:2267`) **[#220]**, a `"resolved"` call whose every
+In `classify_resolution` (`snapshot.rs:2280`) **[#220]**, a `"resolved"` call whose every
 target is a body-less dependency row is `unfetched-dependency` with its edges (today only
-`"opaque"` is, `:2339`). **This moves the ordering engine on its own**: such a ROOT call site
+`"opaque"` is, `:2352`). **This moves the ordering engine on its own**: such a ROOT call site
 becomes a root boundary (`is_opaque`, `ordering_engine.rs:1044-1049`), so d47/d49/d51 can move
 from D6 alone. Part 1 attributes each moved finding to D6 or to the cone graph (§8). Whether a
 single-app model carries body-less rows (ABI stubs, `engine/deps/projection.rs:259`) is counted
@@ -416,14 +418,14 @@ slices. Deleted: `pipeline.rs:255-272` (the RAW build), `substrate::RAW_INHERITE
 
 | Item | Where |
 |---|---|
-| `ConeOutput` | `cone_derived.rs:244-263`; call sites `capability_cone.rs:4118`, `:4590`, `detector_context.rs:1375-1379`, tests → `ConeScope` |
+| `ConeOutput` | `cone_derived.rs:244-263`; call sites `capability_cone.rs:4127`, `:4608`, `detector_context.rs:1375-1379`, tests → `ConeScope` |
 | det's own cone | `detector_context.rs:1386-1406` (the call; the summary assembly stays) |
 | `RAW_INHERITED_FACTS` | `registry.rs:32-90`, `session.rs:193`, `:273-276` |
 | `inherited_raw` and the summary's raw `Option` | **narrowed to `#[cfg(test)]`** (`full_summary.rs:42-130`): production `FullRoutineSummary::new` has no raw parameter; `test_support::summary` (`test_support.rs:240-249`) and `cone_store_of` (`:30-55`) keep raw as fixture input; the raw oracles `may_commit`, `touches_db_of`, `touches_physical_table_of` (`capability_query.rs:62-102`, already `#[cfg(test)]`) keep checking the derived predicates (R1-10) |
 | policy's RAW build | `gate/policy/pipeline.rs:255-272` |
-| the cut graph | `capability_cone.rs:4476-4609`; `R3a3SourceBase` becomes the borrowed input struct |
-| the full-graph timings mode | `capability_cone.rs:4611-4680`, `aldump.rs:61-70`, `:223`, and its smoke test `tests/cli/aldump_smoke.rs:100` |
-| ordering's own snapshot | `digest.rs:4016-4019` (`compute_digest_effects_for_ordering_with` takes the tree) |
+| the cut graph | `capability_cone.rs:4485-4623`; `R3a3SourceBase` becomes the borrowed input struct |
+| the full-graph timings mode | `capability_cone.rs:4625-4694`, `aldump.rs:61-70`, `:223`, and its smoke test `tests/cli/aldump_smoke.rs:100` |
+| ordering's own snapshot | `digest.rs:4007-4010` (`compute_digest_effects_for_ordering_with` takes the tree) |
 
 ### 4.9 Counters (I1; the final row)
 
@@ -452,7 +454,7 @@ step 9 (6A-9).
 | digest's effects | (5) → (8) | new `effects.digest` |
 | `rel.dependency_calls` | the view | new `rel.dependency_calls` |
 
-The census is shallow (lower bounds: owned strings are not walked, `snapshot.rs:1309-1333`), so
+The census is shallow (lower bounds: owned strings are not walked, `snapshot.rs:1322-1346`), so
 it names what is alive but cannot certify a fit (R1-04). The fit is read from measured process
 peaks (§8.4 S2, B2, B4). Policy's peak should DROP (13.67 GiB today), reported in Part 3 and
 checked in S2.
@@ -478,7 +480,7 @@ the revert; both outcomes are recorded (I9, the `discrimination-proof` skill).
   write fixtures (Decision 38); policy's selected facts per primary routine (Decision 41,
   against the parent's `inherited_raw()` path, recorded as a fixture). CDO single-app as a
   CDO-gated arm. **Breaks apply to the scoped arm only** (R1-13): (1) under `Subjects`, skip the
-  fact-cone build for non-subject SCCs (`capability_cone.rs:2713-2715`) → a subject loses
+  fact-cone build for non-subject SCCs (`capability_cone.rs:2714-2716`) → a subject loses
   inherited facts → fails; (2) under `Subjects`, `contains()` is false for recursive members →
   fails on a recursive r0 fixture. (3), evidence only: under `Subjects`, drop non-subject facts
   from the ordering engine's call-site maps; a green run records that the reader does not look
@@ -520,7 +522,7 @@ Deleted: `session.rs:676-680` (`a det cell never carries RAW_INHERITED_FACTS`), 
 mode's smoke test (`tests/cli/aldump_smoke.rs:100`). Rewritten: the `ConeOutput` parity tests
 on `ConeScope` (`cone_derived.rs:1195-1780`); the uses of `build_r3a3_source_only_base` in
 `detector_context.rs:2094`, `detector_context_step5_tests.rs:283` (its claim becomes T8's),
-`detector_context_11b_tests.rs:1968`, `capability_cone.rs:6333`, `:6371`, on `compose_tree`;
+`detector_context_11b_tests.rs:1968`, `capability_cone.rs:6347`, `:6385`, on `compose_tree`;
 `tests/cli/cli_events_policy_dependencies.rs:439` (names the RAW mutation) on `Cell::Raw`.
 Unchanged: the 24 `test_support::summary`/`cone_store_of` call sites and the raw oracles (§4.8).
 The plan lists each with its replacement.
@@ -694,7 +696,7 @@ continues; each is recorded in the ledger.
 | # | If | Then |
 |---|---|---|
 | F1 | — | withdrawn in round 1: raw is all alive when the composition returns, so releasing it after use cannot lower the peak (R1-01) |
-| F2 | S1 or S2 fails on `o` (first rung) | gate the raw walk by three ordering bits (Decision 38, `map_op`'s vocabulary). **The derived row does not have them today** (R3-01): its flags are table, commit, http, file and physical table (`cone_derived.rs:116-129`) plus the write-op mask (`:132-136`); there is no UI-sink bit, and its http/file bits key on `resource_kind`, not on `map_op`. So F2 first ADDS three `map_op`-keyed bits to the row and its fold (external IO = `HTTP`/`FILE`, UI sink = `UI_CONFIRM`/`UI_MESSAGE`/`UI_WINDOW_OPEN`, DB write = `DB_INSERT`/`DB_MODIFY`/`DB_DELETE`: the filter of `digest.rs:4035-4061`). Today a member's derived fold and its raw picks are built in ONE pass (`capability_cone.rs:2823-2930`: the singleton call `inherited_facts_for_singleton` does both under one `mode`; the BFS member's fold follows its walk), so the bits are known only after the walk. F2 therefore runs each subject FOLD FIRST: the member is composed with mode `(true, false)`, its row's three bits are read, and only a member with an ingredient is composed again with mode `(false, true)` for its raw (R2-02). The second walk runs inside the SAME SCC member loop of `compose_inherited_cones`, while the successor fact cones it reads are still alive (a cone is freed only after its last predecessor's member loop, `capability_cone.rs:2669-2700`), so it stays one composition and one `pd_solve`. The extra cost is the new bits, the derived fold of every subject and a second singleton/BFS pass for the kept ones; Task 1's probe prices all three as a fourth configuration (`o` under F2: K, T, E′ and peak). T3's ordering arm proves the kept-root set unchanged |
+| F2 | S1 or S2 fails on `o` (first rung) | gate the raw walk by three ordering bits (Decision 38, `map_op`'s vocabulary). **The derived row does not have them today** (R3-01): its flags are table, commit, http, file and physical table (`cone_derived.rs:116-129`) plus the write-op mask (`:132-136`); there is no UI-sink bit, and its http/file bits key on `resource_kind`, not on `map_op`. So F2 first ADDS three `map_op`-keyed bits to the row and its fold (external IO = `HTTP`/`FILE`, UI sink = `UI_CONFIRM`/`UI_MESSAGE`/`UI_WINDOW_OPEN`, DB write = `DB_INSERT`/`DB_MODIFY`/`DB_DELETE`: the filter of `digest.rs:4026-4052`). Today a member's derived fold and its raw picks are built in ONE pass (`capability_cone.rs:2824-2931`: the singleton call `inherited_facts_for_singleton` does both under one `mode`; the BFS member's fold follows its walk), so the bits are known only after the walk. F2 therefore runs each subject FOLD FIRST: the member is composed with mode `(true, false)`, its row's three bits are read, and only a member with an ingredient is composed again with mode `(false, true)` for its raw (R2-02). The second walk runs inside the SAME SCC member loop of `compose_inherited_cones`, while the successor fact cones it reads are still alive (a cone is freed only after its last predecessor's member loop, `capability_cone.rs:2670-2701`), so it stays one composition and one `pd_solve`. The extra cost is the new bits, the derived fold of every subject and a second singleton/BFS pass for the kept ones; Task 1's probe prices all three as a fourth configuration (`o` under F2: K, T, E′ and peak). T3's ordering arm proves the kept-root set unchanged |
 | F3 | — | promoted into the design (§4.7, R1-07) |
 | F4 | T3's break (3) or a later reader is found to look past the subject | widen THAT reader's input to the subjects' callee closure (from `rel.cone()`), checked by T3's untouched oracle; never give a dependency routine raw (I5). Dormant: §3.2 shows no such reader today |
 | F5 | D1 cannot be made byte-identical on derived rows (Part 1 default-analyze SARIF differs) | a defect; not closed in one attempt → **stop at Task 1** and re-panel: a second composition contradicts A6.5 and 6A-1 (R1-18) |
