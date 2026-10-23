@@ -1691,18 +1691,74 @@ fn issue156_e2e_local_helper_signature_change_repro() {
 }
 
 /// #156 E2E-2 — the real pipeline emits what the ABI rule reads: added action and
-/// table triggers give no `abi` finding; a `local [IntegrationEvent]` publisher
-/// that gained a parameter is one `procedure-signature-changed`; its paired
-/// subscriber gives no `abi` and no subscriber-induced finding. The publisher and
-/// subscriber keep their capabilities and permissions, so nothing else shows; the
-/// added `OnInsert` trigger and action trigger have empty bodies, so they add no
-/// capability to the subscriber's `Log.Insert()` cone or anywhere else.
+/// table triggers give no `abi` finding; its paired subscriber gives no `abi` and
+/// no subscriber-induced finding. The publisher and subscriber keep their
+/// capabilities and permissions, so nothing else shows; the added `OnInsert`
+/// trigger and action trigger have empty bodies, so they add no capability to the
+/// subscriber's `Log.Insert()` cone or anywhere else.
+/// #236 (rebaselined): the `local [IntegrationEvent]` publisher only APPENDED a
+/// parameter (AS0025: allowed), so there is no `abi` finding and the one
+/// `events` finding is Low, not Critical.
 #[test]
 fn issue156_e2e_abi_surface_triggers_publishers_subscribers() {
     let fixture = fixtures_dir().join("ws-diff-abi-surface");
+    let new = compose_ws(&fixture.join("b"));
+    // #236 F2: the production `parameters` text, `var` included, pinned literally.
+    let CborValue::Map(snap) = &new else {
+        unreachable!()
+    };
+    let Some(CborValue::Array(facts)) = snap.get("contractFacts") else {
+        panic!("contractFacts is an array")
+    };
+    let lists: Vec<Vec<String>> = facts
+        .iter()
+        .filter_map(|f| match f {
+            CborValue::Map(m) => match m.get("parameters") {
+                Some(CborValue::Array(p)) => Some(
+                    p.iter()
+                        .map(|v| match v {
+                            CborValue::Text(s) => s.clone(),
+                            _ => panic!("a parameters entry is text"),
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        lists,
+        vec![vec![
+            "var handled: boolean".to_string(),
+            "qty: decimal".to_string()
+        ]]
+    );
+    let r = engine(&compose_ws(&fixture.join("a")), &new, CoveragePolicy::Loose);
+    let row = |c: &str, k: &str, d: &str| (c.to_string(), k.to_string(), d.to_string());
+    assert_eq!(
+        summary_rows(&r),
+        vec![row(
+            "events",
+            "event-contract-changed-with-affected-subscribers",
+            "OnBeforeCalc"
+        )]
+    );
+    assert_eq!(
+        find_kind(&r, "event-contract-changed-with-affected-subscribers").severity,
+        Severity::Low
+    );
+}
+
+/// #236 — E2E-2 reversed: `OnBeforeCalc` LOSES `Qty: Decimal`. A removed event
+/// parameter breaks subscribers (AS0025), so both findings stay Critical. The
+/// removed triggers are not ABI and the `local` subscriber publishes nothing.
+#[test]
+fn issue236_removed_event_param_stays_critical() {
+    let fixture = fixtures_dir().join("ws-diff-abi-surface");
     let r = engine(
-        &compose_ws(&fixture.join("a")),
         &compose_ws(&fixture.join("b")),
+        &compose_ws(&fixture.join("a")),
         CoveragePolicy::Loose,
     );
     let row = |c: &str, k: &str, d: &str| (c.to_string(), k.to_string(), d.to_string());
@@ -1717,4 +1773,151 @@ fn issue156_e2e_abi_surface_triggers_publishers_subscribers() {
             ),
         ]
     );
+    for k in [
+        "procedure-signature-changed",
+        "event-contract-changed-with-affected-subscribers",
+    ] {
+        assert_eq!(find_kind(&r, k).severity, Severity::Critical, "{k}");
+    }
+}
+
+/// #236 — a `local [IntegrationEvent]` publisher with NO subscriber appends a
+/// parameter: no `abi` finding, and the generic `event-publisher-signature-changed`
+/// is Low. Hand-built facts; the pair is found by object + name (#156).
+#[test]
+fn issue236_no_subscriber_append_is_low() {
+    let r = engine(
+        &publisher_side("p1", &["a: integer"], false),
+        &publisher_side("p2", &["a: integer", "b: integer"], false),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(kinds_in(&r, "abi"), pairs(&[]));
+    assert_eq!(
+        kinds_in(&r, "events"),
+        pairs(&[("event-publisher-signature-changed", &id156("p2"))])
+    );
+    assert_eq!(
+        find_kind(&r, "event-publisher-signature-changed").severity,
+        Severity::Low
+    );
+}
+
+/// #236: one snapshot side holding a `local [IntegrationEvent]` publisher `OnX`
+/// (member-less id `{OBJ156}#{sig}`) with the given `parameters`, optionally
+/// with one subscriber declaration.
+fn publisher_side(sig: &str, params: &[&str], subscriber: bool) -> CborValue {
+    let CborValue::Map(mut fact) = routine_fact(
+        OBJ156,
+        sig,
+        "local",
+        Some("event-publisher"),
+        &["IntegrationEvent"],
+    ) else {
+        unreachable!()
+    };
+    fact.insert(
+        "parameters".into(),
+        CborValue::Array(params.iter().map(|p| txt(p)).collect()),
+    );
+    let event_id = format!("{OBJ156}::OnX::{sig}");
+    let mut decls = vec![event_decl("publisher", &id156(sig), &event_id)];
+    if subscriber {
+        decls.push(event_decl(
+            "subscriber",
+            "appguid-1:Codeunit:8#s1",
+            &event_id,
+        ));
+    }
+    snap156(
+        vec![(CborValue::Map(fact), "OnX")],
+        vec![("eventDeclarations", CborValue::Array(decls))],
+    )
+}
+
+/// #236 F1: a same-type reorder keeps the fingerprint and the eventId (names
+/// are in neither), so only `parameters` shows it. It breaks subscribers that
+/// bind by name: Critical in both passes. No subscriber: the generic finding.
+#[test]
+fn issue236_same_type_reorder_is_critical() {
+    let r = engine(
+        &publisher_side("p1", &["a: integer", "b: integer"], false),
+        &publisher_side("p1", &["b: integer", "a: integer"], false),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-signature-changed", &id156("p1"))])
+    );
+    assert_eq!(
+        kinds_in(&r, "events"),
+        pairs(&[("event-publisher-signature-changed", &id156("p1"))])
+    );
+    for k in [
+        "procedure-signature-changed",
+        "event-publisher-signature-changed",
+    ] {
+        assert_eq!(find_kind(&r, k).severity, Severity::Critical, "{k}");
+        // G4: equal hashes and event ids; the lists show the reorder.
+        assert_eq!(
+            detail_list(find_kind(&r, k), "newParameters"),
+            Some(vec!["b: integer".to_string(), "a: integer".to_string()]),
+            "{k}"
+        );
+    }
+}
+
+/// A text-array detail of a finding (#236 G4's parameter lists).
+fn detail_list(f: &al_sem::engine::gate::diff::DiffFinding, key: &str) -> Option<Vec<String>> {
+    f.details.iter().find_map(|(k, v)| match v {
+        CborValue::Array(a) if k == key => Some(
+            a.iter()
+                .map(|x| match x {
+                    CborValue::Text(s) => s.clone(),
+                    _ => panic!("{key} holds text"),
+                })
+                .collect(),
+        ),
+        _ => None,
+    })
+}
+
+/// #236 F1/D1: a pure parameter rename (AS0025 example 3) is Critical in both
+/// passes. With a subscriber: the contract finding.
+#[test]
+fn issue236_pure_rename_is_critical() {
+    let r = engine(
+        &publisher_side("p1", &["i: integer"], true),
+        &publisher_side("p1", &["j: integer"], true),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-signature-changed", &id156("p1"))])
+    );
+    assert_eq!(
+        kinds_in(&r, "events"),
+        pairs(&[(
+            "event-contract-changed-with-affected-subscribers",
+            &id156("p1")
+        )])
+    );
+    for k in [
+        "procedure-signature-changed",
+        "event-contract-changed-with-affected-subscribers",
+    ] {
+        assert_eq!(find_kind(&r, k).severity, Severity::Critical, "{k}");
+        // G4: the hashes and event ids are equal here, so the details carry the
+        // two parameter lists to show what changed.
+        let list = |key: &str| detail_list(find_kind(&r, k), key);
+        assert_eq!(
+            list("oldParameters"),
+            Some(vec!["i: integer".to_string()]),
+            "{k}"
+        );
+        assert_eq!(
+            list("newParameters"),
+            Some(vec!["j: integer".to_string()]),
+            "{k}"
+        );
+    }
 }

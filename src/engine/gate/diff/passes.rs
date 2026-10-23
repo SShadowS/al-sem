@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use indexmap::{IndexMap, IndexSet};
 
 use crate::engine::gate::cbor::CborValue;
+use crate::engine::ids::PARAMETER_EVENT_ATTRIBUTES;
 
 use super::fingerprint::{DiffCategory, DiffKind, compute_diff_fingerprint};
 use super::indexes::DiffIndexes;
@@ -118,16 +119,101 @@ pub(super) fn is_abi_surface(fact: &CborValue) -> bool {
     if get_str(fact, "routineKind") == Some("trigger") {
         return false;
     }
-    let publishes = get_array(fact, "attributes").is_some_and(|attrs| {
+    carries_attribute(fact, &EXTERNAL_EVENT_ATTRIBUTES)
+        || !matches!(get_str(fact, "visibility"), Some("local" | "internal"))
+}
+
+/// Whether the fact carries one of `names` (case-insensitive).
+fn carries_attribute(fact: &CborValue, names: &[&str]) -> bool {
+    get_array(fact, "attributes").is_some_and(|attrs| {
         attrs.iter().any(|a| {
-            get_str(a, "name").is_some_and(|n| {
-                EXTERNAL_EVENT_ATTRIBUTES
-                    .iter()
-                    .any(|e| n.eq_ignore_ascii_case(e))
-            })
+            get_str(a, "name").is_some_and(|n| names.iter().any(|e| n.eq_ignore_ascii_case(e)))
         })
-    });
-    publishes || !matches!(get_str(fact, "visibility"), Some("local" | "internal"))
+    })
+}
+
+/// #236: how a routine's signature changed. The one decision both `diff_abi`
+/// and `diff_events` read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SignatureChange {
+    Unchanged,
+    /// Not a break: no `abi` finding, the `events` finding is Low.
+    NonBreakingAppend,
+    /// Critical in both passes.
+    Breaking,
+}
+
+/// #236: the change between two facts of one routine. The fingerprint holds no
+/// parameter names, so a pure rename or a same-type reorder of a publisher's
+/// parameters shows only in `parameters`; AS0025 says both break subscribers.
+pub(super) fn signature_change(old: &CborValue, new: &CborValue) -> SignatureChange {
+    let old_sig = get_str(old, "signatureFingerprint").unwrap_or("");
+    let new_sig = get_str(new, "signatureFingerprint").unwrap_or("");
+    let sig_changed = !old_sig.is_empty() && !new_sig.is_empty() && old_sig != new_sig;
+    let params_changed = match (get_array(old, "parameters"), get_array(new, "parameters")) {
+        (Some(o), Some(n)) => !texts_eq(o, n),
+        _ => false,
+    };
+    if !sig_changed && !params_changed {
+        SignatureChange::Unchanged
+    } else if is_non_breaking_event_append(old, new) {
+        SignatureChange::NonBreakingAppend
+    } else {
+        SignatureChange::Breaking
+    }
+}
+
+/// Two arrays of text values, equal element by element.
+fn texts_eq(a: &[CborValue], b: &[CborValue]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|p| matches!(p, (CborValue::Text(o), CborValue::Text(n)) if o == n))
+}
+
+/// The `(name, argsHash)` of each attribute as a sorted set. AL names are
+/// case-insensitive and attribute order carries no meaning (F5).
+fn attribute_keys(fact: &CborValue) -> BTreeSet<(Option<String>, Option<&str>)> {
+    get_array(fact, "attributes")
+        .unwrap_or(&[])
+        .iter()
+        .map(|a| {
+            (
+                get_str(a, "name").map(str::to_lowercase),
+                get_str(a, "argsHash"),
+            )
+        })
+        .collect()
+}
+
+/// #236: a `local` / `internal` `[IntegrationEvent]` / `[BusinessEvent]`
+/// publisher, with the same attributes and arguments on both sides, whose old
+/// `parameters` list is a strict prefix of the new one. AppSourceCop AS0025:
+/// "For `local` or `internal` events, it is allowed to add parameters to the
+/// event" (its own example is a `local [BusinessEvent]`); subscribers bind by
+/// name and need not take every parameter. Removing, renaming, retyping or
+/// flipping `var` breaks them, and so does an attribute argument change (e.g.
+/// `IncludeSender`). Stricter than AS0025 on purpose: a middle insertion or a
+/// reorder is not an append here and stays breaking. A fact without
+/// `parameters` (an older snapshot) is never an append. Known risk, accepted as
+/// AS0025 does: an `internalsVisibleTo` friend app may RAISE an `internal`
+/// event, and an append breaks that call (see `is_abi_surface`'s shortcut).
+pub(super) fn is_non_breaking_event_append(old: &CborValue, new: &CborValue) -> bool {
+    let eligible = |f: &CborValue| {
+        get_str(f, "kind") == Some("routine")
+            && matches!(get_str(f, "visibility"), Some("local" | "internal"))
+            && carries_attribute(f, &PARAMETER_EVENT_ATTRIBUTES)
+    };
+    let (Some(old_params), Some(new_params)) =
+        (get_array(old, "parameters"), get_array(new, "parameters"))
+    else {
+        return false;
+    };
+    eligible(old)
+        && eligible(new)
+        && attribute_keys(old) == attribute_keys(new)
+        && old_params.len() < new_params.len()
+        && texts_eq(old_params, &new_params[..old_params.len()])
 }
 
 pub fn diff_abi(indexes: &DiffIndexes) -> Vec<DiffFinding> {
@@ -235,10 +321,10 @@ pub fn diff_abi(indexes: &DiffIndexes) -> Vec<DiffFinding> {
             }
         }
 
-        // Signature fingerprint change.
+        // Signature change (fingerprint, or a publisher's parameter list).
         let old_sig = get_str(old_fact, "signatureFingerprint").unwrap_or("");
         let new_sig = get_str(new_fact, "signatureFingerprint").unwrap_or("");
-        if !old_sig.is_empty() && !new_sig.is_empty() && old_sig != new_sig {
+        if signature_change(old_fact, new_fact) == SignatureChange::Breaking {
             let kind = DiffKind::ProcedureSignatureChanged;
             out.push(make_finding(
                 DiffCategory::Abi,
@@ -247,11 +333,14 @@ pub fn diff_abi(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                 subject,
                 None,
                 vec![subject.clone()],
-                vec![
+                [
                     ("kind".into(), CborValue::Text(kind.as_str().into())),
                     ("oldSignatureHash".into(), CborValue::Text(old_sig.into())),
                     ("newSignatureHash".into(), CborValue::Text(new_sig.into())),
-                ],
+                ]
+                .into_iter()
+                .chain(parameter_details(old_fact, new_fact))
+                .collect(),
                 indexes,
             ));
         }
@@ -507,16 +596,63 @@ fn data_class_details(kind: DiffKind, old_dc: &str, new_dc: &str) -> Vec<(String
 // Events (diff-events.ts)
 // ===========================================================================
 
+/// The two publisher-signature kinds are not here: their severity is decided
+/// once per publisher by `publisher_signature_severity` (#236).
 fn event_severity(kind: DiffKind) -> Severity {
     match kind {
-        DiffKind::EventPublisherSignatureChanged
-        | DiffKind::EventContractChangedWithAffectedSubscribers => Severity::Critical,
         DiffKind::EventPublisherRemoved | DiffKind::EventSubscriberInducedCapabilityGained => {
             Severity::Medium
         }
         DiffKind::EventPublisherAdded => Severity::Info,
         DiffKind::EventSubscriberInducedCapabilityLost => Severity::Low,
         _ => Severity::Medium,
+    }
+}
+
+/// #236: the severity of a kept publisher's signature finding, or `None` when
+/// its signature did not change. The contract facts are looked up by the NEW
+/// decl's `routine` (both maps are keyed by it once #156 paired the change); no
+/// pair means `signature_change` cannot read them, and a changed `eventId` alone
+/// stays Critical.
+fn publisher_signature_severity(
+    indexes: &DiffIndexes,
+    old_decl: &CborValue,
+    new_decl: &CborValue,
+) -> Option<(Severity, Details)> {
+    let routine = get_str(new_decl, "routine").unwrap_or("");
+    let (change, extra) = match (
+        indexes.old_contracts_by_subject.get(routine),
+        indexes.new_contracts_by_subject.get(routine),
+    ) {
+        (Some(old), Some(new)) => (signature_change(old, new), parameter_details(old, new)),
+        _ => (SignatureChange::Unchanged, Vec::new()),
+    };
+    let severity = match change {
+        SignatureChange::NonBreakingAppend => Severity::Low,
+        SignatureChange::Breaking => Severity::Critical,
+        SignatureChange::Unchanged
+            if get_str(old_decl, "eventId") != get_str(new_decl, "eventId") =>
+        {
+            Severity::Critical
+        }
+        SignatureChange::Unchanged => return None,
+    };
+    Some((severity, extra))
+}
+
+/// A finding's `details` entries.
+type Details = Vec<(String, CborValue)>;
+
+/// #236 G4: `oldParameters` / `newParameters` details when both facts carry
+/// the list. A pure rename or reorder has equal hashes and event ids, so these
+/// are what shows the change. Details are not hashed into finding ids.
+fn parameter_details(old: &CborValue, new: &CborValue) -> Details {
+    match (get_array(old, "parameters"), get_array(new, "parameters")) {
+        (Some(o), Some(n)) => vec![
+            ("oldParameters".into(), CborValue::Array(o.to_vec())),
+            ("newParameters".into(), CborValue::Array(n.to_vec())),
+        ],
+        _ => Vec::new(),
     }
 }
 
@@ -550,6 +686,7 @@ fn publisher_identity_key(decl: &CborValue) -> String {
 #[allow(clippy::too_many_arguments)]
 fn event_finding(
     kind: DiffKind,
+    severity: Severity,
     subject_id: &str,
     secondary_key: &str,
     details: Vec<(String, CborValue)>,
@@ -558,7 +695,7 @@ fn event_finding(
     make_finding(
         DiffCategory::Events,
         kind,
-        event_severity(kind),
+        severity,
         subject_id,
         Some(secondary_key),
         vec![subject_id.to_string()],
@@ -614,6 +751,16 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         }
     }
 
+    // #236: one severity (and the G4 parameter details) per kept publisher whose
+    // signature changed, read by the generic and the contract finding alike.
+    let changed: IndexMap<&String, (Severity, Details)> = old_publishers
+        .iter()
+        .filter_map(|(key, old_decl)| {
+            let new_decl = new_publishers.get(key)?;
+            publisher_signature_severity(indexes, old_decl, new_decl).map(|s| (key, s))
+        })
+        .collect();
+
     for (key, old_decl) in &old_publishers {
         let new_decl = new_publishers.get(key);
         let old_id = get_str(old_decl, "eventId").unwrap_or("");
@@ -623,6 +770,7 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                 let routine = indexes.normalize_old(get_str(old_decl, "routine").unwrap_or(""));
                 out.push(event_finding(
                     DiffKind::EventPublisherRemoved,
+                    event_severity(DiffKind::EventPublisherRemoved),
                     &routine,
                     &parsed.event_name,
                     event_details(
@@ -637,19 +785,22 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
             }
             Some(new_decl) => {
                 let new_id = get_str(new_decl, "eventId").unwrap_or("");
-                if old_id != new_id {
+                if let Some((severity, extra)) = changed.get(key) {
                     let routine = get_str(new_decl, "routine").unwrap_or("");
+                    let mut details = event_details(
+                        DiffKind::EventPublisherSignatureChanged,
+                        &parsed.publisher_object,
+                        &parsed.event_name,
+                        Some(old_id),
+                        Some(new_id),
+                    );
+                    details.extend(extra.iter().cloned());
                     out.push(event_finding(
                         DiffKind::EventPublisherSignatureChanged,
+                        *severity,
                         routine,
                         &parsed.event_name,
-                        event_details(
-                            DiffKind::EventPublisherSignatureChanged,
-                            &parsed.publisher_object,
-                            &parsed.event_name,
-                            Some(old_id),
-                            Some(new_id),
-                        ),
+                        details,
                         indexes,
                     ));
                 }
@@ -666,6 +817,7 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         let routine = get_str(new_decl, "routine").unwrap_or("");
         out.push(event_finding(
             DiffKind::EventPublisherAdded,
+            event_severity(DiffKind::EventPublisherAdded),
             routine,
             &parsed.event_name,
             event_details(
@@ -713,9 +865,9 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         };
         let old_id = get_str(old_decl, "eventId").unwrap_or("");
         let new_id = get_str(new_decl, "eventId").unwrap_or("");
-        if old_id == new_id {
+        let Some((severity, extra)) = changed.get(key) else {
             continue;
-        }
+        };
         let has_subs = old_subs_by_event.get(key).map(|v| v.len()).unwrap_or(0)
             + new_subs_by_event.get(key).map(|v| v.len()).unwrap_or(0)
             > 0;
@@ -725,17 +877,20 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         suppress_keys.insert(key.clone());
         let parsed = parse_event_identity(new_id);
         let routine = get_str(new_decl, "routine").unwrap_or("");
+        let mut details = event_details(
+            DiffKind::EventContractChangedWithAffectedSubscribers,
+            &parsed.publisher_object,
+            &parsed.event_name,
+            Some(old_id),
+            Some(new_id),
+        );
+        details.extend(extra.iter().cloned());
         contract_findings.push(event_finding(
             DiffKind::EventContractChangedWithAffectedSubscribers,
+            *severity,
             routine,
             &parsed.event_name,
-            event_details(
-                DiffKind::EventContractChangedWithAffectedSubscribers,
-                &parsed.publisher_object,
-                &parsed.event_name,
-                Some(old_id),
-                Some(new_id),
-            ),
+            details,
             indexes,
         ));
     }
@@ -798,6 +953,7 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                 let sk = format!("{event_name}|{table}|{op}");
                 out.push(event_finding(
                     kind,
+                    event_severity(kind),
                     subject,
                     &sk,
                     vec![
@@ -823,6 +979,7 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                 let sk = format!("{event_name}|{table}|{op}");
                 out.push(event_finding(
                     kind,
+                    event_severity(kind),
                     subject,
                     &sk,
                     vec![
@@ -1269,4 +1426,164 @@ pub fn diff_permissions(indexes: &DiffIndexes) -> Vec<DiffFinding> {
 
     sort_by_id(&mut out);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::ids::{ParamSpec, canonical_param_spec};
+
+    /// One `parameters` entry, rendered by the same formatter `derive_contracts` uses.
+    fn param(name: &str, type_text: &str, is_var: bool) -> CborValue {
+        let spec = ParamSpec {
+            type_text: type_text.into(),
+            is_var,
+        };
+        CborValue::Text(canonical_param_spec(&spec, Some(name)))
+    }
+
+    /// A routine contract fact; `attr` empty means no attribute at all.
+    fn fact(vis: &str, attr: &str, params: Option<Vec<CborValue>>) -> CborValue {
+        fact_args(vis, attr, "h", params)
+    }
+
+    /// `fact` with the attribute's `argsHash` stated (e.g. an `IncludeSender` flip).
+    fn fact_args(vis: &str, attr: &str, args: &str, params: Option<Vec<CborValue>>) -> CborValue {
+        let mut m: IndexMap<String, CborValue> = IndexMap::new();
+        m.insert("kind".into(), CborValue::Text("routine".into()));
+        m.insert("visibility".into(), CborValue::Text(vis.into()));
+        m.insert("signatureFingerprint".into(), CborValue::Text("fp".into()));
+        let attrs = if attr.is_empty() {
+            vec![]
+        } else {
+            let mut a: IndexMap<String, CborValue> = IndexMap::new();
+            a.insert("name".into(), CborValue::Text(attr.into()));
+            a.insert("argsHash".into(), CborValue::Text(args.into()));
+            vec![CborValue::Map(a)]
+        };
+        m.insert("attributes".into(), CborValue::Array(attrs));
+        if let Some(p) = params {
+            m.insert("parameters".into(), CborValue::Array(p));
+        }
+        CborValue::Map(m)
+    }
+
+    /// #236 test 1: which publisher signature changes are a non-breaking append.
+    /// The rename, retype and `var`-flip rows also append, so only the
+    /// per-parameter compare can reject them.
+    #[test]
+    fn non_breaking_event_append_matrix() {
+        let a = || param("Handled", "Boolean", true);
+        let b = || param("Qty", "Decimal", false);
+        let c = || param("Code", "Code[20]", false);
+        let check = |vis: &str, attr: &str, old: Vec<CborValue>, new: Vec<CborValue>| {
+            is_non_breaking_event_append(&fact(vis, attr, Some(old)), &fact(vis, attr, Some(new)))
+        };
+        for vis in ["local", "internal"] {
+            for attr in ["IntegrationEvent", "BusinessEvent", "integrationevent"] {
+                assert!(
+                    check(vis, attr, vec![a()], vec![a(), b()]),
+                    "{vis} [{attr}]"
+                );
+            }
+        }
+        for (vis, attr, why) in [
+            ("public", "IntegrationEvent", "public"),
+            ("protected", "IntegrationEvent", "protected"),
+            ("local", "ExternalBusinessEvent", "ExternalBusinessEvent"),
+            ("local", "", "plain local routine"),
+        ] {
+            assert!(!check(vis, attr, vec![a()], vec![a(), b()]), "{why}");
+        }
+        let local = |old, new| check("local", "IntegrationEvent", old, new);
+        assert!(!local(vec![a()], vec![a()]), "unchanged");
+        assert!(!local(vec![a(), b()], vec![a()]), "removed");
+        assert!(!local(vec![a(), b()], vec![a(), c(), b()]), "inserted");
+        assert!(
+            !local(vec![a(), b()], vec![b(), a(), c()]),
+            "reordered+append"
+        );
+        let renamed = param("IsHandled", "Boolean", true);
+        assert!(!local(vec![a()], vec![renamed, b()]), "rename+append");
+        let retyped = param("Handled", "Integer", true);
+        assert!(!local(vec![a()], vec![retyped, b()]), "retype+append");
+        let unvar = param("Handled", "Boolean", false);
+        assert!(!local(vec![a()], vec![unvar, b()]), "var+append");
+        let i = "IntegrationEvent";
+        assert!(
+            !is_non_breaking_event_append(
+                &fact("local", i, None),
+                &fact("local", i, Some(vec![a()]))
+            ),
+            "old without parameters"
+        );
+        assert!(
+            !is_non_breaking_event_append(&fact("local", i, Some(vec![])), &fact("local", i, None)),
+            "new without parameters"
+        );
+        // F3: each side must be eligible on its own.
+        for (old_vis, new_vis) in [("local", "public"), ("public", "local")] {
+            assert!(
+                !is_non_breaking_event_append(
+                    &fact(old_vis, i, Some(vec![a()])),
+                    &fact(new_vis, i, Some(vec![a(), b()]))
+                ),
+                "{old_vis} -> {new_vis}"
+            );
+        }
+        // CR1: an `IncludeSender` / `GlobalVarAccess` flip with the append breaks
+        // subscribers that take `sender` or read globals.
+        assert!(
+            !is_non_breaking_event_append(
+                &fact_args("local", i, "h", Some(vec![a()])),
+                &fact_args("local", i, "h2", Some(vec![a(), b()]))
+            ),
+            "attribute args changed + append"
+        );
+        // F5: attribute names keep their source case; the compare ignores it.
+        assert!(
+            is_non_breaking_event_append(
+                &fact("local", "IntegrationEvent", Some(vec![a()])),
+                &fact("local", "integrationevent", Some(vec![a(), b()]))
+            ),
+            "attribute name case changed + append"
+        );
+    }
+
+    /// #236 F1: names are not in the fingerprint, so a pure rename or a
+    /// same-type reorder shows only in `parameters`; both break subscribers
+    /// (AS0025). The facts here share one fingerprint.
+    #[test]
+    fn signature_change_reads_the_parameter_list() {
+        let x = || param("X", "Integer", false);
+        let y = || param("Y", "Integer", false);
+        let change = |old: Option<Vec<CborValue>>, new: Option<Vec<CborValue>>| {
+            signature_change(
+                &fact("local", "IntegrationEvent", old),
+                &fact("local", "IntegrationEvent", new),
+            )
+        };
+        use SignatureChange::*;
+        assert_eq!(
+            change(Some(vec![x(), y()]), Some(vec![x(), y()])),
+            Unchanged
+        );
+        assert_eq!(change(None, None), Unchanged, "no lists, same fingerprint");
+        assert_eq!(
+            change(Some(vec![x(), y()]), Some(vec![y(), x()])),
+            Breaking,
+            "reordered"
+        );
+        let renamed = param("Z", "Integer", false);
+        assert_eq!(
+            change(Some(vec![x()]), Some(vec![renamed])),
+            Breaking,
+            "renamed"
+        );
+        assert_eq!(
+            change(Some(vec![x()]), Some(vec![x(), y()])),
+            NonBreakingAppend,
+            "appended"
+        );
+    }
 }

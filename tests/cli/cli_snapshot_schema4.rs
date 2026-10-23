@@ -1418,6 +1418,30 @@ fn closure_fields_are_classified_and_closed() {
                 "precondition: a kept fact carries a table-field source"
             );
         }
+        if label == "R5B" {
+            // #236: R5B's one publisher (`OnHostStarted()`) has no parameters and
+            // DD's is a dependency row, so no tree carries a `parameters` leaf;
+            // one is hand-stated on a kept contract fact.
+            let CborValue::Map(m) = &mut tree else {
+                unreachable!()
+            };
+            let Some(CborValue::Array(facts)) = m.get_mut("contractFacts") else {
+                panic!("contractFacts is an array")
+            };
+            let Some(CborValue::Map(fact)) = facts.first_mut() else {
+                panic!("precondition: a kept contract fact")
+            };
+            fact.insert(
+                "parameters".to_string(),
+                CborValue::Array(vec![CborValue::Text("x: integer".into())]),
+            );
+            assert!(
+                leaves_by_key(&tree)
+                    .iter()
+                    .any(|(key, path, _)| key == "contractFacts" && path == &["parameters"]),
+                "precondition: a kept contract fact carries a parameters leaf"
+            );
+        }
         let tree = tree;
         let snap = json(&tree);
         let shaped = id_shaped(model, evidence_ids(&snap));
