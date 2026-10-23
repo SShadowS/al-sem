@@ -2,18 +2,39 @@
 
 use serde::Serialize;
 
-/// Metrics for a single procedure/trigger
-#[derive(Debug, Clone, Serialize)]
+/// Metrics for a single procedure/trigger. The fields after `quality_score`
+/// were added by #159 (appended, so existing keys keep their order).
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ProcedureMetrics {
     pub object_type: String,
     pub object_name: String,
     pub procedure_name: String,
+    /// The file's base name (kept for existing consumers; see `path`).
     pub file: String,
     pub line: u32,
     pub complexity: u32,
     pub line_count: u32,
     pub parameter_count: u32,
     pub quality_score: f32,
+    /// Workspace-relative POSIX path of the file.
+    pub path: String,
+    /// The object number; `None` when the object declares none.
+    pub object_id: Option<i64>,
+    /// `local` | `internal` | `protected` as declared, else `public`.
+    pub access: String,
+    pub is_event_subscriber: bool,
+    pub is_trigger: bool,
+    /// alsem's `stableRoutineId`; `None` without an app id, for a file in a
+    /// nested app, for Interface / ControlAddIn members, object kinds alsem
+    /// gives no id, and nameless routines. Independent of the call graph.
+    pub routine_id: Option<String>,
+    /// Distinct callers in the resolved call graph; `None` = no graph for
+    /// this row (no snapshot, or no matching declaration), never `0`, and
+    /// for Interface / ControlAddIn members (never a call target).
+    pub fan_in: Option<usize>,
+    /// Distinct callees (routine and dependency-symbol targets); `None` as
+    /// for `fan_in`.
+    pub fan_out: Option<usize>,
 }
 
 /// A finding/issue detected during analysis
@@ -24,6 +45,11 @@ pub struct Finding {
     pub location: String,
     pub procedure: String,
     pub description: String,
+    /// Workspace-relative POSIX path (#159). Set on `unused_procedure`
+    /// findings only and omitted otherwise, so existing findings keep their
+    /// exact shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// Summary statistics for the analysis
@@ -84,6 +110,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
     // Complexity findings
     if config.complexity_enabled && metrics.complexity >= config.complexity_critical {
         findings.push(Finding {
+            path: None,
             category: "high_complexity".to_string(),
             severity: "critical".to_string(),
             location: location.clone(),
@@ -95,6 +122,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
         });
     } else if config.complexity_enabled && metrics.complexity >= config.complexity_warning {
         findings.push(Finding {
+            path: None,
             category: "high_complexity".to_string(),
             severity: "warning".to_string(),
             location: location.clone(),
@@ -109,6 +137,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
     // Length findings
     if config.length_enabled && metrics.line_count >= config.length_critical {
         findings.push(Finding {
+            path: None,
             category: "long_method".to_string(),
             severity: "critical".to_string(),
             location: location.clone(),
@@ -120,6 +149,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
         });
     } else if config.length_enabled && metrics.line_count >= config.length_warning {
         findings.push(Finding {
+            path: None,
             category: "long_method".to_string(),
             severity: "warning".to_string(),
             location: location.clone(),
@@ -134,6 +164,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
     // Parameter findings
     if config.params_enabled && metrics.parameter_count >= config.params_critical {
         findings.push(Finding {
+            path: None,
             category: "too_many_parameters".to_string(),
             severity: "critical".to_string(),
             location: location.clone(),
@@ -145,6 +176,7 @@ pub fn generate_findings(metrics: &ProcedureMetrics, config: &DiagnosticConfig) 
         });
     } else if config.params_enabled && metrics.parameter_count >= config.params_warning {
         findings.push(Finding {
+            path: None,
             category: "too_many_parameters".to_string(),
             severity: "warning".to_string(),
             location,
@@ -183,6 +215,273 @@ pub fn build_summary(metrics: &[ProcedureMetrics], findings: &[Finding]) -> Anal
         critical_findings: critical,
         warning_findings: warnings,
     }
+}
+
+// ---------------------------------------------------------------------------
+// `--analyze`: the whole analysis of one project (#159 moved it here from the
+// binary so it can share the LSP's crate-private rules).
+// ---------------------------------------------------------------------------
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+use crate::lsp::snapshot::{DeclEntry, LspSnapshot, LspTarget};
+use crate::program::RoutineNodeId;
+use crate::snapshot::DependencySource;
+
+/// The call graph one analysis reads: the LSP snapshot plus every routine's
+/// distinct outgoing targets (computed once, not per routine).
+struct Graph<'s> {
+    snap: &'s LspSnapshot,
+    fan_out: HashMap<&'s RoutineNodeId, HashSet<&'s LspTarget>>,
+}
+
+impl<'s> Graph<'s> {
+    fn new(snap: &'s LspSnapshot) -> Self {
+        Graph {
+            snap,
+            fan_out: crate::lsp::handlers::outgoing_targets_by_caller(snap),
+        }
+    }
+}
+
+/// Analyze every `.al` file under `project`: per-routine metrics, then the
+/// threshold findings, then (with a graph) the `unused_procedure` findings.
+///
+/// `graph: Some(source)` builds the LSP's call graph with that dependency
+/// source and fills `fan_in`/`fan_out` and the unused findings; `None` skips
+/// it (text/CSV print none of that). When the graph cannot be built, one
+/// warning with the reason goes to stderr and those stay empty.
+pub fn analyze_project(
+    project: &Path,
+    graph: Option<DependencySource>,
+    config: &DiagnosticConfig,
+) -> anyhow::Result<AnalysisResult> {
+    use rayon::prelude::*;
+
+    let files =
+        crate::source_text::discover_al_files(project, crate::source_text::NestedApps::Walk)?;
+    let snap = graph.and_then(|source| {
+        let snap = LspSnapshot::build_full_with(project, source);
+        if snap.is_none() {
+            // The builder reports no reason; the one we can tell apart is a
+            // missing root app.json.
+            let reason = if project.join("app.json").is_file() {
+                "the program snapshot could not be built"
+            } else {
+                "no app.json at the project root"
+            };
+            eprintln!(
+                "warning: call graph unavailable for {} ({reason}): \
+                 fan_in and fan_out are null and unused procedures are not reported",
+                project.display()
+            );
+        }
+        snap
+    });
+    let graph = snap.as_ref().map(Graph::new);
+    let app_guid = crate::source_text::read_root_app_guid(project);
+
+    // Big-stack pool: the complexity walk recurses (see `big_stack`'s doc).
+    let per_file: Vec<(Vec<ProcedureMetrics>, Vec<Finding>)> = crate::big_stack::big_stack_pool()
+        .install(|| {
+            files
+                .par_iter()
+                .map(|f| {
+                    // A nested app's file belongs to another app: the root's
+                    // guid would mint a wrong routine_id, so it gets none.
+                    let guid = app_guid
+                        .as_deref()
+                        .filter(|_| !in_nested_app(project, &f.rel_posix));
+                    file_metrics(
+                        &f.rel_posix,
+                        &f.abs_path,
+                        graph.as_ref(),
+                        guid,
+                        config.unused_procedures,
+                    )
+                })
+                .collect()
+        });
+
+    let mut metrics = Vec::new();
+    let mut unused = Vec::new();
+    for (m, u) in per_file {
+        metrics.extend(m);
+        unused.extend(u);
+    }
+    let mut findings: Vec<Finding> = metrics
+        .iter()
+        .flat_map(|m| generate_findings(m, config))
+        .collect();
+    // After every existing finding, so those keep their positions.
+    findings.extend(unused);
+    let summary = build_summary(&metrics, &findings);
+    Ok(AnalysisResult {
+        metrics,
+        findings,
+        summary,
+    })
+}
+
+/// Whether the file at `rel_posix` lies in a folder below `project` that holds
+/// its own `app.json` (a nested app; `discover_al_files` walks into those).
+fn in_nested_app(project: &Path, rel_posix: &str) -> bool {
+    let mut dir = project.to_path_buf();
+    let mut folders: Vec<&str> = rel_posix.split('/').collect();
+    folders.pop(); // the file name
+    folders.into_iter().any(|folder| {
+        dir.push(folder);
+        dir.join("app.json").is_file()
+    })
+}
+
+/// One file's rows and `unused_procedure` findings. With a graph that holds
+/// the file, the rows come from the snapshot's OWN parse and join its
+/// declarations on the routine's byte offset, so the two cannot describe
+/// different versions of the file. Otherwise the file is read and parsed
+/// here and the graph fields stay `None`.
+fn file_metrics(
+    rel_posix: &str,
+    abs_path: &Path,
+    graph: Option<&Graph<'_>>,
+    app_guid: Option<&str>,
+    report_unused: bool,
+) -> (Vec<ProcedureMetrics>, Vec<Finding>) {
+    use crate::program::body::ir_walk::ir_routine_kind;
+    use crate::program::body::l2_workspace::{stable_object_id_ir, stable_routine_id_ir};
+    use al_syntax::ir::{ObjectKind, RoutineKind};
+
+    // The file's declarations by start byte: one lookup per routine.
+    let in_snapshot = graph.and_then(|g| {
+        let entry = g.snap.parsed.get(rel_posix)?;
+        let decl_at: HashMap<usize, &DeclEntry> = g
+            .snap
+            .decls_by_file
+            .get(rel_posix)
+            .map(|decls| decls.iter().map(|d| (d.origin.byte.start, d)).collect())
+            .unwrap_or_default();
+        Some((g, entry.file.clone(), decl_at))
+    });
+    let file = match &in_snapshot {
+        Some((_, file, _)) => file.clone(),
+        None => match crate::source_text::read_al_source(abs_path) {
+            Ok(source) => std::sync::Arc::new(al_syntax::parse(&source)),
+            Err(_) => return (Vec::new(), Vec::new()),
+        },
+    };
+    let file_name = abs_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| abs_path.display().to_string());
+
+    let mut metrics = Vec::new();
+    let mut unused = Vec::new();
+    for obj in &file.objects {
+        let object_type = object_kind_label(obj.kind);
+        let object_name = obj.name.trim_matches('"').to_string();
+        // Interface and ControlAddIn members are signatures: never a call
+        // target, so no routine_id and no fan_in/fan_out (null, not 0).
+        let signature_only = matches!(obj.kind, ObjectKind::Interface | ObjectKind::ControlAddIn);
+        let stable_object_id = app_guid
+            .filter(|_| !signature_only)
+            .and_then(|guid| stable_object_id_ir(guid, obj));
+        for r in &obj.routines {
+            let procedure_name = if r.name.is_empty() {
+                match r.kind {
+                    RoutineKind::Procedure => "procedure",
+                    RoutineKind::Trigger => "trigger_declaration",
+                }
+                .to_string()
+            } else {
+                r.name.trim_matches('"').to_string()
+            };
+            let complexity = routine_complexity_ir(&file.ir, r);
+            let line_count = r.origin.end.row.saturating_sub(r.origin.start.row) + 1;
+            let parameter_count = r.params.len() as u32;
+            let quality_score = calculate_quality_score(complexity, line_count, parameter_count);
+            let line = r.origin.start.row + 1;
+
+            let decl = in_snapshot
+                .as_ref()
+                .and_then(|(g, _, decl_at)| Some((*g, *decl_at.get(&r.origin.byte.start)?)));
+            let counted = decl.filter(|_| !signature_only);
+            if report_unused
+                && let Some((g, d)) = decl
+                && crate::lsp::diagnostics::is_unused_procedure(
+                    d,
+                    r,
+                    crate::lsp::lens::effective_incoming_count(g.snap, &d.id),
+                )
+            {
+                unused.push(Finding {
+                    category: "unused_procedure".to_string(),
+                    severity: "info".to_string(),
+                    location: format!("{file_name}:{line}"),
+                    procedure: format!("{object_name}.{procedure_name}"),
+                    description: format!(
+                        "Procedure '{object_name}.{procedure_name}' is never called"
+                    ),
+                    path: Some(rel_posix.to_string()),
+                });
+            }
+
+            metrics.push(ProcedureMetrics {
+                object_type: object_type.clone(),
+                object_name: object_name.clone(),
+                procedure_name,
+                file: file_name.clone(),
+                line,
+                complexity,
+                line_count,
+                parameter_count,
+                quality_score,
+                path: rel_posix.to_string(),
+                object_id: obj.id,
+                access: r
+                    .access_modifier
+                    .clone()
+                    .unwrap_or_else(|| "public".to_string()),
+                is_event_subscriber: ir_routine_kind(r) == "event-subscriber",
+                is_trigger: r.kind == RoutineKind::Trigger,
+                routine_id: stable_object_id
+                    .as_deref()
+                    .filter(|_| !r.name.is_empty())
+                    .map(|o| stable_routine_id_ir(o, r)),
+                fan_in: counted
+                    .map(|(g, d)| crate::lsp::handlers::incoming_callers(g.snap, &d.id).len()),
+                fan_out: counted.map(|(g, d)| g.fan_out.get(&d.id).map_or(0, HashSet::len)),
+            });
+        }
+    }
+    (metrics, unused)
+}
+
+/// Human-readable object-type label (e.g. `Codeunit`, `Pageextension`), matching
+/// the former kind-string capitalization used in the CLI metrics output.
+fn object_kind_label(k: al_syntax::ir::ObjectKind) -> String {
+    use al_syntax::ir::ObjectKind as K;
+    match k {
+        K::Codeunit => "Codeunit",
+        K::Table => "Table",
+        K::TableExtension => "Tableextension",
+        K::Page => "Page",
+        K::PageExtension => "Pageextension",
+        K::Report => "Report",
+        K::ReportExtension => "Reportextension",
+        K::Query => "Query",
+        K::XmlPort => "Xmlport",
+        K::Enum => "Enum",
+        K::EnumExtension => "Enumextension",
+        K::Interface => "Interface",
+        K::ControlAddIn => "Controladdin",
+        K::Entitlement => "Entitlement",
+        K::PermissionSet => "Permissionset",
+        K::PermissionSetExtension => "Permissionsetextension",
+        K::Profile => "Profile",
+        K::Other => "",
+    }
+    .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -664,6 +963,7 @@ mod tests {
             line_count: 10,
             parameter_count: 2,
             quality_score: 5.0,
+            ..Default::default()
         };
         let config = DiagnosticConfig::default();
         let findings = generate_findings(&metrics, &config);
@@ -718,6 +1018,7 @@ mod tests {
             line_count: 5,
             parameter_count: 1,
             quality_score: 8.0,
+            ..Default::default()
         };
         let findings = generate_findings(&metrics, &config);
         assert_eq!(findings.len(), 1);
@@ -738,6 +1039,7 @@ mod tests {
             line_count: config.length_critical, // at critical threshold
             parameter_count: 1,
             quality_score: 5.0,
+            ..Default::default()
         };
         let findings = generate_findings(&metrics, &config);
         assert!(
@@ -760,6 +1062,7 @@ mod tests {
             line_count: config.length_warning, // at warning threshold
             parameter_count: 1,
             quality_score: 7.0,
+            ..Default::default()
         };
         let findings = generate_findings(&metrics, &config);
         assert_eq!(findings.len(), 1);
@@ -780,6 +1083,7 @@ mod tests {
             line_count: 5,
             parameter_count: config.params_critical, // at critical threshold
             quality_score: 5.0,
+            ..Default::default()
         };
         let findings = generate_findings(&metrics, &config);
         assert!(
@@ -802,6 +1106,7 @@ mod tests {
             line_count: 5,
             parameter_count: config.params_warning, // at warning threshold
             quality_score: 7.0,
+            ..Default::default()
         };
         let findings = generate_findings(&metrics, &config);
         assert_eq!(findings.len(), 1);
@@ -822,6 +1127,7 @@ mod tests {
             line_count: 5,
             parameter_count: 1,
             quality_score: 10.0,
+            ..Default::default()
         };
         let findings = generate_findings(&metrics, &config);
         assert!(findings.is_empty());
@@ -840,6 +1146,7 @@ mod tests {
                 line_count: 20,
                 parameter_count: 2,
                 quality_score: 8.0,
+                ..Default::default()
             },
             ProcedureMetrics {
                 object_type: "Codeunit".to_string(),
@@ -851,6 +1158,7 @@ mod tests {
                 line_count: 30,
                 parameter_count: 3,
                 quality_score: 6.0,
+                ..Default::default()
             },
         ];
         let findings = vec![
@@ -860,8 +1168,10 @@ mod tests {
                 location: "test.al:30".to_string(),
                 procedure: "Test.Proc2".to_string(),
                 description: "test".to_string(),
+                path: None,
             },
             Finding {
+                path: None,
                 category: "long_method".to_string(),
                 severity: "warning".to_string(),
                 location: "test.al:30".to_string(),
@@ -885,5 +1195,59 @@ mod tests {
         assert_eq!(summary.avg_quality_score, 0.0);
         assert_eq!(summary.critical_findings, 0);
         assert_eq!(summary.warning_findings, 0);
+    }
+
+    /// #159: a file the snapshot does not hold (a join miss, stated by hand: it
+    /// is written AFTER the snapshot is built) gets `None` graph fields and no
+    /// `unused_procedure` finding, never `Some(0)` / "unused".
+    #[test]
+    fn join_miss_gives_null_not_zero() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"15900000-0000-4000-8000-000000000008","name":"JoinMiss","publisher":"t","version":"1.0.0.0","idRanges":[{"from":50100,"to":50199}],"runtime":"14.0"}"#,
+        )
+        .expect("app.json");
+        let held_src =
+            "codeunit 50100 \"Held\"\n{\n    procedure Uncalled()\n    begin\n    end;\n}\n";
+        let held = dir.path().join("Held.Codeunit.al");
+        std::fs::write(&held, held_src).expect("held");
+        let snap = LspSnapshot::build_full(dir.path()).expect("snapshot");
+        let missing = dir.path().join("Missing.Codeunit.al");
+        std::fs::write(
+            &missing,
+            held_src.replace("50100 \"Held\"", "50101 \"Missing\""),
+        )
+        .expect("missing");
+        let graph = Graph::new(&snap);
+
+        // Precondition: the held file's uncalled procedure IS graph-backed and unused.
+        let (rows, unused) = file_metrics("Held.Codeunit.al", &held, Some(&graph), Some("g"), true);
+        assert_eq!(
+            (rows.len(), rows[0].fan_in, rows[0].fan_out),
+            (1, Some(0), Some(0))
+        );
+        assert_eq!(unused.len(), 1, "precondition: Held.Uncalled is unused");
+
+        let (rows, unused) = file_metrics(
+            "Missing.Codeunit.al",
+            &missing,
+            Some(&graph),
+            Some("g"),
+            true,
+        );
+        assert_eq!(rows.len(), 1, "the missing file is still analyzed");
+        assert_eq!(
+            rows[0].fan_in, None,
+            "join miss: fan_in must be None, not 0"
+        );
+        assert_eq!(
+            rows[0].fan_out, None,
+            "join miss: fan_out must be None, not 0"
+        );
+        assert!(
+            unused.is_empty(),
+            "join miss: no unused finding: {unused:?}"
+        );
     }
 }

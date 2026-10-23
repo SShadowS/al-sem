@@ -1,0 +1,295 @@
+{
+  "metrics": [
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "Target",
+      "file": "Util.Codeunit.al",
+      "line": 3,
+      "complexity": 1,
+      "line_count": 7,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "CallerA",
+      "file": "Util.Codeunit.al",
+      "line": 11,
+      "complexity": 1,
+      "line_count": 5,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "CallerB",
+      "file": "Util.Codeunit.al",
+      "line": 17,
+      "complexity": 1,
+      "line_count": 4,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "One",
+      "file": "Util.Codeunit.al",
+      "line": 22,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "Two",
+      "file": "Util.Codeunit.al",
+      "line": 26,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "Three",
+      "file": "Util.Codeunit.al",
+      "line": 30,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "NeverCalled",
+      "file": "Util.Codeunit.al",
+      "line": 34,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 4,
+      "quality_score": 9.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "Over",
+      "file": "Util.Codeunit.al",
+      "line": 38,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 1,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "Over",
+      "file": "Util.Codeunit.al",
+      "line": 42,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 1,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "OnRaised",
+      "file": "Util.Codeunit.al",
+      "line": 47,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "OnNeverRaised",
+      "file": "Util.Codeunit.al",
+      "line": 52,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "OnSubscribedOnly",
+      "file": "Util.Codeunit.al",
+      "line": 57,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "OnRun",
+      "file": "Util.Codeunit.al",
+      "line": 61,
+      "complexity": 1,
+      "line_count": 16,
+      "parameter_count": 0,
+      "quality_score": 8.35
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Util",
+      "procedure_name": "Dispatch",
+      "file": "Util.Codeunit.al",
+      "line": 78,
+      "complexity": 1,
+      "line_count": 4,
+      "parameter_count": 1,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Subs",
+      "procedure_name": "HandleRaised",
+      "file": "Util.Codeunit.al",
+      "line": 4,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Subs",
+      "procedure_name": "HandleSubscribedOnly",
+      "file": "Util.Codeunit.al",
+      "line": 9,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Interface",
+      "object_name": "Probe Greeter",
+      "procedure_name": "Greet",
+      "file": "Greeter.Interface.al",
+      "line": 3,
+      "complexity": 1,
+      "line_count": 1,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Greeter Impl",
+      "procedure_name": "Greet",
+      "file": "GreeterImpl.Codeunit.al",
+      "line": 3,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Greeter Impl2",
+      "procedure_name": "Greet",
+      "file": "GreeterImpl2.Codeunit.al",
+      "line": 3,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Tests",
+      "procedure_name": "TestSomething",
+      "file": "Tests.Codeunit.al",
+      "line": 6,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Codeunit",
+      "object_name": "Probe Tests",
+      "procedure_name": "ConfirmYes",
+      "file": "Tests.Codeunit.al",
+      "line": 11,
+      "complexity": 1,
+      "line_count": 4,
+      "parameter_count": 2,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Page",
+      "object_name": "Probe Card",
+      "procedure_name": "OnAction",
+      "file": "Card.Page.al",
+      "line": 22,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Page",
+      "object_name": "Probe Card",
+      "procedure_name": "OnAction",
+      "file": "Card.Page.al",
+      "line": 28,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Tableextension",
+      "object_name": "Probe Base Ext",
+      "procedure_name": "OnValidate",
+      "file": "Ext.TableExtension.al",
+      "line": 7,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    },
+    {
+      "object_type": "Tableextension",
+      "object_name": "Probe Base Ext",
+      "procedure_name": "ExtProc",
+      "file": "Ext.TableExtension.al",
+      "line": 13,
+      "complexity": 1,
+      "line_count": 3,
+      "parameter_count": 0,
+      "quality_score": 10.0
+    }
+  ],
+  "findings": [
+    {
+      "category": "too_many_parameters",
+      "severity": "warning",
+      "location": "Util.Codeunit.al:34",
+      "procedure": "Probe Util.NeverCalled",
+      "description": "Parameter count 4 exceeds warning threshold of 4"
+    }
+  ],
+  "summary": {
+    "total_procedures": 25,
+    "avg_complexity": 1.0,
+    "avg_quality_score": 9.894,
+    "critical_findings": 0,
+    "warning_findings": 1
+  }
+}

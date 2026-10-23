@@ -70,8 +70,8 @@ struct Args {
     /// a dependency ships, so calls can be followed into it. `symbols` reads
     /// only its symbols: calls into it still resolve, nothing inside it is
     /// indexed, and memory drops sharply (Base Application's source alone
-    /// costs ~1.4 GB). Also read from AL_SEM_DEPENDENCY_SOURCE. Ignored with
-    /// --analyze.
+    /// costs ~1.4 GB). Also read from AL_SEM_DEPENDENCY_SOURCE. With
+    /// --analyze, used only by --format json (the call-graph fields).
     #[arg(
         long,
         value_enum,
@@ -122,7 +122,7 @@ fn main() -> Result<()> {
     } else if let Some(project) = args.project {
         if args.analyze {
             // Analysis mode
-            run_analysis(&project, &args.format)?;
+            run_analysis(&project, &args.format, args.dependency_source)?;
         } else {
             // CLI mode for testing/indexing (T3 Task 15: re-pointed at the
             // program-engine snapshot — see this block's own doc below).
@@ -182,52 +182,21 @@ fn report_index_stats(project: &Path, dependency_source: DependencySource) -> Re
 }
 
 /// Run code quality analysis on a project
-fn run_analysis(project: &Path, format: &OutputFormat) -> Result<()> {
-    use analysis::{AnalysisResult, ProcedureMetrics, build_summary, generate_findings};
-    use rayon::prelude::*;
+fn run_analysis(
+    project: &Path,
+    format: &OutputFormat,
+    dependency_source: DependencySource,
+) -> Result<()> {
     use std::time::Instant;
 
     let start = Instant::now();
     info!("Analyzing project: {}", project.display());
 
-    // Collect all .al files (the shared workspace walk).
-    let al_files: Vec<PathBuf> =
-        source_text::discover_al_files(project, source_text::NestedApps::Walk)?
-            .into_iter()
-            .map(|f| f.abs_path)
-            .collect();
-
-    info!("Found {} AL files", al_files.len());
-
-    // Parse + collect per-procedure metrics in parallel, from the owned IR, on
-    // a big-stack pool (T2.1: the CLI main thread's default pool has no
-    // guaranteed-generous stack; see `big_stack`'s doc).
-    let pool = big_stack::big_stack_pool();
-    let all_metrics: Vec<ProcedureMetrics> = pool.install(|| {
-        al_files
-            .par_iter()
-            .flat_map(|path| match source_text::read_al_source(path) {
-                Ok(source) => extract_metrics_ir(&source, path),
-                Err(_) => vec![],
-            })
-            .collect()
-    });
-
-    // Generate findings using config from project root
+    // Config from the project root. Only JSON prints the call-graph fields,
+    // so only JSON pays for building the graph.
     let config = config::DiagnosticConfig::load(project);
-    let mut all_findings = Vec::new();
-    for metrics in &all_metrics {
-        all_findings.extend(generate_findings(metrics, &config));
-    }
-
-    // Build summary
-    let summary = build_summary(&all_metrics, &all_findings);
-
-    let result = AnalysisResult {
-        metrics: all_metrics,
-        findings: all_findings,
-        summary,
-    };
+    let graph = matches!(format, OutputFormat::Json).then_some(dependency_source);
+    let result = analysis::analyze_project(project, graph, &config)?;
 
     info!(
         "Analyzed {} procedures in {:.1}ms",
@@ -249,81 +218,6 @@ fn run_analysis(project: &Path, format: &OutputFormat) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Extract per-procedure quality metrics for one file from the owned IR. Each
-/// routine is attributed to its enclosing object (object type/name). Replaces the
-/// former tree-sitter walk; complexity comes from the canonical IR walker.
-fn extract_metrics_ir(source: &str, path: &Path) -> Vec<analysis::ProcedureMetrics> {
-    use al_syntax::ir::RoutineKind;
-    use analysis::{calculate_quality_score, routine_complexity_ir};
-
-    let f = al_syntax::parse(source);
-    let file_str = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.display().to_string());
-
-    let mut metrics = Vec::new();
-    for obj in &f.objects {
-        let object_type = object_kind_label(obj.kind);
-        let object_name = obj.name.trim_matches('"').to_string();
-        for r in &obj.routines {
-            let procedure_name = if r.name.is_empty() {
-                match r.kind {
-                    RoutineKind::Procedure => "procedure",
-                    RoutineKind::Trigger => "trigger_declaration",
-                }
-                .to_string()
-            } else {
-                r.name.trim_matches('"').to_string()
-            };
-            let complexity = routine_complexity_ir(&f.ir, r);
-            let line_count = r.origin.end.row.saturating_sub(r.origin.start.row) + 1;
-            let parameter_count = r.params.len() as u32;
-            let quality_score = calculate_quality_score(complexity, line_count, parameter_count);
-
-            metrics.push(analysis::ProcedureMetrics {
-                object_type: object_type.clone(),
-                object_name: object_name.clone(),
-                procedure_name,
-                file: file_str.clone(),
-                line: r.origin.start.row + 1,
-                complexity,
-                line_count,
-                parameter_count,
-                quality_score,
-            });
-        }
-    }
-    metrics
-}
-
-/// Human-readable object-type label (e.g. `Codeunit`, `Pageextension`), matching
-/// the former kind-string capitalization used in the CLI metrics output.
-fn object_kind_label(k: al_syntax::ir::ObjectKind) -> String {
-    use al_syntax::ir::ObjectKind as K;
-    match k {
-        K::Codeunit => "Codeunit",
-        K::Table => "Table",
-        K::TableExtension => "Tableextension",
-        K::Page => "Page",
-        K::PageExtension => "Pageextension",
-        K::Report => "Report",
-        K::ReportExtension => "Reportextension",
-        K::Query => "Query",
-        K::XmlPort => "Xmlport",
-        K::Enum => "Enum",
-        K::EnumExtension => "Enumextension",
-        K::Interface => "Interface",
-        K::ControlAddIn => "Controladdin",
-        K::Entitlement => "Entitlement",
-        K::PermissionSet => "Permissionset",
-        K::PermissionSetExtension => "Permissionsetextension",
-        K::Profile => "Profile",
-        K::Other => "",
-    }
-    .to_string()
 }
 
 /// Print results in CSV format
@@ -398,7 +292,15 @@ fn print_text(
         println!("  ... and {} more procedures", sorted_metrics.len() - 20);
     }
 
-    // Findings
+    // Findings. Text output is unchanged by #159: `run_analysis` builds no
+    // call graph for text, so the JSON-only `unused_procedure` never exists here.
+    debug_assert!(
+        result
+            .findings
+            .iter()
+            .all(|f| f.category != "unused_procedure"),
+        "text output must not get unused_procedure findings"
+    );
     if !result.findings.is_empty() {
         println!("\nFINDINGS:\n");
         for f in &result.findings {
