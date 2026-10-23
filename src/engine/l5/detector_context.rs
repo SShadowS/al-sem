@@ -496,6 +496,11 @@ pub(crate) mod cones_census {
     /// (anchorless rows that carry a link). Both are counted ungated, so the
     /// step-6 probe reads them without the census.
     pub(crate) static PD_EDGE_UNMAPPED_KEYS: AtomicU64 = AtomicU64::new(0);
+    /// #160 step 6 D8: the witness DAGs built (one per root and first hop),
+    /// their routines and their predecessor entries (spec §14.9's census line).
+    pub(crate) static WITNESS_DAGS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static WITNESS_DAG_NODES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static WITNESS_DAG_PREDS: AtomicU64 = AtomicU64::new(0);
     /// What `compose_inherited_cones` spends outside every timed component,
     /// charged PER CALL as `elapsed - Σ(component delta)` in `i64`. The one
     /// signed counter: a negative total means two component timers overlap.
@@ -760,6 +765,12 @@ pub(crate) mod cones_census {
             snapshot,
             arena + working + snapshot,
             PD_EDGE_UNMAPPED.load(Ordering::Relaxed),
+        );
+        eprintln!(
+            "[cones-census]   digest.witness_dags={} nodes={} preds={}",
+            WITNESS_DAGS.load(Ordering::Relaxed),
+            WITNESS_DAG_NODES.load(Ordering::Relaxed),
+            WITNESS_DAG_PREDS.load(Ordering::Relaxed),
         );
     }
 }

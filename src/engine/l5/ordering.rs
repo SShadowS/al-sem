@@ -177,7 +177,63 @@ pub fn edge_quantifier(a: &OrderedOp, b: &OrderedOp) -> Quantifier {
     }
 }
 
+/// The happens-before test on demand (spec §14.3.7): the answer
+/// [`build_hb_edges`] gives per group, without materializing its all-pairs edge
+/// list. Each group's ops are built once and shared (`Arc`) by its occurrences.
+pub struct HbIndex {
+    groups: Vec<std::sync::Arc<[OrderedOp]>>,
+    /// Every (group, position) of an occurrence id: the edge scan this
+    /// replaces matched an edge between ANY two occurrences with those ids.
+    positions: std::collections::HashMap<String, Vec<(usize, usize)>>,
+}
+
+impl HbIndex {
+    pub fn new(groups: Vec<Vec<OrderedOp>>) -> HbIndex {
+        let mut positions: std::collections::HashMap<String, Vec<(usize, usize)>> =
+            std::collections::HashMap::new();
+        for (g, ops) in groups.iter().enumerate() {
+            for (p, op) in ops.iter().enumerate() {
+                positions
+                    .entry(op.occurrence_id.clone())
+                    .or_default()
+                    .push((g, p));
+            }
+        }
+        HbIndex {
+            groups: groups.into_iter().map(Into::into).collect(),
+            positions,
+        }
+    }
+
+    /// Group `g`'s ops, shared.
+    pub fn group(&self, g: usize) -> std::sync::Arc<[OrderedOp]> {
+        std::sync::Arc::clone(&self.groups[g])
+    }
+
+    /// Is there a happens-before edge `from → to`? [`build_hb_edges`] emits,
+    /// for positions `i < j`, `a → b` when `OB(a,b) && MC(a,b)`, else `b → a`
+    /// when `OB(b,a) && MC(b,a)`. [`ordered_before`] is asymmetric (it needs
+    /// `a.order_id < b.order_id`), so for `i > j` that `else if` guard holds
+    /// whenever `OB(x,y)` does: the edge `x → y` exists exactly when `x` and
+    /// `y` share a group and `OB(x,y) && MC(x,y)`.
+    pub fn has_edge(&self, from: &str, to: &str) -> bool {
+        let (Some(fs), Some(ts)) = (self.positions.get(from), self.positions.get(to)) else {
+            return false;
+        };
+        fs.iter().any(|&(gf, pf)| {
+            ts.iter().any(|&(gt, pt)| {
+                let ops = &self.groups[gf];
+                gf == gt
+                    && pf != pt
+                    && ordered_before(&ops[pf], &ops[pt])
+                    && may_co_execute(&ops[pf], &ops[pt])
+            })
+        })
+    }
+}
+
 /// Build the full list of happens-before edges among a set of `OrderedOp`s.
+/// The ordering engine asks [`HbIndex`] instead; this is its test oracle (O1).
 pub fn build_hb_edges(ops: &[OrderedOp]) -> Vec<HBEdge> {
     let mut edges: Vec<HBEdge> = Vec::new();
     for i in 0..ops.len() {
@@ -304,6 +360,30 @@ mod tests {
         let a = op("a", 1, vec![root_frame()]);
         let b = op("b", 2, vec![root_frame(), frame(1, 0, "loop", None)]);
         assert!(!dom(&a, &b));
+    }
+
+    /// O1 (b), spec §14.3.7: the on-demand test on hand-built ops. Group G1:
+    /// `a` and `b` in the two arms of one `if` (order 1, 2), `c` after it (3);
+    /// group G2: `d` (2, between `a` and `c`).
+    #[test]
+    fn o1_on_demand_happens_before_on_hand_built_ops() {
+        let a = op(
+            "a",
+            1,
+            vec![root_frame(), frame(1, 0, "if-then", Some(true))],
+        );
+        let b = op(
+            "b",
+            2,
+            vec![root_frame(), frame(2, 0, "if-else", Some(true))],
+        );
+        let c = op("c", 3, vec![root_frame()]);
+        let d = op("d", 2, vec![root_frame()]);
+        assert!(!may_co_execute(&a, &b), "precondition: exclusive arms");
+        let hb = HbIndex::new(vec![vec![a, b, c], vec![d]]);
+        assert!(hb.has_edge("a", "c") && hb.has_edge("b", "c"));
+        assert!(!hb.has_edge("a", "b"), "the two arms never co-execute");
+        assert!(!hb.has_edge("a", "d"), "no edge between groups");
     }
 
     #[test]

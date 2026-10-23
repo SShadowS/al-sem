@@ -29,7 +29,9 @@ use std::sync::OnceLock;
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, render_query_effects};
-use al_sem::engine::l5::digest::{build_fingerprint_indexes_pub, reconstruct_witness_paths_pub};
+use al_sem::engine::l5::digest::{
+    DagCache, HopCache, build_fingerprint_indexes_pub, reconstruct_witness_paths_pub, witness_index,
+};
 use al_sem::engine::l5::digest_cli::run_digest_pipeline;
 use al_sem::engine::l5::snapshot::{
     CapabilitySnapshot, SnapCapabilityExtra, SnapTempState, compose_snapshot,
@@ -740,7 +742,15 @@ fn a2h_fingerprint_witnesses_use_the_proofs() {
                 )
         })
         .expect("HelperUiTemp's known-temporary insert fact");
-    let out = reconstruct_witness_paths_pub(&fact.subject, fact, &idx, 256);
+    let widx = witness_index(&idx);
+    let out = reconstruct_witness_paths_pub(
+        &fact.subject,
+        fact,
+        &widx,
+        256,
+        &mut HopCache::default(),
+        &mut DagCache::default(),
+    );
     let diags: Vec<&str> = out.diagnostics.iter().map(|d| d.kind.as_str()).collect();
     assert_eq!(out.paths.len(), 1, "no witness path ({diags:?})");
     assert_eq!(out.paths[0].query_hops.len(), 1, "HelperUiTemp→HelperUi");
