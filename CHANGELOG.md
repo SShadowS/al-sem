@@ -39,6 +39,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JSON only: SARIF `fingerprints` would merge results with an equal value. The
   `schemaVersion` does not change (the key is additive).
 
+### Fixed
+
+- An object or table whose quoted name holds an escaped quote (`"A ""B"" C"`) is shown
+  by its logical name (`A "B" C`) everywhere (#240, #249): digest and fingerprint
+  `objectDisplay`, `query` owners and table names, the identity table, contracts, the
+  HTML report, SARIF and finding text. The ids already used the logical name (#83).
+  The R0 identity snapshot and the L2 projection name the object the same way.
+  - The contract `signatureFingerprint` of such an object, and the table
+    `schemaFacts.shapeFingerprint` of such a table, change once. `alsem diff` of a
+    snapshot made before this fix against one made after reports the contract change as
+    `ProcedureSignatureChanged`; its schema pass compares shape fingerprints only for
+    fields and enum values, not for tables.
+  - A source reference written with `""` to a dependency object now resolves (it missed
+    before: the source text kept `""`, the dependency's symbol name did not), so effects
+    and findings on that table can appear. References between source objects bind the
+    same objects as before: every written name is unescaped exactly once before it is
+    matched, and a name that is already logical is not unescaped again.
+  - A record variable typed `Record "A ""B"" C"` keeps its whole table name; the name
+    used to stop at the first inner quote (`A `). A table that is not loaded is
+    described by its logical name (`A "B" C (type not loaded)`).
+  - Selectors and the policy field `object.name` match the logical name. The escaped
+    spelling is not supported, though it may still match through the owner fallback
+    of a `<Object>::<routine>` selector until #239 removes it.
+  - Limit: an uncertainty edge's `interfaceName` still shows the raw name; it is an
+    input to `edgeId`.
+
 ## [2.0.2] - 2026-10-23
 
 ### Changed
