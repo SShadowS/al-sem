@@ -45,10 +45,14 @@ impl<'a> SymbolTable<'a> {
         let mut by_type_number = HashMap::new();
         let mut by_type_name = HashMap::new();
         for (i, o) in objects.iter().enumerate() {
-            by_type_number.insert(
-                format!("{}/{}", o.object_type.to_lowercase(), o.object_number),
-                i,
-            );
+            // An object without a number (`object_number` 0) is not indexed by
+            // number: every such object of a kind would share `type/0` (#83).
+            if o.object_number != 0 {
+                by_type_number.insert(
+                    format!("{}/{}", o.object_type.to_lowercase(), o.object_number),
+                    i,
+                );
+            }
             by_type_name.insert(
                 format!("{}/{}", o.object_type.to_lowercase(), o.name.to_lowercase()),
                 i,
@@ -110,5 +114,52 @@ impl<'a> SymbolTable<'a> {
 
     pub fn table_by_id(&self, id: &str) -> Option<&ModelTable> {
         self.tables_by_id.get(id).map(|&i| &self.tables[i])
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// A numberless Interface `ModelObject` named `name` (#83 tests).
+    pub(crate) fn numberless(name: &str) -> ModelObject {
+        ModelObject {
+            id: format!("app/Interface/@{name}"),
+            app_guid: "app".to_string(),
+            object_type: "Interface".to_string(),
+            object_number: 0,
+            object_key: format!("@{name}"),
+            name: name.to_string(),
+            source_table_name: None,
+            extends_target_name: None,
+            implements_interfaces: Some(Vec::new()),
+            object_subtype: None,
+            page_type: None,
+            inherent_commit_behavior: None,
+            source_table_temporary: None,
+            page_controls: Vec::new(),
+            single_instance: None,
+            editable: None,
+            insert_allowed: None,
+            modify_allowed: None,
+            delete_allowed: None,
+            source_anchor: None,
+            declaration_only_routines: Vec::new(),
+        }
+    }
+
+    /// #83: two numberless objects of one kind must not answer a lookup by
+    /// number 0 (it used to return whichever came last).
+    #[test]
+    fn numberless_objects_are_not_found_by_number_zero() {
+        let objects = [numberless("ifoo"), numberless("ibar")];
+        let symbols = SymbolTable::build(&objects, &[]);
+        assert!(symbols.object_by_type_number("Interface", 0).is_none());
+        assert_eq!(
+            symbols
+                .object_by_type_name("Interface", "ifoo")
+                .map(|o| o.id.as_str()),
+            Some("app/Interface/@ifoo")
+        );
     }
 }

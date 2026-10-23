@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::ids::{
-    normalized_signature_hash, to_stable_object_id, to_stable_routine_id_from_parts,
+    normalized_signature_hash, object_key, to_stable_object_id, to_stable_routine_id_from_parts,
 };
 use al_sem::engine::l5::diff_parser::parse_unified_diff;
 use al_sem::engine::l5::prove::run_prove_pipeline;
@@ -1764,13 +1764,14 @@ fn decl_only_workspace(dir: &Path) {
 }
 
 /// The id the design gives a declaration-only procedure without parameters or
-/// return value: the object segment `<guid>:<Kind>:0` and the signature hash
-/// folded with the declaring object's name.
+/// return value (#83): the declaring object's own unique id
+/// `<guid>:<Kind>:<object_key(None, logical name)>` and the signature hash, with
+/// no member. `object` is the LOGICAL name.
 fn decl_only_id(kind: &str, object: &str, procedure: &str) -> String {
     to_stable_routine_id_from_parts(
-        &to_stable_object_id(&format!("{DECL_GUID}/{kind}/0")),
+        &to_stable_object_id(&format!("{DECL_GUID}/{kind}/{}", object_key(None, object))),
         &normalized_signature_hash(procedure, &[], None),
-        Some(object),
+        None,
     )
 }
 
@@ -1779,8 +1780,10 @@ fn decl_only_id(kind: &str, object: &str, procedure: &str) -> String {
 /// `DIAG-digest-*` diagnostic.
 ///
 /// Mutations: (i) leave `declaration_only_routines` out of the span index ->
-/// (a)-(d) fail; (ii) pass `None` instead of the object name -> (c) yields one
-/// id; (iii) derive the id from the procedure name alone -> (a)'s stableId
+/// (a)-(d) fail; (ii) fold the object name in as the member again (the pre-#83
+/// derivation) -> (a)'s and (c)'s ids fail; (ii-b) mint the object segment as
+/// `0` again -> (a)'s shape and (c)'s distinct ids fail; (iii) derive the id from
+/// the procedure name alone -> (a)'s stableId
 /// fails; (iv) route declaration-only roots through the identity/coverage
 /// lookups -> (a) loses its entry or counts it twice with a `DIAG-digest-*`.
 #[test]
@@ -1812,8 +1815,11 @@ fn declaration_only_procedures_are_roots() {
     );
     let id = e["routine"]["stableId"].as_str().unwrap();
     assert!(
-        id.starts_with(&format!("{DECL_GUID}:Interface:0#"))
-            && id.len() == format!("{DECL_GUID}:Interface:0#").len() + 64,
+        id.starts_with(&format!("{DECL_GUID}:Interface:@ifoo#"))
+            && id.len() == format!("{DECL_GUID}:Interface:@ifoo#").len() + 64
+            && id[id.len() - 64..]
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
         "(a) {id}"
     );
     assert_eq!(id, decl_only_id("Interface", "IFoo", "Bar"), "(a)");
@@ -1883,7 +1889,8 @@ fn declaration_only_procedures_are_roots() {
         "(c) {doc}"
     );
     assert_ne!(got[0].1, got[1].1);
-    // #78: two interfaces sharing `<guid>/Interface/0` keep their own owners.
+    // #78: each interface's entry names its own owner (since #83 the two also
+    // have distinct object ids).
     let mut owners: Vec<(String, String)> = entries(&doc)
         .iter()
         .map(|e| {
@@ -2222,12 +2229,13 @@ fn hunkless_modified_file_takes_every_declaration() {
     );
 }
 
-/// Final panel (astra, R2-07): the object name folded into a declaration-only id
-/// is the LOGICAL name. `interface "I""Foo"` is the interface `I"Foo`; the IR keeps
-/// the escaped inner text `I""Foo`, which must be unescaped once.
+/// Final panel (astra, R2-07): the object name in a declaration-only id is the
+/// LOGICAL name. `interface "I""Foo"` is the interface `I"Foo`; the IR keeps the
+/// escaped inner text `I""Foo`, which must be unescaped once. Since #83 the name
+/// reaches the id through the object key (`@i%22foo`, not `@i%22%22foo`).
 ///
-/// Mutation: fold the raw IR name (drop the unescape) -> the id is the hash of
-/// `I""Foo`.
+/// Mutation: key the object on the raw IR name (drop the unescape in
+/// `ir_walk::ir_object_key`) -> the id carries `@i%22%22foo`.
 #[test]
 fn quoted_interface_name_is_unescaped_in_the_id() {
     let dir = tempfile::tempdir().unwrap();
@@ -2256,7 +2264,8 @@ fn quoted_interface_name_is_unescaped_in_the_id() {
 }
 
 /// Plan Task 4: Interface/ControlAddIn procedures ride on their object row with a
-/// name-folded stable id; they are still not `ModelRoutine`s.
+/// stable id built on their object's unique id (#83); they are still not
+/// `ModelRoutine`s.
 #[test]
 fn interface_object_rows_carry_declaration_only_routines() {
     let dir = tempfile::tempdir().unwrap();

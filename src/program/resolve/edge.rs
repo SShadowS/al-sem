@@ -64,6 +64,15 @@ pub struct AbiRoutineKey {
     pub event_kind: AbiEventKind,
 }
 
+impl AbiRoutineKey {
+    /// The graph key of this routine's object: its number, or its folded name when
+    /// the ABI gives none ([`crate::program::node::ObjKey::from_abi`]), as
+    /// `abi_ingest` keys the object node.
+    pub fn object_node_key(&self) -> crate::program::node::ObjKey {
+        crate::program::node::ObjKey::from_abi(self.object_number, || self.object_name_lc.as_str())
+    }
+}
+
 /// A platform builtin's catalog identity (clean-room catalog id; Phase 2+).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BuiltinId(pub String);

@@ -163,14 +163,10 @@ fn object_kind_str(k: ObjectKind) -> String {
     format!("{k:?}").to_ascii_lowercase()
 }
 
-/// `ObjKey` → canonical string.
-///
-/// `Id(n)` → decimal integer string; `Name(s)` → the already-lowercased name.
+/// `ObjKey` → canonical string ([`ObjKey::raw_text`]): the decimal number, or the
+/// already-lowercased name.
 fn obj_key_lc(key: &ObjKey) -> String {
-    match key {
-        ObjKey::Id(n) => format!("{n}"),
-        ObjKey::Name(s) => s.to_string(),
-    }
+    key.raw_text()
 }
 
 /// Resolve `AppRef` → guid string via the registry.
@@ -214,11 +210,7 @@ fn project_target(target: &RouteTarget, apps: &AppRegistry) -> Option<CanonicalT
         RouteTarget::AbiSymbol { key } => Some(CanonicalTarget {
             kind: 254,
             app: Some(app_guid(apps, key.app)),
-            object_lc: if key.object_number != 0 {
-                format!("{}", key.object_number)
-            } else {
-                key.object_name_lc.clone()
-            },
+            object_lc: obj_key_lc(&key.object_node_key()),
             routine_lc: Some(key.routine_name_lc.clone()),
         }),
     }

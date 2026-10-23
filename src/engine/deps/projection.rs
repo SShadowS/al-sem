@@ -118,7 +118,11 @@ pub struct ProjectedObject {
     pub stable_object_id: String,
     pub app_guid: String,
     pub object_type: String,
+    /// The ABI number (`0` when the symbols carry none).
     pub object_number: i64,
+    /// The id's object segment ([`ids::object_key`] of [`ids::abi_object_number`]):
+    /// copied into the dependency `ModelObject`, never re-parsed from the id (#83).
+    pub object_key: String,
     pub name: String,
     pub source_unit_id: String,
     pub source_hash: String,
@@ -195,23 +199,25 @@ fn abi_routine_to_routine(
     object_id: &str,
     app_guid: &str,
     object_type: &str,
-    object_number: i64,
+    object_key: &str,
     model_instance_id: &str,
 ) -> ProjectedRoutine {
     let normalized_hash = abi_signature_hash(r);
     let canonical = CanonicalRoutineKey {
         app_guid: app_guid.to_string(),
         object_type: object_type.to_string(),
-        object_number,
+        object_key: object_key.to_string(),
         routine_kind: r.kind.clone(),
         routine_name: r.name.clone(),
         normalized_signature_hash: normalized_hash.clone(),
         // Always `None`: a dependency ABI exposes procedures and event
         // publishers/subscribers, never member triggers, and it carries no member
         // wrapper to name one with. The conditional append in
-        // `encode_canonical_routine_key` therefore leaves every dep-side id
-        // byte-identical, which is what keeps the cross-app join symmetric with
-        // the source side by construction rather than by coincidence.
+        // `encode_canonical_routine_key` therefore appends nothing to a dep-side
+        // id, which is what keeps the cross-app join symmetric with the source
+        // side by construction rather than by coincidence. (The ids of a
+        // NUMBERED dep object are byte-identical to before; a numberless one's
+        // moved on purpose, #83.)
         enclosing_member: None,
     };
 
@@ -226,8 +232,9 @@ fn abi_routine_to_routine(
 
     let stable_object_id = to_stable_object_id(object_id);
     // `None` for the same reason as `canonical.enclosing_member` above — a dep ABI
-    // has no member triggers — so every dep-side STABLE id is byte-identical too and
-    // the cross-app stable-id join stays symmetric by construction.
+    // has no member triggers — so nothing is appended to a dep-side STABLE id either
+    // (byte-identical for a numbered object; a numberless one's moved on purpose,
+    // #83) and the cross-app stable-id join stays symmetric by construction.
     let stable_routine_id =
         ids::to_stable_routine_id_from_parts(&stable_object_id, &normalized_hash, None);
 
@@ -279,7 +286,13 @@ pub fn project_abi_to_index(
 
     for t in &abi.tables {
         let table_id = encode_table_id(app_guid, t.object_number);
-        let object_id = encode_object_id(app_guid, "Table", t.object_number);
+        // The declaring object id agrees with the table's own `ProjectedObject`
+        // (below): the same key from the same ABI number and name.
+        let object_id = encode_object_id(
+            app_guid,
+            "Table",
+            &ids::object_key(ids::abi_object_number(t.object_number), &t.name),
+        );
         let stable_table_id = to_stable_table_id(app_guid, t.object_number);
 
         let fields: Vec<ProjectedField> = t
@@ -338,19 +351,22 @@ pub fn project_abi_to_index(
     }
 
     for o in &abi.objects {
-        let object_id = encode_object_id(app_guid, &o.object_type, o.object_number);
+        // The ABI name is already the logical name.
+        let object_key = ids::object_key(ids::abi_object_number(o.object_number), &o.name);
+        let object_id = encode_object_id(app_guid, &o.object_type, &object_key);
         objects.push(ProjectedObject {
             id: object_id.clone(),
             stable_object_id: to_stable_object_id(&object_id),
             app_guid: app_guid.to_string(),
             object_type: o.object_type.clone(),
             object_number: o.object_number,
+            object_key: object_key.clone(),
             name: o.name.clone(),
             source_unit_id: source_unit_id.clone(),
             source_hash: sha256_of_strings(&[
                 app_guid.to_string(),
                 o.object_type.clone(),
-                o.object_number.to_string(),
+                object_key.clone(),
             ]),
             analysis_role: "dependency".to_string(),
             object_subtype: o.object_subtype.clone(),
@@ -367,7 +383,7 @@ pub fn project_abi_to_index(
                 &object_id,
                 app_guid,
                 &o.object_type,
-                o.object_number,
+                &object_key,
                 model_instance_id,
             ));
         }

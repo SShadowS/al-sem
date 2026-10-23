@@ -21,14 +21,18 @@
 //! - M1: no `HashMap`/`HashSet` iteration reaches an emitted array / sort key /
 //!   hash input. Every output `Vec` is explicitly `sort_by`'d; lookups go through
 //!   `HashMap` but emission iterates a sorted `Vec` or the routine list.
-//! - M8 (localeCompare audit): al-sem sorts the derivers with `String.localeCompare`,
-//!   which is NOT ordinal `str::cmp` for mixed-case ASCII. EVERY sort site here is
-//!   ORDINAL-SAFE: the discriminating characters are single-case (lowercase guids +
-//!   lowercase hex hashes, fixed lowercase op/kind labels, capitalized-but-uniform
-//!   object-type segments `Codeunit`/`Table`/...). No sort key can differ at a
-//!   mixed-case position, so ordinal `cmp` == localeCompare for the corpus. This
-//!   matches the established R3a* sort sites (which already byte-match
-//!   localeCompare-sorted goldens). The 5-fixture differential is the arbiter.
+//! - M8 (sort contract): every sort site in this module is ORDINAL (`str::cmp` /
+//!   `BTreeMap` key order), and that is the contract. It once rested on a claim that
+//!   ordinal equals al-sem's `String.localeCompare` for these keys; al-sem is retired
+//!   and that parity is no longer a goal. The claim is also no longer true: a
+//!   numberless object's key is `@` + a percent-encoded name (`%XX`,
+//!   `engine::ids::object_key`), and `@` sorts AFTER a digit ordinally but before it
+//!   under `locale_compare`, so `…:Codeunit:1` < `…:Codeunit:@a` here while the
+//!   full snapshot's contracts (`snapshot_full.rs`, `locale_compare`) list `…:@a`
+//!   first. Each output keeps its own order; nothing relies on the two agreeing
+//!   (pinned by `cli_numberless_object_ids`'s T7). A key that holds a stable object
+//!   or routine id is not single-case: a numberless object's segment carries `@` and
+//!   uppercase `%XX`.
 //! - M9: the edge-id present-only predicate is exact (`Option::is_some`; an empty
 //!   string IS kept).
 
@@ -1377,15 +1381,16 @@ fn census_snapshot(s: &CapabilitySnapshot) {
 // ---------------------------------------------------------------------------
 // deriveIdentityTable — objects + tables + routines → parallel sorted arrays.
 //
-// M8: sorted by stableId. stableIds are `<guid>:<ObjectType>:<num>[#<lowerhex>]`
-// or `<guid>:Table:<num>` — discriminating positions are single-case (lowercase
-// guid/hex, uniform-case object-type segment), so ordinal cmp == localeCompare.
+// M8: sorted by stableId, ORDINAL (the contract). stableIds are
+// `<guid>:<ObjectType>:<key>[#<lowerhex>]` or `<guid>:Table:<num>`, where `<key>`
+// is the object number, or `@` + the percent-encoded (`%XX`) folded name for an
+// object without one.
 // ---------------------------------------------------------------------------
 
 fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
     let ws = &resolved.workspace;
-    // id → display name, deduped. BTreeMap keeps deterministic key order (M1) and
-    // gives the sorted-by-id pairing al-sem produces (its `Map` + `.sort()`).
+    // id → display name, deduped. BTreeMap keeps deterministic, ordinal key order
+    // (M1, M8).
     let mut pairs: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
 
     for obj in &ws.objects {
@@ -1398,8 +1403,7 @@ fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
         pairs.insert(r.stable_routine_id.clone(), r.name.clone());
     }
 
-    // BTreeMap iteration is ordinal-sorted by key — matches al-sem's `.sort()`
-    // (ordinal-safe per M8 above).
+    // BTreeMap iteration is ordinal-sorted by key (M8).
     let stable_ids: Vec<String> = pairs.keys().cloned().collect();
     let display_names: Vec<String> = pairs.values().cloned().collect();
     SnapshotIdentityTable {
@@ -1417,8 +1421,7 @@ fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
 // `factKey`): subject|op|resourceKind|resourceId|confidence|provenance|
 // witnessCallsiteId|witnessOperationId.
 //
-// M8: all key components are single-case (stable ids lowercase-guid/hex, op/kind
-// fixed-lowercase labels, witness ids `r0/<lowerhex>/...`) → ordinal-safe.
+// Ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn snapshot_fact(f: &CapabilityFact, subject: &str) -> SnapshotCapabilityFact {
@@ -1507,8 +1510,7 @@ fn derive_capability_facts(base: &R3a3SourceBase) -> Vec<SnapshotCapabilityFact>
 // — mirrors al-sem `engine/combined-graph.ts` typed-edge build. The edge-id is
 // computed over the STABLE-rewritten from/to (and the present identity fields).
 //
-// M8: the sort key is kind (fixed lowercase) | stable-from | stable-to | edgeId
-// (lowercase hex) → all single-case → ordinal-safe.
+// The sort key is kind | stable-from | stable-to | edgeId; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
@@ -1849,7 +1851,7 @@ fn snap_combined_value_source(
 // CapabilityFact witnessOperationId (direct ∪ inherited). recordOperations
 // OVERWRITE operationSites for the same opId (richer displayText). Internal ids.
 //
-// Sort by operationId (al-sem). M8: operationId = `r0/<lowerhex>/opN` → ordinal-safe.
+// Sort by operationId (al-sem); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_operation_evidence(
@@ -1966,7 +1968,7 @@ fn derive_operation_evidence(
         }
     }
 
-    // BTreeMap iteration = sorted-by-operationId (ordinal-safe, M8).
+    // BTreeMap iteration = sorted by operationId, ordinal (M8 contract).
     by_id.into_values().collect()
 }
 
@@ -1975,7 +1977,7 @@ fn derive_operation_evidence(
 // CapabilityFact witnessCallsiteId (direct ∪ inherited) OR as a typed-edge
 // callsiteId anchor. Internal ids. Sort by callsiteId.
 //
-// M8: callsiteId = `r0/<lowerhex>/csN` → ordinal-safe.
+// Ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_callsite_evidence(
@@ -2052,7 +2054,7 @@ fn derive_callsite_evidence(
 // Groups by callsiteId; skips implicit-trigger edges. Status mapping per al-sem
 // `callsite-resolutions.ts`. resolvedEdges = matching typed-edge edgeIds.
 //
-// Sort by (from|callsiteId). M8: both stable/internal single-case → ordinal-safe.
+// Sort by (from|callsiteId); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn map_dispatch_kind(dk: &str) -> &'static str {
@@ -2366,7 +2368,7 @@ fn classify_resolution(
 // adjacent. Every gap of the model, unfiltered (#220 I8: `prove` intersects it
 // with its own cone; the cross-app serialization filters it by reach).
 //
-// M8: kind (fixed lowercase) | subject (stable id / bare app guid) → ordinal-safe.
+// Sort by kind | subject; ordinal (M8 contract).
 // A subject keeps the app guid's model casing (`encode_object_id` keeps it
 // verbatim): `prove`'s `count_gaps_in_cone` matches an app subject as a
 // case-sensitive `{guid}:` prefix of the cone's stable ids, so lowercasing it
@@ -2454,7 +2456,7 @@ fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<Snapshot
 
 // ---------------------------------------------------------------------------
 // deriveCoverage — per-routine cone coverage, subject already stable on the cone.
-// Sort by subject. M8: stable routine id → ordinal-safe.
+// Sort by subject; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_coverage(base: &R3a3SourceBase) -> Vec<SnapshotCoverageRecord> {
@@ -2493,8 +2495,7 @@ fn derive_coverage(base: &R3a3SourceBase) -> Vec<SnapshotCoverageRecord> {
 
 // ---------------------------------------------------------------------------
 // deriveEventDeclarations — bipartite publisher/subscriber decls from the event
-// graph. Sort by (kind|routine|eventId). M8: kind fixed lowercase, routine/eventId
-// stable single-case → ordinal-safe.
+// graph. Sort by (kind|routine|eventId); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_event_declarations(base: &R3a3SourceBase) -> Vec<SnapshotEventDeclaration> {
@@ -2577,7 +2578,7 @@ fn derive_event_declarations(base: &R3a3SourceBase) -> Vec<SnapshotEventDeclarat
 // own declaration anchor (al-sem `classifyRoots`: `sourceAnchor:
 // routine.sourceAnchor`), with enclosingRoutineId = the routine's INTERNAL id.
 //
-// Sort by routineId. M8: stable routine id → ordinal-safe.
+// Sort by routineId; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_root_classifications(
@@ -2620,7 +2621,7 @@ fn derive_root_classifications(
 // StableRoutineId, only routines with >=1 frame. Absent when none.
 //
 // Emitted as a serde_json Map with keys in sorted order (M1: explicit sort, no
-// HashMap iteration). M8: stable routine id keys → ordinal-safe.
+// HashMap iteration); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
 fn derive_routine_order_frames(
@@ -2628,8 +2629,8 @@ fn derive_routine_order_frames(
     collided: &CollidedRows<'_>,
 ) -> Option<RoutineOrderFrames> {
     use std::collections::BTreeMap;
-    // BTreeMap keyed by stable routine id → sorted key order (M8: stable id ⇒
-    // ordinal-safe; M1: BTreeMap iteration is sorted, not hash-ordered).
+    // BTreeMap keyed by stable routine id → sorted key order (ordinal, M8
+    // contract; M1: BTreeMap iteration is sorted, not hash-ordered).
     let mut entries: BTreeMap<String, Vec<ScopeFrame>> = BTreeMap::new();
     for r in &base.ws_routines {
         // A collided id's one table holds every row's frames (`CollidedRows`).

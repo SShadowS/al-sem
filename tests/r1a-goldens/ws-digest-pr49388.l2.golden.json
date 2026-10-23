@@ -21,7 +21,7 @@
       "objectType": "Codeunit"
     },
     {
-      "stableObjectId": "33333333-3333-3333-3333-333333333333:Interface:0",
+      "stableObjectId": "33333333-3333-3333-3333-333333333333:Interface:@iimportprocessor",
       "name": "IImportProcessor",
       "objectType": "Interface"
     }

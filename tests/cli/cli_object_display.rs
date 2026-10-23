@@ -7,8 +7,9 @@
 //! the extension's file sorting after the table's, so the identity table keeps
 //! the extension's name at `<guid>:Table:50100`. A test that took the owner from
 //! the identity table would print `OD Item Ext` for the real table's routines.
-//! Two Interfaces share the object id `<guid>/Interface/0`, so their owners
-//! must come from the declaring object.
+//! The two Interfaces check the declaration-only rows' display. Since #83 they
+//! have distinct ids (`<guid>:Interface:@ifoo`, `…:@ibar`), so they no longer
+//! catch an identity-table owner; the Table/TableExtension pair does.
 
 use std::path::Path;
 use std::process::Command;
@@ -150,7 +151,7 @@ fn assert_identity_table_holds_extension_name(ws: &Path) {
 ///
 /// Mutations: (i) keep the old `split_object_routine` -> every value is `""`;
 /// (ii) take the owner from the identity table -> the Table's three routines
-/// read `OD Item Ext`, and IFoo/IBar share one name.
+/// read `OD Item Ext`.
 #[test]
 fn digest_entries_name_their_owning_object() {
     let dir = tempfile::tempdir().unwrap();

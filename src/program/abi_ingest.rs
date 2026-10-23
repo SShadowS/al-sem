@@ -302,13 +302,12 @@ pub(crate) fn object_kind_from_abi_type(object_type: &str) -> ObjectKind {
 fn abi_table_fields(tables: &[AbiTable], object_number: i64, name: &str) -> Vec<FieldNode> {
     tables
         .iter()
-        .find(|t| {
-            if object_number != 0 {
-                t.object_number == object_number
-            } else {
-                t.name.eq_fold_identifier(name)
-            }
-        })
+        .find(
+            |t| match crate::engine::ids::abi_object_number(object_number) {
+                Some(n) => t.object_number == n,
+                None => t.name.eq_fold_identifier(name),
+            },
+        )
         .map(|t| {
             t.fields
                 .iter()
@@ -410,7 +409,7 @@ pub fn load_symbol_reference(unit: &AppUnit) -> Option<Arc<SymbolReferenceAbi>> 
 }
 
 /// The graph id of an ABI object of app `app`: by number, or by folded name when it
-/// has none.
+/// has none ([`ObjKey::from_abi`]).
 pub(crate) fn abi_object_node_id(
     app: AppRef,
     abi_obj: &crate::engine::deps::symbol_reference::AbiObject,
@@ -418,11 +417,7 @@ pub(crate) fn abi_object_node_id(
     ObjectNodeId {
         app,
         kind: object_kind_from_abi_type(&abi_obj.object_type),
-        key: if abi_obj.object_number != 0 {
-            ObjKey::Id(abi_obj.object_number)
-        } else {
-            ObjKey::Name(abi_obj.name.fold_identifier().into())
-        },
+        key: ObjKey::from_abi(abi_obj.object_number, || abi_obj.name.fold_identifier()),
     }
 }
 
@@ -519,11 +514,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
         objects.push(ObjectNode {
             id: obj_id.clone(),
             name: abi_obj.name.as_str().into(),
-            declared_id: if abi_obj.object_number != 0 {
-                Some(abi_obj.object_number)
-            } else {
-                None
-            },
+            declared_id: crate::engine::ids::abi_object_number(abi_obj.object_number),
             extends_target: abi_obj.extends_target_name.as_deref().map(SharedStr::from),
             implements: abi_obj
                 .implemented_interfaces

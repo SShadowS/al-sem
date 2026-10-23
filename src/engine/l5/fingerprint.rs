@@ -4,10 +4,11 @@
 //! INTERNAL `affectedTables` — the finding BEFORE the stable projection. So the
 //! detector computes it over internal ids, and the projection copies it verbatim.
 //!
-//!   sha256( detector | objectType/objectNumber | routineName |
+//!   sha256( detector | objectType/objectKey | routineName |
 //!           affectedTables.join(",") | rootCauseKey )  → first 16 hex chars
 //!
-//! `objectType/objectNumber` is the OWNING object of the finding's
+//! `objectType/objectKey` (the key is the number, or `@name` for a numberless
+//! object) is the OWNING object of the finding's
 //! `primaryLocation.enclosingRoutineId` (empty when unresolved); `routineName` is
 //! that routine's name (empty when unresolved). Uses plain UTF-8 sha256 (Node's
 //! `createHash("sha256").update(str)`), NOT the UTF-16 length-prefixed framing.
@@ -25,7 +26,7 @@
 //!
 //! To match al-sem's NEW stabilized fingerprint (`src/projection/finding-fingerprint.ts`),
 //! we build a map from EVERY routine's internal id → its `StableRoutineId`
-//! (`${appGuid}:${objectType}:${objectNumber}#${64 lowercase hex}` — the hex is the
+//! (`${appGuid}:${objectType}:${objectKey}#${64 lowercase hex}` — the hex is the
 //! `normalizedSignatureHash` for a member-less routine and its enclosing-member fold
 //! for a member trigger, see `ids::to_stable_routine_id_from_parts`) — for ALL
 //! routines, SOURCE and DEPENDENCY alike — and substitute every internal routine-id
@@ -160,7 +161,10 @@ impl<'a> FingerprintIndex<'a> {
             .or_else(|| self.objects_by_id.get(enclosing));
 
         let obj_part = match obj {
-            Some(o) => format!("{}/{}", o.object_type, o.object_number),
+            // The object KEY: the number for a numbered object (the same bytes as
+            // before #83), `@name` for one without, so two numberless objects of one
+            // kind no longer share an object part.
+            Some(o) => format!("{}/{}", o.object_type, o.object_key),
             None => String::new(),
         };
         let routine_name = routine.map(|r| r.name.clone()).unwrap_or_default();
@@ -357,6 +361,7 @@ mod tests {
             app_guid: "app".to_string(),
             object_type: object_type.to_string(),
             object_number,
+            object_key: object_number.to_string(),
             name: format!("Obj{object_number}"),
             source_table_name: None,
             extends_target_name: None,
@@ -410,6 +415,23 @@ mod tests {
             fp, expected,
             "fingerprint must match manual sha256 of parts"
         );
+    }
+
+    // #83: two numberless objects of one kind (object_number 0) must not share a
+    // fingerprint object part. The precondition is hand-stated: same kind, same
+    // number, different object_key.
+    #[test]
+    fn numberless_objects_of_one_kind_fingerprint_differently() {
+        let fp_of = |key: &str| {
+            let obj_id = format!("app/Interface/{key}");
+            let r = minimal_routine("r1", &obj_id, "Proc");
+            let mut o = minimal_object(&obj_id, "Interface", 0);
+            o.object_key = key.to_string();
+            let (routines, objects) = (vec![r], vec![o]);
+            let idx = FingerprintIndex::build(&routines, &objects);
+            idx.fingerprint_of(&dummy_finding("d17-x", "d17/key", "r1"))
+        };
+        assert_ne!(fp_of("@ifoo"), fp_of("@ibar"));
     }
 
     // -----------------------------------------------------------------------

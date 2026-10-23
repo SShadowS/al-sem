@@ -7,8 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Digest `stableId` values of #71's declaration-only roots change once (#83). With a unique
+  object id (see Fixed) the id no longer folds the object name in as a member: it is
+  `{guid}:Interface:@ifoo#{hash}`, the shape the dependency side gives the same method. The
+  digest schema version does not change. **Upgrade note:** a stored baseline or gate
+  snapshot that holds a numberless object id (`…:Interface:0`, `…:ControlAddIn:0`), a
+  dependency interface routine id, or a declaration-only id reports those objects as removed
+  (critical) and re-added once; re-mint it with this version (see Fixed). Numbered ids are
+  unchanged.
+
 ### Fixed
 
+- An object without a number now gets a unique object id (#83). Interface and ControlAddIn
+  have no number, and a numbered kind whose number does not parse has none either; every
+  such object was `…:<Kind>:0`, so two of one kind in one app shared an id. The identity
+  table and every map keyed by the id kept only one of them, the contracts carried duplicate
+  ids, and the fingerprint object part was shared by them (the identity table and the
+  fingerprint are pinned by tests). The key is now `@` + the folded name,
+  percent-encoded outside `a-z 0-9` (`…:Interface:@iprocessor`), from every producer: R0, the
+  model, the program graph, R1a and the dependency projection
+  (`engine::ids::object_key`). Two dependency interfaces without `Id` that declare a method
+  of the same signature no longer share routine ids, and a finding fingerprint's object part
+  uses the key, not `{type}/{number}`. Numbered ids do not change. The identity table stays
+  ordinal and the contracts stay `locale_compare`, so a numbered and a numberless object of
+  one kind list in a different order in each. The differential harness now fails on two
+  object rows with one id. **Limits:** an object with an empty name gets `@` and can still
+  collide; a table whose number does not parse still collides (`encode_table_id`), and d33's
+  object-id to table-id join (`engine/l5/detectors/mod.rs`) no longer matches it
+  (non-compiling input); a dependency object whose logical name contains `""` gets a
+  different id from the graph (`model_object_id`) than from the dependency projection;
+  existing ABI/graph object-kind mismatches (DotNetPackage, PermissionSetExtension,
+  Profile, Entitlement) are unchanged.
+- **`alsem diff` no longer reports a critical `procedure-signature-changed` when a change adds
+  an Interface or ControlAddIn (#83, #245).** Both objects had the id `…:Interface:0`, so the
+  untouched old one looked changed (named after the new one) when the new file sorted
+  last, and the addition went unreported when it sorted first. Now the diff reports only
+  the new object's `object-added` (info). **The stable id of an object without a number
+  (Interface, ControlAddIn) changes shape** from `{appId}:Interface:0` to
+  `{appId}:Interface:@{name}` (e.g. `…:Interface:@repro%20transport`), because the number
+  was the only part that told two such objects apart and they have none. A consumer with a
+  stored baseline (a fingerprint, gate snapshot or digest) sees those ids move once. The
+  snapshot schema version stays 4, so `alsem diff` accepts a pre-#83 baseline (only the
+  `alsem-version-mismatch` warning fires), and **the first diff against it reports the old
+  `…:Interface:0` object and its routines as `object-removed` / `procedure-removed`
+  (critical)**, plus an `object-added` per new id. The remedy is to re-mint the baseline with
+  this version. CentralGauge, which reported #245, has no stored baseline yet.
+- Lookups of an object by type and number (record typing's numeric `SourceTable`, an
+  unresolved `Codeunit.Run(<number>)` target) no longer pick an arbitrary object without a
+  number for number `0` (#83).
+- `aldump --graphify-export` keys an object without a number by the engine's object key in
+  its `al:obj:`, `al:rtn:` and `al:abi:` node ids (`…/interface/@i%20foo#…`). Before, a
+  dependency object's `al:abi:` id carried `0`, and the other ids carried a lossy slug, so
+  `I Foo` and `I-Foo` (or two dependency interfaces with a same-named method) shared a node
+  (#83). The LSP `al-preview:` URI keeps its `Id` segment (`0` for such an object): it is
+  wire format, and the object's name is in the `Name` segment.
 - **`alsem diff` no longer reports a parameter appended to a `local` or `internal` event
   publisher as critical (#236).** For an `[IntegrationEvent]` or `[BusinessEvent]` publisher that
   is `local` or `internal` on both sides, adding parameters at the END is not a break

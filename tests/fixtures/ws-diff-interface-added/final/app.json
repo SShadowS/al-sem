@@ -1,0 +1,11 @@
+{
+  "id": "11111111-2222-4333-8444-555555555555",
+  "name": "Iface Repro",
+  "publisher": "Repro",
+  "version": "1.0.0.0",
+  "runtime": "14.0",
+  "platform": "1.0.0.0",
+  "application": "",
+  "idRanges": [{ "from": 50100, "to": 50149 }],
+  "dependencies": []
+}

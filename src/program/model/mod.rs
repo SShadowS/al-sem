@@ -26,19 +26,19 @@ pub mod taxonomy;
 pub mod workspace;
 
 use crate::program::graph::ProgramGraph;
-use crate::program::node::{ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{ObjectNodeId, RoutineNodeId};
 
 /// The model's object id for a program object (`encode_object_id`'s
-/// `"{app guid}/{type}/{number}"`; a numberless object has number 0, as the model
-/// writes it).
+/// `"{app guid}/{type}/{object key}"`), the same string the model writes for it.
+///
+/// The key segment is [`ObjKey::model_key`] (a source name key is unescaped to the
+/// folded logical name the model keys on).
+///
+/// [`ObjKey::model_key`]: crate::program::node::ObjKey::model_key
 pub fn model_object_id(graph: &ProgramGraph, id: &ObjectNodeId) -> String {
     let guid = &graph.apps.resolve(id.app).guid;
     let ty = crate::program::body::ir_walk::ir_object_type(&id.kind).unwrap_or("Unknown");
-    let number = match id.key {
-        ObjKey::Id(n) => n,
-        ObjKey::Name(_) => 0,
-    };
-    crate::engine::ids::encode_object_id(guid, ty, number)
+    crate::engine::ids::encode_object_id(guid, ty, &id.key.model_key())
 }
 
 /// A routine outside the model, named in the model's terms:

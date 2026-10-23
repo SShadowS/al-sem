@@ -4,7 +4,8 @@
 //! cross-app blame (which OTHER apps appear in the evidence path).
 //!
 //! Model-lookup strategy (mirrors al-sem):
-//!   - An internal `ObjectId` is `${appGuid}/${objectType}/${objectNumber}`, so the
+//!   - An internal `ObjectId` is `${appGuid}/${objectType}/${objectKey}` (the
+//!     number, or `@` + the encoded name for an unnumbered object, #83), so the
 //!     appGuid is the first `/`-delimited segment — `app_for_object_id` extracts it
 //!     directly, no Map needed.
 //!   - `RoutineId → objectId` uses a `routines_by_id` index built from the resolved

@@ -89,9 +89,10 @@ pub fn canonicalize_type_text(raw: &str) -> String {
 /// (The raw IR value is only outer-quote-stripped.)
 ///
 /// `pub(crate)` deliberately: the callers are [`super::ir_walk::ir_enclosing_member`]
-/// (the member discriminator) and the model's declaration-only routine ids (the
-/// Interface / ControlAddIn object-name discriminator, #71), each unescaping its
-/// RAW IR value exactly once. Keeping the visibility crate-internal stops an
+/// (the member discriminator), [`super::ir_walk::ir_object_key`] (a numberless
+/// object's id segment, #83) and [`crate::program::model::model_object_id`] (the
+/// same segment from a graph node's folded name key), each unescaping its RAW
+/// value exactly once. Keeping the visibility crate-internal stops an
 /// out-of-crate consumer from unescaping a second time (not idempotent for a
 /// member like `a""""b`) and minting a divergent id. ⟨task-3 fix wave, review M-5⟩
 pub(crate) fn unescape_al_identifier(inner: &str) -> String {
@@ -107,11 +108,14 @@ pub(crate) fn unescape_al_identifier(inner: &str) -> String {
 /// value would mint a different id for the same routine. See
 /// [`crate::engine::ids::encode_canonical_routine_key`] for why the append is
 /// conditional and why the id's shape must not change.
+///
+/// `object_key` is the owning object's segment from
+/// [`crate::engine::ids::object_key`].
 #[allow(clippy::too_many_arguments)]
 pub fn compute_routine_id(
     app_guid: &str,
     object_type: &str,
-    object_number: i64,
+    object_key: &str,
     routine_kind: &str,
     routine_name: &str,
     enclosing_member: Option<&str>,
@@ -131,7 +135,7 @@ pub fn compute_routine_id(
     let key = CanonicalRoutineKey {
         app_guid: app_guid.to_string(),
         object_type: object_type.to_string(),
-        object_number,
+        object_key: object_key.to_string(),
         routine_kind: routine_kind.to_string(),
         routine_name: routine_name.to_string(),
         normalized_signature_hash,

@@ -21,6 +21,7 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
         app_guid: o.app_guid.clone(),
         object_type: o.object_type.clone(),
         object_number: o.object_number,
+        object_key: o.object_key.clone(),
         name: o.name.clone(),
         source_table_name: o.source_table_name.clone(),
         extends_target_name: o.extends_target_name.clone(),
@@ -107,7 +108,8 @@ pub(crate) fn dep_table_to_l3(t: &ProjectedTable) -> ModelTable {
 /// the event-graph publisher param shape), `attributes_parsed` (the event-graph
 /// inputs), `kind`, and identity fields ARE carried.
 pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> ModelRoutine {
-    // objectId = `${appGuid}/${objectType}/${objectNumber}` — recover the parts.
+    // objectId = `${appGuid}/${objectType}/${objectKey}` — recover the parts. A
+    // numberless key (`@name`, `ids::object_key`) never parses, so its number is 0.
     let parts: Vec<&str> = r.object_id.split('/').collect();
     let app_guid = parts.first().copied().unwrap_or("").to_string();
     let object_number = parts

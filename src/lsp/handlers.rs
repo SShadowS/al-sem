@@ -361,11 +361,8 @@ fn abi_symbol_item(snap: &LspSnapshot, key: &AbiRoutineKey) -> CallHierarchyItem
         .try_resolve(key.app)
         .map(|id| id.name.as_str())
         .unwrap_or("external");
-    let object_display = if key.object_number != 0 {
-        format!("{} {}", key.object_type, key.object_number)
-    } else {
-        format!("{} {}", key.object_type, key.object_name_lc)
-    };
+    // The object's graph key: its number, or its folded name when the ABI gives none.
+    let object_display = format!("{} {}", key.object_type, key.object_node_key().raw_text());
     let detail = format!("{object_display}.{} (from {app_name})", key.routine_name_lc);
     let uri = abi_symbol_uri(key, app_name);
 
@@ -505,6 +502,11 @@ fn dep_source_uri(snap: &LspSnapshot, app: AppRef, virtual_path: &str) -> Uri {
 /// (e.g. `ReportExtension`) fails `parse_al_preview_uri`'s type-anchor scan
 /// entirely — a PRE-EXISTING schema gap inherited from legacy, not something
 /// this conformance fix closes.
+///
+/// The `Id` segment is the ABI object number, `0` for an object without one, as
+/// the AL tooling's own `al-preview:` layout has it. It is wire format and
+/// nothing here reads it (`parse_al_preview_uri` skips it; the object is told
+/// apart by its `Name` segment), so #83's object key does not go there.
 fn abi_symbol_uri(key: &AbiRoutineKey, app_name: &str) -> Uri {
     let encode = |s: &str| utf8_percent_encode(s, SYNTH_URI_SEGMENT).to_string();
     let id_segment = key.object_number.to_string();
@@ -1336,6 +1338,17 @@ mod tests {
         let (_, _, name2) = crate::lsp::custom::parse_al_preview_uri(uri2.as_str())
             .expect("id-less object URI must also parse");
         assert_eq!(name2, "my ext object");
+
+        // The Id segment is wire format, unchanged by #83: the number, `0` for an
+        // id-less object (its name is in the Name segment).
+        assert_eq!(
+            uri2.as_str(),
+            "al-preview:///allang/Some%20Dep%20App/codeunit/0/my%20ext%20object.dal"
+        );
+        assert_eq!(
+            uri.as_str(),
+            "al-preview:///allang/Some%20Dep%20App/codeunit/50100/50100.dal"
+        );
     }
 
     // ── URI case-insensitivity (Windows filesystems are case-insensitive) ──

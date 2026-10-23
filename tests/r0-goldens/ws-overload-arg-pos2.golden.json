@@ -19,7 +19,7 @@
       "signatureFingerprint": "5dc1d7aeb2e8ebb2a40198666243d1d47aee8f94fa5bd08e7a0f27fbb845f8ae"
     },
     {
-      "stableObjectId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:Interface:0",
+      "stableObjectId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:Interface:@probe%20ilog",
       "name": "Probe ILog",
       "kind": "Interface",
       "signatureFingerprint": "1d11ed2d806e87ce4bb04303d2dbc079e21a5e4c42450417e527962754037af3"

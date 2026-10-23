@@ -91,7 +91,7 @@
       "signatureFingerprint": "083b14e7692518d80b578cbdd21345885be5e36907b13a50928e934a8bea9c3c"
     },
     {
-      "stableObjectId": "44444444-4444-4444-4444-444444444444:Interface:0",
+      "stableObjectId": "44444444-4444-4444-4444-444444444444:Interface:@iproveprocessor",
       "name": "IProveProcessor",
       "kind": "Interface",
       "signatureFingerprint": "0f0ff613ad0336138d1f001ebe70758ba5fc2f4f50fd5fb930fde378d17020b7"

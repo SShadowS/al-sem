@@ -3148,15 +3148,10 @@ fn resolve_abi_prefix_routine<'g>(
     index: &ResolveIndex,
 ) -> Option<&'g RoutineNode> {
     let kind = object_kind_from_abi_type(&key.object_type);
-    let obj_key = if key.object_number != 0 {
-        ObjKey::Id(key.object_number)
-    } else {
-        ObjKey::Name(key.object_name_lc.as_str().into())
-    };
     let obj_id = ObjectNodeId {
         app: key.app,
         kind,
-        key: obj_key,
+        key: key.object_node_key(),
     };
 
     let visible: Vec<&RoutineNodeId> = index

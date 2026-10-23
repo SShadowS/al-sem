@@ -81,6 +81,41 @@ pub enum ObjKey {
     Name(SharedStr),
 }
 
+impl ObjKey {
+    /// The key of an ABI (dependency) object: its number, or its folded name
+    /// `name_lc` when the ABI gives none (the ABI zero rule,
+    /// [`crate::engine::ids::abi_object_number`]). `name_lc` runs only then, so a
+    /// numbered object pays for no fold.
+    pub fn from_abi<S: Into<SharedStr>>(number: i64, name_lc: impl FnOnce() -> S) -> ObjKey {
+        match crate::engine::ids::abi_object_number(number) {
+            Some(n) => ObjKey::Id(n),
+            None => ObjKey::Name(name_lc().into()),
+        }
+    }
+
+    /// The key as plain text: the number, or the name as stored.
+    pub fn raw_text(&self) -> String {
+        match self {
+            ObjKey::Id(n) => n.to_string(),
+            ObjKey::Name(s) => s.to_string(),
+        }
+    }
+
+    /// The model's object-id segment for this key (`engine::ids::object_key`): the
+    /// number, or `@` + the encoded name. A source name key is the folded RAW name
+    /// (inner `""` kept), so it is unescaped first; an ABI name key is already the
+    /// folded logical name (see the #83 spec's Limits for one that holds `""`).
+    pub fn model_key(&self) -> String {
+        match self {
+            ObjKey::Id(n) => n.to_string(),
+            ObjKey::Name(n) => crate::engine::ids::object_key(
+                None,
+                &crate::program::body::scope::unescape_al_identifier(n),
+            ),
+        }
+    }
+}
+
 /// Serde "remote" mirror of `al_syntax::ir::ObjectKind` (T3 Task 11 — `LspSnapshot`'s
 /// `ItemData { node: RoutineNodeId }` JSON round-trip through `CallHierarchyItem.data`
 /// needs `RoutineNodeId`'s whole identity chain to be `Serialize`/`Deserialize`).

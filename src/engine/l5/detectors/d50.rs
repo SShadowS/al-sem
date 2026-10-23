@@ -529,6 +529,7 @@ mod tests {
             app_guid: "app".to_string(),
             object_type: "Codeunit".to_string(),
             object_number: 1,
+            object_key: "1".to_string(),
             name: "TestCU".to_string(),
             source_table_name: None,
             extends_target_name: None,
