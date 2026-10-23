@@ -6075,7 +6075,7 @@ mod step4_tests {
 /// base folds it into direct coverage and prints no roles-cap line. The other
 /// producers' folds are pinned in `detector_context_step5_tests`.
 #[cfg(test)]
-mod callsite_local_scan_tests {
+pub(crate) mod callsite_local_scan_tests {
     use super::*;
     use crate::engine::l4::combined_graph::{PrimaryGraph, Uncertainty};
     use crate::engine::l4::summary_runner::with_roles_iteration_cap;
@@ -6252,8 +6252,9 @@ codeunit 50111 "Cell Calls"
     /// The fixture roots under `tests/` that `scc_set_tests`'s fixture oracle
     /// (`derived_only_matches_raw_fold_on_fixtures`) visits, with the app dirs
     /// each holds today: a dir that stops being visited fails that oracle, and
-    /// a new fixture changes this one list.
-    pub(super) const FIXTURE_ROOTS: [(&str, usize); 5] = [
+    /// a new fixture changes this one list (`exec_relation`'s parity test reads
+    /// it too).
+    pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
         ("r0-corpus", 217),
         ("fixtures", 33),
         ("r3a4-fixtures", 1),

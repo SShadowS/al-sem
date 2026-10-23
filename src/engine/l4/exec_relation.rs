@@ -398,14 +398,9 @@ mod tests {
         let mut failures = Vec::new();
         // The count each root holds today, an intentional tripwire: a dir that
         // stops being visited fails here (and the case count below). A NEW
-        // corpus dir fails it too: bump the count here when you add one.
-        for (root, want) in [
-            ("r0-corpus", 217),
-            ("fixtures", 33),
-            ("r3a4-fixtures", 1),
-            ("r3a5-fixtures", 1),
-            ("r2-5b-fixtures", 1),
-        ] {
+        // corpus dir fails it too: bump the count in `FIXTURE_ROOTS`.
+        use crate::engine::l4::capability_cone::callsite_local_scan_tests::FIXTURE_ROOTS;
+        for (root, want) in FIXTURE_ROOTS {
             let dirs = app_dirs(&tests.join(root));
             assert_eq!(dirs.len(), want, "{root}: app dirs");
             for dir in &dirs {
@@ -440,7 +435,8 @@ mod tests {
             "exec_relation parity: {} cases, {} with a dependency half and event dispatch, {} with dependency uncertainty",
             stats.cases, stats.dep_half_with_dispatch, stats.dep_uncertainty
         );
-        assert_eq!(stats.cases, 2 * (217 + 33 + 3 + 2), "cases run");
+        let dirs: usize = FIXTURE_ROOTS.iter().map(|(_, n)| n).sum();
+        assert_eq!(stats.cases, 2 * (dirs + 2), "cases run");
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 

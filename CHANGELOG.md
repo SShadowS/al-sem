@@ -664,25 +664,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   findings.**
   - A `local` or `internal` procedure, and any trigger (object, field or action), is no longer
     part of the ABI: adding, removing or changing one gives no `abi` finding. Event publishers
-    stay ABI even when `local`: `[IntegrationEvent]`, `[BusinessEvent]` and
-    `[ExternalBusinessEvent]` (any case). `local` → `public` on the same procedure is now a
-    `procedure-added`.
+    stay ABI even when `local` or `internal`, because dependent extensions can subscribe to them
+    (AppSourceCop AS0025): `[IntegrationEvent]`, `[BusinessEvent]` and `[ExternalBusinessEvent]`
+    (any case). `local` → `public` on the same procedure is now a `procedure-added`.
   - A procedure whose signature changed is now ONE `procedure-signature-changed`, not a
-    `procedure-removed` (critical) plus a `procedure-added`. Old and new are matched by object and
-    name, only when exactly one routine on each side carries that name. If two overloads change at
-    once, the diff reports removed + added as before. Capability, permission, coverage and
-    subscriber-induced findings now follow the routine (the new id) instead of showing up as
-    gained on the new id and lost on the old one. Such a pair is not a rename: there is no "renamed
-    from" note and no `oldOriginalStableId`, and `renamesApplied` still counts only overlay
-    entries. For an `abi` finding the old id is `<object>#<oldSignatureHash>`.
+    `procedure-removed` (critical) plus a `procedure-added`. Old and new are matched by object,
+    name and ABI status, only when exactly one old-only and one new-only routine carry that name
+    (unchanged overloads don't count). If two overloads change at once, the diff reports removed +
+    added as before. A routine whose ABI status changed with its signature is not matched: public
+    `Foo` removed + local `Foo` added stays a critical `procedure-removed`. A repeated snapshot row
+    (same stable id twice) counts once. Capability, permission, coverage and subscriber-induced
+    findings now follow the routine (the new id) instead of showing up as gained on the new id
+    and lost on the old one. Such a pair is not a rename: there is no "renamed from" note and no
+    `oldOriginalStableId`, and `renamesApplied` still counts only overlay entries. For an `abi`
+    finding the old id is `<object>#<oldSignatureHash>`.
+  - Old ids read from event declarations are now normalized through the rename table, the user
+    overlay included, at three places. This removes a false `event-subscriber-induced-capability-gained`
+    for a paired or renamed subscriber, and puts a removed publisher and a subscriber-induced
+    finding on the renamed/paired subject.
   - `table-field-added` (and the other field findings) show the field's name in
     `subject.displayName` instead of its stable id.
   - Limits: an `internal` procedure called by an `internalsVisibleTo` friend app gets no `abi`
     finding. Object-level `Access = Internal` is not visible, so a public procedure in an
     internal codeunit stays ABI. When a pre-fix snapshot (no `routineKind`) is diffed against a
-    new one, a trigger present only in the old snapshot is still `procedure-removed`. A publisher
-    that drops its event attribute gets no `abi` finding; the events pass reports
-    `event-publisher-removed` (medium).
+    new one, a trigger present only in the old snapshot is still `procedure-removed`. A
+    `local`/`internal` `[IntegrationEvent]` or `[BusinessEvent]` publisher that drops its
+    attribute gets no `abi` finding; the events pass reports `event-publisher-removed` (medium).
+    An `[ExternalBusinessEvent]` publisher that drops it gets no finding at all (the model does
+    not treat it as an event publisher, so there is no event declaration to lose). A user overlay
+    target is never auto-paired, and an old id the overlay maps to a target missing from new
+    stays a removal.
 - **#220: shards and the `diff` preflight took the first `apps[]` row as the workspace's app.**
   That held only while `apps[]` had one row. Both now read the row whose `role` is `"primary"`.
   A shard is now closed over identity, operation, call-site and edge references: it also keeps

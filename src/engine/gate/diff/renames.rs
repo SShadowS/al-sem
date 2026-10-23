@@ -147,11 +147,14 @@ fn stale(stale_id: &str, reason: &str) -> DiffDiagnostic {
 /// `{object}#{signatureFingerprint}`, so a parameter change looks like a removal
 /// plus an addition. A routine only in old and a routine only in new, in the same
 /// object with the same name (AL names ignore case), are one routine when that
-/// (object, name) group holds exactly one of each. An ambiguous group (two
-/// overloads changed at once) stays unpaired. Only member-less ids pair: a member
-/// trigger's id hashes its member in, so two `OnAction`s share name and signature
-/// but are different triggers. Ids the user overlay maps (either end) never pair.
-/// Returns `(old_id, new_id)` pairs in old-snapshot order.
+/// (object, name, ABI status) group holds exactly one of each; unchanged overloads
+/// keep their id and do not count. An ambiguous group (two overloads changed at
+/// once) stays unpaired, and so does a routine whose ABI status changed with its
+/// signature (public `Foo` removed + local `Foo` added stays an ABI removal). Only
+/// member-less ids pair: a member trigger's id hashes its member in, so two
+/// `OnAction`s share name and signature but are different triggers; distinct
+/// member-less ids therefore always differ in signature. Ids the user overlay maps
+/// (either end) never pair. Returns `(old_id, new_id)` pairs in old-snapshot order.
 pub fn pair_signature_changes(
     old_snap: &CborValue,
     new_snap: &CborValue,
@@ -161,48 +164,47 @@ pub fn pair_signature_changes(
     let normalize = |id: &str| user.get(id).map_or(id, |e| e.new_id.as_str()).to_string();
     let old_rows = routine_rows(old_snap);
     let new_rows = routine_rows(new_snap);
-    let old_ids: HashSet<String> = old_rows.iter().map(|r| normalize(&r.id)).collect();
-    let new_ids: HashSet<&str> = new_rows.iter().map(|r| r.id.as_str()).collect();
+    let old_ids: HashSet<String> = old_rows.keys().map(|id| normalize(id)).collect();
 
-    // (object, lowercased name) → (old-only candidates, new-only candidates).
-    type Group<'a> = (Vec<&'a RoutineRow>, Vec<&'a RoutineRow>);
-    let mut groups: IndexMap<(String, String), Group> = IndexMap::new();
-    for r in &old_rows {
-        if r.pairable && !user.contains_key(&r.id) && !new_ids.contains(r.id.as_str()) {
-            groups.entry(r.key()).or_default().0.push(r);
+    // (object, lowercased name, ABI) → (old-only candidates, new-only candidates).
+    type Group<'a> = (Vec<&'a str>, Vec<&'a str>);
+    let mut groups: IndexMap<(&str, String, bool), Group> = IndexMap::new();
+    for (id, r) in &old_rows {
+        if r.pairable && !user.contains_key(id) && !new_rows.contains_key(id) {
+            groups.entry(r.key()).or_default().0.push(id);
         }
     }
-    for r in &new_rows {
-        if r.pairable && !user_targets.contains(r.id.as_str()) && !old_ids.contains(&r.id) {
-            groups.entry(r.key()).or_default().1.push(r);
+    for (id, r) in &new_rows {
+        if r.pairable && !user_targets.contains(id.as_str()) && !old_ids.contains(id) {
+            groups.entry(r.key()).or_default().1.push(id);
         }
     }
     groups
         .into_values()
         .filter_map(|(olds, news)| match (olds.as_slice(), news.as_slice()) {
-            ([o], [n]) if o.sig != n.sig => Some((o.id.clone(), n.id.clone())),
+            ([o], [n]) => Some((o.to_string(), n.to_string())),
             _ => None,
         })
         .collect()
 }
 
 struct RoutineRow {
-    id: String,
     object: String,
     name: String,
-    sig: String,
-    /// Member-less (`id == {object}#{sig}`) and named.
+    abi: bool,
+    /// Member-less (`id == {object}#{signatureFingerprint}`) and named.
     pairable: bool,
 }
 
 impl RoutineRow {
-    fn key(&self) -> (String, String) {
-        (self.object.clone(), self.name.to_lowercase())
+    fn key(&self) -> (&str, String, bool) {
+        (&self.object, self.name.to_lowercase(), self.abi)
     }
 }
 
-/// The routine contract facts of one snapshot, with their display names.
-fn routine_rows(snap: &CborValue) -> Vec<RoutineRow> {
+/// The routine contract facts of one snapshot by stable id, with their display
+/// names. A repeated id keeps its last row, as `build_diff_indexes` does.
+fn routine_rows(snap: &CborValue) -> IndexMap<String, RoutineRow> {
     let ids = super::indexes::identities_field(snap, "stableIds");
     let names = super::indexes::identities_field(snap, "displayNames");
     let name_of: HashMap<&str, &str> = ids
@@ -221,13 +223,13 @@ fn routine_rows(snap: &CborValue) -> Vec<RoutineRow> {
             let sig = super::get_str(f, "signatureFingerprint").unwrap_or("");
             let name = name_of.get(id).copied().unwrap_or("");
             let (object, suffix) = id.rsplit_once('#')?;
-            Some(RoutineRow {
-                id: id.to_string(),
+            let row = RoutineRow {
                 object: object.to_string(),
                 name: name.to_string(),
-                sig: sig.to_string(),
+                abi: super::passes::is_abi_surface(f),
                 pairable: !name.is_empty() && !sig.is_empty() && suffix == sig,
-            })
+            };
+            Some((id.to_string(), row))
         })
         .collect()
 }

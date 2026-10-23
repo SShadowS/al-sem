@@ -106,10 +106,12 @@ const EXTERNAL_EVENT_ATTRIBUTES: [&str; 3] =
 
 /// #156: whether a contract fact is part of the app's ABI — callable or
 /// subscribable from another app. Not ABI: triggers, and `local` / `internal`
-/// routines that publish no external event. Shortcut: `internal` is treated as
-/// in-app although `internalsVisibleTo` friend apps can call it; a fact without
-/// `routineKind` (an older snapshot) counts as not a trigger.
-fn is_abi_surface(fact: &CborValue) -> bool {
+/// routines that publish no external event. A `local` or `internal` publisher
+/// stays ABI: dependent extensions can subscribe to it (AppSourceCop AS0025: the
+/// access modifier only limits raising the event). Shortcut: `internal` is
+/// treated as in-app although `internalsVisibleTo` friend apps can call it; a
+/// fact without `routineKind` (an older snapshot) counts as not a trigger.
+pub(super) fn is_abi_surface(fact: &CborValue) -> bool {
     if get_str(fact, "kind") != Some("routine") {
         return true;
     }

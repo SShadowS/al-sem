@@ -1055,6 +1055,20 @@ fn issue156_a1c_local_event_publishers_stay_abi() {
         ("BusinessEvent", "event-publisher"),
         ("ExternalBusinessEvent", "procedure"),
     ] {
+        // FQ-03: an `internal` publisher too — dependent extensions can subscribe
+        // to local and internal events (AppSourceCop AS0025).
+        for vis in ["local", "internal"] {
+            let old = snap156(
+                vec![(routine_fact(OBJ156, "p1", vis, Some(kind), &[attr]), "OnX")],
+                vec![],
+            );
+            let r = engine(&old, &snap156(vec![], vec![]), CoveragePolicy::Loose);
+            assert_eq!(
+                kinds_in(&r, "abi"),
+                pairs(&[("procedure-removed", &id156("p1"))]),
+                "[{attr}] {vis} publisher removal is an ABI break"
+            );
+        }
         let old = snap156(
             vec![(
                 routine_fact(OBJ156, "p1", "local", Some(kind), &[attr]),
@@ -1553,6 +1567,88 @@ fn issue156_a2g_subscriber_induced_subject_follows_the_pair() {
             .subject
             .normalized_stable_id,
         p2
+    );
+    assert_eq!(
+        find_kind(&r, "event-publisher-removed")
+            .subject
+            .normalized_stable_id,
+        p2,
+        "the removed publisher's subject is the paired new id"
+    );
+}
+
+/// #156 FQ-01 — a snapshot that repeats a routine row (same stable id twice)
+/// still pairs: rows collapse by id (last wins), as the diff indexes do.
+#[test]
+fn issue156_fq01_duplicate_rows_still_pair() {
+    let fact = |sig: &str| routine_fact(OBJ156, sig, "public", Some("procedure"), &[]);
+    let old = snap156(vec![(fact("d1"), "Dup"), (fact("d1"), "Dup")], vec![]);
+    let new = snap156(vec![(fact("d2"), "Dup")], vec![]);
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-signature-changed", &id156("d2"))])
+    );
+}
+
+/// #156 FQ-02 — a routine whose ABI status changed with its signature is not
+/// paired: public `Foo` removed + local `Foo` added stays an ABI removal, and the
+/// local addition is nothing.
+#[test]
+fn issue156_fq02_abi_status_change_is_not_a_pair() {
+    let old = snap156(
+        vec![(
+            routine_fact(OBJ156, "f1", "public", Some("procedure"), &[]),
+            "Foo",
+        )],
+        vec![],
+    );
+    let new = snap156(
+        vec![(
+            routine_fact(OBJ156, "f2", "local", Some("procedure"), &[]),
+            "Foo",
+        )],
+        vec![],
+    );
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-removed", &id156("f1"))])
+    );
+    assert_eq!(
+        find_kind(&r, "procedure-removed").severity,
+        Severity::Critical
+    );
+}
+
+/// #156 FQ-05 — a user overlay target never auto-pairs on the new side: overlay
+/// `#x → #t` whose source `#x` is not in old leaves `#t` new-only; an old-only
+/// `#tp` of the same name must not pair with it.
+#[test]
+fn issue156_fq05_user_target_never_auto_pairs() {
+    let mut overlay = al_sem::engine::gate::diff::RenameOverlay::new();
+    overlay.insert(id156("x"), id156("t"));
+    let old = snap156(
+        vec![(
+            routine_fact(OBJ156, "tp", "public", Some("procedure"), &[]),
+            "W",
+        )],
+        vec![],
+    );
+    let new = snap156(
+        vec![(
+            routine_fact(OBJ156, "t", "public", Some("procedure"), &[]),
+            "W",
+        )],
+        vec![],
+    );
+    let r = engine_with_overlay(&old, &new, overlay);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[
+            ("procedure-removed", &id156("tp")),
+            ("procedure-added", &id156("t")),
+        ])
     );
 }
 
