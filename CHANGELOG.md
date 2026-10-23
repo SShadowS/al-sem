@@ -655,6 +655,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- LSP watcher: each root now watches its root `app.json`, its workspace `.al-sem.json` (reloaded live), and the ancestor `.alpackages` folders the loader reads, registered before the first build; folder renames and moves, and files replaced without their own event, are reconciled. Stated limits: an edit to the global `~/.al-sem/config.json` and a `.git` created or removed at the root or an ancestor still need a server restart (#221).
 - LSP updater: a `.al` file renamed, moved or replaced, a folder renamed, moved in or out, or replaced, and a `FileRemoved` for a file still on disk are reconciled from disk instead of leaving stale or missing declarations; a `.al` under `.alpackages`, `.snapshots` or `node_modules` no longer triggers a full rebuild (#221).
 - **#220: shards and the `diff` preflight took the first `apps[]` row as the workspace's app.**
   That held only while `apps[]` had one row. Both now read the row whose `role` is `"primary"`.

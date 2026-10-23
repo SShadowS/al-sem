@@ -355,40 +355,80 @@ pub fn find_alpackages_folder(project_root: &Path) -> Option<PathBuf> {
 /// AL LSP but not to al-call-hierarchy, leading to inconsistent symbol
 /// data between the two indexes.
 pub fn find_all_alpackages_folders(project_root: &Path) -> Vec<PathBuf> {
-    let mut folders = Vec::new();
-
-    if let Some(own) = find_alpackages_folder(project_root) {
-        folders.push(own);
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for alpkg in package_cache_scope(project_root).candidates {
+        if alpkg.is_dir() && !folders.iter().any(|p| paths_equal(p, &alpkg)) {
+            folders.push(alpkg);
+        }
     }
+    folders
+}
 
+/// Every `.alpackages` folder the loader MAY read for a root (`candidates`,
+/// whether or not it exists, in walk order) and every ancestor the walk
+/// visited (`walked_dirs`). The LSP watcher registers both (#221).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheScope {
+    pub candidates: Vec<PathBuf>,
+    pub walked_dirs: Vec<PathBuf>,
+}
+
+/// What a path is to the dependency loader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// A candidate `.alpackages` folder.
+    CacheFolder,
+    /// A `*.app` file directly inside a candidate folder.
+    AppFile,
+}
+
+/// The ONE implementation of [`find_all_alpackages_folders`]' walk, without
+/// its `is_dir` test: the root's own `.alpackages`, then (unless the root
+/// holds `.git`) each ancestor's, stopping after an ancestor holding `.git`
+/// or after eight ancestors.
+pub fn package_cache_scope(project_root: &Path) -> CacheScope {
+    let mut scope = CacheScope {
+        candidates: vec![project_root.join(".alpackages")],
+        walked_dirs: Vec::new(),
+    };
     // The boundary holds at the workspace itself: a workspace that is its own
     // repository root (`.git` as a directory or a worktree file) reads nothing
     // above it.
     if project_root.join(".git").exists() {
-        return folders;
+        return scope;
     }
-
     let mut current = project_root.parent();
-    let mut depth = 0;
-    while let Some(dir) = current {
-        if depth >= 8 {
-            break;
-        }
-
-        let alpkg = dir.join(".alpackages");
-        if alpkg.is_dir() && !folders.iter().any(|p| paths_equal(p, &alpkg)) {
-            folders.push(alpkg);
-        }
-
+    for _ in 0..8 {
+        let Some(dir) = current else { break };
+        scope.walked_dirs.push(dir.to_path_buf());
+        scope.candidates.push(dir.join(".alpackages"));
         if dir.join(".git").exists() {
             break;
         }
-
         current = dir.parent();
-        depth += 1;
     }
+    scope
+}
 
-    folders
+/// The loader's `.app` name test (case-sensitive).
+pub fn is_app_file(name: &std::ffi::OsStr) -> bool {
+    Path::new(name).extension().and_then(|s| s.to_str()) == Some("app")
+}
+
+/// `path`'s [`Role`] in `scope`, if any. Folder parts compare after
+/// [`crate::protocol::normalize_path`]; the `.app` test is on the raw name.
+pub fn cache_scope_role(scope: &CacheScope, path: &Path) -> Option<Role> {
+    let is_candidate = |p: &Path| {
+        let p = crate::protocol::normalize_path(p);
+        scope
+            .candidates
+            .iter()
+            .any(|c| crate::protocol::normalize_path(c) == p)
+    };
+    if is_candidate(path) {
+        return Some(Role::CacheFolder);
+    }
+    (is_candidate(path.parent()?) && is_app_file(path.file_name()?)).then_some(Role::AppFile)
 }
 
 /// One `.app` file the dependency loader will consider, and the `.alpackages`
@@ -425,7 +465,7 @@ pub fn discover_app_files(
         let apps: Vec<(PathBuf, PathBuf)> = entries
             .flatten()
             .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("app"))
+            .filter(|path| path.file_name().is_some_and(is_app_file))
             .map(|path| {
                 let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
                 (path, canonical)
