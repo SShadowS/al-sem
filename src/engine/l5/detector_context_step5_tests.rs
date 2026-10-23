@@ -286,7 +286,7 @@ fn step5_t3_context_coverage_equals_the_snapshot_on_r0() {
         let ids: BTreeSet<&str> = m.workspace.routines.iter().map(|r| r.id.as_str()).collect();
         let mut has_kind = false;
         for id in ids {
-            let s = snapshot.cones.get(id).map(|c| cov_key(&c.coverage));
+            let s = snapshot.coverage.get(id).map(cov_key);
             let c = ctx
                 .summaries
                 .get(id)

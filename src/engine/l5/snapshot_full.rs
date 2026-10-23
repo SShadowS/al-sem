@@ -922,8 +922,8 @@ fn derive_permissions(
         .iter()
         .filter(|r| resolved.routine_role(r) == Role::Primary)
     {
-        // r.summary present iff the cone ran (base.cones has the routine).
-        let Some(cone) = base.cones.get(&r.id) else {
+        // r.summary present iff the cone ran (base.coverage has the routine).
+        let Some(cov) = base.coverage.get(&r.id) else {
             continue;
         };
         // ⟨task-4-review.md finding I-1⟩ Same as `derive_contracts` above: read the
@@ -932,8 +932,8 @@ fn derive_permissions(
 
         // coverage = inheritedStatus ?? directStatus ?? "unknown".
         let coverage = {
-            let inh = &cone.coverage.inherited_status;
-            let dir = &cone.coverage.direct_status;
+            let inh = &cov.inherited_status;
+            let dir = &cov.direct_status;
             if !inh.is_empty() {
                 inh.clone()
             } else if !dir.is_empty() {
@@ -948,7 +948,7 @@ fn derive_permissions(
         if let Some(d) = base.direct_full.get(&r.id) {
             facts.extend(d.iter());
         }
-        facts.extend(cone.inherited.iter());
+        facts.extend(base.raw.get(&r.id).into_iter().flatten());
 
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 

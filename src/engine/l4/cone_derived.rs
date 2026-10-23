@@ -14,7 +14,7 @@
 //! because the fold depends only on a fact's key (7b spec §4.1).
 //!
 //! ⟨Task 3⟩ It is no longer a parallel view: the analyze path composes under
-//! [`ConeOutput::DerivedOnly`] and the raw Vec is not built at all. The only
+//! a [`ConeScope`] with `raw: WitnessScope::None` and the raw Vec is not built at all. The only
 //! survivors of the raw path are the projection/`prove`/`digest`/`policy`
 //! surfaces, which ask for it explicitly.
 //!
@@ -102,7 +102,7 @@
 //! ids back to `String` and sorts by the resolved string, reproducing the
 //! `BTreeSet<String>` ordering the raw helpers produce.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::mem::size_of;
 use std::ops::Range;
 
@@ -235,31 +235,75 @@ fn physical_table_bit(is_known_temp: bool, op: &str) -> bool {
 // Output mode — the cone seam's gate.
 // ---------------------------------------------------------------------------
 
-/// What a cone composition should PRODUCE. The raw inherited `Vec<CapabilityFact>`
-/// is allocated *inside* the cone walk, so a post-hoc check could only discard it;
-/// the gate has to be threaded into the walk itself.
-///
-/// [`ConeOutput::DerivedOnly`] is a real skip, not build-then-drop: neither the
-/// per-representative `retag` clone nor the `sort_inherited` allocation happens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConeOutput {
-    /// Only the [`ConeDerivedStore`]. Every routine's raw inherited Vec is empty.
-    DerivedOnly,
-    /// Only the raw inherited Vecs (today's behaviour). The store stays empty.
-    RawOnly,
-    /// Both — the dual-run mode the C1 parity oracle asserts over.
-    Both,
+/// The routines whose RAW inherited `Vec<CapabilityFact>` a composition
+/// materializes (#160 step 6 D1): the subjects. Internal routine ids (the cone
+/// is string-keyed). The raw Vec is allocated *inside* the cone walk, so the
+/// gate is threaded into the walk itself, per member.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WitnessScope {
+    /// No member gets raw.
+    None,
+    /// Every member gets raw (the diagnostic projections, the oracles).
+    All,
+    /// Only these members get raw.
+    Subjects(BTreeSet<String>),
 }
 
-impl ConeOutput {
+impl WitnessScope {
+    /// Whether member `id`'s raw half runs.
+    pub fn contains(&self, id: &str) -> bool {
+        match self {
+            WitnessScope::None => false,
+            WitnessScope::All => true,
+            WitnessScope::Subjects(s) => s.contains(id),
+        }
+    }
+
+    /// True for [`WitnessScope::None`].
+    pub fn is_none(&self) -> bool {
+        matches!(self, WitnessScope::None)
+    }
+}
+
+/// What a cone composition PRODUCES: the derived rows (for every member, when
+/// `derived`) and the raw Vecs of the `raw` subjects. Coverage is produced for
+/// every member whatever the scope. A member outside both halves skips its walk
+/// entirely; the fact and coverage cones are built as before, so the gate
+/// changes no other member's output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConeScope {
+    pub derived: bool,
+    pub raw: WitnessScope,
+}
+
+impl ConeScope {
+    /// One member's mode: `(derived, raw.contains(id))`.
+    pub(crate) fn member(&self, id: &str) -> MemberMode {
+        MemberMode {
+            derived: self.derived,
+            raw: self.raw.contains(id),
+        }
+    }
+}
+
+/// One member's half of a [`ConeScope`]. [`MemberMode::wants_derived`] false is
+/// a real skip, not build-then-drop: neither the per-representative `retag`
+/// clone nor the `sort_inherited` allocation happens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MemberMode {
+    pub(crate) derived: bool,
+    pub(crate) raw: bool,
+}
+
+impl MemberMode {
     /// True when the raw inherited `Vec<CapabilityFact>` must be materialized.
-    pub fn wants_raw(self) -> bool {
-        matches!(self, ConeOutput::RawOnly | ConeOutput::Both)
+    pub(crate) fn wants_raw(self) -> bool {
+        self.raw
     }
 
     /// True when the derived substrate must be folded.
-    pub fn wants_derived(self) -> bool {
-        matches!(self, ConeOutput::DerivedOnly | ConeOutput::Both)
+    pub(crate) fn wants_derived(self) -> bool {
+        self.derived
     }
 }
 
@@ -1024,8 +1068,40 @@ pub(crate) mod test_facts {
     }
 }
 
+/// The pre-step-6 output modes as scopes, 1:1 (#160 step 6 spec §4.1), for
+/// the parity tests written against them.
+#[cfg(test)]
+pub(crate) mod scope_of {
+    use super::{ConeScope, WitnessScope};
+
+    /// Was `DerivedOnly`.
+    pub(crate) fn derived_only() -> ConeScope {
+        ConeScope {
+            derived: true,
+            raw: WitnessScope::None,
+        }
+    }
+
+    /// Was `RawOnly`.
+    pub(crate) fn raw_only() -> ConeScope {
+        ConeScope {
+            derived: false,
+            raw: WitnessScope::All,
+        }
+    }
+
+    /// Was `Both`.
+    pub(crate) fn both() -> ConeScope {
+        ConeScope {
+            derived: true,
+            raw: WitnessScope::All,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::scope_of;
     use super::test_facts::{call_edge, fact, temp_fact};
     use super::*;
     use crate::engine::l4::capability_cone::compose_cone_over_graph;
@@ -1103,7 +1179,7 @@ mod tests {
     /// from THREE hand-built unit graphs in this module and never over
     /// `tests/r0-corpus/`. It is a genuine guard — all three fail on the un-widened
     /// key — but it is not a corpus-wide invariant. Widening it into the r3a3
-    /// differential (compose with `ConeOutput::Both`, compare `out.derived` against
+    /// differential (compose with `scope_of::both()`, compare `out.derived` against
     /// the reachable-direct union) is cheap and is the honest way to earn that
     /// wording.
     ///
@@ -1195,10 +1271,10 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::Both,
+            scope_of::both(),
         );
 
-        let root_inherited = &out.cones.get("r/root").expect("root cone").inherited;
+        let root_inherited = out.raw.get("r/root").expect("root cone");
         assert_eq!(
             root_inherited.len(),
             2,
@@ -1306,10 +1382,10 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::Both,
+            scope_of::both(),
         );
 
-        let root_inherited = &out.cones.get("r/root").expect("root cone").inherited;
+        let root_inherited = out.raw.get("r/root").expect("root cone");
         assert_eq!(
             root_inherited.len(),
             2,
@@ -1367,10 +1443,10 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::Both,
+            scope_of::both(),
         );
 
-        let a_inherited = &out.cones.get("r/a").expect("a cone").inherited;
+        let a_inherited = out.raw.get("r/a").expect("a cone");
         assert_eq!(
             a_inherited.len(),
             2,
@@ -1432,7 +1508,7 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::Both,
+            scope_of::both(),
         );
         let ops = out.derived.physical_table_write_ops_of("r/w");
         assert_eq!(ops.len(), 1);
@@ -1473,18 +1549,18 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::Both,
+            scope_of::both(),
         );
 
         // No facts ⇒ no flags; the tri-state then reads coverage.
         assert!(!out.derived.touches_table("r/complete"));
         assert!(!out.derived.may_commit_flag("r/complete"));
         assert_eq!(
-            out.cones["r/complete"].coverage.inherited_status, "complete",
+            out.coverage["r/complete"].inherited_status, "complete",
             "absent fact + complete ⇒ the No arm"
         );
         assert_eq!(
-            out.cones["r/partial"].coverage.inherited_status, "partial",
+            out.coverage["r/partial"].inherited_status, "partial",
             "absent fact + partial ⇒ the Unknown arm"
         );
 
@@ -1584,7 +1660,7 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::Both,
+            scope_of::both(),
         );
         let derived_only = compose_cone_over_graph(
             &graph.typed_edges,
@@ -1592,7 +1668,7 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::DerivedOnly,
+            scope_of::derived_only(),
         );
         let raw_only = compose_cone_over_graph(
             &graph.typed_edges,
@@ -1600,12 +1676,12 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::RawOnly,
+            scope_of::raw_only(),
         );
 
         // DerivedOnly: the raw Vec is never built...
         assert!(
-            derived_only.cones.values().all(|c| c.inherited.is_empty()),
+            derived_only.raw.is_empty(),
             "DerivedOnly must not materialize the raw inherited Vec"
         );
         // ...but the row is fully populated, and identical to `Both`'s.
@@ -1636,13 +1712,10 @@ mod tests {
             );
         }
         // `Both` still returns the raw Vec unchanged.
-        assert_eq!(both.cones["r/root"].inherited.len(), 2);
+        assert_eq!(both.raw["r/root"].len(), 2);
 
         // RawOnly: the raw Vec is byte-identical to `Both`'s; no row is folded.
-        assert_eq!(
-            raw_only.cones["r/root"].inherited,
-            both.cones["r/root"].inherited
-        );
+        assert_eq!(raw_only.raw["r/root"], both.raw["r/root"]);
         assert!(raw_only.derived.is_empty());
     }
 
@@ -1692,7 +1765,7 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::Both,
+            scope_of::both(),
         );
 
         // Fixture preconditions: multiple distinct tables, and the two windows
@@ -1771,7 +1844,7 @@ mod tests {
             &direct_in,
             &coverage_in,
             &[],
-            ConeOutput::Both,
+            scope_of::both(),
         );
 
         // `t/C` is a read, `t/Q`'s op is `publish` (not a write op) — neither is a
