@@ -48,10 +48,43 @@ fn usage() -> ExitCode {
          --graphify-export | --graphify-export-fragments | --integration-points] \
          <workspace-or-.app>\n\
          \x20      aldump --issue160-full-graph-timings <workspace>   (needs ALSEM_CONES_CENSUS=1)\n\
+         \x20      aldump --issue160-step6-probe <workspace> --config <d|o|policy|parent-d|parent-o|single-app> [--file <F>]\n\
          \x20      aldump --switch-dump <workspace> <out-dir>\n\
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]"
     );
     ExitCode::FAILURE
+}
+
+/// `--issue160-step6-probe <workspace> --config <c> [--file <F>]` (#160 step 6
+/// spec §8.4, measurement only, deleted in step 6 Task 2): the stop rule's
+/// inputs, as `probe6 key=value` lines.
+fn issue160_step6_probe_cmd(args: &[String]) -> ExitCode {
+    let (ws, rest) = match args {
+        [ws, rest @ ..] => (ws, rest),
+        _ => return usage(),
+    };
+    let (mut config, mut file) = (None, None);
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match (a.as_str(), it.next()) {
+            ("--config", Some(v)) => config = Some(v.as_str()),
+            ("--file", Some(v)) => file = Some(v.as_str()),
+            _ => return usage(),
+        }
+    }
+    let Some(config) = config else {
+        return usage();
+    };
+    match al_sem::engine::l5::step6_probe::run(std::path::Path::new(ws), config, file) {
+        Ok(text) => {
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("aldump: error: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `--issue160-full-graph-timings <workspace>` (#160 §4.1.6, measurement only,
@@ -221,6 +254,7 @@ fn run_main() -> ExitCode {
         Some("--switch-compare") => return switch_compare_cmd(&raw[1..]),
         Some("--compiler-oracle") => return compiler_oracle_cmd(&raw[1..]),
         Some("--issue160-full-graph-timings") => return issue160_full_graph_timings_cmd(&raw[1..]),
+        Some("--issue160-step6-probe") => return issue160_step6_probe_cmd(&raw[1..]),
         _ => {}
     }
     let mut l2 = false;

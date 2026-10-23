@@ -28,7 +28,7 @@ use crate::engine::l4::capability_cone::{
     direct_facts_for_routine, fold_uncertainty_reasons,
 };
 use crate::engine::l4::combined_graph::{PrimaryGraph, TypedEdge};
-use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeOutput};
+use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::reverse_index::ReverseEffectIndex;
 use crate::engine::l4::summary::{
@@ -492,6 +492,10 @@ pub(crate) mod cones_census {
     pub(crate) static PD_SNAPSHOT_BYTES: AtomicU64 = AtomicU64::new(0);
     /// #69 D2: solve links whose cone edge has no snapshot typed edge (dropped).
     pub(crate) static PD_EDGE_UNMAPPED: AtomicU64 = AtomicU64::new(0);
+    /// #160 step 6 (R6-4): the distinct cone edges behind those dropped links
+    /// (anchorless rows that carry a link). Both are counted ungated, so the
+    /// step-6 probe reads them without the census.
+    pub(crate) static PD_EDGE_UNMAPPED_KEYS: AtomicU64 = AtomicU64::new(0);
     /// What `compose_inherited_cones` spends outside every timed component,
     /// charged PER CALL as `elapsed - Σ(component delta)` in `i64`. The one
     /// signed counter: a negative total means two component timers overlap.
@@ -1252,6 +1256,16 @@ pub(crate) struct DetConeInputs {
 /// own graph's edges; cross-app that is the cut graph (Primary callers only)
 /// until step 6 (spec 5-A3).
 pub(crate) fn det_cone_inputs(resolved: &Model, rel: &ExecRelation) -> DetConeInputs {
+    det_cone_inputs_over(resolved, rel.uncertainty_all())
+}
+
+/// [`det_cone_inputs`] over any uncertainty edges (#160 step 6 §4.4): the
+/// standalone single-app composition passes its own graph's, which single-app
+/// are the relation's.
+pub(crate) fn det_cone_inputs_over<'e>(
+    resolved: &Model,
+    uncertainty: impl IntoIterator<Item = &'e crate::engine::l4::combined_graph::UncertaintyEdge>,
+) -> DetConeInputs {
     let ws = &resolved.workspace;
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
     for evt in &resolved.events.graph.events {
@@ -1270,7 +1284,7 @@ pub(crate) fn det_cone_inputs(resolved: &Model, rel: &ExecRelation) -> DetConeIn
     // direct facts are the full-value union, its coverage the least complete.
     let mut facts_per_row = Vec::with_capacity(ws.routines.len());
     let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
-    let uncertainty_reasons = callsite_local_coverage_reasons(rel.uncertainty_all());
+    let uncertainty_reasons = callsite_local_coverage_reasons(uncertainty);
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
@@ -1290,6 +1304,90 @@ pub(crate) fn det_cone_inputs(resolved: &Model, rel: &ExecRelation) -> DetConeIn
         direct_full,
         coverage_in,
     }
+}
+
+/// What ONE composition over the view leaves for its readers (#160 step 6
+/// D2): every routine's direct facts and coverage, the derived rows (empty
+/// unless the scope derived them) and the producer arena, which the tree takes.
+/// The subjects' raw facts are returned APART by [`compose_capabilities`].
+pub(crate) struct CapabilityAnalysis {
+    pub direct_full: HashMap<String, Vec<CapabilityFact>>,
+    pub coverage: HashMap<String, crate::engine::l4::capability_cone::CoverageRecord>,
+    pub derived: ConeDerivedStore,
+    pub pd: Option<crate::engine::l4::pd_solve::ConeArena>,
+}
+
+/// How many materialized raw entries belong to a non-primary routine (I5: must
+/// be 0). An id is non-primary when any of its rows has `Role::Dependency`.
+pub(crate) fn witness_non_primary_members(
+    model: &Model,
+    raw: &HashMap<String, Vec<CapabilityFact>>,
+) -> usize {
+    use crate::program::model::role::Role;
+    let dependency: std::collections::HashSet<&str> = model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| model.routine_role(r) == Role::Dependency)
+        .map(|r| r.id.as_str())
+        .collect();
+    raw.keys()
+        .filter(|id| dependency.contains(id.as_str()))
+        .count()
+}
+
+/// The one composition (#160 step 6 D1, D2): `compose_cone_over_graph` over
+/// `typed` with `inputs` (from [`det_cone_inputs`]) and `scope`. Returns the
+/// analysis and the raw facts of the members `scope.raw` contains, and prints
+/// the `witness.*` census lines (what was materialized, by role).
+pub(crate) fn compose_capabilities(
+    model: &Model,
+    typed: &[crate::engine::l4::combined_graph::TypedEdge],
+    inputs: DetConeInputs,
+    scope: ConeScope,
+) -> (CapabilityAnalysis, HashMap<String, Vec<CapabilityFact>>) {
+    let ws = &model.workspace;
+    let DetConeInputs {
+        nodes,
+        direct_full,
+        coverage_in,
+    } = inputs;
+    cones_census::add(&cones_census::ROUTINES, ws.routines.len() as u64);
+    cones_census::add(
+        &cones_census::DIRECT_FACTS,
+        direct_full.values().map(|v| v.len() as u64).sum::<u64>(),
+    );
+    let _t_walk = cones_census::start();
+    let outcome = compose_cone_over_graph(
+        typed,
+        &nodes,
+        &direct_full,
+        &coverage_in,
+        &ws.routines,
+        scope,
+    );
+    cones_census::add_since(&cones_census::WALK_NANOS, _t_walk);
+    // ⟨C1 Task 4⟩ Both cone inputs are dead here (`nodes` is one more full
+    // copy of every routine id, `coverage_in` one more copy of every routine's
+    // direct status + reasons).
+    drop(nodes);
+    drop(coverage_in);
+    if crate::engine::census::enabled() {
+        let non_primary = witness_non_primary_members(model, &outcome.raw);
+        eprintln!(
+            "[retained-census] witness.members={} witness.non_primary_members={non_primary}",
+            outcome.raw.len()
+        );
+    }
+    (
+        CapabilityAnalysis {
+            direct_full,
+            coverage: outcome.coverage,
+            derived: outcome.derived,
+            pd: Some(outcome.pd_solution),
+        },
+        outcome.raw,
+    )
 }
 
 /// The owned detector substrates over the relation `rel`, at mask `demanded`:
@@ -1364,65 +1462,47 @@ pub(crate) fn build_detector_artifacts(
         // site — `project_r3a3`, `project_r3a5_cross_app`,
         // `build_detector_context_cross_app` — already passed its `direct_full`
         // directly; this was the one straggler.)
-        let DetConeInputs {
-            nodes,
-            mut direct_full,
-            coverage_in,
-        } = det_cone_inputs(resolved, rel);
-        // ⟨C1 Task 3⟩ `DerivedOnly` — the compact substrate only; the per-routine
-        // raw inherited `Vec<CapabilityFact>` is never allocated. `Both` only when
-        // the policy-only `RAW_INHERITED_FACTS` bit is demanded.
-        let mode = if want_raw_inherited {
-            ConeOutput::Both
-        } else {
-            ConeOutput::DerivedOnly
+        // ⟨C1 Task 3⟩ derived rows only — the per-routine raw inherited
+        // `Vec<CapabilityFact>` is never allocated; raw for every routine only
+        // when the policy-only `RAW_INHERITED_FACTS` bit is demanded.
+        let scope = ConeScope {
+            derived: true,
+            raw: if want_raw_inherited {
+                WitnessScope::All
+            } else {
+                WitnessScope::None
+            },
         };
-        cones_census::add(&cones_census::ROUTINES, ws.routines.len() as u64);
-        cones_census::add(
-            &cones_census::DIRECT_FACTS,
-            direct_full.values().map(|v| v.len() as u64).sum::<u64>(),
-        );
-
-        let _t_walk = cones_census::start();
-        let outcome = compose_cone_over_graph(
-            rel.cone(),
-            &nodes,
-            &direct_full,
-            &coverage_in,
-            &ws.routines,
-            mode,
-        );
-        cones_census::add_since(&cones_census::WALK_NANOS, _t_walk);
-        let mut cones = outcome.cones;
-        cone_derived = outcome.derived;
+        let (caps, mut raw) =
+            compose_capabilities(resolved, rel.cone(), det_cone_inputs(resolved, rel), scope);
+        let CapabilityAnalysis {
+            mut direct_full,
+            coverage: mut cone_coverage,
+            derived,
+            pd,
+        } = caps;
+        cone_derived = derived;
         // #69 D1.4: the detectors read the solve only through the cone; its
         // arena (a snapshot input) is dead here.
-        drop(outcome.pd_solution);
-        // ⟨C1 Task 4⟩ Both cone inputs are dead here; free them before the
-        // summary assembly below rather than at this block's closing brace
-        // (`nodes` is one more full copy of every routine id, `coverage_in` one
-        // more copy of every routine's direct status + reasons).
-        drop(nodes);
-        drop(coverage_in);
+        drop(pd);
 
-        // `cones` and `direct_full` are locally owned and dead after this loop, so
-        // move their payloads into the summaries instead of cloning them out.
+        // `cone_coverage`, `raw` and `direct_full` are locally owned and dead
+        // after this loop, so move their payloads into the summaries instead of
+        // cloning them out.
         let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
         let _t_assemble = cones_census::start();
         for r in &ws.routines {
-            let cone_entry = cones.remove(&r.id);
+            let coverage = cone_coverage.remove(&r.id);
+            let inherited = raw.remove(&r.id).unwrap_or_default();
             let direct = direct_full.remove(&r.id);
             // One summary per id (#160 step 11b §4.6): `direct_full` is already
             // the projection's per-id input (a collided id's full-value union),
             // and the cone is per id, so a collided id's first row files it and
             // every later row of the id finds the drain empty and is skipped.
+            // (A coverage of `None` is the fail-soft for an id the cone did not
+            // walk.)
             let Some(direct) = direct else {
                 continue;
-            };
-            let (inherited, coverage) = match cone_entry {
-                Some(c) => (c.inherited, Some(c.coverage)),
-                // Fail-soft for an id the cone did not walk.
-                None => (Vec::new(), None),
             };
             // ⟨C1 Task 3⟩ `Some(inherited)` ONLY under `RAW_INHERITED_FACTS`;
             // `None` records "never materialized" so `inherited_raw()` panics
