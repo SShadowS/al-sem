@@ -1,0 +1,665 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": "/work/al-sem-issue-253-a1/tests/cli/cli_analyze_call_hierarchy_json.rs",
+    "line": 548,
+    "severity": "important",
+    "text": "A9 still fails after removing test_quality from the parsed JSON: the raw-output scanner treats every \"object_type\" line as a metrics row, including the new procedure/codeunit rows. Restrict the scan to metrics; keep frozen outputs unchanged.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (ledger P17): the scan at :543-569 runs over the whole stdout, and the fixture's [Test] TestSomething makes procedures non-empty. Design v2 'Where it lives' gives the legacy test two edits: remove top-level test_quality from the parsed value, and break the raw scan at the line \"findings\": [. Frozen legacy.* files unchanged. Acceptance row A13 proves edit 2 is needed (revert it alone -> red). Same as O1.",
+    "anchor": "/work/al-sem-issue-253-a1/tests/cli/cli_analyze_call_hierarchy_json.rs:526-580",
+    "anchor_hash": "2b001dc3256b3205f6859ac96669285534447ce58576533edd200f0c4cb89eb5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 163,
+    "severity": "important",
+    "text": "A1-A9 do not enforce traversal completeness. Empty visitor arms could compile and pass: nested control-flow asserts, expression-contained asserts and descent through AssertError are untested. Parameter receivers and AreNearlyEqual are also unpinned.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (P18): exhaustiveness alone does not force recursion. Design v2 adds A10 (one assert per slot: if then/else, case branch/else, while, repeat, for, foreach, nested block, inside asserterror; break = empty each arm in turn -> count drops), A11 (in-body #if, both arms), A9 (parameter receiver; break = drop params from lookup), and AreNearlyEqual in A3 (break = drop it from the method list -> total 8). Asserts inside conditions/expressions cannot occur in valid AL (the assert methods return nothing); the expression recursion is stated as defensive, and A10 pins that a nested non-assert call in an assert's argument is not counted. Round 2 (re-raised): confirmed (P23) the lowerer flattens live in-body #if branches into plain statements (lower/mod.rs:2367-2387) and never builds BlockItem::Preproc, so A11 could not test that arm. Design v3: A11 kept as a binary test of the flattened behaviour (both arms count) and labelled as such; new U1 builds a Preproc block by hand with the public Ir::add_block and breaks the arm (empty -> 0, first branch only -> 1); rule 6 states which path real AL takes.",
+    "anchor": ".agent/issue-253/ledger.md:317-318",
+    "anchor_hash": "8e123a12eab9b2160ebc94837b87a67f1dcd2164cae905ceb664e34e0ef328c4",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 163,
+    "severity": "important",
+    "text": "A1 checks identity-key presence, not the promised exact join with metrics. A wrong/null routine_id or wrong object metadata can pass. Compare every procedure's identity fields against exactly one metrics row at (path, line), including missing-app/nested-app null cases.",
+    "disposition": "fixed",
+    "evidence": "Design v2 A1: for every procedure row, exactly one metrics row has the same (path, line), and object_type, object_name, object_id, procedure_name, routine_id are equal, including routine_id null for a nested-app test; object_stable_id checked by value and null for nested app. A1b runs analyze-json-noapp: routine_id, object_stable_id, assert_count_reachable, zero_assert all null. Breaks: routine_id None, object line as line, unfiltered guid. Round 2 (re-raised): confirmed (P24) analyze-json-noapp has no [Test], so A1b was vacuous. Design v3: new fixture analyze-test-quality-noapp with two [Test] procedures (existing fixture untouched); A1b asserts exactly 2 rows, null routine_id/object_stable_id/assert_count_reachable/zero_assert per procedure, and null assert_count_reachable and zero_assert_procedures on the codeunit and workspace rows (O11 rule).",
+    "anchor": ".agent/issue-253/ledger.md:306-306",
+    "anchor_hash": "1a6d5a2de57ea6d852da9bd2a450c7842b0f2871ddd5d9d53fcb62bdde66ab4f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 195,
+    "severity": "minor",
+    "text": "Performance comparison is underspecified: P16 measures CSV, while the consumer needs JSON. Benchmark base/new binaries with identical profile, format, dependencies and cache conditions.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: P16 used --format csv (no graph) on a target/cdo binary. Design v2 measurement plan: master 60434aef vs branch, both --profile release-fast, same machine, no .alpackages, one discarded warm run, 5 runs each of --analyze --format json, median reported. P16 marked not a valid baseline. Same as O6.",
+    "anchor": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md:193-202",
+    "anchor_hash": "783971c425de3eb16141dd7acdbf494105ae64f7b46e818d0b111896f6940fcf",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 206,
+    "severity": "minor",
+    "text": "The conditional object-key fallback cannot be done by a serde rename: renaming numeric object_id does not produce <appId>/Codeunit/N.",
+    "disposition": "fixed",
+    "evidence": "Correct: object_id is i64 (src/analysis.rs:22); the string comes from ids::encode_object_id (src/engine/ids.rs:177). Operator answer 2 settles it: Design v2 adds object_stable_id on procedure and codeunit rows, built with encode_object_id(guid, ir_object_type, ir_object_key), null when the object part of routine_id is null. The fallback now covers casing only.",
+    "anchor": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md:206-207",
+    "anchor_hash": "e196e2b05d69b6e76febdfac00895e4a2921ae697990dc1c82bcd4d2930bc421",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "sol",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 150,
+    "severity": "minor",
+    "text": "Documentation plan covers CHANGELOG but omits README discoverability.",
+    "disposition": "fixed",
+    "evidence": "README.md:48-51 lists what --analyze reports. Design v2 'Where it lives' adds 'test assert counts (JSON)' there. Same as O8.",
+    "anchor": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md:150-151",
+    "anchor_hash": "63ffeb4ffb29b5cbc69714dff2f491c41c96ad6a20c646d28adf0c2719724e2d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": "/work/al-sem-issue-253-a1/tests/cli/cli_analyze_call_hierarchy_json.rs",
+    "line": 541,
+    "severity": "important",
+    "text": "A9 says the legacy test stays green once it drops test_quality from the parsed Value. It will not: the raw stdout scan treats any \"object_type\" line as a row start; key-order (:553) and row_count (:565) asserts fail.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (P17). Same fix as S1: two edits to the legacy test (drop the key from the parsed value; stop the raw scan at \"findings\": [), frozen files unchanged, A13 proves edit 2 is needed.",
+    "anchor": "/work/al-sem-issue-253-a1/tests/cli/cli_analyze_call_hierarchy_json.rs:526-580",
+    "anchor_hash": "2b001dc3256b3205f6859ac96669285534447ce58576533edd200f0c4cb89eb5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 134,
+    "severity": "important",
+    "text": "Rule 6 makes StmtKind exhaustive but blocks hold BlockItems; in-body #if (BlockItem::Preproc) is not covered and the both-arms policy is unstated. complexity_stmt ends in _ => {} and must not be the model; list every expression slot.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (P18: stmt.rs BlockItem::{Stmt, Preproc}, complexity_stmt _ => {}). Design v2 rule 6: exhaustive match on BlockItem (Preproc visits every branch; an assert in both arms counts twice) and on StmtKind with no catch-all, listing every slot (assignment target/value, call, if cond/then/else, case scrutinee/patterns/bodies/else, while cond/body, repeat body/until, for var/from/to/body, foreach var/iterable/body, with receiver/body, try body/catch, asserterror block, exit value, block; explicit empty arms for break/continue/unknown). Does not copy complexity_stmt. A11 pins in-body #if (break: first branch only -> 1 -> red). Round 2 (re-raised): that break could not apply, because the lowerer flattens in-body #if (P23). Design v3 rule 6 states the real path (live branches flattened to statements, both arms count, dead nested branches absent) and moves the Preproc-arm proof to synthetic-IR unit test U1; A11 now documents the flattened behaviour only. Same fix as S2.",
+    "anchor": "/work/al-sem-issue-253-a1/.agent/issue-253/ledger.md:182-194",
+    "anchor_hash": "dc0149ef11906170e78cf87b28e9e5a318a9b82b692bee072d5ed18d459ac826",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 113,
+    "severity": "minor",
+    "text": "A this.Assert.AreEqual(..) receiver is Member{Identifier(\"this\"), \"Assert\"}, not a bare name, so it is not counted. Accept this.<name> against globals, or state it as a limit.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (P20: this lowers to Identifier(\"this\"), receiver.rs:2357-2364). Design v2 rule 2 accepts this.X looked up in object globals only. A8 pins it (break: remove the this. arm -> red).",
+    "anchor": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md:113-119",
+    "anchor_hash": "d86f549a73b732982893693bc27bce9bdb2a8ca42eac688cb74306d4ddd843d9",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 127,
+    "severity": "minor",
+    "text": "Database::\"Customer\" (ExprKind::DatabaseReference) is a compile-time constant but the spec classes it as an expression.",
+    "disposition": "fixed",
+    "evidence": "expr.rs:50-51 confirms the kind. Design v2 rule 5 counts DatabaseReference as literal_expected. A3 fixture includes AreEqual(Database::Customer, ..); literal total 6.",
+    "anchor": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md:127-133",
+    "anchor_hash": "379aa512aeb37a2cc9d844708fb6b06dd596736a02518d7d1ea28f0a8f9d0445",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 196,
+    "severity": "minor",
+    "text": "The expected CDO test count is exactly 1844, not 1844-1847: three grep hits are commented-out // [Test] lines.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (P21): CDOOpenDocumentsTests.Codeunit.al:312, CDOSendCustStatementTests.Codeunit.al:244,401. Measurement plan v2 expects exactly 1844; any other number is a bug.",
+    "anchor": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md:196-197",
+    "anchor_hash": "61b369b7a811ced309a6594966e88c6bbaebbefa688eff238a62e8b501964593",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 48,
+    "severity": "minor",
+    "text": "The 44.2 ms baseline came from a target/cdo binary that predates #159 and ran --format csv (no graph). Measure master vs branch with --format json, same profile, same machine.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: binary mtime 2026-10-22 06:15, #159 (809fe684) committed 2026-10-23 13:55; its CSV header has no #159 fields. P16 marked invalid; measurement plan v2 as in S4.",
+    "anchor": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md:48-48",
+    "anchor_hash": "45e7fd9a80c4d38677a315370ca8326bc247d2b0bcf9fed787697edccaf19e9b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 164,
+    "severity": "minor",
+    "text": "The A2 break 'count any X.M() as an assert' only fails if the zero-assert test contains a non-assert member call; 'only setup code' does not guarantee one.",
+    "disposition": "fixed",
+    "evidence": "Design v2 A2: the zero-assert test's body is Rec.Init(); Rec.Insert(); so the break turns it red.",
+    "anchor": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md:164-164",
+    "anchor_hash": "b6567dcc84795d12b2eca7e6131ffb73c1618f25565bb660a9835c9db89ac6f6",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": 1,
+    "file": "/work/al-sem-issue-253-a1/README.md",
+    "line": 50,
+    "severity": "minor",
+    "text": "The README lists what --analyze reports; the plan updates the CHANGELOG only.",
+    "disposition": "fixed",
+    "evidence": "Same as S6: Design v2 adds 'test assert counts (JSON)' to README.md:50-51.",
+    "anchor": "/work/al-sem-issue-253-a1/README.md:48-56",
+    "anchor_hash": "a7b560c4a231c3cc87d7eca595ed7cb518b0e2ff82b1b1f695183ee0e9e95be4",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": 1,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md",
+    "line": 117,
+    "severity": "minor",
+    "text": "130000 = Assert and 130002 = Library Assert are not verified here (no .alpackages). Confirm from the BC sidecar's symbols, or cut the numeric form.",
+    "disposition": "fixed",
+    "evidence": "Not cheaply verifiable (P22): the BC sidecar is stopped and reports 'exited unhealthy'; no test-library .app on disk; CDO uses the numeric form 0 times. Per operator, the numeric form is cut: Design v2 non-goals and rule 2 match by name only (assert / library assert); CHANGELOG states the limit.",
+    "anchor": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r1.md:117-117",
+    "anchor_hash": "af2aa1cf10b329ed6bb6eb61e48f030668dc511a1d2ba18e647ccd4801d607b7",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "sol",
+    "round": 2,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r2.md",
+    "line": 206,
+    "severity": "important",
+    "text": "Workspace membership is not actual same-app membership: nested apps also have declarations, so their helpers pass the DeclEntry filter. Filter by actual app-root membership.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (P26): the source root walks nested apps (provider.rs:31-47) and #159 treats a nested-app file as another app (analysis.rs:291-295). Design v3 rule 7: a target is followed only if its declaration's file has the same app root as the test's file (deepest folder with app.json, else project root; a helper next to in_nested_app). A14: a root test calling a nested-app helper with 1 assert gets 0, precondition fan_in >= 1 on the helper; break (drop the root comparison) -> 1 -> red. CHANGELOG states 'same app' with this meaning. Round 3 (sol re-raise): the call map is keyed by (caller app root, RoutineNodeId) so a root and a nested declaration sharing one id keep their outgoing calls apart; fixture A14b with a break (key by id alone -> counted).",
+    "anchor": ".agent/issue-253/ledger.md:217-238",
+    "anchor_hash": "671c0a62503a3fba8f7ea0b159996c03e03eb34110bee20ce34cad8752fc9a99",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S8",
+    "source": "sol",
+    "round": 2,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r2.md",
+    "line": 203,
+    "severity": "important",
+    "text": "Reachability uses RoutineNodeId, but A7's two conditional declarations share that id; their outgoing edges merge and declaration-specific counts have no multiplicity policy.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (P25): source_routine_node_id has no location or preprocessor context (sig_fp.rs:155-166); updater.rs keeps decl_multiplicity for this. Design v3 rule 7: a callee id's own count is the SUM over its declarations; a test contributes only its own declaration's count and its id seeds the visited set; a split test reaches the union of both arms' callees (stated limit). A7 hand values: arm 1 reachable 4, arm 2 reachable 5, split-helper caller U 3, precondition shared routine_id; breaks: own count as id sum -> 6, last-wins map -> U 2. Same as O10.",
+    "anchor": ".agent/issue-253/ledger.md:239-250",
+    "anchor_hash": "98e58e88ac662735159ea21d0dca1fe0306f806307fb6727710c9d18415860de",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S9",
+    "source": "sol",
+    "round": 2,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r2.md",
+    "line": 261,
+    "severity": "minor",
+    "text": "A4's break need not fail: every positive own count already has zero_assert == false, so excluding zero rows changes no assert sum. Mutate a real summand or omit a positive-count procedure.",
+    "disposition": "fixed",
+    "evidence": "Correct: with resolved counts, assert_count > 0 implies zero_assert == false, so the old break changed nothing. Design v3 A4 break: leave the last procedure of each codeunit out of the codeunit sums; precondition asserts that procedure has assert_count > 0 and assert_count_reachable > 0, so computed-sum and hand-total checks go red.",
+    "anchor": ".agent/issue-253/ledger.md:310-310",
+    "anchor_hash": "452c1d920c47645f9e3440e5fd9ba460b2de702252f6a762dfa805163a1888bd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S10",
+    "source": "sol",
+    "round": 2,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r2.md",
+    "line": 269,
+    "severity": "important",
+    "text": "Removing the visited guard on the H<->H2 cycle can hang, not return '4+'. Separate cycle termination from the duplicate-count mutation; the binary runner blocks in .output().",
+    "disposition": "fixed",
+    "evidence": "Correct: without any guard the H->H2->H walk never ends. Design v3 A12(a) uses O12's variant: per-path guard plus every call edge counted; T's two call sites to H each give 1 + 2, so T = 6 instead of 3, red without looping. All listed breaks terminate, so no runner timeout is needed (stated). Same as O12.",
+    "anchor": ".agent/issue-253/ledger.md:319-319",
+    "anchor_hash": "a0419640c3ee7deafb240c88b97248338c82ff879330104c9349814588d7193e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S11",
+    "source": "sol",
+    "round": 2,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r2.md",
+    "line": 275,
+    "severity": "minor",
+    "text": "Matching routine rows does not prove error-free parsing; recovery can keep declarations while dropping body calls. Parse fixtures explicitly and assert parse_incomplete == false.",
+    "disposition": "fixed",
+    "evidence": "Correct: parse_incomplete is node.has_error() per routine (lower/mod.rs:2107), independent of the declaration surviving. Design v3: the test member parses every .al file in both new fixtures with al_syntax::parse (already used by integration tests, e.g. tests/cli/cli_numberless_object_ids.rs) and asserts at least one object and parse_incomplete == false for every routine.",
+    "anchor": ".agent/issue-253/ledger.md:326-333",
+    "anchor_hash": "a1ba75ffcb22644a6e58835cd48ef7ed36edb73a5d7f8836a55803db2f30164c",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O10",
+    "source": "opus",
+    "round": 2,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r2.md",
+    "line": 203,
+    "severity": "minor",
+    "text": "RoutineNodeId is not unique per declaration: same-signature declarations in #if arms share one id, edges are keyed by it, and 'own count of every other visited routine' is undefined for two declarations. State SUM, pre-mark the test's id, give A7 hand values.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (P25). Same fix as S8: SUM over declarations for callee ids, test's own declaration only with its id pre-visited, union-of-callees stated, A7 hand values (4, 5, U 3) with two discriminating breaks.",
+    "anchor": ".agent/issue-253/ledger.md:313-313",
+    "anchor_hash": "2e77ac000b5d5676379535b985a214b4a6027cbb3efb4dd5d91f4e6fcdde213d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O11",
+    "source": "opus",
+    "round": 2,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r2.md",
+    "line": 129,
+    "severity": "minor",
+    "text": "zero_assert_procedures counts only true, so without a graph codeunit and workspace report a made-up 0. Give it the same null rule and assert it in A1b.",
+    "disposition": "fixed",
+    "evidence": "Correct. Design v3 field rules: zero_assert_procedures is null if any of its procedures has zero_assert null, else the count of true. A1b asserts null on the codeunit and workspace rows; break (old count-only-true rule) -> workspace 0 -> red.",
+    "anchor": "/work/al-sem-issue-253-a1/.agent/issue-253/ledger.md:134-138",
+    "anchor_hash": "33b7d1c36efdcc37c0c0887beea03c9f833d6c8646d293fc106d9c19dc9030b2",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O12",
+    "source": "opus",
+    "round": 2,
+    "file": "/work/alsem/.agent/runs/20261023-192451-fe0173/ledger-spec-r2.md",
+    "line": 269,
+    "severity": "minor",
+    "text": "The 'drop the visited set' break hangs on the H->H2->H cycle. Use a path-guarded per-edge count: T gives 6, not 3.",
+    "disposition": "fixed",
+    "evidence": "Correct. Design v3 A12(a) adopts this variant exactly; same fix as S10.",
+    "anchor": ".agent/issue-253/ledger.md:319-319",
+    "anchor_hash": "a0419640c3ee7deafb240c88b97248338c82ff879330104c9349814588d7193e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1",
+    "source": "sol",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "important",
+    "text": "Date/time/datetime/BigInteger literals lower to Unknown and count as expression_expected.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: classifier reads the lowerer-kept grammar kind (date_literal, time_literal, datetime_literal, biginteger_literal), signed BigInteger too; CLI test DateTimeBigIntegerLiterals + unit test; 5 breaks red. CDO: 52 expected values moved to literal (1096/1528).",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F2",
+    "source": "sol",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "trim_matches conflates identifiers with escaped boundary quotes; a local \"Assert\"\"\" hides the global Assert.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: IR names compared as-is; raw member text strips exactly one outer quote pair; regression unit test, trim_matches break red.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G1",
+    "source": "opus",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "object_stable_id builder duplicates stable_object_id_ir; ids could drift.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: internal object id computed once; routine_id's object part and object_stable_id derive from it (same nulls).",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G2",
+    "source": "opus",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "CHANGELOG null sentence too narrow.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: covers 'snapshot could not be built' and the CR1 own-count rule.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G3",
+    "source": "opus",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "A1(d) proof simulated with a fake guid.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: real break (drop the nested-app filter in analyze_project) run red; ledger proof row.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR1",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "important",
+    "text": "One test with no graph declaration nulls the codeunit and workspace reachable sums.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: fill_reachable uses the test's own count when the graph is built but the declaration is missing; null only without a graph; unit test, old rule red.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR2",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "An #if-split test reaches the union of both arms' callees but counts only its own arm's asserts.",
+    "disposition": "fixed",
+    "evidence": "Stated precisely as a CHANGELOG Limit (the spec's S8/O10 decision); no code change.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR3",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "A root edge to a nested routine with a colliding RoutineNodeId is credited to the root routine.",
+    "disposition": "fixed",
+    "evidence": "The graph merges the two (same object kind and number); stated as a CHANGELOG Limit pointing to #250 (program-graph identity); no code change.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR4",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "internal_object_id re-runs stable_object_id_ir's steps.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: computed once (see G1).",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR5",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "important",
+    "text": "object_stable_id holds the slash form, not a prefix of routine_id's colon form.",
+    "disposition": "fixed",
+    "evidence": "Operator asked for the issue's <appId>/Codeunit/N form; value kept, CHANGELOG and README now say it is the issue's object key, not a prefix of routine_id.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR6",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "An #if-split object gives two codeunit rows.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: probe showed a split HEADER already lowers to one object; the real two-row shape is a whole object in both arms. Rows grouped by (path, type, number), start line only for numberless; fixture SplitObject.Codeunit.al + CLI test; old rule red (also A4).",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR7",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "Per-test DFS re-walk could be slow on large test apps.",
+    "disposition": "refuted",
+    "evidence": "Measured on the CDO Test app (1844 tests): JSON median 284 ms vs 293 ms master (round 1) and 193 vs 183 ms (round 2 re-run), release-fast; no measured cost.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR8",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "Body walk runs for text and CSV too.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: runs only when the graph is built (JSON only). No test can observe it (text/CSV identical); ledger says so.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR9",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "FileRows is an unnamed 4-tuple.",
+    "disposition": "fixed",
+    "evidence": "c1f6129b: named struct.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR10",
+    "source": "code-review",
+    "round": "final-1",
+    "file": ".agent/issue-253/ledger.md",
+    "line": 528,
+    "severity": "minor",
+    "text": "is_test duplicates existing [Test] helpers.",
+    "disposition": "refuted",
+    "evidence": "The two existing checks are inline expressions (root_classification.rs:269, impact_graph/facts.rs:96), not callable helpers; nothing to reuse.",
+    "anchor": ".agent/issue-253/ledger.md:528-624",
+    "anchor_hash": "bc6674b2277e0854af0e4fd63f47c0defd168a1447e1f254d1f3cc129fc81ebd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F3",
+    "source": "sol",
+    "round": "final-2",
+    "file": "src/test_quality.rs",
+    "line": 74,
+    "severity": "minor",
+    "text": "assert_count_reachable field doc still says a missing declaration gives None.",
+    "disposition": "fixed",
+    "evidence": "8a3ec7b1: doc now says None only without a call graph; with a graph but no matching declaration it is the own count (fill_reachable).",
+    "anchor": "/work/al-sem-issue-253-a1/src/test_quality.rs:74-75",
+    "anchor_hash": "2726e5ed349e1a4bb31e9b6239486c965106e27d524f247b2dcd7bf2757e0c5d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
