@@ -144,15 +144,17 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
         );
     }
     // Final panel G5: `SingleApp` binds a single-app model, so a cross-app
-    // model cannot be written under `"analysisUniverse": "single-app"`.
+    // model cannot be written under `"analysisUniverse": "single-app"`. Every
+    // row kind with an app guid is checked: objects and tables are serialized
+    // as identities whether or not a routine of their app is.
     if let SnapshotUniverse::SingleApp = &opts.universe {
+        let ws = &resolved.workspace;
+        let primary = |guid: &str| resolved.role_of_app(guid) == Role::Primary;
         assert!(
-            resolved
-                .workspace
-                .routines
-                .iter()
-                .all(|r| resolved.routine_role(r) == Role::Primary),
-            "compose_full_snapshot: SingleApp with a model that holds dependency routines"
+            ws.routines.iter().all(|r| primary(&r.app_guid))
+                && ws.objects.iter().all(|o| primary(&o.app_guid))
+                && ws.tables.iter().all(|t| primary(&t.app_guid)),
+            "compose_full_snapshot: SingleApp with a model that holds dependency rows"
         );
     }
     // The consumed-core (identities, capabilityFacts, typedEdges, …, eventDeclarations,
@@ -3082,5 +3084,305 @@ page 50818 "T5 I-3 Wizard Alpha"
                 }
             }
         }
+    }
+
+    /// Every leaf path of `v` (array indices dropped), whatever its value.
+    fn leaf_paths(v: &CborValue, path: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+        match v {
+            CborValue::Array(a) => a.iter().for_each(|x| leaf_paths(x, path, out)),
+            CborValue::Map(m) => {
+                for (k, x) in m {
+                    path.push(k.clone());
+                    leaf_paths(x, path, out);
+                    path.pop();
+                }
+            }
+            _ => out.push(path.clone()),
+        }
+    }
+
+    /// Final panel F6 (round 2): EVERY variant of every serialized row type,
+    /// built by hand with every optional field present, has each leaf field
+    /// classified (`is_classified`): every `SnapValueSource` variant (as
+    /// `resourceArgSource`, nested in `initializer`, inside `extra` and as
+    /// `targetIdSource`), every `SnapTempState`, every `SnapCapabilityExtra`,
+    /// every `SnapshotGraphEdge`, the Evidence rows, a resolution, a branch
+    /// frame, `inputsMetadata`, a root classification, an event declaration
+    /// with its binding, a coverage record and a gap. DD and R5B emit only
+    /// some of them.
+    ///
+    /// Break: drop one data name (`modal`) from `NON_REFERENCE_FIELDS` -> it
+    /// is reported.
+    #[test]
+    fn every_row_variant_field_is_classified() {
+        use crate::engine::l4::combined_graph::TriggerFires;
+        use crate::engine::l5::snapshot::{
+            SnapTempState, SnapshotAnalysisGap, SnapshotCallsiteResolution, SnapshotCoverageRecord,
+            SnapshotEventDeclaration, SnapshotGraphEdge, SnapshotRange,
+            SnapshotRootClassificationSlot, SnapshotSourceAnchor, SnapshotSubscriberBinding,
+            SnapshotUnresolvedCandidate,
+        };
+        let s = |x: &str| x.to_string();
+        let temps = || {
+            vec![
+                SnapTempState::Known { value: true },
+                SnapTempState::ParameterDependent { parameter_index: 1 },
+                SnapTempState::Unknown,
+            ]
+        };
+        let mut sources = vec![
+            SnapValueSource::Literal { value: s("x") },
+            SnapValueSource::Enum {
+                enum_name: s("E"),
+                member: Some(s("M")),
+            },
+            SnapValueSource::Parameter {
+                index: 0,
+                var_name: s("p"),
+            },
+        ];
+        sources.push(SnapValueSource::TableField {
+            table_id: format!("{P}/table/1"),
+            field_name: s("No."),
+        });
+        sources.push(SnapValueSource::Expression);
+        sources.push(SnapValueSource::Unknown);
+        let nested: Vec<SnapValueSource> = sources
+            .iter()
+            .map(|v| SnapValueSource::ConstantVar {
+                var_name: s("c"),
+                initializer: Box::new(v.clone()),
+            })
+            .collect();
+        sources.extend(nested);
+        let mut extras: Vec<SnapCapabilityExtra> = temps()
+            .into_iter()
+            .map(|t| SnapCapabilityExtra::Table {
+                op_subtype: Some(s("o")),
+                record_variable_id: Some(s("r")),
+                temp_state: Some(t),
+            })
+            .collect();
+        extras.push(SnapCapabilityExtra::Dispatch {
+            object_type: s("Page"),
+            modal: Some(true),
+        });
+        extras.push(SnapCapabilityExtra::Event {
+            event_class: s("integration"),
+            include_sender: Some(true),
+        });
+        for v in &sources {
+            extras.push(SnapCapabilityExtra::Http {
+                method: s("GET"),
+                body_arg_source: Some(v.clone()),
+            });
+            extras.push(SnapCapabilityExtra::Storage {
+                key_arg_source: Some(v.clone()),
+                value_arg_source: Some(v.clone()),
+                scope: Some(s("company")),
+            });
+        }
+        let routine = format!("{P}:Codeunit:1#a");
+        let full_fact = |kind: &str, extra: SnapCapabilityExtra, src: SnapValueSource| {
+            let mut f = fact(&routine);
+            f.resource_kind = s(kind);
+            f.resource_id = Some(format!("{P}/table/1"));
+            f.resource_arg_source = Some(src);
+            f.witness_operation_id = Some(s("mi/h/op0"));
+            f.witness_callsite_id = Some(s("mi/h/cs0"));
+            f.extra = Some(extra);
+            f.witness_first_hop_operation_id = Some(s("mi/h/op1"));
+            f.witness_first_hop_event_id = Some(s("mi/h::E"));
+            f
+        };
+        let mut facts = Vec::new();
+        for (i, e) in extras.iter().enumerate() {
+            let src = sources[i % sources.len()].clone();
+            for kind in ["table", "event", "http"] {
+                facts.push(full_fact(kind, e.clone(), src.clone()));
+            }
+        }
+        let anchor = SnapshotSourceAnchor {
+            source_unit_id: s("u"),
+            range: SnapshotRange {
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 2,
+            },
+            enclosing_routine_id: s("mi/h"),
+            syntax_kind: s("call"),
+        };
+        let (cs, from, to, eid) = (s("mi/h/cs0"), routine.clone(), routine.clone(), s("e0"));
+        let mut edges = vec![
+            SnapshotGraphEdge::DirectCall {
+                kind: "direct-call",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::VariableTypedCall {
+                kind: "variable-typed-call",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                receiver_type: s("Codeunit X"),
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::InterfaceDispatch {
+                kind: "interface-dispatch",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                interface_name: s("I"),
+                candidate_count: 2,
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::ObjectRunResolved {
+                kind: "object-run",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                target_object: format!("{P}:Codeunit:1"),
+                object_type: s("Codeunit"),
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::EventDispatch {
+                kind: "event-dispatch",
+                from: from.clone(),
+                to: to.clone(),
+                event_id: s("mi/h::E"),
+                publish_anchor: anchor.clone(),
+                subscriber_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            },
+            SnapshotGraphEdge::ImplicitTrigger {
+                kind: "implicit-trigger",
+                from: from.clone(),
+                to: to.clone(),
+                operation_id: s("mi/h/op0"),
+                trigger_kind: s("OnValidate"),
+                fires: TriggerFires::Maybe,
+                anchor: Some(anchor.clone()),
+                edge_id: eid.clone(),
+            },
+        ];
+        for v in &sources {
+            edges.push(SnapshotGraphEdge::ObjectRunUnresolved {
+                kind: "object-run-unresolved",
+                callsite_id: cs.clone(),
+                from: from.clone(),
+                target_object: Some(format!("{P}:Codeunit:1")),
+                target_id_source: v.clone(),
+                object_type: s("Codeunit"),
+                source_anchor: anchor.clone(),
+                edge_id: eid.clone(),
+            });
+        }
+        let mut op = op_row("mi/h/op0", &routine);
+        op.control_context = Some(s("loop"));
+        op.under_asserterror = Some(true);
+        let mut csr = cs_row("mi/h/cs0", &routine);
+        csr.control_context = Some(s("loop"));
+        csr.under_asserterror = Some(true);
+        let resolution = SnapshotCallsiteResolution {
+            callsite_id: cs.clone(),
+            from: from.clone(),
+            callee_display: s("X.Y"),
+            dispatch_kind: s("direct"),
+            status: s("resolved"),
+            resolved_edges: vec![eid.clone()],
+            candidates: Some(vec![to.clone()]),
+            open_world: Some(true),
+            unresolved_candidates: Some(vec![SnapshotUnresolvedCandidate {
+                object_id: format!("{P}:Codeunit:1"),
+                reason: s("r"),
+            }]),
+            result_consumed: Some(true),
+            under_asserterror: Some(true),
+        };
+        let mut frame = frames().remove(1);
+        frame.branch_always_terminates = Some(true);
+        frame.branch_may_fall_through = Some(false);
+        frame.branch_terminates_by = Some(s("error"));
+        let mut meta: IndexMap<String, CborValue> = IndexMap::new();
+        meta.insert("rootsConfigIgnored".into(), CborValue::Bool(true));
+
+        let rows: Vec<(&str, CborValue)> = vec![
+            ("capabilityFacts", capability_facts_to_cbor(&facts)),
+            ("typedEdges", to_cbor_value(&edges)),
+            ("operationIndex", to_cbor_value(&vec![op])),
+            ("callsiteIndex", to_cbor_value(&vec![csr])),
+            ("callsiteResolutions", to_cbor_value(&vec![resolution])),
+            ("routineOrderFrames", to_cbor_value(&vec![frame])),
+            ("inputsMetadata", CborValue::Map(meta)),
+            (
+                "rootClassifications",
+                to_cbor_value(&vec![SnapshotRootClassificationSlot {
+                    routine_id: routine.clone(),
+                    kinds: vec![s("trigger")],
+                    externally_reachable: true,
+                    source: s("config"),
+                    confidence: s("static"),
+                    source_anchor: Some(anchor.clone()),
+                    config_entry_id: Some(s("c1")),
+                    resolution_status: Some(s("resolved")),
+                }]),
+            ),
+            (
+                "eventDeclarations",
+                to_cbor_value(&vec![SnapshotEventDeclaration {
+                    kind: s("subscriber"),
+                    routine: routine.clone(),
+                    event_id: s("mi/h::E"),
+                    binding: Some(SnapshotSubscriberBinding {
+                        publisher_object: format!("{P}:Codeunit:1"),
+                        event_name: s("OnX"),
+                    }),
+                    source_anchor: anchor.clone(),
+                }]),
+            ),
+            (
+                "coverage",
+                to_cbor_value(&vec![SnapshotCoverageRecord {
+                    subject: routine.clone(),
+                    direct_status: s("complete"),
+                    inherited_status: s("partial"),
+                    reasons: vec![s("r")],
+                    unknown_targets: vec![routine.clone()],
+                }]),
+            ),
+            (
+                "analysisGaps",
+                to_cbor_value(&vec![SnapshotAnalysisGap {
+                    kind: s("parse-incomplete"),
+                    subject: routine.clone(),
+                    detail: s("d"),
+                    role: s("primary"),
+                }]),
+            ),
+        ];
+        let mut unlisted: std::collections::BTreeSet<String> = Default::default();
+        let mut seen = 0usize;
+        for (key, v) in &rows {
+            let mut paths = Vec::new();
+            leaf_paths(v, &mut Vec::new(), &mut paths);
+            seen += paths.len();
+            for p in paths {
+                if !is_classified(key, &p) {
+                    unlisted.insert(format!("{key}.{}", p.join(".")));
+                }
+            }
+        }
+        assert!(
+            seen > 500,
+            "precondition: every variant built ({seen} leaves)"
+        );
+        assert!(unlisted.is_empty(), "unclassified fields: {unlisted:?}");
     }
 }

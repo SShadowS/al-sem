@@ -1908,36 +1908,55 @@ fn cross_app_universe_binds_its_model() {
     );
 }
 
+/// The panic message of composing `b`'s model as `SingleApp`.
+fn single_app_refusal(b: &Built) -> String {
+    let wrong = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compose_with(b, SnapshotUniverse::SingleApp)
+    }));
+    let err = wrong.expect_err("a cross-app model composed as SingleApp must panic");
+    err.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
 /// Final panel G5: `SingleApp` binds a single-app model. DD's cross-app model
 /// (it holds dependency routines, asserted) composed as `SingleApp` panics;
+/// so does it with every dependency routine removed (round 2: dependency
+/// objects and tables alone, asserted, are serialized as identities too);
 /// DD's single-app model composes.
 ///
-/// Break: drop the `SingleApp` assert -> it composes, writing dependency rows
-/// under `"single-app"`.
+/// Break: check routines only -> the second arm composes, writing dependency
+/// identities under `"single-app"`.
 #[test]
 fn single_app_universe_binds_a_single_app_model() {
+    const REFUSAL: &str =
+        "compose_full_snapshot: SingleApp with a model that holds dependency rows";
     let dir = dd_dir();
-    let cross = build(dir.path(), false);
-    let m = cross.target.resolved();
+    let mut cross = build(dir.path(), false);
+    let dep = |g: &str| g.eq_ignore_ascii_case(dd::DEP_GUID);
     assert!(
-        m.workspace
+        cross
+            .target
+            .resolved()
+            .workspace
             .routines
             .iter()
-            .any(|r| r.app_guid.eq_ignore_ascii_case(dd::DEP_GUID)),
+            .any(|r| dep(&r.app_guid)),
         "precondition: the cross-app model holds dependency routines"
     );
     let _ = compose(&build(dir.path(), true));
-    let wrong = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        compose_with(&cross, SnapshotUniverse::SingleApp)
-    }));
-    let err = wrong.expect_err("a cross-app model composed as SingleApp must panic");
-    let msg = err
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_default();
+    assert_eq!(single_app_refusal(&cross), REFUSAL);
+
+    let ws = &mut model_mut(&mut cross.target).workspace;
+    ws.routines.retain(|r| !dep(&r.app_guid));
+    assert!(
+        ws.objects.iter().any(|o| dep(&o.app_guid)) || ws.tables.iter().any(|t| dep(&t.app_guid)),
+        "precondition: dependency objects or tables remain with no dependency routine"
+    );
     assert_eq!(
-        msg,
-        "compose_full_snapshot: SingleApp with a model that holds dependency routines"
+        single_app_refusal(&cross),
+        REFUSAL,
+        "objects and tables count"
     );
 }
