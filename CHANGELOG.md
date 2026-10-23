@@ -267,7 +267,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call site (else the firing record operation of a trigger, else the publish site of an
   event), and `viaPaths` are the workspace-code prefixes up to it (`[]` when the root's own
   call is the boundary). A dependency effect behind a workspace subscriber or trigger that
-  dependency code reaches also groups at the boundary. A group has no `detail.tempState`.
+  dependency code reaches also groups at the boundary. A group carries no
+  `detail.tempState`. A temporary-record write and a physical write behind one boundary are
+  two groups; their class shows only in the `factId` (the key carries it), so in the JSON
+  the two differ only by their resources.
 
   How: digest resolves its changed roots from the model before the view composes, so the
   view's one composition keeps those roots' raw facts and the digest tree is composed from
@@ -278,10 +281,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unresolved cone are read off it, before the detector run. d47/d49/d51 (the ordering
   cell), prove, fingerprint and diff stay on the cut graph; moving the ordering cell is the
   #161 follow-up, and until then its cut composition keeps raw facts for every routine
-  (dependency rows included), the stated I5 exception. `digest --tests` (#254) builds its
-  coverage graph off the same tree, so its traversal now follows the calls dependency code
-  makes (a test that reaches workspace code only through dependency code covers it) and
-  reads the dependency callers' ledger rows.
+  (dependency rows included), the stated I5 exception.
+
+  `digest --tests` (#254) builds its coverage graph off the same tree, so it changes too:
+  a `[Test]` procedure that reaches a workspace routine only through dependency code (a
+  dependency routine that calls it, or a dependency event the workspace routine subscribes
+  to) now counts as covering it, and the dependency routines' own unresolved calls count
+  toward `testsWithUnresolvedTraversal`. With no resolved root the block still reports every
+  workspace test, as before.
 
 ## [2.0.2] - 2026-10-23
 

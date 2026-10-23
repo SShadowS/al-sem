@@ -670,7 +670,9 @@ pub fn write_fixture_symbol_only_dep(ws: &std::path::Path) {
 /// B8); `CallRaise` calls `Raise`, which raises `OnRaised`, handled by the
 /// workspace's `OnRaisedWs` with an insert into `Ws Log` (B6);
 /// `WriteThenCommit` inserts into `Ws Log`, then calls `MaybeCommit`, which
-/// commits inside an `if` (B7).
+/// commits inside an `if` (B7); `WriteCallCommit` does the same, then commits
+/// itself, and `DepWriteThenCommit` calls `Write`, then commits (B7's MUST
+/// commit and write sets).
 pub fn write_fixture_rule_b(ws: &std::path::Path) {
     let rec = r#"[{"Name":"Rec","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}]"#;
     let flag = r#"[{"Name":"Flag","TypeDefinition":{"Name":"Boolean"}}]"#;
@@ -758,6 +760,24 @@ codeunit 50190 "Ws RuleB"
     begin
         L.Insert();
         Lib.MaybeCommit(true);
+    end;
+
+    procedure WriteCallCommit()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+        L: Record "Ws Log";
+    begin
+        L.Insert();
+        Lib.MaybeCommit(true);
+        Commit();
+    end;
+
+    procedure DepWriteThenCommit()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.Write();
+        Commit();
     end;
 
     [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Rec Lib", 'OnRaised', '', false, false)]

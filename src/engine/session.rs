@@ -166,9 +166,10 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
 /// keeps their effects ([`View::effects`]). No root (prove, which keeps
 /// its standalone snapshot, or a digest that resolved none): neither. `tests`
 /// (`digest --tests`, #254): the effects also keep the tree's test-coverage
-/// graph.
+/// graph, which covers the whole workspace, so a tree is built even with no
+/// root (an empty `Roots` request: no raw facts).
 pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: bool) -> Plan {
-    let needs_tree = !roots.is_empty();
+    let needs_tree = tests || !roots.is_empty();
     Plan {
         runs: vec![detectors],
         scope_primary: true,
@@ -1011,6 +1012,10 @@ mod tests {
         let p = digest_plan(vec![probe(0, noop)], BTreeSet::new(), false);
         assert_eq!(p.witness, WitnessRequest::None);
         assert!(!p.needs_tree);
+        // `--tests` covers the workspace: a tree with no root (#254).
+        let p = digest_plan(vec![probe(0, noop)], BTreeSet::new(), true);
+        assert_eq!(p.witness, WitnessRequest::Roots(BTreeSet::new()));
+        assert!(p.needs_tree && p.tests);
         let mut m = crate::engine::l5::test_support::empty_resolved();
         for id in ["r1", "r2", "r3"] {
             let mut r = crate::engine::l5::test_support::routine(id, "procedure");

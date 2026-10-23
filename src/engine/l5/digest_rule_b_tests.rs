@@ -174,6 +174,45 @@ fn b7_a_boundary_commit_carries_no_must_label() {
     }
 }
 
+/// B7, the MUST sets (A2-03): a boundary group satisfies no MUST condition of a
+/// PRIMARY commit either. `WriteCallCommit` inserts into `Ws Log`, calls
+/// `MaybeCommit` (a boundary COMMIT group) and then commits itself: the nearest
+/// MUST commit after the write is its own, so its commit is
+/// `WRITE_COMMITTED_BEFORE_RETURN` (the boundary commit in the commit set would
+/// take that place). `DepWriteThenCommit` calls `Write` (a boundary DB_MODIFY
+/// group), then commits: no MUST write precedes its commit, so it is not
+/// `WRITE_COMMITTED_BEFORE_RETURN` (the boundary write in the write set would
+/// make it so).
+#[test]
+fn b7_boundary_groups_stay_out_of_a_primary_commits_must_sets() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_fixture_rule_b(tmp.path());
+    let view = digest_view(tmp.path(), &["WriteCallCommit", "DepWriteThenCommit"]);
+    let own_commit_labels = |root: &str, group: &str| -> Vec<&'static str> {
+        let effects = effects_of(&view, root);
+        assert!(
+            effects
+                .iter()
+                .any(|e| e.boundary_group && e.effect_type == group),
+            "precondition: {root} has a {group} group: {effects:?}"
+        );
+        let own: Vec<&DigestEffectResult> = effects
+            .iter()
+            .filter(|e| e.effect_type == "COMMIT" && !e.boundary_group)
+            .collect();
+        assert_eq!(
+            own.len(),
+            1,
+            "precondition: {root}'s own commit: {effects:?}"
+        );
+        own[0].scoped_guarantees.iter().map(|g| g.label).collect()
+    };
+    let w = own_commit_labels("WriteCallCommit", "COMMIT");
+    assert!(w.contains(&"WRITE_COMMITTED_BEFORE_RETURN"), "{w:?}");
+    let d = own_commit_labels("DepWriteThenCommit", "DB_MODIFY");
+    assert!(!d.contains(&"WRITE_COMMITTED_BEFORE_RETURN"), "{d:?}");
+}
+
 /// B8: proofs are cut at the boundary and keep their class (A2-04).
 /// `FillAndPost` passes a `temporary` Customer into `Fill`, which inserts into
 /// it (a producer: only a proof witnesses it), and calls `Post`, which inserts
