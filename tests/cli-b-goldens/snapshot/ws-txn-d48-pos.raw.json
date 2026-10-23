@@ -264,6 +264,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16",
       "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50000#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16",
       "visibility": "public"
@@ -278,6 +279,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "341ea40393c719987aa24f563f883e09ab6132174f4ef8275f8d997ecbf8650e",
       "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#341ea40393c719987aa24f563f883e09ab6132174f4ef8275f8d997ecbf8650e",
       "visibility": "public"
@@ -285,6 +287,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16",
       "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16",
       "visibility": "local"
@@ -299,6 +302,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "197d34c68565ddcb1cc7fa6474f1b19b163362119fb2dcd8b8eaff37d3af2ce9",
       "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50002#197d34c68565ddcb1cc7fa6474f1b19b163362119fb2dcd8b8eaff37d3af2ce9",
       "visibility": "public"
@@ -313,6 +317,7 @@
     {
       "attributes": [],
       "kind": "routine",
+      "routineKind": "procedure",
       "signatureFingerprint": "c430e2d2f95fd1b5c0bbbf663dc9783e81063456de7781a8cca3c89ebb6c015d",
       "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50003#c430e2d2f95fd1b5c0bbbf663dc9783e81063456de7781a8cca3c89ebb6c015d",
       "visibility": "public"

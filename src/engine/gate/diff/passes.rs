@@ -99,12 +99,46 @@ fn abi_severity(kind: DiffKind) -> Severity {
     }
 }
 
+/// Event attributes whose publisher other apps (or, for `ExternalBusinessEvent`,
+/// Power Automate / Dataverse) subscribe to, even when the procedure is `local`.
+const EXTERNAL_EVENT_ATTRIBUTES: [&str; 3] =
+    ["IntegrationEvent", "BusinessEvent", "ExternalBusinessEvent"];
+
+/// #156: whether a contract fact is part of the app's ABI — callable or
+/// subscribable from another app. Not ABI: triggers, and `local` / `internal`
+/// routines that publish no external event. A `local` or `internal` publisher
+/// stays ABI: dependent extensions can subscribe to it (AppSourceCop AS0025: the
+/// access modifier only limits raising the event). Shortcut: `internal` is
+/// treated as in-app although `internalsVisibleTo` friend apps can call it; a
+/// fact without `routineKind` (an older snapshot) counts as not a trigger.
+pub(super) fn is_abi_surface(fact: &CborValue) -> bool {
+    if get_str(fact, "kind") != Some("routine") {
+        return true;
+    }
+    if get_str(fact, "routineKind") == Some("trigger") {
+        return false;
+    }
+    let publishes = get_array(fact, "attributes").is_some_and(|attrs| {
+        attrs.iter().any(|a| {
+            get_str(a, "name").is_some_and(|n| {
+                EXTERNAL_EVENT_ATTRIBUTES
+                    .iter()
+                    .any(|e| n.eq_ignore_ascii_case(e))
+            })
+        })
+    });
+    publishes || !matches!(get_str(fact, "visibility"), Some("local" | "internal"))
+}
+
 pub fn diff_abi(indexes: &DiffIndexes) -> Vec<DiffFinding> {
     let mut out: Vec<DiffFinding> = Vec::new();
 
     for (subject, old_fact) in &indexes.old_contracts_by_subject {
         let new_fact = indexes.new_contracts_by_subject.get(subject);
         let Some(new_fact) = new_fact else {
+            if !is_abi_surface(old_fact) {
+                continue;
+            }
             // Removal — object vs procedure-like.
             let removal_kind = if is_procedure_like(old_fact) {
                 DiffKind::ProcedureRemoved
@@ -123,6 +157,24 @@ pub fn diff_abi(indexes: &DiffIndexes) -> Vec<DiffFinding> {
             ));
             continue;
         };
+
+        if !is_abi_surface(old_fact) {
+            // Not ABI before: becoming ABI is new surface; otherwise nothing.
+            if is_abi_surface(new_fact) {
+                let kind = DiffKind::ProcedureAdded;
+                out.push(make_finding(
+                    DiffCategory::Abi,
+                    kind,
+                    abi_severity(kind),
+                    subject,
+                    None,
+                    vec![subject.clone()],
+                    details_kind(kind),
+                    indexes,
+                ));
+            }
+            continue;
+        }
 
         // Visibility narrowing.
         let old_vis = get_str(old_fact, "visibility").unwrap_or("");
@@ -207,7 +259,7 @@ pub fn diff_abi(indexes: &DiffIndexes) -> Vec<DiffFinding> {
 
     // Additions.
     for (subject, new_fact) in &indexes.new_contracts_by_subject {
-        if indexes.old_contracts_by_subject.contains_key(subject) {
+        if indexes.old_contracts_by_subject.contains_key(subject) || !is_abi_surface(new_fact) {
             continue;
         }
         let add_kind = if is_procedure_like(new_fact) {
@@ -568,10 +620,10 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         let parsed = parse_event_identity(old_id);
         match new_decl {
             None => {
-                let routine = get_str(old_decl, "routine").unwrap_or("");
+                let routine = indexes.normalize_old(get_str(old_decl, "routine").unwrap_or(""));
                 out.push(event_finding(
                     DiffKind::EventPublisherRemoved,
-                    routine,
+                    &routine,
                     &parsed.event_name,
                     event_details(
                         DiffKind::EventPublisherRemoved,
@@ -715,21 +767,25 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
         let old_writes = writes_of(
             old_subs_by_event.get(key),
             &indexes.old_capability_facts_by_subject,
+            |r| indexes.normalize_old(r),
         );
         let new_writes = writes_of(
             new_subs_by_event.get(key),
             &indexes.new_capability_facts_by_subject,
+            str::to_string,
         );
         let mut split = key.splitn(2, "::");
         let publisher_object = split.next().unwrap_or("");
         let event_name = split.next().unwrap_or("");
-        let subject = new_publishers
-            .get(key)
-            .or_else(|| old_publishers.get(key))
-            .and_then(|d| get_str(d, "routine"));
+        let subject = match (new_publishers.get(key), old_publishers.get(key)) {
+            (Some(d), _) => get_str(d, "routine").map(str::to_string),
+            (None, Some(d)) => get_str(d, "routine").map(|r| indexes.normalize_old(r)),
+            (None, None) => None,
+        };
         let Some(subject) = subject else {
             continue;
         };
+        let subject = subject.as_str();
 
         // gained: new not in old.
         for (table, ops) in &new_writes {
@@ -788,17 +844,19 @@ pub fn diff_events(indexes: &DiffIndexes) -> Vec<DiffFinding> {
 }
 
 /// tableId → ordered set of write ops over a subscriber set's capability facts.
+/// `key_of` maps a declaration's `routine` to the key `cap_map` uses.
 fn writes_of(
     subs: Option<&Vec<&CborValue>>,
     cap_map: &IndexMap<String, Vec<&CborValue>>,
+    key_of: impl Fn(&str) -> String,
 ) -> IndexMap<String, BTreeSet<String>> {
     let mut m: IndexMap<String, BTreeSet<String>> = IndexMap::new();
     let Some(subs) = subs else {
         return m;
     };
     for s in subs {
-        let routine = get_str(s, "routine").unwrap_or("");
-        let Some(facts) = cap_map.get(routine) else {
+        let routine = key_of(get_str(s, "routine").unwrap_or(""));
+        let Some(facts) = cap_map.get(&routine) else {
             continue;
         };
         for f in facts {

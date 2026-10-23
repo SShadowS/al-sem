@@ -156,8 +156,12 @@ pub fn run_diff_engine(
     }
 
     let overlay = opts.rename_overlay.clone().unwrap_or_default();
-    let (rename_table, rename_diags) = renames::build_rename_table(&overlay);
+    let (mut rename_table, rename_diags) = renames::build_rename_table(&overlay);
     diagnostics.extend(rename_diags);
+    let renames_applied = rename_table.len() as u32;
+    for (old_id, new_id) in renames::pair_signature_changes(old_snap, new_snap, &rename_table) {
+        rename_table.insert(old_id, renames::RenameEntry { new_id, auto: true });
+    }
 
     let indexes = indexes::build_diff_indexes(old_snap, new_snap, &rename_table);
     diagnostics.extend(indexes.rename_diagnostics.clone());
@@ -176,7 +180,7 @@ pub fn run_diff_engine(
     let mut sorted = policy_findings;
     sort_findings(&mut sorted);
 
-    let summary = compute_summary(&sorted, &policy_diags, rename_table.len() as u32);
+    let summary = compute_summary(&sorted, &policy_diags, renames_applied);
 
     DiffEngineResult {
         findings: sorted,

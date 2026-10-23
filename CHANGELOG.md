@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **#156: snapshot routine contract facts carry `routineKind`, and field schema facts carry
+  `name`.** Both keys are additive, so the schema stays 4 and an older snapshot without them
+  still diffs (field findings then show the stable id, as before).
 - **#220: snapshot schema 4.** `schemaVersion` is now 4. A schema 3 file is refused when it is
   loaded, with the remedy: re-create it with `alsem fingerprint`. The 12 vendored `diff` inputs
   were upgraded by hand (three edits each) and every diff output stayed byte-identical. The
@@ -657,6 +660,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - LSP watcher: each root now watches its root `app.json`, its workspace `.al-sem.json` (reloaded live), and the ancestor `.alpackages` folders the loader reads, registered before the first build; folder renames and moves, and files replaced without their own event, are reconciled; an overflow or a replaced root re-arms the root's watch, re-syncs the caches and reloads the config. Stated limits: an edit to the global `~/.al-sem/config.json` and a `.git` created or removed at the root or an ancestor still need a server restart; a file replaced without its own event by one with the same length and modification time (and, on Unix, the same file id) is not re-read; a path whose watch cannot be registered is seen only once a 5 s retry succeeds; on Windows a folder event walks that folder's subtree (#221).
 - LSP updater: a `.al` file renamed, moved or replaced, a folder renamed, moved in or out, or replaced, and a `FileRemoved` for a file still on disk are reconciled from disk instead of leaving stale or missing declarations; a `.al` under `.alpackages`, `.snapshots` or `node_modules` no longer triggers a full rebuild (#221).
+- **#156: `alsem diff` reported private changes as ABI breaks, and a changed signature as two
+  findings.**
+  - A `local` or `internal` procedure, and any trigger (object, field or action), is no longer
+    part of the ABI: adding, removing or changing one gives no `abi` finding. Event publishers
+    stay ABI even when `local` or `internal`, because dependent extensions can subscribe to them
+    (AppSourceCop AS0025): `[IntegrationEvent]`, `[BusinessEvent]` and `[ExternalBusinessEvent]`
+    (any case). `local` → `public` on the same procedure is now a `procedure-added`.
+  - A procedure whose signature changed is now ONE `procedure-signature-changed`, not a
+    `procedure-removed` (critical) plus a `procedure-added`. Old and new are matched by object,
+    name and ABI status, only when exactly one old-only and one new-only routine carry that name
+    (unchanged overloads don't count). If two overloads change at once, the diff reports removed +
+    added as before. A routine whose ABI status changed with its signature is not matched: public
+    `Foo` removed + local `Foo` added stays a critical `procedure-removed`. A repeated snapshot row
+    (same stable id twice) counts once. Capability, permission, coverage and subscriber-induced
+    findings now follow the routine (the new id) instead of showing up as gained on the new id
+    and lost on the old one. Such a pair is not a rename: there is no "renamed from" note and no
+    `oldOriginalStableId`, and `renamesApplied` still counts only overlay entries. For an `abi`
+    finding the old id is `<object>#<oldSignatureHash>`.
+  - Old ids read from event declarations are now normalized through the rename table, the user
+    overlay included, at three places. This removes a false `event-subscriber-induced-capability-gained`
+    for a paired or renamed subscriber, and puts a removed publisher and a subscriber-induced
+    finding on the renamed/paired subject.
+  - `table-field-added` (and the other field findings) show the field's name in
+    `subject.displayName` instead of its stable id.
+  - Limits: an `internal` procedure called by an `internalsVisibleTo` friend app gets no `abi`
+    finding. Object-level `Access = Internal` is not visible, so a public procedure in an
+    internal codeunit stays ABI. When a pre-fix snapshot (no `routineKind`) is diffed against a
+    new one, a trigger present only in the old snapshot is still `procedure-removed`. A
+    `local`/`internal` `[IntegrationEvent]` or `[BusinessEvent]` publisher that drops its
+    attribute gets no `abi` finding; the events pass reports `event-publisher-removed` (medium).
+    An `[ExternalBusinessEvent]` publisher that drops it gets no finding at all (the model does
+    not treat it as an event publisher, so there is no event declaration to lose). A routine in
+    new that is a user overlay target is never auto-paired, and an old id the overlay maps to a
+    target missing from new stays a removal. Rename normalization is one hop: with overlay
+    `X → T`, an old-only routine whose own id is `T` can still be auto-paired to a same-name `U`,
+    and `X`'s facts then stay on `T` rather than following on to `U`.
 - **#220: shards and the `diff` preflight took the first `apps[]` row as the workspace's app.**
   That held only while `apps[]` had one row. Both now read the row whose `role` is `"primary"`.
   A shard is now closed over identity, operation, call-site and edge references: it also keeps

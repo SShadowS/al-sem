@@ -281,6 +281,7 @@
       {
         "attributes": [],
         "kind": "routine",
+        "routineKind": "trigger",
         "signatureFingerprint": "28129d608bb2353d1edc8a881e6073f4f07bc1388ea6d1c4caa0b7c8850cf83d",
         "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#28129d608bb2353d1edc8a881e6073f4f07bc1388ea6d1c4caa0b7c8850cf83d",
         "visibility": "public"
@@ -288,6 +289,7 @@
       {
         "attributes": [],
         "kind": "routine",
+        "routineKind": "procedure",
         "signatureFingerprint": "3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
         "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
         "visibility": "local"
@@ -302,6 +304,7 @@
       {
         "attributes": [],
         "kind": "routine",
+        "routineKind": "procedure",
         "signatureFingerprint": "3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e",
         "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e",
         "visibility": "local"
@@ -309,6 +312,7 @@
       {
         "attributes": [],
         "kind": "routine",
+        "routineKind": "trigger",
         "signatureFingerprint": "4bede131c948eaabef06c2e6bfbc4f1239c15eb29e7a7e0b64b3cdeed16c79f5",
         "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#4bede131c948eaabef06c2e6bfbc4f1239c15eb29e7a7e0b64b3cdeed16c79f5",
         "visibility": "public"
@@ -727,11 +731,13 @@
       },
       {
         "kind": "field",
+        "name": "Primary Key",
         "shapeFingerprint": "c704a753e408a4452820ffa52a4794b9a526cfcb43831cc4156d4fdae71f42c2",
         "stableId": "11111111-0000-0000-0000-00000000d460:Table:50000#1"
       },
       {
         "kind": "field",
+        "name": "Description",
         "shapeFingerprint": "c6d6e6c422e554c234dc411ad41fd5f57ed04e3dc94188c26601f65a9f0214b4",
         "stableId": "11111111-0000-0000-0000-00000000d460:Table:50000#2"
       },

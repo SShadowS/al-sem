@@ -855,3 +855,866 @@ fn oracle_higher_severity_finding_kinds() {
     let sarif = format_diff(&r, "sarif", VERSION_OVERRIDE, true, &empty);
     assert!(sarif.contains("\"level\": \"note\""), "low → note in sarif");
 }
+
+// ===========================================================================
+// #156 — the ABI surface (local / internal / triggers are not ABI), signature
+// changes paired by object + name, and field names on schema findings. Every
+// precondition is stated by hand: routine facts are built literally, member-less
+// ones with `stableId == {object}#{signatureFingerprint}`.
+// ===========================================================================
+
+const OBJ156: &str = "appguid-1:Codeunit:1";
+
+/// A member-less routine contract fact: `stableId` = `{object}#{sig}`.
+fn routine_fact(
+    object: &str,
+    sig: &str,
+    visibility: &str,
+    routine_kind: Option<&str>,
+    attrs: &[&str],
+) -> CborValue {
+    let attributes = attrs
+        .iter()
+        .map(|a| obj(vec![("argsHash", txt("args")), ("name", txt(a))]))
+        .collect();
+    let mut pairs = vec![
+        ("kind", txt("routine")),
+        ("stableId", txt(&format!("{object}#{sig}"))),
+        ("visibility", txt(visibility)),
+        ("signatureFingerprint", txt(sig)),
+        ("attributes", CborValue::Array(attributes)),
+    ];
+    if let Some(k) = routine_kind {
+        pairs.push(("routineKind", txt(k)));
+    }
+    obj(pairs)
+}
+
+fn stable_id_of(fact: &CborValue) -> String {
+    match fact {
+        CborValue::Map(m) => match m.get("stableId") {
+            Some(CborValue::Text(s)) => s.clone(),
+            _ => panic!("fact without stableId"),
+        },
+        _ => panic!("fact is not a map"),
+    }
+}
+
+/// A snapshot holding the given routine facts (with their display names in
+/// `identities`) plus any extra top-level arrays.
+fn snap156(routines: Vec<(CborValue, &str)>, extra: Vec<(&str, CborValue)>) -> CborValue {
+    let ids = routines
+        .iter()
+        .map(|(f, _)| txt(&stable_id_of(f)))
+        .collect();
+    let names = routines.iter().map(|(_, n)| txt(n)).collect();
+    let facts = routines.into_iter().map(|(f, _)| f).collect();
+    let mut pairs = vec![
+        (
+            "identities",
+            obj(vec![
+                ("stableIds", CborValue::Array(ids)),
+                ("displayNames", CborValue::Array(names)),
+            ]),
+        ),
+        ("contractFacts", CborValue::Array(facts)),
+    ];
+    pairs.extend(extra);
+    snapshot(pairs)
+}
+
+fn cap_fact(subject: &str, op: &str, table: &str) -> CborValue {
+    obj(vec![
+        ("subject", txt(subject)),
+        ("op", txt(op)),
+        ("resourceKind", txt("table")),
+        ("resourceId", txt(table)),
+    ])
+}
+
+fn coverage_rec(subject: &str) -> CborValue {
+    obj(vec![
+        ("subject", txt(subject)),
+        ("directStatus", txt("complete")),
+        ("inheritedStatus", txt("complete")),
+    ])
+}
+
+fn event_decl(kind: &str, routine: &str, event_id: &str) -> CborValue {
+    obj(vec![
+        ("kind", txt(kind)),
+        ("routine", txt(routine)),
+        ("eventId", txt(event_id)),
+    ])
+}
+
+fn engine_with_overlay(
+    old: &CborValue,
+    new: &CborValue,
+    overlay: al_sem::engine::gate::diff::RenameOverlay,
+) -> al_sem::engine::gate::diff::DiffEngineResult {
+    run_diff_engine(
+        old,
+        new,
+        &DiffEngineOptions {
+            coverage_policy: CoveragePolicy::Loose,
+            deterministic: true,
+            rename_overlay: Some(overlay),
+        },
+    )
+}
+
+/// `(kind, normalizedStableId)` of every finding in `category`, sorted.
+fn kinds_in(
+    r: &al_sem::engine::gate::diff::DiffEngineResult,
+    category: &str,
+) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = r
+        .findings
+        .iter()
+        .filter(|f| f.category.as_str() == category)
+        .map(|f| {
+            (
+                f.kind.as_str().to_string(),
+                f.subject.normalized_stable_id.clone(),
+            )
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+fn pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = rows
+        .iter()
+        .map(|(k, s)| (k.to_string(), s.to_string()))
+        .collect();
+    v.sort();
+    v
+}
+
+fn detail(f: &al_sem::engine::gate::diff::DiffFinding, key: &str) -> Option<String> {
+    f.details.iter().find_map(|(k, v)| match v {
+        CborValue::Text(s) if k == key => Some(s.clone()),
+        _ => None,
+    })
+}
+
+fn id156(sig: &str) -> String {
+    format!("{OBJ156}#{sig}")
+}
+
+/// #156 A1/A1b — a `local` or `internal` routine that changes signature, is
+/// removed, or is added produces no `abi` finding.
+#[test]
+fn issue156_a1_local_and_internal_routines_are_not_abi() {
+    for vis in ["local", "internal"] {
+        let old = snap156(
+            vec![
+                (
+                    routine_fact(OBJ156, "h1", vis, Some("procedure"), &[]),
+                    "Helper",
+                ),
+                (
+                    routine_fact(OBJ156, "r1", vis, Some("procedure"), &[]),
+                    "Gone",
+                ),
+            ],
+            vec![],
+        );
+        let new = snap156(
+            vec![
+                (
+                    routine_fact(OBJ156, "h2", vis, Some("procedure"), &[]),
+                    "Helper",
+                ),
+                (
+                    routine_fact(OBJ156, "a1", vis, Some("procedure"), &[]),
+                    "Fresh",
+                ),
+            ],
+            vec![],
+        );
+        let r = engine(&old, &new, CoveragePolicy::Loose);
+        assert_eq!(
+            kinds_in(&r, "abi"),
+            pairs(&[]),
+            "{vis} routines are not ABI"
+        );
+    }
+}
+
+/// #156 A1c — an event publisher stays ABI even when `local` (other apps
+/// subscribe to it); the attribute match ignores case. A `local` InternalEvent
+/// publisher is in-app only, so it is not ABI.
+#[test]
+fn issue156_a1c_local_event_publishers_stay_abi() {
+    for (attr, kind) in [
+        ("IntegrationEvent", "event-publisher"),
+        ("integrationevent", "event-publisher"),
+        ("BusinessEvent", "event-publisher"),
+        ("ExternalBusinessEvent", "procedure"),
+    ] {
+        // FQ-03: an `internal` publisher too — dependent extensions can subscribe
+        // to local and internal events (AppSourceCop AS0025).
+        for vis in ["local", "internal"] {
+            let old = snap156(
+                vec![(routine_fact(OBJ156, "p1", vis, Some(kind), &[attr]), "OnX")],
+                vec![],
+            );
+            let r = engine(&old, &snap156(vec![], vec![]), CoveragePolicy::Loose);
+            assert_eq!(
+                kinds_in(&r, "abi"),
+                pairs(&[("procedure-removed", &id156("p1"))]),
+                "[{attr}] {vis} publisher removal is an ABI break"
+            );
+        }
+        let old = snap156(
+            vec![(
+                routine_fact(OBJ156, "p1", "local", Some(kind), &[attr]),
+                "OnX",
+            )],
+            vec![],
+        );
+        let new = snap156(vec![], vec![]);
+        let r = engine(&old, &new, CoveragePolicy::Loose);
+        assert_eq!(
+            kinds_in(&r, "abi"),
+            pairs(&[("procedure-removed", &id156("p1"))]),
+            "[{attr}] local publisher removal is an ABI break"
+        );
+        assert_eq!(
+            find_kind(&r, "procedure-removed").severity,
+            Severity::Critical
+        );
+    }
+
+    let old = snap156(
+        vec![(
+            routine_fact(OBJ156, "i1", "local", Some("procedure"), &["InternalEvent"]),
+            "OnInternal",
+        )],
+        vec![],
+    );
+    let r = engine(&old, &snap156(vec![], vec![]), CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[]),
+        "InternalEvent is in-app only"
+    );
+}
+
+/// #156 A1d — `public` → `local` on the same id is still a narrowing;
+/// `local` → `public` is new surface (`procedure-added`).
+#[test]
+fn issue156_a1d_visibility_changes_on_the_same_id() {
+    let old = snap156(
+        vec![(
+            routine_fact(OBJ156, "n1", "public", Some("procedure"), &[]),
+            "Narrow",
+        )],
+        vec![],
+    );
+    let new = snap156(
+        vec![(
+            routine_fact(OBJ156, "n1", "local", Some("procedure"), &[]),
+            "Narrow",
+        )],
+        vec![],
+    );
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("object-accessibility-narrowed", &id156("n1"))])
+    );
+    assert_eq!(
+        find_kind(&r, "object-accessibility-narrowed").severity,
+        Severity::Critical
+    );
+
+    let old = snap156(
+        vec![(
+            routine_fact(OBJ156, "w1", "local", Some("procedure"), &[]),
+            "Widen",
+        )],
+        vec![],
+    );
+    let new = snap156(
+        vec![(
+            routine_fact(OBJ156, "w1", "public", Some("procedure"), &[]),
+            "Widen",
+        )],
+        vec![],
+    );
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-added", &id156("w1"))]),
+        "local -> public is new ABI surface"
+    );
+    assert_eq!(find_kind(&r, "procedure-added").severity, Severity::Info);
+}
+
+/// #156 A1e — a same-id `local` routine that drops its IntegrationEvent attribute
+/// (removed, or replaced by InternalEvent) gets no `abi` finding; the events pass
+/// reports `event-publisher-removed` (Medium).
+#[test]
+fn issue156_a1e_publisher_dropping_its_attribute_is_an_events_finding() {
+    let event_id = format!("{OBJ156}::OnE::e1");
+    let old = snap156(
+        vec![(
+            routine_fact(
+                OBJ156,
+                "e1",
+                "local",
+                Some("event-publisher"),
+                &["IntegrationEvent"],
+            ),
+            "OnE",
+        )],
+        vec![(
+            "eventDeclarations",
+            CborValue::Array(vec![event_decl("publisher", &id156("e1"), &event_id)]),
+        )],
+    );
+    for new_attrs in [&[][..], &["InternalEvent"][..]] {
+        let new = snap156(
+            vec![(
+                routine_fact(OBJ156, "e1", "local", Some("procedure"), new_attrs),
+                "OnE",
+            )],
+            vec![],
+        );
+        let r = engine(&old, &new, CoveragePolicy::Loose);
+        assert_eq!(kinds_in(&r, "abi"), pairs(&[]), "attrs now {new_attrs:?}");
+        assert_eq!(
+            kinds_in(&r, "events"),
+            pairs(&[("event-publisher-removed", &id156("e1"))])
+        );
+        assert_eq!(
+            find_kind(&r, "event-publisher-removed").severity,
+            Severity::Medium
+        );
+    }
+}
+
+/// #156 A1f — triggers cannot be called from another app: added, removed or
+/// kept, they give no `abi` finding.
+#[test]
+fn issue156_a1f_triggers_are_not_abi() {
+    let old = snap156(
+        vec![
+            (
+                routine_fact(OBJ156, "t1", "public", Some("trigger"), &[]),
+                "OnInsert",
+            ),
+            (
+                routine_fact(OBJ156, "t2", "public", Some("trigger"), &[]),
+                "OnModify",
+            ),
+        ],
+        vec![],
+    );
+    let new = snap156(
+        vec![
+            (
+                routine_fact(OBJ156, "t2", "public", Some("trigger"), &[]),
+                "OnModify",
+            ),
+            (
+                routine_fact(OBJ156, "t3", "public", Some("trigger"), &[]),
+                "OnDelete",
+            ),
+        ],
+        vec![],
+    );
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(kinds_in(&r, "abi"), pairs(&[]));
+}
+
+/// #156 A2 — a public routine whose signature changed is ONE
+/// `procedure-signature-changed` on the new id, carrying both hashes, with no
+/// "renamed from" note and no `oldOriginalStableId`.
+#[test]
+fn issue156_a2_public_signature_change_is_one_finding() {
+    let old = snap156(
+        vec![(
+            routine_fact(OBJ156, "c1", "public", Some("procedure"), &[]),
+            "CreateInvoice",
+        )],
+        vec![],
+    );
+    let new = snap156(
+        vec![(
+            routine_fact(OBJ156, "c2", "public", Some("procedure"), &[]),
+            "CreateInvoice",
+        )],
+        vec![],
+    );
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-signature-changed", &id156("c2"))])
+    );
+    let f = find_kind(&r, "procedure-signature-changed");
+    assert_eq!(f.severity, Severity::Critical);
+    assert_eq!(detail(f, "oldSignatureHash").as_deref(), Some("c1"));
+    assert_eq!(detail(f, "newSignatureHash").as_deref(), Some("c2"));
+    assert_eq!(f.subject.old_original_stable_id, None);
+    let human = format_diff(&r, "human", VERSION_OVERRIDE, true, &[]);
+    assert!(!human.contains("renamed from"), "{human}");
+}
+
+/// #156 A2b — capability findings follow the paired routine: an unchanged fact
+/// gives nothing, a gained one is reported once on the new id. Under Strict, old
+/// coverage keyed by the OLD id still covers the paired subject.
+#[test]
+fn issue156_a2b_capabilities_follow_the_paired_routine() {
+    let (c1, c2) = (id156("c1"), id156("c2"));
+    let build = |strict: bool| {
+        let mut old_extra = vec![(
+            "capabilityFacts",
+            CborValue::Array(vec![cap_fact(&c1, "insert", "app/table/1")]),
+        )];
+        let mut new_extra = vec![(
+            "capabilityFacts",
+            CborValue::Array(vec![
+                cap_fact(&c2, "insert", "app/table/1"),
+                cap_fact(&c2, "modify", "app/table/2"),
+            ]),
+        )];
+        if strict {
+            old_extra.push(("coverage", CborValue::Array(vec![coverage_rec(&c1)])));
+            new_extra.push(("coverage", CborValue::Array(vec![coverage_rec(&c2)])));
+        }
+        let old = snap156(
+            vec![(
+                routine_fact(OBJ156, "c1", "public", Some("procedure"), &[]),
+                "Post",
+            )],
+            old_extra,
+        );
+        let new = snap156(
+            vec![(
+                routine_fact(OBJ156, "c2", "public", Some("procedure"), &[]),
+                "Post",
+            )],
+            new_extra,
+        );
+        (old, new)
+    };
+
+    let (old, new) = build(false);
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "capabilities"),
+        pairs(&[("capability-gained-write", &c2)])
+    );
+    assert_eq!(
+        detail(find_kind(&r, "capability-gained-write"), "op").as_deref(),
+        Some("modify")
+    );
+
+    let (old, new) = build(true);
+    let r = engine(&old, &new, CoveragePolicy::Strict);
+    assert_eq!(
+        kinds_in(&r, "capabilities"),
+        pairs(&[("capability-gained-write", &c2)])
+    );
+    assert_eq!(
+        find_kind(&r, "capability-gained-write").coverage_state,
+        Some(("complete".to_string(), "complete".to_string()))
+    );
+    assert!(
+        r.diagnostics
+            .iter()
+            .all(|d| d.kind != "coverage-incomplete"),
+        "no coverage diagnostic: {:?}",
+        r.diagnostics.iter().map(|d| &d.kind).collect::<Vec<_>>()
+    );
+}
+
+/// #156 A2c — overloads: one changed overload pairs; two changed at once is
+/// ambiguous and falls back to removed + added; a new overload is added.
+#[test]
+fn issue156_a2c_overload_sets() {
+    let over = |sig: &str| {
+        (
+            routine_fact(OBJ156, sig, "public", Some("procedure"), &[]),
+            "Over",
+        )
+    };
+
+    let r = engine(
+        &snap156(vec![over("oa"), over("ob")], vec![]),
+        &snap156(vec![over("oa"), over("oc")], vec![]),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-signature-changed", &id156("oc"))]),
+        "one changed overload pairs"
+    );
+
+    let r = engine(
+        &snap156(vec![over("oa"), over("ob")], vec![]),
+        &snap156(vec![over("oc"), over("od")], vec![]),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[
+            ("procedure-removed", &id156("oa")),
+            ("procedure-removed", &id156("ob")),
+            ("procedure-added", &id156("oc")),
+            ("procedure-added", &id156("od")),
+        ]),
+        "two changed overloads are ambiguous: no pairing"
+    );
+
+    let r = engine(
+        &snap156(vec![over("oa")], vec![]),
+        &snap156(vec![over("oa"), over("oe")], vec![]),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-added", &id156("oe"))])
+    );
+}
+
+/// #156 A2d — the user overlay wins: an old id the overlay maps (here to a
+/// stale target) is never auto-paired, and `renamesApplied` counts only user
+/// entries even when an auto pair exists.
+#[test]
+fn issue156_a2d_user_overlay_wins_over_auto_pairing() {
+    let mut overlay = al_sem::engine::gate::diff::RenameOverlay::new();
+    overlay.insert(id156("ux"), id156("gone"));
+    let old = snap156(
+        vec![
+            (
+                routine_fact(OBJ156, "ux", "public", Some("procedure"), &[]),
+                "U",
+            ),
+            (
+                routine_fact(OBJ156, "v1", "public", Some("procedure"), &[]),
+                "V",
+            ),
+        ],
+        vec![],
+    );
+    let new = snap156(
+        vec![
+            (
+                routine_fact(OBJ156, "uy", "public", Some("procedure"), &[]),
+                "U",
+            ),
+            (
+                routine_fact(OBJ156, "v2", "public", Some("procedure"), &[]),
+                "V",
+            ),
+        ],
+        vec![],
+    );
+    let r = engine_with_overlay(&old, &new, overlay);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[
+            ("procedure-removed", &id156("gone")),
+            ("procedure-added", &id156("uy")),
+            ("procedure-signature-changed", &id156("v2")),
+        ])
+    );
+    assert_eq!(r.summary.renames_applied, 1, "only the user entry counts");
+}
+
+/// #156 A2e — sibling member triggers (same name, EQUAL signatureFingerprint,
+/// member-discriminated ids) are never paired: they stay two subjects, as on
+/// master. The facts carry no `routineKind` (an older snapshot) so they are ABI
+/// and the pairing outcome is visible.
+#[test]
+fn issue156_a2e_member_triggers_are_never_paired() {
+    let page = "appguid-1:Page:1";
+    let trigger = |member_hash: &str| {
+        obj(vec![
+            ("kind", txt("routine")),
+            ("stableId", txt(&format!("{page}#{member_hash}"))),
+            ("visibility", txt("public")),
+            ("signatureFingerprint", txt("same-sig")),
+            ("attributes", CborValue::Array(vec![])),
+        ])
+    };
+    let (m1, m2) = (format!("{page}#m1"), format!("{page}#m2"));
+    let old = snap156(
+        vec![(trigger("m1"), "OnAction")],
+        vec![(
+            "capabilityFacts",
+            CborValue::Array(vec![cap_fact(&m1, "insert", "app/table/1")]),
+        )],
+    );
+    let new = snap156(
+        vec![(trigger("m2"), "OnAction")],
+        vec![(
+            "capabilityFacts",
+            CborValue::Array(vec![cap_fact(&m2, "insert", "app/table/1")]),
+        )],
+    );
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-removed", &m1), ("procedure-added", &m2)])
+    );
+    let mut cap_subjects: Vec<String> = kinds_in(&r, "capabilities")
+        .into_iter()
+        .map(|(_, s)| s)
+        .collect();
+    cap_subjects.sort();
+    assert_eq!(cap_subjects, vec![m1, m2], "two subjects, not one");
+}
+
+/// #156 A2f — a paired `local [EventSubscriber]` whose signature changed and
+/// whose table write is unchanged produces no finding at all.
+#[test]
+fn issue156_a2f_paired_subscriber_with_unchanged_writes() {
+    let sub_obj = "appguid-1:Codeunit:8";
+    let (s1, s2) = (format!("{sub_obj}#s1"), format!("{sub_obj}#s2"));
+    let pub_routine = "appguid-1:Codeunit:9#pub";
+    let event_id = "appguid-1:Codeunit:9::OnDone::ph";
+    let side = |sig: &str, sid: &str| {
+        snap156(
+            vec![(
+                routine_fact(
+                    sub_obj,
+                    sig,
+                    "local",
+                    Some("event-subscriber"),
+                    &["EventSubscriber"],
+                ),
+                "HandleOnDone",
+            )],
+            vec![
+                (
+                    "eventDeclarations",
+                    CborValue::Array(vec![
+                        event_decl("publisher", pub_routine, event_id),
+                        event_decl("subscriber", sid, event_id),
+                    ]),
+                ),
+                (
+                    "capabilityFacts",
+                    CborValue::Array(vec![cap_fact(sid, "insert", "app/table/1")]),
+                ),
+            ],
+        )
+    };
+    let r = engine(&side("s1", &s1), &side("s2", &s2), CoveragePolicy::Loose);
+    let all: Vec<(String, String)> = r
+        .findings
+        .iter()
+        .map(|f| {
+            (
+                f.kind.as_str().to_string(),
+                f.subject.normalized_stable_id.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(all, Vec::<(String, String)>::new());
+}
+
+/// #156 A2g — when the publisher is gone from new, the subscriber-induced
+/// finding's subject is the publisher's PAIRED new id, not its raw old id.
+#[test]
+fn issue156_a2g_subscriber_induced_subject_follows_the_pair() {
+    let pub_obj = "appguid-1:Codeunit:9";
+    let (p1, p2) = (format!("{pub_obj}#p1"), format!("{pub_obj}#p2"));
+    let event_id = format!("{pub_obj}::OnDone::p1");
+    let s1 = "appguid-1:Codeunit:8#s1";
+    let old = snap156(
+        vec![(
+            routine_fact(
+                pub_obj,
+                "p1",
+                "public",
+                Some("event-publisher"),
+                &["IntegrationEvent"],
+            ),
+            "OnDone",
+        )],
+        vec![
+            (
+                "eventDeclarations",
+                CborValue::Array(vec![
+                    event_decl("publisher", &p1, &event_id),
+                    event_decl("subscriber", s1, &event_id),
+                ]),
+            ),
+            (
+                "capabilityFacts",
+                CborValue::Array(vec![cap_fact(s1, "insert", "app/table/1")]),
+            ),
+        ],
+    );
+    let new = snap156(
+        vec![(
+            routine_fact(pub_obj, "p2", "public", Some("procedure"), &[]),
+            "OnDone",
+        )],
+        vec![],
+    );
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        find_kind(&r, "event-subscriber-induced-capability-lost")
+            .subject
+            .normalized_stable_id,
+        p2
+    );
+    assert_eq!(
+        find_kind(&r, "event-publisher-removed")
+            .subject
+            .normalized_stable_id,
+        p2,
+        "the removed publisher's subject is the paired new id"
+    );
+}
+
+/// #156 FQ-01 — a snapshot that repeats a routine row (same stable id twice)
+/// still pairs: rows collapse by id (last wins), as the diff indexes do.
+#[test]
+fn issue156_fq01_duplicate_rows_still_pair() {
+    let fact = |sig: &str| routine_fact(OBJ156, sig, "public", Some("procedure"), &[]);
+    let old = snap156(vec![(fact("d1"), "Dup"), (fact("d1"), "Dup")], vec![]);
+    let new = snap156(vec![(fact("d2"), "Dup")], vec![]);
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-signature-changed", &id156("d2"))])
+    );
+}
+
+/// #156 FQ-02 — a routine whose ABI status changed with its signature is not
+/// paired: public `Foo` removed + local `Foo` added stays an ABI removal, and the
+/// local addition is nothing.
+#[test]
+fn issue156_fq02_abi_status_change_is_not_a_pair() {
+    let old = snap156(
+        vec![(
+            routine_fact(OBJ156, "f1", "public", Some("procedure"), &[]),
+            "Foo",
+        )],
+        vec![],
+    );
+    let new = snap156(
+        vec![(
+            routine_fact(OBJ156, "f2", "local", Some("procedure"), &[]),
+            "Foo",
+        )],
+        vec![],
+    );
+    let r = engine(&old, &new, CoveragePolicy::Loose);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[("procedure-removed", &id156("f1"))])
+    );
+    assert_eq!(
+        find_kind(&r, "procedure-removed").severity,
+        Severity::Critical
+    );
+}
+
+/// #156 FQ-05 — a user overlay target never auto-pairs on the new side: overlay
+/// `#x → #t` whose source `#x` is not in old leaves `#t` new-only; an old-only
+/// `#tp` of the same name must not pair with it.
+#[test]
+fn issue156_fq05_user_target_never_auto_pairs() {
+    let mut overlay = al_sem::engine::gate::diff::RenameOverlay::new();
+    overlay.insert(id156("x"), id156("t"));
+    let old = snap156(
+        vec![(
+            routine_fact(OBJ156, "tp", "public", Some("procedure"), &[]),
+            "W",
+        )],
+        vec![],
+    );
+    let new = snap156(
+        vec![(
+            routine_fact(OBJ156, "t", "public", Some("procedure"), &[]),
+            "W",
+        )],
+        vec![],
+    );
+    let r = engine_with_overlay(&old, &new, overlay);
+    assert_eq!(
+        kinds_in(&r, "abi"),
+        pairs(&[
+            ("procedure-removed", &id156("tp")),
+            ("procedure-added", &id156("t")),
+        ])
+    );
+}
+
+/// `(category, kind, displayName)` of every finding, sorted.
+fn summary_rows(r: &al_sem::engine::gate::diff::DiffEngineResult) -> Vec<(String, String, String)> {
+    let mut v: Vec<(String, String, String)> = r
+        .findings
+        .iter()
+        .map(|f| {
+            (
+                f.category.as_str().to_string(),
+                f.kind.as_str().to_string(),
+                f.subject.display_name.clone(),
+            )
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+/// #156 E2E-1 — the issue's repro through the real pipeline: a parameter added
+/// to a `local` helper is no finding at all; the new table field is one
+/// `table-field-added` named `Branch`.
+#[test]
+fn issue156_e2e_local_helper_signature_change_repro() {
+    let fixture = fixtures_dir().join("ws-diff-local-sig");
+    let r = engine(
+        &compose_ws(&fixture.join("a")),
+        &compose_ws(&fixture.join("b")),
+        CoveragePolicy::Loose,
+    );
+    assert_eq!(
+        summary_rows(&r),
+        vec![(
+            "schema".to_string(),
+            "table-field-added".to_string(),
+            "Branch".to_string()
+        )]
+    );
+}
+
+/// #156 E2E-2 — the real pipeline emits what the ABI rule reads: added action and
+/// table triggers give no `abi` finding; a `local [IntegrationEvent]` publisher
+/// that gained a parameter is one `procedure-signature-changed`; its paired
+/// subscriber gives no `abi` and no subscriber-induced finding. The publisher and
+/// subscriber keep their capabilities and permissions, so nothing else shows; the
+/// added `OnInsert` trigger and action trigger have empty bodies, so they add no
+/// capability to the subscriber's `Log.Insert()` cone or anywhere else.
+#[test]
+fn issue156_e2e_abi_surface_triggers_publishers_subscribers() {
+    let fixture = fixtures_dir().join("ws-diff-abi-surface");
+    let r = engine(
+        &compose_ws(&fixture.join("a")),
+        &compose_ws(&fixture.join("b")),
+        CoveragePolicy::Loose,
+    );
+    let row = |c: &str, k: &str, d: &str| (c.to_string(), k.to_string(), d.to_string());
+    assert_eq!(
+        summary_rows(&r),
+        vec![
+            row("abi", "procedure-signature-changed", "OnBeforeCalc"),
+            row(
+                "events",
+                "event-contract-changed-with-affected-subscribers",
+                "OnBeforeCalc"
+            ),
+        ]
+    );
+}

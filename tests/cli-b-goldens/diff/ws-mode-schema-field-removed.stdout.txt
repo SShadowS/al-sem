@@ -1,5 +1,5 @@
 Diff: 1 finding(s). critical=1 high=0 medium=0 low=0 info=0
 
 Contract:
-  [critical] table-field-removed: dd1f1e1d-0001-0001-0001-000000000001:Table:50100#3
+  [critical] table-field-removed: Address
 
