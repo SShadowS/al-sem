@@ -9,7 +9,7 @@
 //! d35 still reports it (an unproven-absent commit is worth surfacing), but in its
 //! own words: "may be reachable", naming the coverage reasons.
 //!
-//! Five variants run the REAL gate `analyze` pipeline (`run_analyze_with_exit`,
+//! Five #148 variants run the REAL gate `analyze` pipeline (`run_analyze_with_exit`,
 //! `--format json --with-evidence`) on inline tempdir workspaces (no r0-corpus
 //! fixture, so no golden family):
 //!   V1 the repro: one d35 finding with the UNKNOWN wording, at `possible` capped by
@@ -343,6 +343,14 @@ fn symbol_only_callee_is_unknown_at_medium() {
     assert_eq!(
         f["title"],
         "Commit may be reachable from event subscriber (incomplete call coverage)"
+    );
+    // The precondition: the answer is unknown BECAUSE the callee is symbol-only
+    // (without the symbol app the reason would be `external-target` instead).
+    assert_eq!(
+        f["fixHint"]["description"],
+        "Check what could not be analysed (opaque-dependency; partly analysed: Work \
+         (Codeunit 50300)); if a Commit is reachable, move it out of the subscriber or defer it.",
+        "fixHint names the symbol-only callee"
     );
     assert_eq!(f["severity"], "medium", "severity");
     assert_eq!(f["confidence"]["level"], "possible", "confidence level");
