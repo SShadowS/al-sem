@@ -909,8 +909,11 @@ For a root `r` and a first hop `h` of `r`:
    projected hop JSON; each group, in JSON order, is one child trie node whose frontier is the union of the group's
    targets. At depth `L`, emit the trie node's candidates in end-key order: its boundary edges (sorted by boundary
    identity), `carrier` if `L = dmin` and the frontier holds a carrier, `opaque` if `L = 1` and the frontier holds
-   an opaque seed. Equal-JSON alternatives (two edges into different nodes) are one trie child, so each distinct
-   candidate is produced exactly once, and within a length class the depth-first order over JSON-sorted children
+   an opaque seed. Every hop's JSON carries its `toRoutineId`, so equal-JSON alternatives are parallel edges into
+   ONE node (two triggers fired from one anchor or none, a duplicated edge), and a frontier is always one node.
+   They are one trie child, so each distinct candidate is produced exactly once; their hops can still differ in
+   conditionality (a trigger's operation and `fires` are not in its JSON), so the candidate's conditionality takes
+   the least restrictive edge of each step, as the merge's dedupe did, and within a length class the depth-first order over JSON-sorted children
    is `key_cmp` order; length classes in ascending order make it the full key order by construction.
    (c) Stop after `cap + 1` candidates, where `cap` is the CALLER's cap (A1-04: `HARD_PATH_CAP` = 256 for digest
    and prove; the user's `--witness N` for the fingerprint query, `fingerprint_query.rs:575`, `:596`).
@@ -932,8 +935,8 @@ For a root `r` and a first hop `h` of `r`:
    A non-seed opaque routine is reached by the DAG (no `valid_nodes` prune) but is never reported. Tests: W9 (both
    opaque rules, and a fact whose ONLY candidate is an opaque seed, with no carrier anywhere → one `opaque` path
    and the `opaque-or-unresolved-boundary` diagnostic; break: mark carriers only → no path → fails); W4b
-   (brute-force key order and distinctness over: reconverging diamonds and two carriers; two equal-JSON edges into
-   different nodes whose later hops interleave in `key_cmp` order; one fact with boundary candidates at depths 1, 2
+   (brute-force key order and distinctness over: reconverging diamonds and two carriers; two equal-JSON parallel edges
+   into one node beside a later-sorting branch; one fact with boundary candidates at depths 1, 2
    and 3 plus carriers at `dmin`, with `cap` below the total; a shared primary prefix ending at two boundaries; and
    an opaque seed beside carriers at `dmin = 2`; breaks: walk DAG nodes instead of the prefix trie → order or count
    fails; one walk over all lengths → the length-3 boundary sorts before the length-1 one → fails; key without the

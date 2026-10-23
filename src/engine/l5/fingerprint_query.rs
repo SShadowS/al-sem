@@ -550,13 +550,18 @@ fn build_block(
     perm_map.sort_by(|(_, a), (_, b)| a.target_display.cmp(&b.target_display));
     let required_permissions: Vec<PermissionLine> = perm_map.into_iter().map(|(_, p)| p).collect();
 
-    // Witnesses.
-    let witnesses: Vec<BlockWitness> = match filters.witness_limit {
-        WitnessLimit::Disabled => {
+    // Witnesses. `all` is the hard cap, 256.
+    let cap = match filters.witness_limit {
+        WitnessLimit::Disabled => None,
+        WitnessLimit::Capped(cap) => Some(cap),
+        WitnessLimit::All => Some(256),
+    };
+    let witnesses: Vec<BlockWitness> = match cap {
+        None => {
             // witness reconstruction disabled; no BlockWitness entries.
             Vec::new()
         }
-        WitnessLimit::Capped(0) => {
+        Some(0) => {
             // objects present but zero paths.
             rendered_facts
                 .iter()
@@ -570,11 +575,7 @@ fn build_block(
                 })
                 .collect()
         }
-        WitnessLimit::Capped(_) | WitnessLimit::All => {
-            let cap = match filters.witness_limit {
-                WitnessLimit::Capped(cap) => cap,
-                _ => 256,
-            };
+        Some(cap) => {
             // One pair of caches per root, across its facts (spec §14.3.1 item 3).
             let (mut hops, mut dags) = (HopCache::default(), DagCache::default());
             rendered_facts

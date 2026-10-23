@@ -306,8 +306,8 @@ Acceptance: A6.21, A6.22 (corpus half), A6.19 (DAG half). Depends on Task 1′ p
     the first dependency node, keys it (projected length, projected JSON, end key) and dedupes by key;
     the walk must return exactly the oracle's first `cap` keys in order, with `truncated` iff the
     oracle has more than `cap`. Fixtures: (1) reconverging diamonds and two carriers, more than `cap`
-    paths; (2) two successor edges with EQUAL projected hop JSON into different nodes whose later
-    hops interleave in key order; (3) one fact with boundary candidates at depths 1, 2 and 3 plus
+    paths; (2) two parallel edges with EQUAL projected hop JSON into one node (a hop's JSON carries
+    its `toRoutineId`, so equal JSON cannot reach two nodes) beside a later-sorting branch; (3) one fact with boundary candidates at depths 1, 2 and 3 plus
     carriers at `dmin`, `cap` below the total; (4) a shared primary prefix `R → Helper` ending at two
     boundaries (`cs1`, `cs2`), plus two full paths that collapse to one (prefix, boundary); (5) an
     opaque seed beside carriers at `dmin = 2` (A4-01). Fixture (1) also has an event-dispatch and an
