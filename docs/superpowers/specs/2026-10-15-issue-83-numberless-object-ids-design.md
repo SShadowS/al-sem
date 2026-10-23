@@ -181,6 +181,8 @@ The rest of D4 (R1-11):
 - An ABI object whose LOGICAL name contains `""` (a source name written `"A""""B"`) gives P3 ≠ P8
   (D3). Making P3 unescape only for nodes from source apps would close it. That needs the graph to
   record each node's origin, which is out of scope. No real object name is known to have this shape.
+  `aldump --graphify-export`'s object ids share this limit (ABI logical names `a"b` and `a""b` give
+  one id), because they are the model's ids (`ObjKey::model_key`).
 - **Existing object-KIND mismatches between the ABI and the graph (R1-08).** These exist today and
   are not changed. They give P3 ≠ P8 with or without a number:
   - `abi_ingest.rs:259-278` maps an ABI `DotNetPackage` (and any unknown type) to `Codeunit`, while

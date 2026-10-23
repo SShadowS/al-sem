@@ -270,11 +270,11 @@ fn diff_snapshots(
     out
 }
 
-/// One snapshot's objects keyed by `stableObjectId`. Two rows with one id and one
-/// name are one logical object split across `#if` arms (legal; the last row is
-/// kept). Two rows with one id and DIFFERENT names are a collision and a hard
-/// failure naming the id: a map would keep only the last of them and hide the
-/// other from the comparison (#83).
+/// One snapshot's objects keyed by `stableObjectId`. Two IDENTICAL rows are one
+/// logical object split across `#if` arms (legal; kept once). Any other two rows
+/// with one id (another name, or the same name with another fingerprint or kind)
+/// are a hard failure naming both rows: a map would keep only the last of them and
+/// hide the other from the comparison (#83).
 fn objects_by_id<'a>(
     fixture: &str,
     side: &str,
@@ -283,20 +283,21 @@ fn objects_by_id<'a>(
     let mut map: BTreeMap<&str, &ObjectIdentity> = BTreeMap::new();
     for o in &snap.objects {
         if let Some(prev) = map.insert(o.stable_object_id.as_str(), o)
-            && prev.name != o.name
+            && prev != o
         {
             panic!(
-                "{fixture}: the {side} snapshot has two object rows with stableObjectId {:?} \
-                 ({:?} and {:?})",
-                o.stable_object_id, prev.name, o.name
+                "{fixture}: the {side} snapshot has two different object rows with \
+                 stableObjectId {:?}: {prev:?} and {o:?}",
+                o.stable_object_id
             );
         }
     }
     map
 }
 
-/// CR5 (#83): an `#if`-split object (two rows, one id, one name) is accepted; two
-/// different objects on one id still panic.
+/// CR5/NF2 (#83): an `#if`-split object (two identical rows) is accepted; two rows
+/// on one id that differ in anything (the name, or only the fingerprint) panic, so
+/// a divergent duplicate is never hidden by last-wins.
 #[test]
 fn objects_by_id_accepts_a_split_object_and_rejects_a_collision() {
     let row = |name: &str, fp: &str| ObjectIdentity {
@@ -305,23 +306,25 @@ fn objects_by_id_accepts_a_split_object_and_rejects_a_collision() {
         kind: "Interface".to_string(),
         signature_fingerprint: fp.to_string(),
     };
-    let split = IdentitySnapshot {
-        objects: vec![row("IFoo", "a"), row("IFoo", "b")],
+    let snap = |rows: Vec<ObjectIdentity>| IdentitySnapshot {
+        objects: rows,
         routines: Vec::new(),
     };
+    let split = snap(vec![row("IFoo", "a"), row("IFoo", "a")]);
     let map = objects_by_id("t", "rust", &split);
-    assert_eq!(map.len(), 1);
-    assert_eq!(
-        map["g:Interface:@ifoo"].signature_fingerprint, "b",
-        "last row kept"
-    );
+    assert_eq!(map.len(), 1, "identical duplicate kept once");
 
-    let collision = IdentitySnapshot {
-        objects: vec![row("IFoo", "a"), row("IBar", "a")],
-        routines: Vec::new(),
-    };
-    let panicked = std::panic::catch_unwind(|| objects_by_id("t", "rust", &collision).len());
-    assert!(panicked.is_err(), "two names on one id must panic");
+    for (what, rows) in [
+        (
+            "same name, other fingerprint",
+            vec![row("IFoo", "a"), row("IFoo", "b")],
+        ),
+        ("other name", vec![row("IFoo", "a"), row("IBar", "a")]),
+    ] {
+        let s = snap(rows);
+        let panicked = std::panic::catch_unwind(|| objects_by_id("t", "rust", &s).len());
+        assert!(panicked.is_err(), "{what} on one id must panic");
+    }
 }
 
 fn obj_path(id: &str, field: &str) -> String {
