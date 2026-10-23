@@ -48,7 +48,8 @@ alsem query touches path/to/workspace --table "Sales Header"
 **`al-call-hierarchy --project <ws>` — a one-shot health snapshot.**
 Index a workspace from the command line and print definition/call-site counts. Add
 `--analyze` for a per-procedure quality report (cyclomatic complexity, parameter counts,
-line counts, fan-in, unused procedures) as `text`, `json`, or `csv`.
+line counts, fan-in, unused procedures, and in JSON the test assert counts) as `text`,
+`json`, or `csv`.
 *Why: a fast look at a codebase with no editor and no setup.*
 
 ```bash

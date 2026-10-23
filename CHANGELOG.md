@@ -57,6 +57,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Limits: calls inside dependency code are not seen, so a subscriber to an event raised
   only there is uncovered. Platform events have no publisher to reach. What a `TestPage`
   drives is not followed. A test codeunit's `OnRun` is not a root.
+- `al-call-hierarchy --project <ws> --analyze --format json` gains a `test_quality` block
+  (#253), after `summary`, so existing keys keep their order. Text and CSV do not change.
+  It has three parts. `procedures` holds one row per `[Test]` procedure; its `path`,
+  `line`, `object_*`, `procedure_name` and `routine_id` equal that routine's `metrics`
+  row, and `object_stable_id` is the internal `<appGuid>/Codeunit/<n>` id. `codeunits`
+  sums the rows per test object, and `workspace` sums all of them. Each row has
+  `assert_count`, `assert_count_reachable`, `zero_assert`, `has_asserterror` and
+  `are_equal {total, literal_expected, expression_expected}`.
+  How it counts: an assert is a call `X.M(..)` whose receiver `X` is declared (local,
+  then parameter, then object global; `this.X` looks at globals) as `Codeunit Assert` or
+  `Codeunit "Library Assert"`, any method, plus each `asserterror` statement.
+  `assert_count` is the test's own body. Both arms of an in-body `#if` count.
+  `assert_count_reachable` adds the own count of every routine the test reaches through
+  resolved calls (call, `Codeunit.Run`, implicit trigger) in the **same app**. "Same app"
+  means the test file's own app root, the deepest folder with an `app.json`. Routines in
+  nested apps and in dependencies are not followed, and each routine counts once per
+  test. `zero_assert` is `assert_count_reachable == 0`. Without a call graph (no
+  `app.json`) both are `null`, and so are the sums that include them.
+  `literal_expected` means the first argument of `AreEqual`/`AreNotEqual`/`AreNearlyEqual`
+  is a literal, a signed number, an enum/option value or `Database::X`. A `Label` or
+  `Text` constant counts as an expression.
+  Limits: event subscribers are not followed. Calls inside `with Assert do` are not
+  matched, and neither are numeric receivers (`Codeunit 130000`). Unresolved calls are
+  not followed. Handlers that the test framework calls are not counted. A test split
+  across object-level `#if` arms reaches the union of both arms' callees. Interface
+  calls follow every implementation.
+  On the CDO Test app (139 files): 1844 tests, 3316 own asserts, 3491 reachable, 88 tests
+  with no own assert and 58 with none reachable, 1044 of 1528 `AreEqual`-family calls
+  with a literal expected value. The JSON run time did not change (median of 15 runs:
+  293 ms before, 284 ms after, release-fast).
 - `alsem analyze --format json`: every finding gains `looseFingerprint` (#247), a key
   that stays equal when the same problem moves to another routine of the same object.
   `fingerprint` is byte-identical: it is still the same problem in the same routine, and
