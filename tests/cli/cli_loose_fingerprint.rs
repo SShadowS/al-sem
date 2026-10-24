@@ -481,15 +481,20 @@ fn dnn_code(d: &Dnn, callers: &[Caller], helpers: &[(&str, &str)]) -> String {
 
 /// The callee a d39-d42 finding names. d39/d40/d42 put it at `evidencePath[1]`;
 /// d41's evidence stays in the caller, so its callee is read from that step's note
-/// (`forwards {v} to {callee}, which calls Reset`).
+/// (`forwards {v} to {callee}, which calls Reset`). This PINS that note wording
+/// (`d41.rs`'s evidence step 1): rewording it fails these tests on the parse.
 fn dnn_callee(d: &Dnn, f: &serde_json::Value) -> String {
     if d.detector == D41.detector {
         let note = str_of(&f["evidencePath"][1], "note");
         let after = note
             .split(" to ")
             .nth(1)
-            .expect("d41 note names the callee");
-        after.split(',').next().unwrap().to_string()
+            .expect("d41 note format `forwards {v} to {callee}, which calls Reset`");
+        after
+            .split(',')
+            .next()
+            .expect("d41 note format `forwards {v} to {callee}, which calls Reset`")
+            .to_string()
     } else {
         step_routine(f, 1).to_string()
     }

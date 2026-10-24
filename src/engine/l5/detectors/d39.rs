@@ -294,7 +294,7 @@ pub fn detect_d39(
                             "d39/{}/{}/{}",
                             callee.id,
                             role.parameter_index,
-                            binding_source_table(caller, binding).unwrap_or("?")
+                            binding_source_table(&caller.record_variables, binding).unwrap_or("?")
                         ),
                     }),
                 };

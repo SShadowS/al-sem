@@ -237,9 +237,14 @@ pub fn detect_d45(
                     key: if publisher_events.is_empty() {
                         format!("d45/{publisher}")
                     } else {
-                        let events: Vec<&str> =
-                            publisher_events.iter().map(|e| e.as_str()).collect();
-                        format!("d45/{}", events.join(","))
+                        format!(
+                            "d45/{}",
+                            publisher_events
+                                .iter()
+                                .map(|e| e.as_str())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        )
                     },
                 }),
             };

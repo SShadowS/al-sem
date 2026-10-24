@@ -242,7 +242,7 @@ pub fn detect_d41(
                             "d41/{}/{}/{}",
                             callee.id,
                             binding.parameter_index,
-                            binding_source_table(routine, binding).unwrap_or("?")
+                            binding_source_table(&routine.record_variables, binding).unwrap_or("?")
                         ),
                     }),
                 };
