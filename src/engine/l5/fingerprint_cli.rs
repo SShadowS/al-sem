@@ -424,9 +424,25 @@ enum FingerprintForm {
 
 impl FingerprintForm {
     fn of(opts: &FingerprintOptions) -> FingerprintForm {
-        if !go_b0(opts) && !opts.routine_selectors.is_empty() {
+        FingerprintForm::from_flags(
+            &opts.format,
+            opts.shard.is_some(),
+            opts.is_query_requested,
+            !opts.routine_selectors.is_empty(),
+            opts.inventory_only,
+        )
+    }
+
+    fn from_flags(
+        format: &FingerprintFormat,
+        shard: bool,
+        is_query_requested: bool,
+        has_routine: bool,
+        inventory_only: bool,
+    ) -> FingerprintForm {
+        if !b0(format, shard, is_query_requested) && has_routine {
             FingerprintForm::RoutineQuery
-        } else if opts.inventory_only {
+        } else if inventory_only {
             FingerprintForm::Inventory
         } else {
             FingerprintForm::Cut
@@ -434,12 +450,37 @@ impl FingerprintForm {
     }
 }
 
+/// Whether a fingerprint invocation's view is single-app (#277 D12's job
+/// kind, read before any job is made): the cut forms always are; the tree
+/// forms take `--single-app`.
+pub fn reads_single_app(
+    format: &FingerprintFormat,
+    shard: bool,
+    is_query_requested: bool,
+    has_routine: bool,
+    inventory_only: bool,
+    single_app: bool,
+) -> bool {
+    let form = FingerprintForm::from_flags(
+        format,
+        shard,
+        is_query_requested,
+        has_routine,
+        inventory_only,
+    );
+    form == FingerprintForm::Cut || single_app
+}
+
 /// The B0 path: shard / cbor / cbor.gz / json-no-query.
 fn go_b0(opts: &FingerprintOptions) -> bool {
-    opts.shard.is_some()
-        || opts.format == FingerprintFormat::Cbor
-        || opts.format == FingerprintFormat::CborGz
-        || (opts.format == FingerprintFormat::Json && !opts.is_query_requested)
+    b0(&opts.format, opts.shard.is_some(), opts.is_query_requested)
+}
+
+fn b0(format: &FingerprintFormat, shard: bool, is_query_requested: bool) -> bool {
+    shard
+        || *format == FingerprintFormat::Cbor
+        || *format == FingerprintFormat::CborGz
+        || (*format == FingerprintFormat::Json && !is_query_requested)
 }
 
 /// A fingerprint side: its finished result, or (`--routine`) the query's
@@ -524,7 +565,14 @@ impl Job for FingerprintJob<'_> {
     fn demands(&self) -> Vec<ViewDemand> {
         let o = self.opts;
         // The cut forms stay single-app (S′); the tree forms take `--single-app`.
-        let single_app = FingerprintForm::of(o) == FingerprintForm::Cut || o.single_app;
+        let single_app = reads_single_app(
+            &o.format,
+            o.shard.is_some(),
+            o.is_query_requested,
+            !o.routine_selectors.is_empty(),
+            o.inventory_only,
+            o.single_app,
+        );
         ViewDemand::one(o.inputs, single_app, o.no_roots_config, ViewNeeds::MODEL)
     }
 

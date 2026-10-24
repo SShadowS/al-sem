@@ -26,8 +26,19 @@ pub(crate) fn run_manifest(
     env: &[(&str, &str)],
     stdin: Option<&[u8]>,
 ) -> (Output, Vec<Value>) {
+    run_manifest_doc(dir, &json!({ "jobs": jobs }), cwd, env, stdin)
+}
+
+/// [`run_manifest`] of a whole manifest document (`{"batches": …}`).
+pub(crate) fn run_manifest_doc(
+    dir: &Path,
+    doc: &Value,
+    cwd: Option<&Path>,
+    env: &[(&str, &str)],
+    stdin: Option<&[u8]>,
+) -> (Output, Vec<Value>) {
     let manifest = dir.join("m.json");
-    std::fs::write(&manifest, json!({ "jobs": jobs }).to_string()).unwrap();
+    std::fs::write(&manifest, doc.to_string()).unwrap();
     let trace = dir.join("trace.json");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
     cmd.arg("batch")

@@ -63,11 +63,20 @@ where
 /// settings on first use from ANYWHERE in the process, and a later
 /// `build_global()` call errors if that already happened — a local pool works
 /// regardless of what else in the process has touched rayon.
+///
+/// Its size is rayon's default, so `RAYON_NUM_THREADS` sets it (#277 F18);
+/// the `pool.threads` trace instant reads the built pool's own size.
 pub fn big_stack_pool() -> rayon::ThreadPool {
-    rayon::ThreadPoolBuilder::new()
+    let pool = rayon::ThreadPoolBuilder::new()
         .stack_size(BIG_STACK_SIZE)
         .build()
-        .expect("build big-stack rayon pool")
+        .expect("build big-stack rayon pool");
+    crate::engine::perf_trace::instant_lazy(
+        "pool",
+        "pool.threads",
+        || serde_json::json!({ "threads": pool.current_num_threads() }),
+    );
+    pool
 }
 
 #[cfg(test)]

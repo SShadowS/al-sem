@@ -88,6 +88,7 @@ mod cli_batch_merged_streams;
 mod cli_batch_plan;
 mod cli_batch_standalone;
 mod cli_batch_traces;
+mod cli_batch_workers;
 mod cli_batch_writes;
 mod cli_build_counters;
 mod cli_c_cache_differential;
