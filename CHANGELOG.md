@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Grammar: tree-sitter-al `main` at `c89c2ecb`** (D1, a parser state-reduction pass;
+  package version still 4.4.1; was `960ed312`). `node-types.json` is byte-identical, so the
+  generated vocabulary, `kind_policy` and the 501 named kinds did not move, and no valid
+  input parses to a different tree. `CACHE_VERSION_GRAMMAR` is still bumped, to
+  `tree-sitter-al-v4.4.1-c89c2ecb-native`: a smaller parse table changes the
+  error-recovery trees of broken input, and a cache minted from those must not be reused.
+  Measured old vs new: per-test outcomes identical (3,988 run, all pass, on both sides),
+  zero goldens moved, the stamp kept its length so `dry-run.txt` did not move, CDO
+  `--program-call-graph-stats` byte-identical, and zero recovered files and zero
+  `parseIncomplete` routines on CDO on both sides.
 - `alsem graph`: the node id of a source object without a number, whose name holds an
   escaped quote (`""` in the source), now comes from its logical name, where `""` is
   one `"`. That is the same name the model's object id uses. Such ids change once;
