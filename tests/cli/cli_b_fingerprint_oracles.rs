@@ -14,7 +14,8 @@
 use std::collections::HashMap;
 
 use al_sem::engine::l5::digest::{
-    FingerprintIndexesPub, HumanHop, TerminalHopInfo, reconstruct_witness_paths_pub,
+    CarrierCache, DagCache, FingerprintIndexesPub, HopCache, HumanHop, TerminalHopInfo,
+    WitnessOutcomePub, reconstruct_witness_paths_pub, witness_index,
 };
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintFormat, SpecifiedFlags, default_format, normalize_witness, reject_illegal_combos,
@@ -29,6 +30,24 @@ use al_sem::engine::l5::snapshot::{
 // ===========================================================================
 // Helpers — minimal builders for hand-built witness inputs.
 // ===========================================================================
+
+/// `ROOT`'s witness of `f` at `cap`, with fresh per-root caches.
+fn witness(
+    f: &SnapshotCapabilityFact,
+    idx: &FingerprintIndexesPub,
+    cap: usize,
+) -> WitnessOutcomePub {
+    let widx = witness_index(idx);
+    reconstruct_witness_paths_pub(
+        "ROOT",
+        f,
+        &widx,
+        cap,
+        &mut HopCache::default(),
+        &mut DagCache::default(),
+        &CarrierCache::default(),
+    )
+}
 
 fn empty_idx() -> FingerprintIndexesPub<'static> {
     FingerprintIndexesPub {
@@ -404,7 +423,7 @@ fn item7_missing_witness_anchor_direct_synthetic() {
     // incomplete:true, ONE path with the terminal hop (detail = subject).
     let idx = empty_idx();
     let f = fact("direct", "subscribe", "event");
-    let out = reconstruct_witness_paths_pub("ROOT", &f, &idx, 256);
+    let out = witness(&f, &idx, 256);
     assert!(out.incomplete);
     assert_eq!(out.diagnostics.len(), 1);
     assert_eq!(out.diagnostics[0].kind, "missing-witness-anchor");
@@ -419,7 +438,7 @@ fn item7_missing_operation_evidence() {
     let idx = empty_idx();
     let mut f = fact("direct", "modify", "table");
     f.witness_operation_id = Some("op-missing".to_string());
-    let out = reconstruct_witness_paths_pub("ROOT", &f, &idx, 256);
+    let out = witness(&f, &idx, 256);
     assert!(out.incomplete);
     assert_eq!(out.diagnostics.len(), 1);
     assert_eq!(out.diagnostics[0].kind, "missing-operation-evidence");
@@ -431,7 +450,7 @@ fn item7_missing_callsite_evidence() {
     let idx = empty_idx();
     let mut f = fact("direct", "send", "http");
     f.witness_callsite_id = Some("cs-missing".to_string());
-    let out = reconstruct_witness_paths_pub("ROOT", &f, &idx, 256);
+    let out = witness(&f, &idx, 256);
     assert!(out.incomplete);
     assert_eq!(out.diagnostics.len(), 1);
     assert_eq!(out.diagnostics[0].kind, "missing-callsite-evidence");
@@ -444,7 +463,7 @@ fn item7_first_hop_not_found_no_callsite() {
     let idx = empty_idx();
     let mut f = fact("inherited", "modify", "table");
     f.via = "call".to_string();
-    let out = reconstruct_witness_paths_pub("ROOT", &f, &idx, 256);
+    let out = witness(&f, &idx, 256);
     assert!(out.incomplete);
     assert!(out.paths.is_empty());
     assert_eq!(out.diagnostics.len(), 1);
@@ -459,7 +478,7 @@ fn item7_first_hop_not_found_no_edges() {
     let mut f = fact("inherited", "modify", "table");
     f.via = "call".to_string();
     f.witness_callsite_id = Some("cs0".to_string());
-    let out = reconstruct_witness_paths_pub("ROOT", &f, &idx, 256);
+    let out = witness(&f, &idx, 256);
     assert!(out.incomplete);
     assert!(out.paths.is_empty());
     assert_eq!(out.diagnostics.len(), 1);
@@ -485,7 +504,7 @@ fn item7_terminal_not_found_default_no_detail() {
     let mut f = fact("inherited", "modify", "table");
     f.via = "call".to_string();
     f.witness_callsite_id = Some("cs0".to_string());
-    let out = reconstruct_witness_paths_pub("ROOT", &f, &idx, 256);
+    let out = witness(&f, &idx, 256);
     assert!(out.incomplete);
     assert!(out.paths.is_empty());
     assert_eq!(out.diagnostics.len(), 1);
@@ -507,7 +526,7 @@ fn item7_opaque_or_unresolved_boundary() {
     let mut f = fact("inherited", "modify", "table");
     f.via = "call".to_string();
     f.witness_callsite_id = Some("cs0".to_string());
-    let out = reconstruct_witness_paths_pub("ROOT", &f, &idx, 256);
+    let out = witness(&f, &idx, 256);
     // Boundary push emits one path (the hops up to the boundary) — NOT incomplete by itself.
     assert_eq!(out.paths.len(), 1);
     assert!(out
@@ -528,16 +547,20 @@ fn item7_path_limit_reached_detail_cap() {
         ],
     );
     // A and B each carry a matching direct fact → each seeds a terminal path.
-    let term = fact("direct", "modify", "table");
-    idx.direct_facts_by_routine
-        .insert("A".to_string(), vec![term.clone()]);
-    idx.direct_facts_by_routine
-        .insert("B".to_string(), vec![term]);
+    // Each fact's subject is its routine, as `build_fingerprint_indexes_pub`
+    // keys them: the carriers are read from the subjects.
+    for routine in ["A", "B"] {
+        let mut term = fact("direct", "modify", "table");
+        term.subject = routine.to_string();
+        idx.direct_facts_by_routine
+            .insert(routine.to_string(), vec![term]);
+    }
     let mut f = fact("inherited", "modify", "table");
     f.via = "call".to_string();
     f.witness_callsite_id = Some("cs0".to_string());
-    let out = reconstruct_witness_paths_pub("ROOT", &f, &idx, 1);
-    assert!(out.truncated);
+    let out = witness(&f, &idx, 1);
+    let kinds: Vec<&str> = out.diagnostics.iter().map(|d| d.kind.as_str()).collect();
+    assert!(out.truncated, "{kinds:?}");
     assert!(
         out.diagnostics
             .iter()

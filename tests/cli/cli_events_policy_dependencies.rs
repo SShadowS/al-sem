@@ -436,8 +436,9 @@ fn policy_check_follows_dependency_calls() {
 ///               routines fail the `routine.name` applicability and are not counted)
 ///   single-app: evaluated 5, matched 0, passed 1, findings 0
 ///
-/// Mutation: cross-app demand without `RAW_INHERITED_FACTS` -> the run panics
-/// (`full_summary.rs:107-116`) -> non-zero exit.
+/// Mutation (#160 step 6 Task 3): the rule engine reads an empty map instead
+/// of the view's `Cell::Raw` (`view.raw()` in `gate/policy/pipeline.rs`) -> no
+/// inherited fact -> no finding -> fails.
 #[test]
 fn policy_check_matches_an_inherited_dependency_fact() {
     let dir = tempfile::tempdir().unwrap();

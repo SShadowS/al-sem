@@ -33,7 +33,8 @@ use std::sync::Arc;
 use super::combined_graph::{CombinedGraph, TypedEdge, UncertaintyEdge, build_combined_graph};
 use super::cone_census;
 use super::cone_derived::{
-    ConeDerivedBuilder, ConeDerivedStore, ConeOutput, FoldedRow, fact_is_known_temp,
+    ConeDerivedBuilder, ConeDerivedStore, ConeScope, FoldedRow, MemberMode, WitnessScope,
+    fact_is_known_temp,
 };
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
@@ -1743,8 +1744,8 @@ type ClosedRowMemo = HashMap<usize, FoldedRow>;
 /// cloned, and only the survivors are cloned — by `retag`, and only when `mode`
 /// wants the raw Vec.
 ///
-/// #160 step 7b: `best` is built only for the raw Vec. Under
-/// [`ConeOutput::DerivedOnly`] there is no scan: the derived row comes from
+/// #160 step 7b: `best` is built only for the raw Vec. Under a derived-only
+/// [`MemberMode`] there is no scan: the derived row comes from
 /// `memo` rows, the open entries and the own entries.
 #[allow(clippy::too_many_arguments)]
 fn inherited_facts_for_singleton<'g>(
@@ -1756,7 +1757,7 @@ fn inherited_facts_for_singleton<'g>(
     caller_frame: Option<&super::param_guard::FrameGuards>,
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     own: &'g [super::pd_solve::ResolvedEntry<'g>],
-    mode: ConeOutput,
+    mode: MemberMode,
     derived: &mut ConeDerivedBuilder,
     memo: &mut ClosedRowMemo,
     stats: &mut ComposeStats,
@@ -2017,7 +2018,8 @@ fn inherited_facts_for_singleton<'g>(
         best.len() as u64,
     );
 
-    // Only the raw half reaches here (`DerivedOnly` returned above).
+    // Only the raw half reaches here (a scope with no raw member returned
+    // above).
     let _t = crate::engine::l5::detector_context::cones_census::start();
     let out: Vec<CapabilityFact> = best
         .values()
@@ -2034,7 +2036,8 @@ fn inherited_facts_for_singleton<'g>(
 /// Set-correct path for routines in recursive SCCs. Mirrors
 /// `inheritedFactsByBfs`.
 ///
-/// #160 step 7a: this walk feeds the RAW half only (`RawOnly`, `Both`). The
+/// #160 step 7a: this walk feeds the RAW half only (a member the `ConeScope`'s
+/// `raw: WitnessScope` keeps). The
 /// derived row of a recursive member is folded from its Cone-SCC's set (the
 /// SCC's fact cone) plus its own entries, never from these picks.
 ///
@@ -2132,8 +2135,9 @@ fn inherited_facts_by_bfs<'g>(
                     // `key` is the cone's `Arc<str>`; `seen` stays keyed by `String`
                     // because the sibling branch above feeds it `direct`'s own
                     // `String` keys. Since #160 step 7a this walk runs only for the
-                    // raw half (RawOnly, Both) and the test oracle, never under
-                    // `analyze`'s DerivedOnly, so the one owned copy per newly-seen
+                    // raw half (a member the scope's `raw` keeps) and the test
+                    // oracle, never under `analyze`'s `raw: WitnessScope::None`,
+                    // so the one owned copy per newly-seen
                     // key is not on any hot path.
                     if !seen.contains_key(&**key) {
                         seen.insert(key.to_string(), picked.len());
@@ -2170,7 +2174,7 @@ fn inherited_facts_by_bfs<'g>(
 fn emit_picks(
     subject: &str,
     picks: Vec<(&CapabilityFact, &TypedOutEdge)>,
-    mode: ConeOutput,
+    mode: MemberMode,
 ) -> Vec<CapabilityFact> {
     if !mode.wants_raw() {
         return Vec::new();
@@ -2484,7 +2488,7 @@ pub(crate) struct ComposeStats {
     /// Recursive SCCs by member count: 1, 2, 3-9, 10-99, >= 100.
     pub(crate) size_hist: [u64; 5],
     /// Calls of [`inherited_facts_by_bfs`] (the raw half only; 0 under
-    /// `DerivedOnly`). Their time is the census `walk_total`;
+    /// `raw: WitnessScope::None`). Their time is the census `walk_total`;
     /// `bfs_walk` also holds the set builds and borrows.
     pub(crate) member_walks: u64,
     /// Own (producer-solve) entries of the emitted recursive members.
@@ -2515,12 +2519,6 @@ pub(crate) struct ComposeStats {
     pub(crate) singleton_scans: u64,
 }
 
-/// The per-routine cone result.
-struct InheritedConeResult {
-    inherited: Vec<CapabilityFact>,
-    coverage: CoverageRecord,
-}
-
 /// #160 step 7b §4.7: the T7'/T8' oracle's streamed raw fold. Test-only, so
 /// production builds carry no parameter and no per-routine branch for it.
 /// While [`raw_fold_hook::fold`] runs, every routine `compose_inherited_cones`
@@ -2536,7 +2534,8 @@ pub(crate) mod raw_fold_hook {
         static ORACLE: RefCell<Option<ConeDerivedBuilder>> = const { RefCell::new(None) };
     }
 
-    /// Run `compose` (a `RawOnly` composition) with the hook on; return its
+    /// Run `compose` (a raw-only composition: `ConeScope { derived: false,
+    /// raw: WitnessScope::All }`) with the hook on; return its
     /// result and the oracle store.
     pub(crate) fn fold<T>(compose: impl FnOnce() -> T) -> (T, ConeDerivedStore) {
         ORACLE.with(|o| *o.borrow_mut() = Some(ConeDerivedBuilder::default()));
@@ -2564,6 +2563,16 @@ pub(crate) mod raw_fold_hook {
     }
 }
 
+/// What [`compose_inherited_cones`] returns: coverage, raw, the derived store,
+/// the producer arena and the stats.
+type ComposedCones = (
+    HashMap<String, CoverageRecord>,
+    HashMap<String, Vec<CapabilityFact>>,
+    ConeDerivedStore,
+    super::pd_solve::ConeArena,
+    ComposeStats,
+);
+
 /// Compute capabilityFactsInherited + coverage for EVERY routine via a single
 /// fused bottom-up SCC-cone pass. Mirrors `composeInheritedCones`. The engine
 /// never throws: on internal inconsistency it still returns whatever it built.
@@ -2572,7 +2581,12 @@ pub(crate) mod raw_fold_hook {
 /// same Vec `FullRoutineSummary.capability_facts_direct` holds). It is the SELF
 /// half of the derived fold: the reachable sequence scans every direct fact, so
 /// the fold must too — unlike the inherited half, which folds key-deduped
-/// representatives. `mode` decides which of the two outputs is produced.
+/// representatives. `scope` decides which outputs are produced, per member
+/// (#160 step 6 D1): every emitted member gets its coverage record; its derived
+/// row when `scope.derived`; its raw Vec only when `scope.raw` contains it.
+///
+/// Returns coverage and raw APART (one raw entry per member whose raw half
+/// ran), the derived store, the producer arena and the stats.
 #[allow(clippy::too_many_arguments)]
 fn compose_inherited_cones(
     g: &TypedEdgeGraph,
@@ -2583,13 +2597,8 @@ fn compose_inherited_cones(
     routine_ids: &BTreeSet<String>,
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, super::param_guard::FrameGuards>,
-    mode: ConeOutput,
-) -> (
-    HashMap<String, InheritedConeResult>,
-    ConeDerivedStore,
-    super::pd_solve::ConeArena,
-    ComposeStats,
-) {
+    scope: &ConeScope,
+) -> ComposedCones {
     let mut stats = ComposeStats::default();
     // #160 §4.1.1: the per-call untimed remainder. Entry snapshot only under
     // the census (one OnceLock read otherwise); the function has one exit.
@@ -2599,7 +2608,8 @@ fn compose_inherited_cones(
             crate::engine::l5::detector_context::cones_census::component_snapshot(),
         )
     });
-    let mut out: HashMap<String, InheritedConeResult> = HashMap::new();
+    let mut coverage_out: HashMap<String, CoverageRecord> = HashMap::new();
+    let mut raw_out: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
     let mut derived = ConeDerivedBuilder::default();
 
     // #69 D1: the producers (raw direct facts, in node order) leave the shared
@@ -2783,7 +2793,7 @@ fn compose_inherited_cones(
         // by every member's derived fold. A non-root borrows its fact cone
         // (built above, freed after the member loop); a root, whose cone is
         // never built, gets the same build here, dropped after the loop.
-        let use_set = recursive && emitted > 0 && mode.wants_derived();
+        let use_set = recursive && emitted > 0 && scope.derived;
         let _t_set = use_set
             .then(crate::engine::l5::detector_context::cones_census::start)
             .flatten();
@@ -2818,6 +2828,12 @@ fn compose_inherited_cones(
             if !routine_ids.contains(m) {
                 continue;
             }
+            let mode = scope.member(m);
+            if !mode.wants_derived() && !mode.wants_raw() {
+                // Neither half: no walk, singleton or BFS (D1); coverage only.
+                coverage_out.insert(m.clone(), coverage_record(m, cov, &ccone));
+                continue;
+            }
             if mode.wants_derived() {
                 let _t_der0 = crate::engine::l5::detector_context::cones_census::start();
                 derived.begin_routine();
@@ -2830,7 +2846,8 @@ fn compose_inherited_cones(
             let inherited = if recursive {
                 stats.own_entries_recursive += own_entries(m).len() as u64;
                 stats.members_with_own_entry += u64::from(!own_entries(m).is_empty());
-                // The walk runs only for the raw half: never under `DerivedOnly`.
+                // The walk runs only for the raw half: never for a member the
+                // scope's `raw` drops.
                 let picks = if mode.wants_raw() {
                     stats.member_walks += 1;
                     let picks = inherited_facts_by_bfs(
@@ -2929,27 +2946,10 @@ fn compose_inherited_cones(
             #[cfg(test)]
             let inherited = raw_fold_hook::offer(m, inherited, direct_raw.get(m));
             let _t_emit = crate::engine::l5::detector_context::cones_census::start();
-            let d_status = cov
-                .get(m)
-                .map(|c| c.direct_status.clone())
-                .unwrap_or_else(|| "unknown".to_string());
-            out.insert(
-                m.clone(),
-                InheritedConeResult {
-                    inherited,
-                    coverage: CoverageRecord {
-                        subject: m.clone(),
-                        direct_status: d_status,
-                        inherited_status: if ccone.complete {
-                            "complete".to_string()
-                        } else {
-                            "partial".to_string()
-                        },
-                        reasons: ccone.reasons.clone(),
-                        unknown_targets: ccone.unknown_targets.clone(),
-                    },
-                },
-            );
+            coverage_out.insert(m.clone(), coverage_record(m, cov, &ccone));
+            if mode.wants_raw() {
+                raw_out.insert(m.clone(), inherited);
+            }
             crate::engine::l5::detector_context::cones_census::add_since(
                 &crate::engine::l5::detector_context::cones_census::EMIT_NANOS,
                 _t_emit,
@@ -3076,7 +3076,25 @@ fn compose_inherited_cones(
             std::sync::atomic::Ordering::Relaxed,
         );
     }
-    (out, derived.finish(), arena, stats)
+    (coverage_out, raw_out, derived.finish(), arena, stats)
+}
+
+/// Member `m`'s coverage record from its direct coverage and its SCC's cone.
+fn coverage_record(m: &str, cov: &RoutineDirectCoverage, ccone: &CoverageCone) -> CoverageRecord {
+    CoverageRecord {
+        subject: m.to_string(),
+        direct_status: cov
+            .get(m)
+            .map(|c| c.direct_status.clone())
+            .unwrap_or_else(|| "unknown".to_string()),
+        inherited_status: if ccone.complete {
+            "complete".to_string()
+        } else {
+            "partial".to_string()
+        },
+        reasons: ccone.reasons.clone(),
+        unknown_targets: ccone.unknown_targets.clone(),
+    }
 }
 
 // ===========================================================================
@@ -3088,23 +3106,16 @@ fn compose_inherited_cones(
 // `project_r3a5_cross_app` (it IS that path, factored out). No re-port.
 // ===========================================================================
 
-/// One routine's cone result in PUBLIC (internal-id) form. Field-for-field the
-/// private `InheritedConeResult`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ConeResultPub {
-    pub inherited: Vec<CapabilityFact>,
-    pub coverage: CoverageRecord,
-}
-
-/// What one cone composition produced: the per-routine RAW cone results and the
-/// compact derived substrate. Which halves are populated is decided by the
-/// [`ConeOutput`] mode — see its variants.
+/// What one cone composition produced. Which halves are populated is decided by
+/// the [`ConeScope`]: coverage always, raw for the subjects, derived when asked.
 pub struct ConeOutcome {
-    /// Per-routine inherited facts + coverage. Under
-    /// [`ConeOutput::DerivedOnly`] every `inherited` Vec is empty (never built);
-    /// `coverage` is always populated (it is not the memory problem).
-    pub cones: HashMap<String, ConeResultPub>,
-    /// The compact derived substrate. Empty under [`ConeOutput::RawOnly`].
+    /// Per-routine coverage, for every routine of the universe (it is not the
+    /// memory problem).
+    pub coverage: HashMap<String, CoverageRecord>,
+    /// Per-routine RAW inherited facts, one entry per member whose raw half
+    /// ran (`scope.raw` contains it), APART from coverage (#160 step 6 D1).
+    pub raw: HashMap<String, Vec<CapabilityFact>>,
+    /// The compact derived substrate. Empty unless `scope.derived`.
     pub derived: ConeDerivedStore,
     /// The transitive producer solve (#69 D1), in cone (internal) ids.
     pub pd_solution: super::pd_solve::ConeArena,
@@ -3125,7 +3136,7 @@ pub struct ConeOutcome {
 /// This is the EXACT cone substrate `project_r3a3` / `project_r3a5_cross_app`
 /// build inline, factored out.
 ///
-/// ⟨C1⟩ `mode` selects the output(s). `direct_in` doubles as the derived fold's
+/// ⟨C1⟩ `scope` selects the output(s). `direct_in` doubles as the derived fold's
 /// SELF half — it is the raw, un-deduped direct-fact Vec every caller also stores
 /// on `FullRoutineSummary.capability_facts_direct` (verified at all three call
 /// sites), which is exactly the self half of the reachable sequence.
@@ -3135,7 +3146,7 @@ pub fn compose_cone_over_graph(
     direct_in: &HashMap<String, Vec<CapabilityFact>>,
     coverage_in: &HashMap<String, (String, Vec<String>)>,
     routines: &[ModelRoutine],
-    mode: ConeOutput,
+    scope: ConeScope,
 ) -> ConeOutcome {
     crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
@@ -3196,7 +3207,7 @@ pub fn compose_cone_over_graph(
     let routines_by_id: HashMap<&str, &ModelRoutine> =
         routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, routines, &routines_by_id);
-    let (cones, derived, pd_solution, _stats) = compose_inherited_cones(
+    let (coverage, raw, derived, pd_solution, _stats) = compose_inherited_cones(
         &g,
         &scc,
         &direct,
@@ -3205,8 +3216,11 @@ pub fn compose_cone_over_graph(
         &routine_ids,
         &routines_by_id,
         &frames,
-        mode,
+        &scope,
     );
+    if !raw.is_empty() {
+        crate::engine::perf_trace::counter_delta("build.witness_pass", 1);
+    }
     crate::engine::l5::detector_context::cones_census::add_since(
         &crate::engine::l5::detector_context::cones_census::WALK_COMPOSE_NANOS,
         _t_compose,
@@ -3259,18 +3273,8 @@ pub fn compose_cone_over_graph(
     drop(routine_ids);
 
     ConeOutcome {
-        cones: cones
-            .into_iter()
-            .map(|(id, r)| {
-                (
-                    id,
-                    ConeResultPub {
-                        inherited: r.inherited,
-                        coverage: r.coverage,
-                    },
-                )
-            })
-            .collect(),
+        coverage,
+        raw,
         derived,
         pd_solution,
         #[cfg(test)]
@@ -3688,6 +3692,12 @@ pub struct R3a5CrossAppBase {
     /// dependency code's own calls included) drives the cone, and its SCC is
     /// the one every cross-app `build_l4` shares by pointer.
     pub rel: std::sync::Arc<crate::engine::l4::exec_relation::ExecRelation>,
+    /// The calls dependency routines make, in emission order: the `rel`
+    /// split's dependency half, read only by digest's tree (its call-site
+    /// ledger, #160 step 6 D6). The view takes it in its first `prepare` and
+    /// drops it there unless that prepare composes the tree (final panel
+    /// F1-C2), so no other command holds it past its first fill.
+    pub dependency_calls: Option<Vec<crate::program::model::calls::CallEdge>>,
     /// The solver field index: the leaf summaries' and every cross-app
     /// `build_l4` solve's (through [`Self::cross_app_inputs`]), built once.
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
@@ -3724,6 +3734,15 @@ pub struct R3a5CrossAppBase {
 }
 
 impl R3a5CrossAppBase {
+    /// Each loaded dependency app's name, by lowercase guid: the `<App>` of
+    /// digest's rule-B groups (#160 step 6, spec §14.3.5 item 2).
+    pub(crate) fn loaded_app_names(&self) -> HashMap<String, String> {
+        self.dependency_apps
+            .iter()
+            .map(|a| (a.guid.to_ascii_lowercase(), a.name.clone()))
+            .collect()
+    }
+
     /// Every model routine: the workspace's, then each dependency's.
     pub fn ws_routines(&self) -> &Vec<ModelRoutine> {
         &self.resolved.workspace.routines
@@ -3840,7 +3859,6 @@ pub(crate) fn build_cross_app_base(
         &dependency_calls,
         &x.resolved.events.graph,
     );
-    drop(dependency_calls);
     let calls = crate::program::model::calls::ResolvedCalls {
         edges: primary_calls,
         upgraded_bindings,
@@ -3937,6 +3955,7 @@ pub(crate) fn build_cross_app_base(
         resolved,
         dep_routine_ids,
         rel: std::sync::Arc::new(rel),
+        dependency_calls: Some(dependency_calls),
         field_index,
         leaf_summaries,
         fixed_roles,
@@ -3984,6 +4003,12 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
     );
     emit("base.resolved.rows", &mut census_model_rows(&b.resolved));
     emit("base.resolved.calls", &mut census_calls(&b.resolved.calls));
+    emit(
+        "base.dependency_calls",
+        Tally::default().buf::<crate::program::model::calls::CallEdge>(
+            b.dependency_calls.as_ref().map_or(0, Vec::len),
+        ),
+    );
     emit(
         "base.dep_routine_ids",
         Tally::default()
@@ -4108,26 +4133,30 @@ pub fn project_r3a5_cross_app(
         &base.leaf_summaries,
         &base.fixed_roles,
     );
-    // ⟨C1 Task 3⟩ `RawOnly` — this projection path consumes the RAW cone (its
-    // exact `sort_inherited` byte order IS the R3a-5 golden surface, Global
-    // Constraint 7). It never reads `ConeOutcome::derived`, so folding one here
-    // was build-then-drop; `RawOnly` skips the fold outright. The raw Vec and its
-    // ordering are untouched.
-    let cones = compose_cone_over_graph(
+    // ⟨C1 Task 3⟩ Raw only (`derived: false`, `raw: WitnessScope::All`) — this
+    // projection path consumes the RAW cone (its exact `sort_inherited` byte
+    // order IS the R3a-5 golden surface, Global Constraint 7). It never reads
+    // `ConeOutcome::derived`, so folding one here was build-then-drop;
+    // `derived: false` skips the fold outright. The raw Vec and its ordering
+    // are untouched.
+    let ConeOutcome { coverage, raw, .. } = compose_cone_over_graph(
         base.rel.cone(),
         nodes,
         &base.direct_full,
         &base.direct_coverage,
         base.ws_routines(),
-        ConeOutput::RawOnly,
-    )
-    .cones;
+        ConeScope {
+            derived: false,
+            raw: WitnessScope::All,
+        },
+    );
 
     project_r3a5_from_parts(
         ws_routines,
         dep_routine_ids,
         &core_summaries,
-        &cones,
+        &coverage,
+        &raw,
         direct_full,
         event_graph,
         fixture_name,
@@ -4142,7 +4171,8 @@ pub(crate) fn project_r3a5_from_parts(
     ws_routines: &[ModelRoutine],
     dep_routine_ids: &BTreeSet<String>,
     core_summaries: &HashMap<String, crate::engine::l4::summary::RoutineSummary>,
-    cones: &HashMap<String, ConeResultPub>,
+    cone_coverage: &HashMap<String, CoverageRecord>,
+    cone_raw: &HashMap<String, Vec<CapabilityFact>>,
     direct_full: &HashMap<String, Vec<CapabilityFact>>,
     event_graph: &EventGraph,
     fixture_name: &str,
@@ -4190,19 +4220,19 @@ pub(crate) fn project_r3a5_from_parts(
             .collect();
         direct_facts.sort_by_key(capability_fact_sort_key);
 
-        let (inherited_facts, coverage) = match cones.get(&r.id) {
-            Some(cone) => {
-                let mut inh: Vec<PCapabilityFact> = cone
-                    .inherited
-                    .iter()
+        let (inherited_facts, coverage) = match cone_coverage.get(&r.id) {
+            Some(cov) => {
+                let mut inh: Vec<PCapabilityFact> = cone_raw
+                    .get(&r.id)
+                    .into_iter()
+                    .flatten()
                     .map(|f| project_capability_fact(f, &map, &event_by_id))
                     .collect();
                 inh.sort_by_key(capability_fact_sort_key);
 
-                let mut reasons = cone.coverage.reasons.clone();
+                let mut reasons = cov.reasons.clone();
                 reasons.sort();
-                let mut unknown_targets: Vec<String> = cone
-                    .coverage
+                let mut unknown_targets: Vec<String> = cov
                     .unknown_targets
                     .iter()
                     .map(|t| stable_routine_id(t, &map))
@@ -4212,9 +4242,9 @@ pub(crate) fn project_r3a5_from_parts(
                 (
                     inh,
                     PCoverageRecord {
-                        subject: stable_routine_id(&cone.coverage.subject, &map),
-                        direct_status: cone.coverage.direct_status.clone(),
-                        inherited_status: cone.coverage.inherited_status.clone(),
+                        subject: stable_routine_id(&cov.subject, &map),
+                        direct_status: cov.direct_status.clone(),
+                        inherited_status: cov.inherited_status.clone(),
                         reasons,
                         unknown_targets,
                     },
@@ -4380,13 +4410,13 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         })
         .collect();
 
-    // ⟨C1 Task 3⟩ `RawOnly` — this projection consumes the RAW cone (its
+    // ⟨C1 Task 3⟩ Raw only (`derived: false`) — this projection consumes the RAW cone (its
     // `sort_inherited` byte order IS the R3a-3 golden surface, Global Constraint
     // 7) and discards the derived store. Folding one was build-then-drop.
     let routines_by_id: HashMap<&str, &ModelRoutine> =
         ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, &ws.routines, &routines_by_id);
-    let (cones, _derived, _pd_solution, _stats) = compose_inherited_cones(
+    let (cone_coverage, cone_raw, _derived, _pd_solution, _stats) = compose_inherited_cones(
         &g,
         &scc,
         &direct,
@@ -4395,7 +4425,10 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         &routine_ids,
         &routines_by_id,
         &frames,
-        ConeOutput::RawOnly,
+        &ConeScope {
+            derived: false,
+            raw: WitnessScope::All,
+        },
     );
 
     // ── Project ───────────────────────────────────────────────────────────
@@ -4412,7 +4445,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
 
     let mut summaries: Vec<PRoutineConeCoverage> = Vec::new();
     for r in &ws.routines {
-        let Some(cone) = cones.get(&r.id) else {
+        let Some(cov) = cone_coverage.get(&r.id) else {
             continue;
         };
 
@@ -4425,17 +4458,17 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
             .collect();
         direct_facts.sort_by_key(capability_fact_sort_key);
 
-        let mut inherited_facts: Vec<PCapabilityFact> = cone
-            .inherited
-            .iter()
+        let mut inherited_facts: Vec<PCapabilityFact> = cone_raw
+            .get(&r.id)
+            .into_iter()
+            .flatten()
             .map(|f| project_capability_fact(f, &map, &event_by_id))
             .collect();
         inherited_facts.sort_by_key(capability_fact_sort_key);
 
-        let mut reasons = cone.coverage.reasons.clone();
+        let mut reasons = cov.reasons.clone();
         reasons.sort();
-        let mut unknown_targets: Vec<String> = cone
-            .coverage
+        let mut unknown_targets: Vec<String> = cov
             .unknown_targets
             .iter()
             .map(|t| stable_routine_id(t, &map))
@@ -4447,9 +4480,9 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
             capability_facts_direct: direct_facts,
             capability_facts_inherited: inherited_facts,
             coverage: PCoverageRecord {
-                subject: stable_routine_id(&cone.coverage.subject, &map),
-                direct_status: cone.coverage.direct_status.clone(),
-                inherited_status: cone.coverage.inherited_status.clone(),
+                subject: stable_routine_id(&cov.subject, &map),
+                direct_status: cov.direct_status.clone(),
+                inherited_status: cov.inherited_status.clone(),
                 reasons,
                 unknown_targets,
             },
@@ -4487,8 +4520,10 @@ pub struct R3a3SourceBase {
     pub event_graph: EventGraph,
     /// Per-routine RAW direct capability facts (full, ordered — NOT deduped).
     pub direct_full: HashMap<String, Vec<CapabilityFact>>,
-    /// Per-routine cone result (inherited facts + coverage), internal-id form.
-    pub cones: HashMap<String, ConeResultPub>,
+    /// Per-routine cone coverage, internal-id form (every routine of the cone).
+    pub coverage: HashMap<String, CoverageRecord>,
+    /// Per-routine RAW inherited facts, internal-id form.
+    pub raw: HashMap<String, Vec<CapabilityFact>>,
     /// Internal RoutineId → StableRoutineId.
     pub routine_to_stable: HashMap<String, String>,
     /// The producer solve (#69 D1), internal ids; the snapshot maps it (D2).
@@ -4499,10 +4534,12 @@ pub struct R3a3SourceBase {
 /// assembly, returning the parts). Fail-closed callers get an empty base via the
 /// resolved workspace having zero routines.
 ///
-/// The LEGACY CUT (#160 step 4, amendment M9): this base builds its own graph
+/// The cut graph (#160 step 4, amendment M9): this base builds its own graph
 /// over `resolved.calls`, which cross-app is the primary half only, without
-/// the dependency typed edges the view's `ExecRelation` carries. The snapshot
-/// stays on it until step 6 deletes it.
+/// the dependency typed edges the view's `ExecRelation` carries. Digest left it
+/// at #160 step 6 (`compose_tree` over `rel.cone()`); its one cross-app
+/// production reader is the ordering cell (d47/d49/d51, `fill_ordering`),
+/// which moves to the cone graph in the #161 follow-up.
 pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
     use crate::engine::perf_trace as pt;
     // Not `r3a3.calls_graph`: that span also covered the input clones, now
@@ -4586,18 +4623,25 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
     drop(_s1);
     let _s2 = pt::span("r3a3", "r3a3.compose_cone");
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
-    // ⟨C1 Task 3⟩ `RawOnly` — the snapshot/digest/prove derivers read the RAW
-    // cone off this base and never touch `ConeOutcome::derived` (see
-    // `project_r3a5_cross_app`). Raw bytes and ordering unchanged.
+    // ⟨C1 Task 3⟩ raw for every routine, no derived — the snapshot/digest/prove
+    // derivers read the RAW cone off this base and never touch
+    // `ConeOutcome::derived` (see `project_r3a5_cross_app`). Raw bytes and
+    // ordering unchanged.
     let ConeOutcome {
-        cones, pd_solution, ..
+        coverage,
+        raw,
+        pd_solution,
+        ..
     } = compose_cone_over_graph(
         &graph.typed_edges,
         &nodes,
         &direct_full,
         &direct_coverage,
         &ws.routines,
-        ConeOutput::RawOnly,
+        ConeScope {
+            derived: false,
+            raw: WitnessScope::All,
+        },
     );
 
     let routine_to_stable = routine_to_stable_of(ws);
@@ -4608,81 +4652,11 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
         calls,
         event_graph,
         direct_full,
-        cones,
+        coverage,
+        raw,
         routine_to_stable,
         pd_solution,
     }
-}
-
-/// `aldump --issue160-full-graph-timings` (#160 §4.1.6): the snapshot's cost over
-/// today's CUT graph and over the cross-app base's FULL graph, from one binary.
-/// Measurement only; deleted when step 6 lands. The cone wall and the solve are
-/// read off the cone census, so the caller runs it with `ALSEM_CONES_CENSUS=1`;
-/// without it this returns `Err` rather than print zeros. `Ok(None)`: the
-/// workspace has no cross-app base.
-#[doc(hidden)]
-pub fn issue160_full_graph_timings(
-    workspace: &std::path::Path,
-) -> Result<Option<String>, &'static str> {
-    use crate::engine::l5::detector_context::cones_census as cc;
-    use std::sync::atomic::Ordering;
-    if !cc::enabled() {
-        return Err("--issue160-full-graph-timings needs ALSEM_CONES_CENSUS=1");
-    }
-    let Some(base) = build_cross_app_base(
-        &crate::program::inputs::InputSet::read(workspace, &Default::default()),
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-    )
-    .ok() else {
-        return Ok(None);
-    };
-    let cone_nanos = || {
-        [
-            &cc::WALK_GRAPH_NANOS,
-            &cc::WALK_SCC_NANOS,
-            &cc::WALK_DEDUP_NANOS,
-            &cc::WALK_COMPOSE_NANOS,
-        ]
-        .iter()
-        .map(|c| c.load(Ordering::Relaxed))
-        .sum::<u64>()
-    };
-    let ms = |n: u64| n as f64 / 1e6;
-    let mut out = String::new();
-    for side in ["cut", "full"] {
-        let (cone0, pd0) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
-        let sb = if side == "cut" {
-            build_r3a3_source_only_base(&base.resolved)
-        } else {
-            build_r3a3_source_only_base_over(
-                &base.resolved,
-                CombinedGraph {
-                    primary: (**base.rel.primary()).clone(),
-                    typed_edges: base.rel.cone().to_vec(),
-                },
-            )
-        };
-        let (cone1, pd1) = (cone_nanos(), cc::PD_SOLVE_NANOS.load(Ordering::Relaxed));
-        let t = std::time::Instant::now();
-        let snap = crate::engine::l5::snapshot::compose_snapshot_from_base(&base.resolved, &sb);
-        let derive = t.elapsed().as_nanos() as u64;
-        drop(snap);
-        let inherited: usize = sb.cones.values().map(|c| c.inherited.len()).sum();
-        // §4.1.6's raw population in bytes, by the census rule (each cone's
-        // buffer plus every fact's owned heap).
-        let inherited_bytes: usize = sb
-            .cones
-            .values()
-            .map(|c| super::cone_census::facts_tally(&c.inherited).bytes)
-            .sum();
-        out.push_str(&format!(
-            "{side} cone_wall_ms={:.3}\n{side} pd_solve_ms={:.3}\n{side} snapshot_derive_ms={:.3}\n{side} inherited_facts={inherited}\n{side} inherited_bytes={inherited_bytes}\n",
-            ms(cone1 - cone0),
-            ms(pd1 - pd0),
-            ms(derive),
-        ));
-    }
-    Ok(Some(out))
 }
 
 // ===========================================================================
@@ -4881,7 +4855,7 @@ mod pd_uses_tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::engine::l4::cone_derived::{ConeDerivedBuilder, ConeOutput};
+    use crate::engine::l4::cone_derived::{ConeDerivedBuilder, MemberMode};
     use crate::engine::l4::db_effect_solver::tests::pd_ts_known;
     use crate::engine::l4::pd_solve::ResolvedEntry;
 
@@ -4930,7 +4904,7 @@ mod pd_uses_tests {
         }
     }
 
-    fn singleton(mode: ConeOutput, derived: &mut ConeDerivedBuilder) -> Vec<CapabilityFact> {
+    fn singleton(mode: MemberMode, derived: &mut ConeDerivedBuilder) -> Vec<CapabilityFact> {
         let own = [own_entry()];
         let scc: HashMap<String, usize> = [("C".to_string(), 0)].into();
         inherited_facts_for_singleton(
@@ -4954,7 +4928,13 @@ mod pd_uses_tests {
     #[test]
     fn singleton_walk_emits_own_entries_retagged() {
         let mut derived = ConeDerivedBuilder::default();
-        let out = singleton(ConeOutput::RawOnly, &mut derived);
+        let out = singleton(
+            MemberMode {
+                derived: false,
+                raw: true,
+            },
+            &mut derived,
+        );
         assert_eq!(out.len(), 1);
         let f = &out[0];
         assert_eq!(f.subject, "C");
@@ -4969,8 +4949,14 @@ mod pd_uses_tests {
     fn singleton_walk_folds_own_entries() {
         let mut derived = ConeDerivedBuilder::default();
         derived.begin_routine();
-        let out = singleton(ConeOutput::DerivedOnly, &mut derived);
-        assert!(out.is_empty(), "DerivedOnly builds no raw Vec");
+        let out = singleton(
+            MemberMode {
+                derived: true,
+                raw: false,
+            },
+            &mut derived,
+        );
+        assert!(out.is_empty(), "raw: WitnessScope::None builds no raw Vec");
         derived.finish_routine("C");
         let store = derived.finish();
         assert_eq!(
@@ -5871,6 +5857,8 @@ mod step4_tests {
         let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
         view.prepare(&digest_plan(
             crate::engine::l5::detectors::default_detectors(),
+            std::collections::BTreeSet::new(),
+            false,
         ));
         let det = view.det();
         let name = |id: &str| -> String {
@@ -6348,7 +6336,7 @@ codeunit 50111 "Cell Calls"
                 .map(|r| r.id.as_str())
                 .collect();
             assert_eq!(ids.len(), 1, "precondition: one routine {name}");
-            let coverage = &base.cones[ids[0]].coverage;
+            let coverage = &base.coverage[ids[0]];
             if coverage.direct_status != "partial" {
                 failures.push(format!("{name}: direct status {}", coverage.direct_status));
             }
@@ -6434,7 +6422,7 @@ codeunit 50111 "Cell Calls"
 /// (`docs/superpowers/specs/2026-10-20-issue-160-step7a-scc-membership-design.md`),
 /// T1-T11 and the §5.1 row comparator. Each asserts its precondition before
 /// its main assertions. Since step 7b's last commit the oracle is the fold of
-/// a `RawOnly` composition (raw inherited Vec ∪ raw direct facts per
+/// a raw-only composition (`derived: false`; raw inherited Vec ∪ raw direct facts per
 /// routine), the witness engine step 6 keeps (7b spec §4.7).
 #[cfg(test)]
 mod scc_set_tests {
@@ -6442,6 +6430,7 @@ mod scc_set_tests {
         FIXTURE_ROOTS, app_dirs, model, model_with_tables, workspace_model,
     };
     use super::*;
+    use crate::engine::l4::cone_derived::scope_of;
     use crate::engine::l4::cone_derived::test_facts::{call_edge, fact, temp_fact};
     use crate::engine::l4::cone_derived::{MAY_COMMIT, TOUCHES_PHYSICAL_TABLE, TOUCHES_TABLE};
     use crate::engine::l4::exec_relation::ExecRelation;
@@ -6584,35 +6573,31 @@ mod scc_set_tests {
         typed: &[TypedEdge],
         nodes: &[String],
         direct_in: &Direct,
-        mode: ConeOutput,
+        mode: ConeScope,
     ) -> ConeOutcome {
         compose_cone_over_graph(typed, nodes, direct_in, &HashMap::new(), &[], mode)
     }
 
-    /// The oracle store (7b §4.7): per routine, F(its `RawOnly` inherited Vec
+    /// The oracle store (7b §4.7): per routine, F(its raw-only inherited Vec
     /// ∪ its raw direct facts).
     fn raw_fold(raw: &ConeOutcome, direct_in: &Direct) -> ConeDerivedStore {
         let mut b = ConeDerivedBuilder::default();
-        for (id, r) in &raw.cones {
-            b.fold_routine(
-                id,
-                r.inherited
-                    .iter()
-                    .chain(direct_in.get(id).into_iter().flatten()),
-            );
+        for (id, r) in &raw.raw {
+            b.fold_routine(id, r.iter().chain(direct_in.get(id).into_iter().flatten()));
         }
         b.finish()
     }
 
-    /// The production path (`DerivedOnly`), the `RawOnly` witness engine, and
+    /// The production path (`raw: WitnessScope::None`), the raw-only
+    /// (`derived: false`) witness engine, and
     /// the oracle store folded from the latter.
     fn derived_and_raw_fold(
         typed: &[TypedEdge],
         nodes: &[String],
         direct_in: &Direct,
     ) -> (ConeOutcome, ConeOutcome, ConeDerivedStore) {
-        let new = compose(typed, nodes, direct_in, ConeOutput::DerivedOnly);
-        let raw = compose(typed, nodes, direct_in, ConeOutput::RawOnly);
+        let new = compose(typed, nodes, direct_in, scope_of::derived_only());
+        let raw = compose(typed, nodes, direct_in, scope_of::raw_only());
         let oracle = raw_fold(&raw, direct_in);
         (new, raw, oracle)
     }
@@ -6674,7 +6659,7 @@ mod scc_set_tests {
     // -- helpers over inline AL -----------------------------------------------
 
     /// Compose over the det cone's exact inputs ([`det_cone_inputs`]).
-    fn compose_model(m: &Model, rel: &ExecRelation, mode: ConeOutput) -> ConeOutcome {
+    fn compose_model(m: &Model, rel: &ExecRelation, mode: ConeScope) -> ConeOutcome {
         let i = det_cone_inputs(m, rel);
         compose_cone_over_graph(
             rel.cone(),
@@ -6691,8 +6676,8 @@ mod scc_set_tests {
         m: &Model,
         rel: &ExecRelation,
     ) -> (ConeOutcome, ConeOutcome, ConeDerivedStore) {
-        let new = compose_model(m, rel, ConeOutput::DerivedOnly);
-        let raw = compose_model(m, rel, ConeOutput::RawOnly);
+        let new = compose_model(m, rel, scope_of::derived_only());
+        let raw = compose_model(m, rel, scope_of::raw_only());
         let oracle = raw_fold(&raw, &det_cone_inputs(m, rel).direct_full);
         (new, raw, oracle)
     }
@@ -6910,7 +6895,7 @@ codeunit 50100 C
             call_edge("L", "S", "cs/LS"),
         ];
         let nodes = strs(&["X", "Y", "Z", "L", "S"]);
-        let out = compose(&typed, &nodes, &HashMap::new(), ConeOutput::DerivedOnly);
+        let out = compose(&typed, &nodes, &HashMap::new(), scope_of::derived_only());
         let s = out.stats;
         assert_eq!(s.recursive_sccs, 2, "recursive_sccs");
         assert_eq!(s.recursive_members_all, 4, "recursive_members_all");
@@ -6921,7 +6906,7 @@ codeunit 50100 C
         assert_eq!(s.max_recursive_members, 3, "max_recursive_members");
         assert_eq!(
             s.member_walks, 0,
-            "member_walks (DerivedOnly folds the sets)"
+            "member_walks (raw: WitnessScope::None folds the sets)"
         );
         assert_eq!(
             (s.scc_sets_built, s.scc_sets_borrowed),
@@ -6997,7 +6982,7 @@ codeunit 50100 C
             &i.direct_full,
             &i.coverage_in,
             &m.workspace.routines,
-            ConeOutput::DerivedOnly,
+            scope_of::derived_only(),
         );
         if (new.stats.member_walks, new.stats.singleton_scans) != (0, 0) {
             failures.push(format!(
@@ -7012,7 +6997,7 @@ codeunit 50100 C
                 &i.direct_full,
                 &i.coverage_in,
                 &m.workspace.routines,
-                ConeOutput::RawOnly,
+                scope_of::raw_only(),
             )
         });
         if let Some(d) = rows_diff(&new.derived, &oracle) {
@@ -7408,28 +7393,28 @@ codeunit 50100 C
             ("publish", "event", Some("e/B"), "call", Some("cs/AB")),
         ];
         for (label, g, walks) in [("T1", &t1, 2), ("T5", &t5, 479)] {
-            let both = run(g, ConeOutput::Both);
-            let raw = run(g, ConeOutput::RawOnly);
+            let both = run(g, scope_of::both());
+            let raw = run(g, scope_of::raw_only());
             if label == "T1" {
                 for (mode, out) in [("Both", &both), ("RawOnly", &raw)] {
-                    let got: Vec<_> = out.cones["A"].inherited.iter().map(raw_row).collect();
+                    let got: Vec<_> = out.raw["A"].iter().map(raw_row).collect();
                     assert_eq!(got, want, "T1 {mode}: A's raw inherited Vec");
                 }
             }
             for n in &g.1 {
                 assert_eq!(
-                    both.cones[n].inherited, raw.cones[n].inherited,
+                    both.raw[n], raw.raw[n],
                     "{label} {n}: Both's raw Vec equals RawOnly's"
                 );
             }
             assert_eq!(both.stats.member_walks, walks, "{label}: Both walks");
             assert_eq!(raw.stats.member_walks, walks, "{label}: RawOnly walks");
-            let derived = run(g, ConeOutput::DerivedOnly);
+            let derived = run(g, scope_of::derived_only());
             assert_rows_equal(label, &both.derived, &derived.derived);
         }
 
         // Derived: on T5 under DerivedOnly, no member walk runs.
-        let out = run(&t5, ConeOutput::DerivedOnly);
+        let out = run(&t5, scope_of::derived_only());
         assert_eq!(
             out.stats.member_walks, 0,
             "compose_cone_over_graph runs a per-member walk under DerivedOnly"
@@ -7480,9 +7465,62 @@ codeunit 50100 C
         typed: &[TypedEdge],
         nodes: &[String],
         direct: &Direct,
-        mode: ConeOutput,
+        mode: ConeScope,
     ) -> ConeOutcome {
         compose_cone_over_graph(typed, nodes, direct, &HashMap::new(), &[], mode)
+    }
+
+    /// #160 step 6 T2 (spec §5, D1): R calls M calls writer W; with subjects
+    /// `{R}` only R's raw half runs, equal to the unscoped run's, while every
+    /// routine keeps its coverage record and its derived row.
+    #[test]
+    fn t2_witness_scope_gates_raw_per_member() {
+        let typed = vec![call_edge("R", "M", "cs/RM"), call_edge("M", "W", "cs/MW")];
+        let nodes = strs(&["R", "M", "W"]);
+        let direct: Direct = [("W".to_string(), vec![insert("W", "t/W")])].into();
+        let all = production(&typed, &nodes, &direct, scope_of::both());
+        assert!(
+            !all.raw["R"].is_empty(),
+            "precondition: R inherits W's write"
+        );
+        // `derived: false` is `o`'s shape: M and W skip their walk entirely.
+        for derived in [true, false] {
+            let scoped = production(
+                &typed,
+                &nodes,
+                &direct,
+                ConeScope {
+                    derived,
+                    raw: WitnessScope::Subjects(["R".to_string()].into()),
+                },
+            );
+            assert_eq!(
+                scoped.raw.get("R"),
+                all.raw.get("R"),
+                "derived={derived}: R's raw = the All run's"
+            );
+            assert!(
+                !scoped.raw.contains_key("M"),
+                "derived={derived}: no key M in raw"
+            );
+            assert!(
+                !scoped.raw.contains_key("W"),
+                "derived={derived}: no key W in raw"
+            );
+            for id in ["R", "M", "W"] {
+                assert_eq!(
+                    scoped.coverage.get(id),
+                    all.coverage.get(id),
+                    "derived={derived}: coverage has {id}"
+                );
+                let want: &[&str] = if derived { &["t/W"] } else { &[] };
+                assert_eq!(
+                    scoped.derived.writes_tables_of(id),
+                    want,
+                    "derived={derived}: {id}'s derived row"
+                );
+            }
+        }
     }
 
     /// 7b §5 T1: singletons A -> C, B -> C, C -> D; C writes `t/C`, D writes
@@ -7500,7 +7538,7 @@ codeunit 50100 C
             ("D".to_string(), vec![insert("D", "t/D")]),
         ]
         .into();
-        let out = production(&typed, &nodes, &direct, ConeOutput::DerivedOnly);
+        let out = production(&typed, &nodes, &direct, scope_of::derived_only());
         assert_eq!(
             out.stats.recursive_sccs, 0,
             "precondition: every routine is a singleton"
@@ -7559,7 +7597,7 @@ codeunit 50100 C
         let rel = ExecRelation::single_app(&m);
         let cust = table_id(&m, "Cust");
         let [n, mm] = ["N", "M"].map(|r| routine_id(&m, r));
-        let out = compose_model(&m, &rel, ConeOutput::DerivedOnly);
+        let out = compose_model(&m, &rel, scope_of::derived_only());
         assert_eq!(
             out.derived.writes_tables_of(&n),
             Vec::<String>::new(),
@@ -7598,7 +7636,7 @@ codeunit 50100 C
             2,
             "precondition: the cone's graph keeps both A -> C edges"
         );
-        let out = production(&typed, &nodes, &direct, ConeOutput::DerivedOnly);
+        let out = production(&typed, &nodes, &direct, scope_of::derived_only());
         assert_eq!(out.derived.writes_tables_of("A"), ["t/C"], "A: writes");
         assert_eq!(out.stats.closed_memo_builds, 1, "C's cone, built once");
         assert_eq!(
@@ -7619,7 +7657,7 @@ codeunit 50100 C
             routine_id(&m, "P"),
             table_id(&m, "Cust"),
         );
-        let out = compose_model(&m, &rel, ConeOutput::DerivedOnly);
+        let out = compose_model(&m, &rel, scope_of::derived_only());
         assert!(
             non_seed_states(&out.pd_solution, &q) >= 1,
             "precondition: Q holds a state of W's producer"
@@ -7653,8 +7691,8 @@ codeunit 50100 C
             ("D".to_string(), vec![insert("D", "t/D")]),
         ]
         .into();
-        let both = production(&typed, &nodes, &direct, ConeOutput::Both);
-        let raw = |id: &str| -> Vec<_> { both.cones[id].inherited.iter().map(raw_row).collect() };
+        let both = production(&typed, &nodes, &direct, scope_of::both());
+        let raw = |id: &str| -> Vec<_> { both.raw[id].iter().map(raw_row).collect() };
         assert_eq!(
             raw("A"),
             vec![
@@ -7670,7 +7708,7 @@ codeunit 50100 C
         );
         assert!(raw("D").is_empty(), "Both: D's raw Vec");
         assert_eq!(both.stats.singleton_scans, 3, "Both: every singleton scans");
-        let derived = production(&typed, &nodes, &direct, ConeOutput::DerivedOnly);
+        let derived = production(&typed, &nodes, &direct, scope_of::derived_only());
         assert_eq!(
             derived.stats.singleton_scans, 0,
             "DerivedOnly built `best` for a singleton"

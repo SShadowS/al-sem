@@ -6,7 +6,9 @@
 //!
 //! The BFS is DETERMINISTIC: the expansion queue is sorted by target routineId
 //! at each step (matching the TS sort). Items are deduped by callsiteId string
-//! and sorted by (owningRoutine, anchorFile, anchorLine, calleeDisplay).
+//! and sorted by (owningRoutine, anchorFile, anchorLine, calleeDisplay,
+//! anchorColumn, candidates, callsiteId). The order is total: callsiteId is
+//! unique per item, so the hash-map collection order never reaches the output.
 //!
 //! Default caps (must match witness BFS):
 //!   maxDepth   = 64
@@ -22,6 +24,8 @@ use crate::engine::l5::snapshot::{CapabilitySnapshot, SnapshotGraphEdge};
 
 #[derive(Debug, Clone)]
 pub struct UnresolvedConeItem {
+    /// The ledger row's callsite id: the dedupe key and the last sort tie-break.
+    pub callsite_id: String,
     /// Workspace-relative forward-slash anchor (may be absent).
     pub callsite_file: Option<String>,
     pub callsite_line: Option<u32>,
@@ -182,8 +186,9 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
                 };
 
                 items_by_csid.insert(
-                    cs_key,
+                    cs_key.clone(),
                     UnresolvedConeItem {
+                        callsite_id: cs_key,
                         callsite_file,
                         callsite_line,
                         callsite_column,
@@ -231,26 +236,8 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
         }
     }
 
-    // Sort items: (owningRoutine, anchorFile, anchorLine, calleeDisplay)
     let mut all_items: Vec<UnresolvedConeItem> = items_by_csid.into_values().collect();
-    all_items.sort_by(|a, b| {
-        let r = a.owning_routine.cmp(&b.owning_routine);
-        if r != std::cmp::Ordering::Equal {
-            return r;
-        }
-        let af = a.callsite_file.as_deref().unwrap_or("");
-        let bf = b.callsite_file.as_deref().unwrap_or("");
-        let r = af.cmp(bf);
-        if r != std::cmp::Ordering::Equal {
-            return r;
-        }
-        let al = a.callsite_line.unwrap_or(0);
-        let bl = b.callsite_line.unwrap_or(0);
-        if al != bl {
-            return al.cmp(&bl);
-        }
-        a.callee_display.cmp(&b.callee_display)
-    });
+    all_items.sort_by(item_order);
 
     UnresolvedConeResult {
         items: all_items,
@@ -261,6 +248,31 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
         },
         visited_ids: visited,
     }
+}
+
+/// The items' total order (see the module doc). The items come out of a hash
+/// map, so any tie left here would surface its iteration order in the output.
+fn item_order(a: &UnresolvedConeItem, b: &UnresolvedConeItem) -> std::cmp::Ordering {
+    a.owning_routine
+        .cmp(&b.owning_routine)
+        .then_with(|| {
+            let af = a.callsite_file.as_deref().unwrap_or("");
+            af.cmp(b.callsite_file.as_deref().unwrap_or(""))
+        })
+        .then_with(|| {
+            a.callsite_line
+                .unwrap_or(0)
+                .cmp(&b.callsite_line.unwrap_or(0))
+        })
+        .then_with(|| a.callee_display.cmp(&b.callee_display))
+        // The tie-breaks of the old key (routine, file, line, callee).
+        .then_with(|| {
+            a.callsite_column
+                .unwrap_or(0)
+                .cmp(&b.callsite_column.unwrap_or(0))
+        })
+        .then_with(|| a.candidates.cmp(&b.candidates))
+        .then_with(|| a.callsite_id.cmp(&b.callsite_id))
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +312,7 @@ mod tests {
             root_classifications: Vec::new(),
             routine_order_frames: None,
             pd_solution: Default::default(),
+            boundary: None,
         }
     }
 
@@ -382,6 +395,68 @@ mod tests {
         assert_eq!(it.callsite_line, Some(12));
         assert_eq!(it.owning_routine, "app:Codeunit:1#root");
         assert_eq!(it.owning_routine_display, "Codeunit X::Root");
+    }
+
+    /// #160: items equal on the old key (routine, file, line, callee) kept the
+    /// hash map's order, so `digest --deterministic` swapped two
+    /// `WordTemplates.Merge` rows between runs. Each `unresolved_cone` call
+    /// builds a fresh map with a fresh hash seed, so 32 runs over both input
+    /// orders all agreeing is the determinism check.
+    #[test]
+    fn ties_on_the_old_key_sort_by_column_candidates_then_callsite_id() {
+        let root = "app:Codeunit:1#root";
+        let cands = |a: &str, b: &str| Some(vec![a.to_string(), b.to_string()]);
+        let mut rows = vec![
+            // No anchor (the real case): only candidates and the id differ.
+            resolution("csZ", root, "W.Merge", "ambiguous", cands("c0", "c1"), None),
+            resolution("csA", root, "W.Merge", "ambiguous", cands("c2", "c3"), None),
+            resolution("csN", root, "W.Merge", "ambiguous", cands("c0", "c1"), None),
+            resolution("csM", root, "W.Merge", "ambiguous", cands("c0", "c1"), None),
+            // Same file and line, different column.
+            resolution("csP", root, "W.Merge", "unresolved", None, None),
+            resolution("csQ", root, "W.Merge", "unresolved", None, None),
+        ];
+        let mut p = cs_ev("csP", root, "ws:src/X.al", 12);
+        p.start_column = 8;
+        let mut q = cs_ev("csQ", root, "ws:src/X.al", 12);
+        q.start_column = 4;
+        let expected = ["csM", "csN", "csZ", "csA", "csQ", "csP"];
+        for run in 0..32 {
+            let mut snap = empty_snap();
+            snap.callsite_index = vec![p.clone(), q.clone()];
+            snap.callsite_resolutions = rows.clone();
+            let got: Vec<String> = unresolved_cone(&snap, root)
+                .items
+                .into_iter()
+                .map(|i| i.callsite_id)
+                .collect();
+            assert_eq!(got, expected, "run {run}");
+            rows.reverse();
+        }
+    }
+
+    /// Final panel F1-O3: the column only breaks the old key's ties. Two items
+    /// on one file and line with DIFFERENT callees keep the old order
+    /// (callee), whatever their columns.
+    #[test]
+    fn the_callee_sorts_before_the_column() {
+        let root = "app:Codeunit:1#root";
+        let mut snap = empty_snap();
+        let mut r = cs_ev("csR", root, "ws:src/X.al", 12);
+        r.start_column = 9;
+        let mut s = cs_ev("csS", root, "ws:src/X.al", 12);
+        s.start_column = 2;
+        snap.callsite_index = vec![r, s];
+        snap.callsite_resolutions = vec![
+            resolution("csS", root, "B.Second", "unresolved", None, None),
+            resolution("csR", root, "A.First", "unresolved", None, None),
+        ];
+        let got: Vec<String> = unresolved_cone(&snap, root)
+            .items
+            .into_iter()
+            .map(|i| i.callsite_id)
+            .collect();
+        assert_eq!(got, ["csR", "csS"]);
     }
 
     #[test]

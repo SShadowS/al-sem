@@ -30,8 +30,9 @@ use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::ids::sha256_hex;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::digest::{
-    FingerprintIndexesPub, HumanHop, ProjectedPath, QueryWitnessHop, TerminalHopInfo,
-    build_fingerprint_indexes_pub, reconstruct_witness_paths_pub,
+    CarrierCache, DagCache, FingerprintIndexesPub, HopCache, HumanHop, ProjectedPath,
+    QueryWitnessHop, TerminalHopInfo, WitnessIndex, build_fingerprint_indexes_pub,
+    reconstruct_witness_paths_pub, witness_index,
 };
 use crate::engine::l5::selector_index::{
     build_selector_indexes, narrow_to_owner, resolve_selector,
@@ -292,10 +293,12 @@ fn table_op_to_right(op: &str) -> Option<&'static str> {
     }
 }
 
-fn build_block(
+fn build_block<'w>(
     rid: &str,
     root: &crate::engine::l5::snapshot::SnapshotRootClassificationSlot,
     idx: &FingerprintIndexesPub<'_>,
+    widx: &'w WitnessIndex<'_>,
+    carriers: &CarrierCache<'w>,
     filters: &FingerprintFilters,
     owners: &OwnerIndex<'_>,
 ) -> FingerprintBlock {
@@ -548,13 +551,18 @@ fn build_block(
     perm_map.sort_by(|(_, a), (_, b)| a.target_display.cmp(&b.target_display));
     let required_permissions: Vec<PermissionLine> = perm_map.into_iter().map(|(_, p)| p).collect();
 
-    // Witnesses.
-    let witnesses: Vec<BlockWitness> = match filters.witness_limit {
-        WitnessLimit::Disabled => {
+    // Witnesses. `all` is the hard cap, 256.
+    let cap = match filters.witness_limit {
+        WitnessLimit::Disabled => None,
+        WitnessLimit::Capped(cap) => Some(cap),
+        WitnessLimit::All => Some(256),
+    };
+    let witnesses: Vec<BlockWitness> = match cap {
+        None => {
             // witness reconstruction disabled; no BlockWitness entries.
             Vec::new()
         }
-        WitnessLimit::Capped(0) => {
+        Some(0) => {
             // objects present but zero paths.
             rendered_facts
                 .iter()
@@ -568,48 +576,33 @@ fn build_block(
                 })
                 .collect()
         }
-        WitnessLimit::Capped(cap) => rendered_facts
-            .iter()
-            .enumerate()
-            .map(|(fi, f)| {
-                let outcome = reconstruct_witness_paths_pub(rid, f, idx, cap);
-                BlockWitness {
-                    fact_index: fi,
-                    paths: outcome.paths,
-                    truncated: outcome.truncated,
-                    incomplete: outcome.incomplete,
-                    diagnostics: outcome
-                        .diagnostics
-                        .into_iter()
-                        .map(|d| WitnessDiagnostic {
-                            kind: d.kind,
-                            detail: d.detail,
-                        })
-                        .collect(),
-                }
-            })
-            .collect(),
-        WitnessLimit::All => rendered_facts
-            .iter()
-            .enumerate()
-            .map(|(fi, f)| {
-                let outcome = reconstruct_witness_paths_pub(rid, f, idx, 256);
-                BlockWitness {
-                    fact_index: fi,
-                    paths: outcome.paths,
-                    truncated: outcome.truncated,
-                    incomplete: outcome.incomplete,
-                    diagnostics: outcome
-                        .diagnostics
-                        .into_iter()
-                        .map(|d| WitnessDiagnostic {
-                            kind: d.kind,
-                            detail: d.detail,
-                        })
-                        .collect(),
-                }
-            })
-            .collect(),
+        Some(cap) => {
+            // One pair of caches per root, across its facts (spec §14.3.1 item 3).
+            let (mut hops, mut dags) = (HopCache::default(), DagCache::default());
+            rendered_facts
+                .iter()
+                .enumerate()
+                .map(|(fi, f)| {
+                    let outcome = reconstruct_witness_paths_pub(
+                        rid, f, widx, cap, &mut hops, &mut dags, carriers,
+                    );
+                    BlockWitness {
+                        fact_index: fi,
+                        paths: outcome.paths,
+                        truncated: outcome.truncated,
+                        incomplete: outcome.incomplete,
+                        diagnostics: outcome
+                            .diagnostics
+                            .into_iter()
+                            .map(|d| WitnessDiagnostic {
+                                kind: d.kind,
+                                detail: d.detail,
+                            })
+                            .collect(),
+                    }
+                })
+                .collect()
+        }
     };
 
     FingerprintBlock {
@@ -659,7 +652,7 @@ pub fn fingerprint_query(
 
     // Selector index (5-form resolveSelector cascade) — built from the identity
     // table's source Vec, deterministic by construction. Shared with digest_cli.
-    let selector_idx = build_selector_indexes(snap, None);
+    let selector_idx = build_selector_indexes(&snap.identities, None);
 
     let mut diagnostics: Vec<FingerprintQueryDiagnostic> = Vec::new();
 
@@ -729,9 +722,20 @@ pub fn fingerprint_query(
         .collect();
 
     // Build blocks.
+    let widx = witness_index(&idx);
+    // One carrier cache for the whole query (final panel F1-C8).
+    let carriers = CarrierCache::default();
     let mut blocks: Vec<FingerprintBlock> = Vec::new();
     for root in root_pool {
-        let block = build_block(&root.routine_id, root, &idx, filters, owners);
+        let block = build_block(
+            &root.routine_id,
+            root,
+            &idx,
+            &widx,
+            &carriers,
+            filters,
+            owners,
+        );
         blocks.push(block);
     }
 
@@ -1677,6 +1681,7 @@ mod tests {
             root_classifications: Vec::new(),
             routine_order_frames: None,
             pd_solution: Default::default(),
+            boundary: None,
         }
     }
 
@@ -1733,5 +1738,80 @@ mod tests {
             }
             other => panic!("expected SelectorAmbiguous, got {other:?}"),
         }
+    }
+
+    /// W8 (spec §14.3.1 item 3): the query holds one DAG cache per root, so
+    /// two facts of one root that enter through one first hop build one DAG.
+    #[test]
+    fn w8_one_dag_per_root_across_its_facts() {
+        use crate::engine::l5::snapshot::{
+            SnapshotGraphEdge, SnapshotRange, SnapshotRootClassificationSlot, SnapshotSourceAnchor,
+        };
+        let (r, w) = ("app:Codeunit:1#r", "app:Codeunit:1#w");
+        let mut snap = snap_with_identities(&[(r, "R"), (w, "W")]);
+        let fact = |subject: &str, op: &str, provenance: &str| SnapFact {
+            subject: subject.to_string(),
+            op: op.to_string(),
+            resource_kind: "table".to_string(),
+            resource_id: Some("T".to_string()),
+            resource_arg_source: None,
+            confidence: "static".to_string(),
+            provenance: provenance.to_string(),
+            via: "call".to_string(),
+            witness_operation_id: (provenance == "direct").then(|| format!("op-{op}")),
+            witness_callsite_id: (provenance != "direct").then(|| "cs1".to_string()),
+            extra: None,
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
+        };
+        snap.capability_facts = vec![
+            fact(w, "insert", "direct"),
+            fact(w, "modify", "direct"),
+            fact(r, "insert", "inherited"),
+            fact(r, "modify", "inherited"),
+        ];
+        snap.typed_edges = vec![SnapshotGraphEdge::DirectCall {
+            kind: "direct-call",
+            callsite_id: "cs1".to_string(),
+            from: r.to_string(),
+            to: w.to_string(),
+            source_anchor: SnapshotSourceAnchor {
+                source_unit_id: "su".to_string(),
+                range: SnapshotRange {
+                    start_line: 1,
+                    start_column: 1,
+                    end_line: 1,
+                    end_column: 1,
+                },
+                enclosing_routine_id: r.to_string(),
+                syntax_kind: "call".to_string(),
+            },
+            edge_id: "e-cs1".to_string(),
+        }];
+        snap.root_classifications = vec![SnapshotRootClassificationSlot {
+            routine_id: r.to_string(),
+            kinds: vec!["api".to_string()],
+            externally_reachable: true,
+            source: "test".to_string(),
+            confidence: "static".to_string(),
+            source_anchor: None,
+            config_entry_id: None,
+            resolution_status: None,
+        }];
+        let filters = FingerprintFilters {
+            roots: None,
+            routine_selectors: Vec::new(),
+            include_inherited: true,
+            witness_limit: WitnessLimit::Capped(3),
+        };
+        crate::engine::l5::digest::DAG_BUILDS.with(|c| c.set(0));
+        let result = fingerprint_query(&snap, &filters, false, &OwnerIndex::default());
+        let witnessed = result.blocks[0]
+            .witnesses
+            .iter()
+            .filter(|w| w.paths.len() == 1)
+            .count();
+        assert_eq!(witnessed, 2, "precondition: both inherited facts witnessed");
+        assert_eq!(crate::engine::l5::digest::DAG_BUILDS.with(|c| c.get()), 1);
     }
 }

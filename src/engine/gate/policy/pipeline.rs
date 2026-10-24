@@ -28,9 +28,7 @@ use crate::engine::gate::policy::policy_loader::{
 };
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
 use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view, diagnostic_lines};
-use crate::engine::l5::detector_context::build_detector_artifacts;
 use crate::engine::l5::detectors::default_detectors;
-use crate::engine::l5::registry::substrate;
 use crate::engine::root_classification::classify_roots;
 use crate::engine::session::{Cell, View, policy_plan};
 use crate::program::inputs::{InputSet, PolicyOrigin, PolicyRequest};
@@ -235,10 +233,10 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             };
         }
     };
-    // Nothing after the run reads `det`, `l4` or the ordering facts (the RAW
-    // build below takes no `l4`): none is held through the raw cone. The RAW
-    // build reads the relation.
-    view.release_all_but(&[Cell::Rel]);
+    // #160 step 6 Task 3 (D7 (7)): the rule engine reads `det.summaries` and
+    // the view's witness pass (`Cell::Raw`: every primary routine's raw
+    // inherited facts); nothing else is read after the run.
+    view.release_all_but(&[Cell::Det, Cell::Raw]);
     let resolved = view.model();
     let target = view.target();
 
@@ -252,24 +250,7 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
             diagnostics: Vec::new(),
         },
         Some(policy) => {
-            // ⟨C1 Task 3 — R2⟩ The ONE call site that ORs in `RAW_INHERITED_FACTS`.
-            // `policy_engine::select_facts` iterates the real inherited
-            // `CapabilityFact` objects for `facts: inherited | any` rules, so this
-            // path must compose the cone under `ConeOutput::Both`. The bit is
-            // deliberately NOT in `substrate::ALL`: folding it in would
-            // re-materialize ~10.9 GB of cone Vecs on every other caller.
-            //
-            // #160 §4.4.4: a command LOCAL, not a `View` cell, so no `det` ever
-            // carries the bit, and the raw cone is alive only after the run. It
-            // shares the view's relation. `SUMMARIES` is all `PolicyModel` reads
-            // beside `event_graph` (built under every mask), so it is enough.
-            let (raw, _) = build_detector_artifacts(
-                resolved,
-                substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS,
-                view.rel(),
-                None,
-                target.cross_app_inputs(),
-            );
+            let det = view.det();
             let root_classifications = classify_roots(&resolved.workspace);
             let ws = &resolved.workspace;
             // #70: rules evaluate WORKSPACE routines only; the dependency routines
@@ -288,12 +269,12 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
                 &routines,
                 &ws.objects,
                 &ws.tables,
-                &raw.event_graph.events,
+                &det.event_graph.events,
                 &root_classifications,
-                &raw.summaries,
+                &det.summaries,
+                view.raw(),
             );
             let out = run_policy_engine(&model, policy);
-            // `raw` dies with this arm.
             PolicyRunResult {
                 policy_source: source,
                 policy_version: policy.version,
@@ -304,8 +285,8 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
         }
     };
     let dependencies = target.dependencies();
-    // The RAW build was the relation's last reader.
-    view.release(Cell::Rel);
+    // The rule engine was the last reader of `det` and the raw facts.
+    view.release_all_but(&[]);
 
     let text = match opts.format {
         "json" => format_policy_json(

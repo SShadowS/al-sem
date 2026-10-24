@@ -366,7 +366,8 @@ pub struct OccurrenceWithChain {
     pub occurrence_id: String,
     pub terminal_routine_id: String,
     pub terminal_op: Option<OrderedOp>,
-    pub terminal_routine_ops: Vec<OrderedOp>,
+    /// The owning group's ops, shared by its occurrences (spec §14.3.7).
+    pub terminal_routine_ops: std::sync::Arc<[OrderedOp]>,
     pub chain: CallChain,
 }
 
@@ -1210,6 +1211,7 @@ mod tests {
             root_classifications: vec![],
             routine_order_frames: None,
             pd_solution: Default::default(),
+            boundary: None,
         }
     }
 
@@ -1235,7 +1237,7 @@ mod tests {
                 dominates_success_return: false,
                 frame_chain: vec![],
             }),
-            terminal_routine_ops: vec![],
+            terminal_routine_ops: Vec::new().into(),
             chain: CallChain {
                 links: vec![],
                 path_enumeration: "complete",
@@ -1354,7 +1356,7 @@ mod tests {
             occurrence_id: id.to_string(),
             terminal_routine_id: routine.to_string(),
             terminal_op: Some(op),
-            terminal_routine_ops: vec![],
+            terminal_routine_ops: Vec::new().into(),
             chain: CallChain {
                 links: vec![],
                 path_enumeration: "complete",
@@ -1374,7 +1376,7 @@ mod tests {
             occurrence_id: id.to_string(),
             terminal_routine_id: callee_routine.to_string(),
             terminal_op: Some(op),
-            terminal_routine_ops: vec![],
+            terminal_routine_ops: Vec::new().into(),
             chain: CallChain {
                 links: vec![link],
                 path_enumeration: "complete",
@@ -2128,7 +2130,7 @@ mod tests {
             occurrence_id: id.to_string(),
             terminal_routine_id: routine.to_string(),
             terminal_op: Some(ordered_op(id, 0, true, vec![frame(0, -1, "root", None)])),
-            terminal_routine_ops: vec![],
+            terminal_routine_ops: Vec::new().into(),
             chain,
         };
         let write = occ("write", "onValidate", write_chain);

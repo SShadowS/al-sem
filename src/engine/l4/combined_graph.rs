@@ -297,7 +297,9 @@ pub fn build_combined_graph(
 }
 
 /// The combined graph over `call_edges` and `event_graph`, uncounted: the one
-/// assembler behind [`build_combined_graph`] (the legacy cut) and
+/// assembler behind [`build_combined_graph`] (the cut graph: cross-app, the
+/// ordering cell's until the #161 follow-up; single-app, where it equals the
+/// cone graph, prove, fingerprint and diff) and
 /// [`crate::engine::l4::exec_relation::ExecRelation::new`] (#160 step 4). It
 /// reads only the call edges and the event graph, never the rest of a
 /// `ResolvedCalls`.

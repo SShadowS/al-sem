@@ -1,24 +1,29 @@
 //! #160 step 2 (spec §4.4.3): the `View` a command builds its detector runs
 //! and its L4 analysis on.
 //!
-//! A `View` owns its target and a few cells (`rel`, `l4`, `det`,
-//! `ordering`), each filled at most once, by [`View::prepare`] alone, from a
-//! [`Plan`] that only this module's factories build. No interior mutability:
-//! every fill is on `&mut self`, every reader takes `&self` (rule 4).
+//! A `View` owns its target and a few cells (`rel`, `caps`, `raw`, `l4`,
+//! `det`, `ordering`), each filled at most once, by [`View::prepare`] alone,
+//! from a [`Plan`] that only this module's factories build. No interior
+//! mutability: every fill is on `&mut self`, every reader takes `&self` (rule 4).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::analysis::{L4Analysis, L4Request, build_l4};
+use crate::engine::l4::capability_cone::CapabilityFact;
 use crate::engine::l4::combined_graph::PrimaryGraph;
+use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::summary_runner::SummarizeDiagnostic;
 use crate::engine::l5::detector_context::{
-    self as dc, DetectorArtifacts, DetectorContext, OrderingFactsMap,
+    self as dc, CapabilityAnalysis, DetectorArtifacts, DetectorContext, OrderingFactsMap,
 };
+use crate::engine::l5::digest_cli::DigestEffects;
 use crate::engine::l5::registry::{self, Detector, RunOutput, substrate};
+use crate::engine::l5::snapshot::CapabilitySnapshot;
 use crate::engine::perf_trace as pt;
+use crate::program::model::role::Role;
 use crate::program::model::workspace::Model;
 
 /// One command's model and the cells built over it (spec §4.4.3).
@@ -31,6 +36,17 @@ pub struct View {
     /// single-app the SCC lives from the relation's build, before the det
     /// fill's cone, until `release(Cell::Rel)` (spec §4.4, bounded in §7).
     rel: Option<Arc<ExecRelation>>,
+    /// The view's ONE composition over `rel.cone()` (#160 step 6 D2): filled
+    /// right after `rel`, consumed by the det fill, released by `prepare`.
+    caps: Option<CapabilityAnalysis>,
+    /// The witness subjects' raw inherited facts, from the same composition;
+    /// filled only under a [`WitnessRequest`].
+    raw: Option<HashMap<String, Vec<CapabilityFact>>>,
+    /// Digest's tree over the cone graph (#160 step 6 D4): filled from `caps`
+    /// and `raw` (by move), released by `prepare` once `effects` is read off it.
+    tree: Option<CapabilitySnapshot>,
+    /// Digest's per-root effects (D7 (5)), read by its query after the run.
+    effects: Option<DigestEffects>,
     l4: Option<L4Analysis>,
     det: Option<DetectorArtifacts>,
     /// One bit per [`Cell`] released; a released cell is never refilled.
@@ -58,6 +74,52 @@ pub struct Plan {
     /// report's coverage read). `prepare` asserts every run's union holds
     /// them, naming the missing bit (A2.10).
     after_run: u32,
+    /// Whose raw inherited facts the view's composition keeps (#160 step 6
+    /// D3), fixed before it runs.
+    witness: WitnessRequest,
+    /// Digest's tree and effects (D3, D7 (4)-(5)) over the `Roots` request.
+    needs_tree: bool,
+    /// Digest's `--tests` (#254): the effects keep the tree's test-coverage
+    /// graph.
+    tests: bool,
+}
+
+/// The routines a plan wants raw inherited facts for (#160 step 6 D3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WitnessRequest {
+    None,
+    /// Digest's changed roots, by stable id: every row of each id is a subject
+    /// (a collided id's rows share its cone).
+    Roots(BTreeSet<String>),
+    /// Every `Role::Primary` routine (policy check).
+    Primary,
+}
+
+impl WitnessRequest {
+    /// The composition's raw scope over `model`.
+    fn scope(&self, model: &Model) -> WitnessScope {
+        match self {
+            WitnessRequest::None => WitnessScope::None,
+            WitnessRequest::Roots(ids) => WitnessScope::Subjects(
+                model
+                    .workspace
+                    .routines
+                    .iter()
+                    .filter(|r| ids.contains(&r.stable_routine_id))
+                    .map(|r| r.id.clone())
+                    .collect(),
+            ),
+            WitnessRequest::Primary => WitnessScope::Subjects(
+                model
+                    .workspace
+                    .routines
+                    .iter()
+                    .filter(|r| model.routine_role(r) == Role::Primary)
+                    .map(|r| r.id.clone())
+                    .collect(),
+            ),
+        }
+    }
 }
 
 /// The cells [`View::release`] drops.
@@ -67,10 +129,17 @@ pub enum Cell {
     L4,
     Ordering,
     Rel,
+    Caps,
+    Raw,
+    Tree,
+    Effects,
 }
 
 impl Cell {
-    const ALL: [Cell; 4] = [Cell::Det, Cell::L4, Cell::Ordering, Cell::Rel];
+    /// Every cell a command can hold past `prepare` and `finish_default_run`
+    /// drops: `Caps` and `Tree` never outlive `prepare`, and digest keeps
+    /// `Effects` (with `L4`) for its query, then releases both.
+    const ALL: [Cell; 5] = [Cell::Det, Cell::L4, Cell::Ordering, Cell::Rel, Cell::Raw];
 
     fn bit(self) -> u8 {
         1 << self as u8
@@ -84,28 +153,49 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
         scope_primary,
         need_l4: false,
         after_run: 0,
+        witness: WitnessRequest::None,
+        needs_tree: false,
+        tests: false,
     }
 }
 
 /// `alsem digest` and `alsem prove`: the run, then the tx map off
-/// `det.transaction_spans` and the query off `l4`.
-pub fn digest_plan(detectors: Vec<Detector>) -> Plan {
+/// `det.transaction_spans` and the query off `l4`. Digest passes its changed
+/// roots (stable ids, resolved before the composition, #160 step 6 D3): the
+/// view composes their raw facts, builds the tree over the cone graph and
+/// keeps their effects ([`View::effects`]). No root (prove, which keeps
+/// its standalone snapshot, or a digest that resolved none): neither. `tests`
+/// (`digest --tests`, #254): the effects also keep the tree's test-coverage
+/// graph, which covers the whole workspace, so a tree is built even with no
+/// root (an empty `Roots` request: no raw facts).
+pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: bool) -> Plan {
+    let needs_tree = tests || !roots.is_empty();
     Plan {
         runs: vec![detectors],
         scope_primary: true,
         need_l4: true,
         after_run: substrate::TRANSACTION_SPANS,
+        witness: if needs_tree {
+            WitnessRequest::Roots(roots)
+        } else {
+            WitnessRequest::None
+        },
+        needs_tree,
+        tests,
     }
 }
 
-/// One run at primary scope, with nothing read after it: fingerprint,
-/// `diff --strict` and policy check.
+/// One run at primary scope, with nothing read after it: fingerprint and
+/// `diff --strict`.
 fn run_only_plan(detectors: Vec<Detector>) -> Plan {
     Plan {
         runs: vec![detectors],
         scope_primary: true,
         need_l4: false,
         after_run: 0,
+        witness: WitnessRequest::None,
+        needs_tree: false,
+        tests: false,
     }
 }
 
@@ -127,12 +217,25 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
         scope_primary: true,
         need_l4: false,
         after_run: substrate::SUMMARIES,
+        witness: WitnessRequest::None,
+        needs_tree: false,
+        tests: false,
     }
 }
 
-/// `alsem policy check`.
+/// `alsem policy check`: the run, then the rule engine off `det.summaries`
+/// and the view's raw facts of every primary routine (`View::raw`; #160
+/// step 6 Task 3).
 pub fn policy_plan(detectors: Vec<Detector>) -> Plan {
-    run_only_plan(detectors)
+    Plan {
+        runs: vec![detectors],
+        scope_primary: true,
+        need_l4: false,
+        after_run: substrate::SUMMARIES,
+        witness: WitnessRequest::Primary,
+        needs_tree: false,
+        tests: false,
+    }
 }
 
 /// `alsem query`: no run, `l4` alone.
@@ -142,6 +245,9 @@ pub fn query_plan() -> Plan {
         scope_primary: true,
         need_l4: true,
         after_run: 0,
+        witness: WitnessRequest::None,
+        needs_tree: false,
+        tests: false,
     }
 }
 
@@ -158,7 +264,22 @@ impl Plan {
             scope_primary,
             need_l4,
             after_run,
+            witness: WitnessRequest::None,
+            needs_tree: false,
+            tests: false,
         }
+    }
+
+    /// The plan with `witness`.
+    #[cfg(test)]
+    pub(crate) fn with_witness(self, witness: WitnessRequest) -> Plan {
+        Plan { witness, ..self }
+    }
+
+    /// Whether `prepare` composes digest's tree and fills `Cell::Effects`: the
+    /// one answer a caller reads before `View::effects` (final panel F1-C5).
+    pub fn needs_tree(&self) -> bool {
+        self.needs_tree
     }
 
     /// The key of each run, in plan order.
@@ -190,7 +311,6 @@ fn substrate_bit_name(bit: u32) -> &'static str {
         substrate::CORE_SUMMARIES => "CORE_SUMMARIES",
         substrate::TRANSACTION_SPANS => "TRANSACTION_SPANS",
         substrate::CLOSED_WORLD_TEMP => "CLOSED_WORLD_TEMP",
-        substrate::RAW_INHERITED_FACTS => "RAW_INHERITED_FACTS",
         substrate::DB_EFFECT_REVERSE_INDEX => "DB_EFFECT_REVERSE_INDEX",
         substrate::ORDERING_FACTS => "ORDERING_FACTS",
         _ => "an unnamed substrate bit",
@@ -207,11 +327,26 @@ fn bit_names(bits: u32) -> String {
         .join(" | ")
 }
 
+/// Mark `cell` released: one `view.release` trace instant naming it, so a
+/// CLI test can see when a command drops what.
+fn note_release(released: &mut u8, cell: Cell) {
+    pt::instant_lazy(
+        "view",
+        "view.release",
+        || serde_json::json!({ "cell": format!("{cell:?}") }),
+    );
+    *released |= cell.bit();
+}
+
 impl View {
     pub fn new(target: AnalysisTarget) -> View {
         View {
             target,
             rel: None,
+            caps: None,
+            raw: None,
+            tree: None,
+            effects: None,
             l4: None,
             det: None,
             released: 0,
@@ -220,10 +355,15 @@ impl View {
         }
     }
 
-    /// Fill every cell `plan` needs that is still empty, in order: ordering,
-    /// rel, det (its cone, then `l4`, then its harvest), then the runs. A
-    /// plan with no run: rel, then `l4` alone. Rule 1's asserts (a), (b),
-    /// (c) and the `after_run` assertion hold in release builds too.
+    /// Fill every cell `plan` needs that is still empty, in order (#160 step 6
+    /// D7): ordering, rel, ONE composition into `caps` and `raw`; under
+    /// `needs_tree` the tree (it takes `raw` by move and `caps.pd`; `Raw` is
+    /// released) and the effects off it (then `Tree` is released); det (it
+    /// consumes `caps`, then `l4`, then its harvest; `Caps` is released), then
+    /// the runs. A plan with no run: rel, then `l4` alone. Rule 1's asserts
+    /// (a), (b), (c), the one-witness assertion and the `after_run` assertion
+    /// hold in release builds too. A view composes once, so a witness request
+    /// comes with its first composing `prepare` or not at all.
     pub fn prepare(&mut self, plan: &Plan) {
         self.prepare_inner(plan, vec![]);
     }
@@ -250,7 +390,24 @@ impl View {
         let core = union & substrate::CORE_SUMMARIES != 0;
         let need_l4 = plan.need_l4 || core;
         let need_ordering = union & substrate::ORDERING_FACTS != 0;
-        let need_rel = need_det || need_l4;
+        // The derived rows are the det fill's (TRANSACTION_SPANS folds over
+        // the summaries); the raw half is the witness request's.
+        let need_derived = union & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
+        let need_raw = plan.witness != WitnessRequest::None;
+        let need_caps = (need_det && self.det.is_none() && need_derived) || need_raw;
+        let need_rel = need_det || need_l4 || need_raw;
+        // D3: the subjects are fixed once, before the one composition: a
+        // second request, or a request after the view composed without one.
+        assert!(
+            !need_raw
+                || (self.raw.is_none()
+                    && self.released & (Cell::Raw.bit() | Cell::Caps.bit()) == 0),
+            "a View takes at most one witness request, in its one composing prepare"
+        );
+        assert!(
+            !plan.needs_tree || matches!(plan.witness, WitnessRequest::Roots(_)),
+            "a tree is composed over a Roots witness request"
+        );
         // (a) a released cell is never refilled: a refill after
         // `release(Det)` would find no `CoreSummaries`.
         for (cell, needed) in [
@@ -258,10 +415,21 @@ impl View {
             (Cell::Rel, need_rel),
             (Cell::Det, need_det),
             (Cell::L4, need_l4),
+            (Cell::Caps, need_caps),
         ] {
+            // D2 (final panel F1-C3): every composition releases `Caps` in its
+            // own prepare, so a second one (a det fill needing derived rows
+            // after a raw-only composition) breaks the one-composition rule.
             assert!(
                 !needed || self.released & cell.bit() == 0,
-                "{cell:?} released; a View fills each cell once"
+                "{}",
+                if matches!(cell, Cell::Caps) {
+                    "a View composes once, in its first composing prepare: a det fill that \
+                     needs derived rows comes with that prepare"
+                        .to_string()
+                } else {
+                    format!("{cell:?} released; a View fills each cell once")
+                }
             );
         }
         let missing = plan.after_run & !union;
@@ -269,10 +437,6 @@ impl View {
             missing == 0,
             "the plan reads {} off det after its run, but no run demands it",
             bit_names(missing)
-        );
-        assert!(
-            union & substrate::RAW_INHERITED_FACTS == 0,
-            "a det cell never carries RAW_INHERITED_FACTS"
         );
         // (b) a filled det covers the new plan, so output never depends on
         // fill state (A2.5).
@@ -288,12 +452,24 @@ impl View {
         let View {
             target,
             rel,
+            caps,
+            raw,
+            tree,
+            effects,
             l4,
             det,
+            released,
             ordering,
             runs,
-            ..
         } = self;
+        // Final panel F1-C2: the dependency calls (cross-app) are read only by
+        // digest's tree; they leave the base in the first prepare and die at
+        // the tree's composition below; a plan with no tree drops them here.
+        let dependency_calls = match &mut *target {
+            AnalysisTarget::CrossApp(b) => b.dependency_calls.take(),
+            AnalysisTarget::SingleApp(_) => None,
+        }
+        .filter(|_| plan.needs_tree);
         let target = &*target;
         let model = target.resolved();
         let cross_base = match target {
@@ -321,6 +497,55 @@ impl View {
                 None => Arc::new(ExecRelation::single_app(model)),
             });
         }
+        // D2: ONE composition over `rel.cone()`, the det cone's inputs.
+        if need_caps {
+            let r = rel.as_ref().expect("rel filled above");
+            let scope = ConeScope {
+                derived: need_derived,
+                raw: plan.witness.scope(model),
+            };
+            let _s = pt::span("context", "context.capability_cones");
+            let (c, w) =
+                dc::compose_capabilities(model, r.cone(), dc::det_cone_inputs(model, r), scope);
+            *caps = Some(c);
+            if need_raw {
+                *raw = Some(w);
+            }
+        }
+        // D7 (4)-(5): digest's tree over the cone graph, its effects read off
+        // it, then the tree is released, all before `det` takes `caps`.
+        if let (true, WitnessRequest::Roots(roots)) = (plan.needs_tree, &plan.witness) {
+            let r = rel.as_ref().expect("rel filled above");
+            let app_names = cross_base.map(|b| b.loaded_app_names()).unwrap_or_default();
+            let calls: &[crate::program::model::calls::CallEdge] =
+                match (cross_base, &dependency_calls) {
+                    (None, _) => &[],
+                    (Some(_), Some(c)) => c,
+                    (Some(_), None) => panic!(
+                        "the dependency calls left the base in an earlier prepare: \
+                         digest's tree composes in the view's first prepare"
+                    ),
+                };
+            *tree = Some(crate::engine::l5::snapshot::compose_tree(
+                model,
+                r.cone(),
+                calls,
+                caps.as_mut().expect("caps filled above"),
+                raw.take().expect("raw filled above"),
+                &app_names,
+            ));
+            note_release(released, Cell::Raw);
+            drop(dependency_calls);
+            let roots: Vec<String> = roots.iter().cloned().collect();
+            *effects = Some(crate::engine::l5::digest_cli::digest_effects(
+                tree.as_mut().expect("tree filled above"),
+                model,
+                &roots,
+                plan.tests,
+            ));
+            *tree = None;
+            note_release(released, Cell::Tree);
+        }
         if need_det && det.is_none() {
             let r = rel.as_ref().expect("rel filled above");
             // (c) `CoreSummaries` is a local of the det fill's own solve, so a
@@ -332,12 +557,23 @@ impl View {
             let req = need_l4.then(|| L4Request {
                 extra_diagnostics: std::mem::take(&mut extra_diagnostics),
             });
-            let (art, solved) =
-                dc::build_detector_artifacts(model, union, r, req, target.cross_app_inputs());
+            let (art, solved) = dc::build_detector_artifacts(
+                model,
+                union,
+                r,
+                req,
+                target.cross_app_inputs(),
+                caps.take(),
+            );
             *det = Some(art);
             if need_l4 {
                 *l4 = solved;
             }
+        }
+        // D7 (6): nothing reads the composition past the det fill.
+        if need_caps {
+            *caps = None;
+            note_release(released, Cell::Caps);
         }
         drop(fill_span);
         // A plan with no run (query) fills `l4` alone.
@@ -352,6 +588,33 @@ impl View {
             return;
         }
         let art = det.as_ref().expect("det filled above");
+        // The live-cell checkpoint (spec §4.7, A6.18): what is alive at the
+        // first run. No tree, no pd arena and no raw facts of digest's (D7).
+        if plan
+            .runs
+            .iter()
+            .any(|run| !runs.contains_key(&plan.key(run)))
+        {
+            let pd = caps.as_ref().is_some_and(|c| c.pd.is_some()) || tree.is_some();
+            let live: Vec<&str> = [
+                ("Rel", rel.is_some()),
+                ("Caps", caps.is_some()),
+                ("PdArena", pd),
+                ("Raw", raw.is_some()),
+                ("Tree", tree.is_some()),
+                ("Effects", effects.is_some()),
+                ("L4", l4.is_some()),
+                ("Det", true),
+                ("Ordering", ordering.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(name, filled)| filled.then_some(name))
+            .collect();
+            if crate::engine::census::enabled() {
+                eprintln!("[retained-census] view.live cells={}", live.join(","));
+            }
+            pt::instant_lazy("view", "view.live", || serde_json::json!({ "cells": live }));
+        }
         for run in &plan.runs {
             let key = plan.key(run);
             if runs.contains_key(&key) {
@@ -378,26 +641,25 @@ impl View {
     /// release is one `view.release` trace instant naming the cell, so a CLI
     /// test can see when a command drops what.
     pub fn release(&mut self, cell: Cell) {
-        pt::instant_lazy(
-            "view",
-            "view.release",
-            || serde_json::json!({ "cell": format!("{cell:?}") }),
-        );
-        self.released |= cell.bit();
+        note_release(&mut self.released, cell);
         match cell {
             Cell::Det => self.det = None,
             Cell::L4 => self.l4 = None,
             Cell::Ordering => self.ordering = None,
             Cell::Rel => self.rel = None,
+            Cell::Caps => self.caps = None,
+            Cell::Raw => self.raw = None,
+            Cell::Tree => self.tree = None,
+            Cell::Effects => self.effects = None,
         }
     }
 
-    /// [`View::release`] every cell except `keep`: the one way a command
-    /// drops what it no longer reads, so no cell (`Ordering` included) is
-    /// kept alive by a forgotten line.
+    /// [`View::release`] every cell except `keep` and those already released:
+    /// the one way a command drops what it no longer reads, so no cell
+    /// (`Ordering` included) is kept alive by a forgotten line.
     pub fn release_all_but(&mut self, keep: &[Cell]) {
         for cell in Cell::ALL {
-            if !keep.contains(&cell) {
+            if !keep.contains(&cell) && self.released & cell.bit() == 0 {
                 self.release(cell);
             }
         }
@@ -421,6 +683,23 @@ impl View {
 
     pub fn det(&self) -> &DetectorArtifacts {
         self.det.as_ref().expect("det cell not filled")
+    }
+
+    /// The witness subjects' raw inherited facts (#160 step 6 D2).
+    pub fn raw(&self) -> &HashMap<String, Vec<CapabilityFact>> {
+        self.raw.as_ref().expect("raw cell not filled")
+    }
+
+    /// Digest's effects (#160 step 6 D7 (5)), read by its query at (8).
+    pub fn effects(&self) -> &DigestEffects {
+        self.effects.as_ref().expect("effects cell not filled")
+    }
+
+    /// The effects, moved out: digest's query consumes their unresolved cones
+    /// (final panel F1-C6). The cell is empty after; the caller still
+    /// `release`s `Cell::Effects` when it drops them.
+    pub fn take_effects(&mut self) -> DigestEffects {
+        self.effects.take().expect("effects cell not filled")
     }
 
     /// The stored output of a run `prepare` ran. An `Arc`: a caller may
@@ -540,17 +819,18 @@ mod tests {
     }
 
     /// Pins the factories, not their use (spec §8.4). DISCRIMINATION:
-    /// `after_run: 0` in `digest_plan`, separately in `events_plan`, fails
-    /// that case.
+    /// `after_run: 0` in `digest_plan`, separately in `events_plan` and in
+    /// `policy_plan`, fails that case.
     #[test]
     fn command_plans_declare_after_run() {
         for (name, plan, bit) in [
             (
                 "digest",
-                digest_plan(vec![probe(0, noop)]),
+                digest_plan(vec![probe(0, noop)], BTreeSet::new(), false),
                 "TRANSACTION_SPANS",
             ),
             ("events", events_plan(vec![probe(0, noop)]), "SUMMARIES"),
+            ("policy", policy_plan(vec![probe(0, noop)]), "SUMMARIES"),
         ] {
             let msg = panic_text(
                 name,
@@ -670,21 +950,140 @@ mod tests {
         }
     }
 
-    /// Rule 1: a det cell never carries the RAW bit. DISCRIMINATION: deleting
-    /// the RAW assert fails this (no panic).
+    /// #160 step 6 D2/D7: the view composes once, `det` consumes it and
+    /// `prepare` releases `Caps`; `Raw` is filled only under a witness request.
+    /// DISCRIMINATION: skipping the `Caps` release fails the first assertion;
+    /// filling `Raw` whatever the request fails the second.
     #[test]
-    #[should_panic(expected = "a det cell never carries RAW_INHERITED_FACTS")]
-    fn a_det_cell_never_carries_raw_inherited_facts() {
-        let plan = Plan::for_test(
-            vec![vec![probe(
-                substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS,
-                noop,
-            )]],
+    fn caps_die_with_the_det_fill_and_raw_needs_a_witness_request() {
+        let run = || vec![vec![probe(substrate::SUMMARIES, noop)]];
+        let mut v = view();
+        v.prepare(&Plan::for_test(run(), true, false, 0));
+        assert!(
+            v.caps.is_none() && v.released & Cell::Caps.bit() != 0,
+            "Caps released after the det fill"
+        );
+        assert!(v.raw.is_none(), "no witness request, no raw");
+        let mut v = view();
+        v.prepare(&Plan::for_test(run(), true, false, 0).with_witness(WitnessRequest::Primary));
+        assert!(v.raw().is_empty(), "the empty model's primary raw is empty");
+    }
+
+    /// #160 step 6 D3: one witness request per view. DISCRIMINATION: deleting
+    /// the assertion fails this (no panic).
+    #[test]
+    #[should_panic(expected = "a View takes at most one witness request")]
+    fn a_view_takes_one_witness_request() {
+        let plan = || {
+            Plan::for_test(
+                vec![vec![probe(substrate::SUMMARIES, noop)]],
+                true,
+                false,
+                0,
+            )
+            .with_witness(WitnessRequest::Primary)
+        };
+        let mut v = view();
+        v.prepare(&plan());
+        v.prepare(&plan());
+    }
+
+    /// #160 step 6 D3 (Task 2b-1 review): a witness request after the view
+    /// composed WITHOUT one names the witness rule, not the generic refill.
+    /// DISCRIMINATION: dropping `Cell::Caps` from the assertion's released
+    /// bits gives the refill loop's `Caps` text and fails this.
+    #[test]
+    fn a_witness_request_after_a_composition_names_the_rule() {
+        let plain = Plan::for_test(
+            vec![vec![probe(substrate::SUMMARIES, noop)]],
             true,
             false,
             0,
         );
-        view().prepare(&plan);
+        let msg = panic_text(
+            "witness after a composition",
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut v = view();
+                v.prepare(&plain);
+                let with =
+                    Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::Primary);
+                v.prepare(&with);
+            })),
+        );
+        assert!(
+            msg.contains("a View takes at most one witness request, in its one composing prepare"),
+            "{msg}"
+        );
+    }
+
+    /// Final panel F1-C3: a det fill that needs derived rows after a raw-only
+    /// composition names the one-composition rule, not the generic refill.
+    #[test]
+    fn a_det_fill_after_a_raw_only_composition_names_the_rule() {
+        let msg = panic_text(
+            "det after a raw-only composition",
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut v = view();
+                v.prepare(
+                    &Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::Primary),
+                );
+                v.prepare(&Plan::for_test(
+                    vec![vec![probe(substrate::SUMMARIES, noop)]],
+                    true,
+                    false,
+                    0,
+                ));
+            })),
+        );
+        assert!(
+            msg.contains("a View composes once, in its first composing prepare"),
+            "{msg}"
+        );
+    }
+
+    /// #160 step 6 D7 (Task 2b-1 review): a composition that only a witness
+    /// request asked for (no det fill consumes it) still dies in `prepare`.
+    /// DISCRIMINATION: deleting `*caps = None` fails the first assertion.
+    #[test]
+    fn a_raw_only_composition_is_released_by_prepare() {
+        let mut v = view();
+        v.prepare(&Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::Primary));
+        assert!(v.caps.is_none(), "Caps dropped");
+        assert!(v.released & Cell::Caps.bit() != 0, "Caps released");
+        assert!(v.raw.is_some(), "precondition: the raw half was filled");
+    }
+
+    /// #160 step 6 D3: digest's plan carries its roots as a `Roots` request
+    /// with a tree; a digest with no root (prove, or none resolved) has
+    /// neither. `Roots` scopes every row of each stable id.
+    #[test]
+    fn digest_plan_asks_a_tree_only_for_roots() {
+        let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
+        let p = digest_plan(vec![probe(0, noop)], roots.clone(), false);
+        assert_eq!(p.witness, WitnessRequest::Roots(roots));
+        assert!(p.needs_tree);
+        let p = digest_plan(vec![probe(0, noop)], BTreeSet::new(), false);
+        assert_eq!(p.witness, WitnessRequest::None);
+        assert!(!p.needs_tree);
+        // `--tests` covers the workspace: a tree with no root (#254).
+        let p = digest_plan(vec![probe(0, noop)], BTreeSet::new(), true);
+        assert_eq!(p.witness, WitnessRequest::Roots(BTreeSet::new()));
+        assert!(p.needs_tree && p.tests);
+        let mut m = crate::engine::l5::test_support::empty_resolved();
+        for id in ["r1", "r2", "r3"] {
+            let mut r = crate::engine::l5::test_support::routine(id, "procedure");
+            r.stable_routine_id = if id == "r3" {
+                "other#"
+            } else {
+                "a:Codeunit:1#x"
+            }
+            .into();
+            m.workspace.routines.push(r);
+        }
+        assert_eq!(
+            WitnessRequest::Roots(["a:Codeunit:1#x".to_string()].into()).scope(&m),
+            WitnessScope::Subjects(["r1".to_string(), "r2".to_string()].into())
+        );
     }
 
     /// `take_run` removes the stored output: a second take, or a `run` of the
@@ -736,7 +1135,7 @@ mod tests {
         assert!(v.l4.is_some(), "the kept cell stays");
         assert_eq!(
             v.released,
-            Cell::Det.bit() | Cell::Ordering.bit() | Cell::Rel.bit()
+            Cell::Det.bit() | Cell::Ordering.bit() | Cell::Rel.bit() | Cell::Raw.bit()
         );
     }
 
@@ -744,11 +1143,8 @@ mod tests {
     /// deleting one arm of `substrate_bit_name` fails this.
     #[test]
     fn every_substrate_bit_has_a_name() {
-        let all = substrate::ALL
-            | substrate::RAW_INHERITED_FACTS
-            | substrate::DB_EFFECT_REVERSE_INDEX
-            | substrate::ORDERING_FACTS;
-        assert_eq!(all.count_ones(), 7, "precondition: seven bits");
+        let all = substrate::ALL | substrate::DB_EFFECT_REVERSE_INDEX | substrate::ORDERING_FACTS;
+        assert_eq!(all.count_ones(), 6, "precondition: six bits");
         for i in 0..u32::BITS {
             let bit = 1u32 << i;
             if all & bit != 0 {

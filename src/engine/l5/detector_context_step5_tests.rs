@@ -286,7 +286,7 @@ fn step5_t3_context_coverage_equals_the_snapshot_on_r0() {
         let ids: BTreeSet<&str> = m.workspace.routines.iter().map(|r| r.id.as_str()).collect();
         let mut has_kind = false;
         for id in ids {
-            let s = snapshot.cones.get(id).map(|c| cov_key(&c.coverage));
+            let s = snapshot.coverage.get(id).map(cov_key);
             let c = ctx
                 .summaries
                 .get(id)
@@ -469,6 +469,52 @@ fn step5_t5_both_cross_app_producers_fold_the_same() {
         "(P-a, P-b) Inner's row is folded in both producers"
     );
     assert_eq!(sorted(&pa), sorted(pb), "P-a's map equals P-b's");
+}
+
+/// #160 step 6 T8 (I5, the materialized half) on T4's workspace: a view
+/// prepared with policy's request (`WitnessRequest::Primary`) materializes raw
+/// for no dependency routine, and `Go`'s raw (which reaches `Inner`'s write)
+/// equals a `WitnessScope::All` composition's. Break 1: resolve `Primary` as
+/// `All` -> the dependency members get raw -> the count is > 0 -> fails.
+#[test]
+fn step6_t8_a_primary_witness_request_materializes_no_dependency_member() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    write_fixture_dep_ambiguous(&ws);
+    let base = cross_app_base(&ws);
+    let (go, inner) = dep_ambiguous_preconditions(&base);
+    let d35 = registered_detectors()
+        .into_iter()
+        .find(|d| d.name == crate::engine::l5::detectors::d35::DETECTOR)
+        .expect("d35 is registered");
+    let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
+    view.prepare(
+        &analyze_plan(vec![d35], true)
+            .with_witness(crate::engine::session::WitnessRequest::Primary),
+    );
+    let raw = view.raw();
+    assert_eq!(
+        witness_non_primary_members(view.model(), raw),
+        0,
+        "no dependency member materialized: {:?}",
+        raw.keys().collect::<BTreeSet<_>>()
+    );
+    let (_, all) = compose_capabilities(
+        view.model(),
+        view.rel().cone(),
+        det_cone_inputs(view.model(), view.rel()),
+        ConeScope {
+            derived: true,
+            raw: WitnessScope::All,
+        },
+    );
+    assert!(
+        all.contains_key(&inner),
+        "precondition: the All composition gives Inner raw"
+    );
+    let go_raw = raw.get(&go).expect("Go is a subject");
+    assert!(!go_raw.is_empty(), "Go inherits Inner's write");
+    assert_eq!(Some(go_raw), all.get(&go), "Go's raw equals the All run's");
 }
 
 // ---------------------------------------------------------------------------

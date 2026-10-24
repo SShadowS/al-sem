@@ -98,6 +98,9 @@ pub(crate) struct Row {
     pub pd: u64,
     pub ctx: u64,
     pub snap: u64,
+    /// `build.witness_pass`: compositions that materialized raw facts (#160
+    /// step 6 §4.9, §14.10).
+    pub witness: u64,
 }
 
 /// Every cell is checked and every mismatch reported, so a break that moves
@@ -113,6 +116,7 @@ pub(crate) fn assert_row(case: &str, m: &BTreeMap<String, u64>, r: Row) {
         ("build.pd_solve", r.pd),
         ("build.detector_context", r.ctx),
         ("build.snapshot", r.snap),
+        ("build.witness_pass", r.witness),
         // A1.1: one workspace read per program build (final panel r1, F2-3).
         ("inputs.read", r.program),
     ];
@@ -204,6 +208,7 @@ fn analyze_cross_app_default() {
             pd: 1,
             ctx: 1,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -239,6 +244,7 @@ fn analyze_cross_app_d47() {
             pd: 1,
             ctx: 1,
             snap: 1,
+            witness: 1,
         },
     );
 }
@@ -258,6 +264,7 @@ fn analyze_single_app() {
             pd: 1,
             ctx: 1,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -296,6 +303,7 @@ fn analyze_cross_app_with_a_dependency_half() {
             pd: 1,
             ctx: 1,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -327,17 +335,28 @@ fn analyze_single_app_d47() {
             pd: 1,
             ctx: 1,
             snap: 1,
+            witness: 1,
         },
     );
 }
 
+/// #160 step 6 §14.10 (A1-18), T5: d47 beside a summaries detector is two
+/// compositions, the view's one (derived rows, no raw) and the ordering cell's
+/// cut (raw for every routine, so `witness` 1). Under the split the ordering
+/// cell keeps the cut until the #161 follow-up.
 #[test]
-fn digest_cross_app() {
-    let (d, ws) = ws_dep();
-    let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
-    let m = run(&["digest", &ws, "--diff", &diff, "--deterministic"]);
+fn analyze_cross_app_d47_with_a_summaries_detector() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "analyze",
+        &ws,
+        "--format",
+        "json",
+        "--detector",
+        "d47-io-unsafe-txn,d35-commit-in-event-subscriber",
+    ]);
     assert_row(
-        "digest cross-app",
+        "analyze cross-app d47 + d35",
         &m,
         Row {
             program: 1,
@@ -348,8 +367,48 @@ fn digest_cross_app() {
             pd: 2,
             ctx: 1,
             snap: 1,
+            witness: 1,
         },
     );
+}
+
+/// #160 step 6 §4.9 (T5): digest composes once, over the view's relation:
+/// the tree takes the composition's raw facts and its pd arena, so there is no
+/// cut graph, no second cone, no second SCC and no second producer solve.
+const DIGEST_ROW: Row = Row {
+    program: 1,
+    bcg: 1,
+    cone: 1,
+    v2: 1,
+    scc: 2,
+    pd: 1,
+    ctx: 1,
+    snap: 1,
+    witness: 1,
+};
+
+#[test]
+fn digest_cross_app() {
+    let (d, ws) = ws_dep();
+    let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
+    let m = run(&["digest", &ws, "--diff", &diff, "--deterministic"]);
+    assert_row("digest cross-app", &m, DIGEST_ROW);
+}
+
+/// Review Focus 2: a digest that resolves no root keeps no witness request
+/// and builds no tree, and exits 2.
+#[test]
+fn digest_with_no_resolved_root_builds_no_tree() {
+    let (_d, ws) = ws_dep();
+    let (out, m) = spawn_traced(&["digest", &ws, "--routine", "NoSuchRoutine"], &[]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(
+        count(&m, "build.detector_context"),
+        1,
+        "precondition: the run\n{m:?}"
+    );
+    assert_eq!(count(&m, "build.snapshot"), 0, "{m:?}");
+    assert_eq!(count(&m, "build.witness_pass"), 0, "{m:?}");
 }
 
 #[test]
@@ -369,20 +428,7 @@ fn digest_single_app() {
         "--deterministic",
         "--single-app",
     ]);
-    assert_row(
-        "digest single-app",
-        &m,
-        Row {
-            program: 1,
-            bcg: 2,
-            cone: 2,
-            v2: 1,
-            scc: 3,
-            pd: 2,
-            ctx: 1,
-            snap: 1,
-        },
-    );
+    assert_row("digest single-app", &m, DIGEST_ROW);
 }
 
 #[test]
@@ -401,6 +447,7 @@ fn prove() {
             pd: 2,
             ctx: 1,
             snap: 1,
+            witness: 1,
         },
     );
 }
@@ -450,6 +497,7 @@ const FINGERPRINT_ROW: Row = Row {
     pd: 2,
     ctx: 1,
     snap: 1,
+    witness: 1,
 };
 
 #[test]
@@ -505,6 +553,7 @@ fn diff_ws_ws() {
             pd: 2,
             ctx: 0,
             snap: 2,
+            witness: 2,
         },
     );
 }
@@ -534,6 +583,7 @@ fn diff_ws_ws_strict() {
             pd: 4,
             ctx: 2,
             snap: 2,
+            witness: 2,
         },
     );
 }
@@ -547,6 +597,7 @@ const EVENTS_CROSS_ROW: Row = Row {
     pd: 1,
     ctx: 1,
     snap: 0,
+    witness: 0,
 };
 
 #[test]
@@ -600,6 +651,7 @@ fn events_single_app() {
             pd: 1,
             ctx: 1,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -624,12 +676,13 @@ fn policy_check_cross_app() {
         Row {
             program: 1,
             bcg: 1,
-            cone: 2,
+            cone: 1,
             v2: 1,
-            scc: 3,
-            pd: 2,
-            ctx: 2,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
             snap: 0,
+            witness: 1,
         },
     );
 }
@@ -654,12 +707,13 @@ fn policy_check_single_app() {
         Row {
             program: 1,
             bcg: 1,
-            cone: 2,
+            cone: 1,
             v2: 1,
-            scc: 3,
-            pd: 2,
-            ctx: 2,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
             snap: 0,
+            witness: 1,
         },
     );
 }
@@ -673,6 +727,7 @@ const QUERY_CROSS_ROW: Row = Row {
     pd: 0,
     ctx: 0,
     snap: 0,
+    witness: 0,
 };
 
 #[test]
@@ -721,6 +776,7 @@ fn query_single_app() {
             pd: 0,
             ctx: 0,
             snap: 0,
+            witness: 0,
         },
     );
 }
@@ -911,17 +967,18 @@ fn release_sequence(args: &[&str]) -> Vec<String> {
 }
 
 /// #160 final panel P1-5: each command drops its cells where the code says,
-/// read off the shipped binary's trace. Policy check releases `det`, `l4`
-/// and the ordering facts BEFORE its second (RAW) context build, and the
-/// relation after it; fingerprint and each `diff --strict` side release every
+/// read off the shipped binary's trace. Policy check releases `l4`, the
+/// ordering facts and the relation right after the run, and `det` and the raw
+/// facts after its rule engine (#160 step 6 Task 3, D7 (7)); fingerprint and
+/// each `diff --strict` side release every
 /// cell before snapshot composition; events releases `l4` right after the run
 /// and the rest after the report. Digest and prove (`finish_default_run`)
 /// release `det`, the ordering facts and the relation before the snapshot and
 /// `l4` after the query (§4.4.4). The relation's cell is `Cell::Rel` since
 /// #160 step 4 (it was `Cell::Graph`).
 ///
-/// DISCRIMINATION: deleting policy check's `release_all_but(&[Cell::Rel])`
-/// before the RAW build fails the policy case; deleting
+/// DISCRIMINATION: deleting policy check's `release_all_but(&[Cell::Det,
+/// Cell::Raw])` before the rule engine fails the policy case; deleting
 /// `finish_default_run`'s `release_all_but(&[Cell::L4])` fails digest and
 /// prove.
 #[test]
@@ -929,15 +986,20 @@ fn views_release_their_cells_before_the_next_build() {
     let (d, ws) = ws_dep();
     let policy = policy_yaml();
     let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
-    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Rel"];
-    let per_side: Vec<&str> = [&["ctx"][..], &all, &["snap"]].concat();
+    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Rel", "rel:Raw"];
+    // #160 step 6 D7 (6): the det fill consumes the view's one composition
+    // and `prepare` releases `Caps` right after it.
+    let det = ["ctx", "rel:Caps"];
+    let per_side: Vec<&str> = [&det[..], &all, &["snap"]].concat();
     // `finish_default_run`: every cell but `l4` before the snapshot, `l4`
     // after the query.
     let default_run = vec![
         "ctx",
+        "rel:Caps",
         "rel:Det",
         "rel:Ordering",
         "rel:Rel",
+        "rel:Raw",
         "snap",
         "rel:L4",
     ];
@@ -947,7 +1009,15 @@ fn views_release_their_cells_before_the_next_build() {
             vec![
                 "policy", "check", &ws, "--policy", &policy, "--format", "json",
             ],
-            vec!["ctx", "rel:Det", "rel:L4", "rel:Ordering", "ctx", "rel:Rel"],
+            vec![
+                "ctx",
+                "rel:Caps",
+                "rel:L4",
+                "rel:Ordering",
+                "rel:Rel",
+                "rel:Det",
+                "rel:Raw",
+            ],
         ),
         (
             "fingerprint",
@@ -960,14 +1030,29 @@ fn views_release_their_cells_before_the_next_build() {
             [&per_side[..], &per_side].concat(),
         ),
         (
+            // `release_all_but` skips the `l4` events already released.
             "events fanout",
             vec!["events", "fanout", &ws, "--format", "json"],
-            [&["ctx", "rel:L4"][..], &all].concat(),
+            [&det[..], &["rel:L4"], &all[..1], &all[2..]].concat(),
         ),
         (
+            // #160 step 6 D7: the tree first (it takes `Raw`, and is released
+            // once the effects are read off it), then the run; `Effects` dies
+            // after the query, beside `l4`.
             "digest",
             vec!["digest", &ws, "--diff", &diff, "--deterministic"],
-            default_run.clone(),
+            vec![
+                "snap",
+                "rel:Raw",
+                "rel:Tree",
+                "ctx",
+                "rel:Caps",
+                "rel:Det",
+                "rel:Ordering",
+                "rel:Rel",
+                "rel:L4",
+                "rel:Effects",
+            ],
         ),
         (
             "prove",
@@ -983,6 +1068,45 @@ fn views_release_their_cells_before_the_next_build() {
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// #160 step 6 §4.7 (R1-30, A6.18), the live-cell checkpoint: at digest's
+/// first run the view holds its effects, but no tree, no pd arena and no raw
+/// facts (D7: the tree and the composition's raw half die before `det`).
+#[test]
+fn digest_holds_no_tree_at_its_first_run() {
+    let (d, ws) = ws_dep();
+    let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["digest", &ws, "--diff", &diff, "--deterministic"],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let live: Vec<Vec<String>> = events
+        .iter()
+        .filter(|e| e.get("name").and_then(Value::as_str) == Some("view.live"))
+        .map(|e| {
+            e["args"]["cells"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.as_str().map(str::to_string))
+                .collect()
+        })
+        .collect();
+    assert_eq!(live.len(), 1, "one checkpoint: {live:?}");
+    let cells = &live[0];
+    assert!(
+        cells.contains(&"Effects".to_string()),
+        "precondition: {cells:?}"
+    );
+    for gone in ["Tree", "PdArena", "Raw", "Caps"] {
+        assert!(
+            !cells.contains(&gone.to_string()),
+            "{gone} alive: {cells:?}"
+        );
+    }
 }
 
 /// Spec §4.1.4: `ALSEM_TRACE_EXIT_AFTER` exits from a span guard, where the
@@ -1549,6 +1673,7 @@ fn graph() {
             pd: 0,
             ctx: 0,
             snap: 0,
+            witness: 0,
         },
     );
 }

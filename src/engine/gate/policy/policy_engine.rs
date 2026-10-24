@@ -95,32 +95,20 @@ fn fact_sort_key(f: &CapabilityFact) -> String {
 
 /// Select facts for a rule's `facts` mode. al-sem `selectFacts`.
 ///
-/// ⟨C1 Task 3⟩ This is the ONE consumer that genuinely needs the RAW inherited
-/// `CapabilityFact` objects (it matches their `op`/`resource_kind`/`resource_id`/
-/// `confidence`/… fields against the rule predicate), so the `policy` pipeline
-/// builds its RAW context with `substrate::SUMMARIES | substrate::RAW_INHERITED_FACTS`.
-///
-/// # Panics
-/// The `inherited` / `any` modes panic (via `FullRoutineSummary::inherited_raw`)
-/// when handed a context built WITHOUT that bit. Deliberate: silently returning
-/// the direct-only subset would quietly under-report every `facts: any` rule on
-/// every routine — a policy gate that passes because it never saw the evidence is
-/// worse than one that fails loudly. `facts: direct` is unaffected: it never
-/// reads the inherited half, so it stays correct under either mode.
+/// The ONE consumer of RAW inherited `CapabilityFact` objects (it matches their
+/// `op`/`resource_kind`/`resource_id`/`confidence`/… fields against the rule
+/// predicate). `direct` is the routine's direct facts, `raw` its inherited ones:
+/// the policy view's witness pass (#160 step 6 Task 3, `View::raw`).
 fn select_facts<'a>(
     rule: &Rule,
-    summary: Option<&'a FullRoutineSummary>,
+    direct: &'a [CapabilityFact],
+    raw: &'a [CapabilityFact],
 ) -> Vec<&'a CapabilityFact> {
-    let Some(s) = summary else { return Vec::new() };
     match rule.facts.as_deref().unwrap_or("any") {
-        "direct" => s.capability_facts_direct.iter().collect(),
-        "inherited" => s.inherited_raw().iter().collect(),
+        "direct" => direct.iter().collect(),
+        "inherited" => raw.iter().collect(),
         // "any"
-        _ => s
-            .capability_facts_direct
-            .iter()
-            .chain(s.inherited_raw())
-            .collect(),
+        _ => direct.iter().chain(raw).collect(),
     }
 }
 
@@ -131,6 +119,9 @@ pub struct PolicyModel<'a> {
     pub routines: &'a [ModelRoutine],
     pub field_indexes: FieldIndexes<'a>,
     pub summaries: &'a HashMap<String, FullRoutineSummary>,
+    /// Every evaluated routine's raw inherited facts, by id (the view's
+    /// `Cell::Raw` under `WitnessRequest::Primary`).
+    pub raw: &'a HashMap<String, Vec<CapabilityFact>>,
     pub fingerprint_index: FingerprintIndex<'a>,
 }
 
@@ -145,6 +136,7 @@ impl<'a> PolicyModel<'a> {
         events: &'a [EventSymbol],
         root_classifications: &'a [crate::engine::root_classification::RootClassification],
         summaries: &'a HashMap<String, FullRoutineSummary>,
+        raw: &'a HashMap<String, Vec<CapabilityFact>>,
     ) -> Self {
         let objects_by_id: HashMap<&str, &ModelObject> =
             objects.iter().map(|o| (o.id.as_str(), o)).collect();
@@ -176,6 +168,7 @@ impl<'a> PolicyModel<'a> {
             routines,
             field_indexes,
             summaries,
+            raw,
             fingerprint_index,
         }
     }
@@ -267,7 +260,27 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
             // Sorted facts. al-sem memoizes by (routineId, factsMode); the result is
             // output-identical to recomputing, so we recompute (the corpus is tiny).
             // Decorate-sort-undecorate so each sort key is computed once.
-            let mut facts = select_facts(rule, summary_for_routine);
+            let direct =
+                summary_for_routine.map_or(&[][..], |s| s.capability_facts_direct.as_slice());
+            // R6 (fail loud): a routine with a summary is a cone member, and
+            // the witness pass gives every member in scope a raw entry (empty
+            // when it inherits nothing). A missing entry is a scope that missed
+            // an evaluated routine; reading it as "no inherited facts" would
+            // let `facts: inherited|any` pass unseen. `direct` never reads it.
+            let raw = match model.raw.get(routine.id.as_str()) {
+                Some(v) => v.as_slice(),
+                None if summary_for_routine.is_none()
+                    || rule.facts.as_deref() == Some("direct") =>
+                {
+                    &[][..]
+                }
+                None => panic!(
+                    "policy: routine {} has a summary but no raw inherited facts \
+                     (the view's witness scope missed an evaluated routine)",
+                    routine.id
+                ),
+            };
+            let mut facts = select_facts(rule, direct, raw);
             facts.sort_by_cached_key(|f| fact_sort_key(f));
             if facts.is_empty() {
                 summary.routines_passed += 1;
@@ -540,3 +553,7 @@ fn emit_unknown_finding(rule: &Rule, routine: &ModelRoutine, model: &PolicyModel
     finding.fingerprint = Some(model.fingerprint_index.fingerprint_of(&finding));
     finding
 }
+
+#[cfg(test)]
+#[path = "policy_facts_oracle_tests.rs"]
+mod facts_oracle_tests;

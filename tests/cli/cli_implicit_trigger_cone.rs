@@ -923,7 +923,6 @@ fn a5_forwarded_receiver_binds_through_the_parameter() {
 
 const DEP_GUID: &str = "dddd9696-0000-0000-0000-000000000096";
 const WS6_GUID: &str = "eeee9696-0000-0000-0000-000000000096";
-const DEP_LOG_ID: &str = "dddd9696-0000-0000-0000-000000000096/table/70001";
 
 const DEP_AL: &str = r#"table 70001 "Dep Log" { fields { field(1; Id; Integer) { } } keys { key(PK; Id) { Clustered = true; } } }
 table 70000 "Dep Trig"
@@ -1019,11 +1018,14 @@ fn write_cross_app_workspace(dir: &Path) {
 
 /// A6. Cross-app digest of `ValidateDep` (`D.Validate(Amount, 1)` on the
 /// dependency's "Dep Trig", whose `OnValidate` inserts the dependency's
-/// "Dep Log") reports the `DB_INSERT` on "Dep Log" with a first hop
-/// `implicit-trigger` to `OnValidate` anchored at the Validate (6:8),
-/// unconditional. Precondition (true today): cross-app L4 `query effects`
-/// already has that insert via implicit-trigger, and the fixture line is where
-/// the literal says.
+/// "Dep Log") reports the `DB_INSERT` on "Dep Log". Since #160 step 6 rule B
+/// (spec §14.3.5) the trigger fires into dependency code, so the insert is
+/// the `DB_INSERT` group of that boundary: its identity is the firing
+/// Validate (evidence 6:8), it enters `Dep96.OnValidate`, lists "Dep Log",
+/// has the empty via path (the root's own operation is the boundary) and is
+/// `unknown`. Precondition (true today): cross-app L4 `query effects` already
+/// has that insert via implicit-trigger, and the fixture line is where the
+/// literal says.
 #[test]
 fn a6_dependency_trigger_reaches_the_workspace_caller() {
     assert!(
@@ -1062,18 +1064,31 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
 
     let doc = digest(ws, "src/Ws.al", false);
     no_incoherence(&doc, &mut f);
-    expect_trigger_effect(
-        &doc,
-        &mut f,
-        "ValidateDep",
-        &Want {
-            ty: "DB_INSERT",
-            resource_id: DEP_LOG_ID,
-            trigger: "OnValidate",
-            at: (6, 8),
-            cond: "unconditional-on-success",
-        },
-    );
+    let inserts: Vec<Value> = entry(&doc, "ValidateDep")["effects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|x| x["type"] == "DB_INSERT")
+        .map(|x| {
+            serde_json::json!({
+                "detail": x["detail"],
+                "evidence": [x["evidence"]["line"], x["evidence"]["column"]],
+                "viaPaths": x["viaPaths"],
+                "conditionality": x["conditionality"],
+            })
+        })
+        .collect();
+    let want = vec![serde_json::json!({
+        "detail": {"boundary": "Dep96.OnValidate", "resourceCount": "1", "resources": "Dep Log"},
+        "evidence": [6, 8],
+        "viaPaths": [[]],
+        "conditionality": "unknown",
+    })];
+    if inserts != want {
+        f.push(format!(
+            "ValidateDep inserts: want {want:?}, got {inserts:?}"
+        ));
+    }
     assert!(f.is_empty(), "{}", f.join("\n"));
 }
 

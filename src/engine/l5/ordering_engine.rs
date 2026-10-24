@@ -19,8 +19,7 @@ use std::collections::{HashMap, HashSet};
 use crate::engine::ids::sha256_hex;
 use crate::engine::l5::digest::QueryWitnessHop;
 use crate::engine::l5::ordering::{
-    HBEdge, OrderedOp, Quantifier, build_hb_edges, dom, dominates_return, may_co_execute,
-    ordered_before,
+    HbIndex, OrderedOp, Quantifier, dom, dominates_return, may_co_execute, ordered_before,
 };
 use crate::engine::l5::ordering_inter::{
     CallChain, CallsiteByIdMap, OccurrenceWithChain, ResolutionByCallsiteId, error_escapes_chain,
@@ -65,6 +64,10 @@ pub struct OrderingEffectInput {
     /// Effect-level conditionality — used by COMMIT_ON_SUCCESS_PATH rule.
     /// Pre-computed before the ordering call (mirrors TS eff.conditionality field).
     pub conditionality: &'static str,
+    /// A rule-B boundary group (spec §14.3.5 item 4): the callee MAY do the
+    /// effect. It stays in every MAY relation, is left out of the commit set
+    /// the MUST labels read, and never carries a MUST label.
+    pub boundary: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +243,43 @@ impl<'s> OrderingIndex<'s> {
     }
 }
 
+// O1's counters (test builds): the ordered occurrence pairs checked, and the
+// edges among them.
+#[cfg(test)]
+pub(crate) static O1_PAIRS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+pub(crate) static O1_EDGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// O1 (a), in test builds: for every ordered pair of one call's occurrence ids
+/// (duplicates included), the on-demand test equals membership in
+/// `build_hb_edges`' output.
+#[cfg(test)]
+fn o1_check(groups: &[Vec<OrderedOp>]) {
+    use std::sync::atomic::Ordering;
+    let edges: HashSet<(String, String)> = groups
+        .iter()
+        .flat_map(|g| crate::engine::l5::ordering::build_hb_edges(g))
+        .map(|e| (e.from, e.to))
+        .collect();
+    let hb = HbIndex::new(groups.to_vec());
+    let ids: Vec<&str> = groups
+        .iter()
+        .flatten()
+        .map(|o| o.occurrence_id.as_str())
+        .collect();
+    for x in &ids {
+        for y in &ids {
+            assert_eq!(
+                hb.has_edge(x, y),
+                edges.contains(&(x.to_string(), y.to_string())),
+                "O1: {x} -> {y}"
+            );
+        }
+    }
+    O1_PAIRS.fetch_add(ids.len() * ids.len(), Ordering::Relaxed);
+    O1_EDGES.fetch_add(edges.len(), Ordering::Relaxed);
+}
+
 // ---------------------------------------------------------------------------
 // compute_ordering — order:false path.
 // ---------------------------------------------------------------------------
@@ -363,19 +403,18 @@ pub fn compute_ordering(
         }
     }
 
-    // Build HB edges per group (never cross-group).
-    let mut all_hb_edges: Vec<HBEdge> = Vec::new();
-    for (_owner, idxs) in &groups {
-        let group_ops: Vec<OrderedOp> = idxs
-            .iter()
-            .map(|&i| occurrences[i].ordered_op.clone().unwrap())
-            .collect();
-        let group_edges = build_hb_edges(&group_ops);
-        all_hb_edges.extend(group_edges);
-    }
-    let has_intra_edge = |from: &str, to: &str| -> bool {
-        all_hb_edges.iter().any(|e| e.from == from && e.to == to)
-    };
+    // Happens-before per group (never cross-group), answered on demand.
+    let group_ops: Vec<Vec<OrderedOp>> = groups
+        .iter()
+        .map(|(_owner, idxs)| {
+            idxs.iter()
+                .map(|&i| occurrences[i].ordered_op.clone().unwrap())
+                .collect()
+        })
+        .collect();
+    #[cfg(test)]
+    o1_check(&group_ops);
+    let hb = HbIndex::new(group_ops);
 
     // --- OccurrenceWithChain per effect (None when no order data / not placeable). ---
     let mut multi_path_occurrence_ids: HashSet<String> = HashSet::new();
@@ -390,16 +429,11 @@ pub fn compute_ordering(
 
             let owner = resolve_owning_routine(eff)?;
 
-            // terminalRoutineOps for the owning group.
-            let terminal_routine_ops: Vec<OrderedOp> = groups
+            // terminalRoutineOps for the owning group, shared.
+            let terminal_routine_ops: std::sync::Arc<[OrderedOp]> = groups
                 .iter()
-                .find(|(r, _)| *r == owner)
-                .map(|(_, idxs)| {
-                    idxs.iter()
-                        .map(|&i| occurrences[i].ordered_op.clone().unwrap())
-                        .collect()
-                })
-                .unwrap_or_default();
+                .position(|(r, _)| *r == owner)
+                .map_or_else(|| Vec::new().into(), |g| hb.group(g));
 
             if via_paths.is_empty() {
                 if owner != routine_id {
@@ -491,11 +525,18 @@ pub fn compute_ordering(
                 labels.push("COMMIT_REACHABLE");
             }
 
+            // Rule B (spec §14.3.5 item 4): a boundary group never satisfies a
+            // MUST condition and never carries a MUST label, so the three MUST
+            // labels below read the group's other occurrences only.
+            let is_boundary = effects[idx].boundary;
+            let must = |i: &usize| !effects[*i].boundary;
+            let must_commit_idxs: Vec<usize> = commit_idxs.iter().copied().filter(must).collect();
+
             // COMMIT_ON_SUCCESS_PATH (on COMMIT effects):
             // any commit in the group has conditionality = "unconditional-on-success".
             // Mirrors TS: `commitOccs.some(o => o.conditionality === "unconditional-on-success")`.
-            if occ.effect_type == "COMMIT" {
-                let has_commit_on_success = commit_idxs
+            if occ.effect_type == "COMMIT" && !is_boundary {
+                let has_commit_on_success = must_commit_idxs
                     .iter()
                     .any(|&ci| effects[ci].conditionality == "unconditional-on-success");
                 if has_commit_on_success {
@@ -504,19 +545,19 @@ pub fn compute_ordering(
             }
 
             // COMMIT_DOMINATES_RETURN (on COMMIT effects): this commit dominates return.
-            if occ.effect_type == "COMMIT" && dominates_return(op) {
+            if occ.effect_type == "COMMIT" && !is_boundary && dominates_return(op) {
                 labels.push("COMMIT_DOMINATES_RETURN");
             }
 
             // WRITE_COMMITTED_BEFORE_RETURN (on COMMIT effects):
             // dominatesReturn(op) AND there is a write w with dom(w, op) AND
             // the nearest commit after w (by orderId) is this commit.
-            if occ.effect_type == "COMMIT" && dominates_return(op) {
+            if occ.effect_type == "COMMIT" && !is_boundary && dominates_return(op) {
                 // nearest_commit_after(write_occ): find commit with smallest orderId > write's orderId.
                 let nearest_commit_after = |write_op_id: u32| -> Option<String> {
                     let mut nearest_id: Option<u32> = None;
                     let mut nearest_occ_id: Option<String> = None;
-                    for &ci in &commit_idxs {
+                    for &ci in &must_commit_idxs {
                         let Some(cop) = occurrences[ci].ordered_op.as_ref() else {
                             continue;
                         };
@@ -530,7 +571,7 @@ pub fn compute_ordering(
                     nearest_occ_id
                 };
 
-                let has_write_committed = write_idxs.iter().any(|&wi| {
+                let has_write_committed = write_idxs.iter().filter(|i| must(i)).any(|&wi| {
                     let w_occ = &occurrences[wi];
                     let Some(write_op) = w_occ.ordered_op.as_ref() else {
                         return false;
@@ -552,7 +593,7 @@ pub fn compute_ordering(
                     let Some(cop) = occurrences[ci].ordered_op.as_ref() else {
                         return false;
                     };
-                    if has_intra_edge(&occ.occurrence_id, &occurrences[ci].occurrence_id) {
+                    if hb.has_edge(&occ.occurrence_id, &occurrences[ci].occurrence_id) {
                         return true;
                     }
                     ordered_before(op, cop) && may_co_execute(op, cop)
@@ -571,7 +612,7 @@ pub fn compute_ordering(
                         let Some(iop) = occurrences[ii].ordered_op.as_ref() else {
                             return false;
                         };
-                        if has_intra_edge(&occurrences[ii].occurrence_id, &occ.occurrence_id) {
+                        if hb.has_edge(&occurrences[ii].occurrence_id, &occ.occurrence_id) {
                             return true;
                         }
                         ordered_before(iop, op) && may_co_execute(iop, op)
@@ -600,9 +641,9 @@ pub fn compute_ordering(
                         let Some(c_op) = c_occ.ordered_op.as_ref() else {
                             return false;
                         };
-                        let w_before_c = has_intra_edge(&w_occ.occurrence_id, &c_occ.occurrence_id)
+                        let w_before_c = hb.has_edge(&w_occ.occurrence_id, &c_occ.occurrence_id)
                             || (ordered_before(write_op, c_op) && may_co_execute(write_op, c_op));
-                        let c_before_io = has_intra_edge(&c_occ.occurrence_id, &occ.occurrence_id)
+                        let c_before_io = hb.has_edge(&c_occ.occurrence_id, &occ.occurrence_id)
                             || (ordered_before(c_op, io_op) && may_co_execute(c_op, io_op));
                         w_before_c && c_before_io
                     });
@@ -632,9 +673,9 @@ pub fn compute_ordering(
                         let Some(c_op) = c_occ.ordered_op.as_ref() else {
                             return false;
                         };
-                        let w_before_c = has_intra_edge(&w_occ.occurrence_id, &c_occ.occurrence_id)
+                        let w_before_c = hb.has_edge(&w_occ.occurrence_id, &c_occ.occurrence_id)
                             || (ordered_before(write_op, c_op) && may_co_execute(write_op, c_op));
-                        let c_before_ui = has_intra_edge(&c_occ.occurrence_id, &occ.occurrence_id)
+                        let c_before_ui = hb.has_edge(&c_occ.occurrence_id, &occ.occurrence_id)
                             || (ordered_before(c_op, ui_op) && may_co_execute(c_op, ui_op));
                         w_before_c && c_before_ui
                     });
@@ -944,8 +985,8 @@ pub fn compute_ordering(
                 callsite_by_id,
             );
 
-        // Root-scope COMMIT_DOMINATES_RETURN.
-        if commit_dom_root {
+        // Root-scope COMMIT_DOMINATES_RETURN, never on a rule-B boundary group.
+        if commit_dom_root && !effects[commit_idx].boundary {
             root_scoped[commit_idx].push(ScopedGuarantee {
                 label: "COMMIT_DOMINATES_RETURN",
                 scope: "root",
@@ -1133,11 +1174,9 @@ pub fn compute_ordering(
                             || (intra_usable
                                 && write_op.is_some()
                                 && c_op.is_some()
-                                && (has_intra_edge(
-                                    &write_occ.occurrence_id,
-                                    &c_occ.occurrence_id,
-                                ) || (ordered_before(write_op.unwrap(), c_op.unwrap())
-                                    && may_co_execute(write_op.unwrap(), c_op.unwrap()))));
+                                && (hb.has_edge(&write_occ.occurrence_id, &c_occ.occurrence_id)
+                                    || (ordered_before(write_op.unwrap(), c_op.unwrap())
+                                        && may_co_execute(write_op.unwrap(), c_op.unwrap()))));
                         // GATED: c_before_sink uses intra HB only when `intra_usable`
                         // (same-routine intra path AND commit is root-local).
                         // ASYMMETRY: the event-subscriber cBeforeSink block below
@@ -1154,7 +1193,7 @@ pub fn compute_ordering(
                             || (intra_usable
                                 && c_op.is_some()
                                 && sink_op.is_some()
-                                && (has_intra_edge(&c_occ.occurrence_id, &sink_occ.occurrence_id)
+                                && (hb.has_edge(&c_occ.occurrence_id, &sink_occ.occurrence_id)
                                     || (ordered_before(c_op.unwrap(), sink_op.unwrap())
                                         && may_co_execute(c_op.unwrap(), sink_op.unwrap()))));
                         w_before_c && c_before_sink
@@ -1254,7 +1293,7 @@ pub fn compute_ordering(
                     || (intra_usable
                         && write_op.is_some()
                         && c_op.is_some()
-                        && (has_intra_edge(&write_occ.occurrence_id, &c_occ.occurrence_id)
+                        && (hb.has_edge(&write_occ.occurrence_id, &c_occ.occurrence_id)
                             || (ordered_before(write_op.unwrap(), c_op.unwrap())
                                 && may_co_execute(write_op.unwrap(), c_op.unwrap()))));
 
@@ -1272,7 +1311,7 @@ pub fn compute_ordering(
                 let c_before_sink = edges_from(&c_occ.occurrence_id)
                     .iter()
                     .any(|e| e.to == sink_occ.occurrence_id)
-                    || has_intra_edge(&c_occ.occurrence_id, &sink_occ.occurrence_id)
+                    || hb.has_edge(&c_occ.occurrence_id, &sink_occ.occurrence_id)
                     || (intra_usable
                         && c_op.is_some()
                         && sink_op.is_some()
@@ -1424,10 +1463,10 @@ pub fn compute_ordering(
                     if c_chain.terminal_routine_id != routine_id {
                         continue;
                     }
-                    let c_after_io = has_intra_edge(&io_occ.occurrence_id, &c_occ.occurrence_id)
+                    let c_after_io = hb.has_edge(&io_occ.occurrence_id, &c_occ.occurrence_id)
                         || (ordered_before(&io_op, c_op) && may_co_execute(&io_op, c_op));
                     let c_before_err = err_op.is_some()
-                        && (has_intra_edge(&c_occ.occurrence_id, &err_occ.occurrence_id)
+                        && (hb.has_edge(&c_occ.occurrence_id, &err_occ.occurrence_id)
                             || (ordered_before(c_op, err_op.unwrap())
                                 && may_co_execute(c_op, err_op.unwrap())));
                     if !c_after_io || !c_before_err {
@@ -1696,6 +1735,7 @@ mod tests {
             root_classifications: vec![],
             routine_order_frames: None,
             pd_solution: Default::default(),
+            boundary: None,
         }
     }
 

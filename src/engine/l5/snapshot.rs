@@ -42,11 +42,14 @@ use serde::Serialize;
 
 use crate::engine::ids::{object_id_app_guid, to_stable_object_id};
 use crate::engine::l4::capability_cone::{
-    CapabilityExtra, CapabilityFact, R3a3SourceBase, ValueSource, build_r3a3_source_only_base,
+    CapabilityExtra, CapabilityFact, CoverageRecord, R3a3SourceBase, ValueSource,
+    build_r3a3_source_only_base,
 };
+use crate::engine::l4::combined_graph::TypedEdge;
 use crate::program::body::features::{PAnchor, PCallSite, PCallee, POperationSite};
 use crate::program::body::operation_order::{OperationOrder, ScopeFrame, apply_operation_order};
-use crate::program::model::events::EventSymbol;
+use crate::program::model::calls::CallEdge;
+use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::taxonomy::DispatchKind;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
@@ -315,7 +318,7 @@ fn anchor_from_panchor(a: &PAnchor, enclosing_routine_id: &str) -> SnapshotSourc
 // ===========================================================================
 
 /// Interning table — parallel stableIds[] / displayNames[], sorted by stableId.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SnapshotIdentityTable {
     #[serde(rename = "stableIds")]
     pub stable_ids: Vec<String>,
@@ -902,6 +905,18 @@ pub struct CapabilitySnapshot {
     /// #69 D2: the producer solve (`l4::pd_solve`) over `typed_edges`. Never
     /// serialized: the serialized snapshot moves only where fact values move.
     pub pd_solution: PdArena,
+    /// #160 step 6 rule B (spec §14.3.5): set only on digest's tree over the
+    /// cone graph ([`compose_tree`]); `None` on the cut. Never serialized.
+    pub boundary: Option<BoundaryRule>,
+}
+
+/// Rule B's input (spec §14.3.5): the tree's dependency routines, by the role
+/// rule (#220), each with its app's name. A witness ends at the first routine
+/// listed here.
+#[derive(Debug, Clone, Default)]
+pub struct BoundaryRule {
+    /// Stable routine id of every `Role::Dependency` routine → its app's name.
+    pub dependency_app: HashMap<String, std::sync::Arc<str>>,
 }
 
 /// Index into `PdArena::states`.
@@ -1253,6 +1268,12 @@ impl<'a> CollidedRows<'a> {
 
 /// Compose the consumed-core `CapabilitySnapshot` for a resolved source-only
 /// workspace. `resolved` carries the workspace routines + root classifications.
+///
+/// Over the cut graph (`build_r3a3_source_only_base`: workspace callers only).
+/// Its readers since #160 step 6 (digest reads [`compose_tree`]): the ordering
+/// cell, cross-app and single-app, until the #161 follow-up moves it; prove,
+/// fingerprint and diff, single-app, where the cut equals the cone graph; the
+/// r4f projections and tests. Rule B is off here (`boundary: None`).
 pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
     let base = {
         let _s = crate::engine::perf_trace::span("snapshot", "snapshot.r3a3_base");
@@ -1268,21 +1289,39 @@ pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> Ca
     crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
 
+    let inp = TreeInputs {
+        ws_routines: &base.ws_routines,
+        typed_edges: &base.graph.typed_edges,
+        calls: &base.calls.edges,
+        dependency_calls: &[],
+        event_graph: &base.event_graph,
+        direct_full: &base.direct_full,
+        coverage: &base.coverage,
+        routine_to_stable: &base.routine_to_stable,
+        bodyless_dependency: None,
+    };
     let collided = CollidedRows::build(&base.ws_routines);
     let identities = derive_identity_table(resolved);
-    let capability_facts = derive_capability_facts(base);
-    let typed_edges = derive_typed_edges(base);
-    let operation_index = derive_operation_evidence(base, &collided);
-    let callsite_index = derive_callsite_evidence(base, &collided);
-    let callsite_resolutions = derive_callsite_resolutions(base, &typed_edges, &collided);
-    let analysis_gaps = derive_analysis_gaps(resolved, base);
-    let coverage = derive_coverage(base);
-    let event_declarations = derive_event_declarations(base);
-    let root_classifications = derive_root_classifications(resolved, base);
-    let routine_order_frames = derive_routine_order_frames(base, &collided);
-    let pd_solution = derive_pd_arena(base, &typed_edges, &capability_facts);
+    let capability_facts = derive_capability_facts(&inp, |id| base.raw.get(id).map(Vec::as_slice));
+    let (typed_edges, skipped) = derive_typed_edges(&inp);
+    let operation_index = derive_operation_evidence(&inp, &base.raw, &collided);
+    let callsite_index = derive_callsite_evidence(&inp, &base.raw, &collided);
+    let callsite_resolutions = derive_callsite_resolutions(&inp, &typed_edges, &collided);
+    let analysis_gaps = derive_analysis_gaps(resolved, &inp);
+    let coverage = derive_coverage(&inp);
+    let event_declarations = derive_event_declarations(&inp);
+    let root_classifications = derive_root_classifications(resolved, &inp);
+    let routine_order_frames = derive_routine_order_frames(&inp, &collided);
+    let pd_solution = derive_pd_arena(
+        &inp,
+        &base.pd_solution,
+        None,
+        &typed_edges,
+        &capability_facts,
+        &skipped,
+    );
 
-    let snapshot = CapabilitySnapshot {
+    finish_snapshot(CapabilitySnapshot {
         identities,
         capability_facts,
         typed_edges,
@@ -1295,7 +1334,143 @@ pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> Ca
         root_classifications,
         routine_order_frames,
         pd_solution,
+        boundary: None,
+    })
+}
+
+/// The parts every snapshot deriver reads, borrowed (#160 step 6 D4): from a
+/// cut base ([`compose_snapshot_from_base`]) or from the view
+/// ([`compose_tree`]). The raw inherited facts are passed apart, so the tree
+/// can drain them.
+struct TreeInputs<'a> {
+    /// Every routine row of the model (the universe + per-routine features).
+    ws_routines: &'a [ModelRoutine],
+    /// The typed edges the tree is composed over.
+    typed_edges: &'a [TypedEdge],
+    /// The model's own resolved calls (the call-site ledger, first).
+    calls: &'a [CallEdge],
+    /// The calls dependency routines make (the ledger, after `calls`; D6).
+    dependency_calls: &'a [CallEdge],
+    event_graph: &'a EventGraph,
+    /// Per-routine RAW direct capability facts (full, ordered).
+    direct_full: &'a HashMap<String, Vec<CapabilityFact>>,
+    /// Per-routine cone coverage: every routine that has a cone entry.
+    coverage: &'a HashMap<String, CoverageRecord>,
+    routine_to_stable: &'a HashMap<String, String>,
+    /// D6: the internal ids of the body-less dependency rows. A resolved call
+    /// whose every target is one is `unfetched-dependency`. `None` on the cut.
+    bodyless_dependency: Option<&'a std::collections::HashSet<&'a str>>,
+}
+
+/// The tree over the view's cone graph (#160 step 6 D4, D5, D6): `typed` =
+/// `rel.cone()`, the ledger over `model.calls` then `dependency_calls`, the
+/// direct facts and coverage from `caps`, the raw facts of the subjects drained
+/// by move, the pd arena taken from `caps` and scoped to the subjects' state
+/// closure, and its own identity table (digest's root resolution builds one
+/// too, but drops it before the composition so it never sits beside the
+/// composition's peak; final panel F1-C4). Rule B is on (spec §14.3.5): every
+/// dependency routine is named by its app, `app_names` (lowercase app guid →
+/// name, the loaded apps).
+pub(crate) fn compose_tree(
+    model: &Model,
+    typed: &[TypedEdge],
+    dependency_calls: &[CallEdge],
+    caps: &mut crate::engine::l5::detector_context::CapabilityAnalysis,
+    mut raw: HashMap<String, Vec<CapabilityFact>>,
+    app_names: &HashMap<String, String>,
+) -> CapabilitySnapshot {
+    crate::engine::perf_trace::counter_delta("build.snapshot", 1);
+    let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
+    let ws = &model.workspace;
+    let boundary = boundary_rule(model, app_names);
+    let bodyless: std::collections::HashSet<&str> = ws
+        .routines
+        .iter()
+        .filter(|r| {
+            !r.body_available
+                && model.routine_role(r) == crate::program::model::role::Role::Dependency
+        })
+        .map(|r| r.id.as_str())
+        .collect();
+    let routine_to_stable = crate::engine::l4::capability_cone::routine_to_stable_of(ws);
+    let subjects: std::collections::BTreeSet<String> = raw.keys().cloned().collect();
+    let cone_pd = caps.pd.take().unwrap_or_default();
+    let inp = TreeInputs {
+        ws_routines: &ws.routines,
+        typed_edges: typed,
+        calls: &model.calls.edges,
+        dependency_calls,
+        event_graph: &model.events.graph,
+        direct_full: &caps.direct_full,
+        coverage: &caps.coverage,
+        routine_to_stable: &routine_to_stable,
+        bodyless_dependency: Some(&bodyless),
     };
+    let collided = CollidedRows::build(&ws.routines);
+    let identities = derive_identity_table(model);
+    // The two evidence indexes read the raw facts, so they run before the
+    // drain; each subject's Vec is then moved in and dropped as it goes.
+    let operation_index = derive_operation_evidence(&inp, &raw, &collided);
+    let callsite_index = derive_callsite_evidence(&inp, &raw, &collided);
+    let capability_facts = derive_capability_facts(&inp, |id| raw.remove(id));
+    drop(raw);
+    let (typed_edges, skipped) = derive_typed_edges(&inp);
+    let callsite_resolutions = derive_callsite_resolutions(&inp, &typed_edges, &collided);
+    let analysis_gaps = derive_analysis_gaps(model, &inp);
+    let coverage = derive_coverage(&inp);
+    let event_declarations = derive_event_declarations(&inp);
+    let root_classifications = derive_root_classifications(model, &inp);
+    let routine_order_frames = derive_routine_order_frames(&inp, &collided);
+    let pd_solution = derive_pd_arena(
+        &inp,
+        &cone_pd,
+        Some(&subjects),
+        &typed_edges,
+        &capability_facts,
+        &skipped,
+    );
+    drop(cone_pd);
+
+    finish_snapshot(CapabilitySnapshot {
+        identities,
+        capability_facts,
+        typed_edges,
+        operation_index,
+        callsite_index,
+        callsite_resolutions,
+        analysis_gaps,
+        coverage,
+        event_declarations,
+        root_classifications,
+        routine_order_frames,
+        pd_solution,
+        boundary: Some(boundary),
+    })
+}
+
+/// Rule B's dependency routines of `model` (THE role rule, #220), each named
+/// by its app from `app_names` (lowercase guid → name).
+pub(crate) fn boundary_rule(model: &Model, app_names: &HashMap<String, String>) -> BoundaryRule {
+    use crate::program::model::role::Role;
+    let mut names: HashMap<String, std::sync::Arc<str>> = HashMap::new();
+    let mut dependency_app = HashMap::new();
+    for r in &model.workspace.routines {
+        if model.routine_role(r) != Role::Dependency {
+            continue;
+        }
+        let guid = r.app_guid.to_ascii_lowercase();
+        let name = names.entry(guid).or_insert_with_key(|g| {
+            // A dependency row's app is one the build loaded, so it is named;
+            // the guid stands in only if the loaded-apps list lacks it.
+            std::sync::Arc::from(app_names.get(g).map_or(g.as_str(), String::as_str))
+        });
+        dependency_app.insert(r.stable_routine_id.clone(), std::sync::Arc::clone(name));
+    }
+    BoundaryRule { dependency_app }
+}
+
+/// The census of a composed snapshot, when it is on.
+fn finish_snapshot(snapshot: CapabilitySnapshot) -> CapabilitySnapshot {
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.snapshot");
         census_snapshot(&snapshot);
@@ -1387,7 +1562,7 @@ fn census_snapshot(s: &CapabilitySnapshot) {
 // object without one.
 // ---------------------------------------------------------------------------
 
-fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
+pub(crate) fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
     let ws = &resolved.workspace;
     // id → display name, deduped. BTreeMap keeps deterministic, ordinal key order
     // (M1, M8).
@@ -1456,37 +1631,44 @@ fn capability_fact_sort_key(f: &SnapshotCapabilityFact) -> String {
     .join("|")
 }
 
-fn derive_capability_facts(base: &R3a3SourceBase) -> Vec<SnapshotCapabilityFact> {
+/// `take_raw(id)` hands each emitted id's raw inherited facts over, borrowed
+/// (the cut base) or by move (the tree drains its subjects: each Vec drops
+/// once its facts are emitted).
+fn derive_capability_facts<R>(
+    inp: &TreeInputs<'_>,
+    mut take_raw: impl FnMut(&str) -> Option<R>,
+) -> Vec<SnapshotCapabilityFact>
+where
+    R: std::borrow::Borrow<[CapabilityFact]> + Send,
+{
     use rayon::prelude::*;
     // Per-routine emission is independent; indexed par_iter + sequential flatten
     // preserves the exact sequential emission order (ties in the sort key below are
     // resolved by the STABLE sort from this input order — do not reorder).
-    // The facts are per id (`direct_full`, `cones`), so the rows of a collided id
-    // would emit equal copies: each id is emitted once, at its first row (class
-    // K, #160 step 11b §4.6).
+    // The facts are per id (`direct_full`, coverage, raw), so the rows of a
+    // collided id would emit equal copies: each id is emitted once, at its first
+    // row (class K, #160 step 11b §4.6).
+    // Only routines with a cone entry contribute (mirrors composeSnapshot:
+    // facts come from `r.summary`, present iff the cone ran for the routine).
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let first_rows: Vec<&ModelRoutine> = base
+    let first_rows: Vec<(&ModelRoutine, Option<R>)> = inp
         .ws_routines
         .iter()
-        .filter(|r| seen.insert(r.id.as_str()))
+        .filter(|r| seen.insert(r.id.as_str()) && inp.coverage.contains_key(&r.id))
+        .map(|r| (r, take_raw(&r.id)))
         .collect();
     let per_routine: Vec<Vec<SnapshotCapabilityFact>> = first_rows
-        .par_iter()
-        .map(|r| {
-            // Only routines with a cone entry contribute (mirrors composeSnapshot:
-            // facts come from `r.summary`, present iff the cone ran for the routine).
-            if !base.cones.contains_key(&r.id) {
-                return Vec::new();
-            }
-            let subject = stable_routine_id(&r.id, &base.routine_to_stable);
+        .into_par_iter()
+        .map(|(r, raw)| {
+            let subject = stable_routine_id(&r.id, inp.routine_to_stable);
             let mut v: Vec<SnapshotCapabilityFact> = Vec::new();
-            if let Some(direct) = base.direct_full.get(&r.id) {
+            if let Some(direct) = inp.direct_full.get(&r.id) {
                 for f in direct {
                     v.push(snapshot_fact(f, &subject));
                 }
             }
-            if let Some(cone) = base.cones.get(&r.id) {
-                for f in &cone.inherited {
+            if let Some(raw) = raw {
+                for f in raw.borrow() {
                     v.push(snapshot_fact(f, &subject));
                 }
             }
@@ -1513,33 +1695,34 @@ fn derive_capability_facts(base: &R3a3SourceBase) -> Vec<SnapshotCapabilityFact>
 // The sort key is kind | stable-from | stable-to | edgeId; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
-fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
+fn derive_typed_edges(inp: &TreeInputs<'_>) -> (Vec<SnapshotGraphEdge>, SkippedEdgeKeys) {
     // callsite id -> (anchor, owning-routine internal id) for call-family anchors.
     let mut callsite_anchor: HashMap<&str, (&PAnchor, &str)> = HashMap::new();
-    for r in &base.ws_routines {
+    for r in inp.ws_routines {
         for cs in &r.call_sites {
             callsite_anchor.insert(cs.id.as_str(), (&cs.source_anchor, r.id.as_str()));
         }
     }
     // routine id -> &PAnchor for event-dispatch publish/subscriber anchors.
     let mut routine_anchor: HashMap<&str, &PAnchor> = HashMap::new();
-    for r in &base.ws_routines {
+    for r in inp.ws_routines {
         routine_anchor.insert(r.id.as_str(), &r.source_anchor);
     }
     // record op id -> (anchor, owning-routine internal id) for implicit-trigger
     // anchors (#96 D4).
     let mut op_anchor: HashMap<&str, (&PAnchor, &str)> = HashMap::new();
-    for r in &base.ws_routines {
+    for r in inp.ws_routines {
         for ro in &r.record_operations {
             op_anchor.insert(ro.id.as_str(), (&ro.source_anchor, r.id.as_str()));
         }
     }
 
-    let map = &base.routine_to_stable;
+    let map = inp.routine_to_stable;
 
     let mut out: Vec<SnapshotGraphEdge> = Vec::new();
+    let mut skipped = SkippedEdgeKeys::new();
 
-    for e in &base.graph.typed_edges {
+    for e in inp.typed_edges {
         let from_stable = stable_routine_id(&e.from, map);
         let to_stable = e.to.as_ref().map(|t| stable_routine_id(t, map));
 
@@ -1580,126 +1763,150 @@ fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
         // builder only emits an edge whose callsite/endpoints are workspace routines,
         // so for the source-only corpus these are always present — but a future
         // dep-edge injection must not panic here.
-        let edge = match e.kind.as_str() {
-            "direct-call" => SnapshotGraphEdge::DirectCall {
-                kind: "direct-call",
-                callsite_id: e.callsite_id.clone().unwrap_or_default(),
-                from: from_stable.clone(),
-                to: to_stable.clone().unwrap_or_default(),
-                source_anchor: match cs_anchor {
-                    Some(a) => a,
-                    None => continue,
-                },
-                edge_id: edge_id.clone(),
-            },
-            "variable-typed-call" => SnapshotGraphEdge::VariableTypedCall {
-                kind: "variable-typed-call",
-                callsite_id: e.callsite_id.clone().unwrap_or_default(),
-                from: from_stable.clone(),
-                to: to_stable.clone().unwrap_or_default(),
-                receiver_type: e.receiver_type.clone().unwrap_or_default(),
-                source_anchor: match cs_anchor {
-                    Some(a) => a,
-                    None => continue,
-                },
-                edge_id: edge_id.clone(),
-            },
-            "interface-dispatch" => SnapshotGraphEdge::InterfaceDispatch {
-                kind: "interface-dispatch",
-                callsite_id: e.callsite_id.clone().unwrap_or_default(),
-                from: from_stable.clone(),
-                to: to_stable.clone().unwrap_or_default(),
-                interface_name: e.interface_name.clone().unwrap_or_default(),
-                candidate_count: e.candidate_count.unwrap_or(0),
-                source_anchor: match cs_anchor {
-                    Some(a) => a,
-                    None => continue,
-                },
-                edge_id: edge_id.clone(),
-            },
-            "object-run-resolved" => SnapshotGraphEdge::ObjectRunResolved {
-                kind: "object-run-resolved",
-                callsite_id: e.callsite_id.clone().unwrap_or_default(),
-                from: from_stable.clone(),
-                to: to_stable.clone().unwrap_or_default(),
-                target_object: target_object_internal.clone().unwrap_or_default(),
-                object_type: e.object_type.clone().unwrap_or_default(),
-                source_anchor: match cs_anchor {
-                    Some(a) => a,
-                    None => continue,
-                },
-                edge_id: edge_id.clone(),
-            },
-            "object-run-unresolved" => SnapshotGraphEdge::ObjectRunUnresolved {
-                kind: "object-run-unresolved",
-                callsite_id: e.callsite_id.clone().unwrap_or_default(),
-                from: from_stable.clone(),
-                target_object: target_object_internal.clone(),
-                target_id_source: e
-                    .target_id_source
-                    .as_ref()
-                    .map(snap_combined_value_source)
-                    .unwrap_or(SnapValueSource::Unknown),
-                object_type: e.object_type.clone().unwrap_or_default(),
-                source_anchor: match cs_anchor {
-                    Some(a) => a,
-                    None => continue,
-                },
-                edge_id: edge_id.clone(),
-            },
-            "event-dispatch" => {
-                let Some(publish_anchor) = routine_anchor
-                    .get(e.from.as_str())
-                    .map(|a| anchor_from_panchor(a, &e.from))
-                else {
-                    continue;
-                };
-                let to_internal = e.to.clone().unwrap_or_default();
-                let Some(subscriber_anchor) = routine_anchor
-                    .get(to_internal.as_str())
-                    .map(|a| anchor_from_panchor(a, &to_internal))
-                else {
-                    continue;
-                };
-                SnapshotGraphEdge::EventDispatch {
-                    kind: "event-dispatch",
+        let edge = 'build: {
+            Some(match e.kind.as_str() {
+                "direct-call" => SnapshotGraphEdge::DirectCall {
+                    kind: "direct-call",
+                    callsite_id: e.callsite_id.clone().unwrap_or_default(),
                     from: from_stable.clone(),
                     to: to_stable.clone().unwrap_or_default(),
-                    event_id: event_id_internal.clone().unwrap_or_default(),
-                    publish_anchor,
-                    subscriber_anchor,
+                    source_anchor: match cs_anchor {
+                        Some(a) => a,
+                        None => break 'build None,
+                    },
                     edge_id: edge_id.clone(),
+                },
+                "variable-typed-call" => SnapshotGraphEdge::VariableTypedCall {
+                    kind: "variable-typed-call",
+                    callsite_id: e.callsite_id.clone().unwrap_or_default(),
+                    from: from_stable.clone(),
+                    to: to_stable.clone().unwrap_or_default(),
+                    receiver_type: e.receiver_type.clone().unwrap_or_default(),
+                    source_anchor: match cs_anchor {
+                        Some(a) => a,
+                        None => break 'build None,
+                    },
+                    edge_id: edge_id.clone(),
+                },
+                "interface-dispatch" => SnapshotGraphEdge::InterfaceDispatch {
+                    kind: "interface-dispatch",
+                    callsite_id: e.callsite_id.clone().unwrap_or_default(),
+                    from: from_stable.clone(),
+                    to: to_stable.clone().unwrap_or_default(),
+                    interface_name: e.interface_name.clone().unwrap_or_default(),
+                    candidate_count: e.candidate_count.unwrap_or(0),
+                    source_anchor: match cs_anchor {
+                        Some(a) => a,
+                        None => break 'build None,
+                    },
+                    edge_id: edge_id.clone(),
+                },
+                "object-run-resolved" => SnapshotGraphEdge::ObjectRunResolved {
+                    kind: "object-run-resolved",
+                    callsite_id: e.callsite_id.clone().unwrap_or_default(),
+                    from: from_stable.clone(),
+                    to: to_stable.clone().unwrap_or_default(),
+                    target_object: target_object_internal.clone().unwrap_or_default(),
+                    object_type: e.object_type.clone().unwrap_or_default(),
+                    source_anchor: match cs_anchor {
+                        Some(a) => a,
+                        None => break 'build None,
+                    },
+                    edge_id: edge_id.clone(),
+                },
+                "object-run-unresolved" => SnapshotGraphEdge::ObjectRunUnresolved {
+                    kind: "object-run-unresolved",
+                    callsite_id: e.callsite_id.clone().unwrap_or_default(),
+                    from: from_stable.clone(),
+                    target_object: target_object_internal.clone(),
+                    target_id_source: e
+                        .target_id_source
+                        .as_ref()
+                        .map(snap_combined_value_source)
+                        .unwrap_or(SnapValueSource::Unknown),
+                    object_type: e.object_type.clone().unwrap_or_default(),
+                    source_anchor: match cs_anchor {
+                        Some(a) => a,
+                        None => break 'build None,
+                    },
+                    edge_id: edge_id.clone(),
+                },
+                "event-dispatch" => {
+                    let Some(publish_anchor) = routine_anchor
+                        .get(e.from.as_str())
+                        .map(|a| anchor_from_panchor(a, &e.from))
+                    else {
+                        break 'build None;
+                    };
+                    let to_internal = e.to.clone().unwrap_or_default();
+                    let Some(subscriber_anchor) = routine_anchor
+                        .get(to_internal.as_str())
+                        .map(|a| anchor_from_panchor(a, &to_internal))
+                    else {
+                        break 'build None;
+                    };
+                    SnapshotGraphEdge::EventDispatch {
+                        kind: "event-dispatch",
+                        from: from_stable.clone(),
+                        to: to_stable.clone().unwrap_or_default(),
+                        event_id: event_id_internal.clone().unwrap_or_default(),
+                        publish_anchor,
+                        subscriber_anchor,
+                        edge_id: edge_id.clone(),
+                    }
                 }
-            }
-            // #96 D4: never dropped for a missing anchor (M2): the cone follows
-            // this edge, so the PD arena needs its twin. The anchor is the
-            // firing op's, absent when the op is not in a workspace body.
-            "implicit-trigger" => SnapshotGraphEdge::ImplicitTrigger {
-                kind: "implicit-trigger",
-                from: from_stable.clone(),
-                to: to_stable.clone().unwrap_or_default(),
-                operation_id: e.operation_id.clone().unwrap_or_default(),
-                trigger_kind: e.trigger_kind.clone().unwrap_or_default(),
-                fires: e
-                    .fires
-                    .unwrap_or(crate::engine::l4::combined_graph::TriggerFires::Maybe),
-                anchor: e
-                    .operation_id
-                    .as_deref()
-                    .and_then(|op| op_anchor.get(op))
-                    .map(|(a, rid)| anchor_from_panchor(a, rid)),
-                edge_id: edge_id.clone(),
-            },
-            // Unmodelled kind (dependency-export) - never built by the combined
-            // graph; skip rather than emit a malformed edge.
-            _ => continue,
+                // #96 D4: never dropped for a missing anchor (M2): the cone follows
+                // this edge, so the PD arena needs its twin. The anchor is the
+                // firing op's, absent when the op is not in a workspace body.
+                "implicit-trigger" => SnapshotGraphEdge::ImplicitTrigger {
+                    kind: "implicit-trigger",
+                    from: from_stable.clone(),
+                    to: to_stable.clone().unwrap_or_default(),
+                    operation_id: e.operation_id.clone().unwrap_or_default(),
+                    trigger_kind: e.trigger_kind.clone().unwrap_or_default(),
+                    fires: e
+                        .fires
+                        .unwrap_or(crate::engine::l4::combined_graph::TriggerFires::Maybe),
+                    anchor: e
+                        .operation_id
+                        .as_deref()
+                        .and_then(|op| op_anchor.get(op))
+                        .map(|(a, rid)| anchor_from_panchor(a, rid)),
+                    edge_id: edge_id.clone(),
+                },
+                // Unmodelled kind (dependency-export) - never built by the combined
+                // graph; skip rather than emit a malformed edge.
+                _ => break 'build None,
+            })
         };
-        out.push(edge);
+        match edge {
+            Some(edge) => out.push(edge),
+            // R6-4: the skipped row's pd key, for `derive_pd_arena`'s check.
+            None => {
+                let event = match e.kind.as_str() {
+                    "event-dispatch" => e.event_id.clone().unwrap_or_default(),
+                    _ => String::new(),
+                };
+                skipped.insert((
+                    e.kind.clone(),
+                    from_stable,
+                    to_stable.unwrap_or_default(),
+                    e.callsite_id.clone().unwrap_or_default(),
+                    event,
+                    e.operation_id.clone().unwrap_or_default(),
+                ));
+            }
+        }
     }
 
     out.sort_by_key(|e| e.sort_key());
-    out
+    (out, skipped)
 }
+
+/// The pd keys ([`PdEdgeKey`], owned) of the typed edges `derive_typed_edges`
+/// skipped for want of an anchor or for an unmodelled kind (R6-4). An
+/// `implicit-trigger` row is never skipped, so no key here has that kind.
+type SkippedEdgeKeys = std::collections::HashSet<(String, String, String, String, String, String)>;
 
 // ---------------------------------------------------------------------------
 // derivePdArena (#69 D2) — the cone's producer solve rewritten into snapshot
@@ -1713,17 +1920,54 @@ fn derive_typed_edges(base: &R3a3SourceBase) -> Vec<SnapshotGraphEdge> {
 /// other kind, so two ops of one caller that fire one trigger never collide.
 type PdEdgeKey<'a> = (&'a str, &'a str, &'a str, &'a str, &'a str, &'a str);
 
+/// `subjects` scopes the arena (#160 step 6 D5): only the states reachable from
+/// a subject's states through the links (`callee_state`) are mapped, each once,
+/// in state order. `None` maps every state (the cut base).
 fn derive_pd_arena(
-    base: &R3a3SourceBase,
+    inp: &TreeInputs<'_>,
+    cone: &crate::engine::l4::pd_solve::ConeArena,
+    subjects: Option<&std::collections::BTreeSet<String>>,
     typed_edges: &[SnapshotGraphEdge],
     capability_facts: &[SnapshotCapabilityFact],
+    skipped: &SkippedEdgeKeys,
 ) -> PdArena {
     use crate::engine::l5::detector_context::cones_census;
-    let cone = &base.pd_solution;
     if cone.states.is_empty() {
         return PdArena::default();
     }
-    let map = &base.routine_to_stable;
+    let map = inp.routine_to_stable;
+    // The kept states and their new indexes (identity when unscoped).
+    let keep: Vec<bool> = match subjects {
+        None => vec![true; cone.states.len()],
+        Some(subjects) => {
+            let mut keep = vec![false; cone.states.len()];
+            let mut stack: Vec<usize> = subjects
+                .iter()
+                .filter_map(|s| cone.by_routine.get(s.as_str()))
+                .flatten()
+                .copied()
+                .collect();
+            while let Some(ix) = stack.pop() {
+                if std::mem::replace(&mut keep[ix], true) {
+                    continue;
+                }
+                stack.extend(
+                    cone.links[cone.states[ix].links.clone()]
+                        .iter()
+                        .map(|l| l.callee_state),
+                );
+            }
+            keep
+        }
+    };
+    let new_ix: Vec<usize> = keep
+        .iter()
+        .scan(0usize, |n, &k| {
+            let ix = *n;
+            *n += usize::from(k);
+            Some(ix)
+        })
+        .collect();
     // The key must be unique: a duplicate makes the index ambiguous and
     // silently points a link at the wrong edge (event-dispatch edges carry no
     // call site, so only `derive_typed_edges` keeps them apart).
@@ -1753,7 +1997,12 @@ fn derive_pd_arena(
     }
 
     let mut out = PdArena::default();
+    let mut unmapped_edges: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for (ix, s) in cone.states.iter().enumerate() {
+        if !keep[ix] {
+            continue;
+        }
+        let ix = new_ix[ix];
         let producer = &cone.producers[s.producer];
         let routine = stable_routine_id(&s.routine, map);
         let owner = stable_routine_id(&producer.owner, map);
@@ -1777,10 +2026,23 @@ fn derive_pd_arena(
                 edge.operation_id.as_deref().unwrap_or(""),
             );
             match edge_ix.get(&key) {
-                Some(&e) => out.links.push((l.callee_state, e)),
+                Some(&e) => out.links.push((new_ix[l.callee_state], e)),
                 None => {
-                    debug_assert!(false, "pd arena: cone edge {key:?} has no snapshot edge");
-                    cones_census::add_gated(&cones_census::PD_EDGE_UNMAPPED, 1);
+                    // R6-4: a link may miss only a row skipped for want of an
+                    // anchor (or an unmodelled kind).
+                    debug_assert!(
+                        skipped.contains(&(
+                            key.0.to_string(),
+                            key.1.to_string(),
+                            key.2.to_string(),
+                            key.3.to_string(),
+                            key.4.to_string(),
+                            key.5.to_string(),
+                        )),
+                        "pd arena: cone edge {key:?} has no snapshot edge and was not skipped"
+                    );
+                    cones_census::add(&cones_census::PD_EDGE_UNMAPPED, 1);
+                    unmapped_edges.insert(l.edge);
                 }
             }
         }
@@ -1793,6 +2055,10 @@ fn derive_pd_arena(
             links: start..out.links.len(),
         });
     }
+    cones_census::add(
+        &cones_census::PD_EDGE_UNMAPPED_KEYS,
+        unmapped_edges.len() as u64,
+    );
     if cones_census::enabled() {
         // `PD_SNAPSHOT_BYTES` alone: charging `PD_SOLVE_BYTES_ARENA` here
         // would count the retained arena twice (#160 spec §4.1.1).
@@ -1855,15 +2121,16 @@ fn snap_combined_value_source(
 // ---------------------------------------------------------------------------
 
 fn derive_operation_evidence(
-    base: &R3a3SourceBase,
+    base: &TreeInputs<'_>,
+    raw: &HashMap<String, Vec<CapabilityFact>>,
     collided: &CollidedRows<'_>,
 ) -> Vec<SnapshotOperationEvidence> {
     use std::collections::BTreeSet;
 
     // Referenced op ids = witnessOperationId of any direct ∪ inherited fact.
     let mut referenced: BTreeSet<String> = BTreeSet::new();
-    for r in &base.ws_routines {
-        if !base.cones.contains_key(&r.id) {
+    for r in base.ws_routines {
+        if !base.coverage.contains_key(&r.id) {
             continue;
         }
         if let Some(direct) = base.direct_full.get(&r.id) {
@@ -1873,8 +2140,8 @@ fn derive_operation_evidence(
                 }
             }
         }
-        if let Some(cone) = base.cones.get(&r.id) {
-            for f in &cone.inherited {
+        if let Some(inherited) = raw.get(&r.id) {
+            for f in inherited {
                 if let Some(w) = &f.witness_operation_id {
                     referenced.insert(w.clone());
                 }
@@ -1883,7 +2150,7 @@ fn derive_operation_evidence(
     }
     // #96 D4: the firing op of every implicit-trigger edge, so a trigger hop's
     // control context (digest conditionality) is in the index.
-    for e in &base.graph.typed_edges {
+    for e in base.typed_edges {
         if let Some(op) = &e.operation_id {
             referenced.insert(op.clone());
         }
@@ -1896,7 +2163,7 @@ fn derive_operation_evidence(
     // A collided id's op is its LAST OWNING row's (the later row overwrites),
     // with that row's `order`, shifted into the id's one frame table.
     for (ri, r) in base.ws_routines.iter().enumerate() {
-        let stable = stable_routine_id(&r.id, &base.routine_to_stable);
+        let stable = stable_routine_id(&r.id, base.routine_to_stable);
         // Re-stamp op/callsite order (L3 assembly does not).
         let order = compute_routine_order(r);
         let op_order_by_id: HashMap<&str, &OperationOrder> = order
@@ -1981,14 +2248,15 @@ fn derive_operation_evidence(
 // ---------------------------------------------------------------------------
 
 fn derive_callsite_evidence(
-    base: &R3a3SourceBase,
+    base: &TreeInputs<'_>,
+    raw: &HashMap<String, Vec<CapabilityFact>>,
     collided: &CollidedRows<'_>,
 ) -> Vec<SnapshotCallsiteEvidence> {
     use std::collections::BTreeSet;
 
     let mut referenced: BTreeSet<String> = BTreeSet::new();
-    for r in &base.ws_routines {
-        if !base.cones.contains_key(&r.id) {
+    for r in base.ws_routines {
+        if !base.coverage.contains_key(&r.id) {
             continue;
         }
         if let Some(direct) = base.direct_full.get(&r.id) {
@@ -1998,8 +2266,8 @@ fn derive_callsite_evidence(
                 }
             }
         }
-        if let Some(cone) = base.cones.get(&r.id) {
-            for f in &cone.inherited {
+        if let Some(inherited) = raw.get(&r.id) {
+            for f in inherited {
                 if let Some(w) = &f.witness_callsite_id {
                     referenced.insert(w.clone());
                 }
@@ -2007,7 +2275,7 @@ fn derive_callsite_evidence(
         }
     }
     // Typed-edge callsite anchors.
-    for e in &base.graph.typed_edges {
+    for e in base.typed_edges {
         if let Some(cid) = &e.callsite_id {
             referenced.insert(cid.clone());
         }
@@ -2015,7 +2283,7 @@ fn derive_callsite_evidence(
 
     let mut out: Vec<SnapshotCallsiteEvidence> = Vec::new();
     for (ri, r) in base.ws_routines.iter().enumerate() {
-        let stable = stable_routine_id(&r.id, &base.routine_to_stable);
+        let stable = stable_routine_id(&r.id, base.routine_to_stable);
         let order = compute_routine_order(r);
         for cs in &order.call_sites {
             if !referenced.contains(&cs.id) {
@@ -2070,13 +2338,13 @@ fn map_dispatch_kind(dk: &str) -> &'static str {
 }
 
 fn derive_callsite_resolutions(
-    base: &R3a3SourceBase,
+    base: &TreeInputs<'_>,
     typed_edges: &[SnapshotGraphEdge],
     collided: &CollidedRows<'_>,
 ) -> Vec<SnapshotCallsiteResolution> {
     use std::collections::BTreeMap;
 
-    let map = &base.routine_to_stable;
+    let map = base.routine_to_stable;
 
     // callsiteId → typed-edge edgeIds (for resolvedEdges).
     let mut edges_by_callsite: HashMap<String, Vec<String>> = HashMap::new();
@@ -2123,11 +2391,12 @@ fn derive_callsite_resolutions(
     }
 
     // Group callGraph edges by callsiteId (skip implicit-trigger). Preserve first.
-    // BTreeMap for deterministic group iteration (M1).
+    // BTreeMap for deterministic group iteration (M1). Every caller's calls:
+    // the model's, then the dependency routines' (D6, Decision 18).
     let mut groups: BTreeMap<String, Vec<&crate::program::model::calls::CallEdge>> =
         BTreeMap::new();
     let mut group_order: Vec<String> = Vec::new();
-    for ce in &base.calls.edges {
+    for ce in base.calls.iter().chain(base.dependency_calls) {
         if ce.dispatch_kind == DispatchKind::ImplicitTrigger {
             continue;
         }
@@ -2218,6 +2487,12 @@ fn derive_callsite_resolutions(
             continue;
         }
 
+        // D6: every target a body-less dependency row.
+        let into_unfetched = base.bodyless_dependency.is_some_and(|b| {
+            group_edges
+                .iter()
+                .all(|e| e.to.as_deref().is_some_and(|t| b.contains(t)))
+        });
         out.push(classify_resolution(
             representative,
             &from,
@@ -2227,6 +2502,7 @@ fn derive_callsite_resolutions(
             &edges_by_callsite,
             rc,
             ua,
+            into_unfetched,
         ));
     }
 
@@ -2288,6 +2564,7 @@ fn classify_resolution(
     edges_by_callsite: &HashMap<String, Vec<String>>,
     result_consumed: Option<bool>,
     under_asserterror: bool,
+    into_unfetched: bool,
 ) -> SnapshotCallsiteResolution {
     let callsite_key = &ce.callsite_id;
     let ua = if under_asserterror { Some(true) } else { None };
@@ -2318,7 +2595,13 @@ fn classify_resolution(
                 .cloned()
                 .unwrap_or_default();
             edges.sort();
-            base_row("resolved", edges, None)
+            // D6: resolved only into body-less dependency rows (with its edges).
+            let status = if into_unfetched {
+                "unfetched-dependency"
+            } else {
+                "resolved"
+            };
+            base_row(status, edges, None)
         }
         "ambiguous" => {
             let mut cands: Vec<String> = ce
@@ -2375,7 +2658,7 @@ fn classify_resolution(
 // here would hide the gap of an upper-case manifest guid.
 // ---------------------------------------------------------------------------
 
-fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<SnapshotAnalysisGap> {
+fn derive_analysis_gaps(resolved: &Model, base: &TreeInputs<'_>) -> Vec<SnapshotAnalysisGap> {
     use crate::program::model::role::Role;
     use std::collections::BTreeSet;
 
@@ -2386,7 +2669,7 @@ fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<Snapshot
 
     // Source-only: no coverage.routinesParseIncomplete plumbed through the base, so
     // derive parse-incomplete from routine.parse_incomplete (the model's own flag).
-    for r in &base.ws_routines {
+    for r in base.ws_routines {
         if r.parse_incomplete {
             out.push(SnapshotAnalysisGap {
                 kind: "parse-incomplete".to_string(),
@@ -2402,7 +2685,7 @@ fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<Snapshot
     // A routine whose body a parse error lost is not a symbol: it has its
     // `parse-incomplete` gap above (final panel C1, as the loop below).
     let mut opaque_apps: BTreeSet<String> = BTreeSet::new();
-    for r in &base.ws_routines {
+    for r in base.ws_routines {
         if !r.body_available
             && !r.parse_incomplete
             && is_dependency_role(r)
@@ -2422,7 +2705,7 @@ fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<Snapshot
     }
 
     // Body-unavailable dependency routines not covered by an app-level gap.
-    for r in &base.ws_routines {
+    for r in base.ws_routines {
         if r.body_available || r.parse_incomplete {
             continue;
         }
@@ -2459,20 +2742,19 @@ fn derive_analysis_gaps(resolved: &Model, base: &R3a3SourceBase) -> Vec<Snapshot
 // Sort by subject; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
-fn derive_coverage(base: &R3a3SourceBase) -> Vec<SnapshotCoverageRecord> {
+fn derive_coverage(base: &TreeInputs<'_>) -> Vec<SnapshotCoverageRecord> {
     let map = &base.routine_to_stable;
     let mut out: Vec<SnapshotCoverageRecord> = Vec::new();
     // The cone is per id, so the rows of a collided id would emit equal copies:
     // each id is emitted once (class K, #160 step 11b §4.6).
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for r in &base.ws_routines {
-        let Some(cone) = base.cones.get(&r.id) else {
+    for r in base.ws_routines {
+        let Some(cov) = base.coverage.get(&r.id) else {
             continue;
         };
         if !seen.insert(r.id.as_str()) {
             continue;
         }
-        let cov = &cone.coverage;
         let mut reasons = cov.reasons.clone();
         reasons.sort();
         let mut unknown_targets: Vec<String> = cov
@@ -2498,12 +2780,12 @@ fn derive_coverage(base: &R3a3SourceBase) -> Vec<SnapshotCoverageRecord> {
 // graph. Sort by (kind|routine|eventId); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
-fn derive_event_declarations(base: &R3a3SourceBase) -> Vec<SnapshotEventDeclaration> {
+fn derive_event_declarations(base: &TreeInputs<'_>) -> Vec<SnapshotEventDeclaration> {
     let map = &base.routine_to_stable;
 
     // routine id → internal id (for enclosingRoutineId) + source anchor.
     let mut routine_anchor: HashMap<&str, &PAnchor> = HashMap::new();
-    for r in &base.ws_routines {
+    for r in base.ws_routines {
         routine_anchor.insert(r.id.as_str(), &r.source_anchor);
     }
 
@@ -2583,13 +2865,13 @@ fn derive_event_declarations(base: &R3a3SourceBase) -> Vec<SnapshotEventDeclarat
 
 fn derive_root_classifications(
     resolved: &Model,
-    base: &R3a3SourceBase,
+    base: &TreeInputs<'_>,
 ) -> Vec<SnapshotRootClassificationSlot> {
     let map = &base.routine_to_stable;
 
     // internal routine id → (&PAnchor, internal id) for the sourceAnchor.
     let mut routine_by_id: HashMap<&str, &ModelRoutine> = HashMap::new();
-    for r in &base.ws_routines {
+    for r in base.ws_routines {
         routine_by_id.insert(r.id.as_str(), r);
     }
 
@@ -2625,14 +2907,14 @@ fn derive_root_classifications(
 // ---------------------------------------------------------------------------
 
 fn derive_routine_order_frames(
-    base: &R3a3SourceBase,
+    base: &TreeInputs<'_>,
     collided: &CollidedRows<'_>,
 ) -> Option<RoutineOrderFrames> {
     use std::collections::BTreeMap;
     // BTreeMap keyed by stable routine id → sorted key order (ordinal, M8
     // contract; M1: BTreeMap iteration is sorted, not hash-ordered).
     let mut entries: BTreeMap<String, Vec<ScopeFrame>> = BTreeMap::new();
-    for r in &base.ws_routines {
+    for r in base.ws_routines {
         // A collided id's one table holds every row's frames (`CollidedRows`).
         let frames = match collided.frames.get(r.id.as_str()) {
             Some(table) => table.clone(),
@@ -2641,7 +2923,7 @@ fn derive_routine_order_frames(
         if frames.is_empty() {
             continue;
         }
-        let stable = stable_routine_id(&r.id, &base.routine_to_stable);
+        let stable = stable_routine_id(&r.id, base.routine_to_stable);
         entries.insert(stable, frames);
     }
     if entries.is_empty() {
@@ -2856,5 +3138,210 @@ mod capability_fact_serialize_tests {
         let s = serde_json::to_string(&fact("http", None)).unwrap();
         assert!(!s.contains("witnessOperationId"));
         assert!(idx(&s, "witnessCallsiteId") < idx(&s, "extra"));
+    }
+}
+
+#[cfg(test)]
+mod step6_tree_tests {
+    use super::*;
+    use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
+    use crate::engine::l4::exec_relation::ExecRelation;
+    use crate::engine::l5::detector_context::{compose_capabilities, det_cone_inputs};
+
+    /// Every field of `s` as a comparable string; the pd arena's hash map in
+    /// key order.
+    fn fields(s: &CapabilitySnapshot) -> Vec<(&'static str, String)> {
+        let by_routine: std::collections::BTreeMap<_, _> =
+            s.pd_solution.by_routine.iter().collect();
+        vec![
+            ("identities", format!("{:?}", s.identities)),
+            ("capability_facts", format!("{:?}", s.capability_facts)),
+            ("typed_edges", format!("{:?}", s.typed_edges)),
+            ("operation_index", format!("{:?}", s.operation_index)),
+            ("callsite_index", format!("{:?}", s.callsite_index)),
+            (
+                "callsite_resolutions",
+                format!("{:?}", s.callsite_resolutions),
+            ),
+            ("analysis_gaps", format!("{:?}", s.analysis_gaps)),
+            ("coverage", format!("{:?}", s.coverage)),
+            ("event_declarations", format!("{:?}", s.event_declarations)),
+            (
+                "root_classifications",
+                format!("{:?}", s.root_classifications),
+            ),
+            (
+                "routine_order_frames",
+                format!("{:?}", s.routine_order_frames),
+            ),
+            ("pd.states", format!("{:?}", s.pd_solution.states)),
+            ("pd.links", format!("{:?}", s.pd_solution.links)),
+            ("pd.by_routine", format!("{by_routine:?}")),
+        ]
+    }
+
+    /// #160 step 6 Task 1 (spec §4.4): on every `tests/r0-corpus/` app dir,
+    /// single-app, `compose_tree` over the relation's cone with `{false, All}`
+    /// equals today's cut snapshot (`compose_snapshot`) field by field.
+    /// Preconditions: some dir has inherited facts and some has pd states, so
+    /// the drain and the scoped arena are exercised.
+    #[test]
+    fn compose_tree_equals_the_cut_snapshot_single_app() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+        let mut dirs: Vec<std::path::PathBuf> = walkdir::WalkDir::new(&root)
+            .into_iter()
+            .map(|e| e.unwrap().into_path())
+            .filter(|p| p.join("app.json").is_file())
+            .collect();
+        dirs.sort();
+        assert!(!dirs.is_empty(), "precondition: r0 dirs under {root:?}");
+        let (mut with_inherited, mut with_pd) = (0usize, 0usize);
+        let mut failures: Vec<String> = Vec::new();
+        for dir in &dirs {
+            let where_ = dir.strip_prefix(&root).unwrap_or(dir).display().to_string();
+            let inputs = crate::program::inputs::InputSet::read(dir, &Default::default());
+            let Some(m) =
+                crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+                    &inputs,
+                    crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+                    false,
+                )
+            else {
+                failures.push(format!("{where_}: no single-app model built"));
+                continue;
+            };
+            let cut = compose_snapshot(&m);
+            let rel = ExecRelation::single_app(&m);
+            let (mut caps, raw) = compose_capabilities(
+                &m,
+                rel.cone(),
+                det_cone_inputs(&m, &rel),
+                ConeScope {
+                    derived: false,
+                    raw: WitnessScope::All,
+                },
+            );
+            let tree = compose_tree(&m, rel.cone(), &[], &mut caps, raw, &HashMap::new());
+            with_inherited += usize::from(
+                cut.capability_facts
+                    .iter()
+                    .any(|f| f.provenance == "inherited"),
+            );
+            with_pd += usize::from(!cut.pd_solution.states.is_empty());
+            for ((name, a), (_, b)) in fields(&cut).into_iter().zip(fields(&tree)) {
+                if a != b {
+                    failures.push(format!("{where_}: {name} differs"));
+                }
+            }
+        }
+        assert!(
+            with_inherited > 0,
+            "precondition: a dir with inherited facts"
+        );
+        assert!(with_pd > 0, "precondition: a dir with pd states");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// T6 (R6-4, spec §4.5): a hand-stated cone edge `R → A` at `csX`, a call
+    /// site absent from `R`'s `call_sites`, carrying a pd link (R's state
+    /// reached from A's seed across it). `derive_typed_edges` keeps no row for
+    /// it and records it skipped; the arena drops the link, counts
+    /// `PD_EDGE_UNMAPPED` once, and the debug check passes (the key was
+    /// skipped).
+    #[test]
+    fn t6_an_anchorless_cone_edge_has_no_row_and_its_link_is_dropped() {
+        use crate::engine::l4::capability_cone::TypedOutEdge;
+        use crate::engine::l4::pd_solve::{ConeArena, ConeLink, ConeState, Producer};
+        use crate::engine::l4::summary::TempState;
+        use crate::engine::l5::detector_context::cones_census;
+        use crate::engine::l5::test_support::{fact, routine};
+        use std::sync::atomic::Ordering;
+        let ws_routines = vec![routine("R", "procedure"), routine("A", "procedure")];
+        assert!(
+            ws_routines.iter().all(|r| r.call_sites.is_empty()),
+            "precondition: no routine has a call site"
+        );
+        let typed = vec![TypedEdge {
+            kind: "direct-call".to_string(),
+            from: "R".to_string(),
+            to: Some("A".to_string()),
+            callsite_id: Some("csX".to_string()),
+            operation_id: None,
+            event_id: None,
+            receiver_type: None,
+            interface_name: None,
+            candidate_count: None,
+            target_object: None,
+            object_type: None,
+            target_id_source: None,
+            trigger_kind: None,
+            fires: None,
+        }];
+        let routine_to_stable: HashMap<String, String> = [("R", "R#"), ("A", "A#")]
+            .into_iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        let event_graph = EventGraph::default();
+        let (direct_full, coverage) = (HashMap::new(), HashMap::new());
+        let inp = TreeInputs {
+            ws_routines: &ws_routines,
+            typed_edges: &typed,
+            calls: &[],
+            dependency_calls: &[],
+            event_graph: &event_graph,
+            direct_full: &direct_full,
+            coverage: &coverage,
+            routine_to_stable: &routine_to_stable,
+            bodyless_dependency: None,
+        };
+        let (rows, skipped) = derive_typed_edges(&inp);
+        assert!(rows.is_empty(), "no typedEdges row: {rows:?}");
+        assert_eq!(skipped.len(), 1, "the row is recorded skipped");
+
+        let mut producer_fact = fact("insert", "table", Some("T"));
+        producer_fact.subject = "A".to_string();
+        producer_fact.witness_operation_id = Some("opA".to_string());
+        let state = |routine: &str, seed: bool, links: std::ops::Range<usize>| ConeState {
+            producer: 0,
+            routine: std::sync::Arc::from(routine),
+            t: TempState::Known(false),
+            reqs: Vec::new(),
+            seed,
+            dist: usize::from(!seed),
+            links,
+        };
+        let cone = ConeArena {
+            producers: vec![Producer {
+                fact: std::sync::Arc::new(producer_fact.clone()),
+                owner: std::sync::Arc::from("A"),
+                operation_id: "opA".to_string(),
+            }],
+            states: vec![state("A", true, 0..0), state("R", false, 0..1)],
+            links: vec![ConeLink {
+                callee_state: 0,
+                edge: 0,
+            }],
+            edges: vec![TypedOutEdge::new(
+                "A".to_string(),
+                "direct-call".to_string(),
+                Some("csX".to_string()),
+                None,
+                None,
+            )],
+            by_routine: [("A", 0), ("R", 1)]
+                .into_iter()
+                .map(|(r, s)| (std::sync::Arc::from(r), vec![s]))
+                .collect(),
+        };
+        let facts = vec![snapshot_fact(&producer_fact, "A#")];
+        let before = cones_census::PD_EDGE_UNMAPPED.load(Ordering::Relaxed);
+        let arena = derive_pd_arena(&inp, &cone, None, &rows, &facts, &skipped);
+        assert_eq!(
+            cones_census::PD_EDGE_UNMAPPED.load(Ordering::Relaxed) - before,
+            1,
+            "the link is counted unmapped"
+        );
+        assert_eq!(arena.states.len(), 2, "both states are kept");
+        assert!(arena.links.is_empty(), "the link is dropped");
     }
 }

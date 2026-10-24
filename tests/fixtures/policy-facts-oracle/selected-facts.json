@@ -1,0 +1,3127 @@
+{
+  "cases": {
+    "dep/dep_ambiguous cross": {
+      "any": 1,
+      "direct": 0,
+      "inherited": 1,
+      "routines": 1,
+      "sha256": "6f29c020c008ad23d4fdfc2f553e17e64a16ab4554311b44fe47edb78b9d53b5"
+    },
+    "dep/dep_ambiguous single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "840e959480f6231c0575f09a66321b261265e557a72920d90fc56171f4fe7cdc"
+    },
+    "dep/dep_ledger cross": {
+      "any": 1,
+      "direct": 0,
+      "inherited": 1,
+      "routines": 1,
+      "sha256": "80d1234be8e3b857b512cffbf9be33f23a4cc5710710ae87892d017df688f30f"
+    },
+    "dep/dep_ledger single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "1fd054c731496f6be8e8cc32aa907b498f23e39f50f4d01ad026130010241c69"
+    },
+    "dep/dep_uncertainty cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "840e959480f6231c0575f09a66321b261265e557a72920d90fc56171f4fe7cdc"
+    },
+    "dep/dep_uncertainty single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "840e959480f6231c0575f09a66321b261265e557a72920d90fc56171f4fe7cdc"
+    },
+    "dep/rule_b cross": {
+      "any": 15,
+      "direct": 6,
+      "inherited": 9,
+      "routines": 7,
+      "sha256": "2c8b51a576e63a79504ca9d585a8e29dde63de730b86da1d30b451e9be6eb0a4"
+    },
+    "dep/rule_b single": {
+      "any": 6,
+      "direct": 6,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "df1c71864d1db82266b8ea37f2825a72ec428c7479622776680bd5f5b61762aa"
+    },
+    "dep/step4 cross": {
+      "any": 8,
+      "direct": 3,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "082c303766e095d32715e47493873c53c42c8b656f1a71877a78d2908ba61fa7"
+    },
+    "dep/step4 single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "8e6832c69000d518f15d8650aad450a09cc2615d626d11f11f5fee1c7e8c8636"
+    },
+    "dep/symbol_only_dep cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "1085a99f77314c2515feda01be21fd50ed31925033f469951990cbbbef9980f1"
+    },
+    "dep/symbol_only_dep single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "1085a99f77314c2515feda01be21fd50ed31925033f469951990cbbbef9980f1"
+    },
+    "r0/ws-api-page cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "06fd962773d60a6c9295d196e1520c122140db75058218f050617d0e4101e105"
+    },
+    "r0/ws-api-page single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "06fd962773d60a6c9295d196e1520c122140db75058218f050617d0e4101e105"
+    },
+    "r0/ws-argument-bindings cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "4e1567246a287bc44567ef909a17f4dbc4380c6cc9285257f8c8d394f196ad0c"
+    },
+    "r0/ws-argument-bindings single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "4e1567246a287bc44567ef909a17f4dbc4380c6cc9285257f8c8d394f196ad0c"
+    },
+    "r0/ws-bare-implicit-rec cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 28,
+      "sha256": "0ef73a251a1e936161930de595fdf0a792a523fa0993aa93f6ec2708a0652716"
+    },
+    "r0/ws-bare-implicit-rec single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 28,
+      "sha256": "0ef73a251a1e936161930de595fdf0a792a523fa0993aa93f6ec2708a0652716"
+    },
+    "r0/ws-bare-implicit-rec-field cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 9,
+      "sha256": "d23859fe1e372a7093ef3a281e33c5ff86d0ae16636c8ab7e2c056274097206d"
+    },
+    "r0/ws-bare-implicit-rec-field single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 9,
+      "sha256": "d23859fe1e372a7093ef3a281e33c5ff86d0ae16636c8ab7e2c056274097206d"
+    },
+    "r0/ws-baseapp-closure cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7f6fe189abee96af160c6ad5b8c721f01f4ff3803c8ea21df0ef55b58b21de8d"
+    },
+    "r0/ws-baseapp-closure single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7f6fe189abee96af160c6ad5b8c721f01f4ff3803c8ea21df0ef55b58b21de8d"
+    },
+    "r0/ws-baseapp-closure-control cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "bfd7588946f55a2926317f364efaaa783594ebb65206d147e2fe34be1a2fee62"
+    },
+    "r0/ws-baseapp-closure-control single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "bfd7588946f55a2926317f364efaaa783594ebb65206d147e2fe34be1a2fee62"
+    },
+    "r0/ws-builtin-dispatch-audit cross": {
+      "any": 6,
+      "direct": 6,
+      "inherited": 0,
+      "routines": 6,
+      "sha256": "4fc5eb386b99b7d22f1a0d11945a9e2e103821312fbea036025f8bcf97ab89c8"
+    },
+    "r0/ws-builtin-dispatch-audit single": {
+      "any": 6,
+      "direct": 6,
+      "inherited": 0,
+      "routines": 6,
+      "sha256": "4fc5eb386b99b7d22f1a0d11945a9e2e103821312fbea036025f8bcf97ab89c8"
+    },
+    "r0/ws-builtin-shadow cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 8,
+      "sha256": "4cfe391561ab60bef4e2598fe00d6fb2492b48a2d4df9c46aaa28f63e56af74e"
+    },
+    "r0/ws-builtin-shadow single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 8,
+      "sha256": "4cfe391561ab60bef4e2598fe00d6fb2492b48a2d4df9c46aaa28f63e56af74e"
+    },
+    "r0/ws-builtin-shadow-arity cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "a6f424c8655ca1df1fdd456d14fe4008ad813d065727be2b0bb6a4b59a327b10"
+    },
+    "r0/ws-builtin-shadow-arity single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "a6f424c8655ca1df1fdd456d14fe4008ad813d065727be2b0bb6a4b59a327b10"
+    },
+    "r0/ws-builtin-unresolved cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "289c393e42451a0b28f1590f369e45a85340b05f31f05a45bac1e1e785e6b4f2"
+    },
+    "r0/ws-builtin-unresolved single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "289c393e42451a0b28f1590f369e45a85340b05f31f05a45bac1e1e785e6b4f2"
+    },
+    "r0/ws-calls cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "e2ea48da7dfaa57676ee29dd28bac79fc9b927dab444908c3887e80c451ade8e"
+    },
+    "r0/ws-calls single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "e2ea48da7dfaa57676ee29dd28bac79fc9b927dab444908c3887e80c451ade8e"
+    },
+    "r0/ws-callsite-resolutions cross": {
+      "any": 5,
+      "direct": 2,
+      "inherited": 3,
+      "routines": 5,
+      "sha256": "a5e46b68f4a040486f912df94f8066faad5ac0ca368db40c5c04d8e29de0de7f"
+    },
+    "r0/ws-callsite-resolutions single": {
+      "any": 5,
+      "direct": 2,
+      "inherited": 3,
+      "routines": 5,
+      "sha256": "a5e46b68f4a040486f912df94f8066faad5ac0ca368db40c5c04d8e29de0de7f"
+    },
+    "r0/ws-chain-tables cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 14,
+      "sha256": "79a3b54253be65d8d858d2f68514440f3661787f6268f2f1ebf7336026e7c24b"
+    },
+    "r0/ws-chain-tables single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 14,
+      "sha256": "79a3b54253be65d8d858d2f68514440f3661787f6268f2f1ebf7336026e7c24b"
+    },
+    "r0/ws-codeunit-rec cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "cb592904053483212d097f56cec81d7827cdfc36487f2d7680439b8dd47c790a"
+    },
+    "r0/ws-codeunit-rec single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "cb592904053483212d097f56cec81d7827cdfc36487f2d7680439b8dd47c790a"
+    },
+    "r0/ws-combined cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "9aee3762ff49d647c53597f48dc866b223ca9684dbb7b94cd26bdeb513dab5c1"
+    },
+    "r0/ws-combined single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "9aee3762ff49d647c53597f48dc866b223ca9684dbb7b94cd26bdeb513dab5c1"
+    },
+    "r0/ws-compose cross": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "6428a0c513ce2bf4291bf105d8f399476f4c54b68feb7a7042ef6762471d6216"
+    },
+    "r0/ws-compose single": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "6428a0c513ce2bf4291bf105d8f399476f4c54b68feb7a7042ef6762471d6216"
+    },
+    "r0/ws-compound-call-result cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 24,
+      "sha256": "37e5e85f22799b07c18cabd7afd2366652c061002ff719976d2d510aa6acf733"
+    },
+    "r0/ws-compound-call-result single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 24,
+      "sha256": "37e5e85f22799b07c18cabd7afd2366652c061002ff719976d2d510aa6acf733"
+    },
+    "r0/ws-compound-framework cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 10,
+      "sha256": "2c6c440f4ba39ac39c09e7b799bc3cc493ce32432b8def9299ca6f37206cf34c"
+    },
+    "r0/ws-compound-framework single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 10,
+      "sha256": "2c6c440f4ba39ac39c09e7b799bc3cc493ce32432b8def9299ca6f37206cf34c"
+    },
+    "r0/ws-compound-receiver cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "04542782dab488115e833163765409f2c880e6cf0da3a8117eea999d1316db36"
+    },
+    "r0/ws-compound-receiver single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "04542782dab488115e833163765409f2c880e6cf0da3a8117eea999d1316db36"
+    },
+    "r0/ws-cross-object-chain cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 25,
+      "sha256": "fe2eb08d157bea674b78152942ba862499388eea64ba176fc3a63f9e2b61d3d0"
+    },
+    "r0/ws-cross-object-chain single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 25,
+      "sha256": "fe2eb08d157bea674b78152942ba862499388eea64ba176fc3a63f9e2b61d3d0"
+    },
+    "r0/ws-d1 cross": {
+      "any": 5,
+      "direct": 3,
+      "inherited": 2,
+      "routines": 6,
+      "sha256": "34863f05896e209159f7369916506af1456d28ec24b815c8e7107238ce2ffc16"
+    },
+    "r0/ws-d1 single": {
+      "any": 5,
+      "direct": 3,
+      "inherited": 2,
+      "routines": 6,
+      "sha256": "34863f05896e209159f7369916506af1456d28ec24b815c8e7107238ce2ffc16"
+    },
+    "r0/ws-d1-dep-terminal cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7a8ffa6c3ce49d00778ccd10dc02411969d48f42112030bbdd0a76bce389dc86"
+    },
+    "r0/ws-d1-dep-terminal single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7a8ffa6c3ce49d00778ccd10dc02411969d48f42112030bbdd0a76bce389dc86"
+    },
+    "r0/ws-d1-multi-caller cross": {
+      "any": 7,
+      "direct": 4,
+      "inherited": 3,
+      "routines": 4,
+      "sha256": "4664bb82453e0d7ec515741f39eec74d9280624fbdbe53af66ce6fc3bdd94432"
+    },
+    "r0/ws-d1-multi-caller single": {
+      "any": 7,
+      "direct": 4,
+      "inherited": 3,
+      "routines": 4,
+      "sha256": "4664bb82453e0d7ec515741f39eec74d9280624fbdbe53af66ce6fc3bdd94432"
+    },
+    "r0/ws-d1-setup-singleton cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "d686a88514ce0e97f06a65a10136aa62b7d4c315a4286ffcbf0e6ef797145eb1"
+    },
+    "r0/ws-d1-setup-singleton single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "d686a88514ce0e97f06a65a10136aa62b7d4c315a4286ffcbf0e6ef797145eb1"
+    },
+    "r0/ws-d1-uncertain-path cross": {
+      "any": 4,
+      "direct": 1,
+      "inherited": 3,
+      "routines": 7,
+      "sha256": "a1f27c6458e9a5e302dc305b5d08e59a8e5cbf3fe73fca338055508af5ac4422"
+    },
+    "r0/ws-d1-uncertain-path single": {
+      "any": 4,
+      "direct": 1,
+      "inherited": 3,
+      "routines": 7,
+      "sha256": "a1f27c6458e9a5e302dc305b5d08e59a8e5cbf3fe73fca338055508af5ac4422"
+    },
+    "r0/ws-d10-self-mod cross": {
+      "any": 7,
+      "direct": 7,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "c12c75239455daa68f6d026298001349f38c052058d1ea8ead24d3b73dafb7ac"
+    },
+    "r0/ws-d10-self-mod single": {
+      "any": 7,
+      "direct": 7,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "c12c75239455daa68f6d026298001349f38c052058d1ea8ead24d3b73dafb7ac"
+    },
+    "r0/ws-d11-modifyall-init cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "e6c893265134b8e0313de76023edb451d646be429ea578b4812d365009a3ba19"
+    },
+    "r0/ws-d11-modifyall-init single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "e6c893265134b8e0313de76023edb451d646be429ea578b4812d365009a3ba19"
+    },
+    "r0/ws-d11-no-get cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "388e5fc901823a92ad6dbb68c8f231a00993aceb09a9b53fe7cf48b507c2aeab"
+    },
+    "r0/ws-d11-no-get single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "388e5fc901823a92ad6dbb68c8f231a00993aceb09a9b53fe7cf48b507c2aeab"
+    },
+    "r0/ws-d12-dead-event cross": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "fa2b3aa45166ae049c2377721073ecd8114c3471da0a1221523ee6becfd4fab4"
+    },
+    "r0/ws-d12-dead-event single": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "fa2b3aa45166ae049c2377721073ecd8114c3471da0a1221523ee6becfd4fab4"
+    },
+    "r0/ws-d13-internal-call cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9c0458cff840f8ae08a5b95a6513e5acdcd1d5f84eaa1b60d85f6a9738dafbbb"
+    },
+    "r0/ws-d13-internal-call single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9c0458cff840f8ae08a5b95a6513e5acdcd1d5f84eaa1b60d85f6a9738dafbbb"
+    },
+    "r0/ws-d13-member-call cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "d82f751c0c328502213360ea9a8534fe6c345ef46e8e40ec0a90c3371c27d96a"
+    },
+    "r0/ws-d13-member-call single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "d82f751c0c328502213360ea9a8534fe6c345ef46e8e40ec0a90c3371c27d96a"
+    },
+    "r0/ws-d14-dead-routine cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "5f82a949990b59077f82b41d0dfae25086a5e7f861497b60c02a81327021cd24"
+    },
+    "r0/ws-d14-dead-routine single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "5f82a949990b59077f82b41d0dfae25086a5e7f861497b60c02a81327021cd24"
+    },
+    "r0/ws-d14-internal-no-ivt cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "72c6231b86f51f4a52769d2a36d282c5bfe3a4e3bb70635178a907841a4c5fd0"
+    },
+    "r0/ws-d14-internal-no-ivt single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "72c6231b86f51f4a52769d2a36d282c5bfe3a4e3bb70635178a907841a4c5fd0"
+    },
+    "r0/ws-d14-page-procedure cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "dbc1752604f30ee684346404418b3f49f264554aa93530e4e09e6c47651717e2"
+    },
+    "r0/ws-d14-page-procedure single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "dbc1752604f30ee684346404418b3f49f264554aa93530e4e09e6c47651717e2"
+    },
+    "r0/ws-d14-public-dead cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 8,
+      "sha256": "dd082418a04a5cbaee86c7c427b3c80b6ad18b03cbcd43ac2dd4af6f6cf63c2b"
+    },
+    "r0/ws-d14-public-dead single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 8,
+      "sha256": "dd082418a04a5cbaee86c7c427b3c80b6ad18b03cbcd43ac2dd4af6f6cf63c2b"
+    },
+    "r0/ws-d16-obsolete cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "dd7b92e41d837d10c8eb904bd583706fc06f363bac61798cce159e033bbc4ab9"
+    },
+    "r0/ws-d16-obsolete single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "dd7b92e41d837d10c8eb904bd583706fc06f363bac61798cce159e033bbc4ab9"
+    },
+    "r0/ws-d17-drift cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "13874224c8fea14d07d4ef4cf4cd627c5a1b5c27161e042399f8a5d911f7e1e7"
+    },
+    "r0/ws-d17-drift single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "13874224c8fea14d07d4ef4cf4cd627c5a1b5c27161e042399f8a5d911f7e1e7"
+    },
+    "r0/ws-d18 cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "d3a26de1c88908f22e1977b9f94443d1b28dcbb78a5eb93ac265a7f031e28157"
+    },
+    "r0/ws-d18 single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "d3a26de1c88908f22e1977b9f94443d1b28dcbb78a5eb93ac265a7f031e28157"
+    },
+    "r0/ws-d19 cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "ad10300ad6257b6c0f4aa3d00430968b8e47e44ca3713eb1fb40c2e16db05743"
+    },
+    "r0/ws-d19 single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "ad10300ad6257b6c0f4aa3d00430968b8e47e44ca3713eb1fb40c2e16db05743"
+    },
+    "r0/ws-d2 cross": {
+      "any": 16,
+      "direct": 5,
+      "inherited": 11,
+      "routines": 7,
+      "sha256": "afaa0675d79b8d2c08f8af4333e15023ef6dc7014f95270fcd1bc53c321c4ca9"
+    },
+    "r0/ws-d2 single": {
+      "any": 16,
+      "direct": 5,
+      "inherited": 11,
+      "routines": 7,
+      "sha256": "afaa0675d79b8d2c08f8af4333e15023ef6dc7014f95270fcd1bc53c321c4ca9"
+    },
+    "r0/ws-d2-uncertain cross": {
+      "any": 8,
+      "direct": 3,
+      "inherited": 5,
+      "routines": 4,
+      "sha256": "c014b5106caacb6d9fa721d51d39b100e527f7dce2eeb1908ea9e22a408f4681"
+    },
+    "r0/ws-d2-uncertain single": {
+      "any": 8,
+      "direct": 3,
+      "inherited": 5,
+      "routines": 4,
+      "sha256": "c014b5106caacb6d9fa721d51d39b100e527f7dce2eeb1908ea9e22a408f4681"
+    },
+    "r0/ws-d20 cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "f6bf63a9722eb093a59ed53a809aad1374ac0826077042a0f4ca7fd00ecd8b10"
+    },
+    "r0/ws-d20 single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "f6bf63a9722eb093a59ed53a809aad1374ac0826077042a0f4ca7fd00ecd8b10"
+    },
+    "r0/ws-d21 cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "f057b58852ba2a0b49ea9be274af86270ba6647926b3e97946d92b0bf91e4624"
+    },
+    "r0/ws-d21 single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "f057b58852ba2a0b49ea9be274af86270ba6647926b3e97946d92b0bf91e4624"
+    },
+    "r0/ws-d22 cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "42dda6ea3af3817d0287c3e075c4ceea72c8d01fb11c4a1b75146918aa6d35be"
+    },
+    "r0/ws-d22 single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "42dda6ea3af3817d0287c3e075c4ceea72c8d01fb11c4a1b75146918aa6d35be"
+    },
+    "r0/ws-d29 cross": {
+      "any": 8,
+      "direct": 8,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "7e551b0e31b886b9d8b86a83268c9e1c53ec56087485007076bff3733545a287"
+    },
+    "r0/ws-d29 single": {
+      "any": 8,
+      "direct": 8,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "7e551b0e31b886b9d8b86a83268c9e1c53ec56087485007076bff3733545a287"
+    },
+    "r0/ws-d3 cross": {
+      "any": 7,
+      "direct": 7,
+      "inherited": 0,
+      "routines": 8,
+      "sha256": "16b4fae57a373382289b4c1f3b9d5b2f7d18430f4decc56ee5f2ac478120f37a"
+    },
+    "r0/ws-d3 single": {
+      "any": 7,
+      "direct": 7,
+      "inherited": 0,
+      "routines": 8,
+      "sha256": "16b4fae57a373382289b4c1f3b9d5b2f7d18430f4decc56ee5f2ac478120f37a"
+    },
+    "r0/ws-d3-method-stmt cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "6c8fd236ec96f16582c25ad6f2bea9a0f290c66e533b5ba44ec0159f723529bd"
+    },
+    "r0/ws-d3-method-stmt single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "6c8fd236ec96f16582c25ad6f2bea9a0f290c66e533b5ba44ec0159f723529bd"
+    },
+    "r0/ws-d3-temp cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "f42afdf3163360aa218563e909c731a749b3f0bf86569a02d187dc3d5e4fdc91"
+    },
+    "r0/ws-d3-temp single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "f42afdf3163360aa218563e909c731a749b3f0bf86569a02d187dc3d5e4fdc91"
+    },
+    "r0/ws-d32 cross": {
+      "any": 8,
+      "direct": 5,
+      "inherited": 3,
+      "routines": 8,
+      "sha256": "1ba681f457a7842bb9eca5601a342396c3c3c3b7fff82f3211c536cf547c4c5c"
+    },
+    "r0/ws-d32 single": {
+      "any": 8,
+      "direct": 5,
+      "inherited": 3,
+      "routines": 8,
+      "sha256": "1ba681f457a7842bb9eca5601a342396c3c3c3b7fff82f3211c536cf547c4c5c"
+    },
+    "r0/ws-d33 cross": {
+      "any": 6,
+      "direct": 6,
+      "inherited": 0,
+      "routines": 6,
+      "sha256": "0a2747e7bb712fbbd4890cadc1eb4fae2a4c6c692ef161fcf7d4637e92f0c6ee"
+    },
+    "r0/ws-d33 single": {
+      "any": 6,
+      "direct": 6,
+      "inherited": 0,
+      "routines": 6,
+      "sha256": "0a2747e7bb712fbbd4890cadc1eb4fae2a4c6c692ef161fcf7d4637e92f0c6ee"
+    },
+    "r0/ws-d33-mixed-temp-key cross": {
+      "any": 11,
+      "direct": 5,
+      "inherited": 6,
+      "routines": 5,
+      "sha256": "f7c29a2f8903e9636a53ec4005995abec65bdcb7dcce14f5d2c2f6dfa807daff"
+    },
+    "r0/ws-d33-mixed-temp-key single": {
+      "any": 11,
+      "direct": 5,
+      "inherited": 6,
+      "routines": 5,
+      "sha256": "f7c29a2f8903e9636a53ec4005995abec65bdcb7dcce14f5d2c2f6dfa807daff"
+    },
+    "r0/ws-d34 cross": {
+      "any": 5,
+      "direct": 4,
+      "inherited": 1,
+      "routines": 6,
+      "sha256": "5a59c397e34b59234b2ef4ff321ef2920d507167a871ed06c374b5b54d1c8e59"
+    },
+    "r0/ws-d34 single": {
+      "any": 5,
+      "direct": 4,
+      "inherited": 1,
+      "routines": 6,
+      "sha256": "5a59c397e34b59234b2ef4ff321ef2920d507167a871ed06c374b5b54d1c8e59"
+    },
+    "r0/ws-d35 cross": {
+      "any": 8,
+      "direct": 7,
+      "inherited": 1,
+      "routines": 5,
+      "sha256": "5178902253cc9e031cd14220f6dc452520cea7315b67f8c8aa71ac6599677a5a"
+    },
+    "r0/ws-d35 single": {
+      "any": 8,
+      "direct": 7,
+      "inherited": 1,
+      "routines": 5,
+      "sha256": "5178902253cc9e031cd14220f6dc452520cea7315b67f8c8aa71ac6599677a5a"
+    },
+    "r0/ws-d36 cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "657254d21ea23d18a6576921efb71a743f6303f18ea33d63c3c1aa0f575da287"
+    },
+    "r0/ws-d36 single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "657254d21ea23d18a6576921efb71a743f6303f18ea33d63c3c1aa0f575da287"
+    },
+    "r0/ws-d37 cross": {
+      "any": 15,
+      "direct": 12,
+      "inherited": 3,
+      "routines": 10,
+      "sha256": "897deb89236668bc1f710f02b2671a678ad861807e44f2fcb4a285497f154f63"
+    },
+    "r0/ws-d37 single": {
+      "any": 15,
+      "direct": 12,
+      "inherited": 3,
+      "routines": 10,
+      "sha256": "897deb89236668bc1f710f02b2671a678ad861807e44f2fcb4a285497f154f63"
+    },
+    "r0/ws-d38 cross": {
+      "any": 14,
+      "direct": 7,
+      "inherited": 7,
+      "routines": 8,
+      "sha256": "82b96297168752a3d8dd764a10129a712ff9aabbf9b56006698fcd1fb8780372"
+    },
+    "r0/ws-d38 single": {
+      "any": 14,
+      "direct": 7,
+      "inherited": 7,
+      "routines": 8,
+      "sha256": "82b96297168752a3d8dd764a10129a712ff9aabbf9b56006698fcd1fb8780372"
+    },
+    "r0/ws-d39 cross": {
+      "any": 6,
+      "direct": 5,
+      "inherited": 1,
+      "routines": 5,
+      "sha256": "fb3e87d6904ec1d541a397d9ad7226d86d6e8379fdc79e05a523a19a8d15bc8f"
+    },
+    "r0/ws-d39 single": {
+      "any": 6,
+      "direct": 5,
+      "inherited": 1,
+      "routines": 5,
+      "sha256": "fb3e87d6904ec1d541a397d9ad7226d86d6e8379fdc79e05a523a19a8d15bc8f"
+    },
+    "r0/ws-d4-repeated-get cross": {
+      "any": 7,
+      "direct": 7,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "5f18ee3d0fa7086f4c116cf69b2e52e8170d00e71cd3140d69b30c34755ada95"
+    },
+    "r0/ws-d4-repeated-get single": {
+      "any": 7,
+      "direct": 7,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "5f18ee3d0fa7086f4c116cf69b2e52e8170d00e71cd3140d69b30c34755ada95"
+    },
+    "r0/ws-d40 cross": {
+      "any": 13,
+      "direct": 6,
+      "inherited": 7,
+      "routines": 10,
+      "sha256": "12ef1518b0ec1c1d53347358469f26d157d7bd21f41c1a0d5f3107ca69078bb8"
+    },
+    "r0/ws-d40 single": {
+      "any": 13,
+      "direct": 6,
+      "inherited": 7,
+      "routines": 10,
+      "sha256": "12ef1518b0ec1c1d53347358469f26d157d7bd21f41c1a0d5f3107ca69078bb8"
+    },
+    "r0/ws-d41 cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "b47232920a7b0f4919274ab8aed6e7dce1035dc89e1ea89069fe7547a51d6795"
+    },
+    "r0/ws-d41 single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "b47232920a7b0f4919274ab8aed6e7dce1035dc89e1ea89069fe7547a51d6795"
+    },
+    "r0/ws-d42 cross": {
+      "any": 12,
+      "direct": 7,
+      "inherited": 5,
+      "routines": 6,
+      "sha256": "68281aea25afe3e5432c5c7c3b2649247cebfb4eb67f70c7c5b3cf38cbec43e1"
+    },
+    "r0/ws-d42 single": {
+      "any": 12,
+      "direct": 7,
+      "inherited": 5,
+      "routines": 6,
+      "sha256": "68281aea25afe3e5432c5c7c3b2649247cebfb4eb67f70c7c5b3cf38cbec43e1"
+    },
+    "r0/ws-d5-modifyall cross": {
+      "any": 60,
+      "direct": 60,
+      "inherited": 0,
+      "routines": 19,
+      "sha256": "b85f4a195cd3b4eac44214d7ddc0f9d49596edbb3c3d3523b105dca7aa665b5c"
+    },
+    "r0/ws-d5-modifyall single": {
+      "any": 60,
+      "direct": 60,
+      "inherited": 0,
+      "routines": 19,
+      "sha256": "b85f4a195cd3b4eac44214d7ddc0f9d49596edbb3c3d3523b105dca7aa665b5c"
+    },
+    "r0/ws-d50-medium cross": {
+      "any": 14,
+      "direct": 7,
+      "inherited": 7,
+      "routines": 11,
+      "sha256": "15242fd7fad6bb50d99302101d7bb215e1df44c1c35a6d2a03672d6f65cf742b"
+    },
+    "r0/ws-d50-medium single": {
+      "any": 14,
+      "direct": 7,
+      "inherited": 7,
+      "routines": 11,
+      "sha256": "15242fd7fad6bb50d99302101d7bb215e1df44c1c35a6d2a03672d6f65cf742b"
+    },
+    "r0/ws-d50-neg cross": {
+      "any": 6,
+      "direct": 5,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "17b1e5add7d9e9fb03d8ca8c1ebcaec44107eb515b8e1aad58568f5a55308448"
+    },
+    "r0/ws-d50-neg single": {
+      "any": 6,
+      "direct": 5,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "17b1e5add7d9e9fb03d8ca8c1ebcaec44107eb515b8e1aad58568f5a55308448"
+    },
+    "r0/ws-d50-pos cross": {
+      "any": 6,
+      "direct": 5,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "eeda3cb6a554b584ef03c72d048b28c8ae110c25aa73716854845879cded4567"
+    },
+    "r0/ws-d50-pos single": {
+      "any": 6,
+      "direct": 5,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "eeda3cb6a554b584ef03c72d048b28c8ae110c25aa73716854845879cded4567"
+    },
+    "r0/ws-d50-temp-gate cross": {
+      "any": 16,
+      "direct": 16,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "c780feaa2425fe00909398508ce0169e415f3d365f84d11499d62c3343623a07"
+    },
+    "r0/ws-d50-temp-gate single": {
+      "any": 16,
+      "direct": 16,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "c780feaa2425fe00909398508ce0169e415f3d365f84d11499d62c3343623a07"
+    },
+    "r0/ws-d51-jobqueue cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9a90ac01fddc89c227b1ea259ab74210062bbd2e74cb6f1f92e063828f8e8619"
+    },
+    "r0/ws-d51-jobqueue single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9a90ac01fddc89c227b1ea259ab74210062bbd2e74cb6f1f92e063828f8e8619"
+    },
+    "r0/ws-d51-neg cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "bd59e5dab8f291272115bad242c322b123d17774180ff3d1504546fea03e0bf7"
+    },
+    "r0/ws-d51-neg single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "bd59e5dab8f291272115bad242c322b123d17774180ff3d1504546fea03e0bf7"
+    },
+    "r0/ws-d51-pos cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9a90ac01fddc89c227b1ea259ab74210062bbd2e74cb6f1f92e063828f8e8619"
+    },
+    "r0/ws-d51-pos single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9a90ac01fddc89c227b1ea259ab74210062bbd2e74cb6f1f92e063828f8e8619"
+    },
+    "r0/ws-d52 cross": {
+      "any": 8,
+      "direct": 8,
+      "inherited": 0,
+      "routines": 6,
+      "sha256": "79fa0173dd2835ffbeb2753b926ab9cdf140573574a71cfdef0e5c9a2be237f1"
+    },
+    "r0/ws-d52 single": {
+      "any": 8,
+      "direct": 8,
+      "inherited": 0,
+      "routines": 6,
+      "sha256": "79fa0173dd2835ffbeb2753b926ab9cdf140573574a71cfdef0e5c9a2be237f1"
+    },
+    "r0/ws-d53 cross": {
+      "any": 12,
+      "direct": 4,
+      "inherited": 8,
+      "routines": 7,
+      "sha256": "361816da254259ec22ab8bbebe8c87b3c6cbc77d7aa85e9cfa94da26eb53ab40"
+    },
+    "r0/ws-d53 single": {
+      "any": 12,
+      "direct": 4,
+      "inherited": 8,
+      "routines": 7,
+      "sha256": "361816da254259ec22ab8bbebe8c87b3c6cbc77d7aa85e9cfa94da26eb53ab40"
+    },
+    "r0/ws-d54 cross": {
+      "any": 5,
+      "direct": 1,
+      "inherited": 4,
+      "routines": 5,
+      "sha256": "925957255f51419bce8a57fc2cd489c9f147be0b30e328fa82a15fa78a5f3f21"
+    },
+    "r0/ws-d54 single": {
+      "any": 5,
+      "direct": 1,
+      "inherited": 4,
+      "routines": 5,
+      "sha256": "925957255f51419bce8a57fc2cd489c9f147be0b30e328fa82a15fa78a5f3f21"
+    },
+    "r0/ws-d55 cross": {
+      "any": 7,
+      "direct": 5,
+      "inherited": 2,
+      "routines": 3,
+      "sha256": "6155f8c878de1e0c56dd2b45ae7770b61ec681dd0198ac4257ba267210a0539f"
+    },
+    "r0/ws-d55 single": {
+      "any": 7,
+      "direct": 5,
+      "inherited": 2,
+      "routines": 3,
+      "sha256": "6155f8c878de1e0c56dd2b45ae7770b61ec681dd0198ac4257ba267210a0539f"
+    },
+    "r0/ws-d56 cross": {
+      "any": 19,
+      "direct": 19,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "ef704f314d3476e219a3ff4081497863acf1fc11be50dcd029b828b61b4de963"
+    },
+    "r0/ws-d56 single": {
+      "any": 19,
+      "direct": 19,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "ef704f314d3476e219a3ff4081497863acf1fc11be50dcd029b828b61b4de963"
+    },
+    "r0/ws-d57 cross": {
+      "any": 7,
+      "direct": 5,
+      "inherited": 2,
+      "routines": 5,
+      "sha256": "146a912264e10cdaffa23c8473413388d0460304b6c87f8db9461d748d810fba"
+    },
+    "r0/ws-d57 single": {
+      "any": 7,
+      "direct": 5,
+      "inherited": 2,
+      "routines": 5,
+      "sha256": "146a912264e10cdaffa23c8473413388d0460304b6c87f8db9461d748d810fba"
+    },
+    "r0/ws-d58 cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "f0b8c7e776bf16e4337ec835a2bec139cd98211cd7dc48038ad108d2fee41d4f"
+    },
+    "r0/ws-d58 single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "f0b8c7e776bf16e4337ec835a2bec139cd98211cd7dc48038ad108d2fee41d4f"
+    },
+    "r0/ws-d59 cross": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "bd6f17477d5479b01e10f3ec66478039358c554d09708fe1857a928fa7020ce0"
+    },
+    "r0/ws-d59 single": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "bd6f17477d5479b01e10f3ec66478039358c554d09708fe1857a928fa7020ce0"
+    },
+    "r0/ws-d60 cross": {
+      "any": 58,
+      "direct": 58,
+      "inherited": 0,
+      "routines": 19,
+      "sha256": "bfc3be1089609ffd038c6956797d30742518cae348ebff018c48c245a49e9b2a"
+    },
+    "r0/ws-d60 single": {
+      "any": 58,
+      "direct": 58,
+      "inherited": 0,
+      "routines": 19,
+      "sha256": "bfc3be1089609ffd038c6956797d30742518cae348ebff018c48c245a49e9b2a"
+    },
+    "r0/ws-d61 cross": {
+      "any": 13,
+      "direct": 7,
+      "inherited": 6,
+      "routines": 6,
+      "sha256": "e209c993c69d5b4a15800af5b065ba9546850c37a8aad27c018d38fcefc9cd6a"
+    },
+    "r0/ws-d61 single": {
+      "any": 13,
+      "direct": 7,
+      "inherited": 6,
+      "routines": 6,
+      "sha256": "e209c993c69d5b4a15800af5b065ba9546850c37a8aad27c018d38fcefc9cd6a"
+    },
+    "r0/ws-d62 cross": {
+      "any": 7,
+      "direct": 7,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "41879f62b68578823f17784e2129f0a3d15238e1536715c919046cc9c9a15d27"
+    },
+    "r0/ws-d62 single": {
+      "any": 7,
+      "direct": 7,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "41879f62b68578823f17784e2129f0a3d15238e1536715c919046cc9c9a15d27"
+    },
+    "r0/ws-d63 cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "1c1712547b7642b438a61ada20c5ef8f1e57658ab2b42d426065b5c3577ade49"
+    },
+    "r0/ws-d63 single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "1c1712547b7642b438a61ada20c5ef8f1e57658ab2b42d426065b5c3577ade49"
+    },
+    "r0/ws-d64 cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 0,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    "r0/ws-d64 single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 0,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    "r0/ws-d7-event-cycle cross": {
+      "any": 20,
+      "direct": 4,
+      "inherited": 16,
+      "routines": 6,
+      "sha256": "f6cfc7cdde5f608499d2b6530051aefb921619bc2fb92185f110c35a209af438"
+    },
+    "r0/ws-d7-event-cycle single": {
+      "any": 20,
+      "direct": 4,
+      "inherited": 16,
+      "routines": 6,
+      "sha256": "f6cfc7cdde5f608499d2b6530051aefb921619bc2fb92185f110c35a209af438"
+    },
+    "r0/ws-d8-commit-in-tx cross": {
+      "any": 15,
+      "direct": 8,
+      "inherited": 7,
+      "routines": 3,
+      "sha256": "546e65647d4043b5c5a4736b7e01dd6581a30cd26d6c18cc645761c23ee20b65"
+    },
+    "r0/ws-d8-commit-in-tx single": {
+      "any": 15,
+      "direct": 8,
+      "inherited": 7,
+      "routines": 3,
+      "sha256": "546e65647d4043b5c5a4736b7e01dd6581a30cd26d6c18cc645761c23ee20b65"
+    },
+    "r0/ws-diff-coverage-narrowed/a cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "79c014822e044209672c2bd635c1951ef5f05e2c47dbb71eb1695df2b45fa0a5"
+    },
+    "r0/ws-diff-coverage-narrowed/a single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "79c014822e044209672c2bd635c1951ef5f05e2c47dbb71eb1695df2b45fa0a5"
+    },
+    "r0/ws-diff-coverage-narrowed/b cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "88871c950c5dbbe34867fe25f1d26f288ec615e0029f6c6b61540f0f60f31ca9"
+    },
+    "r0/ws-diff-coverage-narrowed/b single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "88871c950c5dbbe34867fe25f1d26f288ec615e0029f6c6b61540f0f60f31ca9"
+    },
+    "r0/ws-diff-new-capability/a cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "77edaeb009949630032e19fac32c2441c00b020aa90a4840b38c880556e8dac4"
+    },
+    "r0/ws-diff-new-capability/a single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "77edaeb009949630032e19fac32c2441c00b020aa90a4840b38c880556e8dac4"
+    },
+    "r0/ws-diff-new-capability/b cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "558e8e76e6a7d6d6ad99ec553e1a8fb500c28ef384aa04ab17b47da891a3b7ea"
+    },
+    "r0/ws-diff-new-capability/b single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "558e8e76e6a7d6d6ad99ec553e1a8fb500c28ef384aa04ab17b47da891a3b7ea"
+    },
+    "r0/ws-diff-permission-expanded/a cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "6fbd81afcc7a2daabe6d6fc7977c73ee6f977e69ef5e1624a18b84f544efc44e"
+    },
+    "r0/ws-diff-permission-expanded/a single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "6fbd81afcc7a2daabe6d6fc7977c73ee6f977e69ef5e1624a18b84f544efc44e"
+    },
+    "r0/ws-diff-permission-expanded/b cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9b6efab40418dadbfda24624dc0162ee71c8ec2ef29ce776917ec62dce0567e0"
+    },
+    "r0/ws-diff-permission-expanded/b single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9b6efab40418dadbfda24624dc0162ee71c8ec2ef29ce776917ec62dce0567e0"
+    },
+    "r0/ws-diff-removed-field/a cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 0,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    "r0/ws-diff-removed-field/a single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 0,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    "r0/ws-diff-removed-field/b cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 0,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    "r0/ws-diff-removed-field/b single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 0,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    "r0/ws-diff-rename/a cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "c0252bf8994a4eeb19e4a2e0e7df3a8cf1cd724f2d0c6f416267ddd2b2536cce"
+    },
+    "r0/ws-diff-rename/a single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "c0252bf8994a4eeb19e4a2e0e7df3a8cf1cd724f2d0c6f416267ddd2b2536cce"
+    },
+    "r0/ws-diff-rename/b cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "b40c1ebd7cbd98cdf10bd4b1ef4e5c4c11e8125611026be0d6229e33187532df"
+    },
+    "r0/ws-diff-rename/b single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "b40c1ebd7cbd98cdf10bd4b1ef4e5c4c11e8125611026be0d6229e33187532df"
+    },
+    "r0/ws-digest-pr49388 cross": {
+      "any": 8,
+      "direct": 4,
+      "inherited": 4,
+      "routines": 5,
+      "sha256": "a5d0539ac4290f81f76ef116be2940bc4af375f0917c50187eac4f8da72c2b5c"
+    },
+    "r0/ws-digest-pr49388 single": {
+      "any": 8,
+      "direct": 4,
+      "inherited": 4,
+      "routines": 5,
+      "sha256": "a5d0539ac4290f81f76ef116be2940bc4af375f0917c50187eac4f8da72c2b5c"
+    },
+    "r0/ws-e2e cross": {
+      "any": 17,
+      "direct": 6,
+      "inherited": 11,
+      "routines": 10,
+      "sha256": "73f9fbcaa1e7070bc40e73f1f4b18a6f3463e4b8b1072103d653be3aa6ed5c0e"
+    },
+    "r0/ws-e2e single": {
+      "any": 17,
+      "direct": 6,
+      "inherited": 11,
+      "routines": 10,
+      "sha256": "73f9fbcaa1e7070bc40e73f1f4b18a6f3463e4b8b1072103d653be3aa6ed5c0e"
+    },
+    "r0/ws-empty-abi-dep cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "522526e65bdb05f3c43f0cd2645a032606141abefcd29d27c77bda5c249f802f"
+    },
+    "r0/ws-empty-abi-dep single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "522526e65bdb05f3c43f0cd2645a032606141abefcd29d27c77bda5c249f802f"
+    },
+    "r0/ws-event-chains cross": {
+      "any": 12,
+      "direct": 5,
+      "inherited": 7,
+      "routines": 4,
+      "sha256": "5bc9cb4a6a8af19635f6a8f8352142f4595e72c59f4d100359254329923b28ea"
+    },
+    "r0/ws-event-chains single": {
+      "any": 12,
+      "direct": 5,
+      "inherited": 7,
+      "routines": 4,
+      "sha256": "5bc9cb4a6a8af19635f6a8f8352142f4595e72c59f4d100359254329923b28ea"
+    },
+    "r0/ws-event-cycle cross": {
+      "any": 17,
+      "direct": 4,
+      "inherited": 13,
+      "routines": 5,
+      "sha256": "c88445b035a9ac9e844a85055d443ea688814a32897a973b4b20268e3bf5a320"
+    },
+    "r0/ws-event-cycle single": {
+      "any": 17,
+      "direct": 4,
+      "inherited": 13,
+      "routines": 5,
+      "sha256": "c88445b035a9ac9e844a85055d443ea688814a32897a973b4b20268e3bf5a320"
+    },
+    "r0/ws-event-d45-deep cross": {
+      "any": 17,
+      "direct": 5,
+      "inherited": 12,
+      "routines": 5,
+      "sha256": "2308fea2b7267244e8b7529fb2fb466d61df0d8aaae96f76bf5220c14d028471"
+    },
+    "r0/ws-event-d45-deep single": {
+      "any": 17,
+      "direct": 5,
+      "inherited": 12,
+      "routines": 5,
+      "sha256": "2308fea2b7267244e8b7529fb2fb466d61df0d8aaae96f76bf5220c14d028471"
+    },
+    "r0/ws-event-fanout cross": {
+      "any": 10,
+      "direct": 7,
+      "inherited": 3,
+      "routines": 8,
+      "sha256": "dd0062d9ab968b6dafafe293a8aa29dbbf357bea6813875b53cb70c364b2ede7"
+    },
+    "r0/ws-event-fanout single": {
+      "any": 10,
+      "direct": 7,
+      "inherited": 3,
+      "routines": 8,
+      "sha256": "dd0062d9ab968b6dafafe293a8aa29dbbf357bea6813875b53cb70c364b2ede7"
+    },
+    "r0/ws-event-ishandled cross": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 3,
+      "sha256": "38538372a3c16f915c0ae107f6ff6f7754509baf9c4a679251773948398a2f49"
+    },
+    "r0/ws-event-ishandled single": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 3,
+      "sha256": "38538372a3c16f915c0ae107f6ff6f7754509baf9c4a679251773948398a2f49"
+    },
+    "r0/ws-event-ishandled-conditional-set cross": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 3,
+      "sha256": "6a778aa008808cc0edb9d2066703de25b9a89c4fb440bff0cdad9395fda0c9bb"
+    },
+    "r0/ws-event-ishandled-conditional-set single": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 3,
+      "sha256": "6a778aa008808cc0edb9d2066703de25b9a89c4fb440bff0cdad9395fda0c9bb"
+    },
+    "r0/ws-event-ishandled-exit cross": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 3,
+      "sha256": "c0b77dcc0f04871d0bc70d3a7a6d71a139bd96d461908bbcec9644ec748f079f"
+    },
+    "r0/ws-event-ishandled-exit single": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 3,
+      "sha256": "c0b77dcc0f04871d0bc70d3a7a6d71a139bd96d461908bbcec9644ec748f079f"
+    },
+    "r0/ws-event-ishandled-helper cross": {
+      "any": 7,
+      "direct": 3,
+      "inherited": 4,
+      "routines": 4,
+      "sha256": "ce2410ae35735a7a95a038bca3eabb303fee04cb91417a8631837b91f3c2efc2"
+    },
+    "r0/ws-event-ishandled-helper single": {
+      "any": 7,
+      "direct": 3,
+      "inherited": 4,
+      "routines": 4,
+      "sha256": "ce2410ae35735a7a95a038bca3eabb303fee04cb91417a8631837b91f3c2efc2"
+    },
+    "r0/ws-event-ishandled-multi-dispatch cross": {
+      "any": 9,
+      "direct": 4,
+      "inherited": 5,
+      "routines": 4,
+      "sha256": "cb62fa78045bd9d1e82bcf7b18491ffffe85345d581acf0d2941d851198fcd92"
+    },
+    "r0/ws-event-ishandled-multi-dispatch single": {
+      "any": 9,
+      "direct": 4,
+      "inherited": 5,
+      "routines": 4,
+      "sha256": "cb62fa78045bd9d1e82bcf7b18491ffffe85345d581acf0d2941d851198fcd92"
+    },
+    "r0/ws-event-ishandled-nested-guard cross": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 3,
+      "sha256": "d552b15869f8a8687518d9031b568dbd15807b051c3d1705fa5fd65ae77ca76a"
+    },
+    "r0/ws-event-ishandled-nested-guard single": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 3,
+      "sha256": "d552b15869f8a8687518d9031b568dbd15807b051c3d1705fa5fd65ae77ca76a"
+    },
+    "r0/ws-event-isolated cross": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "de953d365c31cb1565c6fdc0fd0c6ea0b843e0f41885d81e2a96b95dcac0d4aa"
+    },
+    "r0/ws-event-isolated single": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "de953d365c31cb1565c6fdc0fd0c6ea0b843e0f41885d81e2a96b95dcac0d4aa"
+    },
+    "r0/ws-event-multi-sub-overlap cross": {
+      "any": 10,
+      "direct": 5,
+      "inherited": 5,
+      "routines": 4,
+      "sha256": "7c17f8f28a82a1ebaccf8b24b9280ae0ed19b6270199f66e31ce3c07fb510bec"
+    },
+    "r0/ws-event-multi-sub-overlap single": {
+      "any": 10,
+      "direct": 5,
+      "inherited": 5,
+      "routines": 4,
+      "sha256": "7c17f8f28a82a1ebaccf8b24b9280ae0ed19b6270199f66e31ce3c07fb510bec"
+    },
+    "r0/ws-event-partial-coverage cross": {
+      "any": 11,
+      "direct": 4,
+      "inherited": 7,
+      "routines": 3,
+      "sha256": "9f26d94f11cf6ce506599de393cc61be2a97062eee9e37ba9c9ac03064831842"
+    },
+    "r0/ws-event-partial-coverage single": {
+      "any": 11,
+      "direct": 4,
+      "inherited": 7,
+      "routines": 3,
+      "sha256": "9f26d94f11cf6ce506599de393cc61be2a97062eee9e37ba9c9ac03064831842"
+    },
+    "r0/ws-event-pub-cycle cross": {
+      "any": 20,
+      "direct": 4,
+      "inherited": 16,
+      "routines": 6,
+      "sha256": "b171b901051cd715aa12e690d6b9b9b219172fcf43a952d88e1cb416bb0a2c88"
+    },
+    "r0/ws-event-pub-cycle single": {
+      "any": 20,
+      "direct": 4,
+      "inherited": 16,
+      "routines": 6,
+      "sha256": "b171b901051cd715aa12e690d6b9b9b219172fcf43a952d88e1cb416bb0a2c88"
+    },
+    "r0/ws-event-read-after-write cross": {
+      "any": 12,
+      "direct": 5,
+      "inherited": 7,
+      "routines": 4,
+      "sha256": "ce8731145abdbd04e788d818a270f1f1601657dab6786b7ffee46eb5517bf5d7"
+    },
+    "r0/ws-event-read-after-write single": {
+      "any": 12,
+      "direct": 5,
+      "inherited": 7,
+      "routines": 4,
+      "sha256": "ce8731145abdbd04e788d818a270f1f1601657dab6786b7ffee46eb5517bf5d7"
+    },
+    "r0/ws-event-transitive-exposure cross": {
+      "any": 8,
+      "direct": 3,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "30a13a36d3f244644bb1fbb3df558fc33598d88068cf851622a058d82e288d20"
+    },
+    "r0/ws-event-transitive-exposure single": {
+      "any": 8,
+      "direct": 3,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "30a13a36d3f244644bb1fbb3df558fc33598d88068cf851622a058d82e288d20"
+    },
+    "r0/ws-events cross": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 4,
+      "sha256": "190abe748f5609eb4159ec17e6681f6aaff41340cb8318dd69a8d461b9405ee6"
+    },
+    "r0/ws-events single": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 4,
+      "sha256": "190abe748f5609eb4159ec17e6681f6aaff41340cb8318dd69a8d461b9405ee6"
+    },
+    "r0/ws-implicit-trigger cross": {
+      "any": 3,
+      "direct": 1,
+      "inherited": 2,
+      "routines": 3,
+      "sha256": "1ab8597cbe0cd8cc720dcfe071758653d601670146c541e18b80ce8dae26f50e"
+    },
+    "r0/ws-implicit-trigger single": {
+      "any": 3,
+      "direct": 1,
+      "inherited": 2,
+      "routines": 3,
+      "sha256": "1ab8597cbe0cd8cc720dcfe071758653d601670146c541e18b80ce8dae26f50e"
+    },
+    "r0/ws-inline-suppress cross": {
+      "any": 9,
+      "direct": 9,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "bd3ce94e5e15b2d7cdd6bee2eb0c0c0f9259ee2b705da171cbfb4bd66a77e78e"
+    },
+    "r0/ws-inline-suppress single": {
+      "any": 9,
+      "direct": 9,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "bd3ce94e5e15b2d7cdd6bee2eb0c0c0f9259ee2b705da171cbfb4bd66a77e78e"
+    },
+    "r0/ws-install-codeunit cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "71ee58a858110e85646e4e5d3828f609b049cd7266fe6373ea620f6be85c3839"
+    },
+    "r0/ws-install-codeunit single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "71ee58a858110e85646e4e5d3828f609b049cd7266fe6373ea620f6be85c3839"
+    },
+    "r0/ws-interface-dispatch cross": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 4,
+      "sha256": "dce2d7b037be153f9a6209ba7dab45df398fa633b78bea8ebb80766f95bf0018"
+    },
+    "r0/ws-interface-dispatch single": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 4,
+      "sha256": "dce2d7b037be153f9a6209ba7dab45df398fa633b78bea8ebb80766f95bf0018"
+    },
+    "r0/ws-may-facts cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 10,
+      "sha256": "c907a9ead5cdbe548a7643dea26a3d8b4dfbc63832e64d73880a020a434db60a"
+    },
+    "r0/ws-may-facts single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 10,
+      "sha256": "c907a9ead5cdbe548a7643dea26a3d8b4dfbc63832e64d73880a020a434db60a"
+    },
+    "r0/ws-member-call-codeunit cross": {
+      "any": 7,
+      "direct": 3,
+      "inherited": 4,
+      "routines": 6,
+      "sha256": "1345998d920e6e044e4e2f6286b17f0daba517d1235e5cdf3f78a4960efce167"
+    },
+    "r0/ws-member-call-codeunit single": {
+      "any": 7,
+      "direct": 3,
+      "inherited": 4,
+      "routines": 6,
+      "sha256": "1345998d920e6e044e4e2f6286b17f0daba517d1235e5cdf3f78a4960efce167"
+    },
+    "r0/ws-member-call-resolution cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "02346876f868cee66055e2387b1977884a62b3d70370d1acc2d8f3a56b111469"
+    },
+    "r0/ws-member-call-resolution single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "02346876f868cee66055e2387b1977884a62b3d70370d1acc2d8f3a56b111469"
+    },
+    "r0/ws-multi-object cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "b108cc755dc5646d535a81df8a21369e02572cf8ca0751f54a36b9a548944246"
+    },
+    "r0/ws-multi-object single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "b108cc755dc5646d535a81df8a21369e02572cf8ca0751f54a36b9a548944246"
+    },
+    "r0/ws-object-name-shape cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "a349f19e3e291fb45fdd254afb0a32ebbf688675dd19d7b18c8410df44ebda67"
+    },
+    "r0/ws-object-name-shape single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "a349f19e3e291fb45fdd254afb0a32ebbf688675dd19d7b18c8410df44ebda67"
+    },
+    "r0/ws-op-order cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "c0614f8c41ac7781e5c4987dfb065f7dea5cae0e8986c4664b510185a8db57fa"
+    },
+    "r0/ws-op-order single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "c0614f8c41ac7781e5c4987dfb065f7dea5cae0e8986c4664b510185a8db57fa"
+    },
+    "r0/ws-order-branch-error cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "6f25dcf625a232482739bb7ccd1b84af3d4c1d855510b6f66d6ab89dade58839"
+    },
+    "r0/ws-order-branch-error single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "6f25dcf625a232482739bb7ccd1b84af3d4c1d855510b6f66d6ab89dade58839"
+    },
+    "r0/ws-order-branch-exit cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "b70aff257ce6a9f91bf66ce204075d5a0c89c3389512f8af6c0f434eb7a10de6"
+    },
+    "r0/ws-order-branch-exit single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "b70aff257ce6a9f91bf66ce204075d5a0c89c3389512f8af6c0f434eb7a10de6"
+    },
+    "r0/ws-order-commit-before-io cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "5f49651b0427040e0262b7ada83ea2cd2927b16022d5a923006019ee5a6636dd"
+    },
+    "r0/ws-order-commit-before-io single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "5f49651b0427040e0262b7ada83ea2cd2927b16022d5a923006019ee5a6636dd"
+    },
+    "r0/ws-order-conditional-exit-before-commit cross": {
+      "any": 8,
+      "direct": 8,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "6cf1104a7fa8403e62d72e99cef7b08aba49f8621f01e9ae2823cddcc9110c08"
+    },
+    "r0/ws-order-conditional-exit-before-commit single": {
+      "any": 8,
+      "direct": 8,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "6cf1104a7fa8403e62d72e99cef7b08aba49f8621f01e9ae2823cddcc9110c08"
+    },
+    "r0/ws-order-condleaf cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "98742ee2e8ba18b83b3101840d50a44b5f95667bacdfd3877470bac4d128a200"
+    },
+    "r0/ws-order-condleaf single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "98742ee2e8ba18b83b3101840d50a44b5f95667bacdfd3877470bac4d128a200"
+    },
+    "r0/ws-order-io-before-commit cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "2580dd42d4342891dd715dcccfea1811119910b804aaf688a3bd462dc5eb21a6"
+    },
+    "r0/ws-order-io-before-commit single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "2580dd42d4342891dd715dcccfea1811119910b804aaf688a3bd462dc5eb21a6"
+    },
+    "r0/ws-order-loop cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "03fcd81d7462cd7a72c4b9c6673ad60e681744b1dd16f9503cdb38726b23b58b"
+    },
+    "r0/ws-order-loop single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "03fcd81d7462cd7a72c4b9c6673ad60e681744b1dd16f9503cdb38726b23b58b"
+    },
+    "r0/ws-order-transitive-unknown cross": {
+      "any": 4,
+      "direct": 2,
+      "inherited": 2,
+      "routines": 2,
+      "sha256": "717ef2cb58dbde9c46675cc931aedd8a829abb17151fdcdcedb027bd73b957e0"
+    },
+    "r0/ws-order-transitive-unknown single": {
+      "any": 4,
+      "direct": 2,
+      "inherited": 2,
+      "routines": 2,
+      "sha256": "717ef2cb58dbde9c46675cc931aedd8a829abb17151fdcdcedb027bd73b957e0"
+    },
+    "r0/ws-order-tryfunction cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "3983b3d4c229b2f27a868239f52c31db631362223904f7f2b41a19260ffaeef7"
+    },
+    "r0/ws-order-tryfunction single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "3983b3d4c229b2f27a868239f52c31db631362223904f7f2b41a19260ffaeef7"
+    },
+    "r0/ws-order-two-commits cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "f343f339ccfd48ef26a195a34a87bf876956d4b7cf223cf9667d124ea60c4ca4"
+    },
+    "r0/ws-order-two-commits single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "f343f339ccfd48ef26a195a34a87bf876956d4b7cf223cf9667d124ea60c4ca4"
+    },
+    "r0/ws-overload-arg-pos2 cross": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 8,
+      "sha256": "9817ea89ec742271694799bbaacd0a3157b5b6eadab3f8d87ea5b4b62dc1f71c"
+    },
+    "r0/ws-overload-arg-pos2 single": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 8,
+      "sha256": "9817ea89ec742271694799bbaacd0a3157b5b6eadab3f8d87ea5b4b62dc1f71c"
+    },
+    "r0/ws-overload-arg-type cross": {
+      "any": 5,
+      "direct": 3,
+      "inherited": 2,
+      "routines": 5,
+      "sha256": "91b6c6728eed8de50dbb5bcf393864514607c177ad681aaa13ffcffed2d556ae"
+    },
+    "r0/ws-overload-arg-type single": {
+      "any": 5,
+      "direct": 3,
+      "inherited": 2,
+      "routines": 5,
+      "sha256": "91b6c6728eed8de50dbb5bcf393864514607c177ad681aaa13ffcffed2d556ae"
+    },
+    "r0/ws-overload-callexpr-discriminator cross": {
+      "any": 4,
+      "direct": 2,
+      "inherited": 2,
+      "routines": 4,
+      "sha256": "4deb2efff987ce20f78561835f097a8771d575febfc03213e4c83c086372645f"
+    },
+    "r0/ws-overload-callexpr-discriminator single": {
+      "any": 4,
+      "direct": 2,
+      "inherited": 2,
+      "routines": 4,
+      "sha256": "4deb2efff987ce20f78561835f097a8771d575febfc03213e4c83c086372645f"
+    },
+    "r0/ws-overload-callresult-guards cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 13,
+      "sha256": "c5160ad862268922fa23a53a2ec813090221d83ac09c429d5c340b925699f314"
+    },
+    "r0/ws-overload-callresult-guards single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 13,
+      "sha256": "c5160ad862268922fa23a53a2ec813090221d83ac09c429d5c340b925699f314"
+    },
+    "r0/ws-overload-char cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "b11399b7c72c32f3426229bcfec1825eec173a93aa750b83e57553d3440c273e"
+    },
+    "r0/ws-overload-char single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "b11399b7c72c32f3426229bcfec1825eec173a93aa750b83e57553d3440c273e"
+    },
+    "r0/ws-overload-collision cross": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 7,
+      "sha256": "a43c877be1de59872fc5ee7d7ad3bf64901314f88d48c3e95070ddeaf1c5197e"
+    },
+    "r0/ws-overload-collision single": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 7,
+      "sha256": "a43c877be1de59872fc5ee7d7ad3bf64901314f88d48c3e95070ddeaf1c5197e"
+    },
+    "r0/ws-overload-enum-discriminator cross": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "d55112461d5ee23dfcf065cde8bd27efdf760b4fa2c1d8d8cd6c424ef315fdf4"
+    },
+    "r0/ws-overload-enum-discriminator single": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "d55112461d5ee23dfcf065cde8bd27efdf760b4fa2c1d8d8cd6c424ef315fdf4"
+    },
+    "r0/ws-overload-field-discriminator cross": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "8e530293b2892226dc01a72f614eeffe90ed41d8a2183455c07309a6cf0f7ab9"
+    },
+    "r0/ws-overload-field-discriminator single": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "8e530293b2892226dc01a72f614eeffe90ed41d8a2183455c07309a6cf0f7ab9"
+    },
+    "r0/ws-overload-membercall-discriminator cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "6456b262a9a47f9a5c52442647fa04fce011b414e8ead21eecebd54a9ee4ac3c"
+    },
+    "r0/ws-overload-membercall-discriminator single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "6456b262a9a47f9a5c52442647fa04fce011b414e8ead21eecebd54a9ee4ac3c"
+    },
+    "r0/ws-overload-negatives cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 9,
+      "sha256": "d03307b7ca523b6f84c41ad4532b285025bdfb93d6a32303fb810c4b7af006da"
+    },
+    "r0/ws-overload-negatives single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 9,
+      "sha256": "d03307b7ca523b6f84c41ad4532b285025bdfb93d6a32303fb810c4b7af006da"
+    },
+    "r0/ws-overload-pageext-callresult cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "18eb14690072d0e18953aacc8acb8c0fa1cbcbf05be35ba1ed94248afed7282a"
+    },
+    "r0/ws-overload-pageext-callresult single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "18eb14690072d0e18953aacc8acb8c0fa1cbcbf05be35ba1ed94248afed7282a"
+    },
+    "r0/ws-overload-with-scope cross": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 4,
+      "sha256": "bed34a32e1cfb6d1bcfc595a8bea7e360dbdad21918ea980576ad88227045a92"
+    },
+    "r0/ws-overload-with-scope single": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 4,
+      "sha256": "bed34a32e1cfb6d1bcfc595a8bea7e360dbdad21918ea980576ad88227045a92"
+    },
+    "r0/ws-page-rec cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "e42364cc6cbfec390d7a585253b4dc385f86a5549ac21ddebae876e9dfde4e1d"
+    },
+    "r0/ws-page-rec single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 7,
+      "sha256": "e42364cc6cbfec390d7a585253b4dc385f86a5549ac21ddebae876e9dfde4e1d"
+    },
+    "r0/ws-paramfx cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "12144bd4a36042955a36201ed70018d3698db44a509eee4ffe1d0a932d860018"
+    },
+    "r0/ws-paramfx single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "12144bd4a36042955a36201ed70018d3698db44a509eee4ffe1d0a932d860018"
+    },
+    "r0/ws-path-facts cross": {
+      "any": 19,
+      "direct": 17,
+      "inherited": 2,
+      "routines": 12,
+      "sha256": "d7df5cf31a13f7a8d1e2c1797f4b4284c1a3fa2f7a915154910291cc599e5ad0"
+    },
+    "r0/ws-path-facts single": {
+      "any": 19,
+      "direct": 17,
+      "inherited": 2,
+      "routines": 12,
+      "sha256": "d7df5cf31a13f7a8d1e2c1797f4b4284c1a3fa2f7a915154910291cc599e5ad0"
+    },
+    "r0/ws-perm-temp cross": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "46b476adcdc84b66557cb888eddd0c2aa0171c45934a0dd72d10c4aaf8ce9c67"
+    },
+    "r0/ws-perm-temp single": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "46b476adcdc84b66557cb888eddd0c2aa0171c45934a0dd72d10c4aaf8ce9c67"
+    },
+    "r0/ws-policy-api-dynamic-dispatch cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7ad14ae9503c44dff79b099ce0d48c9876732a62750f332475691e6e4a333665"
+    },
+    "r0/ws-policy-api-dynamic-dispatch single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7ad14ae9503c44dff79b099ce0d48c9876732a62750f332475691e6e4a333665"
+    },
+    "r0/ws-policy-api-isolated-storage cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "97817f2e9f937c31bb8901d96f899e519ea87fda305469255f162b95f17ed204"
+    },
+    "r0/ws-policy-api-isolated-storage single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "97817f2e9f937c31bb8901d96f899e519ea87fda305469255f162b95f17ed204"
+    },
+    "r0/ws-policy-api-ledger-write cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "31cc90005b5c67bf359d7d32201a01f490a338a21065d49b43e89579c29db979"
+    },
+    "r0/ws-policy-api-ledger-write single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "31cc90005b5c67bf359d7d32201a01f490a338a21065d49b43e89579c29db979"
+    },
+    "r0/ws-policy-api-ui cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "dc45d969a9efa52781391a82d6077b46542c92b9eeef34658c754e89a248bd6f"
+    },
+    "r0/ws-policy-api-ui single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "dc45d969a9efa52781391a82d6077b46542c92b9eeef34658c754e89a248bd6f"
+    },
+    "r0/ws-policy-clean cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "91a7d721140078056609048cafeee68a9d2fa4ce59cd51942999de45b9992917"
+    },
+    "r0/ws-policy-clean single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "91a7d721140078056609048cafeee68a9d2fa4ce59cd51942999de45b9992917"
+    },
+    "r0/ws-policy-commit-in-subscriber cross": {
+      "any": 8,
+      "direct": 3,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "668c14346feb2ad116e95f1c53a15eebd4b15d5b0a02d92fcd4a028f0825c828"
+    },
+    "r0/ws-policy-commit-in-subscriber single": {
+      "any": 8,
+      "direct": 3,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "668c14346feb2ad116e95f1c53a15eebd4b15d5b0a02d92fcd4a028f0825c828"
+    },
+    "r0/ws-policy-commit-in-trigger cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "26213c124bb67718748c69906296d2ade9318ec50dde3cc82744f8fbf82b01bd"
+    },
+    "r0/ws-policy-commit-in-trigger single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "26213c124bb67718748c69906296d2ade9318ec50dde3cc82744f8fbf82b01bd"
+    },
+    "r0/ws-policy-install-business-write cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "31a4ce67b6fd3aa92a3af4e1aeff0757e33450aaaa6d96f59e91ae1f1e1f3be3"
+    },
+    "r0/ws-policy-install-business-write single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "31a4ce67b6fd3aa92a3af4e1aeff0757e33450aaaa6d96f59e91ae1f1e1f3be3"
+    },
+    "r0/ws-policy-trigger-http cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "cd0a292c94ee33542e29bb3dca29c1ccccc777cfb8b673103be92e40f0f8b705"
+    },
+    "r0/ws-policy-trigger-http single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "cd0a292c94ee33542e29bb3dca29c1ccccc777cfb8b673103be92e40f0f8b705"
+    },
+    "r0/ws-pr-summary-multi cross": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "96b803a225f5e02182f4609cad8c762443719f1b06f98805910167f902e65014"
+    },
+    "r0/ws-pr-summary-multi single": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "96b803a225f5e02182f4609cad8c762443719f1b06f98805910167f902e65014"
+    },
+    "r0/ws-preflight-missingdep cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "c77970d433940a01609f69fcb8986813dd1ba62188c57821dbfe7bd52cf36953"
+    },
+    "r0/ws-preflight-missingdep single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "c77970d433940a01609f69fcb8986813dd1ba62188c57821dbfe7bd52cf36953"
+    },
+    "r0/ws-preset-txn cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "a9a07e5658db0b30abb3cdac33ea2fbcb0f6640bdf95e28f76b792f5bd4c9865"
+    },
+    "r0/ws-preset-txn single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "a9a07e5658db0b30abb3cdac33ea2fbcb0f6640bdf95e28f76b792f5bd4c9865"
+    },
+    "r0/ws-protected-abi cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 11,
+      "sha256": "a932ebada7a15def5b32a613664f77e476d4c79394016e5464f72cad19016b1f"
+    },
+    "r0/ws-protected-abi single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 11,
+      "sha256": "a932ebada7a15def5b32a613664f77e476d4c79394016e5464f72cad19016b1f"
+    },
+    "r0/ws-prove cross": {
+      "any": 17,
+      "direct": 15,
+      "inherited": 2,
+      "routines": 17,
+      "sha256": "368922926353b568c008e008e609db8c8fd2b3996efd07788baf4841a56f4ba9"
+    },
+    "r0/ws-prove single": {
+      "any": 17,
+      "direct": 15,
+      "inherited": 2,
+      "routines": 17,
+      "sha256": "368922926353b568c008e008e609db8c8fd2b3996efd07788baf4841a56f4ba9"
+    },
+    "r0/ws-r0-canon-stress cross": {
+      "any": 5,
+      "direct": 4,
+      "inherited": 1,
+      "routines": 16,
+      "sha256": "56bbcb5aa7f8afa7c58a4037b22d88aa6928656e2380fe02be26be4e6ebefed3"
+    },
+    "r0/ws-r0-canon-stress single": {
+      "any": 5,
+      "direct": 4,
+      "inherited": 1,
+      "routines": 16,
+      "sha256": "56bbcb5aa7f8afa7c58a4037b22d88aa6928656e2380fe02be26be4e6ebefed3"
+    },
+    "r0/ws-r2a-record-types cross": {
+      "any": 8,
+      "direct": 8,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "066f1f495d6c0ae75b29b50c8c9b1ce61374743b22edd77e4653c4e097bab406"
+    },
+    "r0/ws-r2a-record-types single": {
+      "any": 8,
+      "direct": 8,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "066f1f495d6c0ae75b29b50c8c9b1ce61374743b22edd77e4653c4e097bab406"
+    },
+    "r0/ws-r2b-external cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7e0ba14762f94b635d763d540842e8fed559412637fedaa984ac0271cab06038"
+    },
+    "r0/ws-r2b-external single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7e0ba14762f94b635d763d540842e8fed559412637fedaa984ac0271cab06038"
+    },
+    "r0/ws-r2b-opaque cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "c797ca961b9b29d94d4f2e1bb523febea034477405a51d2fef245d717eae63ca"
+    },
+    "r0/ws-r2b-opaque single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "c797ca961b9b29d94d4f2e1bb523febea034477405a51d2fef245d717eae63ca"
+    },
+    "r0/ws-r2c-maybe-elem cross": {
+      "any": 5,
+      "direct": 4,
+      "inherited": 1,
+      "routines": 5,
+      "sha256": "a8f2dcf972baf126b7007f07314e8efa7fb610470512bf7f680cbac18071c039"
+    },
+    "r0/ws-r2c-maybe-elem single": {
+      "any": 5,
+      "direct": 4,
+      "inherited": 1,
+      "routines": 5,
+      "sha256": "a8f2dcf972baf126b7007f07314e8efa7fb610470512bf7f680cbac18071c039"
+    },
+    "r0/ws-r2c-mixed cross": {
+      "any": 10,
+      "direct": 8,
+      "inherited": 2,
+      "routines": 8,
+      "sha256": "6adf0737b791ba72b9ce3b1e5b3c0ff192a0899abfcd3df8cb91fb7deecf6cf1"
+    },
+    "r0/ws-r2c-mixed single": {
+      "any": 10,
+      "direct": 8,
+      "inherited": 2,
+      "routines": 8,
+      "sha256": "6adf0737b791ba72b9ce3b1e5b3c0ff192a0899abfcd3df8cb91fb7deecf6cf1"
+    },
+    "r0/ws-r2c-two-sub-maybe cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "2c173ef6b5979848640440fff4d80b4eaaf079f4b2df80e071c7b033a6b840e4"
+    },
+    "r0/ws-r2c-two-sub-maybe single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "2c173ef6b5979848640440fff4d80b4eaaf079f4b2df80e071c7b033a6b840e4"
+    },
+    "r0/ws-r3a3-equal-distance-tie cross": {
+      "any": 6,
+      "direct": 1,
+      "inherited": 5,
+      "routines": 6,
+      "sha256": "c626bbe70badfa20145c2a509f3d31e86efa18243ed720409ee4c544b53fa2ef"
+    },
+    "r0/ws-r3a3-equal-distance-tie single": {
+      "any": 6,
+      "direct": 1,
+      "inherited": 5,
+      "routines": 6,
+      "sha256": "c626bbe70badfa20145c2a509f3d31e86efa18243ed720409ee4c544b53fa2ef"
+    },
+    "r0/ws-record-field-chain cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 8,
+      "sha256": "026562db67e288b5503b649a170b7d416af12d065c2a69be4cf24042348d0f13"
+    },
+    "r0/ws-record-field-chain single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 8,
+      "sha256": "026562db67e288b5503b649a170b7d416af12d065c2a69be4cf24042348d0f13"
+    },
+    "r0/ws-recursive cross": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "079ba2d0969b828648096cbd257773752156f043dd821f134c1dc4fa9fb61f83"
+    },
+    "r0/ws-recursive single": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "079ba2d0969b828648096cbd257773752156f043dd821f134c1dc4fa9fb61f83"
+    },
+    "r0/ws-report-dataitem cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 12,
+      "sha256": "c0194206e9fdb9ceef0d15a69cf400462775c1c417b043c454cb299922c89345"
+    },
+    "r0/ws-report-dataitem single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 12,
+      "sha256": "c0194206e9fdb9ceef0d15a69cf400462775c1c417b043c454cb299922c89345"
+    },
+    "r0/ws-report-trigger cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "c4bc6bf9b07eb7fd95fdcbb6be20354f49f543aec7aef5830dd403cc48632482"
+    },
+    "r0/ws-report-trigger single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "c4bc6bf9b07eb7fd95fdcbb6be20354f49f543aec7aef5830dd403cc48632482"
+    },
+    "r0/ws-resolve cross": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "703e568a1a63c3cdca13c331a8a87f620313d66ce90f72a745f239d1b96424d1"
+    },
+    "r0/ws-resolve single": {
+      "any": 2,
+      "direct": 1,
+      "inherited": 1,
+      "routines": 3,
+      "sha256": "703e568a1a63c3cdca13c331a8a87f620313d66ce90f72a745f239d1b96424d1"
+    },
+    "r0/ws-rollup-multi-detector cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "4a2fb5288e7ebb8e1bb98660833dc12ffaeb6989bbbf1cde714013545b915202"
+    },
+    "r0/ws-rollup-multi-detector single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "4a2fb5288e7ebb8e1bb98660833dc12ffaeb6989bbbf1cde714013545b915202"
+    },
+    "r0/ws-roots-config cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "8ca5e69f65f5e243d8039c436efbaf9184d38511fb9b1175d34035f054bb1cb4"
+    },
+    "r0/ws-roots-config single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "8ca5e69f65f5e243d8039c436efbaf9184d38511fb9b1175d34035f054bb1cb4"
+    },
+    "r0/ws-sibling-member-triggers cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "12c361e73779d24c6a903d32e772192a001880e84f437ab5e7490f1c611ec117"
+    },
+    "r0/ws-sibling-member-triggers single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "12c361e73779d24c6a903d32e772192a001880e84f437ab5e7490f1c611ec117"
+    },
+    "r0/ws-statement-tree cross": {
+      "any": 33,
+      "direct": 33,
+      "inherited": 0,
+      "routines": 26,
+      "sha256": "bf5ad8cf96b6172c74de00536e53357789ef3413e18f8f433a688ac70972be13"
+    },
+    "r0/ws-statement-tree single": {
+      "any": 33,
+      "direct": 33,
+      "inherited": 0,
+      "routines": 26,
+      "sha256": "bf5ad8cf96b6172c74de00536e53357789ef3413e18f8f433a688ac70972be13"
+    },
+    "r0/ws-test-codeunit cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "f7480833156f139a32960f1323f5449bdaae4d0ef12e3e8f2571a3ef67f40005"
+    },
+    "r0/ws-test-codeunit single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 3,
+      "sha256": "f7480833156f139a32960f1323f5449bdaae4d0ef12e3e8f2571a3ef67f40005"
+    },
+    "r0/ws-triggers cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 6,
+      "sha256": "3a9f85a8a491be8380878f722f6307763f1fbb88a34e3450f40353b9f83945b7"
+    },
+    "r0/ws-triggers single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 6,
+      "sha256": "3a9f85a8a491be8380878f722f6307763f1fbb88a34e3450f40353b9f83945b7"
+    },
+    "r0/ws-tx-span cross": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "df2576a32c9f3c3401154f5569943442fdd1d0f0b0dc91a0bac4bf9fccd3038a"
+    },
+    "r0/ws-tx-span single": {
+      "any": 5,
+      "direct": 5,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "df2576a32c9f3c3401154f5569943442fdd1d0f0b0dc91a0bac4bf9fccd3038a"
+    },
+    "r0/ws-txn-d46-neg cross": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 2,
+      "sha256": "767b8ae953a7cdd499b6c157e5614ae6b0514c204ccb7eb4f8b866c5c97275e6"
+    },
+    "r0/ws-txn-d46-neg single": {
+      "any": 6,
+      "direct": 3,
+      "inherited": 3,
+      "routines": 2,
+      "sha256": "767b8ae953a7cdd499b6c157e5614ae6b0514c204ccb7eb4f8b866c5c97275e6"
+    },
+    "r0/ws-txn-d46-pos cross": {
+      "any": 12,
+      "direct": 6,
+      "inherited": 6,
+      "routines": 4,
+      "sha256": "f04ce4b3447b90a8e38ada8d4d6dd869f3f8754a066565d09254147f01bb070b"
+    },
+    "r0/ws-txn-d46-pos single": {
+      "any": 12,
+      "direct": 6,
+      "inherited": 6,
+      "routines": 4,
+      "sha256": "f04ce4b3447b90a8e38ada8d4d6dd869f3f8754a066565d09254147f01bb070b"
+    },
+    "r0/ws-txn-d47-advisory-deduped cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "04801f42b4d7277b387c015dcd9c45d8265ed92fa499d655e1e79ca2ef557bbe"
+    },
+    "r0/ws-txn-d47-advisory-deduped single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "04801f42b4d7277b387c015dcd9c45d8265ed92fa499d655e1e79ca2ef557bbe"
+    },
+    "r0/ws-txn-d47-advisory-post-nowrite cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "f74df87a6cff1f3fa62794b20db455a17c7995d77aaf79eb761c25494f07ab5d"
+    },
+    "r0/ws-txn-d47-advisory-post-nowrite single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "f74df87a6cff1f3fa62794b20db455a17c7995d77aaf79eb761c25494f07ab5d"
+    },
+    "r0/ws-txn-d47-crosshop-iobeforecommit cross": {
+      "any": 5,
+      "direct": 4,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "10413cb73a1173e3bf45a6055d9ce0477679b6a3f61baa2c3d04bbdb8e18a794"
+    },
+    "r0/ws-txn-d47-crosshop-iobeforecommit single": {
+      "any": 5,
+      "direct": 4,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "10413cb73a1173e3bf45a6055d9ce0477679b6a3f61baa2c3d04bbdb8e18a794"
+    },
+    "r0/ws-txn-d47-event-neg-clean cross": {
+      "any": 8,
+      "direct": 3,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "9d198221ddf6889186f3461b870d42c1b8643d29f78ab5ac5cbe20f4f6af162d"
+    },
+    "r0/ws-txn-d47-event-neg-clean single": {
+      "any": 8,
+      "direct": 3,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "9d198221ddf6889186f3461b870d42c1b8643d29f78ab5ac5cbe20f4f6af162d"
+    },
+    "r0/ws-txn-d47-event-neg-isolated cross": {
+      "any": 10,
+      "direct": 5,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "7129d7719cde3829662e0ab8a45dc13150da8e48c6c5b46f2c8986415791249f"
+    },
+    "r0/ws-txn-d47-event-neg-isolated single": {
+      "any": 10,
+      "direct": 5,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "7129d7719cde3829662e0ab8a45dc13150da8e48c6c5b46f2c8986415791249f"
+    },
+    "r0/ws-txn-d47-event-pos cross": {
+      "any": 10,
+      "direct": 5,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "f1570639fce15760c9b030716c689382bfb65f4b0074e088f98cd85ef052283d"
+    },
+    "r0/ws-txn-d47-event-pos single": {
+      "any": 10,
+      "direct": 5,
+      "inherited": 5,
+      "routines": 3,
+      "sha256": "f1570639fce15760c9b030716c689382bfb65f4b0074e088f98cd85ef052283d"
+    },
+    "r0/ws-txn-d47-neg-commit-between cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "efa04f8bd27d5b46f9de118d837fae641782948ec3f8574c69833eda67d73a69"
+    },
+    "r0/ws-txn-d47-neg-commit-between single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "efa04f8bd27d5b46f9de118d837fae641782948ec3f8574c69833eda67d73a69"
+    },
+    "r0/ws-txn-d47-neg-readonly cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "e3d085911f0d88a564cde45cf262fc6152f6ad73a7ac9795da5ff36b0b341e09"
+    },
+    "r0/ws-txn-d47-neg-readonly single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "e3d085911f0d88a564cde45cf262fc6152f6ad73a7ac9795da5ff36b0b341e09"
+    },
+    "r0/ws-txn-d47-neg-temp cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "088863d8d69eb4ea9cc67ebc032cd2da0dd76244f412747a4b121cd3a3e391bf"
+    },
+    "r0/ws-txn-d47-neg-temp single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "088863d8d69eb4ea9cc67ebc032cd2da0dd76244f412747a4b121cd3a3e391bf"
+    },
+    "r0/ws-txn-d47-pos-file cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "ee98f6982dcf678da1af8f1e5624e0bd83226a37e7bd344e149c5e3a0bc17327"
+    },
+    "r0/ws-txn-d47-pos-file single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "ee98f6982dcf678da1af8f1e5624e0bd83226a37e7bd344e149c5e3a0bc17327"
+    },
+    "r0/ws-txn-d47-pos-http-commit-after cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "0d0ff97f0508d87a20a050a8413502fe5b43489345ffb06af26f388646e0a47d"
+    },
+    "r0/ws-txn-d47-pos-http-commit-after single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "0d0ff97f0508d87a20a050a8413502fe5b43489345ffb06af26f388646e0a47d"
+    },
+    "r0/ws-txn-d47-pos-http-nocommit cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "bdad98f560e9412f4aea7e68750eb5f94d42cff3115cd087a95073131c464a1b"
+    },
+    "r0/ws-txn-d47-pos-http-nocommit single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "bdad98f560e9412f4aea7e68750eb5f94d42cff3115cd087a95073131c464a1b"
+    },
+    "r0/ws-txn-d48-neg cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "22c02a822b2f4bd602186466fee691e2847feae7593dbfa2d436ff18d6d4208d"
+    },
+    "r0/ws-txn-d48-neg single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "22c02a822b2f4bd602186466fee691e2847feae7593dbfa2d436ff18d6d4208d"
+    },
+    "r0/ws-txn-d48-pos cross": {
+      "any": 5,
+      "direct": 2,
+      "inherited": 3,
+      "routines": 5,
+      "sha256": "5a91642c68873c704d944fadf5771b293570de9ff0c97e2dac70d7193ac4d89d"
+    },
+    "r0/ws-txn-d48-pos single": {
+      "any": 5,
+      "direct": 2,
+      "inherited": 3,
+      "routines": 5,
+      "sha256": "5a91642c68873c704d944fadf5771b293570de9ff0c97e2dac70d7193ac4d89d"
+    },
+    "r0/ws-txn-d49-neg-commit-between cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "8ad6df304699122ac00d040b9550b8ed6d93b77e499a2cfab3dc499244b7cf5e"
+    },
+    "r0/ws-txn-d49-neg-commit-between single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "8ad6df304699122ac00d040b9550b8ed6d93b77e499a2cfab3dc499244b7cf5e"
+    },
+    "r0/ws-txn-d49-neg-no-write cross": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "5266f09c651b33c69bd2d4ba7d9945f623ecfb8e32751436f1f2b42b6d285c1d"
+    },
+    "r0/ws-txn-d49-neg-no-write single": {
+      "any": 1,
+      "direct": 1,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "5266f09c651b33c69bd2d4ba7d9945f623ecfb8e32751436f1f2b42b6d285c1d"
+    },
+    "r0/ws-txn-d49-neg-run-boundary cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "c8920f5b6026fcb376e3a04aa9c6623eba4daa48ffb7184b06d4a4f1e84ce9ef"
+    },
+    "r0/ws-txn-d49-neg-run-boundary single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "c8920f5b6026fcb376e3a04aa9c6623eba4daa48ffb7184b06d4a4f1e84ce9ef"
+    },
+    "r0/ws-txn-d49-neg-temp-write cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9494cdcd294b51077e5ed7808623fa209370f4d67a90a40e37f9be0cd7eb61fd"
+    },
+    "r0/ws-txn-d49-neg-temp-write single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "9494cdcd294b51077e5ed7808623fa209370f4d67a90a40e37f9be0cd7eb61fd"
+    },
+    "r0/ws-txn-d49-pos-modify-message cross": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "6f0bd7bde0df8b831800e1eebc044345ccdca517b5330521d7c259a08f63db49"
+    },
+    "r0/ws-txn-d49-pos-modify-message single": {
+      "any": 3,
+      "direct": 3,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "6f0bd7bde0df8b831800e1eebc044345ccdca517b5330521d7c259a08f63db49"
+    },
+    "r0/ws-txn-d49-pos-modify-runmodal cross": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "5e3a41f4277797800f30de637dca0fb0508ecef07e6fee498f8038a5bafa32bd"
+    },
+    "r0/ws-txn-d49-pos-modify-runmodal single": {
+      "any": 4,
+      "direct": 4,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "5e3a41f4277797800f30de637dca0fb0508ecef07e6fee498f8038a5bafa32bd"
+    },
+    "r0/ws-unicode-fold cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "65e47aa86ed41a29bd60772e1a9e67c175f9038dda5f3708a57f7dec5e630ad0"
+    },
+    "r0/ws-unicode-fold single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 4,
+      "sha256": "65e47aa86ed41a29bd60772e1a9e67c175f9038dda5f3708a57f7dec5e630ad0"
+    },
+    "r0/ws-unresolved cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "8c8c2452e69a3e7549aa1d205e580d7341cf8e3144731771cc5f3ecab67acdcb"
+    },
+    "r0/ws-unresolved single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "8c8c2452e69a3e7549aa1d205e580d7341cf8e3144731771cc5f3ecab67acdcb"
+    },
+    "r0/ws-upgrade-codeunit cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "6b878e00bcba27f2a79e4b06e320ae5bbf6c89143aace42ba96a4a5e09aa0bac"
+    },
+    "r0/ws-upgrade-codeunit single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 2,
+      "sha256": "6b878e00bcba27f2a79e4b06e320ae5bbf6c89143aace42ba96a4a5e09aa0bac"
+    },
+    "r0/ws-with-receiver cross": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7c6c7819772d05e526f5ff1290a6d2f3305807bc6d64941d54b3d0dab3ec0ac0"
+    },
+    "r0/ws-with-receiver single": {
+      "any": 2,
+      "direct": 2,
+      "inherited": 0,
+      "routines": 1,
+      "sha256": "7c6c7819772d05e526f5ff1290a6d2f3305807bc6d64941d54b3d0dab3ec0ac0"
+    },
+    "r0/ws-xhop-callee-always-error cross": {
+      "any": 5,
+      "direct": 3,
+      "inherited": 2,
+      "routines": 2,
+      "sha256": "f66b8a61298d90f827d8622af33407dcbe7542cc01a64512ce10f289d1ba7e55"
+    },
+    "r0/ws-xhop-callee-always-error single": {
+      "any": 5,
+      "direct": 3,
+      "inherited": 2,
+      "routines": 2,
+      "sha256": "f66b8a61298d90f827d8622af33407dcbe7542cc01a64512ce10f289d1ba7e55"
+    },
+    "r0/ws-xhop-callee-error cross": {
+      "any": 7,
+      "direct": 4,
+      "inherited": 3,
+      "routines": 2,
+      "sha256": "ce9bf50acc9daeeef389b7d7217ff798ba638f843db26ec8232d613b1cbeb364"
+    },
+    "r0/ws-xhop-callee-error single": {
+      "any": 7,
+      "direct": 4,
+      "inherited": 3,
+      "routines": 2,
+      "sha256": "ce9bf50acc9daeeef389b7d7217ff798ba638f843db26ec8232d613b1cbeb364"
+    },
+    "r0/ws-xhop-conditional cross": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "6871c884ac215e766ccda6667c4c738f4e4fa58e5f33d3dd739d96b3ab444137"
+    },
+    "r0/ws-xhop-conditional single": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "6871c884ac215e766ccda6667c4c738f4e4fa58e5f33d3dd739d96b3ab444137"
+    },
+    "r0/ws-xhop-io-before-commit cross": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "519ee1534d5985cc134bb0127e3b344929f185e0ab9fc672365871866069a888"
+    },
+    "r0/ws-xhop-io-before-commit single": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "519ee1534d5985cc134bb0127e3b344929f185e0ab9fc672365871866069a888"
+    },
+    "r0/ws-xhop-loop cross": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "6bb37a12c0ccfac2ebe7501091dba9f2def9630f3dba38b7f2987468d32fdf69"
+    },
+    "r0/ws-xhop-loop single": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "6bb37a12c0ccfac2ebe7501091dba9f2def9630f3dba38b7f2987468d32fdf69"
+    },
+    "r0/ws-xhop-tryfunction-committer cross": {
+      "any": 4,
+      "direct": 2,
+      "inherited": 2,
+      "routines": 2,
+      "sha256": "2ec2b0eb7b31a26b6ab7d7eb0f9c13e291dab766491b4e55940fbb6d514e5e62"
+    },
+    "r0/ws-xhop-tryfunction-committer single": {
+      "any": 4,
+      "direct": 2,
+      "inherited": 2,
+      "routines": 2,
+      "sha256": "2ec2b0eb7b31a26b6ab7d7eb0f9c13e291dab766491b4e55940fbb6d514e5e62"
+    },
+    "r0/ws-xhop-write-commit cross": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "c610321568f02eb85f78fd873b4430e94477ea9ab00a4c7f81760159e9031ec4"
+    },
+    "r0/ws-xhop-write-commit single": {
+      "any": 3,
+      "direct": 2,
+      "inherited": 1,
+      "routines": 2,
+      "sha256": "c610321568f02eb85f78fd873b4430e94477ea9ab00a4c7f81760159e9031ec4"
+    }
+  },
+  "recordedOn": "86d24beb"
+}

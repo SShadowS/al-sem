@@ -14,7 +14,7 @@
 //!   - project_digest_document → JSON envelope (sorted, null-drop, 2-space, trailing \n)
 //!   - formatDigestHuman → human text
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::engine::gate::format_json::{
     serialize_normalized_value, sort_and_drop_nulls, sort_keys_keep_nulls,
@@ -29,7 +29,9 @@ use crate::engine::l5::diff_parser::{DiffFileKind, HunkChange, parse_unified_dif
 use crate::engine::l5::digest::{
     DigestEntryResult, compute_digest_effects_cli, is_known_temp_state,
 };
-use crate::engine::l5::snapshot::{CapabilitySnapshot, compose_snapshot};
+use crate::engine::l5::snapshot::{
+    CapabilitySnapshot, SnapshotCoverageRecord, SnapshotIdentityTable, derive_identity_table,
+};
 use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use crate::engine::l5::unresolved_cone::{
     DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
@@ -368,14 +370,16 @@ pub fn primary_guid_of(resolved: &Model) -> Option<&str> {
 }
 
 /// `primary_app_guid` scopes routine selectors to the workspace app's routines: a
-/// cross-app snapshot (#66) also holds dependency routines. Files are scoped by
-/// the span index's `ws:` filter ([`build_routine_span_index`]).
+/// cross-app identity table (#66) also holds dependency routines. Files are
+/// scoped by the span index's `ws:` filter ([`build_routine_span_index`]). Only
+/// the routine selectors read `identities` (the model's, `derive_identity_table`,
+/// built before digest's composition, #160 step 6 D3).
 ///
 /// Files and diffs resolve by routine declaration span (#71); the result also
 /// carries, per root, the declarations the input touched. `owners` narrows an
 /// `<owner>::<routine>` selector and labels ambiguity candidates (#78).
 pub fn resolve_changed_roots(
-    snap: &CapabilitySnapshot,
+    identities: &SnapshotIdentityTable,
     resolved: &Model,
     input: &ChangedInput,
     primary_app_guid: Option<&str>,
@@ -389,7 +393,7 @@ pub fn resolve_changed_roots(
     let mut hits: Vec<usize> = Vec::new();
 
     // Selector indexes (5-form resolveSelector cascade).
-    let selector_idx = build_selector_indexes(snap, primary_app_guid);
+    let selector_idx = build_selector_indexes(identities, primary_app_guid);
 
     // 1. File-based matching
     for file in input.files.iter().flatten() {
@@ -762,15 +766,70 @@ impl<'a> DbTempStates<'a> {
     }
 }
 
+/// What digest's query reads of its tree (#160 step 6 D7 (5), A1-16): per
+/// root its S4 entry and its unresolved cone, plus the tree's identity table
+/// and coverage. Computed while the tree is alive; the tree is then released.
+#[derive(Default)]
+pub struct DigestEffects {
+    pub entries: Vec<DigestEntryResult>,
+    pub unresolved: BTreeMap<String, UnresolvedCone>,
+    pub coverage: Vec<SnapshotCoverageRecord>,
+    pub identities: SnapshotIdentityTable,
+    /// `--tests` (#254): the test-coverage graph over the same tree.
+    pub coverage_graph: Option<crate::engine::l5::test_coverage::CoverageGraph>,
+}
+
+/// A root's unresolved cone: its items and the traversal block (depth,
+/// truncation, visited count) the digest JSON serializes and prove's
+/// obligations read.
+pub struct UnresolvedCone {
+    pub items: Vec<UnresolvedConeItem>,
+    pub traversal: UnresolvedTraversal,
+}
+
+/// [`DigestEffects`] of `roots` off `tree`: `tests`' coverage graph (#254), the
+/// S4 entries and each root's unresolved cone are computed first, then the
+/// identity table and the coverage are moved out (the tree's other readers are
+/// done with them).
+pub(crate) fn digest_effects(
+    tree: &mut CapabilitySnapshot,
+    model: &Model,
+    roots: &[String],
+    tests: bool,
+) -> DigestEffects {
+    let coverage_graph =
+        tests.then(|| crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model));
+    let entries = compute_digest_effects_cli(tree, model, Some(roots));
+    let unresolved = roots
+        .iter()
+        .map(|r| {
+            let c = unresolved_cone(tree, r);
+            (
+                r.clone(),
+                UnresolvedCone {
+                    items: c.items,
+                    traversal: c.traversal,
+                },
+            )
+        })
+        .collect();
+    DigestEffects {
+        entries,
+        unresolved,
+        coverage: std::mem::take(&mut tree.coverage),
+        identities: std::mem::take(&mut tree.identities),
+        coverage_graph,
+    }
+}
+
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),
 /// produce DigestEntryFull for each root (order:false path). `changed` supplies
 /// the declaration spans and the touched declarations (#71); `roots` may be a
 /// subset of `changed.roots` (prove passes one). `owners`: each root's owning
 /// object, from the model's [`OwnerIndex`] (#78); `""` when absent.
 pub fn run_digest_query_full_from_entries(
-    snap: &CapabilitySnapshot,
+    effects: &mut DigestEffects,
     roots: &[String],
-    base_entries: &[DigestEntryResult],
     tx_ctx_map: &HashMap<String, TransactionContext>,
     temp_states: &DbTempStates<'_>,
     changed: &ChangedRootsResult,
@@ -781,7 +840,7 @@ pub fn run_digest_query_full_from_entries(
 
     // Coverage map
     let mut coverage_by_id: HashMap<&str, (&str, Vec<&str>)> = HashMap::new();
-    for rec in &snap.coverage {
+    for rec in &effects.coverage {
         let reasons: Vec<&str> = rec.reasons.iter().map(|s| s.as_str()).collect();
         coverage_by_id.insert(
             rec.subject.as_str(),
@@ -790,16 +849,15 @@ pub fn run_digest_query_full_from_entries(
     }
 
     // Identities
+    let identities = &effects.identities;
     let mut display_by_id: HashMap<&str, &str> = HashMap::new();
-    for i in 0..snap.identities.stable_ids.len() {
-        let id = snap
-            .identities
+    for i in 0..identities.stable_ids.len() {
+        let id = identities
             .stable_ids
             .get(i)
             .map(|s| s.as_str())
             .unwrap_or("");
-        let nm = snap
-            .identities
+        let nm = identities
             .display_names
             .get(i)
             .map(|s| s.as_str())
@@ -810,7 +868,8 @@ pub fn run_digest_query_full_from_entries(
     }
 
     // Build index of base entries by routineId
-    let base_by_rid: HashMap<&str, &DigestEntryResult> = base_entries
+    let base_by_rid: HashMap<&str, &DigestEntryResult> = effects
+        .entries
         .iter()
         .map(|e| (e.routine_id.as_str(), e))
         .collect();
@@ -991,11 +1050,17 @@ pub fn run_digest_query_full_from_entries(
             }
         }
 
-        // Unresolved cone. (gapsInCone — TS digestQuery computes it onto the internal
-        // DigestEntryResult for the prove engine, but it is NOT part of the digest JSON
-        // contract (contracts/digest.ts omits it) and the CLI does not expose queryEntries,
-        // so it is intentionally not computed here (#20).)
-        let cone = unresolved_cone(snap, rid);
+        // Unresolved cone, computed with the effects. (gapsInCone — TS digestQuery
+        // computes it onto the internal DigestEntryResult for the prove engine, but
+        // it is NOT part of the digest JSON contract (contracts/digest.ts omits it)
+        // and the CLI does not expose queryEntries, so it is intentionally not
+        // computed here (#20).)
+        // Moved out, not cloned (final panel F1-C6): the caller drops the
+        // effects right after. `roots` holds each id once.
+        let cone = effects
+            .unresolved
+            .remove(rid.as_str())
+            .expect("digest_effects computes every root's cone");
 
         out.push(DigestEntryFull {
             routine_id: rid.clone(),
@@ -1682,51 +1747,60 @@ pub(crate) fn digest_pipeline_with(
     }
 
     // One View: the default run (the envelope diagnostics), the tx map off its
-    // `det`, and the L4 store off its `l4` (#160 §4.4.4).
+    // `det`, the effects off its tree and the L4 store off its `l4` (#160
+    // §4.4.4, step 6 D7).
     let mut view = View::new(target);
-    let plan = digest_plan(detectors);
-    let key = plan.keys().remove(0);
-    view.prepare(&plan);
-    let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
-    let resolved = view.model();
 
-    // Compose snapshot ONCE. The workspace fingerprint is computed directly via the
-    // shared helper (no second full-snapshot composition just to fish it out) (#19).
-    // Cross-app: over the base's model (calls cut to workspace callers), the same
-    // snapshot `alsem analyze`'s ordering facts read.
-    let snap = compose_snapshot(resolved);
-    let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
-
-    // Resolve changed roots
+    // D3: the roots are resolved before the composition, from the model alone;
+    // the identity table and the owner index die with this block.
     let changed_input = ChangedInput {
         files: changed_files.clone(),
         routines: changed_routines.clone(),
         diff_text: diff_text.clone(),
     };
-    let owners = OwnerIndex::build(resolved);
-    let changed_roots = resolve_changed_roots(
-        &snap,
-        resolved,
-        &changed_input,
-        primary_guid_of(resolved),
-        &owners,
-    );
+    let changed_roots = {
+        let model = view.model();
+        let identities = derive_identity_table(model);
+        let owners = OwnerIndex::build(model);
+        resolve_changed_roots(
+            &identities,
+            model,
+            &changed_input,
+            primary_guid_of(model),
+            &owners,
+        )
+    };
 
-    // Compute S4 ordering effects for the changed roots alone (each root's pass is
-    // independent, so this equals computing every reportable root and filtering).
-    // Use compute_digest_effects_cli which matches TS runDigestPipeline (no routineReturnSummaries).
-    let all_s4_entries = compute_digest_effects_cli(&snap, resolved, Some(&changed_roots.roots));
+    // The plan composes the roots' raw facts, the tree over the cone graph and
+    // their effects; no resolved root composes no tree (exit 2 below).
+    let plan = digest_plan(
+        detectors,
+        changed_roots.roots.iter().cloned().collect(),
+        tests,
+    );
+    let key = plan.keys().remove(0);
+    view.prepare(&plan);
+    let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
+    let mut effects = if plan.needs_tree() {
+        view.take_effects()
+    } else {
+        DigestEffects::default()
+    };
+    let resolved = view.model();
+    let workspace_fp =
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's
     // `l4`, solved the way `query effects` solves it in the same mode (#66).
     let temp_states = DbTempStates::new(resolved, &view.l4().bundle);
+    // Built again (F1-C4): the first borrows the model, and `prepare` takes
+    // the view mutably. It is small (one entry per primary routine).
+    let owners = OwnerIndex::build(resolved);
 
     // Run full digest query for the resolved roots
     let query_full = run_digest_query_full_from_entries(
-        &snap,
+        &mut effects,
         &changed_roots.roots,
-        &all_s4_entries,
         &tx_ctx_map,
         &temp_states,
         &changed_roots,
@@ -1734,20 +1808,27 @@ pub(crate) fn digest_pipeline_with(
     );
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;
-    // #254: the coverage block reads the snapshot, so it is built before the drop.
+    // #254: the coverage block reads the graph the effects step built off the
+    // tree (#160 step 6: the tree itself is released inside `prepare`). A
+    // `--tests` plan always builds the tree, roots or not (`digest_plan`).
     let test_coverage = tests.then(|| {
-        use crate::engine::l5::test_coverage::{CoverageGraph, compute_test_coverage};
         let changed = coverage_changed_roots(&changed_roots.roots, &entries, &owners);
-        compute_test_coverage(&CoverageGraph::from_snapshot(&snap, resolved), &changed)
+        crate::engine::l5::test_coverage::compute_test_coverage(
+            effects
+                .coverage_graph
+                .as_ref()
+                .expect("a --tests plan builds the coverage graph"),
+            &changed,
+        )
     });
-    // #69 D1.4: the query's inputs (the snapshot with its producer-solve arena,
-    // the S4 entries, the L4 store) are dead here. Free them before the JSON
-    // projection.
-    drop(snap);
-    drop(all_s4_entries);
+    // #69 D1.4: the query's inputs (the effects, the L4 store) are dead here.
+    // Free them before the JSON projection.
     drop(temp_states);
     drop(tx_ctx_map);
+    drop(owners);
+    drop(effects);
     view.release(Cell::L4);
+    view.release(Cell::Effects);
 
     let exit_code: u8 = if changed_roots.roots.is_empty() { 2 } else { 0 };
 
@@ -1833,6 +1914,11 @@ pub(crate) fn assert_prepare_refuses_a_reduced_set(
     // panic naming `CORE_SUMMARIES` when `missing` is `SUMMARIES`.
     assert!(msg.contains(&format!("reads {missing} off det")), "{msg}");
 }
+
+// #160 step 6 Task 2b-2 acceptance tests (digest on the cone graph, rule B).
+#[cfg(test)]
+#[path = "digest_rule_b_tests.rs"]
+mod tests_rule_b;
 
 #[cfg(test)]
 mod tests {

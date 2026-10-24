@@ -28,7 +28,7 @@ use crate::engine::l4::capability_cone::{
     direct_facts_for_routine, fold_uncertainty_reasons,
 };
 use crate::engine::l4::combined_graph::{PrimaryGraph, TypedEdge};
-use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeOutput};
+use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::reverse_index::ReverseEffectIndex;
 use crate::engine::l4::summary::{
@@ -381,7 +381,7 @@ pub(crate) mod cones_census {
     // `BFS_FOLD_NANOS` the derived fold plus `emit_picks` in raw modes. Since
     // step 7b the set is folded ONCE per SCC (its row built, each member's
     // `fold_row` + own entries, and the row's destruction all charge it).
-    // `BFS_PICKS` counts picks of walks that ran (0 under DerivedOnly).
+    // `BFS_PICKS` counts picks of walks that ran (0 under `raw: WitnessScope::None`).
     pub(crate) static BFS_WALK_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static BFS_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static BFS_PICKS: AtomicU64 = AtomicU64::new(0);
@@ -395,7 +395,7 @@ pub(crate) mod cones_census {
     /// entries, the candidate scan over every out-edge's callee cone
     /// (`SCAN_CONE`), the scan over the subject's own producer-solve entries
     /// (`SCAN_OWN`), and the raw materialization (`retag` + `sort_inherited`,
-    /// skipped under `ConeOutput::DerivedOnly`). Since #160 step 7b the scans
+    /// skipped for a member with no raw half). Since #160 step 7b the scans
     /// run for the raw half only (0 in `analyze`), and the derived row is
     /// folded from memoized closed-set rows: memo-row builds and destruction
     /// (`MEMO`; the destruction runs in the refcount-free loop and is added to
@@ -422,7 +422,7 @@ pub(crate) mod cones_census {
     pub(crate) static CLOSED_MEMO_LIVE_MAX: AtomicU64 = AtomicU64::new(0);
     /// Populations the scan time is per (since #160 step 7b, the raw-half scan
     /// only: these and the `SGL_CALLS_*` / `SGL_ENTRIES_N_CONES` counts stay 0
-    /// under `DerivedOnly`, and the report prints their two lines only when a
+    /// under `raw: WitnessScope::None`, and the report prints their two lines only when a
     /// singleton scanned). Accumulated in plain locals inside the
     /// walk and folded in with ONE `fetch_add` per call — the inner loop runs
     /// millions of times and must not touch an atomic (the distortion this
@@ -492,6 +492,15 @@ pub(crate) mod cones_census {
     pub(crate) static PD_SNAPSHOT_BYTES: AtomicU64 = AtomicU64::new(0);
     /// #69 D2: solve links whose cone edge has no snapshot typed edge (dropped).
     pub(crate) static PD_EDGE_UNMAPPED: AtomicU64 = AtomicU64::new(0);
+    /// #160 step 6 (R6-4): the distinct cone edges behind those dropped links
+    /// (anchorless rows that carry a link). Both are counted ungated, so the
+    /// step-6 probe reads them without the census.
+    pub(crate) static PD_EDGE_UNMAPPED_KEYS: AtomicU64 = AtomicU64::new(0);
+    /// #160 step 6 D8: the witness DAGs built (one per root and first hop),
+    /// their routines and their predecessor entries (spec §14.9's census line).
+    pub(crate) static WITNESS_DAGS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static WITNESS_DAG_NODES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static WITNESS_DAG_PREDS: AtomicU64 = AtomicU64::new(0);
     /// What `compose_inherited_cones` spends outside every timed component,
     /// charged PER CALL as `elapsed - Σ(component delta)` in `i64`. The one
     /// signed counter: a negative total means two component timers overlap.
@@ -518,7 +527,7 @@ pub(crate) mod cones_census {
     /// A REPORT value, never a component (the §4.5 overlap rule): the time of
     /// the per-member walks only, from the same readings `BFS_WALK_NANOS`
     /// adds. `BFS_WALK_NANOS` also holds the set builds and borrows, so
-    /// `walk_total <= bfs_walk`; under DerivedOnly `walk_total` is 0.
+    /// `walk_total <= bfs_walk`; under `raw: WitnessScope::None` `walk_total` is 0.
     pub(crate) static WALK_TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
 
     /// Fold one compose call's stats into the Cone-SCC census, if it is on.
@@ -691,7 +700,7 @@ pub(crate) mod cones_census {
             ms(SGL_RAW_NANOS.load(Ordering::Relaxed)),
         );
         // #160 step 7b: the scan populations exist only where a singleton
-        // scanned `best` (the raw half); under `DerivedOnly` they would be zeros.
+        // scanned `best` (the raw half); under `raw: WitnessScope::None` they would be zeros.
         if SINGLETON_SCANS.load(Ordering::Relaxed) > 0 {
             eprintln!(
                 "[cones-census]   singleton calls: 0_cones={} 1_cone={} n_cones={} entries_under_n_cones={}",
@@ -756,6 +765,12 @@ pub(crate) mod cones_census {
             snapshot,
             arena + working + snapshot,
             PD_EDGE_UNMAPPED.load(Ordering::Relaxed),
+        );
+        eprintln!(
+            "[cones-census]   digest.witness_dags={} nodes={} preds={}",
+            WITNESS_DAGS.load(Ordering::Relaxed),
+            WITNESS_DAG_NODES.load(Ordering::Relaxed),
+            WITNESS_DAG_PREDS.load(Ordering::Relaxed),
         );
     }
 }
@@ -882,10 +897,8 @@ pub struct DetectorArtifacts {
     /// flags + interned table/event id-sets folded during the same cone walk that
     /// produces `summaries`, with zero `retag` clones. Every analyze-path consumer
     /// of the old `capability_facts_inherited` Vec reads only a derived predicate
-    /// off it, so this row REPLACES that Vec outright: since C1 Task 3 the analyze
-    /// path composes under `ConeOutput::DerivedOnly` and the raw Vec is never
-    /// built (`summaries[*].inherited_raw()` panics there — see
-    /// `FullRoutineSummary`). Parked here because the rows are `Range<u32>` windows into pools this store owns; a row alone
+    /// off it, so this row REPLACES that Vec outright: since C1 Task 3 no
+    /// summary carries a raw Vec (see `FullRoutineSummary`). Parked here because the rows are `Range<u32>` windows into pools this store owns; a row alone
     /// is meaningless. EMPTY when the `SUMMARIES` substrate was not demanded.
     pub cone_derived: ConeDerivedStore,
     /// The shared event-flow indexes (publisher/subscriber lookup tables) the
@@ -1169,16 +1182,12 @@ impl OwnedContext<'_> {
 ///   - `TRANSACTION_SPANS` — `transaction_spans`.
 ///   - `CLOSED_WORLD_TEMP` — `closed_world_temp_params`.
 ///
-/// ⟨C1 Task 3⟩ `demanded` additionally carries the policy-only
-/// `RAW_INHERITED_FACTS` bit (NOT part of `substrate::ALL` — see its doc). Without
-/// it the cone composes under [`ConeOutput::DerivedOnly`]: the per-routine raw
-/// `Vec<CapabilityFact>` is never allocated (it cost ~10.9 GB on the 8020 corpus)
-/// and every summary carries `capability_facts_inherited: None`. With it the cone
-/// composes under [`ConeOutput::Both`] — the derived substrate AND the raw Vecs,
-/// byte-identical to the pre-Task-3 build.
+/// ⟨C1 Task 3⟩ The cone composes with no raw half: the per-routine raw
+/// `Vec<CapabilityFact>` is never allocated (it cost ~10.9 GB on the 8020
+/// corpus). Raw facts come only from a `View`'s witness request (#160 step 6).
 ///
 /// #160 step 2: a SHIM (tests and `aldump`; no `alsem` command) over
-/// [`build_detector_artifacts`]. It fills the ordering slot FIRST when the mask
+/// [`compose_detector_artifacts`]. It fills the ordering slot FIRST when the mask
 /// has `ORDERING_FACTS`, builds the relation, and runs the solve iff the mask has
 /// `CORE_SUMMARIES`.
 pub fn build_detector_context(resolved: &Model, demanded: u32) -> OwnedContext<'_> {
@@ -1225,7 +1234,7 @@ pub(crate) fn build_detector_context_with<'a>(
         extra_diagnostics: vec![],
     });
     let cross = base.map(|b| b.cross_app_inputs());
-    let (art, l4) = build_detector_artifacts(resolved, demanded, &rel, l4, cross);
+    let (art, l4) = compose_detector_artifacts(resolved, demanded, &rel, l4, cross);
     OwnedContext {
         model: resolved,
         art,
@@ -1252,6 +1261,16 @@ pub(crate) struct DetConeInputs {
 /// own graph's edges; cross-app that is the cut graph (Primary callers only)
 /// until step 6 (spec 5-A3).
 pub(crate) fn det_cone_inputs(resolved: &Model, rel: &ExecRelation) -> DetConeInputs {
+    det_cone_inputs_over(resolved, rel.uncertainty_all())
+}
+
+/// [`det_cone_inputs`] over any uncertainty edges (#160 step 6 §4.4): the
+/// standalone single-app composition passes its own graph's, which single-app
+/// are the relation's.
+pub(crate) fn det_cone_inputs_over<'e>(
+    resolved: &Model,
+    uncertainty: impl IntoIterator<Item = &'e crate::engine::l4::combined_graph::UncertaintyEdge>,
+) -> DetConeInputs {
     let ws = &resolved.workspace;
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
     for evt in &resolved.events.graph.events {
@@ -1270,7 +1289,7 @@ pub(crate) fn det_cone_inputs(resolved: &Model, rel: &ExecRelation) -> DetConeIn
     // direct facts are the full-value union, its coverage the least complete.
     let mut facts_per_row = Vec::with_capacity(ws.routines.len());
     let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
-    let uncertainty_reasons = callsite_local_coverage_reasons(rel.uncertainty_all());
+    let uncertainty_reasons = callsite_local_coverage_reasons(uncertainty);
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
@@ -1292,9 +1311,120 @@ pub(crate) fn det_cone_inputs(resolved: &Model, rel: &ExecRelation) -> DetConeIn
     }
 }
 
+/// What ONE composition over the view leaves for its readers (#160 step 6
+/// D2): every routine's direct facts and coverage, the derived rows (empty
+/// unless the scope derived them) and the producer arena, which the tree takes.
+/// The subjects' raw facts are returned APART by [`compose_capabilities`].
+pub(crate) struct CapabilityAnalysis {
+    pub direct_full: HashMap<String, Vec<CapabilityFact>>,
+    pub coverage: HashMap<String, crate::engine::l4::capability_cone::CoverageRecord>,
+    pub derived: ConeDerivedStore,
+    pub pd: Option<crate::engine::l4::pd_solve::ConeArena>,
+}
+
+/// How many materialized raw entries belong to a non-primary routine (I5: must
+/// be 0). An id is non-primary when any of its rows has `Role::Dependency`.
+pub(crate) fn witness_non_primary_members(
+    model: &Model,
+    raw: &HashMap<String, Vec<CapabilityFact>>,
+) -> usize {
+    use crate::program::model::role::Role;
+    let dependency: std::collections::HashSet<&str> = model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| model.routine_role(r) == Role::Dependency)
+        .map(|r| r.id.as_str())
+        .collect();
+    raw.keys()
+        .filter(|id| dependency.contains(id.as_str()))
+        .count()
+}
+
+/// The one composition (#160 step 6 D1, D2): `compose_cone_over_graph` over
+/// `typed` with `inputs` (from [`det_cone_inputs`]) and `scope`. Returns the
+/// analysis and the raw facts of the members `scope.raw` contains, and prints
+/// the `witness.*` census lines (what was materialized, by role).
+pub(crate) fn compose_capabilities(
+    model: &Model,
+    typed: &[crate::engine::l4::combined_graph::TypedEdge],
+    inputs: DetConeInputs,
+    scope: ConeScope,
+) -> (CapabilityAnalysis, HashMap<String, Vec<CapabilityFact>>) {
+    let ws = &model.workspace;
+    let DetConeInputs {
+        nodes,
+        direct_full,
+        coverage_in,
+    } = inputs;
+    cones_census::add(&cones_census::ROUTINES, ws.routines.len() as u64);
+    cones_census::add(
+        &cones_census::DIRECT_FACTS,
+        direct_full.values().map(|v| v.len() as u64).sum::<u64>(),
+    );
+    let _t_walk = cones_census::start();
+    let outcome = compose_cone_over_graph(
+        typed,
+        &nodes,
+        &direct_full,
+        &coverage_in,
+        &ws.routines,
+        scope,
+    );
+    cones_census::add_since(&cones_census::WALK_NANOS, _t_walk);
+    // ⟨C1 Task 4⟩ Both cone inputs are dead here (`nodes` is one more full
+    // copy of every routine id, `coverage_in` one more copy of every routine's
+    // direct status + reasons).
+    drop(nodes);
+    drop(coverage_in);
+    if crate::engine::census::enabled() {
+        let non_primary = witness_non_primary_members(model, &outcome.raw);
+        eprintln!(
+            "[retained-census] witness.members={} witness.non_primary_members={non_primary}",
+            outcome.raw.len()
+        );
+    }
+    (
+        CapabilityAnalysis {
+            direct_full,
+            coverage: outcome.coverage,
+            derived: outcome.derived,
+            pd: Some(outcome.pd_solution),
+        },
+        outcome.raw,
+    )
+}
+
+/// The composing builder (#160 step 6 Task 2b-1, spec §14.5): ONE composition
+/// over `rel.cone()`, then [`build_detector_artifacts`] over it. The test shim
+/// composes here; a `View` composes in `prepare`.
+pub(crate) fn compose_detector_artifacts(
+    resolved: &Model,
+    demanded: u32,
+    rel: &ExecRelation,
+    l4: Option<L4Request>,
+    cross: Option<CrossAppInputs<'_>>,
+) -> (DetectorArtifacts, Option<L4Analysis>) {
+    use crate::engine::l5::registry::substrate;
+    let need_summaries = demanded & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
+    // This composition repeats `View::prepare`'s (the scope, the span, the
+    // inputs) for the shim, with no witness request.
+    let caps = need_summaries.then(|| {
+        let scope = ConeScope {
+            derived: true,
+            raw: WitnessScope::None,
+        };
+        let _s = pt::span("context", "context.capability_cones");
+        compose_capabilities(resolved, rel.cone(), det_cone_inputs(resolved, rel), scope).0
+    });
+    build_detector_artifacts(resolved, demanded, rel, l4, cross, caps)
+}
+
 /// The owned detector substrates over the relation `rel`, at mask `demanded`:
-/// the cone (over `rel.cone()`) first, then (when `l4` is `Some`) ONE
-/// [`build_l4`] solve over `rel`, then the harvest of its core summaries.
+/// the summaries from `caps`, the caller's ONE composition (#160 step 6 D2;
+/// `Some` whenever the mask has `SUMMARIES` or `TRANSACTION_SPANS`), then
+/// (when `l4` is `Some`) ONE [`build_l4`] solve over `rel`, then the harvest
+/// of its core summaries. It composes nothing and never sees raw facts.
 /// Returns the solve's [`L4Analysis`] beside the artifacts. `l4: None` = no
 /// solve.
 pub(crate) fn build_detector_artifacts(
@@ -1303,6 +1433,7 @@ pub(crate) fn build_detector_artifacts(
     rel: &ExecRelation,
     l4: Option<L4Request>,
     cross: Option<CrossAppInputs<'_>>,
+    caps: Option<CapabilityAnalysis>,
 ) -> (DetectorArtifacts, Option<L4Analysis>) {
     // The Primary payload; `DetectorArtifacts.graph` shares it by pointer.
     let graph: Arc<PrimaryGraph> = Arc::clone(rel.primary());
@@ -1319,22 +1450,6 @@ pub(crate) fn build_detector_artifacts(
     // TRANSACTION_SPANS folds over the summaries map, so demand summaries whenever
     // either bit is set (see `compute_transaction_spans`).
     let need_summaries = demanded & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
-    // ⟨C1 Task 3 — R1⟩ The gate is a MODE threaded into the cone walk, not a
-    // post-hoc check: the raw Vec is allocated INSIDE `compose_inherited_cones`,
-    // so a check here could only discard it — zero memory win.
-    let want_raw_inherited = demanded & substrate::RAW_INHERITED_FACTS != 0;
-    // ⟨C1 Task 3 review fix M-1⟩ `RAW_INHERITED_FACTS` without `SUMMARIES` (nor
-    // `TRANSACTION_SPANS`) is a SILENT no-op: `need_summaries` would be false, the
-    // block below never runs, `summaries` stays empty, and `select_facts` (which
-    // reads through `summaries`) then returns an empty fact list for every
-    // routine — the exact silent-empty outcome R6 was designed to foreclose,
-    // reached through a different door. No current caller does this (`R2`'s table
-    // above), but a future one could; fail loudly instead of degrading quietly.
-    debug_assert!(
-        !want_raw_inherited || need_summaries,
-        "RAW_INHERITED_FACTS demanded without SUMMARIES/TRANSACTION_SPANS — the raw \
-         cone would silently build empty; OR in substrate::SUMMARIES alongside it"
-    );
 
     // --- L3→L4 substrate: the model's calls and events (the program engine's) ---
     let _symbols_span = pt::span("context", "context.symbols_resolve_calls");
@@ -1343,102 +1458,53 @@ pub(crate) fn build_detector_artifacts(
     drop(_symbols_span);
     let event_graph = resolved.events.graph.clone();
 
-    // Per-routine direct facts + direct coverage, then the inherited cone over
-    // the combined graph — the same assembly project_r3a3 does inline, here via
-    // the reusable `compose_cone_over_graph` seam. SUBSTRATE-GATED: built only when
-    // some selected detector demands SUMMARIES (or TRANSACTION_SPANS, which folds
+    // The summaries over the caller's composition (direct facts, coverage and
+    // derived rows of every routine). SUBSTRATE-GATED: built only when some
+    // selected detector demands SUMMARIES (or TRANSACTION_SPANS, which folds
     // over the summaries map). Skipped ⇒ empty `summaries` map.
-    let _cones_span = pt::span("context", "context.capability_cones");
+    // Not `context.capability_cones` (final panel F1-C7): that span is the
+    // composition's, opened by the caller (`View::prepare`, the shim above).
+    let _cones_span = pt::span("context", "context.summaries_assemble");
     // ⟨C1⟩ Assigned inside the block below (kept a separate binding so the whole
     // cone-assembly block stays at its original indentation).
     let mut cone_derived = ConeDerivedStore::default();
     let summaries: HashMap<String, FullRoutineSummary> = if need_summaries {
-        // ⟨C1 Task 4⟩ ONE direct-facts map, not two. This used to build a
-        // second, byte-identical `direct_in` (a `facts.clone()` per routine)
-        // purely to hand to the cone walk, which takes it by shared reference
-        // and only reads it — 79.66 MB of pure duplicate on the 8020 corpus,
-        // held for the rest of this block because Rust frees a local at its
-        // block's end, not at its last use. `direct_full` is not drained until
-        // the summary loop below, well after the walk's borrow ends, so the
-        // walk can simply read it. (Every OTHER `compose_cone_over_graph` call
-        // site — `project_r3a3`, `project_r3a5_cross_app`,
-        // `build_detector_context_cross_app` — already passed its `direct_full`
-        // directly; this was the one straggler.)
-        let DetConeInputs {
-            nodes,
+        let CapabilityAnalysis {
             mut direct_full,
-            coverage_in,
-        } = det_cone_inputs(resolved, rel);
-        // ⟨C1 Task 3⟩ `DerivedOnly` — the compact substrate only; the per-routine
-        // raw inherited `Vec<CapabilityFact>` is never allocated. `Both` only when
-        // the policy-only `RAW_INHERITED_FACTS` bit is demanded.
-        let mode = if want_raw_inherited {
-            ConeOutput::Both
-        } else {
-            ConeOutput::DerivedOnly
-        };
-        cones_census::add(&cones_census::ROUTINES, ws.routines.len() as u64);
-        cones_census::add(
-            &cones_census::DIRECT_FACTS,
-            direct_full.values().map(|v| v.len() as u64).sum::<u64>(),
+            coverage: mut cone_coverage,
+            derived,
+            pd,
+        } = caps.expect(
+            "SUMMARIES/TRANSACTION_SPANS demanded without a composition: the caller composes \
+             once and passes it (#160 step 6 D2)",
         );
-
-        let _t_walk = cones_census::start();
-        let outcome = compose_cone_over_graph(
-            rel.cone(),
-            &nodes,
-            &direct_full,
-            &coverage_in,
-            &ws.routines,
-            mode,
-        );
-        cones_census::add_since(&cones_census::WALK_NANOS, _t_walk);
-        let mut cones = outcome.cones;
-        cone_derived = outcome.derived;
+        cone_derived = derived;
         // #69 D1.4: the detectors read the solve only through the cone; its
         // arena (a snapshot input) is dead here.
-        drop(outcome.pd_solution);
-        // ⟨C1 Task 4⟩ Both cone inputs are dead here; free them before the
-        // summary assembly below rather than at this block's closing brace
-        // (`nodes` is one more full copy of every routine id, `coverage_in` one
-        // more copy of every routine's direct status + reasons).
-        drop(nodes);
-        drop(coverage_in);
+        drop(pd);
 
-        // `cones` and `direct_full` are locally owned and dead after this loop, so
-        // move their payloads into the summaries instead of cloning them out.
+        // `cone_coverage` and `direct_full` are owned and dead after this
+        // loop, so move their payloads into the summaries instead of cloning
+        // them out.
         let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
         let _t_assemble = cones_census::start();
         for r in &ws.routines {
-            let cone_entry = cones.remove(&r.id);
+            let coverage = cone_coverage.remove(&r.id);
             let direct = direct_full.remove(&r.id);
             // One summary per id (#160 step 11b §4.6): `direct_full` is already
             // the projection's per-id input (a collided id's full-value union),
             // and the cone is per id, so a collided id's first row files it and
             // every later row of the id finds the drain empty and is skipped.
+            // (A coverage of `None` is the fail-soft for an id the cone did not
+            // walk.)
             let Some(direct) = direct else {
                 continue;
             };
-            let (inherited, coverage) = match cone_entry {
-                Some(c) => (c.inherited, Some(c.coverage)),
-                // Fail-soft for an id the cone did not walk.
-                None => (Vec::new(), None),
-            };
-            // ⟨C1 Task 3⟩ `Some(inherited)` ONLY under `RAW_INHERITED_FACTS`;
-            // `None` records "never materialized" so `inherited_raw()` panics
-            // instead of answering "empty cone" (R6). The `Some(Vec::new())` case
-            // is still REAL and must stay distinct from `None` — a leaf routine
-            // with no callees has a materialized-but-empty cone. (It is no longer
-            // ALSO produced by the G-18 collision arm, which now `continue`s
-            // above rather than composing a drained entry.)
+            // ⟨C1 Task 3⟩ No inherited half (R6): raw facts live in the view's
+            // witness pass, never on a summary.
             summaries.insert(
                 r.id.clone(),
-                FullRoutineSummary::new(
-                    r.id.clone(),
-                    direct,
-                    want_raw_inherited.then_some(inherited),
-                    coverage,
-                ),
+                FullRoutineSummary::new(r.id.clone(), direct, coverage),
             );
         }
         cones_census::add_since(&cones_census::ASSEMBLE_NANOS, _t_assemble);
@@ -3024,7 +3090,7 @@ page 50813 "CP3 Wizard"
         let model = crate::engine::l5::test_support::empty_resolved();
         let rel = ExecRelation::single_app(&model);
         let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build_detector_artifacts(&model, substrate::CORE_SUMMARIES, &rel, None, None);
+            build_detector_artifacts(&model, substrate::CORE_SUMMARIES, &rel, None, None, None);
         }))
         .expect_err("CORE_SUMMARIES with l4: None must panic");
         let msg = err

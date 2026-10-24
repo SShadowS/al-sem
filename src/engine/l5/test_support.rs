@@ -237,15 +237,15 @@ pub fn coverage(inherited_status: &str) -> CoverageRecord {
 /// A `FullRoutineSummary` from direct + inherited facts + optional coverage.
 /// ⟨C1 Task 3⟩ Fixture summaries are always MATERIALIZED (`Some(inherited)`) —
 /// they carry their inherited facts as INPUT rather than as a cone output, so
-/// `inherited_raw()` is always legal on them. A test that wants the derived-only
-/// shape builds it with `FullRoutineSummary::new(.., None, ..)` directly.
+/// `inherited_raw()` is always legal on them. A test that wants the production
+/// (derived-only) shape builds it with `FullRoutineSummary::new` directly.
 pub fn summary(
     routine_id: &str,
     direct: Vec<CapabilityFact>,
     inherited: Vec<CapabilityFact>,
     cov: Option<CoverageRecord>,
 ) -> FullRoutineSummary {
-    FullRoutineSummary::new(routine_id.to_string(), direct, Some(inherited), cov)
+    FullRoutineSummary::with_inherited(routine_id.to_string(), direct, Some(inherited), cov)
 }
 
 // ---------------------------------------------------------------------------
@@ -503,12 +503,16 @@ fn write_ws_with_dep(ws: &std::path::Path, ws_al: &str, methods_json: &str, lib_
     {
         let mut zip = zip::ZipWriter::new(&mut bytes);
         let opts = zip::write::SimpleFileOptions::default();
+        // An empty `lib_al` writes a symbol-only app (no source).
         for (name, text) in [
             ("NavxManifest.xml", manifest.as_str()),
             ("SymbolReference.json", symbols.as_str()),
             ("src/Customer.al", customer),
             ("src/Lib.al", lib_al),
-        ] {
+        ]
+        .into_iter()
+        .filter(|(name, _)| !(lib_al.is_empty() && name.starts_with("src/")))
+        {
             zip.start_file(name, opts).unwrap();
             zip.write_all(text.as_bytes()).unwrap();
         }
@@ -607,6 +611,240 @@ pub fn write_fixture_dep_uncertainty(ws: &std::path::Path) {
 }
 "#;
     write_ws_with_dep(ws, ws_al, r#"[{"Name":"DepCaller","Parameters":[]}]"#, lib);
+}
+
+/// #160 step 6 D6 (T7 (a)): the dependency's `DepCaller`, demanded by the
+/// workspace's `Go`, makes a to-less call (`R.NoSuchMethod()`) and a resolved
+/// object run whose result it reads (`Ok := Codeunit.Run(..)`).
+pub fn write_fixture_dep_ledger(ws: &std::path::Path) {
+    let lib = r#"codeunit 12 "Dep Rec Lib"
+{
+    trigger OnRun()
+    begin
+    end;
+
+    procedure DepCaller()
+    var
+        R: Record Customer;
+        Ok: Boolean;
+    begin
+        R.NoSuchMethod();
+        Ok := Codeunit.Run(Codeunit::"Dep Rec Lib");
+    end;
+}
+"#;
+    let ws_al = r#"codeunit 50183 "Ws Ledger"
+{
+    procedure Go()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.DepCaller();
+    end;
+}
+"#;
+    let methods = r#"[{"Name":"DepCaller","Parameters":[]}]"#;
+    write_ws_with_dep(ws, ws_al, methods, lib);
+}
+
+/// #160 step 6 D6 (T7 (b)): the workspace's `Go` calls `Write` of a
+/// SYMBOL-ONLY `XRec`: a resolved call into a body-less dependency row.
+pub fn write_fixture_symbol_only_dep(ws: &std::path::Path) {
+    let ws_al = r#"codeunit 50182 "Ws Sym"
+{
+    procedure Go()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.Write();
+    end;
+}
+"#;
+    write_ws_with_dep(ws, ws_al, r#"[{"Name":"Write","Parameters":[]}]"#, "");
+}
+
+/// #160 step 6 rule B (spec §14.3.5): each workspace routine of `Ws RuleB`
+/// reaches dependency code one way. `CallWrite` calls `Write` (a physical
+/// `Modify`, B4); `FillAndPost` passes a `temporary` Customer to `Fill` (it
+/// inserts into it, a producer proof) and calls `Post` (a physical insert,
+/// B8); `CallRaise` calls `Raise`, which raises `OnRaised`, handled by the
+/// workspace's `OnRaisedWs` with an insert into `Ws Log` (B6);
+/// `WriteThenCommit` inserts into `Ws Log`, then calls `MaybeCommit`, which
+/// commits inside an `if` (B7); `WriteCallCommit` does the same, then commits
+/// itself, and `DepWriteThenCommit` calls `Write`, then commits (B7's MUST
+/// commit and write sets).
+pub fn write_fixture_rule_b(ws: &std::path::Path) {
+    let rec = r#"[{"Name":"Rec","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}]"#;
+    let flag = r#"[{"Name":"Flag","TypeDefinition":{"Name":"Boolean"}}]"#;
+    let ev = r#"[{"Name":"IntegrationEvent","Arguments":[{"Value":"False"},{"Value":"False"}]}]"#;
+    let methods = format!(
+        r#"[{{"Name":"Write","Parameters":[]}},{{"Name":"Fill","Parameters":{rec}}},{{"Name":"Post","Parameters":[]}},{{"Name":"Raise","Parameters":[]}},{{"Name":"OnRaised","Parameters":[],"Attributes":{ev}}},{{"Name":"MaybeCommit","Parameters":{flag}}}]"#
+    );
+    let lib = r#"codeunit 12 "Dep Rec Lib"
+{
+    procedure Write()
+    var
+        C: Record Customer;
+    begin
+        C.Modify();
+    end;
+
+    procedure Fill(var Rec: Record Customer)
+    begin
+        Rec.Insert();
+    end;
+
+    procedure Post()
+    var
+        C: Record Customer;
+    begin
+        C.Insert();
+    end;
+
+    procedure Raise()
+    begin
+        OnRaised();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnRaised()
+    begin
+    end;
+
+    procedure MaybeCommit(Flag: Boolean)
+    begin
+        if Flag then
+            Commit();
+    end;
+}
+"#;
+    let ws_al = r#"table 50190 "Ws Log"
+{
+    fields
+    {
+        field(1; Id; Integer)
+        {
+        }
+    }
+}
+
+codeunit 50190 "Ws RuleB"
+{
+    procedure CallWrite()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.Write();
+    end;
+
+    procedure FillAndPost()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+        T: Record Customer temporary;
+    begin
+        Lib.Fill(T);
+        Lib.Post();
+    end;
+
+    procedure CallRaise()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.Raise();
+    end;
+
+    procedure WriteThenCommit()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+        L: Record "Ws Log";
+    begin
+        L.Insert();
+        Lib.MaybeCommit(true);
+    end;
+
+    procedure WriteCallCommit()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+        L: Record "Ws Log";
+    begin
+        L.Insert();
+        Lib.MaybeCommit(true);
+        Commit();
+    end;
+
+    procedure DepWriteThenCommit()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.Write();
+        Commit();
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Rec Lib", 'OnRaised', '', false, false)]
+    local procedure OnRaisedWs()
+    var
+        L: Record "Ws Log";
+    begin
+        L.Insert();
+    end;
+}
+"#;
+    write_ws_with_dep(ws, ws_al, &methods, lib);
+}
+
+/// #160 step 6 rule B, final panel F1-S2: the parts of an event dispatch from
+/// primary code into a dependency subscriber (the `ev:` boundary). The
+/// workspace's `WriteThenRaise` inserts into `Ws Log`, then raises its own
+/// `OnWsEvent`; the dependency's `DoHttp` makes an HTTP call, and `CallHttp`
+/// calls it (so the cone holds it). No compilable AL dispatches from the
+/// workspace into a dependency subscriber (a dependency cannot see the
+/// workspace), so the test adds that edge to the tree by hand.
+pub fn write_fixture_rule_b_event(ws: &std::path::Path) {
+    let lib = r#"codeunit 12 "Dep Rec Lib"
+{
+    procedure DoHttp()
+    var
+        Client: HttpClient;
+        Resp: HttpResponseMessage;
+    begin
+        Client.Get('https://api.example.test/orders', Resp);
+    end;
+}
+"#;
+    let ws_al = r#"table 50190 "Ws Log"
+{
+    fields
+    {
+        field(1; Id; Integer)
+        {
+        }
+    }
+}
+
+codeunit 50191 "Ws Pub"
+{
+    procedure CallHttp()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.DoHttp();
+    end;
+
+    procedure WriteThenRaise()
+    var
+        L: Record "Ws Log";
+    begin
+        L.Insert();
+        OnWsEvent();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnWsEvent()
+    begin
+    end;
+}
+"#;
+    write_ws_with_dep(ws, ws_al, r#"[{"Name":"DoHttp","Parameters":[]}]"#, lib);
 }
 
 /// #160 step 5 (spec `2026-10-22-issue-160-step5-coverage-policy-design.md`
