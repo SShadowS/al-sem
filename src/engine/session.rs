@@ -411,9 +411,19 @@ impl View {
             (Cell::L4, need_l4),
             (Cell::Caps, need_caps),
         ] {
+            // D2 (final panel F1-C3): every composition releases `Caps` in its
+            // own prepare, so a second one (a det fill needing derived rows
+            // after a raw-only composition) breaks the one-composition rule.
             assert!(
                 !needed || self.released & cell.bit() == 0,
-                "{cell:?} released; a View fills each cell once"
+                "{}",
+                if matches!(cell, Cell::Caps) {
+                    "a View composes once, in its first composing prepare: a det fill that \
+                     needs derived rows comes with that prepare"
+                        .to_string()
+                } else {
+                    format!("{cell:?} released; a View fills each cell once")
+                }
             );
         }
         let missing = plan.after_run & !union;
@@ -969,7 +979,7 @@ mod tests {
     /// #160 step 6 D3 (Task 2b-1 review): a witness request after the view
     /// composed WITHOUT one names the witness rule, not the generic refill.
     /// DISCRIMINATION: dropping `Cell::Caps` from the assertion's released
-    /// bits gives the "Caps released" text and fails this.
+    /// bits gives the refill loop's `Caps` text and fails this.
     #[test]
     fn a_witness_request_after_a_composition_names_the_rule() {
         let plain = Plan::for_test(
@@ -990,6 +1000,31 @@ mod tests {
         );
         assert!(
             msg.contains("a View takes at most one witness request, in its one composing prepare"),
+            "{msg}"
+        );
+    }
+
+    /// Final panel F1-C3: a det fill that needs derived rows after a raw-only
+    /// composition names the one-composition rule, not the generic refill.
+    #[test]
+    fn a_det_fill_after_a_raw_only_composition_names_the_rule() {
+        let msg = panic_text(
+            "det after a raw-only composition",
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut v = view();
+                v.prepare(
+                    &Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::Primary),
+                );
+                v.prepare(&Plan::for_test(
+                    vec![vec![probe(substrate::SUMMARIES, noop)]],
+                    true,
+                    false,
+                    0,
+                ));
+            })),
+        );
+        assert!(
+            msg.contains("a View composes once, in its first composing prepare"),
             "{msg}"
         );
     }
