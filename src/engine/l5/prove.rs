@@ -1207,8 +1207,8 @@ mod tests {
         let model = &b.resolved;
         let (mut caps, raw) = compose_capabilities(
             model,
-            b.rel.cone(),
-            det_cone_inputs(model, &b.rel),
+            b.rel().cone(),
+            det_cone_inputs(model, b.rel()),
             ConeScope {
                 derived: true,
                 raw: WitnessScope::None,
@@ -1217,7 +1217,7 @@ mod tests {
         let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
         let tree = crate::engine::l5::snapshot::compose_tree(
             model,
-            b.rel.cone(),
+            b.rel().cone(),
             b.dependency_calls.as_deref().unwrap_or(&[]),
             &caps,
             crate::engine::l5::snapshot::TreeRaw::Drain(raw),
@@ -1346,8 +1346,8 @@ mod tests {
         let model = &b.resolved;
         let (mut caps, raw) = compose_capabilities(
             model,
-            b.rel.cone(),
-            det_cone_inputs(model, &b.rel),
+            b.rel().cone(),
+            det_cone_inputs(model, b.rel()),
             ConeScope {
                 derived: true,
                 raw: WitnessScope::None,
@@ -1356,7 +1356,7 @@ mod tests {
         let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
         let tree = crate::engine::l5::snapshot::compose_tree(
             model,
-            b.rel.cone(),
+            b.rel().cone(),
             b.dependency_calls.as_deref().unwrap_or(&[]),
             &caps,
             crate::engine::l5::snapshot::TreeRaw::Drain(raw),

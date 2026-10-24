@@ -797,8 +797,9 @@ fn diff_ws_ws() {
 
 /// #277 D8: a diff whose old workspace side fails never builds its new side
 /// (the driver skips a job's later view once a side failed), as standalone
-/// `diff` stopped at the old side (the pre-driver binary passes this too).
-/// Precondition: with the sides swapped, the good side builds.
+/// `diff` stopped at the old side. Both workspace sides are read before the
+/// first build, so `inputs.read` is 2 (stated in CHANGELOG; the pre-driver
+/// binary read 1). Precondition: with the sides swapped, the good side builds.
 #[test]
 fn diff_failed_old_side_builds_no_new_side() {
     let d = tempfile::tempdir().unwrap();
@@ -818,6 +819,7 @@ fn diff_failed_old_side_builds_no_new_side() {
         )
     );
     assert_eq!(count(&m, "build.program"), 0, "{m:?}");
+    assert_eq!(count(&m, "inputs.read"), 2, "{m:?}");
     // The sides swapped: the good side, built first, is the one build.
     let (_, swapped) = spawn_traced(&["diff", &new, old, "--format", "json"], &[]);
     assert_eq!(

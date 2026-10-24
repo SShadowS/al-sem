@@ -1227,7 +1227,7 @@ pub(crate) fn build_detector_context_with<'a>(
     // Cross-app the base's relation (its SCC included, no second Tarjan);
     // single-app one built here over every call.
     let rel = match base {
-        Some(b) => Arc::clone(&b.rel),
+        Some(b) => Arc::clone(b.rel()),
         None => Arc::new(ExecRelation::single_app(resolved)),
     };
     let l4 = (demanded & substrate::CORE_SUMMARIES != 0).then(|| L4Request {

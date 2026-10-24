@@ -149,7 +149,7 @@ fn hand_state_parse_incomplete(t: &mut AnalysisTarget, names: &[&str]) {
 /// Reach over the CONE (`rel.cone()`): BFS from every primary routine.
 fn cone_reach(b: &R3a5CrossAppBase) -> HashSet<String> {
     let mut adj: std::collections::HashMap<&str, Vec<String>> = Default::default();
-    for e in b.rel.cone() {
+    for e in b.rel().cone() {
         if let Some(to) = &e.to {
             adj.entry(e.from.as_str()).or_default().push(to.clone());
         }
@@ -160,7 +160,7 @@ fn cone_reach(b: &R3a5CrossAppBase) -> HashSet<String> {
 /// Reach over the CUT (`rel.primary()`: primary callers' calls plus event
 /// dispatch).
 fn cut_reach(b: &R3a5CrossAppBase) -> HashSet<String> {
-    let g = b.rel.primary();
+    let g = b.rel().primary();
     bfs(b, |from| {
         g.edges_by_from
             .get(from)
@@ -568,7 +568,7 @@ fn symbol_only_callee_has_its_gap() {
         .map(|r| r.id.as_str())
         .collect();
     assert!(
-        x.rel
+        x.rel()
             .cone()
             .iter()
             .any(|e| e.from == drive && e.to.as_deref().is_some_and(|t| bodyless_d.contains(t))),

@@ -281,6 +281,13 @@ pub enum Cell {
     Tree,
     Effects,
     TreeRead,
+    /// The cross-app base's parts only `prepare` reads (#160 Task 27 I1,
+    /// #277 R6-1): released after the view's one prepare, by a job that
+    /// needs neither them nor the relation (`alsem query`). The model and
+    /// `dependencies()` stay. Not in [`Cell::ALL`]: released only by name.
+    /// After step 9's `TreeRead`: #277 merged second, so its cell takes the
+    /// next free bit (spec §9).
+    Base,
 }
 
 impl Cell {
@@ -656,6 +663,10 @@ impl View {
             !registry::in_detector_loop(),
             "View::prepare inside the detector loop"
         );
+        assert!(
+            self.released & Cell::Base.bit() == 0,
+            "the cross-app base was released past the view's prepare"
+        );
         let union = plan.union();
         let need_det = !plan.runs.is_empty();
         let core = union & substrate::CORE_SUMMARIES != 0;
@@ -765,7 +776,7 @@ impl View {
             // its `rel.*` census buckets printed by `single_app`); cross-app it
             // is the base's, built, counted and census-printed with the base.
             *rel = Some(match cross_base {
-                Some(b) => Arc::clone(&b.rel),
+                Some(b) => Arc::clone(b.rel()),
                 None => Arc::new(ExecRelation::single_app(model)),
             });
         }
@@ -1022,6 +1033,11 @@ impl View {
             Cell::Tree => self.tree = None,
             Cell::Effects => self.effects.clear(),
             Cell::TreeRead => self.tree_reads.clear(),
+            Cell::Base => {
+                if let AnalysisTarget::CrossApp(b) = &mut self.target {
+                    b.release_past_prepare();
+                }
+            }
         }
     }
 
@@ -1075,7 +1091,7 @@ impl View {
         .filter_map(|(name, filled)| filled.then_some(name))
         .collect();
         let rel_strong = match &self.target {
-            AnalysisTarget::CrossApp(b) => Arc::strong_count(&b.rel),
+            AnalysisTarget::CrossApp(b) => Arc::strong_count(b.rel()),
             AnalysisTarget::SingleApp(_) => self.rel.as_ref().map_or(0, Arc::strong_count),
         };
         format!(
@@ -2055,6 +2071,7 @@ mod tests {
             Cell::Tree,
             Cell::Effects,
             Cell::TreeRead,
+            Cell::Base,
         ];
         for c in all {
             match c {
@@ -2066,7 +2083,8 @@ mod tests {
                 | Cell::Raw
                 | Cell::Tree
                 | Cell::Effects
-                | Cell::TreeRead => assert_ne!(c.bit(), 0, "(f) {c:?} has a bit"),
+                | Cell::TreeRead
+                | Cell::Base => assert_ne!(c.bit(), 0, "(f) {c:?} has a bit"),
             }
         }
         let mask = all.iter().fold(0u16, |m, c| m | c.bit());
