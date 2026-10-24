@@ -792,6 +792,61 @@ codeunit 50190 "Ws RuleB"
     write_ws_with_dep(ws, ws_al, &methods, lib);
 }
 
+/// #160 step 6 rule B, final panel F1-S2: the parts of an event dispatch from
+/// primary code into a dependency subscriber (the `ev:` boundary). The
+/// workspace's `WriteThenRaise` inserts into `Ws Log`, then raises its own
+/// `OnWsEvent`; the dependency's `DoHttp` makes an HTTP call, and `CallHttp`
+/// calls it (so the cone holds it). No compilable AL dispatches from the
+/// workspace into a dependency subscriber (a dependency cannot see the
+/// workspace), so the test adds that edge to the tree by hand.
+pub fn write_fixture_rule_b_event(ws: &std::path::Path) {
+    let lib = r#"codeunit 12 "Dep Rec Lib"
+{
+    procedure DoHttp()
+    var
+        Client: HttpClient;
+        Resp: HttpResponseMessage;
+    begin
+        Client.Get('https://api.example.test/orders', Resp);
+    end;
+}
+"#;
+    let ws_al = r#"table 50190 "Ws Log"
+{
+    fields
+    {
+        field(1; Id; Integer)
+        {
+        }
+    }
+}
+
+codeunit 50191 "Ws Pub"
+{
+    procedure CallHttp()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.DoHttp();
+    end;
+
+    procedure WriteThenRaise()
+    var
+        L: Record "Ws Log";
+    begin
+        L.Insert();
+        OnWsEvent();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnWsEvent()
+    begin
+    end;
+}
+"#;
+    write_ws_with_dep(ws, ws_al, r#"[{"Name":"DoHttp","Parameters":[]}]"#, lib);
+}
+
 /// #160 step 5 (spec `2026-10-22-issue-160-step5-coverage-policy-design.md`
 /// §5 T4, probe P6): a dependency routine `Inner` makes one ambiguous call and
 /// one `Modify`; the dependency's `Outer` calls `Inner`; the workspace's

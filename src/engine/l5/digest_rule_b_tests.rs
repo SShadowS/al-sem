@@ -244,6 +244,109 @@ fn b8_proofs_are_cut_at_the_boundary_and_keep_their_class() {
     assert!(effects.iter().all(|e| e.boundary_group));
 }
 
+/// Final panel F1-S2 (spec §14.3.5 item 4): an event-dispatch boundary group
+/// stays in the MAY relations. `WriteThenRaise` inserts into `Ws Log`, then
+/// raises `OnWsEvent`. Hand-stated precondition (no compilable AL dispatches
+/// from the workspace into a dependency subscriber): on the real cross-app
+/// tree, an event-dispatch edge `OnWsEvent → DoHttp` (a dependency routine
+/// whose HTTP call is a real cone fact) and `WriteThenRaise`'s inherited HTTP
+/// fact through its `OnWsEvent()` call. The `HTTP` group (`ev:` identity: no
+/// call site or operation of its own) is placed at that call, in
+/// `WriteThenRaise`'s real order frames, so the insert is pending at it:
+/// `WRITE_PENDING_AT_EXTERNAL_IO`, never `ORDERING_UNKNOWN`.
+#[test]
+fn an_event_boundary_group_is_in_the_may_relations() {
+    use crate::engine::l5::snapshot::SnapshotGraphEdge;
+    let tmp = tempfile::tempdir().unwrap();
+    crate::engine::l5::test_support::write_fixture_rule_b_event(tmp.path());
+    let base = cross_base(tmp.path());
+    let model = &base.resolved;
+    let id = |name: &str| -> String {
+        model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("precondition: {name}"))
+            .stable_routine_id
+            .clone()
+    };
+    let (root, publisher, dep, call_http) = (
+        id("WriteThenRaise"),
+        id("OnWsEvent"),
+        id("DoHttp"),
+        id("CallHttp"),
+    );
+    let mut tree = tree_of(
+        model,
+        &base.rel,
+        ConeScope {
+            derived: false,
+            raw: WitnessScope::All,
+        },
+    );
+    let (cs, anchor) = tree
+        .typed_edges
+        .iter()
+        .find_map(|e| match e {
+            SnapshotGraphEdge::DirectCall {
+                from,
+                to,
+                callsite_id,
+                source_anchor,
+                ..
+            } if *from == root && *to == publisher => {
+                Some((callsite_id.clone(), source_anchor.clone()))
+            }
+            _ => None,
+        })
+        .expect("precondition: WriteThenRaise calls OnWsEvent");
+    tree.typed_edges.push(SnapshotGraphEdge::EventDispatch {
+        kind: "event-dispatch",
+        from: publisher,
+        to: dep,
+        event_id: "test/Codeunit/50191/event/onwsevent".to_string(),
+        publish_anchor: anchor.clone(),
+        subscriber_anchor: anchor,
+        edge_id: "f1-s2-dispatch".to_string(),
+    });
+    let mut fact = tree
+        .capability_facts
+        .iter()
+        .find(|f| f.subject == call_http && f.provenance == "inherited" && f.op == "send")
+        .expect("precondition: CallHttp's inherited HTTP send fact")
+        .clone();
+    fact.subject = root.clone();
+    fact.witness_callsite_id = Some(cs);
+    tree.capability_facts.push(fact);
+    let entries = crate::engine::l5::digest::compute_digest_effects_cli(
+        &tree,
+        model,
+        Some(std::slice::from_ref(&root)),
+    );
+    let effects = &entries[0].effects;
+    let http: Vec<&DigestEffectResult> =
+        effects.iter().filter(|e| e.effect_type == "HTTP").collect();
+    assert_eq!(http.len(), 1, "precondition: one HTTP effect: {effects:?}");
+    let g = http[0];
+    assert!(g.boundary_group, "precondition: a group: {g:?}");
+    // `tree_of` passes no app names, so the app shows as its id.
+    assert!(
+        detail(g, "boundary").is_some_and(|b| b.ends_with(".DoHttp")),
+        "precondition: {g:?}"
+    );
+    assert!(
+        g.evidence_callsite_id.is_none() && g.evidence_operation_id.is_none(),
+        "precondition: the ev: boundary has no site of its own: {g:?}"
+    );
+    let labels: Vec<&str> = g.scoped_guarantees.iter().map(|s| s.label).collect();
+    assert!(!labels.contains(&"ORDERING_UNKNOWN"), "{labels:?}");
+    assert!(
+        labels.contains(&"WRITE_PENDING_AT_EXTERNAL_IO"),
+        "{labels:?}"
+    );
+}
+
 /// The cross-app base of `ws`, its relation, and the tree `compose_tree`
 /// composes over `rel.cone()` for `scope` (the view's path, unreleased).
 fn tree_of(

@@ -4148,23 +4148,45 @@ fn digest_one_root<'i>(
             let ordering_inputs: Vec<crate::engine::l5::ordering_engine::OrderingEffectInput> =
                 effects
                     .iter()
-                    .map(
-                        |e| crate::engine::l5::ordering_engine::OrderingEffectInput {
+                    .map(|e| {
+                        let mut via_paths: Vec<Vec<QueryWitnessHop>> = e
+                            .via_paths
+                            .iter()
+                            .map(|p| p.iter().map(|h| h.inner.clone()).collect())
+                            .collect();
+                        let mut evidence_callsite_id = e.evidence_callsite_id.clone();
+                        // Spec §14.3.5 item 4 (final panel F1-S2): an
+                        // event-dispatch boundary group (`ev:`) has no call
+                        // site or operation of its own. It is placed at the
+                        // call that raises the event (its via path's last
+                        // hop), in that caller's frame, so it stays in the
+                        // MAY relations; the chain is the prefix before it.
+                        if e.boundary_group
+                            && e.evidence_operation_id.is_none()
+                            && evidence_callsite_id.is_none()
+                            && let Some(cs) =
+                                via_paths.iter().find_map(|p| p.last()?.callsite_id.clone())
+                        {
+                            via_paths.retain(|p| {
+                                p.last().and_then(|h| h.callsite_id.as_deref()) == Some(cs.as_str())
+                            });
+                            for p in &mut via_paths {
+                                p.pop();
+                            }
+                            evidence_callsite_id = Some(cs);
+                        }
+                        crate::engine::l5::ordering_engine::OrderingEffectInput {
                             effect_type: e.effect_type.clone(),
                             evidence_operation_id: e.evidence_operation_id.clone(),
-                            evidence_callsite_id: e.evidence_callsite_id.clone(),
-                            via_paths: e
-                                .via_paths
-                                .iter()
-                                .map(|p| p.iter().map(|h| h.inner.clone()).collect())
-                                .collect(),
+                            evidence_callsite_id,
+                            via_paths,
                             via_paths_truncated: e.via_paths_truncated,
                             temp_state: e.temp_state.clone(),
                             occurrence_id: e.fact_id.clone(),
                             conditionality: e.conditionality,
                             boundary: e.boundary_group,
-                        },
-                    )
+                        }
+                    })
                     .collect();
             let scoped = crate::engine::l5::ordering_engine::compute_ordering(
                 rid,
