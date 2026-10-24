@@ -760,7 +760,7 @@ fn fingerprint_wide_query_stays_single_app() {
 }
 
 /// #160 step 9 §4.6 (T16, T11): `--inventory-only` reads a tree over the
-/// view's relation composed with no raw facts (`Roots(∅)`): digest's row with
+/// view's relation composed with no raw facts (an empty request): digest's row with
 /// no witness pass.
 const INVENTORY_ROW: Row = Row {
     witness: 0,
