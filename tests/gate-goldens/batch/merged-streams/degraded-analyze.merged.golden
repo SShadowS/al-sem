@@ -1,0 +1,272 @@
+al-sem: warning: analysis coverage degraded — 1 unknown resolution edge(s)
+{
+  "alsemVersion": "2.0.3",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "analyze-report",
+  "payload": {
+    "findings": [],
+    "summary": {
+      "byDetector": {},
+      "bySeverity": {},
+      "detectorStats": [
+        {
+          "candidatesConsidered": 1,
+          "detector": "d1-db-op-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d2-event-fanout-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d3-missing-setloadfields",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d4-repeated-lookup-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 1
+          }
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d5-set-based-opportunity",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 1
+          }
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d7-recursive-event-expansion",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d9-transaction-span-summary",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 1
+          }
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d10-self-modifying-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d11-modify-without-get",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d12-dead-integration-event",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d13-cross-app-internal-call",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d14-dead-routine",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 1
+          }
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d16-obsolete-routine-call",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d18-constant-filter-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d19-unused-parameter",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d20-unreachable-after-exit",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d21-read-without-load",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d22-flowfield-without-calcfields",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d29-subscriber-modify-on-event-record",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d32-constant-boolean-parameter",
+          "findingsEmitted": 0,
+          "skipped": {
+            "nonLocal": 1
+          }
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d33-unfiltered-bulk-write",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d34-commit-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d35-commit-in-event-subscriber",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d36-late-setloadfields",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d37-validate-without-persist",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d38-subscriber-to-obsolete-event",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d39-record-left-dirty-across-chain",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d41-transitive-filter-loss",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d42-cross-call-wrong-setloadfields",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d43-event-ishandled-skip",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d44-event-multi-subscriber-overlap",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d52-bulk-write-param-no-temp-guard",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d53-ignored-tryfunction-result",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d54-publish-in-tryfunction-cone",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d55-event-publish-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d56-clone-before-write-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d57-singleinstance-growing-state",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d58-query-filter-after-open",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d59-integrationevent-var-boolean-guard",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d60-upgrade-loop-should-be-datatransfer",
+          "findingsEmitted": 0,
+          "skipped": {}
+        }
+      ],
+      "opaqueApps": [],
+      "routinesAnalyzed": 1,
+      "sourceUnitsParsed": 2,
+      "totalFindings": 0
+    }
+  },
+  "schemaVersion": "1.0.0"
+}
