@@ -101,7 +101,9 @@ pub enum WitnessRequest {
 }
 
 impl WitnessRequest {
-    /// The composition's raw scope over `model`.
+    /// The composition's raw scope over `model`. `pub(crate)` so the
+    /// scoped-equals-unscoped tests (#160 step 9 T17) compose with the view's
+    /// own mapping, not a copy of it.
     pub(crate) fn scope(&self, model: &Model) -> WitnessScope {
         match self {
             WitnessRequest::None => WitnessScope::None,

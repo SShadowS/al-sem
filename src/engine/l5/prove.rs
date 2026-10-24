@@ -928,6 +928,10 @@ pub(crate) fn prove_on_target(
             obligations: dummy_oblg,
         };
 
+        // As digest's no-root path: `l4` and the (unfilled) effects die
+        // before the projection, so the release sequence is digest's.
+        view.release(Cell::L4);
+        view.release(Cell::Effects);
         view.census_output();
         let json_text = project_prove_document(ProveDocumentArgs {
             workspace_fp: &workspace_fp,

@@ -1031,10 +1031,15 @@ fn diff_ends_each_sides_phase() {
 /// `build.detector_context`, `snap` per `build.snapshot`, `rel:<Cell>` per
 /// `view.release` (`View::release`'s instant).
 fn release_sequence(args: &[&str]) -> Vec<String> {
+    release_sequence_exit(args, 0)
+}
+
+/// [`release_sequence`] of a run that exits `code`.
+fn release_sequence_exit(args: &[&str], code: i32) -> Vec<String> {
     let (out, events) = spawn_trace_events(env!("CARGO_BIN_EXE_alsem"), args, &[]);
     assert_eq!(
         out.status.code(),
-        Some(0),
+        Some(code),
         "alsem {args:?}\nstderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
@@ -1053,6 +1058,23 @@ fn release_sequence(args: &[&str]) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// #160 step 9 (Task 2 review item 4): a prove that resolves no root drops its
+/// cells in digest's no-root order, `l4` and `Effects` included, before its
+/// exit 2. Precondition: the sequence holds `l4`'s release. DISCRIMINATION:
+/// deleting the dummy branch's `release(Cell::L4)` / `release(Cell::Effects)`
+/// in `prove_on_target` fails it.
+#[test]
+fn prove_with_no_root_releases_as_digest_does() {
+    let (_d, ws) = ws_dep();
+    let digest = release_sequence_exit(&["digest", &ws, "--routine", "NoSuchRoutine"], 2);
+    let prove = release_sequence_exit(&["prove", &ws, "NoSuchRoutine", "may-commit"], 2);
+    assert!(
+        digest.iter().any(|c| c == "rel:L4"),
+        "precondition: {digest:?}"
+    );
+    assert_eq!(prove, digest);
 }
 
 /// #160 final panel P1-5: each command drops its cells where the code says,
