@@ -182,6 +182,17 @@ impl AnalysisTarget {
         single_app: bool,
         command: &str,
     ) -> Result<AnalysisTarget, String> {
+        Self::build_with(inputs, single_app, false, command)
+    }
+
+    /// [`AnalysisTarget::build`] with `--no-roots-config` (#160 step 9 D1): both
+    /// arms skip the `roots.config.json` overlay when `no_roots_config`.
+    pub fn build_with(
+        inputs: &Arc<InputSet>,
+        single_app: bool,
+        no_roots_config: bool,
+        command: &str,
+    ) -> Result<AnalysisTarget, String> {
         let model_instance_id = inputs
             .model_instance_id
             .as_deref()
@@ -190,14 +201,18 @@ impl AnalysisTarget {
             crate::program::model::program_calls::assemble_and_resolve_workspace_program(
                 inputs,
                 model_instance_id,
-                false,
+                no_roots_config,
             )
             .map(|r| AnalysisTarget::SingleApp(Box::new(r)))
             .ok_or_else(|| format!("{command}: workspace did not resolve"))
         } else {
-            crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
-                .map(|b| AnalysisTarget::CrossApp(Box::new(b)))
-                .map_err(|e| Self::cross_app_failure_message(command, &e))
+            crate::engine::l4::capability_cone::build_cross_app_base_with(
+                inputs,
+                model_instance_id,
+                no_roots_config,
+            )
+            .map(|b| AnalysisTarget::CrossApp(Box::new(b)))
+            .map_err(|e| Self::cross_app_failure_message(command, &e))
         }
     }
 
@@ -1184,6 +1199,40 @@ mod tests {
             version: "1.0.0.0".to_string(),
         });
         m
+    }
+
+    /// #160 step 9 D1 (plan 1.2): `--no-roots-config` reaches both arms of
+    /// `AnalysisTarget::build_with`. Precondition: with `false`, ws-d51's
+    /// `roots.config.json` gives a root classification a `config_entry_id`, in
+    /// both universes. Break: a literal `false` inside
+    /// `build_cross_app_base_with` -> the cross-app half fails.
+    #[test]
+    fn build_with_no_roots_config_reaches_both_arms() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-d51-jobqueue");
+        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let configured = |single_app: bool, no_roots_config: bool| -> usize {
+            let target =
+                super::AnalysisTarget::build_with(&inputs, single_app, no_roots_config, "test")
+                    .unwrap_or_else(|e| panic!("build_with({single_app}): {e}"));
+            target
+                .resolved()
+                .root_classifications
+                .iter()
+                .filter(|rc| rc.config_entry_id.is_some())
+                .count()
+        };
+        for (universe, single_app) in [("single-app", true), ("cross-app", false)] {
+            assert!(
+                configured(single_app, false) > 0,
+                "{universe}: precondition: the overlay gives a classification a config_entry_id"
+            );
+            assert_eq!(
+                configured(single_app, true),
+                0,
+                "{universe}: --no-roots-config leaves no config_entry_id"
+            );
+        }
     }
 
     /// #220 review u-1: `is_primary_routine` decides by THE role rule in a
