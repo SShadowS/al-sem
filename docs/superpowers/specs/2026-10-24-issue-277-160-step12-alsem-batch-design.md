@@ -827,7 +827,7 @@ Batches:
 | B4 | for every Part 3 command x: `H_x ≤ 1.03 × P_x` (peaks) and `H_x + bH_x ≤ P_x + bP_x` (walls). `diff ws ws` is read against D8's stated change: its peak may drop, never rise | — |
 | B5 (decided budget) | `Σ(W4) ≤ 29,360,128 KiB` and `Σ(W4u) ≤ 29,360,128 KiB` | — |
 | B5p (decided cap) | `W2p` runs at most 2 workers at once and the Σ of any two concurrent workers ≤ 29,360,128 KiB | — |
-| B6 | `W4 + bW4 ≤ 1.25 × (W1q − bW1q)` (throughput ≥ 0.8 × 4 × one at CPUs/4) | — |
+| B6 | `W4 + bW4 ≤ 1.25 × (W1q − bW1q)` (throughput ≥ 0.8 × 4 × one at CPUs/4) — **reported, not gating (12A-18, operator 2026-10-24)** | — |
 | B7 | `W4 + bW4 ≤ 4 × (W1f − bW1f)` (throughput ≥ one at full threads) | — |
 
 The "post-attach phase peak" of §5.12 is "not measured" on Linux (#204); every peak here is `VmHWM` (12A-7).
@@ -1006,6 +1006,13 @@ Asked of the epic:
 - **12A-17**: E13's "stderr lines equal standalone" has two stated exceptions in a batch: a view's `log`
   lines (D7) and a job's own write-error line (D2.2) go to the worker's stderr, not the job's stderr file. In
   a one-job batch both land on the process stderr as today.
+- **12A-18 (operator decision, 2026-10-24, after Task 1's STOP)**: B6 (four-worker throughput ≥ 0.8 × 4 ×
+  one) is **reported, not gating**. Task 1 measured four concurrent digests at 1.45 × one (bound 1.25 ×) on
+  clean rounds, while every other bound passed. The same reading found master's digest regressed after step
+  6's merge (`d` 40 s vs 23.8 s, `h` 118 s vs 41 s; cause 444d0c8b, filed as #289), which inflates the
+  contention. The operator chose a working `alsem batch` now over the throughput target: `W` stays as D12
+  derives it; Task 12 measures and reports B6 (on #289's fix if it has landed); a follow-up investigation of
+  four-worker throughput is filed as a discovery. B1a, B1b, B2, B2u, B2o, B5 and B7 stay gating.
 
 ## 11. Open questions
 
