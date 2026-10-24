@@ -190,9 +190,9 @@ fn compose_ws(dir: &std::path::Path) -> CborValue {
     use al_sem::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
     use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
     let model_id = compute_gate_model_instance_id(dir).expect("modelInstanceId");
-    let inputs = al_sem::program::inputs::InputSet::read(
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(
         dir,
-        &al_sem::program::inputs::InputNeeds {
+        &al_sem::program::inputs::WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         },

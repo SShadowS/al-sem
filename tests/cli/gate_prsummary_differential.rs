@@ -213,9 +213,19 @@ fn run_prsummary(fixture: &str, preset: Option<&str>, detector: Option<&str>) ->
         None,
         false,
     );
-    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
-        .expect("run_analyze_with_exit")
-        .0
+    analyze(&args).0
+}
+
+/// `run_analyze_with_exit` over `args`: `(output, exit_code, stderr_warning)`.
+fn analyze(args: &AnalyzeArgs) -> (String, u8, Option<String>) {
+    let (out, exit, warning, _) = run_analyze_with_exit(
+        &args.read_inputs(),
+        &args.read_request(),
+        args,
+        "engine-default",
+    )
+    .expect("run_analyze_with_exit");
+    (out, exit, warning)
 }
 
 /// Run the PR-summary path and return `(markdown, exit_code, stderr_warning)`.
@@ -234,8 +244,7 @@ fn run_prsummary_full(
         fail_on,
         require_dependencies,
     );
-    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
-        .expect("run_analyze_with_exit")
+    analyze(&args)
 }
 
 /// Run the exit-code path for one slot for a `--fail-on` key (no `--require-dependencies`).
@@ -259,9 +268,7 @@ fn run_exit_fail_on(
         fail_on,
         false,
     );
-    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
-        .expect("run_analyze_with_exit")
-        .1
+    analyze(&args).1
 }
 
 /// Run the exit-code path for one slot with `--require-dependencies` (no `--fail-on`).
@@ -274,9 +281,7 @@ fn run_exit_require_deps(fixture: &str, preset: Option<&str>, detector: Option<&
         None,
         true,
     );
-    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
-        .expect("run_analyze_with_exit")
-        .1
+    analyze(&args).1
 }
 
 /// If `trimmed` is a `"key": {` object-opening line, return the unquoted key.
@@ -724,6 +729,7 @@ fn oracle_parse_fail_on_error_is_err() {
     // responsibility. Confirm the pipeline runs (does not panic) with an unknown value.
     let result = al_sem::engine::gate::run::run_analyze_with_exit(
         &args.read_inputs(),
+        &args.read_request(),
         &args,
         "engine-default",
     );
@@ -734,7 +740,7 @@ fn oracle_parse_fail_on_error_is_err() {
     // With "not-a-severity" (rank 0 = info level), all findings at/above info trigger
     // exit 1, so exit is FINDINGS (1) for a fixture with findings — OR PREFLIGHT (4)
     // if degraded without require-deps. Either way it must NOT be CONFIG_ERROR (3).
-    let (_, exit_code, _) = result.unwrap();
+    let (_, exit_code, ..) = result.unwrap();
     assert_ne!(
         exit_code, 3,
         "pipeline exit must not be CONFIG_ERROR (3) — that is the bin's domain"
@@ -770,8 +776,7 @@ fn run_analyze_fixture_json(
         None,
         require_dependencies,
     );
-    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
-        .expect("run_analyze_with_exit")
+    analyze(&args)
 }
 
 /// Fresh-clean workspace (no deps, resolves fully) → NO warning, exit driven by
@@ -867,8 +872,7 @@ fn run_analyze_path(ws: &Path, require_dependencies: bool) -> (String, u8, Optio
         with_evidence: false,
         single_app: false,
     };
-    run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
-        .expect("run_analyze_with_exit")
+    analyze(&args)
 }
 
 /// Fail-closed workspace (unanalyzable — root `app.json` missing `id`) →

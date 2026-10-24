@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::engine::gate::run::{AnalysisTarget, build_analysis_model};
-use crate::program::inputs::{InputNeeds, InputSet};
+use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 use crate::program::model::workspace::Model;
 
@@ -32,8 +32,8 @@ fn rows(m: &Model) -> Vec<String> {
 
 /// `inputs` without its roots config: how a builder that takes no
 /// `--no-roots-config` flag sees "no roots config".
-fn without_roots_config(ws: &Path) -> Arc<InputSet> {
-    let mut set = Arc::try_unwrap(InputSet::read(ws, &InputNeeds::default()))
+fn without_roots_config(ws: &Path) -> Arc<WorkspaceInputs> {
+    let mut set = Arc::try_unwrap(WorkspaceInputs::read(ws, &WorkspaceNeeds::default()))
         .unwrap_or_else(|_| panic!("a fresh read has one owner"));
     set.roots_config = None;
     Arc::new(set)
@@ -41,7 +41,7 @@ fn without_roots_config(ws: &Path) -> Arc<InputSet> {
 
 /// The three builders' rows on `ws`; `None` where a builder built no model.
 fn three(ws: &Path, no_roots_config: bool) -> [Option<Vec<String>>; 3] {
-    let full = InputSet::read(ws, &InputNeeds::default());
+    let full = WorkspaceInputs::read(ws, &WorkspaceNeeds::default());
     let other = if no_roots_config {
         without_roots_config(ws)
     } else {

@@ -3805,7 +3805,7 @@ impl R3a5CrossAppBase {
 ///   S8.2 the model holds only the DEMANDED dependency code, and S8.6 measured
 ///   +1 s and no memory on CDO/DO.
 pub(crate) fn build_cross_app_base(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
 ) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
     build_cross_app_base_with(inputs, model_instance_id, false)
@@ -4115,7 +4115,7 @@ pub fn project_r3a5_cross_app(
         total_cross_app_inherited_facts: 0,
     };
 
-    let inputs = crate::program::inputs::InputSet::read(workspace, &Default::default());
+    let inputs = crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default());
     let Some(base) = build_cross_app_base(&inputs, model_instance_id).ok() else {
         return empty;
     };
@@ -5250,7 +5250,7 @@ codeunit 13 "Dep Rec Sub"
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         write_fixture(&ws);
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
         let publisher = routine_id(&base, "OnDepRec");
         let fwd = routine_id(&base, "Fwd");
@@ -5370,7 +5370,7 @@ codeunit 13 "Dep Rec Sub"
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         write_fixture(&ws);
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let q = crate::engine::l4::effect_query_cli::QuerySubstrate::build(&inputs, "r0", false)
             .expect("cross-app query substrate");
         assert_eq!(q.shared_owners(), (1, 1), "(graph, scc) owners");
@@ -5384,7 +5384,7 @@ codeunit 13 "Dep Rec Sub"
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         write_fixture(&ws);
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
         let owned = crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
@@ -5413,7 +5413,7 @@ codeunit 13 "Dep Rec Sub"
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         write_fixture(&ws);
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
         let publisher = routine_id(&base, "OnDepRec");
         let probe = Detector {
@@ -5674,7 +5674,7 @@ codeunit 13 "Dep Rec Sub"
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         write_fixture_107(&ws, true);
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
         for p in ["OnDepRec", "OnDepRec2"] {
             assert!(
@@ -5735,7 +5735,7 @@ codeunit 13 "Dep Rec Sub"
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         write_fixture_107(&ws, false);
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
         let keys = [
             "persistsCurrentRecord",
@@ -5797,7 +5797,7 @@ mod step4_tests {
     }
 
     fn base_of(ws: &Path) -> R3a5CrossAppBase {
-        let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
         build_cross_app_base(&inputs, "r0").expect("cross-app base")
     }
 
@@ -6118,7 +6118,7 @@ pub(crate) mod callsite_local_scan_tests {
 
     pub(super) fn workspace_model(dir: &Path) -> Option<Model> {
         assemble_and_resolve_workspace_program(
-            &crate::program::inputs::InputSet::read(dir, &Default::default()),
+            &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
             crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
             false,
         )
@@ -7023,7 +7023,7 @@ codeunit 50100 C
         classes: &mut Classes,
         failures: &mut Vec<String>,
     ) -> Option<ComposeStats> {
-        let inputs = crate::program::inputs::InputSet::read(dir, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
         match build_cross_app_base(
             &inputs,
             crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,

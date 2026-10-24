@@ -328,7 +328,7 @@ pub fn load_policy_from_file(path: &std::path::Path) -> LoadResult {
 }
 
 /// [`load_policy_from_file`] over a file already read (the command's
-/// `InputSet`, #160). Reads `text()`, so a read error and a non-UTF-8 file both
+/// `WorkspaceInputs`, #160). Reads `text()`, so a read error and a non-UTF-8 file both
 /// keep the `failed to read <path>: <e>` text.
 pub fn load_policy_from_input(file: &crate::program::inputs::FileInput) -> LoadResult {
     match file.text() {

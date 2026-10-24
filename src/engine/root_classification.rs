@@ -479,10 +479,10 @@ fn validate_roots_config(parsed: &serde_json::Value) -> Option<RootsConfig> {
     Some(RootsConfig { roots: entries })
 }
 
-/// True when the `roots.config.json` bytes (as the command's `InputSet` read
+/// True when the `roots.config.json` bytes (as the command's `WorkspaceInputs` read
 /// them, #160) load+validate — i.e. al-sem's `model.identity.rootsConfig !==
 /// undefined`. The cli-b snapshot `deriveInputs` includes a `roots-config`
-/// input iff this holds (`InputSet::roots_config_loaded`).
+/// input iff this holds (`WorkspaceInputs::roots_config_loaded`).
 pub(crate) fn roots_config_bytes_load(bytes: &[u8]) -> bool {
     roots_config_from_bytes(bytes).is_some()
 }
@@ -698,7 +698,7 @@ pub fn compute_root_classifications(
     roots_config: Option<&Result<Vec<u8>, String>>,
 ) -> (Vec<RootClassification>, Vec<InfraDiagnostic>) {
     let ast_roots = classify_roots(workspace);
-    // `roots_config` is the file's bytes as `InputSet::read` read them (#160):
+    // `roots_config` is the file's bytes as `WorkspaceInputs::read` read them (#160):
     // `None` = no file (or skipped), `Some(Err)` = unreadable, which loads no
     // config, as a failed disk read did.
     let config = roots_config

@@ -281,14 +281,14 @@ impl Model {
     }
 
     /// The coverage capture (the emitter + differential entry point): the
-    /// workspace's `.al` files, as the command's `InputSet` listed them, as
+    /// workspace's `.al` files, as the command's `WorkspaceInputs` listed them, as
     /// `ws:<relPosix>` source units, then the coverage over the resolved model.
     /// SOURCE-ONLY: no index-stage warnings are produced, so `index_diagnostics`
     /// is empty and parsed == total. The unit ids + order match
     /// `project_workspace` byte-for-byte.
     pub fn project_coverage_inputs(
         &self,
-        inputs: &crate::program::inputs::InputSet,
+        inputs: &crate::program::inputs::WorkspaceInputs,
     ) -> AnalysisCoverage {
         let units = coverage_source_units(inputs);
         let diagnostics: Vec<CoverageDiagnostic> = Vec::new();
@@ -298,13 +298,15 @@ impl Model {
 
 /// A workspace's `.al` files as `ws:<relPosix>` source units, in rel-posix
 /// order. `sourceUnitsTotal` matches al-sem's unit count. Empty when the walk
-/// failed (`InputSet.al_files` is then empty: fail-closed — never throws).
+/// failed (`WorkspaceInputs.al_files` is then empty: fail-closed — never throws).
 ///
 /// App-scoped (engine-switch S5.1): a child directory with its own `app.json` is
 /// another app, and the model analyses only the root app's files
 /// (`select_program_files`). Counting the nested app's files here reported them
 /// as parsed although no routine of theirs was analysed.
-pub fn coverage_source_units(inputs: &crate::program::inputs::InputSet) -> Vec<CoverageUnit> {
+pub fn coverage_source_units(
+    inputs: &crate::program::inputs::WorkspaceInputs,
+) -> Vec<CoverageUnit> {
     inputs
         .app_scoped_files()
         .map(|f| CoverageUnit {

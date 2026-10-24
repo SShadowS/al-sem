@@ -1677,7 +1677,7 @@ fn fingerprint_inventory_only_usage_errors_read_no_inputs() {
 }
 
 /// Review focus 1: a relative workspace path runs as the absolute one does
-/// (`InputSet.workspace` is the path as spelled, and the build asserts it
+/// (`WorkspaceInputs.workspace` is the path as spelled, and the build asserts it
 /// equals the builder's root).
 #[test]
 fn inputs_relative_workspace_path_runs() {
@@ -1710,7 +1710,9 @@ fn inputs_relative_workspace_path_runs() {
 }
 
 /// One `.al` file `alsem` cannot read, beside `app_json`; `None` = skip.
-fn unreadable_ws(app_json: &str) -> Option<(tempfile::TempDir, crate::unreadable::Guard)> {
+pub(crate) fn unreadable_ws(
+    app_json: &str,
+) -> Option<(tempfile::TempDir, crate::unreadable::Guard)> {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("app.json"), app_json).unwrap();
     let f = d.path().join("A.al");

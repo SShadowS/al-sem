@@ -169,10 +169,11 @@ fn analyze_json_with(ws: &Path, detector: Option<&str>, with_evidence: bool) -> 
         single_app: false,
         with_evidence,
     };
-    let out = match run_analyze_with_exit(&args.read_inputs(), &args, "247-test") {
-        Ok((out, _, _)) => out,
-        Err(e) => panic!("run_analyze failed: {e}"),
-    };
+    let out =
+        match run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "247-test") {
+            Ok((out, ..)) => out,
+            Err(e) => panic!("run_analyze failed: {e}"),
+        };
     serde_json::from_str(&out).expect("analyze JSON must parse")
 }
 

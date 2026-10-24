@@ -1,5 +1,5 @@
 //! #160 step 1 (spec `2026-10-18-issue-160-steps-0-2-design.md` §4.2.3, §8.2):
-//! a command reads its workspace inputs ONCE, into an `InputSet`, and every
+//! a command reads its workspace inputs ONCE, into an `WorkspaceInputs`, and every
 //! reader after that reads the set, never the disk. Each test reads the set,
 //! then edits the disk, then runs the pipeline with the earlier set: the output
 //! equals an untouched run's. In-process, because the edit must land BETWEEN the
@@ -13,7 +13,7 @@ use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintFormat, FingerprintOptions, FingerprintOutput, run_fingerprint_pipeline,
 };
-use al_sem::program::inputs::{InputNeeds, InputSet, PolicyRequest};
+use al_sem::program::inputs::{PolicyRequest, RequestInputs, WorkspaceInputs};
 
 fn r0(ws: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -21,13 +21,13 @@ fn r0(ws: &str) -> PathBuf {
         .join(ws)
 }
 
-fn read(ws: &Path) -> Arc<InputSet> {
-    InputSet::read(ws, &Default::default())
+fn read(ws: &Path) -> Arc<WorkspaceInputs> {
+    WorkspaceInputs::read(ws, &Default::default())
 }
 
 /// What `fingerprint` reads: the hash rows too.
-fn read_fingerprint(ws: &Path) -> Arc<InputSet> {
-    InputSet::read(ws, &crate::fingerprint_needs())
+fn read_fingerprint(ws: &Path) -> Arc<WorkspaceInputs> {
+    WorkspaceInputs::read(ws, &crate::fingerprint_needs())
 }
 
 /// `analyze --deterministic` arguments (the harness shape of
@@ -54,21 +54,26 @@ fn analyze_args(ws: &Path, format: OutputFormat) -> AnalyzeArgs {
     }
 }
 
-/// Run `analyze` over `inputs`: stdout and exit code.
-fn analyze_run(inputs: &Arc<InputSet>, args: &AnalyzeArgs) -> (String, u8) {
-    match run_analyze_with_exit(inputs, args, "engine-default") {
-        Ok((out, exit, _)) => (out, exit),
+/// Run `analyze` over `inputs` and `request`: stdout and exit code.
+fn analyze_run(
+    inputs: &Arc<WorkspaceInputs>,
+    request: &RequestInputs,
+    args: &AnalyzeArgs,
+) -> (String, u8) {
+    match run_analyze_with_exit(inputs, request, args, "engine-default") {
+        Ok((out, exit, ..)) => (out, exit),
         Err(e) => panic!("analyze failed: {e}"),
     }
 }
 
 /// `analyze --format <format>` over `inputs`.
-fn analyze(inputs: &Arc<InputSet>, format: OutputFormat) -> String {
-    analyze_run(inputs, &analyze_args(&inputs.workspace, format)).0
+fn analyze(inputs: &Arc<WorkspaceInputs>, format: OutputFormat) -> String {
+    let args = analyze_args(&inputs.workspace, format);
+    analyze_run(inputs, &args.read_request(), &args).0
 }
 
 /// `analyze --format json --deterministic` over `inputs`.
-fn analyze_json(inputs: &Arc<InputSet>) -> String {
+fn analyze_json(inputs: &Arc<WorkspaceInputs>) -> String {
     analyze(inputs, OutputFormat::Json)
 }
 
@@ -82,7 +87,7 @@ fn findings(json: &str) -> Vec<serde_json::Value> {
 
 /// `fingerprint --format json --deterministic` over `inputs` (the harness call
 /// of `cli_b_fingerprint_differential.rs`), parsed.
-fn fingerprint_json(inputs: &Arc<InputSet>) -> serde_json::Value {
+fn fingerprint_json(inputs: &Arc<WorkspaceInputs>) -> serde_json::Value {
     let opts = FingerprintOptions {
         inputs,
         driver_version: "engine-default",
@@ -341,11 +346,12 @@ fn closure_app_replaced_after_read() {
     assert_eq!(after["payload"]["inputs"], *rows);
 }
 
-/// `policy check --format json` over `inputs`.
-fn policy_check_json(inputs: &Arc<InputSet>) -> Option<String> {
+/// `policy check --format json` over `inputs` and `request`.
+fn policy_check_json(inputs: &Arc<WorkspaceInputs>, request: &RequestInputs) -> Option<String> {
     use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, run_policy_check};
     run_policy_check(&PolicyCheckOptions {
         inputs,
+        request,
         format: "json",
         out: None,
         deterministic: true,
@@ -356,20 +362,24 @@ fn policy_check_json(inputs: &Arc<InputSet>) -> Option<String> {
     .text
 }
 
-/// Code review CR5: the policy mode comes from the set alone. A set read with
-/// no policy request would hold no policy file although the workspace has one,
-/// and the check would silently run the bundled default: it is refused.
+/// Code review CR5: the policy mode comes from the request alone. A request
+/// read with no policy request would hold no policy file although the
+/// workspace has one, and the check would silently run the bundled default: it
+/// is refused.
 #[test]
 #[should_panic(expected = "without a policy request")]
 fn policy_check_refuses_a_set_read_without_a_policy_request() {
     let ws =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli-c-policy/ws-policy-custom");
     assert!(ws.join("al-sem.policy.yaml").exists(), "precondition");
-    policy_check_json(&InputSet::read(&ws, &InputNeeds::default()));
+    policy_check_json(
+        &read(&ws),
+        &RequestInputs::read(&ws, PolicyRequest::None, None),
+    );
 }
 
 /// Spec §8.2 `inputs::policy_edit_after_read`: the policy is loaded from the
-/// bytes read with the set (auto-detected `al-sem.policy.yaml`).
+/// bytes read with the request (auto-detected `al-sem.policy.yaml`).
 #[test]
 fn policy_edit_after_read() {
     let d = tempfile::tempdir().unwrap();
@@ -377,28 +387,21 @@ fn policy_edit_after_read() {
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli-c-policy/ws-policy-custom"),
         d.path(),
     );
-    let read_auto = || {
-        InputSet::read(
-            d.path(),
-            &InputNeeds {
-                policy: PolicyRequest::AutoDetect,
-                ..InputNeeds::default()
-            },
-        )
-    };
-    let untouched = policy_check_json(&read_auto()).expect("policy output");
+    let read_auto = || RequestInputs::read(d.path(), PolicyRequest::AutoDetect, None);
+    let inputs = read(d.path());
+    let untouched = policy_check_json(&inputs, &read_auto()).expect("policy output");
     assert!(
         untouched.contains("cust-all-rule"),
         "precondition: the workspace policy was loaded"
     );
-    let inputs = read_auto();
+    let request = read_auto();
     std::fs::write(
         d.path().join("al-sem.policy.yaml"),
         "version: [not a policy\n",
     )
     .unwrap();
     assert_eq!(
-        policy_check_json(&inputs).as_deref(),
+        policy_check_json(&inputs, &request).as_deref(),
         Some(untouched.as_str())
     );
 }
@@ -421,9 +424,9 @@ fn baseline_edit_after_read() {
     let base = d.path().join("baseline.json");
     let ws = r0("ws-d8-commit-in-tx");
     let args = d8_args(&ws, &base, false);
-    let first = findings(&analyze_run(&args.read_inputs(), &args).0);
+    let first = findings(&analyze_run(&args.read_inputs(), &args.read_request(), &args).0);
     assert!(!first.is_empty(), "precondition: findings");
-    let inputs = args.read_inputs();
+    let (inputs, request) = (args.read_inputs(), args.read_request());
     let all: Vec<&str> = first
         .iter()
         .map(|f| f["fingerprint"].as_str().unwrap())
@@ -435,11 +438,14 @@ fn baseline_edit_after_read() {
     )
     .unwrap();
     assert_eq!(
-        findings(&analyze_run(&args.read_inputs(), &args).0).len(),
+        findings(&analyze_run(&args.read_inputs(), &args.read_request(), &args).0).len(),
         0,
         "precondition: the rewritten baseline suppresses everything"
     );
-    assert_eq!(findings(&analyze_run(&inputs, &args).0).len(), first.len());
+    assert_eq!(
+        findings(&analyze_run(&inputs, &request, &args).0).len(),
+        first.len()
+    );
 }
 
 /// A1.6 `baseline::update_baseline_applies_the_set_just_written`: with
@@ -452,7 +458,7 @@ fn update_baseline_applies_the_set_just_written() {
     let d = tempfile::tempdir().unwrap();
     let probe = d8_args(&ws, &d.path().join("none.json"), false);
     assert!(
-        !findings(&analyze_run(&probe.read_inputs(), &probe).0).is_empty(),
+        !findings(&analyze_run(&probe.read_inputs(), &probe.read_request(), &probe).0).is_empty(),
         "precondition: findings without a baseline"
     );
     for (case, old) in [("no file", None), ("malformed", Some("not json"))] {
@@ -461,7 +467,7 @@ fn update_baseline_applies_the_set_just_written() {
             std::fs::write(&base, text).unwrap();
         }
         let args = d8_args(&ws, &base, true);
-        let (out, exit) = analyze_run(&args.read_inputs(), &args);
+        let (out, exit) = analyze_run(&args.read_inputs(), &args.read_request(), &args);
         assert_eq!(exit, 0, "{case}");
         assert_eq!(findings(&out).len(), 0, "{case}");
     }

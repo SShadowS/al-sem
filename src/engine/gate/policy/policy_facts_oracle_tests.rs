@@ -17,7 +17,7 @@ use crate::engine::l5::detector_context::witness_non_primary_members;
 use crate::engine::l5::detectors::default_detectors;
 use crate::engine::l5::test_support as ts;
 use crate::engine::session::{View, policy_plan};
-use crate::program::inputs::InputSet;
+use crate::program::inputs::WorkspaceInputs;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -58,7 +58,7 @@ fn render(mut facts: Vec<&CapabilityFact>) -> Vec<String> {
 
 /// A view prepared as `run_policy_check` prepares it, its run taken.
 fn view_of(ws: &Path, single_app: bool) -> Result<View, String> {
-    let inputs = InputSet::read(ws, &Default::default());
+    let inputs = WorkspaceInputs::read(ws, &Default::default());
     let target = AnalysisTarget::build(&inputs, single_app, "oracle")?;
     let mut view = View::new(target);
     let plan = policy_plan(default_detectors());

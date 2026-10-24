@@ -9,8 +9,8 @@
 use std::path::Path;
 
 /// The command's one read of `ws` (#160), as `alsem` does it.
-fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs())
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceInputs> {
+    al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs())
 }
 
 fn write(path: &Path, text: &str) {
@@ -291,15 +291,15 @@ codeunit 50622 "S6 Pol Sub"
 }
 "#,
     );
-    let inputs = al_sem::program::inputs::InputSet::read(
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
+    let request = al_sem::program::inputs::RequestInputs::read(
         ws,
-        &al_sem::program::inputs::InputNeeds {
-            policy: al_sem::engine::gate::policy::pipeline::policy_request(None, false),
-            ..Default::default()
-        },
+        al_sem::engine::gate::policy::pipeline::policy_request(None, false),
+        None,
     );
     let out = run_policy_check(&PolicyCheckOptions {
         inputs: &inputs,
+        request: &request,
         format: "json",
         out: None,
         deterministic: true,
@@ -367,8 +367,8 @@ fn html_report_draws_the_program_engines_event_graph() {
         with_evidence: false,
         single_app: false,
     };
-    let (html, _, _) =
-        run_analyze_with_exit(&args.read_inputs(), &args, "s6").expect("analyze runs");
+    let (html, ..) = run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "s6")
+        .expect("analyze runs");
     assert!(
         html.contains("HandleX</title>"),
         "the subscriber node is drawn"

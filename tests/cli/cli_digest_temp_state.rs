@@ -49,7 +49,7 @@ use crate::temp_state_probe::{probe_al, write_workspace};
 fn run_mode(single_app: bool) -> Value {
     let tmp = write_workspace();
     let result = run_digest_pipeline(
-        &al_sem::program::inputs::InputSet::read(tmp.path(), &crate::fingerprint_needs()),
+        &al_sem::program::inputs::WorkspaceInputs::read(tmp.path(), &crate::fingerprint_needs()),
         Some(vec!["src/Probe.al".to_string()]),
         None,
         None,
@@ -304,7 +304,7 @@ fn check_mode(single_app: bool) -> Vec<String> {
     let tmp = write_workspace();
     let ws = tmp.path();
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let substrate = QuerySubstrate::build(&inputs, &model_id, single_app).expect("query substrate");
     for e in doc["payload"]["entries"].as_array().expect("entries") {
         let name = e["routine"]["display"].as_str().unwrap();
@@ -471,7 +471,7 @@ fn a1c_cone_values_are_frame_correct() {
     let tmp = write_workspace();
     let ws = tmp.path();
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).expect("model");
     let snap = compose_snapshot(&model);
     let writes = snapshot_writes(&snap);
@@ -716,7 +716,7 @@ fn a2h_fingerprint_witnesses_use_the_proofs() {
     let tmp = write_workspace();
     let ws = tmp.path();
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).expect("model");
     let snap = compose_snapshot(&model);
     let idx = build_fingerprint_indexes_pub(&snap);
@@ -1049,7 +1049,7 @@ fn mixed_carrier_precondition() -> Vec<String> {
     let tmp = write_workspace();
     let ws = tmp.path();
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).expect("model");
     let snap = compose_snapshot(&model);
     let display: BTreeMap<&str, &str> = snap
@@ -1236,7 +1236,7 @@ fn cross_app_digest_reads_the_cross_app_store() {
     let ws = tmp.path();
     let run = |single_app: bool| -> Value {
         let r = run_digest_pipeline(
-            &al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs()),
+            &al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs()),
             None,
             Some(vec!["RaiseDep".to_string()]),
             None,
@@ -1289,7 +1289,7 @@ fn cross_app_digest_reads_the_cross_app_store() {
     }
 
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let substrate = QuerySubstrate::build(&inputs, &model_id, false).expect("query substrate");
     let q = render_query_effects(&substrate, "RaiseDep", "t", true);
     let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");

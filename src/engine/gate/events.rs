@@ -39,7 +39,7 @@ use crate::engine::l5::event_flow::{
 };
 use crate::engine::l5::registry::Detector;
 use crate::engine::session::{Cell, Plan, View, events_plan};
-use crate::program::inputs::InputSet;
+use crate::program::inputs::WorkspaceInputs;
 use crate::program::resolve::full::LoadedDependencies;
 use std::sync::Arc;
 
@@ -358,7 +358,7 @@ pub struct EventsRunResult {
 /// omits the detector-stage ones the goldens' `.stderr.txt` capture.
 fn events_view(
     plan: Plan,
-    inputs: &Arc<InputSet>,
+    inputs: &Arc<WorkspaceInputs>,
     single_app: bool,
     strict: bool,
     cmd: &str,
@@ -398,7 +398,7 @@ fn release_cells(view: &mut View) {
 /// Options for `run_events_fanout`.
 pub struct EventsFanoutOptions<'a> {
     /// The command's one read of the workspace (#160).
-    pub inputs: &'a Arc<InputSet>,
+    pub inputs: &'a Arc<WorkspaceInputs>,
     pub format: &'a str, // "human" | "json"
     pub scope: Scope,
     /// "warn" (default) | "strict" | "ignore". Mirrors `--coverage-policy` in
@@ -521,7 +521,7 @@ pub(crate) fn events_fanout_with(
 /// Options for `run_events_chains`.
 pub struct EventsChainsOptions<'a> {
     /// The command's one read of the workspace (#160).
-    pub inputs: &'a Arc<InputSet>,
+    pub inputs: &'a Arc<WorkspaceInputs>,
     pub format: &'a str,
     pub scope: Scope,
     /// "warn" | "strict" | "ignore". al-sem `events-chains.ts` VALIDATES this flag

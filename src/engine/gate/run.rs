@@ -25,7 +25,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::engine::gate::app_attribution::App;
-use crate::engine::gate::baseline::{apply_baseline, load_baseline_bytes, save_baseline};
+use crate::engine::gate::baseline::{apply_baseline, load_baseline_bytes, serialize_baseline};
 use crate::engine::gate::exit_code::{compute_finding_exit, exit};
 use crate::engine::gate::filter::{FilterOptions, Scope, filter_findings, scope_filter};
 use crate::engine::gate::format_html::{HtmlFormatInputs, format_html};
@@ -40,7 +40,7 @@ use crate::engine::gate::projection::{ProjectionIndex, project_finding};
 use crate::engine::l5::registry::run_detectors;
 use crate::engine::perf_trace as pt;
 use crate::engine::session::{RunKey, View, analyze_plan};
-use crate::program::inputs::{InputNeeds, InputSet};
+use crate::program::inputs::{PolicyRequest, RequestInputs, WorkspaceInputs, WorkspaceNeeds};
 use crate::program::model::coverage::AnalysisCoverage;
 use crate::program::model::role::Role;
 use crate::program::model::workspace::{Model, assemble_and_resolve_workspace_from_program};
@@ -115,16 +115,19 @@ pub struct AnalyzeArgs {
 }
 
 impl AnalyzeArgs {
-    /// The command's one read of `workspace` (#160 §4.2.6), with what `analyze`
-    /// reads besides the build's inputs: the `--baseline` file.
+    /// The command's one read of `workspace` (#160 §4.2.6).
     #[must_use]
-    pub fn read_inputs(&self) -> Arc<InputSet> {
-        InputSet::read(
+    pub fn read_inputs(&self) -> Arc<WorkspaceInputs> {
+        WorkspaceInputs::read(Path::new(&self.workspace), &WorkspaceNeeds::default())
+    }
+
+    /// What `analyze` reads besides the workspace (#277 D3): the `--baseline` file.
+    #[must_use]
+    pub fn read_request(&self) -> RequestInputs {
+        RequestInputs::read(
             Path::new(&self.workspace),
-            &InputNeeds {
-                baseline: self.baseline.as_ref().map(std::path::PathBuf::from),
-                ..InputNeeds::default()
-            },
+            PolicyRequest::None,
+            self.baseline.as_ref().map(std::path::PathBuf::from),
         )
     }
 }
@@ -136,8 +139,8 @@ impl AnalyzeArgs {
 ///
 /// SOURCE-ONLY: exactly one app per run. Returns an empty registry if `app.json` is
 /// unreadable (engine-never-throws; attribution then falls back to "(unknown app)").
-/// Reads the `app.json` the command's `InputSet` read (#160).
-fn read_workspace_apps(inputs: &InputSet) -> Vec<App> {
+/// Reads the `app.json` the command's `WorkspaceInputs` read (#160).
+fn read_workspace_apps(inputs: &WorkspaceInputs) -> Vec<App> {
     crate::program::model::workspace::read_primary_app(inputs)
         .into_iter()
         .collect()
@@ -178,7 +181,7 @@ impl AnalysisTarget {
     /// The model-instance id is `inputs.model_instance_id`; a caller that has its
     /// own message for a missing id checks it first.
     pub fn build(
-        inputs: &Arc<InputSet>,
+        inputs: &Arc<WorkspaceInputs>,
         single_app: bool,
         command: &str,
     ) -> Result<AnalysisTarget, String> {
@@ -188,7 +191,7 @@ impl AnalysisTarget {
     /// [`AnalysisTarget::build`] with `--no-roots-config` (#160 step 9 D1): both
     /// arms skip the `roots.config.json` overlay when `no_roots_config`.
     pub fn build_with(
-        inputs: &Arc<InputSet>,
+        inputs: &Arc<WorkspaceInputs>,
         single_app: bool,
         no_roots_config: bool,
         command: &str,
@@ -295,7 +298,7 @@ pub struct AnalysisModel {
 /// dependency code it demands. The switch harness dumps the single-app model (it
 /// needs the physical rows); the cross-app side is measured with
 /// `aldump --r4-findings-cross-app`.
-pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> AnalysisModel {
+pub fn build_analysis_model(inputs: &Arc<WorkspaceInputs>, single_app: bool) -> AnalysisModel {
     if !single_app {
         return build_cross_app_analysis_model(inputs);
     }
@@ -322,7 +325,7 @@ pub fn build_analysis_model(inputs: &Arc<InputSet>, single_app: bool) -> Analysi
     let failed = |program: crate::program::resolved::ResolvedProgram, model| {
         failed_model(Ok(program.into_parts().0.coverage), model)
     };
-    // The id `InputSet::read` computed (#160): no second disk walk.
+    // The id `WorkspaceInputs::read` computed (#160): no second disk walk.
     let Some(model_instance_id) = inputs.model_instance_id.as_deref() else {
         return failed(program, ModelFailure::NoModelInstanceId);
     };
@@ -376,7 +379,7 @@ fn failed_model(
 /// assemble L3's model from disk only to tell the two apart.) The same rule as
 /// the `NestedApps::Skip` walk it replaces: a failed walk left `al_files` empty,
 /// so it does not assemble either.
-fn program_build_failure(inputs: &InputSet, why: String) -> ModelFailure {
+fn program_build_failure(inputs: &WorkspaceInputs, why: String) -> ModelFailure {
     if inputs.app_scoped_files().next().is_some() {
         ModelFailure::ProgramBuildFailed(why)
     } else {
@@ -386,7 +389,7 @@ fn program_build_failure(inputs: &InputSet, why: String) -> ModelFailure {
 
 /// [`build_analysis_model`]'s cross-app half. A failed cross-app build is
 /// classified from its own `Result` (#160 spec §4.4.5), with no second build.
-fn build_cross_app_analysis_model(inputs: &Arc<InputSet>) -> AnalysisModel {
+fn build_cross_app_analysis_model(inputs: &Arc<WorkspaceInputs>) -> AnalysisModel {
     use crate::program::model::program_calls::CrossAppFailure;
     let Some(mi) = inputs.model_instance_id.as_deref() else {
         // No id: one build under the single-app profile, never `FULL`'s dependency bodies.
@@ -441,7 +444,7 @@ pub fn dependency_object_predicate<'a>(
 /// leaving it would let stderr say "N symbol-only apps" while JSON says [].
 pub fn analysis_coverage(
     resolved: &Model,
-    inputs: &InputSet,
+    inputs: &WorkspaceInputs,
     fresh: &Result<crate::program::resolve::full::FreshCoverage, String>,
 ) -> AnalysisCoverage {
     let mut c = resolved.project_coverage_inputs(inputs);
@@ -458,14 +461,19 @@ pub fn analysis_coverage(
 /// Backwards-compatible Stage-1 entry: SARIF only, no exit code. Prefer
 /// `run_analyze_with_exit` for the full gate (pr-summary + exit code).
 pub fn run_analyze(
-    inputs: &Arc<InputSet>,
+    inputs: &Arc<WorkspaceInputs>,
+    request: &RequestInputs,
     args: &AnalyzeArgs,
     default_version: &str,
 ) -> Result<String, String> {
-    run_analyze_with_exit(inputs, args, default_version).map(|(out, _exit, _warn)| out)
+    run_analyze_with_exit(inputs, request, args, default_version).map(|(out, ..)| out)
 }
 
-/// Run the gate `analyze` pipeline, returning `(stdout, exit_code, stderr_warning)`.
+/// `run_analyze_with_exit`'s output: `(stdout, exit_code, stderr_warning, baseline_bytes)`.
+pub type AnalyzeOutput = (String, u8, Option<String>, Option<Vec<u8>>);
+
+/// Run the gate `analyze` pipeline, returning `(stdout, exit_code, stderr_warning,
+/// baseline_bytes)`.
 ///
 /// The exit code follows the al-sem precedence:
 ///   CONFIG_ERROR (3) and ANALYSIS_FAILURE (2) are the CALLER's responsibility (bad
@@ -481,8 +489,14 @@ pub fn run_analyze(
 ///
 /// `default_version` is the engine's real version, used when no SARIF override is given.
 ///
+/// The fourth is the baseline `--update-baseline` writes (`Some` only with
+/// `--baseline` and `--update-baseline`). Compute writes nothing (#277 D2.4): the
+/// caller writes these bytes to `args.baseline` BEFORE the output, and a failed
+/// write is its write failure, never an error of this function.
+///
 /// `inputs` is the command's one read of the workspace (#160 §4.2.6): every reader
 /// below reads it, never the disk. `inputs.workspace` is `args.workspace`.
+/// `request` holds the `--baseline` file, read with it (`AnalyzeArgs::read_request`).
 ///
 /// Errors: detector/preset resolution failures (e.g. unknown preset, `--preset` +
 /// `--detector` together). A workspace that fails to assemble (fail-closed / unreadable)
@@ -490,10 +504,11 @@ pub fn run_analyze(
 /// a could-not-verify preflight WARNING (never a fabricated clean — spec §3), and exit
 /// CLEAN unless `--require-dependencies` is set, in which case exit PREFLIGHT_FAILED (4).
 pub fn run_analyze_with_exit(
-    inputs: &Arc<InputSet>,
+    inputs: &Arc<WorkspaceInputs>,
+    request: &RequestInputs,
     args: &AnalyzeArgs,
     default_version: &str,
-) -> Result<(String, u8, Option<String>), String> {
+) -> Result<AnalyzeOutput, String> {
     let _analyze_span = pt::span("analyze", "analyze.total");
     let detectors = resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref())?;
 
@@ -511,7 +526,9 @@ pub fn run_analyze_with_exit(
         // Fail-closed layout / unreadable workspace → empty output; preflight says
         // could-not-verify (never a fabricated clean — spec §3), gated on `fresh`.
         Err(ModelFailure::NoModelInstanceId | ModelFailure::AssemblyFailed) => {
-            return empty_output_result(inputs, args, &version, &fresh);
+            // No finding set, so no baseline is written (as before #277).
+            return empty_output_result(inputs, args, &version, &fresh)
+                .map(|(out, exit, warn)| (out, exit, warn, None));
         }
         Err(ModelFailure::ProgramBuildFailed(why)) => {
             return Err(format!(
@@ -601,15 +618,13 @@ pub fn run_analyze_with_exit(
     // Load the baseline fingerprint set (empty when no --baseline). Drop any finding
     // whose fingerprint is in it. --update-baseline saves the CURRENT (post-limit) set —
     // the new floor — BEFORE the drop, matching al-sem (`saveBaseline(path, limited)`).
-    if let Some(path) = &args.baseline {
+    // The bytes are returned, never written here (#277 D2.4): the caller writes them.
+    let mut baseline_bytes = None;
+    if args.baseline.is_some() {
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
         let baseline = if args.update_baseline {
-            // Engine-never-throws: a write failure is surfaced as Err to the caller,
-            // which the bin maps to a config/IO error message.
-            save_baseline(Path::new(path), &summaries)
-                .map_err(|e| format!("failed to write baseline '{path}': {e}"))?;
-            // The set applied is the set just written: every current finding. The
-            // old file (`inputs.baseline`) is never read, so a malformed one never
+            baseline_bytes = Some(serialize_baseline(&summaries).into_bytes()); // The set applied is the set to be written: every current finding. The
+            // old file (`request.baseline`) is never read, so a malformed one never
             // errors, as when the file was overwritten before being read back (#160).
             summaries.iter().map(|s| s.fingerprint.clone()).collect()
         } else {
@@ -619,9 +634,9 @@ pub fn run_analyze_with_exit(
             // <msg>" + exits 2. We surface this as an Err tagged with the "analysis
             // failure — " prefix so the bin can distinguish it from config errors
             // (exit 3) and use exit 2 instead. The bytes are the ones the command's
-            // `InputSet` read (#160).
-            let file = inputs.baseline.as_ref().expect(
-                "--baseline set but the InputSet was read without it (AnalyzeArgs::read_inputs)",
+            // `RequestInputs` read (#160, #277).
+            let file = request.baseline.as_ref().expect(
+                "--baseline set but the RequestInputs was read without it (AnalyzeArgs::read_request)",
             );
             load_baseline_bytes(file).map_err(|e| format!("analysis failure — {e}"))?
         };
@@ -633,7 +648,7 @@ pub fn run_analyze_with_exit(
     }
 
     // --- inline al-sem-ignore suppression (default-ON, al-sem index.ts:304-319) ---
-    // Parsed from the workspace source texts the `InputSet` read; only ws: units are
+    // Parsed from the workspace source texts the `WorkspaceInputs` read; only ws: units are
     // scanned. The kept set after this is `newFindings` — the set the exit gate and
     // all formats use.
     if !args.disable_inline_suppression {
@@ -773,7 +788,7 @@ pub fn run_analyze_with_exit(
         drop(view);
     }
 
-    Ok((output, exit_code, stderr_warning))
+    Ok((output, exit_code, stderr_warning, baseline_bytes))
 }
 
 /// The empty-output path for a fail-closed / unreadable workspace: empty findings ⇒
@@ -802,7 +817,7 @@ pub fn run_analyze_with_exit(
 /// (zero findings, zero coverage), the same shape Sarif/PrSummary/Json produce here —
 /// every arm returns `Ok`, never `Err`.
 pub(crate) fn empty_output_result(
-    inputs: &InputSet,
+    inputs: &WorkspaceInputs,
     args: &AnalyzeArgs,
     version: &str,
     fresh: &Result<crate::program::resolve::full::FreshCoverage, String>,
@@ -1107,7 +1122,7 @@ fn analyzer_diagnostics_of_run(
 ) -> Vec<crate::engine::l5::registry::Diagnostic> {
     let mut all: Vec<crate::engine::l5::registry::Diagnostic> = Vec::new();
     // (1) workspace.diagnostics — provider (discover) + index, kept on the model
-    //     by `attach_program_calls` from the command's `InputSet` and the build's
+    //     by `attach_program_calls` from the command's `WorkspaceInputs` and the build's
     //     objectless-file list (#160 §4.2.4).
     all.extend(resolved.workspace_diagnostics.iter().cloned());
     // (2) dependency diagnostics — the program build's dependency ledger
@@ -1288,7 +1303,7 @@ mod tests {
         // An anchor from the function's last statement proves the cut did not
         // stop early.
         assert!(
-            body.contains("Ok((output, exit_code, stderr_warning))"),
+            body.contains("Ok((output, exit_code, stderr_warning, baseline_bytes))"),
             "the cut must reach run_analyze_with_exit's later code"
         );
         assert!(

@@ -1001,7 +1001,7 @@ mod trigger_site_rule_tests {
             format!("codeunit 50101 C\n{{\n{body}}}\n"),
         )
         .unwrap();
-        let inputs = crate::program::inputs::InputSet::read(&root, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&root, &Default::default());
         let (_ctx, report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         std::fs::remove_dir_all(&root).ok();

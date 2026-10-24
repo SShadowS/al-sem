@@ -67,7 +67,8 @@ fn args(ws: &Path) -> AnalyzeArgs {
 
 fn analyze_keys(ws: &Path) -> Vec<Key> {
     let a = args(ws);
-    let (out, _, _) = run_analyze_with_exit(&a.read_inputs(), &a, "test").expect("analyze runs");
+    let (out, ..) = run_analyze_with_exit(&a.read_inputs(), &a.read_request(), &a, "test")
+        .expect("analyze runs");
     let v: serde_json::Value = serde_json::from_str(&out).expect("json output");
     let s =
         |f: &serde_json::Value, p: &str| f.pointer(p).and_then(|x| x.as_str()).unwrap().to_string();
@@ -96,7 +97,7 @@ fn analyze_matches_the_detectors_over_the_program_model_on_r0_fixtures() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
     for name in ["ws-member-call-resolution", "ws-overload-callresult-guards"] {
         let ws = root.join(name);
-        let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let model =
             assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
                 .expect("program model");
@@ -121,7 +122,13 @@ fn analyze_of_a_missing_workspace_is_still_could_not_verify() {
     let ws = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/__t7_no_such_ws__");
     assert!(!ws.exists());
     assert!(
-        run_analyze_with_exit(&args(&ws).read_inputs(), &args(&ws), "test").is_ok(),
+        run_analyze_with_exit(
+            &args(&ws).read_inputs(),
+            &args(&ws).read_request(),
+            &args(&ws),
+            "test"
+        )
+        .is_ok(),
         "a missing workspace is empty output, not an error"
     );
 }
@@ -138,7 +145,8 @@ fn analyze_of_a_missing_workspace_is_still_could_not_verify() {
 fn analyze_is_cross_app_by_default_and_single_app_on_request() {
     let ws = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d13-internal-call");
     let detectors = |a: &AnalyzeArgs| {
-        let (out, _, _) = run_analyze_with_exit(&a.read_inputs(), a, "test").expect("analyze runs");
+        let (out, ..) = run_analyze_with_exit(&a.read_inputs(), &a.read_request(), a, "test")
+            .expect("analyze runs");
         let v: serde_json::Value = serde_json::from_str(&out).expect("json output");
         v["payload"]["findings"]
             .as_array()

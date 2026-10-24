@@ -46,7 +46,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
     // the registry yet, so it comes from its own program build. The workspace
     // diagnostics' index rows come from that build's parse (#160 §4.2.4): none
     // when it fails.
-    let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let built = crate::program::resolve::full::build_program_with_coverage(&inputs);
     d.insert(
         "diagnostics.workspace".into(),
@@ -421,7 +421,7 @@ mod tests {
         )
         .unwrap();
 
-        let inputs = crate::program::inputs::InputSet::read(&root, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&root, &Default::default());
         let (ctx, _report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let program_paths: Vec<&str> = ctx

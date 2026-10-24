@@ -85,7 +85,7 @@ pub fn compute_gate_model_instance_id(workspace: &Path) -> Option<String> {
 
 /// The id from its three inputs: the root `app.json` `id` and `version`, and
 /// the `rel_posix` of every discovered `.al` file (any order). The one
-/// algorithm behind [`compute_gate_model_instance_id`] and `InputSet::read`.
+/// algorithm behind [`compute_gate_model_instance_id`] and `WorkspaceInputs::read`.
 pub(crate) fn model_instance_id_from<'a>(
     app_guid: &str,
     app_version: &str,

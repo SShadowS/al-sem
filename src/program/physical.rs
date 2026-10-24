@@ -124,7 +124,7 @@ mod tests {
     fn each_row_names_the_node_of_its_own_declaration() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let (ctx, _report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let graph = ctx.graph();

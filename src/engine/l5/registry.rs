@@ -819,7 +819,7 @@ mod tests {
     fn cross_app_scope_drops_a_finding_located_in_dependency_source() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-d13-internal-call");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
             .expect("cross-app base");
         let d13 = crate::engine::l5::detectors::registered_detectors()
@@ -867,7 +867,7 @@ mod tests {
     fn cross_app_scope_uses_role() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-d13-internal-call");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
             .expect("cross-app base");
         let primary = base

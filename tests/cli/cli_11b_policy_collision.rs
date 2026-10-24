@@ -285,7 +285,7 @@ fn query_effects_origin_is_the_last_owning_rows_operation() {
     std::fs::create_dir_all(ws.join("src")).unwrap();
     std::fs::write(ws.join("app.json"), APP_JSON).unwrap();
     std::fs::write(ws.join("src/Work.al"), JOIN_AL).unwrap();
-    let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
     let q = al_sem::engine::l4::effect_query_cli::run_query_effects_pipeline(
         &inputs,
         "QJ Work.Go",

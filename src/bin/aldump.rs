@@ -32,7 +32,7 @@ use al_sem::program::body::l2_workspace::project_workspace;
 /// under the default model-instance id.
 fn program_model(workspace: &std::path::Path) -> Option<al_sem::program::model::workspace::Model> {
     al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
-        &al_sem::program::inputs::InputSet::read(workspace, &Default::default()),
+        &al_sem::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
         al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
@@ -136,9 +136,9 @@ fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let inputs = al_sem::program::inputs::InputSet::read(
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(
         std::path::Path::new(ws),
-        &al_sem::program::inputs::InputNeeds::default(),
+        &al_sem::program::inputs::WorkspaceNeeds::default(),
     );
     // `--all-apps` also compares the dependency call sites, each resolved from
     // its own app (as the cross-app model does); otherwise the workspace's.

@@ -1719,7 +1719,7 @@ pub struct DigestRunResult {
 /// from `payload.dependencies.mode` (a contract test).
 #[allow(clippy::too_many_arguments)] // CLI flags, one each
 pub fn run_digest_pipeline(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     changed_files: Option<Vec<String>>,
     changed_routines: Option<Vec<String>>,
     diff_text: Option<String>,
@@ -1747,7 +1747,7 @@ pub fn run_digest_pipeline(
 /// The CLI inputs of one digest run ([`run_digest_pipeline`]'s flags).
 /// `max_paths_override` is not here: the pipeline has never read it.
 pub(crate) struct DigestRequest<'a> {
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
+    pub inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     pub changed_files: Option<Vec<String>>,
     pub changed_routines: Option<Vec<String>>,
     pub diff_text: Option<String>,
@@ -1937,7 +1937,7 @@ pub(crate) fn assert_prepare_refuses_a_reduced_set(
     fixture: &str,
     pipeline: impl FnOnce(
         Vec<crate::engine::l5::registry::Detector>,
-        &std::sync::Arc<crate::program::inputs::InputSet>,
+        &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     ),
 ) {
     let set: Vec<_> = crate::engine::l5::detectors::default_detectors()
@@ -1952,9 +1952,9 @@ pub(crate) fn assert_prepare_refuses_a_reduced_set(
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/r0-corpus")
         .join(fixture);
-    let inputs = crate::program::inputs::InputSet::read(
+    let inputs = crate::program::inputs::WorkspaceInputs::read(
         &ws,
-        &crate::program::inputs::InputNeeds {
+        &crate::program::inputs::WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         },

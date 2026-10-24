@@ -7,8 +7,9 @@
 //!     `fingerprints` field (mirrors al-sem's bare `JSON.parse` + `new Set(parsed.fingerprints)`
 //!     which throws on malformed input — propagated to the CLI as ANALYSIS_FAILURE, exit 2).
 //!   - `apply_baseline(findings, set)` → keep findings whose fingerprint is NOT in the set.
-//!   - `save_baseline(path, findings)` → write `{ schemaVersion: "1",
-//!     generatedAt: "1970-01-01T00:00:00.000Z", fingerprints: sorted+deduped }`.
+//!   - `serialize_baseline(findings)` → the bytes `--update-baseline` writes:
+//!     `{ schemaVersion: "1", generatedAt: "1970-01-01T00:00:00.000Z",
+//!     fingerprints: sorted+deduped }`. The bin writes them (#277 D2.4).
 //!
 //! Byte-stability: `generatedAt` is pinned to the Unix epoch (`new Date(0).toISOString()`),
 //! fingerprints are sorted (ascending, lexicographic — matching JS `Array.prototype.sort`
@@ -42,7 +43,7 @@ pub fn load_baseline(path: &Path) -> Result<BTreeSet<String>, String> {
     })
 }
 
-/// [`load_baseline`] over a file already read (the command's `InputSet`, #160).
+/// [`load_baseline`] over a file already read (the command's `RequestInputs`, #160).
 /// Reads [`FileInput::text`], so a non-UTF-8 file is still a READ error
 /// (`cannot read baseline`), never `is not valid JSON`.
 pub fn load_baseline_bytes(file: &FileInput) -> Result<BTreeSet<String>, String> {
@@ -85,8 +86,8 @@ pub fn apply_baseline(
 }
 
 /// Serialize a `BaselineFile` from the given findings: sorted + deduped fingerprints,
-/// epoch `generatedAt`. Returns the exact bytes `save_baseline` would write (used by the
-/// CLI write path and the differential round-trip test). Matches
+/// epoch `generatedAt`. The exact bytes `--update-baseline` writes (`run_analyze_with_exit`
+/// returns them; the bin writes them). Matches
 /// `JSON.stringify(file, null, 2) + "\n"`.
 pub fn serialize_baseline(findings: &[FindingSummary]) -> String {
     // BTreeSet gives sorted + deduped, matching `[...new Set(...)].sort()` over hex
@@ -113,11 +114,6 @@ pub fn serialize_baseline(findings: &[FindingSummary]) -> String {
     }
     out.push_str("}\n");
     out
-}
-
-/// Write a baseline file with sorted, deduped fingerprints from `findings`.
-pub fn save_baseline(path: &Path, findings: &[FindingSummary]) -> std::io::Result<()> {
-    std::fs::write(path, serialize_baseline(findings))
 }
 
 #[cfg(test)]

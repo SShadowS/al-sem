@@ -1478,7 +1478,7 @@ fn project_ir(
 /// `parenless` is the resolution's [`crate::program::resolve::full::ParenlessCalls`]
 /// (`ProgramReport::parenless_calls`): the body walk takes those reads as calls.
 pub fn assemble_and_resolve_workspace_from_program(
-    inputs: &crate::program::inputs::InputSet,
+    inputs: &crate::program::inputs::WorkspaceInputs,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
@@ -1497,7 +1497,7 @@ pub fn assemble_and_resolve_workspace_from_program(
 /// members swap places. Test entry.
 #[doc(hidden)]
 pub fn assemble_and_resolve_workspace_from_program_reversed_groups(
-    inputs: &crate::program::inputs::InputSet,
+    inputs: &crate::program::inputs::WorkspaceInputs,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
@@ -1538,7 +1538,7 @@ pub fn assemble_and_resolve_workspace_from_program_reversed_groups(
 /// `demand` (engine-switch S8.2, `program::resolve::demand`): when given, a
 /// source-bearing dependency file keeps every object but only the routines in it.
 pub fn assemble_and_resolve_cross_app_from_program(
-    inputs: &crate::program::inputs::InputSet,
+    inputs: &crate::program::inputs::WorkspaceInputs,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
@@ -1755,11 +1755,11 @@ pub enum ProgramFiles<'c> {
 /// Select L3's app-scoped file set from `ctx`'s parse. `None` on the fail-closed
 /// conditions (no root `app.json` id, a failed `.al` walk).
 ///
-/// The list is the command's `InputSet` (#160 §4.2.3): the build parsed exactly
+/// The list is the command's `WorkspaceInputs` (#160 §4.2.3): the build parsed exactly
 /// that set's files, so `Missing` can no longer come from a disk change between
 /// two walks; it stays as the guard against a parse that dropped a file.
 pub fn select_program_files<'c>(
-    inputs: &crate::program::inputs::InputSet,
+    inputs: &crate::program::inputs::WorkspaceInputs,
     ctx: &'c crate::program::resolve::full::ProgramContext,
 ) -> Option<ProgramFiles<'c>> {
     use crate::snapshot::parse::ParsedFile;
@@ -1785,7 +1785,7 @@ pub fn select_program_files<'c>(
 }
 
 fn assemble_l3_workspace_from_program(
-    inputs: &crate::program::inputs::InputSet,
+    inputs: &crate::program::inputs::WorkspaceInputs,
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
@@ -1903,14 +1903,14 @@ fn assemble_l3_workspace_from_program(
 /// classify roots, read the primary app, and refuse an empty model.
 fn finish_resolved(
     mut ws: ModelEntities,
-    inputs: &crate::program::inputs::InputSet,
+    inputs: &crate::program::inputs::WorkspaceInputs,
     skip_roots_config: bool,
     row_nodes: RowNodes,
 ) -> Option<ModelRows> {
     let resolved = {
         resolve(&mut ws);
         // R4-F: classify AST roots, then overlay `<workspace>/roots.config.json`,
-        // from the bytes the command's `InputSet` read (mirrors al-sem's
+        // from the bytes the command's `WorkspaceInputs` read (mirrors al-sem's
         // index.ts: `loadRootsConfig(workspaceRoot)`).
         let roots_config = if skip_roots_config {
             None
@@ -1939,10 +1939,10 @@ fn finish_resolved(
 }
 
 /// The primary app's identity from the workspace root `app.json`, as the
-/// command's `InputSet` read it (#160); `run::read_workspace_apps` reads it too.
+/// command's `WorkspaceInputs` read it (#160); `run::read_workspace_apps` reads it too.
 /// Engine-never-throws: returns `None` on any read/parse failure.
 pub(crate) fn read_primary_app(
-    inputs: &crate::program::inputs::InputSet,
+    inputs: &crate::program::inputs::WorkspaceInputs,
 ) -> Option<crate::engine::gate::app_attribution::App> {
     let Some(Ok(v)) = &inputs.app_json_value else {
         return None;
@@ -2252,7 +2252,7 @@ pub struct Model {
     pub infra_diagnostics: Vec<crate::engine::root_classification::InfraDiagnostic>,
     /// al-sem's `workspace.diagnostics` (provider + index rows,
     /// `gate::workspace_diagnostics::compute_workspace_diagnostics`), from the
-    /// command's `InputSet` and the program build's objectless-file list (#160
+    /// command's `WorkspaceInputs` and the program build's objectless-file list (#160
     /// §4.2.4). Source (1) of every command's analyzer diagnostics.
     pub workspace_diagnostics: Vec<crate::engine::l5::registry::Diagnostic>,
     /// The program build's dependency-ledger warnings
@@ -3193,7 +3193,7 @@ mod population_tests {
     fn model_population_follows_the_physical_rows() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let (mut ctx, _report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let full = assemble_and_resolve_workspace_from_program(
@@ -3251,7 +3251,7 @@ mod population_tests {
     fn declaration_only_routines_follow_the_population() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let (mut ctx, _report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let decls = |m: &ModelRows| -> Vec<(String, u32)> {

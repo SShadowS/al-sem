@@ -188,7 +188,7 @@ impl ImpactGraph {
 /// ([`ResolvedProgram::build`] at [`ProgramScope::CrossApp`]), then
 /// [`export_from_program`].
 pub fn export_workspace(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
 ) -> Result<ImpactGraph, String> {
     let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp)?;
     export_from_program(&program)

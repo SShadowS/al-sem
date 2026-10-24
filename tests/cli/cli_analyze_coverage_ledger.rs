@@ -17,8 +17,8 @@ fn write(path: &Path, text: &str) {
 }
 
 /// The command's one read of `ws` (#160).
-fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceInputs> {
+    al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default())
 }
 
 fn app_json(guid: &str, name: &str) -> String {
@@ -175,8 +175,9 @@ fn analyze_degrades_on_an_unreadable_dependency_and_reports_the_others() {
     let dir = tempfile::tempdir().unwrap();
     ledger_workspace(dir.path());
     let args = analyze_args(dir.path());
-    let (out, exit, warning) =
-        run_analyze_with_exit(&args.read_inputs(), &args, "test").expect("analyze runs");
+    let (out, exit, warning, _) =
+        run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "test")
+            .expect("analyze runs");
     let warning = warning.expect("degraded");
     assert!(
         warning.contains("1 unreadable dependency app(s): LedgerBroken"),
@@ -226,8 +227,9 @@ fn analyze_degrades_on_an_unbound_event_subscription() {
 "#,
     );
     let args = analyze_args(ws);
-    let (_, _, warning) =
-        run_analyze_with_exit(&args.read_inputs(), &args, "test").expect("analyze runs");
+    let (_, _, warning, _) =
+        run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "test")
+            .expect("analyze runs");
     let warning = warning.expect("degraded");
     assert!(
         warning.contains("1 unbound event subscription(s)"),

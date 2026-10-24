@@ -20,8 +20,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
-fn inputs(ws: &Path) -> Arc<crate::program::inputs::InputSet> {
-    crate::program::inputs::InputSet::read(ws, &Default::default())
+fn inputs(ws: &Path) -> Arc<crate::program::inputs::WorkspaceInputs> {
+    crate::program::inputs::WorkspaceInputs::read(ws, &Default::default())
 }
 
 /// The internal → stable ids of the roots named `displays` (workspace rows).
@@ -620,9 +620,9 @@ fn t9a_a_routine_selector_reads_the_table_digest_builds() {
     let tmp = tempfile::tempdir().unwrap();
     write_fixture_rule_b(tmp.path());
     let r = run_digest_pipeline(
-        &crate::program::inputs::InputSet::read(
+        &crate::program::inputs::WorkspaceInputs::read(
             tmp.path(),
-            &crate::program::inputs::InputNeeds {
+            &crate::program::inputs::WorkspaceNeeds {
                 fingerprint_rows: true,
                 ..Default::default()
             },
@@ -1222,9 +1222,9 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
     };
     let tmp = tempfile::tempdir().unwrap();
     write_fixture_rule_b(tmp.path());
-    let inputs = crate::program::inputs::InputSet::read(
+    let inputs = crate::program::inputs::WorkspaceInputs::read(
         tmp.path(),
-        &crate::program::inputs::InputNeeds {
+        &crate::program::inputs::WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         },

@@ -75,8 +75,8 @@ fn d14_routines_in(ws: &Path, file: &str) -> Vec<String> {
         with_evidence: false,
         single_app: false,
     };
-    let (out, _, _) =
-        run_analyze_with_exit(&args.read_inputs(), &args, "test").expect("analyze must not fail");
+    let (out, ..) = run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "test")
+        .expect("analyze must not fail");
     let v: serde_json::Value = serde_json::from_str(&out).expect("json output");
     let findings = v["payload"]["findings"].as_array().expect("findings array");
     findings

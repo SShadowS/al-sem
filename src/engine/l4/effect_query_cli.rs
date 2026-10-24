@@ -128,7 +128,7 @@ impl QuerySubstrate {
     /// tables resolve and are selectable. With no dependency there are no leaves
     /// and the same graph, so the two modes agree.
     pub fn build(
-        inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+        inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
         model_instance_id: &str,
         single_app: bool,
     ) -> Result<Self, String> {
@@ -712,7 +712,7 @@ fn selector_failure_doc<T>(
 ///   does not touch T.
 /// - no `--from` — the workspace-global list, count first, uncapped.
 pub fn run_query_touches_pipeline(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     table_selector: &str,
     from: Option<&str>,
     direction: Direction,
@@ -1085,7 +1085,7 @@ fn render_query_touches_body(
 /// down-list for one routine, WITH `via` (which the posting lists drop and
 /// `ConeDerivedStore` never carried).
 pub fn run_query_effects_pipeline(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     routine_selector: &str,
     alsem_ver: &str,
     deterministic: bool,

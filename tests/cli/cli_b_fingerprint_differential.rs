@@ -552,10 +552,10 @@ fn shard_output_matches_goldens() {
 
 /// The command's one read of `ws` (#160), with what `fingerprint` reads: the
 /// hash rows too.
-fn read(ws: &std::path::Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(
+fn read(ws: &std::path::Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceInputs> {
+    al_sem::program::inputs::WorkspaceInputs::read(
         ws,
-        &al_sem::program::inputs::InputNeeds {
+        &al_sem::program::inputs::WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         },
@@ -563,7 +563,7 @@ fn read(ws: &std::path::Path) -> std::sync::Arc<al_sem::program::inputs::InputSe
 }
 
 fn opts_for<'a>(
-    ws: &'a std::sync::Arc<al_sem::program::inputs::InputSet>,
+    ws: &'a std::sync::Arc<al_sem::program::inputs::WorkspaceInputs>,
     format: FingerprintFormat,
     shard: Option<ShardMode>,
     strict: bool,

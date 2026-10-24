@@ -29,7 +29,7 @@ use al_sem::engine::l5::snapshot_full::{
     Domain, FullSnapshotOptions, SNAPSHOT_KEYS, SnapshotUniverse, build_inventory_envelope,
     closure_violations, compose_full_snapshot, is_classified, is_reference, to_sorted_json,
 };
-use al_sem::program::inputs::InputSet;
+use al_sem::program::inputs::WorkspaceInputs;
 use al_sem::program::model::workspace::Model;
 use serde_json::Value;
 
@@ -53,12 +53,12 @@ fn r5b() -> PathBuf {
 }
 
 struct Built {
-    inputs: Arc<InputSet>,
+    inputs: Arc<WorkspaceInputs>,
     target: AnalysisTarget,
 }
 
 fn build(ws: &Path, single_app: bool) -> Built {
-    let inputs = InputSet::read(ws, &crate::fingerprint_needs());
+    let inputs = WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let target = AnalysisTarget::build(&inputs, single_app, "t220").expect("analysis target");
     Built { inputs, target }
 }
