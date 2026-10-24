@@ -6,6 +6,14 @@ origin/master after #250/#252). Operator ran `unblock 160` after attempt 8 hit t
 `678d6540..32d01fae` were cherry-picked (CHANGELOG conflicts taken from master, then the #160 entries re-added in
 `2af87561`; the code delta a8→a9 equals master's 678d6540→9bd2996f delta outside CHANGELOG/.agent). check-diff
 `reasons: []`.
+Attempt 9 final panel: r1 (sol, Opus, code-review skill at high) 18 findings → 16 register entries (F1-*), all fixed or
+refuted with evidence; rebased onto `83ba322a` (#239: one conflict in `selector_index.rs` and the `fingerprint_cli.rs`
+call site, resolved) and `830a150c` (#241, clean); r2: Opus accepted all 16, sol accepted 15 and re-raised F1-O5
+(provenance named a stale base), fixed in `056295ad` (docs only); r3: both accepted F1-O5, NEW none, both VERDICT
+ship. Register: 88 entries, every one accepted by both (R3-01/R3-02 rule marks re-pointed to the rebased
+`cad084a7`). Executor gates on H = `056295ad`: ci-steps-all rc 0 (333 s), check-goldens-coverage rc 0,
+check-goldens rc 0, cdo-gate rc 0 (274 s). Operator decisions this attempt: bench void rule = external load > 8
+only (step 6's final-bench rounds count); 24 h wall-clock cap (`83ba322a`).
 
 ## Claim
 

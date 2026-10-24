@@ -610,7 +610,7 @@
     "evidence": "cone_derived.rs:116-129 (flags), :132-136 (write-op mask). Spec F2: first adds the three map_op-keyed bits (the filter of digest.rs:4035-4061), prices them in the fourth Task 1 configuration, and runs the second walk inside the same SCC member loop while the successor fact cones are alive (capability_cone.rs:2669-2700): one composition, one pd_solve.",
     "anchor": "spec:697",
     "anchor_hash": "c62dab36",
-    "fix_commit": "5c91c8000c3ff6fcfe7dedd13ed25fbd5b1b9317",
+    "fix_commit": "cad084a7de263400a0a3f23b81c4122fe335e7ea",
     "reviews": {
       "sol": "accepted-by-rule",
       "opus": "accepted"
@@ -628,7 +628,7 @@
     "evidence": "pipeline.rs:288-295 builds PolicyModel from summaries and events. Spec F13: PolicyModel from caps.direct_full + caps.coverage (summaries), Cell::Raw, model.events.graph; Raw released right after. B5 row and S2 text now Hm <= 1.03 x Pm.",
     "anchor": "spec:606,654,708",
     "anchor_hash": "c62dab36",
-    "fix_commit": "5c91c8000c3ff6fcfe7dedd13ed25fbd5b1b9317",
+    "fix_commit": "cad084a7de263400a0a3f23b81c4122fe335e7ea",
     "reviews": {
       "sol": "accepted-by-rule",
       "opus": "accepted"
