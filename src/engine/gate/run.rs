@@ -623,9 +623,10 @@ pub fn run_analyze_with_exit(
     if args.baseline.is_some() {
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
         let baseline = if args.update_baseline {
-            baseline_bytes = Some(serialize_baseline(&summaries).into_bytes()); // The set applied is the set to be written: every current finding. The
+            // The set applied is the set to be written: every current finding. The
             // old file (`request.baseline`) is never read, so a malformed one never
             // errors, as when the file was overwritten before being read back (#160).
+            baseline_bytes = Some(serialize_baseline(&summaries).into_bytes());
             summaries.iter().map(|s| s.fingerprint.clone()).collect()
         } else {
             // A malformed baseline (exists but not valid JSON / non-array
