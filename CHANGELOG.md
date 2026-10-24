@@ -18,6 +18,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **#160 step 9: `prove`, `fingerprint --routine` and `fingerprint --inventory-only` are
+  cross-app by default** (part of #160). Each builds the model of the workspace plus the
+  dependency code it requires, as `analyze` and `digest` do, and reads a tree over that
+  cone graph, so behaviour follows calls into dependency code. `--single-app` (new on
+  `prove` and `fingerprint`) analyses the workspace alone and gives the previous output.
+  - `prove` is `digest` with one root: a dependency effect counts as evidence, and
+    dependency code that has no body, is ABI-only or has an analysis gap keeps the answer
+    `unknown`. A must-question answered only through dependency code is `unknown`
+    (rule B: a dependency effect is a boundary group with conditionality `unknown`).
+  - `fingerprint --routine`: inherited dependency facts appear on the routine, and each
+    witness path stops at the first dependency routine. A selector never names a
+    dependency routine, and `summary.totalClassifications` counts primary classifications
+    only. The query document's `schemaVersion` is `1.3.0`. This is additive: a path can
+    carry a `boundary` object (`kind` `call` / `trigger` / `event`, its `cs:` / `op:` /
+    `ev:` id, the callsite, operation or event id, and an anchor), and a witness's
+    `evidence` is the first path's boundary when a path has one. With `--witness 0`, or
+    when no path is found, the evidence is the fact's own operation, which for an
+    inherited fact can be inside the dependency routine; this is intended (the operation
+    is where the effect happens). The json projection is streamed, so a large document
+    is not held twice; its bytes are unchanged.
+  - `fingerprint --inventory-only` composes no raw facts: its five keys come from a
+    tree with no inherited facts, and cross-app `apps[]` names the dependency apps whose
+    identities a primary row references.
+  - Stays single-app in this release, whatever `--single-app` says: `fingerprint`'s full
+    snapshot (json with no query flag, cbor, cbor.gz, `--shard`), the query forms with no
+    `--routine` (human with no flag, `--roots`, `--witness` or `--no-include-inherited`
+    alone), and `diff`. A filed follow-up moves them.
 - **d35's unknown answer names the subscriber's own unresolved call sites** (#265). When
   the gap is in the subscriber's own body, the root cause, evidence note and fix hint now
   say `unresolved: <callee> (line n)` (source order, up to three, then `+N more`) and
@@ -144,6 +171,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bare one). Calls through an interface stay out on purpose: they are a may-call
   candidate set, which d43 would report as `confirmed`. d43 no longer checks for the
   `dependency-export` edge kind, which is never built.
+- #160 step 9 (part of #160):
+  - `--no-roots-config` now reaches a cross-app build (`AnalysisTarget::build_with`);
+    before, only the single-app build skipped the `roots.config.json` overlay.
+  - `fingerprint`'s `mayCommit` reads the inherited coverage when inherited facts are
+    shown: a routine whose own body is fully analysed but whose cone is not now says
+    `unknown`, not `no`. It reads the direct coverage with `--no-include-inherited`.
+    One cli-b query golden moved (`ws-txn-d49-pos-modify-runmodal`).
+  - `prove` matches a dependency effect inside a boundary group by every resource of the
+    group, not only the 10 its `detail` lists, so `writes-table:` / `publishes-event:` no
+    longer answer a false `no` for the 11th.
+  - A dependency app that ships source but has a body-less routine gets a
+    `body-unavailable` gap for that routine, not an app-level `symbol-only-boundary` gap
+    (which names only an app with no source). Both kinds still block `prove`. This also
+    removes a debug-build panic on a cross-app inventory of such a workspace.
 - `alsem diff`: a `--renames` entry for a table field or key is no longer called
   stale (`rename-overlay-stale`, `not-in-old` or `not-in-new`) when the field exists.
   Field and key ids have schema facts but no `identities` row, and only identities
