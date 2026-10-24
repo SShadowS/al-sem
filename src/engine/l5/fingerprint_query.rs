@@ -26,7 +26,6 @@
 
 use std::collections::HashMap;
 
-use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::ids::sha256_hex;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::digest::{
@@ -1016,16 +1015,151 @@ fn query_hop_to_json(hop: &QueryWitnessHop, _workspace_root: &str) -> serde_json
     serde_json::Value::Object(m)
 }
 
-/// Serialize the fingerprint-query envelope: sorted keys, null-drop,
-/// 2-space indent, trailing newline. Mirrors `serializeDocument` (contracts/document.ts).
-fn serialize_fingerprint_envelope(v: serde_json::Value) -> String {
-    // Use the existing sorted-JSON serializer that the digest pipeline uses.
-    // `serialize_document_value` always appends '\n'.
-    serialize_document_value(v)
+/// One node of the query document, serialized exactly as the
+/// `serde_json::Value` it stands for once sorted and null-dropped
+/// (`serialize_document_value`), but with its big arrays built element by
+/// element while serializing (#160 step 9, the B1q fix): no `Value` of the
+/// whole document is ever alive. serde_json's pretty serializer makes the same
+/// calls (`serialize_map` with sorted keys, `serialize_seq` with the length)
+/// for a `Value` and for this, so the bytes are the same.
+enum Doc<'a> {
+    /// A small subtree, already sorted and null-dropped.
+    Value(serde_json::Value),
+    /// An object; its entries are sorted by key, and `null` values dropped,
+    /// when serialized.
+    Map(Vec<(&'static str, Doc<'a>)>),
+    /// An array of `n` elements, the `i`-th built when it is serialized.
+    Seq(usize, Box<dyn Fn(usize) -> Doc<'a> + 'a>),
+}
+
+impl Doc<'_> {
+    /// A small subtree, normalized as `serialize_document_value` does.
+    fn value(v: serde_json::Value) -> Self {
+        Doc::Value(crate::engine::gate::format_json::sort_and_drop_nulls(v))
+    }
+
+    fn is_null(&self) -> bool {
+        matches!(self, Doc::Value(serde_json::Value::Null))
+    }
+}
+
+impl serde::Serialize for Doc<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeMap, SerializeSeq};
+        match self {
+            Doc::Value(v) => v.serialize(s),
+            Doc::Map(entries) => {
+                let mut kept: Vec<&(&'static str, Doc<'_>)> =
+                    entries.iter().filter(|(_, v)| !v.is_null()).collect();
+                kept.sort_by(|a, b| a.0.cmp(b.0));
+                let mut m = s.serialize_map(Some(kept.len()))?;
+                for (k, v) in kept {
+                    m.serialize_entry(k, v)?;
+                }
+                m.end()
+            }
+            Doc::Seq(n, item) => {
+                let mut seq = s.serialize_seq(Some(*n))?;
+                for i in 0..*n {
+                    seq.serialize_element(&item(i))?;
+                }
+                seq.end()
+            }
+        }
+    }
+}
+
+/// `format_json::serialize_document_value`'s bytes for a [`Doc`]: pretty,
+/// trailing newline.
+fn serialize_doc(doc: &Doc<'_>) -> String {
+    let mut out: Vec<u8> = Vec::new();
+    let mut ser =
+        serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::new());
+    serde::Serialize::serialize(doc, &mut ser).expect("query document serialization");
+    let mut text = String::from_utf8(out).expect("serde_json writes UTF-8");
+    text.push('\n');
+    text
+}
+
+/// One fact of a block as JSON, with its witness (`build_block` makes the
+/// witnesses positionally: the `fi`-th, when any, is fact `fi`'s).
+fn fact_doc(block: &FingerprintBlock, fi: usize, workspace_root: &str) -> serde_json::Value {
+    let fact = &block.rendered_facts[fi];
+    let bw = block.witnesses.get(fi).filter(|w| w.fact_index == fi);
+    let mut fj = serde_json::Map::new();
+    fj.insert("factId".into(), fact_id_of(fact).into());
+    fj.insert("op".into(), fact.op.clone().into());
+    fj.insert("resourceKind".into(), fact.resource_kind.clone().into());
+    if let Some(ref rid) = fact.resource_id {
+        fj.insert("resourceId".into(), rid.clone().into());
+    }
+    fj.insert("provenance".into(), fact.provenance.clone().into());
+    fj.insert("confidence".into(), fact.confidence.clone().into());
+    fj.insert("via".into(), fact.via.clone().into());
+    if let Some(bw) = bw {
+        fj.insert("witness".into(), project_witness_json(bw, workspace_root));
+    }
+    serde_json::Value::Object(fj)
+}
+
+/// A block's families: every resource's facts built one by one.
+fn families_doc<'a>(block: &'a FingerprintBlock, workspace_root: &'a str) -> Doc<'a> {
+    Doc::Seq(
+        block.families.len(),
+        Box::new(move |f| {
+            let family = &block.families[f];
+            Doc::Map(vec![
+                ("resourceKind", Doc::value(family.kind.clone().into())),
+                (
+                    "coneCoverage",
+                    Doc::value(family.cone_coverage.clone().into()),
+                ),
+                (
+                    "resources",
+                    Doc::Seq(
+                        family.resources.len(),
+                        Box::new(move |r| {
+                            let res = &family.resources[r];
+                            Doc::Map(vec![
+                                (
+                                    "id",
+                                    Doc::value(
+                                        res.id.clone().map_or(serde_json::Value::Null, Into::into),
+                                    ),
+                                ),
+                                ("display", Doc::value(res.display.clone().into())),
+                                (
+                                    "ops",
+                                    Doc::value(serde_json::Value::Array(
+                                        res.ops.iter().map(|o| o.clone().into()).collect(),
+                                    )),
+                                ),
+                                (
+                                    "facts",
+                                    Doc::Seq(
+                                        res.fact_indices.len(),
+                                        Box::new(move |i| {
+                                            Doc::value(fact_doc(
+                                                block,
+                                                res.fact_indices[i],
+                                                workspace_root,
+                                            ))
+                                        }),
+                                    ),
+                                ),
+                            ])
+                        }),
+                    ),
+                ),
+            ])
+        }),
+    )
 }
 
 /// Full `projectFingerprintQuery` with all parameters injected. The result is
-/// self-contained (#160 step 9 S9-16): no snapshot is read here.
+/// self-contained (#160 step 9 S9-16): no snapshot is read here. The blocks
+/// stream ([`Doc`], the B1q fix): each fact's JSON is built, written and
+/// dropped in turn.
 pub fn project_fingerprint_query_full(
     result: &FingerprintQueryResult,
     workspace_root: &str,
@@ -1036,58 +1170,24 @@ pub fn project_fingerprint_query_full(
     workspace_fingerprint: &str,
 ) -> String {
     // Project blocks.
-    let mut blocks_arr: Vec<serde_json::Value> = Vec::new();
-    for block in &result.blocks {
-        let witness_by_fi: HashMap<usize, &BlockWitness> =
-            block.witnesses.iter().map(|w| (w.fact_index, w)).collect();
+    let blocks = Doc::Seq(
+        result.blocks.len(),
+        Box::new(move |b| block_doc(&result.blocks[b], workspace_root)),
+    );
+    project_query_envelope(
+        result,
+        blocks,
+        filters,
+        deterministic,
+        analyzer_diagnostics,
+        driver_version,
+        workspace_fingerprint,
+    )
+}
 
-        // Families.
-        let mut families_arr: Vec<serde_json::Value> = Vec::new();
-        for family in &block.families {
-            let mut resources_arr: Vec<serde_json::Value> = Vec::new();
-            for res in &family.resources {
-                let mut facts_arr: Vec<serde_json::Value> = Vec::new();
-                for &fi in &res.fact_indices {
-                    let fact = &block.rendered_facts[fi];
-                    let fact_id = fact_id_of(fact);
-                    let bw = witness_by_fi.get(&fi).copied();
-
-                    let witness_val = bw.map(|bw| project_witness_json(bw, workspace_root));
-
-                    let mut fj = serde_json::Map::new();
-                    fj.insert("factId".into(), fact_id.into());
-                    fj.insert("op".into(), fact.op.clone().into());
-                    fj.insert("resourceKind".into(), fact.resource_kind.clone().into());
-                    if let Some(ref rid) = fact.resource_id {
-                        fj.insert("resourceId".into(), rid.clone().into());
-                    }
-                    fj.insert("provenance".into(), fact.provenance.clone().into());
-                    fj.insert("confidence".into(), fact.confidence.clone().into());
-                    fj.insert("via".into(), fact.via.clone().into());
-                    if let Some(w) = witness_val {
-                        fj.insert("witness".into(), w);
-                    }
-                    facts_arr.push(serde_json::Value::Object(fj));
-                }
-                let mut rj = serde_json::Map::new();
-                if let Some(ref id) = res.id {
-                    rj.insert("id".into(), id.clone().into());
-                }
-                rj.insert("display".into(), res.display.clone().into());
-                rj.insert(
-                    "ops".into(),
-                    serde_json::Value::Array(res.ops.iter().map(|o| o.clone().into()).collect()),
-                );
-                rj.insert("facts".into(), serde_json::Value::Array(facts_arr));
-                resources_arr.push(serde_json::Value::Object(rj));
-            }
-            let mut fam = serde_json::Map::new();
-            fam.insert("resourceKind".into(), family.kind.clone().into());
-            fam.insert("coneCoverage".into(), family.cone_coverage.clone().into());
-            fam.insert("resources".into(), serde_json::Value::Array(resources_arr));
-            families_arr.push(serde_json::Value::Object(fam));
-        }
-
+/// One block: its small parts as values, its families streamed.
+fn block_doc<'a>(block: &'a FingerprintBlock, workspace_root: &'a str) -> Doc<'a> {
+    {
         // mayCommit.
         let may_commit_fact_id = block
             .may_commit
@@ -1150,37 +1250,49 @@ pub fn project_fingerprint_query_full(
             "objectDisplay": block.object_display,
         });
 
-        let mut bj = serde_json::Map::new();
-        bj.insert("routine".into(), routine_ref);
-        bj.insert(
-            "rootKinds".into(),
-            serde_json::Value::Array(block.kinds.iter().map(|k| k.clone().into()).collect()),
-        );
-        bj.insert(
-            "classificationSource".into(),
-            block.classification_source.clone().into(),
-        );
-        bj.insert("coverage".into(), cov_obj);
-        bj.insert("families".into(), serde_json::Value::Array(families_arr));
-        bj.insert(
-            "mayCommit".into(),
-            serde_json::Value::Object(may_commit_obj),
-        );
-        bj.insert(
-            "dispatch".into(),
-            serde_json::json!({
-                "resolved": resolved_arr,
-                "unresolved": unresolved_arr,
-            }),
-        );
-        bj.insert(
-            "requiredPermissions".into(),
-            serde_json::Value::Array(perms_arr),
-        );
-
-        blocks_arr.push(serde_json::Value::Object(bj));
+        Doc::Map(vec![
+            ("routine", Doc::value(routine_ref)),
+            (
+                "rootKinds",
+                Doc::value(serde_json::Value::Array(
+                    block.kinds.iter().map(|k| k.clone().into()).collect(),
+                )),
+            ),
+            (
+                "classificationSource",
+                Doc::value(block.classification_source.clone().into()),
+            ),
+            ("coverage", Doc::value(cov_obj)),
+            ("families", families_doc(block, workspace_root)),
+            (
+                "mayCommit",
+                Doc::value(serde_json::Value::Object(may_commit_obj)),
+            ),
+            (
+                "dispatch",
+                Doc::value(serde_json::json!({
+                    "resolved": resolved_arr,
+                    "unresolved": unresolved_arr,
+                })),
+            ),
+            (
+                "requiredPermissions",
+                Doc::value(serde_json::Value::Array(perms_arr)),
+            ),
+        ])
     }
+}
 
+/// The query envelope around `blocks`: its small parts as values.
+fn project_query_envelope(
+    result: &FingerprintQueryResult,
+    blocks: Doc<'_>,
+    filters: &FingerprintFilters,
+    deterministic: bool,
+    analyzer_diagnostics: &[(String, String, String)],
+    driver_version: &str,
+    workspace_fingerprint: &str,
+) -> String {
     // Payload diagnostics.
     let payload_diags: Vec<serde_json::Value> = result
         .diagnostics
@@ -1237,17 +1349,29 @@ pub fn project_fingerprint_query_full(
     }
 
     // Payload.
-    let payload = serde_json::json!({
-        "workspaceFingerprint": workspace_fingerprint,
-        "filters": serde_json::Value::Object(filters_map),
-        "blocks": blocks_arr,
-        "diagnostics": payload_diags,
-        "summary": {
-            "totalClassifications": result.total_classifications,
-            "renderedBlocks": result.rendered_blocks,
-            "rootsConfigIgnored": result.roots_config_ignored,
-        }
-    });
+    let payload = Doc::Map(vec![
+        (
+            "workspaceFingerprint",
+            Doc::value(workspace_fingerprint.into()),
+        ),
+        (
+            "filters",
+            Doc::value(serde_json::Value::Object(filters_map)),
+        ),
+        ("blocks", blocks),
+        (
+            "diagnostics",
+            Doc::value(serde_json::Value::Array(payload_diags)),
+        ),
+        (
+            "summary",
+            Doc::value(serde_json::json!({
+                "totalClassifications": result.total_classifications,
+                "renderedBlocks": result.rendered_blocks,
+                "rootsConfigIgnored": result.roots_config_ignored,
+            })),
+        ),
+    ]);
 
     // Build envelope.
     let generated_at = crate::engine::gate::format_json::pinned_or_now_iso8601(deterministic);
@@ -1263,17 +1387,23 @@ pub fn project_fingerprint_query_full(
         })
         .collect();
 
-    let envelope = serde_json::json!({
-        "kind": "fingerprint-query",
-        "schemaVersion": FINGERPRINT_QUERY_CONTRACT_VERSION,
-        "alsemVersion": driver_version,
-        "deterministic": deterministic,
-        "generatedAt": generated_at,
-        "diagnostics": diags_arr,
-        "payload": payload,
-    });
+    let envelope = Doc::Map(vec![
+        ("kind", Doc::value("fingerprint-query".into())),
+        (
+            "schemaVersion",
+            Doc::value(FINGERPRINT_QUERY_CONTRACT_VERSION.into()),
+        ),
+        ("alsemVersion", Doc::value(driver_version.into())),
+        ("deterministic", Doc::value(deterministic.into())),
+        ("generatedAt", Doc::value(generated_at.into())),
+        (
+            "diagnostics",
+            Doc::value(serde_json::Value::Array(diags_arr)),
+        ),
+        ("payload", payload),
+    ]);
 
-    serialize_fingerprint_envelope(envelope)
+    serialize_doc(&envelope)
 }
 
 // ---------------------------------------------------------------------------
@@ -1753,6 +1883,89 @@ pub fn format_fingerprint_human_verbosity(
 mod tests {
     use super::*;
     use crate::engine::l5::snapshot::SnapshotIdentityTable;
+
+    /// #160 step 9 (the B1q fix): a [`Doc`] serializes to exactly the bytes
+    /// `serialize_document_value` gives the `Value` it stands for: keys out of
+    /// order, a `null` entry (dropped), a `null` inside a small value (dropped
+    /// there too), nested maps, an empty and a non-empty streamed array.
+    /// DISCRIMINATION: `Doc::Map` without its sort, or without its null drop,
+    /// fails it.
+    #[test]
+    fn doc_serializes_as_the_normalized_value() {
+        let doc = Doc::Map(vec![
+            (
+                "zeta",
+                Doc::value(serde_json::json!({"b": 1, "a": null, "c": [1, 2]})),
+            ),
+            ("alpha", Doc::value(serde_json::Value::Null)),
+            ("empty", Doc::Seq(0, Box::new(|_| unreachable!()))),
+            (
+                "items",
+                Doc::Seq(
+                    2,
+                    Box::new(|i| {
+                        Doc::Map(vec![
+                            ("n", Doc::value((i as u64).into())),
+                            ("m", Doc::value(serde_json::json!({"y": "x", "x": i}))),
+                        ])
+                    }),
+                ),
+            ),
+            ("beta", Doc::Map(vec![("k", Doc::value(true.into()))])),
+        ]);
+        let want = crate::engine::gate::format_json::serialize_document_value(serde_json::json!({
+            "zeta": {"b": 1, "a": null, "c": [1, 2]},
+            "alpha": null,
+            "empty": [],
+            "items": [
+                {"n": 0, "m": {"y": "x", "x": 0}},
+                {"n": 1, "m": {"y": "x", "x": 1}},
+            ],
+            "beta": {"k": true},
+        }));
+        assert_eq!(serialize_doc(&doc), want);
+    }
+
+    /// #160 step 9 (the B1q fix): a streamed array builds each element while
+    /// the serializer writes, so element `i` is built only after element
+    /// `i - 1`'s bytes are out (no array is held whole). DISCRIMINATION:
+    /// `Doc::Seq` collecting every element before writing fails it.
+    #[test]
+    fn doc_builds_seq_items_while_writing() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+        struct Counting(Rc<Cell<usize>>);
+        impl std::io::Write for Counting {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.set(self.0.get() + b.len());
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let written = Rc::new(Cell::new(0usize));
+        let seen: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+        let (w, s) = (Rc::clone(&written), Rc::clone(&seen));
+        let doc = Doc::Seq(
+            3,
+            Box::new(move |i| {
+                s.borrow_mut().push(w.get());
+                Doc::value(serde_json::json!({"i": i, "pad": "0123456789"}))
+            }),
+        );
+        let mut ser = serde_json::Serializer::with_formatter(
+            Counting(Rc::clone(&written)),
+            serde_json::ser::PrettyFormatter::new(),
+        );
+        serde::Serialize::serialize(&doc, &mut ser).unwrap();
+        let at_build = seen.borrow().clone();
+        assert_eq!(at_build.len(), 3);
+        assert!(
+            at_build.windows(2).all(|w| w[1] > w[0] + 10),
+            "each element is built after the previous one is written: {at_build:?}"
+        );
+    }
 
     fn snap_with_identities(rows: &[(&str, &str)]) -> CapabilitySnapshot {
         let mut ids = SnapshotIdentityTable {
