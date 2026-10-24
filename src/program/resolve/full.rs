@@ -711,6 +711,8 @@ fn resolve_call_site_obligation(
                         from_object: obj_node,
                         graph,
                         index,
+                        surface,
+                        with_state,
                     };
                     facts_out.interface_closed_over =
                         crate::program::resolve::closed_enum::closed_over(

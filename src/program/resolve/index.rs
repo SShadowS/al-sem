@@ -833,6 +833,31 @@ impl ResolveIndex {
         }
     }
 
+    /// [`Self::resolve_object_ref`], except that TWO of `from`'s own objects
+    /// matching is [`ObjectRefResolution::Ambiguous`] instead of first-wins.
+    /// One app can declare two same-named objects in different namespaces, and
+    /// the graph holds no namespaces, so first-wins could pick the wrong one.
+    /// For proofs that must not guess (#264's closed-enum facts).
+    pub fn resolve_object_ref_strict(
+        &self,
+        graph: &ProgramGraph,
+        from: ObjectNodeId,
+        kind: ObjectKind,
+        r: &ObjectRef,
+    ) -> ObjectRefResolution {
+        let candidates = match r {
+            ObjectRef::Id(n) => self.objects_by_id.get(&(kind, *n)),
+            ObjectRef::Name { normalized_lc, .. } => {
+                self.objects_by_name.get(&(kind, normalized_lc.clone()))
+            }
+        };
+        let own = candidates.map_or(0, |c| c.iter().filter(|o| o.app == from.app).count());
+        if own > 1 {
+            return ObjectRefResolution::Ambiguous;
+        }
+        self.resolve_object_ref(graph, from, kind, r)
+    }
+
     /// All `TableExtension` objects whose `extends_target` (lowercased) equals
     /// `base_table_name_lc` — [`WorldMode::AnalyzedSnapshot`], whole-program
     /// view (extensions live in reverse-dependent apps, outside the base
@@ -928,6 +953,20 @@ impl ResolveIndex {
         base: &ObjectNodeId,
         field_lc: &str,
     ) -> Option<FieldNode> {
+        self.field_with_owner_in_table(graph, from_object, base, field_lc)
+            .map(|(field, _)| field)
+    }
+
+    /// [`Self::field_in_table`], with the object that DECLARES the field (the
+    /// table, or the table extension that added it): a field's type text is
+    /// resolved where it was written (#264).
+    pub fn field_with_owner_in_table(
+        &self,
+        graph: &ProgramGraph,
+        from_object: &ObjectNode,
+        base: &ObjectNodeId,
+        field_lc: &str,
+    ) -> Option<(FieldNode, ObjectNodeId)> {
         let closure = graph.topology.closure(from_object.id.app);
         if !closure.contains(&base.app) {
             return None;
@@ -976,7 +1015,7 @@ impl ResolveIndex {
         }
 
         match deduped.as_slice() {
-            [(_, f)] => Some((*f).clone()),
+            [(owner, f)] => Some(((*f).clone(), (*owner).clone())),
             [] => None,
             _ => {
                 log::debug!(

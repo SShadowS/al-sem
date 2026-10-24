@@ -9,9 +9,17 @@
 //! of the interface); that never makes the claim unsound. Every doubt fails
 //! OPEN: an empty result.
 //!
-//! Limit: the graph holds no namespaces, so an interface is identified by its
-//! folded last name segment only (`Ns1."I"` and `Ns2."I"` are one interface
-//! here), the same rule receiver typing and `implements` use.
+//! Limits (the graph holds no namespaces):
+//! - an interface is identified by its folded last name segment only
+//!   (`Ns1."I"` and `Ns2."I"` are one interface here), the same rule receiver
+//!   typing and `implements` use;
+//! - a namespace-qualified enum TYPE (`Enum Ns2."Kind"`) resolves by its last
+//!   segment, and only a unique hit counts: two same-named enums are ambiguous
+//!   and the site stays open. Left: when the written enum is not loaded but ONE
+//!   same-named enum of another namespace is, that one is taken (alc would
+//!   reject such a reference, so only input that does not compile reaches it).
+//!   A qualified IMPLEMENTATION codeunit is refused earlier, in the fact
+//!   (`node_extract::enum_closure`).
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{
@@ -21,10 +29,16 @@ use al_syntax::ir::{
 
 use crate::program::graph::ProgramGraph;
 use crate::program::node::ObjectNodeId;
-use crate::program::node_extract::{ObjectNode, fold_ref_name};
+use crate::program::node_extract::{ObjectNode, ObjectRef, fold_ref_name};
+use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{Evidence, Route, RouteTarget};
+use crate::program::resolve::extract::WithState;
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
-use crate::program::resolve::receiver::{ParsedType, classify_type_text, parse_object_kind_type};
+use crate::program::resolve::receiver::{
+    ParsedType, ReceiverType, classify_type_text, infer_receiver_type, parse_object_kind_type,
+    unquote_identifier,
+};
+use crate::program::resolve::resolver::resolve_bare;
 
 /// What [`closed_enum_sources`] reads about the call site.
 pub(crate) struct ClosedEnumCx<'a> {
@@ -34,6 +48,8 @@ pub(crate) struct ClosedEnumCx<'a> {
     pub from_object: &'a ObjectNode,
     pub graph: &'a ProgramGraph,
     pub index: &'a ResolveIndex,
+    pub surface: &'a DeclSurface,
+    pub with_state: WithState,
 }
 
 /// The closed enums (sorted) the interface call on `receiver` dispatches over,
@@ -113,15 +129,10 @@ pub(crate) fn closed_enum_sources(
 }
 
 /// The folded name of `e` when it is a (quoted) identifier, parentheses removed.
-fn name_of(ir: &Ir, mut e: ExprId) -> Option<String> {
-    loop {
-        match &ir.expr(e).kind {
-            ExprKind::Parenthesized(inner) => e = *inner,
-            ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
-                return Some(n.fold_identifier());
-            }
-            _ => return None,
-        }
+fn name_of(ir: &Ir, e: ExprId) -> Option<String> {
+    match &ir.expr(unparen(ir, e)).kind {
+        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => Some(n.fold_identifier()),
+        _ => None,
     }
 }
 
@@ -281,12 +292,134 @@ impl Occurrences<'_> {
     }
 }
 
-/// Rule 4 (Task 3: the variable arm): the closed enum `value` is a value of,
-/// resolved where the variable's `Enum X` type is declared (the calling
-/// object), or `None`. The enum must be `closed_enum` and implement I.
+/// Rule 4: the closed enum `value` is a value of, or `None`. The enum must be
+/// `closed_enum` and implement I.
 fn enum_identity(cx: &ClosedEnumCx, value: ExprId, interface_lc: &str) -> Option<ObjectNodeId> {
-    let name = name_of(&cx.file.ir, value)?;
-    let ty = declared_type(cx, &name)?;
+    let id = value_enum(cx, unparen(&cx.file.ir, value))?;
+    let node = cx.graph.object(&id)?;
+    let implements_i = node
+        .implements
+        .iter()
+        .any(|i| fold_ref_name(i) == interface_lc);
+    (node.closed_enum && implements_i).then_some(id)
+}
+
+/// The enum `e` is a value of, each type resolved in the context that DECLARED
+/// it (spec §3 rule 4), or `None` for any other shape:
+/// - a variable (local, parameter, named return value, object global) declared
+///   `Enum X`: X from the calling object;
+/// - `Rec.Field` (a bare member, never a call) of a record whose table has no
+///   same-named procedure (a parens-less call has the same shape; alc AL0486
+///   only warns): X from the object that declares the field;
+/// - `Enum::"X"::V`, `"X"::V` (no variable named X in scope) and
+///   `Enum::"X".FromInteger(n)`: X from the calling object;
+/// - a bare call `F(..)` where no variable is named F (an array `F` makes
+///   `F(1)` an index) and `resolve_bare` gives exactly one source routine: its
+///   declared `Enum X` return type, X from that routine's object.
+fn value_enum(cx: &ClosedEnumCx, e: ExprId) -> Option<ObjectNodeId> {
+    let ir = &cx.file.ir;
+    let from = &cx.from_object.id;
+    match &ir.expr(e).kind {
+        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
+            declared_enum(cx, declared_type(cx, &n.fold_identifier())?, from)
+        }
+        ExprKind::Member { object, member, .. } => field_enum(cx, *object, member),
+        ExprKind::QualifiedEnum { enum_type, .. } => match &ir.expr(*enum_type).kind {
+            ExprKind::QualifiedEnum { .. } => enum_type_static(cx, *enum_type),
+            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x)
+                if !in_scope(cx, &x.fold_identifier()) =>
+            {
+                enum_by_name(cx, x, from)
+            }
+            _ => None,
+        },
+        ExprKind::Call { function, args } => match &ir.expr(*function).kind {
+            ExprKind::Member { object, member, .. }
+                if member.eq_ignore_ascii_case("frominteger") =>
+            {
+                enum_type_static(cx, *object)
+            }
+            ExprKind::Identifier(f) | ExprKind::QuotedIdentifier(f) => {
+                call_enum(cx, &f.fold_identifier(), args.len())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `Enum::"X"` (the type-static shape): X from the calling object.
+fn enum_type_static(cx: &ClosedEnumCx, e: ExprId) -> Option<ObjectNodeId> {
+    let ir = &cx.file.ir;
+    let ExprKind::QualifiedEnum { enum_type, value } = &ir.expr(e).kind else {
+        return None;
+    };
+    let is_keyword = matches!(&ir.expr(*enum_type).kind, ExprKind::Identifier(k) if k.eq_ignore_ascii_case("enum"));
+    if !is_keyword {
+        return None;
+    }
+    enum_by_name(cx, value, &cx.from_object.id)
+}
+
+/// The field arm: `object.member` where `object` types as a record of a
+/// resolved table.
+fn field_enum(cx: &ClosedEnumCx, object: ExprId, member: &str) -> Option<ObjectNodeId> {
+    let receiver_lc = name_of(&cx.file.ir, object)?;
+    let ReceiverType::Record { table: Some(table) } = infer_receiver_type(
+        &receiver_lc,
+        cx.routine,
+        &cx.obj.globals,
+        cx.from_object,
+        cx.graph,
+        cx.index,
+        Some((cx.file, object)),
+        Some((cx.surface, cx.with_state)),
+    ) else {
+        return None;
+    };
+    let field_lc = unquote_identifier(member).fold_identifier();
+    if cx
+        .index
+        .table_scope_has_routine(cx.graph, cx.from_object, &table, &field_lc)
+    {
+        return None;
+    }
+    let (field, owner) =
+        cx.index
+            .field_with_owner_in_table(cx.graph, cx.from_object, &table, &field_lc)?;
+    declared_enum(cx, &field.type_text, &owner)
+}
+
+/// The bare-call arm.
+fn call_enum(cx: &ClosedEnumCx, f_lc: &str, arity: usize) -> Option<ObjectNodeId> {
+    if in_scope(cx, f_lc) {
+        return None;
+    }
+    let (_shape, routes) = resolve_bare(
+        cx.from_object,
+        f_lc,
+        arity,
+        cx.graph,
+        cx.index,
+        cx.surface,
+        cx.with_state,
+    );
+    let [route] = routes.as_slice() else {
+        return None;
+    };
+    let RouteTarget::Routine(rid) = &route.target else {
+        return None;
+    };
+    let i = cx.graph.routines.binary_search_by(|r| r.id.cmp(rid)).ok()?;
+    declared_enum(
+        cx,
+        cx.graph.routines[i].return_type.as_deref()?,
+        &rid.object,
+    )
+}
+
+/// A declared `Enum X` type text, X resolved from `from` (the declaring object).
+fn declared_enum(cx: &ClosedEnumCx, ty: &str, from: &ObjectNodeId) -> Option<ObjectNodeId> {
     let (head, rest) = ty.trim().split_once(char::is_whitespace)?;
     if !head.eq_ignore_ascii_case("enum") {
         return None;
@@ -295,20 +428,48 @@ fn enum_identity(cx: &ClosedEnumCx, value: ExprId, interface_lc: &str) -> Option
     else {
         return None;
     };
-    let ObjectRefResolution::Unique(id) = cx.index.resolve_object_ref(
-        cx.graph,
-        cx.from_object.id.clone(),
-        ObjectKind::Enum,
-        &object_ref,
-    ) else {
-        return None;
+    unique_enum(cx, from, &object_ref)
+}
+
+/// The enum named `name` (unquoted), resolved from `from`.
+fn enum_by_name(cx: &ClosedEnumCx, name: &str, from: &ObjectNodeId) -> Option<ObjectNodeId> {
+    let object_ref = ObjectRef::Name {
+        raw: name.to_string(),
+        normalized_lc: name.fold_identifier(),
     };
-    let node = cx.graph.object(&id)?;
-    let implements_i = node
-        .implements
-        .iter()
-        .any(|i| fold_ref_name(i) == interface_lc);
-    (node.closed_enum && implements_i).then_some(id)
+    unique_enum(cx, from, &object_ref)
+}
+
+/// Only a `Unique` resolution counts. A namespace-qualified name resolves by
+/// its last segment (the graph holds no namespaces), so two same-named enums
+/// are `Ambiguous` (open) — see the module doc's limits.
+fn unique_enum(cx: &ClosedEnumCx, from: &ObjectNodeId, r: &ObjectRef) -> Option<ObjectNodeId> {
+    match cx
+        .index
+        .resolve_object_ref_strict(cx.graph, from.clone(), ObjectKind::Enum, r)
+    {
+        ObjectRefResolution::Unique(id) => Some(id),
+        _ => None,
+    }
+}
+
+/// Whether `name_lc` names a variable in scope at the routine: a local,
+/// parameter, the named return value, or an object global.
+fn in_scope(cx: &ClosedEnumCx, name_lc: &str) -> bool {
+    let r = cx.routine;
+    let named = |n: &str| n.fold_identifier() == name_lc;
+    r.locals.iter().any(|v| named(&v.name))
+        || r.params.iter().any(|p| named(&p.name))
+        || r.return_name.as_deref().is_some_and(named)
+        || cx.obj.globals.iter().any(|g| named(&g.name))
+}
+
+/// `e` with parentheses removed.
+fn unparen(ir: &Ir, mut e: ExprId) -> ExprId {
+    while let ExprKind::Parenthesized(inner) = &ir.expr(e).kind {
+        e = *inner;
+    }
+    e
 }
 
 /// The declared type text of the variable `name_lc` in scope at the routine:
@@ -405,9 +566,20 @@ mod tests {
     fields
     {
         field(1; "No."; Code[20]) { }
+        field(2; Kind; Enum "Demo Kind") { }
     }
 }
 "#;
+
+    /// An extensible enum `Open Kind` over `Demo Strategy`.
+    fn open_kind() -> String {
+        kind(
+            50104,
+            "Open Kind",
+            "    Extensible = true;",
+            r#"    value(0; Standard) { Implementation = "Demo Strategy" = "Demo Impl"; }"#,
+        )
+    }
 
     /// A codeunit `name` implementing `Demo Strategy`.
     fn implementer(id: u32, name: &str) -> String {
@@ -479,22 +651,61 @@ mod tests {
         dir
     }
 
+    const DEP_GUID: &str = "26426426-0000-0000-0000-0000000000df";
+
+    /// A workspace `app.json` that depends on the [`write_dep`] app.
+    fn dep_ws_app_json() -> String {
+        format!(
+            r#"{{"id":"26426426-0000-0000-0000-000000000004","name":"Ws264b","publisher":"probe","version":"1.0.0.0","runtime":"14.0","idRanges":[{{"from":50100,"to":50199}}],"dependencies":[{{"id":"{DEP_GUID}","name":"Dep264b","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        )
+    }
+
+    /// Writes the dependency `.app` into `root/.alpackages`: symbols for the
+    /// interface `Dep Strategy` and codeunit 70001 `Dep Impl` implementing it,
+    /// plus `more_symbols` (`,"Key":[..]` entries), and the embedded `sources`.
+    fn write_dep(root: &std::path::Path, more_symbols: &str, sources: &[(&str, &str)]) {
+        let next_km = r#"{"Name":"NextKm","Parameters":[{"Name":"CurrentKm","TypeDefinition":{"Name":"Integer"}}],"ReturnTypeDefinition":{"Name":"Integer"}}"#;
+        let symbols = format!(
+            r#"{{"RuntimeVersion":"14.0","Interfaces":[{{"Name":"Dep Strategy","Methods":[{next_km}]}}],"Codeunits":[{{"Id":70001,"Name":"Dep Impl","ImplementedInterfaces":["Dep Strategy"],"Methods":[{next_km}]}}]{more_symbols}}}"#
+        );
+        let manifest = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{DEP_GUID}" Name="Dep264b" Publisher="probe" Version="1.0.0.0" Runtime="14.0" /></Package>"#
+        );
+        let mut entries: Vec<(&str, &[u8])> = vec![
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", symbols.as_bytes()),
+        ];
+        entries.extend(sources.iter().map(|(p, t)| (*p, t.as_bytes())));
+        let app = crate::engine::deps::app_package_zip::test_apps::build_app(&entries);
+        let pkgs = root.join(".alpackages");
+        std::fs::create_dir_all(&pkgs).unwrap();
+        std::fs::write(pkgs.join("probe_Dep264b_1.0.0.0.app"), app).unwrap();
+    }
+
     /// The completeness of the ONE interface (`Polymorphic`) edge from
     /// `Caller.Dispatch`.
     fn completeness_in(root: &std::path::Path) -> SetCompleteness {
         let report = crate::program::resolve::full::resolve_full_program(root).expect("resolves");
+        site_completeness(&report, "dispatch")
+    }
+
+    /// The completeness of the ONE interface edge from routine `routine_lc`.
+    fn site_completeness(
+        report: &crate::program::resolve::full::ProgramReport,
+        routine_lc: &str,
+    ) -> SetCompleteness {
         let hits: Vec<_> = report
             .edges
             .iter()
             .filter(|c| {
-                c.edge.from.name_lc.as_ref() == "dispatch"
+                c.edge.from.name_lc.as_ref() == routine_lc
                     && c.edge.shape == DispatchShape::Polymorphic
             })
             .collect();
         assert_eq!(
             hits.len(),
             1,
-            "precondition: one interface site, got {}",
+            "precondition: one interface site in {routine_lc}, got {}",
             hits.len()
         );
         hits[0].edge.completeness
@@ -532,15 +743,9 @@ mod tests {
     /// T30: one write from a closed enum, one from an extensible one.
     #[test]
     fn i264_t30_closed_and_extensible_writes_stay_open() {
-        let open_kind = kind(
-            50104,
-            "Open Kind",
-            "    Extensible = true;",
-            r#"    value(0; Standard) { Implementation = "Demo Strategy" = "Demo Impl"; }"#,
-        );
         let vars = format!("{VARS}\n        KO: Enum \"Open Kind\";");
         let body = "        S := K;\n        S := KO;\n        S.NextKm(1);";
-        let ws = workspace(caller(&vars, body, ""), &[("src/OpenKind.al", open_kind)]);
+        let ws = workspace(caller(&vars, body, ""), &[("src/OpenKind.al", open_kind())]);
         assert!(is_open(completeness(&ws)));
     }
 
@@ -849,10 +1054,6 @@ enum 50106 "Other Kind" implements "Other Strategy"
     /// the route is an `AbiSymbol` and its object counts as reached.
     #[test]
     fn i264_t19_symbol_only_implementer_of_a_source_enum_is_complete() {
-        const DEP_GUID: &str = "26426426-0000-0000-0000-0000000000df";
-        let app_json = format!(
-            r#"{{"id":"26426426-0000-0000-0000-000000000004","name":"Ws264b","publisher":"probe","version":"1.0.0.0","runtime":"14.0","idRanges":[{{"from":50100,"to":50199}}],"dependencies":[{{"id":"{DEP_GUID}","name":"Dep264b","publisher":"probe","version":"1.0.0.0"}}]}}"#
-        );
         let kind_text = r#"enum 50102 "Ws Kind" implements "Dep Strategy"
 {
     Extensible = false;
@@ -865,22 +1066,12 @@ enum 50106 "Other Kind" implements "Other Strategy"
             "",
         );
         let files: Vec<(String, String)> = vec![
-            ("app.json".into(), app_json),
+            ("app.json".into(), dep_ws_app_json()),
             ("src/Kind.al".into(), kind_text.into()),
             ("src/Caller.al".into(), caller_text),
         ];
         let dir = write(&files);
-        let symbols = r#"{"RuntimeVersion":"14.0","Interfaces":[{"Name":"Dep Strategy","Methods":[{"Name":"NextKm","Parameters":[{"Name":"CurrentKm","TypeDefinition":{"Name":"Integer"}}],"ReturnTypeDefinition":{"Name":"Integer"}}]}],"Codeunits":[{"Id":70001,"Name":"Dep Impl","ImplementedInterfaces":["Dep Strategy"],"Methods":[{"Name":"NextKm","Parameters":[{"Name":"CurrentKm","TypeDefinition":{"Name":"Integer"}}],"ReturnTypeDefinition":{"Name":"Integer"}}]}]}"#;
-        let manifest = format!(
-            r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{DEP_GUID}" Name="Dep264b" Publisher="probe" Version="1.0.0.0" Runtime="14.0" /></Package>"#
-        );
-        let app = crate::engine::deps::app_package_zip::test_apps::build_app(&[
-            ("NavxManifest.xml", manifest.as_bytes()),
-            ("SymbolReference.json", symbols.as_bytes()),
-        ]);
-        let pkgs = dir.path().join(".alpackages");
-        std::fs::create_dir_all(&pkgs).unwrap();
-        std::fs::write(pkgs.join("probe_Dep264b_1.0.0.0.app"), app).unwrap();
+        write_dep(dir.path(), "", &[]);
 
         let report =
             crate::program::resolve::full::resolve_full_program(dir.path()).expect("resolves");
@@ -944,5 +1135,293 @@ enum 50106 "Other Kind" implements "Other Strategy"
             "demo strategy",
             routes
         ));
+    }
+
+    // -- Task 4: the identity typer's remaining arms and their binding guards --
+
+    /// The `Interface S` local every Task 4 procedure declares.
+    const S_VAR: &str = "        S: Interface \"Demo Strategy\";";
+
+    /// One procedure `name` with `vars` and `body` (then `S.NextKm(1)`).
+    fn procedure(name: &str, params: &str, vars: &str, body: &str) -> String {
+        format!(
+            "    procedure {name}({params})\n    var\n{S_VAR}\n{vars}\n    begin\n{body}\n        S.NextKm(1);\n    end;\n"
+        )
+    }
+
+    /// T3 (resolver half): every right-hand-side shape of spec §3 rule 4.
+    #[test]
+    fn i264_t3_rhs_shapes_complete_at_resolver() {
+        let shapes = [
+            (
+                "FromLocal",
+                "",
+                "        K: Enum \"Demo Kind\";",
+                "        S := K;",
+            ),
+            ("FromParam", "K: Enum \"Demo Kind\"", "", "        S := K;"),
+            (
+                "FromField",
+                "",
+                "        Rec: Record \"Demo Item\";",
+                "        Rec.Get('X');\n        S := Rec.Kind;",
+            ),
+            (
+                "FromQuotedValue",
+                "",
+                "",
+                "        S := \"Demo Kind\"::Standard;",
+            ),
+            (
+                "FromEnumValue",
+                "",
+                "",
+                "        S := Enum::\"Demo Kind\"::Standard;",
+            ),
+            (
+                "FromInteger",
+                "",
+                "",
+                "        S := Enum::\"Demo Kind\".FromInteger(0);",
+            ),
+            ("FromOwnCall", "", "", "        S := PickKind();"),
+        ];
+        let mut text = "codeunit 50110 \"Shape Probe\"\n{\n".to_string();
+        for (name, params, vars, body) in shapes {
+            text.push_str(&procedure(name, params, vars, body));
+        }
+        text.push_str(
+            "    local procedure PickKind(): Enum \"Demo Kind\"\n    begin\n        exit(Enum::\"Demo Kind\"::Standard);\n    end;\n}\n",
+        );
+        let dir = write(&workspace(
+            caller(VARS, "        S.NextKm(1);", ""),
+            &[("src/Shapes.al", text)],
+        ));
+        let report =
+            crate::program::resolve::full::resolve_full_program(dir.path()).expect("resolves");
+        let open: Vec<&str> = shapes
+            .iter()
+            .map(|s| s.0)
+            .filter(|name| {
+                site_completeness(&report, &name.to_ascii_lowercase()) != SetCompleteness::Complete
+            })
+            .collect();
+        assert!(open.is_empty(), "T3: shapes left open: {open:?}");
+    }
+
+    /// T9b: the table has a field `Kind` of the CLOSED enum and a procedure
+    /// `Kind()` returning an EXTENSIBLE one. `Rec.Kind` may be a parens-less
+    /// call (alc 18.0.41 compiles it with warning AL0486), so the field arm
+    /// declines and the site stays open.
+    #[test]
+    fn i264_t9b_field_procedure_collision_stays_open() {
+        let item = r#"table 50100 "Demo Item"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Kind; Enum "Demo Kind") { }
+    }
+
+    procedure Kind(): Enum "Open Kind"
+    begin
+    end;
+}
+"#;
+        let vars = format!("{VARS}\n        Rec: Record \"Demo Item\";");
+        let ws = workspace(
+            caller(&vars, "        S := Rec.Kind;\n        S.NextKm(1);", ""),
+            &[
+                ("src/Item.al", item.to_string()),
+                ("src/OpenKind.al", open_kind()),
+            ],
+        );
+        assert!(is_open(completeness(&ws)));
+    }
+
+    /// The own procedure `GetKind(I)` returning the CLOSED enum.
+    const GET_KIND: &str = "\n    local procedure GetKind(I: Integer): Enum \"Demo Kind\"\n    begin\n        exit(Enum::\"Demo Kind\"::Standard);\n    end;";
+
+    /// T9c: a local array `GetKind` of the EXTENSIBLE enum makes `GetKind(1)` an
+    /// index, not a call of the same-named procedure.
+    #[test]
+    fn i264_t9c_array_shadowed_call_stays_open() {
+        let vars = format!("{VARS}\n        GetKind: array[2] of Enum \"Open Kind\";");
+        let ws = workspace(
+            caller(
+                &vars,
+                "        S := GetKind(1);\n        S.NextKm(1);",
+                GET_KIND,
+            ),
+            &[("src/OpenKind.al", open_kind())],
+        );
+        assert!(is_open(completeness(&ws)));
+    }
+
+    /// T9d: the routine's NAMED RETURN VALUE is `GetKind` (an array of the
+    /// EXTENSIBLE enum), so `GetKind(1)` reads it, not the procedure.
+    #[test]
+    fn i264_t9d_named_return_shadowed_call_stays_open() {
+        let text = format!(
+            "codeunit 50103 \"Caller\"\n{{\n    procedure Dispatch() GetKind: array[2] of Enum \"Open Kind\"\n    var\n{S_VAR}\n    begin\n        S := GetKind(1);\n        S.NextKm(1);\n    end;\n{GET_KIND}\n}}\n"
+        );
+        let ws = workspace(text, &[("src/OpenKind.al", open_kind())]);
+        assert!(is_open(completeness(&ws)));
+    }
+
+    /// T29 (resolver half): writes from two different closed enums close the
+    /// site over both.
+    #[test]
+    fn i264_t29_two_closed_enums_are_complete() {
+        let second = format!(
+            "{}\n{}\ntable 50112 \"Second Item\"\n{{\n    fields\n    {{\n        field(1; \"No.\"; Code[20]) {{ }}\n        field(2; Kind; Enum \"Second Kind\") {{ }}\n    }}\n}}\n",
+            implementer(50111, "Second Impl"),
+            kind(
+                50113,
+                "Second Kind",
+                "    Extensible = false;",
+                r#"    value(0; Standard) { Implementation = "Demo Strategy" = "Second Impl"; }"#,
+            ),
+        );
+        let vars =
+            format!("{VARS}\n        A: Record \"Demo Item\";\n        B: Record \"Second Item\";");
+        let body = "        S := A.Kind;\n        S := B.Kind;\n        S.NextKm(1);";
+        let dir = write(&workspace(
+            caller(&vars, body, ""),
+            &[("src/Second.al", second)],
+        ));
+        let report =
+            crate::program::resolve::full::resolve_full_program(dir.path()).expect("resolves");
+        assert_eq!(
+            site_completeness(&report, "dispatch"),
+            SetCompleteness::Complete
+        );
+        let closed: Vec<_> = report
+            .site_facts
+            .values()
+            .filter(|f| !f.interface_closed_over.is_empty())
+            .collect();
+        assert_eq!(closed.len(), 1, "one closed site");
+        assert_eq!(closed[0].interface_closed_over.len(), 2, "{closed:?}");
+    }
+
+    /// RF1: an enum variable declared by NUMBER, or by a namespace-qualified
+    /// name, closes like one declared by name.
+    #[test]
+    fn i264_rf1_enum_by_number_and_namespace_closes() {
+        let by_number = "        S: Interface \"Demo Strategy\";\n        K: Enum 50102;";
+        let ws = workspace(
+            caller(by_number, "        S := K;\n        S.NextKm(1);", ""),
+            &[],
+        );
+        assert_eq!(completeness(&ws), SetCompleteness::Complete, "by number");
+
+        let qualified =
+            "        S: Interface \"Demo Strategy\";\n        K: Enum Demo.\"Demo Kind\";";
+        let ws = workspace(
+            caller(qualified, "        S := K;\n        S.NextKm(1);", ""),
+            &[("src/Kind.al", format!("namespace Demo;\n\n{}", demo_kind()))],
+        );
+        assert_eq!(
+            completeness(&ws),
+            SetCompleteness::Complete,
+            "namespace-qualified"
+        );
+    }
+
+    /// `"X"::V` is an enum value only when no variable named X is in scope: a
+    /// local `"Demo Kind"` (an Option here) makes it that variable's value.
+    #[test]
+    fn i264_quoted_value_shadowed_by_a_variable_stays_open() {
+        let vars = "        S: Interface \"Demo Strategy\";\n        \"Demo Kind\": Option Standard,Other;";
+        let ws = workspace(
+            caller(
+                vars,
+                "        S := \"Demo Kind\"::Standard;\n        S.NextKm(1);",
+                "",
+            ),
+            &[],
+        );
+        assert!(is_open(completeness(&ws)));
+    }
+
+    /// Coordinator decision (plan issue 4): one app declares `Demo Kind` twice,
+    /// closed in `Ns1` and extensible in `Ns2`. The graph holds no namespaces,
+    /// so `Enum Ns2."Demo Kind"` resolves by name, which is ambiguous: open.
+    #[test]
+    fn i264_same_named_enums_in_two_namespaces_stay_open() {
+        let ns2 = format!(
+            "namespace Ns2;\n\n{}",
+            kind(
+                50120,
+                "Demo Kind",
+                "    Extensible = true;",
+                r#"    value(0; Standard) { Implementation = "Demo Strategy" = "Demo Impl"; }"#,
+            )
+        );
+        let vars = "        S: Interface \"Demo Strategy\";\n        K: Enum Ns2.\"Demo Kind\";";
+        let ws = workspace(
+            caller(vars, "        S := K;\n        S.NextKm(1);", ""),
+            &[
+                ("src/Kind.al", format!("namespace Ns1;\n\n{}", demo_kind())),
+                ("src/Kind2.al", ns2),
+            ],
+        );
+        assert!(is_open(completeness(&ws)));
+    }
+
+    /// T21 (defensive, stated precondition): a dependency table's field is
+    /// typed with the DEPENDENCY's extensible `Demo Kind`, and the workspace
+    /// declares its own closed `Demo Kind`. alc rejects this closure (AL0197:
+    /// an enum name declared by two extensions, probe P7); al-sem must still
+    /// never close it, because the field's type is resolved where it is
+    /// declared.
+    #[test]
+    fn i264_t21_field_enum_resolves_in_the_declaring_app() {
+        let dep_kind_and_table = r#"enum 70002 "Demo Kind" implements "Dep Strategy"
+{
+    Extensible = true;
+    value(0; Standard) { Implementation = "Dep Strategy" = "Dep Impl"; }
+}
+
+table 70003 "Dep Item"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Kind; Enum "Demo Kind") { }
+    }
+}
+"#;
+        let dep_strategy = "interface \"Dep Strategy\"\n{\n    procedure NextKm(CurrentKm: Integer): Integer;\n}\n";
+        let dep_impl = "codeunit 70001 \"Dep Impl\" implements \"Dep Strategy\"\n{\n    procedure NextKm(CurrentKm: Integer): Integer\n    begin\n        exit(CurrentKm);\n    end;\n}\n";
+        let ws_kind = r#"enum 50102 "Demo Kind" implements "Dep Strategy"
+{
+    Extensible = false;
+    value(0; Standard) { Implementation = "Dep Strategy" = "Dep Impl"; }
+}
+"#;
+        let caller_text = caller(
+            "        S: Interface \"Dep Strategy\";\n        Rec: Record \"Dep Item\";",
+            "        S := Rec.Kind;\n        S.NextKm(1);",
+            "",
+        );
+        let files: Vec<(String, String)> = vec![
+            ("app.json".into(), dep_ws_app_json()),
+            ("src/Kind.al".into(), ws_kind.into()),
+            ("src/Caller.al".into(), caller_text),
+        ];
+        let dir = write(&files);
+        let more = r#","EnumTypes":[{"Id":70002,"Name":"Demo Kind","ImplementedInterfaces":["Dep Strategy"],"Properties":[{"Name":"Extensible","Value":"1"}]}],"Tables":[{"Id":70003,"Name":"Dep Item","Fields":[{"Id":1,"Name":"No.","TypeDefinition":{"Name":"Code"}},{"Id":2,"Name":"Kind","TypeDefinition":{"Name":"Enum","Subtype":{"Name":"Demo Kind"}}}]}]"#;
+        write_dep(
+            dir.path(),
+            more,
+            &[
+                ("src/DepStrategy.al", dep_strategy),
+                ("src/DepImpl.al", dep_impl),
+                ("src/DepKind.al", dep_kind_and_table),
+            ],
+        );
+        assert!(is_open(completeness_in(dir.path())));
     }
 }
