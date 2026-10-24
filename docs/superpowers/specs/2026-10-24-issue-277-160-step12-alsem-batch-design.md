@@ -254,7 +254,9 @@ A one-view job has one side and a trivial `finalize`. `PlanPart` carries the job
 - **Amended at final round 1 (FR-2):** a job that fails its own validation writes only its two streams, so
   its write set (D2.4) holds them alone: nothing its command line names (e.g. `fingerprint --shard` without
   `--out` names no shard directory) can clash, and the job runs as a zero-view `Failed` job with its
-  standalone text and exit while the other jobs run (T24 (b)).
+  standalone text and exit while the other jobs run (T24 (b)). **Amended at final round 2 (R2-1):** it keeps
+  the files its command line READS (D2.4): a job that failed because a file did not exist yet still clashes
+  with a job writing it, so no later batch's worker could read another job's output.
 
 **D2.2 The run's own output and exit (decided, Q-a).**
 - **Run stdout**: one JSON line per job, in manifest order (batch, then job), `{"batch":b,"job":i,
@@ -317,6 +319,12 @@ their relative order is not observable there; the order between stream and file 
   loader's `.alpackages` files): a link inside the workspace to a file outside it clashes with a write of
   that file. The walk takes every `.al`/`.app`/config-named file under the workspace (a superset), so it can
   refuse where no read would happen, never miss one.
+- **Amended at final round 2 (R2-2).** A linked DIRECTORY the walk enters is a read root: an
+  `.al`/`.app`/config-named file beneath its canonical target clashes with the workspace read whether it
+  exists yet or not (the loader would follow the link and read a file written there). A linked
+  `.alpackages` (the workspace's own or an ancestor's) is a package candidate, compared at its canonical
+  target, so a new `.app` written into its target clashes too. A link loop is not entered (its targets are
+  not compared, a stated limit).
 
 **D2.5 Workers.** With two or more batches, the parent spawns one child per batch (`current_exe()`, hidden
 `alsem batch --worker <b> <manifest>`), at most `W` at once, in manifest order (D12). Each child writes its
@@ -326,8 +334,13 @@ lines; the parent forwards it whole line by whole line, prefixed `[w<b>] `, so t
 mix inside a line (decided, Q-d). **One batch** runs in-process (no child, no prefix).
 **Amended at final round 1 (FR-3):** a child never opens the manifest. The parent writes the child's batch
 on its stdin (`WorkerInput`: each job's argv and streams, the parent's `--changed` decisions, the parent's
-one stdin read); the `<manifest>` argument stays only as a name. A job writing the manifest, or a file an
-earlier batch writes that the parent took for absent, therefore cannot change what a later child runs.
+one stdin read and, amended at final round 2 (R2-1), every file the plans read and every `exists` answer
+they took: digest's `--diff <file>` bytes or read error, `policy check`'s policy file and its auto-detect
+answers); the `<manifest>` argument stays only as a name. A child plans off the parent's reads and answers,
+never the file system, so each such file is read exactly once per run (a FIFO given once works), and a job
+writing the manifest, or a file an earlier batch writes, cannot change what a later child runs. A file a
+plan reads is also a read in the write check (D2.4), the plan's failure or not (D2.1), so no job may write
+it.
 
 ### 4.3 D3: inputs split; validation before the build (Decision 7)
 
@@ -359,6 +372,13 @@ earlier batch writes that the parent took for absent, therefore cannot change wh
   does not load) gives the read up when it fails; `fingerprint --shard` without `--out` fails before the
   read. Only a job that will build a view counts toward admission (D12). The jobs are made in a loop into
   per-job slots the batch owns (FR-12), never one call deeper per job.
+- **Amended at final round 2 (R2-4, R2-5).** `policy check` reads and resolves its policy while it is
+  planned, before its workspace: a policy that does not load is a failed plan (no read, no view, no
+  admission row), standalone too (it no longer reads the workspace before it fails; its text and exit are
+  unchanged). The batch's reader keeps every workspace read alive until every job of the batch is made,
+  then gives them up to the jobs (`WorkspaceReader::made`), so a job that gives its read up while it is
+  made never makes a later job read that workspace again (one read per workspace, as above), and no job
+  that failed holds a read once the batch runs.
 
 ### 4.4 D4: views, their order, their key, their builder, the plan
 
@@ -582,7 +602,8 @@ after the last view: (11) again, for every job left
   view. A manifest whose jobs are listed grouped by view holds nothing under (b). (c) (amended at Task 8,
   R7-1) the `WorkspaceInputs` of views still to come: D3 reads every workspace before the first build, so a
   later view's read exists from the start; each read is freed after its last view (a job hands its read to
-  the driver in `demands` and reads it only through `ViewCx::inputs`/`ResolveCx::inputs`). The bound:
+  the driver in `demands` and reads it only through `ViewCx::inputs`/`ResolveCx::inputs`; the batch's
+  reader holds the reads only until every job is made, final round 2 R2-5). The bound:
   **retained bytes at a view boundary ≤ Σ of the held `JobOutput`s + Σ of the held `SideDoc`s + Σ of the
   later views' reads**, printed under `ALSEM_RETAINED_CENSUS=1` as `[retained-census] batch.held
   outputs=<bytes> sides=<bytes> inputs=<bytes>` at each view start (`sides` counts diff's snapshot sides,
@@ -723,7 +744,8 @@ Two rules, kept apart (S7):
   it never raises `W`: with policy, `W` = min(formula, 2)). `P` = the
   largest `KIND_PEAK_KIB` row of any job kind in the manifest that builds a view (amended at final round 1,
   FR-14: a job that fails its own validation, or a `diff` of two snapshot files, counts for none; a
-  fingerprint's universe is read only after its validation). Batches start in manifest order; at most `W`
+  fingerprint's universe is read only after its validation; amended at final round 2, R2-4: a `policy check`
+  whose policy does not load fails in planning, so it counts for none and sets no policy cap). Batches start in manifest order; at most `W`
   run at once. The parent emits a trace instant `batch.workers` (`w`, `p_kib`, `policy_cap`). When
   `⌊E16_BUDGET_KIB / P⌋ = 0` (no row today comes near), `W` = 1 and the parent prints one stderr line
   `al-sem batch: the largest measured job peak exceeds the 28 GiB budget; running one worker`.

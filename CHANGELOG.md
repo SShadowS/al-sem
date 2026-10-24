@@ -33,15 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside another job's shard directory, a job writing the manifest, and a file one job
   reads (a diff side, `--baseline`, `--renames`, `--policy`, a digest diff, a workspace's
   own files) that another job writes. A job that fails its own validation (a bad
-  `--format`, `--shard` without `--out`, …) writes only its two streams, so nothing its
-  command line names is checked; it is a job of its own exit, never a usage error. Paths
+  `--format`, `--shard` without `--out`, a policy that does not load, …) writes only its
+  two streams, so nothing it would write is checked, but it keeps the files it reads (a
+  `digest --diff foo.diff` that failed because `foo.diff` is absent still clashes with the
+  job that writes it); it is a job of its own exit, never a usage error. Paths
   are compared after their deepest existing directory is canonicalized and each `..` is
   taken as the OS takes it (after a symlink, the target's parent), so a symlink, a Windows
   case difference or an 8.3 name hides no clash; a workspace's own files are its
   `.al`/`.app` files in any case, its `app.json` and config files, and the `.app` files of
   every ancestor `.alpackages` the loader reads (the ancestors of the workspace as spelled,
   as the loader walks them), each also at the target of a symlink that leads outside the
-  workspace, as the loader follows it. Every job is validated once, before anything runs:
+  workspace, as the loader follows it; a linked directory (a linked `.alpackages`
+  included) is compared at its target, so a new `.al`, `.app` or config file written
+  under it clashes too. Every job is validated once, before anything runs:
   whether `digest --changed <value>` names a diff file is decided then, and stdin is read
   then, once, only when a job that passed its validation reads it, as standalone (a read
   that fails is each such job's `failed to read diff from stdin`, exit 3); a closed run
@@ -51,9 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run's job kinds that build a view (`batch::admission::KIND_PEAK_KIB`; a kind with no row
   takes the largest; the cross-app `fingerprint` and single-app `prove` rows are
   placeholders at the largest row until measured; a job that fails its validation or a
-  `diff` of two snapshot files counts for none). The parent writes each worker its batch,
-  its `--changed` decisions and the one stdin read on the worker's stdin (a worker never
-  opens the manifest), forwards each worker's stderr whole line by whole line as
+  `diff` of two snapshot files counts for none, nor sets the policy cap). The parent writes
+  each worker its batch, its `--changed` decisions, the one stdin read and every file its
+  plans read (a digest's `--diff` file, a policy file) on the worker's stdin (a worker never
+  opens the manifest, and each such file is read once per run, so a FIFO works), forwards each worker's stderr whole line by whole line as
   `[w<b>] …`, gives each worker the trace file `<ALSEM_TRACE_FILE>.w<b>`, and prints the job
   lines in manifest order after the last worker exits; a worker that dies without its lines
   leaves its jobs `"exit": null` with `"worker": "<signal or status>"`, and the run exits 1.
@@ -153,7 +158,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now report the policy error; `--shard` without `--out` and a failing build report
   `--shard requires --out <directory>`; and `policy check --strict` with a bad policy and
   an error-severity analyzer diagnostic reports the policy error, not the diagnostic
-  lines (exit 1 either way). Neither case builds a model any more. The `--shard`/`--out`
+  lines (exit 1 either way). Neither case builds a model any more, and a bad policy no
+  longer reads the workspace before it is reported. The `--shard`/`--out`
   check also now runs before `fingerprint --strict`'s analyzer-diagnostic gate and before
   its `fingerprint: could not compute modelInstanceId` error: with either of those, a
   `--shard` without `--out` now reports the shard error (exit 1 in every case; only the

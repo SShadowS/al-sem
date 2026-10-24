@@ -330,7 +330,10 @@ fn same_workspace(old: &str, old_kind: InputKind, new: &str, new_kind: InputKind
 /// `DiffRunOutcome`; the bin maps it to stdout/stderr writes + a process exit
 /// code.
 pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
-    match DiffJob::new(*opts, &WorkspaceReader::default()) {
+    let reader = WorkspaceReader::default();
+    let job = DiffJob::new(*opts, &reader);
+    reader.made();
+    match job {
         Err(early) => early,
         Ok(job) => crate::engine::batch::run_doc(&job).take(),
     }
@@ -498,6 +501,7 @@ mod tests {
         };
         let reader = WorkspaceReader::default();
         let job = DiffJob::new(opts, &reader).unwrap_or_else(|_| panic!("inputs exist"));
+        reader.made();
         let demands = job.demands();
         assert_eq!(demands.len(), 2, "precondition: two workspace sides");
         let reads: Vec<_> = demands.iter().map(|d| Arc::downgrade(&d.inputs)).collect();

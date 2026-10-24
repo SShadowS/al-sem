@@ -143,15 +143,18 @@ fn resolve(cwd: &Path, p: &Path) -> PathBuf {
 /// loader's (R10-5): it can refuse a write where no real clash exists, but
 /// it never misses one. `taken`: the workspace's [`taken_files`], which
 /// holds the targets of the links a read follows.
-fn read_by_workspace(cwd: &Path, ws: &Path, f: &Path, taken: &HashSet<PathBuf>) -> bool {
+fn read_by_workspace(cwd: &Path, ws: &Path, f: &Path, taken: &Taken) -> bool {
     use crate::dependencies::{CacheScope, Role, cache_scope_role, package_cache_scope};
-    let under_ws = f.starts_with(resolve(cwd, ws)) && is_input_name(f);
+    let under = |root: &Path| f.starts_with(root) && is_input_name(f);
     let spelled = package_cache_scope(&fold(cwd, ws));
     let scope = CacheScope {
         candidates: spelled.candidates.iter().map(|c| resolve(cwd, c)).collect(),
         walked_dirs: vec![],
     };
-    under_ws || cache_scope_role(&scope, f) == Some(Role::AppFile) || taken.contains(f)
+    under(&resolve(cwd, ws))
+        || cache_scope_role(&scope, f) == Some(Role::AppFile)
+        || taken.files.contains(f)
+        || taken.linked_dirs.iter().any(|d| under(d))
 }
 
 /// An `.al` or `.app` file or one of [`WORKSPACE_FILES`] (any case, as the
@@ -163,15 +166,30 @@ fn is_input_name(f: &Path) -> bool {
             .is_some_and(|n| WORKSPACE_FILES.iter().any(|w| n.eq_ignore_ascii_case(w)))
 }
 
-/// Every file a workspace read of `ws` takes that exists now, canonicalized
-/// (#277 final r1 FR-5): the source walk follows links
-/// (`source_text::discover_al_files`), and so do the config reads and the
-/// package loader (`dependencies::discover_app_files`), so a link inside the
-/// workspace to a file outside it is read at its target. The walk takes every
-/// [`is_input_name`] file under `ws`, past the folders the source walk skips,
-/// a superset of what a read takes.
-fn taken_files(cwd: &Path, ws: &Path) -> HashSet<PathBuf> {
+/// What a workspace read of `ws` takes through links ([`taken_files`]).
+struct Taken {
+    /// Every file it takes that exists now, canonicalized.
+    files: HashSet<PathBuf>,
+    /// The canonical target of every linked directory the walk enters: an
+    /// [`is_input_name`] file beneath one is taken, existing or not (#277
+    /// final r2 R2-2).
+    linked_dirs: Vec<PathBuf>,
+}
+
+/// What a workspace read of `ws` takes through links (#277 final r1 FR-5):
+/// the source walk follows links (`source_text::discover_al_files`), and so
+/// do the config reads and the package loader
+/// (`dependencies::discover_app_files`), so a link inside the workspace to a
+/// file or a directory outside it is read at its target. The walk takes
+/// every [`is_input_name`] file under `ws`, past the folders the source walk
+/// skips, a superset of what a read takes. A linked `.alpackages` is a
+/// package candidate, which [`read_by_workspace`] resolves itself.
+fn taken_files(cwd: &Path, ws: &Path) -> Taken {
     let root = fold(cwd, ws);
+    let mut taken = Taken {
+        files: HashSet::new(),
+        linked_dirs: Vec::new(),
+    };
     let walked = walkdir::WalkDir::new(&root)
         .follow_links(true)
         .into_iter()
@@ -180,17 +198,22 @@ fn taken_files(cwd: &Path, ws: &Path) -> HashSet<PathBuf> {
                 || !e.file_type().is_dir()
                 || !crate::source_text::is_skipped_dir_name(e.file_name())
         })
-        .flatten()
-        .filter(|e| e.file_type().is_file() && is_input_name(e.path()))
-        .map(walkdir::DirEntry::into_path);
-    let packages = crate::dependencies::discover_app_files(&root)
-        .0
-        .into_iter()
-        .map(|a| a.path);
-    walked
-        .chain(packages)
-        .filter_map(|p| std::fs::canonicalize(p).ok())
-        .collect()
+        .flatten();
+    for e in walked {
+        let canonical = || std::fs::canonicalize(e.path()).ok();
+        if e.file_type().is_dir() && e.path_is_symlink() {
+            taken.linked_dirs.extend(canonical());
+        } else if e.file_type().is_file() && is_input_name(e.path()) {
+            taken.files.extend(canonical());
+        }
+    }
+    let packages = crate::dependencies::discover_app_files(&root).0;
+    taken.files.extend(
+        packages
+            .into_iter()
+            .filter_map(|a| std::fs::canonicalize(a.path).ok()),
+    );
+    taken
 }
 
 /// Every write target of the run checked before any build (D2.4, 12A-10):

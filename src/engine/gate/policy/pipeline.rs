@@ -227,31 +227,59 @@ impl<'a> PolicyJob<'a> {
     /// the job's workspace read is then given up, so a job with no view holds
     /// no read for the rest of its batch (#277 final r1 FR-11).
     pub fn new(opts: PolicyCheckOptions<'a>) -> Result<PolicyJob<'a>, PolicyCheckOutcome> {
+        match PolicyCheck::resolve(&opts.inputs.get().workspace, opts.request) {
+            Ok(check) => Ok(PolicyJob::resolved(opts, check)),
+            Err(early) => {
+                drop(opts.inputs.hand_off());
+                Err(early)
+            }
+        }
+    }
+
+    /// The job of a policy [`PolicyCheck::resolve`] resolved.
+    pub fn resolved(opts: PolicyCheckOptions<'a>, check: PolicyCheck) -> PolicyJob<'a> {
+        PolicyJob {
+            opts,
+            policy: check.policy,
+            source: check.source,
+        }
+    }
+}
+
+/// A policy resolved for `policy check`, before the workspace is read: the
+/// binary resolves it while it plans the job (#277 final r2 R2-4), so a bad
+/// policy is a job with no view.
+pub struct PolicyCheck {
+    policy: Option<PolicyDoc>,
+    source: String,
+}
+
+impl PolicyCheck {
+    /// The policy `request` holds for `workspace` (its spelling, as given), or
+    /// the bad policy's report.
+    pub fn resolve(
+        workspace: &Path,
+        request: &RequestInputs,
+    ) -> Result<PolicyCheck, PolicyCheckOutcome> {
         // A set read without a policy request holds no policy file even when the
         // workspace has one: the check would silently run the bundled default.
         assert!(
-            opts.request.policy_request != PolicyRequest::None,
+            request.policy_request != PolicyRequest::None,
             "policy check: RequestInputs read without a policy request (use policy_request)"
         );
-        let (policy, source) =
-            match resolve_policy_check(&opts.inputs.get().workspace, opts.request) {
-                ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
-                ResolvedPolicy::Disabled => (None, "disabled".to_string()),
-                ResolvedPolicy::Error(lines) => {
-                    drop(opts.inputs.hand_off());
-                    return Err(PolicyCheckOutcome {
-                        text: None,
-                        exit_code: 1,
-                        stderr_lines: lines,
-                        out_path: None,
-                    });
-                }
-            };
-        Ok(PolicyJob {
-            opts,
-            policy,
-            source,
-        })
+        let (policy, source) = match resolve_policy_check(workspace, request) {
+            ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
+            ResolvedPolicy::Disabled => (None, "disabled".to_string()),
+            ResolvedPolicy::Error(lines) => {
+                return Err(PolicyCheckOutcome {
+                    text: None,
+                    exit_code: 1,
+                    stderr_lines: lines,
+                    out_path: None,
+                });
+            }
+        };
+        Ok(PolicyCheck { policy, source })
     }
 }
 

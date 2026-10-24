@@ -192,13 +192,16 @@ impl WorkspaceRead for HandOff {
 /// job of a batch reads its workspace through this, so jobs on one path share
 /// one `Arc`, read with the union of every job's needs on that path, stated
 /// before the first read. A read happens on the first ask, so a standalone
-/// command reads where it always did. The reader keeps no read alive: the
-/// jobs and then the driver hold them, and the driver drops each after its
-/// last view (#277 E12-C2).
+/// command reads where it always did. The reader keeps each read alive only
+/// while the jobs are made, so a job that gives its read up early (one that
+/// fails before its view) never makes the next job read it again (#277 final
+/// r2 R2-5); after [`made`](Self::made) the jobs and then the driver hold
+/// them, and the driver drops each after its last view (#277 E12-C2).
 #[derive(Default)]
 pub struct WorkspaceReader {
     planned: BTreeMap<PathBuf, WorkspaceNeeds>,
     read: RefCell<BTreeMap<PathBuf, (WorkspaceNeeds, Weak<WorkspaceInputs>)>>,
+    making: RefCell<Vec<Arc<WorkspaceInputs>>>,
 }
 
 impl WorkspaceReader {
@@ -213,8 +216,13 @@ impl WorkspaceReader {
         }
         WorkspaceReader {
             planned,
-            read: RefCell::default(),
+            ..WorkspaceReader::default()
         }
+    }
+
+    /// Every job is made: the reader gives its reads up to them.
+    pub fn made(&self) {
+        self.making.borrow_mut().clear();
     }
 
     /// `workspace`'s one read, holding at least `needs`.
@@ -235,6 +243,7 @@ impl WorkspaceReader {
         let needs = self.planned.get(&key).map_or(needs, |p| p.union(needs));
         let inputs = WorkspaceInputs::read(workspace, &needs);
         read.insert(key, (needs, Arc::downgrade(&inputs)));
+        self.making.borrow_mut().push(Arc::clone(&inputs));
         inputs
     }
 }

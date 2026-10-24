@@ -85,6 +85,30 @@ fn graph_error_names_its_own_spelling() {
     assert_each_standalone(&run, &jobs, None);
 }
 
+/// #277 final r2 R2-5 (D3): a job that fails before its view never makes its
+/// batch read a workspace twice. `policy check --policy bad.yaml` beside an
+/// `analyze` of the same workspace: one read, and both jobs equal to their
+/// standalone runs.
+#[test]
+fn failed_policy_job_reads_once() {
+    let ws = crate::cli_build_counters::ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let bad = d.path().join("bad.yaml");
+    std::fs::write(&bad, "rules: [").unwrap();
+    let jobs = vec![
+        argv(&["policy", "check", &ws, "--policy", bad.to_str().unwrap()]),
+        argv(&["analyze", &ws, "--format", "json", "--deterministic"]),
+    ];
+    let run = batch(&jobs);
+    assert_each_standalone(&run, &jobs, None);
+    assert_eq!(
+        run.lines()[0]["exit"],
+        1,
+        "precondition: the policy job fails"
+    );
+    assert_eq!(count(&run.counters, "inputs.read"), 1, "{:?}", run.counters);
+}
+
 /// The `log::warn!` lines of a shared view build (the snapshot cache, made
 /// unwritable here) are view lines: printed once on the run's stderr, as a
 /// one-job run prints them, and in no job's stderr file.

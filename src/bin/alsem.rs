@@ -69,7 +69,7 @@ use al_sem::engine::batch::job::{
 use al_sem::engine::batch::manifest::{JobPaths, check_write_sets};
 use al_sem::engine::batch::output::{JobOutput, WriteAction, replay};
 use al_sem::engine::batch::worker::{
-    StdinRead, WorkerBatch, WorkerInput, WorkerJob, Workers, report_peak, run_workers,
+    PlanFiles, StdinRead, WorkerBatch, WorkerInput, WorkerJob, Workers, report_peak, run_workers,
 };
 use al_sem::engine::batch::{JobLine, JobStreams, run_batch, run_standalone};
 use al_sem::engine::gate::cache_prune::{format_prune_report, prune_cache};
@@ -90,7 +90,7 @@ use al_sem::engine::l5::fingerprint_cli::{
     reject_shard_without_out, validate_roots,
 };
 use al_sem::engine::l5::prove::{ProveJob, parse_question, question_ids};
-use al_sem::program::inputs::{RequestInputs, WorkspaceNeeds};
+use al_sem::program::inputs::{FileInput, RequestInputs, WorkspaceNeeds};
 use clap::{Parser, Subcommand};
 
 const SEVERITY_VALUES: &[&str] = &["critical", "high", "medium", "low", "info"];
@@ -807,20 +807,23 @@ fn hold<T: 'static>(slot: &Slot, value: T) -> &T {
         .expect("the value just held")
 }
 
-/// Every planned job made, in order, each off its own slot.
+/// Every planned job made, in order, each off its own slot; then the reader
+/// gives its reads up to the jobs (#277 final r2 R2-5).
 fn make_jobs<'s>(
     planned: Vec<Planned>,
     reader: &'s WorkspaceReader,
     slots: &'s [Slot],
 ) -> Vec<Box<dyn Job + 's>> {
-    planned
+    let jobs = planned
         .into_iter()
         .zip(slots)
         .map(|(p, slot)| match p {
-            Planned::Failed(f) => Box::new(f),
+            Planned::Failed(f) => Box::new(f) as Box<dyn Job>,
             Planned::Ready { make, .. } => make(reader, slot),
         })
-        .collect()
+        .collect();
+    reader.made();
+    jobs
 }
 
 /// A command that reads `workspace` with `needs` (stated once, #277 R7-5):
@@ -1043,7 +1046,8 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
         parsed.push(commands);
     }
     // What a job writes and reads, and its kind, follow its own validation:
-    // a failed job writes only its streams and builds nothing (FR-2, FR-14).
+    // a failed job writes only its streams and builds nothing (FR-2, FR-14),
+    // but keeps its reads, so no other job writes a file it read (R2-1).
     let (mut paths, mut kinds, mut planned, mut changed) = (vec![], vec![], vec![], vec![]);
     for (bi, (batch, commands)) in manifest.batches.iter().zip(parsed).enumerate() {
         let (mut plans, mut decided) = (Vec::new(), Vec::new());
@@ -1052,7 +1056,10 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
             let (kind, written) = (job_kind(&command), job_paths(&command, &job.streams));
             let p = plan(command, true);
             let written = match p {
-                Planned::Failed(_) => stream_paths(&job.streams),
+                Planned::Failed(_) => JobPaths {
+                    reads: written.reads,
+                    ..stream_paths(&job.streams)
+                },
                 Planned::Ready { .. } => written,
             };
             paths.push((format!("batch {bi} job {i}"), written));
@@ -1087,6 +1094,7 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
         Some(text) => StdinRead::Text(text.clone()),
         None => StdinRead::Failed,
     });
+    let files = PLAN_FILES.lock().expect("plan files").clone();
     let batches: Vec<WorkerBatch> = manifest
         .batches
         .iter()
@@ -1104,6 +1112,7 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
                     })
                     .collect(),
                 stdin: stdin.clone(),
+                files: files.clone(),
             };
             WorkerBatch {
                 streams: batch.jobs.iter().map(|j| j.streams.clone()).collect(),
@@ -1139,6 +1148,7 @@ fn run_worker(b: u32) -> ExitCode {
             StdinRead::Failed => None,
         });
     }
+    *PLAN_FILES.lock().expect("plan files") = input.files;
     let mut planned = Vec::new();
     for (i, job) in input.jobs.iter().enumerate() {
         match parse_job(&job.argv) {
@@ -1346,7 +1356,9 @@ fn plan_query_effects(e: QueryEffectsCli) -> Planned {
 // ── policy check command ─────────────────────────────────────────────────────
 
 fn plan_policy_check(c: PolicyCheckCli) -> Planned {
-    use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, PolicyJob, policy_request};
+    use al_sem::engine::gate::policy::pipeline::{
+        PolicyCheck, PolicyCheckOptions, PolicyJob, policy_request,
+    };
 
     // Validate --format (human | json | sarif). al-sem writes the message + exit 1.
     const VALID_FORMATS: &[&str] = &["human", "json", "sarif"];
@@ -1358,15 +1370,30 @@ fn plan_policy_check(c: PolicyCheckCli) -> Planned {
         );
     }
 
+    // The policy is read and resolved here, before the workspace: a bad one
+    // is a job with no view, which reads nothing and counts for no admission
+    // row (#277 final r2 R2-4).
+    let workspace = Path::new(&c.workspace);
+    let request = RequestInputs::read_with(
+        workspace,
+        policy_request(c.policy.as_deref(), c.no_policy),
+        None,
+        &plan_exists,
+        &plan_read,
+    );
+    let check = match PolicyCheck::resolve(workspace, &request) {
+        Ok(check) => check,
+        Err(early) => {
+            return Planned::Failed(Failed {
+                output: early.into_output(),
+                write_failure_exit: 1,
+            });
+        }
+    };
     ready(
         &c.workspace.clone(),
         WorkspaceNeeds::default(),
         move |slot, inputs| {
-            let request = RequestInputs::read(
-                Path::new(&c.workspace),
-                policy_request(c.policy.as_deref(), c.no_policy),
-                None,
-            );
             let version = inputs.get().driver_version.clone();
             let (c, inputs, request, version) = hold(slot, (c, inputs, request, version));
             let opts = PolicyCheckOptions {
@@ -1379,16 +1406,7 @@ fn plan_policy_check(c: PolicyCheckCli) -> Planned {
                 driver_version: version,
                 single_app: c.single_app,
             };
-
-            // A bad policy is found before any build: a job with no view
-            // (#277 D3), which holds no read (FR-11).
-            match PolicyJob::new(opts) {
-                Ok(job) => Box::new(job),
-                Err(early) => Box::new(Failed {
-                    output: early.into_output(),
-                    write_failure_exit: 1,
-                }),
-            }
+            Box::new(PolicyJob::resolved(opts, check))
         },
     )
 }
@@ -1528,6 +1546,31 @@ fn stdin_text() -> Option<&'static str> {
         .as_deref()
 }
 
+/// What this run's plans read of the file system, once each (#277 final r2
+/// R2-1). A batch's parent hands it to every worker, which is seeded with it.
+static PLAN_FILES: std::sync::LazyLock<std::sync::Mutex<PlanFiles>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// `path`'s bytes as a plan reads them: read once per run ([`PLAN_FILES`]).
+/// The error keeps its text, not its kind.
+fn plan_read(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut files = PLAN_FILES.lock().expect("plan files");
+    let read = files
+        .reads
+        .entry(path.to_path_buf())
+        .or_insert_with(|| std::fs::read(path).map_err(|e| e.to_string()));
+    read.clone().map_err(std::io::Error::other)
+}
+
+/// Whether `path` exists, as a plan asks it: answered once per run.
+fn plan_exists(path: &Path) -> bool {
+    let mut files = PLAN_FILES.lock().expect("plan files");
+    *files
+        .exists
+        .entry(path.to_path_buf())
+        .or_insert_with(|| path.exists())
+}
+
 /// Decide once whether `digest --changed` names an existing diff file
 /// (#277 final r1 FR-3): `decided` when a batch's parent decided it, else
 /// the file system now.
@@ -1621,8 +1664,8 @@ fn plan_digest(d: DigestCli) -> Planned {
                 );
             }
         },
-        Some(path) => match std::fs::read_to_string(path) {
-            Ok(s) => Some(s),
+        Some(path) => match FileInput::read_with(path.into(), &plan_read).text() {
+            Ok(s) => Some(s.to_string()),
             Err(e) => {
                 return failed(
                     format!("al-sem: digest: could not read diff file '{path}': {e}"),
@@ -2234,5 +2277,74 @@ mod tests {
                 "Html format must succeed (Stage A4 implemented); got: {result:?}"
             );
         }
+    }
+
+    /// #277 final r2 R2-3 (FR-12): the jobs are made in a loop. 100 000 jobs
+    /// on a 256 KiB stack: one frame per job would overflow it.
+    #[test]
+    fn make_jobs_runs_in_constant_stack() {
+        const JOBS: usize = 100_000;
+        let made = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let planned: Vec<Planned> = (0..JOBS).map(|_| failed("x", 1, 1)).collect();
+                let reader = WorkspaceReader::new(vec![]);
+                let slots: Vec<Slot> = (0..JOBS).map(|_| Slot::new()).collect();
+                make_jobs(planned, &reader, &slots).len()
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(made, JOBS);
+    }
+
+    /// #277 final r2 R2-5 (D3): while a batch's jobs are made, a job that gives
+    /// its read up early does not make the next job on that workspace read it
+    /// again; once every job is made, the reader holds no read.
+    #[test]
+    fn make_jobs_reads_a_workspace_once() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::{Arc, Weak};
+        let ws =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d1-multi-caller");
+        let needs = WorkspaceNeeds::default();
+        let first: Rc<RefCell<Weak<_>>> = Rc::default();
+        let failed_job = || -> Box<dyn Job> {
+            Box::new(Failed {
+                output: JobOutput::lines(&["x".to_string()], 1),
+                write_failure_exit: 1,
+            })
+        };
+        let plan = |make: Box<MakeJob>| Planned::Ready {
+            reads: vec![(ws.clone(), needs)],
+            make,
+        };
+        let (path, seen) = (ws.clone(), Rc::clone(&first));
+        let early = plan(Box::new(move |reader, _| {
+            // Read, then give it up at once, as a job failing before its view.
+            *seen.borrow_mut() = Arc::downgrade(&reader.read(&path, needs));
+            failed_job()
+        }));
+        let (path, seen) = (ws.clone(), Rc::clone(&first));
+        let next = plan(Box::new(move |reader, _| {
+            let read = reader.read(&path, needs);
+            let shared = seen.borrow().upgrade();
+            assert!(
+                shared.is_some_and(|s| Arc::ptr_eq(&s, &read)),
+                "the workspace was read twice"
+            );
+            failed_job()
+        }));
+        let planned = vec![early, next];
+        let reader =
+            WorkspaceReader::new(planned.iter().flat_map(Planned::reads).collect::<Vec<_>>());
+        let slots = [Slot::new(), Slot::new()];
+        let jobs = make_jobs(planned, &reader, &slots);
+        assert_eq!(jobs.len(), 2);
+        assert!(
+            first.borrow().upgrade().is_none(),
+            "the reader kept the read past the jobs' making"
+        );
     }
 }
