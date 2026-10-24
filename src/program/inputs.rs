@@ -33,10 +33,6 @@ use crate::source_text::{
 #[path = "../../tests/common/unreadable.rs"]
 mod unreadable;
 
-// shortcut: digest.rs test code (step 9's lane, hands-off for #277) still names
-// `InputSet`; remove this alias when digest.rs is free.
-pub type InputSet = WorkspaceInputs;
-
 /// Every input the workspace path gives, read once (spec §4.2.1).
 pub struct WorkspaceInputs {
     /// The workspace root as the command line spelled it (never canonicalized:

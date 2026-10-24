@@ -950,12 +950,12 @@ fn fingerprint_witness_boundary_trigger_and_event() {
 
 /// #160 step 9 T17 (prove arm, 6A-9): prove reads one root's effects,
 /// unresolved cone and gap count off a tree whose witness request is
-/// `Roots({root})` (`prove_pipeline_with`'s `digest_plan`). For every
+/// `WitnessRequest::roots({root})` (`ProveJob`'s `prove_plan`). For every
 /// reportable root of every r0 dir and of the dependency fixtures, in both
-/// universes, those equal the same root's under `WitnessRequest::Primary`
+/// universes, those equal the same root's under `WitnessRequest::primary()`
 /// (every primary routine a subject). The subjects come from
 /// `WitnessRequest::scope`, the view's own mapping. DISCRIMINATION:
-/// `Roots`' scope dropping its subjects (`.take(0)` in `scope`) loses the
+/// a roots request's scope dropping its subjects (`.take(0)` in `scope`) loses the
 /// root's transitive effects and fails it.
 #[test]
 fn prove_scoped_equals_unscoped() {
@@ -1063,11 +1063,11 @@ fn prove_scoped_equals_unscoped() {
 }
 
 /// #160 step 9 T17 (query arm, 6A-9): `fingerprint --routine R` reads a tree
-/// whose witness request is `Roots({R})` (the pool). For every root
-/// classification of every r0 dir and of the dependency fixtures, in both
+/// whose witness request is `WitnessRequest::roots({R})` (the pool). For every
+/// root classification of every r0 dir and of the dependency fixtures, in both
 /// universes, the query's block for `--routine R` (its facts, coverage,
 /// witnesses and evidence) equals the same query's over a tree with
-/// `WitnessRequest::Primary`. DISCRIMINATION: `Roots`' scope dropping its
+/// `WitnessRequest::primary()`. DISCRIMINATION: a roots request's scope dropping its
 /// subjects (`.take(0)` in `scope`) loses the inherited facts and fails it.
 /// Final panel O4: in each universe the model's `totalClassifications`
 /// (`selector_failure_result`, the count a failing selector prints with no
@@ -1208,8 +1208,8 @@ fn fingerprint_query_scoped_equals_unscoped() {
 /// #160 step 9 T11 (spec §5): `fingerprint --inventory-only` (cross-app, on the
 /// rule-B fixture, whose source dependency `Dep Rec Lib` writes `Customer`)
 /// is the inventory envelope of `assemble_full_snapshot`'s five keys over a
-/// tree composed with `Roots(∅)`. Precondition: that tree holds no inherited
-/// fact. DISCRIMINATION: giving the plan `Roots(every primary routine)` keeps
+/// tree composed over an empty request. Precondition: that tree holds no
+/// inherited fact. DISCRIMINATION: giving the plan every primary routine keeps
 /// the dependency identities its inherited facts reference, and fails it (its
 /// counter half, `build.witness_pass` 0, is `cli_build_counters`'
 /// `fingerprint_inventory_only`).

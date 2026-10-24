@@ -1639,7 +1639,7 @@ codeunit 50302 Setter
 
     // Precondition: the call really is an `interface-dispatch` edge from
     // `PostingCaller.DoPost` to the publisher, so "no finding" means d43 skipped it.
-    let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
     let id = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
         .expect("model id");
     let m = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(

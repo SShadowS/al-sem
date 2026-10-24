@@ -1463,7 +1463,7 @@ mod tests {
     fn build_with_no_roots_config_reaches_both_arms() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-d51-jobqueue");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let configured = |single_app: bool, no_roots_config: bool| -> usize {
             let target =
                 super::AnalysisTarget::build_with(&inputs, single_app, no_roots_config, "test")

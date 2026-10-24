@@ -757,8 +757,8 @@ fn cg_files(
     write_files(tag, &files)
 }
 
-fn read_inputs(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs())
+fn read_inputs(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceInputs> {
+    al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs())
 }
 
 /// The single-app model (`alsem analyze --single-app`'s; with no dependency it
