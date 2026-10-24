@@ -4656,6 +4656,8 @@ pageextension 52911 "ExtA" extends BasePage
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
             ObjectNode {
                 id: base_obj_id.clone(),
@@ -4673,6 +4675,8 @@ pageextension 52911 "ExtA" extends BasePage
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
         ];
 
@@ -4824,6 +4828,8 @@ pageextension 52911 "ExtA" extends BasePage
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -4841,6 +4847,8 @@ pageextension 52911 "ExtA" extends BasePage
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
         ];
 
@@ -5019,6 +5027,8 @@ pageextension 52911 "ExtA" extends BasePage
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -5036,6 +5046,8 @@ pageextension 52911 "ExtA" extends BasePage
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
         ];
 
@@ -5407,6 +5419,8 @@ codeunit 50612 "MixedCU2"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -5424,6 +5438,8 @@ codeunit 50612 "MixedCU2"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
         ];
 
@@ -5640,6 +5656,8 @@ codeunit 50612 "MixedCU2"
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         }];
 
         let routines = vec![RoutineNode {
@@ -5788,6 +5806,8 @@ codeunit 50612 "MixedCU2"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
             ObjectNode {
                 id: sub_obj_id.clone(),
@@ -5805,6 +5825,8 @@ codeunit 50612 "MixedCU2"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
         ];
 
@@ -6381,6 +6403,8 @@ codeunit 50203 "NoTriggerCU"
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         }];
         let mut topology = DependencyGraph::default();
         topology.add_dependency(ws_ref, dep_ref);
@@ -6678,6 +6702,8 @@ codeunit 50300 "OverloadCU"
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         };
         (graph, index, surface, from_obj)
     }
@@ -10948,6 +10974,8 @@ codeunit 50000 "Caller"
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         });
 
         // Event-publisher routine: abi_routine_kind=EventPublisher, abi_event_kind=Integration.
@@ -13217,6 +13245,8 @@ codeunit 53971 "OverloadNCaller"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
             ObjectNode {
                 id: target_obj_id.clone(),
@@ -13234,6 +13264,8 @@ codeunit 53971 "OverloadNCaller"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
         ];
 
@@ -13607,6 +13639,8 @@ codeunit 53975 "Overload3Caller"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -13624,6 +13658,8 @@ codeunit 53975 "Overload3Caller"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
         ];
 
@@ -13800,6 +13836,8 @@ codeunit 53975 "Overload3Caller"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
             ObjectNode {
                 id: target_obj_id.clone(),
@@ -13817,6 +13855,8 @@ codeunit 53975 "Overload3Caller"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
         ];
 

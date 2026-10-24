@@ -3207,6 +3207,8 @@ mod tests {
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         };
         let caller = ObjectNode {
             id: ObjectNodeId {
@@ -3228,6 +3230,8 @@ mod tests {
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         };
         let from_id = caller.id.clone();
         let mut objects = vec![table, caller];
@@ -3956,6 +3960,8 @@ codeunit 50100 "C"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
             ObjectNode {
                 id: dep_id.clone(),
@@ -3973,6 +3979,8 @@ codeunit 50100 "C"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             },
         ];
         objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -4134,6 +4142,8 @@ codeunit 50700 "Caller"
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         };
         let objects = vec![table];
         let obj_index = ObjectIndex::build(&objects);
@@ -4175,6 +4185,8 @@ codeunit 50700 "Caller"
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             })
             .collect();
         let obj_index = ObjectIndex::build(&objects);
@@ -4249,6 +4261,8 @@ codeunit 50700 "Caller"
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         };
         let objects = vec![object];
         let obj_index = ObjectIndex::build(&objects);

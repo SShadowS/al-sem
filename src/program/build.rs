@@ -305,7 +305,7 @@ fn build_dep_nodes(
     // (arbitrary but stable) — see `dedup_routines_preserving_genuine_overloads`'s
     // doc for why routines need content-aware, not blanket, dedup.
     objects.sort_by(|a, b| a.id.cmp(&b.id));
-    objects.dedup_by(|a, b| a.id == b.id);
+    dedup_objects(&mut objects);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
     let routines = Arc::new(routines);
@@ -368,7 +368,7 @@ pub fn assemble_program_graph(
     }
 
     objects.sort_by(|a, b| a.id.cmp(&b.id));
-    objects.dedup_by(|a, b| a.id == b.id);
+    dedup_objects(&mut objects);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
 
@@ -663,6 +663,31 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
     }
     graph.routines.extend(synth);
     graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
+}
+
+/// Collapse a SORTED `objects` vec's runs of equal id to the first entry
+/// (arbitrary but stable). Two whole-object `#if` arms give two entries with
+/// one id, so the closed-enum fact (#264) merges: `closed_enum` is the AND of
+/// every copy (a closed arm never survives an extensible one) and
+/// `enum_impls` their union, cleared when the AND is `false` so it stays
+/// empty unless closed.
+fn dedup_objects(objects: &mut Vec<ObjectNode>) {
+    objects.dedup_by(|dup, kept| {
+        if dup.id != kept.id {
+            return false;
+        }
+        kept.closed_enum &= dup.closed_enum;
+        if kept.closed_enum {
+            for entry in std::mem::take(&mut dup.enum_impls) {
+                if !kept.enum_impls.contains(&entry) {
+                    kept.enum_impls.push(entry);
+                }
+            }
+        } else {
+            kept.enum_impls.clear();
+        }
+        true
+    });
 }
 
 /// Collapse a SORTED `routines` vec's runs of equal `RoutineNodeId` down to
@@ -1953,7 +1978,7 @@ codeunit 50301 "Preproc Dup Sig"
         }
         let raw_routines = routines.len();
         objects.sort_by(|a, b| a.id.cmp(&b.id));
-        objects.dedup_by(|a, b| a.id == b.id);
+        dedup_objects(&mut objects);
         routines.sort_by(|a, b| a.id.cmp(&b.id));
         dedup_routines_preserving_genuine_overloads(&mut routines);
 
@@ -2842,5 +2867,56 @@ codeunit 50110 "Repro Obj Sub"
         dedup_routines_preserving_genuine_overloads(&mut routines);
 
         assert_eq!(routines, [want]);
+    }
+
+    /// T16/T33 (#264): two copies of one enum object (two whole-object `#if`
+    /// arms), one closed and one extensible, merge to an OPEN object with no
+    /// implementations, in either order. Stated precondition: equal ids and
+    /// the closure fields by assignment.
+    #[test]
+    fn dedup_objects_ands_closed_enum_and_clears_impls() {
+        use crate::program::node_extract::ObjectRef;
+        let mut closed = crate::program::node_extract::test_fixtures::fully_populated_object_node();
+        closed.closed_enum = true;
+        closed.enum_impls = vec![("i".into(), ObjectRef::Id(50100))];
+        let mut open = closed.clone();
+        open.closed_enum = false;
+        open.enum_impls = Vec::new();
+        for pair in [[closed.clone(), open.clone()], [open, closed]] {
+            let mut objects = pair.to_vec();
+            dedup_objects(&mut objects);
+            assert_eq!(objects.len(), 1);
+            assert!(!objects[0].closed_enum);
+            assert!(
+                objects[0].enum_impls.is_empty(),
+                "{:?}",
+                objects[0].enum_impls
+            );
+        }
+    }
+
+    /// Two closed copies keep the union of their implementations.
+    #[test]
+    fn dedup_objects_unions_impls_of_closed_copies() {
+        use crate::program::node_extract::ObjectRef;
+        let mut a = crate::program::node_extract::test_fixtures::fully_populated_object_node();
+        a.closed_enum = true;
+        a.enum_impls = vec![("i".into(), ObjectRef::Id(1))];
+        let mut b = a.clone();
+        b.enum_impls = vec![
+            ("i".into(), ObjectRef::Id(1)),
+            ("i".into(), ObjectRef::Id(2)),
+        ];
+        let mut objects = vec![a, b];
+        dedup_objects(&mut objects);
+        assert_eq!(objects.len(), 1);
+        assert!(objects[0].closed_enum);
+        assert_eq!(
+            objects[0].enum_impls,
+            [
+                ("i".into(), ObjectRef::Id(1)),
+                ("i".into(), ObjectRef::Id(2))
+            ]
+        );
     }
 }

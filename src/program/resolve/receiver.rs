@@ -3773,6 +3773,8 @@ mod tests {
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             };
 
         let mut objects = vec![
@@ -3899,6 +3901,8 @@ mod tests {
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         }
     }
 

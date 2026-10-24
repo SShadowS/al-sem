@@ -541,6 +541,10 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
             // `parse_incomplete` concept (error-recovered CST) does not apply here; ABI's
             // own honesty is already captured via `TrustTier::SymbolOnly` above.
             parse_incomplete: false,
+            // A symbol-only enum stays open: symbol extensibility and value
+            // mappings are not modelled (#264, Discovery D1).
+            closed_enum: false,
+            enum_impls: Vec::new(),
         });
 
         for routine in &abi_obj.routines {
