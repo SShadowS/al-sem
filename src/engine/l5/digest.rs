@@ -904,6 +904,30 @@ struct ProofOutcome {
     /// The state or depth limit cut the enumeration.
     incomplete: bool,
     diagnostics: Vec<(String, Option<String>)>,
+    /// Partial paths expanded (the perf guard reads it, #289).
+    popped: usize,
+}
+
+/// A candidate key of [`enumerate_proofs`]: the projected hops' JSON and the
+/// boundary identity. The walk hashes one per crossing or proof, never per
+/// partial path (#289); tests count the hashes to hold that.
+#[derive(PartialEq, Eq)]
+struct ProofKey(Vec<String>, Option<BoundaryEnd>);
+
+// Hand-written only to count calls in tests; it hashes exactly the fields `Eq`
+// compares, so it agrees with the derived `Eq`.
+impl std::hash::Hash for ProofKey {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        #[cfg(test)]
+        PROOF_KEY_HASHES.with(|n| n.set(n.get() + 1));
+        self.0.hash(h);
+        self.1.hash(h);
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static PROOF_KEY_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Depth-0 proofs (#69 D3) for inherited fact `f` at `root`: for every NON-seed
@@ -942,10 +966,8 @@ fn enumerate_proofs<'i>(
         state: StateIx,
         parent: Option<(usize, EdgeIx)>,
         len: usize,
-        crossed: Option<(Rc<Key>, usize)>,
+        crossed: Option<(usize, usize)>,
     }
-    // A candidate key: the projected hops' JSON and the boundary identity.
-    type Key = (Vec<String>, Option<BoundaryEnd>);
     let key_of =
         |n: &[Node], mut cur: usize, boundary: Option<BoundaryEnd>, hc: &mut HopCache<'i>| {
             let mut json = Vec::new();
@@ -961,7 +983,7 @@ fn enumerate_proofs<'i>(
                 cur = parent;
             }
             json.reverse();
-            (json, boundary)
+            ProofKey(json, boundary)
         };
     let mut out = ProofOutcome::default();
     if fact_first_hop(f).is_none() {
@@ -992,18 +1014,26 @@ fn enumerate_proofs<'i>(
     let mut crossed_q: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
     let mut seen: std::collections::HashSet<(Vec<EdgeIx>, usize)> =
         std::collections::HashSet::new();
-    let mut found: std::collections::HashSet<Rc<Key>> = std::collections::HashSet::new();
+    // Each distinct key once, as a dense id: a pop tests `found[id]` and never
+    // hashes the key again (#289: hashing it per pop cost ×15 on CDO).
+    let mut key_ids: HashMap<ProofKey, usize> = HashMap::new();
+    let mut found: Vec<bool> = Vec::new();
+    let mut found_count = 0usize;
+    let mut intern = |key: ProofKey, found: &mut Vec<bool>| {
+        let next = key_ids.len();
+        let id = *key_ids.entry(key).or_insert(next);
+        if id == found.len() {
+            found.push(false);
+        }
+        id
+    };
     // The level at which the `cap`-th distinct candidate was found.
     let mut cut_len: Option<usize> = None;
     let mut popped = 0usize;
     let mut depth_exceeded = false;
     loop {
         let ni = if let Some(ni) = crossed_q.pop_front() {
-            if nodes[ni]
-                .crossed
-                .as_ref()
-                .is_some_and(|(k, _)| found.contains(&**k))
-            {
+            if nodes[ni].crossed.is_some_and(|(k, _)| found[k]) {
                 continue;
             }
             ni
@@ -1040,12 +1070,15 @@ fn enumerate_proofs<'i>(
             edges.reverse();
             if seen.insert((edges.clone(), st.producer_fact)) {
                 out.paths.push((edges, st.producer_fact));
-                let (key, level) = match &nodes[ni].crossed {
-                    Some((k, level)) => (Rc::clone(k), *level),
-                    None => (Rc::new(key_of(&nodes, ni, None, hop_cache)), len),
+                let (key, level) = match nodes[ni].crossed {
+                    Some(kl) => kl,
+                    None => (intern(key_of(&nodes, ni, None, hop_cache), &mut found), len),
                 };
-                if found.insert(key) && found.len() >= cap {
-                    cut_len.get_or_insert(level);
+                if !std::mem::replace(&mut found[key], true) {
+                    found_count += 1;
+                    if found_count >= cap {
+                        cut_len.get_or_insert(level);
+                    }
                 }
             }
             continue;
@@ -1067,15 +1100,15 @@ fn enumerate_proofs<'i>(
             if revisits {
                 continue;
             }
-            let crossed = match &nodes[ni].crossed {
-                Some((k, level)) => Some((Rc::clone(k), *level)),
+            let crossed = match nodes[ni].crossed {
+                Some(kl) => Some(kl),
                 None if edge_to(edge).is_some_and(|to| idx.is_dependency(to)) => {
                     let b = boundary_terminal(edge, idx).0;
-                    let key = key_of(&nodes, ni, Some(b), hop_cache);
-                    if found.contains(&key) {
+                    let key = intern(key_of(&nodes, ni, Some(b), hop_cache), &mut found);
+                    if found[key] {
                         continue;
                     }
-                    Some((Rc::new(key), len))
+                    Some((key, len))
                 }
                 None => None,
             };
@@ -1103,6 +1136,7 @@ fn enumerate_proofs<'i>(
         ));
         out.incomplete = true;
     }
+    out.popped = popped;
     out
 }
 
@@ -8741,5 +8775,113 @@ codeunit 50102 "W10 Merge"
                 "cap {cap}"
             );
         }
+    }
+
+    /// Perf guard (#289): the proof walk tests a crossed partial path's key by
+    /// its id, never by hashing the key. Hand-stated precondition, the CDO
+    /// shape: one boundary's key is FOUND early (`cs-a`, seed `H1` at depth
+    /// 1), and another boundary (`cs-w`) opens a dependency lattice of 6
+    /// layers × 3 routines, fully linked, with no seed: 3 + 9 + … + 729 = 1092
+    /// crossed partial paths, each popped while `found` is non-empty. `cs-a`'s
+    /// dead branch `X1 → X2` is dropped once its key is found.
+    /// Limit: it pins per-pop key hashing and the drop-at-pop on this fixture,
+    /// not enumeration work in general (an extra-pop regression shows only as
+    /// `popped`, and only here).
+    #[test]
+    fn proof_walk_hashes_keys_per_crossing_not_per_partial_path() {
+        let mut names: Vec<String> = ["R", "P", "DepA", "H1", "X1", "X2", "DepW"]
+            .map(String::from)
+            .to_vec();
+        for l in 1..=6 {
+            for j in 0..3 {
+                names.push(format!("W{l}{j}"));
+            }
+        }
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut snap = rb_snapshot(&refs, &refs[2..], &[]);
+        let mut edges = Vec::new();
+        let mut edge = |from: &str, to: &str| {
+            edges.push(rb_call(from, to, &format!("cs-{from}-{to}")));
+            edges.len() - 1
+        };
+        let e_root = edge("R", "P");
+        let e_a = edge("P", "DepA");
+        let e_w = edge("P", "DepW");
+        let e_h1 = edge("DepA", "H1");
+        let e_x1 = edge("DepA", "X1");
+        let e_x2 = edge("X1", "X2");
+        // Arena, bottom-up: (routine, seed, links as (callee state, edge)).
+        type Row = (String, bool, Vec<(usize, usize)>);
+        let real = TempStateKind::Known(false);
+        let mut rows: Vec<Row> = vec![
+            ("H1#".into(), true, vec![]),
+            ("X2#".into(), false, vec![]),
+            ("X1#".into(), false, vec![(1, e_x2)]),
+            ("DepA#".into(), false, vec![(0, e_h1), (2, e_x1)]),
+        ];
+        let mut below: Vec<usize> = Vec::new();
+        for l in (1..=6).rev() {
+            let mut layer = Vec::new();
+            for j in 0..3 {
+                let from = format!("W{l}{j}");
+                let links = below
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &s)| (s, edge(&from, &format!("W{}{k}", l + 1))))
+                    .collect();
+                rows.push((format!("{from}#"), false, links));
+                layer.push(rows.len() - 1);
+            }
+            below = layer;
+        }
+        let links = below
+            .iter()
+            .enumerate()
+            .map(|(k, &s)| (s, edge("DepW", &format!("W1{k}"))))
+            .collect();
+        rows.push(("DepW#".into(), false, links));
+        let dep_w = rows.len() - 1;
+        rows.push(("P#".into(), false, vec![(3, e_a), (dep_w, e_w)]));
+        rows.push(("R#".into(), false, vec![(rows.len() - 1, e_root)]));
+        snap.typed_edges = edges;
+        snap.capability_facts = vec![insert_fact(
+            "H1#",
+            "direct",
+            Some("op-h1"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        )];
+        let arena = &mut snap.pd_solution;
+        for (routine, seed, links) in rows {
+            let start = arena.links.len();
+            arena.links.extend(links);
+            let temp = if seed {
+                TempStateKind::ParameterDependent(0)
+            } else {
+                real.clone()
+            };
+            arena
+                .states
+                .push(state(&routine, temp, seed, start..arena.links.len()));
+        }
+        let root_state = arena.states.len() - 1;
+        arena.by_routine.insert("R#".to_string(), vec![root_state]);
+        let f = insert_fact(
+            "R#",
+            "inherited",
+            None,
+            Some("cs-R-P"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        let before = PROOF_KEY_HASHES.with(|n| n.get());
+        let out = enumerate_proofs("R#", &f, &idx, HARD_PATH_CAP, &mut HopCache::default());
+        let hashes = PROOF_KEY_HASHES.with(|n| n.get()) - before;
+        assert_eq!(out.paths, vec![(vec![e_root, e_a, e_h1], 0)]);
+        assert!(!out.truncated && !out.incomplete, "{:?}", out.diagnostics);
+        // R, P, DepA, DepW, H1, then the lattice; X1 is dropped unexpanded.
+        assert_eq!(out.popped, 5 + 1092);
+        // Two crossings (cs-a, cs-w), each key hashed once on insert.
+        assert!(hashes <= 4, "{hashes} key hashes for {} pops", out.popped);
     }
 }

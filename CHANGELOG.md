@@ -168,6 +168,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`digest` is no longer several times slower since #160 step 6** (#289). Step 6's
+  proof cap (count distinct candidates after the boundary cut) made the proof walk
+  hash each crossed partial path's full candidate key (the projected hops' JSON) on
+  every pop, hundreds of millions of times on CDO. The walk now gives each distinct
+  key a small number once, when it first meets it, and a pop checks that number in a
+  list. The walk's order, its limits and its output are unchanged, and so is the
+  cap's rule. A new unit test counts the key hashes on a CDO-shaped fixture (2, where
+  the old walk made 1,094).
 - **d43 sees a guarded IsHandled dispatch through a member call** (#271). It followed
   bare calls and object runs only, so `Mgr.OnBeforePost(IsHandled)` through a
   codeunit variable, a call on a record or page variable, and `this.OnBeforePost(..)`
