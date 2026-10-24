@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0-rc.1] - 2026-10-24
+
+Release candidate, cut from #277's reviewed and gated head before its CDO bench.
+
 ### Added
 
 - **`alsem batch <manifest> [--out-dir DIR]` (#277).** Runs the commands of a JSON
