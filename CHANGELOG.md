@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`alsem batch <manifest> [--out-dir DIR]` (#277).** Runs the commands of a JSON
   manifest (`{"jobs": [{"argv": [...], "stdout": ..., "stderr": ...}]}`, or several
-  `{"batches": [...]}`) in one process. Jobs on one workspace and universe share one
+  `{"batches": [...]}`); a batch runs in one process. Jobs on one workspace and universe share one
   view: one read of the workspace, one build, one witness pass at the union of the jobs'
   requests, one `det`, and one run per distinct detector set and scope. Views are built
   one after another, and a workspace read is freed after its last view. Every job's
@@ -33,7 +33,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   canonicalized, so a symlink, a Windows case difference or an 8.3 name hides no clash; a
   workspace's own files are its `.al`/`.app` files in any case, its `app.json` and config
   files, and the `.app` files of every ancestor `.alpackages` the loader reads. Stdin is read once for every `--diff -` job; a closed run stdout
-  exits 1. Several batches run one after another for now. Traces gain `batch.driver`,
+  exits 1. Two or more batches run in worker processes (`alsem batch --worker <b>`, hidden),
+  at most `W` at once, started in manifest order: `W = max(1, min(batches, 4, ⌊28 GiB /
+  P⌋))`, at most 2 when a job is `policy check`, `P` the largest measured CDO peak of the
+  run's job kinds (`batch::admission::KIND_PEAK_KIB`; a kind with no row takes the largest;
+  the events, query, graph, prove, diff and single-app digest/policy rows are placeholders
+  at the largest row until measured). The parent reads stdin once and hands it to each
+  worker with a `--diff -` job, forwards each worker's stderr whole line by whole line as
+  `[w<b>] …`, gives each worker the trace file `<ALSEM_TRACE_FILE>.w<b>`, and prints the job
+  lines in manifest order after the last worker exits; a worker that dies without its lines
+  leaves its jobs `"exit": null` with `"worker": "<signal or status>"`, and the run exits 1.
+  `alsem batch --help` states the budget's limit (the measured shapes only) and that the
+  table is CDO-calibrated. Neither `alsem batch` nor its workers read or set
+  `RAYON_NUM_THREADS`; each big-stack pool reports its size in a `pool.threads` trace
+  instant. Under `ALSEM_RETAINED_CENSUS=1` each worker prints `[batch] worker <b>
+  peak_kib=<VmHWM>` (where `/proc/self/status` exists). Traces gain `batch.workers`
+  (`w`, `p_kib`, `policy_cap`), `batch.worker.start`, `batch.worker.exit`, `batch.driver`,
   `view.<i>`, `view.drop`, `view.teardown`, `view.run`, `job.<i>.<cmd>` and
   `inputs.request_read`; `ALSEM_RETAINED_CENSUS=1` prints `[retained-census] batch.held
   outputs= sides= inputs=` at each view's start, `batch.shared cell=<model|rel|raw|l4|det>

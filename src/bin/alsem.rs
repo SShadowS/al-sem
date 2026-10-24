@@ -62,9 +62,15 @@ const _: () = assert!(
 
 use std::path::{Path, PathBuf};
 
-use al_sem::engine::batch::job::{Failed, HandOff, Job, WorkspaceRead, WorkspaceReader};
-use al_sem::engine::batch::manifest::{BatchSpec, JobPaths, check_write_sets};
+use al_sem::engine::batch::admission::{JobKind, admit};
+use al_sem::engine::batch::job::{
+    Failed, HandOff, Job, ViewUniverse, WorkspaceRead, WorkspaceReader,
+};
+use al_sem::engine::batch::manifest::{BatchSpec, JobPaths, Manifest, check_write_sets};
 use al_sem::engine::batch::output::{JobOutput, WriteAction, replay};
+use al_sem::engine::batch::worker::{
+    WorkerBatch, Workers, report_peak, run_workers, test_seam_die,
+};
 use al_sem::engine::batch::{JobLine, JobStreams, run_batch, run_standalone};
 use al_sem::engine::gate::cache_prune::{format_prune_report, prune_cache};
 use al_sem::engine::gate::events::{EventsChainsOptions, EventsFanoutOptions, EventsJob};
@@ -80,7 +86,8 @@ use al_sem::engine::l5::digest_cli::{
 use al_sem::engine::l5::event_flow::Scope as EventScope;
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintJob, FingerprintOptions, ShardMode, SpecifiedFlags, default_format,
-    normalize_witness, reject_illegal_combos, reject_inventory_only_combos, validate_roots,
+    normalize_witness, reads_single_app, reject_illegal_combos, reject_inventory_only_combos,
+    validate_roots,
 };
 use al_sem::engine::l5::prove::{ProveJob, parse_question, question_ids};
 use al_sem::program::inputs::{RequestInputs, WorkspaceNeeds};
@@ -123,8 +130,17 @@ enum Commands {
     /// Write the program's may-execute call graph as JSONL (schema
     /// `al-sem.callgraph` v1), for diff-scoped test selection.
     Graph(GraphCli),
-    /// Run the commands of a JSON manifest in one process: jobs on one
+    /// Run the commands of a JSON manifest: jobs of one batch on one
     /// workspace share one build. Prints one JSON line per job.
+    ///
+    /// One batch runs in this process. Two or more run in worker processes,
+    /// at most four at once and at most two when a job is `policy check`: as
+    /// many as fit a 28 GiB budget at the largest measured peak of the run's
+    /// job kinds. The peak table is calibrated on one large workspace (CDO);
+    /// a larger workspace needs it re-measured. The budget holds only for
+    /// manifests no heavier than the measured shapes: many large-root digests
+    /// on one workspace, or many large outputs that wait for a later job, can
+    /// exceed it.
     Batch(BatchCli),
 }
 
@@ -139,6 +155,10 @@ struct BatchCli {
     /// manifest's directory).
     #[arg(long = "out-dir")]
     out_dir: Option<String>,
+
+    /// Run batch `b` alone, as a worker of a parent run (#277 D2.5).
+    #[arg(long, hide = true)]
+    worker: Option<u32>,
 }
 
 /// `GraphCli` — arguments for `alsem graph <ws>`.
@@ -941,9 +961,12 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
 }
 
 /// `alsem batch <manifest>`: every job's argv is parsed first (a usage error
-/// runs nothing, exit 3), and every write target checked (D2.4); then each
-/// batch runs in this process, in manifest order, and the run prints one
-/// line per job. Exit 0 when every job ran, whatever its own exit (D2.2).
+/// runs nothing, exit 3), and every write target checked (D2.4); then one
+/// batch runs in this process, two or more in `W` workers (D2.5, D12), and
+/// the run prints one line per job in manifest order. Exit 0 when every job
+/// ran, whatever its own exit; 1 when a worker died without its lines (D2.2).
+/// `--worker <b>`: run batch `b` alone and print its lines (the parent
+/// checked the manifest).
 fn run_batch_cmd(b: BatchCli) -> ExitCode {
     use al_sem::engine::batch::manifest::load;
     let usage =
@@ -962,6 +985,9 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
             }
         }
         parsed.push(commands);
+    }
+    if let Some(w) = b.worker {
+        return run_worker(w, &manifest, parsed);
     }
     let paths: Vec<(String, JobPaths)> = manifest
         .batches
@@ -983,27 +1009,129 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
     if let Err(line) = check_write_sets(&paths, &cwd) {
         return usage(line);
     }
-    let mut lines = Vec::new();
-    for (bi, (batch, commands)) in manifest.batches.iter().zip(parsed).enumerate() {
-        let b = u32::try_from(bi).expect("at most u32::MAX batches");
-        lines.extend(run_one_batch(
-            b,
+    let commands = || parsed.iter().flatten();
+    let kinds: Vec<JobKind> = commands().filter_map(job_kind).collect();
+    let has_policy = commands().any(|c| matches!(c, Commands::Policy(_)));
+    let w = admit(&kinds, manifest.batches.len(), has_policy);
+    if let [batch] = &manifest.batches[..] {
+        let commands = parsed.into_iter().next().expect("one batch");
+        return print_lines(&run_one_batch(
+            0,
             batch,
             commands.into_iter().map(plan).collect(),
         ));
     }
-    let mut out = String::new();
-    for line in &lines {
-        out.push_str(&serde_json::to_string(line).expect("a job line serializes"));
-        out.push('\n');
+    let batches: Vec<WorkerBatch> = manifest
+        .batches
+        .iter()
+        .zip(&parsed)
+        .map(|(batch, commands)| WorkerBatch {
+            streams: batch.jobs.iter().map(|j| j.streams.clone()).collect(),
+            stdin: commands.iter().any(reads_stdin),
+        })
+        .collect();
+    // One read of stdin, handed to every worker with a `--diff -` job (D3).
+    let stdin = batches.iter().any(|b| b.stdin).then(|| {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let _ = std::io::stdin().read_to_end(&mut buf);
+        buf
+    });
+    let run = Workers {
+        manifest: Path::new(&b.manifest),
+        out_dir: b.out_dir.as_deref().map(Path::new),
+        w,
+        stdin: stdin.as_deref(),
+    };
+    let (out, whole) = run_workers(&run, &batches);
+    write_run_stdout(out, whole)
+}
+
+/// `alsem batch --worker <b>`: batch `b` in this process, then its lines.
+fn run_worker(b: u32, manifest: &Manifest, parsed: Vec<Vec<Commands>>) -> ExitCode {
+    let at = usize::try_from(b).expect("a batch index fits usize");
+    let (Some(batch), Some(commands)) = (manifest.batches.get(at), parsed.into_iter().nth(at))
+    else {
+        let line = format!("al-sem batch: no batch {b}");
+        return ExitCode::from(replay(&JobOutput::lines(&[line], exit::CONFIG_ERROR), 1));
+    };
+    let lines = run_one_batch(b, batch, commands.into_iter().map(plan).collect());
+    test_seam_die(b);
+    report_peak(b);
+    print_lines(&lines)
+}
+
+/// The run's job lines on stdout (D2.2).
+fn print_lines(lines: &[JobLine]) -> ExitCode {
+    let mut out = Vec::new();
+    for line in lines {
+        out.extend(serde_json::to_vec(line).expect("a job line serializes"));
+        out.push(b'\n');
     }
-    ExitCode::from(replay(
+    write_run_stdout(out, true)
+}
+
+/// Write the run's stdout: exit 0, or 1 when the write fails or a worker
+/// died without its lines (`whole` false).
+fn write_run_stdout(out: Vec<u8>, whole: bool) -> ExitCode {
+    let code = replay(
         &JobOutput {
-            actions: vec![WriteAction::Stdout(out.into_bytes())],
-            exit: exit::CLEAN,
+            actions: vec![WriteAction::Stdout(out)],
+            exit: if whole { exit::CLEAN } else { 1 },
         },
         1,
-    ))
+    );
+    ExitCode::from(code)
+}
+
+/// A job's kind for the peak table (D12): its command and its view's
+/// universe. `None`: `batch`, `policy explain`, `cache prune` (no job).
+fn job_kind(command: &Commands) -> Option<JobKind> {
+    let universe = |single_app: bool| match single_app {
+        true => ViewUniverse::SingleApp,
+        false => ViewUniverse::CrossApp,
+    };
+    Some(match command {
+        Commands::Analyze(a) => ("analyze", universe(a.single_app)),
+        Commands::Digest(d) => ("digest", universe(d.single_app)),
+        Commands::Prove(p) => ("prove", universe(p.single_app)),
+        Commands::Fingerprint(f) => ("fingerprint", universe(fingerprint_single_app(f))),
+        Commands::Diff(_) => ("diff", ViewUniverse::SingleApp),
+        Commands::Events(e) => match &e.command {
+            EventsCommands::Fanout(f) => ("events fanout", universe(f.single_app)),
+            EventsCommands::Chains(c) => ("events chains", universe(c.single_app)),
+        },
+        Commands::Policy(PolicyCli {
+            command: PolicyCommands::Check(c),
+        }) => ("policy check", universe(c.single_app)),
+        Commands::Query(q) => match &q.command {
+            QueryCommands::Touches(t) => ("query touches", universe(t.single_app)),
+            QueryCommands::Effects(e) => ("query effects", universe(e.single_app)),
+        },
+        Commands::Graph(_) => ("graph", ViewUniverse::CrossApp),
+        Commands::Policy(_) | Commands::Cache(_) | Commands::Batch(_) => return None,
+    })
+}
+
+/// Whether a fingerprint job's view is single-app; a job whose format fails
+/// validation reads no view (taken as cross-app).
+fn fingerprint_single_app(f: &FingerprintCli) -> bool {
+    default_format(f.format.as_deref(), f.shard.is_some()).is_ok_and(|format| {
+        reads_single_app(
+            &format,
+            f.shard.is_some(),
+            fingerprint_flags(f).is_query_requested(),
+            !f.routine.is_empty(),
+            f.inventory_only,
+            f.single_app,
+        )
+    })
+}
+
+/// Whether a job reads stdin (`digest --diff -`; with a `--changed` diff file
+/// it does not, and is handed the bytes all the same).
+fn reads_stdin(command: &Commands) -> bool {
+    matches!(command, Commands::Digest(d) if d.diff.as_deref() == Some("-"))
 }
 
 /// One batch: every workspace read once with the union of its jobs' needs
@@ -1484,6 +1612,16 @@ fn plan_prove(p: ProveCli) -> Planned {
 
 // ── fingerprint command ─────────────────────────────────────────────────────
 
+/// _specifiedFlags (index.ts:434-439).
+fn fingerprint_flags(f: &FingerprintCli) -> SpecifiedFlags {
+    SpecifiedFlags {
+        roots: f.roots.is_some(),
+        routine_selectors: !f.routine.is_empty(),
+        include_inherited: f.no_include_inherited,
+        witness: f.witness.is_some() && f.witness.as_deref() != Some("3"),
+    }
+}
+
 fn plan_fingerprint(f: FingerprintCli) -> Planned {
     // Parse --shard mode (primary-only | all). Invalid value → exit 1.
     let shard_mode: Option<ShardMode> = match f.shard.as_deref() {
@@ -1499,13 +1637,7 @@ fn plan_fingerprint(f: FingerprintCli) -> Planned {
         }
     };
 
-    // _specifiedFlags (index.ts:434-439).
-    let specified = SpecifiedFlags {
-        roots: f.roots.is_some(),
-        routine_selectors: !f.routine.is_empty(),
-        include_inherited: f.no_include_inherited,
-        witness: f.witness.is_some() && f.witness.as_deref() != Some("3"),
-    };
+    let specified = fingerprint_flags(&f);
 
     // defaultFormat (fingerprint.ts:140) + rejectIllegalCombos (fingerprint.ts:110).
     let format = match default_format(f.format.as_deref(), shard_mode.is_some()) {

@@ -10,9 +10,11 @@
 //! file/file `diff`) before the first. A job whose side failed reads no later
 //! view (D8).
 
+pub mod admission;
 pub mod job;
 pub mod manifest;
 pub mod output;
+pub mod worker;
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -92,14 +94,18 @@ pub struct JobStreams {
 
 /// One job's line on the run's stdout (D2.2), in manifest order. `exit` is
 /// the job's own exit; `files` every file and directory its actions wrote.
+/// A worker that died without its lines (D2.5): `exit` null and `worker` its
+/// signal or status.
 #[derive(Debug, serde::Serialize)]
 pub struct JobLine {
     pub batch: u32,
     pub job: u32,
-    pub exit: u8,
+    pub exit: Option<u8>,
     pub stdout: PathBuf,
     pub stderr: PathBuf,
     pub files: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
 }
 
 /// Run batch `b` in this process (D2.5): one driver over every job, each
@@ -156,10 +162,11 @@ fn write_job(b: u32, i: usize, job: &dyn Job, streams: &JobStreams, out: &JobOut
     JobLine {
         batch: b,
         job: u32::try_from(i).expect("a batch of at most u32::MAX jobs"),
-        exit,
+        exit: Some(exit),
         stdout: streams.stdout.clone(),
         stderr: streams.stderr.clone(),
         files,
+        worker: None,
     }
 }
 
