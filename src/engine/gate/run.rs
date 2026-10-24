@@ -554,6 +554,9 @@ pub fn run_analyze_with_exit(
     args: &AnalyzeArgs,
     default_version: &str,
 ) -> Result<AnalyzeOutput, String> {
+    // The whole run, build included; the bin opens the same span around its
+    // standalone run (#277 R5-2).
+    let _analyze_span = pt::span("analyze", "analyze.total");
     let job = AnalyzeJob::new(inputs, request, args, default_version)?;
     crate::engine::batch::run_doc(&job)
         .one()
@@ -632,7 +635,6 @@ impl Job for AnalyzeJob<'_> {
     }
 
     fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
-        let _analyze_span = pt::span("analyze", "analyze.total");
         let ViewFailure::Model { fresh, failure } = failure else {
             unreachable!("analyze's view is built by analyze's builder")
         };
@@ -704,7 +706,6 @@ fn analyze_view(
     args: &AnalyzeArgs,
     version: &str,
 ) -> Result<AnalyzeOutput, String> {
-    let _analyze_span = pt::span("analyze", "analyze.total");
     // L4 + L5: the selected detectors ran on the view (#160 §4.4.4). Findings
     // come pre-sorted by (detector, primaryLocationKey, rootCauseKey). Cross-app,
     // the run drops dependency-anchored findings itself for `--scope primary`
@@ -929,9 +930,9 @@ fn analyze_view(
     };
 
     // --- teardown, MEASURED ------------------------------------------------
-    // These drops happened here anyway: `_analyze_span` is the FIRST local
-    // declared, so it is the LAST dropped, and every structure below was
-    // already being freed inside the `analyze.total` span. Naming them makes
+    // These drops happened here anyway: the `analyze.total` span (opened by
+    // the caller around the whole run) outlives them, and every structure
+    // below was already being freed inside it. Naming them makes
     // that cost visible instead of leaving it in the span's unattributed self
     // time — a 4-run 8020 profile put `analyze.total`'s own self time at
     // 15.5 % of the whole run (≈ 11.8 s at the 76.2 s median), the SECOND

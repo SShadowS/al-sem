@@ -744,9 +744,13 @@ fn standalone(job: &dyn Job) -> ExitCode {
     ExitCode::from(run_standalone(job))
 }
 
-/// A job that failed its own validation: `line` on stderr, exit `exit`.
-fn failed(line: impl Into<String>, exit: u8) -> ExitCode {
-    standalone(&Failed(JobOutput::lines(&[line.into()], exit)))
+/// A job that failed its own validation: `line` on stderr, exit `exit`; a
+/// failed stderr write exits `write_failure_exit` (analyze 2, else 1).
+fn failed(line: impl Into<String>, exit: u8, write_failure_exit: u8) -> ExitCode {
+    standalone(&Failed {
+        output: JobOutput::lines(&[line.into()], exit),
+        write_failure_exit,
+    })
 }
 
 /// Write `actions` in order; a failed write ends them with `fail`.
@@ -887,6 +891,7 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         return failed(
             format!("al-sem policy check: invalid --format '{}'", c.format),
             1,
+            1,
         );
     }
 
@@ -911,7 +916,10 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
     // A bad policy is found before any build: a job with no view (#277 D3).
     match PolicyJob::new(&opts) {
         Ok(job) => standalone(&job),
-        Err(early) => standalone(&Failed(early.into_output())),
+        Err(early) => standalone(&Failed {
+            output: early.into_output(),
+            write_failure_exit: 1,
+        }),
     }
 }
 
@@ -1032,7 +1040,7 @@ const ORDER_REJECTION: &str = "al-sem: digest --order is not supported by the Ru
 fn run_digest_cmd(d: DigestCli) -> ExitCode {
     // Reject --order (CONFIG_ERROR — a not-ported flag rejected cleanly rather than silently ignored)
     if d.order {
-        return failed(ORDER_REJECTION, exit::CONFIG_ERROR);
+        return failed(ORDER_REJECTION, exit::CONFIG_ERROR, 1);
     }
 
     // Validate --format. al-sem (cli/index.ts:578) writes this exact message and
@@ -1045,6 +1053,7 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
                 "al-sem digest: invalid --format '{}'. Expected: json | human",
                 d.format
             ),
+            1,
             1,
         );
     }
@@ -1077,6 +1086,7 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         return failed(
             "digest: at least one of --changed-files, --changed-routines, --diff, or --changed is required",
             1,
+            1,
         );
     }
 
@@ -1091,6 +1101,7 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
                 return failed(
                     "al-sem: digest: failed to read diff from stdin",
                     exit::CONFIG_ERROR,
+                    1,
                 );
             }
             Some(buf)
@@ -1101,6 +1112,7 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
                 return failed(
                     format!("al-sem: digest: could not read diff file '{path}': {e}"),
                     exit::CONFIG_ERROR,
+                    1,
                 );
             }
         },
@@ -1391,6 +1403,7 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
         return failed(
             format!("al-sem events fanout: invalid --format '{}'", f.format),
             1,
+            1,
         );
     }
 
@@ -1402,6 +1415,7 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
                 f.coverage_policy
             ),
             1,
+            1,
         );
     }
 
@@ -1411,6 +1425,7 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
         other => {
             return failed(
                 format!("al-sem events fanout: invalid --scope '{other}'. Expected: primary | all"),
+                1,
                 1,
             );
         }
@@ -1442,6 +1457,7 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
         return failed(
             format!("al-sem events chains: invalid --format '{}'", c.format),
             1,
+            1,
         );
     }
 
@@ -1453,6 +1469,7 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
                 c.coverage_policy
             ),
             1,
+            1,
         );
     }
 
@@ -1463,6 +1480,7 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
             return failed(
                 format!("al-sem events chains: invalid --scope '{other}'. Expected: primary | all"),
                 1,
+                1,
             );
         }
     };
@@ -1470,7 +1488,7 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
     if let Some(md) = c.max_depth
         && md > 256
     {
-        return failed("al-sem events chains: --max-depth must be in 0..256", 1);
+        return failed("al-sem events chains: --max-depth must be in 0..256", 1, 1);
     }
 
     let inputs = WorkspaceInputs::read(
@@ -1537,6 +1555,7 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
                 SEVERITY_VALUES.join(", ")
             ),
             exit::CONFIG_ERROR,
+            exit::ANALYSIS_FAILURE,
         );
     }
 
@@ -1547,6 +1566,7 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
             return failed(
                 format!("al-sem: invalid --scope '{other}'. Expected one of: primary, all"),
                 exit::CONFIG_ERROR,
+                exit::ANALYSIS_FAILURE,
             );
         }
     };
@@ -1562,6 +1582,7 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
                 preset_names().join(", ")
             ),
             exit::CONFIG_ERROR,
+            exit::ANALYSIS_FAILURE,
         );
     }
     let format = resolve_auto_format(&a.format);
@@ -1575,6 +1596,7 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
                     GROUP_BY_VALUES.join(", ")
                 ),
                 exit::CONFIG_ERROR,
+                exit::ANALYSIS_FAILURE,
             );
         }
         Some(g.clone())
@@ -1586,7 +1608,13 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
     let fail_on = match &a.fail_on {
         Some(s) => match parse_fail_on(s) {
             Ok(sev) => Some(sev),
-            Err(msg) => return failed(format!("al-sem: {msg}"), exit::CONFIG_ERROR),
+            Err(msg) => {
+                return failed(
+                    format!("al-sem: {msg}"),
+                    exit::CONFIG_ERROR,
+                    exit::ANALYSIS_FAILURE,
+                );
+            }
         },
         None => None,
     };
@@ -1616,14 +1644,26 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
     // this is only the fallback for a real, unpinned invocation.
     // A bad `--preset` / `--detector` is a usage error found before the
     // workspace is read (`run_analyze_with_exit` resolves the set again).
+    let config_error = |msg: String| {
+        failed(
+            format!("al-sem: {msg}"),
+            exit::CONFIG_ERROR,
+            exit::ANALYSIS_FAILURE,
+        )
+    };
     if let Err(msg) = resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref()) {
-        return failed(format!("al-sem: {msg}"), exit::CONFIG_ERROR);
+        return config_error(msg);
     }
     let inputs = args.read_inputs();
     let request = args.read_request();
     match AnalyzeJob::new(&inputs, &request, &args, &inputs.driver_version) {
-        Ok(job) => standalone(&job),
-        Err(msg) => failed(format!("al-sem: {msg}"), exit::CONFIG_ERROR),
+        Ok(job) => {
+            // The whole run, build included, as before the driver (#277 R5-2):
+            // `scripts/trace_summary.py` takes its percentages off this span.
+            let _analyze_span = al_sem::engine::perf_trace::span("analyze", "analyze.total");
+            standalone(&job)
+        }
+        Err(msg) => config_error(msg),
     }
 }
 

@@ -110,3 +110,42 @@ fn digest_out_unwritable_exits_1() {
     assert_eq!(out.status.code(), Some(1), "stderr: {err}");
     assert_eq!(write_error_lines(&out.stderr, target_s), 1, "stderr: {err}");
 }
+
+/// The exit of `alsem <args>` whose stderr is a pipe with no reader (the read
+/// end dropped before the spawn, so every stderr write fails).
+fn closed_stderr_exit(args: &[&str]) -> Option<i32> {
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(writer)
+        .status()
+        .expect("spawn alsem")
+        .code()
+}
+
+/// #277 R5-1: a validation error that cannot reach stderr exits with the
+/// command's write-failure code: analyze 2, every other command 1. The
+/// open-stderr runs state the precondition: each is a validation error with
+/// its own exit (analyze 3, events 1) and one stderr line.
+#[test]
+fn validation_error_on_a_closed_stderr_exits_with_the_write_failure_code() {
+    let ws = ws_a();
+    let analyze = ["analyze", ws.as_str(), "--scope", "bad"];
+    let events = ["events", "fanout", ws.as_str(), "--format", "bad"];
+    for (args, open_exit) in [(&analyze[..], 3), (&events[..], 1)] {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(args)
+            .output()
+            .expect("spawn alsem");
+        assert_eq!(out.status.code(), Some(open_exit), "precondition: {args:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr).lines().count(),
+            1,
+            "precondition: one validation line for {args:?}"
+        );
+    }
+    assert_eq!(closed_stderr_exit(&analyze), Some(2), "analyze");
+    assert_eq!(closed_stderr_exit(&events), Some(1), "events fanout");
+}

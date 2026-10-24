@@ -52,6 +52,37 @@ fn spawn_trace_events(
     (out, serde_json::from_str(&text).unwrap_or_default())
 }
 
+/// #277 R5-2: `analyze.total` spans the whole analyze run, model build
+/// included, as before the batch driver: `scripts/trace_summary.py` takes its
+/// percentages off it. Precondition: the trace holds one `analyze.total` span
+/// and a `build.program` counter.
+#[test]
+fn analyze_total_spans_the_build() {
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["analyze", &ws_a(), "--format", "json"],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let ts = |ph: &str, name: &str| -> Vec<f64> {
+        events
+            .iter()
+            .filter(|e| e["ph"] == ph && e["name"] == name)
+            .filter_map(|e| e["ts"].as_f64())
+            .collect()
+    };
+    let (begin, end) = (ts("B", "analyze.total"), ts("E", "analyze.total"));
+    assert_eq!((begin.len(), end.len()), (1, 1), "precondition: one span");
+    let build = ts("C", "build.program");
+    assert!(!build.is_empty(), "precondition: a program build");
+    assert!(
+        build.iter().all(|t| begin[0] <= *t && *t <= end[0]),
+        "build.program at {build:?} outside analyze.total [{}, {}]",
+        begin[0],
+        end[0]
+    );
+}
+
 /// The `phase.*` instant events, in trace order.
 fn phase_events(events: &[Value]) -> Vec<String> {
     events

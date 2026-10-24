@@ -103,6 +103,14 @@ fn run_view(
             .all(|(_, d)| d.needs.analyze_extras == analyze_extras),
         "one builder per view"
     );
+    // The view is built from the first demand's read: every demand on it must
+    // hold that same read, never a second one of the workspace.
+    assert!(
+        on_view
+            .iter()
+            .all(|(_, d)| Arc::ptr_eq(&d.inputs, &first.inputs)),
+        "a view's demands share one WorkspaceInputs"
+    );
     let single_app = first.key.universe == job::ViewUniverse::SingleApp;
     let built = build_view(&first.inputs, single_app, analyze_extras);
     let (target, fresh) = match built {
@@ -199,5 +207,61 @@ fn build_view(
         AnalysisTarget::build_target(inputs, single_app)
             .map(|t| (t, None))
             .map_err(|f| Box::new(ViewFailure::Target(f)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::job::*;
+    use super::output::JobOutput;
+    use super::*;
+    use crate::program::inputs::WorkspaceNeeds;
+
+    /// A job with one demand on `key` over `inputs`; it never gets past the
+    /// driver's checks in these tests.
+    struct OnView(ViewKey, Arc<WorkspaceInputs>);
+
+    impl Job for OnView {
+        fn demands(&self) -> Vec<ViewDemand> {
+            vec![ViewDemand {
+                key: self.0.clone(),
+                side: SideIx(0),
+                needs: ViewNeeds::default(),
+                inputs: Arc::clone(&self.1),
+            }]
+        }
+        fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+            panic!("resolved past the driver's checks")
+        }
+        fn compute(&self, _: SideIx, _: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+            panic!("computed past the driver's checks")
+        }
+        fn view_failed(&self, _: SideIx, _: &ViewFailure) -> Result<SideDoc, JobFailure> {
+            panic!("built past the driver's checks")
+        }
+        fn serialize(&self, _: Doc) -> JobOutput {
+            unreachable!()
+        }
+    }
+
+    /// #277 R5-3: two demands on one view key with two reads of the workspace
+    /// are refused before the build. Precondition: the two reads are distinct
+    /// `Arc`s of one workspace, so the key alone cannot tell them apart.
+    #[test]
+    fn a_view_refuses_two_reads_of_its_workspace() {
+        let d = tempfile::tempdir().unwrap();
+        let read = || WorkspaceInputs::read(d.path(), &WorkspaceNeeds::default());
+        let (a, b) = (read(), read());
+        assert!(!Arc::ptr_eq(&a, &b), "precondition: two reads");
+        let key = ViewKey::new(d.path(), true, false);
+        let (ja, jb) = (OnView(key.clone(), a), OnView(key, b));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drive(&[&ja, &jb])));
+        let msg = r.err().expect("the driver refuses the view");
+        let msg = msg
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| msg.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert_eq!(msg, "a view's demands share one WorkspaceInputs");
     }
 }

@@ -91,10 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prepares one plan and the job computes off it; its writes are an ordered list that
   a standalone run replays in today's order, so stdout, stderr, exit codes and files
   are unchanged. Two small differences: a validation error line is now written like
-  every other stderr line, so a closed stderr gives the command's write-failure exit
-  instead of a panic; and in the trace, `analyze.total` no longer spans the model
-  build or the detector run (the driver's `prepare`; `l4_l5.run_detectors` is gone).
-  The trace carries a `batch.driver` instant (`jobs`, `views`, `workers`).
+  every other stderr line, so when stderr is closed the command exits with its own
+  write-failure code (analyze 2, every other command 1) instead of panicking; and the
+  trace span `l4_l5.run_detectors` is gone (the detector run is the driver's `prepare`).
+  `analyze.total` still spans the whole analyze run, model build included. The trace
+  carries a `batch.driver` instant (`jobs`, `views`, `workers`).
 
 - **Grammar: tree-sitter-al `main` at `c89c2ecb`** (D1, a parser state-reduction pass;
   package version still 4.4.1; was `960ed312`). `node-types.json` is byte-identical, so the
