@@ -396,9 +396,21 @@ fn field_enum(cx: &ClosedEnumCx, object: ExprId, member: &str) -> Option<ObjectN
         return None;
     }
     let field_lc = unquote_identifier(member).fold_identifier();
-    if cx
+    // A same-named procedure makes `Rec.X` a parens-less call: in the table's
+    // scope, or in a table extension with no known target (it may extend it).
+    let untargeted_has_routine = cx
         .index
-        .table_scope_has_routine(cx.graph, cx.from_object, &table, &field_lc)
+        .untargeted_table_extensions_in(cx.graph, cx.from_object)
+        .any(|ext| {
+            cx.index
+                .routines_in_object(cx.graph, ext, &field_lc)
+                .next()
+                .is_some()
+        });
+    if untargeted_has_routine
+        || cx
+            .index
+            .table_scope_has_routine(cx.graph, cx.from_object, &table, &field_lc)
     {
         return None;
     }
@@ -1771,6 +1783,60 @@ enum 50106 "Other Kind" implements "Other Strategy"
         let report = crate::program::resolve::full::resolve_full_program(write(&ws).path())
             .expect("resolves");
         assert!(is_open(site_completeness(&report, "onaftergetrecord")));
+    }
+
+    /// Final panel N21 (round 4): a table extension declared in two `#if` arms
+    /// that extend two different tables loses its target in the merge (N2-1),
+    /// so no table lists it as an extension. Its members still exist on
+    /// whichever table a build extends. A caller OUTSIDE that extension, a page
+    /// on one of the tables, must still see them: here the extension adds a
+    /// field `"Demo Kind"` (shadowing `"Demo Kind"::Standard`) or a procedure
+    /// `Kind()` (colliding with the table's field `Kind`).
+    #[test]
+    fn i264_n21_conflicted_table_extension_still_counts_for_both_tables() {
+        let other = "table 50142 \"Other Item\"\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n}\n";
+        let ext = |target: &str, member: &str| {
+            format!("tableextension 50141 \"Kind Ext\" extends \"{target}\"\n{{\n{member}}}\n")
+        };
+        let field =
+            "    fields\n    {\n        field(50; \"Demo Kind\"; Enum \"Open Kind\") { }\n    }\n";
+        let unrelated_field = "    fields\n    {\n        field(50; \"Other Field\"; Enum \"Open Kind\") { }\n    }\n";
+        let procedure = "    procedure Kind(): Enum \"Open Kind\"\n    begin\n    end;\n";
+        let unrelated_procedure =
+            "    procedure Other(): Enum \"Open Kind\"\n    begin\n    end;\n";
+        let page = |value: &str| {
+            format!(
+                "page 50143 \"Item Card\"\n{{\n    SourceTable = \"Demo Item\";\n\n    procedure Dispatch()\n    var\n{S_VAR}\n    begin\n        S := {value};\n        S.NextKm(1);\n    end;\n}}\n"
+            )
+        };
+        let run = |ext_source: String, value: &str| {
+            completeness(&workspace(
+                caller(VARS, "", ""),
+                &[
+                    ("src/Other.al", other.to_string()),
+                    ("src/Ext.al", ext_source),
+                    ("src/Page.al", page(value)),
+                    ("src/OpenKind.al", open_kind()),
+                ],
+            ))
+        };
+        for (shape, value, member, unrelated) in [
+            ("field", "\"Demo Kind\"::Standard", field, unrelated_field),
+            ("procedure", "Rec.Kind", procedure, unrelated_procedure),
+        ] {
+            assert_eq!(
+                run(ext("Demo Item", unrelated), value),
+                SetCompleteness::Complete,
+                "precondition: {shape}, a non-colliding extension closes"
+            );
+            for (label, first, second) in [
+                ("Demo Item first", "Demo Item", "Other Item"),
+                ("Other Item first", "Other Item", "Demo Item"),
+            ] {
+                let arms = if_arms(&ext(first, member), &ext(second, member));
+                assert!(is_open(run(arms, value)), "N21 {shape}, {label}");
+            }
+        }
     }
 
     /// Final panel N2-3: a table extension inherits its base table's protected
