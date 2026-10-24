@@ -413,8 +413,16 @@ fn field_enum(cx: &ClosedEnumCx, object: ExprId, member: &str) -> Option<ObjectN
 /// Whether a bare name `name_lc` in this routine may be a field of the implicit
 /// `Rec` (a table, table extension, or an object with a `SourceTable`): `Rec`
 /// types as a record whose table has that field, or as a record whose table is
-/// unknown. Then `"X"::V` may be the field's value, not the enum X's.
+/// unknown. Then `"X"::V` may be the field's value, not the enum X's. In a
+/// report or XmlPort the data items' fields are reached by bare name too, not
+/// only through the trigger's `Rec`: any name may be one there.
 fn implicit_rec_may_have_field(cx: &ClosedEnumCx, name_lc: &str) -> bool {
+    if matches!(
+        cx.from_object.id.kind,
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
+    ) {
+        return true;
+    }
     match infer_receiver_type(
         "rec",
         cx.routine,
@@ -1650,6 +1658,33 @@ enum 50106 "Other Kind" implements "Other Strategy"
             ],
         );
         assert!(is_open(completeness(&ws)));
+    }
+
+    /// Final panel NEW-1: in a report (or XmlPort) the data items' fields can be
+    /// reached by bare name beyond the trigger's own `Rec` (here a field of the
+    /// PARENT data item, seen from the child's trigger), so `"X"::V` may be a
+    /// field's value. Reports and XmlPorts decline the arm.
+    #[test]
+    fn i264_new1_quoted_value_in_a_report_data_item_stays_open() {
+        let table = "table 50100 \"Demo Item\"\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n        field(2; \"Demo Kind\"; Enum \"Open Kind\") { }\n    }\n}\n".to_string();
+        // The site is in the CHILD data item's trigger; its own table has no
+        // field "Demo Kind", the parent data item's table has.
+        let line = "table 50135 \"Line Item\"\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n}\n".to_string();
+        let report = format!(
+            "report 50134 \"Item Report\"\n{{\n    dataset\n    {{\n        dataitem(Item; \"Demo Item\")\n        {{\n            dataitem(Line; \"Line Item\")\n            {{\n                trigger OnAfterGetRecord()\n                var\n{S_VAR}\n                begin\n                    S := \"Demo Kind\"::Standard;\n                    S.NextKm(1);\n                end;\n            }}\n        }}\n    }}\n}}\n"
+        );
+        let ws = workspace(
+            caller(VARS, "", ""),
+            &[
+                ("src/Item.al", table),
+                ("src/Line.al", line),
+                ("src/Report.al", report),
+                ("src/OpenKind.al", open_kind()),
+            ],
+        );
+        let report = crate::program::resolve::full::resolve_full_program(write(&ws).path())
+            .expect("resolves");
+        assert!(is_open(site_completeness(&report, "onaftergetrecord")));
     }
 
     /// Final panel FC3: in a table (or a page on a SourceTable), `"X"::V` may
