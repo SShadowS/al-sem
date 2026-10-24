@@ -843,7 +843,24 @@ pub fn assemble_and_resolve_cross_app_program(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Result<CrossAppProgram, CrossAppFailure> {
-    cross_app_program_census(inputs, model_instance_id, skip_roots_config).map(|(p, _)| p)
+    cross_app_program_from(
+        ResolvedProgram::build(inputs, ProgramScope::CrossApp),
+        inputs,
+        model_instance_id,
+        skip_roots_config,
+    )
+}
+
+/// [`assemble_and_resolve_cross_app_program`] over a program built (or failed)
+/// already: the batch view builder builds it first and lends it to `alsem
+/// graph` before the model is assembled from it (#277 D9).
+pub(crate) fn cross_app_program_from(
+    program: Result<ResolvedProgram, String>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+) -> Result<CrossAppProgram, CrossAppFailure> {
+    cross_app_program_census(program, inputs, model_instance_id, skip_roots_config).map(|(p, _)| p)
 }
 
 /// The cross-app build up to the attach: the program, the demand the model was
@@ -861,9 +878,23 @@ pub(crate) fn cross_app_assemble(
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Result<CrossAppAssembled, CrossAppFailure> {
+    cross_app_assemble_from(
+        ResolvedProgram::build(inputs, ProgramScope::CrossApp),
+        inputs,
+        model_instance_id,
+        skip_roots_config,
+    )
+}
+
+/// [`cross_app_assemble`] over `program`, the build's own result.
+fn cross_app_assemble_from(
+    program: Result<ResolvedProgram, String>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+) -> Result<CrossAppAssembled, CrossAppFailure> {
     use crate::engine::perf_trace as pt;
-    let program =
-        ResolvedProgram::build(inputs, ProgramScope::CrossApp).map_err(CrossAppFailure::Build)?;
+    let program = program.map_err(CrossAppFailure::Build)?;
     let body = program.body();
     let ctx = &body.ctx;
     // S8.2: only what the workspace can reach, and the code around the dependency
@@ -942,6 +973,7 @@ pub fn cross_app_event_graph_after(
 /// [`assemble_and_resolve_cross_app_program`] plus the adapter's census, from
 /// the same attach (#160 §5.2).
 fn cross_app_program_census(
+    program: Result<ResolvedProgram, String>,
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
@@ -952,7 +984,7 @@ fn cross_app_program_census(
         demand,
         rows,
         abi_rows,
-    } = cross_app_assemble(inputs, model_instance_id, skip_roots_config)?;
+    } = cross_app_assemble_from(program, inputs, model_instance_id, skip_roots_config)?;
     let body = program.body();
     let ctx = &body.ctx;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
@@ -1030,8 +1062,10 @@ fn cross_app_program_census(
 pub fn adapter_census_for_workspace_cross_app(
     workspace: &std::path::Path,
 ) -> Result<SiteCensus, String> {
+    let inputs = crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default());
     cross_app_program_census(
-        &crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
+        ResolvedProgram::build(&inputs, ProgramScope::CrossApp),
+        &inputs,
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )

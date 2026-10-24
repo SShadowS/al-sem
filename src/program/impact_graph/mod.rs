@@ -81,6 +81,11 @@ pub use facts::{ObjectFacts, RoutineFacts, RunTarget, SourceFacts, extract_sourc
 use project::{Hub, Key};
 pub use project::{Inputs, Projection, project};
 
+use crate::engine::batch::job::{
+    Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+    ViewKey, ViewNeeds,
+};
+use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::program::graph::ProgramGraph;
 use crate::program::graphify_export::object_kind_str;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId};
@@ -184,14 +189,61 @@ impl ImpactGraph {
     }
 }
 
-/// Build the export for a workspace: the cross-app program
-/// ([`ResolvedProgram::build`] at [`ProgramScope::CrossApp`]), then
-/// [`export_from_program`].
-pub fn export_workspace(
-    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-) -> Result<ImpactGraph, String> {
-    let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp)?;
-    export_from_program(&program)
+/// `alsem graph` as a batch job (#277 D9): the export of its workspace's
+/// cross-app program, which the view builder lends before any model is built
+/// from it ([`export_from_program`]). A view with no other job builds the
+/// program alone. Its writes are the JSONL (to `--out` or stdout), or
+/// `al-sem graph: <error>` and exit 1.
+pub struct GraphJob<'a> {
+    pub inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    pub out: Option<&'a str>,
+}
+
+impl Job for GraphJob<'_> {
+    fn demands(&self) -> Vec<ViewDemand> {
+        vec![ViewDemand {
+            key: ViewKey::new(&self.inputs.workspace, false, false),
+            side: SideIx(0),
+            needs: ViewNeeds::GRAPH,
+            inputs: std::sync::Arc::clone(self.inputs),
+        }]
+    }
+
+    fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        unreachable!("a graph job reads only the program")
+    }
+
+    fn compute(&self, _: SideIx, _: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        unreachable!("a graph job reads only the program")
+    }
+
+    fn view_failed(&self, _: SideIx, _: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        unreachable!("a graph job is done off the program, built or failed")
+    }
+
+    fn program(
+        &self,
+        _: SideIx,
+        program: Result<&ResolvedProgram, &str>,
+    ) -> Result<SideDoc, JobFailure> {
+        let graph = program
+            .map_err(str::to_string)
+            .and_then(export_from_program);
+        Ok(SideDoc::new(graph))
+    }
+
+    fn serialize(&self, doc: Doc) -> JobOutput {
+        match doc
+            .one::<Result<ImpactGraph, String>>()
+            .unwrap_or_else(|f| unreachable!("graph fails no side: {f:?}"))
+        {
+            Err(msg) => JobOutput::lines(&[format!("al-sem graph: {msg}")], 1),
+            Ok(graph) => JobOutput {
+                actions: vec![WriteAction::out(self.out, graph.to_jsonl())],
+                exit: 0,
+            },
+        }
+    }
 }
 
 /// The export of a built program: its source facts, the projection and `meta`.

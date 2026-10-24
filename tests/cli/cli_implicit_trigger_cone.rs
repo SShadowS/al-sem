@@ -23,7 +23,7 @@ use std::sync::OnceLock;
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l4::combined_graph::build_combined_graph;
-use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, render_query_effects};
+use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, query_view, render_query_effects};
 use al_sem::engine::l5::detector_context::build_detector_context;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::digest_cli::run_digest_pipeline;
@@ -256,13 +256,13 @@ fn model() -> &'static Model {
 /// L4 `query effects` rows of `Trig Caller.<routine>`, single-app (the store
 /// is the same in both modes here: no dependency).
 fn query_effects(routine: &str) -> Vec<Value> {
-    static WS: OnceLock<(tempfile::TempDir, QuerySubstrate)> = OnceLock::new();
-    let (_, substrate) = WS.get_or_init(|| {
+    static WS: OnceLock<(tempfile::TempDir, al_sem::engine::session::View)> = OnceLock::new();
+    let (_, view) = WS.get_or_init(|| {
         let tmp = write_workspace();
-        let id = compute_gate_model_instance_id(tmp.path()).expect("model id");
-        let s = QuerySubstrate::build(&read(tmp.path()), &id, true).expect("query substrate");
-        (tmp, s)
+        let v = query_view(&read(tmp.path()), true).expect("query view");
+        (tmp, v)
     });
+    let substrate = &QuerySubstrate::of(view);
     let q = render_query_effects(substrate, &format!("Trig Caller.{routine}"), "t", true);
     let doc: Value = serde_json::from_str(&q.json_text).expect("query json");
     doc["payload"]["effects"]
@@ -1040,8 +1040,8 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
     write_cross_app_workspace(ws);
     let mut f = Vec::new();
 
-    let model_id = compute_gate_model_instance_id(ws).expect("model id");
-    let substrate = QuerySubstrate::build(&read(ws), &model_id, false).expect("query substrate");
+    let view = query_view(&read(ws), false).expect("query view");
+    let substrate = QuerySubstrate::of(&view);
     let q = render_query_effects(&substrate, "Ws Caller.ValidateDep", "t", true);
     let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");
     let l4: Vec<(String, String)> = qdoc["payload"]["effects"]

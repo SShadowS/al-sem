@@ -70,19 +70,16 @@ use al_sem::engine::gate::filter::Scope;
 use al_sem::engine::gate::presets::{preset_names, resolve_analyze_detectors};
 use al_sem::engine::gate::run::{AnalyzeArgs, AnalyzeJob, OutputFormat};
 use al_sem::engine::gate::version::driver_version;
-use al_sem::engine::l4::effect_query_cli::{
-    Direction, QueryRunResult, run_query_effects_pipeline, run_query_touches_pipeline,
-};
+use al_sem::engine::l4::effect_query_cli::{Direction, QueryJob};
 use al_sem::engine::l5::digest_cli::{
     ChangedAutoDetect, DigestJob, DigestRequest, auto_detect_changed,
 };
 use al_sem::engine::l5::event_flow::Scope as EventScope;
 use al_sem::engine::l5::fingerprint_cli::{
-    FingerprintOptions, FingerprintOutput, ShardMode, SpecifiedFlags, default_format,
-    normalize_witness, reject_illegal_combos, reject_inventory_only_combos,
-    run_fingerprint_pipeline, validate_roots,
+    FingerprintJob, FingerprintOptions, ShardMode, SpecifiedFlags, default_format,
+    normalize_witness, reject_illegal_combos, reject_inventory_only_combos, validate_roots,
 };
-use al_sem::engine::l5::prove::{parse_question, question_ids, run_prove_pipeline};
+use al_sem::engine::l5::prove::{ProveJob, parse_question, question_ids};
 use al_sem::program::inputs::{RequestInputs, WorkspaceInputs, WorkspaceNeeds};
 use clap::{Parser, Subcommand};
 
@@ -736,8 +733,9 @@ fn main() -> ExitCode {
 //
 // A command through the batch driver: standalone is a batch of one, and its
 // writes replay in its standalone order (`al_sem::engine::batch::output`,
-// which holds the one write-failure rule). The commands not yet behind the
-// driver (#277 Task 6) write through `write_actions`, the same replay.
+// which holds the one write-failure rule). The commands with no view
+// (`policy explain`, `cache prune`) write through `write_actions`, the same
+// replay.
 
 /// Run `job` as a batch of one (#277 D1).
 fn standalone(job: &dyn Job) -> ExitCode {
@@ -766,11 +764,6 @@ fn write_stdout(bytes: impl Into<Vec<u8>>, fail: u8) -> Result<(), ExitCode> {
     write_actions(vec![WriteAction::Stdout(bytes.into())], fail)
 }
 
-/// Write `bytes` to `--out` when given, else stdout.
-fn write_out(out: Option<&str>, bytes: impl Into<Vec<u8>>, fail: u8) -> Result<(), ExitCode> {
-    write_actions(vec![WriteAction::out(out, bytes)], fail)
-}
-
 /// Write each line plus `\n` to stderr (the lines a command prints after its output).
 fn write_stderr_lines(lines: &[String], fail: u8) -> Result<(), ExitCode> {
     write_actions(lines.iter().map(|l| WriteAction::line(l)).collect(), fail)
@@ -783,51 +776,30 @@ fn run_graph_cmd(g: GraphCli) -> ExitCode {
         std::path::Path::new(&g.workspace),
         &WorkspaceNeeds::default(),
     );
-    let graph = match al_sem::program::impact_graph::export_workspace(&inputs) {
-        Ok(graph) => graph,
-        Err(msg) => {
-            eprintln!("al-sem graph: {msg}");
-            return ExitCode::from(1);
-        }
-    };
-    let text = graph.to_jsonl();
-    match write_out(g.out.as_deref(), text, 1) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(code) => code,
-    }
+    standalone(&al_sem::program::impact_graph::GraphJob {
+        inputs: &inputs,
+        out: g.out.as_deref(),
+    })
 }
 
 // ── query commands ───────────────────────────────────────────────────────────
-
-/// Write a query result to `--out` or stdout, returning its exit code.
-fn emit_query(result: QueryRunResult, format: &str, out: Option<&str>) -> ExitCode {
-    let output = if format == "json" {
-        result.json_text
-    } else {
-        result.human_text
-    };
-    if let Err(code) = write_out(out, output, 1) {
-        return code;
-    }
-    ExitCode::from(result.exit_code)
-}
 
 const VALID_QUERY_FORMATS: &[&str] = &["human", "json"];
 
 fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
     if !VALID_QUERY_FORMATS.contains(&t.format.as_str()) {
-        eprintln!(
-            "al-sem query touches: invalid --format '{}'. Expected: human | json",
-            t.format
+        return failed(
+            format!(
+                "al-sem query touches: invalid --format '{}'. Expected: human | json",
+                t.format
+            ),
+            1,
+            1,
         );
-        return ExitCode::from(1);
     }
     let direction = match Direction::parse(&t.direction) {
         Ok(d) => d,
-        Err(msg) => {
-            eprintln!("{msg}");
-            return ExitCode::from(1);
-        }
+        Err(msg) => return failed(msg, 1, 1),
     };
     // `--direction down` without `--from` is rejected by `render_query_touches`
     // itself, not duplicated here: one rule in one place, and the golden family
@@ -836,48 +808,45 @@ fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
         std::path::Path::new(&t.workspace),
         &WorkspaceNeeds::default(),
     );
-    match run_query_touches_pipeline(
-        &inputs,
-        &t.table,
-        t.from.as_deref(),
-        direction,
-        &inputs.driver_version,
-        t.deterministic,
-        t.single_app,
-    ) {
-        Err(msg) => {
-            eprintln!("{msg}");
-            ExitCode::from(1)
-        }
-        Ok(result) => emit_query(result, &t.format, t.out.as_deref()),
-    }
+    standalone(
+        &QueryJob::touches(
+            &inputs,
+            &t.table,
+            t.from.as_deref(),
+            direction,
+            &inputs.driver_version,
+            t.deterministic,
+            t.single_app,
+        )
+        .written(t.format == "json", t.out.as_deref()),
+    )
 }
 
 fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
     if !VALID_QUERY_FORMATS.contains(&e.format.as_str()) {
-        eprintln!(
-            "al-sem query effects: invalid --format '{}'. Expected: human | json",
-            e.format
+        return failed(
+            format!(
+                "al-sem query effects: invalid --format '{}'. Expected: human | json",
+                e.format
+            ),
+            1,
+            1,
         );
-        return ExitCode::from(1);
     }
     let inputs = WorkspaceInputs::read(
         std::path::Path::new(&e.workspace),
         &WorkspaceNeeds::default(),
     );
-    match run_query_effects_pipeline(
-        &inputs,
-        &e.routine,
-        &inputs.driver_version,
-        e.deterministic,
-        e.single_app,
-    ) {
-        Err(msg) => {
-            eprintln!("{msg}");
-            ExitCode::from(1)
-        }
-        Ok(result) => emit_query(result, &e.format, e.out.as_deref()),
-    }
+    standalone(
+        &QueryJob::effects(
+            &inputs,
+            &e.routine,
+            &inputs.driver_version,
+            e.deterministic,
+            e.single_app,
+        )
+        .written(e.format == "json", e.out.as_deref()),
+    )
 }
 
 // ── policy check command ─────────────────────────────────────────────────────
@@ -958,18 +927,21 @@ fn run_policy_explain_cmd(e: PolicyExplainCli) -> ExitCode {
 // ── diff command ────────────────────────────────────────────────────────────
 
 fn run_diff_cmd(d: DiffCli) -> ExitCode {
-    use al_sem::engine::gate::diff::cli::{DiffCliOptions, run_diff};
+    use al_sem::engine::gate::diff::cli::{DiffCliOptions, DiffJob};
     use al_sem::engine::gate::diff::{CoveragePolicy, Severity};
 
     // Validate --format (human | json | sarif). al-sem writes the message + exit 1.
     const VALID_FORMATS: &[&str] = &["human", "json", "sarif"];
     if !VALID_FORMATS.contains(&d.format.as_str()) {
-        eprintln!(
-            "unknown --format '{}'; valid: {}",
-            d.format,
-            VALID_FORMATS.join(", ")
+        return failed(
+            format!(
+                "unknown --format '{}'; valid: {}",
+                d.format,
+                VALID_FORMATS.join(", ")
+            ),
+            1,
+            1,
         );
-        return ExitCode::from(1);
     }
 
     // Validate --coverage-policy (loose | strict).
@@ -977,8 +949,11 @@ fn run_diff_cmd(d: DiffCli) -> ExitCode {
         "loose" => CoveragePolicy::Loose,
         "strict" => CoveragePolicy::Strict,
         other => {
-            eprintln!("--coverage-policy must be loose|strict (got '{other}')");
-            return ExitCode::from(1);
+            return failed(
+                format!("--coverage-policy must be loose|strict (got '{other}')"),
+                1,
+                1,
+            );
         }
     };
 
@@ -991,8 +966,11 @@ fn run_diff_cmd(d: DiffCli) -> ExitCode {
         Some("low") => Some(Severity::Low),
         Some("info") => Some(Severity::Info),
         Some(_) => {
-            eprintln!("--fail-on must be one of: critical|high|medium|low|info");
-            return ExitCode::from(1);
+            return failed(
+                "--fail-on must be one of: critical|high|medium|low|info",
+                1,
+                1,
+            );
         }
     };
 
@@ -1010,24 +988,14 @@ fn run_diff_cmd(d: DiffCli) -> ExitCode {
         driver_version: &version,
     };
 
-    let outcome = run_diff(&opts);
-
-    if let Some(msg) = outcome.error_message {
-        eprintln!("{msg}");
-        return ExitCode::from(outcome.exit_code);
+    // An input error is found before any build: a job with no view.
+    match DiffJob::new(&opts) {
+        Ok(job) => standalone(&job),
+        Err(early) => standalone(&Failed {
+            output: early.into_output(None),
+            write_failure_exit: 1,
+        }),
     }
-
-    if let Some(text) = outcome.output
-        && let Err(code) = write_out(d.out.as_deref(), text, 1)
-    {
-        return code;
-    }
-
-    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, 1) {
-        return code;
-    }
-
-    ExitCode::from(outcome.exit_code)
 }
 
 const GROUP_BY_VALUES: &[&str] = &["object", "routine", "table", "detector", "file"];
@@ -1156,26 +1124,32 @@ fn run_prove_cmd(p: ProveCli) -> ExitCode {
     // Validate --format
     const VALID_PROVE_FORMATS: &[&str] = &["json", "human"];
     if !VALID_PROVE_FORMATS.contains(&p.format.as_str()) {
-        eprintln!(
-            "al-sem prove: invalid --format '{}'. Expected: json | human",
-            p.format
+        return failed(
+            format!(
+                "al-sem prove: invalid --format '{}'. Expected: json | human",
+                p.format
+            ),
+            1,
+            1,
         );
-        return ExitCode::from(1);
     }
 
     // Validate question early (mirrors prove.ts exit 1 for unknown question)
     if parse_question(&p.question).is_none() {
         let valid: Vec<&str> = question_ids().to_vec();
-        eprintln!(
-            "prove: unknown question '{}'\nValid questions:\n{}",
-            p.question,
-            valid
-                .iter()
-                .map(|q| format!("  {q}"))
-                .collect::<Vec<_>>()
-                .join("\n")
+        return failed(
+            format!(
+                "prove: unknown question '{}'\nValid questions:\n{}",
+                p.question,
+                valid
+                    .iter()
+                    .map(|q| format!("  {q}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            1,
+            1,
         );
-        return ExitCode::from(1);
     }
 
     let inputs = WorkspaceInputs::read(
@@ -1186,32 +1160,17 @@ fn run_prove_cmd(p: ProveCli) -> ExitCode {
         },
     );
 
-    match run_prove_pipeline(
-        &inputs,
-        &p.routine,
-        &p.question,
-        &inputs.driver_version,
-        p.deterministic,
-        p.single_app,
-    ) {
-        Err(msg) => {
-            eprintln!("{msg}");
-            ExitCode::from(1)
-        }
-        Ok(result) => {
-            let output = if p.format == "human" {
-                result.human_text
-            } else {
-                result.json_text
-            };
-
-            if let Err(code) = write_out(p.out.as_deref(), output, 1) {
-                return code;
-            }
-
-            ExitCode::from(result.exit_code)
-        }
-    }
+    standalone(&ProveJob {
+        detectors: al_sem::engine::l5::detectors::default_detectors(),
+        inputs: &inputs,
+        routine_selector: &p.routine,
+        question_text: &p.question,
+        alsem_ver: &inputs.driver_version,
+        deterministic: p.deterministic,
+        single_app: p.single_app,
+        human: p.format == "human",
+        out: p.out.as_deref(),
+    })
 }
 
 // ── fingerprint command ─────────────────────────────────────────────────────
@@ -1223,8 +1182,11 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
         Some("primary-only") => Some(ShardMode::PrimaryOnly),
         Some("all") => Some(ShardMode::All),
         Some(other) => {
-            eprintln!("unknown --shard mode '{other}'; valid: primary-only, all");
-            return ExitCode::from(1);
+            return failed(
+                format!("unknown --shard mode '{other}'; valid: primary-only, all"),
+                1,
+                1,
+            );
         }
     };
 
@@ -1239,32 +1201,28 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
     // defaultFormat (fingerprint.ts:140) + rejectIllegalCombos (fingerprint.ts:110).
     let format = match default_format(f.format.as_deref(), shard_mode.is_some()) {
         Ok(fmt) => fmt,
-        Err(msg) => {
-            eprintln!("{msg}");
-            return ExitCode::from(1);
-        }
+        Err(msg) => return failed(msg, 1, 1),
     };
     if let Err(msg) = reject_illegal_combos(specified, &format, shard_mode.is_some()) {
-        eprintln!("{msg}");
-        return ExitCode::from(1);
+        return failed(msg, 1, 1);
     }
 
     // Validate --verbosity (compact | full).
     if !matches!(f.verbosity.as_str(), "compact" | "full") {
-        eprintln!(
-            "unknown --verbosity '{}'; valid: compact, full",
-            f.verbosity
+        return failed(
+            format!(
+                "unknown --verbosity '{}'; valid: compact, full",
+                f.verbosity
+            ),
+            1,
+            1,
         );
-        return ExitCode::from(1);
     }
 
     // normalizeWitness (fingerprint.ts:82): None→3, false/all, 0..256, >256 → exit 1.
     let witness_limit = match normalize_witness(f.witness.as_deref()) {
         Ok(wl) => Some(wl),
-        Err(msg) => {
-            eprintln!("{msg}");
-            return ExitCode::from(1);
-        }
+        Err(msg) => return failed(msg, 1, 1),
     };
 
     // validateRoots (fingerprint.ts:67): split on commas, each must be a RootKind.
@@ -1284,10 +1242,7 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
                         Some(vs.into_iter().collect())
                     }
                 }
-                Err(msg) => {
-                    eprintln!("{msg}");
-                    return ExitCode::from(1);
-                }
+                Err(msg) => return failed(msg, 1, 1),
             }
         }
     };
@@ -1300,8 +1255,7 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
         &format,
         is_query_requested,
     ) {
-        eprintln!("{msg}");
-        return ExitCode::from(1);
+        return failed(msg, 1, 1);
     }
     let inputs = WorkspaceInputs::read(
         std::path::Path::new(&f.workspace),
@@ -1331,67 +1285,13 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
         single_app: f.single_app,
     };
 
-    match run_fingerprint_pipeline(&opts) {
-        Err(msg) => {
-            eprintln!("{msg}");
-            ExitCode::from(1)
-        }
-        Ok(result) => {
-            // A stderr-only error (selector error, --shard-no-out, strict gate):
-            // print message, no stdout, exit with the result's code.
-            if let Some(ref err_msg) = result.selector_error_message {
-                eprintln!("{err_msg}");
-                return ExitCode::from(result.exit_code);
-            }
-            // strict gate emits the diagnostics block + exit 1, no output.
-            if result.exit_code == 1 && !result.stderr_diagnostics.is_empty() {
-                for line in &result.stderr_diagnostics {
-                    eprintln!("{line}");
-                }
-                return ExitCode::from(1);
-            }
-
-            // Write output (skip empty text).
-            let should_write = match &result.output {
-                FingerprintOutput::Text(t) => !t.is_empty(),
-                _ => true,
-            };
-            if should_write
-                && let Err(code) = write_fingerprint_output(result.output, f.out.as_deref(), 1)
-            {
-                return code;
-            }
-
-            // Per-mode stderr diagnostics AFTER writing output (human/base-json/cbor).
-            if let Err(code) = write_stderr_lines(&result.stderr_diagnostics, 1) {
-                return code;
-            }
-
-            ExitCode::from(result.exit_code)
-        }
-    }
-}
-
-/// Write the fingerprint output to `--out` or stdout; shards go into the `--out`
-/// directory (the current directory when absent).
-fn write_fingerprint_output(
-    output: FingerprintOutput,
-    out: Option<&str>,
-    fail: u8,
-) -> Result<(), ExitCode> {
-    match output {
-        FingerprintOutput::Text(text) => write_out(out, text, fail),
-        FingerprintOutput::Binary(bytes) => write_out(out, bytes, fail),
-        FingerprintOutput::Shards(shards) => {
-            let dir = std::path::Path::new(out.unwrap_or("."));
-            let mut actions = vec![WriteAction::Dir(dir.to_path_buf())];
-            actions.extend(
-                shards
-                    .into_iter()
-                    .map(|(name, content)| WriteAction::File(dir.join(name), content)),
-            );
-            write_actions(actions, fail)
-        }
+    // `--shard` without `--out` is found before any build: a job with no view.
+    match FingerprintJob::new(&opts) {
+        Ok(job) => standalone(&job),
+        Err(f) => standalone(&Failed {
+            output: f.into(),
+            write_failure_exit: 1,
+        }),
     }
 }
 

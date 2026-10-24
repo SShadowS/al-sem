@@ -41,17 +41,17 @@ use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use crate::engine::l5::unresolved_cone::{
     DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
 };
-use crate::engine::session::{Cell, RunKey, View};
+use crate::engine::session::{Cell, RunKey};
 use crate::program::model::workspace::Model;
 
 // ---------------------------------------------------------------------------
 // Shared envelope-diagnostics projection
 // ---------------------------------------------------------------------------
 
-/// Finishes digest's and prove's default run on a prepared [`View`]: reads
-/// the envelope diagnostics and the tx map, then takes and drops the run and
+/// Finishes digest's and prove's default run on a prepared view: reads the
+/// envelope diagnostics and the tx map, then takes and drops the run and
 /// releases `det`, the relation (`Cell::Rel`) and the ordering facts (#160
-/// §4.4.4).
+/// §4.4.4), each kept when a later job on the view reads it (#277 D6.1).
 ///
 /// Shared so the two cannot desync. The envelope `diagnostics` is the JSON
 /// array of the run `key` (each entry `{code: "DIAG-<stage>", message,
@@ -60,34 +60,14 @@ use crate::program::model::workspace::Model;
 /// base still owns the relation (its graph and SCC): releasing `Cell::Rel`
 /// drops only the view's `Arc`.
 pub(crate) fn finish_default_run(
-    view: &mut View,
-    key: &RunKey,
-) -> (serde_json::Value, HashMap<String, TransactionContext>) {
-    let reads = default_run_reads(view, key);
-    drop(view.take_run(key));
-    view.release_all_but(&[Cell::L4]);
-    reads
-}
-
-/// [`finish_default_run`] through the batch driver (#277 D6.1): the same
-/// reads, take and release, each kept when a later job on the view reads it.
-fn finish_default_run_in(
     cx: &mut ViewCx<'_>,
     key: &RunKey,
 ) -> (serde_json::Value, HashMap<String, TransactionContext>) {
-    let reads = default_run_reads(cx.view(), key);
-    drop(cx.take_run(key));
-    cx.release_all_but(&[Cell::L4]);
-    reads
-}
-
-/// The default run's envelope diagnostics and the tx map.
-fn default_run_reads(
-    view: &View,
-    key: &RunKey,
-) -> (serde_json::Value, HashMap<String, TransactionContext>) {
+    let view = cx.view();
     let diagnostics = diagnostics_json(&analyzer_diagnostics_of_view(view, key));
     let tx_ctx_map = tx_context_map(&view.det().transaction_spans);
+    drop(cx.take_run(key));
+    cx.release_all_but(&[Cell::L4]);
     (diagnostics, tx_ctx_map)
 }
 
@@ -1838,13 +1818,7 @@ impl Job for DigestJob<'_> {
         vec![ViewDemand {
             key: ViewKey::new(&self.req.inputs.workspace, self.req.single_app, false),
             side: SideIx(0),
-            needs: ViewNeeds {
-                workspace: crate::program::inputs::WorkspaceNeeds {
-                    fingerprint_rows: true,
-                    ..Default::default()
-                },
-                ..ViewNeeds::default()
-            },
+            needs: ViewNeeds::MODEL,
             inputs: std::sync::Arc::clone(self.req.inputs),
         }]
     }
@@ -1905,10 +1879,9 @@ impl Job for DigestJob<'_> {
 
     fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
         // No model-instance id: `digest: could not compute modelInstanceId`.
-        let ViewFailure::Target(f) = failure else {
-            unreachable!("digest's view is built by `AnalysisTarget`")
-        };
-        Ok(SideDoc::new(Err::<DigestRunResult, _>(f.message("digest"))))
+        Ok(SideDoc::new(Err::<DigestRunResult, _>(
+            failure.target.message("digest"),
+        )))
     }
 
     fn serialize(&self, doc: Doc) -> JobOutput {
@@ -1950,7 +1923,7 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
     let changed_roots: ChangedRootsResult = cx.take_carry();
     let dependencies = cx.view().target().dependencies();
     let key = cx.keys()[0].clone();
-    let (diagnostics_json, tx_ctx_map) = finish_default_run_in(cx, &key);
+    let (diagnostics_json, tx_ctx_map) = finish_default_run(cx, &key);
     let mut effects = if cx.has_tree() {
         cx.take_effects()
     } else {

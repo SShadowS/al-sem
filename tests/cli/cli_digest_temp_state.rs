@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
-use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, render_query_effects};
+use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, query_view, render_query_effects};
 use al_sem::engine::l5::digest::{
     CarrierCache, DagCache, HopCache, build_fingerprint_indexes_pub, reconstruct_witness_paths_pub,
     witness_index,
@@ -303,9 +303,9 @@ fn check_mode(single_app: bool) -> Vec<String> {
     // for the same routine.
     let tmp = write_workspace();
     let ws = tmp.path();
-    let model_id = compute_gate_model_instance_id(ws).expect("model id");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
-    let substrate = QuerySubstrate::build(&inputs, &model_id, single_app).expect("query substrate");
+    let view = query_view(&inputs, single_app).expect("query view");
+    let substrate = QuerySubstrate::of(&view);
     for e in doc["payload"]["entries"].as_array().expect("entries") {
         let name = e["routine"]["display"].as_str().unwrap();
         let db = db_effects(e);
@@ -1288,9 +1288,9 @@ fn cross_app_digest_reads_the_cross_app_store() {
         ));
     }
 
-    let model_id = compute_gate_model_instance_id(ws).expect("model id");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
-    let substrate = QuerySubstrate::build(&inputs, &model_id, false).expect("query substrate");
+    let view = query_view(&inputs, false).expect("query view");
+    let substrate = QuerySubstrate::of(&view);
     let q = render_query_effects(&substrate, "RaiseDep", "t", true);
     let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");
     let mut query_parts: Vec<(String, String, String)> = qdoc["payload"]["effects"]

@@ -257,7 +257,7 @@ impl Job for PolicyJob<'_> {
         vec![ViewDemand {
             key: ViewKey::new(&self.opts.inputs.workspace, self.opts.single_app, false),
             side: SideIx(0),
-            needs: ViewNeeds::default(),
+            needs: ViewNeeds::MODEL,
             inputs: std::sync::Arc::clone(self.opts.inputs),
         }]
     }
@@ -277,13 +277,10 @@ impl Job for PolicyJob<'_> {
     fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
         // No model-instance id is `al-sem policy check: could not compute
         // modelInstanceId`, exit 1.
-        let ViewFailure::Target(f) = failure else {
-            unreachable!("policy's view is built by `AnalysisTarget`")
-        };
         Ok(SideDoc::new(PolicyCheckOutcome {
             text: None,
             exit_code: 1,
-            stderr_lines: vec![f.message("al-sem policy check")],
+            stderr_lines: vec![failure.target.message("al-sem policy check")],
             out_path: None,
         }))
     }

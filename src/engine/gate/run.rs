@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds,
+    ViewKey, ViewNeeds, ViewUniverse,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::app_attribution::App;
@@ -207,6 +207,7 @@ impl AnalysisTarget {
     /// builds by default. `command` prefixes the error line.
     /// The model-instance id is `inputs.model_instance_id`; a caller that has its
     /// own message for a missing id checks it first.
+    /// Through the one view builder ([`build_view_model`]).
     pub fn build(
         inputs: &Arc<WorkspaceInputs>,
         single_app: bool,
@@ -223,44 +224,10 @@ impl AnalysisTarget {
         no_roots_config: bool,
         command: &str,
     ) -> Result<AnalysisTarget, String> {
-        Self::build_target_with(inputs, single_app, no_roots_config).map_err(|f| f.message(command))
-    }
-
-    /// [`AnalysisTarget::build`] with the failure kept as a value, so each job
-    /// of a view words it with its own command (#277 D4.1).
-    pub fn build_target(
-        inputs: &Arc<WorkspaceInputs>,
-        single_app: bool,
-    ) -> Result<AnalysisTarget, TargetFailure> {
-        Self::build_target_with(inputs, single_app, false)
-    }
-
-    /// [`AnalysisTarget::build_target`] with `--no-roots-config`.
-    fn build_target_with(
-        inputs: &Arc<WorkspaceInputs>,
-        single_app: bool,
-        no_roots_config: bool,
-    ) -> Result<AnalysisTarget, TargetFailure> {
-        let model_instance_id = inputs
-            .model_instance_id
-            .as_deref()
-            .ok_or(TargetFailure::NoModelInstanceId)?;
-        if single_app {
-            crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-                inputs,
-                model_instance_id,
-                no_roots_config,
-            )
-            .map(|r| AnalysisTarget::SingleApp(Box::new(r)))
-            .ok_or(TargetFailure::DidNotResolve)
-        } else {
-            crate::engine::l4::capability_cone::build_cross_app_base_with(
-                inputs,
-                model_instance_id,
-                no_roots_config,
-            )
-            .map(|b| AnalysisTarget::CrossApp(Box::new(b)))
-            .map_err(TargetFailure::CrossApp)
+        let key = ViewKey::new(&inputs.workspace, single_app, no_roots_config);
+        match build_view_model(inputs, &key, ViewNeeds::MODEL, |_| {}) {
+            Ok(view) => Ok(view.expect("a model view").target),
+            Err(f) => Err(f.target.message(command)),
         }
     }
 
@@ -344,9 +311,144 @@ pub struct AnalysisModel {
 /// needs the physical rows); the cross-app side is measured with
 /// `aldump --r4-findings-cross-app`.
 pub fn build_analysis_model(inputs: &Arc<WorkspaceInputs>, single_app: bool) -> AnalysisModel {
-    if !single_app {
-        return build_cross_app_analysis_model(inputs);
+    let key = ViewKey::new(&inputs.workspace, single_app, false);
+    match build_view_model(inputs, &key, ViewNeeds::ANALYZE, |_| {}) {
+        Ok(view) => {
+            let view = view.expect("a model view");
+            AnalysisModel {
+                fresh: view.fresh.expect("analyze's extras"),
+                model: Ok(view.target),
+                physical: view.physical,
+                object_facts: view.object_facts,
+            }
+        }
+        Err(f) => {
+            let (fresh, model) = *f.analyze.expect("analyze's extras");
+            AnalysisModel {
+                fresh,
+                model: Err(model),
+                physical: None,
+                object_facts: None,
+            }
+        }
     }
+}
+
+/// A view's model (#277 D4.1), and analyze's extras when its needs ask them:
+/// the program coverage, and (single-app) the physical rows and the
+/// object-fact census.
+pub struct ViewModel {
+    pub target: AnalysisTarget,
+    pub fresh: Option<Result<crate::program::resolve::full::FreshCoverage, String>>,
+    pub physical: Option<crate::program::physical::PhysicalIndex>,
+    pub object_facts: Option<Vec<String>>,
+}
+
+/// THE view builder (#277 D4.1): every command's model is built here, so
+/// views shared by several commands build one model. `needs` is the union of
+/// the view's demands. A graph demand (`needs.graph`, cross-app only) gets
+/// the program, or its build error, through `on_program` before the model is
+/// assembled from it (D9); a view with no model demand builds the program
+/// alone (`Ok(None)`).
+///
+/// A missing model-instance id: `AnalysisTarget`'s callers report it before
+/// any build; analyze builds the single-app program first, for the coverage
+/// its warning reads.
+pub fn build_view_model(
+    inputs: &Arc<WorkspaceInputs>,
+    key: &ViewKey,
+    needs: ViewNeeds,
+    on_program: impl FnOnce(Result<&crate::program::resolved::ResolvedProgram, &str>),
+) -> Result<Option<ViewModel>, ViewFailure> {
+    use crate::program::resolved::{ProgramScope, ResolvedProgram};
+    let extras = needs.analyze_extras;
+    let single_app = key.universe == ViewUniverse::SingleApp;
+    let model_instance_id = inputs.model_instance_id.as_deref();
+    let no_id = || ViewFailure {
+        target: TargetFailure::NoModelInstanceId,
+        analyze: None,
+    };
+    if single_app || (!needs.graph && model_instance_id.is_none()) {
+        assert!(
+            !needs.graph,
+            "the call-graph export reads a cross-app program"
+        );
+        if !extras && model_instance_id.is_none() {
+            return Err(no_id());
+        }
+        // A cross-app analyze with no id: one build under the single-app
+        // profile, never `FULL`'s dependency bodies.
+        return build_single_app(inputs, key.no_roots_config, extras).map(Some);
+    }
+    // A graph-only view builds no base: no base span.
+    let _s = needs
+        .model
+        .then(|| pt::span("crossapp", "crossapp.base_total"));
+    let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp);
+    if needs.graph {
+        on_program(program.as_ref().map_err(String::as_str));
+    }
+    if !needs.model {
+        return Ok(None);
+    }
+    let Some(mi) = model_instance_id else {
+        drop(program);
+        // shortcut: a graph job beside an analyze on a workspace with no id
+        // costs a second (single-app) program build for analyze's coverage;
+        // upgrade if a batch shape needs it.
+        return if extras {
+            build_single_app(inputs, key.no_roots_config, true).map(Some)
+        } else {
+            Err(no_id())
+        };
+    };
+    use crate::program::model::program_calls::CrossAppFailure;
+    match crate::engine::l4::capability_cone::build_cross_app_base_from(
+        program,
+        inputs,
+        mi,
+        key.no_roots_config,
+    ) {
+        Ok(base) => Ok(Some(ViewModel {
+            fresh: extras.then(|| Ok(base.coverage.clone())),
+            target: AnalysisTarget::CrossApp(Box::new(base)),
+            physical: None,
+            object_facts: None,
+        })),
+        // A failed cross-app build is classified from its own `Result` (#160
+        // spec §4.4.5), with no second build.
+        Err(e) => {
+            let analyze = extras.then(|| match &e {
+                CrossAppFailure::Build(why) => {
+                    (Err(why.clone()), program_build_failure(inputs, why.clone()))
+                }
+                CrossAppFailure::Assembly { fresh } => {
+                    (Ok((**fresh).clone()), ModelFailure::AssemblyFailed)
+                }
+                // Unreachable from step 1 (the id and `primary_app` share one
+                // read); fail closed with today's outcome.
+                CrossAppFailure::NoPrimaryApp { fresh } => (
+                    Ok((**fresh).clone()),
+                    ModelFailure::ProgramBuildFailed(
+                        "the cross-app model could not be built".to_string(),
+                    ),
+                ),
+            });
+            Err(ViewFailure {
+                target: TargetFailure::CrossApp(e),
+                analyze: analyze.map(Box::new),
+            })
+        }
+    }
+}
+
+/// [`build_view_model`]'s single-app half: one `Workspace` program build, the
+/// model projected from its parse (engine-switch S2a), its calls attached.
+fn build_single_app(
+    inputs: &Arc<WorkspaceInputs>,
+    skip_roots_config: bool,
+    extras: bool,
+) -> Result<ViewModel, ViewFailure> {
     let program = {
         let _s = pt::span("preflight", "preflight.fresh_program");
         crate::program::resolved::ResolvedProgram::build(
@@ -354,69 +456,66 @@ pub fn build_analysis_model(inputs: &Arc<WorkspaceInputs>, single_app: bool) -> 
             crate::program::resolved::ProgramScope::Workspace,
         )
     };
+    // The id `WorkspaceInputs::read` computed (#160): no second disk walk.
+    let id = inputs.model_instance_id.as_deref();
+    // A missing model-instance id is reported first, as before.
+    let target_failure = || match id {
+        None => TargetFailure::NoModelInstanceId,
+        Some(_) => TargetFailure::DidNotResolve,
+    };
     let program = match program {
         Ok(program) => program,
         Err(why) => {
-            // A missing model-instance id is reported first, as before.
-            let model = if inputs.model_instance_id.is_none() {
-                ModelFailure::NoModelInstanceId
-            } else {
-                program_build_failure(inputs, why.clone())
-            };
-            return failed_model(Err(why), model);
+            return Err(ViewFailure {
+                target: target_failure(),
+                analyze: extras.then(|| {
+                    let model = match id {
+                        None => ModelFailure::NoModelInstanceId,
+                        Some(_) => program_build_failure(inputs, why.clone()),
+                    };
+                    Box::new((Err(why), model))
+                }),
+            });
         }
     };
     // The build's coverage, moved out once the program is done with (#91).
-    let failed = |program: crate::program::resolved::ResolvedProgram, model| {
-        failed_model(Ok(program.into_parts().0.coverage), model)
+    let failed = |program: crate::program::resolved::ResolvedProgram, model| ViewFailure {
+        target: target_failure(),
+        analyze: extras.then(|| Box::new((Ok(program.into_parts().0.coverage), model))),
     };
-    // The id `WorkspaceInputs::read` computed (#160): no second disk walk.
-    let Some(model_instance_id) = inputs.model_instance_id.as_deref() else {
-        return failed(program, ModelFailure::NoModelInstanceId);
+    let Some(model_instance_id) = id else {
+        return Err(failed(program, ModelFailure::NoModelInstanceId));
     };
-    // Engine-switch S2a: the model is projected from the program engine's parse.
     let resolved = {
         let _s = pt::span("l3", "l3.assemble_resolve");
         assemble_and_resolve_workspace_from_program(
             inputs,
             model_instance_id,
-            false,
+            skip_roots_config,
             &program.body().ctx,
             &program.body().parenless_calls,
         )
     };
     let Some(rows) = resolved else {
-        return failed(program, ModelFailure::AssemblyFailed);
+        return Err(failed(program, ModelFailure::AssemblyFailed));
     };
     // Taken before the adapter consumes (and drops) the program context.
-    let physical = Some(program.body().ctx.graph().workspace_rows.clone());
-    let object_facts = Some(crate::program::model::census::object_fact_census(
-        &rows.workspace,
-        program.body().ctx.graph(),
-    ));
+    let physical = extras.then(|| program.body().ctx.graph().workspace_rows.clone());
+    let object_facts = extras.then(|| {
+        crate::program::model::census::object_fact_census(
+            &rows.workspace,
+            program.body().ctx.graph(),
+        )
+    });
     // The same build's coverage (#91).
     let (resolved, meta) =
         crate::program::model::program_calls::attach_program_calls(rows, program);
-    let fresh = Ok(meta.coverage);
-    AnalysisModel {
-        fresh,
-        model: Ok(AnalysisTarget::SingleApp(Box::new(resolved))),
+    Ok(ViewModel {
+        target: AnalysisTarget::SingleApp(Box::new(resolved)),
+        fresh: extras.then_some(Ok(meta.coverage)),
         physical,
         object_facts,
-    }
-}
-
-/// A model that was not built, and why.
-fn failed_model(
-    fresh: Result<crate::program::resolve::full::FreshCoverage, String>,
-    model: ModelFailure,
-) -> AnalysisModel {
-    AnalysisModel {
-        fresh,
-        model: Err(model),
-        physical: None,
-        object_facts: None,
-    }
+    })
 }
 
 /// A failed program build with an id: an error, unless the workspace has no
@@ -429,40 +528,6 @@ fn program_build_failure(inputs: &WorkspaceInputs, why: String) -> ModelFailure 
         ModelFailure::ProgramBuildFailed(why)
     } else {
         ModelFailure::AssemblyFailed
-    }
-}
-
-/// [`build_analysis_model`]'s cross-app half. A failed cross-app build is
-/// classified from its own `Result` (#160 spec §4.4.5), with no second build.
-fn build_cross_app_analysis_model(inputs: &Arc<WorkspaceInputs>) -> AnalysisModel {
-    use crate::program::model::program_calls::CrossAppFailure;
-    let Some(mi) = inputs.model_instance_id.as_deref() else {
-        // No id: one build under the single-app profile, never `FULL`'s dependency bodies.
-        return build_analysis_model(inputs, true);
-    };
-    let base = {
-        let _s = pt::span("crossapp", "crossapp.base_total");
-        crate::engine::l4::capability_cone::build_cross_app_base(inputs, mi)
-    };
-    match base {
-        Ok(base) => AnalysisModel {
-            fresh: Ok(base.coverage.clone()),
-            model: Ok(AnalysisTarget::CrossApp(Box::new(base))),
-            physical: None,
-            object_facts: None,
-        },
-        Err(CrossAppFailure::Build(why)) => {
-            failed_model(Err(why.clone()), program_build_failure(inputs, why))
-        }
-        Err(CrossAppFailure::Assembly { fresh }) => {
-            failed_model(Ok(*fresh), ModelFailure::AssemblyFailed)
-        }
-        // Unreachable from step 1 (the id and `primary_app` share one read);
-        // fail closed with today's outcome.
-        Err(CrossAppFailure::NoPrimaryApp { fresh }) => failed_model(
-            Ok(*fresh),
-            ModelFailure::ProgramBuildFailed("the cross-app model could not be built".to_string()),
-        ),
     }
 }
 
@@ -608,10 +673,7 @@ impl Job for AnalyzeJob<'_> {
         vec![ViewDemand {
             key: ViewKey::new(Path::new(&self.args.workspace), self.args.single_app, false),
             side: SideIx(0),
-            needs: ViewNeeds {
-                analyze_extras: true,
-                ..ViewNeeds::default()
-            },
+            needs: ViewNeeds::ANALYZE,
             inputs: Arc::clone(self.inputs),
         }]
     }
@@ -635,9 +697,10 @@ impl Job for AnalyzeJob<'_> {
     }
 
     fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
-        let ViewFailure::Model { fresh, failure } = failure else {
-            unreachable!("analyze's view is built by analyze's builder")
-        };
+        let (fresh, failure) = failure
+            .analyze
+            .as_deref()
+            .expect("analyze's view is built with its extras");
         Ok(SideDoc::new(match failure {
             // Fail-closed layout / unreadable workspace → empty output; preflight says
             // could-not-verify (never a fabricated clean — spec §3), gated on `fresh`.

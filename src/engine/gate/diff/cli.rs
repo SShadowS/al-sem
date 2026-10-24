@@ -4,10 +4,22 @@
 //! overlay, format dispatch, `--out`, the ws-mode stderr note, and the exit gates
 //! (a fatal preflight first, #220; then strict-coverage and `--fail-on`).
 
+use std::cell::RefCell;
 use std::path::Path;
+use std::sync::Arc;
 
+use crate::engine::batch::job::{
+    Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+    ViewKey, ViewNeeds,
+};
+use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::cbor::CborValue;
+use crate::engine::gate::run::{TargetFailure, analyzer_diagnostics_of_view, diagnostic_lines};
 use crate::engine::gate::snapshot_deserialize::{SnapshotFormat, deserialize_snapshot};
+use crate::engine::l5::detectors::default_detectors;
+use crate::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
+use crate::engine::session::diff_plan;
+use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 
 use super::format::format_diff;
 use super::renames::parse_rename_overlay;
@@ -80,86 +92,189 @@ fn load_snapshot_from_path(path: &str) -> Result<CborValue, String> {
     deserialize_snapshot(&bytes, hint)
 }
 
-/// Compose a full snapshot tree by reanalyzing a workspace directory (ws-mode).
-/// Under `strict` it also returns that side's analyzer diagnostics as
-/// `<severity>: <message>` lines, the list `fingerprint --strict` gates on (#89);
-/// otherwise the lines are empty and no detector runs. `diff` stays single-app
-/// (#70). The model is dropped before the next side loads, so at most one is alive.
-fn load_snapshot_from_workspace(
-    dir: &str,
-    driver_version: &str,
-    deterministic: bool,
-    strict: bool,
-) -> Result<(CborValue, Vec<String>), String> {
-    use crate::engine::gate::run::{
-        AnalysisTarget, analyzer_diagnostics_of_view, diagnostic_lines,
-    };
-    use crate::engine::l5::detectors::default_detectors;
-    use crate::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
-    use crate::engine::session::{View, diff_strict_plan};
-    use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
-    use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
+/// A loaded side: its snapshot tree and, for a `--strict` workspace side, its
+/// analyzer diagnostic lines. A snapshot file contributes no lines, even when
+/// its envelope carried some (deserialization keeps only the payload).
+type Side = (CborValue, Vec<String>);
 
-    let ws = Path::new(dir);
-    // #160 §4.2.6: one read of this side's workspace.
-    let inputs = WorkspaceInputs::read(
-        ws,
-        &WorkspaceNeeds {
-            fingerprint_rows: true,
-            ..WorkspaceNeeds::default()
-        },
-    );
-    let model_id = inputs
-        .model_instance_id
-        .as_deref()
-        .ok_or_else(|| format!("could not compute modelInstanceId for workspace '{dir}'"))?;
-    // Engine-switch S6.4: the program-backed model (program calls and events).
-    let resolved = assemble_and_resolve_workspace_program(&inputs, model_id, false)
-        .ok_or_else(|| format!("workspace '{dir}' did not resolve"))?;
-    // #160 §4.4.4: this side's `View`; `--strict` runs the default set on it
-    // and releases the run and its cells before snapshot composition. Without
-    // `--strict` nothing is filled, so nothing is released.
-    let mut view = View::new(AnalysisTarget::SingleApp(Box::new(resolved)));
-    let diag_lines = if strict {
-        let plan = diff_strict_plan(default_detectors());
-        let key = plan.keys().remove(0);
-        view.prepare(&plan);
-        let lines = diagnostic_lines(&analyzer_diagnostics_of_view(&view, &key));
-        drop(view.take_run(&key));
-        view.release_all_but(&[]);
-        lines
-    } else {
-        Vec::new()
-    };
-    let opts = FullSnapshotOptions {
-        inputs: &inputs,
-        driver_version,
-        deterministic,
-        roots_config_ignored: false,
-        universe: crate::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
-    };
-    let snapshot = compose_full_snapshot(view.model(), &opts);
-    drop(view);
-    // #160 §4.1.4: this side's model is gone, so the other side's build is
-    // not post-attach.
-    crate::engine::perf_trace::end_phase("post_attach");
-    Ok((snapshot, diag_lines))
+/// A snapshot-file side, loaded.
+fn file_side(arg: &str) -> Result<Side, JobFailure> {
+    load_snapshot_from_path(arg)
+        .map(|s| (s, Vec::new()))
+        .map_err(load_failure)
 }
 
-/// Load one side: a workspace (reanalyzed, with its strict diagnostic lines) or
-/// a snapshot file. Deserialization keeps only the snapshot payload, so a
-/// snapshot side contributes no analyzer diagnostics even when the envelope
-/// carried some.
-fn load_side(
-    arg: &str,
-    kind: InputKind,
-    opts: &DiffCliOptions,
-) -> Result<(CborValue, Vec<String>), String> {
-    match kind {
-        InputKind::Workspace => {
-            load_snapshot_from_workspace(arg, opts.driver_version, opts.deterministic, opts.strict)
+/// "failed to load snapshot: <msg>", exit 1.
+fn load_failure(msg: String) -> JobFailure {
+    JobFailure::line(&format!("failed to load snapshot: {msg}"), 1)
+}
+
+/// `alsem diff` as a batch job (#277 D8). A workspace side is a demand on its
+/// single-app view (#70), which composes the side's snapshot there; two sides
+/// on one workspace share one view (`diff A A`: one build). The old snapshot
+/// file is loaded before any build, the new one in `finalize`, so a side
+/// loads only when standalone `diff` would load it: a failed old side stops
+/// the run (the driver skips the new side's view). Its document is the
+/// [`DiffRunOutcome`].
+pub struct DiffJob<'a> {
+    opts: &'a DiffCliOptions<'a>,
+    kinds: [InputKind; 2],
+    /// Each workspace side's read; one read when both name one view.
+    inputs: [Option<Arc<WorkspaceInputs>>; 2],
+    /// The old snapshot file, loaded at construction, taken by `finalize`.
+    old_file: RefCell<Option<CborValue>>,
+}
+
+impl<'a> DiffJob<'a> {
+    /// The job, or its early outcome: an input that does not exist, an
+    /// `.app` input, or an old snapshot file that does not load. Nothing is
+    /// built for any of them.
+    pub fn new(opts: &'a DiffCliOptions<'a>) -> Result<DiffJob<'a>, DiffRunOutcome> {
+        // Input-kind detection.
+        let old_kind = detect_input_kind(opts.old_arg).map_err(|m| early_error(m, 1))?;
+        let new_kind = detect_input_kind(opts.new_arg).map_err(|m| early_error(m, 1))?;
+
+        // Reject .app input cleanly (CONFIG_ERROR exit 2). al-sem detects `.app` as a
+        // distinct kind and routes it to loadSnapshotFromApp; the Rust engine does not
+        // port the .app snapshot path, so it rejects it.
+        if old_kind == InputKind::App || new_kind == InputKind::App {
+            return Err(early_error(
+                "diff: .app input is not supported by the Rust engine; persist a snapshot with 'al-sem fingerprint --format cbor.gz' and diff that".to_string(),
+                2,
+            ));
         }
-        _ => load_snapshot_from_path(arg).map(|s| (s, Vec::new())),
+        let old_file = match old_kind {
+            InputKind::Workspace => None,
+            _ => match file_side(opts.old_arg) {
+                Ok((snapshot, _)) => Some(snapshot),
+                Err(f) => return Err(DiffRunOutcome::failed(f)),
+            },
+        };
+        // #160 §4.2.6: one read per side's workspace; both sides on one view
+        // share it.
+        let read = |arg: &str| {
+            WorkspaceInputs::read(
+                Path::new(arg),
+                &WorkspaceNeeds {
+                    fingerprint_rows: true,
+                    ..WorkspaceNeeds::default()
+                },
+            )
+        };
+        let old = (old_kind == InputKind::Workspace).then(|| read(opts.old_arg));
+        let new = (new_kind == InputKind::Workspace).then(|| match &old {
+            Some(o) if view_key(opts.old_arg) == view_key(opts.new_arg) => Arc::clone(o),
+            _ => read(opts.new_arg),
+        });
+        Ok(DiffJob {
+            opts,
+            kinds: [old_kind, new_kind],
+            inputs: [old, new],
+            old_file: RefCell::new(old_file),
+        })
+    }
+
+    fn arg(&self, side: SideIx) -> &str {
+        match side.0 {
+            0 => self.opts.old_arg,
+            _ => self.opts.new_arg,
+        }
+    }
+}
+
+/// A workspace side's view (`diff` stays single-app, #70).
+fn view_key(arg: &str) -> ViewKey {
+    ViewKey::new(Path::new(arg), true, false)
+}
+
+impl Job for DiffJob<'_> {
+    fn demands(&self) -> Vec<ViewDemand> {
+        (0..2u8)
+            .filter_map(|i| {
+                let inputs = self.inputs[usize::from(i)].as_ref()?;
+                Some(ViewDemand {
+                    key: view_key(self.arg(SideIx(i))),
+                    side: SideIx(i),
+                    needs: ViewNeeds::MODEL,
+                    inputs: Arc::clone(inputs),
+                })
+            })
+            .collect()
+    }
+
+    fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        Ok(PlanPart {
+            plan: diff_plan(default_detectors(), self.opts.strict),
+            reads: vec![],
+            carry: None,
+        })
+    }
+
+    /// Compose the side's full snapshot tree off its view (ws-mode). Under
+    /// `--strict` the side's analyzer diagnostics come first, as
+    /// `<severity>: <message>` lines, the list `fingerprint --strict` gates on
+    /// (#89); the run and its cells are released before the composition.
+    /// Without `--strict` no detector runs and nothing is filled.
+    fn compute(&self, side: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        let diag_lines = if self.opts.strict {
+            let key = cx.keys()[0].clone();
+            let lines = diagnostic_lines(&analyzer_diagnostics_of_view(cx.view(), &key));
+            drop(cx.take_run(&key));
+            cx.release_all_but(&[]);
+            lines
+        } else {
+            Vec::new()
+        };
+        let opts = FullSnapshotOptions {
+            inputs: self.inputs[usize::from(side.0)]
+                .as_ref()
+                .expect("a workspace side"),
+            driver_version: self.opts.driver_version,
+            deterministic: self.opts.deterministic,
+            roots_config_ignored: false,
+            universe: crate::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
+        };
+        let snapshot = compose_full_snapshot(cx.view().model(), &opts);
+        Ok(SideDoc::new((snapshot, diag_lines)))
+    }
+
+    fn view_failed(&self, side: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        let dir = self.arg(side);
+        Err(load_failure(match failure.target {
+            TargetFailure::NoModelInstanceId => {
+                format!("could not compute modelInstanceId for workspace '{dir}'")
+            }
+            _ => format!("workspace '{dir}' did not resolve"),
+        }))
+    }
+
+    /// Today's order: the old side's load error, the new side's, the
+    /// `--strict` gate, the rename overlay, the engine, the render.
+    fn finalize(&self, sides: Vec<Result<SideDoc, JobFailure>>) -> Doc {
+        let mut ws = sides.into_iter();
+        let mut side = |i: usize| -> Result<Side, JobFailure> {
+            match self.kinds[i] {
+                InputKind::Workspace => ws.next().expect("a workspace side").map(SideDoc::take),
+                _ if i == 0 => Ok((
+                    self.old_file.take().expect("the old file, loaded once"),
+                    Vec::new(),
+                )),
+                _ => file_side(self.opts.new_arg),
+            }
+        };
+        let old = match side(0) {
+            Ok(old) => old,
+            Err(f) => return Doc::new(DiffRunOutcome::failed(f)),
+        };
+        let new = match side(1) {
+            Ok(new) => new,
+            Err(f) => return Doc::new(DiffRunOutcome::failed(f)),
+        };
+        Doc::new(finish_diff(self.opts, self.kinds, old, new))
+    }
+
+    fn serialize(&self, doc: Doc) -> JobOutput {
+        doc.take::<DiffRunOutcome>().into_output(self.opts.out)
     }
 }
 
@@ -188,45 +303,26 @@ fn same_workspace(old: &str, old_kind: InputKind, new: &str, new_kind: InputKind
         )
 }
 
-/// Run the diff command end-to-end. Returns a `DiffRunOutcome`; the bin maps it to
-/// stdout/stderr writes + a process exit code.
+/// Run the diff command end-to-end, through the batch driver. Returns a
+/// `DiffRunOutcome`; the bin maps it to stdout/stderr writes + a process exit
+/// code.
 pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
+    match DiffJob::new(opts) {
+        Err(early) => early,
+        Ok(job) => crate::engine::batch::run_doc(&job).take(),
+    }
+}
+
+/// Both sides loaded: the `--strict` gate, the rename overlay, the engine,
+/// the render and the exit gates.
+fn finish_diff(
+    opts: &DiffCliOptions,
+    [old_kind, new_kind]: [InputKind; 2],
+    (old_snap, old_diag_lines): Side,
+    (new_snap, new_diag_lines): Side,
+) -> DiffRunOutcome {
     let mut stderr_lines: Vec<String> = Vec::new();
-    let mut workspace_mode = false;
-
-    // Input-kind detection.
-    let old_kind = match detect_input_kind(opts.old_arg) {
-        Ok(k) => k,
-        Err(msg) => return early_error(msg, 1),
-    };
-    let new_kind = match detect_input_kind(opts.new_arg) {
-        Ok(k) => k,
-        Err(msg) => return early_error(msg, 1),
-    };
-
-    // Reject .app input cleanly (CONFIG_ERROR exit 2). al-sem detects `.app` as a
-    // distinct kind and routes it to loadSnapshotFromApp; the Rust engine does not
-    // port the .app snapshot path, so it rejects it.
-    if old_kind == InputKind::App || new_kind == InputKind::App {
-        return early_error(
-            "diff: .app input is not supported by the Rust engine; persist a snapshot with 'al-sem fingerprint --format cbor.gz' and diff that".to_string(),
-            2,
-        );
-    }
-
-    if old_kind == InputKind::Workspace || new_kind == InputKind::Workspace {
-        workspace_mode = true;
-    }
-
-    // Load both snapshots.
-    let (old_snap, old_diag_lines) = match load_side(opts.old_arg, old_kind, opts) {
-        Ok(s) => s,
-        Err(msg) => return early_error(format!("failed to load snapshot: {msg}"), 1),
-    };
-    let (new_snap, new_diag_lines) = match load_side(opts.new_arg, new_kind, opts) {
-        Ok(s) => s,
-        Err(msg) => return early_error(format!("failed to load snapshot: {msg}"), 1),
-    };
+    let workspace_mode = old_kind == InputKind::Workspace || new_kind == InputKind::Workspace;
 
     // --strict (#89): an error-severity analyzer diagnostic on EITHER workspace
     // side → its lines to stderr, no output, exit 1, and no ws-mode note, as
@@ -325,6 +421,31 @@ fn early_error(msg: String, exit_code: u8) -> DiffRunOutcome {
     }
 }
 
+impl DiffRunOutcome {
+    /// A side's failure as the early error it is.
+    fn failed(f: JobFailure) -> DiffRunOutcome {
+        early_error(f.message(), f.exit)
+    }
+
+    /// The writes `diff` makes (#277 D2.3): an early error's line alone; else
+    /// the output (to `out` or stdout), then the stderr lines.
+    pub fn into_output(self, out: Option<&str>) -> JobOutput {
+        if let Some(msg) = self.error_message {
+            return JobOutput::lines(&[msg], self.exit_code);
+        }
+        let mut actions: Vec<WriteAction> = self
+            .output
+            .map(|text| WriteAction::out(out, text))
+            .into_iter()
+            .collect();
+        actions.extend(self.stderr_lines.iter().map(|l| WriteAction::line(l)));
+        JobOutput {
+            actions,
+            exit: self.exit_code,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,9 +512,49 @@ mod tests {
         dep["version"] = serde_json::Value::from("2.0.0.0");
         std::fs::write(&app_json, app.to_string()).expect("write app.json");
 
-        let (_, lines) =
-            load_snapshot_from_workspace(ws.to_str().expect("utf-8 path"), "t", true, true)
-                .expect("workspace loads");
+        /// The diff job with its sides kept as computed, through the driver.
+        struct Sides<'a>(DiffJob<'a>);
+        impl Job for Sides<'_> {
+            fn demands(&self) -> Vec<ViewDemand> {
+                self.0.demands()
+            }
+            fn resolve(&self, s: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+                self.0.resolve(s, cx)
+            }
+            fn compute(&self, s: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+                self.0.compute(s, cx)
+            }
+            fn view_failed(&self, s: SideIx, f: &ViewFailure) -> Result<SideDoc, JobFailure> {
+                self.0.view_failed(s, f)
+            }
+            fn finalize(&self, sides: Vec<Result<SideDoc, JobFailure>>) -> Doc {
+                Doc::new(sides)
+            }
+            fn serialize(&self, _: Doc) -> JobOutput {
+                unreachable!()
+            }
+        }
+        let arg = ws.to_str().expect("utf-8 path");
+        let opts = DiffCliOptions {
+            old_arg: arg,
+            new_arg: arg,
+            format: "json",
+            out: None,
+            coverage_policy: CoveragePolicy::Loose,
+            renames_path: None,
+            fail_on: None,
+            strict: true,
+            deterministic: true,
+            driver_version: "t",
+        };
+        let job = Sides(DiffJob::new(&opts).unwrap_or_else(|_| panic!("inputs exist")));
+        let sides = crate::engine::batch::run_doc(&job).take::<Vec<Result<SideDoc, JobFailure>>>();
+        let (_, lines) = sides
+            .into_iter()
+            .next()
+            .expect("the old side")
+            .expect("workspace loads")
+            .take::<Side>();
         let want = "warning: dependency \"CodeunitRecLibA\" (eeee5555-0000-0000-0000-000000000005), \
                     declared by \"CodeunitRec Probe\" at version 2.0.0.0, is present only at \
                     version 1.0.0.0";

@@ -12,7 +12,6 @@ use std::sync::Arc;
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::analysis::{L4Analysis, L4Request, build_l4};
 use crate::engine::l4::capability_cone::CapabilityFact;
-use crate::engine::l4::combined_graph::PrimaryGraph;
 use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::summary_runner::SummarizeDiagnostic;
@@ -420,9 +419,14 @@ pub fn fingerprint_inventory_plan(detectors: Vec<Detector>, read: InventoryRead)
     )
 }
 
-/// `alsem diff --strict`, per side.
-pub fn diff_strict_plan(detectors: Vec<Detector>) -> Plan {
-    run_only_plan(detectors)
+/// `alsem diff`, per workspace side: `--strict` runs the default set; without
+/// it nothing is filled.
+pub fn diff_plan(detectors: Vec<Detector>, strict: bool) -> Plan {
+    if strict {
+        run_only_plan(detectors)
+    } else {
+        Plan::merge(std::iter::empty())
+    }
 }
 
 /// `alsem events fanout` / `chains`: the run, then the report off
@@ -1140,21 +1144,6 @@ impl View {
         self.runs
             .remove(key)
             .unwrap_or_else(|| panic!("run {key:?} not prepared or already taken"))
-    }
-
-    /// Take the view apart into what `alsem query` reads once its plan is
-    /// prepared: the model, the relation's graph and the `l4` analysis.
-    /// Cross-app, the rest of the base (its cone inputs, its own `rel`
-    /// handle) drops here, so it is not live through the query and the
-    /// render, as at `1524b1fd`.
-    pub fn into_query_parts(self) -> (Model, Arc<PrimaryGraph>, L4Analysis) {
-        let graph = Arc::clone(self.rel.expect("rel cell not filled").primary());
-        let l4 = self.l4.expect("l4 cell not filled");
-        let model = match self.target {
-            AnalysisTarget::SingleApp(m) => *m,
-            AnalysisTarget::CrossApp(b) => b.resolved,
-        };
-        (model, graph, l4)
     }
 }
 
