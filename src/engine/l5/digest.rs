@@ -6379,7 +6379,7 @@ mod tests {
         for dir in &dirs {
             if let Some(resolved) =
                 crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-                    &crate::program::inputs::InputSet::read(dir, &Default::default()),
+                    &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
                     crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                     false,
                 )
@@ -8149,7 +8149,7 @@ codeunit 50410 DupProducer
         dirs.iter()
             .filter_map(|dir| {
                 crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-                    &crate::program::inputs::InputSet::read(dir, &Default::default()),
+                    &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
                     crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                     false,
                 )

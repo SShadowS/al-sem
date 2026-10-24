@@ -10876,7 +10876,7 @@ fn cdo_i264_closed_interface_site_census() {
     };
     let id = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
         .expect("model id");
-    let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
     let model = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &inputs, &id, false,
     )

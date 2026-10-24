@@ -208,7 +208,7 @@ pub struct QueryRead {
 /// The inventory's tree-read inputs (#160 step 9 D4): the snapshot options
 /// `assemble_full_snapshot` takes, owned (the universe comes from the target).
 pub struct InventoryRead {
-    pub inputs: Arc<crate::program::inputs::InputSet>,
+    pub inputs: Arc<crate::program::inputs::WorkspaceInputs>,
     pub driver_version: String,
     pub deterministic: bool,
     pub roots_config_ignored: bool,
@@ -243,8 +243,8 @@ fn read_fingerprint_query(
 
 /// The inventory's read off the tree (#160 step 9 D4): the assembly half of
 /// the full snapshot over the tree, its five inventory keys only. The tree is
-/// composed over `Roots(∅)`, so it holds no raw facts and the permission
-/// facts are empty (§4.4 item 3).
+/// composed over an empty request, so it holds no raw facts and the
+/// permission facts are empty (§4.4 item 3).
 fn read_inventory(
     tree: CapabilitySnapshot,
     read: &InventoryRead,
@@ -1948,7 +1948,7 @@ mod tests {
     fn inventory_read() -> InventoryRead {
         let tmp = tempfile::tempdir().unwrap();
         InventoryRead {
-            inputs: crate::program::inputs::InputSet::read(tmp.path(), &Default::default()),
+            inputs: crate::program::inputs::WorkspaceInputs::read(tmp.path(), &Default::default()),
             driver_version: "t".to_string(),
             deterministic: true,
             roots_config_ignored: false,

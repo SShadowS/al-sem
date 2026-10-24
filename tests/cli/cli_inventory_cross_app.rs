@@ -61,7 +61,8 @@ fn no_dependency_parity_inventory_only() {
     let mut failures = Vec::new();
     let mut compared = 0usize;
     for dir in &dirs {
-        let inputs = al_sem::program::inputs::InputSet::read(dir, &crate::fingerprint_needs());
+        let inputs =
+            al_sem::program::inputs::WorkspaceInputs::read(dir, &crate::fingerprint_needs());
         let run = |single_app: bool| {
             let opts = FingerprintOptions {
                 inputs: &inputs,
@@ -195,7 +196,7 @@ fn no_app_json_keeps_its_error_inventory_only() {
 fn cross_app_inventory_matches_its_golden() {
     let tmp = tempfile::tempdir().unwrap();
     crate::cli_fingerprint_routine_cross_app::write_two_on_runs(tmp.path());
-    let inputs = al_sem::program::inputs::InputSet::read(tmp.path(), &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(tmp.path(), &Default::default());
     let t = al_sem::engine::gate::run::AnalysisTarget::build(&inputs, false, "t").expect("cross");
     let m = t.resolved();
     assert!(

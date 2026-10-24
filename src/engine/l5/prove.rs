@@ -1153,7 +1153,7 @@ mod tests {
     /// declaration-only member, which the resolver never targets), so the
     /// precondition is stated by assignment (CLAUDE.md).
     fn bodyless_source_row_target(ws: &std::path::Path) -> AnalysisTarget {
-        let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
         let mut target = AnalysisTarget::build(&inputs, false, "prove").expect("cross-app base");
         let AnalysisTarget::CrossApp(b) = &mut target else {
             panic!("precondition: a cross-app target")
@@ -1379,7 +1379,7 @@ mod tests {
             "no app-level gap for an app with source: {:?}",
             tree.analysis_gaps
         );
-        let inputs = crate::program::inputs::InputSet::read(tmp.path(), &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(tmp.path(), &Default::default());
         let keys = assemble_full_snapshot(
             model,
             tree,
