@@ -1271,10 +1271,12 @@ impl<'a> CollidedRows<'a> {
 /// workspace. `resolved` carries the workspace routines + root classifications.
 ///
 /// Over the cut graph (`build_r3a3_source_only_base`: workspace callers only).
-/// Its readers since #160 step 6 (digest reads [`compose_tree`]): the ordering
-/// cell, cross-app and single-app, until the #161 follow-up moves it; prove,
-/// fingerprint and diff, single-app, where the cut equals the cone graph; the
-/// r4f projections and tests. Rule B is off here (`boundary: None`).
+/// Its readers since #160 step 9 (digest, prove, `fingerprint --routine` and
+/// `--inventory-only` read [`compose_tree`]): the ordering cell, cross-app and
+/// single-app, until the #161 follow-up moves it; fingerprint's full snapshot
+/// (B0), its query forms with no `--routine`, and `diff`, single-app, where the
+/// cut equals the cone graph; the r4f projections and tests. Rule B is off here
+/// (`boundary: None`).
 pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
     let base = {
         let _s = crate::engine::perf_trace::span("snapshot", "snapshot.r3a3_base");
