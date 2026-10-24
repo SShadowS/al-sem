@@ -10,12 +10,13 @@ use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l5::detector_context::{compose_capabilities, det_cone_inputs};
 use crate::engine::l5::digest::DigestEffectResult;
-use crate::engine::l5::snapshot::{compose_snapshot, compose_tree};
+use crate::engine::l5::snapshot::{compose_snapshot, compose_tree, source_less_apps};
 use crate::engine::l5::test_support::{
     write_fixture_dep_ambiguous, write_fixture_dep_uncertainty, write_fixture_rule_b,
     write_fixture_symbol_only_dep,
 };
 use crate::engine::session::digest_plan;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -281,6 +282,7 @@ fn an_event_boundary_group_is_in_the_may_relations() {
         model,
         &base.rel,
         base.dependency_calls.as_deref().unwrap_or(&[]),
+        &source_less_apps(&base.dependency_apps),
         ConeScope {
             derived: false,
             raw: WitnessScope::All,
@@ -401,11 +403,28 @@ fn tree_of(
     model: &Model,
     rel: &ExecRelation,
     calls: &[crate::program::model::calls::CallEdge],
+    source_less: &HashSet<String>,
     scope: ConeScope,
 ) -> crate::engine::l5::snapshot::CapabilitySnapshot {
     let (mut caps, raw) =
         compose_capabilities(model, rel.cone(), det_cone_inputs(model, rel), scope);
-    compose_tree(model, rel.cone(), calls, &mut caps, raw, &HashMap::new())
+    compose_tree(
+        model,
+        rel.cone(),
+        calls,
+        &mut caps,
+        raw,
+        &HashMap::new(),
+        source_less,
+    )
+}
+
+/// D9's source-less dependency apps of `target` (#160 step 9); none single-app.
+fn source_less_of(target: &AnalysisTarget) -> HashSet<String> {
+    match target {
+        AnalysisTarget::SingleApp(_) => HashSet::new(),
+        AnalysisTarget::CrossApp(b) => source_less_apps(&b.dependency_apps),
+    }
 }
 
 fn cross_base(ws: &Path) -> crate::engine::l4::capability_cone::R3a5CrossAppBase {
@@ -439,6 +458,7 @@ fn t7a_a_dependency_callers_rows_are_the_ledgers() {
         model,
         &base.rel,
         base.dependency_calls.as_deref().unwrap_or(&[]),
+        &source_less_apps(&base.dependency_apps),
         ConeScope {
             derived: true,
             raw: WitnessScope::None,
@@ -505,6 +525,7 @@ fn t7b_a_call_into_a_body_less_dependency_row_is_unfetched() {
         model,
         &base.rel,
         base.dependency_calls.as_deref().unwrap_or(&[]),
+        &source_less_apps(&base.dependency_apps),
         ConeScope {
             derived: true,
             raw: WitnessScope::None,
@@ -544,6 +565,7 @@ fn t8_the_trees_coverage_is_the_det_cells() {
         model,
         view.rel(),
         &[],
+        &HashSet::new(),
         ConeScope {
             derived: false,
             raw: WitnessScope::All,
@@ -670,6 +692,7 @@ fn t3_digest_scoped_equals_unscoped() {
             continue;
         };
         let model = target.resolved();
+        let sl = source_less_of(&target);
         let (rel, calls) = match &target {
             AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
             AnalysisTarget::CrossApp(b) => (
@@ -682,6 +705,7 @@ fn t3_digest_scoped_equals_unscoped() {
             model,
             &rel,
             calls,
+            &sl,
             ConeScope {
                 derived: false,
                 raw: WitnessScope::All,
@@ -700,6 +724,7 @@ fn t3_digest_scoped_equals_unscoped() {
                 model,
                 &rel,
                 calls,
+                &sl,
                 ConeScope {
                     derived: false,
                     raw: WitnessScope::Subjects(subjects),
@@ -783,6 +808,7 @@ fn fingerprint_witness_boundary_trigger_and_event() {
             model,
             &base.rel,
             base.dependency_calls.as_deref().unwrap_or(&[]),
+            &source_less_apps(&base.dependency_apps),
             ConeScope {
                 derived: false,
                 raw: WitnessScope::All,
@@ -953,6 +979,7 @@ fn prove_scoped_equals_unscoped() {
                 continue;
             };
             let model = target.resolved();
+            let sl = source_less_of(&target);
             let (rel, calls) = match &target {
                 AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
                 AnalysisTarget::CrossApp(b) => (
@@ -965,6 +992,7 @@ fn prove_scoped_equals_unscoped() {
                 model,
                 &rel,
                 calls,
+                &sl,
                 ConeScope {
                     derived: false,
                     raw: WitnessRequest::Primary.scope(model),
@@ -976,6 +1004,7 @@ fn prove_scoped_equals_unscoped() {
                     model,
                     &rel,
                     calls,
+                    &sl,
                     ConeScope {
                         derived: false,
                         raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
@@ -1060,6 +1089,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
                 continue;
             };
             let model = target.resolved();
+            let sl = source_less_of(&target);
             let (rel, calls) = match &target {
                 AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
                 AnalysisTarget::CrossApp(b) => (
@@ -1090,6 +1120,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
                 model,
                 &rel,
                 calls,
+                &sl,
                 ConeScope {
                     derived: false,
                     raw: WitnessRequest::Primary.scope(model),
@@ -1110,6 +1141,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
                     model,
                     &rel,
                     calls,
+                    &sl,
                     ConeScope {
                         derived: false,
                         raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
@@ -1199,6 +1231,7 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
         model,
         &b.rel,
         b.dependency_calls.as_deref().unwrap_or(&[]),
+        &source_less_apps(&b.dependency_apps),
         ConeScope {
             derived: false,
             // Hand-stated: no subject (what `Roots(∅)` must mean).

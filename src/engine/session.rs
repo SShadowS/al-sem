@@ -676,6 +676,10 @@ impl View {
         if let (true, WitnessRequest::Roots(roots)) = (plan.tree != TreeRead::None, &plan.witness) {
             let r = rel.as_ref().expect("rel filled above");
             let app_names = cross_base.map(|b| b.loaded_app_names()).unwrap_or_default();
+            // D9 (#160 step 9): the dependency apps with no source; none single-app.
+            let source_less = cross_base
+                .map(|b| crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps))
+                .unwrap_or_default();
             let calls: &[crate::program::model::calls::CallEdge] =
                 match (cross_base, &dependency_calls) {
                     (None, _) => &[],
@@ -692,6 +696,7 @@ impl View {
                 caps.as_mut().expect("caps filled above"),
                 raw.take().expect("raw filled above"),
                 &app_names,
+                &source_less,
             ));
             note_release(released, Cell::Raw);
             drop(dependency_calls);

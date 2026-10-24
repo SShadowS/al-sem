@@ -1,0 +1,234 @@
+{
+  "alsemVersion": "cli-inv-x-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "routine-inventory",
+  "payload": {
+    "analysisUniverse": "cross-app",
+    "apps": [
+      {
+        "appGuid": "aaaa7070-0000-0000-0000-000000000070",
+        "name": "Ws70",
+        "publisher": "probe",
+        "role": "primary",
+        "version": "1.0.0.0"
+      },
+      {
+        "appGuid": "bbbb7070-0000-0000-0000-000000000070",
+        "name": "XBase",
+        "publisher": "probe",
+        "role": "dependency",
+        "version": "1.0.0.0"
+      }
+    ],
+    "coverage": [
+      {
+        "directStatus": "complete",
+        "inheritedStatus": "complete",
+        "reasons": [],
+        "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+        "unknownTargets": []
+      },
+      {
+        "directStatus": "complete",
+        "inheritedStatus": "complete",
+        "reasons": [],
+        "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+        "unknownTargets": []
+      },
+      {
+        "directStatus": "complete",
+        "inheritedStatus": "complete",
+        "reasons": [],
+        "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+        "unknownTargets": []
+      },
+      {
+        "directStatus": "complete",
+        "inheritedStatus": "complete",
+        "reasons": [],
+        "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+        "unknownTargets": []
+      },
+      {
+        "directStatus": "complete",
+        "inheritedStatus": "complete",
+        "reasons": [],
+        "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50176#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
+        "unknownTargets": []
+      }
+    ],
+    "identities": {
+      "displayNames": [
+        "Ws Work",
+        "CallChain",
+        "RaiseDep",
+        "TouchCust",
+        "Ws Sub",
+        "HandleInWs",
+        "Ws Runner",
+        "OnRun",
+        "Ws Flag",
+        "Dep Lib",
+        "OnDepEvent",
+        "Outer",
+        "Dep Runner",
+        "OnRun",
+        "Customer"
+      ],
+      "stableIds": [
+        "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170",
+        "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+        "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+        "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+        "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171",
+        "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+        "aaaa7070-0000-0000-0000-000000000070:Codeunit:50176",
+        "aaaa7070-0000-0000-0000-000000000070:Codeunit:50176#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
+        "aaaa7070-0000-0000-0000-000000000070:Table:50170",
+        "bbbb7070-0000-0000-0000-000000000070:Codeunit:10",
+        "bbbb7070-0000-0000-0000-000000000070:Codeunit:10#599faf1bf74753352b2ee4b536c3e14928b89aa14646e66947883d01e683bf51",
+        "bbbb7070-0000-0000-0000-000000000070:Codeunit:10#eb597b263b2335f917e714a9f79f795ffdf8557b5df28cc49e514933392a0257",
+        "bbbb7070-0000-0000-0000-000000000070:Codeunit:14",
+        "bbbb7070-0000-0000-0000-000000000070:Codeunit:14#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
+        "bbbb7070-0000-0000-0000-000000000070:Table:18"
+      ]
+    },
+    "rootClassifications": [
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "public-procedure"
+        ],
+        "routineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "320ee0a725f705f3/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae",
+          "range": {
+            "endColumn": 8,
+            "endLine": 17,
+            "startColumn": 4,
+            "startLine": 12
+          },
+          "sourceUnitId": "ws:src/Work.al",
+          "syntaxKind": "procedure"
+        }
+      },
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "public-procedure"
+        ],
+        "routineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "320ee0a725f705f3/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f",
+          "range": {
+            "endColumn": 8,
+            "endLine": 24,
+            "startColumn": 4,
+            "startLine": 19
+          },
+          "sourceUnitId": "ws:src/Work.al",
+          "syntaxKind": "procedure"
+        }
+      },
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "public-procedure"
+        ],
+        "routineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "320ee0a725f705f3/08a0e8321ca2e66246ab84a0358b5501013da2b83cf2eebbc85a56ed7652b149",
+          "range": {
+            "endColumn": 8,
+            "endLine": 31,
+            "startColumn": 4,
+            "startLine": 26
+          },
+          "sourceUnitId": "ws:src/Work.al",
+          "syntaxKind": "procedure"
+        }
+      },
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "event-subscriber"
+        ],
+        "routineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "320ee0a725f705f3/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e",
+          "range": {
+            "endColumn": 8,
+            "endLine": 42,
+            "startColumn": 4,
+            "startLine": 37
+          },
+          "sourceUnitId": "ws:src/Work.al",
+          "syntaxKind": "procedure"
+        }
+      },
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "onrun-codeunit"
+        ],
+        "routineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50176#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "320ee0a725f705f3/fb69409071bbc7e62f79efa3ada6b2d1af42aa7d0d0db1157548672ee86d75b8",
+          "range": {
+            "endColumn": 8,
+            "endLine": 5,
+            "startColumn": 4,
+            "startLine": 2
+          },
+          "sourceUnitId": "ws:src/Extra.al",
+          "syntaxKind": "trigger_declaration"
+        }
+      }
+    ],
+    "routineInventory": [
+      {
+        "objectNumber": 50170,
+        "objectType": "Codeunit",
+        "routineName": "CallChain",
+        "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea"
+      },
+      {
+        "objectNumber": 50170,
+        "objectType": "Codeunit",
+        "routineName": "RaiseDep",
+        "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330"
+      },
+      {
+        "objectNumber": 50170,
+        "objectType": "Codeunit",
+        "routineName": "TouchCust",
+        "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a"
+      },
+      {
+        "objectNumber": 50171,
+        "objectType": "Codeunit",
+        "routineName": "HandleInWs",
+        "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa"
+      },
+      {
+        "objectNumber": 50176,
+        "objectType": "Codeunit",
+        "routineName": "OnRun",
+        "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50176#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+      }
+    ]
+  },
+  "schemaVersion": "1.2.0"
+}

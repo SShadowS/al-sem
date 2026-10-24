@@ -181,3 +181,36 @@ fn no_app_json_keeps_its_error_inventory_only() {
         }
     }
 }
+
+/// #160 step 9 (Task 4 review item 2): a content oracle for the cross-app
+/// inventory with a dependency. Fixture: the workspace's `Ws Runner.OnRun`
+/// runs the dependency's `Dep Runner`, whose own `OnRun` is a classified root
+/// in the cross-app model (precondition, read off the model). The golden was
+/// minted from the head and triaged line by hand (ledger): every
+/// `rootClassifications`, `coverage` and `routineInventory` row is primary; the
+/// dependency identities are the ones primary rows reference; `apps` gains
+/// the `XBase` dependency row. DISCRIMINATION: `filter_by_class` keeping
+/// every classification (a dependency one leaks) fails it.
+#[test]
+fn cross_app_inventory_matches_its_golden() {
+    let tmp = tempfile::tempdir().unwrap();
+    crate::cli_fingerprint_routine_cross_app::write_two_on_runs(tmp.path());
+    let inputs = al_sem::program::inputs::InputSet::read(tmp.path(), &Default::default());
+    let t = al_sem::engine::gate::run::AnalysisTarget::build(&inputs, false, "t").expect("cross");
+    let m = t.resolved();
+    assert!(
+        m.root_classifications.iter().any(|rc| m
+            .workspace
+            .routines
+            .iter()
+            .any(|r| r.id == rc.routine_id
+                && m.routine_role(r) == al_sem::program::model::role::Role::Dependency)),
+        "precondition: the model classifies a dependency routine"
+    );
+    let (got, err, code) = inventory(tmp.path(), &[]);
+    assert_eq!(code, 0, "{err}");
+    // Minted from the head and triaged by hand (ledger), so never regenerated.
+    let path = repo().join("tests/cli-b-goldens/cross-app/inventory.two-onruns.json");
+    let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    assert_eq!(got, want);
+}

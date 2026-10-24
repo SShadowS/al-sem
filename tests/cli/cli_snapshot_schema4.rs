@@ -635,14 +635,16 @@ fn gap_app_subject_matches_case_insensitively() {
     );
 }
 
-/// Review F-3b: the F21 assertion fires when an app WITH source owns a
-/// reached body-less row (`dddd…`'s `has_source` hand-stated `true`).
+/// Review F-3b, rewritten by #160 step 9 D9: an app WITH source that owns a
+/// reached body-less row (`dddd…`'s `has_source` hand-stated `true`) gets no
+/// app-level `symbol-only-boundary` gap, so F21's assertion (still in
+/// `reachable_gaps`) cannot fire on this path: each of its body-less rows gets
+/// a `body-unavailable` gap instead. Before D9 this case fired the assertion.
 ///
-/// Break: delete the `debug_assert!` -> no panic.
-#[cfg(debug_assertions)]
+/// Break: D9's source-less filter removed from `derive_analysis_gaps` -> the
+/// `symbol-only-boundary` gap comes back and the debug assertion fires.
 #[test]
-#[should_panic(expected = "a symbol-only-boundary gap names an app with source")]
-fn opaque_gap_of_an_app_with_source_fires() {
+fn opaque_gap_of_an_app_with_source_is_per_routine() {
     let mut b = build(&r5b(), false);
     let app = base_mut(&mut b.target)
         .dependency_apps
@@ -651,7 +653,19 @@ fn opaque_gap_of_an_app_with_source_fires() {
         .expect("precondition: dddd… is a dependency app");
     assert!(!app.has_source, "precondition: dddd… is symbol-only");
     app.has_source = true;
-    let _ = compose(&b);
+    let snap = json(&compose(&b));
+    assert!(
+        gaps(&snap, "symbol-only-boundary")
+            .iter()
+            .all(|g| g["subject"] != R5B_D),
+        "no app-level gap for an app with source"
+    );
+    assert!(
+        gaps(&snap, "body-unavailable")
+            .iter()
+            .any(|g| starts_ci(g["subject"].as_str().unwrap(), R5B_D)),
+        "its reached body-less rows get body-unavailable gaps"
+    );
 }
 
 /// F22 (review F4): a serialized identity's dependency app must be in

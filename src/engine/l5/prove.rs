@@ -1088,9 +1088,9 @@ mod tests {
     /// #160 step 9 T2 (a'), spec §5: `prove CallWrite may-commit` cross-app,
     /// where `CallWrite` calls a body-less row of a source dependency app.
     /// Preconditions (asserted on the same hand-stated model's tree): the
-    /// `CallWrite → Write` ledger row is `unfetched-dependency`, and the tree
-    /// holds a gap for it. The gap is `symbol-only-boundary` on the app here;
-    /// step 9 Task 5 (D9) switches it to `body-unavailable` on `Write`.
+    /// `CallWrite → Write` ledger row is `unfetched-dependency`, and the tree's
+    /// one gap is `body-unavailable` on `Write` (D9: its app has source, so no
+    /// app-level `symbol-only-boundary`; Task 2 asserted that, Task 5 switched it).
     /// Assertion: the blockers are exactly the callsite, the gap and
     /// coverage. DISCRIMINATION: B1, `into_unfetched` forced false
     /// (`snapshot.rs`) drops the callsite blocker; B2, `gaps_in_cone` forced 0
@@ -1124,6 +1124,7 @@ mod tests {
             &mut caps,
             raw,
             &std::collections::HashMap::new(),
+            &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
         );
         let call_write = model
             .workspace
@@ -1142,14 +1143,23 @@ mod tests {
             ["unfetched-dependency"],
             "precondition: CallWrite → Write is unfetched-dependency"
         );
-        let dep_guid = "bbbb1604-0000-0000-0000-000000000160"; // the fixture's XRec
-        assert!(
-            tree.analysis_gaps
-                .iter()
-                .any(|g| g.kind == "symbol-only-boundary"
-                    && g.subject.eq_ignore_ascii_case(dep_guid)),
-            "precondition: the tree's gap for Write's app: {:?}",
-            tree.analysis_gaps
+        // D9 (#160 step 9 Task 5): the gap is the routine's `body-unavailable`,
+        // never an app-level `symbol-only-boundary` (XRec has source).
+        let write = model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "Write" && !r.body_available)
+            .expect("the hand-stated Write");
+        let kinds: Vec<(&str, &str)> = tree
+            .analysis_gaps
+            .iter()
+            .map(|g| (g.kind.as_str(), g.subject.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [("body-unavailable", write.stable_routine_id.as_str())],
+            "precondition: the tree's gap for Write"
         );
         drop(tree);
         drop(target);
@@ -1206,6 +1216,89 @@ mod tests {
             "{}",
             r.json_text
         );
+    }
+
+    /// #160 step 9 T27 (D9, spec §4.10): a source dependency app (`XRec`,
+    /// precondition: `has_source`) with one body-less demanded row (`Write`,
+    /// hand-stated). Assertions: the tree's gaps hold `body-unavailable` for
+    /// `Write` and no `symbol-only-boundary` for the app; the cross-app
+    /// inventory assembly over that tree (where F21's debug assertion runs)
+    /// does not panic. DISCRIMINATION: every body-less row's app back into
+    /// `opaque_apps` (D9's filter removed) fails the gap assertion.
+    #[test]
+    fn source_app_bodyless_row_gets_body_unavailable_gap() {
+        use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
+        use crate::engine::l5::detector_context::{compose_capabilities, det_cone_inputs};
+        use crate::engine::l5::snapshot_full::{
+            FullSnapshotOptions, SnapshotKeys, SnapshotUniverse, assemble_full_snapshot,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine::l5::test_support::write_fixture_rule_b(tmp.path());
+        let target = bodyless_source_row_target(tmp.path());
+        let AnalysisTarget::CrossApp(b) = &target else {
+            unreachable!()
+        };
+        let dep_guid = "bbbb1604-0000-0000-0000-000000000160"; // the fixture's XRec
+        assert!(
+            b.dependency_apps
+                .iter()
+                .any(|a| a.guid.eq_ignore_ascii_case(dep_guid) && a.has_source),
+            "precondition: XRec ships source"
+        );
+        let model = &b.resolved;
+        let (mut caps, raw) = compose_capabilities(
+            model,
+            b.rel.cone(),
+            det_cone_inputs(model, &b.rel),
+            ConeScope {
+                derived: true,
+                raw: WitnessScope::None,
+            },
+        );
+        let tree = crate::engine::l5::snapshot::compose_tree(
+            model,
+            b.rel.cone(),
+            b.dependency_calls.as_deref().unwrap_or(&[]),
+            &mut caps,
+            raw,
+            &std::collections::HashMap::new(),
+            &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+        );
+        let write = model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "Write" && !r.body_available)
+            .expect("the hand-stated Write");
+        assert!(
+            tree.analysis_gaps
+                .iter()
+                .any(|g| g.kind == "body-unavailable" && g.subject == write.stable_routine_id),
+            "body-unavailable for Write: {:?}",
+            tree.analysis_gaps
+        );
+        assert!(
+            tree.analysis_gaps
+                .iter()
+                .all(|g| g.kind != "symbol-only-boundary"),
+            "no app-level gap for an app with source: {:?}",
+            tree.analysis_gaps
+        );
+        let inputs = crate::program::inputs::InputSet::read(tmp.path(), &Default::default());
+        let keys = assemble_full_snapshot(
+            model,
+            tree,
+            crate::engine::gate::cbor::CborValue::Array(vec![]),
+            &FullSnapshotOptions {
+                inputs: &inputs,
+                driver_version: "t",
+                deterministic: true,
+                roots_config_ignored: false,
+                universe: SnapshotUniverse::of(&target),
+            },
+            SnapshotKeys::Inventory,
+        );
+        assert_eq!(keys.len(), 5, "the inventory assembled without a panic");
     }
 
     /// A2.10: prove builds digest's plan from the set it is given.

@@ -67,7 +67,9 @@ pub struct FullSnapshotOptions<'a> {
     /// (sets `inputsMetadata.rootsConfigIgnored`). Pass false for the cli-b dump.
     pub roots_config_ignored: bool,
     /// #220 (spec §4.3): which model the snapshot describes
-    /// (`analysisUniverse`). Production callers pass `SingleApp` until step 9.
+    /// (`analysisUniverse`). Since #160 step 9 the cross-app inventory
+    /// (`--inventory-only`) passes `SnapshotUniverse::of(target)`; B0 and
+    /// `diff` still pass `SingleApp`.
     pub universe: SnapshotUniverse<'a>,
 }
 
@@ -140,7 +142,14 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     let base = build_r3a3_source_only_base(resolved);
     // The composer's own copy: filtering it leaves every other in-memory
     // snapshot unfiltered (I8).
-    let core = compose_snapshot_from_base(resolved, &base);
+    // D9 (#160 step 9): a cross-app universe names its source-less apps.
+    let source_less = match &opts.universe {
+        SnapshotUniverse::CrossApp(u) => Some(crate::engine::l5::snapshot::source_less_apps(
+            &u.base.dependency_apps,
+        )),
+        SnapshotUniverse::SingleApp => None,
+    };
+    let core = compose_snapshot_from_base(resolved, &base, source_less.as_ref());
     let permission_facts = derive_permissions(resolved, &base);
     drop(base);
     CborValue::Map(assemble_full_snapshot(
