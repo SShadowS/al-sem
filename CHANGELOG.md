@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.1.0-rc.1] - 2026-10-24
+## [2.1.0-rc.2] - 2026-10-25
 
-Release candidate, cut from #277's reviewed and gated head before its CDO bench.
+Release candidate, cut from #277's reviewed and gated head (76ef00cb) before its CDO bench.
+rc.1 published nothing: the batch one-job goldens embedded the version, so the release
+build's test run failed on the bump. rc.2 compares them with the version normalized
+(test-only; the binaries are rc.1's code).
 
 ### Added
 
