@@ -841,3 +841,73 @@ fn batch_missing_stream_directory_is_a_usage_error() {
         assert!(!missing.exists());
     }
 }
+
+/// #277 final r2 R2-1 (D2.4): a job that fails its own validation keeps its
+/// reads in the write check. Batch 1's `digest --diff foo.diff` fails in
+/// planning (no `foo.diff` yet), batch 0 writes `foo.diff`: a usage error
+/// before anything runs, so no worker reads another job's output.
+#[test]
+fn batch_failed_job_keeps_its_reads() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let jobs = vec![
+        (
+            vec![
+                "digest",
+                ws.as_str(),
+                "--file",
+                "src/D1MultiCaller.al",
+                "--out",
+                "foo.diff",
+            ],
+            None,
+        ),
+        (vec!["digest", ws.as_str(), "--diff", "foo.diff"], None),
+    ];
+    let (out, events) =
+        run_manifest_doc(d.path(), &one_job_batches(&jobs), Some(d.path()), &[], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("batch 1 job 0 reads") && stderr.contains("batch 0 job 0 writes"),
+        "{stderr}"
+    );
+    assert_eq!(count(&last_counters(&events), "build.program"), 0);
+    assert!(!d.path().join("foo.diff").exists(), "nothing ran");
+}
+
+/// #277 final r2 R2-2 (D2.4): a linked directory in a workspace is a read
+/// root. A new `.al` file under the target of `WS/shared`, and a new `.app`
+/// under the target of a linked `WS/.alpackages`, are taken by the read, so
+/// a job writing either clashes with it, though neither exists yet.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_writing_under_a_linked_directory() {
+    let (ws, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let app = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#;
+    std::fs::write(ws.path().join("app.json"), app).unwrap();
+    for (dir, link) in [("shared", "shared"), ("pkgs", ".alpackages")] {
+        std::fs::create_dir(outside.path().join(dir)).unwrap();
+        std::os::unix::fs::symlink(outside.path().join(dir), ws.path().join(link)).unwrap();
+    }
+    std::fs::write(outside.path().join("shared/A.al"), "codeunit 50100 A { }").unwrap();
+    let w = ws.path().to_string_lossy().into_owned();
+    for target in ["shared/New.al", "pkgs/New.app"] {
+        let d = tempfile::tempdir().unwrap();
+        let written = outside.path().join(target);
+        let jobs = [
+            job(&["events", "fanout", &w, "--single-app"], None, None),
+            job(
+                &["events", "fanout", &w, "--format", "bad"],
+                Some(&written),
+                None,
+            ),
+        ];
+        let (out, events) = run_manifest(d.path(), &jobs, None, &[], None);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(3), "{target}: {stderr}");
+        assert!(stderr.contains("reads the workspace"), "{target}: {stderr}");
+        assert_eq!(count(&last_counters(&events), "build.program"), 0);
+        assert!(!written.exists(), "{target}: nothing ran");
+    }
+}

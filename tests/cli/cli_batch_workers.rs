@@ -430,3 +430,118 @@ fn admission_skips_failed_jobs() {
     let workers = instants(&events, "batch.workers");
     assert_eq!(workers[0]["args"]["w"], 4);
 }
+
+/// #277 final r2 R2-4 (D12): a bad `--policy` file fails the job in planning,
+/// so it builds no view and counts for no admission row. Four batches of
+/// `policy check --policy bad.yaml`: `W` is 4 (no policy cap), each job
+/// equal to its standalone run.
+#[test]
+fn admission_skips_bad_policy_jobs() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let bad = d.path().join("bad.yaml");
+    std::fs::write(&bad, "rules: [").unwrap();
+    let job = vec![
+        "policy",
+        "check",
+        ws.as_str(),
+        "--policy",
+        bad.to_str().unwrap(),
+    ];
+    let (out, events) = run_batches(d.path(), &vec![vec![job.clone()]; 4], &[], None);
+    assert_eq!(out.status.code(), Some(0));
+    let workers = instants(&events, "batch.workers");
+    assert_eq!(workers[0]["args"]["w"], 4);
+    let alone = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(&job)
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    assert_eq!(alone.status.code(), Some(1), "precondition: a bad policy");
+    let got = lines(&out);
+    assert_eq!(got.len(), 4);
+    for (b, line) in got.iter().enumerate() {
+        assert_eq!(line["exit"], 1, "batch {b}");
+        let read = |ext: &str| std::fs::read(d.path().join(format!("{b}.0.{ext}"))).unwrap();
+        assert_eq!(read("stdout"), alone.stdout, "batch {b}: stdout");
+        assert_eq!(
+            String::from_utf8_lossy(&read("stderr")),
+            String::from_utf8_lossy(&alone.stderr),
+            "batch {b}: stderr"
+        );
+    }
+}
+
+/// #277 final r2 R2-1 (D2.5, D3): a file a plan reads is read once per run,
+/// by the parent, and its bytes go to the worker. A `digest --diff` of a FIFO
+/// with one writer, in the first of two batches, finishes (a second read
+/// would wait for a writer that never comes) and equals its standalone run on
+/// a regular file of the same bytes.
+#[cfg(unix)]
+#[test]
+fn batch_diff_fifo_is_read_once() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let regular = write_diff(
+        d.path(),
+        "src/D1MultiCaller.al",
+        18,
+        "        Cust.Modify();",
+    );
+    let bytes = std::fs::read(&regular).unwrap();
+    let fifo = d.path().join("fifo.diff");
+    let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
+    assert!(made.success(), "precondition: mkfifo");
+    let writer = {
+        let fifo = fifo.clone();
+        std::thread::spawn(move || {
+            // One writer: opened once, closed after the bytes.
+            let mut f = std::fs::OpenOptions::new().write(true).open(fifo).unwrap();
+            f.write_all(&bytes).unwrap();
+        })
+    };
+    let fifo_arg = fifo.to_string_lossy().into_owned();
+    let jobs = [
+        vec![
+            "digest",
+            ws.as_str(),
+            "--diff",
+            &fifo_arg,
+            "--deterministic",
+        ],
+        vec!["events", "fanout", ws.as_str(), "--single-app"],
+    ];
+    let mut child = spawn_manifest(d.path(), &batches_doc(&jobs), Stdio::null());
+    let start = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if start.elapsed() > std::time::Duration::from_secs(120) {
+            let _ = child.kill();
+            panic!("the run reads the FIFO twice");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    writer.join().unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let alone = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["digest", ws.as_str(), "--diff", &regular, "--deterministic"])
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    assert_eq!(
+        alone.status.code(),
+        Some(0),
+        "precondition: the diff digests"
+    );
+    assert_eq!(lines(&out)[0]["exit"], 0);
+    let got = std::fs::read(d.path().join("0.0.stdout")).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&got),
+        String::from_utf8_lossy(&alone.stdout)
+    );
+}

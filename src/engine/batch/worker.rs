@@ -1,15 +1,17 @@
 //! #277 D2.5: a run of two or more batches runs each batch in a child
 //! process (`alsem batch --worker <b> <manifest>`), at most `W` at once
 //! (D12), started in manifest order. Each child gets its batch on its stdin
-//! as a [`WorkerInput`] (its jobs, the parent's `--changed` decisions and
-//! its one stdin read, D3) and never opens the manifest (#277 final r1 FR-3).
+//! as a [`WorkerInput`] (its jobs, the parent's `--changed` decisions, its
+//! one stdin read and the files its plans read, D3) and never opens the
+//! manifest (#277 final r1 FR-3, final r2 R2-1).
 //! The parent forwards each child's stderr whole line by whole line with a
 //! `[w<b>] ` prefix and prints the job lines in manifest order after the last
 //! child exits. A child that dies without its lines leaves its jobs `"exit":
 //! null` with the child's status (D2.2).
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 
@@ -26,6 +28,19 @@ pub struct WorkerInput {
     pub jobs: Vec<WorkerJob>,
     /// The parent's one stdin read; `None` when no job read stdin.
     pub stdin: Option<StdinRead>,
+    /// What the parent's plans read of the file system.
+    pub files: PlanFiles,
+}
+
+/// What a run's plans read of the file system, once each (#277 final r2
+/// R2-1): each file's bytes or its read error's text, and each `exists`
+/// answer, by the path as the plan spelled it. A worker plans off its
+/// parent's, so it neither reads a file again (a FIFO gives its bytes once)
+/// nor answers anew what another job may have changed since.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct PlanFiles {
+    pub reads: BTreeMap<PathBuf, Result<Vec<u8>, String>>,
+    pub exists: BTreeMap<PathBuf, bool>,
 }
 
 /// One job of a child's batch.

@@ -82,7 +82,12 @@ pub struct FileInput {
 
 impl FileInput {
     fn read(path: PathBuf) -> FileInput {
-        let bytes = std::fs::read(&path);
+        FileInput::read_with(path, &|p| std::fs::read(p))
+    }
+
+    /// `path` read by `read` (a batch plan's reads, #277 final r2 R2-1).
+    pub fn read_with(path: PathBuf, read: &dyn Fn(&Path) -> std::io::Result<Vec<u8>>) -> FileInput {
+        let bytes = read(&path);
         FileInput { path, bytes }
     }
 
@@ -188,7 +193,22 @@ impl RequestInputs {
         policy: PolicyRequest,
         baseline: Option<PathBuf>,
     ) -> RequestInputs {
+        Self::read_with(workspace, policy, baseline, &|p| p.exists(), &|p| {
+            std::fs::read(p)
+        })
+    }
+
+    /// [`read`](Self::read) with the file system's answers from `exists` and
+    /// `read`: a batch worker's are its parent's (#277 final r2 R2-1).
+    pub fn read_with(
+        workspace: &Path,
+        policy: PolicyRequest,
+        baseline: Option<PathBuf>,
+        exists: &dyn Fn(&Path) -> bool,
+        read: &dyn Fn(&Path) -> std::io::Result<Vec<u8>>,
+    ) -> RequestInputs {
         use crate::engine::gate::policy::pipeline::absolutize;
+        let file = |path: PathBuf| FileInput::read_with(path, read);
         // Timed and tallied like the workspace read (#277 E12-C6); not charged
         // to `inputs.read`, which counts workspace reads.
         let _s = pt::span("inputs", "inputs.request_read");
@@ -196,21 +216,21 @@ impl RequestInputs {
             PolicyRequest::None | PolicyRequest::Disabled => None,
             PolicyRequest::Path(p) => Some(PolicyInput {
                 origin: PolicyOrigin::Explicit,
-                file: FileInput::read(absolutize(p)),
+                file: file(absolutize(p)),
             }),
             PolicyRequest::AutoDetect => ["al-sem.policy.yaml", "al-sem.policy.yml"]
                 .iter()
                 .map(|name| workspace.join(name))
-                .find(|candidate| candidate.exists())
+                .find(|candidate| exists(candidate))
                 .map(|candidate| PolicyInput {
                     origin: PolicyOrigin::Auto,
-                    file: FileInput::read(absolutize(candidate.to_string_lossy().as_ref())),
+                    file: file(absolutize(candidate.to_string_lossy().as_ref())),
                 }),
         };
         let request = RequestInputs {
             policy_file,
             policy_request: policy,
-            baseline: baseline.map(FileInput::read),
+            baseline: baseline.map(file),
         };
         if crate::engine::census::enabled() {
             request
