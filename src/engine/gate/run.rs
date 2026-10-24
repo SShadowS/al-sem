@@ -1347,3 +1347,8 @@ mod tests {
         }
     }
 }
+
+// #277 T16: the three single-app builders agree.
+#[cfg(test)]
+#[path = "run_builders_tests.rs"]
+mod builders_tests;
