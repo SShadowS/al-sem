@@ -13,13 +13,16 @@
 //! - an interface is identified by its folded last name segment only
 //!   (`Ns1."I"` and `Ns2."I"` are one interface here), the same rule receiver
 //!   typing and `implements` use;
-//! - a namespace-qualified enum TYPE (`Enum Ns2."Kind"`) resolves by its last
-//!   segment, and only a unique hit counts: two same-named enums are ambiguous
-//!   and the site stays open. Left: when the written enum is not loaded but ONE
-//!   same-named enum of another namespace is, that one is taken (alc would
-//!   reject such a reference, so only input that does not compile reaches it).
-//!   A qualified IMPLEMENTATION codeunit is refused earlier, in the fact
-//!   (`node_extract::enum_closure`).
+//! - an enum, implementation codeunit or record table NAME counts only when it
+//!   is unique in the whole program (`ResolveIndex::resolve_object_ref_strict`,
+//!   `name_is_unique`), qualified or not: an own-app object of that name may
+//!   not be the one a `using` or a dropped qualifier means. Two same-named
+//!   objects anywhere leave the site open. Left: when the written enum is not
+//!   loaded but ONE same-named enum of another namespace is, that one is taken
+//!   (alc would reject such a reference, so only input that does not compile
+//!   reaches it). A qualified IMPLEMENTATION codeunit is refused earlier, in
+//!   the fact (`node_extract::enum_closure`). A reference by NUMBER keeps the
+//!   own-app rule.
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{
@@ -35,8 +38,8 @@ use crate::program::resolve::edge::{Evidence, Route, RouteTarget};
 use crate::program::resolve::extract::WithState;
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::receiver::{
-    ParsedType, ReceiverType, classify_type_text, infer_receiver_type, parse_object_kind_type,
-    unquote_identifier,
+    ParsedType, ReceiverType, classify_type_text, infer_receiver_type, name_shadows_bare_call,
+    parse_object_kind_type, unquote_identifier,
 };
 use crate::program::resolve::resolver::resolve_bare;
 
@@ -107,10 +110,12 @@ pub(crate) fn closed_enum_sources(
     // A Clean file can still hold code the lowerer read partly (an `#if` group
     // as an operand lowers one arm, with a `SyntaxIssue`), which may hide a write.
     let span = &cx.routine.origin.byte;
-    let overlaps = |i: &al_syntax::ir::SyntaxIssue| {
-        i.origin.byte.start < span.end && span.start < i.origin.byte.end
-    };
-    if cx.file.issues.iter().any(overlaps) {
+    if cx
+        .file
+        .issues
+        .iter()
+        .any(|i| overlaps(&i.origin.byte, span))
+    {
         return None;
     }
     let ir = &cx.file.ir;
@@ -126,6 +131,11 @@ pub(crate) fn closed_enum_sources(
     enums.sort();
     enums.dedup();
     Some(enums)
+}
+
+/// Whether two half-open byte ranges share a byte.
+fn overlaps(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
+    a.start < b.end && b.start < a.end
 }
 
 /// The folded name of `e` when it is a (quoted) identifier, parentheses removed.
@@ -377,6 +387,12 @@ fn field_enum(cx: &ClosedEnumCx, object: ExprId, member: &str) -> Option<ObjectN
     ) else {
         return None;
     };
+    // Receiver typing resolves the table first-wins; another table of that
+    // name (another namespace) leaves the record's table unproven.
+    let table_name = cx.graph.object(&table)?.name.fold_identifier();
+    if !cx.index.name_is_unique(ObjectKind::Table, &table_name) {
+        return None;
+    }
     let field_lc = unquote_identifier(member).fold_identifier();
     if cx
         .index
@@ -440,9 +456,11 @@ fn enum_by_name(cx: &ClosedEnumCx, name: &str, from: &ObjectNodeId) -> Option<Ob
     unique_enum(cx, from, &object_ref)
 }
 
-/// Only a `Unique` resolution counts. A namespace-qualified name resolves by
-/// its last segment (the graph holds no namespaces), so two same-named enums
-/// are `Ambiguous` (open) — see the module doc's limits.
+/// Only a `Unique` resolution counts, and a NAME counts only when exactly one
+/// enum of that name exists in the whole program
+/// ([`ResolveIndex::resolve_object_ref_strict`]): with no namespaces in the
+/// graph, an own-app enum may not be the one a `using` or a qualified name
+/// means. See the module doc's limits.
 fn unique_enum(cx: &ClosedEnumCx, from: &ObjectNodeId, r: &ObjectRef) -> Option<ObjectNodeId> {
     match cx
         .index
@@ -456,12 +474,7 @@ fn unique_enum(cx: &ClosedEnumCx, from: &ObjectNodeId, r: &ObjectRef) -> Option<
 /// Whether `name_lc` names a variable in scope at the routine: a local,
 /// parameter, the named return value, or an object global.
 fn in_scope(cx: &ClosedEnumCx, name_lc: &str) -> bool {
-    let r = cx.routine;
-    let named = |n: &str| n.fold_identifier() == name_lc;
-    r.locals.iter().any(|v| named(&v.name))
-        || r.params.iter().any(|p| named(&p.name))
-        || r.return_name.as_deref().is_some_and(named)
-        || cx.obj.globals.iter().any(|g| named(&g.name))
+    name_shadows_bare_call(cx.routine, &cx.obj.globals, name_lc)
 }
 
 /// `e` with parentheses removed.
@@ -1328,6 +1341,99 @@ enum 50106 "Other Kind" implements "Other Strategy"
             completeness(&ws),
             SetCompleteness::Complete,
             "namespace-qualified"
+        );
+    }
+
+    /// Task 4 review (I1): the workspace declares a closed `Ns1."Demo Kind"`, a
+    /// dependency an extensible `Ns2."Demo Kind"`. alc accepts both
+    /// `Enum Ns2."Demo Kind"` and, with `using Ns2;`, a bare `"Demo Kind"` for
+    /// the dependency's enum. The own-app shortcut would take the workspace's
+    /// closed one; a name counts only when it is unique in the whole program.
+    fn own_closed_and_dependency_open_kind(declared: &str) -> SetCompleteness {
+        let vars = format!("        S: Interface \"Demo Strategy\";\n        K: Enum {declared};");
+        let ws = workspace(
+            caller(&vars, "        S := K;\n        S.NextKm(1);", ""),
+            &[
+                ("app.json", dep_ws_app_json()),
+                ("src/Kind.al", format!("namespace Ns1;\n\n{}", demo_kind())),
+            ],
+        );
+        let dir = write(&ws);
+        let dep_kind = "namespace Ns2;\n\nenum 70002 \"Demo Kind\" implements \"Dep Strategy\"\n{\n    Extensible = true;\n    value(0; Standard) { Implementation = \"Dep Strategy\" = \"Dep Impl\"; }\n}\n";
+        write_dep(dir.path(), "", &[("src/DepKind.al", dep_kind)]);
+        completeness_in(dir.path())
+    }
+
+    #[test]
+    fn i264_qualified_name_of_a_dependency_enum_stays_open() {
+        assert!(is_open(own_closed_and_dependency_open_kind(
+            "Ns2.\"Demo Kind\""
+        )));
+    }
+
+    #[test]
+    fn i264_unqualified_name_shared_with_a_dependency_enum_stays_open() {
+        assert!(is_open(own_closed_and_dependency_open_kind(
+            "\"Demo Kind\""
+        )));
+    }
+
+    /// Task 4 review (M1): the record's TABLE is resolved first-wins by receiver
+    /// typing; a dependency table of the same name makes `Rec.Kind` unprovable.
+    #[test]
+    fn i264_table_name_shared_with_a_dependency_stays_open() {
+        let vars = format!("{VARS}\n        Rec: Record \"Demo Item\";");
+        let ws = workspace(
+            caller(&vars, "        S := Rec.Kind;\n        S.NextKm(1);", ""),
+            &[("app.json", dep_ws_app_json())],
+        );
+        let dir = write(&ws);
+        let dep_item = "table 70010 \"Demo Item\"\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n}\n";
+        write_dep(dir.path(), "", &[("src/DepItem.al", dep_item)]);
+        assert!(is_open(completeness_in(dir.path())));
+    }
+
+    /// Task 4 review (M3): the issue check reads the routine's own span only.
+    /// Half-open ranges: touching at an edge is no overlap.
+    #[test]
+    fn issue_overlap_is_half_open_on_both_edges() {
+        let routine = 10..20;
+        assert!(
+            !super::overlaps(&(5..10), &routine),
+            "ends where the routine starts"
+        );
+        assert!(
+            super::overlaps(&(5..11), &routine),
+            "one byte inside at the start"
+        );
+        assert!(
+            !super::overlaps(&(20..25), &routine),
+            "starts where the routine ends"
+        );
+        assert!(
+            super::overlaps(&(19..25), &routine),
+            "one byte inside at the end"
+        );
+    }
+
+    /// An issue in ANOTHER routine of the file does not open this site.
+    #[test]
+    fn i264_issue_in_another_routine_keeps_the_site_closed() {
+        let vars2 = "    var\n        A: Integer;\n        B: Integer;\n";
+        let extra = format!(
+            "\n    local procedure Other()\n{vars2}    begin\n        A := 1 +\n#if X\n            B\n#else\n            2\n#endif\n        ;\n    end;"
+        );
+        let text = caller(VARS, "        S := K;\n        S.NextKm(1);", &extra);
+        let parsed = al_syntax::parse(&text);
+        assert_eq!(
+            parsed.parse_status,
+            al_syntax::ir::ParseStatus::Clean,
+            "precondition"
+        );
+        assert!(!parsed.issues.is_empty(), "precondition: an issue in Other");
+        assert_eq!(
+            completeness(&workspace(text, &[])),
+            SetCompleteness::Complete
         );
     }
 

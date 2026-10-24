@@ -833,11 +833,14 @@ impl ResolveIndex {
         }
     }
 
-    /// [`Self::resolve_object_ref`], except that TWO of `from`'s own objects
-    /// matching is [`ObjectRefResolution::Ambiguous`] instead of first-wins.
-    /// One app can declare two same-named objects in different namespaces, and
-    /// the graph holds no namespaces, so first-wins could pick the wrong one.
-    /// For proofs that must not guess (#264's closed-enum facts).
+    /// [`Self::resolve_object_ref`] for proofs that must not guess (#264's
+    /// closed-enum facts). The graph holds no namespaces, so a name may mean an
+    /// object of another namespace than an own-app one of the same name (a
+    /// `using`, or a qualified name whose qualifier is dropped). A NAME
+    /// therefore resolves only when it is unique in the whole program
+    /// ([`Self::name_is_unique`]); else it is
+    /// [`ObjectRefResolution::Ambiguous`]. A NUMBER keeps the own-app rule,
+    /// except that two own objects with one number are `Ambiguous`.
     pub fn resolve_object_ref_strict(
         &self,
         graph: &ProgramGraph,
@@ -845,17 +848,28 @@ impl ResolveIndex {
         kind: ObjectKind,
         r: &ObjectRef,
     ) -> ObjectRefResolution {
-        let candidates = match r {
-            ObjectRef::Id(n) => self.objects_by_id.get(&(kind, *n)),
-            ObjectRef::Name { normalized_lc, .. } => {
-                self.objects_by_name.get(&(kind, normalized_lc.clone()))
-            }
+        let ambiguous = match r {
+            ObjectRef::Id(n) => self
+                .objects_by_id
+                .get(&(kind, *n))
+                .is_some_and(|c| c.iter().filter(|o| o.app == from.app).count() > 1),
+            ObjectRef::Name { normalized_lc, .. } => self
+                .objects_by_name
+                .get(&(kind, normalized_lc.clone()))
+                .is_some_and(|c| c.len() > 1),
         };
-        let own = candidates.map_or(0, |c| c.iter().filter(|o| o.app == from.app).count());
-        if own > 1 {
+        if ambiguous {
             return ObjectRefResolution::Ambiguous;
         }
         self.resolve_object_ref(graph, from, kind, r)
+    }
+
+    /// Whether exactly one object of `kind` is named `name_lc` (folded) in the
+    /// whole program.
+    pub fn name_is_unique(&self, kind: ObjectKind, name_lc: &str) -> bool {
+        self.objects_by_name
+            .get(&(kind, name_lc.to_string()))
+            .is_some_and(|c| c.len() == 1)
     }
 
     /// All `TableExtension` objects whose `extends_target` (lowercased) equals
