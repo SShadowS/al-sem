@@ -380,14 +380,21 @@ pub fn build_view_model(
         // profile, never `FULL`'s dependency bodies.
         return build_single_app(inputs, key.no_roots_config, extras).map(Some);
     }
-    // A graph-only view builds no base: no base span.
-    let _s = needs
-        .model
-        .then(|| pt::span("crossapp", "crossapp.base_total"));
+    // The base span covers the program build and the base's, never the graph
+    // export lent in between (#277 R6-5); a graph-only view builds no base.
+    let base_span = || {
+        needs
+            .model
+            .then(|| pt::span("crossapp", "crossapp.base_total"))
+    };
+    let mut span = base_span();
     let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp);
     if needs.graph {
+        drop(span);
         on_program(program.as_ref().map_err(String::as_str));
+        span = base_span();
     }
+    let _span = span;
     if !needs.model {
         return Ok(None);
     }

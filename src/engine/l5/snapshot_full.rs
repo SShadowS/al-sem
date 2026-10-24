@@ -534,7 +534,7 @@ fn to_cbor_inputs(inputs: &[SnapshotInput]) -> CborValue {
 /// routine of the model (spec §4.2: the cone, not the cut, F9).
 fn reach(x: &R3a5CrossAppBase) -> HashSet<String> {
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
-    for e in x.rel.cone() {
+    for e in x.rel().cone() {
         if let Some(to) = &e.to {
             adj.entry(e.from.as_str()).or_default().push(to.as_str());
         }

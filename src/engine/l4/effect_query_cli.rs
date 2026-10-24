@@ -111,10 +111,11 @@ pub struct QueryRunResult {
 // The owned substrate (one workspace load per invocation).
 // ---------------------------------------------------------------------------
 
-/// What a [`DbEffectQuery`] borrows, off a [`View`] whose `l4` cell query's
-/// plan filled (no detector run, #160 §4.4.4): the model, the relation's graph
-/// and the `l4` analysis (the bundle and its SCC). A borrow, so a query shares
-/// its view with the batch's other jobs (#277 D9).
+/// What a [`DbEffectQuery`] reads, off a [`View`] whose `l4` cell query's plan
+/// filled (no detector run, #160 §4.4.4): the model and the `l4` analysis (the
+/// bundle and its SCC) by borrow, so a query shares its view with the batch's
+/// other jobs (#277 D9), and the relation's graph by its own `Arc`, so the
+/// relation itself can go before the render ([`QueryJob`]'s compute).
 ///
 /// Cross-app (the default, #66), the view is `alsem analyze`'s cross-app base:
 /// its graph and SCC, with every source-bearing dependency routine a FIXED
@@ -122,7 +123,9 @@ pub struct QueryRunResult {
 /// and are selectable. With no dependency there are no leaves and the same
 /// graph, so the two modes agree.
 pub struct QuerySubstrate<'a> {
-    view: &'a View,
+    model: &'a Model,
+    graph: std::sync::Arc<crate::engine::l4::combined_graph::PrimaryGraph>,
+    l4: &'a crate::engine::l4::analysis::L4Analysis,
     /// Which dependencies the model holds (#66), stated in every document.
     pub dependencies: LoadedDependencies,
 }
@@ -130,22 +133,50 @@ pub struct QuerySubstrate<'a> {
 impl<'a> QuerySubstrate<'a> {
     /// The substrate of a view prepared with [`query_plan`].
     pub fn of(view: &'a View) -> Self {
+        Self::with_graph(view, std::sync::Arc::clone(view.rel().primary()))
+    }
+
+    fn with_graph(
+        view: &'a View,
+        graph: std::sync::Arc<crate::engine::l4::combined_graph::PrimaryGraph>,
+    ) -> Self {
         QuerySubstrate {
-            view,
+            model: view.model(),
+            graph,
+            l4: view.l4(),
             dependencies: view.target().dependencies(),
         }
     }
 
     /// The model the selectors and joins read.
     pub fn resolved(&self) -> &Model {
-        self.view.model()
+        self.model
     }
 
     /// The query surface over this substrate.
     pub fn query(&self) -> DbEffectQuery<'_> {
-        let l4 = self.view.l4();
-        DbEffectQuery::build(&l4.bundle, &l4.scc, self.view.rel().primary())
+        DbEffectQuery::build(&self.l4.bundle, &self.l4.scc, &self.graph)
     }
+
+    /// How many owners the graph and the SCC have (#160 Task 27 review I1).
+    #[cfg(test)]
+    pub(crate) fn shared_owners(&self) -> (usize, usize) {
+        (
+            std::sync::Arc::strong_count(&self.graph),
+            std::sync::Arc::strong_count(&self.l4.scc),
+        )
+    }
+}
+
+/// The query's substrate off its prepared view, with what the render does not
+/// read released first (#160 Task 27 review I1): the relation (its cone
+/// payload; the substrate keeps the graph's `Arc`) and the cross-app base's
+/// prepare-only parts. A later job on the view keeps what it declared.
+pub(crate) fn released_substrate<'v>(cx: &'v mut ViewCx<'_>) -> QuerySubstrate<'v> {
+    let graph = std::sync::Arc::clone(cx.view().rel().primary());
+    cx.release_all_but(&[Cell::L4]);
+    cx.release(Cell::Base);
+    QuerySubstrate::with_graph(cx.view(), graph)
 }
 
 /// Test entry: a workspace's view prepared with [`query_plan`], outside the
@@ -268,7 +299,7 @@ impl Job for QueryJob<'_> {
     }
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
-        let substrate = QuerySubstrate::of(cx.view());
+        let substrate = released_substrate(cx);
         let result = match self.ask {
             QueryAsk::Touches {
                 table,

@@ -99,14 +99,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`query`, `graph`, `prove`, `fingerprint` and `diff` run through the batch driver too
   (#277), and every view is built by one builder (`gate::run::build_view_model`).** Their
   stdout, stderr, exit codes and files are unchanged, and so are their validation errors
-  and their closed-stderr exit (as above). `query` reads its view's model, relation and
-  `l4` by borrow, so the rest of a cross-app base now lives until the query's render ends
-  (it was dropped before the query). `graph` gets the cross-app program from the builder
+  and their closed-stderr exit (as above). `query` reads its view's model and `l4` by
+  borrow and keeps its own `Arc` of the graph; before its render it releases the view's
+  relation and the cross-app base's prepare-only parts (a new `Cell::Base`), so they die
+  where they did before. `graph` gets the cross-app program from the builder
   before any model is built from it. `fingerprint`'s `--shard` without `--out` is a job
   with no view. Library: `impact_graph::export_workspace`, `View::into_query_parts` and
   `AnalysisTarget::build_target` are gone (`GraphJob`, `QuerySubstrate::of(&view)` with the
   test entry `query_view`, and `build_view_model` replace them); `diff_strict_plan` is
-  `diff_plan(detectors, strict)`.
+  `diff_plan(detectors, strict)`; `R3a5CrossAppBase.rel` is read through `rel()`.
 - **`diff ws ws`: both sides share one view (#277).** Two workspace sides that name one
   directory (after `std::path::absolute`, not canonicalised) are now read and built once;
   each side still composes its own snapshot. Output is unchanged. Counters

@@ -3690,8 +3690,9 @@ pub struct R3a5CrossAppBase {
     /// (workspace callers' calls plus every event dispatch) drives the solve
     /// and the detector traversals, the Cone payload (its typed edges, the
     /// dependency code's own calls included) drives the cone, and its SCC is
-    /// the one every cross-app `build_l4` shares by pointer.
-    pub rel: std::sync::Arc<crate::engine::l4::exec_relation::ExecRelation>,
+    /// the one every cross-app `build_l4` shares by pointer. Read through
+    /// [`Self::rel`]; `None` once [`Self::release_past_prepare`] ran.
+    rel: Option<std::sync::Arc<crate::engine::l4::exec_relation::ExecRelation>>,
     /// The calls dependency routines make, in emission order: the `rel`
     /// split's dependency half, read only by digest's tree (its call-site
     /// ledger, #160 step 6 D6). The view takes it in its first `prepare` and
@@ -3734,6 +3735,33 @@ pub struct R3a5CrossAppBase {
 }
 
 impl R3a5CrossAppBase {
+    /// The view's execution relation (see the field).
+    pub fn rel(&self) -> &std::sync::Arc<crate::engine::l4::exec_relation::ExecRelation> {
+        self.rel
+            .as_ref()
+            .expect("the base's relation was released past its view's prepare")
+    }
+
+    /// Drop everything only a view's `prepare` reads (#160 Task 27 I1, #277
+    /// R6-1): the relation handle, the solver and cone inputs, the d13/d17
+    /// rows. Kept: the model (`resolved`), `loaded_apps` (every command's
+    /// `dependencies()` statement) and `coverage` (small). `View::release(
+    /// Cell::Base)` calls it once the view's one prepare is done.
+    pub(crate) fn release_past_prepare(&mut self) {
+        self.rel = None;
+        self.dependency_calls = None;
+        self.friends = HashMap::new();
+        self.dep_routine_ids = BTreeSet::new();
+        self.field_index = Default::default();
+        self.leaf_summaries = HashMap::new();
+        self.fixed_roles = HashSet::new();
+        self.direct_full = HashMap::new();
+        self.direct_coverage = HashMap::new();
+        self.declared_dependencies = Vec::new();
+        self.dependency_apps = Vec::new();
+        self.resolved_app_versions = HashMap::new();
+    }
+
     /// Each loaded dependency app's name, by lowercase guid: the `<App>` of
     /// digest's rule-B groups (#160 step 6, spec §14.3.5 item 2).
     pub(crate) fn loaded_app_names(&self) -> HashMap<String, String> {
@@ -3984,7 +4012,7 @@ pub(crate) fn build_cross_app_base_from(
         friends: x.friends.clone(),
         resolved,
         dep_routine_ids,
-        rel: std::sync::Arc::new(rel),
+        rel: Some(std::sync::Arc::new(rel)),
         dependency_calls: Some(dependency_calls),
         field_index,
         leaf_summaries,
@@ -4013,7 +4041,7 @@ pub(crate) fn build_cross_app_base_from(
 fn census_cross_app_base(b: &R3a5CrossAppBase) {
     use crate::engine::census::{Kind, Tally};
     use crate::program::model::program_calls::{census_calls, census_model_rows};
-    b.rel.emit_census();
+    b.rel().emit_census();
     let emit = |name: &str, t: &mut Tally| t.emit(name, Kind::Shallow);
     emit(
         "base.coverage",
@@ -4141,7 +4169,7 @@ pub fn project_r3a5_cross_app(
     };
     let ws_routines = base.ws_routines();
     let dep_routine_ids = &base.dep_routine_ids;
-    let graph = base.rel.primary();
+    let graph = base.rel().primary();
     let event_graph = &base.resolved.events.graph;
     let direct_full = &base.direct_full;
     // The cone's routine universe: the relation's node ids, every model
@@ -4157,7 +4185,7 @@ pub fn project_r3a5_cross_app(
     let (core_summaries, _) = compute_summaries_v2_with_leaves_core(
         ws_routines,
         graph,
-        base.rel.scc(),
+        base.rel().scc(),
         &base.resolved.calls.upgraded_bindings,
         &base.field_index,
         &base.leaf_summaries,
@@ -4170,7 +4198,7 @@ pub fn project_r3a5_cross_app(
     // `derived: false` skips the fold outright. The raw Vec and its ordering
     // are untouched.
     let ConeOutcome { coverage, raw, .. } = compose_cone_over_graph(
-        base.rel.cone(),
+        base.rel().cone(),
         nodes,
         &base.direct_full,
         &base.direct_coverage,
@@ -5284,7 +5312,7 @@ codeunit 13 "Dep Rec Sub"
         // relation and cross-app inputs, so the leaves and fixed roles are in).
         let (l4, _) = crate::engine::l4::analysis::build_l4(
             &base.resolved,
-            &base.rel,
+            base.rel(),
             crate::engine::l4::analysis::L4Request {
                 extra_diagnostics: vec![],
             },
@@ -5380,6 +5408,51 @@ codeunit 13 "Dep Rec Sub"
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// #160 Task 27 review I1 (restored by #277 R6-1): cross-app `alsem query`
+    /// keeps the model, the graph and the `l4` analysis, and drops the rest
+    /// of the base and the view's relation before the render. The relation
+    /// (the view's cell and the base's handle) owns the graph and the SCC, so
+    /// a live one shows as a second owner of each. Run through the batch
+    /// driver: a wrapper job over `QueryJob` reads the owners off the query's
+    /// own substrate.
+    #[test]
+    fn cross_app_query_drops_the_base() {
+        use crate::engine::batch::job::{
+            Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+        };
+        use crate::engine::l4::effect_query_cli::{QueryJob, released_substrate};
+        struct Owners<'a>(QueryJob<'a>);
+        impl Job for Owners<'_> {
+            fn demands(&self) -> Vec<ViewDemand> {
+                self.0.demands()
+            }
+            fn resolve(&self, s: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+                self.0.resolve(s, cx)
+            }
+            fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+                Ok(SideDoc::new(released_substrate(cx).shared_owners()))
+            }
+            fn view_failed(&self, _: SideIx, f: &ViewFailure) -> Result<SideDoc, JobFailure> {
+                panic!("precondition: the cross-app view builds: {f:?}")
+            }
+            fn serialize(
+                &self,
+                _: crate::engine::batch::job::Doc,
+            ) -> crate::engine::batch::output::JobOutput {
+                unreachable!()
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        write_fixture(&ws);
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
+        let job = Owners(QueryJob::effects(&inputs, "X", "t", true, false));
+        let owners: (usize, usize) = crate::engine::batch::run_doc(&job)
+            .one()
+            .expect("query fails no side");
+        assert_eq!(owners, (1, 1), "(graph, scc) owners");
+    }
+
     /// #160 Task 27 review #2: the cross-app shim solves over the base's
     /// relation, so it takes the relation's SCC instead of running a second
     /// Tarjan.
@@ -5397,7 +5470,7 @@ codeunit 13 "Dep Rec Sub"
         );
         let l4 = owned.l4().expect("CORE_SUMMARIES solves");
         assert!(
-            std::sync::Arc::ptr_eq(&l4.scc, base.rel.scc()),
+            std::sync::Arc::ptr_eq(&l4.scc, base.rel().scc()),
             "the shim computed its own SCC"
         );
     }
@@ -6024,7 +6097,7 @@ mod step4_tests {
         let mut failures: Vec<String> = Vec::new();
         // (1)
         let kept: Vec<(&str, &str, Option<&str>)> = base
-            .rel
+            .rel()
             .dependency_uncertainty()
             .iter()
             .map(|u| {
@@ -6047,7 +6120,7 @@ mod step4_tests {
         }
         // (2)
         let in_graph: Vec<&crate::engine::l4::combined_graph::UncertaintyEdge> = base
-            .rel
+            .rel()
             .primary()
             .uncertainty_edges
             .iter()
@@ -7034,7 +7107,7 @@ codeunit 50100 C
         ) {
             Ok(base) => Some(check_model(
                 &base.resolved,
-                &base.rel,
+                base.rel(),
                 &format!("{where_} (cross-app)"),
                 classes,
                 failures,

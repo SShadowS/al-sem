@@ -457,6 +457,16 @@ T15, T19, `batch_view_key_spellings`), `tests/cli/cli_batch_manifest.rs` (T11),
   union, view order and drop, the write point (11), the run lines and exit, the `exit_code.rs` row, the
   traces. `scripts/check-goldens --regen`, inspect the `one-job/` diff (only the seeds fill), then
   `scripts/check-goldens`.
+- [ ] **Step 2b: one read per workspace path (closes the `ViewDemand.inputs` shortcut, Task 6 R6-2).** Before the
+  first view, the manifest loader collects every job's (workspace path, `WorkspaceNeeds`) from its parsed argv, reads
+  ONE `WorkspaceInputs` per path (absolutised as `ViewKey` does) with the `union` of those needs, and hands the same
+  `Arc` to every job on that path. The bin's per-command `WorkspaceInputs::read` calls become this one reader (a
+  standalone command is a one-job batch, so its read is unchanged). Test `batch_reads_each_workspace_once` (spawned,
+  counters from the trace): two jobs on one workspace and one view (analyze cross-app + `digest`, which needs
+  `fingerprint_rows`) and two jobs on one workspace and two views (analyze cross-app + `--single-app`) each read once
+  (`inputs.read` 1), every job equals its standalone run, and the driver's `Arc::ptr_eq` assert (R5-3) does not fire.
+  Proof: read per job → `inputs.read` 2, and the R5-3 panic on the shared view. Delete the `shortcut:` comment on
+  `ViewDemand.inputs`.
 - [ ] **Step 3: proofs** (spec §5): T3 break 1 one `View` per job → `assert_row` fails at program/ctx/
   witness = 2, no panic; T3 break 2 one `prepare` per job on one view → the `a View composes once` /
   `a View takes at most one witness request` panic; T4 build every view before any compute; T6 open job

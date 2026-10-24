@@ -280,7 +280,7 @@ fn an_event_boundary_group_is_in_the_may_relations() {
     );
     let mut tree = tree_of(
         model,
-        &base.rel,
+        base.rel(),
         base.dependency_calls.as_deref().unwrap_or(&[]),
         &source_less_apps(&base.dependency_apps),
         ConeScope {
@@ -458,7 +458,7 @@ fn t7a_a_dependency_callers_rows_are_the_ledgers() {
         .expect("precondition: DepCaller is demanded");
     let tree = tree_of(
         model,
-        &base.rel,
+        base.rel(),
         base.dependency_calls.as_deref().unwrap_or(&[]),
         &source_less_apps(&base.dependency_apps),
         ConeScope {
@@ -525,7 +525,7 @@ fn t7b_a_call_into_a_body_less_dependency_row_is_unfetched() {
     assert!(!write.body_available, "precondition: Write has no body");
     let tree = tree_of(
         model,
-        &base.rel,
+        base.rel(),
         base.dependency_calls.as_deref().unwrap_or(&[]),
         &source_less_apps(&base.dependency_apps),
         ConeScope {
@@ -698,7 +698,7 @@ fn t3_digest_scoped_equals_unscoped() {
         let (rel, calls) = match &target {
             AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
             AnalysisTarget::CrossApp(b) => (
-                Arc::clone(&b.rel),
+                Arc::clone(b.rel()),
                 b.dependency_calls.as_deref().unwrap_or(&[]),
             ),
         };
@@ -814,7 +814,7 @@ fn fingerprint_witness_boundary_trigger_and_event() {
         );
         let mut tree = tree_of(
             model,
-            &base.rel,
+            base.rel(),
             base.dependency_calls.as_deref().unwrap_or(&[]),
             &source_less_apps(&base.dependency_apps),
             ConeScope {
@@ -991,7 +991,7 @@ fn prove_scoped_equals_unscoped() {
             let (rel, calls) = match &target {
                 AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
                 AnalysisTarget::CrossApp(b) => (
-                    Arc::clone(&b.rel),
+                    Arc::clone(b.rel()),
                     b.dependency_calls.as_deref().unwrap_or(&[]),
                 ),
             };
@@ -1110,7 +1110,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
             let (rel, calls) = match &target {
                 AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
                 AnalysisTarget::CrossApp(b) => (
-                    Arc::clone(&b.rel),
+                    Arc::clone(b.rel()),
                     b.dependency_calls.as_deref().unwrap_or(&[]),
                 ),
             };
@@ -1262,7 +1262,7 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
     let model = &b.resolved;
     let tree = tree_of(
         model,
-        &b.rel,
+        b.rel(),
         b.dependency_calls.as_deref().unwrap_or(&[]),
         &source_less_apps(&b.dependency_apps),
         ConeScope {

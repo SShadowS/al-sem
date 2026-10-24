@@ -100,7 +100,7 @@ pub struct ViewDemand {
     /// The workspace the command read; every demand on a view holds the same
     /// read. shortcut: each command reads its own `WorkspaceInputs`; a batch of
     /// several jobs must read one per workspace path (with the union of their
-    /// needs) and hand it to each job (Task 7's manifest).
+    /// needs) and hand it to each job (plan Task 7 Step 2b, the manifest).
     pub inputs: Arc<WorkspaceInputs>,
 }
 

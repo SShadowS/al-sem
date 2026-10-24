@@ -344,12 +344,12 @@ fn dep_ambiguous_preconditions(base: &R3a5CrossAppBase) -> (String, String) {
         "precondition: Inner is dependency code, Go is the workspace's"
     );
     assert_eq!(
-        four_kind_edges(base.rel.dependency_uncertainty()),
+        four_kind_edges(base.rel().dependency_uncertainty()),
         vec![(inner.as_str(), "ambiguous-overload")],
         "precondition: the dependency half holds exactly one four-kind edge, from Inner"
     );
     assert_eq!(
-        four_kind_edges(&base.rel.primary().uncertainty_edges),
+        four_kind_edges(&base.rel().primary().uncertainty_edges),
         Vec::<(&str, &str)>::new(),
         "precondition: the Primary half holds no four-kind edge"
     );
@@ -380,7 +380,7 @@ fn step5_t4_dependency_half_folds_into_the_cross_app_context() {
     write_fixture_dep_ambiguous(&ws);
     let base = cross_app_base(&ws);
     let (go, inner) = dep_ambiguous_preconditions(&base);
-    let rel = Arc::clone(&base.rel);
+    let rel = Arc::clone(base.rel());
 
     let d35 = registered_detectors()
         .into_iter()
@@ -453,7 +453,7 @@ fn step5_t5_both_cross_app_producers_fold_the_same() {
     write_fixture_dep_ambiguous(&ws);
     let base = cross_app_base(&ws);
     let (_go, inner) = dep_ambiguous_preconditions(&base);
-    let pa = det_cone_inputs(&base.resolved, &base.rel).coverage_in;
+    let pa = det_cone_inputs(&base.resolved, base.rel()).coverage_in;
     let pb = &base.direct_coverage;
     let want = (
         "partial".to_string(),
