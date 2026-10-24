@@ -50,6 +50,7 @@ fn base_opts(inputs: &std::sync::Arc<al_sem::program::inputs::InputSet>) -> Fing
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        single_app: true,
     }
 }
 
@@ -251,6 +252,7 @@ fn inventory_only_cbor_rejected() {
         verbosity: "compact",
         inventory_only: true,
         no_roots_config: false,
+        single_app: true,
     };
     // Must return Err (rejected combo).
     let result = run_fingerprint_pipeline(&opts);
@@ -307,6 +309,7 @@ fn inventory_doc_for(tag: &str, al_file: &str, al_source: &str) -> serde_json::V
         verbosity: "compact",
         inventory_only: true,
         no_roots_config: false,
+        single_app: true,
     };
     let result = run_fingerprint_pipeline(&opts)
         .unwrap_or_else(|e| panic!("inventory pipeline error for {tag}: {e}"));
@@ -514,6 +517,7 @@ fn inventory_only_query_selector_rejected() {
         verbosity: "compact",
         inventory_only: true,
         no_roots_config: false,
+        single_app: true,
     };
     // FingerprintRunResult is not Debug, so match the Result rather than unwrap_err().
     let msg = match run_fingerprint_pipeline(&opts) {

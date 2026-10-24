@@ -14,7 +14,7 @@
 //!   → B0's snapshot serializers — **NOT this module**.
 //! - `--format json` WITH query flag (`--witness`, `--roots`, `--routine`,
 //!   `--include-inherited`) → `fingerprint_query` → `project_fingerprint_query`
-//!   → JSON envelope (kind `fingerprint-query`, schemaVersion `1.2.0`).
+//!   → JSON envelope (kind `fingerprint-query`, schemaVersion `1.3.0`).
 //! - `--format human` → `fingerprint_query` → `format_fingerprint_human`.
 //!
 //! ## Witness modes
@@ -71,6 +71,7 @@ mod types {
     }
 
     /// Filters for a fingerprint query (mirrors `FingerprintFilters` in TS).
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FingerprintFilters {
         /// When Some, only root classifications whose `kinds` intersect this set are rendered.
         pub roots: Option<RootKindSet>,
@@ -92,6 +93,25 @@ mod types {
         pub truncated: bool,
         pub incomplete: bool,
         pub diagnostics: Vec<WitnessDiagnostic>,
+        /// The witness's terminal evidence (#160 step 9 S9-2, S9-16), computed
+        /// while the snapshot is alive: the boundary of the FIRST path that has
+        /// one, else the fact's operation evidence (also when `paths` is empty).
+        pub evidence: Option<FactEvidence>,
+    }
+
+    /// A fact's terminal evidence in its witness object.
+    #[derive(Debug, Clone)]
+    pub enum FactEvidence {
+        /// The fact's own operation (`witness_operation_id`) and its anchor.
+        Operation {
+            operation_id: String,
+            file: String,
+            line: u32,
+            column: u32,
+            excerpt: String,
+        },
+        /// Rule B: the boundary the first path was cut at.
+        Boundary(crate::engine::l5::digest::PathBoundary),
     }
 
     #[derive(Debug, Clone)]
@@ -293,6 +313,44 @@ fn table_op_to_right(op: &str) -> Option<&'static str> {
     }
 }
 
+/// A witness's terminal evidence (#160 step 9 S9-2): the boundary of the first
+/// of `paths` that has one, in their order; else the fact's own operation
+/// evidence from the snapshot's operation index (`None` when the fact names no
+/// operation the index holds).
+fn fact_evidence(
+    fact: &SnapFact,
+    paths: &[ProjectedPath],
+    idx: &FingerprintIndexesPub<'_>,
+) -> Option<FactEvidence> {
+    if let Some(b) = paths.iter().find_map(|p| p.boundary.as_ref()) {
+        return Some(FactEvidence::Boundary(b.clone()));
+    }
+    let op_id = fact.witness_operation_id.as_ref()?;
+    let ev = idx.operation_by_id.get(op_id.as_str())?;
+    Some(FactEvidence::Operation {
+        operation_id: op_id.clone(),
+        file: normalize_anchor_path(&ev.source_file),
+        line: ev.start_line,
+        column: ev.start_column,
+        excerpt: ev.display_text.clone(),
+    })
+}
+
+/// The stable ids of the model's `Role::Primary` routines: the query's
+/// `is_primary` (#160 step 9, Decision 28). A stable id any primary row
+/// carries is primary.
+pub(crate) fn primary_stable_ids(
+    model: &crate::program::model::workspace::Model,
+) -> std::collections::HashSet<&str> {
+    model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| model.routine_role(r) == crate::program::model::role::Role::Primary)
+        .map(|r| r.stable_routine_id.as_str())
+        .collect()
+}
+
 fn build_block<'w>(
     rid: &str,
     root: &crate::engine::l5::snapshot::SnapshotRootClassificationSlot,
@@ -441,12 +499,18 @@ fn build_block<'w>(
         });
     }
 
-    // mayCommit.
+    // mayCommit. `no` needs complete coverage over the facts the query renders
+    // (#160 step 9 S9-3): the inherited coverage when inherited facts are shown.
     let commit_fi = rendered_facts.iter().position(|f| f.op == "commit");
+    let commit_coverage = if filters.include_inherited {
+        &coverage.inherited_status
+    } else {
+        &coverage.direct_status
+    };
     let may_commit = BlockCommit {
         presence: if commit_fi.is_some() {
             "yes"
-        } else if coverage.direct_status == "complete" {
+        } else if commit_coverage == "complete" {
             "no"
         } else {
             "unknown"
@@ -567,12 +631,13 @@ fn build_block<'w>(
             rendered_facts
                 .iter()
                 .enumerate()
-                .map(|(fi, _)| BlockWitness {
+                .map(|(fi, f)| BlockWitness {
                     fact_index: fi,
                     paths: Vec::new(),
                     truncated: false,
                     incomplete: false,
                     diagnostics: Vec::new(),
+                    evidence: fact_evidence(f, &[], idx),
                 })
                 .collect()
         }
@@ -588,6 +653,7 @@ fn build_block<'w>(
                     );
                     BlockWitness {
                         fact_index: fi,
+                        evidence: fact_evidence(f, &outcome.paths, idx),
                         paths: outcome.paths,
                         truncated: outcome.truncated,
                         incomplete: outcome.incomplete,
@@ -641,18 +707,26 @@ fn build_block<'w>(
 /// `owners`: the model's [`OwnerIndex`] (#78). It names each block's owning
 /// object, narrows an `<owner>::<routine>` selector and labels ambiguity
 /// candidates.
+///
+/// Roles (#160 step 9, epic Decision 28): the selector index keeps the
+/// `primary_guid` app's routines only, so a selector never names a dependency
+/// routine; `total_classifications` counts the classifications whose routine
+/// `is_primary` (by stable id, read off the model's roles), before the
+/// selector and `--roots` filters. Single-app every row is primary.
 pub fn fingerprint_query(
     snap: &CapabilitySnapshot,
     filters: &FingerprintFilters,
     roots_config_ignored: bool,
     owners: &OwnerIndex<'_>,
+    primary_guid: Option<&str>,
+    is_primary: &dyn Fn(&str) -> bool,
 ) -> FingerprintQueryResult {
     // Build shared indexes (reuse B1's public entry point).
     let idx = build_fingerprint_indexes_pub(snap);
 
     // Selector index (5-form resolveSelector cascade) — built from the identity
     // table's source Vec, deterministic by construction. Shared with digest_cli.
-    let selector_idx = build_selector_indexes(&snap.identities, None);
+    let selector_idx = build_selector_indexes(&snap.identities, primary_guid);
 
     let mut diagnostics: Vec<FingerprintQueryDiagnostic> = Vec::new();
 
@@ -689,7 +763,11 @@ pub fn fingerprint_query(
         }
     }
 
-    let total_classifications = snap.root_classifications.len();
+    let total_classifications = snap
+        .root_classifications
+        .iter()
+        .filter(|r| is_primary(&r.routine_id))
+        .count();
 
     if any_selector_failed {
         return FingerprintQueryResult {
@@ -771,11 +849,13 @@ pub fn fact_id_of(f: &SnapFact) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// project_fingerprint_query — JSON envelope (fingerprint-query, 1.2.0)
+// project_fingerprint_query — JSON envelope (fingerprint-query, 1.3.0)
 // Mirrors `projectFingerprintQuery` in `src/contracts/fingerprint-query.ts`.
 // ---------------------------------------------------------------------------
 
-pub const FINGERPRINT_QUERY_CONTRACT_VERSION: &str = "1.2.0";
+/// 1.3.0 (#160 step 9, O9-25): additive, a path's `boundary` object and a
+/// boundary form of a witness's `evidence` (rule B, cross-app only).
+pub const FINGERPRINT_QUERY_CONTRACT_VERSION: &str = "1.3.0";
 
 /// Build a `normalizeAnchorPath`-normalized file path: forward slashes,
 /// keep the `ws:` prefix intact (it is NOT stripped — the golden keeps it).
@@ -789,37 +869,58 @@ fn normalize_anchor_path(source_file: &str) -> String {
     source_file.replace('\\', "/")
 }
 
-/// Project one block witness path set into the JSON contract form.
-fn project_witness_json(
-    bw: &BlockWitness,
-    fact: &SnapFact,
-    workspace_root: &str,
-    operation_index: &HashMap<String, &crate::engine::l5::snapshot::SnapshotOperationEvidence>,
-) -> serde_json::Value {
+/// A rule-B boundary's JSON object (#160 step 9 S9-2): `anchor`, `id`, `kind`
+/// and the kind's own id key (`callsiteId` | `operationId` | `eventId`).
+fn boundary_to_json(b: &crate::engine::l5::digest::PathBoundary) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    if let Some(file) = &b.file {
+        let mut anch = serde_json::Map::new();
+        anch.insert("sourceKind".into(), "source".into());
+        anch.insert("file".into(), normalize_anchor_path(file).into());
+        if let Some(l) = b.line {
+            anch.insert("line".into(), l.into());
+        }
+        if let Some(c) = b.column {
+            anch.insert("column".into(), c.into());
+        }
+        m.insert("anchor".into(), serde_json::Value::Object(anch));
+    }
+    m.insert("id".into(), b.id.clone().into());
+    m.insert("kind".into(), b.kind.into());
+    m.insert(b.target_key().into(), b.target.clone().into());
+    serde_json::Value::Object(m)
+}
+
+/// Project one block witness path set into the JSON contract form. The
+/// witness carries its own evidence (#160 step 9 S9-16), so no snapshot is read.
+fn project_witness_json(bw: &BlockWitness, workspace_root: &str) -> serde_json::Value {
     // Terminal evidence (anchor keys: column, excerpt, file, line, sourceKind — alphabetical).
-    let evidence = if let Some(op_id) = &fact.witness_operation_id {
-        if let Some(ev) = operation_index.get(op_id.as_str()) {
-            let file = normalize_anchor_path(&ev.source_file);
+    let evidence = bw.evidence.as_ref().map(|e| match e {
+        FactEvidence::Operation {
+            operation_id,
+            file,
+            line,
+            column,
+            excerpt,
+        } => {
             // Sorted: column, excerpt, file, line, sourceKind
             let mut anchor = serde_json::Map::new();
-            anchor.insert("column".into(), ev.start_column.into());
-            anchor.insert("excerpt".into(), ev.display_text.clone().into());
-            anchor.insert("file".into(), file.into());
-            anchor.insert("line".into(), ev.start_line.into());
+            anchor.insert("column".into(), (*column).into());
+            anchor.insert("excerpt".into(), excerpt.clone().into());
+            anchor.insert("file".into(), file.clone().into());
+            anchor.insert("line".into(), (*line).into());
             anchor.insert("sourceKind".into(), "source".into());
             // Sorted: anchor, operationId
             let mut ev_obj = serde_json::Map::new();
             ev_obj.insert("anchor".into(), serde_json::Value::Object(anchor));
-            ev_obj.insert("operationId".into(), op_id.clone().into());
-            Some(serde_json::Value::Object(ev_obj))
-        } else {
-            None
+            ev_obj.insert("operationId".into(), operation_id.clone().into());
+            serde_json::Value::Object(ev_obj)
         }
-    } else {
-        None
-    };
+        FactEvidence::Boundary(b) => boundary_to_json(b),
+    });
 
-    // Projected paths (already projected via reconstruct_witness_paths_pub).
+    // Projected paths (already projected via reconstruct_witness_paths_pub);
+    // a path cut at a rule-B boundary names it (absent on the cut).
     let projected_paths: Vec<serde_json::Value> = bw
         .paths
         .iter()
@@ -829,7 +930,10 @@ fn project_witness_json(
                 .iter()
                 .map(|h| query_hop_to_json(h, workspace_root))
                 .collect();
-            serde_json::json!({"hops": hops})
+            match &path.boundary {
+                Some(b) => serde_json::json!({"boundary": boundary_to_json(b), "hops": hops}),
+                None => serde_json::json!({"hops": hops}),
+            }
         })
         .collect();
 
@@ -920,11 +1024,10 @@ fn serialize_fingerprint_envelope(v: serde_json::Value) -> String {
     serialize_document_value(v)
 }
 
-/// Full `projectFingerprintQuery` with all parameters injected.
-#[allow(clippy::too_many_arguments)] // query-document fields; grouping would obscure
+/// Full `projectFingerprintQuery` with all parameters injected. The result is
+/// self-contained (#160 step 9 S9-16): no snapshot is read here.
 pub fn project_fingerprint_query_full(
     result: &FingerprintQueryResult,
-    snap: &CapabilitySnapshot,
     workspace_root: &str,
     filters: &FingerprintFilters,
     deterministic: bool,
@@ -932,13 +1035,6 @@ pub fn project_fingerprint_query_full(
     driver_version: &str,
     workspace_fingerprint: &str,
 ) -> String {
-    // Operation index (borrowed from snap; lives as long as snap).
-    let op_index: HashMap<String, &crate::engine::l5::snapshot::SnapshotOperationEvidence> = snap
-        .operation_index
-        .iter()
-        .map(|e| (e.operation_id.clone(), e))
-        .collect();
-
     // Project blocks.
     let mut blocks_arr: Vec<serde_json::Value> = Vec::new();
     for block in &result.blocks {
@@ -956,8 +1052,7 @@ pub fn project_fingerprint_query_full(
                     let fact_id = fact_id_of(fact);
                     let bw = witness_by_fi.get(&fi).copied();
 
-                    let witness_val =
-                        bw.map(|bw| project_witness_json(bw, fact, workspace_root, &op_index));
+                    let witness_val = bw.map(|bw| project_witness_json(bw, workspace_root));
 
                     let mut fj = serde_json::Map::new();
                     fj.insert("factId".into(), fact_id.into());
@@ -1704,7 +1799,14 @@ mod tests {
             include_inherited: true,
             witness_limit: WitnessLimit::Disabled,
         };
-        let result = fingerprint_query(&snap, &filters, false, &OwnerIndex::default());
+        let result = fingerprint_query(
+            &snap,
+            &filters,
+            false,
+            &OwnerIndex::default(),
+            None,
+            &|_| true,
+        );
         assert_eq!(result.diagnostics.len(), 1);
         match &result.diagnostics[0] {
             FingerprintQueryDiagnostic::SelectorAmbiguous {
@@ -1805,7 +1907,14 @@ mod tests {
             witness_limit: WitnessLimit::Capped(3),
         };
         crate::engine::l5::digest::DAG_BUILDS.with(|c| c.set(0));
-        let result = fingerprint_query(&snap, &filters, false, &OwnerIndex::default());
+        let result = fingerprint_query(
+            &snap,
+            &filters,
+            false,
+            &OwnerIndex::default(),
+            None,
+            &|_| true,
+        );
         let witnessed = result.blocks[0]
             .witnesses
             .iter()

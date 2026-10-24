@@ -95,6 +95,7 @@ fn fingerprint_json() -> Value {
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        single_app: true,
     };
     let result = run_fingerprint_pipeline(&opts).expect("fingerprint pipeline");
     let text = match result.output {

@@ -618,6 +618,13 @@ struct FingerprintCli {
     /// keys. Implies --format=json; incompatible with --shard and binary formats.
     #[arg(long = "inventory-only", default_value_t = false)]
     inventory_only: bool,
+
+    /// Analyse the workspace alone. The default loads the dependencies it requires
+    /// (as `analyze` and `graph` do), so effects on a dependency's tables resolve,
+    /// at more memory and time. Applies to `--routine` and `--inventory-only`; the
+    /// other forms analyse the workspace alone in this release.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
 }
 
 /// `DigestCli` — arguments for `alsem digest <ws>`.
@@ -1350,6 +1357,7 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
         verbosity: &f.verbosity,
         inventory_only: f.inventory_only,
         no_roots_config: f.no_roots_config,
+        single_app: f.single_app,
     };
 
     match run_fingerprint_pipeline(&opts) {

@@ -527,6 +527,8 @@ fn fingerprint_json() {
     assert_row("fingerprint json", &m, FINGERPRINT_ROW);
 }
 
+/// #160 step 9 §4.6 (T16): the `--routine` query reads a tree over the view's
+/// relation (cross-app by default): digest's row, no cut.
 #[test]
 fn fingerprint_query() {
     let (_d, ws) = ws_dep();
@@ -539,7 +541,74 @@ fn fingerprint_query() {
         "CallLib",
         "--deterministic",
     ]);
-    assert_row("fingerprint query", &m, FINGERPRINT_ROW);
+    assert_row("fingerprint query", &m, DIGEST_ROW);
+}
+
+/// T16: `--single-app` takes the same path over the workspace alone.
+#[test]
+fn fingerprint_query_single_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "fingerprint",
+        &ws,
+        "--format",
+        "json",
+        "--routine",
+        "CallLib",
+        "--deterministic",
+        "--single-app",
+    ]);
+    assert_row("fingerprint query single-app", &m, DIGEST_ROW);
+}
+
+/// #160 step 9 T21 (S′, spec §4.3): only a query with `--routine` moves to the
+/// view's tree. Precondition: on `ws_dep()` the cross-app `--routine CallLib`
+/// output differs from its `--single-app` one. Assertion: the human query
+/// with no flag and the `--roots` query with no `--routine` are byte-equal
+/// with and without `--single-app`, and stay on the cut (`build.combined_graph`
+/// 2, `FINGERPRINT_ROW`). DISCRIMINATION: routing every query form to the new
+/// path gives `combined_graph` 1 and different bytes.
+#[test]
+fn fingerprint_wide_query_stays_single_app() {
+    let (_d, ws) = ws_dep();
+    let routine = |extra: &[&str]| {
+        let mut a = vec![
+            "fingerprint",
+            ws.as_str(),
+            "--format",
+            "json",
+            "--routine",
+            "CallLib",
+            "--deterministic",
+        ];
+        a.extend_from_slice(extra);
+        let (out, _) = spawn_traced(&a, &[]);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert_ne!(
+        routine(&[]),
+        routine(&["--single-app"]),
+        "precondition: the universes differ on ws_dep"
+    );
+    for form in [
+        &["--format", "human"][..],
+        &["--format", "json", "--roots", "public-procedure"][..],
+    ] {
+        let mut outs = Vec::new();
+        for extra in [&[][..], &["--single-app"][..]] {
+            let mut a = vec!["fingerprint", ws.as_str(), "--deterministic"];
+            a.extend_from_slice(form);
+            a.extend_from_slice(extra);
+            let (out, m) = spawn_traced(&a, &[]);
+            assert_eq!(out.status.code(), Some(0), "{a:?}: {out:?}");
+            assert_row(&format!("{a:?}"), &m, FINGERPRINT_ROW);
+            outs.push(out.stdout);
+        }
+        assert!(
+            !outs[0].is_empty() && outs[0] == outs[1],
+            "{form:?}: equal with and without --single-app"
+        );
+    }
 }
 
 #[test]

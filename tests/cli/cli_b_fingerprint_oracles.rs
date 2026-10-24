@@ -63,6 +63,8 @@ fn empty_idx() -> FingerprintIndexesPub<'static> {
         pd_solution: Box::leak(Box::default()),
         typed_edges: &[],
         capability_facts: &[],
+        boundary: None,
+        boundary_displays: HashMap::new(),
     }
 }
 

@@ -4,6 +4,7 @@ Codeunit D49 Sender::ModifyThenRunModal  [public-procedure]
   coverage:   partial — object-run-unresolved
   writes:     none known reachable
   reads:      TableData "11111111-0000-0000-0000-0000000d4902/table/50100"
+  commit:     unknown
   publish:    none known reachable
   dispatch:   1 unresolved-dynamic
   ui:         "<unknown>"

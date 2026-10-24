@@ -171,8 +171,8 @@ fn write_zdeep(dir: &Path) {
 }
 
 /// T1 (a): `CallChain` → source `Lib.Outer` (a body, no COMMIT) →
-/// symbol-only `Z Deep.Work`.
-fn write_two_hop(dir: &Path) {
+/// symbol-only `Z Deep.Work`. Shared with the fingerprint query's T26.
+pub(crate) fn write_two_hop(dir: &Path) {
     dd::write_workspace(dir, "");
     let lib = format!(
         "codeunit 10 \"Dep Lib\"\n{{\n    procedure Outer()\n    var\n        Deep: Codeunit \"Z Deep\";\n    begin\n        Deep.Work();\n    end;\n\n{LIB_STUBS}}}\n"
@@ -477,8 +477,8 @@ fn diagnostics_channel_prove() {
 // ---------------------------------------------------------------------------
 
 /// Every r0 dir (recursive) with an `app.json`, no `.alpackages` and no
-/// declared dependency.
-fn no_dependency_dirs() -> Vec<PathBuf> {
+/// declared dependency. Shared with the fingerprint query's T7.
+pub(crate) fn no_dependency_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = walkdir::WalkDir::new(repo().join("tests/r0-corpus"))
         .into_iter()
         .map(|e| e.unwrap().into_path())
@@ -495,7 +495,7 @@ fn no_dependency_dirs() -> Vec<PathBuf> {
 }
 
 /// The root classifications' routine ids of `ws`, from the single-app model.
-fn root_ids(ws: &Path) -> Vec<String> {
+pub(crate) fn root_ids(ws: &Path) -> Vec<String> {
     let inputs = al_sem::program::inputs::InputSet::read(ws, &Default::default());
     let Ok(t) = al_sem::engine::gate::run::AnalysisTarget::build(&inputs, true, "t") else {
         return vec![];
@@ -606,10 +606,9 @@ fn single_app_flag_reaches_prove() {
         ("human", "prove.dd.CallChain.may-commit.human.txt"),
     ] {
         let got = run(&["--single-app"], format);
+        // Minted from the base binary, so never regenerated: regen mode
+        // compares too.
         let path = t8_golden(file);
-        if crate::regen::regen_mode() {
-            panic!("T8 goldens are minted from the base binary, never regenerated: {path:?}");
-        }
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");
     }

@@ -92,6 +92,7 @@ mod cli_envelope_detector_set;
 mod cli_escaped_object_names;
 mod cli_event_dispatch_first_hop;
 mod cli_events_policy_dependencies;
+mod cli_fingerprint_routine_cross_app;
 mod cli_graph_export;
 mod cli_implicit_trigger_cone;
 mod cli_inputs_frozen;
