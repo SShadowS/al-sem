@@ -569,7 +569,7 @@ struct WitnessOutcomeExt {
 /// A rule-B boundary (spec §14.3.5 item 2): its identity (`cs:` call site,
 /// else `op:` firing operation, else `ev:` event) and `<App>.<Routine>`, the
 /// dependency routine it enters.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct BoundaryEnd {
     id: String,
     display: String,
@@ -894,21 +894,53 @@ struct ProofOutcome {
 /// construction. Breadth-first by length; a path never revisits a STATE (it may
 /// revisit a routine). Limits: `MAX_DEPTH` edges, `MAX_STATES` expansions.
 ///
-/// The cap. A proof's identity is its edge sequence plus its producer fact (its
-/// terminal), and only distinct proofs count toward `cap`. Once `cap` are found,
-/// the rest of that LENGTH is still enumerated: the caller picks the first `cap`
-/// of the combined set in its own global order, and every proof left out is
-/// longer than all of those, so the capped result is a prefix of the uncapped
-/// one. Partial paths are parent-linked nodes, so a push costs one node, never
-/// a copy of the path.
-fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) -> ProofOutcome {
-    /// A partial path's last state, and its parent node plus the edge between
-    /// them (`None` at the root state).
+/// The cap counts distinct CANDIDATES (spec §14.3.1 item 4 (c)): a proof's key
+/// is the caller's, its projected path and end, and under rule B the path is
+/// cut at its first edge into dependency code (§14.3.5 item 5), so many proofs
+/// behind one boundary are one candidate. A partial path that has crossed the
+/// boundary at length `i` has its key fixed with projected length `i`; it is
+/// walked before any longer uncrossed path (its "level" is `i`), and dropped
+/// once its key is found. Once `cap` keys are found, the rest of that level is
+/// still enumerated: every candidate left out is longer than all of those, so
+/// the capped result is a prefix of the uncapped one in key order. Every
+/// distinct (edges, producer) proof found is returned (equal keys are the
+/// caller's twins). Partial paths are parent-linked nodes, so a push costs one
+/// node, never a copy of the path.
+fn enumerate_proofs<'i>(
+    root: &str,
+    f: &Fact,
+    idx: &'i FingerprintIndexes,
+    cap: usize,
+    hop_cache: &mut HopCache<'i>,
+) -> ProofOutcome {
+    /// A partial path's last state, its parent node plus the edge between them
+    /// (`None` at the root state), and, once it has crossed into dependency
+    /// code, its candidate key and the level it crossed at.
     struct Node {
         state: StateIx,
         parent: Option<(usize, EdgeIx)>,
         len: usize,
+        crossed: Option<(Rc<Key>, usize)>,
     }
+    // A candidate key: the projected hops' JSON and the boundary identity.
+    type Key = (Vec<String>, Option<BoundaryEnd>);
+    let key_of =
+        |n: &[Node], mut cur: usize, boundary: Option<BoundaryEnd>, hc: &mut HopCache<'i>| {
+            let mut json = Vec::new();
+            while let Some((parent, e)) = n[cur].parent {
+                let memo = hc.get(&idx.typed_edges[e], idx);
+                json.push(
+                    memo.projected
+                        .as_ref()
+                        .expect("a walked edge projects")
+                        .json()
+                        .to_string(),
+                );
+                cur = parent;
+            }
+            json.reverse();
+            (json, boundary)
+        };
     let mut out = ProofOutcome::default();
     if fact_first_hop(f).is_none() {
         return out;
@@ -929,21 +961,39 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
             state: s,
             parent: None,
             len: 0,
+            crossed: None,
         })
         .collect();
     let mut queue: std::collections::VecDeque<usize> = (0..nodes.len()).collect();
+    // Crossed partial paths: their level is at most the current one, so they
+    // are walked first.
+    let mut crossed_q: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
     let mut seen: std::collections::HashSet<(Vec<EdgeIx>, usize)> =
         std::collections::HashSet::new();
-    // The length at which the `cap`-th distinct proof was found.
+    let mut found: std::collections::HashSet<Rc<Key>> = std::collections::HashSet::new();
+    // The level at which the `cap`-th distinct candidate was found.
     let mut cut_len: Option<usize> = None;
     let mut popped = 0usize;
     let mut depth_exceeded = false;
-    while let Some(&ni) = queue.front() {
+    loop {
+        let ni = if let Some(ni) = crossed_q.pop_front() {
+            if nodes[ni]
+                .crossed
+                .as_ref()
+                .is_some_and(|(k, _)| found.contains(&**k))
+            {
+                continue;
+            }
+            ni
+        } else {
+            let Some(&ni) = queue.front() else { break };
+            if cut_len.is_some_and(|cut| nodes[ni].len > cut) {
+                break;
+            }
+            queue.pop_front();
+            ni
+        };
         let len = nodes[ni].len;
-        if cut_len.is_some_and(|cut| len > cut) {
-            break;
-        }
-        queue.pop_front();
         popped += 1;
         if popped > MAX_STATES {
             out.diagnostics.push((
@@ -968,14 +1018,19 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
             edges.reverse();
             if seen.insert((edges.clone(), st.producer_fact)) {
                 out.paths.push((edges, st.producer_fact));
-                if out.paths.len() >= cap {
-                    cut_len.get_or_insert(len);
+                let (key, level) = match &nodes[ni].crossed {
+                    Some((k, level)) => (Rc::clone(k), *level),
+                    None => (Rc::new(key_of(&nodes, ni, None, hop_cache)), len),
+                };
+                if found.insert(key) && found.len() >= cap {
+                    cut_len.get_or_insert(level);
                 }
             }
             continue;
         }
         for &(callee, e) in &idx.pd.links[st.links.clone()] {
-            if len == 0 && !is_first_hop(&idx.typed_edges[e], f) {
+            let edge = &idx.typed_edges[e];
+            if len == 0 && !is_first_hop(edge, f) {
                 continue;
             }
             let mut cur = Some(ni);
@@ -990,15 +1045,33 @@ fn enumerate_proofs(root: &str, f: &Fact, idx: &FingerprintIndexes, cap: usize) 
             if revisits {
                 continue;
             }
+            let crossed = match &nodes[ni].crossed {
+                Some((k, level)) => Some((Rc::clone(k), *level)),
+                None if edge_to(edge).is_some_and(|to| idx.is_dependency(to)) => {
+                    let b = boundary_terminal(edge, idx).0;
+                    let key = key_of(&nodes, ni, Some(b), hop_cache);
+                    if found.contains(&key) {
+                        continue;
+                    }
+                    Some((Rc::new(key), len))
+                }
+                None => None,
+            };
+            let is_crossed = crossed.is_some();
             nodes.push(Node {
                 state: callee,
                 parent: Some((ni, e)),
                 len: len + 1,
+                crossed,
             });
-            queue.push_back(nodes.len() - 1);
+            if is_crossed {
+                crossed_q.push_back(nodes.len() - 1);
+            } else {
+                queue.push_back(nodes.len() - 1);
+            }
         }
     }
-    if cut_len.is_some() && !queue.is_empty() {
+    if cut_len.is_some() && !(queue.is_empty() && crossed_q.is_empty()) {
         out.truncated = true;
     }
     if depth_exceeded {
@@ -1735,7 +1808,7 @@ fn reconstruct_witness_paths<'i>(
     // #69 D3: the root's own proofs first, then the BFS for ordinary carriers.
     // Both obey the first-hop contract, and an empty-path diagnostic is decided
     // over the combined set.
-    let proofs = enumerate_proofs(root_id, fact, idx, cap);
+    let proofs = enumerate_proofs(root_id, fact, idx, cap, hop_cache);
 
     let empty: Vec<&SnapshotGraphEdge> = Vec::new();
     let out_from_root = idx.outgoing_edges.get(root_id).unwrap_or(&empty);
@@ -6398,7 +6471,7 @@ codeunit 50101 "T7b Temp Classes"
             SnapTempState::ParameterDependent { parameter_index: 0 },
         );
         let idx = build_fingerprint_indexes(&snap);
-        let out = enumerate_proofs("R", &f, &idx, HARD_PATH_CAP);
+        let out = enumerate_proofs("R", &f, &idx, HARD_PATH_CAP, &mut HopCache::default());
         assert!(out.paths.is_empty(), "{:?}", out.paths);
     }
 
@@ -6474,7 +6547,7 @@ codeunit 50101 "T7b Temp Classes"
             SnapTempState::Known { value: false },
         );
         let idx = build_fingerprint_indexes(&snap);
-        let out = enumerate_proofs("Root", &f, &idx, HARD_PATH_CAP);
+        let out = enumerate_proofs("Root", &f, &idx, HARD_PATH_CAP, &mut HopCache::default());
         assert_eq!(out.paths, vec![(vec![0, 1, 2], 0)]);
         assert!(!out.incomplete && !out.truncated);
     }
@@ -6561,8 +6634,28 @@ codeunit 50101 "T7b Temp Classes"
             SnapTempState::Known { value: false },
         );
         let idx = build_fingerprint_indexes(&snap);
-        let out = enumerate_proofs("Root", &f, &idx, 2);
+        let out = enumerate_proofs("Root", &f, &idx, 2, &mut HopCache::default());
         assert_eq!(out.paths, vec![(vec![0, 1], 0), (vec![0, 2, 3], 0)]);
+        assert!(!out.truncated && !out.incomplete);
+
+        // Final panel F1-S1, the cut side: the twins are now two PRODUCERS on
+        // the same edges, two distinct raw proofs with one candidate key. Both
+        // are returned (the caller's twins), and they count once.
+        snap.capability_facts.push(snap.capability_facts[0].clone());
+        for s in [1, 3, 5, 7] {
+            snap.pd_solution.states[s].producer_fact = 1;
+        }
+        let idx = build_fingerprint_indexes(&snap);
+        let out = enumerate_proofs("Root", &f, &idx, 2, &mut HopCache::default());
+        assert_eq!(
+            out.paths,
+            vec![
+                (vec![0, 1], 0),
+                (vec![0, 1], 1),
+                (vec![0, 2, 3], 0),
+                (vec![0, 2, 3], 1)
+            ]
+        );
         assert!(!out.truncated && !out.incomplete);
     }
 
@@ -6704,7 +6797,7 @@ codeunit 50101 "T7b Temp Classes"
         );
         let idx = build_fingerprint_indexes(&snap);
         assert!(
-            enumerate_proofs("R0", &f, &idx, HARD_PATH_CAP)
+            enumerate_proofs("R0", &f, &idx, HARD_PATH_CAP, &mut HopCache::default())
                 .diagnostics
                 .iter()
                 .any(|(k, _)| k == "depth-exceeded"),
@@ -8354,6 +8447,117 @@ codeunit 50102 "W10 Merge"
                 assert_eq!(w4b_cut_keys(&out), oracle[..k], "{name} cap {cap}");
                 assert_eq!(out.truncated, oracle.len() > cap, "{name} cap {cap}");
             }
+        }
+    }
+
+    /// Spec §14.3.1 item 4 (c) and §14.3.5 item 5 (final panel F1-S1): the
+    /// proofs' cap counts DISTINCT candidates after the rule-B cut, in key
+    /// order. Hand-stated precondition: a producer-only fact (no BFS carrier,
+    /// so only proofs witness it). `R → P` is the first hop; `P` calls `DepA`
+    /// (`cs-a`), whose two seeds give two raw proofs of length 3 that cut to
+    /// ONE candidate; `P` calls `DepC` (`cs-c`), whose seed lies 4 edges deep
+    /// (raw length 5, projected length 1); `P → Q → DepB` (`cs-b`) gives a
+    /// length-2 candidate at raw length 4. Key order: A, C (length 1), B.
+    #[test]
+    fn proof_cap_counts_distinct_candidates_after_the_boundary_cut() {
+        let mut snap = rb_snapshot(
+            &[
+                "R", "P", "Q", "DepA", "DepB", "DepC", "X", "Y", "H1", "H2", "H3", "H4",
+            ],
+            &["DepA", "DepB", "DepC", "X", "Y", "H1", "H2", "H3", "H4"],
+            &[],
+        );
+        snap.typed_edges = vec![
+            rb_call("R", "P", "cs-root"),
+            rb_call("P", "DepA", "cs-a"),
+            rb_call("P", "DepC", "cs-c"),
+            rb_call("P", "Q", "cs-q"),
+            rb_call("DepA", "H1", "cs-h1"),
+            rb_call("DepA", "H2", "cs-h2"),
+            rb_call("DepC", "X", "cs-x"),
+            rb_call("X", "Y", "cs-y"),
+            rb_call("Y", "H4", "cs-h4"),
+            rb_call("Q", "DepB", "cs-b"),
+            rb_call("DepB", "H3", "cs-h3"),
+        ];
+        snap.capability_facts = vec![insert_fact(
+            "H1#",
+            "direct",
+            Some("op-h1"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        )];
+        let arena = &mut snap.pd_solution;
+        let real = TempStateKind::Known(false);
+        let pd = TempStateKind::ParameterDependent(0);
+        arena.states = vec![
+            state("H1#", pd.clone(), true, 0..0),
+            state("H2#", pd.clone(), true, 0..0),
+            state("H3#", pd.clone(), true, 0..0),
+            state("H4#", pd, true, 0..0),
+            state("Y#", real.clone(), false, 0..1),
+            state("X#", real.clone(), false, 1..2),
+            state("DepC#", real.clone(), false, 2..3),
+            state("DepA#", real.clone(), false, 3..5),
+            state("DepB#", real.clone(), false, 5..6),
+            state("Q#", real.clone(), false, 6..7),
+            state("P#", real.clone(), false, 7..10),
+            state("R#", real, false, 10..11),
+        ];
+        arena.links = vec![
+            (3, 8),
+            (4, 7),
+            (5, 6),
+            (0, 4),
+            (1, 5),
+            (2, 10),
+            (8, 9),
+            (7, 1),
+            (6, 2),
+            (9, 3),
+            (10, 0),
+        ];
+        arena.by_routine.insert("R#".to_string(), vec![11]);
+        let f = insert_fact(
+            "R#",
+            "inherited",
+            None,
+            Some("cs-root"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        let ends = |cap: usize| -> (Vec<String>, bool) {
+            let out = reconstruct_witness_paths(
+                "R#",
+                &f,
+                &idx,
+                cap,
+                &mut HopCache::default(),
+                &mut DagCache::default(),
+                &CarrierCache::default(),
+            );
+            let keys = w4b_cut_keys(&out)
+                .into_iter()
+                .map(|(len, _, end)| format!("{len} {end}"))
+                .collect();
+            (keys, out.truncated)
+        };
+        let all = [
+            "1 boundary:cs:cs-a",
+            "1 boundary:cs:cs-c",
+            "2 boundary:cs:cs-b",
+        ];
+        assert_eq!(ends(HARD_PATH_CAP), (all.map(String::from).to_vec(), false));
+        for cap in 1..=all.len() + 1 {
+            let k = all.len().min(cap);
+            assert_eq!(
+                ends(cap),
+                (
+                    all[..k].iter().map(|s| s.to_string()).collect(),
+                    all.len() > cap
+                ),
+                "cap {cap}"
+            );
         }
     }
 }
