@@ -78,22 +78,34 @@ const WORKSPACE_FILES: &[&str] = &[
     "al-sem.policy.yml",
 ];
 
-/// `p` against `cwd`, `.` and `..` folded lexically, then its deepest
-/// existing ancestor canonicalized and the rest appended (R8-1): two
-/// spellings of one file through a symlink, a Windows case difference or an
-/// 8.3 name are one path. The part that does not exist yet is compared as
-/// spelled, lowercased on Windows (a case-insensitive file system).
-fn resolve(cwd: &Path, p: &Path) -> PathBuf {
-    let mut lexical = PathBuf::new();
+/// `p` against `cwd` with `.` and `..` folded as the OS takes them: a `..`
+/// goes to the parent of where its prefix leads (a symlink's target), so an
+/// existing prefix is canonicalized before it is popped (R9-3); a prefix that
+/// does not exist pops as spelled.
+fn fold(cwd: &Path, p: &Path) -> PathBuf {
+    let mut folded = PathBuf::new();
     for c in cwd.join(p).components() {
         match c {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                lexical.pop();
+                if let Ok(canonical) = std::fs::canonicalize(&folded) {
+                    folded = canonical;
+                }
+                folded.pop();
             }
-            c => lexical.push(c),
+            c => folded.push(c),
         }
     }
+    folded
+}
+
+/// `p` [`fold`]ed, then its deepest existing ancestor canonicalized and the
+/// rest appended (R8-1): two spellings of one file through a symlink, a
+/// Windows case difference or an 8.3 name are one path. The part that does
+/// not exist yet is compared as spelled, lowercased on Windows (a
+/// case-insensitive file system).
+fn resolve(cwd: &Path, p: &Path) -> PathBuf {
+    let lexical = fold(cwd, p);
     let mut rest = Vec::new();
     let mut base = lexical.as_path();
     loop {
@@ -122,15 +134,23 @@ fn resolve(cwd: &Path, p: &Path) -> PathBuf {
 /// Whether a workspace read of `ws` takes the file `f` (`WorkspaceInputs::read`,
 /// the policy auto-detect, the dependency loader): an `.al` or `.app` file or
 /// one of [`WORKSPACE_FILES`] under `ws` (any case, as the loader matches),
-/// or an `.app` in an ancestor `.alpackages` the loader reads (R8-3).
-fn read_by_workspace(ws: &Path, f: &Path) -> bool {
-    use crate::dependencies::{Role, cache_scope_role, package_cache_scope};
-    let under_ws = f.starts_with(ws)
+/// or an `.app` in an ancestor `.alpackages` the loader reads (R8-3). The
+/// loader walks the ancestors of the workspace AS SPELLED, so its candidate
+/// folders come from the [`fold`]ed spelling and are compared [`resolve`]d
+/// (R9-4). `f` is resolved; `ws` is the job's spelling.
+fn read_by_workspace(cwd: &Path, ws: &Path, f: &Path) -> bool {
+    use crate::dependencies::{CacheScope, Role, cache_scope_role, package_cache_scope};
+    let under_ws = f.starts_with(resolve(cwd, ws))
         && (crate::source_text::has_al_extension(f)
             || f.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))
             || f.file_name()
                 .is_some_and(|n| WORKSPACE_FILES.iter().any(|w| n.eq_ignore_ascii_case(w))));
-    under_ws || cache_scope_role(&package_cache_scope(ws), f) == Some(Role::AppFile)
+    let spelled = package_cache_scope(&fold(cwd, ws));
+    let scope = CacheScope {
+        candidates: spelled.candidates.iter().map(|c| resolve(cwd, c)).collect(),
+        walked_dirs: vec![],
+    };
+    under_ws || cache_scope_role(&scope, f) == Some(Role::AppFile)
 }
 
 /// Every write target of the run checked before any build (D2.4, 12A-10):
@@ -191,14 +211,13 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
             }
         }
         for ws in &paths.workspaces {
-            let ws = resolve(cwd, ws);
             for (w, t) in writes.iter().filter(|(w, _)| *w != r) {
                 let Target::File(f) = t else { continue };
-                if read_by_workspace(&ws, f) {
+                if read_by_workspace(cwd, ws, f) {
                     return fail(format!(
                         "{} reads the workspace {}, where {} writes {}",
                         name(r),
-                        ws.display(),
+                        resolve(cwd, ws).display(),
                         name(*w),
                         f.display()
                     ));

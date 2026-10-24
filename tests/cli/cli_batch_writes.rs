@@ -94,14 +94,18 @@ fn write_errors(out: &Output) -> Vec<String> {
         .collect()
 }
 
-/// `dir/link` a symlink to `dir/real`: one file's two spellings,
-/// `(link/x.json, real/x.json)`. None where a symlink needs a privilege.
-fn symlinked_dir(dir: &Path) -> Option<(String, String)> {
-    std::fs::create_dir(dir.join("real")).unwrap();
+/// `dir/link` and `dir/b/link`, symlinks to `dir/sub/real`; `dir/b` exists.
+/// The cases name paths under `dir` by their relative spelling. None where a
+/// symlink needs a privilege.
+fn symlinked_dir(dir: &Path) -> Option<impl Fn(&str) -> String> {
+    std::fs::create_dir_all(dir.join("sub/real")).unwrap();
+    std::fs::create_dir(dir.join("b")).unwrap();
     #[cfg(unix)]
-    std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
-    let file = |d: &str| dir.join(d).join("x.json").to_string_lossy().into_owned();
-    cfg!(unix).then(|| (file("link"), file("real")))
+    for link in ["link", "b/link"] {
+        std::os::unix::fs::symlink(dir.join("sub/real"), dir.join(link)).unwrap();
+    }
+    let dir = dir.to_path_buf();
+    cfg!(unix).then(move || move |rel: &str| dir.join(rel).to_string_lossy().into_owned())
 }
 
 /// T5 (b)-(b5), 12A-10: each conflicting manifest is refused before any build:
@@ -141,15 +145,36 @@ fn batch_write_conflicts_are_usage_errors() {
     let linked = symlinked_dir(s.path());
     let mut cases: Vec<(&str, Vec<Value>, &str)> = linked
         .iter()
-        .map(|(via_link, via_real)| {
-            (
-                "(R8-1) a write through a symlink, a read through its target",
-                vec![
-                    events_out(via_link),
-                    job(&["diff", via_real, &ws], None, None),
-                ],
-                "which batch 0 job 0 writes",
-            )
+        .flat_map(|at| {
+            [
+                (
+                    "(R8-1) a write through a symlink, a read through its target",
+                    vec![
+                        events_out(&at("link/x.json")),
+                        job(&["diff", &at("sub/real/x.json"), &ws], None, None),
+                    ],
+                    "which batch 0 job 0 writes",
+                ),
+                // `link/..` is the target's parent (`sub`), not `link`'s.
+                (
+                    "(R9-3) a write through link/.., a read of the target's parent",
+                    vec![
+                        events_out(&at("link/../x.json")),
+                        job(&["diff", &at("sub/x.json"), &ws], None, None),
+                    ],
+                    "which batch 0 job 0 writes",
+                ),
+                // The loader walks the spelled workspace's ancestors (`b`),
+                // not its target's (`sub`).
+                (
+                    "(R9-4) an .app beside a symlinked workspace's spelling",
+                    vec![
+                        job(&["events", "fanout", &at("b/link")], None, None),
+                        events_out(&at("b/.alpackages/y.app")),
+                    ],
+                    "reads the workspace",
+                ),
+            ]
         })
         .collect();
     cases.extend([

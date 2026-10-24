@@ -18,9 +18,23 @@ use std::process::{Command, Output, Stdio};
 
 use serde_json::{Value, json};
 
-use crate::cli_batch_plan::argv;
+use crate::cli_batch_plan::{BatchRun, argv};
 use crate::cli_batch_writes::{job, run_manifest};
 use crate::cli_build_counters::{policy_yaml, write_diff, ws_a, ws_dep};
+
+/// The second policy of W's view (R9-1): its own rule, so its output differs
+/// from the first policy's.
+const POLICY2: &str = "policy2.yaml";
+const POLICY2_YAML: &str = "version: 1
+description: \"#277 R9-1: a second policy, one rule the first does not have\"
+rules:
+  - id: second-policy-writes
+    title: \"Table writes are reviewed (second policy)\"
+    severity: high
+    when:
+      capability.op: [insert, modify, delete]
+    facts: any
+";
 
 /// Every solve prints one non-convergence line (debug-only seam, spec T1 B1).
 const SEAM: (&str, &str) = ("ALSEM_TEST_SUMMARIZE_DIAGNOSTIC", "1");
@@ -71,46 +85,41 @@ fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     out
 }
 
-/// One `alsem batch` of `jobs` from `cwd` (the manifest and the default
-/// streams in their own directory, so `cwd` holds only the jobs' files).
-struct Batch {
-    out: Output,
-    streams: tempfile::TempDir,
+/// One `alsem batch` of `jobs` from `cwd` with `stdin` piped in (the manifest
+/// and the default streams in their own directory, so `cwd` holds only the
+/// jobs' files); trace off, so the run carries no events.
+fn run_batch(jobs: &[Vec<String>], cwd: &Path, env: &[(&str, &str)], stdin: &[u8]) -> BatchRun {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = dir.path().join("m.json");
+    let jobs: Vec<Value> = jobs.iter().map(|a| json!({ "argv": a })).collect();
+    std::fs::write(&manifest, json!({ "jobs": jobs }).to_string()).unwrap();
+    let args = argv(&["batch", &manifest.to_string_lossy()]);
+    let out = alsem(&args, cwd, env, stdin);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "run stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    BatchRun {
+        out,
+        events: vec![],
+        counters: BTreeMap::new(),
+        dir,
+    }
 }
 
-impl Batch {
-    fn run(jobs: &[Vec<String>], cwd: &Path, env: &[(&str, &str)], stdin: &[u8]) -> Batch {
-        let streams = tempfile::tempdir().unwrap();
-        let manifest = streams.path().join("m.json");
-        let jobs: Vec<Value> = jobs.iter().map(|a| json!({ "argv": a })).collect();
-        std::fs::write(&manifest, json!({ "jobs": jobs }).to_string()).unwrap();
-        let args = argv(&["batch", &manifest.to_string_lossy()]);
-        let out = alsem(&args, cwd, env, stdin);
-        assert_eq!(
-            out.status.code(),
-            Some(0),
-            "run stderr: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        Batch { out, streams }
-    }
-
-    /// Job `i`'s line, stdout and stderr.
-    fn job(&self, i: usize) -> (Value, Vec<u8>, Vec<u8>) {
-        let line = String::from_utf8_lossy(&self.out.stdout)
-            .lines()
-            .nth(i)
-            .map(|l| serde_json::from_str::<Value>(l).unwrap())
-            .unwrap_or_else(|| panic!("no line for job {i}"));
-        let read = |ext: &str| std::fs::read(self.streams.path().join(format!("0.{i}.{ext}")));
-        (line, read("stdout").unwrap(), read("stderr").unwrap())
-    }
+/// Job `i`'s line, stdout and stderr.
+fn job_of(b: &BatchRun, i: usize) -> (Value, Vec<u8>, Vec<u8>) {
+    let line = b.lines().swap_remove(i);
+    let (stdout, stderr) = b.streams(i);
+    (line, stdout, stderr)
 }
 
 /// Job `i` of the batch equals `alone` (its separate run): exit, stdout,
 /// stderr.
-fn assert_job_equals(b: &Batch, i: usize, what: &str, alone: &Output) {
-    let (line, stdout, stderr) = b.job(i);
+fn assert_job_equals(b: &BatchRun, i: usize, what: &str, alone: &Output) {
+    let (line, stdout, stderr) = job_of(b, i);
     assert_eq!(line["job"], i, "{what}");
     assert_eq!(
         line["exit"].as_i64(),
@@ -200,6 +209,7 @@ impl Fixture {
             );
         }
         std::fs::write(fx.input("empty.diff"), "").unwrap();
+        std::fs::write(fx.input(POLICY2), POLICY2_YAML).unwrap();
         fx
     }
 
@@ -217,10 +227,11 @@ impl Fixture {
             self.d.as_str(),
         );
         let (diff, policy) = (self.diff.as_str(), policy_yaml());
-        let (b0, snap, empty) = (
+        let (b0, snap, empty, policy2) = (
             self.input("b0.json"),
             self.input("snap.json"),
             self.input("empty.diff"),
+            self.input(POLICY2),
         );
         let det = |a: &[&str]| argv(&[a, &["--deterministic"]].concat());
         let mut jobs = vec![
@@ -253,7 +264,7 @@ impl Fixture {
             det(&["fingerprint", w, "--inventory-only"]),
             det(&["events", "fanout", w, "--format", "json"]),
             det(&["events", "chains", w, "--format", "json"]),
-            // Two policies on one view.
+            // Two policies on one view (R9-1: two distinct policy files).
             det(&[
                 "policy", "check", w, "--policy", &policy, "--format", "json",
             ]),
@@ -262,7 +273,7 @@ impl Fixture {
                 "check",
                 w,
                 "--policy",
-                &policy,
+                &policy2,
                 "--format",
                 "sarif",
                 "--out",
@@ -433,9 +444,30 @@ fn batch_equals_standalone() {
         String::from_utf8_lossy(&traced.stderr)
     );
     let vs = views(&events);
-    assert!(vs.len() >= 4, "two workspaces × two universes: {vs:?}");
     for (jobs_on, _, _) in &vs {
         assert!(jobs_on.len() >= 2, "a view with one job: {vs:?}");
+    }
+    // W and R each have a cross-app and a single-app view (R9-6): a job's
+    // view key read off its argv (its workspace; `--single-app`), skipping
+    // fingerprint and diff, whose universe the argv does not spell.
+    let key = |j: &[String]| {
+        let ws = [fx.w.as_str(), fx.r.as_str()]
+            .into_iter()
+            .find(|w| j.iter().any(|a| a == w))?;
+        let single = j.iter().any(|a| a == "--single-app");
+        (single || !matches!(j[0].as_str(), "fingerprint" | "diff")).then_some((ws, single))
+    };
+    let keys: std::collections::BTreeSet<(&str, bool)> = vs
+        .iter()
+        .flat_map(|(on, _, _)| on.iter().filter_map(|&i| key(&jobs[i])))
+        .collect();
+    for ws in [fx.w.as_str(), fx.r.as_str()] {
+        for single in [false, true] {
+            assert!(
+                keys.contains(&(ws, single)),
+                "{ws} single-app {single}: a view of its own: {keys:?}"
+            );
+        }
     }
     let index_of = |args: &[&str]| {
         jobs.iter()
@@ -458,7 +490,7 @@ fn batch_equals_standalone() {
     assert!(*snapshots >= 2, "two tree jobs on one view: {snapshots}");
 
     let cwd = tempfile::tempdir().unwrap();
-    let b = Batch::run(&jobs, cwd.path(), &[SEAM], stdin);
+    let b = run_batch(&jobs, cwd.path(), &[SEAM], stdin);
     let mut written: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
     for (i, args) in jobs.iter().enumerate() {
         let own = tempfile::tempdir().unwrap();
@@ -487,14 +519,14 @@ fn batch_equals_standalone() {
         &fx.input("empty.diff"),
         "--deterministic",
     ]);
-    assert_eq!(b.job(empty).0["exit"], 1, "the empty diff exits 1");
+    assert_eq!(job_of(&b, empty).0["exit"], 1, "the empty diff exits 1");
     assert!(
         written.len() >= 5,
         "the jobs write files: {:?}",
         written.keys()
     );
     let digest = index_of(&["digest", &fx.w, "--diff", &fx.diff, "--deterministic"]);
-    let (_, _, stderr) = b.job(digest);
+    let (_, _, stderr) = job_of(&b, digest);
     let seam = String::from_utf8_lossy(&stderr).matches(SEAM_LINE).count();
     assert_eq!(seam, 1, "B1's precondition: digest's l4 line, once");
     let primary = index_of(&["analyze", &fx.d, "--format", "json", "--deterministic"]);
@@ -504,6 +536,28 @@ fn batch_equals_standalone() {
         p != all,
         "B3's precondition: D's two scopes report differently, standalone\n{}",
         String::from_utf8_lossy(&all)
+    );
+    // R9-1's precondition: the second policy job's standalone output differs
+    // from the same job on the first policy, so a policy leaked across jobs
+    // shows in the equalities above.
+    let second = jobs
+        .iter()
+        .position(|j| j.iter().any(|a| a.ends_with(POLICY2)))
+        .expect("the second policy job");
+    let first_policy = policy_yaml();
+    let on_first: Vec<String> = jobs[second]
+        .iter()
+        .map(|a| match a.ends_with(POLICY2) {
+            true => first_policy.clone(),
+            false => a.clone(),
+        })
+        .collect();
+    let own = tempfile::tempdir().unwrap();
+    alsem(&on_first, own.path(), &[], b"");
+    let sarif = Path::new("policy.sarif");
+    assert!(
+        files(own.path())[sarif] != written[sarif],
+        "R9-1's precondition: the two policies report differently, standalone"
     );
 }
 
@@ -520,19 +574,26 @@ fn batch_output_independent_of_neighbours() {
     let jobs: Vec<Vec<String>> = all
         .into_iter()
         .filter(|j| {
-            j.get(1).map(String::as_str) == Some(w)
+            j.iter().any(|a| a == w)
                 && !j
                     .iter()
                     .any(|a| a == "--single-app" || a == "--out" || a == "--update-baseline")
                 && !matches!(j[0].as_str(), "fingerprint" | "diff")
         })
         .collect();
+    // (graph writes its `--out`, so it is no neighbour here.)
+    for cmd in ["analyze", "digest", "prove", "events", "policy", "query"] {
+        assert!(
+            jobs.iter().any(|j| j[0] == cmd),
+            "R9-2: a {cmd} neighbour on W's view"
+        );
+    }
     let j = jobs
         .iter()
         .position(|a| a.iter().any(|x| x == "CallLib") && a[0] == "digest")
         .expect("J");
     let census = [("ALSEM_RETAINED_CENSUS", "1")];
-    let members = |b: &Batch| -> Vec<u64> {
+    let members = |b: &BatchRun| -> Vec<u64> {
         String::from_utf8_lossy(&b.out.stderr)
             .lines()
             .filter_map(|l| l.strip_prefix("[retained-census] witness.members="))
@@ -541,15 +602,15 @@ fn batch_output_independent_of_neighbours() {
     };
     let cwd = tempfile::tempdir().unwrap();
     let stdin = fx.diff_text.as_slice();
-    let alone = Batch::run(std::slice::from_ref(&jobs[j]), cwd.path(), &census, stdin);
-    let together = Batch::run(&jobs, cwd.path(), &census, stdin);
+    let alone = run_batch(std::slice::from_ref(&jobs[j]), cwd.path(), &census, stdin);
+    let together = run_batch(&jobs, cwd.path(), &census, stdin);
     let (m_alone, m_union) = (members(&alone), members(&together));
     assert!(
         m_alone.len() == 1 && m_union.len() == 1 && m_alone[0] < m_union[0],
         "J's subjects a strict subset of the union: {m_alone:?} vs {m_union:?}"
     );
-    let (line, stdout, stderr) = alone.job(0);
-    let (t_line, t_stdout, t_stderr) = together.job(j);
+    let (line, stdout, stderr) = job_of(&alone, 0);
+    let (t_line, t_stdout, t_stderr) = job_of(&together, j);
     assert_eq!(line["exit"], t_line["exit"]);
     assert_eq!(line["files"], t_line["files"]);
     assert_eq!(
@@ -563,9 +624,13 @@ fn batch_output_independent_of_neighbours() {
 }
 
 /// The number of times `line` appears in each job's stderr.
-fn line_counts(b: &Batch, jobs: usize, line: &str) -> Vec<usize> {
+fn line_counts(b: &BatchRun, jobs: usize, line: &str) -> Vec<usize> {
     (0..jobs)
-        .map(|i| String::from_utf8_lossy(&b.job(i).2).matches(line).count())
+        .map(|i| {
+            String::from_utf8_lossy(&b.streams(i).1)
+                .matches(line)
+                .count()
+        })
         .collect()
 }
 
@@ -583,13 +648,13 @@ fn batch_job_lines_by_count() {
         argv(&["events", "chains", &a, "--format", "json"]),
         argv(&["graph", &a]),
     ];
-    let b = Batch::run(&jobs, cwd.path(), &[SEAM], b"");
+    let b = run_batch(&jobs, cwd.path(), &[SEAM], b"");
     assert_eq!(line_counts(&b, 3, SEAM_LINE), [1, 1, 0], "(a) one solve");
     assert!(!String::from_utf8_lossy(&b.out.stderr).contains(SEAM_LINE));
 
     let warning = "al-sem graph: warning: the coverage contract does not hold";
     let graphs = vec![argv(&["graph", &a]), argv(&["graph", &a]), jobs[0].clone()];
-    let b = Batch::run(
+    let b = run_batch(
         &graphs,
         cwd.path(),
         &[("ALSEM_TEST_GRAPH_COVERAGE_WARNING", "1")],

@@ -696,13 +696,13 @@ impl View {
             "the cross-app base was released past the view's prepare"
         );
         let union = plan.union();
-        let need_det = !plan.runs.is_empty();
-        let need_l4 = plan.builds_l4();
+        // The cells this prepare fills: one rule, `Plan::fills` (#277 R9-5).
+        let fills = plan.fills();
+        let [need_rel, need_raw, need_l4, need_det] =
+            [Cell::Rel, Cell::Raw, Cell::L4, Cell::Det].map(|c| fills.contains(&c));
         let need_ordering = union & substrate::ORDERING_FACTS != 0;
         let need_derived = plan.needs_derived();
-        let need_raw = plan.keeps_raw();
         let need_caps = plan.composes(self.det.is_some());
-        let need_rel = need_det || need_l4 || need_raw;
         // D3: the subjects are fixed once, before the one composition: a
         // second request, or a request after the view composed without one.
         assert!(
