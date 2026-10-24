@@ -4,8 +4,14 @@
 //! [`closed_over`] is the one entry point (`full.rs`'s member arm). It proves,
 //! for one call site, that every write to the routine-local interface variable
 //! comes from closed enums ([`closed_enum_sources`]), and that every
-//! implementation those enums map is the object of a real route on the edge
-//! ([`enum_covered_by_routes`]). Every doubt fails OPEN: an empty result.
+//! implementation those enums map is among the edge's real routes
+//! ([`enum_covered_by_routes`]). The routes may be a superset (every implementer
+//! of the interface); that never makes the claim unsound. Every doubt fails
+//! OPEN: an empty result.
+//!
+//! Limit: the graph holds no namespaces, so an interface is identified by its
+//! folded last name segment only (`Ns1."I"` and `Ns2."I"` are one interface
+//! here), the same rule receiver typing and `implements` use.
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{
@@ -63,7 +69,8 @@ pub(crate) fn closed_over(
 
 /// The closed enums (sorted, deduplicated) whose values are the ONLY values
 /// the interface variable `receiver` can hold at the call (spec §3), or `None`:
-/// 1. the file parsed cleanly and so did the routine;
+/// 1. the file parsed cleanly, so did the routine, and the lowerer recorded no
+///    `SyntaxIssue` inside the routine's span;
 /// 2. `receiver` (parentheses removed) names a routine LOCAL declared
 ///    `Interface I` in every `#if` arm, and no parameter, return name or object
 ///    global has that name;
@@ -79,6 +86,15 @@ pub(crate) fn closed_enum_sources(
     interface_lc: &str,
 ) -> Option<Vec<ObjectNodeId>> {
     if cx.file.parse_status != ParseStatus::Clean || cx.routine.parse_incomplete {
+        return None;
+    }
+    // A Clean file can still hold code the lowerer read partly (an `#if` group
+    // as an operand lowers one arm, with a `SyntaxIssue`), which may hide a write.
+    let span = &cx.routine.origin.byte;
+    let overlaps = |i: &al_syntax::ir::SyntaxIssue| {
+        i.origin.byte.start < span.end && span.start < i.origin.byte.end
+    };
+    if cx.file.issues.iter().any(overlaps) {
         return None;
     }
     let ir = &cx.file.ir;
@@ -635,6 +651,37 @@ enum 50106 "Other Kind" implements "Other Strategy"
                 .iter_stmts()
                 .any(|s| matches!(s.kind, al_syntax::ir::StmtKind::Unknown)),
             "precondition: an Unknown statement"
+        );
+        assert!(is_open(completeness(&workspace(text, &[]))));
+    }
+
+    /// Task 3 review (soundness): an `#if` group as a whole operand lowers only
+    /// its first arm and records a `SyntaxIssue`; the file still parses Clean.
+    /// `S` passed by `var` in the second arm is a write the walk cannot see, so
+    /// any issue inside the routine keeps the site open.
+    #[test]
+    fn i264_operand_if_group_in_the_routine_stays_open() {
+        let vars = format!(
+            "{VARS}\n        Dummy: Interface \"Demo Strategy\";\n        SomeCu: Codeunit \"Demo Impl\";"
+        );
+        let body = "        S := K;\n#if X\n        Dummy\n#else\n        S\n#endif\n        := SomeCu;\n        S.NextKm(1);";
+        let text = caller(&vars, body, "");
+        let parsed = al_syntax::parse(&text);
+        assert_eq!(
+            parsed.parse_status,
+            al_syntax::ir::ParseStatus::Clean,
+            "precondition"
+        );
+        assert!(
+            !parsed.issues.is_empty(),
+            "precondition: the lowerer recorded an issue"
+        );
+        assert!(
+            !parsed.objects[0]
+                .routines
+                .iter()
+                .any(|r| r.parse_incomplete),
+            "precondition: no routine is marked parse_incomplete"
         );
         assert!(is_open(completeness(&workspace(text, &[]))));
     }
