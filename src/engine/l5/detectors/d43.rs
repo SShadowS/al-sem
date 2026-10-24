@@ -11,6 +11,12 @@
 //!   walks `ctx.cone` (the relation's Cone payload) for caller→publisher edges, finds the publisher's
 //!   `var Boolean` IsHandled formal, binds the caller's actual, and collects post-call
 //!   `conditionReferences` guards + the caller's guarded table writes.
+//!   It follows `direct-call`, `variable-typed-call` and `object-run-resolved`
+//!   edges. Admitting `variable-typed-call` (#271: calls through a codeunit,
+//!   record or page variable, and `this.`) is a deliberate departure from the
+//!   al-sem port, which walked bare calls only; the al-sem reference is retired.
+//!   The IsHandled binding is unchanged, because argument indices exclude the
+//!   receiver. `interface-dispatch` stays out: it is a may-call candidate set.
 //! - `classify_subscriber` reads the subscriber's `var_assignments` + `has_branching`
 //!   + `statement_tree` (CFN nesting) to decide mustSetTrue / maySetTrue / noSetTrue.
 //! - `build_cross_extension_subscribers` (event_flow.rs) populates the finding's
@@ -67,7 +73,7 @@ fn is_boolean_type(type_text: &str) -> bool {
 }
 
 /// `enumerateDispatchSites` — bridge the event-flow substrate with d43's dispatch-site
-/// guard analysis. Faithful port.
+/// guard analysis. A port, except that it also follows member calls (#271).
 fn enumerate_dispatch_sites(
     ctx: &DetectorContext,
     routine_by_id: &HashMap<&str, &ModelRoutine>,
@@ -83,9 +89,12 @@ fn enumerate_dispatch_sites(
     }
 
     for edge in ctx.cone.iter() {
+        // Every exact, resolved call: bare, member (`Cu.`/`Rec.`/`Page.`/`this.`)
+        // and object run. Not `interface-dispatch`: a may-call candidate set that
+        // the confidence ladder would call `confirmed` (#271).
         if edge.kind != "direct-call"
+            && edge.kind != "variable-typed-call"
             && edge.kind != "object-run-resolved"
-            && edge.kind != "dependency-export"
         {
             continue;
         }

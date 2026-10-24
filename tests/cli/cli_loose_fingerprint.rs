@@ -1347,8 +1347,8 @@ const D43: &str = "d43-event-ishandled-skip";
 /// FR3 `d43_caller_objects_distinct`: one event's guarded dispatch from the table
 /// `Doc` and from its table extension `DocExt` (a bare call into the base table);
 /// both anchor on the one setter. The dispatching caller's OBJECT is in the subject,
-/// so they keep two keys. (A cross-object call through a codeunit variable is a
-/// `variable-typed-call` edge, which d43 does not walk.)
+/// so they keep two keys. (The cross-object call through a codeunit variable is
+/// `d43_caller_objects_distinct_codeunit_variable`, #271.)
 #[test]
 fn d43_caller_objects_distinct() {
     let fs = run_252("d43-objs", &d43_ext_code(Some("Post"), &["PostExt"]), D43);
@@ -1385,6 +1385,228 @@ fn d43_move_within_caller_object() {
         "precondition: same caller object"
     );
     assert_move(&fa[0], &fb[0]);
+}
+
+// --- d43: member calls (#271) ---
+
+/// `PostingMgr` publishes `OnBeforePost(var Rec; var IsHandled)` and `PostingHandler`
+/// sets IsHandled; `PostingMgr` has no caller of its own.
+const D43_MGR_AND_SETTER: &str = r#"codeunit 50000 PostingMgr
+{
+    [IntegrationEvent(false, false)]
+    procedure OnBeforePost(var Rec: Record Customer; var IsHandled: Boolean)
+    begin
+    end;
+}
+codeunit 50001 PostingHandler
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::PostingMgr, 'OnBeforePost', '', false, false)]
+    local procedure OnBeforePostHandler(var Rec: Record Customer; var IsHandled: Boolean)
+    begin
+        IsHandled := true;
+    end;
+}
+"#;
+
+/// `PostingCaller.DoPost`: the guarded dispatch through a codeunit variable.
+const D43_CUVAR_CALLER: &str = r#"codeunit 50002 PostingCaller
+{
+    procedure DoPost(var Rec: Record Customer)
+    var
+        Mgr: Codeunit PostingMgr;
+        IsHandled: Boolean;
+    begin
+        IsHandled := false;
+        Mgr.OnBeforePost(Rec, IsHandled);
+        if not IsHandled then
+            Rec.Insert(true);
+    end;
+}
+"#;
+
+/// #271 item 1: a guarded dispatch through a codeunit variable (B) is the same
+/// finding as the bare call (A), with the caller in another object.
+#[test]
+fn d43_codeunit_variable_matches_bare_call() {
+    let fa = run_252("d43-271-a", &d43_code("DoPost", "Other"), D43);
+    let fb = run_252(
+        "d43-271-b",
+        &format!("{D43_MGR_AND_SETTER}{D43_CUVAR_CALLER}"),
+        D43,
+    );
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    let (a, b) = (&fa[0], &fb[0]);
+    assert_eq!(a["confidence"]["level"], "confirmed");
+    assert_eq!(a["confidence"]["level"], b["confidence"]["level"]);
+    assert_eq!(a["severity"], b["severity"]);
+    assert_eq!(a["affectedTables"], b["affectedTables"]);
+    assert_eq!(loc(a, "routineName"), "OnBeforePostHandler");
+    assert_eq!(loc(a, "routineName"), loc(b, "routineName"));
+    assert_ne!(
+        object_of_routine(step_routine(a, 0)),
+        object_of_routine(step_routine(b, 0)),
+        "precondition: callers in two objects"
+    );
+}
+
+/// #271 item 2 (the #252 shape): a bare call in `PostingMgr` and a codeunit-variable
+/// call from `PostingCaller` are two findings on one anchor, with two loose keys.
+#[test]
+fn d43_caller_objects_distinct_codeunit_variable() {
+    let code = format!("{}{D43_CUVAR_CALLER}", d43_code("DoPost", "Other"));
+    let fs = run_252("d43-271-g", &code, D43);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(
+        loc(&fs[0], "routineId"),
+        loc(&fs[1], "routineId"),
+        "precondition: one anchor (the setter)"
+    );
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+/// #271 item 4, the record-variable shape: `D.OnBeforePost` on a table publisher.
+const D43_RECVAR: &str = r#"table 50300 Doc
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    [IntegrationEvent(false, false)]
+    procedure OnBeforePost(var IsHandled: Boolean)
+    begin
+    end;
+}
+codeunit 50002 PostingCaller
+{
+    procedure DoPost(var D: Record Doc)
+    var
+        Log: Record Item;
+        IsHandled: Boolean;
+    begin
+        IsHandled := false;
+        D.OnBeforePost(IsHandled);
+        if not IsHandled then
+            Log.Insert();
+    end;
+}
+codeunit 50302 Setter
+{
+    [EventSubscriber(ObjectType::Table, Database::Doc, 'OnBeforePost', '', false, false)]
+    local procedure SetHandled(var IsHandled: Boolean)
+    begin
+        IsHandled := true;
+    end;
+}
+"#;
+
+/// #271 item 4, the page-variable shape: `P.OnBeforePost` on a page publisher.
+const D43_PAGEVAR: &str = r#"page 50400 DocCard
+{
+    SourceTable = Customer;
+
+    [IntegrationEvent(false, false)]
+    procedure OnBeforePost(var IsHandled: Boolean)
+    begin
+    end;
+}
+codeunit 50002 PostingCaller
+{
+    procedure DoPost()
+    var
+        P: Page DocCard;
+        Log: Record Item;
+        IsHandled: Boolean;
+    begin
+        IsHandled := false;
+        P.OnBeforePost(IsHandled);
+        if not IsHandled then
+            Log.Insert();
+    end;
+}
+codeunit 50302 Setter
+{
+    [EventSubscriber(ObjectType::Page, Page::DocCard, 'OnBeforePost', '', false, false)]
+    local procedure SetHandled(var IsHandled: Boolean)
+    begin
+        IsHandled := true;
+    end;
+}
+"#;
+
+/// #271 item 4: record-variable, page-variable and `this.` dispatches each give one
+/// `confirmed` finding. `this` needs runtime 14.0, so that workspace declares it.
+#[test]
+fn d43_record_page_and_this_calls() {
+    let this_code = d43_code("DoPost", "Other").replacen(
+        "        OnBeforePost(Rec, IsHandled);",
+        "        this.OnBeforePost(Rec, IsHandled);",
+        1,
+    );
+    assert!(
+        this_code.contains("this.OnBeforePost"),
+        "the `this.` edit applied"
+    );
+    for (tag, code, runtime14) in [
+        ("d43-271-c", D43_RECVAR.to_string(), false),
+        ("d43-271-e", D43_PAGEVAR.to_string(), false),
+        ("d43-271-i", this_code, true),
+    ] {
+        let (_g, ws) = ws_252(tag, &code);
+        if runtime14 {
+            let app = APP_JSON.replacen(
+                "\"dependencies\"",
+                "\"runtime\": \"14.0\",\n    \"dependencies\"",
+                1,
+            );
+            assert!(app.contains("\"runtime\": \"14.0\""), "{tag}: runtime set");
+            std::fs::write(ws.join("app.json"), app).expect("write app.json");
+        }
+        let fs = findings_of(&analyze_json_with(&ws, Some(D43), true), D43);
+        assert_eq!(fs.len(), 1, "{tag}: {fs:#?}");
+        assert_eq!(fs[0]["confidence"]["level"], "confirmed", "{tag}");
+    }
+}
+
+/// #271 item 5 (deliberate non-goal): a call through an interface is a may-call
+/// candidate set, so d43 does not follow it.
+#[test]
+fn d43_interface_dispatch_not_followed() {
+    let code = r#"interface IPost
+{
+    procedure OnBeforePost(var IsHandled: Boolean);
+}
+codeunit 50000 PostingMgr implements IPost
+{
+    [IntegrationEvent(false, false)]
+    procedure OnBeforePost(var IsHandled: Boolean)
+    begin
+    end;
+}
+codeunit 50002 PostingCaller
+{
+    procedure DoPost(I: Interface IPost)
+    var
+        Log: Record Item;
+        IsHandled: Boolean;
+    begin
+        IsHandled := false;
+        I.OnBeforePost(IsHandled);
+        if not IsHandled then
+            Log.Insert();
+    end;
+}
+codeunit 50302 Setter
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::PostingMgr, 'OnBeforePost', '', false, false)]
+    local procedure SetHandled(var IsHandled: Boolean)
+    begin
+        IsHandled := true;
+    end;
+}
+"#;
+    let fs = run_252("d43-271-f", code, D43);
+    assert!(fs.is_empty(), "{fs:#?}");
 }
 
 // --- d57: the global variable ---
