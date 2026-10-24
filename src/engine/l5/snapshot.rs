@@ -2456,6 +2456,10 @@ fn derive_callsite_resolutions(
                 .map(|dm| dm.unresolved_impls.clone())
                 .unwrap_or_default();
             // #264: a receiver proven to hold closed-enum values has a closed set.
+            // `representative` is `group_edges[0]`, the edge that carries the
+            // site's `DispatchMeta`: the adapter puts it on `out[0]` only, and
+            // `group_edges` keeps emission order. If either order changes, read
+            // the meta from whichever group edge carries it.
             let closed = representative
                 .dispatch_meta
                 .as_ref()

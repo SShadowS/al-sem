@@ -133,9 +133,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `openWorld: false`, and `prove`/`digest` see no unresolved-call blocker for it. d35
   therefore no longer reports an unknown Commit for such a call; a Commit in one of
   the candidates is still reported. Routes, shapes and the call-graph histograms do
-  not change. Enums known only from symbols, a dependency implementer outside the
-  model (`--single-app`) and names that are not unique in the whole program stay
-  open (#264).
+  not change (byte-identical on CDO). Two outputs show the closed edges: the graphify
+  export's `open_world_reason` is empty for them (the edge is `Complete`), and
+  `aldump --switch-dump` prints the new `closed_over` field. Enums known only from
+  symbols, a dependency implementer outside the model (`--single-app`) and names that
+  are not unique in the whole program stay open. Known limit: the candidates are every
+  implementer of the interface, so an implementer the enum does not map still counts;
+  if it commits, d35 still reports YES (#264).
 - An object without a number, in a dependency that ships only symbols, whose name
   holds two quote characters in a row (`""`) now has the same id in the program graph
   and in the model. Before, the graph id dropped one of the two quotes (#250).

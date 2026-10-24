@@ -399,8 +399,15 @@ pub(crate) fn assemble(
         }
         // to-less edge → typed uncertainty on the `from` routine.
         if ce.dispatch_kind == DispatchKind::Interface {
-            // Zero-impl interface dispatch → "interface-open-world".
-            if owns(ce) && !interface_open_world_emitted.contains(&ce.callsite_id) {
+            // Zero-impl interface dispatch → "interface-open-world". The
+            // closed-site guard is defence only: a closed site has no to-less
+            // edge today, because the adapter fills `closed_over` only when no
+            // route left the model (`dependency` empty) and every implementer
+            // was reached (#264, spec §5).
+            if owns(ce)
+                && !closed_sites.contains(ce.callsite_id.as_str())
+                && !interface_open_world_emitted.contains(&ce.callsite_id)
+            {
                 interface_open_world_emitted.insert(ce.callsite_id.clone());
                 let interface_name = ce
                     .dispatch_meta

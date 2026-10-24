@@ -10846,3 +10846,61 @@ fn dependency_body_unknown_ceiling_on_cdo() {
         CDO_DEPENDENCY_BODY_AMBIGUOUS_CEILING,
     );
 }
+
+/// #264 census: the interface sites of the default (cross-app) `analyze` model
+/// that are closed over a non-extensible source enum (`DispatchMeta.closed_over`
+/// non-empty). Measured 2026-10-24 on branch 200d679c, the pinned CDO baseline
+/// (`/work/bench/264/cdo-after/REPORT.md`, M2): 12 of 318 interface sites, every
+/// one source-checked:
+/// - CDO `CDOeDocPrePostValid.Codeunit.al:29`, `:55` (`CTS-CDN IPrePostValidator`
+///   over `CTS-CDN PrePost Valid. Type`, an own call with a named return);
+/// - CDN `CreateeReminder.Codeunit.al:134`, `CTSCDNCreateeBilling.Codeunit.al:1551`,
+///   `:1577` (`CTS-CDN INetworkProfileSelector` over `CTS-CDN Net. Profile
+///   Selection`, a parameter of the enum type);
+/// - SYS `AzureBlobStorageMgt.Codeunit.al:211`, `:226`, `:498`
+///   (`CTS-SYS IAzureBlobAuthorization` over `CTS-SYS Azure Blob Auth. Type`, a
+///   global enum variable);
+/// - System App `CopilotCapabilityImpl.Codeunit.al:121` (`AI Service Name` over
+///   `Azure AI Service Type`, a parameter);
+/// - Base App `ICInboxOutboxMgt.Codeunit.al:3416`, `:3445`, `:3558`
+///   (`IC Data Exchange` over `IC Data Exchange Type`, a table field).
+///
+/// A change of this number is a change of which sites close: re-triage them
+/// against the source before re-pinning (both directions).
+#[test]
+fn cdo_i264_closed_interface_site_census() {
+    let Some(ws) = cdo_ws_or_enforce() else {
+        return;
+    };
+    let id = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
+        .expect("model id");
+    let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+    let model = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
+        &inputs, &id, false,
+    )
+    .unwrap_or_else(|_| panic!("cross-app model"))
+    .resolved;
+    let mut closed: Vec<(String, Vec<String>)> = model
+        .calls
+        .edges
+        .iter()
+        .filter_map(|e| {
+            let dm = e.dispatch_meta.as_ref()?;
+            (!dm.closed_over.is_empty()).then(|| (e.callsite_id.clone(), dm.closed_over.clone()))
+        })
+        .collect();
+    closed.sort();
+    closed.dedup_by(|a, b| a.0 == b.0);
+    let interface_sites: std::collections::BTreeSet<&str> = model
+        .calls
+        .edges
+        .iter()
+        .filter(|e| e.dispatch_kind == al_sem::program::model::taxonomy::DispatchKind::Interface)
+        .map(|e| e.callsite_id.as_str())
+        .collect();
+    assert_eq!(
+        (closed.len(), interface_sites.len()),
+        (12, 318),
+        "closed interface sites (of all interface sites) on CDO; closed: {closed:#?}"
+    );
+}
