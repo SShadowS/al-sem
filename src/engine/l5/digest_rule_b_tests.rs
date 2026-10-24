@@ -15,7 +15,7 @@ use crate::engine::l5::test_support::{
     write_fixture_dep_ambiguous, write_fixture_dep_uncertainty, write_fixture_rule_b,
     write_fixture_symbol_only_dep,
 };
-use crate::engine::session::{JobId, digest_plan};
+use crate::engine::session::{JobId, View, digest_plan};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;

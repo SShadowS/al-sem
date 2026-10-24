@@ -96,6 +96,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trace span `l4_l5.run_detectors` is gone (the detector run is the driver's `prepare`).
   `analyze.total` still spans the whole analyze run, model build included. The trace
   carries a `batch.driver` instant (`jobs`, `views`, `workers`).
+- **`query`, `graph`, `prove`, `fingerprint` and `diff` run through the batch driver too
+  (#277), and every view is built by one builder (`gate::run::build_view_model`).** Their
+  stdout, stderr, exit codes and files are unchanged, and so are their validation errors
+  and their closed-stderr exit (as above). `query` reads its view's model, relation and
+  `l4` by borrow, so the rest of a cross-app base now lives until the query's render ends
+  (it was dropped before the query). `graph` gets the cross-app program from the builder
+  before any model is built from it. `fingerprint`'s `--shard` without `--out` is a job
+  with no view. Library: `impact_graph::export_workspace`, `View::into_query_parts` and
+  `AnalysisTarget::build_target` are gone (`GraphJob`, `QuerySubstrate::of(&view)` with the
+  test entry `query_view`, and `build_view_model` replace them); `diff_strict_plan` is
+  `diff_plan(detectors, strict)`.
+- **`diff ws ws`: both sides share one view (#277).** Two workspace sides that name one
+  directory (after `std::path::absolute`, not canonicalised) are now read and built once;
+  each side still composes its own snapshot. Output is unchanged. Counters
+  (program, combined_graph, cone, summaries_v2, graph_scc, pd_solve, detector_context,
+  snapshot, witness_pass, inputs.read): without `--strict` 2, 2, 2, 0, 2, 2, 0, 2, 2, 2
+  → **1**, 2, 2, 0, 2, 2, 0, 2, 2, **1**; with `--strict` 2, 4, 4, 2, 6, 4, 2, 2, 2, 2 →
+  **1, 3, 3, 1, 4, 3, 1**, 2, 2, **1** (one detector run serves both sides' gates). Also:
+  every workspace side is read before the first build, so a `diff` whose old workspace
+  side fails now counts the new side's read (`inputs.read` 2, was 1; still no new-side
+  build and the same error); the `diff --strict` trace releases the view's cells once.
+- **Traces (#277).** A view's post-attach phase now ends when the driver drops the view
+  (every command; `diff` ended it per side before), so `peak.post_attach_mb` no longer
+  covers a command's writes. Every single-app view build now opens `preflight.fresh_program`
+  and `l3.assemble_resolve` (only `analyze --single-app` did), and every cross-app model
+  build opens `crossapp.base_total` (only `analyze` did; `graph`'s program-only build opens
+  none): `scripts/trace_summary.py` shows those rows for more commands.
 
 - **Grammar: tree-sitter-al `main` at `c89c2ecb`** (D1, a parser state-reduction pass;
   package version still 4.4.1; was `960ed312`). `node-types.json` is byte-identical, so the

@@ -424,7 +424,7 @@ impl Job for EventsJob<'_> {
         vec![ViewDemand {
             key: ViewKey::new(&inputs.workspace, single_app, false),
             side: SideIx(0),
-            needs: ViewNeeds::default(),
+            needs: ViewNeeds::MODEL,
             inputs: Arc::clone(inputs),
         }]
     }
@@ -451,11 +451,8 @@ impl Job for EventsJob<'_> {
 
     fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
         // No model-instance id: `<cmd>: could not compute modelInstanceId`, exit 1.
-        let ViewFailure::Target(f) = failure else {
-            unreachable!("an events view is built by `AnalysisTarget`")
-        };
         let (.., cmd) = self.head();
-        Ok(SideDoc::new(early(vec![f.message(cmd)])))
+        Ok(SideDoc::new(early(vec![failure.target.message(cmd)])))
     }
 
     fn serialize(&self, doc: Doc) -> JobOutput {

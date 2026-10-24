@@ -14,10 +14,11 @@ use crate::engine::gate::run::{ModelFailure, TargetFailure};
 use crate::engine::l5::digest_cli::DigestEffects;
 use crate::engine::l5::registry::RunOutput;
 use crate::engine::l5::snapshot::{SnapshotIdentityTable, derive_identity_table};
-use crate::engine::session::{Cell, JobId, Plan, RunKey, View};
-use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
+use crate::engine::session::{Cell, JobId, Plan, RunKey, TreeReadOut, View};
+use crate::program::inputs::WorkspaceInputs;
 use crate::program::model::workspace::Model;
 use crate::program::resolve::full::FreshCoverage;
+use crate::program::resolved::ResolvedProgram;
 
 /// A job's side: its index among the job's demands (diff: old 0, new 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,14 +54,42 @@ impl ViewKey {
     }
 }
 
-/// What a demand needs from its view's build.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What a demand needs from its view's ONE builder (D4.1); a view's needs are
+/// the union of its demands'.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ViewNeeds {
-    /// `alsem analyze`'s builder (its program coverage, `fresh`).
+    /// `alsem analyze`'s extras: the program coverage (`fresh`), the physical
+    /// rows and the object-fact census.
     pub analyze_extras: bool,
-    /// The program, for a graph job (D9).
+    /// The program, lent before the model is built (D9): `alsem graph`.
     pub graph: bool,
-    pub workspace: WorkspaceNeeds,
+    /// The model: every job but graph.
+    pub model: bool,
+}
+
+impl ViewNeeds {
+    pub const MODEL: ViewNeeds = ViewNeeds {
+        analyze_extras: false,
+        graph: false,
+        model: true,
+    };
+    pub const ANALYZE: ViewNeeds = ViewNeeds {
+        analyze_extras: true,
+        ..ViewNeeds::MODEL
+    };
+    pub const GRAPH: ViewNeeds = ViewNeeds {
+        analyze_extras: false,
+        graph: true,
+        model: false,
+    };
+
+    pub fn union(self, other: ViewNeeds) -> ViewNeeds {
+        ViewNeeds {
+            analyze_extras: self.analyze_extras || other.analyze_extras,
+            graph: self.graph || other.graph,
+            model: self.model || other.model,
+        }
+    }
 }
 
 /// One view a job reads.
@@ -68,9 +97,10 @@ pub struct ViewDemand {
     pub key: ViewKey,
     pub side: SideIx,
     pub needs: ViewNeeds,
-    /// The workspace the command read. shortcut: each command still reads its
-    /// own `WorkspaceInputs` (with `needs.workspace`); Task 6 deletes those
-    /// reads and the driver reads one per workspace path.
+    /// The workspace the command read; every demand on a view holds the same
+    /// read. shortcut: each command reads its own `WorkspaceInputs`; a batch of
+    /// several jobs must read one per workspace path (with the union of their
+    /// needs) and hand it to each job (Task 7's manifest).
     pub inputs: Arc<WorkspaceInputs>,
 }
 
@@ -182,16 +212,13 @@ impl<'a> ResolveCx<'a> {
 }
 
 /// Why a view built no model; each job words it as its own command does
-/// (D4.1). shortcut: two builders (analyze's and `AnalysisTarget`'s) until
-/// Task 6's one view builder.
+/// (D4.1): `target` as `AnalysisTarget`'s callers word it, `analyze` as
+/// `alsem analyze` classifies it, with its program coverage (`Some` on a view
+/// with analyze's extras).
 #[derive(Debug)]
-pub enum ViewFailure {
-    /// `alsem analyze`'s builder, with its program coverage.
-    Model {
-        fresh: Result<FreshCoverage, String>,
-        failure: ModelFailure,
-    },
-    Target(TargetFailure),
+pub struct ViewFailure {
+    pub target: TargetFailure,
+    pub analyze: Option<Box<(Result<FreshCoverage, String>, ModelFailure)>>,
 }
 
 /// One demand's access to its prepared view. Releases go through the driver
@@ -242,6 +269,11 @@ impl ViewCx<'_> {
         self.view.take_effects(self.job)
     }
 
+    /// This job's tree read (#160 step 9 D5; #277 D5.4).
+    pub fn take_tree_read(&mut self) -> TreeReadOut {
+        self.view.take_tree_read(self.job)
+    }
+
     /// The run's output; the view's own copy is dropped unless a later demand
     /// reads it.
     pub fn take_run(&mut self, key: &RunKey) -> Arc<RunOutput> {
@@ -276,6 +308,15 @@ pub trait Job {
     fn compute(&self, side: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure>;
     /// The view did not build: this command's own text and exit.
     fn view_failed(&self, side: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure>;
+    /// A graph demand (D9): off the view's program, or its build error, lent
+    /// before the model is built. Its side is done here.
+    fn program(
+        &self,
+        _side: SideIx,
+        _program: Result<&ResolvedProgram, &str>,
+    ) -> Result<SideDoc, JobFailure> {
+        unreachable!("a job that reads no program")
+    }
     /// After the job's last view. The default: a job of at most one side.
     fn finalize(&self, sides: Vec<Result<SideDoc, JobFailure>>) -> Doc {
         let mut sides = sides.into_iter();

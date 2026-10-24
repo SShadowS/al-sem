@@ -132,6 +132,11 @@ pub(crate) struct Row {
     /// `build.witness_pass`: compositions that materialized raw facts (#160
     /// step 6 §4.9, §14.10).
     pub witness: u64,
+    /// `inputs.read`: workspace reads. One per program build in every row
+    /// but `diff ws ws`, whose two sides share one read and one view (#277
+    /// D8); its own cell, since a batch reads a workspace once for every
+    /// view of it (D10).
+    pub inputs: u64,
 }
 
 /// Every cell is checked and every mismatch reported, so a break that moves
@@ -148,8 +153,7 @@ pub(crate) fn assert_row(case: &str, m: &BTreeMap<String, u64>, r: Row) {
         ("build.detector_context", r.ctx),
         ("build.snapshot", r.snap),
         ("build.witness_pass", r.witness),
-        // A1.1: one workspace read per program build (final panel r1, F2-3).
-        ("inputs.read", r.program),
+        ("inputs.read", r.inputs),
     ];
     let bad: Vec<String> = want
         .iter()
@@ -240,6 +244,7 @@ fn analyze_cross_app_default() {
             ctx: 1,
             snap: 0,
             witness: 0,
+            inputs: 1,
         },
     );
 }
@@ -276,6 +281,7 @@ fn analyze_cross_app_d47() {
             ctx: 1,
             snap: 1,
             witness: 1,
+            inputs: 1,
         },
     );
 }
@@ -296,6 +302,7 @@ fn analyze_single_app() {
             ctx: 1,
             snap: 0,
             witness: 0,
+            inputs: 1,
         },
     );
 }
@@ -335,6 +342,7 @@ fn analyze_cross_app_with_a_dependency_half() {
             ctx: 1,
             snap: 0,
             witness: 0,
+            inputs: 1,
         },
     );
 }
@@ -367,6 +375,7 @@ fn analyze_single_app_d47() {
             ctx: 1,
             snap: 1,
             witness: 1,
+            inputs: 1,
         },
     );
 }
@@ -399,6 +408,7 @@ fn analyze_cross_app_d47_with_a_summaries_detector() {
             ctx: 1,
             snap: 1,
             witness: 1,
+            inputs: 1,
         },
     );
 }
@@ -416,6 +426,7 @@ const DIGEST_ROW: Row = Row {
     ctx: 1,
     snap: 1,
     witness: 1,
+    inputs: 1,
 };
 
 #[test]
@@ -549,6 +560,7 @@ const FINGERPRINT_ROW: Row = Row {
     ctx: 1,
     snap: 1,
     witness: 1,
+    inputs: 1,
 };
 
 #[test]
@@ -758,7 +770,9 @@ fn fingerprint_inventory_only_single_app() {
     assert_row("fingerprint --inventory-only single-app", &m, INVENTORY_ROW);
 }
 
-/// `diff ws ws`: the row is per side, so the process total is twice it.
+/// `diff ws ws` (#277 D8): both sides are demands on ONE view, so the
+/// workspace is read and built once (program 1, inputs 1); each side still
+/// composes its own cut snapshot (bcg, cone, scc, pd, snap, witness 2).
 #[test]
 fn diff_ws_ws() {
     let (_d, ws) = ws_dep();
@@ -767,7 +781,7 @@ fn diff_ws_ws() {
         "diff ws ws",
         &m,
         Row {
-            program: 2,
+            program: 1,
             bcg: 2,
             cone: 2,
             v2: 0,
@@ -776,11 +790,45 @@ fn diff_ws_ws() {
             ctx: 0,
             snap: 2,
             witness: 2,
+            inputs: 1,
         },
     );
 }
 
-/// `--strict` adds ctx 1, bcg 1, cone 1, v2 1, scc 2, pd 1 per side.
+/// #277 D8: a diff whose old workspace side fails never builds its new side
+/// (the driver skips a job's later view once a side failed), as standalone
+/// `diff` stopped at the old side (the pre-driver binary passes this too).
+/// Precondition: with the sides swapped, the good side builds.
+#[test]
+fn diff_failed_old_side_builds_no_new_side() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("app.json"),
+        r#"{"name":"A","publisher":"p","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    let old = d.path().to_str().unwrap();
+    let new = ws_a();
+    let (out, m) = spawn_traced(&["diff", old, &new, "--format", "json"], &[]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        format!(
+            "failed to load snapshot: could not compute modelInstanceId for workspace '{old}'\n"
+        )
+    );
+    assert_eq!(count(&m, "build.program"), 0, "{m:?}");
+    // The sides swapped: the good side, built first, is the one build.
+    let (_, swapped) = spawn_traced(&["diff", &new, old, "--format", "json"], &[]);
+    assert_eq!(
+        count(&swapped, "build.program"),
+        1,
+        "precondition\n{swapped:?}"
+    );
+}
+
+/// `--strict` on the one view (#277 D8): one det fill (ctx 1, bcg 1, cone 1,
+/// v2 1, scc 2, pd 1) serves both sides' gates, beside the two cuts.
 #[test]
 fn diff_ws_ws_strict() {
     let (_d, ws) = ws_dep();
@@ -797,15 +845,16 @@ fn diff_ws_ws_strict() {
         "diff ws ws --strict",
         &m,
         Row {
-            program: 2,
-            bcg: 4,
-            cone: 4,
-            v2: 2,
-            scc: 6,
-            pd: 4,
-            ctx: 2,
+            program: 1,
+            bcg: 3,
+            cone: 3,
+            v2: 1,
+            scc: 4,
+            pd: 3,
+            ctx: 1,
             snap: 2,
             witness: 2,
+            inputs: 1,
         },
     );
 }
@@ -820,6 +869,7 @@ const EVENTS_CROSS_ROW: Row = Row {
     ctx: 1,
     snap: 0,
     witness: 0,
+    inputs: 1,
 };
 
 #[test]
@@ -874,6 +924,7 @@ fn events_single_app() {
             ctx: 1,
             snap: 0,
             witness: 0,
+            inputs: 1,
         },
     );
 }
@@ -905,6 +956,7 @@ fn policy_check_cross_app() {
             ctx: 1,
             snap: 0,
             witness: 1,
+            inputs: 1,
         },
     );
 }
@@ -936,6 +988,7 @@ fn policy_check_single_app() {
             ctx: 1,
             snap: 0,
             witness: 1,
+            inputs: 1,
         },
     );
 }
@@ -950,6 +1003,7 @@ const QUERY_CROSS_ROW: Row = Row {
     ctx: 0,
     snap: 0,
     witness: 0,
+    inputs: 1,
 };
 
 #[test]
@@ -999,6 +1053,7 @@ fn query_single_app() {
             ctx: 0,
             snap: 0,
             witness: 0,
+            inputs: 1,
         },
     );
 }
@@ -1137,27 +1192,34 @@ fn phase_peak_is_reported() {
     );
 }
 
-/// Spec §4.1.4: `diff ws ws` builds a model per side. Each side's post-attach
-/// phase ends when that side's model is dropped, so the second side's parse and
-/// attach are never inside a phase and the reported peak is the maximum over
-/// both sides' phases (code-review CR2).
+/// Spec §4.1.4: `diff ws_a ws_b` builds a model per side, on two views. Each
+/// view's post-attach phase ends when the driver drops the view (#277), so
+/// the second side's parse and attach are never inside a phase and the
+/// reported peak is the maximum over both sides' phases (code-review CR2).
+/// `diff ws ws` is one view (#277 D8): one phase.
 #[test]
 fn diff_ends_each_sides_phase() {
-    let ws = ws_a();
-    let (out, events) = spawn_trace_events(
-        env!("CARGO_BIN_EXE_alsem"),
-        &["diff", &ws, &ws, "--format", "json", "--deterministic"],
-        &[],
-    );
-    assert!(
-        out.status.code().is_some(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(
-        phase_events(&events),
-        ["phase.start", "phase.end", "phase.start", "phase.end"]
-    );
+    let (ws, other) = (ws_a(), r0("ws-d8-commit-in-tx"));
+    let other = other.to_str().unwrap();
+    for (new, want) in [
+        (
+            other,
+            &["phase.start", "phase.end", "phase.start", "phase.end"][..],
+        ),
+        (ws.as_str(), &["phase.start", "phase.end"][..]),
+    ] {
+        let (out, events) = spawn_trace_events(
+            env!("CARGO_BIN_EXE_alsem"),
+            &["diff", &ws, new, "--format", "json", "--deterministic"],
+            &[],
+        );
+        assert!(
+            out.status.code().is_some(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(phase_events(&events), want, "diff ws {new}");
+    }
 }
 
 /// The trace of `alsem <args>` as tokens, in order: `ctx` per
@@ -1282,9 +1344,12 @@ fn views_release_their_cells_before_the_next_build() {
             per_side.clone(),
         ),
         (
+            // #277 D8: both sides on one view. The old side releases every
+            // cell before its snapshot (the new side reads only the run); the
+            // new side finds them released.
             "diff --strict",
             vec!["diff", &ws, &ws, "--format", "json", "--strict"],
-            [&per_side[..], &per_side].concat(),
+            [&per_side[..], &["snap"]].concat(),
         ),
         (
             // `release_all_but` skips the `l4` events already released.
@@ -1653,8 +1718,8 @@ fn retained_census_changes_no_output() {
 }
 
 /// Spec §8.2 `inputs::read_once`: every command reads the workspace ONCE
-/// (`inputs.read` 1), `diff ws ws` once per side. Spawned: the counter lives
-/// only in the trace file.
+/// (`inputs.read` 1), `diff ws ws` too: its two sides share one view (#277
+/// D8). Spawned: the counter lives only in the trace file.
 #[test]
 fn inputs_read_once() {
     let (_d, ws) = ws_dep();
@@ -1670,7 +1735,7 @@ fn inputs_read_once() {
         assert_eq!(count(&m, "inputs.read"), 1, "{args:?}\n{m:?}");
     }
     let m = run(&["diff", ws, ws, "--format", "json", "--deterministic"]);
-    assert_eq!(count(&m, "inputs.read"), 2, "diff: one per side\n{m:?}");
+    assert_eq!(count(&m, "inputs.read"), 1, "diff: one view\n{m:?}");
 }
 
 /// Code review CR1: a bad `--preset` is a usage error (exit 3) found BEFORE the
@@ -1920,6 +1985,7 @@ fn graph() {
             ctx: 0,
             snap: 0,
             witness: 0,
+            inputs: 1,
         },
     );
 }

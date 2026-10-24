@@ -2,23 +2,24 @@
 //! `alsem <cmd>` builds one [`Job`] and runs [`run_standalone`], so a batch
 //! and a standalone run share one code path.
 //!
-//! Per view, in order of first demand (D6): build → each demand's `resolve`
-//! (D4.2) → the union of the parts (D5) → ONE `prepare` → each demand's
-//! `compute`, in job order → the view is dropped. A job is finalized after its
-//! last view; a job with no view (a failed validation) before the first.
+//! Per view, in order of first demand (D6): the one builder
+//! (`build_view_model`; graph demands are done off its program, D9) → each
+//! demand's `resolve` (D4.2) → the union of the parts (D5) → ONE `prepare` →
+//! each demand's `compute`, in job order → the view is dropped. A job is
+//! finalized after its last view; a job with no view (a failed validation, a
+//! file/file `diff`) before the first. A job whose side failed reads no later
+//! view (D8).
 
 pub mod job;
 pub mod output;
 
 use std::sync::Arc;
 
-use crate::engine::gate::run::{AnalysisModel, AnalysisTarget, build_analysis_model};
+use crate::engine::gate::run::{ViewModel, build_view_model};
 use crate::engine::perf_trace as pt;
 use crate::engine::session::{JobId, Plan, View};
-use crate::program::inputs::WorkspaceInputs;
-use crate::program::resolve::full::FreshCoverage;
 
-use job::{Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, ViewCx, ViewDemand, ViewFailure};
+use job::{Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, ViewCx, ViewDemand};
 use output::replay;
 
 /// Run one job as its own process does (D1): through the driver, then its
@@ -31,6 +32,33 @@ pub fn run_standalone(job: &dyn Job) -> u8 {
 /// One job's document, through the driver: a library entry point's run.
 pub(crate) fn run_doc(job: &dyn Job) -> Doc {
     drive(&[job]).pop().expect("one document per job")
+}
+
+/// A one-demand job's side on a target built already, through the driver's
+/// steps ([`run_view`]): `resolve`, ONE `prepare`, `compute`. A test
+/// hand-states the model's precondition between the build and the job
+/// (CLAUDE.md), which the driver's own builder cannot.
+#[cfg(test)]
+pub(crate) fn run_on_target(
+    job: &dyn Job,
+    target: crate::engine::gate::run::AnalysisTarget,
+) -> Result<SideDoc, JobFailure> {
+    let d = job.demands().into_iter().next().expect("a job with a view");
+    let mut view = View::new(target);
+    let part = job.resolve(d.side, &ResolveCx::new(view.model()))?;
+    let (keys, has_tree) = (part.plan.keys(), part.plan.has_tree(JobId(0)));
+    view.prepare(&Plan::merge([(JobId(0), part.plan)]));
+    let mut cx = ViewCx {
+        view: &mut view,
+        fresh: None,
+        job: JobId(0),
+        keys,
+        has_tree,
+        later_cells: vec![],
+        later_runs: vec![],
+        carry: part.carry,
+    };
+    job.compute(d.side, &mut cx)
 }
 
 /// The driver: every job's document, in job order.
@@ -66,14 +94,28 @@ fn drive(jobs: &[&dyn Job]) -> Vec<Doc> {
         }
     }
     for key in &keys {
-        let on_view: Vec<(usize, &ViewDemand)> = demands
-            .iter()
-            .enumerate()
-            .flat_map(|(j, ds)| ds.iter().map(move |d| (j, d)))
-            .filter(|(_, d)| d.key == *key)
-            .collect();
-        for (j, d, side) in run_view(jobs, &on_view) {
-            sides[j][usize::from(d)] = Some(side);
+        // Each demand on the view, and its slot (job, demand index).
+        let mut on_view: Vec<(usize, &ViewDemand)> = Vec::new();
+        let mut slots = Vec::new();
+        for (j, ds) in demands.iter().enumerate() {
+            for (k, d) in ds.iter().enumerate().filter(|(_, d)| d.key == *key) {
+                // A job whose earlier side failed reads no later view (D8: a
+                // standalone `diff` never loads its new side after its old
+                // one failed); the failure stands for the side.
+                let failed = sides[j].iter().flatten().find_map(|s| s.as_ref().err());
+                match failed.cloned() {
+                    Some(f) => sides[j][k] = Some(Err(f)),
+                    None => {
+                        on_view.push((j, d));
+                        slots.push((j, k));
+                    }
+                }
+            }
+        }
+        if !on_view.is_empty() {
+            for ((j, k), side) in slots.into_iter().zip(run_view(jobs, &on_view)) {
+                sides[j][k] = Some(side);
+            }
         }
         // (10) Every job whose last demand this view held.
         for (j, ds) in demands.iter().enumerate() {
@@ -88,21 +130,12 @@ fn drive(jobs: &[&dyn Job]) -> Vec<Doc> {
 }
 
 /// One view: its build, its demands' parts, one `prepare`, their computes.
-/// Returns (job, side, result) per demand, in the order given.
+/// Returns each demand's result, in the order given.
 fn run_view(
     jobs: &[&dyn Job],
     on_view: &[(usize, &ViewDemand)],
-) -> Vec<(usize, u8, Result<SideDoc, JobFailure>)> {
+) -> Vec<Result<SideDoc, JobFailure>> {
     let (_, first) = on_view[0];
-    let analyze_extras = first.needs.analyze_extras;
-    // shortcut: two builders until Task 6's one view builder; a view's demands
-    // agree on which.
-    assert!(
-        on_view
-            .iter()
-            .all(|(_, d)| d.needs.analyze_extras == analyze_extras),
-        "one builder per view"
-    );
     // The view is built from the first demand's read: every demand on it must
     // hold that same read, never a second one of the workspace.
     assert!(
@@ -111,24 +144,49 @@ fn run_view(
             .all(|(_, d)| Arc::ptr_eq(&d.inputs, &first.inputs)),
         "a view's demands share one WorkspaceInputs"
     );
-    let single_app = first.key.universe == job::ViewUniverse::SingleApp;
-    let built = build_view(&first.inputs, single_app, analyze_extras);
-    let (target, fresh) = match built {
-        Err(failure) => {
-            return on_view
-                .iter()
-                .map(|(j, d)| (*j, d.side.0, jobs[*j].view_failed(d.side, &failure)))
-                .collect();
-        }
-        Ok(built) => built,
+    let needs = on_view
+        .iter()
+        .fold(first.needs, |n, (_, d)| n.union(d.needs));
+    let finish = |results: Vec<Option<Result<SideDoc, JobFailure>>>| {
+        results
+            .into_iter()
+            .map(|r| r.expect("every demand computed"))
+            .collect()
     };
+    let mut results: Vec<Option<Result<SideDoc, JobFailure>>> =
+        on_view.iter().map(|_| None).collect();
+    // (1) The one builder; graph demands are done off its program.
+    let built = build_view_model(&first.inputs, &first.key, needs, |program| {
+        for (i, (j, d)) in on_view.iter().enumerate() {
+            if d.needs.graph {
+                results[i] = Some(jobs[*j].program(d.side, program));
+            }
+        }
+    });
+    let (target, fresh) = match built {
+        Ok(Some(ViewModel { target, fresh, .. })) => (target, fresh),
+        Ok(None) => return finish(results),
+        Err(failure) => {
+            for (i, (j, d)) in on_view.iter().enumerate() {
+                results[i].get_or_insert_with(|| jobs[*j].view_failed(d.side, &failure));
+            }
+            return finish(results);
+        }
+    };
+    // The model demands; a graph demand is done.
+    let on_view: Vec<(usize, (usize, &ViewDemand))> = on_view
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(i, _)| results[*i].is_none())
+        .collect();
     let mut view = View::new(target);
     // (2b) Each demand's part, the identity table shared and dropped here.
     let parts: Vec<Result<PlanPart, JobFailure>> = {
         let cx = ResolveCx::new(view.model());
         on_view
             .iter()
-            .map(|(j, d)| jobs[*j].resolve(d.side, &cx))
+            .map(|(_, (j, d))| jobs[*j].resolve(d.side, &cx))
             .collect()
     };
     // What each demand reads, kept before the parts' plans merge (D6.1, D6.2).
@@ -142,28 +200,26 @@ fn run_view(
         .collect();
     let mut carries = Vec::new();
     let mut plans = Vec::new();
-    let mut results: Vec<Option<Result<SideDoc, JobFailure>>> = Vec::new();
-    for ((j, _), part) in on_view.iter().zip(parts) {
+    for ((i, (j, _)), part) in on_view.iter().zip(parts) {
         match part {
             Ok(p) => {
                 plans.push((job_id(*j), p.plan));
                 carries.push(p.carry);
-                results.push(None);
             }
             Err(f) => {
                 carries.push(None);
-                results.push(Some(Err(f)));
+                results[*i] = Some(Err(f));
             }
         }
     }
     // (4)-(8) ONE plan, ONE prepare.
     view.prepare(&Plan::merge(plans));
     // (9) Each demand's compute, in job order.
-    for (i, (j, d)) in on_view.iter().enumerate() {
-        let Some((_, keys, has_tree)) = reads[i].clone() else {
+    for (k, (i, (j, d))) in on_view.iter().enumerate() {
+        let Some((_, keys, has_tree)) = reads[k].clone() else {
             continue;
         };
-        let later = || reads[i + 1..].iter().flatten();
+        let later = || reads[k + 1..].iter().flatten();
         let mut cx = ViewCx {
             view: &mut view,
             fresh: fresh.as_ref(),
@@ -172,42 +228,19 @@ fn run_view(
             has_tree,
             later_cells: later().flat_map(|r| r.0.clone()).collect(),
             later_runs: later().flat_map(|r| r.1.clone()).collect(),
-            carry: carries[i].take(),
+            carry: carries[k].take(),
         };
-        results[i] = Some(jobs[*j].compute(d.side, &mut cx));
+        results[*i] = Some(jobs[*j].compute(d.side, &mut cx));
     }
     drop(view);
-    on_view
-        .iter()
-        .zip(results)
-        .map(|((j, d), r)| (*j, d.side.0, r.expect("every demand computed")))
-        .collect()
+    // The view's model is gone: its post-attach phase ends (#160 §4.1.4), so
+    // the next view's build is in no phase.
+    pt::end_phase("post_attach");
+    finish(results)
 }
 
 fn job_id(j: usize) -> JobId {
     JobId(u32::try_from(j).expect("a batch of at most u32::MAX jobs"))
-}
-
-/// The view's model, and analyze's program coverage when its builder ran.
-type Built = (AnalysisTarget, Option<Result<FreshCoverage, String>>);
-
-/// Build a view: analyze's builder (its `fresh`), or `AnalysisTarget`'s.
-fn build_view(
-    inputs: &Arc<WorkspaceInputs>,
-    single_app: bool,
-    analyze_extras: bool,
-) -> Result<Built, Box<ViewFailure>> {
-    if analyze_extras {
-        let AnalysisModel { fresh, model, .. } = build_analysis_model(inputs, single_app);
-        match model {
-            Ok(target) => Ok((target, Some(fresh))),
-            Err(failure) => Err(Box::new(ViewFailure::Model { fresh, failure })),
-        }
-    } else {
-        AnalysisTarget::build_target(inputs, single_app)
-            .map(|t| (t, None))
-            .map_err(|f| Box::new(ViewFailure::Target(f)))
-    }
 }
 
 #[cfg(test)]
@@ -215,7 +248,7 @@ mod tests {
     use super::job::*;
     use super::output::JobOutput;
     use super::*;
-    use crate::program::inputs::WorkspaceNeeds;
+    use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 
     /// A job with one demand on `key` over `inputs`; it never gets past the
     /// driver's checks in these tests.
@@ -226,7 +259,7 @@ mod tests {
             vec![ViewDemand {
                 key: self.0.clone(),
                 side: SideIx(0),
-                needs: ViewNeeds::default(),
+                needs: ViewNeeds::MODEL,
                 inputs: Arc::clone(&self.1),
             }]
         }

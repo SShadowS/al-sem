@@ -3814,12 +3814,32 @@ pub(crate) fn build_cross_app_base(
 /// [`build_cross_app_base`] with `--no-roots-config` (#160 step 9 D1): the
 /// overlay is skipped when `no_roots_config`.
 pub(crate) fn build_cross_app_base_with(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    model_instance_id: &str,
+    no_roots_config: bool,
+) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
+    build_cross_app_base_from(
+        crate::program::resolved::ResolvedProgram::build(
+            inputs,
+            crate::program::resolved::ProgramScope::CrossApp,
+        ),
+        inputs,
+        model_instance_id,
+        no_roots_config,
+    )
+}
+
+/// [`build_cross_app_base_with`] over a program built (or failed) already:
+/// the batch view builder lends it to `alsem graph` first (#277 D9).
+pub(crate) fn build_cross_app_base_from(
+    program: Result<crate::program::resolved::ResolvedProgram, String>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     no_roots_config: bool,
 ) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
     use crate::engine::l4::summary_runner::base_intraprocedural_summary;
-    let mut x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
+    let mut x = crate::program::model::program_calls::cross_app_program_from(
+        program,
         inputs,
         model_instance_id,
         no_roots_config,
@@ -5358,22 +5378,6 @@ codeunit 13 "Dep Rec Sub"
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
-    }
-
-    /// #160 Task 27 review I1: cross-app `alsem query` keeps the model, the
-    /// graph and the `l4` analysis, and drops the rest of the base before the
-    /// query and the render. The base holds the relation (`base.rel`), which
-    /// owns the graph and the SCC, so a live base (or view cell) shows as a
-    /// second owner of each (#160 step 4).
-    #[test]
-    fn cross_app_query_drops_the_base() {
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path().join("ws");
-        write_fixture(&ws);
-        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let q = crate::engine::l4::effect_query_cli::QuerySubstrate::build(&inputs, "r0", false)
-            .expect("cross-app query substrate");
-        assert_eq!(q.shared_owners(), (1, 1), "(graph, scc) owners");
     }
 
     /// #160 Task 27 review #2: the cross-app shim solves over the base's
