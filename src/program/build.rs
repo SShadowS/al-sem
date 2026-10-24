@@ -670,11 +670,19 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
 /// one id, so the closed-enum fact (#264) merges: `closed_enum` is the AND of
 /// every copy (a closed arm never survives an extensible one) and
 /// `enum_impls` their union, cleared when the AND is `false` so it stays
-/// empty unless closed.
+/// empty unless closed. A table's `fields` are unioned too: an arm that
+/// declares a field with another type keeps both entries, so
+/// `ResolveIndex::field_in_table` declines the name instead of taking the
+/// first arm's type (identical copies add nothing).
 fn dedup_objects(objects: &mut Vec<ObjectNode>) {
     objects.dedup_by(|dup, kept| {
         if dup.id != kept.id {
             return false;
+        }
+        for field in std::mem::take(&mut dup.fields) {
+            if !kept.fields.contains(&field) {
+                kept.fields.push(field);
+            }
         }
         kept.closed_enum &= dup.closed_enum;
         if kept.closed_enum {
@@ -829,13 +837,19 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
             // exists under its own build conditions, so the survivor exists
             // under either: it keeps only the symbols every collapsed copy
             // decides alike (`RoutineNode::preproc_context`).
-            contexts.push(Some(
+            // #264: copies that disagree on the return type (two `#if` arms
+            // that differ only there) leave the survivor with NO return type:
+            // keeping the first arm's would type every caller by one build.
+            let return_disagrees = r.tier != TrustTier::SymbolOnly
+                && copies.iter().any(|o| o.return_type != r.return_type);
+            contexts.push(Some((
                 r.preproc_context
                     .iter()
                     .filter(|e| copies.iter().all(|o| o.preproc_context.contains(e)))
                     .cloned()
                     .collect::<Box<[_]>>(),
-            ));
+                return_disagrees,
+            )));
             // Issue #103: the same declaration in two `#if` arms can subscribe
             // to, or publish, different events; the survivor stands for every
             // arm, so it carries the event facts of all of them. Only for the
@@ -878,8 +892,12 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         let ((verdict, context), facts) = decisions
             .next()
             .expect("retain_mut visits each routine exactly once");
-        if let Some(context) = context {
+        if let Some((context, return_disagrees)) = context {
             survivor.preproc_context = context;
+            if return_disagrees {
+                survivor.return_type = None;
+                survivor.return_type_id = None;
+            }
         }
         if let Some(facts) = facts {
             facts.apply(survivor);
@@ -2082,11 +2100,13 @@ codeunit 50301 "Preproc Dup Sig"
         assert_eq!(
             projection,
             vec![
+                // #264: the copies' return types differ (A1, A2), so the
+                // survivor has none.
                 (
                     s("a"),
                     10,
                     s("Integer"),
-                    Some(s("A1")),
+                    None,
                     vec![(s("CLEAN"), true)],
                     false,
                     false,
@@ -2106,7 +2126,7 @@ codeunit 50301 "Preproc Dup Sig"
                     s("c"),
                     30,
                     s("Text"),
-                    Some(s("C1")),
+                    None,
                     vec![(s("Z"), true)],
                     false,
                     false,

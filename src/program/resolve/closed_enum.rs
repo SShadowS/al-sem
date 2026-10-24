@@ -403,7 +403,16 @@ fn field_enum(cx: &ClosedEnumCx, object: ExprId, member: &str) -> Option<ObjectN
     let (field, owner) =
         cx.index
             .field_with_owner_in_table(cx.graph, cx.from_object, &table, &field_lc)?;
+    if !parsed_clean(cx, &owner) {
+        return None;
+    }
     declared_enum(cx, &field.type_text, &owner)
+}
+
+/// Rule 1 for a type read from ANOTHER object (a field, a callee's return
+/// type): that object's file parsed cleanly, as the enum fact requires.
+fn parsed_clean(cx: &ClosedEnumCx, object: &ObjectNodeId) -> bool {
+    cx.graph.object(object).is_some_and(|o| !o.parse_incomplete)
 }
 
 /// The bare-call arm.
@@ -427,11 +436,13 @@ fn call_enum(cx: &ClosedEnumCx, f_lc: &str, arity: usize) -> Option<ObjectNodeId
         return None;
     };
     let i = cx.graph.routines.binary_search_by(|r| r.id.cmp(rid)).ok()?;
-    declared_enum(
-        cx,
-        cx.graph.routines[i].return_type.as_deref()?,
-        &rid.object,
-    )
+    let callee = &cx.graph.routines[i];
+    if !parsed_clean(cx, &rid.object) {
+        return None;
+    }
+    // `#if` alternatives that disagree on the return type leave the node with
+    // none (`build::dedup_routines_preserving_genuine_overloads`): declined here.
+    declared_enum(cx, callee.return_type.as_deref()?, &rid.object)
 }
 
 /// A declared `Enum X` type text, X resolved from `from` (the declaring object).
@@ -1434,6 +1445,112 @@ enum 50106 "Other Kind" implements "Other Strategy"
         assert_eq!(
             completeness(&workspace(text, &[])),
             SetCompleteness::Complete
+        );
+    }
+
+    /// `#if CLEAN99` / `#else` text around two alternatives, in `order`.
+    fn if_arms(first: &str, second: &str) -> String {
+        format!("#if CLEAN99\n{first}#else\n{second}#endif\n")
+    }
+
+    /// Final panel FO2a (FC1): two `#if` alternatives of `PickKind` differ only
+    /// in the return type (closed `Demo Kind`, extensible `Open Kind`). The
+    /// build keeps one routine node; whichever survives, the site stays open.
+    #[test]
+    fn i264_fo2a_if_alternative_return_types_stay_open() {
+        let pick = |kind: &str, value: &str| {
+            format!(
+                "    local procedure PickKind(): Enum \"{kind}\"\n    begin\n        exit(Enum::\"{kind}\"::{value});\n    end;\n"
+            )
+        };
+        let closed = pick("Demo Kind", "Standard");
+        let open = pick("Open Kind", "Standard");
+        for (label, first, second) in [
+            ("closed first", &closed, &open),
+            ("open first", &open, &closed),
+        ] {
+            let text = caller(
+                "        S: Interface \"Demo Strategy\";",
+                "        S := PickKind();\n        S.NextKm(1);",
+                &format!("\n{}", if_arms(first, second)),
+            );
+            let ws = workspace(text, &[("src/OpenKind.al", open_kind())]);
+            assert!(is_open(completeness(&ws)), "FO2a {label}");
+        }
+    }
+
+    /// Final panel FO2b: the table is declared twice under `#if`, its `Kind`
+    /// field of the closed enum in one arm and of the extensible one in the
+    /// other. The build keeps one copy of the table; the field stays unprovable.
+    #[test]
+    fn i264_fo2b_if_alternative_table_field_types_stay_open() {
+        let table = |kind: &str| {
+            format!(
+                "table 50100 \"Demo Item\"\n{{\n    fields\n    {{\n        field(1; \"No.\"; Code[20]) {{ }}\n        field(2; Kind; Enum \"{kind}\") {{ }}\n    }}\n}}\n"
+            )
+        };
+        let closed = table("Demo Kind");
+        let open = table("Open Kind");
+        let vars = format!("{VARS}\n        Rec: Record \"Demo Item\";");
+        for (label, first, second) in [
+            ("closed first", &closed, &open),
+            ("open first", &open, &closed),
+        ] {
+            let ws = workspace(
+                caller(&vars, "        S := Rec.Kind;\n        S.NextKm(1);", ""),
+                &[
+                    ("src/Item.al", if_arms(first, second)),
+                    ("src/OpenKind.al", open_kind()),
+                ],
+            );
+            assert!(is_open(completeness(&ws)), "FO2b {label}");
+        }
+    }
+
+    /// Final panel FC4: the type text read for a field or a callee's return
+    /// value comes from a file that hit error recovery: open, as for the enum
+    /// fact. A syntax error elsewhere in that file is enough.
+    #[test]
+    fn i264_fc4_types_from_a_recovered_file_stay_open() {
+        let broken = "\ncodeunit 50130 \"Broken\"\n{\n    procedure Bad()\n    begin\n        if then ;\n    end;\n}\n";
+        let item = format!("{ITEM}{broken}");
+        assert_eq!(
+            al_syntax::parse(&item).parse_status,
+            al_syntax::ir::ParseStatus::Recovered,
+            "precondition"
+        );
+        let vars = format!("{VARS}\n        Rec: Record \"Demo Item\";");
+        let ws = workspace(
+            caller(&vars, "        S := Rec.Kind;\n        S.NextKm(1);", ""),
+            &[("src/Item.al", item)],
+        );
+        assert!(is_open(completeness(&ws)), "field from a recovered file");
+
+        // A bare call from a table extension reaches its base table's
+        // procedure, which lives in the (recovered) table's file.
+        let item = format!(
+            "table 50100 \"Demo Item\"\n{{\n    fields\n    {{\n        field(1; \"No.\"; Code[20]) {{ }}\n    }}\n\n    procedure PickKind(): Enum \"Demo Kind\"\n    begin\n        exit(Enum::\"Demo Kind\"::Standard);\n    end;\n}}\n{broken}"
+        );
+        let ext = format!(
+            "tableextension 50132 \"Item Ext\" extends \"Demo Item\"\n{{\n    procedure Dispatch()\n    var\n{S_VAR}\n    begin\n        S := PickKind();\n        S.NextKm(1);\n    end;\n}}\n"
+        );
+        let clean_item = item.replace(broken, "");
+        let clean = workspace(
+            caller(VARS, "", ""),
+            &[("src/Item.al", clean_item), ("src/Ext.al", ext.clone())],
+        );
+        assert_eq!(
+            completeness(&clean),
+            SetCompleteness::Complete,
+            "precondition: the clean table closes the extension's site"
+        );
+        let ws = workspace(
+            caller(VARS, "", ""),
+            &[("src/Item.al", item), ("src/Ext.al", ext)],
+        );
+        assert!(
+            is_open(completeness(&ws)),
+            "return type from a recovered file"
         );
     }
 
