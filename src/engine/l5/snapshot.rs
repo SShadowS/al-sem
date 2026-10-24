@@ -1489,8 +1489,8 @@ pub(crate) fn compose_tree(
     };
     let collided = CollidedRows::build(&ws.routines);
     let identities = derive_identity_table(model);
-    // The two evidence indexes read the raw facts, so they run before the
-    // drain; each subject's Vec is then moved in and dropped as it goes.
+    // The two evidence indexes read the raw facts, so they run first; in
+    // drain mode each subject's Vec is then moved in and dropped as it goes.
     let (subjects, operation_index, callsite_index, capability_facts) = match raw {
         TreeRaw::Drain(mut map) => {
             let subjects: std::collections::BTreeSet<String> = map.keys().cloned().collect();

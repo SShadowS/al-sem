@@ -780,6 +780,9 @@ impl View {
                 .collect();
             // The raw readers after the trees: the part of the request no
             // tree asks. Policy, the one such reader, asks `primary` alone.
+            // shortcut: a tree that asks `primary` (step 9's inventory) keeps
+            // raw alive to the end; upgrade when `Plan` carries the non-tree
+            // jobs' own request.
             let rest = WitnessRequest {
                 ids: plan
                     .witness
@@ -1606,6 +1609,35 @@ mod tests {
             "precondition: FillAndPost's standalone effects carry the proof-witnessed Fill insert"
         );
 
+        // R4-1, no later reader (run first, so its breaks fail here): (a)
+        // disjoint roots, each tree drains its own entries out of the shared
+        // map; (b) one root twice, the first tree borrows and the last
+        // drains. DISCRIMINATION: (a) the first tree drains the whole map →
+        // "(a) disjoint: job 1"; (b) the borrow tree removes every subject, a
+        // later reader or not → "(b) same root: job 1".
+        for (name, x, y, sx, sy) in [
+            ("(a) disjoint", &a, &b, &sa, &sb),
+            ("(b) same root", &b, &b, &sb, &sb),
+        ] {
+            let mut v = new_view();
+            v.prepare(&plan(vec![(JobId(0), tree(x)), (JobId(1), tree(y))], false));
+            assert_eq!(
+                effects_text(v.effects(JobId(0))),
+                effects_text(sx),
+                "{name}: job 0"
+            );
+            assert_eq!(
+                effects_text(v.effects(JobId(1))),
+                effects_text(sy),
+                "{name}: job 1"
+            );
+            assert!(
+                v.raw.is_none() && v.released & Cell::Raw.bit() != 0,
+                "{name}: raw released"
+            );
+        }
+
+        // With a policy-shaped later reader both trees borrow.
         let mut v = new_view();
         v.prepare(&plan(
             vec![(JobId(0), tree(&a)), (JobId(1), tree(&b))],
