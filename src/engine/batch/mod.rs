@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::engine::gate::run::{ViewModel, build_view_model};
 use crate::engine::perf_trace as pt;
-use crate::engine::session::{JobId, Plan, View};
+use crate::engine::session::{Cell, JobId, Plan, View};
 
 use job::{Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, ViewCx, ViewDemand};
 use output::{JobOutput, Stream, WriteAction, capture, replay, replay_on, write_error};
@@ -67,6 +67,7 @@ pub(crate) fn run_on_target(
     let part = job.resolve(d.side, &ResolveCx::new(view.model(), &d.inputs))?;
     let (keys, has_tree) = (part.plan.keys(), part.plan.has_tree(JobId(0)));
     view.prepare(&Plan::merge([(JobId(0), part.plan)]));
+    let mut handed = Vec::new();
     let mut cx = ViewCx {
         view: &mut view,
         inputs: &d.inputs,
@@ -77,6 +78,7 @@ pub(crate) fn run_on_target(
         later_cells: vec![],
         later_runs: vec![],
         carry: part.carry,
+        handed: &mut handed,
     };
     job.compute(d.side, &mut cx)
 }
@@ -397,6 +399,7 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             })
         })
         .collect();
+    let fills: Vec<Vec<Cell>> = parts.iter().flatten().map(|p| p.plan.fills()).collect();
     let mut carries = Vec::new();
     let mut plans = Vec::new();
     for ((i, (j, _)), part) in on_view.iter().zip(parts) {
@@ -413,6 +416,11 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
     }
     // (4)-(8) ONE plan, ONE prepare; its job lines are the `l4` solve's.
     let ((), l4_lines) = capture(|| view.prepare(&Plan::merge(plans)));
+    let census = crate::engine::census::enabled();
+    if census {
+        shared_census(&fills);
+    }
+    let mut handed = Vec::new();
     // (9) Each demand's compute, in job order.
     for (k, (i, (j, d))) in on_view.iter().enumerate() {
         let Some((_, keys, has_tree, builds_l4)) = reads[k].clone() else {
@@ -429,6 +437,7 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             later_cells: later().flat_map(|r| r.0.clone()).collect(),
             later_runs: later().flat_map(|r| r.1.clone()).collect(),
             carry: carries[k].take(),
+            handed: &mut handed,
         };
         let _s = job_span(*j, jobs[*j], "compute");
         let (side, own) = capture(|| jobs[*j].compute(d.side, &mut cx));
@@ -442,6 +451,9 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
         lines.extend(own);
         results[*i] = Some((side, lines));
     }
+    if census {
+        runs_census(&handed);
+    }
     // Freeing the view is a large deallocation: named, so it is not left in an
     // enclosing span's self time (E12-C3, as analyze's `gate.teardown`).
     {
@@ -453,6 +465,44 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
     // the next view's build is in no phase.
     pt::end_phase("post_attach");
     finish(results)
+}
+
+/// D11's shared cells, after the view's one `prepare`: each is one allocation
+/// however many jobs read it, so one line per cell names how many do
+/// (`job_refs`: the demands whose own plan fills it; every model demand reads
+/// the model). Its bytes are the cell's own buckets, printed once when it
+/// was filled.
+fn shared_census(fills: &[Vec<Cell>]) {
+    let refs = |cell: Cell| fills.iter().filter(|f| f.contains(&cell)).count();
+    for (name, n) in [
+        ("model", fills.len()),
+        ("rel", refs(Cell::Rel)),
+        ("raw", refs(Cell::Raw)),
+        ("l4", refs(Cell::L4)),
+        ("det", refs(Cell::Det)),
+    ] {
+        eprintln!("[retained-census] batch.shared cell={name} job_refs={n}");
+    }
+}
+
+/// D11's `runs`, after the view's computes: the bytes of each DISTINCT run
+/// allocation handed to a job (`allocs` of them; a copy per job would count
+/// twice) and how many jobs took one.
+fn runs_census(handed: &[job::HandedRun]) {
+    let mut distinct: Vec<&job::HandedRun> = Vec::new();
+    for h in handed {
+        if !distinct.iter().any(|d| d.1.ptr_eq(&h.1)) {
+            distinct.push(h);
+        }
+    }
+    let bytes: usize = distinct.iter().map(|d| d.2).sum();
+    let mut jobs: Vec<JobId> = handed.iter().map(|h| h.0).collect();
+    jobs.dedup();
+    eprintln!(
+        "[retained-census] batch.shared cell=runs bytes={bytes} allocs={} job_refs={}",
+        distinct.len(),
+        jobs.len()
+    );
 }
 
 fn job_id(j: usize) -> JobId {

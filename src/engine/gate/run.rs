@@ -787,7 +787,8 @@ fn analyze_view(
     // the run drops dependency-anchored findings itself for `--scope primary`
     // (routine, object and `dep:` location); `--scope all` keeps them for the
     // scope filter below.
-    let run = cx.view().run(&cx.keys()[0]);
+    let key = cx.keys()[0].clone();
+    let run = cx.take_run(&key);
     // Today's context died inside the runner, before any projection: the view
     // holds none of its cells longer.
     cx.release_all_but(&[]);

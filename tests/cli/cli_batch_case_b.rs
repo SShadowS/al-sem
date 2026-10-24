@@ -12,7 +12,7 @@ use crate::cli_build_counters::count;
 /// through `CallLib` → `Dep Lib.InsertCust`, an inherited fact. (In
 /// `ws_dep()` `DoWork` writes table 18 itself, so every job's output names
 /// the dependency's identities anyway and a shared raw set would not show.)
-fn ws_split(dir: &Path) {
+pub(crate) fn ws_split(dir: &Path) {
     crate::cli_digest_query_dependencies::write_dependency_workspace(dir);
     std::fs::write(
         dir.join("src/Work.al"),

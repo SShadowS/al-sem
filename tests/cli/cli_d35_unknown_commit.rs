@@ -1789,27 +1789,7 @@ const A6D_WS: &str = r#"codeunit 50101 "Ws Caller"
 /// no `unresolved:` segment, and it stays under "partly analysed".
 #[test]
 fn dependency_subscriber_keeps_todays_text() {
-    let (_tmp, ws) = write_files(
-        "i265-a6d",
-        &[("app.json", &dep264_app_json()), ("src/Ws.al", A6D_WS)],
-    );
-    // DEP_STRATEGY_SYMBOLS's codeunit list plus `Dep Pub` and `Dep Sub`.
-    let codeunits = DEP_STRATEGY_SYMBOLS
-        .strip_suffix(']')
-        .expect("precondition: the symbols end with the codeunit list");
-    let symbols = format!(
-        r#"{codeunits},{{"Id":70010,"Name":"Dep Pub","Methods":[{{"Name":"Raise","Parameters":[]}}]}},{{"Id":70011,"Name":"Dep Sub","Methods":[]}}]"#
-    );
-    write_dep264(
-        &ws,
-        &symbols,
-        &[
-            ("src/DepStrategy.al", DEP_STRATEGY),
-            ("src/DepImpl.al", DEP_IMPL),
-            ("src/DepPub.al", DEP_PUB),
-            ("src/DepSub.al", DEP_SUB),
-        ],
-    );
+    let (_tmp, ws) = dependency_subscriber_ws();
     let findings = d35_findings(&analyze_in(&ws, None, None, Scope::All, false).0);
     let dep: Vec<&Value> = findings
         .iter()
@@ -1833,4 +1813,32 @@ fn dependency_subscriber_keeps_todays_text() {
         !fix.contains("unresolved:"),
         "A6d: no own-site segment: {fix}"
     );
+}
+
+/// A6d's workspace: a subscriber in a SOURCE dependency with a d35 finding
+/// that `--scope all` reports and `--scope primary` drops (also #277 T1's
+/// B3 fixture).
+pub(crate) fn dependency_subscriber_ws() -> (tempfile::TempDir, PathBuf) {
+    let (tmp, ws) = write_files(
+        "i265-a6d",
+        &[("app.json", &dep264_app_json()), ("src/Ws.al", A6D_WS)],
+    );
+    // DEP_STRATEGY_SYMBOLS's codeunit list plus `Dep Pub` and `Dep Sub`.
+    let codeunits = DEP_STRATEGY_SYMBOLS
+        .strip_suffix(']')
+        .expect("precondition: the symbols end with the codeunit list");
+    let symbols = format!(
+        r#"{codeunits},{{"Id":70010,"Name":"Dep Pub","Methods":[{{"Name":"Raise","Parameters":[]}}]}},{{"Id":70011,"Name":"Dep Sub","Methods":[]}}]"#
+    );
+    write_dep264(
+        &ws,
+        &symbols,
+        &[
+            ("src/DepStrategy.al", DEP_STRATEGY),
+            ("src/DepImpl.al", DEP_IMPL),
+            ("src/DepPub.al", DEP_PUB),
+            ("src/DepSub.al", DEP_SUB),
+        ],
+    );
+    (tmp, ws)
 }

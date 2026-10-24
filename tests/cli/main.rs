@@ -79,6 +79,8 @@ mod cli_b_fingerprint_oracles;
 mod cli_b_prove_differential;
 mod cli_b_snapshot_differential;
 mod cli_batch_case_b;
+mod cli_batch_census;
+mod cli_batch_contract;
 mod cli_batch_diff;
 mod cli_batch_failures;
 mod cli_batch_manifest;
