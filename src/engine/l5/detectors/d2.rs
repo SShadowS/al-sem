@@ -517,6 +517,7 @@ pub fn detect_d2(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 event_kind: None,
                 cross_extension_subscribers: None,
                 cohort_contexts: None,
+                loose_subject: None,
             };
             // Fingerprint deferred until AFTER merge_by_terminal.
             findings.push(finding);

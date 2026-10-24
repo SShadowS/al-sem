@@ -20,7 +20,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::engine::l5::capability_query::reachable_coverage;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::event_flow::{RelayWalkOptions, collect_relay_subscribers, event_kind_of};
-use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
+use crate::engine::l5::finding::{
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject,
+};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
@@ -227,6 +229,19 @@ pub fn detect_d45(
                 event_kind: publisher_event_kind.clone(),
                 cross_extension_subscribers: cross_ext,
                 cohort_contexts: None,
+                // #252: the publisher's events, on the publisher's object. The anchor
+                // IS the publisher for a primary one; for a dependency publisher it
+                // is the first primary subscriber, which a rename can move.
+                loose_subject: Some(LooseSubject {
+                    object_id: Some(pub_routine.object_id.clone()),
+                    key: if publisher_events.is_empty() {
+                        format!("d45/{publisher}")
+                    } else {
+                        let events: Vec<&str> =
+                            publisher_events.iter().map(|e| e.as_str()).collect();
+                        format!("d45/{}", events.join(","))
+                    },
+                }),
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
             findings.push(finding);

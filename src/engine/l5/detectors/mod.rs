@@ -72,7 +72,9 @@ use al_syntax::IdentifierFoldExt;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::SourceAnchor;
 use crate::engine::l5::registry::{Detector, substrate};
-use crate::program::body::features::{PAnchor, PCFNNode, PCallSite, PCallee, PExpressionInfo};
+use crate::program::body::features::{
+    PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PExpressionInfo,
+};
 use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine, ModelTable};
 
 /// `beforeAnchor(a, b)` — true iff `a` is strictly before `b` by source position.
@@ -1173,6 +1175,25 @@ pub(crate) fn anchor_of(a: &PAnchor, routine: &ModelRoutine) -> SourceAnchor {
         leading_context_hash: None,
         trailing_context_hash: None,
     }
+}
+
+/// #252: the resolved table of the caller's record variable that `binding` passes
+/// (d39-d42 loose subjects). Matched by record-variable id, else by folded name;
+/// `None` when neither resolves to a table.
+pub(crate) fn binding_source_table<'r>(
+    caller: &'r ModelRoutine,
+    binding: &PCallArgumentBinding,
+) -> Option<&'r str> {
+    let vars = &caller.record_variables;
+    let by_id = binding
+        .source_record_variable_id
+        .as_deref()
+        .and_then(|id| vars.iter().find(|v| v.id == id));
+    let by_name = || {
+        let name = binding.source_variable_name.as_deref()?.fold_identifier();
+        vars.iter().find(|v| v.name.fold_identifier() == name)
+    };
+    by_id.or_else(by_name)?.table_id.as_deref()
 }
 
 /// `groupAndCap` — group findings by `key_of(finding)`, sort each group by

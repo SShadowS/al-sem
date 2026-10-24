@@ -615,6 +615,7 @@ fn build_finding(
         event_kind: None,
         cross_extension_subscribers: None,
         cohort_contexts: None,
+        loose_subject: None,
     };
 
     let actionable = pick_actionable_anchor(&finding, role_by_routine);
@@ -1567,6 +1568,7 @@ fn build_group_finding(
         event_kind: None,
         cross_extension_subscribers: None,
         cohort_contexts: None,
+        loose_subject: None,
     };
 
     let actionable = pick_actionable_anchor(&finding, role_by_routine);
@@ -1970,6 +1972,7 @@ fn assemble_cohort_findings(
             event_kind: None,
             cross_extension_subscribers: None,
             cohort_contexts: Some(cohort_contexts),
+            loose_subject: None,
         };
 
         let actionable = pick_actionable_anchor(&finding, role_by_routine);

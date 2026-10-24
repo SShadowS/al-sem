@@ -19,13 +19,14 @@
 //! `candidatesConsidered = (sccs of size>=2).length`. confidence
 //! `to_confidence(&[], "likely")`. severity high.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::engine::l4::combined_graph::CombinedEdge;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, SourceAnchor, id_list,
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject, SourceAnchor,
+    id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PAnchor;
@@ -243,6 +244,24 @@ pub fn detect_d7(
         let id = format!("d7/{}", sorted_scc.join(","));
         let root_cause_key = id.clone();
 
+        // #252: the cycle's events and objects, on its first object. Event and
+        // object ids name no routine, and the anchor (first member by internal id)
+        // can move to another object on a rename, so the loose object is fixed here.
+        let event_ids: BTreeSet<&str> = sorted_scc
+            .iter()
+            .flat_map(|from| graph.edges_by_from.get(from).unwrap_or(&empty))
+            .filter(|e| e.kind == "event-dispatch" && in_set.contains(e.to.as_str()))
+            .filter_map(|e| e.event_id.as_deref())
+            .collect();
+        let loose_subject = LooseSubject {
+            object_id: affected_objects.first().cloned(),
+            key: format!(
+                "d7/{}|{}",
+                event_ids.into_iter().collect::<Vec<_>>().join(","),
+                affected_objects.join(",")
+            ),
+        };
+
         let mut finding = Finding {
             id,
             root_cause_key,
@@ -272,6 +291,7 @@ pub fn detect_d7(
             event_kind: None,
             cross_extension_subscribers: None,
             cohort_contexts: None,
+            loose_subject: Some(loose_subject),
         };
         finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
         findings.push(finding);

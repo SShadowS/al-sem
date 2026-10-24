@@ -39,9 +39,12 @@ use crate::engine::l4::effect_lattice::EffectPresence;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
-    anchor_of, before_anchor, branch_exclusive, is_auto_persist_trigger_rec, record_load_points,
+    anchor_of, before_anchor, binding_source_table, branch_exclusive, is_auto_persist_trigger_rec,
+    record_load_points,
 };
-use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
+use crate::engine::l5::finding::{
+    Evidence, EvidenceStep, Finding, FixOption, LooseSubject, id_list,
+};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
 
@@ -284,6 +287,16 @@ pub fn detect_d39(
                     event_kind: None,
                     cross_extension_subscribers: None,
                     cohort_contexts: None,
+                    // #252: the callee, its parameter and the caller's table.
+                    loose_subject: Some(LooseSubject {
+                        object_id: None,
+                        key: format!(
+                            "d39/{}/{}/{}",
+                            callee.id,
+                            role.parameter_index,
+                            binding_source_table(caller, binding).unwrap_or("?")
+                        ),
+                    }),
                 };
                 finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
                 findings.push(finding);

@@ -584,6 +584,7 @@ pub fn detect_d43(
                     event_kind: event_kind_by_id.get(site.event_id.as_str()).map(|s| s.to_string()),
                     cross_extension_subscribers: cross_ext,
                     cohort_contexts: None,
+                    loose_subject: None,
                 };
                 finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
                 findings.push(finding);

@@ -231,6 +231,7 @@ pub fn detect_d5(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 event_kind: None,
                 cross_extension_subscribers: None,
                 cohort_contexts: None,
+                loose_subject: None,
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
             findings.push(finding);

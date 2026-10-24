@@ -312,6 +312,21 @@ pub struct Finding {
     /// by N loops" per verdict class instead of one [`LoopContext`] per loop. See
     /// [`D1CohortContext`].
     pub cohort_contexts: Option<Vec<D1CohortContext>>,
+    /// #252: the routine-independent part of this finding, stated by the detector.
+    /// Read only by `FingerprintIndex::loose_fingerprint_of`. `None`: the #247
+    /// fallback (strip the anchor out of `root_cause_key`).
+    pub loose_subject: Option<LooseSubject>,
+}
+
+/// #252: what `looseFingerprint` hashes in place of the anchor object and the
+/// stripped `root_cause_key`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LooseSubject {
+    /// Internal object id whose `type/key` replaces the anchor's object part.
+    /// `None`: the anchor's object (all detectors but d7 and d45).
+    pub object_id: Option<String>,
+    /// The key text (`dNN/…`), hashed after `stabilize`, never stripped.
+    pub key: String,
 }
 
 /// Build the `Arc<str>` id list [`Finding::affected_objects`] /
@@ -1493,6 +1508,7 @@ mod tests {
                     witness: dummy_witness(),
                 },
             ]),
+            loose_subject: None,
         };
 
         let map: HashMap<String, String> = HashMap::new();
@@ -1573,6 +1589,7 @@ mod tests {
             event_kind: None,
             cross_extension_subscribers: None,
             cohort_contexts: Some(vec![]),
+            loose_subject: None,
         };
         assert_eq!(
             realizing_path_count(&f),

@@ -168,17 +168,41 @@ impl<'a> FingerprintIndex<'a> {
     /// same object keeps this key. Not unique: several findings can share one. When
     /// the anchor is not a routine (d64's object id, an unresolved id) it equals
     /// `fingerprint_of`.
+    ///
+    /// #252: when the detector states a [`LooseSubject`](crate::engine::l5::finding::LooseSubject),
+    /// its key replaces the stripped `rootCauseKey` and is hashed as given (after
+    /// `stabilize`, never stripped: it holds only what the detector chose, so an id
+    /// in it is meant to be there), and its `object_id`, when set, replaces the
+    /// anchor's object part. `None` is the #247 path above, unchanged.
     pub fn loose_fingerprint_of(&self, finding: &Finding) -> String {
-        let (routine, obj_part) = self.anchor_of(finding);
-        let key = match routine {
-            Some(r) => strip_anchor(
-                &finding.root_cause_key,
-                &[r.id.as_str(), r.stable_routine_id.as_str()],
+        let (routine, anchor_obj) = self.anchor_of(finding);
+        let (obj_part, key) = match (&finding.loose_subject, routine) {
+            (Some(s), _) => (
+                s.object_id
+                    .as_deref()
+                    .map_or(anchor_obj, |id| self.object_part(id)),
+                s.key.clone(),
             ),
-            None => finding.root_cause_key.clone(),
+            (None, Some(r)) => (
+                anchor_obj,
+                strip_anchor(
+                    &finding.root_cause_key,
+                    &[r.id.as_str(), r.stable_routine_id.as_str()],
+                ),
+            ),
+            (None, None) => (anchor_obj, finding.root_cause_key.clone()),
         };
         let key = self.stabilize(&key);
         hash_parts(finding, obj_part, String::new(), key)
+    }
+
+    /// The `objectType/objectKey` part of the object with internal id `id`, or `id`
+    /// itself when the index does not hold it (internal object ids are
+    /// `{appGuid}/{type}/{key}`, so still stable).
+    fn object_part(&self, id: &str) -> String {
+        self.objects_by_id
+            .get(id)
+            .map_or_else(|| id.to_string(), |o| object_type_key(o))
     }
 
     /// The anchor routine (`primaryLocation.enclosingRoutineId`, when it is one) and
@@ -198,13 +222,7 @@ impl<'a> FingerprintIndex<'a> {
             .and_then(|r| self.objects_by_id.get(r.object_id.as_str()))
             .or_else(|| self.objects_by_id.get(enclosing));
 
-        let obj_part = match obj {
-            // The object KEY: the number for a numbered object (the same bytes as
-            // before #83), `@name` for one without, so two numberless objects of one
-            // kind no longer share an object part.
-            Some(o) => format!("{}/{}", o.object_type, o.object_key),
-            None => String::new(),
-        };
+        let obj_part = obj.map_or_else(String::new, |o| object_type_key(o));
         (routine, obj_part)
     }
 
@@ -218,6 +236,13 @@ impl<'a> FingerprintIndex<'a> {
             substitute_stable_ids(key, &self.stable_by_id, &self.model_instance_prefixes)
         }
     }
+}
+
+/// The object KEY part: the number for a numbered object (the same bytes as before
+/// #83), `@name` for one without, so two numberless objects of one kind no longer
+/// share an object part.
+fn object_type_key(o: &ModelObject) -> String {
+    format!("{}/{}", o.object_type, o.object_key)
 }
 
 /// `sha256(detector | obj_part | routine_name | affectedTables | key)[..16]`.
@@ -335,7 +360,7 @@ fn substitute_stable_ids(
 mod tests {
     use super::*;
     use crate::engine::ids::sha256_hex;
-    use crate::engine::l5::finding::{Evidence, FindingConfidence, SourceAnchor};
+    use crate::engine::l5::finding::{Evidence, FindingConfidence, LooseSubject, SourceAnchor};
     use crate::program::model::workspace::{ModelRoutine, RoutineVariables};
 
     fn dummy_anchor(enclosing: &str) -> SourceAnchor {
@@ -381,6 +406,7 @@ mod tests {
             event_kind: None,
             cross_extension_subscribers: None,
             cohort_contexts: None,
+            loose_subject: None,
         }
     }
 
@@ -752,8 +778,9 @@ mod tests {
     }
 
     /// The anchor id and the ONE site-id segment minted on it go; the rest of the
-    /// key stays. Keys are the real detector layouts (`rA` = the anchor's internal
-    /// id, `S#A` its stable id).
+    /// key stays. Keys are the detector `rootCauseKey` layouts (`rA` = the anchor's
+    /// internal id, `S#A` its stable id). Since #252 this is only the fallback path
+    /// (`loose_subject: None`); a detector that states a subject no longer reaches it.
     #[test]
     fn strip_anchor_shapes() {
         let ids = ["rA", "S#A"];
@@ -764,8 +791,8 @@ mod tests {
             strip_anchor("d18/rA/rA/loop0/rec/field", &ids),
             "d18/~/~/rec/field"
         );
-        // d60: `{rid}/{loopId}/{var}` — a variable named like a site id after the
-        // loop segment is the subject and stays (#247 CR1).
+        // d60's key layout `{rid}/{loopId}/{var}` — a variable named like a site id
+        // after the loop segment stays (#247 CR1).
         assert_eq!(strip_anchor("d60/rA/rA/loop0/p1", &ids), "d60/~/~/p1");
         assert_eq!(strip_anchor("d60/rA/rA/loop0/op2", &ids), "d60/~/~/op2");
         // A segment must end at `/`, `|` or the key's end.
@@ -784,8 +811,9 @@ mod tests {
         assert_eq!(strip_anchor("d2/event", &ids), "d2/event");
     }
 
-    /// #247 CR1/CR8: two d60 findings in one routine on variables `p1` and `p2` (the
-    /// real key layout) keep different loose keys.
+    /// #247 CR1/CR8: on the fallback path (`loose_subject: None`), two findings with
+    /// d60's key layout on variables `p1` and `p2` keep different loose keys. Since
+    /// #252 d60 states its own subject; this pins the strip, not d60.
     #[test]
     fn loose_fingerprint_keeps_the_variable_after_the_site_id() {
         let (routines, objects) = two_routine_model();
@@ -795,8 +823,9 @@ mod tests {
         assert_ne!(idx.loose_fingerprint_of(&a), idx.loose_fingerprint_of(&b));
     }
 
-    /// Moving a finding between routines of one object keeps the loose key (internal
-    /// and stable id forms) and changes the fingerprint; a callee id is kept.
+    /// On the fallback path (`loose_subject: None`): moving a finding between routines
+    /// of one object keeps the loose key (internal and stable id forms) and changes
+    /// the fingerprint; a callee id is kept.
     #[test]
     fn loose_fingerprint_ignores_the_anchor_routine() {
         let (routines, objects) = two_routine_model();
@@ -820,5 +849,46 @@ mod tests {
         let a = dummy_finding("d16", "d16/rA/rA/cs1/rB", "rA");
         let b = dummy_finding("d16", "d16/rA/rA/cs1/rA", "rA");
         assert_ne!(idx.loose_fingerprint_of(&a), idx.loose_fingerprint_of(&b));
+    }
+
+    // -----------------------------------------------------------------------
+    // #252 typed loose subjects
+    // -----------------------------------------------------------------------
+
+    fn with_subject(mut f: Finding, object_id: Option<&str>, key: &str) -> Finding {
+        f.loose_subject = Some(LooseSubject {
+            object_id: object_id.map(str::to_string),
+            key: key.to_string(),
+        });
+        f
+    }
+
+    /// U1: a subject key is hashed verbatim, never stripped. A key holding the
+    /// anchor's own id (the d16 self-call shape) keeps it, so it differs from the
+    /// key the strip would have made of it. Break: strip the subject key.
+    #[test]
+    fn loose_subject_key_is_not_stripped() {
+        let (routines, objects) = two_routine_model();
+        let idx = FingerprintIndex::build(&routines, &objects);
+        let own = with_subject(dummy_finding("d16", "k", "rA"), None, "d16/rA");
+        let tilde = with_subject(dummy_finding("d16", "k", "rA"), None, "d16/~");
+        assert_ne!(
+            idx.loose_fingerprint_of(&own),
+            idx.loose_fingerprint_of(&tilde)
+        );
+    }
+
+    /// U4: a subject `object_id` the index does not hold is hashed verbatim, not
+    /// dropped, so two unknown objects keep different loose keys. Break: map an
+    /// unknown id to `""`.
+    #[test]
+    fn loose_subject_unknown_object_is_hashed_verbatim() {
+        let (routines, objects) = two_routine_model();
+        let idx = FingerprintIndex::build(&routines, &objects);
+        let a = with_subject(dummy_finding("d7", "k", "rA"), Some("x/A"), "d7/e");
+        let b = with_subject(dummy_finding("d7", "k", "rA"), Some("x/B"), "d7/e");
+        assert_ne!(idx.loose_fingerprint_of(&a), idx.loose_fingerprint_of(&b));
+        // The ordinary fingerprint never reads the subject.
+        assert_eq!(idx.fingerprint_of(&a), idx.fingerprint_of(&b));
     }
 }

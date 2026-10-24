@@ -17,8 +17,10 @@
 use crate::engine::l4::effect_lattice::EffectPresence;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::detectors::{anchor_of, before_anchor};
-use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
+use crate::engine::l5::detectors::{anchor_of, before_anchor, binding_source_table};
+use crate::engine::l5::finding::{
+    Evidence, EvidenceStep, Finding, FixOption, LooseSubject, id_list,
+};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::calls::UpgradedBinding;
 use crate::program::model::workspace::{Model, ModelRecordOperation};
@@ -233,6 +235,16 @@ pub fn detect_d41(
                     event_kind: None,
                     cross_extension_subscribers: None,
                     cohort_contexts: None,
+                    // #252: the callee, its parameter and the caller's table.
+                    loose_subject: Some(LooseSubject {
+                        object_id: None,
+                        key: format!(
+                            "d41/{}/{}/{}",
+                            callee.id,
+                            binding.parameter_index,
+                            binding_source_table(routine, binding).unwrap_or("?")
+                        ),
+                    }),
                 };
                 finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
                 findings.push(finding);
