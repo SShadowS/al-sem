@@ -498,6 +498,287 @@ fn ambiguous_selector_candidates_name_their_owner() {
 }
 
 // ---------------------------------------------------------------------------
+// #239: an `<owner>::<routine>` selector selects the named owner's routine or
+// nothing; it never falls back to another object's routine.
+// ---------------------------------------------------------------------------
+
+/// `<header>` + one `procedure <routine>()`.
+fn object_with(header: &str, body: &str, routine: &str) -> String {
+    format!(
+        "{header}\n{{\n{body}    procedure {routine}()\n    begin\n        Message('p');\n    end;\n}}\n"
+    )
+}
+
+const TABLE_FIELDS: &str = "    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n\n";
+const TABLE_SEL_B: &str = "Table Sel B";
+
+/// An app whose `src/<file>` holds each `(file, header, body, routine)` object.
+fn objects_workspace(dir: &Path, objects: &[(&str, &str, &str, &str)]) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{GUID}","name":"Issue239","publisher":"probe","version":"1.0.0.0","platform":"1.0.0.0","application":"1.0.0.0","idRanges":[{{"from":50100,"to":50199}}],"runtime":"14.0"}}"#
+        ),
+    );
+    for (file, header, body, routine) in objects {
+        write(
+            &dir.join("src").join(file),
+            &object_with(header, body, routine),
+        );
+    }
+}
+
+/// The issue's exact shape: only `Codeunit "Sel B"` declares `Persist`.
+fn one_owner_workspace(dir: &Path) {
+    objects_workspace(
+        dir,
+        &[
+            ("a.al", "codeunit 50101 \"Sel A\"", "", "Other"),
+            ("b.al", "codeunit 50102 \"Sel B\"", "", "Persist"),
+        ],
+    );
+}
+
+/// `Codeunit "Sel B"` and `Table "Sel B"` share the bare name `Sel B`;
+/// `Table "Codeunit Sel B"`'s bare name spells the codeunit's full owner.
+fn shared_name_workspace(dir: &Path) {
+    objects_workspace(
+        dir,
+        &[
+            ("a.al", "codeunit 50101 \"Sel B\"", "", "Persist"),
+            ("b.al", "table 50111 \"Sel B\"", TABLE_FIELDS, "Persist"),
+            (
+                "c.al",
+                "table 50112 \"Codeunit Sel B\"",
+                TABLE_FIELDS,
+                "Persist",
+            ),
+        ],
+    );
+}
+
+/// CR1 / sol F2: `Codeunit "Sel B"` declares only `Other`; `Persist` belongs to
+/// `Table "Codeunit Sel B"`, whose bare name spells the codeunit's full owner.
+fn typed_owner_workspace(dir: &Path) {
+    objects_workspace(
+        dir,
+        &[
+            ("a.al", "codeunit 50101 \"Sel B\"", "", "Other"),
+            (
+                "c.al",
+                "table 50112 \"Codeunit Sel B\"",
+                TABLE_FIELDS,
+                "Persist",
+            ),
+        ],
+    );
+}
+
+/// What digest, fingerprint (JSON) and prove each did with `sel`: the exit
+/// code, every selected routine as `<owner>|<stableId>`, and the diagnostics
+/// (digest: kind and candidates; fingerprint: kind; prove: the answer). One
+/// assert over all three shows every command's outcome, not only the first.
+fn per_command(w: &str, sel: &str) -> [String; 3] {
+    let s = |v: &Value| v.as_str().unwrap_or("").to_string();
+    let routine = |r: &Value| format!("{}|{}", s(&r["objectDisplay"]), s(&r["stableId"]));
+    let list = |v: &Value, f: &dyn Fn(&Value) -> String| {
+        v.as_array()
+            .map_or(Vec::new(), |a| a.iter().map(f).collect::<Vec<_>>())
+            .join(", ")
+    };
+    let (d, dc) = alsem(&["digest", w, "--routine", sel, "--deterministic"]);
+    let d_roots = list(&d["payload"]["entries"], &|e| routine(&e["routine"]));
+    let d_diags = list(&d["payload"]["changedRootsDiagnostics"], &|g| {
+        format!("{}({})", s(&g["kind"]), list(&g["candidates"], &s))
+    });
+    let (f, fc) = alsem(&[
+        "fingerprint",
+        w,
+        "--routine",
+        sel,
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    let f_roots = list(&f["payload"]["blocks"], &|b| routine(&b["routine"]));
+    let f_diags = list(&f["payload"]["diagnostics"], &|g| s(&g["kind"]));
+    let (p, pc) = alsem(&["prove", w, sel, "may-commit", "--deterministic"]);
+    [
+        format!("digest {dc} [{d_roots}] [{d_diags}]"),
+        format!("fingerprint {fc} [{f_roots}] [{f_diags}]"),
+        format!(
+            "prove {pc} [{}] {}",
+            routine(&p["payload"]["routine"]),
+            s(&p["payload"]["result"]["answer"])
+        ),
+    ]
+}
+
+/// `per_command` when `sel` selects exactly `owner`'s routine `id`.
+fn selects(owner: &str, id: &str) -> [String; 3] {
+    [
+        format!("digest 0 [{owner}|{id}] []"),
+        format!("fingerprint 0 [{owner}|{id}] []"),
+        format!("prove 0 [{owner}|{id}] no"),
+    ]
+}
+
+/// `per_command` when `sel` matches no routine (prove's dummy routine echoes it).
+fn unmatched(sel: &str) -> [String; 3] {
+    [
+        "digest 2 [] [selector-unmatched()]".to_string(),
+        "fingerprint 2 [] [selector-unresolved]".to_string(),
+        format!("prove 2 [|{sel}] unknown"),
+    ]
+}
+
+/// A1 (#239, M1). An owner that declares no such routine matches nothing, in
+/// all three commands: never `Codeunit Sel B`'s `Persist`. The human
+/// fingerprint error says so and names the owner that does declare it (B5).
+///
+/// Breaks: restore the fallback -> digest, fingerprint and prove each select
+/// `Codeunit Sel B|<id>` at exit 0 (one assert shows all three); drop the hint
+/// -> the `declared as` assert fails.
+#[test]
+fn owner_qualified_selector_with_no_such_routine_is_unmatched() {
+    let dir = tempfile::tempdir().unwrap();
+    one_owner_workspace(dir.path());
+    let w = dir.path().to_str().unwrap();
+    let sel = format!("{SEL_A}::Persist");
+
+    assert_eq!(per_command(w, &sel), unmatched(&sel));
+    let (_out, err, code) = alsem_out(&[
+        "fingerprint",
+        w,
+        "--routine",
+        &sel,
+        "--format",
+        "human",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(&format!("error: --routine '{sel}' did not match")),
+        "{err}"
+    );
+    assert!(
+        err.contains(&format!(
+            "\n  no routine of that name on the named owner; declared as: {SEL_B}::Persist"
+        )),
+        "{err}"
+    );
+}
+
+/// A2 (#239, M2, M3, CR2). The bare object name, the AL-quoted owner and an
+/// AL-quoted routine select Sel A's routine in all three commands.
+///
+/// Breaks: drop the bare-name match -> M2 unmatched; keep the quotes of the
+/// owner (M3) or of the routine (CR2) -> unmatched.
+#[test]
+fn bare_and_quoted_owner_selectors_select_that_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    same_name_workspace(dir.path());
+    let ws = dir.path();
+    let w = ws.to_str().unwrap();
+    let id = stable_id_of(ws, "src/a.al", "Persist");
+
+    for sel in [
+        "Sel A::Persist",
+        "Codeunit \"Sel A\"::Persist",
+        "Codeunit \"Sel A\"::\"Persist\"",
+    ] {
+        assert_eq!(per_command(w, sel), selects(SEL_A, &id), "{sel}");
+    }
+}
+
+/// A3 (#239, M4, M6). A bare name two owners share is ambiguous with both
+/// owners as candidates; a typed owner selects only itself, never
+/// `Table "Codeunit Sel B"` (whose bare name spells it).
+///
+/// Breaks: a typed object part also matches bare names -> M6 ambiguous; keep
+/// only the first bare-name match -> M4 selects one routine.
+#[test]
+fn shared_bare_name_is_ambiguous_and_typed_owner_is_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_name_workspace(dir.path());
+    let ws = dir.path();
+    let w = ws.to_str().unwrap();
+
+    assert_eq!(
+        per_command(w, "Sel B::Persist"),
+        [
+            format!("digest 2 [] [selector-ambiguous({SEL_B}::Persist, {TABLE_SEL_B}::Persist)]"),
+            "fingerprint 2 [] [selector-ambiguous]".to_string(),
+            "prove 2 [|Sel B::Persist] unknown".to_string(),
+        ]
+    );
+    let (_out, err, code) = alsem_out(&[
+        "fingerprint",
+        w,
+        "--routine",
+        "Sel B::Persist",
+        "--format",
+        "human",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    let listed: Vec<&str> = err.lines().filter(|l| l.starts_with("  - ")).collect();
+    assert_eq!(listed.len(), 2, "{err}");
+    for owner in [SEL_B, TABLE_SEL_B] {
+        assert!(
+            listed
+                .iter()
+                .any(|l| l.starts_with(&format!("  - {owner}::Persist  ("))),
+            "{err}"
+        );
+    }
+
+    let id = stable_id_of(ws, "src/a.al", "Persist");
+    assert_eq!(
+        per_command(w, &format!("{SEL_B}::Persist")),
+        selects(SEL_B, &id)
+    );
+}
+
+/// A4 (#239, CR1, sol F2). A typed object part never matches by bare name:
+/// with `Codeunit "Sel B"` declaring no `Persist`, `Codeunit "Sel B"::Persist`
+/// is unmatched rather than `Table "Codeunit Sel B"`'s routine, which the
+/// quoted bare name `"Codeunit Sel B"::Persist` does select.
+///
+/// Break: a typed object part also matches bare names -> the first assert
+/// selects the table's routine in all three commands.
+#[test]
+fn typed_owner_never_matches_a_bare_name() {
+    let dir = tempfile::tempdir().unwrap();
+    typed_owner_workspace(dir.path());
+    let ws = dir.path();
+    let w = ws.to_str().unwrap();
+
+    let sel = "Codeunit \"Sel B\"::Persist";
+    assert_eq!(per_command(w, sel), unmatched(sel));
+    let id = stable_id_of(ws, "src/c.al", "Persist");
+    assert_eq!(
+        per_command(w, "\"Codeunit Sel B\"::Persist"),
+        selects("Table Codeunit Sel B", &id)
+    );
+}
+
+/// A5 (#239, CR4). An empty object part (`::Persist`, the pre-#78 header) is the
+/// bare routine name: it selects the one `Persist`.
+///
+/// Break: narrow an empty object part (compare `""` with the owners) -> unmatched.
+#[test]
+fn empty_owner_part_is_a_bare_routine_name() {
+    let dir = tempfile::tempdir().unwrap();
+    one_owner_workspace(dir.path());
+    let ws = dir.path();
+    let w = ws.to_str().unwrap();
+    let id = stable_id_of(ws, "src/b.al", "Persist");
+
+    assert_eq!(per_command(w, "::Persist"), selects(SEL_B, &id));
+}
+
+// ---------------------------------------------------------------------------
 // #240 / #249: a quoted object name that holds an escaped quote (`"A ""B"" C"`)
 // is shown by its LOGICAL name (`A "B" C`) everywhere, the name the ids use (#83).
 // ---------------------------------------------------------------------------
