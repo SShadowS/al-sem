@@ -277,8 +277,9 @@ fn push_capped<'a>(out: &mut String, label: &str, items: impl ExactSizeIterator<
 /// Why the commit answer is unknown, for the message: the subscriber's coverage
 /// reasons, deduplicated, sorted and joined (or a fallback naming what is
 /// missing), then `; unresolved: …` naming the subscriber's own call-site-local
-/// gaps (sites of `routine`'s own row) in source order, then `; partly analysed: …` naming the cone's other
-/// partially analysed routines, sorted; each list capped at [`SHOWN_TARGETS`]
+/// gaps (sites of `routine`'s own row) in source order, then
+/// `; partly analysed: …` naming the cone's other partially analysed routines,
+/// sorted; each list capped at [`SHOWN_TARGETS`]
 /// with `+N more`. The subscriber itself is left out of "partly analysed" only
 /// when its own sites account for its whole gap (module doc, #265).
 fn coverage_reasons(
@@ -320,16 +321,15 @@ fn coverage_reasons(
             continue;
         };
         let a = &cs.source_anchor;
-        // The structured callee, as the snapshot shows it: the raw `callee_text`
-        // may span lines and hold comments.
+        // The structured callee, as the snapshot shows it (the raw `callee_text`
+        // may span lines and hold comments), on one line: its receiver is still
+        // raw source, so whitespace runs become one space.
         sites
             .entry((a.start_line, a.start_column, cs.id.as_str()))
             .or_insert_with(|| {
-                format!(
-                    "{} (line {})",
-                    display_of_callee(&cs.callee),
-                    a.start_line + 1
-                )
+                let callee = display_of_callee(&cs.callee);
+                let callee = callee.split_whitespace().collect::<Vec<_>>().join(" ");
+                format!("{callee} (line {})", a.start_line + 1)
             });
     }
     let drop_self =
@@ -677,6 +677,34 @@ mod tests {
                 "interface-open-world; unresolved: X (line 5); partly analysed: sub (Codeunit 1)",
             );
         }
+    }
+
+    /// #265 FC3 / N1: the structured callee's receiver is raw source and may span
+    /// lines; the rendered site is printed on one line.
+    #[test]
+    fn multi_line_receiver_prints_on_one_line() {
+        let receiver = "GetStrategy(\n    1)";
+        assert!(
+            receiver.contains('\n'),
+            "precondition: a multi-line receiver"
+        );
+        let mut cs = site_at("cs1", "GetStrategy(\n    1).NextKm", 4, 0);
+        cs.callee = PCallee::Member {
+            receiver: receiver.to_string(),
+            method: "NextKm".to_string(),
+        };
+        let mut sub = routine("sub", "event-subscriber");
+        sub.call_sites = vec![cs];
+        let routines = vec![sub];
+        let f = finding_with_edges(
+            &routines,
+            partial(&["interface-open-world"], &["sub"]),
+            vec![own_edge("interface-open-world", "cs1")],
+        );
+        assert_unknown_with(
+            &f,
+            "interface-open-world; unresolved: GetStrategy( 1).NextKm (line 5)",
+        );
     }
 
     /// #265 CR4: a site in unreachable code is not named (the cone's own fact
