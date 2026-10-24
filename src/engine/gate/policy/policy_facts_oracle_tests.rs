@@ -245,3 +245,76 @@ fn policy_view_materializes_no_dependency_member() {
         "every primary routine, and only those, has raw"
     );
 }
+
+/// The rule engine on `ws`'s policy view, with `drop` removed from the raw
+/// map (the hand-stated precondition: a witness scope that missed an
+/// evaluated routine), for `policy`.
+fn run_without_raw_of(drop: &str, policy: &str) -> RunOutput {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    ts::write_fixture_dep_ambiguous(&ws);
+    let view = view_of(&ws, false).expect("cross-app target");
+    let model = view.model();
+    let routines: Vec<ModelRoutine> = model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| view.target().is_primary_routine(r))
+        .cloned()
+        .collect();
+    let id = routines
+        .iter()
+        .find(|r| r.name == drop)
+        .expect("precondition: a primary routine")
+        .id
+        .clone();
+    let det = view.det();
+    assert!(
+        det.summaries.contains_key(&id) && view.raw().get(&id).is_some_and(|v| !v.is_empty()),
+        "precondition: {drop} has a summary and inherited facts"
+    );
+    let mut raw = view.raw().clone();
+    raw.remove(&id);
+    let classes = crate::engine::root_classification::classify_roots(&model.workspace);
+    let pm = PolicyModel::new(
+        &routines,
+        &model.workspace.objects,
+        &model.workspace.tables,
+        &det.event_graph.events,
+        &classes,
+        &det.summaries,
+        &raw,
+    );
+    let doc = match load_policy_from_string(policy) {
+        LoadResult::Ok { policy, .. } => policy,
+        LoadResult::Err { errors, .. } => panic!("{errors:?}"),
+    };
+    run_policy_engine(&pm, &doc)
+}
+
+/// Final panel F1-O6 / F1-C1 (R6): an evaluated routine with a summary but no
+/// raw entry FAILS LOUDLY when a rule reads inherited facts. Read as "no
+/// inherited facts", a `facts: inherited|any` rule would pass for it unseen.
+#[test]
+#[should_panic(expected = "has a summary but no raw inherited facts")]
+fn a_routine_missing_from_raw_fails_loudly() {
+    run_without_raw_of("Go", MODES_POLICY);
+}
+
+/// The same precondition under a `facts: direct` rule: it never reads the
+/// inherited half, so it runs.
+#[test]
+fn a_direct_rule_never_reads_raw() {
+    let out = run_without_raw_of(
+        "Go",
+        "version: 1
+rules:
+  - id: m-direct
+    severity: high
+    when:
+      capability.op: insert
+    facts: direct
+",
+    );
+    assert_eq!(out.rule_summaries.len(), 1);
+}

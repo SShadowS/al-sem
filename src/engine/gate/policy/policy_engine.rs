@@ -262,10 +262,24 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
             // Decorate-sort-undecorate so each sort key is computed once.
             let direct =
                 summary_for_routine.map_or(&[][..], |s| s.capability_facts_direct.as_slice());
-            let raw = model
-                .raw
-                .get(routine.id.as_str())
-                .map_or(&[][..], Vec::as_slice);
+            // R6 (fail loud): a routine with a summary is a cone member, and
+            // the witness pass gives every member in scope a raw entry (empty
+            // when it inherits nothing). A missing entry is a scope that missed
+            // an evaluated routine; reading it as "no inherited facts" would
+            // let `facts: inherited|any` pass unseen. `direct` never reads it.
+            let raw = match model.raw.get(routine.id.as_str()) {
+                Some(v) => v.as_slice(),
+                None if summary_for_routine.is_none()
+                    || rule.facts.as_deref() == Some("direct") =>
+                {
+                    &[][..]
+                }
+                None => panic!(
+                    "policy: routine {} has a summary but no raw inherited facts \
+                     (the view's witness scope missed an evaluated routine)",
+                    routine.id
+                ),
+            };
             let mut facts = select_facts(rule, direct, raw);
             facts.sort_by_cached_key(|f| fact_sort_key(f));
             if facts.is_empty() {
