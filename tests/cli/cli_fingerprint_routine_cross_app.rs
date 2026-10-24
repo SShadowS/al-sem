@@ -121,7 +121,7 @@ fn write_two_boundaries(dir: &Path) {
 /// T5/T6: the workspace's `Ws Runner` has an `OnRun` that runs the
 /// dependency's `Dep Runner`, whose own `OnRun` inserts `Customer`: the
 /// cross-app identities hold two `OnRun` triggers, one per role.
-fn write_two_on_runs(dir: &Path) {
+pub(crate) fn write_two_on_runs(dir: &Path) {
     dd::write_workspace(
         dir,
         "codeunit 50176 \"Ws Runner\"\n{\n    trigger OnRun()\n    begin\n        Codeunit.Run(Codeunit::\"Dep Runner\");\n    end;\n}\n",

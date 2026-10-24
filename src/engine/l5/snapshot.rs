@@ -1280,13 +1280,19 @@ pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
         let _s = crate::engine::perf_trace::span("snapshot", "snapshot.r3a3_base");
         build_r3a3_source_only_base(resolved)
     };
-    compose_snapshot_from_base(resolved, &base)
+    compose_snapshot_from_base(resolved, &base, None)
 }
 
 /// [`compose_snapshot`] over an already-built source-only base, for a caller
 /// that reads the base too (`snapshot_full::compose_full_snapshot`): the base
 /// runs the whole cone and the producer solve, so it is built once.
-pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> CapabilitySnapshot {
+/// `source_less_apps`: D9's set when the caller holds a cross-app base, else
+/// `None` (the old gap rule).
+pub fn compose_snapshot_from_base(
+    resolved: &Model,
+    base: &R3a3SourceBase,
+    source_less_apps: Option<&std::collections::HashSet<String>>,
+) -> CapabilitySnapshot {
     crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
 
@@ -1300,6 +1306,7 @@ pub fn compose_snapshot_from_base(resolved: &Model, base: &R3a3SourceBase) -> Ca
         coverage: &base.coverage,
         routine_to_stable: &base.routine_to_stable,
         bodyless_dependency: None,
+        source_less_apps,
     };
     let collided = CollidedRows::build(&base.ws_routines);
     let identities = derive_identity_table(resolved);
@@ -1361,6 +1368,23 @@ struct TreeInputs<'a> {
     /// D6: the internal ids of the body-less dependency rows. A resolved call
     /// whose every target is one is `unfetched-dependency`. `None` on the cut.
     bodyless_dependency: Option<&'a std::collections::HashSet<&'a str>>,
+    /// #160 step 9 D9: the lowercase guids of the dependency apps with no
+    /// source ([`source_less_apps`]). Only such an app's body-less rows give a
+    /// `symbol-only-boundary` gap; a source app's give `body-unavailable`.
+    /// `None` (a cut with no cross-app base) keeps the old rule: every
+    /// body-less dependency row's app.
+    source_less_apps: Option<&'a std::collections::HashSet<String>>,
+}
+
+/// The lowercase guids of the dependency apps that ship no source
+/// (`DependencyApp::has_source == false`), for D9.
+pub(crate) fn source_less_apps(
+    apps: &[crate::program::model::workspace::DependencyApp],
+) -> std::collections::HashSet<String> {
+    apps.iter()
+        .filter(|a| !a.has_source)
+        .map(|a| a.guid.to_ascii_lowercase())
+        .collect()
 }
 
 /// The tree over the view's cone graph (#160 step 6 D4, D5, D6): `typed` =
@@ -1371,7 +1395,8 @@ struct TreeInputs<'a> {
 /// too, but drops it before the composition so it never sits beside the
 /// composition's peak; final panel F1-C4). Rule B is on (spec §14.3.5): every
 /// dependency routine is named by its app, `app_names` (lowercase app guid →
-/// name, the loaded apps).
+/// name, the loaded apps). `source_less_apps`: D9's set (#160 step 9), empty
+/// single-app.
 pub(crate) fn compose_tree(
     model: &Model,
     typed: &[TypedEdge],
@@ -1379,6 +1404,7 @@ pub(crate) fn compose_tree(
     caps: &mut crate::engine::l5::detector_context::CapabilityAnalysis,
     mut raw: HashMap<String, Vec<CapabilityFact>>,
     app_names: &HashMap<String, String>,
+    source_less_apps: &std::collections::HashSet<String>,
 ) -> CapabilitySnapshot {
     crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
@@ -1406,6 +1432,7 @@ pub(crate) fn compose_tree(
         coverage: &caps.coverage,
         routine_to_stable: &routine_to_stable,
         bodyless_dependency: Some(&bodyless),
+        source_less_apps: Some(source_less_apps),
     };
     let collided = CollidedRows::build(&ws.routines);
     let identities = derive_identity_table(model);
@@ -2654,14 +2681,16 @@ fn classify_resolution(
 
 // ---------------------------------------------------------------------------
 // deriveAnalysisGaps — non-callsite unknowns. Sort by (kind|subject), dedup
-// adjacent. Every gap of the model, unfiltered (#220 I8: `prove` intersects it
-// with its own cone; the cross-app serialization filters it by reach).
+// adjacent. Every gap of the model, unfiltered (#220 I8: prove's gap count
+// intersects it with its own cone; the cross-app serialization filters it by
+// reach). #160 step 9 D9: an app-level `symbol-only-boundary` names only a
+// source-less app when the caller passes `source_less_apps`.
 //
 // Sort by kind | subject; ordinal (M8 contract).
 // A subject keeps the app guid's model casing (`encode_object_id` keeps it
-// verbatim): `prove`'s `count_gaps_in_cone` matches an app subject as a
-// case-sensitive `{guid}:` prefix of the cone's stable ids, so lowercasing it
-// here would hide the gap of an upper-case manifest guid.
+// verbatim): `digest_cli::count_gaps_in_cone` (prove's gap count) matches an
+// app subject as a case-sensitive `{guid}:` prefix of the cone's stable ids, so
+// lowercasing it here would hide the gap of an upper-case manifest guid.
 // ---------------------------------------------------------------------------
 
 fn derive_analysis_gaps(resolved: &Model, base: &TreeInputs<'_>) -> Vec<SnapshotAnalysisGap> {
@@ -2690,12 +2719,20 @@ fn derive_analysis_gaps(resolved: &Model, base: &TreeInputs<'_>) -> Vec<Snapshot
     // Symbol-only apps: any app guid in a body-unavailable dependency routine.
     // A routine whose body a parse error lost is not a symbol: it has its
     // `parse-incomplete` gap above (final panel C1, as the loop below).
+    // #160 step 9 D9: with a cross-app base's set, only an app with no source
+    // (F21: "an opaque boundary is a source-less app"); a source app's
+    // body-less row gets the `body-unavailable` gap below.
+    let source_less = |guid: &str| {
+        base.source_less_apps
+            .is_none_or(|s| s.contains(&guid.to_ascii_lowercase()))
+    };
     let mut opaque_apps: BTreeSet<String> = BTreeSet::new();
     for r in base.ws_routines {
         if !r.body_available
             && !r.parse_incomplete
             && is_dependency_role(r)
             && let Some(guid) = object_id_app_guid(&r.object_id)
+            && source_less(guid)
         {
             opaque_apps.insert(guid.to_string());
         }
@@ -3227,7 +3264,15 @@ mod step6_tree_tests {
                     raw: WitnessScope::All,
                 },
             );
-            let tree = compose_tree(&m, rel.cone(), &[], &mut caps, raw, &HashMap::new());
+            let tree = compose_tree(
+                &m,
+                rel.cone(),
+                &[],
+                &mut caps,
+                raw,
+                &HashMap::new(),
+                &Default::default(),
+            );
             with_inherited += usize::from(
                 cut.capability_facts
                     .iter()
@@ -3299,6 +3344,7 @@ mod step6_tree_tests {
             coverage: &coverage,
             routine_to_stable: &routine_to_stable,
             bodyless_dependency: None,
+            source_less_apps: None,
         };
         let (rows, skipped) = derive_typed_edges(&inp);
         assert!(rows.is_empty(), "no typedEdges row: {rows:?}");
