@@ -1269,7 +1269,7 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
         &source_less_apps(&b.dependency_apps),
         ConeScope {
             derived: false,
-            // Hand-stated: no subject (what `Roots(∅)` must mean).
+            // Hand-stated: no subject (what an empty request must mean).
             raw: WitnessScope::Subjects(BTreeSet::new()),
         },
     );
@@ -1277,7 +1277,7 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
         tree.capability_facts
             .iter()
             .all(|f| f.provenance != "inherited"),
-        "precondition: no inherited fact in a Roots(∅) tree"
+        "precondition: no inherited fact in a tree of an empty request"
     );
     let keys = assemble_full_snapshot(
         model,
