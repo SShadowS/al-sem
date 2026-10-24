@@ -290,8 +290,12 @@ pub trait Job {
     }
 }
 
-/// A job that failed its own validation: no view, its output already made.
-pub struct Failed(pub JobOutput);
+/// A job that failed its own validation: no view, its output already made,
+/// and its command's write-failure exit (analyze 2, every other command 1).
+pub struct Failed {
+    pub output: JobOutput,
+    pub write_failure_exit: u8,
+}
 
 impl Job for Failed {
     fn demands(&self) -> Vec<ViewDemand> {
@@ -310,6 +314,9 @@ impl Job for Failed {
         Doc::new(())
     }
     fn serialize(&self, _: Doc) -> JobOutput {
-        self.0.clone()
+        self.output.clone()
+    }
+    fn write_failure_exit(&self) -> u8 {
+        self.write_failure_exit
     }
 }
