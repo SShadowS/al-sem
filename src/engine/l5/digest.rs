@@ -3159,6 +3159,10 @@ pub struct DigestEffectResult {
     pub origin_operation_ids: Vec<String>,
     /// S4: per-effect scoped guarantees (attached by `compute_ordering`).
     pub scoped_guarantees: Vec<crate::engine::l5::ordering_engine::ScopedGuarantee>,
+    /// A boundary group's full `(resource id, display)` set, in resource-id
+    /// order (#160 step 9 D2 (6)): `detail` lists at most 10, prove matches
+    /// every member. Not serialized; empty off a group.
+    pub group_resources: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -4063,6 +4067,16 @@ fn digest_one_root<'i>(
             // A group's detail (spec §14.3.5 item 3): the dependency routine it
             // enters, its distinct resources' count and the first 10 of them,
             // in resource-id order. Values stay strings.
+            let group_resources: Vec<(String, String)> = acc
+                .group
+                .as_ref()
+                .map(|(_, resources)| {
+                    resources
+                        .iter()
+                        .map(|(id, display)| (id.clone(), display.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
             let detail = match &acc.group {
                 Some((b, resources)) => vec![
                     ("boundary".to_string(), b.display.clone()),
@@ -4132,6 +4146,7 @@ fn digest_one_root<'i>(
                 temp_state: acc.temp_state,
                 origin_operation_ids: acc.origin_operation_ids.into_iter().collect(),
                 scoped_guarantees: Vec::new(),
+                group_resources,
             });
         }
 

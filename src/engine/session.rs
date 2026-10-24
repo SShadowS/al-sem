@@ -102,7 +102,7 @@ pub enum WitnessRequest {
 
 impl WitnessRequest {
     /// The composition's raw scope over `model`.
-    fn scope(&self, model: &Model) -> WitnessScope {
+    pub(crate) fn scope(&self, model: &Model) -> WitnessScope {
         match self {
             WitnessRequest::None => WitnessScope::None,
             WitnessRequest::Roots(ids) => WitnessScope::Subjects(
@@ -224,8 +224,8 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
 /// `det.transaction_spans` and the query off `l4`. Digest passes its changed
 /// roots (stable ids, resolved before the composition, #160 step 6 D3): the
 /// view composes their raw facts, builds the tree over the cone graph and
-/// keeps their effects ([`View::effects`]). No root (prove, which keeps
-/// its standalone snapshot, or a digest that resolved none): neither. `tests`
+/// keeps their effects ([`View::effects`]); prove passes its one root (#160
+/// step 9 D2). No root (a digest or prove that resolved none): neither. `tests`
 /// (`digest --tests`, #254): the effects also keep the tree's test-coverage
 /// graph, which covers the whole workspace, so a tree is built even with no
 /// root (an empty `Roots` request: no raw facts).
@@ -689,6 +689,7 @@ impl View {
                 ("Raw", raw.is_some()),
                 ("Tree", tree.is_some()),
                 ("Effects", effects.is_some()),
+                ("TreeRead", tree_read.is_some()),
                 ("L4", l4.is_some()),
                 ("Det", true),
                 ("Ordering", ordering.is_some()),
@@ -1359,6 +1360,12 @@ mod tests {
         assert!(v.tree.is_none(), "(e) the Effects tree died inside prepare");
         assert!(v.tree_read.is_none(), "(e) Effects fills no TreeRead cell");
         drop(v.take_effects());
+        v.release_all_but(&[]);
+        assert_eq!(
+            v.released & Cell::TreeRead.bit(),
+            0,
+            "(b) an unfilled TreeRead is not released, so no rel:TreeRead trace"
+        );
         let msg = panic_text(
             "(d) take_tree_read after Effects",
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(v.take_tree_read()))),
