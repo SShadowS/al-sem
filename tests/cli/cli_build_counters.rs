@@ -431,25 +431,45 @@ fn digest_single_app() {
     assert_row("digest single-app", &m, DIGEST_ROW);
 }
 
+/// #160 step 9 §4.6 (T16): prove is digest with one root, cross-app by
+/// default: one composition over the view's relation, its tree read inside
+/// `prepare` (no cut, so no second graph, cone, SCC or producer solve).
 #[test]
 fn prove() {
     let (_d, ws) = ws_dep();
     let m = run(&["prove", &ws, "CallLib", "may-commit", "--deterministic"]);
-    assert_row(
+    assert_row("prove", &m, DIGEST_ROW);
+}
+
+/// T16: `--single-app` takes the same path over the workspace alone.
+#[test]
+fn prove_single_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
         "prove",
-        &m,
-        Row {
-            program: 1,
-            bcg: 2,
-            cone: 2,
-            v2: 1,
-            scc: 3,
-            pd: 2,
-            ctx: 1,
-            snap: 1,
-            witness: 1,
-        },
+        &ws,
+        "CallLib",
+        "may-commit",
+        "--deterministic",
+        "--single-app",
+    ]);
+    assert_row("prove single-app", &m, DIGEST_ROW);
+}
+
+/// T16: a prove that resolves no root keeps no witness request and builds no
+/// tree, as digest's no-root case; it exits 2 with the dummy document.
+#[test]
+fn prove_no_root() {
+    let (_d, ws) = ws_dep();
+    let (out, m) = spawn_traced(&["prove", &ws, "NoSuchRoutine", "may-commit"], &[]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(
+        count(&m, "build.detector_context"),
+        1,
+        "precondition: the run\n{m:?}"
     );
+    assert_eq!(count(&m, "build.snapshot"), 0, "{m:?}");
+    assert_eq!(count(&m, "build.witness_pass"), 0, "{m:?}");
 }
 
 /// Spec §4.4.4 (A8): digest's no-input check runs right after the target
@@ -991,17 +1011,20 @@ fn views_release_their_cells_before_the_next_build() {
     // and `prepare` releases `Caps` right after it.
     let det = ["ctx", "rel:Caps"];
     let per_side: Vec<&str> = [&det[..], &all, &["snap"]].concat();
-    // `finish_default_run`: every cell but `l4` before the snapshot, `l4`
-    // after the query.
-    let default_run = vec![
+    // #160 step 6 D7: the tree first (it takes `Raw`, and is released once
+    // the effects are read off it), then the run; `Effects` dies after the
+    // query, beside `l4`.
+    let tree_run = vec![
+        "snap",
+        "rel:Raw",
+        "rel:Tree",
         "ctx",
         "rel:Caps",
         "rel:Det",
         "rel:Ordering",
         "rel:Rel",
-        "rel:Raw",
-        "snap",
         "rel:L4",
+        "rel:Effects",
     ];
     let cases: [(&str, Vec<&str>, Vec<&str>); 6] = [
         (
@@ -1036,28 +1059,15 @@ fn views_release_their_cells_before_the_next_build() {
             [&det[..], &["rel:L4"], &all[..1], &all[2..]].concat(),
         ),
         (
-            // #160 step 6 D7: the tree first (it takes `Raw`, and is released
-            // once the effects are read off it), then the run; `Effects` dies
-            // after the query, beside `l4`.
             "digest",
             vec!["digest", &ws, "--diff", &diff, "--deterministic"],
-            vec![
-                "snap",
-                "rel:Raw",
-                "rel:Tree",
-                "ctx",
-                "rel:Caps",
-                "rel:Det",
-                "rel:Ordering",
-                "rel:Rel",
-                "rel:L4",
-                "rel:Effects",
-            ],
+            tree_run.clone(),
         ),
         (
+            // #160 step 9 D2: prove is digest with one root.
             "prove",
             vec!["prove", &ws, "CallLib", "may-commit", "--deterministic"],
-            default_run,
+            tree_run,
         ),
     ];
     let mut bad = Vec::new();

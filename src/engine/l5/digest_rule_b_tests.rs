@@ -738,3 +738,109 @@ fn t3_digest_scoped_equals_unscoped() {
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// #160 step 9 T17 (prove arm, 6A-9): prove reads one root's effects,
+/// unresolved cone and gap count off a tree whose witness request is
+/// `Roots({root})` (`prove_pipeline_with`'s `digest_plan`). For every
+/// reportable root of every r0 dir and of the dependency fixtures, in both
+/// universes, those equal the same root's under `WitnessRequest::Primary`
+/// (every primary routine a subject). The subjects come from
+/// `WitnessRequest::scope`, the view's own mapping. DISCRIMINATION:
+/// `Roots`' scope dropping its subjects (`.take(0)` in `scope`) loses the
+/// root's transitive effects and fails it.
+#[test]
+fn prove_scoped_equals_unscoped() {
+    use crate::engine::session::WitnessRequest;
+    let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+    let mut r0_dirs: Vec<_> = walkdir::WalkDir::new(&r0)
+        .into_iter()
+        .map(|e| e.unwrap().into_path())
+        .filter(|p| p.join("app.json").is_file())
+        .collect();
+    r0_dirs.sort();
+    for d in r0_dirs {
+        dirs.push((d.display().to_string(), d));
+    }
+    let tmps: Vec<tempfile::TempDir> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
+    write_fixture_rule_b(tmps[0].path());
+    write_fixture_dep_ambiguous(tmps[1].path());
+    write_fixture_dep_uncertainty(tmps[2].path());
+    write_fixture_symbol_only_dep(tmps[3].path());
+    for (i, t) in tmps.iter().enumerate() {
+        dirs.push((format!("dependency fixture {i}"), t.path().to_path_buf()));
+    }
+    let (mut roots_seen, mut inherited_seen, mut gaps_seen) = (0usize, 0usize, 0usize);
+    let mut failures: Vec<String> = Vec::new();
+    for (name, dir) in &dirs {
+        for single in [true, false] {
+            let Ok(target) = AnalysisTarget::build(&inputs(dir), single, "prove") else {
+                continue;
+            };
+            let model = target.resolved();
+            let (rel, calls) = match &target {
+                AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
+                AnalysisTarget::CrossApp(b) => (
+                    Arc::clone(&b.rel),
+                    b.dependency_calls.as_deref().unwrap_or(&[]),
+                ),
+            };
+            let roots = crate::engine::l5::digest::reportable_roots(model);
+            let mut all = tree_of(
+                model,
+                &rel,
+                calls,
+                ConeScope {
+                    derived: false,
+                    raw: WitnessRequest::Primary.scope(model),
+                },
+            );
+            let unscoped = digest_effects(&mut all, model, &roots, false);
+            for root in &roots {
+                let mut scoped_tree = tree_of(
+                    model,
+                    &rel,
+                    calls,
+                    ConeScope {
+                        derived: false,
+                        raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
+                    },
+                );
+                let scoped =
+                    digest_effects(&mut scoped_tree, model, std::slice::from_ref(root), false);
+                let mut one = |e: &DigestEffects| {
+                    let entry = e.entries.iter().find(|x| &x.routine_id == root);
+                    inherited_seen += entry.map_or(0, |x| {
+                        x.effects
+                            .iter()
+                            .filter(|f| f.provenance == "transitive")
+                            .count()
+                    });
+                    let cone = &e.unresolved[root];
+                    gaps_seen += cone.gaps_in_cone;
+                    format!(
+                        "{:?}\n{:?}\n{:?}\n{}",
+                        entry.map(|x| &x.effects),
+                        cone.items,
+                        cone.traversal,
+                        cone.gaps_in_cone
+                    )
+                };
+                if one(&scoped) != one(&unscoped) {
+                    failures.push(format!("{name} (single-app {single}): {root}"));
+                }
+                roots_seen += 1;
+            }
+        }
+    }
+    assert!(
+        roots_seen > 200,
+        "precondition: roots compared ({roots_seen})"
+    );
+    assert!(
+        inherited_seen > 0,
+        "precondition: transitive effects compared"
+    );
+    assert!(gaps_seen > 0, "precondition: gap counts compared");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

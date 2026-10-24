@@ -65,6 +65,7 @@ fn prove_follows_the_program_engines_calls() {
         "writes-table:S6 Log",
         "s6",
         true,
+        true, // single-app, as before #160 step 9
     )
     .expect("prove runs");
     let v: serde_json::Value = serde_json::from_str(&r.json_text).expect("json");
