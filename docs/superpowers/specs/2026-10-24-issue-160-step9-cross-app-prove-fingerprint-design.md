@@ -112,7 +112,7 @@ Source: `/work/bench/160-9/OPERATOR-DECISIONS-2026-10-24.md`; probe record
 | A9.8 | both peaks ≤ P_a + band | §8.1: B2 (prove), B1q (`--routine` query), B1i (inventory-only) as worded. B0 and `diff`: no-regression bounds B1s, B3s (they stay single-app) |
 | A9.9 | cell census | §8.3 Part 1: the new output-time census line (§4.5) and `witness.non_primary_members=0` per cross-app run |
 | A9.10 | a miss walks §5.12's ladder | §7 |
-| A9.11 | goldens: cli-b header `cross-app`; contents unchanged | cli-b prove, fingerprint and diff goldens: **byte-identical** except the stated `mayCommit` fix (§4.3), which may move query goldens only (triaged per §3's move table). The `cross-app` header in cli-b B0 files moves to the follow-up |
+| A9.11 | goldens: cli-b header `cross-app`; contents unchanged | cli-b prove, fingerprint and diff goldens: **byte-identical** except the stated `mayCommit` fix (§4.3) and the query `schemaVersion` bump to `1.3.0` (O9-25), which may move query goldens only (triaged per §3's move table). The `cross-app` header in cli-b B0 files moves to the follow-up |
 | E6 | never falsely PROVEN | T1, T2, T12, T15, T19, T24; §6 |
 | E7 | behavioural fingerprint/diff cross-app | the query half: T3, T25, T26. The B0 and `diff` half: follow-up |
 | E9 | parity | T7 |
@@ -127,6 +127,7 @@ Source: `/work/bench/160-9/OPERATOR-DECISIONS-2026-10-24.md`; probe record
 |---|---|---|
 | cli-b goldens (prove, digest, diff, snapshot, fingerprint B0) | none | byte-compare; any move fails |
 | cli-b fingerprint query goldens (human, and the `ERROR_SELECTOR` query) | only `mayCommit` `no` → `unknown` where the routine's inherited coverage is not complete (§4.3 item 6) | every moved line is that field on a routine whose `coverage.inheritedStatus` is not `complete`; anything else fails |
+| every `kind: fingerprint-query` JSON document (the cli-b `tests/cli-b-goldens/fingerprint/*.json` query goldens) | `schemaVersion` `"1.2.0"` → `"1.3.0"` (O9-25): `FINGERPRINT_QUERY_CONTRACT_VERSION` (`fingerprint_query.rs:778`) is bumped because the query contract gains, additively, a `boundary` object on path objects and a boundary form of a fact's `evidence` (§4.3 item 5), as #220 bumped the inventory `schemaVersion` for an additive field | each query golden moves by exactly that one line (plus §4.3 item 6's field); T25 asserts `schemaVersion: "1.3.0"` on its cross-app output; CHANGELOG `Changed` |
 | `tests/cli/cli_build_counters.rs` rows | prove and the `--routine` query lose the standalone composition; inventory-only composes no raw facts (§4.6) | each row read at the base |
 | the existing tests listed in §5 "Rewritten with the code they pin" | they now run on the cross-app path | each is named with the universe it pins |
 | prove, `fingerprint --routine`, `--inventory-only` on a workspace with no `app.json` | **none**: with no `app.json` the input set has no model-instance id (`compute_model_instance_id` returns `None` at `let app_id = self.app_id()?;`, `inputs.rs:443-444`), so both today's pipelines (`prove.rs:868-871`, `fingerprint_cli.rs:368-372`) and `AnalysisTarget::build` (`run.rs:185-188`) fail first with `"{command}: could not compute modelInstanceId"`, exit 1, in either universe; the cross-app `NoPrimaryApp` arm is never reached | T22 pins the unchanged message |
