@@ -76,7 +76,7 @@ pub(crate) fn build_l4(
         .as_ref()
         .or(cross.map(|c| c.field_index))
         .expect("a field index: the solve's own, or the cross-app base's");
-    let (bundle, core_summaries, mut diagnostics) = compute_summaries_v2_bundle_with_leaves(
+    let (bundle, core_summaries, diagnostics) = compute_summaries_v2_bundle_with_leaves(
         &ws.routines,
         graph,
         &scc,
@@ -99,16 +99,8 @@ pub(crate) fn build_l4(
         "build_l4's core summaries must carry EMPTY db_effects"
     );
 
-    // #277 spec T1 B1's seam (debug builds only): one non-convergence
-    // diagnostic, rendered and printed like a real one, so a test can see a
-    // solve's job line (D7) on any fixture.
-    if cfg!(debug_assertions) && std::env::var_os("ALSEM_TEST_SUMMARIZE_DIAGNOSTIC").is_some() {
-        diagnostics.push(SummarizeDiagnostic {
-            severity: "warning".to_string(),
-            stage: "summarize".to_string(),
-            message: format!("test seam: a forced non-convergence{NON_CONVERGENCE_TAIL}"),
-        });
-    }
+    #[cfg(debug_assertions)]
+    let diagnostics = with_test_seam(diagnostics);
     let warnings = render_warnings(&diagnostics);
     let mut summarize_diagnostics = diagnostics;
     summarize_diagnostics.extend(req.extra_diagnostics);
@@ -237,6 +229,22 @@ fn emit_scc_stats(graph: &PrimaryGraph, scc: &SccResult) {
             "largest_scc": largest_scc,
         })
     });
+}
+
+/// #277 spec T1 B1's seam, compiled into debug builds only (R8-6): under
+/// `ALSEM_TEST_SUMMARIZE_DIAGNOSTIC`, one non-convergence diagnostic, rendered
+/// and printed like a real one, so a test can see a solve's job line (D7) on
+/// any fixture.
+#[cfg(debug_assertions)]
+fn with_test_seam(mut diagnostics: Vec<SummarizeDiagnostic>) -> Vec<SummarizeDiagnostic> {
+    if std::env::var_os("ALSEM_TEST_SUMMARIZE_DIAGNOSTIC").is_some() {
+        diagnostics.push(SummarizeDiagnostic {
+            severity: "warning".to_string(),
+            stage: "summarize".to_string(),
+            message: format!("test seam: a forced non-convergence{NON_CONVERGENCE_TAIL}"),
+        });
+    }
+    diagnostics
 }
 
 /// #160 §4.1.5: the `l4.*` buckets, shallow. No `l4.scc`: the SCC is the

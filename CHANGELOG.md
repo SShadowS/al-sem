@@ -29,7 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and so do two write targets naming one file (also one job's stdout and stderr), a file
   inside another job's shard directory, and a file one job reads (a diff side,
   `--baseline`, `--renames`, `--policy`, a digest diff, a workspace's own files) that
-  another job writes. Stdin is read once for every `--diff -` job; a closed run stdout
+  another job writes. Paths are compared after their deepest existing directory is
+  canonicalized, so a symlink, a Windows case difference or an 8.3 name hides no clash; a
+  workspace's own files are its `.al`/`.app` files in any case, its `app.json` and config
+  files, and the `.app` files of every ancestor `.alpackages` the loader reads. Stdin is read once for every `--diff -` job; a closed run stdout
   exits 1. Several batches run one after another for now. Traces gain `batch.driver`,
   `view.<i>`, `view.drop`, `view.teardown`, `view.run`, `job.<i>.<cmd>` and
   `inputs.request_read`; `ALSEM_RETAINED_CENSUS=1` prints `[retained-census] batch.held
@@ -46,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A tree read that asks for the primary app's facts now stops the run in release builds
+  too: the view's "no tree read asks primary" check is an `assert!`, not a
+  `debug_assert!` (#277).
 - **#160 step 9: `prove`, `fingerprint --routine` and `fingerprint --inventory-only` are
   cross-app by default** (part of #160). Each builds the model of the workspace plus the
   dependency code it requires, as `analyze` and `digest` do, and reads a tree over that
