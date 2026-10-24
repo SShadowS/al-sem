@@ -37,7 +37,10 @@ rules:
 ";
 
 /// Every solve prints one non-convergence line (debug-only seam, spec T1 B1).
+/// Release builds have no seam: T1 then runs without its B1 precondition, and
+/// the job-line count tests are debug-only (#277 R10-2).
 const SEAM: (&str, &str) = ("ALSEM_TEST_SUMMARIZE_DIAGNOSTIC", "1");
+#[cfg(debug_assertions)]
 const SEAM_LINE: &str = "warning: summarize: test seam: a forced non-convergence";
 
 /// `exe <args>` from `cwd` with `stdin` piped in: census and trace off,
@@ -525,10 +528,13 @@ fn batch_equals_standalone() {
         "the jobs write files: {:?}",
         written.keys()
     );
-    let digest = index_of(&["digest", &fx.w, "--diff", &fx.diff, "--deterministic"]);
-    let (_, _, stderr) = job_of(&b, digest);
-    let seam = String::from_utf8_lossy(&stderr).matches(SEAM_LINE).count();
-    assert_eq!(seam, 1, "B1's precondition: digest's l4 line, once");
+    #[cfg(debug_assertions)]
+    {
+        let digest = index_of(&["digest", &fx.w, "--diff", &fx.diff, "--deterministic"]);
+        let (_, _, stderr) = job_of(&b, digest);
+        let seam = String::from_utf8_lossy(&stderr).matches(SEAM_LINE).count();
+        assert_eq!(seam, 1, "B1's precondition: digest's l4 line, once");
+    }
     let primary = index_of(&["analyze", &fx.d, "--format", "json", "--deterministic"]);
     let scope = |i: usize| alsem(&jobs[i], cwd.path(), &[], b"").stdout;
     let (p, all) = (scope(primary), scope(primary + 1));
@@ -624,6 +630,7 @@ fn batch_output_independent_of_neighbours() {
 }
 
 /// The number of times `line` appears in each job's stderr.
+#[cfg(debug_assertions)]
 fn line_counts(b: &BatchRun, jobs: usize, line: &str) -> Vec<usize> {
     (0..jobs)
         .map(|i| {
@@ -639,6 +646,7 @@ fn line_counts(b: &BatchRun, jobs: usize, line: &str) -> Vec<usize> {
 /// plan solves `l4` gets the solve's line once; graph, whose plan builds no
 /// `l4`, gets none. (b) graph's coverage warning, once per graph job. In
 /// both, the run's own stderr holds none of them.
+#[cfg(debug_assertions)]
 #[test]
 fn batch_job_lines_by_count() {
     let a = ws_a();
@@ -667,6 +675,7 @@ fn batch_job_lines_by_count() {
 /// R8-5 (12A-17, F11): a library job line printed outside any driver step
 /// (here `aldump`, which solves `l4` with no driver) reaches the process
 /// stderr, once.
+#[cfg(debug_assertions)]
 #[test]
 fn job_line_outside_a_step_reaches_stderr() {
     let a = ws_a();

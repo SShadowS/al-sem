@@ -30,6 +30,7 @@ const POLICY_X: u64 = 32 * STEP;
 /// Numbers: `.agent/issue-277/ledger.md` "Task 1 projection" (release-fast,
 /// `maxrss.py`, `/work/bench/160-12/task1/reading.txt`) and spec §7.3 (step
 /// 6's final bench). A kind with no row takes the largest row.
+/// No row yet: events chains and query effects, cross-app and single-app.
 pub static KIND_PEAK_KIB: &[(JobKind, u64)] = &[
     // `a` 3,142,400 KiB → 3 GiB.
     (("analyze", X), 12 * STEP),
@@ -89,9 +90,16 @@ pub fn worker_count(
     if has_policy { w.min(2) } else { w }
 }
 
+/// Whether the run has a `policy check` job (D12's cap of 2); no other
+/// command caps `W` (R10-3).
+pub fn has_policy_check(kinds: &[JobKind]) -> bool {
+    kinds.iter().any(|(command, _)| *command == "policy check")
+}
+
 /// The run's `W` over the committed table, with its `batch.workers` instant
 /// and, when one job's peak alone exceeds the budget, the one stderr line.
-pub fn admit(kinds: &[JobKind], batches: usize, has_policy: bool) -> usize {
+pub fn admit(kinds: &[JobKind], batches: usize) -> usize {
+    let has_policy = has_policy_check(kinds);
     let p = peak_kib(kinds, KIND_PEAK_KIB);
     if p > E16_BUDGET_KIB {
         let _ = super::output::write_stderr(
@@ -158,8 +166,19 @@ mod tests {
     }
 
     fn committed(names: &str) -> usize {
-        let has_policy = names.contains('p');
-        worker_count(&kinds(names), 4, has_policy, KIND_PEAK_KIB)
+        let kinds = kinds(names);
+        worker_count(&kinds, 4, has_policy_check(&kinds), KIND_PEAK_KIB)
+    }
+
+    /// R10-3: only `policy check` caps `W` at 2, in either universe.
+    #[test]
+    fn only_policy_check_caps() {
+        assert!(has_policy_check(&[("analyze", X), ("policy check", S)]));
+        assert!(!has_policy_check(&[
+            ("events chains", X),
+            ("query effects", S)
+        ]));
+        assert_eq!(committed("adf"), 4, "no policy check: no cap");
     }
 
     /// T17 (lib, the committed table, O16): a shape's peak raised only its

@@ -3,13 +3,19 @@
 //! earlier view. The view-order cases (`[diff A B, diff B A]`, `[diff A B,
 //! analyze A]`, `diff A A`, `diff bad A`) are `cli_batch_plan::batch_diff_sides`.
 
-use crate::cli_batch_plan::{argv, assert_each_standalone, batch_in, standalone_in};
+use crate::cli_batch_plan::{argv, batch_in};
+#[cfg(debug_assertions)]
+use crate::cli_batch_plan::{assert_each_standalone, standalone_in};
 use crate::cli_build_counters::ws_a;
 
-/// Every solve prints one non-convergence line (debug-only seam, spec T1 B1).
+/// Every solve prints one non-convergence line (debug-only seam, spec T1 B1;
+/// release builds have no seam, so its tests are debug-only, #277 R10-2).
+#[cfg(debug_assertions)]
 const SEAM: (&str, &str) = ("ALSEM_TEST_SUMMARIZE_DIAGNOSTIC", "1");
+#[cfg(debug_assertions)]
 const SEAM_LINE: &str = "warning: summarize: test seam: a forced non-convergence";
 
+#[cfg(debug_assertions)]
 #[test]
 fn batch_diff_failed_old_side_drops_new_side_lines() {
     let a = ws_a();

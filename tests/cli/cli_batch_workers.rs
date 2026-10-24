@@ -206,7 +206,8 @@ fn batch_stdin_read_once_across_workers() {
 
 /// Review Focus 4: a worker that dies without its lines leaves its jobs
 /// `"exit": null` with its status, and the run exits 1; the other worker's
-/// lines stand.
+/// lines stand. Debug-only: the kill is a debug seam (#277 R10-2).
+#[cfg(debug_assertions)]
 #[test]
 fn batch_worker_killed() {
     let ws = ws_a();
