@@ -2390,6 +2390,9 @@ fn derive_callsite_resolutions(
         }
     }
 
+    let closed_sites = crate::program::model::calls::closed_interface_sites(
+        base.calls.iter().chain(base.dependency_calls),
+    );
     // Group callGraph edges by callsiteId (skip implicit-trigger). Preserve first.
     // BTreeMap for deterministic group iteration (M1). Every caller's calls:
     // the model's, then the dependency routines' (D6, Decision 18).
@@ -2455,15 +2458,8 @@ fn derive_callsite_resolutions(
                 .as_ref()
                 .map(|dm| dm.unresolved_impls.clone())
                 .unwrap_or_default();
-            // #264: a receiver proven to hold closed-enum values has a closed set.
-            // `representative` is `group_edges[0]`, the edge that carries the
-            // site's `DispatchMeta`: the adapter puts it on `out[0]` only, and
-            // `group_edges` keeps emission order. If either order changes, read
-            // the meta from whichever group edge carries it.
-            let closed = representative
-                .dispatch_meta
-                .as_ref()
-                .is_some_and(|dm| !dm.closed_over.is_empty());
+            // #264: closed in every row (the combined graph's rule too).
+            let closed = closed_sites.contains(callsite_key.as_str());
             out.push(SnapshotCallsiteResolution {
                 callsite_id: callsite_key.clone(),
                 from,

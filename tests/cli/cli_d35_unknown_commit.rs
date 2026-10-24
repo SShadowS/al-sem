@@ -1550,3 +1550,64 @@ codeunit 50109 "Two Kinds"
     want.sort();
     assert_closed(&site, &want, "T29");
 }
+
+/// An extensible enum over `Demo Strategy`, mapped to the same `Demo Impl`.
+const OPEN_KIND: &str = r#"enum 50105 "Open Kind" implements "Demo Strategy"
+{
+    Extensible = true;
+    value(0; Other) { Implementation = "Demo Strategy" = "Demo Impl"; }
+}
+"#;
+
+/// The subscriber declared twice under `#if CLEAN99 … #else … #endif`: one arm
+/// writes the interface from the closed `Demo Kind`, the other from the
+/// extensible `Open Kind`. Both arms share one routine id and one call-site id.
+fn two_arm_subscriber(first: &str, second: &str) -> String {
+    let arm = |value: &str| {
+        format!(
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Demo Publisher\", 'OnAfterRegistered', '', false, false)]\n    local procedure ReleaseOnRegistered(var DemoItem: Record \"Demo Item\")\n    var\n        Strategy: Interface \"Demo Strategy\";\n    begin\n        Strategy := {value};\n        if Strategy.NextKm(DemoItem.Km) > 0 then\n            exit;\n        DemoItem.Modify(true);\n    end;\n"
+        )
+    };
+    format!(
+        "codeunit 50104 \"Demo Subscriber\"\n{{\n#if CLEAN99\n{}#else\n{}#endif\n}}\n",
+        arm(first),
+        arm(second)
+    )
+}
+
+/// Final panel FO1: whatever the arm order, one open arm keeps the shared site
+/// open: d35 still reports the unknown Commit, and no layer calls it closed.
+#[test]
+fn i264_fo1_if_alternative_routines_close_only_when_every_arm_is_closed() {
+    const CLOSED_VALUE: &str = "Enum::\"Demo Kind\"::Standard";
+    const OPEN_VALUE: &str = "Enum::\"Open Kind\"::Other";
+    for (label, first, second) in [
+        ("open arm first", OPEN_VALUE, CLOSED_VALUE),
+        ("closed arm first", CLOSED_VALUE, OPEN_VALUE),
+    ] {
+        let subscriber = two_arm_subscriber(first, second);
+        let (_tmp, ws) = cg_files(
+            &format!("i264-fo1-{}", label.replace(' ', "-")),
+            &cg_kind(CLOSED),
+            &subscriber,
+            &[("OpenKind.Enum.al", OPEN_KIND)],
+        );
+        let findings = d35_findings(&analyze(&ws, None));
+        assert!(
+            !findings.is_empty(),
+            "FO1 {label}: the open arm must keep the unknown Commit, got none"
+        );
+        let snapshot = compose_snapshot(&single_app_model(&ws));
+        let closed_rows: Vec<_> = snapshot
+            .callsite_resolutions
+            .iter()
+            // The subscriber's (50104) site only: the publisher's IsDue is closed.
+            .filter(|r| {
+                r.from.contains(":Codeunit:50104#")
+                    && r.status == "polymorphic"
+                    && r.open_world == Some(false)
+            })
+            .collect();
+        assert!(closed_rows.is_empty(), "FO1 {label}: {closed_rows:#?}");
+    }
+}
