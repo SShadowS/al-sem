@@ -215,11 +215,13 @@ pub fn detect_d18(
                 loose_subject: Some(LooseSubject {
                     object_id: None,
                     key: match &op.table_id {
-                        Some(_) => format!("d18/{}", field_name.to_lowercase()),
+                        Some(_) => {
+                            format!("d18/{}", unquoted_field_name(field_info).to_lowercase())
+                        }
                         None => format!(
                             "d18/{}/{}",
                             op.record_variable_name.to_lowercase(),
-                            field_name.to_lowercase()
+                            unquoted_field_name(field_info).to_lowercase()
                         ),
                     },
                 }),

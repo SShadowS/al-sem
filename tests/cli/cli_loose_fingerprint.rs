@@ -986,6 +986,22 @@ fn d18_field_distinct() {
     assert_ne!(loose(&fs[0]), loose(&fs[1]));
 }
 
+/// `d18_quoted_field_same_key`: loops in `A` and `B` filter the same field, written
+/// `"Name"` in one and `Name` in the other. The subject uses the unquoted field name,
+/// so both share a loose key (raw source text would split them).
+#[test]
+fn d18_quoted_field_same_key() {
+    let code = codeunit(&[
+        d18_proc("A", Some(("Cust", "\"Name\""))),
+        d18_proc("B", Some(("Cust", "Name"))),
+    ]);
+    let fs = run_252("d18-q", &code, D18);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(fs[0]["affectedTables"], fs[1]["affectedTables"]);
+    assert_eq!(loc(&fs[0], "objectId"), loc(&fs[1], "objectId"));
+    assert_eq!(loose(&fs[0]), loose(&fs[1]));
+}
+
 const D22: &str = "d22-flowfield-without-calcfields";
 
 /// `Customer` with two FlowFields (`Balance`, `Sales`) over `Ledger Entry`.
