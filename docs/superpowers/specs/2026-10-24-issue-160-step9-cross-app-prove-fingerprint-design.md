@@ -237,12 +237,11 @@ query form keeps today's path (single-app, the cut) whatever `--single-app` says
    for each witness's terminal evidence (`fingerprint_query.rs:925-946`, used at `:801-820`), and the human
    selector-error path builds the #239 owner hint from `snap.identities` (`fingerprint_cli.rs:538`). With the
    tree dropped in `prepare`, neither exists. So:
-   - `BlockWitness` gains `terminal: Option<TerminalEvidence>`, an owned value computed inside
-     `fingerprint_query` while the tree is alive: `Operation { operation_id, anchor }` from the operation index
-     (today's rule), or `Boundary { callsite_id, anchor }` (item 5). `project_fingerprint_query_full` drops its
-     `snap` parameter and writes `terminal` as it writes today's evidence object; on the cut every terminal is
-     `Operation`, built from the same operation index, so the cut path's bytes cannot move (T18's differentials
-     and T23 check it);
+   - `BlockWitness` gains `evidence: Option<FactEvidence>` and each `ProjectedPath` gains
+     `boundary: Option<PathBoundary>` (item 5), owned values computed inside `fingerprint_query` while the tree
+     is alive. `project_fingerprint_query_full` drops its `snap` parameter and writes them; on the cut no path
+     has a boundary and every fact's evidence is today's operation evidence from the same operation index, so
+     the cut path's bytes cannot move (T18's differentials and T23 check it);
    - the #239 hint on the new path builds its selector index from `derive_identity_table(view.model())`,
      called after `prepare` and only on the error path; it is the same table the tree's `identities` holds
      (step 2). The cut path keeps `snap.identities`.
@@ -253,13 +252,24 @@ query form keeps today's path (single-app, the cut) whatever `--single-app` says
    adapter `pub_idx_as_private` sets `boundary: None` with the comment "The fingerprint query reads the cut:
    rule B is off." (`digest.rs:5156-5158`). `FingerprintIndexesPub` (`digest.rs:5024`) gains
    `boundary: Option<&'a BoundaryRule>` and `boundary_displays`, filled from `snap.boundary` the way the private
-   index fills them; the adapter passes them through. **The terminal evidence follows the witness (S9-2
-   re-raised):** when a witness path ends at a boundary (its last hop is the rule-B terminal at the boundary
-   call), `terminal` is `Boundary { callsite_id, anchor }`, the anchor read from `snap.callsite_index` for that
-   callsite; it is never the original fact's operation inside dependency code. The JSON writes it as
-   `{ "anchor": …, "callsiteId": … }` in place of `{ "anchor": …, "operationId": … }` (a cross-app-only shape;
-   on the cut `snap.boundary` is `None` and every terminal stays `Operation`, so the wide query forms cannot
-   move). T25 pins the JSON terminal evidence and the human witness.
+   index fills them; the adapter passes them through. **The boundary belongs to each path (S9-2, O9-24).**
+   Under rule B one inherited fact can be reached through several boundaries (two call sites into `Lib.Outer`;
+   `Outer1` and `Outer2` both reaching `Inner`), so the boundary is carried per path, never per fact:
+   - **`PathBoundary`** is filled from what `boundary_terminal` (`digest.rs:1481`) already computes for the
+     path's last edge, with step 6's identity rule (`digest.rs:1497-1537`), one form per rule-B boundary kind:
+     `Call { id: "cs:<callsite>", callsite_id, anchor }` (the anchor from `callsite_index`);
+     `Trigger { id: "op:<operation>", operation_id, anchor }` (an implicit-trigger edge: the anchor from
+     `operation_index`, else the edge's own anchor); `Event { id: "ev:<event>", event_id, anchor }` (an
+     event-dispatch edge: the publish site's anchor, `publish_anchor`). The JSON writes it on the path object
+     as `"boundary": { "anchor": …, "id": …, "kind": "call"|"trigger"|"event", "callsiteId"|"operationId"|"eventId": … }`,
+     only when present, so a path on the cut keeps today's bytes. The human path line names the same boundary
+     (today's `terminal_hop`).
+   - **The fact's evidence** (`BlockWitness.evidence`, today's `evidence` object) is chosen deterministically:
+     the boundary of the FIRST projected path that has one, in the paths' existing order (step 6 made that order
+     deterministic); when no path has a boundary, or `paths` is empty (the `Some(0)` witness limit,
+     `fingerprint_query.rs:565-576`, or a capped truncation), it is today's operation evidence. So a fact with
+     paths never shows an operation inside dependency code as its evidence when its witness stops at a boundary.
+   - T25 pins the call, trigger and event kinds, two boundaries on one fact, and the empty-paths fallback.
 6. **`mayCommit` reads the coverage the query asked for (S9-3).** Today `presence` is `no` when no commit fact
    is rendered and `coverage.direct_status == "complete"` (`fingerprint_query.rs:449-457`), even when inherited
    facts are rendered. For `Root → source dependency A → opaque X`, Root's direct coverage is complete and its
@@ -491,7 +501,7 @@ named is recorded as such.
 | T22 | `no_app_json_keeps_its_error` (the 9 r0 dirs with no `app.json`) | the dir has no `app.json`; the base binary prints `"{command}: could not compute modelInstanceId"`, exit 1 | prove, `fingerprint --routine` and `--inventory-only` print that same line and exit 1, with and without `--single-app` | B: make the new path skip the model-id check (build the target from a dummy id) → the line differs |
 | T23 | `single_app_sweep` (ledger record, not a committed test) | the base binary is built from the parent | for every r0 dir with an `app.json`: `fingerprint --routine <each root> --format json` and human, `--inventory-only`, and `prove <each root> <each question>` on the gap corpus and every cli-b case: base default == head `--single-app`, byte for byte, apart from §4.3 item 6's field | any other difference is a defect, fixed before the final panel |
 | T24 | `prove_matches_a_group_resource_beyond_ten` (CLI) | `Root` reaches, only through `Dep.W`, writes to 11 dependency tables; the target sorts 11th by resource id; the group's `detail.resources` lists 10 | `prove Root writes-table:<11th>` → `yes`, evidence = the group | B: match a group on `detail` only → `unknown` or `no` |
-| T25 | `fingerprint_witness_stops_at_boundary` (CLI, the dependency fixture) | the inherited Table 18 fact's carrier is the dependency routine `Inner` | the JSON and human witnesses of that fact end at the boundary `Lib.Outer`, never at `Inner`; the JSON terminal evidence is `{anchor, callsiteId}` of the `CallChain → Lib.Outer` call (its anchor equals that callsite's `callsiteIndex` row), with no `operationId` from inside `Inner` | B1: keep the adapter's `boundary: None` → the witness reaches `Inner`. B2: build `terminal` from the fact's operation always (today's `fingerprint_query.rs:801-820` rule) → the terminal-evidence assertion fails |
+| T25 | `fingerprint_witness_stops_at_boundary` (CLI, the dependency fixture) | the inherited Table 18 fact's carrier is the dependency routine `Inner` | five arms, each asserting its precondition: (call) the witness ends at `Lib.Outer`, never `Inner`; the path's `boundary` is `kind: call`, `id: cs:<CallChain→Outer>`, anchor = that callsite's `callsiteIndex` row; the fact's `evidence` is that boundary, with no `operationId` from inside `Inner`. (trigger) a primary insert fires a dependency table trigger that writes: the path's `boundary` is `kind: trigger`, `id: op:<insert op>`. (event) a primary publisher whose dependency subscriber writes: `kind: event`, `id: ev:<event>`, anchor = the publish site. (two call sites) one fact reached through two calls into `Lib.Outer`: two paths, each with its own `cs:` boundary; the fact's `evidence` is the first path's, and two runs are byte-equal. (`--witness 0`) `paths` is empty and `evidence` is today's operation evidence | B1: keep the adapter's `boundary: None` → the call arm reaches `Inner`. B2: one boundary per fact (the first path's copied to every path) → the two-call-site arm fails. B3: fill `PathBoundary` for call-site edges only → the trigger and event arms fail. B4: pick the fact's evidence from an unordered set (iterate a `HashMap` of boundaries) → the two-call-site arm's evidence or byte-equality fails (run it 5 times). B5: write no evidence when `paths` is empty → the `--witness 0` arm fails |
 | T26 | `fingerprint_may_commit_uses_inherited_coverage` (CLI) | `Root → source dependency A → opaque X`; Root's direct coverage `complete`, inherited not complete; no commit fact rendered | `mayCommit: unknown` with inherited facts; `no` with `--no-include-inherited` | B: read `direct_status` always → `no` |
 | T27 | `source_app_bodyless_row_gets_body_unavailable_gap` (lib, D9) | a source dependency app with one body-less demanded row | the tree's gaps hold `body-unavailable` for that routine and no `symbol-only-boundary` for the app; cross-app inventory of that workspace does not panic in a debug build | B: put every body-less row's app back into `opaque_apps` → the gap assertion fails (and the debug assertion fires) |
 
