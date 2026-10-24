@@ -14,7 +14,8 @@
 //!   It follows `direct-call`, `variable-typed-call` and `object-run-resolved`
 //!   edges. Admitting `variable-typed-call` (#271: calls through a codeunit,
 //!   record or page variable, and `this.`) is a deliberate departure from the
-//!   al-sem port, which walked bare calls only; the al-sem reference is retired.
+//!   al-sem port, which walked bare calls and object runs only; the al-sem
+//!   reference is retired.
 //!   The IsHandled binding is unchanged, because argument indices exclude the
 //!   receiver. `interface-dispatch` stays out: it is a may-call candidate set.
 //! - `classify_subscriber` reads the subscriber's `var_assignments` + `has_branching`

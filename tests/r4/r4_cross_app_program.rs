@@ -673,9 +673,14 @@ fn d43_follows_a_codeunit_variable_call_to_a_dependency_publisher() {
     use al_sem::engine::l5::finding::project_r4_findings_cross_app;
     let dir = tempfile::tempdir().unwrap();
     ishandled_var_workspace(dir.path());
-    assert_eq!(d43_confidence(dir.path()), vec!["confirmed"]);
     let names = vec!["d43-event-ishandled-skip".to_string()];
     let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    let levels: Vec<&str> = p
+        .findings
+        .iter()
+        .map(|f| f.confidence.level.as_str())
+        .collect();
+    assert_eq!(levels, vec!["confirmed"]);
     let step0 = &p.findings[0].evidence_path[0];
     assert!(
         step0

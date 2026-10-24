@@ -1547,6 +1547,9 @@ fn d43_record_page_and_this_calls() {
         this_code.contains("this.OnBeforePost"),
         "the `this.` edit applied"
     );
+    // Per row: (tag, finding count, first finding's level, the caller's object
+    // `{type}:{number}` from `evidencePath[0]`). Collected for all rows, asserted once.
+    let mut got: Vec<(&str, usize, Option<String>, Option<String>)> = Vec::new();
     for (tag, code, runtime14) in [
         ("d43-271-c", D43_RECVAR.to_string(), false),
         ("d43-271-e", D43_PAGEVAR.to_string(), false),
@@ -1563,9 +1566,35 @@ fn d43_record_page_and_this_calls() {
             std::fs::write(ws.join("app.json"), app).expect("write app.json");
         }
         let fs = findings_of(&analyze_json_with(&ws, Some(D43), true), D43);
-        assert_eq!(fs.len(), 1, "{tag}: {fs:#?}");
-        assert_eq!(fs[0]["confidence"]["level"], "confirmed", "{tag}");
+        let first = fs.first();
+        got.push((
+            tag,
+            fs.len(),
+            first.and_then(|f| f["confidence"]["level"].as_str().map(str::to_string)),
+            first.map(|f| {
+                let obj = object_of_routine(step_routine(f, 0));
+                obj.split_once(':')
+                    .map_or(obj, |(_, rest)| rest)
+                    .to_string()
+            }),
+        ));
     }
+    let want = |tag, caller: &str| {
+        (
+            tag,
+            1,
+            Some("confirmed".to_string()),
+            Some(caller.to_string()),
+        )
+    };
+    assert_eq!(
+        got,
+        vec![
+            want("d43-271-c", "Codeunit:50002"),
+            want("d43-271-e", "Codeunit:50002"),
+            want("d43-271-i", "Codeunit:50000"),
+        ]
+    );
 }
 
 /// #271 item 5 (deliberate non-goal): a call through an interface is a may-call
@@ -1605,7 +1634,50 @@ codeunit 50302 Setter
     end;
 }
 "#;
-    let fs = run_252("d43-271-f", code, D43);
+    let (_g, ws) = ws_252("d43-271-f", code);
+
+    // Precondition: the call really is an `interface-dispatch` edge from
+    // `PostingCaller.DoPost` to the publisher, so "no finding" means d43 skipped it.
+    let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+    let id = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
+        .expect("model id");
+    let m = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+        &inputs, &id, false,
+    )
+    .expect("model");
+    let rid = |object: &str, name: &str| {
+        let obj = m
+            .workspace
+            .objects
+            .iter()
+            .find(|o| o.name == object)
+            .unwrap_or_else(|| panic!("object {object}"));
+        m.workspace
+            .routines
+            .iter()
+            .find(|r| r.object_id == obj.id && r.name == name)
+            .unwrap_or_else(|| panic!("routine {object}.{name}"))
+            .id
+            .clone()
+    };
+    let (caller, publisher) = (
+        rid("PostingCaller", "DoPost"),
+        rid("PostingMgr", "OnBeforePost"),
+    );
+    let graph = al_sem::engine::l4::combined_graph::build_combined_graph(
+        &m.workspace,
+        &m.calls,
+        &m.events.graph,
+    );
+    let kinds: Vec<&str> = graph
+        .typed_edges
+        .iter()
+        .filter(|e| e.from == caller && e.to.as_deref() == Some(publisher.as_str()))
+        .map(|e| e.kind.as_str())
+        .collect();
+    assert_eq!(kinds, vec!["interface-dispatch"], "precondition");
+
+    let fs = findings_of(&analyze_json_with(&ws, Some(D43), true), D43);
     assert!(fs.is_empty(), "{fs:#?}");
 }
 
