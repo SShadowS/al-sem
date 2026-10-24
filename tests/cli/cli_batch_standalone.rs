@@ -12,6 +12,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::batch_records::{batch_goldens, write_golden};
+use crate::cli_batch_merged_streams::normalize;
 use crate::cli_batch_plan::{argv, batch_in, standalone_in};
 use crate::cli_build_counters::{last_counters, spawn_trace_events};
 use crate::regen::regen_mode;
@@ -120,9 +121,10 @@ fn standalone_is_a_batch_of_one() {
             line,
             "{name}: line"
         );
+        // The version is normalized so a version bump does not move the golden.
         assert_eq!(
-            String::from_utf8_lossy(&std::fs::read(&stdout_path).unwrap()),
-            String::from_utf8_lossy(&stdout),
+            normalize(&std::fs::read(&stdout_path).unwrap()),
+            normalize(&stdout),
             "{name}: stdout"
         );
     }
