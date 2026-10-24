@@ -21,10 +21,23 @@
 //! `medium` (the arm picks the severity, so a direct Commit with an unknown cone
 //! stays `high`). The yes and direct arms are unchanged.
 //!
+//! #265 — when the gap is in the subscriber's own body, the unknown answer names
+//! those call sites (`; unresolved: <callee text> (line n)`, source order, up to
+//! three) and lists only OTHER routines under "partly analysed". "Unresolved"
+//! here means a call whose callee set is not closed for this proof (the
+//! call-site-local kinds: interface-open-world, ambiguous-overload,
+//! external-target, member-not-found), not the `unresolved-call` uncertainty
+//! kind, which is left out. The subscriber stays under "partly analysed" unless
+//! every own gap is accounted for: a site was named, every own edge's site was
+//! found, and no other row with its id is opaque or parse-incomplete. Primary
+//! subscribers only: a dependency subscriber's own edges are not on the
+//! detector context, so it keeps the #148 text (stated limit).
+//!
 //! Within-detector sort by `a.id.cmp(&b.id)` (byte order).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::engine::l4::db_effect_solver::is_callsite_local_kind;
 use crate::engine::l5::capability_query::{EffectPresence, may_commit_derived};
 use crate::engine::l5::confidence::{UncertaintyLite, to_confidence};
 use crate::engine::l5::detector_context::DetectorContext;
@@ -32,7 +45,7 @@ use crate::engine::l5::detectors::anchor_of;
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
-use crate::program::model::workspace::Model;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 pub(crate) const DETECTOR: &str = "d35-commit-in-event-subscriber";
 
@@ -45,6 +58,15 @@ pub fn detect_d35(
     let mut findings: Vec<Finding> = Vec::new();
     let mut candidates_considered = 0usize;
     let mut skipped_commit_free_subscriber = 0u64;
+    // Routine ids with an opaque or parse-incomplete row: that row's gap is not
+    // a call site, so a subscriber sharing the id keeps itself listed. In
+    // cross-app mode `ws.routines` already holds the dependency rows.
+    let incomplete_ids: BTreeSet<&str> = ws
+        .routines
+        .iter()
+        .filter(|r| !r.body_available || r.parse_incomplete)
+        .map(|r| r.id.as_str())
+        .collect();
 
     for routine in &ws.routines {
         // roleOf(routine) === "primary": source-only ⇒ every routine is primary.
@@ -148,7 +170,7 @@ pub fn detect_d35(
             ),
             // `summary_commits` is "unknown" here ("no" was skipped above).
             (None, _) => {
-                let reasons = coverage_reasons(summary, ctx);
+                let reasons = coverage_reasons(summary, routine, &incomplete_ids, ctx);
                 // Capped by what kept the cone incomplete — the subscriber's own
                 // uncertainty set (CORE_SUMMARIES). It may be empty: a cone can be
                 // partial for a reason the summarize step does not record.
@@ -231,14 +253,37 @@ pub fn detect_d35(
     Ok(DetectorOutput::no_diag(findings, stats))
 }
 
-/// How many partly analysed targets the message names before `+N more`.
+/// How many own unresolved sites, and how many partly analysed targets, the
+/// message names before `+N more` (each list on its own).
 const SHOWN_TARGETS: usize = 3;
+
+/// `; {label}: ` and up to [`SHOWN_TARGETS`] of `items`, then `, +N more`;
+/// nothing when `items` is empty.
+fn push_capped<'a>(out: &mut String, label: &str, items: impl ExactSizeIterator<Item = &'a str>) {
+    let total = items.len();
+    if total == 0 {
+        return;
+    }
+    let shown: Vec<&str> = items.take(SHOWN_TARGETS).collect();
+    out.push_str(&format!("; {label}: {}", shown.join(", ")));
+    if total > SHOWN_TARGETS {
+        out.push_str(&format!(", +{} more", total - SHOWN_TARGETS));
+    }
+}
 
 /// Why the commit answer is unknown, for the message: the subscriber's coverage
 /// reasons, deduplicated, sorted and joined (or a fallback naming what is
-/// missing), then `; partly analysed: …` naming up to [`SHOWN_TARGETS`] of the cone's
-/// partially analysed routines, sorted, with `+N more` for the rest.
-fn coverage_reasons(summary: Option<&FullRoutineSummary>, ctx: &DetectorContext) -> String {
+/// missing), then `; unresolved: …` naming the subscriber's own call-site-local
+/// gaps in source order, then `; partly analysed: …` naming the cone's other
+/// partially analysed routines, sorted; each list capped at [`SHOWN_TARGETS`]
+/// with `+N more`. The subscriber itself is left out of "partly analysed" only
+/// when its own sites account for its whole gap (module doc, #265).
+fn coverage_reasons(
+    summary: Option<&FullRoutineSummary>,
+    routine: &ModelRoutine,
+    incomplete_ids: &BTreeSet<&str>,
+    ctx: &DetectorContext,
+) -> String {
     let Some(summary) = summary else {
         return "no effect summary".to_string();
     };
@@ -251,27 +296,51 @@ fn coverage_reasons(summary: Option<&FullRoutineSummary>, ctx: &DetectorContext)
     } else {
         reasons.into_iter().collect::<Vec<_>>().join(", ")
     };
+    // Own sites, one per site id, in source order.
+    let mut sites: BTreeMap<(u32, u32, &str), String> = BTreeMap::new();
+    let mut every_site_found = true;
+    let own_edges = ctx.uncertainty_edges_by_from.get(&routine.id);
+    for u in own_edges.into_iter().flatten() {
+        if !is_callsite_local_kind(&u.kind) {
+            continue;
+        }
+        let cs = u
+            .callsite_id
+            .as_deref()
+            .and_then(|id| ctx.call_site_by_id.get(id));
+        let Some(cs) = cs else {
+            every_site_found = false;
+            continue;
+        };
+        let a = &cs.source_anchor;
+        // The callee text is raw source and may span lines.
+        let text = cs
+            .callee_text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        sites
+            .entry((a.start_line, a.start_column, cs.id.as_str()))
+            .or_insert_with(|| format!("{text} (line {})", a.start_line + 1));
+    }
+    let drop_self =
+        !sites.is_empty() && every_site_found && !incomplete_ids.contains(routine.id.as_str());
     // A target is a routine id; show its routine when the model has it.
     let targets: BTreeSet<String> = coverage
         .unknown_targets
         .iter()
+        .filter(|t| !(drop_self && **t == routine.id))
         .map(|t| match ctx.routine_by_id.get(t.as_str()) {
             Some(r) => format!("{} ({} {})", r.name, r.object_type, r.object_number),
             None => t.clone(),
         })
         .collect();
-    if !targets.is_empty() {
-        let shown: Vec<&str> = targets
-            .iter()
-            .take(SHOWN_TARGETS)
-            .map(String::as_str)
-            .collect();
-        out.push_str("; partly analysed: ");
-        out.push_str(&shown.join(", "));
-        if targets.len() > SHOWN_TARGETS {
-            out.push_str(&format!(", +{} more", targets.len() - SHOWN_TARGETS));
-        }
-    }
+    push_capped(&mut out, "unresolved", sites.values().map(String::as_str));
+    push_capped(
+        &mut out,
+        "partly analysed",
+        targets.iter().map(String::as_str),
+    );
     out
 }
 
@@ -280,10 +349,12 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::engine::l4::combined_graph::Uncertainty as CgUncertainty;
     use crate::engine::l4::summary::Uncertainty;
     use crate::engine::l5::test_support::{
-        coverage, minimal_ctx, op_commit_routine, routine, summary,
+        call_site, coverage, minimal_ctx, op_commit_routine, routine, summary,
     };
+    use crate::program::body::features::PCallSite;
     use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
     fn model_of(routines: &[ModelRoutine]) -> Model {
@@ -424,6 +495,172 @@ mod tests {
             &f,
             "opaque-call; partly analysed: aa-id, helper (Codeunit 1), mm-id, +2 more",
         );
+    }
+
+    /// A `sub` call site `id` with `callee_text` at 0-based `(line, column)`.
+    fn site_at(id: &str, callee_text: &str, line: u32, column: u32) -> PCallSite {
+        let mut cs = call_site(id, callee_text, vec![]);
+        cs.source_anchor.start_line = line;
+        cs.source_anchor.start_column = column;
+        cs
+    }
+
+    /// A combined-graph uncertainty edge of `kind` at call site `cs`.
+    fn own_edge(kind: &str, cs: &str) -> CgUncertainty {
+        CgUncertainty {
+            kind: kind.to_string(),
+            callsite_id: Some(cs.to_string()),
+            operation_id: None,
+            routine_id: None,
+            interface_name: None,
+        }
+    }
+
+    /// Run d35 on `routines` (the subscriber `sub` first) with `sub`'s summary
+    /// `s` and `sub`'s own uncertainty edges `edges`; return its one finding.
+    fn finding_with_edges(
+        routines: &[ModelRoutine],
+        s: FullRoutineSummary,
+        edges: Vec<CgUncertainty>,
+    ) -> Finding {
+        let mut owned = minimal_ctx(
+            routines,
+            HashMap::new(),
+            HashMap::from([("sub".to_string(), s)]),
+        );
+        owned
+            .art_mut()
+            .uncertainty_edges_by_from
+            .insert("sub".to_string(), edges);
+        let ctx = owned.ctx();
+        let mut out = detect_d35(&model_of(routines), &ctx).unwrap().findings;
+        assert_eq!(out.len(), 1, "expected one d35 finding, got {out:#?}");
+        out.remove(0)
+    }
+
+    /// #265 A5: the subscriber's own site is named (whitespace runs collapsed
+    /// to one space, line 1-based) and the subscriber leaves "partly analysed".
+    #[test]
+    fn own_site_named_and_self_dropped() {
+        let text = "Strategy\n    .NextKm";
+        assert!(
+            text.contains('\n'),
+            "precondition: a multi-line callee text"
+        );
+        let mut sub = routine("sub", "event-subscriber");
+        sub.call_sites = vec![site_at("cs1", text, 10, 11)];
+        let routines = vec![sub, routine("helper", "procedure")];
+        let f = finding_with_edges(
+            &routines,
+            partial(&["interface-open-world"], &["sub", "helper"]),
+            vec![own_edge("interface-open-world", "cs1")],
+        );
+        assert_unknown_with(
+            &f,
+            "interface-open-world; unresolved: Strategy .NextKm (line 11); partly analysed: \
+             helper (Codeunit 1)",
+        );
+    }
+
+    /// #265 A4: own sites in (line, column) order, one per site (an edge
+    /// repeated adjacent and non-adjacent prints once; two sites with equal
+    /// text both count), the `unresolved-call` kind left out, three shown.
+    #[test]
+    fn own_sites_source_order_dedup_and_more() {
+        let mut sub = routine("sub", "event-subscriber");
+        sub.call_sites = vec![
+            site_at("cs-b", "Beta", 5, 0),
+            site_at("cs-a1", "Alpha", 9, 0),
+            site_at("cs-a2", "Alpha", 2, 4),
+            site_at("cs-z", "Zed", 7, 8),
+            site_at("cs-y", "Yak", 7, 2),
+            site_at("cs-u", "Unres", 1, 0),
+        ];
+        let routines = vec![sub];
+        let f = finding_with_edges(
+            &routines,
+            partial(&["interface-open-world"], &["sub"]),
+            vec![
+                own_edge("interface-open-world", "cs-a2"),
+                own_edge("interface-open-world", "cs-a2"),
+                own_edge("ambiguous-overload", "cs-b"),
+                own_edge("external-target", "cs-z"),
+                own_edge("interface-open-world", "cs-a2"),
+                own_edge("member-not-found", "cs-a1"),
+                own_edge("interface-open-world", "cs-y"),
+                own_edge("unresolved-call", "cs-u"),
+            ],
+        );
+        assert_unknown_with(
+            &f,
+            "interface-open-world; unresolved: Alpha (line 3), Beta (line 6), Yak (line 8), \
+             +2 more",
+        );
+    }
+
+    /// #265 A6: no own site found, so the subscriber stays under "partly analysed".
+    #[test]
+    fn own_gap_without_site_keeps_self() {
+        let routines = vec![routine("sub", "event-subscriber")];
+        let f = finding_with_edges(
+            &routines,
+            partial(&["interface-open-world"], &["sub"]),
+            vec![],
+        );
+        assert_unknown_with(
+            &f,
+            "interface-open-world; partly analysed: sub (Codeunit 1)",
+        );
+    }
+
+    /// #265 A6b: one own edge's site is found, one is missing: the found site is
+    /// named AND the subscriber stays under "partly analysed".
+    #[test]
+    fn own_gap_partly_located_keeps_self() {
+        let mut sub = routine("sub", "event-subscriber");
+        sub.call_sites = vec![site_at("cs1", "X", 4, 0)];
+        let routines = vec![sub];
+        let f = finding_with_edges(
+            &routines,
+            partial(&["interface-open-world"], &["sub"]),
+            vec![
+                own_edge("interface-open-world", "cs1"),
+                own_edge("interface-open-world", "cs-missing"),
+            ],
+        );
+        assert_unknown_with(
+            &f,
+            "interface-open-world; unresolved: X (line 5); partly analysed: sub (Codeunit 1)",
+        );
+    }
+
+    /// #265 A6c: another row with the subscriber's id is opaque, or parse-
+    /// incomplete: its gap is not a call site, so the subscriber stays under
+    /// "partly analysed" though its own site is named. The sibling is not a d35
+    /// candidate, so the run still has one finding.
+    #[test]
+    fn own_site_with_incomplete_sibling_keeps_self() {
+        for (label, opaque) in [("opaque", true), ("parse-incomplete", false)] {
+            let mut sub = routine("sub", "event-subscriber");
+            sub.call_sites = vec![site_at("cs1", "X", 4, 0)];
+            let mut sibling = routine("sub", "event-subscriber");
+            if opaque {
+                sibling.body_available = false;
+            } else {
+                sibling.parse_incomplete = true;
+            }
+            let routines = vec![sub, sibling];
+            let f = finding_with_edges(
+                &routines,
+                partial(&["interface-open-world"], &["sub"]),
+                vec![own_edge("interface-open-world", "cs1")],
+            );
+            assert_eq!(f.id, "d35/sub/transitive", "{label}");
+            assert_unknown_with(
+                &f,
+                "interface-open-world; unresolved: X (line 5); partly analysed: sub (Codeunit 1)",
+            );
+        }
     }
 
     /// The unknown arm's confidence is the subscriber's own uncertainty set,

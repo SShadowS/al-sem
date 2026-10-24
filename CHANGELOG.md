@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **d35's unknown answer names the subscriber's own unresolved call sites** (#265). When
+  the gap is in the subscriber's own body, the root cause, evidence note and fix hint now
+  say `unresolved: <callee text> (line n)` (source order, up to three, then `+N more`)
+  and list only OTHER routines under "partly analysed". CentralGauge's direct repro now
+  reads `(interface-open-world; unresolved: Strategy.NextKm (line 11))` instead of
+  `partly analysed: ReleaseOnRegistered (Codeunit 50104)`. "Unresolved" means a call whose
+  callee set is not closed for this proof (interface-open-world, ambiguous-overload,
+  external-target, member-not-found). The subscriber stays listed when a gap of its own
+  has no located site, or another row with its id is opaque or parse-incomplete. Limit: a
+  subscriber in a dependency app (`--scope all`) keeps the old text, because its own
+  uncertainty edges are not on the detector context. Ids, fingerprints, severity and
+  confidence do not change.
 - **Grammar: tree-sitter-al `main` at `c89c2ecb`** (D1, a parser state-reduction pass;
   package version still 4.4.1; was `960ed312`). `node-types.json` is byte-identical, so the
   generated vocabulary, `kind_policy` and the 501 named kinds did not move, and no valid
