@@ -319,11 +319,15 @@ fn lower_object(
     let mut globals = Vec::new();
     let mut properties = Vec::new();
     let mut protected_globals = Vec::new();
+    let mut enum_values = Vec::new();
     if let Some(body) = node.field(FieldName::Body) {
         for member in body.named_children() {
             collect_globals(member, source, &mut globals);
             collect_protected_names(member, source, &mut protected_globals);
             collect_properties(member, source, &mut properties);
+            if kind == ObjectKind::Enum {
+                collect_enum_values(member, source, &mut enum_values);
+            }
         }
     }
     if kind == ObjectKind::XmlPort {
@@ -348,7 +352,43 @@ fn lower_object(
         fields,
         keys,
         run_objects,
+        enum_values,
         origin: origin_of(node),
+    }
+}
+
+/// Collect enum `value` declarations, descending preproc wrappers (every arm),
+/// as [`collect_properties`] does. A value's `Implementation` properties go
+/// through [`collect_properties`] too, so an `#if` in the value body or around
+/// the property value gives one entry per arm.
+fn collect_enum_values(node: RawNode, source: &str, out: &mut Vec<crate::ir::EnumValueDecl>) {
+    match node.kind() {
+        RawKind::EnumValueDeclaration => {
+            let Some(name) = node.field(FieldName::ValueName) else {
+                return;
+            };
+            let mut properties = Vec::new();
+            if let Some(body) = node.field(FieldName::Body) {
+                for member in body.named_children() {
+                    collect_properties(member, source, &mut properties);
+                }
+            }
+            out.push(crate::ir::EnumValueDecl {
+                name: ident_text(name, source),
+                implementations: properties
+                    .into_iter()
+                    .filter(|p| p.name == "implementation")
+                    .map(|p| p.value)
+                    .collect(),
+                origin: origin_of(node),
+            });
+        }
+        _ if is_preproc_wrapper(node) => {
+            for c in node.named_children() {
+                collect_enum_values(c, source, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -7712,5 +7752,106 @@ codeunit 50102 D2
                 ("T".to_string(), names(&["Scope"]))
             ]
         );
+    }
+
+    /// The `Implementation` values of one lowered enum value, as `&str`s.
+    fn enum_impls(v: &crate::ir::EnumValueDecl) -> Vec<&str> {
+        v.implementations.iter().map(String::as_str).collect()
+    }
+
+    /// #264: an enum's values are lowered in document order, each with its raw
+    /// `Implementation` property value; a value with no body property has none.
+    #[test]
+    fn enum_values_are_lowered_with_implementations() {
+        let src = r#"
+enum 50102 "K" implements "I", "J"
+{
+    value(0; A) { Implementation = "I" = "Impl A", "J" = "Impl J"; }
+    value(1; "B C") { }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let values = &af.objects[0].enum_values;
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].name, "A");
+        assert_eq!(
+            enum_impls(&values[0]),
+            [r#""I" = "Impl A", "J" = "Impl J""#]
+        );
+        assert_eq!(values[1].name, "B C");
+        assert!(values[1].implementations.is_empty());
+    }
+
+    /// #264: an `#if` around a value's `Implementation` gives one entry per arm.
+    #[test]
+    fn enum_value_implementation_if_arms_give_one_entry_per_arm() {
+        let src = r#"
+enum 50102 K implements I
+{
+    value(0; A)
+    {
+#if X
+        Implementation = "I" = "P";
+#else
+        Implementation = "I" = "Q";
+#endif
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let values = &af.objects[0].enum_values;
+        assert_eq!(values.len(), 1);
+        assert_eq!(enum_impls(&values[0]), [r#""I" = "P""#, r#""I" = "Q""#]);
+    }
+
+    /// #264 (Review Focus 5): a value declared only inside an `#if` wrapper is
+    /// still lowered, with its implementation.
+    #[test]
+    fn enum_value_inside_if_wrapper_is_lowered() {
+        let src = r#"
+enum 50102 K implements I
+{
+    value(0; A) { Implementation = "I" = "O"; }
+#if CLEAN27
+    value(1; X) { Implementation = "I" = "P"; }
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let values = &af.objects[0].enum_values;
+        let names: Vec<&str> = values.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["A", "X"]);
+        assert_eq!(enum_impls(&values[1]), [r#""I" = "P""#]);
+    }
+
+    /// #264: only Enum objects carry enum values. The enumextension holds a
+    /// `value` declaration, so it is the case that tells the kind guard apart.
+    #[test]
+    fn non_enum_objects_have_no_enum_values() {
+        let src = r#"
+codeunit 50100 C
+{
+}
+
+table 50101 T
+{
+    fields
+    {
+        field(1; A; Integer) { }
+    }
+}
+
+enumextension 50103 E extends K
+{
+    value(5; Z) { Implementation = "I" = "P"; }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(af.objects.len(), 3);
+        assert!(af.objects.iter().all(|o| o.enum_values.is_empty()));
     }
 }

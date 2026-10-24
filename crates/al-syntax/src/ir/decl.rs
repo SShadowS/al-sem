@@ -55,6 +55,24 @@ pub struct ObjectDecl {
     /// one entry per `#if` arm, document order: `Page "Customer Card"`,
     /// `Codeunit 50100`, … A user or a `TestPage` action opens that object.
     pub run_objects: Vec<String>,
+    /// The `value(<n>; <Name>)` declarations of an Enum object, document order,
+    /// values inside `#if` wrappers included (every arm). Enum only (empty
+    /// otherwise, including EnumExtension).
+    pub enum_values: Vec<EnumValueDecl>,
+    pub origin: Origin,
+}
+
+/// One enum `value(<n>; <Name>) { … }` declaration.
+pub struct EnumValueDecl {
+    /// The value name, unquoted, as written.
+    pub name: String,
+    /// The raw `Implementation` property value (`"I" = "Impl A", "J" = "Impl B"`),
+    /// trimmed, one entry per textually present `#if` arm around the property or
+    /// its whole value; empty = none declared. An `#if` BETWEEN list elements
+    /// (`"I" = "P" #if X , "J" = "Q" #endif`) is not split: that entry keeps the
+    /// directive lines in its text, so a consumer must treat text holding `#` as
+    /// unreadable (fail open), not parse past it.
+    pub implementations: Vec<String>,
     pub origin: Origin,
 }
 
