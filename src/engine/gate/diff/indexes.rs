@@ -47,12 +47,43 @@ pub struct DiffIndexes<'a> {
 }
 
 /// One hop by design (#237): an entry's target is a new-side id and is never looked
-/// up again as an old id, so each old routine lands on its own entry's target.
+/// up again as an old id, so each old id lands on its own entry's target.
 fn normalize(id: &str, table: &RenameTable) -> String {
     match table.get(id) {
         Some(e) => e.new_id.clone(),
         None => id.to_string(),
     }
+}
+
+/// #237: the ids a snapshot holds: every identity row plus every fact subject the
+/// indexes key by (the subjects `normalize` re-keys on the old side). Field and key
+/// ids have schema facts but no identity row (`derive_identity_table` writes
+/// objects, tables and routines only).
+fn live_ids(snap: &CborValue, identity_ids: &[CborValue]) -> HashSet<String> {
+    let mut ids: HashSet<String> = identity_ids
+        .iter()
+        .filter_map(|v| match v {
+            CborValue::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    for (array, key) in [
+        ("contractFacts", "stableId"),
+        ("schemaFacts", "stableId"),
+        ("eventDeclarations", "routine"),
+        ("capabilityFacts", "subject"),
+        ("coverage", "subject"),
+    ] {
+        let subjects = snapshot_array(snap, array)
+            .iter()
+            .filter_map(|f| get_str(f, key));
+        ids.extend(subjects.map(str::to_string));
+    }
+    let permissions = snapshot_array(snap, "permissionFacts")
+        .iter()
+        .filter_map(permission_fact_subject);
+    ids.extend(permissions.map(str::to_string));
+    ids
 }
 
 fn push_by_key<'a>(
@@ -257,22 +288,12 @@ pub fn build_diff_indexes<'a>(
         }
     }
 
-    // Stale-rename diagnostics now that snapshot membership is known.
-    let old_ids: HashSet<String> = old_ids_arr
-        .iter()
-        .filter_map(|v| match v {
-            CborValue::Text(s) => Some(s.clone()),
-            _ => None,
-        })
-        .collect();
-    let new_ids: HashSet<String> = new_ids_arr
-        .iter()
-        .filter_map(|v| match v {
-            CborValue::Text(s) => Some(s.clone()),
-            _ => None,
-        })
-        .collect();
-    let rename_diagnostics = validate_overlay_against_snapshots(rename_table, &old_ids, &new_ids);
+    // Stale-rename and collision diagnostics now that snapshot membership is known.
+    let rename_diagnostics = validate_overlay_against_snapshots(
+        rename_table,
+        &live_ids(old_snap, old_ids_arr),
+        &live_ids(new_snap, new_ids_arr),
+    );
 
     DiffIndexes {
         old_display_by_stable_id,

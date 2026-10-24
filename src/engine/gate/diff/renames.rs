@@ -110,14 +110,22 @@ pub fn build_rename_table(overlay: &RenameOverlay) -> (RenameTable, Vec<DiffDiag
     (table, diagnostics)
 }
 
-/// Validate the overlay against actual snapshot stable-id sets, emitting stale
-/// diagnostics. Mirrors `validateOverlayAgainstSnapshots`.
+/// Validate the overlay against the ids each snapshot holds, emitting stale and
+/// collision diagnostics. Began as a port of al-sem `validateOverlayAgainstSnapshots`
+/// (the stale checks); two parts are #237's own and diverge from it: an id is live
+/// when it has an identity row OR is the subject of a fact (`indexes::live_ids`;
+/// field and key ids have only schema facts), and `rename-overlay-collision`.
 ///
-/// #237: no entry may put two live old routines on one key. Under one-hop
-/// normalization that happens exactly when an entry's old id and its target are
-/// both live old ids and nothing maps the target away; such an entry gets a
-/// `rename-overlay-collision`. Findings are unchanged (the maps stay last write
-/// wins); the diagnostic only says the two routines were compared as one.
+/// #237: no entry may put two live old subjects (routines, objects, tables, fields,
+/// keys) on one key. Under one-hop normalization that happens in two ways:
+/// - two entries share a target: `rename-overlay-overlap` reports that
+///   (`build_rename_table`), so it is not repeated here. Only user entries can share
+///   one: an auto target is never a user target, and auto targets are distinct;
+/// - an entry's old id and its target are both live old ids and nothing maps the
+///   target away: that entry gets a `rename-overlay-collision`.
+///
+/// Findings are unchanged (the maps stay last write wins); the diagnostic says the
+/// two old subjects' facts share one normalized key. The target may be stale in new.
 pub fn validate_overlay_against_snapshots(
     table: &RenameTable,
     old_ids: &HashSet<String>,
@@ -175,15 +183,18 @@ fn stale(stale_id: &str, reason: &str) -> DiffDiagnostic {
 /// signature (public `Foo` removed + local `Foo` added stays an ABI removal). Only
 /// member-less ids pair: a member trigger's id hashes its member in, so two
 /// `OnAction`s share name and signature but are different triggers; distinct
-/// member-less ids therefore always differ in signature. Ids the user overlay maps
-/// (either end) never pair. Returns `(old_id, new_id)` pairs in old-snapshot order.
+/// member-less ids therefore always differ in signature. Returns `(old_id, new_id)`
+/// pairs in old-snapshot order.
 ///
-/// #237: one principle decides which ids may pair: no rename-table entry may put
-/// two live old routines on one key. A user key never pairs, and a user target
-/// never pairs on the new side: either would add a second old routine to a key a
-/// user entry fills. An old routine that IS a user target may pair: that moves it
-/// off the key the user entry fills (user `X→T` plus auto `T→U` keeps `X` on `T`
-/// and old `T` on `U`). Normalization is one hop, so the chain is never followed.
+/// #237: which ids may pair, side by side:
+/// - old side: a user KEY never pairs. The pair would REPLACE the user's own entry,
+///   since `run_diff_engine` inserts every pair into the same rename table.
+/// - new side: a user TARGET never pairs (#156 FQ-05), nor does any id an old
+///   routine already normalizes to: the pair would put a second old routine on a
+///   key that one already fills.
+/// - an old routine that IS a user target may pair: that moves it off the key the
+///   user entry fills (user `X→T` plus auto `T→U` keeps `X` on `T` and old `T` on
+///   `U`). Normalization is one hop, so the chain is never followed.
 pub fn pair_signature_changes(
     old_snap: &CborValue,
     new_snap: &CborValue,
@@ -384,8 +395,8 @@ mod tests {
         assert!(diags.is_empty(), "{diags:?}");
     }
 
-    /// #237 O9: `{Y→T}` where only `T` is live in old: `Y` is a stale key, not a
-    /// second routine on `T`, so no collision.
+    /// #237 O9: `{Y→T}` where only `T` is live in old (no identity row and no fact
+    /// subject `Y`): `Y` is a stale key, not a second subject on `T`, so no collision.
     #[test]
     fn overlay_stale_key_is_not_a_collision() {
         let (table, _) = build_rename_table(&overlay(&[("Y", "T")]));

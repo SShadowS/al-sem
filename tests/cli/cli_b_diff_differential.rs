@@ -1690,6 +1690,12 @@ struct Diff237 {
 /// --format json` (overlay entries by signature, in the given order). Asserts
 /// exit 0.
 fn diff237(old: &CborValue, new: &CborValue, overlay: &[(&str, &str)]) -> Diff237 {
+    let ids: Vec<(String, String)> = overlay.iter().map(|(k, v)| (id156(k), id156(v))).collect();
+    diff237_ids(old, new, &ids)
+}
+
+/// [`diff237`] with overlay entries as full stable ids.
+fn diff237_ids(old: &CborValue, new: &CborValue, overlay: &[(String, String)]) -> Diff237 {
     use al_sem::engine::gate::cbor::encode;
     let tmp = tempfile::tempdir().expect("tempdir");
     let (o, n, r) = (
@@ -1702,19 +1708,23 @@ fn diff237(old: &CborValue, new: &CborValue, overlay: &[(&str, &str)]) -> Diff23
     // Written by hand so the overlay keeps its order.
     let entries: Vec<String> = overlay
         .iter()
-        .map(|(k, v)| format!("\"{}\":\"{}\"", id156(k), id156(v)))
+        .map(|(k, v)| format!("\"{k}\":\"{v}\""))
         .collect();
     std::fs::write(&r, format!("{{{}}}", entries.join(","))).expect("write overlay");
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_alsem"))
-        .arg("diff")
-        .arg(&o)
-        .arg(&n)
-        .args(["--deterministic", "--renames"])
-        .arg(&r)
-        .args(["--format", "json"])
-        .env("RUST_LOG", "off")
-        .output()
-        .expect("run alsem diff");
+    let (o, n, r) = (
+        o.to_string_lossy(),
+        n.to_string_lossy(),
+        r.to_string_lossy(),
+    );
+    let out = crate::cli_diff_strict::alsem_diff(&[
+        &o,
+        &n,
+        "--deterministic",
+        "--renames",
+        &r,
+        "--format",
+        "json",
+    ]);
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -1881,10 +1891,21 @@ fn issue237_a5_swap_cycle() {
     assert_eq!(d.renames_applied, 1);
 }
 
+/// The findings of `d` whose subject is not `collided`. A collided key's findings
+/// are deliberately NOT pinned: two old subjects share it, the maps keep the last
+/// row, so its findings depend on row order and can be false (the stated limit of
+/// #237). Only the diagnostic and every other key's findings are pinned.
+fn findings_off237(d: &Diff237, collided: &str) -> Vec<(String, String, String)> {
+    d.findings
+        .iter()
+        .filter(|(_, key, _)| key != collided)
+        .cloned()
+        .collect()
+}
+
 /// #237 D1a/D1b — a user target that is a live old routine nothing maps away:
 /// old `X` and `T`, new `T` unchanged, overlay `X→T`. Both old routines land on
-/// `T`, so the report carries one `rename-overlay-collision`. Findings are as
-/// before (last write wins, so they depend on row order).
+/// `T`, so the report carries one `rename-overlay-collision`, in either row order.
 #[test]
 fn issue237_d1ab_user_target_is_a_live_unmapped_old_routine() {
     for t_first in [false, true] {
@@ -1898,15 +1919,7 @@ fn issue237_d1ab_user_target_is_a_live_unmapped_old_routine() {
             vec![collision237("aaaa", "tttt")],
             "t_first={t_first}"
         );
-        let want = if t_first {
-            rows237(&[
-                ("procedure-signature-changed", "tttt", "aaaa"),
-                ("capability-lost-under-coverage", "tttt", "aaaa"),
-            ])
-        } else {
-            rows237(&[("capability-lost-under-coverage", "tttt", "")])
-        };
-        assert_eq!(d.findings, want, "t_first={t_first}");
+        assert_eq!(findings_off237(&d, &id156("tttt")), rows237(&[]));
         assert_eq!(d.renames_applied, 1);
     }
 }
@@ -1931,13 +1944,7 @@ fn issue237_d1c_issue_shape_without_the_pair_abi_differs() {
         d.diagnostics,
         vec![stale237("tttt"), collision237("aaaa", "tttt")]
     );
-    assert_eq!(
-        d.findings,
-        rows237(&[
-            ("procedure-removed", "tttt", ""),
-            ("capability-lost-under-coverage", "tttt", ""),
-        ])
-    );
+    assert_eq!(findings_off237(&d, &id156("tttt")), rows237(&[]));
     assert_eq!(d.renames_applied, 1);
 }
 
@@ -1960,16 +1967,59 @@ fn issue237_d1d_issue_shape_without_the_pair_ambiguous() {
         vec![stale237("tttt"), collision237("aaaa", "tttt")]
     );
     assert_eq!(
-        d.findings,
+        findings_off237(&d, &id156("tttt")),
         rows237(&[
-            ("procedure-removed", "tttt", ""),
             ("procedure-removed", "t2t2", ""),
             ("procedure-added", "uuuu", ""),
             ("capability-gained-write", "uuuu", ""),
-            ("capability-lost-under-coverage", "tttt", ""),
         ])
     );
     assert_eq!(d.renames_applied, 1);
+}
+
+/// #237 D1e (CR1) — field and key ids have schema facts but no identity row
+/// (`derive_identity_table` writes objects, tables and routines only), yet
+/// `normalize` re-keys schema facts too. An overlay `#1→#2` between two old fields
+/// of one table puts both on `#2`: the collision fires, and `#1` is not called
+/// stale, since a fact subject is live.
+#[test]
+fn issue237_d1e_field_ids_live_through_schema_facts() {
+    let table = "appguid-1:Table:1";
+    let field = |n: &str| format!("{table}#{n}");
+    let schema = |fields: &[(&str, &str)]| {
+        let mut facts = vec![obj(vec![
+            ("kind", txt("table")),
+            ("shapeFingerprint", txt("t")),
+            ("stableId", txt(table)),
+        ])];
+        for (n, shape) in fields {
+            facts.push(obj(vec![
+                ("kind", txt("field")),
+                ("shapeFingerprint", txt(shape)),
+                ("stableId", txt(&field(n))),
+            ]));
+        }
+        snapshot(vec![
+            (
+                "identities",
+                obj(vec![
+                    ("stableIds", CborValue::Array(vec![txt(table)])),
+                    ("displayNames", CborValue::Array(vec![txt("Tbl")])),
+                ]),
+            ),
+            ("schemaFacts", CborValue::Array(facts)),
+        ])
+    };
+    let old = schema(&[("1", "a"), ("2", "b")]);
+    let new = schema(&[("2", "b")]);
+    let d = diff237_ids(&old, &new, &[(field("1"), field("2"))]);
+    assert_eq!(
+        d.diagnostics,
+        vec![
+            serde_json::json!({"kind": "rename-overlay-collision", "from": field("1"), "to": field("2")})
+        ]
+    );
+    assert_eq!(findings_off237(&d, &field("2")), rows237(&[]));
 }
 
 /// `(category, kind, displayName)` of every finding, sorted.

@@ -10,10 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `alsem diff`: a new `rename-overlay-collision` diagnostic (`{kind, from, to}`). It
-  fires when a `--renames` entry maps an old routine onto a target that is also a
-  routine in the old snapshot, and nothing maps that target away. The two old
-  routines are then compared with the new one as if they were one. Findings do not
-  change; the diagnostic says that they merged (#237).
+  fires when a `--renames` entry maps an old id (a routine, object, table, field or
+  key) onto a target that is also an id in the old snapshot, and nothing maps that
+  target away. The two old ids' facts then share one key. Findings do not change;
+  the diagnostic says that they merged. Two entries onto one target are still
+  reported as `rename-overlay-overlap` (#237).
 
 ### Changed
 
@@ -118,6 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `alsem diff`: a `--renames` entry for a table field or key is no longer called
+  stale (`rename-overlay-stale`, `not-in-old` or `not-in-new`) when the field exists.
+  Field and key ids have schema facts but no `identities` row, and only identities
+  were checked. An id now counts as present when it has an identity row or is the
+  subject of a fact (#237).
 - An object without a number, in a dependency that ships only symbols, whose name
   holds two quote characters in a row (`""`) now has the same id in the program graph
   and in the model. Before, the graph id dropped one of the two quotes (#250).
