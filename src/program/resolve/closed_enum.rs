@@ -433,10 +433,11 @@ fn implicit_rec_may_have_field(cx: &ClosedEnumCx, name_lc: &str) -> bool {
         None,
         Some((cx.surface, cx.with_state)),
     ) {
-        ReceiverType::Record { table: Some(table) } => cx
-            .index
-            .field_in_table(cx.graph, cx.from_object, &table, name_lc)
-            .is_some(),
+        // May the name be a field (even an ambiguous one), not "does it type".
+        ReceiverType::Record { table: Some(table) } => {
+            cx.index
+                .table_scope_may_have_field(cx.graph, cx.from_object, &table, name_lc)
+        }
         ReceiverType::Record { table: None } => true,
         _ => false,
     }
@@ -1758,6 +1759,55 @@ enum 50106 "Other Kind" implements "Other Strategy"
         let report = crate::program::resolve::full::resolve_full_program(write(&ws).path())
             .expect("resolves");
         assert!(is_open(site_completeness(&report, "onaftergetrecord")));
+    }
+
+    /// Final panel N2-2: the implicit `Rec`'s field `"Demo Kind"` is declared in
+    /// two `#if` arms with different types, so typing it is ambiguous, but the
+    /// field EXISTS: `"Demo Kind"::Standard` may still be its value. A table and
+    /// a page on that table both stay open.
+    #[test]
+    fn i264_n2_2_quoted_value_named_like_an_ambiguous_rec_field_stays_open() {
+        let body = format!(
+            "\n    procedure Dispatch()\n    var\n{S_VAR}\n    begin\n        S := \"Demo Kind\"::Standard;\n        S.NextKm(1);\n    end;\n"
+        );
+        let field = if_arms(
+            "        field(2; \"Demo Kind\"; Enum \"Open Kind\") { }\n",
+            "        field(2; \"Demo Kind\"; Code[20]) { }\n",
+        );
+        let table = format!(
+            "table 50100 \"Demo Item\"\n{{\n    fields\n    {{\n        field(1; \"No.\"; Code[20]) {{ }}\n{field}    }}\n{body}}}\n"
+        );
+        let page = format!(
+            "page 50133 \"Item Card\"\n{{\n    SourceTable = \"Demo Item\";\n{}}}\n",
+            body.replace("procedure Dispatch()", "procedure Dispatch2()")
+        );
+        let dir = write(&workspace(
+            caller(VARS, "", ""),
+            &[
+                ("src/Item.al", table),
+                ("src/Page.al", page),
+                ("src/OpenKind.al", open_kind()),
+            ],
+        ));
+        let ctx = crate::program::resolve::full::build_context_res(dir.path()).expect("context");
+        let item = ctx
+            .graph()
+            .objects
+            .iter()
+            .find(|o| o.name.as_ref() == "Demo Item")
+            .expect("table");
+        assert_eq!(
+            item.fields
+                .iter()
+                .filter(|f| f.name_lc.as_ref() == "demo kind")
+                .count(),
+            2,
+            "precondition: two conflicting declarations"
+        );
+        let report =
+            crate::program::resolve::full::resolve_full_program(dir.path()).expect("resolves");
+        assert!(is_open(site_completeness(&report, "dispatch")), "table");
+        assert!(is_open(site_completeness(&report, "dispatch2")), "page");
     }
 
     /// Final panel FC3: in a table (or a page on a SourceTable), `"X"::V` may

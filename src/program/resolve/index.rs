@@ -1121,6 +1121,39 @@ impl ResolveIndex {
         false
     }
 
+    /// Whether a field named `field_lc` is declared anywhere in the
+    /// visibility-scoped table surface for `base` (the table and its
+    /// closure-visible extensions), whatever its type and however many
+    /// declarations it has. Unlike [`Self::field_in_table`], which types a
+    /// field only when it is unique, this answers "may the name be a field?"
+    /// for proofs that must not mistake an ambiguous field for no field (#264).
+    /// `true` when `base` is outside `from_object`'s closure or is not found,
+    /// since its fields cannot then be ruled out.
+    pub fn table_scope_may_have_field(
+        &self,
+        graph: &ProgramGraph,
+        from_object: &ObjectNode,
+        base: &ObjectNodeId,
+        field_lc: &str,
+    ) -> bool {
+        let closure = graph.topology.closure(from_object.id.app);
+        if !closure.contains(&base.app) {
+            return true;
+        }
+        let Some(base_obj) = Self::find_object(graph, base) else {
+            return true;
+        };
+        let declares = |o: &ObjectNode| o.fields.iter().any(|f| f.name_lc.as_ref() == field_lc);
+        if declares(base_obj) {
+            return true;
+        }
+        let base_name_lc = base_obj.name.fold_identifier();
+        self.table_extensions_of(&base_name_lc)
+            .iter()
+            .filter(|ext_id| closure.contains(&ext_id.app))
+            .any(|ext_id| Self::find_object(graph, ext_id).is_none_or(declares))
+    }
+
     /// Look up an `ObjectNode` by id via binary search — `graph.objects` is
     /// sorted by `ObjectNodeId` at construction (`build_program_graph` Step 4
     /// / every in-memory test fixture), mirroring `object_extends`'s
