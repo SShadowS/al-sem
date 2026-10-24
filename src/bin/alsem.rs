@@ -1047,14 +1047,19 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
     }
     // What a job writes and reads, and its kind, follow its own validation:
     // a failed job writes only its streams and builds nothing (FR-2, FR-14),
-    // but keeps its reads, so no other job writes a file it read (R2-1).
+    // but keeps its reads, so no other job writes a file it read (R2-1): its
+    // command line's and every file its planning read or probed (F1).
     let (mut paths, mut kinds, mut planned, mut changed) = (vec![], vec![], vec![], vec![]);
     for (bi, (batch, commands)) in manifest.batches.iter().zip(parsed).enumerate() {
         let (mut plans, mut decided) = (Vec::new(), Vec::new());
         for (i, (job, command)) in batch.jobs.iter().zip(commands).enumerate() {
             decided.push(changed_is_file(&command));
-            let (kind, written) = (job_kind(&command), job_paths(&command, &job.streams));
+            let (kind, mut written) = (job_kind(&command), job_paths(&command, &job.streams));
+            PLAN_TOUCHED.lock().expect("plan touches").clear();
             let p = plan(command, true);
+            written
+                .reads
+                .append(&mut PLAN_TOUCHED.lock().expect("plan touches"));
             let written = match p {
                 Planned::Failed(_) => JobPaths {
                     reads: written.reads,
@@ -1551,9 +1556,17 @@ fn stdin_text() -> Option<&'static str> {
 static PLAN_FILES: std::sync::LazyLock<std::sync::Mutex<PlanFiles>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Every path the plan being made read or probed, in order: a batch's parent
+/// adds them to that job's reads (D2.4; #277 final r3 F1).
+static PLAN_TOUCHED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
 /// `path`'s bytes as a plan reads them: read once per run ([`PLAN_FILES`]).
 /// The error keeps its text, not its kind.
 fn plan_read(path: &Path) -> std::io::Result<Vec<u8>> {
+    PLAN_TOUCHED
+        .lock()
+        .expect("plan touches")
+        .push(path.to_path_buf());
     let mut files = PLAN_FILES.lock().expect("plan files");
     let read = files
         .reads
@@ -1564,6 +1577,10 @@ fn plan_read(path: &Path) -> std::io::Result<Vec<u8>> {
 
 /// Whether `path` exists, as a plan asks it: answered once per run.
 fn plan_exists(path: &Path) -> bool {
+    PLAN_TOUCHED
+        .lock()
+        .expect("plan touches")
+        .push(path.to_path_buf());
     let mut files = PLAN_FILES.lock().expect("plan files");
     *files
         .exists

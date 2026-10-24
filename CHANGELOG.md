@@ -36,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--format`, `--shard` without `--out`, a policy that does not load, …) writes only its
   two streams, so nothing it would write is checked, but it keeps the files it reads (a
   `digest --diff foo.diff` that failed because `foo.diff` is absent still clashes with the
-  job that writes it); it is a job of its own exit, never a usage error. Paths
+  job that writes it), named or not (an auto-detected `al-sem.policy.yaml` that does not
+  load still clashes with a job writing it); it is a job of its own exit, never a usage
+  error. Paths
   are compared after their deepest existing directory is canonicalized and each `..` is
   taken as the OS takes it (after a symlink, the target's parent), so a symlink, a Windows
   case difference or an 8.3 name hides no clash; a workspace's own files are its
@@ -58,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diff` of two snapshot files counts for none, nor sets the policy cap). The parent writes
   each worker its batch, its `--changed` decisions, the one stdin read and every file its
   plans read (a digest's `--diff` file, a policy file) on the worker's stdin (a worker never
-  opens the manifest, and each such file is read once per run, so a FIFO works), forwards each worker's stderr whole line by whole line as
+  opens the manifest, and each such file is read once per run, so a FIFO works; a path
+  that is not UTF-8 crosses as raw bytes), forwards each worker's stderr whole line by whole line as
   `[w<b>] …`, gives each worker the trace file `<ALSEM_TRACE_FILE>.w<b>`, and prints the job
   lines in manifest order after the last worker exits; a worker that dies without its lines
   leaves its jobs `"exit": null` with `"worker": "<signal or status>"`, and the run exits 1.

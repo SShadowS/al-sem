@@ -256,7 +256,10 @@ A one-view job has one side and a trivial `finalize`. `PlanPart` carries the job
   `--out` names no shard directory) can clash, and the job runs as a zero-view `Failed` job with its
   standalone text and exit while the other jobs run (T24 (b)). **Amended at final round 2 (R2-1):** it keeps
   the files its command line READS (D2.4): a job that failed because a file did not exist yet still clashes
-  with a job writing it, so no later batch's worker could read another job's output.
+  with a job writing it, so no later batch's worker could read another job's output. **Amended at final
+  round 3 (F1):** and every file its planning read or probed, whether its command line names it or not (an
+  auto-detected `WS/al-sem.policy.yaml` that does not load, and the `.yml` probe): the parent records each
+  plan's reads and `exists` probes and adds them to that job's reads, failed or not.
 
 **D2.2 The run's own output and exit (decided, Q-a).**
 - **Run stdout**: one JSON line per job, in manifest order (batch, then job), `{"batch":b,"job":i,
@@ -339,8 +342,10 @@ they took: digest's `--diff <file>` bytes or read error, `policy check`'s policy
 answers); the `<manifest>` argument stays only as a name. A child plans off the parent's reads and answers,
 never the file system, so each such file is read exactly once per run (a FIFO given once works), and a job
 writing the manifest, or a file an earlier batch writes, cannot change what a later child runs. A file a
-plan reads is also a read in the write check (D2.4), the plan's failure or not (D2.1), so no job may write
-it.
+plan reads or probes is also a read in the write check (D2.4), the plan's failure or not (D2.1), so no job
+may write it. Amended at final round 3 (F2): those files' paths cross as the platform's raw units (bytes on
+unix, UTF-16 units on Windows), never as strings, so a path that is not UTF-8 (a relative `--policy` under
+such a cwd) crosses too; serializing a worker's input cannot fail on a path.
 
 ### 4.3 D3: inputs split; validation before the build (Decision 7)
 

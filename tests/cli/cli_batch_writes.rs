@@ -911,3 +911,37 @@ fn batch_refuses_writing_under_a_linked_directory() {
         assert!(!written.exists(), "{target}: nothing ran");
     }
 }
+
+/// #277 final r3 F1 (D2.4): a failed plan keeps every file its planning read
+/// or probed. `policy check WS` auto-detects `WS/al-sem.policy.yaml`, which
+/// does not load, so it fails in planning; a job writing that file clashes
+/// with the read: exit 3, the policy untouched.
+#[test]
+fn batch_failed_plan_keeps_its_implicit_reads() {
+    let ws = tempfile::tempdir().unwrap();
+    let app = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#;
+    std::fs::write(ws.path().join("app.json"), app).unwrap();
+    std::fs::write(ws.path().join("A.al"), "codeunit 50100 A { }").unwrap();
+    let policy = ws.path().join("al-sem.policy.yaml");
+    std::fs::write(&policy, "rules: [").unwrap();
+    let w = ws.path().to_string_lossy().into_owned();
+    let d = tempfile::tempdir().unwrap();
+    let jobs = [
+        job(&["policy", "check", &w], None, None),
+        job(
+            &["events", "fanout", &w, "--format", "bad"],
+            Some(&policy),
+            None,
+        ),
+    ];
+    let (out, events) = run_manifest(d.path(), &jobs, None, &[], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("batch 0 job 0 reads") && stderr.contains("batch 0 job 1 writes"),
+        "{stderr}"
+    );
+    assert_eq!(count(&last_counters(&events), "build.program"), 0);
+    assert_eq!(std::fs::read_to_string(&policy).unwrap(), "rules: [");
+    assert!(!d.path().join("0.0.stdout").exists(), "nothing ran");
+}
