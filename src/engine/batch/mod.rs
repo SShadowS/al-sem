@@ -86,7 +86,7 @@ pub(crate) fn run_on_target(
 }
 
 /// Where a batch job's two streams go (D2.1), resolved by the manifest.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct JobStreams {
     pub stdout: PathBuf,
     pub stderr: PathBuf,
@@ -724,7 +724,10 @@ mod tests {
     /// in a [`HandOff`]) keeps no workspace read past its view. Two
     /// workspaces, no diff: `events fanout` on A, then a job on B that looks
     /// for A's read while B computes. Precondition: the job holds A's read
-    /// before the batch runs (the test holds only a `Weak`).
+    /// before the batch runs (the test holds only a `Weak`). And (#277 final
+    /// r1 FR-11) a job that fails its own validation after its read (a
+    /// policy file that does not load) has no view and gives the read up
+    /// when it fails, so it lives past no use.
     #[test]
     fn a_job_holds_no_read_past_its_view() {
         use crate::engine::gate::events::{EventsFanoutOptions, EventsJob};
@@ -741,7 +744,7 @@ mod tests {
             strict: false,
             single_app: true,
         };
-        let events = EventsJob::fanout(&opts, None);
+        let events = EventsJob::fanout(opts, None);
         assert!(a_read.upgrade().is_some(), "precondition: the job holds A");
         let key = ViewKey::new(&b.workspace, true, false);
         let mut later = Probe::new(vec![(key, &b)]);
@@ -755,6 +758,38 @@ mod tests {
             0
         });
         assert_eq!(docs, 2, "both jobs finalized");
+
+        // FR-11: the policy job fails before any view.
+        use crate::engine::gate::policy::pipeline::{
+            PolicyCheckOptions, PolicyJob, policy_request,
+        };
+        let a = r0("ws-d1-multi-caller");
+        let a_read = Arc::downgrade(&a);
+        let held = HandOff::new(a);
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("bad.yaml");
+        std::fs::write(&bad, "rules: [").unwrap();
+        let request = crate::program::inputs::RequestInputs::read(
+            &held.get().workspace,
+            policy_request(bad.to_str(), false),
+            None,
+        );
+        let opts = PolicyCheckOptions {
+            inputs: &held,
+            request: &request,
+            format: "json",
+            out: None,
+            deterministic: true,
+            strict: false,
+            driver_version: "test",
+            single_app: true,
+        };
+        assert!(a_read.upgrade().is_some(), "precondition: the job holds A");
+        assert!(
+            PolicyJob::new(opts).is_err(),
+            "precondition: the policy fails"
+        );
+        assert!(a_read.upgrade().is_none(), "the failed job kept A's read");
     }
 
     /// #277 D6.1, D6.2: on one view, a cell or run an earlier job releases or

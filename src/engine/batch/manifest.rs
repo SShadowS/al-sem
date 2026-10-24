@@ -2,6 +2,7 @@
 //! each job's `argv` is parsed by the binary's own clap `Cli`, so every flag,
 //! default and message is the standalone one.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -140,20 +141,56 @@ fn resolve(cwd: &Path, p: &Path) -> PathBuf {
 /// (R9-4). `f` is resolved; `ws` is the job's spelling. For a relative
 /// spelling the walk climbs the cwd's ancestors too, a superset of the
 /// loader's (R10-5): it can refuse a write where no real clash exists, but
-/// it never misses one.
-fn read_by_workspace(cwd: &Path, ws: &Path, f: &Path) -> bool {
+/// it never misses one. `taken`: the workspace's [`taken_files`], which
+/// holds the targets of the links a read follows.
+fn read_by_workspace(cwd: &Path, ws: &Path, f: &Path, taken: &HashSet<PathBuf>) -> bool {
     use crate::dependencies::{CacheScope, Role, cache_scope_role, package_cache_scope};
-    let under_ws = f.starts_with(resolve(cwd, ws))
-        && (crate::source_text::has_al_extension(f)
-            || f.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))
-            || f.file_name()
-                .is_some_and(|n| WORKSPACE_FILES.iter().any(|w| n.eq_ignore_ascii_case(w))));
+    let under_ws = f.starts_with(resolve(cwd, ws)) && is_input_name(f);
     let spelled = package_cache_scope(&fold(cwd, ws));
     let scope = CacheScope {
         candidates: spelled.candidates.iter().map(|c| resolve(cwd, c)).collect(),
         walked_dirs: vec![],
     };
-    under_ws || cache_scope_role(&scope, f) == Some(Role::AppFile)
+    under_ws || cache_scope_role(&scope, f) == Some(Role::AppFile) || taken.contains(f)
+}
+
+/// An `.al` or `.app` file or one of [`WORKSPACE_FILES`] (any case, as the
+/// loader matches).
+fn is_input_name(f: &Path) -> bool {
+    crate::source_text::has_al_extension(f)
+        || f.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))
+        || f.file_name()
+            .is_some_and(|n| WORKSPACE_FILES.iter().any(|w| n.eq_ignore_ascii_case(w)))
+}
+
+/// Every file a workspace read of `ws` takes that exists now, canonicalized
+/// (#277 final r1 FR-5): the source walk follows links
+/// (`source_text::discover_al_files`), and so do the config reads and the
+/// package loader (`dependencies::discover_app_files`), so a link inside the
+/// workspace to a file outside it is read at its target. The walk takes every
+/// [`is_input_name`] file under `ws`, past the folders the source walk skips,
+/// a superset of what a read takes.
+fn taken_files(cwd: &Path, ws: &Path) -> HashSet<PathBuf> {
+    let root = fold(cwd, ws);
+    let walked = walkdir::WalkDir::new(&root)
+        .follow_links(true)
+        .into_iter()
+        .filter_entry(|e| {
+            e.depth() == 0
+                || !e.file_type().is_dir()
+                || !crate::source_text::is_skipped_dir_name(e.file_name())
+        })
+        .flatten()
+        .filter(|e| e.file_type().is_file() && is_input_name(e.path()))
+        .map(walkdir::DirEntry::into_path);
+    let packages = crate::dependencies::discover_app_files(&root)
+        .0
+        .into_iter()
+        .map(|a| a.path);
+    walked
+        .chain(packages)
+        .filter_map(|p| std::fs::canonicalize(p).ok())
+        .collect()
 }
 
 /// Every write target of the run checked before any build (D2.4, 12A-10):
@@ -195,6 +232,7 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
             }
         }
     }
+    let mut taken = std::collections::BTreeMap::new();
     for (r, (_, paths)) in jobs.iter().enumerate() {
         for read in &paths.reads {
             let read = resolve(cwd, read);
@@ -214,15 +252,43 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
             }
         }
         for ws in &paths.workspaces {
+            let taken = taken
+                .entry(ws.clone())
+                .or_insert_with(|| taken_files(cwd, ws));
             for (w, t) in writes.iter().filter(|(w, _)| *w != r) {
                 let Target::File(f) = t else { continue };
-                if read_by_workspace(cwd, ws, f) {
+                if read_by_workspace(cwd, ws, f, taken) {
                     return fail(format!(
                         "{} reads the workspace {}, where {} writes {}",
                         name(r),
                         resolve(cwd, ws).display(),
                         name(*w),
                         f.display()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every stream's directory exists, `--out-dir` too (D2.1; #277 final r1
+/// FR-13): a missing one is a usage error before any build, not a write
+/// failure of every job after the whole batch has run.
+pub fn check_stream_dirs(manifest: &Manifest, out_dir: Option<&Path>) -> Result<(), String> {
+    if let Some(dir) = out_dir.filter(|d| !d.is_dir()) {
+        return Err(format!(
+            "al-sem batch: --out-dir {}: not a directory",
+            dir.display()
+        ));
+    }
+    for (b, batch) in manifest.batches.iter().enumerate() {
+        for (i, job) in batch.jobs.iter().enumerate() {
+            for stream in [&job.streams.stdout, &job.streams.stderr] {
+                if stream.parent().is_some_and(|d| !d.is_dir()) {
+                    return Err(format!(
+                        "al-sem batch: batch {b} job {i}: no directory for {}",
+                        stream.display()
                     ));
                 }
             }

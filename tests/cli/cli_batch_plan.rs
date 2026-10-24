@@ -676,3 +676,53 @@ fn batch_diff_sides() {
         run.counters
     );
 }
+
+/// #277 final r1 FR-9 (D6.1): `policy check --no-policy` declares no raw
+/// read, so a policy with rules before it (which fills `raw`, its witness
+/// pass) releases `raw` after its own last read, in its own compute; a later
+/// reader's declaration would have kept it. Each job equals standalone.
+#[test]
+fn no_policy_reads_no_raw() {
+    let (_d, ws) = ws_dep();
+    let policy = policy_yaml();
+    let no_policy = argv(&[
+        "policy",
+        "check",
+        &ws,
+        "--no-policy",
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    let with_rules = argv(&[
+        "policy",
+        "check",
+        &ws,
+        "--policy",
+        &policy,
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    let jobs = vec![with_rules, no_policy];
+    let run = batch(&jobs);
+    assert_each_standalone(&run, &jobs, None);
+    let compute = |j: usize| {
+        instants(&run.events, "job.step")
+            .into_iter()
+            .find(|(_, a)| a["job"] == j && a["step"] == "compute")
+            .map(|(ts, _)| ts)
+            .expect("a compute step")
+    };
+    let raw: Vec<f64> = instants(&run.events, "view.release")
+        .into_iter()
+        .filter(|(_, a)| a["cell"] == "Raw")
+        .map(|(ts, _)| ts)
+        .collect();
+    assert_eq!(raw.len(), 1, "raw released once: {raw:?}");
+    let (job0, job1) = (compute(0), compute(1));
+    assert!(
+        job0 < raw[0] && raw[0] < job1,
+        "in the policy's compute: raw {raw:?}, computes {job0} {job1}"
+    );
+}

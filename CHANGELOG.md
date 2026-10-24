@@ -15,41 +15,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   view: one read of the workspace, one build, one witness pass at the union of the jobs'
   requests, one `det`, and one run per distinct detector set and scope. Views are built
   one after another, and a workspace read is freed after its last view. Every job's
-  stdout, stderr and exit equal its standalone run, with two stated exceptions: a
+  stdout, stderr and exit equal its standalone run with its stdout off a terminal
+  (`analyze`'s `--format auto` is JSON in a batch, whatever the run's own stdout is,
+  with one batch or several), with two stated exceptions: a
   view's `log` lines (`RUST_LOG`) are printed once on the run's stderr, and a job's own
   write-error line goes to the run's stderr too. The library's job lines (the L4
   non-convergence line, `graph`'s coverage warning) are replayed in the stderr of each
   job whose standalone run prints them. A job's streams go to
   `DIR/<batch>.<job>.stdout`/`.stderr` unless the manifest names them (relative paths
-  against the manifest's directory; `--out` stays relative to the cwd). The run prints
+  against the manifest's directory; `--out` stays relative to the cwd); a missing stream
+  directory or `--out-dir` exits 3 before any build. The run prints
   one JSON line per job (`batch`, `job`, `exit`, `stdout`, `stderr`, `files`) and exits 0
   when every job ran, whatever their exits; a job whose own write fails gets its
   command's write-failure exit (analyze 2, else 1). A bad manifest (an argv clap rejects,
   `batch`, `policy explain`, `cache prune`, no command, no job) exits 3 and runs nothing,
   and so do two write targets naming one file (also one job's stdout and stderr), a file
-  inside another job's shard directory, and a file one job reads (a diff side,
-  `--baseline`, `--renames`, `--policy`, a digest diff, a workspace's own files) that
-  another job writes. Paths are compared after their deepest existing directory is
-  canonicalized and each `..` is taken as the OS takes it (after a symlink, the target's
-  parent), so a symlink, a Windows case difference or an 8.3 name hides no clash; a
-  workspace's own files are its `.al`/`.app` files in any case, its `app.json` and config
-  files, and the `.app` files of every ancestor `.alpackages` the loader reads (the
-  ancestors of the workspace as spelled, as the loader walks them). Stdin is read once for every `--diff -` job; a closed run stdout
-  exits 1. Two or more batches run in worker processes (`alsem batch --worker <b>`, hidden),
+  inside another job's shard directory, a job writing the manifest, and a file one job
+  reads (a diff side, `--baseline`, `--renames`, `--policy`, a digest diff, a workspace's
+  own files) that another job writes. A job that fails its own validation (a bad
+  `--format`, `--shard` without `--out`, …) writes only its two streams, so nothing its
+  command line names is checked; it is a job of its own exit, never a usage error. Paths
+  are compared after their deepest existing directory is canonicalized and each `..` is
+  taken as the OS takes it (after a symlink, the target's parent), so a symlink, a Windows
+  case difference or an 8.3 name hides no clash; a workspace's own files are its
+  `.al`/`.app` files in any case, its `app.json` and config files, and the `.app` files of
+  every ancestor `.alpackages` the loader reads (the ancestors of the workspace as spelled,
+  as the loader walks them), each also at the target of a symlink that leads outside the
+  workspace, as the loader follows it. Every job is validated once, before anything runs:
+  whether `digest --changed <value>` names a diff file is decided then, and stdin is read
+  then, once, only when a job that passed its validation reads it, as standalone (a read
+  that fails is each such job's `failed to read diff from stdin`, exit 3); a closed run
+  stdout exits 1. Two or more batches run in worker processes (`alsem batch --worker <b>`, hidden),
   at most `W` at once, started in manifest order: `W = max(1, min(batches, 4, ⌊28 GiB /
   P⌋))`, at most 2 when a job is `policy check`, `P` the largest measured CDO peak of the
-  run's job kinds (`batch::admission::KIND_PEAK_KIB`; a kind with no row takes the largest;
-  the cross-app `fingerprint` and single-app `prove` rows are placeholders at the largest
-  row until measured). The parent reads stdin once and hands it to each
-  worker with a `--diff -` job, forwards each worker's stderr whole line by whole line as
+  run's job kinds that build a view (`batch::admission::KIND_PEAK_KIB`; a kind with no row
+  takes the largest; the cross-app `fingerprint` and single-app `prove` rows are
+  placeholders at the largest row until measured; a job that fails its validation or a
+  `diff` of two snapshot files counts for none). The parent writes each worker its batch,
+  its `--changed` decisions and the one stdin read on the worker's stdin (a worker never
+  opens the manifest), forwards each worker's stderr whole line by whole line as
   `[w<b>] …`, gives each worker the trace file `<ALSEM_TRACE_FILE>.w<b>`, and prints the job
   lines in manifest order after the last worker exits; a worker that dies without its lines
   leaves its jobs `"exit": null` with `"worker": "<signal or status>"`, and the run exits 1.
   `alsem batch --help` states the budget's limit (the measured shapes only) and that the
   table is CDO-calibrated. Neither `alsem batch` nor its workers read or set
   `RAYON_NUM_THREADS`; each big-stack pool reports its size in a `pool.threads` trace
-  instant. Under `ALSEM_RETAINED_CENSUS=1` each worker prints `[batch] worker <b>
-  peak_kib=<VmHWM>` (where `/proc/self/status` exists). Traces gain `batch.workers`
+  instant. Under `ALSEM_RETAINED_CENSUS=1` each worker, a one-batch run's in-process one
+  included, prints `[batch] worker <b> peak_kib=<VmHWM>` (where `/proc/self/status`
+  exists). Traces gain `batch.workers`
   (`w`, `p_kib`, `policy_cap`), `batch.worker.start`, `batch.worker.exit`, `batch.driver`,
   `view.<i>`, `view.drop`, `view.teardown`, `view.run`, `job.<i>.<cmd>` and
   `inputs.request_read`; `ALSEM_RETAINED_CENSUS=1` prints `[retained-census] batch.held
@@ -123,7 +136,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change.
 - **`policy check --no-policy` keeps no raw facts (#277 E12-C5).** No rule reads them, so
   the view's composition no longer keeps every primary routine's raw facts
-  (`build.witness_pass` 0, was 1). Output is unchanged.
+  (`build.witness_pass` 0, was 1), and in a batch it no longer claims them as a later
+  reader, so a policy with rules before it frees them after its own use. Output is
+  unchanged.
 - **Each workspace read is dropped with its last view (#277 E12-C2).** `diff A B` no
   longer holds A's read through B's build. A `RequestInputs` read (policy, baseline) is
   now timed (`inputs.request_read`) and tallied in a `request_inputs` census bucket

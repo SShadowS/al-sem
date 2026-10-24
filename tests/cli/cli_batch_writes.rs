@@ -367,12 +367,18 @@ fn batch_writes_in_job_order() {
     assert_each_standalone(&run, &jobs, None);
 
     let d = tempfile::tempdir().unwrap();
-    let missing = |n: &str| d.path().join("no-such-dir").join(n);
+    // A stream path that is a directory: its file cannot be created (a
+    // missing stream directory is a usage error before any build, FR-13).
+    let unwritable = |n: &str| {
+        let p = d.path().join(n);
+        std::fs::create_dir(&p).unwrap();
+        p
+    };
     let jobs = [
-        job(&["diff", &a, &b], Some(&missing("0.out")), None),
+        job(&["diff", &a, &b], Some(&unwritable("0.out")), None),
         job(
             &["analyze", &a, "--single-app"],
-            Some(&missing("1.out")),
+            Some(&unwritable("1.out")),
             None,
         ),
     ];
@@ -425,17 +431,17 @@ fn batch_job_write_failures() {
     let d = tempfile::tempdir().unwrap();
     let missing = d.path().join("no-such-dir");
     let fp_out = missing.join("fp.json").to_string_lossy().into_owned();
+    // A stream path that is a directory (a missing stream directory is a
+    // usage error before any build, FR-13).
+    let a_sarif = d.path().join("a.sarif");
+    std::fs::create_dir(&a_sarif).unwrap();
     let jobs = [
         job(
             &["fingerprint", &ws, "--format", "json", "--out", &fp_out],
             None,
             None,
         ),
-        job(
-            &["analyze", &ws, "--format", "json"],
-            Some(&missing.join("a.sarif")),
-            None,
-        ),
+        job(&["analyze", &ws, "--format", "json"], Some(&a_sarif), None),
         job(&["events", "fanout", &ws, "--format", "json"], None, None),
     ];
     let (out, _) = run_manifest(d.path(), &jobs, None, &[], None);
@@ -606,5 +612,232 @@ fn batch_stdin_read_once() {
             String::from_utf8_lossy(&alone.stdout),
             "job {i}"
         );
+    }
+}
+
+/// #277 final r1 FR-2 (D2.1, T24 (b)): a job that fails its own validation
+/// writes only its two streams. `fingerprint --shard` without `--out` and
+/// `--shard bad`, run from the manifest's directory (their streams under the
+/// cwd), and an `events fanout --format bad` whose `--out` names the next
+/// job's stdout file, are each a job of exit 1 with its standalone text, and
+/// the other job still runs.
+#[test]
+fn batch_failed_job_writes_only_its_streams() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let jobs = [
+        vec!["fingerprint", ws.as_str(), "--shard", "all"],
+        vec!["fingerprint", ws.as_str(), "--shard", "bad"],
+        vec![
+            "events",
+            "fanout",
+            ws.as_str(),
+            "--format",
+            "bad",
+            "--out",
+            "0.3.stdout",
+        ],
+        vec![
+            "events",
+            "fanout",
+            ws.as_str(),
+            "--single-app",
+            "--format",
+            "json",
+            "--deterministic",
+        ],
+    ];
+    let manifest: Vec<Value> = jobs.iter().map(|a| job(a, None, None)).collect();
+    let (out, _) = run_manifest(d.path(), &manifest, Some(d.path()), &[], None);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = lines(&out);
+    for (i, a) in jobs.iter().enumerate() {
+        let (stdout, stderr, exit) = standalone_in(&argv(a), Some(d.path()));
+        if i < 3 {
+            assert_eq!(exit, Some(1), "precondition: {a:?} fails its validation");
+        }
+        assert_eq!(got[i]["exit"].as_i64(), exit.map(i64::from), "job {i}");
+        let read = |ext: &str| std::fs::read(d.path().join(format!("0.{i}.{ext}"))).unwrap();
+        assert_eq!(read("stdout"), stdout, "job {i}: stdout");
+        assert_eq!(
+            String::from_utf8_lossy(&read("stderr")),
+            String::from_utf8_lossy(&stderr),
+            "job {i}: stderr"
+        );
+    }
+}
+
+/// `{"batches": …}` of one job per batch: `(argv, stdout)`.
+fn one_job_batches(jobs: &[(Vec<&str>, Option<&Path>)]) -> Value {
+    let batches: Vec<Value> = jobs
+        .iter()
+        .map(|(a, out)| json!({ "jobs": [job(a, *out, None)] }))
+        .collect();
+    json!({ "batches": batches })
+}
+
+/// #277 final r1 FR-3 (a) (D2.4): no job may write the manifest, which the
+/// run reads. Five batches (more than `W`), batch 0 writing its stdout over
+/// the manifest: a usage error before anything runs.
+#[test]
+fn batch_refuses_writing_the_manifest() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let bad = vec!["events", "fanout", ws.as_str(), "--format", "bad"];
+    let manifest = d.path().join("m.json");
+    let mut jobs = vec![(bad.clone(), Some(manifest.as_path()))];
+    jobs.extend((1..5).map(|_| (bad.clone(), None)));
+    let (out, events) = run_manifest_doc(d.path(), &one_job_batches(&jobs), None, &[], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("the run reads") && stderr.contains("batch 0 job 0"),
+        "{stderr}"
+    );
+    assert_eq!(count(&last_counters(&events), "build.program"), 0);
+    assert!(!d.path().join("1.0.stdout").exists(), "nothing ran");
+}
+
+/// #277 final r1 FR-3 (b) (D3): whether `digest --changed foo.diff` names a
+/// diff file or a routine is decided once, by the parent, before any job
+/// runs. Batch 0 writes `foo.diff` (absent at the start); the digest, in batch
+/// 4 (it starts only after a worker exits, `W` 4), still takes `foo.diff` as
+/// a routine, as its standalone run before the batch did.
+#[test]
+fn batch_changed_is_decided_once() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let digest = vec![
+        "digest",
+        ws.as_str(),
+        "--changed",
+        "foo.diff",
+        "--deterministic",
+    ];
+    let (stdout, stderr, exit) = standalone_in(&argv(&digest), Some(d.path()));
+    assert!(
+        !d.path().join("foo.diff").exists(),
+        "precondition: no foo.diff"
+    );
+    let analyze = vec!["analyze", ws.as_str(), "--format", "sarif"];
+    let foo = d.path().join("foo.diff");
+    let jobs = vec![
+        (
+            vec!["events", "fanout", ws.as_str(), "--format", "bad"],
+            Some(foo.as_path()),
+        ),
+        (analyze.clone(), None),
+        (analyze.clone(), None),
+        (analyze, None),
+        (digest, None),
+    ];
+    let (out, events) =
+        run_manifest_doc(d.path(), &one_job_batches(&jobs), Some(d.path()), &[], None);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let w = events
+        .iter()
+        .find(|e| e["ph"] == "i" && e["name"] == "batch.workers")
+        .map(|e| e["args"]["w"].clone());
+    assert_eq!(
+        w,
+        Some(json!(4)),
+        "precondition: batch 4 waits for a worker"
+    );
+    assert!(foo.exists(), "precondition: batch 0 wrote foo.diff");
+    let got = lines(&out);
+    assert_eq!(got[4]["exit"].as_i64(), exit.map(i64::from));
+    let read = |ext: &str| std::fs::read(d.path().join(format!("4.0.{ext}"))).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&read("stdout")),
+        String::from_utf8_lossy(&stdout)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read("stderr")),
+        String::from_utf8_lossy(&stderr)
+    );
+}
+
+/// #277 final r1 FR-5 (D2.4): a workspace input that is a symlink to a file
+/// outside the workspace (a source file, `app.json`) is read through the
+/// link, so a job writing the link's target clashes with the read.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_writing_a_linked_workspace_input() {
+    let (ws, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let app = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#;
+    std::fs::write(outside.path().join("app.json"), app).unwrap();
+    std::fs::write(outside.path().join("A.al"), "codeunit 50100 A { }").unwrap();
+    std::fs::create_dir(ws.path().join("src")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("A.al"), ws.path().join("src/link.al")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("app.json"), ws.path().join("app.json"))
+        .unwrap();
+    let w = ws.path().to_string_lossy().into_owned();
+    for target in ["A.al", "app.json"] {
+        let d = tempfile::tempdir().unwrap();
+        let written = outside.path().join(target);
+        let jobs = [
+            job(&["events", "fanout", &w, "--single-app"], None, None),
+            job(
+                &["events", "fanout", &w, "--format", "bad"],
+                Some(&written),
+                None,
+            ),
+        ];
+        let (out, events) = run_manifest(d.path(), &jobs, None, &[], None);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(3), "{target}: {stderr}");
+        assert!(stderr.contains("reads the workspace"), "{target}: {stderr}");
+        assert_eq!(count(&last_counters(&events), "build.program"), 0);
+    }
+}
+
+/// #277 final r1 FR-13 (D2.1): a missing `--out-dir`, or a missing directory
+/// of a manifest stream path, is a usage error before any build (exit 3).
+#[test]
+fn batch_missing_stream_directory_is_a_usage_error() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let events = ["events", "fanout", ws.as_str(), "--single-app"];
+    let manifest = d.path().join("m.json");
+    let missing = d.path().join("missing");
+    for (doc, out_dir) in [
+        (
+            json!({ "jobs": [job(&events, None, None)] }),
+            Some(&missing),
+        ),
+        (
+            json!({ "jobs": [job(&events, Some(&missing.join("x.out")), None)] }),
+            None,
+        ),
+    ] {
+        std::fs::write(&manifest, doc.to_string()).unwrap();
+        let trace = d.path().join("trace.json");
+        let _ = std::fs::remove_file(&trace);
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
+        cmd.arg("batch")
+            .env("RUST_LOG", "off")
+            .env("ALSEM_TRACE", "1")
+            .env("ALSEM_TRACE_FILE", &trace);
+        if let Some(dir) = out_dir {
+            cmd.arg("--out-dir").arg(dir);
+        }
+        let out = cmd.arg(&manifest).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(3), "{stderr}");
+        assert!(stderr.contains("missing"), "names the directory: {stderr}");
+        let text = std::fs::read_to_string(&trace).unwrap_or_default();
+        let events: Vec<Value> = serde_json::from_str(&text).unwrap_or_default();
+        assert_eq!(count(&last_counters(&events), "build.program"), 0);
+        assert!(!missing.exists());
     }
 }

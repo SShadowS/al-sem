@@ -3737,9 +3737,16 @@ pub struct R3a5CrossAppBase {
 impl R3a5CrossAppBase {
     /// The view's execution relation (see the field).
     pub fn rel(&self) -> &std::sync::Arc<crate::engine::l4::exec_relation::ExecRelation> {
-        self.rel
-            .as_ref()
+        self.held_rel()
             .expect("the base's relation was released past its view's prepare")
+    }
+
+    /// The relation, `None` once released past the view's prepare (a census
+    /// reads it either way, #277 final r1 FR-4).
+    pub fn held_rel(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::engine::l4::exec_relation::ExecRelation>> {
+        self.rel.as_ref()
     }
 
     /// Drop everything only a view's `prepare` reads (#160 Task 27 I1, #277

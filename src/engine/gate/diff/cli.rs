@@ -51,6 +51,7 @@ enum InputKind {
 /// The ws-mode stderr note (al-sem diff.ts), byte-exact.
 pub const WORKSPACE_MODE_NOTE: &str = "note: workspace-mode reanalyzes both sides; for CI, persist snapshots with 'al-sem fingerprint --format cbor.gz' and diff those instead.";
 
+#[derive(Clone, Copy)]
 pub struct DiffCliOptions<'a> {
     pub old_arg: &'a str,
     pub new_arg: &'a str,
@@ -134,7 +135,7 @@ fn load_failure(msg: String) -> JobFailure {
 /// the run (the driver skips the new side's view). Its document is the
 /// [`DiffRunOutcome`].
 pub struct DiffJob<'a> {
-    opts: &'a DiffCliOptions<'a>,
+    opts: DiffCliOptions<'a>,
     kinds: [InputKind; 2],
     /// Each workspace side's read; one read when both name one view. Handed
     /// to the driver by `demands`, which drops each after its view, so `diff
@@ -148,9 +149,10 @@ impl<'a> DiffJob<'a> {
     /// The job, or its early outcome: an input that does not exist, an
     /// `.app` input, or an old snapshot file that does not load. Nothing is
     /// built for any of them. Each workspace side is read through `reader`, so
-    /// both sides on one path share one read (`diff A A`: one view).
+    /// both sides on one path share one read (`diff A A`: one view). Every
+    /// early outcome comes before either side is read.
     pub fn new(
-        opts: &'a DiffCliOptions<'a>,
+        opts: DiffCliOptions<'a>,
         reader: &WorkspaceReader,
     ) -> Result<DiffJob<'a>, DiffRunOutcome> {
         // Input-kind detection.
@@ -291,7 +293,7 @@ impl Job for DiffJob<'_> {
             Ok(new) => new,
             Err(f) => return Doc::new(DiffRunOutcome::failed(f)),
         };
-        Doc::new(finish_diff(self.opts, self.kinds, old, new))
+        Doc::new(finish_diff(&self.opts, self.kinds, old, new))
     }
 
     fn serialize(&self, doc: Doc) -> JobOutput {
@@ -328,7 +330,7 @@ fn same_workspace(old: &str, old_kind: InputKind, new: &str, new_kind: InputKind
 /// `DiffRunOutcome`; the bin maps it to stdout/stderr writes + a process exit
 /// code.
 pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
-    match DiffJob::new(opts, &WorkspaceReader::default()) {
+    match DiffJob::new(*opts, &WorkspaceReader::default()) {
         Err(early) => early,
         Ok(job) => crate::engine::batch::run_doc(&job).take(),
     }
@@ -495,7 +497,7 @@ mod tests {
             driver_version: "t",
         };
         let reader = WorkspaceReader::default();
-        let job = DiffJob::new(&opts, &reader).unwrap_or_else(|_| panic!("inputs exist"));
+        let job = DiffJob::new(opts, &reader).unwrap_or_else(|_| panic!("inputs exist"));
         let demands = job.demands();
         assert_eq!(demands.len(), 2, "precondition: two workspace sides");
         let reads: Vec<_> = demands.iter().map(|d| Arc::downgrade(&d.inputs)).collect();
@@ -603,7 +605,7 @@ mod tests {
             driver_version: "t",
         };
         let reader = WorkspaceReader::default();
-        let job = Sides(DiffJob::new(&opts, &reader).unwrap_or_else(|_| panic!("inputs exist")));
+        let job = Sides(DiffJob::new(opts, &reader).unwrap_or_else(|_| panic!("inputs exist")));
         let sides = crate::engine::batch::run_doc(&job).take::<Vec<Result<SideDoc, JobFailure>>>();
         let (_, lines) = sides
             .into_iter()

@@ -244,6 +244,7 @@ pub enum ShardMode {
 }
 
 /// Options for `run_fingerprint_pipeline`.
+#[derive(Clone)]
 pub struct FingerprintOptions<'a> {
     /// The command's one read of the workspace (#160); the path is
     /// `inputs.workspace`. Handed to the driver; the job reads the view's
@@ -386,7 +387,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         opts.is_query_requested,
     )?;
 
-    match FingerprintJob::new(opts) {
+    match FingerprintJob::new(opts.clone()) {
         // A stderr-only error: the message, no output.
         Err(f) => Ok(FingerprintRunResult {
             output: FingerprintOutput::Text(String::new()),
@@ -408,7 +409,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
 /// Both views are the ones `--no-roots-config` names. Its document is a
 /// [`FingerprintDoc`].
 pub struct FingerprintJob<'a> {
-    opts: &'a FingerprintOptions<'a>,
+    opts: FingerprintOptions<'a>,
 }
 
 /// Which path a fingerprint invocation takes (#160 step 9 §4.3).
@@ -546,14 +547,21 @@ type SelectorResolution = Result<
     ),
 >;
 
+/// `--shard` without `--out` (fingerprint.ts:210): exit 1, found before the
+/// build (#277 D3, Decision 7), so it wins over a failing build and over the
+/// `--strict` gate. The binary checks it before the workspace is read (#277
+/// final r1 FR-2, FR-11).
+pub fn reject_shard_without_out(shard: bool, out: Option<&str>) -> Result<(), JobFailure> {
+    match (shard, out) {
+        (true, None) => Err(JobFailure::line("--shard requires --out <directory>", 1)),
+        _ => Ok(()),
+    }
+}
+
 impl<'a> FingerprintJob<'a> {
-    /// `Err`: `--shard` without `--out` (fingerprint.ts:210), exit 1, found
-    /// before the build (#277 D3, Decision 7): it wins over a failing build
-    /// and over the `--strict` gate.
-    pub fn new(opts: &'a FingerprintOptions<'a>) -> Result<FingerprintJob<'a>, JobFailure> {
-        if opts.shard.is_some() && opts.out.is_none() {
-            return Err(JobFailure::line("--shard requires --out <directory>", 1));
-        }
+    /// `Err`: [`reject_shard_without_out`].
+    pub fn new(opts: FingerprintOptions<'a>) -> Result<FingerprintJob<'a>, JobFailure> {
+        reject_shard_without_out(opts.shard.is_some(), opts.out)?;
         Ok(FingerprintJob { opts })
     }
 }
@@ -563,7 +571,7 @@ impl Job for FingerprintJob<'_> {
         "fingerprint"
     }
     fn demands(&self) -> Vec<ViewDemand> {
-        let o = self.opts;
+        let o = &self.opts;
         // The cut forms stay single-app (S′); the tree forms take `--single-app`.
         let single_app = reads_single_app(
             &o.format,
@@ -577,7 +585,7 @@ impl Job for FingerprintJob<'_> {
     }
 
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
-        let opts = self.opts;
+        let opts = &self.opts;
         let roots_config_ignored = opts.no_roots_config && cx.inputs().roots_config_loaded();
         let form = FingerprintForm::of(opts);
         let (plan, carry): (_, Option<Box<dyn std::any::Any + Send>>) = match form {
@@ -626,10 +634,11 @@ impl Job for FingerprintJob<'_> {
     }
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
-        Ok(SideDoc::new(match FingerprintForm::of(self.opts) {
-            FingerprintForm::Cut => FingerprintDoc::Done(fingerprint_view(cx, self.opts)),
-            FingerprintForm::RoutineQuery => routine_query_view(cx, self.opts),
-            FingerprintForm::Inventory => FingerprintDoc::Done(inventory_view(cx, self.opts)),
+        let opts = &self.opts;
+        Ok(SideDoc::new(match FingerprintForm::of(opts) {
+            FingerprintForm::Cut => FingerprintDoc::Done(fingerprint_view(cx, opts)),
+            FingerprintForm::RoutineQuery => routine_query_view(cx, opts),
+            FingerprintForm::Inventory => FingerprintDoc::Done(inventory_view(cx, opts)),
         }))
     }
 
@@ -643,7 +652,7 @@ impl Job for FingerprintJob<'_> {
         let r = match doc
             .one::<FingerprintDoc>()
             .unwrap_or_else(|f| unreachable!("fingerprint fails no side: {f:?}"))
-            .into_result(self.opts)
+            .into_result(&self.opts)
         {
             Err(msg) => return JobOutput::lines(&[msg], 1),
             Ok(r) => r,

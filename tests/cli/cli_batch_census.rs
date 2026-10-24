@@ -208,3 +208,48 @@ fn batch_arc_census() {
         "raw {raw} in [{max}, {sum}]: {raws:?}"
     );
 }
+
+/// #277 final r1 FR-4 (D11): with the census on, a query on a cross-app view
+/// releases the base before the jobs after it print their output census
+/// (inventory and routine fingerprints, prove); each prints its line and
+/// equals its standalone run.
+#[test]
+fn output_census_after_a_released_base() {
+    let (_d, ws) = ws_dep();
+    let d_ = ["--deterministic"];
+    let with = |a: &[&str]| argv(&[a, &d_].concat());
+    let jobs = vec![
+        with(&["query", "touches", &ws, "--table", "18", "--format", "json"]),
+        with(&["fingerprint", &ws, "--inventory-only"]),
+        with(&["prove", &ws, "CallLib", "may-commit"]),
+        with(&[
+            "fingerprint",
+            &ws,
+            "--routine",
+            "CallLib",
+            "--format",
+            "json",
+        ]),
+    ];
+    let run = batch_in(&jobs, None, &[CENSUS]);
+    crate::cli_batch_plan::assert_each_standalone(&run, &jobs, None);
+    let outputs = |stderr: &[u8]| {
+        census(stderr)
+            .into_iter()
+            .filter(|l| l.starts_with("view.output "))
+            .count()
+    };
+    let alone: usize = jobs
+        .iter()
+        .map(|job| {
+            let args: Vec<&str> = job.iter().map(String::as_str).collect();
+            let (out, _) = spawn_trace_events(env!("CARGO_BIN_EXE_alsem"), &args, &[CENSUS]);
+            outputs(&out.stderr)
+        })
+        .sum();
+    assert!(
+        alone >= 2,
+        "precondition: the jobs print output census lines"
+    );
+    assert_eq!(outputs(&run.out.stderr), alone, "each job's, as standalone");
+}
