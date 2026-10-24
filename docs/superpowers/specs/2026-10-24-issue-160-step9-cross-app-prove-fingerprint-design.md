@@ -107,7 +107,7 @@ Source: `/work/bench/160-9/OPERATOR-DECISIONS-2026-10-24.md`; probe record
 | A9.3 | three stated output moves | (1) diagnostics source: **pinned by construction, no discriminating fixture**: each command reads its diagnostics off the one view that answers it (§4.2 item 3, §4.3 step 3). No diagnostic is known that only a cross-app build emits; P1 shows 0 lines on CDO in both universes. T14 pins the CHANNEL only. (2) dependency shards: **not deliverable**, shards are a B0 form (follow-up). (3) `unresolved_cone` caps: unchanged by this step; "unchanged" rests on P4's distribution (max 19,284 of 25,000; 0 truncated). T15 pins that a truncation reaches prove's answer end to end and that the depth cap of 64 is what truncates its chain |
 | A9.4 | fixtures (a), (a'), (b), (c), (d) | (a) T1; (a') T2; (b) T3 on the query path; (d) T5, T6. (c) dependency-mediated `capability-gained` is a `diff` fixture: **not deliverable**, follow-up |
 | A9.5 | one discrimination per filter | role filters: T5, T6. Universe switches: T1-B1, T3-B, T8, T21. Gap count: T1-B2, T2-B2. Boundary-group matching: T24. Rule B in the query: T25. Rule B in prove: T19 |
-| A9.6 | no-dependency parity (E9) | T7 over every r0 dir with an `app.json` and no dependency; T22 pins the stated error on the dirs with no `app.json` |
+| A9.6 | no-dependency parity (E9) | T7 over every r0 dir with an `app.json` and no dependency; T22 pins that the dirs with no `app.json` keep today's error, unchanged, in both universes |
 | A9.7 | CDO fingerprint time and size reported | §8.3 Part 3: `fq`, `fi` and single-app B0 time and size. Cross-app B0: the OD-1 lower bound (≥ 29.1 GB, killed, no output) is the report |
 | A9.8 | both peaks ≤ P_a + band | §8.1: B2 (prove), B1q (`--routine` query), B1i (inventory-only) as worded. B0 and `diff`: no-regression bounds B1s, B3s (they stay single-app) |
 | A9.9 | cell census | §8.3 Part 1: the new output-time census line (§4.5) and `witness.non_primary_members=0` per cross-app run |
@@ -129,7 +129,7 @@ Source: `/work/bench/160-9/OPERATOR-DECISIONS-2026-10-24.md`; probe record
 | cli-b fingerprint query goldens (human, and the `ERROR_SELECTOR` query) | only `mayCommit` `no` → `unknown` where the routine's inherited coverage is not complete (§4.3 item 6) | every moved line is that field on a routine whose `coverage.inheritedStatus` is not `complete`; anything else fails |
 | `tests/cli/cli_build_counters.rs` rows | prove and the `--routine` query lose the standalone composition; inventory-only composes no raw facts (§4.6) | each row read at the base |
 | the existing tests listed in §5 "Rewritten with the code they pin" | they now run on the cross-app path | each is named with the universe it pins |
-| prove, `fingerprint --routine`, `--inventory-only` on a workspace with no `app.json` | **user-visible change**: today they answer; by default they now exit 1 with `"{command}: the cross-app model could not be built (--single-app analyses the workspace alone)"`, as digest and analyze already do (`run.rs:211-213`) | T22; CHANGELOG `Changed` |
+| prove, `fingerprint --routine`, `--inventory-only` on a workspace with no `app.json` | **none**: with no `app.json` the input set has no model-instance id (`compute_model_instance_id` returns `None` at `let app_id = self.app_id()?;`, `inputs.rs:443-444`), so both today's pipelines (`prove.rs:868-871`, `fingerprint_cli.rs:368-372`) and `AnalysisTarget::build` (`run.rs:185-188`) fail first with `"{command}: could not compute modelInstanceId"`, exit 1, in either universe; the cross-app `NoPrimaryApp` arm is never reached | T22 pins the unchanged message |
 | CDO prove, cross-app | single-app `unknown` can become `yes` (a matching effect, a boundary group included) or `no` (the dependency code is fully analysed). A may-question `yes` cannot drop: cross-app only adds effects. A MUST `yes` (`commits-on-success-path`) can drop to `unknown` | an `unknown` → `yes` must cite an evidence effect (a boundary group counts); every `unknown` → `no` is triaged against the dependency source (the E6 check). A `yes` → `no` is a defect (F8) |
 | CDO `fingerprint --routine R` | inherited dependency facts appear on R; witnesses end at the boundary | reported; a primary fact lost is a defect |
 | CDO inventory-only | `coverage` statuses can change where a primary routine's cone enters dependency code; `apps[]` gains the dependency apps owning a kept identity | reported per key; a primary routine row lost is a defect |
@@ -157,9 +157,9 @@ Source: `/work/bench/160-9/OPERATOR-DECISIONS-2026-10-24.md`; probe record
   `prove_pipeline_with(` call sites). A site that means today's behaviour passes `true`.
 - Failure texts are `AnalysisTarget::build`'s: `"{command}: could not compute modelInstanceId"`,
   `"{command}: workspace did not resolve"`, and `cross_app_failure_message` (`run.rs:206`), whose head already
-  names `--single-app`. A workspace with no `app.json` has no primary app, so the cross-app build fails with
-  `CrossAppFailure::NoPrimaryApp` (`capability_cone.rs:3817-3822`) and exit 1; this is a stated move (§3), the
-  same one digest made in step 6. Exit codes are otherwise unchanged.
+  names `--single-app`. A workspace with no `app.json` has no model-instance id, so it fails at
+  `"{command}: could not compute modelInstanceId"` (`run.rs:185-188`) before the cross-app arm, exactly as
+  prove and fingerprint fail today (§3 move table: no change). Exit codes are unchanged.
 
 ### 4.2 D2: prove is digest with one root
 
@@ -229,18 +229,37 @@ query form keeps today's path (single-app, the cut) whatever `--single-app` says
    `fingerprint_query(&tree, &filters, roots_config_ignored, &OwnerIndex::build(model), roles)` and keeps its
    `FingerprintQueryResult` in a cell; the tree is dropped there. After `prepare`: the run's analyzer
    diagnostics (`analyzer_diags_for(&view, &key)`, as today, `fingerprint_cli.rs:391`),
-   `view.take_fingerprint_query()`, `release_all_but(&[])`. `fingerprint_query` re-resolves the selectors over
-   `tree.identities`, the same `derive_identity_table` output, so the diagnostics (unresolved, ambiguous, the
-   #239 owner hint) are unchanged.
-4. The `--strict` gate stays before any output, as today (`fingerprint_cli.rs:398-413`). The projection (from
-   `let snap = compose_snapshot(resolved);`, `fingerprint_cli.rs:499`, on, minus that line and the query call)
-   is unchanged.
+   `view.take_tree_read()`, `release_all_but(&[])`. `fingerprint_query` re-resolves the selectors over
+   `tree.identities`, the same `derive_identity_table` output, so the diagnostics (unresolved, ambiguous) are
+   unchanged.
+4. **The result is self-contained (r2 item 1).** Today the projection still reads the snapshot after the query:
+   `project_fingerprint_query_full(&result, &snap, …)` builds its operation index from `snap.operation_index`
+   for each witness's terminal evidence (`fingerprint_query.rs:925-946`, used at `:801-820`), and the human
+   selector-error path builds the #239 owner hint from `snap.identities` (`fingerprint_cli.rs:538`). With the
+   tree dropped in `prepare`, neither exists. So:
+   - `BlockWitness` gains `terminal: Option<TerminalEvidence>`, an owned value computed inside
+     `fingerprint_query` while the tree is alive: `Operation { operation_id, anchor }` from the operation index
+     (today's rule), or `Boundary { callsite_id, anchor }` (item 5). `project_fingerprint_query_full` drops its
+     `snap` parameter and writes `terminal` as it writes today's evidence object; on the cut every terminal is
+     `Operation`, built from the same operation index, so the cut path's bytes cannot move (T18's differentials
+     and T23 check it);
+   - the #239 hint on the new path builds its selector index from `derive_identity_table(view.model())`,
+     called after `prepare` and only on the error path; it is the same table the tree's `identities` holds
+     (step 2). The cut path keeps `snap.identities`.
+   The `--strict` gate stays before any output, as today (`fingerprint_cli.rs:398-413`). The rest of the
+   projection (from `let snap = compose_snapshot(resolved);`, `fingerprint_cli.rs:499`, on) is unchanged apart
+   from these two reads.
 5. **Rule B reaches the query (S9-2).** `build_fingerprint_indexes_pub` drops the boundary metadata, and the
    adapter `pub_idx_as_private` sets `boundary: None` with the comment "The fingerprint query reads the cut:
    rule B is off." (`digest.rs:5156-5158`). `FingerprintIndexesPub` (`digest.rs:5024`) gains
    `boundary: Option<&'a BoundaryRule>` and `boundary_displays`, filled from `snap.boundary` the way the private
-   index fills them; the adapter passes them through. On the cut `snap.boundary` is `None`, so the wide query
-   forms cannot move. T25 pins the JSON and human witnesses.
+   index fills them; the adapter passes them through. **The terminal evidence follows the witness (S9-2
+   re-raised):** when a witness path ends at a boundary (its last hop is the rule-B terminal at the boundary
+   call), `terminal` is `Boundary { callsite_id, anchor }`, the anchor read from `snap.callsite_index` for that
+   callsite; it is never the original fact's operation inside dependency code. The JSON writes it as
+   `{ "anchor": …, "callsiteId": … }` in place of `{ "anchor": …, "operationId": … }` (a cross-app-only shape;
+   on the cut `snap.boundary` is `None` and every terminal stays `Operation`, so the wide query forms cannot
+   move). T25 pins the JSON terminal evidence and the human witness.
 6. **`mayCommit` reads the coverage the query asked for (S9-3).** Today `presence` is `no` when no commit fact
    is rendered and `coverage.direct_status == "complete"` (`fingerprint_query.rs:449-457`), even when inherited
    facts are rendered. For `Root → source dependency A → opaque X`, Root's direct coverage is complete and its
@@ -267,8 +286,8 @@ query form keeps today's path (single-app, the cut) whatever `--single-app` says
 
 Today inventory-only goes down B0: `compose_full_snapshot(resolved, &full_opts)` (`fingerprint_cli.rs:438`),
 then `build_inventory_envelope(&tree, …)` (`:467`). So it composes the whole cut snapshot and every primary
-routine's raw facts, then reads four keys (`apps`, `identities`, `coverage`, `rootClassifications`,
-`snapshot_full.rs:1336` `pub fn build_inventory_envelope(`).
+routine's raw facts, then reads five keys (`analysisUniverse`, `apps`, `identities`, `coverage`,
+`rootClassifications`, `snapshot_full.rs:1336` `pub fn build_inventory_envelope(`, `:1474-1478`).
 
 1. **Split `compose_full_snapshot`** (`snapshot_full.rs:137`) into the cut half and an assembly half:
    - `compose_full_snapshot(resolved, opts)` keeps its signature and its 8 callers (B0, `diff`, tests): it
@@ -276,8 +295,10 @@ routine's raw facts, then reads four keys (`apps`, `identities`, `coverage`, `ro
      `derive_permissions(resolved, &base)` (`:174`), then calls the assembly half.
    - `assemble_full_snapshot(resolved, core, permission_facts, opts, keys)` is everything after: contracts,
      schema, `reachable_gaps`, `filter_by_class`, `project_apps`, and the CBOR map in its literal key order.
-     `keys` is `All` for B0 and `Inventory` for inventory-only, which converts only `apps`, `identities`,
-     `coverage` and `rootClassifications` to `CborValue` (the other keys would be built and thrown away).
+     `keys` is `All` for B0 and `Inventory` for inventory-only, which converts only the five keys
+     `build_inventory_envelope` reads, `analysisUniverse`, `apps`, `identities`, `coverage` and
+     `rootClassifications` (`snapshot_full.rs:1474-1478`; a missing key becomes `Null`), to `CborValue`; the
+     other keys would be built and thrown away.
      `reachable_gaps` (`:507` `fn reachable_gaps(`) and `filter_by_class` read only `routine_to_stable` from the
      cut base; both take `routine_to_stable_of(ws)` (`capability_cone.rs:4555`) instead, the one builder the cut
      base's own field is made with (`:4647` `let routine_to_stable = routine_to_stable_of(ws);`). So B0 and
@@ -286,7 +307,7 @@ routine's raw facts, then reads four keys (`apps`, `identities`, `coverage`, `ro
    plan `fingerprint_inventory_plan(detectors, opts)` = `fingerprint_plan`'s run plus `WitnessRequest::Roots(∅)`
    and the tree read `TreeRead::Inventory`. Inside `prepare`, right after `compose_tree`, the read calls
    `assemble_full_snapshot(model, tree, CborValue::Array(vec![]), opts, Inventory)` with
-   `universe: SnapshotUniverse::of(target)` and keeps the four-key map; the tree is dropped there. After
+   `universe: SnapshotUniverse::of(target)` and keeps the five-key map; the tree is dropped there. After
    `prepare`, `build_inventory_envelope` runs unchanged over that map. `Roots(∅)` composes no raw facts (digest
    `--tests`' shape, `session.rs:166-170` doc), so `build.witness_pass` stays 0 (`capability_cone.rs:3221-3222`:
    the counter moves only when `raw` is not empty).
@@ -325,11 +346,15 @@ during a run) without an amendment.
   `session.rs:468-473`; step 6's F1-C2: a second prepare cannot get them back), with the filter
   `.filter(|_| plan.tree != TreeRead::None)`.
 - The two new results live in one new cell, `Cell::TreeRead`, holding an `enum TreeReadOut {
-  FingerprintQuery(FingerprintQueryResult), Inventory(IndexMap<String, CborValue>) }`. `View::take_tree_read()`
+  FingerprintQuery(FingerprintQueryResult), Inventory(IndexMap<String, CborValue>) }`; both are owned and need
+  nothing from the tree afterwards (§4.3 item 4, §4.4 item 2). `View::take_tree_read()`
   moves it out and marks the cell released; it panics with `"no tree read: the plan asked for none"`
   otherwise. `Cell::ALL` is unchanged: `release_all_but` drops a `TreeRead` cell only when it is filled, so
   no command that never reads a tree gains a `view.release` trace line (O9-5; the sequences pinned by
   `views_release_their_cells_before_the_next_build`, `cli_build_counters.rs:984-1070`, stay).
+- **The release mask widens (r2 item 3).** `Cell::TreeRead` is a ninth cell, but the mask is a `u8`
+  (`released: u8`, `session.rs:53`; `fn bit(self) -> u8`, `:144-145`; `fn note_release(released: &mut u8, …`,
+  `:332`). The three become `u16`. T20 (f) asserts that every `Cell` variant's bit is distinct and non-zero.
 - The assertion keeps its rule: a tree (any read) is composed over a `Roots` request.
 - **Output-time census (S9-10, O9-15).** Today `[retained-census] view.live cells=…` prints once, before the
   run (`session.rs:613-614`), so it cannot show what is alive at serialization. New: `View::census_output()`
@@ -364,7 +389,10 @@ set form.** Rules both sides keep, whichever merges second:
    `--tests` and step 9's inventory (`Roots(∅)` + a tree read) compose only because `Roots(∅) != None`. Under
    the set form an empty request means `None`, so `need_caps` must also be true when any job demands a tree.
 3. Step 9's `TreeRead` becomes a field of `TreeDemand` (`Effects`, `FingerprintQuery`, `Inventory`); each
-   result is per job.
+   result is per job. Each read's output is OWNED and needs nothing from the tree afterwards (§4.3 item 4: the
+   query result carries each witness's terminal evidence; the inventory map carries its five keys), so a batch
+   may drop each job's tree right after its read, before `det`.
+3a. The release mask is `u16` after this step (§4.5); a step 12 cell added later takes the next free bit.
 4. **A job's tree read is computed over that job's own subjects (S9-12).** In a batch the view's composition
    may hold other jobs' raw facts, and those facts change which dependency identities and apps
    `filter_by_class` keeps (`snapshot_full/key_classes.rs:806-869`). Step 12's D5.2 already gives each tree job
@@ -416,10 +444,22 @@ opaque boundary is a source-less app"). Today only the unshipped cross-app B0 pa
 step 9's inventory path does. So a cross-app inventory of a workspace whose source dependency has a body-less
 row (T2's fixture shape) panics in a debug build, and the gap's label is wrong. Fix the derivation, the side
 the assertion's contract names: an app joins `opaque_apps` only when the cross-app base says it has no source
-(`DependencyApp::has_source == false`; `compose_tree` receives that set beside `app_names`, from the same
-`cross_base`); a body-less row of an app with source gets the per-routine `body-unavailable` gap the third
-loop already emits. Both gap kinds block prove (`count_gaps_in_cone` matches a routine id or an app prefix), so
-no answer can move to PROVEN. Single-app trees have no dependency rows: nothing moves. T27 pins it.
+(`DependencyApp::has_source == false`); a body-less row of an app with source gets the per-routine
+`body-unavailable` gap the third loop already emits. Both gap kinds block prove (`count_gaps_in_cone` matches a
+routine id or an app prefix), so no answer can move to PROVEN. T27 pins it.
+
+**Where the set comes from (r2 item 6).** `derive_analysis_gaps` (`snapshot.rs:2661`) is shared by the cut
+(`compose_snapshot_from_base`, `:1310`) and the tree (`compose_tree`, `:1419`). It takes the set through
+`TreeInputs` as `source_less_apps: Option<&HashSet<String>>`:
+- `compose_tree` passes `Some`, built from the view's cross-app base (`dependency_apps`, beside `app_names`);
+  single-app it passes `Some(∅)`, and a single-app model has no dependency rows, so nothing moves;
+- `compose_full_snapshot` with `SnapshotUniverse::CrossApp(u)` passes `Some`, from `u.base.dependency_apps`;
+- every other cut caller (`compose_snapshot(resolved)`: the ordering cell, r4f, B0 and `diff` single-app,
+  tests) passes `None`, which keeps today's rule (every body-less dependency row's app), so their bytes cannot
+  move.
+`tests/cli/cli_snapshot_schema4.rs`'s cross-app snapshot tests stay green unchanged: their symbol-only apps
+(the R5B pair, `ZDeep`) have no source, so they keep their `symbol-only-boundary` gaps (`:221-262`, `:459-490`),
+and `parse_error_body_is_not_symbol_only` (`:512`) already asserts the source app gets no app-level gap.
 
 ## 5. Tests (every new test: break, failing assertion, revert; the discrimination-proof skill)
 
@@ -437,7 +477,7 @@ named is recorded as such.
 | T6 (d) | `fingerprint_total_counts_primary_roots` (CLI, T5's fixture) | the cross-app model classifies the dependency `OnRun` (P5; asserted through the view's model) | `totalClassifications` equals the primary root classifications, counted before the selector | B: count every classification → the total is one higher |
 | T7 (E9) | `no_dependency_parity_{prove,fingerprint_routine,inventory_only}` over every r0 dir with an `app.json` and no dependency (192 of 216; recount at the task) | the dir has an `app.json`, no `.alpackages`, no declared dependency | cross-app output == `--single-app` output, byte for byte, except inventory's `analysisUniverse` | B1: append one cross-app-only diagnostic line → fails. B2: a class filter that drops one primary row → fails |
 | T8 | `single_app_flag_reaches_{prove,fingerprint_routine,inventory_only}` | cross-app output differs from `--single-app` on the dependency fixture | `--single-app` output == the base's default output (a golden minted from the base binary) | B: ignore the flag |
-| T11 | `inventory_only_composes_no_raw` | — | `build.witness_pass` 0, `build.snapshot` 1; the output's four keys equal the same keys of `assemble_full_snapshot` over a `Roots(∅)` tree | B: give the plan `Roots(all primary)` → the counter is 1 |
+| T11 | `inventory_only_composes_no_raw` | — | `build.witness_pass` 0, `build.snapshot` 1; the output's five keys equal the same keys of `assemble_full_snapshot` over a `Roots(∅)` tree | B: give the plan `Roots(all primary)` → the counter is 1 |
 | T12 | `abi_only_target_blocks_prove` | the row's status is `external`; Root's coverage reasons include `external-target` | `unknown`, blockers include `unresolved-callsite` and `coverage-incomplete` | B: skip `external` rows in the harvest (`unresolved_cone.rs:152`) → the `unresolved-callsite` assertion fails (the answer stays `unknown` through `coverage-incomplete`; recorded) |
 | T13 | `fingerprint_no_roots_config_cross_app` on `ws-d51-jobqueue` | its `roots.config.json` gives a classification a `configEntryId` | cross-app with `--no-roots-config`: the `--routine` query reports `rootsConfigIgnored: true` and the unconfigured kinds; inventory-only has no classification with a `configEntryId` (the inventory carries no `inputsMetadata`) | B: `build_with` drops the parameter (literal `false`) |
 | T14 | `diagnostics_channel_prove_and_fingerprint` (`ws-codeunit-rec` with the 2.0.0.0 dependency mismatch, the `gate/diff/cli.rs:374` test's fixture) | the run reports the version warning | prove's envelope `diagnostics` and the `fingerprint --routine … --format json` envelope's diagnostics carry it (a warning does not fail `--strict`, and the json query embeds diagnostics rather than printing them, `fingerprint_cli.rs:593-610`) | B: drop the run's diagnostics from the new path's envelope → fails. Not a universe proof (A9.3 (1)) |
@@ -446,12 +486,12 @@ named is recorded as such.
 | T17 (6A-9) | `prove_scoped_equals_unscoped`, `fingerprint_query_scoped_equals_unscoped` (lib; template `digest_rule_b_tests.rs:643` `fn t3_digest_scoped_equals_unscoped()`) | — | on the r0 dirs, the gap corpus and the dependency fixture, both universes: prove's entry with `Roots({root})` == with `Roots(all primary)`; the query's blocks with `Roots(pool)` == with `Roots(all primary)` | B: drop one subject from the pool → that block's inherited facts vanish |
 | T18 | `full_snapshot_split_is_byte_identical` | — | `compose_full_snapshot` bytes (json, cbor, cbor.gz) at the head == the base's cli-b B0 and snapshot goldens (the existing differentials) | B: pass `assemble_full_snapshot` an empty permission array from B0 → `permissionFacts` differ |
 | T19 | `prove_commits_on_success_path_through_boundary_is_unknown` | `Root` calls `Dep.X` with no guard; `Dep.X` commits with no guard; no gap in the cone; `coverageComplete: true` (all asserted) | `prove Root commits-on-success-path` → `unknown` cross-app | B: give boundary groups their computed path conditionality instead of `UNKNOWN` (`digest.rs:3928-3930`) → `yes` |
-| T20 | `tree_read_lifecycle` (lib, `session.rs`) | — | (a) a `FingerprintQuery` read leaves a result that `take_tree_read` returns once; (b) a filled, untaken `TreeRead` cell is dropped by `release_all_but(&[])` (field checked directly); (c) after `prepare` with any tree read, the `tree` field is `None` before `det` runs (E18); (d) `take_tree_read` after an `Effects` plan panics with its message; (e) `Effects` behaviour unchanged | B: skip the tree drop after a `FingerprintQuery` read → (c) fails |
+| T20 | `tree_read_lifecycle` (lib, `session.rs`) | — | (a) a `FingerprintQuery` read leaves a result that `take_tree_read` returns once; (b) a filled, untaken `TreeRead` cell is dropped by `release_all_but(&[])` (field checked directly); (c) after `prepare` with any tree read, the `tree` field is `None` before `det` runs (E18); (d) `take_tree_read` after an `Effects` plan panics with its message; (e) `Effects` behaviour unchanged; (f) every `Cell` variant's `bit()` is non-zero and distinct (the `u16` mask) | B1: skip the tree drop after a `FingerprintQuery` read → (c) fails. B2: give `Cell::TreeRead` the bit of `Cell::Det` → (f) fails |
 | T21 | `fingerprint_wide_query_stays_single_app` on `ws_dep()` | cross-app `--routine CallLib` differs from `--single-app` | human with no flag, and `--roots <kind>` with no `--routine`, are byte-equal with and without `--single-app`, and the trace's `build.bcg` is 2 (`FINGERPRINT_ROW`, the cut) | B: route every query form to the new path → bcg 1 and the outputs differ |
-| T22 | `no_app_json_errors_cross_app` (the 9 r0 dirs with no `app.json`) | the dir has no `app.json` | prove, `fingerprint --routine` and `--inventory-only` exit 1 with the `cross_app_failure_message` head; with `--single-app` they exit as today | B: fall back to single-app silently → exit 0 |
+| T22 | `no_app_json_keeps_its_error` (the 9 r0 dirs with no `app.json`) | the dir has no `app.json`; the base binary prints `"{command}: could not compute modelInstanceId"`, exit 1 | prove, `fingerprint --routine` and `--inventory-only` print that same line and exit 1, with and without `--single-app` | B: make the new path skip the model-id check (build the target from a dummy id) → the line differs |
 | T23 | `single_app_sweep` (ledger record, not a committed test) | the base binary is built from the parent | for every r0 dir with an `app.json`: `fingerprint --routine <each root> --format json` and human, `--inventory-only`, and `prove <each root> <each question>` on the gap corpus and every cli-b case: base default == head `--single-app`, byte for byte, apart from §4.3 item 6's field | any other difference is a defect, fixed before the final panel |
 | T24 | `prove_matches_a_group_resource_beyond_ten` (CLI) | `Root` reaches, only through `Dep.W`, writes to 11 dependency tables; the target sorts 11th by resource id; the group's `detail.resources` lists 10 | `prove Root writes-table:<11th>` → `yes`, evidence = the group | B: match a group on `detail` only → `unknown` or `no` |
-| T25 | `fingerprint_witness_stops_at_boundary` (CLI, the dependency fixture) | the inherited Table 18 fact's carrier is the dependency routine `Inner` | the JSON and human witnesses of that fact end at the boundary `Lib.Outer` (terminal evidence = the boundary call), never at `Inner` | B: keep the adapter's `boundary: None` → the witness reaches `Inner` |
+| T25 | `fingerprint_witness_stops_at_boundary` (CLI, the dependency fixture) | the inherited Table 18 fact's carrier is the dependency routine `Inner` | the JSON and human witnesses of that fact end at the boundary `Lib.Outer`, never at `Inner`; the JSON terminal evidence is `{anchor, callsiteId}` of the `CallChain → Lib.Outer` call (its anchor equals that callsite's `callsiteIndex` row), with no `operationId` from inside `Inner` | B1: keep the adapter's `boundary: None` → the witness reaches `Inner`. B2: build `terminal` from the fact's operation always (today's `fingerprint_query.rs:801-820` rule) → the terminal-evidence assertion fails |
 | T26 | `fingerprint_may_commit_uses_inherited_coverage` (CLI) | `Root → source dependency A → opaque X`; Root's direct coverage `complete`, inherited not complete; no commit fact rendered | `mayCommit: unknown` with inherited facts; `no` with `--no-include-inherited` | B: read `direct_status` always → `no` |
 | T27 | `source_app_bodyless_row_gets_body_unavailable_gap` (lib, D9) | a source dependency app with one body-less demanded row | the tree's gaps hold `body-unavailable` for that routine and no `symbol-only-boundary` for the app; cross-app inventory of that workspace does not panic in a debug build | B: put every body-less row's app back into `opaque_apps` → the gap assertion fails (and the debug assertion fires) |
 
@@ -497,11 +537,11 @@ cross-app); `cli_b_fingerprint_differential.rs:425` (the `ERROR_SELECTOR` query,
 | # | If | Then |
 |---|---|---|
 | F1 | a bounded row (B2, B1q, B1i) misses and the output-time census (§4.5) shows `Det`, `Caps`, `Rel`, `L4` or `Raw` filled, `rel_strong` > 1 beyond the target's own, or `tree=1` | a defect: release before output; re-run Part 2 once |
-| F2 | B1q or B1i still misses with a clean census | the projection of the read is trimmed: `assemble_full_snapshot`'s `Inventory` keys and `fingerprint_query`'s indexes are built over the subjects' cones only (the tree's other rows are dropped before the read); T7, T8, T11, T17, T23 re-run byte-identical |
-| F3 | still missed after F2 | that form stays single-app by default in this step, under the alternate contract below |
+| F2 | B1q still misses with a clean census | the query read is trimmed: `fingerprint_query`'s fact, edge and witness indexes are built over the pool's cones only, while the GLOBAL inputs stay whole: `tree.identities` (selector re-resolution) and `tree.root_classifications` (the primary `totalClassifications`). T5, T6, T7, T8, T17, T23 re-run byte-identical. **B1i has no F2**: its five keys are global by definition (every primary routine's inventory row, coverage and classification, and the identities `filter_by_class` keeps from every serialized reference), so nothing can be trimmed without changing them; a B1i miss with a clean census goes straight to F3 |
+| F3 | B1q still missed after F2, or B1i missed after F1 | that form stays single-app by default in this step, under the alternate contract below |
 | F6 | B2 (prove) misses after F1 | OD-2: read B2 against digest's B2′ (`≤ Pm(d) + 3,145,728 KiB`). `Pm(d)` is measured then: three interleaved `release-fast` runs of the PARENT's cross-app digest `d`, alongside the head's `pv`, in the same bench slot; never a historical or `cdo`-profile number. Stated in the numbers file |
 | F7 | B2′ also misses | as F3 for prove |
-| F8 | T1, T2, T12, T19 or T24 answers PROVEN; or in Part 1 a CDO prove answer moves `yes` → `no`, or `unknown` → `yes` with no cited evidence effect, or `unknown` → `no` and the dependency source triage shows an effect the answer misses | stop: E6 is violated by step 6's ledger, rule B, #220's gaps or this step's matching; file against the owner; prove stays on its base path for this step under the alternate contract below |
+| F8 | T1, T2, T12 or T19 answers PROVEN (each must stay `unknown`); T24 answers anything but its expected `yes` with the group as evidence; or in Part 1 a CDO prove answer moves `yes` → `no`, or `unknown` → `yes` with no cited evidence effect, or `unknown` → `no` and the dependency source triage shows an effect the answer misses | stop: E6 is violated by step 6's ledger, rule B, #220's gaps or this step's matching; file against the owner; prove stays on its base path for this step under the alternate contract below |
 | F9 | T7, T8 or T23 differs on inventory-only (the tree does not reproduce the cut's inventory on a no-dependency dir) | a defect: find the key that differs and fix the tree side if the cut is right. If not closed in this attempt, inventory-only stays on today's cut path in BOTH universes (so T7 and T8 hold) under the alternate contract below |
 | F10 | T6's precondition is not produced (the cross-app model classifies no dependency `OnRun`) | P5 says it does; if the fixture does not, the filter has no production effect and is deleted with T6, and §4.3 says so |
 | F12 | D (drift control, §8.1) fails twice | the B rows FAIL; nothing merges |
@@ -540,7 +580,7 @@ Reference: `P_a` ≈ 3.14-3.16 GB (step 6 parent `o` 3,158,924 KiB; P4's cross-a
 | D (drift control) | head `a` (cross-app `analyze`, default detectors, primary scope) vs parent `a` | `|H_a − P_a| ≤ 0.03 × P_a`; fails twice → F12 |
 | B2 | head `pv` kernel peak, median of 3 | `H_pv ≤ 1.03 × P_a`; fallback F6 |
 | B1q | head `fq` | `H_fq ≤ 1.03 × P_a`; fallback F2, F3 |
-| B1i | head `fi` | `H_fi ≤ 1.03 × P_a`; fallback F2, F3 |
+| B1i | head `fi` | `H_fi ≤ 1.03 × P_a`; fallback F3 (no F2: §7) |
 | B1s | head `fp` (B0 json, single-app) vs parent `fp` | `H_fp ≤ 1.03 × P_fp` (no regression) |
 | B3s | head `df` (`diff $WS $WS`, single-app) vs parent `df` | `H_df ≤ 1.03 × P_df` (no regression) |
 | ceiling | every head run | `≤ 12,582,912 KiB` (12 GiB). A probe or bench that could exceed it is not run in the shared cgroup |
