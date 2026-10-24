@@ -330,6 +330,19 @@ pub struct RunOutput {
     pub d1_cohort_index: Option<D1CohortIndex>,
 }
 
+impl RunOutput {
+    /// The run's buffers, shallow (#277 D11's `runs` census): findings,
+    /// diagnostics, stats and summarize diagnostics by `len × size_of`.
+    pub fn census_tally(&self) -> crate::engine::census::Tally {
+        let mut t = crate::engine::census::Tally::default();
+        t.buf::<Finding>(self.findings.len())
+            .buf::<Diagnostic>(self.diagnostics.len())
+            .buf::<DetectorStats>(self.detector_stats.len())
+            .buf::<Diagnostic>(self.summarize_diagnostics.len());
+        t
+    }
+}
+
 /// Convert an L4 `SummarizeDiagnostic` into the shared `l5::registry::Diagnostic`
 /// shape — the same seam-conversion `gate/run.rs` already does for
 /// `root_classification::InfraDiagnostic`.

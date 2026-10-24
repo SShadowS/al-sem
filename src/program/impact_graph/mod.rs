@@ -328,7 +328,9 @@ fn export_as(program: &ResolvedProgram, workspace: &Path) -> Result<ImpactGraph,
             "dependencyBodies": histogram_json(&dependency_histogram),
         },
     });
-    if !crate::program::resolve::full::coverage_holds(&pm.coverage_contract) {
+    if !crate::program::resolve::full::coverage_holds(&pm.coverage_contract)
+        || forced_coverage_warning()
+    {
         crate::engine::batch::output::job_line(format!(
             "al-sem graph: warning: the coverage contract does not hold ({} obligations without an edge); \
              their routines are linked to the universal hub",
@@ -340,6 +342,19 @@ fn export_as(program: &ResolvedProgram, workspace: &Path) -> Result<ImpactGraph,
         nodes: projection.nodes,
         edges: projection.edges,
     })
+}
+
+/// #277 R8-5's seam, debug builds only: `ALSEM_TEST_GRAPH_COVERAGE_WARNING`
+/// prints the coverage warning on any fixture (no fixture breaks the
+/// contract), so a test can see graph's job line replayed per job (D7).
+#[cfg(debug_assertions)]
+fn forced_coverage_warning() -> bool {
+    std::env::var_os("ALSEM_TEST_GRAPH_COVERAGE_WARNING").is_some()
+}
+
+#[cfg(not(debug_assertions))]
+fn forced_coverage_warning() -> bool {
+    false
 }
 
 fn histogram_json(h: &Histogram) -> Value {

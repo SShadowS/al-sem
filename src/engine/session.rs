@@ -575,6 +575,22 @@ impl Plan {
     pub fn builds_l4(&self) -> bool {
         self.need_l4 || self.union() & substrate::CORE_SUMMARIES != 0
     }
+
+    /// The shared cells `prepare` fills for this plan on a fresh view, as
+    /// `prepare_inner` derives them: a job reading the view through this plan
+    /// is one of each cell's `job_refs` (#277 D11).
+    pub fn fills(&self) -> Vec<Cell> {
+        let (det, l4, raw) = (!self.runs.is_empty(), self.builds_l4(), self.keeps_raw());
+        [
+            (Cell::Rel, det || l4 || raw),
+            (Cell::Raw, raw),
+            (Cell::L4, l4),
+            (Cell::Det, det),
+        ]
+        .into_iter()
+        .filter_map(|(cell, filled)| filled.then_some(cell))
+        .collect()
+    }
 }
 
 /// A run's key, its scope its own (#277 D5.5).

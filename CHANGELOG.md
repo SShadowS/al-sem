@@ -36,7 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exits 1. Several batches run one after another for now. Traces gain `batch.driver`,
   `view.<i>`, `view.drop`, `view.teardown`, `view.run`, `job.<i>.<cmd>` and
   `inputs.request_read`; `ALSEM_RETAINED_CENSUS=1` prints `[retained-census] batch.held
-  outputs= sides= inputs=` at each view's start. Limit: jobs that spell one workspace
+  outputs= sides= inputs=` at each view's start, `batch.shared cell=<model|rel|raw|l4|det>
+  job_refs=<n>` after its one prepare (each cell one allocation, its bytes the cell's own
+  buckets, printed once) and `batch.shared cell=runs bytes= allocs= job_refs=` after its
+  computes (each distinct run allocation counted once). Limit: jobs that spell one workspace
   path differently share its read, so a program build error names the first spelling
   (graph's missing-`id` error names the job's own).
 

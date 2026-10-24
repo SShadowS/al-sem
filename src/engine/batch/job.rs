@@ -368,7 +368,14 @@ pub struct ViewCx<'a> {
     pub(crate) later_cells: Vec<Cell>,
     pub(crate) later_runs: Vec<RunKey>,
     pub(crate) carry: Option<Box<dyn Any + Send>>,
+    /// Every run handed to a job on the view, under `ALSEM_RETAINED_CENSUS=1`
+    /// only (D11): `Weak`, so the allocation's address stays unique while the
+    /// view's census counts each distinct one once.
+    pub(crate) handed: &'a mut Vec<HandedRun>,
 }
+
+/// One run handed to a job (D11): the job, the allocation, its bytes.
+pub(crate) type HandedRun = (JobId, Weak<RunOutput>, usize);
 
 impl ViewCx<'_> {
     pub fn view(&self) -> &View {
@@ -416,13 +423,18 @@ impl ViewCx<'_> {
     }
 
     /// The run's output; the view's own copy is dropped unless a later demand
-    /// reads it.
+    /// reads it. Always the view's one allocation, never a copy (D11).
     pub fn take_run(&mut self, key: &RunKey) -> Arc<RunOutput> {
-        if self.later_runs.contains(key) {
+        let run = if self.later_runs.contains(key) {
             self.view.run(key)
         } else {
             self.view.take_run(key)
+        };
+        if crate::engine::census::enabled() {
+            let bytes = run.census_tally().bytes;
+            self.handed.push((self.job, Arc::downgrade(&run), bytes));
         }
+        run
     }
 
     /// [`View::release`], unless a later demand reads `cell`.
