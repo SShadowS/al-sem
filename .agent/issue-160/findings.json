@@ -1,44 +1,1562 @@
 [
-  {"id":"R1-01","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":183,"severity":"important","text":"prove is not output-neutral: it reads the context's tx map (prove.rs:886, :960) and prints transactionContext via digest_cli::effect_to_value (prove.rs:665, digest_cli.rs:1104); §3.2/§3.3/A5/5-A1 said the opposite.","disposition":"fixed","evidence":"Verified on f96619ec (prove.rs:878-890, :955-963, :660-668; digest_cli.rs:1104). prove added to §3.2 as a mover; §3.3 limits prove to snapshot-derived keys; T1b pins prove's and digest's transactionContext; §8 step 4 measures prove; 5-A1 adds prove.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:199-236,356","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-02","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":321,"severity":"important","text":"A5/§3.3 'byte-identical in both universes' cannot be measured: fingerprint, prove and diff have no cross-app mode (fingerprint_cli.rs builds AnalysisTarget::SingleApp); P12 measured single-app fingerprint only.","disposition":"fixed","evidence":"Verified fingerprint_cli.rs:372-389 (SingleApp) and the --help of prove/digest. A5 now: single-app goldens + CDO fingerprint bytes; cross-app via CDO digest `coverage` key on the §8 step 4 roots; §3.3 states which commands are single-app only; §0 item 9 says fingerprint is single-app.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:228-236,385","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-03","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":295,"severity":"important","text":"T1 infeasible: a caller-free Root's span has one routine and d9 needs >= 2 (d9.rs:23,:46) and < 2 pending physical tables for the coverage arm; reasons asserted as superset; digest assert needs the digest pipeline.","disposition":"fixed","evidence":"Verified d9.rs:23-24, :40-59 and the backward span (transaction_spans.rs backward_cone). Fixture A adds Entry -> Root; T1 hand-states the edge, Helper reasons == [ambiguous-overload], span members {Entry, Root}, 1 pending table; digest/prove moved to a CLI test T1b. Round 2: verified d9.rs:75-80 (a non-zero pending count wins over the 'effect scope unknown' wording); T1 now expects 'writes 1 known table(s) before it', admitted by the coverage gate (d9.rs:54-56).","re_raise":"round 2 (sol): T1's expected d9 text was wrong for a span with one pending table.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:377","anchor_hash":"ad291462","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-04","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":296,"severity":"important","text":"T2 expectations wrong: a fact-scope `when` is Unknown in applicability mode so Root (partial) is gated too; skipped counter increments in both modes; must state literal counters and use the production RAW pipeline.","disposition":"fixed","evidence":"Verified predicate_evaluator.rs:219-221, policy_engine.rs:239, :250-264. Both rules now carry `routine.name: Helper`; literal counters (skipped 1, matched 0) for A and B; run through `alsem policy check` (pipeline.rs:266); §3.4 states the counter increments in both modes.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:237-256,357","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-05","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":303,"severity":"important","text":"T9 pins the presence helpers, not d1/d2's uses; deleting either production arm stays green.","disposition":"fixed","evidence":"Read d2.rs:125-143, :385-470 and d1_graph.rs:125-140: the arms only decide whether a walk enters a callee whose cone has no fact of the kind; walk terminals are cone facts, so output cannot change. CDO prototype: d1/d2 findings and detectorStats byte-identical (measure/{before,after}/analyze-all.json summary diff). T9 removed; §3.2 states the d1/d2 limit with this evidence (the LIMIT option opus offered); F5 covers a head move. Round 2: verified d2.rs:56-59 (max_nodes 500, max_depth 20), path_walker.rs:265-273 (one shared nodes_visited budget, edges in emission order, not terminal-first) and d2.rs:424-426 (no Complete path -> subscriber skipped): a newly entered terminal-free branch can spend the budget and REMOVE a d2 finding. d1's production search has no budget (d1.rs:18, :111-117), so d1 stays a stated limit. §3.2 now says the fold can only remove d2 findings, never add; T9 restored as a d2 use test with a generated 500-callee fixture (head: no finding, NodeBudgetCut; control with 1 callee: finding; break: finding returns); F6 pre-states the fallback (Yes-before-Unknown edge order in d2's expand) if CDO loses a d2 finding. Round 3: §5 adds 'T9 if F6 fires': T9-main (finding emitted; mutation: remove F6's Yes-first ordering -> finding lost) pins F6's use, and T9-nested (depth-cut Yes branch then 500 Unknown callees inside A, the residual F6 cannot fix: head no finding; mutation: delete the fold -> finding emitted) keeps pinning the fold's use in d2 under F6.","re_raise":"round 2 (sol, important): the output-invariance limit ignored d2's shared walk budget. Round 3 (sol): after F6's assertion flip, T9 no longer pinned d2's use; the F6 variant needed its own consuming-use assertion and mutation.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:229-245,391-416","anchor_hash":"62d2593d","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-06","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":410,"severity":"important","text":"F1(b) moves #148's object-run-unresolved UNKNOWN findings to opt-in, contradicting A4 and tests/cli/cli_d35_unknown_commit.rs V1 (default selection and --detector d35); migrations not pre-stated.","disposition":"fixed","evidence":"Verified cli_d35_unknown_commit.rs:10-16, :243-249. F1(b) now moves only UNKNOWN findings whose every reason is a fold kind; mixed and object-run-unresolved stay default; registration, default exclusion, explicit inclusion and mixed-reason tests pre-stated; F2 mirrors it for d9. Round 2: verified d35.rs:145-170 and coverage_reasons :233-268 (reasons and 'partly analysed' targets are in the message text). F1 now keeps a mixed-reason UNKNOWN finding's id, rootCauseKey and fingerprint and explicitly permits its text to gain the fold reasons and targets; the mixed-reason test asserts its text names both object-run-unresolved and ambiguous-overload; the CDO comp allows text changes only in mixed-reason findings. Empty reason sets stay in d35.","re_raise":"round 2 (sol): 'mixed-reason findings stay byte-identical' contradicts d35's message text, which lists the reasons.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:549-564","anchor_hash":"ad291462","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-07","source":"opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":331,"severity":"important","text":"Triage criterion undecidable for interface-open-world (emitted for every resolved interface dispatch, combined_graph.rs:369-389) and for ambiguous-overload in compiled code.","disposition":"fixed","evidence":"Verified combined_graph.rs:365-392 emits it per resolved interface site regardless of access. §7 pre-states per-kind epistemic rules: Internal interface -> false (+issue), Public -> true; ambiguous-overload -> false (+resolver issue); external-target -> true; member-not-found by existence. §2 notes emission is out of scope (A6).","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:397-420","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-08","source":"sol","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":331,"severity":"important","text":"Triage criteria inconsistent: body-less callee is 'true' yet single-app external-target called 'likely false'; d9's 'Commit reachable' alternative is tautological; separate epistemic correctness from hazard usefulness per reader and universe.","disposition":"fixed","evidence":"§7 now defines two verdicts: epistemic (gating, per kind, per reader incl. fanout and tx context) and hazard (recorded); d9 uses only the epistemic verdict (spans are Commit-seeded, d9.rs:36-39); single-app external-target is epistemically true, hazard likely false, not gated (Q8).","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:392-440","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-09","source":"sol","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":360,"severity":"important","text":"d9 additions do not enumerate changed transaction contexts (d9 skips singleton spans and already emits table-rich spans); digest and prove must be measured on every affected Commit.","disposition":"fixed","evidence":"§8 step 4: an uncommitted CDO-gated probe lists every span's coverage_complete parent vs head, both universes; digest (both universes) and prove (single-app) on each flipped commit routine; diff must be only transactionContext; triage (step 8) includes the changed spans.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:455-470","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-10","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":427,"severity":"important","text":"F4 drops the dependency-fold contract for detector precision and removes cross-app parity tests; 'keep uncertainty_all() unused' is dead API; owner-acceptance overclaim.","disposition":"fixed","evidence":"F4 removed as a scope change: the step always folds both halves; detector precision is handled by F1/F2; the ledger records dependency-half attribution when F1/F2 fire. uncertainty_all() always used; no owner-acceptance claim remains.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:524-528","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-11","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":300,"severity":"minor","text":"Fanout's coverage switch is --coverage-policy strict (gate/events.rs:400-413, :456-518), not --strict; T6 must pin warn/strict/ignore and the exit code.","disposition":"fixed","evidence":"Verified events.rs:403-410, :460-470. §3.2 fanout row and T6 now pin all three modes, the dropped entry, stderr and exit 1.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:361","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-12","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":105,"severity":"minor","text":"Counts: '126 items' not derivable; '88 + 5' double-counts d9; §0 item 6 mixes edge and routine counts; moving detectors are three.","disposition":"fixed","evidence":"Feasibility and §8 step 8 restated per scope (46/88 incl. d9's 5, 28 fanout events, 65 opt-in d45 texts); §0 item 6 separates edges and routines.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:76-82,132-137,464-470","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-13","source":"sol","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":63,"severity":"minor","text":"Stale citations: d45 opt-in registration is detectors/mod.rs:1636-1648; d1.rs:723 is the test-only shadow oracle, production use is d1_graph.rs:135.","disposition":"fixed","evidence":"Verified mod.rs:1636-1648 and d1.rs:669-712 (#[cfg(test)] D1Policy). Citations updated in §0 item 4 and the §3.2 d1 row.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:68,211","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-14","source":"sol+opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":261,"severity":"minor","text":"A10's grep fails unless the scan's doc (capability_cone.rs:3627) and the test-module doc (:6132) that name the deleted function are rewritten.","disposition":"fixed","evidence":"grep on f96619ec found exactly those two docs plus the two call sites. §4.3 now names both docs and their rewrite; A10 counts them.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:325-329","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-15","source":"opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":328,"severity":"minor","text":"Epic I2's exception requires the deleted tests to be listed in the child spec's §7.","disposition":"fixed","evidence":"§7 opens with a pointer to §4.3's four deleted tests.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:394-395","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-16","source":"opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":99,"severity":"minor","text":"'Identity check (SARIF at both scopes)' contradicts the expected move.","disposition":"fixed","evidence":"Feasibility now reads the identity check as SARIF identical for every detector except the moving ones, plus the histogram SHA.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:124-129","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-17","source":"opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":454,"severity":"minor","text":"Q2's second reason is wrong: folding the dependency half into P-d cannot move the fingerprint or single-app goldens.","disposition":"fixed","evidence":"Second reason removed; Q2 keeps the cut-graph reason (only directly called dependency rows would be reached).","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:548-551","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-18","source":"opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":298,"severity":"minor","text":"T4's independent BFS ignores unresolved_sources (capability_cone.rs:2432-2435); assert the fixture has no object run.","disposition":"fixed","evidence":"T4 preconditions add 'no unresolved object-run source' and 'no four-kind Primary edge'; the Words section's inherited-status definition names the object-run term.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:359","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R1-19","source":"opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":295,"severity":"minor","text":"The O(L) fixture is not compilable AL; it works only through resolver leniency.","disposition":"fixed","evidence":"§5 adds a leniency note: T1/T4 preconditions assert the ambiguous edge so a stricter resolver fails loudly; the fixture doc must say so; §0 item 7 notes the compiler would reject it.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:369-372","anchor_hash":"5acb6cfb","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R2-01","source":"sol","round":2,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":558,"severity":"important","text":"F2's d9u routing ('every reason is a fold kind') is vacuously true for complete, table-rich spans d9 legitimately reports (d9.rs:54-56); it must require incomplete coverage and a non-empty reason set, with a complete-span preservation test.","disposition":"fixed","evidence":"Verified d9.rs:53-59 (admission = >= 2 pending tables OR !coverage_complete). F2 now moves a d9 finding only if the span is incomplete, was admitted by coverage alone (< 2 pending tables), and its reasons (§7 definition) are non-empty and all fold kinds; adds a preservation test (complete span, two tables: stays in d9, absent under d9u).","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:566-573","anchor_hash":"ad291462","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R2-02","source":"opus","round":2,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":397,"severity":"minor","text":"A span carries only coverage_complete; define a span's reasons (union of coverage.reasons over its routines whose inherited status is not complete) and use it for the triage and F2's split.","disposition":"fixed","evidence":"Verified transaction_spans.rs:228-245 (only a bool is kept). §7 defines a span's reasons and uncertain calls that way (empty when complete); d9, digest/prove triage and F2 use it.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:452-458","anchor_hash":"ad291462","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R2-03","source":"opus","round":2,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":398,"severity":"minor","text":"§7 gated fanout partial and changed transactionContext under the > 30 % rule, but A8/F1/F2 give fallbacks only for detectors.","disposition":"fixed","evidence":"Took the recommended option: §7's epistemic verdict gates only d35 UNKNOWN and d9's coverage-admitted findings; d45 text, fanout and transactionContext verdicts are recorded and reported, not gated (not detectors, no opt-in to fall back to); A8's pass rule says so.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:423,433-437","anchor_hash":"ad291462","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"R3-01","source":"sol","round":3,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":574,"severity":"important","text":"Local Yes-before-Unknown ordering does not guarantee recovery (a depth-cut Yes chain then terminal-free Unknown callees inside one node still exhaust the shared budget before Db); A8 accepted merely applying F6. Make F6 outcome-based and pre-state the residual.","disposition":"fixed","evidence":"Agreed on the code: path_walker.rs:265-273 shares nodes_visited across the whole walk, and max_depth 20 (d2.rs:56-59) can cut a Yes chain without a Complete path. F6 is now outcome-based (every lost CDO d2 finding must be restored on a re-run); A8's pass rule says so. Residual rule pre-stated: each remaining loss becomes a stated limit with repro plus one discovery issue 'd2: replace the budgeted walk_evidence with budget-free reachability, as d1 did' (d1.rs:8-31, defect D-A); the fold is kept. Rejected alternative (d2 reads unfolded presence): it needs a second direct-coverage map and cone result in the context, i.e. the two-policy split this step removes, and the budget loses findings without the fold too. T9-nested pins the residual shape.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:403-416,437,588-606","anchor_hash":"62d2593d","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-01","source":"sol+opus","round":1,"file":"docs/measurements/2026-10-22-issue-160-step5.md","line":11,"severity":"important","text":"A9's seeded 30-routine sample of cust-coverage-gate drops (spec :438, :521) was never done; 'Every added or changed item was triaged' overclaims.","disposition":"fixed","evidence":"Dropped routines = parent cust-coverage-gate finding routines minus the head's: 182 cross-app, 113 single-app, one finding each, none gained. Seed 160 sample of 30 per universe: all 30 inherit partial (28 complete direct, 2 partial direct); each reaches a four-kind edge (cross-app 180 open-world, 45 ambiguous, 9 external-target edge instances; single-app 96 external-target, 28 open-world); 0 of 30 epistemically false in each. Lists in /work/bench/160-5/final/triage/items-pol-*.tsv. Line 11 now names what was triaged and what was sampled.","anchor":"docs/measurements/2026-10-22-issue-160-step5.md:11-12,172-195","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-02","source":"sol","round":1,"file":"docs/measurements/2026-10-22-issue-160-step5.md","line":124,"severity":"important","text":"The d35 hazard claim overstates absence: pre-fold No assumed the completeness being corrected; a Commit( grep over implementation bodies is not transitive; D3 puts an unanalysed callee body inside the closure.","disposition":"fixed","evidence":"Agreed. Rewritten: 'no Commit found in the analysed graph'; the grep is stated as direct-only; every d35 item reaches an unverified path (a Public interface's out-of-closure implementation; 50 items also D3's callee), so all 41/83 are hazard-unknown, 0 proven either way. Hazard is recorded, not gated: no fallback changes.","re_raise":"sol r2: the 'every item reaches a Public-interface path' sentence also covered the 2 false items, which reach only an Internal interface / a compiler-decided overload; fixed in e7818178 (conductor)","anchor":"docs/measurements/2026-10-22-issue-160-step5.md:125-140,161-162","anchor_hash":"e7818178","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-03","source":"sol","round":1,"file":"src/engine/l5/detector_context_step5_tests.rs","line":615,"severity":"minor","text":"T9 asserts only Wide's status, not each Ai's ambiguous edge and folded partial coverage (spec :394-398).","disposition":"fixed","evidence":"t9_run asserts as a precondition that each Ai's only uncertainty edge is ambiguous-overload (holds without the fold); main asserts each Ai's direct coverage == (partial, [ambiguous-overload]) AFTER the d2-output assertion, so the discrimination path is unchanged. Proof: delete the fold in det_cone_inputs -> preconditions hold, main fails at :645 (the d2 ids); revert -> green.","anchor":"src/engine/l5/detector_context_step5_tests.rs:600-625,643-661","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-04","source":"opus","round":1,"file":"src/engine/l5/detector_context_step5_tests.rs","line":203,"severity":"minor","text":"T1/T4/T6 proofs fail at the first post-precondition assertion; the reader-side assertions (T1 span+d9, T4 Go inherit, T6 strict drop+exit) were never shown failing.","disposition":"fixed","evidence":"Four reader-side breaks, each made with Edit and reverted with Edit (ledger proof rows): span reader ignores coverage (transaction_spans.rs `!= complete && false`) -> T1 fails at :203 'the span reaches Helper's ambiguous call, so it is incomplete'; d9's incomplete-coverage admission off (d9.rs) -> T1 fails at :213 'd9 emits exactly one finding' left 0; the Cone's successor roll-up off (coverage_cone_for_scc `!yc.complete && false`) -> T4 fails at :400 'Go inherits partial' (Inner's direct assertion passes); strict ignores capabilityComposition (gate/events.rs) -> T6 fails at cli_step5_coverage_fold.rs:345 'strict: the partial entry is dropped'. All green after revert; git diff of those three files empty.","anchor":"src/engine/l5/detector_context_step5_tests.rs:203,213,400; tests/cli/cli_step5_coverage_fold.rs:345","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-05","source":"opus","round":1,"file":"src/engine/l4/capability_cone.rs","line":6364,"severity":"minor","text":"snapshot_base_prints_no_capped_line can pass vacuously now the roles-cap test is gone; add a 'cap fires' precondition.","disposition":"fixed","evidence":"The parent side now runs the L4 solve on CAP_SRC under the same cap and asserts non-empty diagnostics, a fixpoint-capped member, and a rendered `warning: summarize:` line before spawning the child. Proof: make build_r3a3_source_only_base_over run compute_summaries_v2 and print render_warnings -> fails at capability_cone.rs:6437 with the captured 'warning: summarize: Summary fixed-point did not converge' line; revert -> green.","anchor":"src/engine/l4/capability_cone.rs:6394-6420","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-06","source":"sol+opus","round":1,"file":"CHANGELOG.md","line":636,"severity":"minor","text":"Three tests were deleted, not four (check_oracle is a helper): CHANGELOG, ledger, spec :443, plan :155/:173.","disposition":"fixed","evidence":"All five places now say three tests plus their helper check_oracle.","anchor":"CHANGELOG.md:636-638; docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:461; docs/superpowers/plans/2026-10-22-issue-160-step5-coverage-policy.md:155,173","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-07","source":"opus","round":1,"file":"src/engine/l4/capability_cone.rs","line":6245,"severity":"minor","text":"Stale FIXTURE_ROOTS comment describes the deleted oracles.","disposition":"fixed","evidence":"The doc now names its one remaining user, scc_set_tests' derived_only_matches_raw_fold_on_fixtures.","anchor":"src/engine/l4/capability_cone.rs:6246-6250","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-08","source":"opus","round":1,"file":"/work/bench/160-5/final/verdict.py","line":1,"severity":"minor","text":"Stored verdict.py opens iface-access.tsv but only .clean.tsv exists.","disposition":"fixed","evidence":"/work/bench/160-5/final/iface-access.tsv now exists (CRLF-stripped), next to verdict.py; re-ran it from that folder on the stored triage/reach-*.tsv: same results (d35 0/41, 2/83; A9 0/30, 0/30). Outside the repository, so not in the commit.","anchor":"/work/bench/160-5/final/iface-access.tsv","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-09","source":"opus","round":1,"file":"docs/measurements/2026-10-22-issue-160-step5.md","line":51,"severity":"minor","text":"Numbers-file arithmetic: 46 added + 2270 kept != 2323 (duplicate fingerprints); d9 5 items vs 6 spans; '122 spans' per universe or both.","disposition":"fixed","evidence":"Measured: 7 duplicate fingerprints at primary (2,277 findings / 2,270 distinct; head 2,323 / 2,316), 28 at all (30,712/30,684; 30,800/30,772); added + kept = the head's distinct count. The 5 d9 findings sit on 6 flipped spans (HandleEntry ops 3 and 12; d9 reports op 3), verdict 0 false either way. 61 spans per universe, 122 lines.","anchor":"docs/measurements/2026-10-22-issue-160-step5.md:62-65,89,168-170","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-10","source":"opus","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":3,"severity":"minor","text":"Spec status line names rounds 1-2 only; it converged in round 4.","disposition":"fixed","evidence":"Status line: converged in round 4, 23 findings (R1-01..R1-19, R2-01..R2-03, R3-01), all accepted.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:3-4","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-11","source":"code-review","round":1,"file":"src/engine/l4/capability_cone.rs","line":3909,"severity":"minor","text":"drop(uncertainty_reasons) and its comment are misleading: the borrow ends at last use (HashMap's Drop is #[may_dangle]).","disposition":"fixed","evidence":"Removed the drop and the comment; the crate builds (dev and release clippy) with `rel` moved into the base afterwards, confirming the borrow ends at last use.","anchor":"src/engine/l4/capability_cone.rs:3909","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-12","source":"code-review","round":1,"file":"src/engine/l4/capability_cone.rs","line":3562,"severity":"minor","text":"The scan's doc cites db_effect_solver.rs:1025/:1103/:1143; name the function and the guard expressions instead.","disposition":"fixed","evidence":"The doc names solve_side_facts, the `if !is_callsite_local_kind(&u.kind)` guard on fold_shared for both base uncertainties and uncertainty edges, the per-member `own` list in own_by_member, and `own_by_member.remove(&m_ix)`; no line numbers.","anchor":"src/engine/l4/capability_cone.rs:3556-3566","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-13","source":"code-review","round":1,"file":"src/engine/l5/detector_context_step5_tests.rs","line":404,"severity":"minor","text":"T4's BFS 'independent oracle' reads direct_status from the same folded summaries.","disposition":"fixed","evidence":"Doc and comment now call it a propagation check over the folded statuses, not independent of the fold; the explicit Inner and Go assertions carry the fold (and FQ-04's roll-up break shows the Go assertion failing on the reader side).","anchor":"src/engine/l5/detector_context_step5_tests.rs:367-375,406-407","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-14","source":"code-review","round":1,"file":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md","line":259,"severity":"important","text":"Dependency routines: folded coverage says partial (ambiguous-overload) while the L4 summary over rel.primary() leaves uncertainties empty and hasUnresolvedCalls false (r3a5 output for Inner).","disposition":"fixed","evidence":"Verified: head aldump --r3a5-cross-app-summary on the T4-shaped P6 fixture prints Inner (isDepRoutine) directStatus partial, reasons [ambiguous-overload], uncertainties [], hasUnresolvedCalls false. Cause: cross-app the solve runs over rel.primary(); a dependency routine is a fixed leaf (base_intraprocedural_summary) or fixed-role row; predates step 5. Added as a stated limit (spec §3.3, CHANGELOG): the only output printing both side by side is the r3a5 projection (project_r3a5_from_parts; aldump, tests/r3a5-goldens — no fixture has a dependency four-kind call, goldens unmoved). Other readers of uncertainties (d2's path_walker evidence and confidence, d1 cohort records, confidence.rs) print no coverage beside them and read the same empty list as before. Discovery D4 for step 6's dependency solve.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:259-277; CHANGELOG.md:639-644","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"FQ-15","source":"code-review","round":1,"file":"src/engine/l5/detector_context.rs","line":1250,"severity":"minor","text":"Docs say the context folds 'as every other producer'; the cross-app snapshot base folds only its cut graph (5-A3).","disposition":"fixed","evidence":"det_cone_inputs' doc: the same fold, per row, as the cross-app base; the r3a3 projection and the snapshot base fold their own graph's edges, cross-app the cut graph until step 6 (5-A3). The scan's doc already lists each producer's input explicitly.","anchor":"src/engine/l5/detector_context.rs:1247-1253","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"CR-01","source":"code-review","round":1,"file":"src/engine/l5/detector_context_step5_tests.rs","line":615,"severity":"minor","text":"T9 asserts the d2 budget loss (pins a precision cost).","disposition":"refuted","evidence":"By design: spec R1-05/R3-01, §5 T9 and F6 (outcome-based). The test pins the fold's use in d2 and states the cost; on CDO the head lost no d2 finding (findings and detectorStats identical, numbers file), so F6 did not fire.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:409-434","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"CR-02","source":"code-review","round":1,"file":"docs/measurements/2026-10-22-issue-160-step5.md","line":78,"severity":"minor","text":"The custom fail-open policy silently drops 255 -> 73 cust-coverage-gate findings.","disposition":"refuted","evidence":"By design: spec §3.4 and P13 — fail-open emits nothing for a routine failing the gate, it is the declared meaning; reported, not gated (§7). FQ-01's A9 sample shows each sampled dropped routine really reaches a four-kind edge (0/30 false per universe).","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:277-291","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"CR-05","source":"code-review","round":1,"file":"src/engine/l4/capability_cone.rs","line":3546,"severity":"minor","text":"No test ties the scan to the L4 solve after the oracle deletion.","disposition":"refuted","evidence":"By design: spec Q5 and §4.3, accepted by both spec reviewers — the fold reads no solve, so 'scan equals the solve's fold' has no second side. FQ-12 makes the argument in the scan's doc durable by naming solve_side_facts' guards instead of line numbers.","anchor":"docs/superpowers/specs/2026-10-22-issue-160-step5-coverage-policy-design.md:351-368","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}},
-  {"id":"CR-06","source":"code-review","round":1,"file":"src/engine/l5/detector_context.rs","line":1251,"severity":"minor","text":"Cross-app det_cone_inputs recomputes the direct facts and folded coverage build_cross_app_base already stored; T5 guards the drift.","disposition":"deferred","evidence":"Minor, deferred: step 6 rewrites both producers (the snapshot and context move to the Cone); recorded as discovery D5 in the ledger and the numbers file.","anchor":"docs/measurements/2026-10-22-issue-160-step5.md (D5)","anchor_hash":"b04b8551","reviews":{"sol":"accepted","opus":"accepted"}}
+  {
+    "id": "R1-01",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 2938,
+    "severity": "important",
+    "text": "F1 cannot lower the composition peak: every subject's raw is returned at once from compose_inherited_cones, and derive_capability_facts clones raw again into the tree (Decision 24 broken).",
+    "disposition": "fixed",
+    "evidence": "capability_cone.rs:2819-2955 (one out map returned at the end); snapshot.rs:1443-1486 clones each inherited fact via snapshot_fact. Spec: raw split out of the composition's output and moved into the tree (D4 row), F1 withdrawn, F2 first rung.",
+    "anchor": "spec:83,239,306,670",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-02",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 613,
+    "severity": "important",
+    "text": "6A-10's terms are in the wrong mode (C from default analyze's DerivedOnly compose), omit the cone-graph tree derive and do not credit the cut-base savings.",
+    "disposition": "fixed",
+    "evidence": "probe/p7-o-spans.txt: ordering.compose_snapshot = r3a3_base + derive; detector_context.rs:1375-1406 gates derived. Spec §8.4: K, T, E' from a Task 1 probe in the head's exact configuration; S_P credited; B3 = Po - S_P + K + T + E' + Bo. Round 2: K now includes the input assembly (det_cone_inputs, detector_context.rs:1254-1293) as well as the composition, both timed.",
+    "re_raise": "round 2, sol: K named det_cone_inputs separately from composition time; fixed by defining K = input assembly + composition (spec §8.4).",
+    "anchor": "spec:627,633",
+    "anchor_hash": "8e121683",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-03",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l5/snapshot_full.rs",
+    "line": 39,
+    "severity": "important",
+    "text": "The post-#220 parent is mandatory, not conditional on a rebase; base numbers are stale until re-measured there.",
+    "disposition": "fixed",
+    "evidence": "snapshot_full.rs:39-40 serializes schema 3 at the base; #220 moves it to 4. Spec header and §8: P = the post-#220 master, unconditionally; Task 1 re-measures every term there.",
+    "anchor": "spec:23",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-04",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l5/snapshot.rs",
+    "line": 1309,
+    "severity": "important",
+    "text": "S2 sums shallow census buckets (lower bounds) and a 1.0 GB budget with no source; it cannot certify a fit.",
+    "disposition": "fixed",
+    "evidence": "snapshot.rs:1309-1333 counts structs, not owned strings; #204 makes the post-attach live set unreadable on Linux. Spec S2 reads the Task 1 probe's measured process peak against the parent's (1.03x; policy <= parent); §4.10 states the census is a lower bound.",
+    "anchor": "spec:89,447,630",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-05",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l5/detector_context.rs",
+    "line": 1430,
+    "severity": "important",
+    "text": "CapabilityAnalysis had no field for raw once det moves cones; moving cones whole would make det carry raw (I5/E12).",
+    "disposition": "fixed",
+    "evidence": "detector_context.rs:1430-1437 (FullRoutineSummary::new takes the raw Option). Spec §4.1/§4.2: ConeOutcome.raw apart from coverage; Cell::Raw; build_detector_artifacts never sees raw and asserts it.",
+    "anchor": "spec:90,239",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-06",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/session.rs",
+    "line": 255,
+    "severity": "important",
+    "text": "The tree and the effects had no View cell (field, Cell variant, release rule, plan input); tree demand was tied to the raw scope, contradicting policy's no-tree row; identities cell swapped without an amendment.",
+    "disposition": "fixed",
+    "evidence": "session.rs:255-372 fills everything in one prepare. Spec §4.3 needs_tree apart from witness; §4.7 cell table (Caps, Raw, Tree, Effects) with fill, reader, release; 6A-11 for identities.",
+    "anchor": "spec:90,278",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-07",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 777,
+    "severity": "important",
+    "text": "F3 could not free the whole tree: the digest query also reads coverage and identities; Opus: make F3 the design since the kept tree meets det and l4.",
+    "disposition": "fixed",
+    "evidence": "digest_cli.rs:777-804 (coverage, identities), :990 (unresolved_cone). Spec §4.7: the effects cell computes each root's unresolved cone and keeps identities and coverage; the whole tree is released at (5); F3 promoted.",
+    "anchor": "spec:93,393,672",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-08",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l4/exec_relation.rs",
+    "line": 85,
+    "severity": "important",
+    "text": "A standalone compose_snapshot through ExecRelation::single_app adds a counted Tarjan, so prove/fingerprint/diff counters would move.",
+    "disposition": "fixed",
+    "evidence": "exec_relation.rs:85 graph_scc; analysis.rs:145 counts build.graph_scc. Spec §4.4: the standalone path keeps build_combined_graph (counted bcg, no relation), so the rows stay; T5 pins them.",
+    "anchor": "spec:95,324",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-09",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l5/snapshot_full.rs",
+    "line": 84,
+    "severity": "important",
+    "text": "compose_full_snapshot calls the cut builder directly and reads its base in derive_permissions; after #220 it has a cross-app universe the spec did not cover.",
+    "disposition": "fixed",
+    "evidence": "snapshot_full.rs:84, :92, :651. Spec §4.4: single-app via the standalone path (which asserts no dependency-role row); cross-app over base.rel.cone() with Subjects(every primary); derive_permissions added to the deriver table.",
+    "anchor": "spec:97,322,331",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-10",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l5/test_support.rs",
+    "line": 240,
+    "severity": "important",
+    "text": "Deleting inherited_raw breaks test_support::summary/cone_store_of and removes the raw oracles the derived predicates are checked against.",
+    "disposition": "fixed",
+    "evidence": "test_support.rs:30-55, :240-249; capability_query.rs:62-102 (#[cfg(test)]). Spec §4.8: the raw field and inherited_raw become #[cfg(test)] fixture input; production has no raw parameter; the oracles stay.",
+    "anchor": "spec:98,413",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-11",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l5/ordering_engine.rs",
+    "line": 1028,
+    "severity": "important",
+    "text": "D6 named the wrong reader (the ordering engine reads only the root's ledger rows; unresolved_cone walks into dependencies), and D6's unfetched-dependency rule makes such root call sites ordering boundaries, so d47/d49/d51 can move from D6 alone.",
+    "disposition": "fixed",
+    "evidence": "ordering_engine.rs:1028 resolutions_from(routine_id), :1044-1049 is_opaque; unresolved_cone.rs:94-140. Spec §4.6: reader corrected; ordering moves attributed to D6 or the cone graph in Part 1; single-app body-less rows counted at Task 1, single-app cmp may move only in D6-explained findings.",
+    "anchor": "spec:100,358",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-12",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "tests/common/dep_dispatch_fixture.rs",
+    "line": 28,
+    "severity": "important",
+    "text": "T1's fixture does Cust.Insert(), so it cannot produce the DB_MODIFY #161 names.",
+    "disposition": "fixed",
+    "evidence": "dep_dispatch_fixture.rs:21-30. Spec T1: a fixture variant whose Inner does Cust.Modify(); assert the op and the full path.",
+    "anchor": "spec:101,458",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-13",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 2713,
+    "severity": "important",
+    "text": "T3's breaks changed production code that both arms run (or corrupted the reference arm), so they could not fail.",
+    "disposition": "fixed",
+    "evidence": "Both arms call compose_inherited_cones. Spec T3: untouched All arm; breaks only under Subjects (skip non-subject fact cones; contains() false for recursive members); the look-past break is evidence only.",
+    "anchor": "spec:471",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-14",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 3698,
+    "severity": "important",
+    "text": "T4's break Subjects(reportable roots) may equal All, since reportable roots include every primary body-available parse-complete routine.",
+    "disposition": "fixed",
+    "evidence": "digest.rs:3698-3727. Spec T4: break with Subjects(empty).",
+    "anchor": "spec:480",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-15",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 2836,
+    "severity": "important",
+    "text": "T8 counted the declared subject set, not what the walk materialized, so production passing All could stay unseen.",
+    "disposition": "fixed",
+    "evidence": "Allocation gate at capability_cone.rs:2836-2846, :2885-2898. Spec §4.1: witness.non_primary_members counted at the gate by role; T8 break sets policy's production scope to All.",
+    "anchor": "spec:242,495",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-16",
+    "source": "sol",
+    "round": 1,
+    "file": "src/engine/l5/snapshot.rs",
+    "line": 2211,
+    "severity": "important",
+    "text": "T7(a): without dependency_calls the leftover-typed-edge pass still writes a resolved row, so row existence does not pin the use.",
+    "disposition": "fixed",
+    "evidence": "snapshot.rs:2211-2255 writes status resolved, dispatch direct, no flags. Spec T7(a): a builtin/unresolved dependency site with result_consumed set must keep that status and flag.",
+    "anchor": "spec:490",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-17",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l5/selector_index.rs",
+    "line": 114,
+    "severity": "important",
+    "text": "T9's break (drop dependency rows) cannot fail: selectors keep primary ids only and file matching uses model spans.",
+    "disposition": "fixed",
+    "evidence": "selector_index.rs:88-121; digest_cli.rs:381-386. Spec T9: a use pin; break removes one primary routine's row; a second assertion that the table is unfiltered. Round 2: only the changedRoutines selector path reads the table (digest_cli.rs:386, :398-423); diff/file roots come from the span index (:381, :436-510). T9(a) now breaks on a --routine selector input; T9(b) keeps diff parity without a break.",
+    "re_raise": "round 2, sol+opus: the break ran on a diff input, which never reads the table; moved to a routine-selector input.",
+    "anchor": "spec:102,511",
+    "anchor_hash": "8e121683",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-18",
+    "source": "sol",
+    "round": 1,
+    "file": "tests/cli/cli_build_counters.rs",
+    "line": 180,
+    "severity": "important",
+    "text": "F5's second witness composition contradicts A6.5 and 6A-1; re-running timing does not license it.",
+    "disposition": "fixed",
+    "evidence": "capability_cone.rs:2639-2648 (each composition solves). Spec F5: stop at Task 1 and re-panel.",
+    "anchor": "spec:102,674",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-19",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 4063,
+    "severity": "important",
+    "text": "'No unscoped cross-app path' is false: aldump --r3a5-cross-app-summary composes raw for every routine of any workspace.",
+    "disposition": "fixed",
+    "evidence": "aldump.rs:446 -> capability_cone.rs:4063-4119. Spec §2: the guarantee covers alsem commands; the aldump diagnostic is the stated exception.",
+    "anchor": "spec:155",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-20",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "src/engine/l5/ordering_engine.rs",
+    "line": 1323,
+    "severity": "minor",
+    "text": "Q3 is decidable statically: the http and background maps are queried only with root-local call sites, and retag sets an inherited fact's call site to its own subject's first hop.",
+    "disposition": "fixed",
+    "evidence": "ordering_engine.rs:1323-1333 (terminal_routine_id == routine_id), :1028-1050; capability_cone.rs:1666-1672 retag. Checked: the maps' only reads are those two (grep). Spec §3.2 decides Q3; F4 dormant; T3 break (3) kept as evidence.",
+    "anchor": "spec:102,197",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-21",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l4/cone_derived.rs",
+    "line": 245,
+    "severity": "minor",
+    "text": "Per-member mode (false,false) was undefined.",
+    "disposition": "fixed",
+    "evidence": "ConeOutput has three variants. Spec §4.1: (false,false) skips the member's walk; fact and coverage cones still built.",
+    "anchor": "spec:236",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-22",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l5/detector_context.rs",
+    "line": 1321,
+    "severity": "minor",
+    "text": "'Plan needs det summaries' must be SUMMARIES | TRANSACTION_SPANS.",
+    "disposition": "fixed",
+    "evidence": "detector_context.rs:1321. Spec §4.2.",
+    "anchor": "spec:262",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-23",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/gate/policy/pipeline.rs",
+    "line": 288,
+    "severity": "minor",
+    "text": "policy_plan needs after_run: SUMMARIES once the rule engine reads det.summaries.",
+    "disposition": "fixed",
+    "evidence": "pipeline.rs:288-295; session.rs:267-272 after_run assertion. Spec §4.7.",
+    "anchor": "spec:395",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-24",
+    "source": "opus",
+    "round": 1,
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 630,
+    "severity": "minor",
+    "text": "The stop rule had no memory check for policy.",
+    "disposition": "fixed",
+    "evidence": "Round 2: the probe stops at composition, before policy's Raw overlaps det, l4 and rule evaluation (spec §4.7). Spec S2: policy is bounded on the final command, new bound B5 (cross-app policy check kernel peak <= parent, Part 3), with fallback F13 (rule engine before det); the probe's composition peak is kept as an early warning.",
+    "re_raise": "round 2, sol: the policy peak was measured only through composition; now bounded on the whole command (B5) with F13.",
+    "anchor": "spec:606,652",
+    "anchor_hash": "8e121683",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-25",
+    "source": "sol",
+    "round": 1,
+    "file": "/work/bench/160-6/probe/p10.err",
+    "line": 1,
+    "severity": "minor",
+    "text": "Units overstated: maxrss.py prints KiB; the single-app 367 ms is cumulative over two compositions.",
+    "disposition": "fixed",
+    "evidence": "p10.err kb=14331236 = 13.67 GiB; p1c-policy-single.err:1. Spec uses GiB and drops the single-app timing claim.",
+    "anchor": "spec:50",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-26",
+    "source": "sol+opus",
+    "round": 1,
+    "file": "/work/bench/160-6/probe/p7-o-spans.txt",
+    "line": 7,
+    "severity": "important",
+    "text": "The o void check has no evidence it can pass (clean-side band 14%); B3 read analyze.total with a wall band rule.",
+    "disposition": "fixed",
+    "evidence": "p7-o-spans.txt analyze.total B band 2638 ms. Spec §8.1: 5 parent rounds in the Task 1 slot; >5% -> 7 rounds with a trimmed band, pre-stated before Task 2; B3's band reads analyze.total; quiet-slot rules also for Task 1.",
+    "anchor": "spec:73,581",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-27",
+    "source": "opus",
+    "round": 1,
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 312,
+    "severity": "minor",
+    "text": "caps.pd and the tree's PdArena coexisted from (4) to (5).",
+    "disposition": "fixed",
+    "evidence": "Spec D4: caps.pd taken by the tree and dropped once the tree's arena is built.",
+    "anchor": "spec:312",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-28",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l5/snapshot.rs",
+    "line": 1767,
+    "severity": "minor",
+    "text": "The R6-4 debug_assert 'edge of a kind derive_typed_edges skips' is ill-defined: skipping depends on the anchor, for any kind.",
+    "disposition": "fixed",
+    "evidence": "snapshot.rs:1558-1600. Spec §4.5: derive_typed_edges records skipped keys; debug_assert!(skipped.contains(&key)). Round 2: implicit-trigger rows are never skipped, with or without an anchor (snapshot.rs:1659-1676, #96 D4); the spec states the exemption and limits the skip rule to call-family, event-dispatch and unmodelled kinds.",
+    "re_raise": "round 2, sol: 'any kind' contradicted the implicit-trigger exemption; wording fixed.",
+    "anchor": "spec:350",
+    "anchor_hash": "8e121683",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-29",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 3845,
+    "severity": "minor",
+    "text": "rel.dependency_calls lives in every cross-app view with no reader outside the tree (the epic's M8 concern).",
+    "disposition": "fixed",
+    "evidence": "Spec §4.6: measured at Task 1 (P8); F12 moves it out of the relation if > 50 MB. Pre-stated limit, not more scope.",
+    "anchor": "spec:359",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-30",
+    "source": "sol",
+    "round": 1,
+    "file": "src/engine/l5/snapshot.rs",
+    "line": 1283,
+    "severity": "minor",
+    "text": "Census records construction, not destruction; A6.18 needs a live-cell checkpoint before the first run.",
+    "disposition": "fixed",
+    "evidence": "Spec §4.7: view.live line at the first run, test asserts no Tree/pd/Raw (except policy's); break skips release(Tree).",
+    "anchor": "spec:402",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-31",
+    "source": "opus",
+    "round": 1,
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 23,
+    "severity": "minor",
+    "text": "The [#220] file list was incomplete (gate/run.rs, test_support.rs, role.rs, fingerprint_cli.rs, gate/diff/cli.rs); subjects should be Role::Primary.",
+    "disposition": "fixed",
+    "evidence": "git diff --stat 459294f1..#220 head. Spec header list and §4.3 use Role::Primary.",
+    "anchor": "spec:23,136",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-32",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l5/digest.rs",
+    "line": 3722,
+    "severity": "minor",
+    "text": "Wording: reportable_roots returns stable ids (name the map back); there is no LegacyCut symbol.",
+    "disposition": "fixed",
+    "evidence": "digest.rs:3722. Spec §4.3 maps through stable_routine_id, every row of a collided id; Words note on LegacyCut; A6.15 checks the doc text.",
+    "anchor": "spec:36,278",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R1-33",
+    "source": "opus",
+    "round": 1,
+    "file": "docs/superpowers/specs/2026-10-18-issue-160-analysis-session-design.md",
+    "line": 661,
+    "severity": "minor",
+    "text": "6A-10 must be stated as a change to E15 ('6 within parent') for the operator/epic to take.",
+    "disposition": "fixed",
+    "evidence": "Spec 6A-10 and Q1 name the E15 change and the operator decision.",
+    "anchor": "spec:653,705",
+    "anchor_hash": "6ae8946a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R2-01",
+    "source": "opus",
+    "round": 2,
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1655,
+    "severity": "minor",
+    "text": "For d, S1 added the head's effects E'_d but subtracted no parent effects time; S_P(d) covered only the cut base and derive, though the parent already computes S4 entries (digest_cli.rs:1655) and unresolved cones (:990).",
+    "disposition": "fixed",
+    "evidence": "digest_cli.rs:1655, :990. Spec §8.4: S_P is measured by the probe's parent-shape arm (the cut builder still exists at Task 1); for d it includes the parent's effects; D_P names the parent's det cone.",
+    "anchor": "spec:643",
+    "anchor_hash": "8e121683",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R2-02",
+    "source": "opus",
+    "round": 2,
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 2823,
+    "severity": "minor",
+    "text": "F2 gates raw by a routine's derived ordering bits, but the derived fold and the raw picks are built in one pass, so the bits are known only after the walk.",
+    "disposition": "fixed",
+    "evidence": "capability_cone.rs:2823-2930 (inherited_facts_for_singleton does both under one mode; the BFS member's fold follows its walk). Spec F2: fold first with mode (true,false), read the bits, then compose raw (false,true) only for members with an ingredient; Task 1 prices it as a fourth probe configuration.",
+    "anchor": "spec:696",
+    "anchor_hash": "8e121683",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R3-01",
+    "source": "opus",
+    "round": 3,
+    "file": "src/engine/l4/cone_derived.rs",
+    "line": 116,
+    "severity": "minor",
+    "text": "F2 reads 'three ordering bits' the derived row does not have: its flags are table/commit/http/file/physical-table plus a write-op mask; no UI-sink bit, and http/file key on resource_kind, not map_op.",
+    "disposition": "fixed",
+    "evidence": "cone_derived.rs:116-129 (flags), :132-136 (write-op mask). Spec F2: first adds the three map_op-keyed bits (the filter of digest.rs:4035-4061), prices them in the fourth Task 1 configuration, and runs the second walk inside the same SCC member loop while the successor fact cones are alive (capability_cone.rs:2669-2700): one composition, one pd_solve.",
+    "anchor": "spec:697",
+    "anchor_hash": "c62dab36",
+    "fix_commit": "5c91c8000c3ff6fcfe7dedd13ed25fbd5b1b9317",
+    "reviews": {
+      "sol": "accepted-by-rule",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R3-02",
+    "source": "opus",
+    "round": 3,
+    "file": "src/engine/gate/policy/pipeline.rs",
+    "line": 288,
+    "severity": "minor",
+    "text": "F13 must name its inputs, since after R1-23 the rule engine reads det.summaries, which does not exist before det; B5 should be Hm <= 1.03 x Pm like B2/B4.",
+    "disposition": "fixed",
+    "evidence": "pipeline.rs:288-295 builds PolicyModel from summaries and events. Spec F13: PolicyModel from caps.direct_full + caps.coverage (summaries), Cell::Raw, model.events.graph; Raw released right after. B5 row and S2 text now Hm <= 1.03 x Pm.",
+    "anchor": "spec:606,654,708",
+    "anchor_hash": "c62dab36",
+    "fix_commit": "5c91c8000c3ff6fcfe7dedd13ed25fbd5b1b9317",
+    "reviews": {
+      "sol": "accepted-by-rule",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-01",
+    "source": "sol+opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 1777,
+    "severity": "important",
+    "text": "The DAG took its first 257 paths in carrier/predecessor order and sorted afterwards, so the printed prefix could differ from the true first paths by (length, JSON) (sol 1, opus m-4).",
+    "disposition": "fixed",
+    "evidence": "digest.rs:1777-1817 sorts and dedupes before capping. Spec §14.3.1 item 4: marked-node forward walk in hop-JSON order gives the merge's (length, JSON) order, cap + 1 paths; test W4b compares with brute force. Round 2: projection drops terminals (project_hop, digest.rs:1985-2002), so an opaque seed path (projected length 1) ties with a carrier path at dmin = 1; the order is key_cmp over ONE stream merging the carrier walk and the opaque seed paths, distinct paths only (A2-06); W4c pins cap = 1 with both kinds (break: opaque first). Round 3: §14.3.1 item 4 walks the trie of projected prefixes one length class at a time (L ascending), with per-node length bit sets; W4b fixture (3) pins boundaries at depths 1, 2, 3 plus carriers (break: one walk over all lengths).",
+    "re_raise": "round 2, sol: 'opaque first because shorter' contradicts the ProjPath prefix since projected lengths can tie; fixed by one key_cmp-ordered stream and W4c. | round 3, opus: under rule B prefixes end at boundary depth, not dmin, so one depth-first walk is not key_cmp order; fixed by one trie walk per length class, L ascending.",
+    "anchor": "spec:870",
+    "anchor_hash": "ef45f063",
+    "fix_commit": "ef45f0638f1e3f0f2166e483cc3bb3137c292578",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-02",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 3164,
+    "severity": "important",
+    "text": "The rejected options rested on 'the merge needs all paths'; every merge output is a fold computable in O(MAX_PATHS) (opus I-2).",
+    "disposition": "fixed",
+    "evidence": "merge_normalize_via_paths digest.rs:3164-3226; effect_conditionality conditionality.rs:90-122 (distinct ranks :32-40); dedupe least-restrictive :3199-3212. Spec §14.3.1a: streaming window of MAX_PATHS+1 distinct paths + running least rank + flags; byte-equal; W10 against the old merge.",
+    "anchor": "spec:914",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-03",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/conditionality.rs",
+    "line": 90,
+    "severity": "important",
+    "text": "Shortest-only witnesses change conditionality's meaning (a guarded shortest path hides an unguarded longer one) and no test pinned it (opus I-3).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.3.1b: accepted explicitly as the rule's meaning, measured 2/138 effects on the CDO cut; W7 pins it; the sound alternative recorded as an operator veto point (decision 7).",
+    "anchor": "spec:933",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-04",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/fingerprint_query.rs",
+    "line": 575,
+    "severity": "important",
+    "text": "The DAG rule hard-coded 257 and ignored the fingerprint query's --witness N cap (opus I-4).",
+    "disposition": "fixed",
+    "evidence": "fingerprint_query.rs:575 Capped(cap), :596. Spec §14.3.1 item 4: enumerate the caller's cap + 1; W4 at cap 3 and 256.",
+    "anchor": "spec:875,910",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-05",
+    "source": "sol+opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 4608,
+    "severity": "important",
+    "text": "reconstruct_witness_paths_pub builds a fresh cache per call, so the fingerprint query would build a full DAG per fact (opus I-5, sol 4).",
+    "disposition": "fixed",
+    "evidence": "digest.rs:4608-4615 &mut HopCache::default(). Spec §14.3.1 item 3: _pub takes &mut HopCache and &mut DagCache, one pair per root in fingerprint_query.rs:560-600; W8 pins the build count; Part 1 times the fingerprint query.",
+    "anchor": "spec:863,1220",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-06",
+    "source": "sol+opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 4594,
+    "severity": "important",
+    "text": "T8/A6.6/I5 contradicted the cut composition kept for o ({false, All} over every model routine, dependency rows included) (opus I-6, sol 7; opus A5).",
+    "disposition": "fixed",
+    "evidence": "capability_cone.rs:4594-4609. Spec §14.2 I5 row: stated I5 exception for the cut until the #161 follow-up (and for policy's RAW build if Task 3 is reverted); T8/A6.6 read d, h and policy; T8 text line 507 strikes o.",
+    "anchor": "spec:839,1164",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-07",
+    "source": "sol+opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 1473,
+    "severity": "important",
+    "text": "The depth flag was DAG-global, so an unrelated deep branch could mark a fact incomplete, and the change of today's depth semantics was unstated (opus I-7, sol 3).",
+    "disposition": "fixed",
+    "evidence": "digest.rs:1473-1481, :1660-1667. Spec §14.3.1 item 6: depth-exceeded only when the fact has no carrier path, no proof path and a carrier reachable from the depth frontier; W6 and W6b.",
+    "anchor": "spec:886",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-08",
+    "source": "sol",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 3215,
+    "severity": "important",
+    "text": "viaPathsTruncated does not mean 'more than 256 shortest paths'; it is set when more than three distinct printed paths exist or an input was truncated (sol 2).",
+    "disposition": "fixed",
+    "evidence": "digest.rs:3215-3222. Spec §14.3.4: the public meaning is kept; only the path set it reads over changes; producer proofs stated as unchanged.",
+    "anchor": "spec:983",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-09",
+    "source": "sol",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 2780,
+    "severity": "important",
+    "text": "The output-change allowlist missed occurrence/fact ids that hash the via paths and prove answers that read truncation or conditionality (sol 8).",
+    "disposition": "fixed",
+    "evidence": "build_canonical_key digest.rs:2780-2820; prove.rs:405-558. Spec §14.3.4 allowlist; A6.23; plan Task 2a Step 3 triage classes.",
+    "anchor": "spec:987",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-10",
+    "source": "sol",
+    "round": "6A-12 r1",
+    "file": "docs/superpowers/plans/2026-10-23-issue-160-step6-one-cone-graph.md",
+    "line": 251,
+    "severity": "minor",
+    "text": "The flip triage (P-4) and corpus golden diff (P-5) were claimed but not required gates (sol 9).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.3.4 and §14.9: P-4 and P-5 REQUIRED and recorded before Task 2a's commit; plan Task 1′ Step 5.",
+    "anchor": "spec:999",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-11",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/ordering_engine.rs",
+    "line": 366,
+    "severity": "important",
+    "text": "Found while answering opus I-1: digest's per-root ordering pass materializes every happens-before pair of an owner group, scans them linearly per query and clones the group's ops into every occurrence; quadratic in effects per owner.",
+    "disposition": "fixed",
+    "evidence": "ordering_engine.rs:366-378, :394-401; ordering.rs:181-205. Prototype (w6/proto9.sh): on-demand test, byte-identical o SARIF (60708358...), cut digest JSON identical, d ordering 2.5 -> 0.2 CPU-s. Spec §14.3.7; test O1. Round 2: ordered_before is asymmetric (order_id strictly less, ordering.rs:117-120), so the !(...) guard is redundant and its removal cannot fail; the code states the reduction, and O1 adds a literal fixture (two arms of one if, an op after it, a second group) with two breaks that can fail: drop may_co_execute (a->b appears) and drop the same-group check (a->d appears).",
+    "re_raise": "round 2, sol: O1's mutation (drop the guard) cannot fail; replaced by discriminating mutations on a literal fixture.",
+    "anchor": "spec:1130",
+    "anchor_hash": "f6f1c648",
+    "fix_commit": "f6f1c6483b475533f8f296e70345b94211fe0db3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-12",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 3283,
+    "severity": "important",
+    "text": "The +2.5 GiB was not attributed and only a 3-root digest was measured; parallel roots could blow far past 6 GB (opus I-1).",
+    "disposition": "fixed",
+    "evidence": "Prototypes w6/proto4-9: owner not the DAGs nor path count; the per-root effect volume and the ordering pass. 88-root file: shortest-path DAG E' 77 s / 22.5 GB; option A OOM; rule B 21.2-22.0 s / 3.1 GB. Spec §14.3.5 rule B, §14.4 S3'/B6/B7 multi-root bounds, §14.6 attribution, F-W1 names its owner by census.",
+    "anchor": "spec:1065,1181",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-13",
+    "source": "sol",
+    "round": "6A-12 r1",
+    "file": "src/engine/gate/policy/pipeline.rs",
+    "line": 255,
+    "severity": "important",
+    "text": "Task 2b turns build_detector_artifacts into a non-composing assembler, so policy's retained RAW build (and the Task 3 rollback) would break (sol 6).",
+    "disposition": "fixed",
+    "evidence": "pipeline.rs:255-272. Spec §14.5: Task 2b keeps a command-local composing builder for policy until Task 3; Task 2b alone and the post-revert state are tested; plan Task 2b files and Step 1.",
+    "anchor": "spec:1114",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-14",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "src/bin/alsem.rs",
+    "line": 28,
+    "severity": "important",
+    "text": "Found while answering opus I-1: the probe peaks were taken under aldump's system allocator, not alsem's mimalloc (purge delay 0); the bounds read the wrong peaks.",
+    "disposition": "fixed",
+    "evidence": "alsem.rs:28 #[global_allocator] mimalloc; same d run 6.0 GB (system) vs 4.79 GB (mimalloc). Spec §14.6 measurement rule: every bounded peak on alsem or a mimalloc probe.",
+    "anchor": "spec:1123",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-15",
+    "source": "sol",
+    "round": "6A-12 r1",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 1162,
+    "severity": "minor",
+    "text": "F10 pointed ordering misses at F11, which cannot touch o (sol 10).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.7 F10 row: a B3/B4 miss stops the claim and re-panels; plan Task 4 Step 4.",
+    "anchor": "spec:1163",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-16",
+    "source": "sol",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1230,
+    "severity": "important",
+    "text": "DigestEffects kept only unresolved-cone items and lost UnresolvedTraversal, which is serialized and read by prove's obligations (sol 5).",
+    "disposition": "fixed",
+    "evidence": "digest_cli.rs:1230-1246; prove.rs:207-224. Spec §14.7 Cell::Effects row; plan DigestEffects holds UnresolvedCone (items + traversal) and a traversal-block test with its break.",
+    "anchor": "spec:1166",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-17",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 3960,
+    "severity": "minor",
+    "text": "The cut builder has more readers than the ordering cell (opus m-1).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.2 first row lists them: ordering cell, compose_snapshot (prove/fingerprint/diff), compose_full_snapshot cross-app (tests), compute_digest_effects/_with_ordering (digest.rs:3960, :3973, r4f), digest with an ordering detector.",
+    "anchor": "spec:828",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-18",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "tests/cli/cli_build_counters.rs",
+    "line": 233,
+    "severity": "minor",
+    "text": "Analyze with d47 plus a summaries detector composes twice; 'one composition per view' needed the exception and a counter row (opus m-2).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.2 WitnessScope row exception; §14.10 row 2/2/1/3/2/1/1/1, pinned by T5.",
+    "anchor": "spec:829,1232",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-19",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 1531,
+    "severity": "minor",
+    "text": "Opaque-boundary seed paths were underspecified, and the DAG reaches non-seed opaque routines the old prune never did (opus m-3).",
+    "disposition": "fixed",
+    "evidence": "digest.rs:1531-1550. Spec §14.3.1 item 4: opaque seeds as today, counted in cap + 1; non-seed opaque routines never reported; W9.",
+    "anchor": "spec:878",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-20",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 1071,
+    "severity": "minor",
+    "text": "One E' run was excluded by hand as a load mark (opus m-5).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.9: a probe round with a load tick > 8 is void and re-run; no round excluded by hand; §14.4's numbers are the rule-B runs with no exclusion.",
+    "anchor": "spec:1211",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-21",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 1179,
+    "severity": "minor",
+    "text": "F-W3 called any d47/d49/d51 move a defect, though a move could be a real witness improvement (opus m-9).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.8 F-W3: stop and ask the operator.",
+    "anchor": "spec:1183",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-22",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 1013,
+    "severity": "minor",
+    "text": "Putting the DAG map in HopCache mixed two caches (opus m-7).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.3.1 item 3: a separate per-root DagCache; plan Task 2a files.",
+    "anchor": "spec:862",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-23",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 863,
+    "severity": "minor",
+    "text": "'the ordering cell may keep it' read as the old search (opus m-8).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.3.1 'One search rule': the ordering cell runs the DAG; rule B is off on the cut.",
+    "anchor": "spec:900",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A1-24",
+    "source": "opus",
+    "round": "6A-12 r1",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 942,
+    "severity": "minor",
+    "text": "S2's 9 % margin was thin and only time had a '> 10 % off the prototype' rule (opus m-6).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.6: the same 10 % rule for peak; the rule-B peaks sit at the parent's (3.10-3.12 GB) against +3.0 GiB (d) and 12 GiB (h).",
+    "anchor": "spec:1143",
+    "anchor_hash": "3f335f1d",
+    "fix_commit": "3f335f1d92c0873c4e4696784527eaf28564736a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A2-01",
+    "source": "sol+opus",
+    "round": "6A-12 r2",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 1014,
+    "severity": "important",
+    "text": "Rule B had no partition or identity rule: one fact's witnesses can leave primary code at several boundary sites, and call-site-less boundaries need distinct identities.",
+    "disposition": "fixed",
+    "evidence": "Prototype keyed by the first witness's terminal and fell back to display text (diag-wt digest.rs:3825-3845). Spec §14.3.5 items 2-3: boundary = edge (u -> b); identity = call site, else firing operation, else event; one group per boundary identity per fact; a resource reached through two boundaries counts in both groups' resourceCount; each group its own canonicalKey/factId and ordering occurrence; mixed facts keep a per-resource effect for non-boundary witnesses. Test B5 (two call sites + two distinct anchorless triggers -> four groups). Round 3: B5 rewritten (one fact, one prefix R -> Helper, four boundaries -> four groups; breaks: key without boundary, first boundary only); item 3 partitions AFTER the enumeration by end key.",
+    "anchor": "spec:1133",
+    "anchor_hash": "ef45f063",
+    "fix_commit": "ef45f0638f1e3f0f2166e483cc3bb3137c292578",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "re_raise": "round 3, sol: B5 used separate root first hops, so it never tested partition within one fact; B5 now puts cs1, cs2 and two triggers behind one shared first hop R -> Helper."
+  },
+  {
+    "id": "A2-02",
+    "source": "opus",
+    "round": "6A-12 r2",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 1021,
+    "severity": "important",
+    "text": "§14.3.5 items 1 and 2 conflicted for a primary carrier reached through dependency code (primary -> dep -> primary subscriber).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.3.5 item 1: the cut at the first dependency routine wins over the carrier; the boundary is the terminal tested; the subscriber's operation is not printed. Test B6.",
+    "anchor": "spec:1025",
+    "anchor_hash": "f6f1c648",
+    "fix_commit": "f6f1c6483b475533f8f296e70345b94211fe0db3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A2-03",
+    "source": "sol",
+    "round": "6A-12 r2",
+    "file": "src/engine/l5/ordering_engine.rs",
+    "line": 283,
+    "severity": "important",
+    "text": "Boundary placement can fabricate must-guarantees: an unconditional call to a conditionally committing dependency becomes a COMMIT occurrence that can emit COMMIT_DOMINATES_RETURN or WRITE_COMMITTED_BEFORE_RETURN.",
+    "disposition": "fixed",
+    "evidence": "ordering_engine.rs:283-310 (occurrence placed at the evidence call site), :505-541 (must-labels). Spec §14.3.5 item 4: a boundary occurrence never satisfies a must condition nor carries a must-label (left out of the commit set of COMMIT_DOMINATES_RETURN, WRITE_COMMITTED_BEFORE_RETURN, COMMIT_ON_SUCCESS_PATH), stays in may relations; group conditionality unknown. Test B7; plan Task 2b-2 ordering_engine.rs bullet.",
+    "anchor": "spec:1053",
+    "anchor_hash": "f6f1c648",
+    "fix_commit": "f6f1c6483b475533f8f296e70345b94211fe0db3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A2-04",
+    "source": "sol",
+    "round": "6A-12 r2",
+    "file": "src/engine/l5/digest.rs",
+    "line": 880,
+    "severity": "important",
+    "text": "Rule B did not cover producer proofs: the prototype appended full proof paths into dependency code.",
+    "disposition": "fixed",
+    "evidence": "diag-wt digest.rs:2004-2022. Spec §14.3.5 item 5: proofs cut at their first link edge into a dependency routine with the item-2 boundary, deduplicated with BFS prefixes; class kept (TempStateKind, the |kt suffix in the group key, item 3). Test B8 (temporary record passed into Dep.Fill plus a physical insert in Dep.Post -> two DB_INSERT groups).",
+    "anchor": "spec:1042,1063",
+    "anchor_hash": "f6f1c648",
+    "fix_commit": "f6f1c6483b475533f8f296e70345b94211fe0db3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A2-05",
+    "source": "sol",
+    "round": "6A-12 r2",
+    "file": "docs/superpowers/plans/2026-10-23-issue-160-step6-one-cone-graph.md",
+    "line": 442,
+    "severity": "important",
+    "text": "Fallback D kept Task 3 but dropped Task 2b, whose cells and API Task 3 consumes.",
+    "disposition": "fixed",
+    "evidence": "Plan: Task 2b split into 2b-1 (Cell::Caps/Raw, WitnessRequest, Plan.witness, build_detector_artifacts over caps, compose_policy_raw; kept under D) and 2b-2 (digest's tree, Cell::Tree/Effects, DigestEffects, rule B; dropped or reverted under D); Task 3 depends on 2b-1 only; Task 2b-2 Step 8 tests the D outcome (revert 2b-2 in a scratch worktree, suite + goldens + CDO policy). Spec §14.8 D row.",
+    "anchor": "spec:1263",
+    "anchor_hash": "f6f1c648",
+    "fix_commit": "f6f1c6483b475533f8f296e70345b94211fe0db3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A2-06",
+    "source": "opus",
+    "round": "6A-12 r2",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 869,
+    "severity": "minor",
+    "text": "Equal hop JSON on successor edges (and rule B's collapsed prefixes) let duplicates count toward cap + 1.",
+    "disposition": "fixed",
+    "evidence": "digest.rs:1777-1817 deduped before capping. Spec §14.3.1 item 4: distinct paths only; a candidate equal to the previous projected path is folded and not counted; W4b adds equal-JSON successor edges and collapsed rule-B prefixes. Round 3: §14.3.1 item 4 rewritten: candidates are (projected path, end key); the walk is over the trie of projected prefixes with frontier SETS and children grouped by hop JSON, so each distinct key is produced once, in key order, by construction; W4b fixtures (2) and (4) with breaks.",
+    "anchor": "spec:870",
+    "anchor_hash": "ef45f063",
+    "fix_commit": "ef45f0638f1e3f0f2166e483cc3bb3137c292578",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "re_raise": "round 3, opus + sol: adjacent-only fold is the Vec::dedup trap (equal-JSON edges into different nodes interleave), and projected-path equality erases boundary identity before partition; fixed by the prefix-trie walk (equal-JSON alternatives are one trie child) keyed with the boundary last."
+  },
+  {
+    "id": "A2-07",
+    "source": "opus",
+    "round": "6A-12 r2",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 507,
+    "severity": "minor",
+    "text": "T8 read d and policy but §14.7/A6.6 and the plan read d, h and policy.",
+    "disposition": "fixed",
+    "evidence": "Spec T8 now reads d, h and policy.",
+    "anchor": "spec:507",
+    "anchor_hash": "f6f1c648",
+    "fix_commit": "f6f1c6483b475533f8f296e70345b94211fe0db3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A2-08",
+    "source": "sol",
+    "round": "6A-12 r2",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 1098,
+    "severity": "minor",
+    "text": "The 12 GiB rationale claimed four parallel jobs fit in 32 GB (4 x 12 = 48 GiB).",
+    "disposition": "fixed",
+    "evidence": "Spec §14.4: 12 GiB is a single-job ceiling; parallel jobs are step 12's E16 bound; at the measured 3.1 GB four jobs fit.",
+    "anchor": "spec:1174",
+    "anchor_hash": "f6f1c648",
+    "fix_commit": "f6f1c6483b475533f8f296e70345b94211fe0db3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A2-09",
+    "source": "sol",
+    "round": "6A-12 r2",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 904,
+    "severity": "minor",
+    "text": "Per-fact ancestor marking is O(V_h + E_h) per fact and was missing from the cost statement and remeasurement.",
+    "disposition": "fixed",
+    "evidence": "Spec §14.3.1 Cost: marking is O(sub-DAG to the fact's dmin carriers), cached per (DAG, carrier set); the prototype's backward enumeration walked the same sub-DAG; Task 1' P-1 re-measures E' with the ported marking (plan Task 1' Step 5). Round 3: Cost paragraph rewritten: trie walk visits only children whose frontier can reach a candidate of the current length; at most (cap+1+C) x L_max trie nodes, each costing its frontier out-degree <= E_f; equal-JSON alternatives coalesce, so no exponential term.",
+    "anchor": "spec:949",
+    "anchor_hash": "ef45f063",
+    "fix_commit": "ef45f0638f1e3f0f2166e483cc3bb3137c292578",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "re_raise": "round 3, sol: (cap+1) x dmin does not bound the walk once duplicate candidates stop counting; equal-JSON fan-out can be exponential."
+  },
+  {
+    "id": "A3-01",
+    "source": "opus",
+    "round": "6A-12 r3",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 879,
+    "severity": "important",
+    "text": "Projection drops terminal hops, and rule B makes the boundary the terminal, so two prefixes through the same primary routines ending at different boundaries project to the same path; item 4 deduped before item 3 partitioned, dropping a boundary (also for proofs deduped with the BFS prefixes). Also state whether viaPaths print the enters hop.",
+    "disposition": "fixed",
+    "evidence": "digest.rs:1985-2002 (project_hop drops Terminal). Spec §14.3.1 item 4: candidate key = (projected length, projected JSON, end key), the boundary identity last; partition by end key runs AFTER the enumeration (§14.3.5 item 3); proofs keyed the same (item 5). Printed viaPaths are the primary prefixes; the enters hop is not printed (shown in evidence and detail.boundary); a first-hop boundary has via path []. W4b fixture (4) and B5 pin it (break: key without the boundary).",
+    "anchor": "spec:870",
+    "anchor_hash": "ef45f063",
+    "fix_commit": "ef45f0638f1e3f0f2166e483cc3bb3137c292578",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "A4-01",
+    "source": "sol",
+    "round": "6A-12 r4",
+    "file": "docs/superpowers/specs/2026-10-23-issue-160-step6-one-cone-graph-design.md",
+    "line": 891,
+    "severity": "important",
+    "text": "Carrier-only marking excludes opaque seeds: an opaque seed has no direct facts and no out-edges, so it is never in the backward-marked carrier sub-DAG, and the trie walk's opaque branch can never fire.",
+    "disposition": "fixed",
+    "evidence": "digest.rs:1529-1551 (opaque: no out-edges, no directs, coverage unknown). Spec §14.3.1 item 4 (a): opaque seeds are accepting states of their own with length bit 1, marked once per root for every fact, including a fact with no carrier (only length class 1 walked); Cost paragraph adds O(seeds) per root. W9 (fact whose only candidate is an opaque seed) and W4b fixture (5) (opaque seed beside carriers at dmin = 2), each with the break: mark carriers only. Also (opus note): projected length = DAG depth stated (project_hop, digest.rs:1986-2170, every non-Terminal arm is Some), asserted by W4b's oracle; cut-only debug assertion that no two candidates share a projected path.",
+    "anchor": "spec:899",
+    "anchor_hash": "9273e39a",
+    "fix_commit": "cbaf387d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-S1",
+    "source": "sol",
+    "round": "final r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 941,
+    "severity": "important",
+    "text": "Producer proofs are capped before the rule-B projection: enumerate_proofs counts raw (edges, producer) proofs toward cap, so many short proofs collapsing to boundary A spend the cap and a longer proof through boundary B is lost (no BFS carrier recovers it for producer-only facts).",
+    "disposition": "fixed",
+    "evidence": "Confirmed at digest.rs:969-974 (old: out.paths.len() >= cap). The cap now counts distinct candidate keys (projected prefix JSON + boundary identity, spec 14.3.1 item 4 (c), 14.3.5 item 5). A partial path that crossed into dependency code has its key fixed at its crossing level; crossed paths are walked before longer uncrossed ones and pruned once their key is found, so the capped set is a key-order prefix. Tests: proof_cap_counts_distinct_candidates_after_the_boundary_cut (A, C at length 1 behind a 5-edge raw proof, B at length 2; every cap 1..4 equals the uncapped key-order prefix; red first at cap 2) and a two-producer twin row in twin_proofs_count_once_toward_the_cap. Breaks: crossed paths into the FIFO queue -> FAIL cap 2; raw counting + no prune -> FAIL cap 3; raw counting alone -> new test PASSES (the prune alone covers it, stated), twin row FAILS.",
+    "anchor": "src/engine/l5/digest.rs:931-1095",
+    "anchor_hash": "0f21dbb6",
+    "fix_commit": "0f21dbb6",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-S2",
+    "source": "sol",
+    "round": "final r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 1424,
+    "severity": "important",
+    "text": "Event-dispatch boundary groups carry no operation or call-site id, so the ordering engine places no occurrence for them and they leave every MAY relation, against spec 14.3.5 item 4.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: boundary_terminal's EventDispatch arm sets both ids None; ordering_engine.rs places occurrences only via evidence op/callsite, so the group got ORDERING_UNKNOWN. Digest now hands the ordering pass the call that raises the event (the via path's last hop) as the group's site, in that caller's frame, with the prefix before it as the chain (as a call-site group is placed); the printed effect and its evidence (the publish site) are unchanged. No compilable AL reaches this shape (a dependency cannot subscribe to a workspace event: a written fixture with such a subscriber is not bound), so the end-to-end test hand-states the dispatch edge on the real cross-app tree of write_fixture_rule_b_event. Test an_event_boundary_group_is_in_the_may_relations: WRITE_PENDING_AT_EXTERNAL_IO, no ORDERING_UNKNOWN (red first). Break: drop the placement -> FAIL. Stated limit: the prefix trim (pop of the last hop) is not pinned; intra labels read the owner group, not the chain (the commit body's wording 'empty either way' is wrong: without the pop the chain holds the one link).",
+    "anchor": "src/engine/l5/digest.rs:4175-4215",
+    "anchor_hash": "502b1c8a",
+    "fix_commit": "502b1c8a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-O1",
+    "aliases": ["F1-S3"],
+    "source": "opus+sol",
+    "round": "final r1",
+    "file": "CHANGELOG.md",
+    "line": 269,
+    "severity": "important",
+    "text": "The whole 'digest sees dependency effects' entry is in CHANGELOG twice: under [Unreleased] and under the released [2.0.3] Fixed (a rebase artifact), so the 2.0.3 notes claim step 6 shipped there.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (git show origin/master:CHANGELOG.md has 0 copies; the branch had 2). The [2.0.3] copy is deleted; git diff 9bd2996f -- CHANGELOG.md removes no line.",
+    "anchor": "CHANGELOG.md:40",
+    "anchor_hash": "94307103",
+    "fix_commit": "94307103",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-O2",
+    "source": "opus",
+    "round": "final r1",
+    "file": "CHANGELOG.md",
+    "line": 95,
+    "severity": "minor",
+    "text": "### Removed names aldump --issue160-step6-probe, which never shipped.",
+    "disposition": "fixed",
+    "evidence": "Only --issue160-full-graph-timings is named now.",
+    "anchor": "CHANGELOG.md:102-104",
+    "anchor_hash": "94307103",
+    "fix_commit": "94307103",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-O3",
+    "source": "opus",
+    "round": "final r1",
+    "file": "src/engine/l5/unresolved_cone.rs",
+    "line": 255,
+    "severity": "minor",
+    "text": "item_order puts the anchor column before calleeDisplay, reordering items that were never tied; the CHANGELOG says the column only breaks ties.",
+    "disposition": "fixed",
+    "evidence": "Column moved after calleeDisplay (module doc updated); CHANGELOG and the measurement record say the old key is unchanged. Test the_callee_sorts_before_the_column (red first on the old order: [csS, csR]); the determinism test stays green.",
+    "anchor": "src/engine/l5/unresolved_cone.rs:255-276",
+    "anchor_hash": "581f3397",
+    "fix_commit": "581f3397",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-O4",
+    "source": "opus",
+    "round": "final r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 1530,
+    "severity": "minor",
+    "text": "A multi-target boundary call site is one group, but detail.boundary names one routine (the first per candidate, the first contributing fact's per group).",
+    "disposition": "fixed",
+    "evidence": "build_fingerprint_indexes maps each boundary identity with several dependency targets to every <App>.<Routine> it enters, sorted, ', '-joined (boundary_displays); boundary_terminal names them all, so walk and proof candidates of one identity carry one display. Spec 14.3.5 item 3 and CHANGELOG state it. Test a_multi_target_boundary_names_every_entered_routine (red first: 'XDep.DepB' != 'XDep.DepA, XDep.DepB').",
+    "anchor": "src/engine/l5/digest.rs:194-198, 330-345, 1545-1550",
+    "anchor_hash": "66f4cd5a",
+    "fix_commit": "66f4cd5a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-O5",
+    "source": "opus",
+    "round": "final r1",
+    "file": "docs/measurements/2026-10-24-issue-160-step6.md",
+    "line": 16,
+    "severity": "minor",
+    "text": "The measurement record names attempt-8 commits and does not say the numbers predate the rebase.",
+    "disposition": "fixed",
+    "evidence": "Provenance section (round 2: sol re-raised that it still named base 9bd2996f after the #239 rebase). Rewritten without rebase-volatile ids: measured on a8 (72a30b67 / bb81b4db); a9 = the #160 commits cherry-picked then rebased, differing from a8 by master's changes after 678d6540 (#250, #252, #239, agentflow wall-clock, #241) and the final-panel round-1 fixes; commits named by title; executor re-ran every gate on a9's final head.",
+    "anchor": "docs/measurements/2026-10-24-issue-160-step6.md:15-27",
+    "anchor_hash": "056295ad",
+    "fix_commit": "056295ad6edbf9611b64123a8e3de45666ef9bfb",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-C1",
+    "aliases": ["F1-O6"],
+    "source": "code-review+opus",
+    "round": "final r1",
+    "file": "src/engine/gate/policy/policy_engine.rs",
+    "line": 263,
+    "severity": "important",
+    "text": "The policy engine reads a routine missing from raw as 'no inherited facts', silently; R6's fail-loud (inherited_raw() panicked) is gone.",
+    "disposition": "fixed",
+    "evidence": "A routine with a summary is a cone member, and the witness pass gives every in-scope member a raw entry (capability_cone.rs raw_out.insert beside coverage_out). A missing entry now panics with a stated message when the rule reads inherited facts; facts: direct and no-summary routines are unchanged. Tests (hand-stated: Go removed from the policy view's raw map): a_routine_missing_from_raw_fails_loudly (red first: did not panic), a_direct_rule_never_reads_raw. Break: drop the direct exemption -> a_direct_rule FAILS.",
+    "anchor": "src/engine/gate/policy/policy_engine.rs:265-282",
+    "anchor_hash": "d22b0129",
+    "fix_commit": "d22b0129",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-C2",
+    "source": "code-review",
+    "round": "final r1",
+    "file": "src/engine/l4/exec_relation.rs",
+    "line": 97,
+    "severity": "important",
+    "text": "ExecRelation::new keeps the dependency CallEdge Vec for the relation's lifetime, so every cross-app command holds it, though only digest's tree reads it.",
+    "disposition": "fixed",
+    "evidence": "ExecRelation::new borrows the dependency calls again (master's shape); R3a5CrossAppBase holds them as an Option; View::prepare takes them in its first prepare, passes them to compose_tree under a tree plan and drops them right after, and drops them at once otherwise. Test the_dependency_calls_leave_the_base_in_the_first_prepare (digest's unresolved cone lists the dependency's R.NoSuchMethod; base empty after digest and analyze prepares). Breaks: view passes no calls -> FAIL; clone instead of take -> FAIL. CDO cross-app analyze peak (VmHWM, 3 interleaved rounds, release-fast): parent 0b0b95c9 3,111,080/3,133,272/3,157,644 KiB (min/median/max), old head 72a30b67 3,130,276/3,136,376/3,142,660, new head 8ba75e0d 3,136,392/3,146,380/3,165,060: all within the parent's own 46.6 MB spread; no measurable peak change either way (the analyze peak is not where the calls were alive). Output diff parent vs new head is master's #252/#256 delta only (old head == parent byte-identical bar generatedAt; new head differs in d35 severity and looseFingerprint).",
+    "anchor": "src/engine/session.rs:465-472, src/engine/l4/capability_cone.rs:3695-3700",
+    "anchor_hash": "8ba75e0d",
+    "fix_commit": "8ba75e0d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-C3",
+    "source": "code-review",
+    "round": "final r1",
+    "file": "src/engine/session.rs",
+    "line": 541,
+    "severity": "minor",
+    "text": "prepare releases Caps after a raw-only composition, so a later SUMMARIES prepare panics with the generic refill message.",
+    "disposition": "fixed",
+    "evidence": "The refill check gives Caps its own text ('a View composes once, in its first composing prepare: ...'); Det is checked first, so a refill after release(Det) still names Det. Test a_det_fill_after_a_raw_only_composition_names_the_rule (red first: generic text).",
+    "anchor": "src/engine/session.rs:418-432",
+    "anchor_hash": "a25d0cad",
+    "fix_commit": "a25d0cad",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-C4",
+    "source": "code-review",
+    "round": "final r1",
+    "file": "src/engine/l5/snapshot.rs",
+    "line": 161,
+    "severity": "minor",
+    "text": "compose_tree's identities argument is always None (identity table built twice); OwnerIndex is built twice in digest_pipeline_with.",
+    "disposition": "fixed",
+    "evidence": "The dead parameter is deleted; the doc states why digest's root resolution builds and drops its own table first (so it never sits beside the composition peak). OwnerIndex partly refuted: the first borrows the model and View::prepare takes the view mutably, so one index cannot live across prepare; it is small (primary routines only) and the second build is commented.",
+    "anchor": "src/engine/l5/snapshot.rs:1365-1380, src/engine/l5/digest_cli.rs:1796",
+    "anchor_hash": "8ebeebf5",
+    "fix_commit": "8ebeebf5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-C5",
+    "source": "code-review",
+    "round": "final r1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1812,
+    "severity": "minor",
+    "text": "The &no_roots vs view.effects() choice repeats digest_plan's needs_tree condition by hand.",
+    "disposition": "fixed",
+    "evidence": "Plan::needs_tree() is the one answer; digest reads it.",
+    "anchor": "src/engine/session.rs:279-283, src/engine/l5/digest_cli.rs:1784",
+    "anchor_hash": "8ebeebf5",
+    "fix_commit": "8ebeebf5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-C6",
+    "source": "code-review",
+    "round": "final r1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1072,
+    "severity": "minor",
+    "text": "run_digest_query_full_from_entries deep-clones every root's unresolved items and traversal.",
+    "disposition": "fixed",
+    "evidence": "It takes &mut DigestEffects and removes each root's cone (moved, not cloned); digest takes the effects off the view (View::take_effects) and still releases Cell::Effects where it did; prove passes its own.",
+    "anchor": "src/engine/l5/digest_cli.rs:1058-1076",
+    "anchor_hash": "8ebeebf5",
+    "fix_commit": "8ebeebf5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-C7",
+    "source": "code-review",
+    "round": "final r1",
+    "file": "src/engine/l5/detector_context.rs",
+    "line": 1462,
+    "severity": "minor",
+    "text": "build_detector_artifacts opens a second context.capability_cones span around summary assembly.",
+    "disposition": "fixed",
+    "evidence": "Renamed context.summaries_assemble. The only test reading the old name (cli_build_counters exit_after_still_reports_both_peaks, ALSEM_TRACE_EXIT_AFTER=context.capability_cones) reads the composition's span, which keeps its name; no counter test reads either.",
+    "anchor": "src/engine/l5/detector_context.rs:1465-1467",
+    "anchor_hash": "8ebeebf5",
+    "fix_commit": "8ebeebf5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-C8",
+    "source": "code-review",
+    "round": "final r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 5070,
+    "severity": "minor",
+    "text": "reconstruct_witness_paths_pub builds a fresh CarrierCache per call.",
+    "disposition": "fixed",
+    "evidence": "It takes the caller's &CarrierCache (now pub); the fingerprint query holds one for the whole query, across roots.",
+    "anchor": "src/engine/l5/fingerprint_query.rs:727, src/engine/l5/digest.rs:5175-5185",
+    "anchor_hash": "8ebeebf5",
+    "fix_commit": "8ebeebf5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1-C9",
+    "source": "code-review",
+    "round": "final r1",
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 4118,
+    "severity": "minor",
+    "text": "Doc comments still describe the deleted ConeOutput::RawOnly/DerivedOnly/Both modes.",
+    "disposition": "fixed",
+    "evidence": "The named sites (capability_cone.rs :2038, :2136, :2534, :4118; cone_derived.rs :498, :940) and the other production docs (detector_context.rs census docs, capability_query.rs, capability_cone.rs :2021, :2488, :2845, :4413, :6425, :6581, :6591) say ConeScope now. Left: the test-only scope_of parity helpers and the tests written against them keep the old names, documented as the former modes.",
+    "anchor": "src/engine/l4/capability_cone.rs:4136-4141",
+    "anchor_hash": "8ebeebf5",
+    "fix_commit": "8ebeebf5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
 ]
