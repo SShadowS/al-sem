@@ -72,6 +72,10 @@ Source: `/work/bench/160-9/OPERATOR-DECISIONS-2026-10-24.md`; probe record
    inventory rows stay primary (#220's key classes).
 2. **`--single-app`** on `prove` and `fingerprint` restores the base's output byte for byte on these forms,
    except the one stated fix of §4.3 (`mayCommit` over inherited coverage), which moves both universes.
+   **Every byte-identity gate in this spec and the plan** (T7, T8, T18, T23, §8.3 Part 1, plan 3.5 and 6.x)
+   allows exactly two differences in `kind: fingerprint-query` JSON and nothing else: that `mayCommit` field
+   (triaged per §3's move table), and the `schemaVersion` line `1.2.0` → `1.3.0` (O9-25). Prove, inventory and
+   B0/`diff` documents allow no version change.
 3. **The query path filters by role** (epic Decision 28): a selector never resolves to a dependency routine,
    and `totalClassifications` counts primary root classifications only.
 4. **No false PROVEN and no false `no` cross-app** (E6): a cone that enters body-less, ABI-only or opaque
