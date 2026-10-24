@@ -78,20 +78,59 @@ const WORKSPACE_FILES: &[&str] = &[
     "al-sem.policy.yml",
 ];
 
-/// `p` against `cwd`, `.` and `..` folded lexically (no link is followed:
-/// two spellings through a symlink are two paths, stated).
+/// `p` against `cwd`, `.` and `..` folded lexically, then its deepest
+/// existing ancestor canonicalized and the rest appended (R8-1): two
+/// spellings of one file through a symlink, a Windows case difference or an
+/// 8.3 name are one path. The part that does not exist yet is compared as
+/// spelled, lowercased on Windows (a case-insensitive file system).
 fn resolve(cwd: &Path, p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
+    let mut lexical = PathBuf::new();
     for c in cwd.join(p).components() {
         match c {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                out.pop();
+                lexical.pop();
             }
-            c => out.push(c),
+            c => lexical.push(c),
         }
     }
-    out
+    let mut rest = Vec::new();
+    let mut base = lexical.as_path();
+    loop {
+        if let Ok(canonical) = std::fs::canonicalize(base) {
+            return rest
+                .iter()
+                .rev()
+                .fold(canonical, |p, name: &std::ffi::OsString| {
+                    if cfg!(windows) {
+                        p.join(name.to_string_lossy().to_lowercase())
+                    } else {
+                        p.join(name)
+                    }
+                });
+        }
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                base = parent;
+            }
+            _ => return lexical,
+        }
+    }
+}
+
+/// Whether a workspace read of `ws` takes the file `f` (`WorkspaceInputs::read`,
+/// the policy auto-detect, the dependency loader): an `.al` or `.app` file or
+/// one of [`WORKSPACE_FILES`] under `ws` (any case, as the loader matches),
+/// or an `.app` in an ancestor `.alpackages` the loader reads (R8-3).
+fn read_by_workspace(ws: &Path, f: &Path) -> bool {
+    use crate::dependencies::{Role, cache_scope_role, package_cache_scope};
+    let under_ws = f.starts_with(ws)
+        && (crate::source_text::has_al_extension(f)
+            || f.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))
+            || f.file_name()
+                .is_some_and(|n| WORKSPACE_FILES.iter().any(|w| n.eq_ignore_ascii_case(w))));
+    under_ws || cache_scope_role(&package_cache_scope(ws), f) == Some(Role::AppFile)
 }
 
 /// Every write target of the run checked before any build (D2.4, 12A-10):
@@ -155,10 +194,7 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
             let ws = resolve(cwd, ws);
             for (w, t) in writes.iter().filter(|(w, _)| *w != r) {
                 let Target::File(f) = t else { continue };
-                let read_by_ws = f.extension().is_some_and(|e| e == "al" || e == "app")
-                    || f.file_name()
-                        .is_some_and(|n| WORKSPACE_FILES.iter().any(|w| n == *w));
-                if f.starts_with(&ws) && read_by_ws {
+                if read_by_workspace(&ws, f) {
                     return fail(format!(
                         "{} reads the workspace {}, where {} writes {}",
                         name(r),

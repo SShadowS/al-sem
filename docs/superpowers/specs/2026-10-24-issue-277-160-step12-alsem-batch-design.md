@@ -290,7 +290,9 @@ their relative order is not observable there; the order between stream and file 
   "analysis failure" branch); under the one write-failure rule (Decision 49) it becomes `al-sem: write error:
   <path>: <OS message>` with analyze's write-failure exit 2, and stdout stays unwritten in both. T23 states
   both behaviours (the base text and exit from a golden minted at Task 0, the new ones asserted);
-- **two targets that are the same file** (compared after resolution), across ALL jobs of the run AND within
+- **two targets that are the same file** (compared after resolution: `.`/`..` folded, then the deepest
+  existing ancestor canonicalized and the rest appended, lowercased on Windows; amended at the Task 8 review,
+  R8-1, so a symlink, a Windows case difference or an 8.3 name is no longer a limit), across ALL jobs of the run AND within
   one job (its `stdout` and `stderr` naming one file);
 - **a file inside a directory target, or two nested directory targets** (a shard directory and another
   target under it; `alsem.rs:1416-1430` creates shard files inside the directory);

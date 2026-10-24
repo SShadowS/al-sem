@@ -83,6 +83,16 @@ fn write_errors(out: &Output) -> Vec<String> {
         .collect()
 }
 
+/// `dir/link` a symlink to `dir/real`: one file's two spellings,
+/// `(link/x.json, real/x.json)`. None where a symlink needs a privilege.
+fn symlinked_dir(dir: &Path) -> Option<(String, String)> {
+    std::fs::create_dir(dir.join("real")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+    let file = |d: &str| dir.join(d).join("x.json").to_string_lossy().into_owned();
+    cfg!(unix).then(|| (file("link"), file("real")))
+}
+
 /// T5 (b)-(b5), 12A-10: each conflicting manifest is refused before any build:
 /// exit 3, `build.program` 0, nothing written, one stderr line naming both jobs.
 #[test]
@@ -103,7 +113,51 @@ fn batch_write_conflicts_are_usage_errors() {
     };
     let events_out = |out: &str| job(&["events", "fanout", &ws, "--out", out], None, None);
     let same = d.path().join("same.txt");
-    let cases: Vec<(&str, Vec<Value>, &str)> = vec![
+    // R8-2: an upper-case `.AL` the source walk takes.
+    let upper_al = dep.path().join("src/X.AL").to_string_lossy().into_owned();
+    // R8-3: an `.app` in an ancestor `.alpackages` the loader reads.
+    let a = tempfile::tempdir().unwrap();
+    std::fs::create_dir(a.path().join("ws")).unwrap();
+    let nested_ws = a.path().join("ws").to_string_lossy().into_owned();
+    let ancestor_app = a
+        .path()
+        .join(".alpackages/y.app")
+        .to_string_lossy()
+        .into_owned();
+    // R8-1: one directory under two spellings (a unix symlink; Windows needs
+    // a privilege to make one, so the row is unix-only).
+    let s = tempfile::tempdir().unwrap();
+    let linked = symlinked_dir(s.path());
+    let mut cases: Vec<(&str, Vec<Value>, &str)> = linked
+        .iter()
+        .map(|(via_link, via_real)| {
+            (
+                "(R8-1) a write through a symlink, a read through its target",
+                vec![
+                    events_out(via_link),
+                    job(&["diff", via_real, &ws], None, None),
+                ],
+                "which batch 0 job 0 writes",
+            )
+        })
+        .collect();
+    cases.extend([
+        (
+            "(R8-2) an upper-case .AL file in another job's workspace",
+            vec![
+                job(&["events", "fanout", &dep_ws], None, None),
+                events_out(&upper_al),
+            ],
+            "reads the workspace",
+        ),
+        (
+            "(R8-3) an .app in an ancestor .alpackages of another job's workspace",
+            vec![
+                job(&["events", "fanout", &nested_ws], None, None),
+                events_out(&ancestor_app),
+            ],
+            "reads the workspace",
+        ),
         (
             "(b) two jobs, one --out",
             vec![fp(&x), events_out(&x)],
@@ -202,10 +256,9 @@ fn batch_write_conflicts_are_usage_errors() {
             ],
             "reads the workspace",
         ),
-    ];
-    for (case, jobs, why) in cases {
-        let run = tempfile::tempdir().unwrap();
-        let (out, events) = run_manifest(run.path(), &jobs, None, &[], None);
+    ]);
+    let refused = |case: &str, run: &Path, jobs: &[Value], why: &str| {
+        let (out, events) = run_manifest(run, jobs, None, &[], None);
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         assert_eq!(out.status.code(), Some(3), "{case}: {stderr}");
         assert_eq!(count(&last_counters(&events), "build.program"), 0, "{case}");
@@ -217,7 +270,23 @@ fn batch_write_conflicts_are_usage_errors() {
         );
         let written: Vec<_> = std::fs::read_dir(d.path()).unwrap().collect();
         assert!(written.is_empty(), "{case}: nothing written: {written:?}");
+    };
+    for (case, jobs, why) in cases {
+        refused(case, tempfile::tempdir().unwrap().path(), &jobs, why);
     }
+    // R8-4: a job's `--out` names another job's default stream file, which
+    // the manifest puts beside itself.
+    let run = tempfile::tempdir().unwrap();
+    let stream = run.path().join("0.0.stdout").to_string_lossy().into_owned();
+    refused(
+        "(R8-4) a --out on another job's default stream file",
+        run.path(),
+        &[
+            job(&["events", "fanout", &ws], None, None),
+            events_out(&stream),
+        ],
+        "both write",
+    );
     // The workspace's own file is untouched.
     assert!(
         std::fs::read_to_string(&app_json)
@@ -351,6 +420,12 @@ fn batch_job_write_failures() {
     );
     let events_out = std::fs::read(d.path().join("0.2.stdout")).unwrap();
     assert!(!events_out.is_empty(), "the events job was written");
+    // R8-4 (D2.2 order): job 1's stdout file failed, so its stderr file
+    // (a writable default) was never created.
+    assert!(
+        !d.path().join("0.1.stderr").exists(),
+        "a failed stdout file stops the job before its stderr file"
+    );
 }
 
 /// T24 (a), S18: a file/file `diff` (two snapshot files a separate run wrote)
