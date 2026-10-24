@@ -1,0 +1,1 @@
+al-sem: write error: tests/gate-goldens/batch/merged-streams/no-such-dir/p.json: No such file or directory (os error 2)

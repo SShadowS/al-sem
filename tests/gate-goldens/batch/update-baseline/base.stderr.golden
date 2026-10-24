@@ -1,0 +1,1 @@
+al-sem: failed to write baseline 'tests/gate-goldens/batch/update-baseline/no-such-dir/b.json': No such file or directory (os error 2)
