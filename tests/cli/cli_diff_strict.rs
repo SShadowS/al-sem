@@ -58,7 +58,7 @@ pub(crate) fn error_ws(root: &Path, name: &str) -> PathBuf {
     ws
 }
 
-fn alsem_diff(args: &[&str]) -> Output {
+pub(crate) fn alsem_diff(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_alsem"))
         .arg("diff")
         .args(args)

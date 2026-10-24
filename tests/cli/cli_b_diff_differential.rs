@@ -1652,6 +1652,376 @@ fn issue156_fq05_user_target_never_auto_pairs() {
     );
 }
 
+// ===========================================================================
+// #237 — rename normalization is ONE hop, for user and auto entries alike: no
+// entry may put two live old routines on one key. When the inputs still do (a
+// user target that is a live old routine nothing maps away), the report says so
+// with `rename-overlay-collision`. Every test runs the real `alsem diff` binary on
+// CBOR snapshots with no coverage records, so a lost capability is
+// `capability-lost-under-coverage`.
+// ===========================================================================
+
+/// A public member-less procedure `{OBJ156}#{sig}` named `name`.
+fn proc237<'a>(sig: &str, name: &'a str) -> (CborValue, &'a str) {
+    (
+        routine_fact(OBJ156, sig, "public", Some("procedure"), &[]),
+        name,
+    )
+}
+
+/// One `insert` capability fact on each of `sigs`.
+fn inserts237(sigs: &[&str]) -> Vec<(&'static str, CborValue)> {
+    let facts = sigs
+        .iter()
+        .map(|s| cap_fact(&id156(s), "insert", "app/table/1"))
+        .collect();
+    vec![("capabilityFacts", CborValue::Array(facts))]
+}
+
+/// What a #237 test asserts about one `alsem diff` run.
+struct Diff237 {
+    /// `(kind, normalizedStableId, oldOriginalStableId or "")`, sorted.
+    findings: Vec<(String, String, String)>,
+    diagnostics: Vec<serde_json::Value>,
+    renames_applied: i64,
+}
+
+/// Run `alsem diff old.cbor new.cbor --deterministic --renames overlay.json
+/// --format json` (overlay entries by signature, in the given order). Asserts
+/// exit 0.
+fn diff237(old: &CborValue, new: &CborValue, overlay: &[(&str, &str)]) -> Diff237 {
+    let ids: Vec<(String, String)> = overlay.iter().map(|(k, v)| (id156(k), id156(v))).collect();
+    diff237_ids(old, new, &ids)
+}
+
+/// [`diff237`] with overlay entries as full stable ids.
+fn diff237_ids(old: &CborValue, new: &CborValue, overlay: &[(String, String)]) -> Diff237 {
+    use al_sem::engine::gate::cbor::encode;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (o, n, r) = (
+        tmp.path().join("old.cbor"),
+        tmp.path().join("new.cbor"),
+        tmp.path().join("renames.json"),
+    );
+    std::fs::write(&o, encode(old)).expect("write old");
+    std::fs::write(&n, encode(new)).expect("write new");
+    // Written by hand so the overlay keeps its order.
+    let entries: Vec<String> = overlay
+        .iter()
+        .map(|(k, v)| format!("\"{k}\":\"{v}\""))
+        .collect();
+    std::fs::write(&r, format!("{{{}}}", entries.join(","))).expect("write overlay");
+    let (o, n, r) = (
+        o.to_string_lossy(),
+        n.to_string_lossy(),
+        r.to_string_lossy(),
+    );
+    let out = crate::cli_diff_strict::alsem_diff(&[
+        &o,
+        &n,
+        "--deterministic",
+        "--renames",
+        &r,
+        "--format",
+        "json",
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json stdout");
+    let p = &v["payload"];
+    let s = |x: &serde_json::Value| x.as_str().unwrap_or("").to_string();
+    let mut findings: Vec<(String, String, String)> = p["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .map(|f| {
+            (
+                s(&f["kind"]),
+                s(&f["subject"]["normalizedStableId"]),
+                s(&f["subject"]["oldOriginalStableId"]),
+            )
+        })
+        .collect();
+    findings.sort();
+    Diff237 {
+        findings,
+        diagnostics: p["diagnostics"].as_array().expect("diagnostics").clone(),
+        renames_applied: p["summary"]["renamesApplied"]
+            .as_i64()
+            .expect("renamesApplied"),
+    }
+}
+
+/// Expected finding rows, by signature (`""` origin = none).
+fn rows237(rows: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
+    let mut v: Vec<(String, String, String)> = rows
+        .iter()
+        .map(|(k, n, o)| {
+            let origin = if o.is_empty() {
+                String::new()
+            } else {
+                id156(o)
+            };
+            (k.to_string(), id156(n), origin)
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+fn stale237(sig: &str) -> serde_json::Value {
+    serde_json::json!({"kind": "rename-overlay-stale", "staleId": id156(sig), "reason": "not-in-new"})
+}
+
+fn collision237(from: &str, to: &str) -> serde_json::Value {
+    serde_json::json!({"kind": "rename-overlay-collision", "from": id156(from), "to": id156(to)})
+}
+
+/// The issue's shape: old `X` (`aaaa` Alpha, insert) and `T` (`tttt` Beta), new
+/// `U` (`uuuu` Beta, insert), overlay `X→T`. Old `T` auto-pairs to `U`; `X`'s
+/// facts stay on `T` (one hop) and `T` is a removal carrying `X`'s origin.
+fn issue237_a1_assert(t_first: bool) {
+    let (x, t) = (proc237("aaaa", "Alpha"), proc237("tttt", "Beta"));
+    let olds = if t_first { vec![t, x] } else { vec![x, t] };
+    let old = snap156(olds, inserts237(&["aaaa"]));
+    let new = snap156(vec![proc237("uuuu", "Beta")], inserts237(&["uuuu"]));
+    let d = diff237(&old, &new, &[("aaaa", "tttt")]);
+    assert_eq!(d.diagnostics, vec![stale237("tttt")], "no collision");
+    assert_eq!(
+        d.findings,
+        rows237(&[
+            ("procedure-removed", "tttt", "aaaa"),
+            ("capability-lost-under-coverage", "tttt", "aaaa"),
+            ("procedure-signature-changed", "uuuu", ""),
+            ("capability-gained-write", "uuuu", ""),
+        ])
+    );
+    assert_eq!(d.renames_applied, 1);
+}
+
+/// #237 A1 — user `X→T` plus auto `T→U`: one hop, no chain-following.
+#[test]
+fn issue237_a1_user_target_that_auto_pairs_stays_one_hop() {
+    issue237_a1_assert(false);
+}
+
+/// #237 A2 — A1 with the old rows in the other order: the same output.
+#[test]
+fn issue237_a2_one_hop_is_order_independent() {
+    issue237_a1_assert(true);
+}
+
+/// #237 A3 — auto then user: old `A` (`aaaa` Beta, insert) auto-pairs to new
+/// `O#bbbb`, which is also the user key `B→C`. Each old routine keeps its own key.
+#[test]
+fn issue237_a3_auto_target_that_is_a_user_key() {
+    let old = snap156(
+        vec![proc237("aaaa", "Beta"), proc237("bbbb", "Gamma")],
+        inserts237(&["aaaa"]),
+    );
+    let new = snap156(
+        vec![proc237("bbbb", "Beta"), proc237("cccc", "Gamma")],
+        inserts237(&["bbbb"]),
+    );
+    let d = diff237(&old, &new, &[("bbbb", "cccc")]);
+    assert_eq!(d.diagnostics, Vec::<serde_json::Value>::new());
+    assert_eq!(
+        d.findings,
+        rows237(&[
+            ("procedure-signature-changed", "bbbb", ""),
+            ("procedure-signature-changed", "cccc", "bbbb"),
+        ])
+    );
+    assert_eq!(d.renames_applied, 1);
+}
+
+/// #237 A4 — user, auto, user: `X→T` (user), `T→O#bbbb` (auto), `B→C` (user).
+/// Each old routine lands on exactly its own entry's target.
+#[test]
+fn issue237_a4_mixed_chain_of_three() {
+    let old = snap156(
+        vec![
+            proc237("aaaa", "Alpha"),
+            proc237("tttt", "Beta"),
+            proc237("bbbb", "Gamma"),
+        ],
+        inserts237(&["aaaa"]),
+    );
+    let new = snap156(
+        vec![proc237("bbbb", "Beta"), proc237("cccc", "Gamma")],
+        vec![],
+    );
+    let d = diff237(&old, &new, &[("aaaa", "tttt"), ("bbbb", "cccc")]);
+    assert_eq!(d.diagnostics, vec![stale237("tttt")], "no collision");
+    assert_eq!(
+        d.findings,
+        rows237(&[
+            ("procedure-removed", "tttt", "aaaa"),
+            ("capability-lost-under-coverage", "tttt", "aaaa"),
+            ("procedure-signature-changed", "bbbb", ""),
+            ("procedure-signature-changed", "cccc", "bbbb"),
+        ])
+    );
+    assert_eq!(d.renames_applied, 2);
+}
+
+/// #237 A5 — the swap: `X` is in both snapshots, `X→T` (user) and `T→X` (auto).
+/// One hop gives a clean swap: no loop, no collision.
+#[test]
+fn issue237_a5_swap_cycle() {
+    let old = snap156(
+        vec![proc237("aaaa", "Alpha"), proc237("tttt", "Beta")],
+        inserts237(&["aaaa"]),
+    );
+    let new = snap156(vec![proc237("aaaa", "Beta")], vec![]);
+    let d = diff237(&old, &new, &[("aaaa", "tttt")]);
+    assert_eq!(d.diagnostics, vec![stale237("tttt")], "no collision");
+    assert_eq!(
+        d.findings,
+        rows237(&[
+            ("procedure-removed", "tttt", "aaaa"),
+            ("capability-lost-under-coverage", "tttt", "aaaa"),
+            ("procedure-signature-changed", "aaaa", ""),
+        ])
+    );
+    assert_eq!(d.renames_applied, 1);
+}
+
+/// The findings of `d` whose subject is not `collided`. A collided key's findings
+/// are deliberately NOT pinned: two old subjects share it, the maps keep the last
+/// row, so its findings depend on row order and can be false (the stated limit of
+/// #237). Only the diagnostic and every other key's findings are pinned.
+fn findings_off237(d: &Diff237, collided: &str) -> Vec<(String, String, String)> {
+    d.findings
+        .iter()
+        .filter(|(_, key, _)| key != collided)
+        .cloned()
+        .collect()
+}
+
+/// #237 D1a/D1b — a user target that is a live old routine nothing maps away:
+/// old `X` and `T`, new `T` unchanged, overlay `X→T`. Both old routines land on
+/// `T`, so the report carries one `rename-overlay-collision`, in either row order.
+#[test]
+fn issue237_d1ab_user_target_is_a_live_unmapped_old_routine() {
+    for t_first in [false, true] {
+        let (x, t) = (proc237("aaaa", "Alpha"), proc237("tttt", "Beta"));
+        let olds = if t_first { vec![t, x] } else { vec![x, t] };
+        let old = snap156(olds, inserts237(&["aaaa"]));
+        let new = snap156(vec![proc237("tttt", "Beta")], vec![]);
+        let d = diff237(&old, &new, &[("aaaa", "tttt")]);
+        assert_eq!(
+            d.diagnostics,
+            vec![collision237("aaaa", "tttt")],
+            "t_first={t_first}"
+        );
+        assert_eq!(findings_off237(&d, &id156("tttt")), rows237(&[]));
+        assert_eq!(d.renames_applied, 1);
+    }
+}
+
+/// #237 D1c — the issue's shape when the auto pair cannot form (new `U` is
+/// `local`, so its ABI status differs): `X` and `T` collide on `T`.
+#[test]
+fn issue237_d1c_issue_shape_without_the_pair_abi_differs() {
+    let old = snap156(
+        vec![proc237("aaaa", "Alpha"), proc237("tttt", "Beta")],
+        inserts237(&["aaaa"]),
+    );
+    let new = snap156(
+        vec![(
+            routine_fact(OBJ156, "uuuu", "local", Some("procedure"), &[]),
+            "Beta",
+        )],
+        vec![],
+    );
+    let d = diff237(&old, &new, &[("aaaa", "tttt")]);
+    assert_eq!(
+        d.diagnostics,
+        vec![stale237("tttt"), collision237("aaaa", "tttt")]
+    );
+    assert_eq!(findings_off237(&d, &id156("tttt")), rows237(&[]));
+    assert_eq!(d.renames_applied, 1);
+}
+
+/// #237 D1d — the issue's shape with an ambiguous group (two old `Beta`s), so
+/// no pair forms: `X` and `T` collide on `T`.
+#[test]
+fn issue237_d1d_issue_shape_without_the_pair_ambiguous() {
+    let old = snap156(
+        vec![
+            proc237("aaaa", "Alpha"),
+            proc237("tttt", "Beta"),
+            proc237("t2t2", "Beta"),
+        ],
+        inserts237(&["aaaa"]),
+    );
+    let new = snap156(vec![proc237("uuuu", "Beta")], inserts237(&["uuuu"]));
+    let d = diff237(&old, &new, &[("aaaa", "tttt")]);
+    assert_eq!(
+        d.diagnostics,
+        vec![stale237("tttt"), collision237("aaaa", "tttt")]
+    );
+    assert_eq!(
+        findings_off237(&d, &id156("tttt")),
+        rows237(&[
+            ("procedure-removed", "t2t2", ""),
+            ("procedure-added", "uuuu", ""),
+            ("capability-gained-write", "uuuu", ""),
+        ])
+    );
+    assert_eq!(d.renames_applied, 1);
+}
+
+/// #237 D1e (CR1) — field and key ids have schema facts but no identity row
+/// (`derive_identity_table` writes objects, tables and routines only), yet
+/// `normalize` re-keys schema facts too. An overlay `#1→#2` between two old fields
+/// of one table puts both on `#2`: the collision fires, and `#1` is not called
+/// stale, since a fact subject is live.
+#[test]
+fn issue237_d1e_field_ids_live_through_schema_facts() {
+    let table = "appguid-1:Table:1";
+    let field = |n: &str| format!("{table}#{n}");
+    let schema = |fields: &[(&str, &str)]| {
+        let mut facts = vec![obj(vec![
+            ("kind", txt("table")),
+            ("shapeFingerprint", txt("t")),
+            ("stableId", txt(table)),
+        ])];
+        for (n, shape) in fields {
+            facts.push(obj(vec![
+                ("kind", txt("field")),
+                ("shapeFingerprint", txt(shape)),
+                ("stableId", txt(&field(n))),
+            ]));
+        }
+        snapshot(vec![
+            (
+                "identities",
+                obj(vec![
+                    ("stableIds", CborValue::Array(vec![txt(table)])),
+                    ("displayNames", CborValue::Array(vec![txt("Tbl")])),
+                ]),
+            ),
+            ("schemaFacts", CborValue::Array(facts)),
+        ])
+    };
+    let old = schema(&[("1", "a"), ("2", "b")]);
+    let new = schema(&[("2", "b")]);
+    let d = diff237_ids(&old, &new, &[(field("1"), field("2"))]);
+    assert_eq!(
+        d.diagnostics,
+        vec![
+            serde_json::json!({"kind": "rename-overlay-collision", "from": field("1"), "to": field("2")})
+        ]
+    );
+    assert_eq!(findings_off237(&d, &field("2")), rows237(&[]));
+}
+
 /// `(category, kind, displayName)` of every finding, sorted.
 fn summary_rows(r: &al_sem::engine::gate::diff::DiffEngineResult) -> Vec<(String, String, String)> {
     let mut v: Vec<(String, String, String)> = r
