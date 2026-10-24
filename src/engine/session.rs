@@ -1096,7 +1096,8 @@ impl View {
     }
 
     /// The filled cells, the relation's strong count (the target's own handle
-    /// included) and whether a tree is alive.
+    /// included; once an earlier job released `Cell::Base`, the view cell's,
+    /// else 0, #277 final r1 FR-4) and whether a tree is alive.
     fn census_output_line(&self) -> String {
         let cells: Vec<&str> = [
             ("Rel", self.rel.is_some()),
@@ -1112,10 +1113,11 @@ impl View {
         .into_iter()
         .filter_map(|(name, filled)| filled.then_some(name))
         .collect();
-        let rel_strong = match &self.target {
-            AnalysisTarget::CrossApp(b) => Arc::strong_count(b.rel()),
-            AnalysisTarget::SingleApp(_) => self.rel.as_ref().map_or(0, Arc::strong_count),
+        let rel = match &self.target {
+            AnalysisTarget::CrossApp(b) => b.held_rel().or(self.rel.as_ref()),
+            AnalysisTarget::SingleApp(_) => self.rel.as_ref(),
         };
+        let rel_strong = rel.map_or(0, Arc::strong_count);
         format!(
             "[retained-census] view.output cells={} rel_strong={rel_strong} tree={}",
             cells.join(","),

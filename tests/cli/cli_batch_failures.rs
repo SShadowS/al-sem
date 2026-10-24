@@ -121,3 +121,28 @@ fn batch_view_log_lines_once() {
         assert_eq!(own.lines().filter(is_log).count(), 0, "job {i}: {own}");
     }
 }
+
+/// #277 final r1 FR-6 (A12.6): graph and analyze on a workspace with no `id`
+/// share ONE program build: analyze's coverage comes off the program graph
+/// read. The workspace carries a source-bearing dependency, so a coverage
+/// that depended on the build's scope would show. Each job equals standalone.
+#[test]
+fn graph_and_analyze_without_an_id_build_once() {
+    let (d, ws) = ws_dep();
+    let app = d.path().join("app.json");
+    let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&app).unwrap()).unwrap();
+    assert!(doc.as_object_mut().unwrap().remove("id").is_some());
+    std::fs::write(&app, doc.to_string()).unwrap();
+    let jobs = vec![
+        argv(&["graph", &ws]),
+        argv(&["analyze", &ws, "--format", "json", "--deterministic"]),
+    ];
+    let run = batch(&jobs);
+    assert_each_standalone(&run, &jobs, None);
+    assert_eq!(
+        count(&run.counters, "build.program"),
+        1,
+        "{:?}",
+        run.counters
+    );
+}

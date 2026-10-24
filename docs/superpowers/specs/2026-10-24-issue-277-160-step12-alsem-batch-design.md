@@ -174,7 +174,7 @@ job's stderr.
 |---|---|---|---|---|
 | A12.1 | plan; one view per key; fixed job order | D4, D5; T3, T4, T21 | yes | yes |
 | A12.2 | one pass at the union (E1) | D5; T3 (cross-app view: `cone` 1, `witness` 1); T14 (lib, union); T19 (an empty request with a tree composes once; no request, no tree, no run composes zero times) | yes; a single-app view with cut readers: `cone` = 1 + one per cut reader, `witness` = one per cut reader (decided, §9) | yes; single-app views with B0 or `diff`: the same stated row |
-| A12.3 | `JobOutput` writes; §5.11 batch rules (`--format auto` = Json, one `--diff -` reader, writes in job order) | D2, D3, D6; T5, T10, T20; T1's analyze job with no `--format` | yes | yes |
+| A12.3 | `JobOutput` writes; §5.11 batch rules (`--format auto` = Json, one `--diff -` reader, writes in job order) | D2, D3, D6; T5, T10, T20; T1's analyze job with no `--format`; `batch_auto_format_is_json_on_a_terminal` (amended at final round 1, FR-1: T1 pipes both sides, so it cannot see the terminal branch; a debug-only seam, `ALSEM_TEST_STDOUT_IS_TERMINAL`, makes stdout a terminal without a pty, and one batch and two batches must both write the JSON). `--format auto` resolves to Json for every batch job, one batch in-process included, whatever the run's own stdout is | yes | yes |
 | A12.4 | no `--threads` | Decision 36; T8 | yes | yes |
 | A12.5 | per job: stdout, stderr lines, write order, exit, files equal standalone (E13) — **the contract test over every command**. Stated exceptions in a batch (12A-17): a view's `log` lines and a job's own write-error line go to the worker's stderr | T1 (every batchable command and form, both universes, one batch vs each job standalone); T2; T20 (write order under `2>&1`); T21 (diff sides); T22 (case B tree reads, on rebase); T24 (zero-view jobs); T12 and T5 (d) pin the two exceptions; §7 Part 1 on CDO | yes | yes |
 | A12.6 | one build / `det` / cone / witness pass per view; **separate passes → the counter reads 2 and the test fails** | T3: D10's rows exactly; its break builds one `View` per job, so `build.program`, `build.detector_context` and `build.witness_pass` read 2 and T3 fails on `assert_row` | yes | yes |
@@ -247,6 +247,14 @@ A one-view job has one side and a trivial `finalize`. `PlanPart` carries the job
 - `stdout` / `stderr` (optional): where the job's streams go; default `DIR/<batch>.<job>.stdout` /
   `.stderr` (`DIR` defaults to the manifest's directory). Relative paths resolve against the manifest's
   directory; `--out`/`--shard`/`--baseline` paths in `argv` resolve as standalone (against the process cwd).
+  **Amended at final round 1 (FR-13):** a stream path whose directory does not exist, or an `--out-dir` that
+  is not a directory, is a usage error (exit 3) before any job is planned or built; it used to surface as
+  every job's write failure after the whole batch had run. A job's own `--out` keeps its standalone rule
+  (its write failure is its exit, D2.2).
+- **Amended at final round 1 (FR-2):** a job that fails its own validation writes only its two streams, so
+  its write set (D2.4) holds them alone: nothing its command line names (e.g. `fingerprint --shard` without
+  `--out` names no shard directory) can clash, and the job runs as a zero-view `Failed` job with its
+  standalone text and exit while the other jobs run (T24 (b)).
 
 **D2.2 The run's own output and exit (decided, Q-a).**
 - **Run stdout**: one JSON line per job, in manifest order (batch, then job), `{"batch":b,"job":i,
@@ -303,6 +311,12 @@ their relative order is not observable there; the order between stream and file 
   the conflict is refused, not ordered.
 - `--diff -`: with one batch, read once in-process (D3). With several, the parent reads stdin once and
   passes the bytes to every child that needs them on the child's stdin.
+- **Amended at final round 1 (FR-3, FR-5).** The manifest is a file the run reads: a job that writes it is
+  refused like any read-after-write ("the run reads …"). A workspace read's files are also compared at the
+  canonical target of every symlink the loader follows (the source walk, the config reads, the package
+  loader's `.alpackages` files): a link inside the workspace to a file outside it clashes with a write of
+  that file. The walk takes every `.al`/`.app`/config-named file under the workspace (a superset), so it can
+  refuse where no read would happen, never miss one.
 
 **D2.5 Workers.** With two or more batches, the parent spawns one child per batch (`current_exe()`, hidden
 `alsem batch --worker <b> <manifest>`), at most `W` at once, in manifest order (D12). Each child writes its
@@ -310,6 +324,10 @@ own jobs' actions (D6) and prints its job lines to its stdout; the parent collec
 manifest order after the last child exits. A child's stderr carries only process lines (D7) and write-error
 lines; the parent forwards it whole line by whole line, prefixed `[w<b>] `, so two children's lines never
 mix inside a line (decided, Q-d). **One batch** runs in-process (no child, no prefix).
+**Amended at final round 1 (FR-3):** a child never opens the manifest. The parent writes the child's batch
+on its stdin (`WorkerInput`: each job's argv and streams, the parent's `--changed` decisions, the parent's
+one stdin read); the `<manifest>` argument stays only as a name. A job writing the manifest, or a file an
+earlier batch writes that the parent took for absent, therefore cannot change what a later child runs.
 
 ### 4.3 D3: inputs split; validation before the build (Decision 7)
 
@@ -331,6 +349,16 @@ mix inside a line (decided, Q-d). **One batch** runs in-process (no child, no pr
   `diff --renames` keeps its order (Decision 7). One T9 case per change.
 - **One `--diff -` reader** (§5.11): the driver reads stdin once (`alsem.rs:1101` `read_to_string(&mut buf)`
   moves into the driver) if any job says `--diff -`; every such job gets the same text.
+- **Amended at final round 1 (FR-3, FR-7, FR-8, FR-11, FR-14).** The parent plans every job once, before
+  any write check: its validation, whether `digest --changed <value>` names an existing diff file (decided
+  here, once, and handed to the workers, so the write check sees the real read), and its stdin read. Stdin
+  is read exactly when a job that passed its validation and its `--changed` override reads it, as
+  standalone; a job that never reads it (`--diff - --changed <file>`, a bad `--format`) never blocks the
+  run on stdin. A read that fails is every such job's standalone `al-sem: digest: failed to read diff from
+  stdin`, exit 3, in every worker. A job that fails its validation after its workspace read (a policy that
+  does not load) gives the read up when it fails; `fingerprint --shard` without `--out` fails before the
+  read. Only a job that will build a view counts toward admission (D12). The jobs are made in a loop into
+  per-job slots the batch owns (FR-12), never one call deeper per job.
 
 ### 4.4 D4: views, their order, their key, their builder, the plan
 
@@ -541,7 +569,11 @@ after the last view: (11) again, for every job left
   `view.release_all_but(&[])` after its run, `run.rs:522`; policy `release_all_but(&[Cell::Det, Cell::Raw])`;
   fingerprint `take_run` then `release_all_but(&[])`; digest `release(Cell::L4)`, `release(Cell::Effects)`).
   In a batch each cell is released after the last demand that declared it reads it (`PlanPart` declares
-  reads). A one-job batch releases where the standalone does today (B4).
+  reads). A one-job batch releases where the standalone does today (B4). Amended at final round 1 (FR-9):
+  a declaration states only what the job really reads; `policy check --no-policy` declares `det` alone (its
+  keep list is the same `reads`), so a policy with rules before it frees `raw` after its own use.
+  Amended at final round 1 (FR-6, A12.6): beside graph on a workspace with no `id`, analyze's coverage is
+  taken from the cross-app program graph reads, not from a second, single-app build.
 - **D6.2 Runs.** `take_run` becomes "the driver drops its `Arc` after the last reader".
 - **D6.3 What a worker retains across a view boundary** (S6). Item (11) writes a job as soon as it and every
   earlier job are finished, so a worker holds across a view boundary only:
@@ -689,7 +721,9 @@ Two rules, kept apart (S7):
   `W = max(1, min(batches in the manifest, 4, ⌊E16_BUDGET_KIB / P⌋))`, and **`W ≤ 2` when the manifest
   contains `policy check`** (decided; the cap is applied after the formula's `min`, in the same function, so
   it never raises `W`: with policy, `W` = min(formula, 2)). `P` = the
-  largest `KIND_PEAK_KIB` row of any job kind in the manifest. Batches start in manifest order; at most `W`
+  largest `KIND_PEAK_KIB` row of any job kind in the manifest that builds a view (amended at final round 1,
+  FR-14: a job that fails its own validation, or a `diff` of two snapshot files, counts for none; a
+  fingerprint's universe is read only after its validation). Batches start in manifest order; at most `W`
   run at once. The parent emits a trace instant `batch.workers` (`w`, `p_kib`, `policy_cap`). When
   `⌊E16_BUDGET_KIB / P⌋ = 0` (no row today comes near), `W` = 1 and the parent prints one stderr line
   `al-sem batch: the largest measured job peak exceeds the 28 GiB budget; running one worker`.
@@ -715,7 +749,8 @@ Two rules, kept apart (S7):
   **4** (so `ADF`, `W4`, `W4u` all run at 4); the policy row ≈ max(7.94 GiB, `U` ≈ 8.7 GB) rounds to
   8.25 GiB → with policy: `⌊28 / 8.25⌋ = 3`, capped → **2**; case B rows (prove, `fingerprint --routine`,
   `--inventory-only`, ≈ 3.1-3.3 GB, **estimate**) → **4**.
-- Each worker prints `[batch] worker <b> peak_kib=<VmHWM>` (read from `/proc/self/status` at the end of its
+- Each worker, a one-batch run's in-process worker 0 included (amended at final round 1, FR-10), prints
+  `[batch] worker <b> peak_kib=<VmHWM>` (read from `/proc/self/status` at the end of its
   run; omitted where the file does not exist) to its stderr under `ALSEM_RETAINED_CENSUS=1`, so Part 4 can
   sum per-worker peaks (`RUSAGE_CHILDREN` gives the max, not the sum).
 

@@ -353,7 +353,7 @@ pub struct ViewModel {
 ///
 /// A missing model-instance id: `AnalysisTarget`'s callers report it before
 /// any build; analyze builds the single-app program first, for the coverage
-/// its warning reads.
+/// its warning reads, or, beside graph, reads that of graph's program.
 pub fn build_view_model(
     inputs: &Arc<WorkspaceInputs>,
     key: &ViewKey,
@@ -400,15 +400,18 @@ pub fn build_view_model(
         return Ok(None);
     }
     let Some(mi) = model_instance_id else {
-        drop(program);
-        // shortcut: a graph job beside an analyze on a workspace with no id
-        // costs a second (single-app) program build for analyze's coverage;
-        // upgrade if a batch shape needs it.
-        return if extras {
-            build_single_app(inputs, key.no_roots_config, true).map(Some)
-        } else {
-            Err(no_id())
-        };
+        // Beside graph, analyze's warning reads the coverage of the program
+        // graph read: one build per view (A12.6; #277 final r1 FR-6). It is
+        // reduced before the dependency bodies resolve; its equality with the
+        // single-app build's is pinned on a workspace with a source-bearing
+        // dependency (`graph_and_analyze_without_an_id_build_once`).
+        return Err(ViewFailure {
+            analyze: extras.then(|| {
+                let coverage = program.map(|p| p.into_parts().0.coverage);
+                Box::new((coverage, ModelFailure::NoModelInstanceId))
+            }),
+            ..no_id()
+        });
     };
     use crate::program::model::program_calls::CrossAppFailure;
     match crate::engine::l4::capability_cone::build_cross_app_base_from(

@@ -357,10 +357,11 @@ fn early(stderr_lines: Vec<String>) -> EventsRunResult {
     }
 }
 
-/// Which report an events job writes.
+/// Which report an events job writes; the job owns its options, so a batch
+/// makes its jobs in a loop (#277 final r1 FR-12).
 enum EventsReport<'a> {
-    Fanout(&'a EventsFanoutOptions<'a>),
-    Chains(&'a EventsChainsOptions<'a>),
+    Fanout(EventsFanoutOptions<'a>),
+    Chains(EventsChainsOptions<'a>),
 }
 
 /// `alsem events fanout` / `chains` as a batch job (#277 D1). Its document
@@ -373,7 +374,7 @@ pub struct EventsJob<'a> {
 }
 
 impl<'a> EventsJob<'a> {
-    pub fn fanout(opts: &'a EventsFanoutOptions<'a>, out: Option<&'a str>) -> EventsJob<'a> {
+    pub fn fanout(opts: EventsFanoutOptions<'a>, out: Option<&'a str>) -> EventsJob<'a> {
         Self::with(
             crate::engine::l5::detectors::default_detectors(),
             EventsReport::Fanout(opts),
@@ -381,7 +382,7 @@ impl<'a> EventsJob<'a> {
         )
     }
 
-    pub fn chains(opts: &'a EventsChainsOptions<'a>, out: Option<&'a str>) -> EventsJob<'a> {
+    pub fn chains(opts: EventsChainsOptions<'a>, out: Option<&'a str>) -> EventsJob<'a> {
         Self::with(
             crate::engine::l5::detectors::default_detectors(),
             EventsReport::Chains(opts),
@@ -399,7 +400,7 @@ impl<'a> EventsJob<'a> {
 
     /// The job's workspace, universe, `--strict` and error-line prefix.
     fn head(&self) -> (&'a dyn WorkspaceRead, bool, bool, &'static str) {
-        match self.report {
+        match &self.report {
             EventsReport::Fanout(o) => (o.inputs, o.single_app, o.strict, "al-sem events fanout"),
             EventsReport::Chains(o) => (o.inputs, o.single_app, o.strict, "al-sem events chains"),
         }
@@ -437,7 +438,7 @@ impl Job for EventsJob<'_> {
         let (_, _, strict, _) = self.head();
         let result = match events_head(cx, strict) {
             Err(early) => early,
-            Ok(diag_lines) => match self.report {
+            Ok(diag_lines) => match &self.report {
                 EventsReport::Fanout(o) => fanout_report(cx, o, diag_lines),
                 EventsReport::Chains(o) => chains_report(cx, o, diag_lines),
             },
@@ -500,6 +501,7 @@ fn release_cells(cx: &mut ViewCx<'_>) {
 // ---------------------------------------------------------------------------
 
 /// Options for `run_events_fanout`.
+#[derive(Clone, Copy)]
 pub struct EventsFanoutOptions<'a> {
     /// The command's one read of the workspace (#160), handed to the driver
     /// (#277 R7-1).
@@ -531,7 +533,7 @@ pub(crate) fn events_fanout_with(
     detectors: Vec<Detector>,
     opts: &EventsFanoutOptions,
 ) -> EventsRunResult {
-    EventsJob::with(detectors, EventsReport::Fanout(opts), None).run()
+    EventsJob::with(detectors, EventsReport::Fanout(*opts), None).run()
 }
 
 /// The fanout report off the prepared view, after [`events_head`].
@@ -622,6 +624,7 @@ fn fanout_report(
 // ---------------------------------------------------------------------------
 
 /// Options for `run_events_chains`.
+#[derive(Clone, Copy)]
 pub struct EventsChainsOptions<'a> {
     /// The command's one read of the workspace (#160), handed to the driver
     /// (#277 R7-1).
@@ -654,7 +657,7 @@ pub(crate) fn events_chains_with(
     detectors: Vec<Detector>,
     opts: &EventsChainsOptions,
 ) -> EventsRunResult {
-    EventsJob::with(detectors, EventsReport::Chains(opts), None).run()
+    EventsJob::with(detectors, EventsReport::Chains(*opts), None).run()
 }
 
 /// The chain report off the prepared view, after [`events_head`].

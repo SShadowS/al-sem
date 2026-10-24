@@ -165,6 +165,7 @@ pub struct PolicyCheckOutcome {
 }
 
 /// Options for `run_policy_check`.
+#[derive(Clone, Copy)]
 pub struct PolicyCheckOptions<'a> {
     /// The command's one read of the workspace (#160), handed to the driver
     /// (#277 R7-1).
@@ -185,7 +186,7 @@ pub struct PolicyCheckOptions<'a> {
 /// `runPolicyCheck`. Exit: 0 on success ALWAYS (no fail-on gate); non-zero only on
 /// invalid format / strict analyzer error / policy-load error / write failure.
 pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
-    match PolicyJob::new(opts) {
+    match PolicyJob::new(*opts) {
         Err(early) => early,
         Ok(job) => crate::engine::batch::run_doc(&job)
             .one()
@@ -214,7 +215,7 @@ impl PolicyCheckOutcome {
 /// `alsem policy check` as a batch job (#277 D1). Its document is the
 /// [`PolicyCheckOutcome`].
 pub struct PolicyJob<'a> {
-    opts: &'a PolicyCheckOptions<'a>,
+    opts: PolicyCheckOptions<'a>,
     policy: Option<PolicyDoc>,
     source: String,
 }
@@ -222,8 +223,10 @@ pub struct PolicyJob<'a> {
 impl<'a> PolicyJob<'a> {
     /// The job with its policy resolved, before any build (#277 D3, Decision
     /// 7): a bad policy is reported even when the build would fail, or
-    /// `--strict` would stop on an analyzer diagnostic. `Err` is that report.
-    pub fn new(opts: &'a PolicyCheckOptions<'a>) -> Result<PolicyJob<'a>, PolicyCheckOutcome> {
+    /// `--strict` would stop on an analyzer diagnostic. `Err` is that report;
+    /// the job's workspace read is then given up, so a job with no view holds
+    /// no read for the rest of its batch (#277 final r1 FR-11).
+    pub fn new(opts: PolicyCheckOptions<'a>) -> Result<PolicyJob<'a>, PolicyCheckOutcome> {
         // A set read without a policy request holds no policy file even when the
         // workspace has one: the check would silently run the bundled default.
         assert!(
@@ -235,6 +238,7 @@ impl<'a> PolicyJob<'a> {
                 ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
                 ResolvedPolicy::Disabled => (None, "disabled".to_string()),
                 ResolvedPolicy::Error(lines) => {
+                    drop(opts.inputs.hand_off());
                     return Err(PolicyCheckOutcome {
                         text: None,
                         exit_code: 1,
@@ -270,7 +274,7 @@ impl Job for PolicyJob<'_> {
     fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
         Ok(PlanPart {
             plan: policy_plan(default_detectors(), self.policy.is_some()),
-            reads: vec![Cell::Det, Cell::Raw],
+            reads: self.reads().to_vec(),
             carry: None,
         })
     }
@@ -298,6 +302,16 @@ impl Job for PolicyJob<'_> {
 }
 
 impl PolicyJob<'_> {
+    /// The cells the check reads after the run: `det.summaries`, and the
+    /// view's witness pass (`Cell::Raw`: every primary routine's raw inherited
+    /// facts) only when a policy's rules run (D6.1; #277 final r1 FR-9).
+    fn reads(&self) -> &'static [Cell] {
+        match self.policy {
+            Some(_) => &[Cell::Det, Cell::Raw],
+            None => &[Cell::Det],
+        }
+    }
+
     /// The check off its prepared view.
     fn check(&self, cx: &mut ViewCx<'_>) -> PolicyCheckOutcome {
         let opts = self.opts;
@@ -319,10 +333,8 @@ impl PolicyJob<'_> {
             };
         }
 
-        // #160 step 6 Task 3 (D7 (7)): the rule engine reads `det.summaries` and
-        // the view's witness pass (`Cell::Raw`: every primary routine's raw
-        // inherited facts); nothing else is read after the run.
-        cx.release_all_but(&[Cell::Det, Cell::Raw]);
+        // #160 step 6 Task 3 (D7 (7)): nothing but `reads` is read after the run.
+        cx.release_all_but(self.reads());
         let view = cx.view();
         let resolved = view.model();
         let target = view.target();

@@ -228,3 +228,205 @@ fn batch_worker_killed() {
     }
     assert_eq!(out.status.code(), Some(1), "the run lost a worker's lines");
 }
+
+/// The debug seam that makes `alsem` take its stdout for a terminal.
+#[cfg(debug_assertions)]
+const TTY_SEAM: (&str, &str) = ("ALSEM_TEST_STDOUT_IS_TERMINAL", "1");
+
+/// #277 final r1 FR-1 (A12.3): in a batch, analyze's `--format auto` (its
+/// default) is JSON whatever the process's stdout is. Under the debug seam
+/// standalone analyze prints terminal text (precondition); one batch and two
+/// batches each write the JSON standalone prints off a terminal.
+#[cfg(debug_assertions)]
+#[test]
+fn batch_auto_format_is_json_on_a_terminal() {
+    let ws = ws_a();
+    let args = vec!["analyze", ws.as_str(), "--deterministic"];
+    let alone = |env: &[(&str, &str)]| {
+        Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(&args)
+            .env("RUST_LOG", "off")
+            .envs(env.iter().copied())
+            .output()
+            .unwrap()
+    };
+    let (json_out, tty) = (alone(&[]), alone(&[TTY_SEAM]));
+    serde_json::from_slice::<Value>(&json_out.stdout).expect("precondition: JSON off a terminal");
+    assert_ne!(
+        json_out.stdout, tty.stdout,
+        "precondition: the seam is a terminal"
+    );
+    for n in [1, 2] {
+        let d = tempfile::tempdir().unwrap();
+        let batches = vec![vec![args.clone()]; n];
+        let (out, _) = run_batches(d.path(), &batches, &[TTY_SEAM], None);
+        assert_eq!(out.status.code(), Some(0), "{n} batches");
+        for b in 0..n {
+            let got = std::fs::read(d.path().join(format!("{b}.0.stdout"))).unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&got),
+                String::from_utf8_lossy(&json_out.stdout),
+                "{n} batches: batch {b}"
+            );
+        }
+    }
+}
+
+/// `alsem batch` of `doc` (written to `dir/m.json`) with `stdin`, not waited.
+fn spawn_manifest(dir: &Path, doc: &Value, stdin: Stdio) -> std::process::Child {
+    let manifest = dir.join("m.json");
+    std::fs::write(&manifest, doc.to_string()).unwrap();
+    Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("batch")
+        .arg(&manifest)
+        .env("RUST_LOG", "off")
+        .env_remove("ALSEM_TRACE")
+        .stdin(stdin)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+/// `{"batches": …}` of one job per batch.
+fn batches_doc(batches: &[Vec<&str>]) -> Value {
+    let batches: Vec<Value> = batches
+        .iter()
+        .map(|a| json!({ "jobs": [job(a, None, None)] }))
+        .collect();
+    json!({ "batches": batches })
+}
+
+/// #277 final r1 FR-7 (D3): stdin is read only for a job that reads it after
+/// its own validation and `--changed` override, as standalone. A digest with
+/// `--diff -` overridden by an existing `--changed` diff file, and one whose
+/// `--format` fails, read none: two batches finish with stdin still open, each
+/// job equal to its standalone run.
+#[test]
+fn batch_unread_stdin_does_not_block() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let diff = write_diff(
+        d.path(),
+        "src/D1MultiCaller.al",
+        18,
+        "        Cust.Modify();",
+    );
+    let jobs = [
+        vec![
+            "digest",
+            ws.as_str(),
+            "--diff",
+            "-",
+            "--changed",
+            &diff,
+            "--deterministic",
+        ],
+        vec!["digest", ws.as_str(), "--diff", "-", "--format", "bad"],
+    ];
+    let mut child = spawn_manifest(d.path(), &batches_doc(&jobs), Stdio::piped());
+    let open = child.stdin.take();
+    let start = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if start.elapsed() > std::time::Duration::from_secs(120) {
+            let _ = child.kill();
+            panic!("the run waits for stdin no job reads");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    drop(open);
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let got = lines(&out);
+    for (b, a) in jobs.iter().enumerate() {
+        let alone = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(a)
+            .env("RUST_LOG", "off")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(got[b]["exit"].as_i64(), alone.status.code().map(i64::from));
+        let read = |ext: &str| std::fs::read(d.path().join(format!("{b}.0.{ext}"))).unwrap();
+        assert_eq!(read("stdout"), alone.stdout, "batch {b}: stdout");
+        assert_eq!(read("stderr"), alone.stderr, "batch {b}: stderr");
+    }
+}
+
+/// #277 final r1 FR-8 (D3): a stdin the parent cannot read (a directory) is
+/// each `--diff -` job's own standalone error, exit 3, in every worker.
+#[cfg(unix)]
+#[test]
+fn batch_stdin_read_error_is_each_jobs() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let args = vec!["digest", ws.as_str(), "--diff", "-", "--deterministic"];
+    let dir_stdin = || Stdio::from(std::fs::File::open(d.path()).unwrap());
+    let alone = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(&args)
+        .env("RUST_LOG", "off")
+        .stdin(dir_stdin())
+        .output()
+        .unwrap();
+    assert_eq!(
+        alone.status.code(),
+        Some(3),
+        "precondition: standalone fails"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&alone.stderr),
+        "al-sem: digest: failed to read diff from stdin\n"
+    );
+    let out = spawn_manifest(d.path(), &batches_doc(&[args.clone(), args]), dir_stdin())
+        .wait_with_output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let got = lines(&out);
+    assert_eq!(got.len(), 2, "one line per job");
+    for (b, line) in got.iter().enumerate() {
+        assert_eq!(line["exit"], 3, "batch {b}");
+        let err = std::fs::read(d.path().join(format!("{b}.0.stderr"))).unwrap();
+        assert_eq!(err, alone.stderr, "batch {b}");
+    }
+}
+
+/// #277 final r1 FR-10 (D12): a one-batch run, a worker in-process, prints
+/// its `[batch] worker 0 peak_kib=` line under the census.
+#[cfg(target_os = "linux")]
+#[test]
+fn one_batch_reports_its_peak() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let batches = vec![vec![vec![
+        "events",
+        "fanout",
+        ws.as_str(),
+        "--format",
+        "bad",
+    ]]];
+    let (out, _) = run_batches(d.path(), &batches, &[("ALSEM_RETAINED_CENSUS", "1")], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.starts_with("[batch] worker 0 peak_kib=")),
+        "{stderr}"
+    );
+}
+
+/// #277 final r1 FR-14 (D12): admission counts only jobs that will build a
+/// view. Four batches of jobs that fail their own validation, one of them a
+/// `fingerprint --format bad` (whose kind would be the 8 GiB placeholder):
+/// `W` is 4, not 3.
+#[test]
+fn admission_skips_failed_jobs() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let bad = vec!["events", "fanout", ws.as_str(), "--format", "bad"];
+    let mut batches = vec![vec![bad.clone()]; 4];
+    batches[0].push(vec!["fingerprint", ws.as_str(), "--format", "bad"]);
+    let (out, events) = run_batches(d.path(), &batches, &[], None);
+    assert_eq!(out.status.code(), Some(0));
+    let workers = instants(&events, "batch.workers");
+    assert_eq!(workers[0]["args"]["w"], 4);
+}
