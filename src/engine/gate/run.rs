@@ -24,6 +24,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::engine::batch::job::{
+    Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+    ViewKey, ViewNeeds,
+};
+use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::app_attribution::App;
 use crate::engine::gate::baseline::{apply_baseline, load_baseline_bytes, serialize_baseline};
 use crate::engine::gate::exit_code::{compute_finding_exit, exit};
@@ -158,6 +163,28 @@ pub enum ModelFailure {
     ProgramBuildFailed(String),
 }
 
+/// Why [`AnalysisTarget::build_target`] built no target.
+#[derive(Debug)]
+pub enum TargetFailure {
+    NoModelInstanceId,
+    /// The single-app workspace did not resolve.
+    DidNotResolve,
+    CrossApp(crate::program::model::program_calls::CrossAppFailure),
+}
+
+impl TargetFailure {
+    /// The error line `command` prints.
+    pub fn message(&self, command: &str) -> String {
+        match self {
+            TargetFailure::NoModelInstanceId => {
+                format!("{command}: could not compute modelInstanceId")
+            }
+            TargetFailure::DidNotResolve => format!("{command}: workspace did not resolve"),
+            TargetFailure::CrossApp(e) => AnalysisTarget::cross_app_failure_message(command, e),
+        }
+    }
+}
+
 /// What the detectors run over: the workspace's own model, or the cross-app base
 /// (engine-switch S8.3, the default).
 pub enum AnalysisTarget {
@@ -196,10 +223,28 @@ impl AnalysisTarget {
         no_roots_config: bool,
         command: &str,
     ) -> Result<AnalysisTarget, String> {
+        Self::build_target_with(inputs, single_app, no_roots_config).map_err(|f| f.message(command))
+    }
+
+    /// [`AnalysisTarget::build`] with the failure kept as a value, so each job
+    /// of a view words it with its own command (#277 D4.1).
+    pub fn build_target(
+        inputs: &Arc<WorkspaceInputs>,
+        single_app: bool,
+    ) -> Result<AnalysisTarget, TargetFailure> {
+        Self::build_target_with(inputs, single_app, false)
+    }
+
+    /// [`AnalysisTarget::build_target`] with `--no-roots-config`.
+    fn build_target_with(
+        inputs: &Arc<WorkspaceInputs>,
+        single_app: bool,
+        no_roots_config: bool,
+    ) -> Result<AnalysisTarget, TargetFailure> {
         let model_instance_id = inputs
             .model_instance_id
             .as_deref()
-            .ok_or_else(|| format!("{command}: could not compute modelInstanceId"))?;
+            .ok_or(TargetFailure::NoModelInstanceId)?;
         if single_app {
             crate::program::model::program_calls::assemble_and_resolve_workspace_program(
                 inputs,
@@ -207,7 +252,7 @@ impl AnalysisTarget {
                 no_roots_config,
             )
             .map(|r| AnalysisTarget::SingleApp(Box::new(r)))
-            .ok_or_else(|| format!("{command}: workspace did not resolve"))
+            .ok_or(TargetFailure::DidNotResolve)
         } else {
             crate::engine::l4::capability_cone::build_cross_app_base_with(
                 inputs,
@@ -215,7 +260,7 @@ impl AnalysisTarget {
                 no_roots_config,
             )
             .map(|b| AnalysisTarget::CrossApp(Box::new(b)))
-            .map_err(|e| Self::cross_app_failure_message(command, &e))
+            .map_err(TargetFailure::CrossApp)
         }
     }
 
@@ -509,50 +554,168 @@ pub fn run_analyze_with_exit(
     args: &AnalyzeArgs,
     default_version: &str,
 ) -> Result<AnalyzeOutput, String> {
-    let _analyze_span = pt::span("analyze", "analyze.total");
-    let detectors = resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref())?;
+    let job = AnalyzeJob::new(inputs, request, args, default_version)?;
+    crate::engine::batch::run_doc(&job)
+        .one()
+        .unwrap_or_else(|f| unreachable!("analyze fails no side: {f:?}"))
+}
 
-    let version = args
-        .sarif_version_override
-        .clone()
-        .unwrap_or_else(|| default_version.to_string());
+/// `alsem analyze` as a batch job (#277 D1). Its document is
+/// `Result<AnalyzeOutput, String>`; its writes are the baseline (when
+/// `--update-baseline`), the degraded warning, then the report (D2.3, D2.4).
+pub struct AnalyzeJob<'a> {
+    inputs: &'a Arc<WorkspaceInputs>,
+    request: &'a RequestInputs,
+    args: &'a AnalyzeArgs,
+    /// The SARIF `driver.version`: the override, else the engine's.
+    version: String,
+    detectors: Vec<crate::engine::l5::registry::Detector>,
+}
 
-    // Assemble with the al-sem GATE modelInstanceId (content-derived, UNPINNED) so the
-    // internal RoutineIds embedded in each finding's rootCauseKey — and therefore the
-    // SARIF fingerprint hashed over them — byte-match the al-sem `analyze` CLI goldens.
-    let AnalysisModel { fresh, model, .. } = build_analysis_model(inputs, args.single_app);
-    let target = match model {
-        Ok(t) => t,
-        // Fail-closed layout / unreadable workspace → empty output; preflight says
-        // could-not-verify (never a fabricated clean — spec §3), gated on `fresh`.
-        Err(ModelFailure::NoModelInstanceId | ModelFailure::AssemblyFailed) => {
+impl<'a> AnalyzeJob<'a> {
+    /// `Err`: a detector/preset resolution failure, found before any build.
+    pub fn new(
+        inputs: &'a Arc<WorkspaceInputs>,
+        request: &'a RequestInputs,
+        args: &'a AnalyzeArgs,
+        default_version: &str,
+    ) -> Result<AnalyzeJob<'a>, String> {
+        let detectors =
+            resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref())?;
+        let version = args
+            .sarif_version_override
+            .clone()
+            .unwrap_or_else(|| default_version.to_string());
+        Ok(AnalyzeJob {
+            inputs,
+            request,
+            args,
+            version,
+            detectors,
+        })
+    }
+}
+
+impl Job for AnalyzeJob<'_> {
+    fn demands(&self) -> Vec<ViewDemand> {
+        // Assembled with the al-sem GATE modelInstanceId (content-derived, UNPINNED)
+        // so the internal RoutineIds embedded in each finding's rootCauseKey — and
+        // therefore the SARIF fingerprint hashed over them — byte-match the al-sem
+        // `analyze` CLI goldens (`build_analysis_model`).
+        vec![ViewDemand {
+            key: ViewKey::new(Path::new(&self.args.workspace), self.args.single_app, false),
+            side: SideIx(0),
+            needs: ViewNeeds {
+                analyze_extras: true,
+                ..ViewNeeds::default()
+            },
+            inputs: Arc::clone(self.inputs),
+        }]
+    }
+
+    fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        Ok(PlanPart {
+            plan: analyze_plan(self.detectors.clone(), self.args.scope == Scope::Primary),
+            reads: vec![],
+            carry: None,
+        })
+    }
+
+    fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        Ok(SideDoc::new(analyze_view(
+            cx,
+            self.inputs,
+            self.request,
+            self.args,
+            &self.version,
+        )))
+    }
+
+    fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        let _analyze_span = pt::span("analyze", "analyze.total");
+        let ViewFailure::Model { fresh, failure } = failure else {
+            unreachable!("analyze's view is built by analyze's builder")
+        };
+        Ok(SideDoc::new(match failure {
+            // Fail-closed layout / unreadable workspace → empty output; preflight says
+            // could-not-verify (never a fabricated clean — spec §3), gated on `fresh`.
             // No finding set, so no baseline is written (as before #277).
-            return empty_output_result(inputs, args, &version, &fresh)
-                .map(|(out, exit, warn)| (out, exit, warn, None));
-        }
-        Err(ModelFailure::ProgramBuildFailed(why)) => {
-            return Err(format!(
+            ModelFailure::NoModelInstanceId | ModelFailure::AssemblyFailed => {
+                empty_output_result(self.inputs, self.args, &self.version, fresh)
+                    .map(|(out, exit, warn)| -> AnalyzeOutput { (out, exit, warn, None) })
+            }
+            ModelFailure::ProgramBuildFailed(why) => Err(format!(
                 "analysis failure — program engine build failed: {why}"
-            ));
-        }
-    };
+            )),
+        }))
+    }
 
-    // L4 + L5: run the selected detectors on a `View` (#160 §4.4.4). Findings
+    fn serialize(&self, doc: Doc) -> JobOutput {
+        let doc = doc
+            .one::<Result<AnalyzeOutput, String>>()
+            .unwrap_or_else(|f| unreachable!("analyze fails no side: {f:?}"));
+        match doc {
+            Ok((mut out, exit_code, stderr_warning, baseline_bytes)) => {
+                let mut actions = Vec::new();
+                // `--update-baseline`: the baseline is the first write, before any
+                // stderr line or stdout; a failure is a write error (exit 2) and
+                // stdout stays unwritten (#277 D2.4, S17).
+                if let (Some(path), Some(bytes)) = (&self.args.baseline, baseline_bytes) {
+                    actions.push(WriteAction::File(path.into(), bytes));
+                }
+                // F2: the preflight degraded warning (the "no silent clean"
+                // contract), before the report. Matches al-sem index.ts:263-264.
+                if let Some(msg) = stderr_warning {
+                    actions.push(WriteAction::line(&format!("al-sem: warning: {msg}")));
+                }
+                // al-sem appends a trailing newline to the formatted output.
+                out.push('\n');
+                actions.push(WriteAction::Stdout(out.into_bytes()));
+                JobOutput {
+                    actions,
+                    exit: exit_code,
+                }
+            }
+            // "analysis failure — …" is tagged for the errors al-sem maps to
+            // EXIT.ANALYSIS_FAILURE (2), e.g. a malformed baseline file; every
+            // other error is a config/usage error (3).
+            Err(msg) => {
+                let exit = if msg.starts_with("analysis failure — ") {
+                    exit::ANALYSIS_FAILURE
+                } else {
+                    exit::CONFIG_ERROR
+                };
+                JobOutput::lines(&[format!("al-sem: {msg}")], exit)
+            }
+        }
+    }
+
+    fn write_failure_exit(&self) -> u8 {
+        exit::ANALYSIS_FAILURE
+    }
+}
+
+/// Analyze off its prepared view: projection, filters, baseline, format,
+/// preflight and exit.
+fn analyze_view(
+    cx: &mut ViewCx<'_>,
+    inputs: &Arc<WorkspaceInputs>,
+    request: &RequestInputs,
+    args: &AnalyzeArgs,
+    version: &str,
+) -> Result<AnalyzeOutput, String> {
+    let _analyze_span = pt::span("analyze", "analyze.total");
+    // L4 + L5: the selected detectors ran on the view (#160 §4.4.4). Findings
     // come pre-sorted by (detector, primaryLocationKey, rootCauseKey). Cross-app,
     // the run drops dependency-anchored findings itself for `--scope primary`
     // (routine, object and `dep:` location); `--scope all` keeps them for the
     // scope filter below.
-    let mut view = View::new(target);
-    let run = {
-        let _s = pt::span("l4_l5", "l4_l5.run_detectors");
-        let plan = analyze_plan(detectors, args.scope == Scope::Primary);
-        view.prepare(&plan);
-        view.run(&plan.keys()[0])
-    };
+    let run = cx.view().run(&cx.keys()[0]);
     // Today's context died inside the runner, before any projection: the view
     // holds none of its cells longer.
-    view.release_all_but(&[]);
-    let resolved = view.model();
+    cx.release_all_but(&[]);
+    let fresh = cx.fresh();
+    let resolved = cx.view().model();
     // Capture diagnostics + detector stats for the Json formatter (consumed after
     // filtering), through the aggregation every other command uses, over THIS
     // run (the selected detectors), so analyze and the rest report one set (#91).
@@ -676,7 +839,7 @@ pub fn run_analyze_with_exit(
     // to the Json formatter. The preflight evaluation + exit-code gate follow below.
     let coverage = {
         let _s = pt::span("gate", "gate.coverage");
-        analysis_coverage(resolved, inputs, &fresh)
+        analysis_coverage(resolved, inputs, fresh)
     };
     // --- format ---
     let output = {
@@ -686,7 +849,7 @@ pub fn run_analyze_with_exit(
                 let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
                 let raws: Vec<&crate::engine::l5::finding::Finding> =
                     paired.iter().map(|(_, r)| *r).collect();
-                format_sarif(&summaries, &raws, &version)
+                format_sarif(&summaries, &raws, version)
             }
             OutputFormat::PrSummary => {
                 let apps = read_workspace_apps(inputs);
@@ -746,7 +909,7 @@ pub fn run_analyze_with_exit(
     // "no silent clean" contract — al-sem index.ts:263-264). The warn is INDEPENDENT
     // of --require-dependencies; only the FAILED→exit-4 path needs that flag.
     // We return the warning message as the 3rd tuple field; the bin emits it.
-    let pf = evaluate_preflight(&fresh, args.require_dependencies);
+    let pf = evaluate_preflight(fresh, args.require_dependencies);
 
     // The degraded warning message — None when coverage is complete (pf.degraded false).
     // Matches al-sem: `if (pf.degraded) process.stderr.write(`al-sem: warning: ${pf.message}\n`)`.
@@ -786,7 +949,6 @@ pub fn run_analyze_with_exit(
         drop(run_diagnostics);
         drop(coverage);
         drop(run);
-        drop(view);
     }
 
     Ok((output, exit_code, stderr_warning, baseline_bytes))
@@ -1280,14 +1442,13 @@ mod tests {
     /// aggregation, not an inline copy of it. Its output cannot tell the two
     /// apart, so the call itself is pinned. Mutation: restore the inline
     /// `compute_workspace_diagnostics(` / `dependency_diagnostics(` block in
-    /// `run_analyze_with_exit`, or read `.workspace_diagnostics` there (#160:
-    /// source (1) is now a model field) -> this fails.
+    /// `analyze_view` (the analyze job's compute, #277), or read
+    /// `.workspace_diagnostics` there (#160: source (1) is now a model field)
+    /// -> this fails.
     #[test]
     fn run_analyze_with_exit_uses_the_shared_aggregation() {
         let src = include_str!("run.rs");
-        let start = src
-            .find("pub fn run_analyze_with_exit(")
-            .expect("run_analyze_with_exit");
+        let start = src.find("\nfn analyze_view(").expect("analyze_view");
         let body = &src[start..];
         // Cut at the next top-level item, not the first column-0 `}`, which a raw
         // string inside the fn could hold.
@@ -1295,7 +1456,7 @@ mod tests {
             .iter()
             .filter_map(|m| body[1..].find(m))
             .min()
-            .expect("an item after run_analyze_with_exit");
+            .expect("an item after analyze_view");
         // The trace span's NAME holds `.workspace_diagnostics` too; it is a
         // label, not a read of the field, so it is cut out before the scan.
         let span = "\"gate.workspace_diagnostics\"";
@@ -1305,11 +1466,11 @@ mod tests {
         // stop early.
         assert!(
             body.contains("Ok((output, exit_code, stderr_warning, baseline_bytes))"),
-            "the cut must reach run_analyze_with_exit's later code"
+            "the cut must reach analyze_view's later code"
         );
         assert!(
             body.contains("analyzer_diagnostics_of_run("),
-            "run_analyze_with_exit must call analyzer_diagnostics_of_run"
+            "analyze_view must call analyzer_diagnostics_of_run"
         );
         for banned in [
             "compute_workspace_diagnostics(",
@@ -1320,7 +1481,7 @@ mod tests {
         ] {
             assert!(
                 !body.contains(banned),
-                "run_analyze_with_exit calls {banned} itself; aggregate through \
+                "analyze_view calls {banned} itself; aggregate through \
                  analyzer_diagnostics_of_run so every command reports the same set"
             );
         }

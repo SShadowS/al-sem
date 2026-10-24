@@ -86,6 +86,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `InputNeeds` is `WorkspaceNeeds` (with `union`). The policy file and the baseline moved
   to a new per-command `RequestInputs`. `run_analyze_with_exit` takes the request and
   returns the baseline bytes instead of writing them; `save_baseline` is gone.
+- **`analyze`, `digest`, `policy check` and `events` run through one batch driver
+  (#277).** Each command is a job (`engine::batch`): the driver builds the view,
+  prepares one plan and the job computes off it; its writes are an ordered list that
+  a standalone run replays in today's order, so stdout, stderr, exit codes and files
+  are unchanged. Two small differences: a validation error line is now written like
+  every other stderr line, so a closed stderr gives the command's write-failure exit
+  instead of a panic; and in the trace, `analyze.total` no longer spans the model
+  build or the detector run (the driver's `prepare`; `l4_l5.run_detectors` is gone).
+  The trace carries a `batch.driver` instant (`jobs`, `views`, `workers`).
 
 - **Grammar: tree-sitter-al `main` at `c89c2ecb`** (D1, a parser state-reduction pass;
   package version still 4.4.1; was `960ed312`). `node-types.json` is byte-identical, so the
