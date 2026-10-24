@@ -516,7 +516,8 @@ fn param_sig_key(params: &[Param]) -> String {
 
 /// The closed-enum fact of one SOURCE object (#264, spec §1), as
 /// `(closed_enum, enum_impls)` (see those [`ObjectNode`] fields). Closed only
-/// when the object is an Enum, its file parsed cleanly, every `Extensible`
+/// when the object is an Enum implementing at least one interface, its file
+/// parsed cleanly, every `Extensible`
 /// entry (one per `#if` arm) is `false` or there is none (absent = not
 /// extensible, AL0504), and every value maps every implemented interface by
 /// an `Implementation` pair or the enum's `DefaultImplementation` for it.
@@ -533,7 +534,7 @@ fn enum_closure_impls(
     obj: &al_syntax::ir::ObjectDecl,
     parse_incomplete: bool,
 ) -> Option<Vec<(SharedStr, ObjectRef)>> {
-    if obj.kind != ObjectKind::Enum || parse_incomplete {
+    if obj.kind != ObjectKind::Enum || obj.implements.is_empty() || parse_incomplete {
         return None;
     }
     let extensible = |p: &&al_syntax::ir::ObjectProperty| p.name == "extensible";
@@ -582,18 +583,22 @@ fn enum_closure_impls(
 }
 
 /// [`parse_impl_pairs`] of `raw` with the interface folded and the codeunit
-/// as an [`ObjectRef`] (both may be namespace-qualified; S9.0e).
+/// as an [`ObjectRef`]. The interface may be namespace-qualified (it is matched
+/// by folded name); a qualified codeunit makes the whole value unreadable.
 fn read_impl_pairs(raw: &str) -> Option<Vec<(String, ObjectRef)>> {
     let pairs = parse_impl_pairs(raw)?;
     let read = |(iface, codeunit): (String, String)| {
-        let codeunit = crate::program::resolve::receiver::strip_namespace(&codeunit);
-        (fold_ref_name(&iface), parse_object_ref_value(codeunit).0)
+        // The graph holds no namespaces (`ResolveIndex::resolve_object_ref`), so
+        // `Ns2."Impl"` would resolve to an `Impl` in any namespace: unreadable.
+        let unqualified = crate::program::resolve::receiver::strip_namespace(&codeunit);
+        (unqualified == codeunit)
+            .then(|| (fold_ref_name(&iface), parse_object_ref_value(unqualified).0))
     };
-    Some(pairs.into_iter().map(read).collect())
+    pairs.into_iter().map(read).collect()
 }
 
 /// An object reference's folded name: last namespace segment, unquoted.
-fn fold_ref_name(s: &str) -> String {
+pub(crate) fn fold_ref_name(s: &str) -> String {
     unquote_identifier(crate::program::resolve::receiver::strip_namespace(s)).fold_identifier()
 }
 
@@ -1685,6 +1690,33 @@ enum 50102 "Demo Kind" implements "Demo Strategy"
     #[test]
     fn enum_closure_recovered_file_is_open() {
         assert_eq!(closure(&demo_enum(""), true), (false, vec![]));
+    }
+
+    /// An enum that implements no interface carries no closure fact: the fact
+    /// is only ever read for a dispatch over an interface it implements.
+    #[test]
+    fn enum_closure_without_interfaces_is_open() {
+        let src = r#"
+enum 50102 "Plain Kind"
+{
+    Extensible = false;
+    value(0; A) { }
+}
+"#;
+        assert_eq!(closure(src, false), (false, vec![]));
+    }
+
+    /// Task 2 review (namespace): the graph holds no namespaces, so a qualified
+    /// implementation (`Ns2."Demo Impl"`) could resolve to a same-named codeunit
+    /// in ANOTHER namespace. It cannot be checked, so the enum stays open.
+    #[test]
+    fn enum_closure_namespace_qualified_implementation_is_open() {
+        let src = demo_enum("").replace(r#"= "Demo Impl""#, r#"= Ns2."Demo Impl""#);
+        assert!(
+            src.contains("Ns2."),
+            "precondition: the reference is qualified"
+        );
+        assert_eq!(closure(&src, false), (false, vec![]));
     }
 
     /// A non-Enum object (no `Extensible` property either) is never closed.

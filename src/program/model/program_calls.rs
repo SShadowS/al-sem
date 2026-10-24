@@ -126,7 +126,6 @@ use super::calls::{
 use super::ix::RoutineIx;
 use super::taxonomy::{DispatchKind, Resolution};
 use super::workspace::{ModelEntities, ModelRecordOperation, ModelRoutine};
-use crate::program::abi_ingest::object_kind_from_abi_type;
 use crate::program::body::features::{PCallSite, PCallee};
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
@@ -1870,21 +1869,8 @@ impl<'a> Converter<'a> {
         callsite_id: &str,
         c: &mut SiteCensus,
     ) {
-        let id = match &route.target {
-            RouteTarget::Routine(id) => id.clone(),
-            RouteTarget::AbiSymbol { key } => RoutineNodeId {
-                object: ObjectNodeId {
-                    app: key.app,
-                    kind: object_kind_from_abi_type(&key.object_type),
-                    key: key.object_node_key(),
-                },
-                name_lc: key.routine_name_lc.as_str().into(),
-                // ABI routines are object-level (`abi_ingest`).
-                enclosing_member_lc: None,
-                params_count: key.params_count,
-                sig_fp: key.param_type_fp,
-            },
-            _ => return,
+        let Some(id) = Self::route_routine_id(route) else {
+            return;
         };
         let node = self
             .graph
@@ -1982,12 +1968,9 @@ impl<'a> Converter<'a> {
         match &route.target {
             RouteTarget::Routine(id) => Some(id.clone()),
             RouteTarget::AbiSymbol { key } => Some(RoutineNodeId {
-                object: ObjectNodeId {
-                    app: key.app,
-                    kind: object_kind_from_abi_type(&key.object_type),
-                    key: key.object_node_key(),
-                },
+                object: route.target_object()?,
                 name_lc: key.routine_name_lc.as_str().into(),
+                // ABI routines are object-level (`abi_ingest`).
                 enclosing_member_lc: None,
                 params_count: key.params_count,
                 sig_fp: key.param_type_fp,
@@ -2052,17 +2035,13 @@ impl<'a> Converter<'a> {
                 // A workspace implementer with no model routine: the whole site
                 // is an honest unknown (S3.1).
                 (Target::MissingFromModel, _) => return None,
-                (Target::Outside, RouteTarget::Routine(id)) => dependency.push(id.object.clone()),
-                (Target::Outside, RouteTarget::AbiSymbol { key }) => {
-                    dependency.push(ObjectNodeId {
-                        app: key.app,
-                        kind: object_kind_from_abi_type(&key.object_type),
-                        key: key.object_node_key(),
-                    });
+                (Target::Outside, _) => {
+                    // An implementer the resolver could not resolve (`None`): it is
+                    // listed in `unresolved_impls` below (no route reached its object).
+                    if let Some(object) = route.target_object() {
+                        dependency.push(object);
+                    }
                 }
-                // An implementer the resolver could not resolve: it is listed in
-                // `unresolved_impls` below (no route reached its object).
-                (Target::Outside, RouteTarget::Unresolved | RouteTarget::Builtin(_)) => {}
             }
         }
         callees.sort_by(|a, b| a.id.cmp(&b.id));

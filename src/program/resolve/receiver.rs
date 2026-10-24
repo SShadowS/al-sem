@@ -3423,7 +3423,7 @@ pub(crate) fn strip_namespace(s: &str) -> &str {
     }
 }
 
-fn parse_object_kind_type(kind: ObjectKind, name_rest: &str) -> ParsedType {
+pub(crate) fn parse_object_kind_type(kind: ObjectKind, name_rest: &str) -> ParsedType {
     let trimmed = strip_namespace(name_rest);
     let object_ref = if let Ok(n) = trimmed.parse::<i64>() {
         ObjectRef::Id(n)

@@ -134,6 +134,10 @@ pub type ParenlessCalls = HashMap<(AppRef, String), HashSet<al_syntax::ir::ExprI
 pub struct SiteFacts {
     /// The interface (folded name) an interface-receiver call dispatched over.
     pub interface: Option<String>,
+    /// #264: the closed enums an interface call's receiver provably holds a
+    /// value of (sorted), when the edge is `Complete` because of them
+    /// ([`crate::program::resolve::closed_enum::closed_over`]). Empty = open.
+    pub interface_closed_over: Vec<ObjectNodeId>,
     /// The member call's receiver as the resolver typed it.
     pub receiver: Option<ReceiverFact>,
     /// The object an object run (`Page.Run(Page::X)`, `PageVar.RunModal()`)
@@ -699,6 +703,20 @@ fn resolve_call_site_obligation(
                         )
                         .map(|o| o.id.clone());
                 }
+                if let (ReceiverType::Interface { name_lc }, Some(receiver)) = (&recv, receiver) {
+                    let cx = crate::program::resolve::closed_enum::ClosedEnumCx {
+                        file,
+                        routine,
+                        obj,
+                        from_object: obj_node,
+                        graph,
+                        index,
+                    };
+                    facts_out.interface_closed_over =
+                        crate::program::resolve::closed_enum::closed_over(
+                            &cx, *receiver, name_lc, &r,
+                        );
+                }
                 (s, r)
             } else {
                 (
@@ -733,7 +751,13 @@ fn resolve_call_site_obligation(
                     }
                 }
             }
-            let completeness = completeness_for_shape(member_shape);
+            // #264: an interface receiver proven to hold only closed-enum values
+            // reaches exactly its routes (spec §4); routes are unchanged.
+            let completeness = if facts_out.interface_closed_over.is_empty() {
+                completeness_for_shape(member_shape)
+            } else {
+                SetCompleteness::Complete
+            };
             (EdgeKind::Call, member_shape, completeness, routes, finding)
         }
 
