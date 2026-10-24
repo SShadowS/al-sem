@@ -1390,6 +1390,15 @@ pub(crate) fn source_less_apps(
         .collect()
 }
 
+/// The dependency apps a tree names (#160 step 6 rule B; step 9 D9): `names`,
+/// lowercase app guid → name of the loaded apps, and `source_less`,
+/// [`source_less_apps`]. Both empty single-app.
+#[derive(Default)]
+pub(crate) struct TreeApps {
+    pub names: HashMap<String, String>,
+    pub source_less: std::collections::HashSet<String>,
+}
+
 /// A borrow-mode tree's one view of the view's shared raw map (#277 D5.3,
 /// O20): every raw reader of [`compose_tree`] walks every workspace routine,
 /// so each goes through [`SubjectRaw::get`], which hides any id outside the
@@ -1447,11 +1456,8 @@ pub(crate) enum TreeRaw<'a> {
 /// state closure, and its own identity table (digest's root resolution builds
 /// one too, but drops it before the composition so it never sits beside the
 /// composition's peak; final panel F1-C4). Rule B is on (spec §14.3.5): every
-/// dependency routine is named by its app, `app_names` (lowercase app guid →
-/// name, the loaded apps). `source_less_apps`: D9's set (#160 step 9), empty
-/// single-app.
-// The eighth input is step 9's `source_less_apps`, beside #277's `pd` (case B).
-#[allow(clippy::too_many_arguments)]
+/// dependency routine is named by its app (`apps.names`); D9's source-less
+/// apps are `apps.source_less` (#160 step 9).
 pub(crate) fn compose_tree(
     model: &Model,
     typed: &[TypedEdge],
@@ -1459,13 +1465,12 @@ pub(crate) fn compose_tree(
     caps: &crate::engine::l5::detector_context::CapabilityAnalysis,
     raw: TreeRaw<'_>,
     pd: std::borrow::Cow<'_, crate::engine::l4::pd_solve::ConeArena>,
-    app_names: &HashMap<String, String>,
-    source_less_apps: &std::collections::HashSet<String>,
+    apps: &TreeApps,
 ) -> CapabilitySnapshot {
     crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
     let ws = &model.workspace;
-    let boundary = boundary_rule(model, app_names);
+    let boundary = boundary_rule(model, &apps.names);
     let bodyless: std::collections::HashSet<&str> = ws
         .routines
         .iter()
@@ -1487,7 +1492,7 @@ pub(crate) fn compose_tree(
         coverage: &caps.coverage,
         routine_to_stable: &routine_to_stable,
         bodyless_dependency: Some(&bodyless),
-        source_less_apps: Some(source_less_apps),
+        source_less_apps: Some(&apps.source_less),
     };
     let collided = CollidedRows::build(&ws.routines);
     let identities = derive_identity_table(model);
@@ -3346,8 +3351,7 @@ mod step6_tree_tests {
                 &caps,
                 TreeRaw::Drain(raw),
                 pd,
-                &HashMap::new(),
-                &Default::default(),
+                &TreeApps::default(),
             );
             with_inherited += usize::from(
                 cut.capability_facts
@@ -3558,8 +3562,7 @@ mod step6_tree_tests {
                 &caps,
                 raw,
                 Cow::Borrowed(&arena),
-                &HashMap::new(),
-                &Default::default(),
+                &TreeApps::default(),
             )
         };
         let has_y = |s: &CapabilitySnapshot| {

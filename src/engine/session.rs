@@ -812,15 +812,16 @@ impl View {
         // is lent to every tree but the last; the dependency calls die after
         // the last.
         if !plan.trees.is_empty() {
-            use crate::engine::l5::snapshot::{SubjectRaw, TreeRaw, compose_tree};
+            use crate::engine::l5::snapshot::{SubjectRaw, TreeApps, TreeRaw, compose_tree};
             use std::borrow::Cow;
             let mut dependency_calls = dependency_calls;
             let r = rel.as_ref().expect("rel filled above");
-            let app_names = cross_base.map(|b| b.loaded_app_names()).unwrap_or_default();
-            // D9 (#160 step 9): the dependency apps with no source; none single-app.
-            let source_less = cross_base
-                .map(|b| crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps))
-                .unwrap_or_default();
+            // Rule B's app names and D9's source-less apps (#160 step 9); none
+            // single-app.
+            let apps = cross_base.map_or_else(TreeApps::default, |b| TreeApps {
+                names: b.loaded_app_names(),
+                source_less: crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+            });
             let mut map = raw.take().expect("raw filled above");
             let scopes: Vec<BTreeSet<String>> = plan
                 .trees
@@ -828,10 +829,8 @@ impl View {
                 .map(|(_, t)| t.subjects.subjects(model))
                 .collect();
             // The raw readers after the trees: the part of the request no
-            // tree asks. Policy, the one such reader, asks `primary` alone.
-            // shortcut: a tree that asks `primary` (step 9's inventory) keeps
-            // raw alive to the end; upgrade when `Plan` carries the non-tree
-            // jobs' own request.
+            // tree asks. Policy, the one such reader, asks `primary` alone; no
+            // tree asks `primary` (D5.1's table, asserted per tree below).
             let rest = WitnessRequest {
                 ids: plan
                     .witness
@@ -882,16 +881,7 @@ impl View {
                     let own = scope.iter().filter_map(|id| map.remove_entry(id)).collect();
                     (TreeRaw::Drain(own), vec![])
                 };
-                *tree = Some(compose_tree(
-                    model,
-                    r.cone(),
-                    calls,
-                    c,
-                    tree_raw,
-                    pd,
-                    &app_names,
-                    &source_less,
-                ));
+                *tree = Some(compose_tree(model, r.cone(), calls, c, tree_raw, pd, &apps));
                 for id in done {
                     map.remove(&id);
                 }

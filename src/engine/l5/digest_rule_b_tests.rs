@@ -416,8 +416,10 @@ fn tree_of(
         &caps,
         crate::engine::l5::snapshot::TreeRaw::Drain(raw),
         pd,
-        &HashMap::new(),
-        source_less,
+        &crate::engine::l5::snapshot::TreeApps {
+            names: HashMap::new(),
+            source_less: source_less.clone(),
+        },
     )
 }
 

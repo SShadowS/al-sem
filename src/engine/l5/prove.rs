@@ -1217,8 +1217,10 @@ mod tests {
             &caps,
             crate::engine::l5::snapshot::TreeRaw::Drain(raw),
             pd,
-            &std::collections::HashMap::new(),
-            &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+            &crate::engine::l5::snapshot::TreeApps {
+                names: Default::default(),
+                source_less: crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+            },
         );
         let call_write = model
             .workspace
@@ -1356,8 +1358,10 @@ mod tests {
             &caps,
             crate::engine::l5::snapshot::TreeRaw::Drain(raw),
             pd,
-            &std::collections::HashMap::new(),
-            &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+            &crate::engine::l5::snapshot::TreeApps {
+                names: Default::default(),
+                source_less: crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+            },
         );
         let write = model
             .workspace
