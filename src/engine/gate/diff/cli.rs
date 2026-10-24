@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds,
+    ViewKey, ViewNeeds, WorkspaceReader,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::cbor::CborValue;
@@ -24,6 +24,12 @@ use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 use super::format::format_diff;
 use super::renames::parse_rename_overlay;
 use super::{CoveragePolicy, DiffEngineOptions, Severity, run_diff_engine};
+
+/// What a workspace side reads (#160 §4.2.6): the snapshot's input rows.
+pub const DIFF_NEEDS: WorkspaceNeeds = WorkspaceNeeds {
+    build_only: false,
+    fingerprint_rows: true,
+};
 
 /// The outcome of a diff run: the text to write (stdout or --out), the lines to
 /// write to stderr (analyzer diagnostics + the ws-mode note), and the exit code.
@@ -119,8 +125,10 @@ fn load_failure(msg: String) -> JobFailure {
 pub struct DiffJob<'a> {
     opts: &'a DiffCliOptions<'a>,
     kinds: [InputKind; 2],
-    /// Each workspace side's read; one read when both name one view.
-    inputs: [Option<Arc<WorkspaceInputs>>; 2],
+    /// Each workspace side's read; one read when both name one view. Handed
+    /// to the driver by `demands`, which drops each after its view, so `diff
+    /// A B` holds no side's read past that side's view (#277 E12-C2).
+    inputs: RefCell<[Option<Arc<WorkspaceInputs>>; 2]>,
     /// The old snapshot file, loaded at construction, taken by `finalize`.
     old_file: RefCell<Option<CborValue>>,
 }
@@ -128,8 +136,12 @@ pub struct DiffJob<'a> {
 impl<'a> DiffJob<'a> {
     /// The job, or its early outcome: an input that does not exist, an
     /// `.app` input, or an old snapshot file that does not load. Nothing is
-    /// built for any of them.
-    pub fn new(opts: &'a DiffCliOptions<'a>) -> Result<DiffJob<'a>, DiffRunOutcome> {
+    /// built for any of them. Each workspace side is read through `reader`, so
+    /// both sides on one path share one read (`diff A A`: one view).
+    pub fn new(
+        opts: &'a DiffCliOptions<'a>,
+        reader: &WorkspaceReader,
+    ) -> Result<DiffJob<'a>, DiffRunOutcome> {
         // Input-kind detection.
         let old_kind = detect_input_kind(opts.old_arg).map_err(|m| early_error(m, 1))?;
         let new_kind = detect_input_kind(opts.new_arg).map_err(|m| early_error(m, 1))?;
@@ -150,26 +162,13 @@ impl<'a> DiffJob<'a> {
                 Err(f) => return Err(DiffRunOutcome::failed(f)),
             },
         };
-        // #160 §4.2.6: one read per side's workspace; both sides on one view
-        // share it.
-        let read = |arg: &str| {
-            WorkspaceInputs::read(
-                Path::new(arg),
-                &WorkspaceNeeds {
-                    fingerprint_rows: true,
-                    ..WorkspaceNeeds::default()
-                },
-            )
-        };
+        let read = |arg: &str| reader.read(Path::new(arg), DIFF_NEEDS);
         let old = (old_kind == InputKind::Workspace).then(|| read(opts.old_arg));
-        let new = (new_kind == InputKind::Workspace).then(|| match &old {
-            Some(o) if view_key(opts.old_arg) == view_key(opts.new_arg) => Arc::clone(o),
-            _ => read(opts.new_arg),
-        });
+        let new = (new_kind == InputKind::Workspace).then(|| read(opts.new_arg));
         Ok(DiffJob {
             opts,
             kinds: [old_kind, new_kind],
-            inputs: [old, new],
+            inputs: RefCell::new([old, new]),
             old_file: RefCell::new(old_file),
         })
     }
@@ -188,16 +187,21 @@ fn view_key(arg: &str) -> ViewKey {
 }
 
 impl Job for DiffJob<'_> {
+    fn name(&self) -> &'static str {
+        "diff"
+    }
+    /// Asked once: the reads move to the driver.
     fn demands(&self) -> Vec<ViewDemand> {
+        let mut inputs = self.inputs.borrow_mut();
         (0..2u8)
             .filter_map(|i| {
-                let inputs = self.inputs[usize::from(i)].as_ref()?;
-                Some(ViewDemand {
-                    key: view_key(self.arg(SideIx(i))),
-                    side: SideIx(i),
-                    needs: ViewNeeds::MODEL,
-                    inputs: Arc::clone(inputs),
-                })
+                let inputs = inputs[usize::from(i)].take()?;
+                Some(ViewDemand::new(
+                    view_key(self.arg(SideIx(i))),
+                    SideIx(i),
+                    ViewNeeds::MODEL,
+                    inputs,
+                ))
             })
             .collect()
     }
@@ -215,7 +219,7 @@ impl Job for DiffJob<'_> {
     /// `<severity>: <message>` lines, the list `fingerprint --strict` gates on
     /// (#89); the run and its cells are released before the composition.
     /// Without `--strict` no detector runs and nothing is filled.
-    fn compute(&self, side: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+    fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
         let diag_lines = if self.opts.strict {
             let key = cx.keys()[0].clone();
             let lines = diagnostic_lines(&analyzer_diagnostics_of_view(cx.view(), &key));
@@ -226,9 +230,7 @@ impl Job for DiffJob<'_> {
             Vec::new()
         };
         let opts = FullSnapshotOptions {
-            inputs: self.inputs[usize::from(side.0)]
-                .as_ref()
-                .expect("a workspace side"),
+            inputs: cx.inputs(),
             driver_version: self.opts.driver_version,
             deterministic: self.opts.deterministic,
             roots_config_ignored: false,
@@ -307,7 +309,7 @@ fn same_workspace(old: &str, old_kind: InputKind, new: &str, new_kind: InputKind
 /// `DiffRunOutcome`; the bin maps it to stdout/stderr writes + a process exit
 /// code.
 pub fn run_diff(opts: &DiffCliOptions) -> DiffRunOutcome {
-    match DiffJob::new(opts) {
+    match DiffJob::new(opts, &WorkspaceReader::default()) {
         Err(early) => early,
         Ok(job) => crate::engine::batch::run_doc(&job).take(),
     }
@@ -454,6 +456,37 @@ mod tests {
         lines.iter().map(|l| l.to_string()).collect()
     }
 
+    /// #277 E12-C2: the job hands its workspace reads to the driver with its
+    /// demands and keeps none, so the driver's drop after a side's view frees
+    /// that side's read (`diff A B` holds only B's read during B's build).
+    #[test]
+    fn diff_job_hands_its_reads_to_the_driver() {
+        let r0 = |ws: &str| format!("{}/tests/r0-corpus/{ws}", env!("CARGO_MANIFEST_DIR"));
+        let (old, new) = (r0("ws-d1-multi-caller"), r0("ws-d14-dead-routine"));
+        let opts = DiffCliOptions {
+            old_arg: &old,
+            new_arg: &new,
+            format: "json",
+            out: None,
+            coverage_policy: CoveragePolicy::Loose,
+            renames_path: None,
+            fail_on: None,
+            strict: false,
+            deterministic: true,
+            driver_version: "t",
+        };
+        let reader = WorkspaceReader::default();
+        let job = DiffJob::new(&opts, &reader).unwrap_or_else(|_| panic!("inputs exist"));
+        let demands = job.demands();
+        assert_eq!(demands.len(), 2, "precondition: two workspace sides");
+        let reads: Vec<_> = demands.iter().map(|d| Arc::downgrade(&d.inputs)).collect();
+        drop(demands);
+        assert!(
+            reads.iter().all(|r| r.upgrade().is_none()),
+            "the job kept a workspace read"
+        );
+    }
+
     /// #89: two different workspaces that share a path-free message both print
     /// it, so the reader sees the NEW side has the error too. Mutation: drop
     /// new-side lines equal to an old-side line -> the second assert fails.
@@ -515,6 +548,9 @@ mod tests {
         /// The diff job with its sides kept as computed, through the driver.
         struct Sides<'a>(DiffJob<'a>);
         impl Job for Sides<'_> {
+            fn name(&self) -> &'static str {
+                "diff"
+            }
             fn demands(&self) -> Vec<ViewDemand> {
                 self.0.demands()
             }
@@ -547,7 +583,8 @@ mod tests {
             deterministic: true,
             driver_version: "t",
         };
-        let job = Sides(DiffJob::new(&opts).unwrap_or_else(|_| panic!("inputs exist")));
+        let reader = WorkspaceReader::default();
+        let job = Sides(DiffJob::new(&opts, &reader).unwrap_or_else(|_| panic!("inputs exist")));
         let sides = crate::engine::batch::run_doc(&job).take::<Vec<Result<SideDoc, JobFailure>>>();
         let (_, lines) = sides
             .into_iter()

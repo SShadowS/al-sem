@@ -1,0 +1,30 @@
+{
+  "alsemVersion": "2.0.3",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "diff-report",
+  "payload": {
+    "diagnostics": [],
+    "findings": [],
+    "summary": {
+      "coverageIncompleteCones": 0,
+      "findingsByCategory": {
+        "abi": 0,
+        "capabilities": 0,
+        "events": 0,
+        "permissions": 0,
+        "schema": 0
+      },
+      "findingsBySeverity": {
+        "critical": 0,
+        "high": 0,
+        "info": 0,
+        "low": 0,
+        "medium": 0
+      },
+      "renamesApplied": 0
+    }
+  },
+  "schemaVersion": "1.0.0"
+}

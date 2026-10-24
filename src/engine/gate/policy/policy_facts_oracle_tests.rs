@@ -61,7 +61,7 @@ fn view_of(ws: &Path, single_app: bool) -> Result<View, String> {
     let inputs = WorkspaceInputs::read(ws, &Default::default());
     let target = AnalysisTarget::build(&inputs, single_app, "oracle")?;
     let mut view = View::new(target);
-    let plan = policy_plan(default_detectors());
+    let plan = policy_plan(default_detectors(), true);
     let key = plan.keys().remove(0);
     view.prepare(&plan);
     drop(view.take_run(&key));

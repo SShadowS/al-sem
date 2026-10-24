@@ -1,0 +1,82 @@
+{
+  "alsemVersion": "2.0.3",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.effects",
+  "payload": {
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "effectCount": 2,
+    "effects": [
+      {
+        "isUnknownBucket": false,
+        "op": "FindSet",
+        "operationId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/op0",
+        "origin": {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/D1MultiCaller.al",
+            "line": 24
+          },
+          "routine": {
+            "anchor": {
+              "column": 4,
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 21
+            },
+            "display": "CallerA",
+            "objectDisplay": "Codeunit D1 Multi Caller",
+            "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
+          }
+        },
+        "tableId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "tableName": "MC Customer",
+        "tempState": "known(false)",
+        "via": "direct"
+      },
+      {
+        "isUnknownBucket": false,
+        "op": "Modify",
+        "operationId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0",
+        "origin": {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/D1MultiCaller.al",
+            "line": 18
+          },
+          "routine": {
+            "anchor": {
+              "column": 4,
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 16
+            },
+            "display": "ModifyHelper",
+            "objectDisplay": "Codeunit D1 Multi Caller",
+            "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+          }
+        },
+        "tableId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "tableName": "MC Customer",
+        "tempState": "known(false)",
+        "via": "inherited"
+      }
+    ],
+    "routine": {
+      "resolution": "resolved",
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/D1MultiCaller.al",
+          "line": 21
+        },
+        "display": "CallerA",
+        "objectDisplay": "Codeunit D1 Multi Caller",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
+      },
+      "selector": "CallerA"
+    }
+  },
+  "schemaVersion": "1.1.0"
+}

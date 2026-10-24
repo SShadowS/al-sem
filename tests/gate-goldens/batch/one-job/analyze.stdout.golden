@@ -1,0 +1,314 @@
+{
+  "alsemVersion": "2.0.3",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "analyze-report",
+  "payload": {
+    "findings": [
+      {
+        "affectedObjects": [
+          "11111111-0000-0000-0000-00000000d01a/Codeunit/50101"
+        ],
+        "affectedTables": [
+          "11111111-0000-0000-0000-00000000d01a/table/50101"
+        ],
+        "confidence": {
+          "level": "likely"
+        },
+        "detector": "d1-db-op-in-loop",
+        "fingerprint": "7b8051d5229766f0",
+        "fixHint": {
+          "description": "Move the database operation outside the loop, or batch it into a set-based operation.",
+          "safety": "medium"
+        },
+        "id": "d1/225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0",
+        "looseFingerprint": "d05093538474feb2",
+        "pathCount": 1,
+        "primaryLocation": {
+          "column": 9,
+          "file": "ws:src/D1MultiCaller.al",
+          "line": 19,
+          "objectId": "11111111-0000-0000-0000-00000000d01a/Codeunit/50101",
+          "objectName": "D1 Multi Caller",
+          "routineId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513",
+          "routineName": "ModifyHelper"
+        },
+        "rootCause": "A loop in CallerA reaches Modify on MC Customer in ModifyHelper, which has no loop of its own — the operation runs once per iteration of that loop. (Also reached from 2 other in-loop ancestors.)",
+        "severity": "high",
+        "title": "Database operation inside a loop"
+      }
+    ],
+    "summary": {
+      "byDetector": {
+        "d1-db-op-in-loop": 1
+      },
+      "bySeverity": {
+        "high": 1
+      },
+      "detectorStats": [
+        {
+          "candidatesConsidered": 4,
+          "detector": "d1-db-op-in-loop",
+          "findingsEmitted": 1,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d2-event-fanout-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d3-missing-setloadfields",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d4-repeated-lookup-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 4
+          }
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d5-set-based-opportunity",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 4
+          }
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d7-recursive-event-expansion",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d9-transaction-span-summary",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d10-self-modifying-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d11-modify-without-get",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 1
+          }
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d12-dead-integration-event",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 3,
+          "detector": "d13-cross-app-internal-call",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 3
+          }
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d14-dead-routine",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 4
+          }
+        },
+        {
+          "candidatesConsidered": 3,
+          "detector": "d16-obsolete-routine-call",
+          "findingsEmitted": 0,
+          "skipped": {
+            "other": 3
+          }
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d18-constant-filter-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d19-unused-parameter",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d20-unreachable-after-exit",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d21-read-without-load",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d22-flowfield-without-calcfields",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d29-subscriber-modify-on-event-record",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d32-constant-boolean-parameter",
+          "findingsEmitted": 0,
+          "skipped": {
+            "nonLocal": 4
+          }
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d33-unfiltered-bulk-write",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 4,
+          "detector": "d34-commit-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d35-commit-in-event-subscriber",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d36-late-setloadfields",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d37-validate-without-persist",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d38-subscriber-to-obsolete-event",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d39-record-left-dirty-across-chain",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d41-transitive-filter-loss",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d42-cross-call-wrong-setloadfields",
+          "findingsEmitted": 0,
+          "skipped": {
+            "calleeRequiresNone": 3
+          }
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d43-event-ishandled-skip",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d44-event-multi-subscriber-overlap",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d52-bulk-write-param-no-temp-guard",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d53-ignored-tryfunction-result",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d54-publish-in-tryfunction-cone",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d55-event-publish-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d56-clone-before-write-in-loop",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d57-singleinstance-growing-state",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d58-query-filter-after-open",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d59-integrationevent-var-boolean-guard",
+          "findingsEmitted": 0,
+          "skipped": {}
+        },
+        {
+          "candidatesConsidered": 0,
+          "detector": "d60-upgrade-loop-should-be-datatransfer",
+          "findingsEmitted": 0,
+          "skipped": {}
+        }
+      ],
+      "opaqueApps": [],
+      "routinesAnalyzed": 4,
+      "sourceUnitsParsed": 1,
+      "totalFindings": 1
+    }
+  },
+  "schemaVersion": "1.0.0"
+}

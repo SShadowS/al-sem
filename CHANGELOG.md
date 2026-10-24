@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`alsem batch <manifest> [--out-dir DIR]` (#277).** Runs the commands of a JSON
+  manifest (`{"jobs": [{"argv": [...], "stdout": ..., "stderr": ...}]}`, or several
+  `{"batches": [...]}`) in one process. Jobs on one workspace and universe share one
+  view: one read of the workspace, one build, one witness pass at the union of the jobs'
+  requests, one `det`, and one run per distinct detector set and scope. Views are built
+  one after another. Every job's stdout, stderr and exit equal its standalone run; its
+  streams go to `DIR/<batch>.<job>.stdout`/`.stderr` unless the manifest names them. The
+  run prints one JSON line per job (`batch`, `job`, `exit`, `stdout`, `stderr`, `files`)
+  and exits 0 when every job ran; a bad manifest (an argv clap rejects, `batch`, `policy
+  explain`, `cache prune`, no command, no job) exits 3 and runs nothing. Several batches
+  run one after another for now. Traces gain `batch.driver`, `view.<i>`, `view.drop`,
+  `view.teardown`, `view.run`, `job.<i>.<cmd>` and `inputs.request_read`.
+
 - `alsem diff`: a new `rename-overlay-collision` diagnostic (`{kind, from, to}`). It
   fires when a `--renames` entry maps an old id (a routine, object, table, field or
   key) onto a target that is also an id in the old snapshot, and nothing maps that
@@ -67,6 +80,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dependency app (`--scope all`) keeps the old text, because its own uncertainty edges
   are not on the detector context. Ids, fingerprints, severity and confidence do not
   change.
+- **`policy check --no-policy` keeps no raw facts (#277 E12-C5).** No rule reads them, so
+  the view's composition no longer keeps every primary routine's raw facts
+  (`build.witness_pass` 0, was 1). Output is unchanged.
+- **Each workspace read is dropped with its last view (#277 E12-C2).** `diff A B` no
+  longer holds A's read through B's build. A `RequestInputs` read (policy, baseline) is
+  now timed (`inputs.request_read`) and tallied in a `request_inputs` census bucket
+  (E12-C6). The view's own cells are freed in a `view.teardown` span (E12-C3).
+- Library: `JobFailure` is now an alias of `JobOutput` (E12-C7); `ViewDemand::one` builds
+  a one-side job's demand and `JobOutput::text` a text command's writes (E12-C8);
+  `DiffJob::new` takes a `WorkspaceReader` and `policy_plan` a `rules` flag.
+
 - **Errors found before the build win (#277).** `policy check` loads its policy, and
   `fingerprint` checks `--shard` against `--out`, before the model is built. So when an
   invocation has two problems, the stderr text changes: a bad policy and a failing build

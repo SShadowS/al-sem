@@ -23,9 +23,9 @@
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds,
+    ViewNeeds,
 };
-use crate::engine::batch::output::{JobOutput, WriteAction};
+use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
@@ -923,13 +923,11 @@ pub struct ProveJob<'a> {
 }
 
 impl Job for ProveJob<'_> {
+    fn name(&self) -> &'static str {
+        "prove"
+    }
     fn demands(&self) -> Vec<ViewDemand> {
-        vec![ViewDemand {
-            key: ViewKey::new(&self.inputs.workspace, self.single_app, false),
-            side: SideIx(0),
-            needs: ViewNeeds::MODEL,
-            inputs: std::sync::Arc::clone(self.inputs),
-        }]
+        ViewDemand::one(self.inputs, self.single_app, false, ViewNeeds::MODEL)
     }
 
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
@@ -969,23 +967,20 @@ impl Job for ProveJob<'_> {
     }
 
     fn serialize(&self, doc: Doc) -> JobOutput {
-        match doc
+        let r = doc
             .one::<Result<ProveRunResult, String>>()
-            .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"))
-        {
-            Err(msg) => JobOutput::lines(&[msg], 1),
-            Ok(r) => JobOutput {
-                actions: vec![WriteAction::out(
-                    self.out,
-                    if self.human {
-                        r.human_text
-                    } else {
-                        r.json_text
-                    },
-                )],
-                exit: r.exit_code,
-            },
-        }
+            .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"));
+        JobOutput::text(
+            self.out,
+            r.map(|r| {
+                let text = if self.human {
+                    r.human_text
+                } else {
+                    r.json_text
+                };
+                (text, r.exit_code)
+            }),
+        )
     }
 }
 

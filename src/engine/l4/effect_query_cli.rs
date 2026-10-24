@@ -41,9 +41,9 @@ use serde_json::{Map, Value, json};
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds,
+    ViewNeeds,
 };
-use crate::engine::batch::output::{JobOutput, WriteAction};
+use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document_value};
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::effect_lattice::TempStateKind;
@@ -281,13 +281,11 @@ impl<'a> QueryJob<'a> {
 }
 
 impl Job for QueryJob<'_> {
+    fn name(&self) -> &'static str {
+        "query"
+    }
     fn demands(&self) -> Vec<ViewDemand> {
-        vec![ViewDemand {
-            key: ViewKey::new(&self.inputs.workspace, self.single_app, false),
-            side: SideIx(0),
-            needs: ViewNeeds::MODEL,
-            inputs: std::sync::Arc::clone(self.inputs),
-        }]
+        ViewDemand::one(self.inputs, self.single_app, false, ViewNeeds::MODEL)
     }
 
     fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
@@ -327,19 +325,16 @@ impl Job for QueryJob<'_> {
     }
 
     fn serialize(&self, doc: Doc) -> JobOutput {
-        match doc
+        let r = doc
             .one::<Result<QueryRunResult, String>>()
-            .unwrap_or_else(|f| unreachable!("query fails no side: {f:?}"))
-        {
-            Err(msg) => JobOutput::lines(&[msg], 1),
-            Ok(r) => JobOutput {
-                actions: vec![WriteAction::out(
-                    self.out,
-                    if self.json { r.json_text } else { r.human_text },
-                )],
-                exit: r.exit_code,
-            },
-        }
+            .unwrap_or_else(|f| unreachable!("query fails no side: {f:?}"));
+        JobOutput::text(
+            self.out,
+            r.map(|r| {
+                let text = if self.json { r.json_text } else { r.human_text };
+                (text, r.exit_code)
+            }),
+        )
     }
 }
 

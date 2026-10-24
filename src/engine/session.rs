@@ -450,13 +450,18 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
 
 /// `alsem policy check`: the run, then the rule engine off `det.summaries`
 /// and the view's raw facts of every primary routine (`View::raw`; #160
-/// step 6 Task 3).
-pub fn policy_plan(detectors: Vec<Detector>) -> Plan {
+/// step 6 Task 3). With no policy (`--no-policy`) no rule reads raw facts,
+/// so the request is empty (#277 E12-C5).
+pub fn policy_plan(detectors: Vec<Detector>, rules: bool) -> Plan {
     Plan {
         runs: vec![(detectors, true)],
         need_l4: false,
         after_run: substrate::SUMMARIES,
-        witness: WitnessRequest::primary(),
+        witness: if rules {
+            WitnessRequest::primary()
+        } else {
+            WitnessRequest::empty()
+        },
         trees: vec![],
     }
 }
@@ -1013,6 +1018,11 @@ impl View {
             } else {
                 &[]
             };
+            // One run per distinct key, whatever the number of jobs (#277 D5.5).
+            pt::instant_lazy("view", "view.run", || {
+                serde_json::json!({ "detectors": key.detectors, "demanded": key.demanded,
+                                    "scopePrimary": key.scope_primary })
+            });
             let out = registry::finish_run(model, &ctx, run, cross_base, *scope_primary, summarize);
             runs.insert(key, Arc::new(out));
         }
@@ -1256,7 +1266,11 @@ mod tests {
                 "TRANSACTION_SPANS",
             ),
             ("events", events_plan(vec![probe(0, noop)]), "SUMMARIES"),
-            ("policy", policy_plan(vec![probe(0, noop)]), "SUMMARIES"),
+            (
+                "policy",
+                policy_plan(vec![probe(0, noop)], true),
+                "SUMMARIES",
+            ),
         ] {
             let msg = panic_text(
                 name,
@@ -1843,7 +1857,7 @@ mod tests {
             (JobId(3), digest(&["b"])),
             (
                 JobId(4),
-                policy_plan(vec![probe(substrate::SUMMARIES, noop)]),
+                policy_plan(vec![probe(substrate::SUMMARIES, noop)], true),
             ),
         ]);
         assert_eq!(u.runs.len(), 3, "one run per key");

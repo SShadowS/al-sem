@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds,
+    ViewNeeds,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::policy::format_policy::{
@@ -250,21 +250,24 @@ impl<'a> PolicyJob<'a> {
 }
 
 impl Job for PolicyJob<'_> {
+    fn name(&self) -> &'static str {
+        "policy"
+    }
     fn demands(&self) -> Vec<ViewDemand> {
         // #70: the cross-app base by default (rules see a dependency's table
         // names and the facts its code adds), the workspace alone under
         // `--single-app`.
-        vec![ViewDemand {
-            key: ViewKey::new(&self.opts.inputs.workspace, self.opts.single_app, false),
-            side: SideIx(0),
-            needs: ViewNeeds::MODEL,
-            inputs: std::sync::Arc::clone(self.opts.inputs),
-        }]
+        ViewDemand::one(
+            self.opts.inputs,
+            self.opts.single_app,
+            false,
+            ViewNeeds::MODEL,
+        )
     }
 
     fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
         Ok(PlanPart {
-            plan: policy_plan(default_detectors()),
+            plan: policy_plan(default_detectors(), self.policy.is_some()),
             reads: vec![Cell::Det, Cell::Raw],
             carry: None,
         })

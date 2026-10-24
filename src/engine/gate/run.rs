@@ -672,17 +672,19 @@ impl<'a> AnalyzeJob<'a> {
 }
 
 impl Job for AnalyzeJob<'_> {
+    fn name(&self) -> &'static str {
+        "analyze"
+    }
+    /// The whole run, build included, as before the driver (#277 R5-2).
+    fn standalone_span(&self) -> Option<&'static str> {
+        Some("analyze.total")
+    }
     fn demands(&self) -> Vec<ViewDemand> {
         // Assembled with the al-sem GATE modelInstanceId (content-derived, UNPINNED)
         // so the internal RoutineIds embedded in each finding's rootCauseKey — and
         // therefore the SARIF fingerprint hashed over them — byte-match the al-sem
         // `analyze` CLI goldens (`build_analysis_model`).
-        vec![ViewDemand {
-            key: ViewKey::new(Path::new(&self.args.workspace), self.args.single_app, false),
-            side: SideIx(0),
-            needs: ViewNeeds::ANALYZE,
-            inputs: Arc::clone(self.inputs),
-        }]
+        ViewDemand::one(self.inputs, self.args.single_app, false, ViewNeeds::ANALYZE)
     }
 
     fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
@@ -1012,7 +1014,9 @@ fn analyze_view(
     // into `run.findings` and `idx` borrows `resolved.workspace`, so both must
     // go before their owners. Nothing here has a `Drop` impl (the only two in
     // the engine are `perf_trace`'s own guards), so this is pure deallocation
-    // and reordering it is not observable.
+    // and reordering it is not observable. The view's own cells (the model,
+    // `det`, `l4`, the runs map) are freed by the batch driver when it drops
+    // the view, in its `view.teardown` span (#277 E12-C3).
     {
         let _s = pt::span("gate", "gate.teardown");
         drop(paired);
