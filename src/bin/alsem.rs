@@ -68,9 +68,7 @@ use al_sem::engine::batch::job::{
 };
 use al_sem::engine::batch::manifest::{BatchSpec, JobPaths, Manifest, check_write_sets};
 use al_sem::engine::batch::output::{JobOutput, WriteAction, replay};
-use al_sem::engine::batch::worker::{
-    WorkerBatch, Workers, report_peak, run_workers, test_seam_die,
-};
+use al_sem::engine::batch::worker::{WorkerBatch, Workers, report_peak, run_workers};
 use al_sem::engine::batch::{JobLine, JobStreams, run_batch, run_standalone};
 use al_sem::engine::gate::cache_prune::{format_prune_report, prune_cache};
 use al_sem::engine::gate::events::{EventsChainsOptions, EventsFanoutOptions, EventsJob};
@@ -1011,8 +1009,7 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
     }
     let commands = || parsed.iter().flatten();
     let kinds: Vec<JobKind> = commands().filter_map(job_kind).collect();
-    let has_policy = commands().any(|c| matches!(c, Commands::Policy(_)));
-    let w = admit(&kinds, manifest.batches.len(), has_policy);
+    let w = admit(&kinds, manifest.batches.len());
     if let [batch] = &manifest.batches[..] {
         let commands = parsed.into_iter().next().expect("one batch");
         return print_lines(&run_one_batch(
@@ -1056,7 +1053,8 @@ fn run_worker(b: u32, manifest: &Manifest, parsed: Vec<Vec<Commands>>) -> ExitCo
         return ExitCode::from(replay(&JobOutput::lines(&[line], exit::CONFIG_ERROR), 1));
     };
     let lines = run_one_batch(b, batch, commands.into_iter().map(plan).collect());
-    test_seam_die(b);
+    #[cfg(debug_assertions)]
+    al_sem::engine::batch::worker::test_seam_die(b);
     report_peak(b);
     print_lines(&lines)
 }

@@ -137,7 +137,10 @@ fn resolve(cwd: &Path, p: &Path) -> PathBuf {
 /// or an `.app` in an ancestor `.alpackages` the loader reads (R8-3). The
 /// loader walks the ancestors of the workspace AS SPELLED, so its candidate
 /// folders come from the [`fold`]ed spelling and are compared [`resolve`]d
-/// (R9-4). `f` is resolved; `ws` is the job's spelling.
+/// (R9-4). `f` is resolved; `ws` is the job's spelling. For a relative
+/// spelling the walk climbs the cwd's ancestors too, a superset of the
+/// loader's (R10-5): it can refuse a write where no real clash exists, but
+/// it never misses one.
 fn read_by_workspace(cwd: &Path, ws: &Path, f: &Path) -> bool {
     use crate::dependencies::{CacheScope, Role, cache_scope_role, package_cache_scope};
     let under_ws = f.starts_with(resolve(cwd, ws))

@@ -36,6 +36,7 @@ type Ended = (Vec<u8>, String);
 
 /// Run every batch in its own child. Returns the run's job lines, in
 /// manifest order, and whether every worker printed all of its lines.
+/// A worker that exits non-zero but printed all its lines counts as whole.
 pub fn run_workers(run: &Workers<'_>, batches: &[WorkerBatch]) -> (Vec<u8>, bool) {
     let mut ended: Vec<Option<Ended>> = batches.iter().map(|_| None).collect();
     std::thread::scope(|s| {
@@ -188,11 +189,12 @@ pub fn report_peak(b: u32) {
     }
 }
 
-/// Test seam (debug builds): `ALSEM_TEST_WORKER_DIES=<b>` kills worker `b`
-/// after its jobs ran, before it prints its lines (`batch_worker_killed`).
+/// Test seam, compiled into debug builds only (#277 R10-1):
+/// `ALSEM_TEST_WORKER_DIES=<b>` kills worker `b` after its jobs ran, before
+/// it prints its lines (`batch_worker_killed`).
+#[cfg(debug_assertions)]
 pub fn test_seam_die(b: u32) {
-    if cfg!(debug_assertions) && std::env::var("ALSEM_TEST_WORKER_DIES").ok() == Some(b.to_string())
-    {
+    if std::env::var("ALSEM_TEST_WORKER_DIES").ok() == Some(b.to_string()) {
         let pid = std::process::id().to_string();
         let _ = Command::new("kill").args(["-KILL", &pid]).status();
         // Where there is no `kill`: die without the lines all the same.
