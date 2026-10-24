@@ -15,7 +15,7 @@ use crate::engine::l5::test_support::{
     write_fixture_dep_ambiguous, write_fixture_dep_uncertainty, write_fixture_rule_b,
     write_fixture_symbol_only_dep,
 };
-use crate::engine::session::digest_plan;
+use crate::engine::session::{JobId, digest_plan};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -62,7 +62,7 @@ fn effects_of<'v>(view: &'v View, display: &str) -> &'v [DigestEffectResult] {
         .expect("the root")
         .stable_routine_id;
     &view
-        .effects()
+        .effects(JobId(0))
         .entries
         .iter()
         .find(|e| &e.routine_id == id)
@@ -379,7 +379,7 @@ fn the_dependency_calls_leave_the_base_in_the_first_prepare() {
         false,
     ));
     assert_eq!(calls_of(&view), None, "digest: released");
-    let items: Vec<&str> = view.effects().unresolved[&go]
+    let items: Vec<&str> = view.effects(JobId(0)).unresolved[&go]
         .items
         .iter()
         .map(|i| i.callee_display.as_str())
@@ -408,12 +408,14 @@ fn tree_of(
 ) -> crate::engine::l5::snapshot::CapabilitySnapshot {
     let (mut caps, raw) =
         compose_capabilities(model, rel.cone(), det_cone_inputs(model, rel), scope);
+    let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
     compose_tree(
         model,
         rel.cone(),
         calls,
-        &mut caps,
-        raw,
+        &caps,
+        crate::engine::l5::snapshot::TreeRaw::Drain(raw),
+        pd,
         &HashMap::new(),
         source_less,
     )
@@ -648,7 +650,7 @@ fn t9a_a_routine_selector_reads_the_table_digest_builds() {
     assert_eq!(roots, vec!["CallWrite"]);
     let view = digest_view(tmp.path(), &["CallWrite"]);
     assert!(
-        view.effects()
+        view.effects(JobId(0))
             .identities
             .stable_ids
             .iter()

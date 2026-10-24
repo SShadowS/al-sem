@@ -30,7 +30,7 @@ use crate::engine::l5::digest_cli::{
     primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::snapshot::derive_identity_table;
-use crate::engine::session::{Cell, View, prove_plan};
+use crate::engine::session::{Cell, JobId, View, prove_plan};
 
 // ---------------------------------------------------------------------------
 // ProveQuestion
@@ -958,7 +958,7 @@ pub(crate) fn prove_on_target(
 
     // (5) The root's S4 entry, unresolved cone and gap count, read off the
     // view's tree inside `prepare` (the tree is gone).
-    let mut effects = view.take_effects();
+    let mut effects = view.take_effects(JobId(0));
     let gaps_in_cone_count = effects
         .unresolved
         .get(root_id)
@@ -1114,12 +1114,14 @@ mod tests {
                 raw: WitnessScope::None,
             },
         );
+        let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
         let tree = crate::engine::l5::snapshot::compose_tree(
             model,
             b.rel.cone(),
             b.dependency_calls.as_deref().unwrap_or(&[]),
-            &mut caps,
-            raw,
+            &caps,
+            crate::engine::l5::snapshot::TreeRaw::Drain(raw),
+            pd,
             &std::collections::HashMap::new(),
             &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
         );
@@ -1251,12 +1253,14 @@ mod tests {
                 raw: WitnessScope::None,
             },
         );
+        let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
         let tree = crate::engine::l5::snapshot::compose_tree(
             model,
             b.rel.cone(),
             b.dependency_calls.as_deref().unwrap_or(&[]),
-            &mut caps,
-            raw,
+            &caps,
+            crate::engine::l5::snapshot::TreeRaw::Drain(raw),
+            pd,
             &std::collections::HashMap::new(),
             &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
         );

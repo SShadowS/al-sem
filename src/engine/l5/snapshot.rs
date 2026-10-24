@@ -1314,8 +1314,9 @@ pub fn compose_snapshot_from_base(
     let identities = derive_identity_table(resolved);
     let capability_facts = derive_capability_facts(&inp, |id| base.raw.get(id).map(Vec::as_slice));
     let (typed_edges, skipped) = derive_typed_edges(&inp);
-    let operation_index = derive_operation_evidence(&inp, &base.raw, &collided);
-    let callsite_index = derive_callsite_evidence(&inp, &base.raw, &collided);
+    let raw = |id: &str| base.raw.get(id).map(Vec::as_slice);
+    let operation_index = derive_operation_evidence(&inp, raw, &collided);
+    let callsite_index = derive_callsite_evidence(&inp, raw, &collided);
     let callsite_resolutions = derive_callsite_resolutions(&inp, &typed_edges, &collided);
     let analysis_gaps = derive_analysis_gaps(resolved, &inp);
     let coverage = derive_coverage(&inp);
@@ -1389,12 +1390,62 @@ pub(crate) fn source_less_apps(
         .collect()
 }
 
+/// A borrow-mode tree's one view of the view's shared raw map (#277 D5.3,
+/// O20): every raw reader of [`compose_tree`] walks every workspace routine,
+/// so each goes through [`SubjectRaw::get`], which hides any id outside the
+/// tree's own subjects.
+pub(crate) struct SubjectRaw<'a> {
+    map: &'a HashMap<String, Vec<CapabilityFact>>,
+    subjects: std::collections::BTreeSet<String>,
+}
+
+impl<'a> SubjectRaw<'a> {
+    /// The subjects are `scope` ∩ the map's keys (O21): a scoped routine the
+    /// composition never walked has no entry, and the scope alone would widen
+    /// the pd arena's scope.
+    pub(crate) fn new(
+        map: &'a HashMap<String, Vec<CapabilityFact>>,
+        scope: &std::collections::BTreeSet<String>,
+    ) -> Self {
+        let subjects = scope
+            .iter()
+            .filter(|id| map.contains_key(id.as_str()))
+            .cloned()
+            .collect();
+        SubjectRaw { map, subjects }
+    }
+
+    /// `id`'s raw facts; `None` outside the subjects.
+    pub(crate) fn get(&self, id: &str) -> Option<&'a [CapabilityFact]> {
+        if self.subjects.contains(id) {
+            self.map.get(id).map(Vec::as_slice)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn subjects(&self) -> &std::collections::BTreeSet<String> {
+        &self.subjects
+    }
+}
+
+/// How a tree reads the raw facts (#277 D5.3). `Drain`: the tree is the last
+/// reader of every one of its subjects, and the map holds exactly their
+/// entries (the subjects are its keys), moved in and dropped as they go.
+/// `Borrow`: some subject has a later reader, so the shared map is lent
+/// through [`SubjectRaw`].
+pub(crate) enum TreeRaw<'a> {
+    Drain(HashMap<String, Vec<CapabilityFact>>),
+    Borrow(SubjectRaw<'a>),
+}
+
 /// The tree over the view's cone graph (#160 step 6 D4, D5, D6): `typed` =
 /// `rel.cone()`, the ledger over `model.calls` then `dependency_calls`, the
-/// direct facts and coverage from `caps`, the raw facts of the subjects drained
-/// by move, the pd arena taken from `caps` and scoped to the subjects' state
-/// closure, and its own identity table (digest's root resolution builds one
-/// too, but drops it before the composition so it never sits beside the
+/// direct facts and coverage from `caps`, the raw facts of the subjects
+/// (`raw`, drained or borrowed, #277 D5.3), the pd arena (`pd`: lent to every
+/// tree of a view but the last, owned by the last) scoped to the subjects'
+/// state closure, and its own identity table (digest's root resolution builds
+/// one too, but drops it before the composition so it never sits beside the
 /// composition's peak; final panel F1-C4). Rule B is on (spec §14.3.5): every
 /// dependency routine is named by its app, `app_names` (lowercase app guid →
 /// name, the loaded apps). `source_less_apps`: D9's set (#160 step 9), empty
@@ -1403,8 +1454,9 @@ pub(crate) fn compose_tree(
     model: &Model,
     typed: &[TypedEdge],
     dependency_calls: &[CallEdge],
-    caps: &mut crate::engine::l5::detector_context::CapabilityAnalysis,
-    mut raw: HashMap<String, Vec<CapabilityFact>>,
+    caps: &crate::engine::l5::detector_context::CapabilityAnalysis,
+    raw: TreeRaw<'_>,
+    pd: std::borrow::Cow<'_, crate::engine::l4::pd_solve::ConeArena>,
     app_names: &HashMap<String, String>,
     source_less_apps: &std::collections::HashSet<String>,
 ) -> CapabilitySnapshot {
@@ -1422,8 +1474,7 @@ pub(crate) fn compose_tree(
         .map(|r| r.id.as_str())
         .collect();
     let routine_to_stable = crate::engine::l4::capability_cone::routine_to_stable_of(ws);
-    let subjects: std::collections::BTreeSet<String> = raw.keys().cloned().collect();
-    let cone_pd = caps.pd.take().unwrap_or_default();
+    let cone_pd = pd;
     let inp = TreeInputs {
         ws_routines: &ws.routines,
         typed_edges: typed,
@@ -1440,10 +1491,29 @@ pub(crate) fn compose_tree(
     let identities = derive_identity_table(model);
     // The two evidence indexes read the raw facts, so they run before the
     // drain; each subject's Vec is then moved in and dropped as it goes.
-    let operation_index = derive_operation_evidence(&inp, &raw, &collided);
-    let callsite_index = derive_callsite_evidence(&inp, &raw, &collided);
-    let capability_facts = derive_capability_facts(&inp, |id| raw.remove(id));
-    drop(raw);
+    let (subjects, operation_index, callsite_index, capability_facts) = match raw {
+        TreeRaw::Drain(mut map) => {
+            let subjects: std::collections::BTreeSet<String> = map.keys().cloned().collect();
+            let get = |id: &str| map.get(id).map(Vec::as_slice);
+            let operation_index = derive_operation_evidence(&inp, get, &collided);
+            let callsite_index = derive_callsite_evidence(&inp, get, &collided);
+            let capability_facts = derive_capability_facts(&inp, |id| map.remove(id));
+            drop(map);
+            (subjects, operation_index, callsite_index, capability_facts)
+        }
+        TreeRaw::Borrow(acc) => {
+            let get = |id: &str| acc.get(id);
+            let operation_index = derive_operation_evidence(&inp, get, &collided);
+            let callsite_index = derive_callsite_evidence(&inp, get, &collided);
+            let capability_facts = derive_capability_facts(&inp, get);
+            (
+                acc.subjects,
+                operation_index,
+                callsite_index,
+                capability_facts,
+            )
+        }
+    };
     let (typed_edges, skipped) = derive_typed_edges(&inp);
     let callsite_resolutions = derive_callsite_resolutions(&inp, &typed_edges, &collided);
     let analysis_gaps = derive_analysis_gaps(model, &inp);
@@ -2150,9 +2220,9 @@ fn snap_combined_value_source(
 // Sort by operationId (al-sem); ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
-fn derive_operation_evidence(
+fn derive_operation_evidence<'r>(
     base: &TreeInputs<'_>,
-    raw: &HashMap<String, Vec<CapabilityFact>>,
+    raw: impl Fn(&str) -> Option<&'r [CapabilityFact]>,
     collided: &CollidedRows<'_>,
 ) -> Vec<SnapshotOperationEvidence> {
     use std::collections::BTreeSet;
@@ -2170,7 +2240,7 @@ fn derive_operation_evidence(
                 }
             }
         }
-        if let Some(inherited) = raw.get(&r.id) {
+        if let Some(inherited) = raw(&r.id) {
             for f in inherited {
                 if let Some(w) = &f.witness_operation_id {
                     referenced.insert(w.clone());
@@ -2277,9 +2347,9 @@ fn derive_operation_evidence(
 // Ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
-fn derive_callsite_evidence(
+fn derive_callsite_evidence<'r>(
     base: &TreeInputs<'_>,
-    raw: &HashMap<String, Vec<CapabilityFact>>,
+    raw: impl Fn(&str) -> Option<&'r [CapabilityFact]>,
     collided: &CollidedRows<'_>,
 ) -> Vec<SnapshotCallsiteEvidence> {
     use std::collections::BTreeSet;
@@ -2296,7 +2366,7 @@ fn derive_callsite_evidence(
                 }
             }
         }
-        if let Some(inherited) = raw.get(&r.id) {
+        if let Some(inherited) = raw(&r.id) {
             for f in inherited {
                 if let Some(w) = &f.witness_callsite_id {
                     referenced.insert(w.clone());
@@ -3266,12 +3336,14 @@ mod step6_tree_tests {
                     raw: WitnessScope::All,
                 },
             );
+            let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
             let tree = compose_tree(
                 &m,
                 rel.cone(),
                 &[],
-                &mut caps,
-                raw,
+                &caps,
+                TreeRaw::Drain(raw),
+                pd,
                 &HashMap::new(),
                 &Default::default(),
             );
@@ -3397,5 +3469,127 @@ mod step6_tree_tests {
         );
         assert_eq!(arena.states.len(), 2, "both states are kept");
         assert!(arena.links.is_empty(), "the link is dropped");
+    }
+
+    /// #277 T25 (D5.3; O20, O21): three primary routines X, Y, Z; ONE raw map
+    /// holding entries for X and Y (by assignment), none for Z; Z owns the pd
+    /// arena's one state. (a) A borrow-mode tree scoped to {X} sees nothing of
+    /// Y and equals a drain tree over a map holding X alone. (b) Scoped to
+    /// {X, Z}, its subject set is still {X} (Z has no entry), and its output,
+    /// `pd_solution` included, equals (a)'s. DISCRIMINATION: (a) the
+    /// operation index read from the map directly → `op:y` appears; (b) the
+    /// subject set from the scope alone → Z's state enters `pd_solution`.
+    #[test]
+    fn subject_raw_hides_other_subjects() {
+        use crate::engine::l4::pd_solve::{ConeArena, ConeState, Producer};
+        use crate::engine::l4::summary::TempState;
+        use crate::engine::l5::detector_context::CapabilityAnalysis;
+        use crate::engine::l5::test_support::{
+            call_site, coverage, empty_resolved, fact, op_commit_routine,
+        };
+        use std::borrow::Cow;
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+        let mut m = empty_resolved();
+        for id in ["X", "Y", "Z"] {
+            let mut r = op_commit_routine(id, "procedure", &[&format!("op:{}", id.to_lowercase())]);
+            r.call_sites.push(call_site(
+                &format!("cs:{}", id.to_lowercase()),
+                "Foo",
+                vec![],
+            ));
+            m.workspace.routines.push(r);
+        }
+        let inherited = |id: &str| {
+            let mut f = fact("insert", "table", Some("T"));
+            f.provenance = "inherited";
+            f.via = "call";
+            f.witness_operation_id = Some(format!("op:{id}"));
+            f.witness_callsite_id = Some(format!("cs:{id}"));
+            vec![f]
+        };
+        let map: HashMap<String, Vec<CapabilityFact>> =
+            [("X", inherited("x")), ("Y", inherited("y"))]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+        assert!(
+            map.contains_key("X") && map.contains_key("Y") && !map.contains_key("Z"),
+            "precondition: X and Y have entries, Z none"
+        );
+        let mut z_direct = fact("insert", "table", Some("T"));
+        z_direct.witness_operation_id = Some("op:z".to_string());
+        let caps = CapabilityAnalysis {
+            direct_full: [("Z".to_string(), vec![z_direct.clone()])].into(),
+            coverage: ["X", "Y", "Z"]
+                .into_iter()
+                .map(|id| (id.to_string(), coverage("complete")))
+                .collect(),
+            derived: Default::default(),
+            pd: None,
+        };
+        let arena = ConeArena {
+            producers: vec![Producer {
+                fact: Arc::new(z_direct),
+                owner: Arc::from("Z"),
+                operation_id: "op:z".to_string(),
+            }],
+            states: vec![ConeState {
+                producer: 0,
+                routine: Arc::from("Z"),
+                t: TempState::Known(false),
+                reqs: Vec::new(),
+                seed: true,
+                dist: 0,
+                links: 0..0,
+            }],
+            links: vec![],
+            edges: vec![],
+            by_routine: [(Arc::from("Z"), vec![0])].into(),
+        };
+        let ids = |xs: &[&str]| -> BTreeSet<String> { xs.iter().map(|x| x.to_string()).collect() };
+        let tree = |raw: TreeRaw<'_>| {
+            compose_tree(
+                &m,
+                &[],
+                &[],
+                &caps,
+                raw,
+                Cow::Borrowed(&arena),
+                &HashMap::new(),
+                &Default::default(),
+            )
+        };
+        let has_y = |s: &CapabilitySnapshot| {
+            s.capability_facts.iter().any(|f| f.subject == "stable::Y")
+                || s.operation_index.iter().any(|o| o.operation_id == "op:y")
+                || s.callsite_index.iter().any(|c| c.callsite_id == "cs:y")
+        };
+        assert!(
+            has_y(&tree(TreeRaw::Drain(map.clone()))),
+            "precondition: Y's entry is observable in a tree that reads it"
+        );
+
+        // (a)
+        let acc = SubjectRaw::new(&map, &ids(&["X"]));
+        assert!(acc.get("Y").is_none(), "Y is outside the subjects");
+        assert!(acc.get("X").is_some());
+        assert_eq!(acc.subjects(), &ids(&["X"]));
+        let a = tree(TreeRaw::Borrow(acc));
+        assert!(!has_y(&a), "nothing of Y's entry reaches the tree");
+        let only_x: HashMap<String, Vec<CapabilityFact>> =
+            [("X".to_string(), map["X"].clone())].into();
+        let drain_x = tree(TreeRaw::Drain(only_x));
+        assert_eq!(fields(&a), fields(&drain_x), "(a) equals a drain over X");
+
+        // (b)
+        let acc = SubjectRaw::new(&map, &ids(&["X", "Z"]));
+        assert_eq!(acc.subjects(), &ids(&["X"]), "Z has no entry");
+        let b = tree(TreeRaw::Borrow(acc));
+        assert_eq!(fields(&b), fields(&a), "(b) equals (a), pd included");
+        assert!(
+            b.pd_solution.states.is_empty(),
+            "Z's state is outside the arena's scope"
+        );
     }
 }
