@@ -630,6 +630,16 @@ fn centralgauge_direct_and_isdue_names_site_and_isdue() {
             ),
             "{label}: fixHint"
         );
+        let path = f["evidencePath"].as_array().expect("evidencePath");
+        assert_eq!(path.len(), 1, "{label}: evidencePath {path:#?}");
+        assert_eq!(
+            path[0]["note"],
+            format!(
+                "[EventSubscriber] ReleaseOnRegistered may commit (mayCommit(summary) == \
+                 \"unknown\"; incomplete coverage: {reasons})"
+            ),
+            "{label}: evidence note"
+        );
     }
 }
 
