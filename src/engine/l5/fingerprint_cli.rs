@@ -51,7 +51,7 @@ use crate::engine::l5::snapshot_full::{
     serialize_cbor, serialize_cbor_gz, serialize_envelope, serialize_sharded,
 };
 use crate::engine::session::{
-    InventoryRead, QueryRead, RunKey, TreeReadOut, View, fingerprint_inventory_plan,
+    InventoryRead, JobId, QueryRead, RunKey, TreeReadOut, View, fingerprint_inventory_plan,
     fingerprint_plan, fingerprint_query_plan,
 };
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
@@ -614,7 +614,7 @@ fn run_routine_query(opts: &FingerprintOptions) -> Result<FingerprintRunResult, 
     view.prepare(&plan);
     let analyzer_diags = analyzer_diags_for(&view, &key);
     drop(view.take_run(&key));
-    let TreeReadOut::FingerprintQuery(result) = view.take_tree_read() else {
+    let TreeReadOut::FingerprintQuery(result) = view.take_tree_read(JobId(0)) else {
         unreachable!("a FingerprintQuery read leaves a query result")
     };
     view.release_all_but(&[]);
@@ -658,7 +658,7 @@ fn run_inventory_only(opts: &FingerprintOptions) -> Result<FingerprintRunResult,
     view.prepare(&plan);
     let analyzer_diags = analyzer_diags_for(&view, &key);
     drop(view.take_run(&key));
-    let TreeReadOut::Inventory(keys) = view.take_tree_read() else {
+    let TreeReadOut::Inventory(keys) = view.take_tree_read(JobId(0)) else {
         unreachable!("an Inventory read leaves the inventory keys")
     };
     view.release_all_but(&[]);

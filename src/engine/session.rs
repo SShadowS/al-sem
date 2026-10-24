@@ -42,14 +42,15 @@ pub struct View {
     /// The witness subjects' raw inherited facts, from the same composition;
     /// filled only under a [`WitnessRequest`].
     raw: Option<HashMap<String, Vec<CapabilityFact>>>,
-    /// Digest's tree over the cone graph (#160 step 6 D4): filled from `caps`
-    /// and `raw` (by move), released by `prepare` once `effects` is read off it.
+    /// The tree being read (#160 step 6 D4; #277 D6.5): one at a time, filled
+    /// from `caps` and `raw`, released by `prepare` once its read is done.
     tree: Option<CapabilitySnapshot>,
-    /// Digest's per-root effects (D7 (5)), read by its query after the run.
-    effects: Option<DigestEffects>,
-    /// A fingerprint tree read's owned result (#160 step 9 D5), read off the
-    /// tree inside `prepare`; taken by [`View::take_tree_read`].
-    tree_read: Option<TreeReadOut>,
+    /// Each tree job's per-root effects (D7 (5); #277 D5.4), read by its
+    /// query after the run.
+    effects: BTreeMap<JobId, DigestEffects>,
+    /// Each fingerprint tree job's owned read (#160 step 9 D5; #277 D5.4),
+    /// read off its tree inside `prepare`; taken by [`View::take_tree_read`].
+    tree_reads: BTreeMap<JobId, TreeReadOut>,
     l4: Option<L4Analysis>,
     det: Option<DetectorArtifacts>,
     /// One bit per [`Cell`] released; a released cell is never refilled.
@@ -180,18 +181,21 @@ impl WitnessRequest {
     /// scoped-equals-unscoped tests (#160 step 9 T17) compose with the view's
     /// own mapping, not a copy of it.
     pub(crate) fn scope(&self, model: &Model) -> WitnessScope {
-        WitnessScope::Subjects(
-            model
-                .workspace
-                .routines
-                .iter()
-                .filter(|r| {
-                    self.ids.contains(&r.stable_routine_id)
-                        || (self.primary && model.routine_role(r) == Role::Primary)
-                })
-                .map(|r| r.id.clone())
-                .collect(),
-        )
+        WitnessScope::Subjects(self.subjects(model))
+    }
+
+    /// The internal ids of every row this request names in `model`.
+    fn subjects(&self, model: &Model) -> BTreeSet<String> {
+        model
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| {
+                self.ids.contains(&r.stable_routine_id)
+                    || (self.primary && model.routine_role(r) == Role::Primary)
+            })
+            .map(|r| r.id.clone())
+            .collect()
     }
 }
 
@@ -576,8 +580,8 @@ impl View {
             caps: None,
             raw: None,
             tree: None,
-            effects: None,
-            tree_read: None,
+            effects: BTreeMap::new(),
+            tree_reads: BTreeMap::new(),
             l4: None,
             det: None,
             released: 0,
@@ -587,10 +591,12 @@ impl View {
     }
 
     /// Fill every cell `plan` needs that is still empty, in order (#160 step 6
-    /// D7): ordering, rel, ONE composition into `caps` and `raw`; under a
-    /// tree demand the tree (it takes `raw` by move and `caps.pd`; `Raw` is
-    /// released) and the read off it, the effects or a `TreeRead` result
-    /// (then `Tree` is released, step 9 D5); det (it
+    /// D7): ordering, rel, ONE composition into `caps` and `raw`; per tree
+    /// demand, in job order, its tree (#277 D5.3: its subjects' raw entries
+    /// drained or borrowed, `caps.pd` lent or, for the last tree, taken; `Raw`
+    /// is released after the last tree unless a later reader asks it) and its
+    /// read off it, the effects or a `TreeRead` result (then `Tree` is
+    /// released, step 9 D5); det (it
     /// consumes `caps`, then `l4`, then its harvest; `Caps` is released), then
     /// the runs. A plan with no run: rel, then `l4` alone. Rule 1's asserts
     /// (a), (b), (c), the one-witness assertion and the `after_run` assertion
@@ -640,9 +646,6 @@ impl View {
                 .all(|(_, t)| plan.witness.covers(&t.subjects)),
             "every tree demand's subjects are inside the view's request"
         );
-        // shortcut: one tree per view (it takes all of `raw`), until #277
-        // Task 4 composes several trees off one pass.
-        assert!(plan.trees.len() <= 1, "a View composes at most one tree");
         // (a) a released cell is never refilled: a refill after
         // `release(Det)` would find no `CoreSummaries`.
         for (cell, needed) in [
@@ -691,7 +694,7 @@ impl View {
             raw,
             tree,
             effects,
-            tree_read,
+            tree_reads,
             l4,
             det,
             released,
@@ -752,63 +755,134 @@ impl View {
                 *raw = Some(w);
             }
         }
-        // D7 (4)-(5): the tree over the cone graph, its read (digest's effects
-        // or a step 9 `TreeRead` result) off it, then the tree is released,
-        // all before `det` takes `caps`.
-        if let Some((_, demand)) = plan.trees.first() {
+        // D7 (4)-(5), #277 D5.3: per tree demand, in job order, its tree over
+        // its own subjects, its read off it, then the tree is released (one
+        // at a time, D6.5), all before `det` takes `caps`. A tree drains the
+        // entries it is the last reader of; with a later reader (a later
+        // tree, or policy's rule engine at (8)) it borrows them. The pd arena
+        // is lent to every tree but the last; the dependency calls die after
+        // the last.
+        if !plan.trees.is_empty() {
+            use crate::engine::l5::snapshot::{SubjectRaw, TreeRaw, compose_tree};
+            use std::borrow::Cow;
+            let mut dependency_calls = dependency_calls;
             let r = rel.as_ref().expect("rel filled above");
             let app_names = cross_base.map(|b| b.loaded_app_names()).unwrap_or_default();
             // D9 (#160 step 9): the dependency apps with no source; none single-app.
             let source_less = cross_base
                 .map(|b| crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps))
                 .unwrap_or_default();
-            let calls: &[crate::program::model::calls::CallEdge] =
-                match (cross_base, &dependency_calls) {
-                    (None, _) => &[],
-                    (Some(_), Some(c)) => c,
-                    (Some(_), None) => panic!(
-                        "the dependency calls left the base in an earlier prepare: \
-                         digest's tree composes in the view's first prepare"
-                    ),
+            let mut map = raw.take().expect("raw filled above");
+            let scopes: Vec<BTreeSet<String>> = plan
+                .trees
+                .iter()
+                .map(|(_, t)| t.subjects.subjects(model))
+                .collect();
+            // The raw readers after the trees: the part of the request no
+            // tree asks. Policy, the one such reader, asks `primary` alone.
+            let rest = WitnessRequest {
+                ids: plan
+                    .witness
+                    .ids
+                    .iter()
+                    .filter(|id| !plan.trees.iter().any(|(_, t)| t.subjects.ids.contains(*id)))
+                    .cloned()
+                    .collect(),
+                primary: plan.witness.primary,
+            };
+            let rest_scope = rest.subjects(model);
+            for (i, ((job, demand), scope)) in plan.trees.iter().zip(&scopes).enumerate() {
+                let last_tree = i + 1 == plan.trees.len();
+                let later = |id: &str| {
+                    rest_scope.contains(id) || scopes[i + 1..].iter().any(|s| s.contains(id))
                 };
-            *tree = Some(crate::engine::l5::snapshot::compose_tree(
-                model,
-                r.cone(),
-                calls,
-                caps.as_mut().expect("caps filled above"),
-                raw.take().expect("raw filled above"),
-                &app_names,
-                &source_less,
-            ));
-            note_release(released, Cell::Raw);
-            drop(dependency_calls);
-            let roots = &demand.subjects.ids;
-            match &demand.read {
-                TreeRead::Effects => {
-                    let t = tree.as_mut().expect("tree filled above");
-                    let roots: Vec<String> = roots.iter().cloned().collect();
-                    *effects = Some(crate::engine::l5::digest_cli::digest_effects(
-                        t,
-                        model,
-                        &roots,
-                        demand.tests,
-                        demand.gaps_in_cone,
-                    ));
+                let calls: &[crate::program::model::calls::CallEdge] =
+                    match (cross_base, dependency_calls.as_deref()) {
+                        (None, _) => &[],
+                        (Some(_), Some(c)) => c,
+                        (Some(_), None) => panic!(
+                            "the dependency calls left the base in an earlier prepare: \
+                             digest's tree composes in the view's first prepare"
+                        ),
+                    };
+                let c = caps.as_mut().expect("caps filled above");
+                let pd = if last_tree {
+                    Cow::Owned(c.pd.take().unwrap_or_default())
+                } else {
+                    c.pd.as_ref()
+                        .map_or_else(|| Cow::Owned(Default::default()), Cow::Borrowed)
+                };
+                let drain = scope.iter().all(|id| !map.contains_key(id) || !later(id));
+                let (tree_raw, done) = if !drain {
+                    let acc = SubjectRaw::new(&map, scope);
+                    let done: Vec<String> = acc
+                        .subjects()
+                        .iter()
+                        .filter(|id| !later(id))
+                        .cloned()
+                        .collect();
+                    (TreeRaw::Borrow(acc), done)
+                } else if map.keys().all(|id| scope.contains(id)) {
+                    // A one-tree view with no later reader: the whole map, as
+                    // a standalone digest always did.
+                    (TreeRaw::Drain(std::mem::take(&mut map)), vec![])
+                } else {
+                    let own = scope.iter().filter_map(|id| map.remove_entry(id)).collect();
+                    (TreeRaw::Drain(own), vec![])
+                };
+                *tree = Some(compose_tree(
+                    model,
+                    r.cone(),
+                    calls,
+                    c,
+                    tree_raw,
+                    pd,
+                    &app_names,
+                    &source_less,
+                ));
+                for id in done {
+                    map.remove(&id);
                 }
-                TreeRead::FingerprintQuery(read) => {
-                    let t = tree.as_ref().expect("tree filled above");
-                    *tree_read = Some(TreeReadOut::FingerprintQuery(read_fingerprint_query(
-                        t, read, roots, model,
-                    )));
+                if last_tree {
+                    if rest.is_empty() {
+                        note_release(released, Cell::Raw);
+                    } else {
+                        *raw = Some(std::mem::take(&mut map));
+                    }
+                    dependency_calls = None;
                 }
-                TreeRead::Inventory(read) => {
-                    // The assembly consumes the tree (its key classes filter it).
-                    let t = tree.take().expect("tree filled above");
-                    *tree_read = Some(TreeReadOut::Inventory(read_inventory(t, read, target)));
+                // No tree read asks `primary`: digest, prove and the query ask
+                // their roots, inventory nothing (#277 D5.1's table).
+                debug_assert!(!demand.subjects.primary);
+                let roots = &demand.subjects.ids;
+                match &demand.read {
+                    TreeRead::Effects => {
+                        let t = tree.as_mut().expect("tree filled above");
+                        let roots: Vec<String> = roots.iter().cloned().collect();
+                        let out = crate::engine::l5::digest_cli::digest_effects(
+                            t,
+                            model,
+                            &roots,
+                            demand.tests,
+                            demand.gaps_in_cone,
+                        );
+                        effects.insert(*job, out);
+                    }
+                    TreeRead::FingerprintQuery(read) => {
+                        let t = tree.as_ref().expect("tree filled above");
+                        let out = read_fingerprint_query(t, read, roots, model);
+                        tree_reads.insert(*job, TreeReadOut::FingerprintQuery(out));
+                    }
+                    TreeRead::Inventory(read) => {
+                        // The assembly consumes the tree (its key classes filter it).
+                        let t = tree.take().expect("tree filled above");
+                        let out = read_inventory(t, read, target);
+                        tree_reads.insert(*job, TreeReadOut::Inventory(out));
+                    }
                 }
+                *tree = None;
+                note_release(released, Cell::Tree);
             }
-            *tree = None;
-            note_release(released, Cell::Tree);
         }
         if need_det && det.is_none() {
             let r = rel.as_ref().expect("rel filled above");
@@ -862,8 +936,8 @@ impl View {
                 ("PdArena", pd),
                 ("Raw", raw.is_some()),
                 ("Tree", tree.is_some()),
-                ("Effects", effects.is_some()),
-                ("TreeRead", tree_read.is_some()),
+                ("Effects", !effects.is_empty()),
+                ("TreeRead", !tree_reads.is_empty()),
                 ("L4", l4.is_some()),
                 ("Det", true),
                 ("Ordering", ordering.is_some()),
@@ -910,8 +984,8 @@ impl View {
             Cell::Caps => self.caps = None,
             Cell::Raw => self.raw = None,
             Cell::Tree => self.tree = None,
-            Cell::Effects => self.effects = None,
-            Cell::TreeRead => self.tree_read = None,
+            Cell::Effects => self.effects.clear(),
+            Cell::TreeRead => self.tree_reads.clear(),
         }
     }
 
@@ -926,14 +1000,16 @@ impl View {
         }
     }
 
-    /// A fingerprint tree read's result, moved out (#160 step 9 D5); the cell
-    /// is released.
-    pub fn take_tree_read(&mut self) -> TreeReadOut {
+    /// `job`'s tree read, moved out (#160 step 9 D5; #277 D5.4); the cell is
+    /// released once no job's read is left in it.
+    pub fn take_tree_read(&mut self, job: JobId) -> TreeReadOut {
         let out = self
-            .tree_read
-            .take()
+            .tree_reads
+            .remove(&job)
             .expect("no tree read: the plan asked for none");
-        note_release(&mut self.released, Cell::TreeRead);
+        if self.tree_reads.is_empty() {
+            note_release(&mut self.released, Cell::TreeRead);
+        }
         out
     }
 
@@ -953,8 +1029,8 @@ impl View {
             ("Caps", self.caps.is_some()),
             ("Raw", self.raw.is_some()),
             ("Tree", self.tree.is_some()),
-            ("Effects", self.effects.is_some()),
-            ("TreeRead", self.tree_read.is_some()),
+            ("Effects", !self.effects.is_empty()),
+            ("TreeRead", !self.tree_reads.is_empty()),
             ("L4", self.l4.is_some()),
             ("Det", self.det.is_some()),
             ("Ordering", self.ordering.is_some()),
@@ -998,16 +1074,21 @@ impl View {
         self.raw.as_ref().expect("raw cell not filled")
     }
 
-    /// Digest's effects (#160 step 6 D7 (5)), read by its query at (8).
-    pub fn effects(&self) -> &DigestEffects {
-        self.effects.as_ref().expect("effects cell not filled")
+    /// `job`'s effects (#160 step 6 D7 (5); #277 D5.4), read by its query at
+    /// (8).
+    pub fn effects(&self, job: JobId) -> &DigestEffects {
+        self.effects
+            .get(&job)
+            .unwrap_or_else(|| panic!("effects of {job:?} not filled"))
     }
 
-    /// The effects, moved out: digest's query consumes their unresolved cones
-    /// (final panel F1-C6). The cell is empty after; the caller still
+    /// `job`'s effects, moved out: digest's query consumes their unresolved
+    /// cones (final panel F1-C6). The entry is gone after; the caller still
     /// `release`s `Cell::Effects` when it drops them.
-    pub fn take_effects(&mut self) -> DigestEffects {
-        self.effects.take().expect("effects cell not filled")
+    pub fn take_effects(&mut self, job: JobId) -> DigestEffects {
+        self.effects
+            .remove(&job)
+            .unwrap_or_else(|| panic!("effects of {job:?} not filled"))
     }
 
     /// The stored output of a run `prepare` ran. An `Arc`: a caller may
@@ -1380,7 +1461,7 @@ mod tests {
         ] {
             let mut v = view();
             v.prepare(&plan);
-            let effects = v.take_effects();
+            let effects = v.take_effects(JobId(0));
             let cone = effects.unresolved.get(&root);
             assert!(cone.is_some(), "{name}: precondition, the root's cone");
             assert_eq!(cone.and_then(|c| c.gaps_in_cone), want, "{name}");
@@ -1409,10 +1490,153 @@ mod tests {
         );
         let mut v = view();
         v.prepare(&plan);
-        assert!(v.effects.is_some(), "the tree was composed and read");
+        assert!(
+            v.effects.contains_key(&JobId(0)),
+            "the tree was composed and read"
+        );
         assert!(
             v.released & Cell::Caps.bit() != 0,
             "the one composition was released"
+        );
+    }
+
+    fn effects_tree(subjects: WitnessRequest) -> TreeDemand {
+        TreeDemand {
+            subjects,
+            tests: false,
+            gaps_in_cone: false,
+            read: TreeRead::Effects,
+        }
+    }
+
+    /// #277 R3-1: a tree demand naming a subject the view's request does not
+    /// is refused. DISCRIMINATION: `|| true` on the assertion → no panic.
+    #[test]
+    #[should_panic(expected = "inside the view's request")]
+    fn a_tree_outside_the_request_is_refused() {
+        let plan = Plan::for_test(vec![], true, false, 0)
+            .with_witness(WitnessRequest::primary())
+            .with_trees(vec![(
+                JobId(0),
+                effects_tree(WitnessRequest::roots(["x".to_string()].into())),
+            )]);
+        view().prepare(&plan);
+    }
+
+    /// #277 R3-1, the passing half: a `primary` request covers a tree with
+    /// no subject.
+    #[test]
+    fn a_primary_request_covers_an_empty_tree() {
+        let plan = Plan::for_test(vec![], true, false, 0)
+            .with_witness(WitnessRequest::primary())
+            .with_trees(vec![(JobId(0), effects_tree(WitnessRequest::empty()))]);
+        let mut v = view();
+        v.prepare(&plan);
+        assert!(v.effects.contains_key(&JobId(0)));
+    }
+
+    /// Every field of `e` as one comparable string.
+    fn effects_text(e: &DigestEffects) -> String {
+        let unresolved: Vec<String> = e
+            .unresolved
+            .iter()
+            .map(|(k, c)| format!("{k}: {:?} {:?}", c.items, c.traversal))
+            .collect();
+        format!(
+            "{:?}\n{unresolved:?}\n{:?}\n{:?}",
+            e.entries, e.coverage, e.identities
+        )
+    }
+
+    /// #277 Task 4 (D5.3, D5.4): two tree jobs with disjoint roots and a
+    /// policy-shaped later raw reader (`primary`) on ONE view, off one
+    /// composition. Each job's effects equal its one-tree plan's; the raw
+    /// facts outlive the trees for the later reader. Rule B's fixture:
+    /// `FillAndPost`'s temp `Fill` insert is a producer only a proof off the
+    /// pd arena witnesses, so the second tree reads the arena.
+    /// DISCRIMINATION: `caps.pd.take()` per tree (the first tree takes it) →
+    /// job 1's effects differ.
+    #[test]
+    fn two_trees_one_pass() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine::l5::test_support::write_fixture_rule_b(tmp.path());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(tmp.path(), &Default::default());
+        let new_view = || View::new(AnalysisTarget::build(&inputs, false, "digest").expect("base"));
+        let root = |v: &View, name: &str| -> String {
+            v.model()
+                .workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name && v.model().routine_role(r) == Role::Primary)
+                .unwrap_or_else(|| panic!("precondition: {name}"))
+                .stable_routine_id
+                .clone()
+        };
+        let probe_view = new_view();
+        let (a, b) = (
+            root(&probe_view, "CallWrite"),
+            root(&probe_view, "FillAndPost"),
+        );
+        drop(probe_view);
+        let tree = |id: &str| effects_tree(WitnessRequest::roots([id.to_string()].into()));
+        let plan = |trees: Vec<(JobId, TreeDemand)>, policy: bool| {
+            let mut w = trees
+                .iter()
+                .fold(WitnessRequest::empty(), |w, (_, t)| w.union(&t.subjects));
+            if policy {
+                w = w.union(&WitnessRequest::primary());
+            }
+            Plan::for_test(vec![], true, false, 0)
+                .with_witness(w)
+                .with_trees(trees)
+        };
+        let standalone = |id: &str| {
+            let mut v = new_view();
+            v.prepare(&plan(vec![(JobId(0), tree(id))], false));
+            v.take_effects(JobId(0))
+        };
+        let (sa, sb) = (standalone(&a), standalone(&b));
+        assert!(
+            sb.entries.iter().flat_map(|e| &e.effects).any(|e| {
+                e.detail
+                    .iter()
+                    .any(|(k, v)| k == "boundary" && v == "XRec.Fill")
+                    && crate::engine::l5::digest::is_known_temp_state(e.temp_state.as_ref())
+            }),
+            "precondition: FillAndPost's standalone effects carry the proof-witnessed Fill insert"
+        );
+
+        let mut v = new_view();
+        v.prepare(&plan(
+            vec![(JobId(0), tree(&a)), (JobId(1), tree(&b))],
+            true,
+        ));
+        assert_eq!(
+            effects_text(v.effects(JobId(0))),
+            effects_text(&sa),
+            "job 0"
+        );
+        assert_eq!(
+            effects_text(v.effects(JobId(1))),
+            effects_text(&sb),
+            "job 1"
+        );
+        assert!(v.tree.is_none(), "no tree outlives prepare");
+        assert!(
+            v.released & Cell::Caps.bit() != 0,
+            "the one composition was released"
+        );
+        let fill_and_post: Vec<&str> = v
+            .model()
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.stable_routine_id == b)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert!(
+            !fill_and_post.is_empty() && fill_and_post.iter().all(|id| v.raw().contains_key(*id)),
+            "the later reader still finds the trees' primary subjects"
         );
     }
 
@@ -1650,18 +1874,20 @@ mod tests {
             v.tree.is_none() && v.released & Cell::Tree.bit() != 0,
             "(c) the FingerprintQuery tree died inside prepare"
         );
-        assert!(v.effects.is_none(), "(a) a query read fills no effects");
-        let TreeReadOut::FingerprintQuery(r) = v.take_tree_read() else {
+        assert!(v.effects.is_empty(), "(a) a query read fills no effects");
+        let TreeReadOut::FingerprintQuery(r) = v.take_tree_read(JobId(0)) else {
             panic!("(a) a FingerprintQuery read leaves a query result")
         };
         assert!(r.blocks.is_empty() && r.diagnostics.is_empty());
         assert!(
-            v.tree_read.is_none() && v.released & Cell::TreeRead.bit() != 0,
+            v.tree_reads.is_empty() && v.released & Cell::TreeRead.bit() != 0,
             "(a) the take empties and releases the cell"
         );
         let msg = panic_text(
             "(a) a second take",
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(v.take_tree_read()))),
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drop(v.take_tree_read(JobId(0)))
+            })),
         );
         assert!(msg.contains("no tree read"), "(a) {msg}");
 
@@ -1673,7 +1899,7 @@ mod tests {
             "(c) the Inventory tree died inside prepare"
         );
         assert!(
-            matches!(v.tree_read, Some(TreeReadOut::Inventory(_))),
+            matches!(v.tree_reads.get(&JobId(0)), Some(TreeReadOut::Inventory(_))),
             "(b) precondition: an Inventory result is filled"
         );
         assert_eq!(
@@ -1681,7 +1907,7 @@ mod tests {
             "[retained-census] view.output cells=Rel,TreeRead,Det rel_strong=1 tree=0"
         );
         v.release_all_but(&[]);
-        assert!(v.tree_read.is_none(), "(b) the untaken result is dropped");
+        assert!(v.tree_reads.is_empty(), "(b) the untaken result is dropped");
         assert!(v.released & Cell::TreeRead.bit() != 0, "(b) and released");
         assert_eq!(
             v.census_output_line(),
@@ -1697,8 +1923,11 @@ mod tests {
         );
         v.prepare(&plan);
         assert!(v.tree.is_none(), "(e) the Effects tree died inside prepare");
-        assert!(v.tree_read.is_none(), "(e) Effects fills no TreeRead cell");
-        drop(v.take_effects());
+        assert!(
+            v.tree_reads.is_empty(),
+            "(e) Effects fills no TreeRead cell"
+        );
+        drop(v.take_effects(JobId(0)));
         v.release_all_but(&[]);
         assert_ne!(
             v.released & Cell::TreeRead.bit(),
@@ -1707,7 +1936,9 @@ mod tests {
         );
         let msg = panic_text(
             "(d) take_tree_read after Effects",
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(v.take_tree_read()))),
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drop(v.take_tree_read(JobId(0)))
+            })),
         );
         assert!(
             msg.contains("no tree read: the plan asked for none"),

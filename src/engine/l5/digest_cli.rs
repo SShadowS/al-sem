@@ -1840,7 +1840,7 @@ pub(crate) fn digest_pipeline_with(
     view.prepare(&plan);
     let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
     let mut effects = if plan.has_tree(JobId(0)) {
-        view.take_effects()
+        view.take_effects(JobId(0))
     } else {
         DigestEffects::default()
     };
