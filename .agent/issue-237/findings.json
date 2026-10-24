@@ -1,0 +1,410 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 158,
+    "severity": "important",
+    "text": "A1/A2 expect the wrong finding kind: with no NEW coverage the finding is capability-lost-under-coverage, not capability-lost (which stays only in details.kind). Exact tuple assertions would fail on unchanged code.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: policy.rs:102-109 downgrades CapabilityLost to CapabilityLostUnderCoverage under loose when new coverage is partial; all probe JSONs (with.json, rev.json, occ*.json) show capability-lost-under-coverage. Terms now state the coverage setup (no coverage records, CLI default --coverage-policy loose); A1/A2, P5, P9, P10 and the D1 rows name the real kind.",
+    "anchor": ".agent/issue-237/ledger.md:158-159",
+    "anchor_hash": "c5f5dfee290bb8540af79a4cd0f27b3f77159e31dbd573ac9b5f8fb320660ef3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 206,
+    "severity": "minor",
+    "text": "The longer-chain impossibility argument is false: old {X:Alpha,T:Beta,B:Gamma}, new {B:Beta,C:Gamma}, overlay {X:T,B:C} gives user->auto->user X->T->B->C with no chain diagnostic. Add it as a regression case.",
+    "disposition": "fixed",
+    "evidence": "Confirmed on the binary (P14, s2.json): the chain forms, no rename-overlay-chain diagnostic, and one hop keeps each old routine on its own entry's target. Argument rewritten (mixed chains exist; one hop never re-looks-up a target); pinned as A4 with proof (a).",
+    "anchor": ".agent/issue-237/ledger.md:206-211",
+    "anchor_hash": "a0b15a690e51b5c7b2b0906a92bf9fe4c54b3b22adda23d7503d7d89c81dc46a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 64,
+    "severity": "minor",
+    "text": "P11 wrongly says the rename golden runs through a real CLI path; it composes snapshots and calls run_diff_engine directly.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: cli_b_diff_differential.rs:153-186 calls compose_ws + run_diff_engine + format_diff. P11 corrected: t9 is the only test that passes --renames to the binary.",
+    "anchor": ".agent/issue-237/ledger.md:64-64",
+    "anchor_hash": "fe39315f3add30100e31957e0ed00e2883198a75aa63b45adf605d1f7c02fe4c",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 58,
+    "severity": "minor",
+    "text": "A1 and P5 name capability-lost; the real CLI (loose default) emits capability-lost-under-coverage because coverage is unknown.",
+    "disposition": "fixed",
+    "evidence": "Same as S1: policy.rs:102-109; P5 now reads capability-lost-under-coverage (with.json). Chose to state the empty-coverage setup rather than add coverage records.",
+    "anchor": ".agent/issue-237/ledger.md:58-58",
+    "anchor_hash": "a78d6466d745a25447d0bf6af3a82e175e2c1daafd94fa51b9e16a59d9ded31c",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 64,
+    "severity": "minor",
+    "text": "P11: the rename golden test calls run_diff_engine + format_diff directly, so t9 is the only binary-path test that uses --renames.",
+    "disposition": "fixed",
+    "evidence": "Same as S3: cli_b_diff_differential.rs:172-185. P11 corrected.",
+    "anchor": ".agent/issue-237/ledger.md:64-64",
+    "anchor_hash": "fe39315f3add30100e31957e0ed00e2883198a75aa63b45adf605d1f7c02fe4c",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 145,
+    "severity": "minor",
+    "text": "Test location not named; snap156/routine_fact/cap_fact are private to cli_b_diff_differential.rs. Put A1-A3 there with a local CARGO_BIN_EXE_alsem runner on .cbor files.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: the helpers are private fns in cli_b_diff_differential.rs (869-1008); diff/cli.rs:73 loads .cbor; gate::cbor::encode exists (cbor.rs:54). Acceptance matrix now names the file, the runner and the .cbor encoding for A1-A5 and D1a-D1d.",
+    "anchor": ".agent/issue-237/ledger.md:145-157",
+    "anchor_hash": "01f7b812f6289fbd0a834e428a3efb086982f0d15e1e904117970e76db547261",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 68,
+    "severity": "minor",
+    "text": "Cycle precondition is wrong: X must be in both snapshots (new X only has to be absent from the normalized old set). Add an A4 swap test with a bounded break, or label it untested.",
+    "disposition": "fixed",
+    "evidence": "Confirmed on the binary (P15, sw.json): old {X Alpha, T Beta}, new {X Beta}, overlay {X:T} pairs old T to new X; no loop, no collision. Pinned as A5; proof (a) is a bounded fixed point (stop on a repeated id or after table.len() hops); fallback 3 covers a hang.",
+    "anchor": ".agent/issue-237/ledger.md:68-68",
+    "anchor_hash": "805bf3f16701c507ac24307a21ca36f76d4497b9154bcbec8595bc2b161fd173",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 206,
+    "severity": "minor",
+    "text": "The user-auto-user argument names the wrong id: it needs the auto TARGET to be a user key, which is legal (A3 itself is such a chain). Reword.",
+    "disposition": "fixed",
+    "evidence": "Same as S2: renames.rs:173,178 and P13/P14. The shape paragraph now says auto targets can be user keys (P13) and user targets can be auto keys (P5); one hop never follows either.",
+    "anchor": ".agent/issue-237/ledger.md:206-211",
+    "anchor_hash": "a0b15a690e51b5c7b2b0906a92bf9fe4c54b3b22adda23d7503d7d89c81dc46a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 184,
+    "severity": "minor",
+    "text": "The CHANGELOG text to replace is in the released [2.0.1] section and is not false; add an [Unreleased] Changed entry instead of rewriting history.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: CHANGELOG.md:1091 is under ## [2.0.1] (L332). Design step 4 now adds [Unreleased] Added (the diagnostic) and Changed (the one-hop rule) entries and leaves the 2.0.1 text alone.",
+    "anchor": ".agent/issue-237/ledger.md:184-188",
+    "anchor_hash": "017d065d21d8858751b39429e51bbb27cbd671b5eee6ef9f8aef2e0beab25c7b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 91,
+    "severity": "minor",
+    "text": "The pair_signature_changes doc misses the strongest reason: pairing an old-side user target prevents the D1 collision. State one principle: no entry may put two live old routines on one key.",
+    "disposition": "fixed",
+    "evidence": "Confirmed by P5 vs P9/P16/P17: when T pairs, X is alone on T; when it does not, X and T collide. Goal now states the single principle and derives :173, :178 and the inclusion from it; Design step 2 puts it in the doc.",
+    "anchor": ".agent/issue-237/ledger.md:91-105",
+    "anchor_hash": "e7f259016de27a7c6c085379b79cb23e3a58c31e79c62895f6357c9584e62031",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 61,
+    "severity": "minor",
+    "text": "The {X:U, T:U} simulation is not the same table as following the chain (T would be auto), so origin and renamesApplied differ. Note it is approximate; rely on proof (a).",
+    "disposition": "fixed",
+    "evidence": "Confirmed: indexes.rs:103-114 sets origin only for non-auto entries. P8 is labelled approximate and points to proof (a)'s recorded run as the evidence.",
+    "anchor": ".agent/issue-237/ledger.md:61-61",
+    "anchor_hash": "e4ffa422dc83a78f832a17f98f69fdb8ed3f2e3c173ebb0afb810ff5e6e6c272",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-237/ledger.md",
+    "line": 261,
+    "severity": "minor",
+    "text": "The old-id-is-live clause of rename-overlay-collision is pinned by no test.",
+    "disposition": "fixed",
+    "evidence": "Required unit test in renames.rs ({Y→T}, old_ids={T}: stale not-in-old Y, no collision) with a discrimination proof (drop the clause → fails); delivered by the implementer, marked at the final panel.",
+    "anchor": ".agent/issue-237/ledger.md:261-263",
+    "anchor_hash": "c426b49a66cc73cdab83fe04c3b86924ef54ea970af0aabdcefb26a48f78c6bb",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F1",
+    "source": "sol",
+    "round": "final-1",
+    "file": "src/engine/gate/diff/renames.rs",
+    "line": 178,
+    "severity": "minor",
+    "text": "\"Ids the user overlay maps (either end) never pair\" contradicts the new paragraph that lets old-side user targets pair.",
+    "disposition": "fixed",
+    "evidence": "Replaced with side-specific exclusions: old side excludes user keys (the pair would replace the user's entry, mod.rs:162-163); new side excludes user targets and keys an old routine already fills; old-side user targets may pair. Same fix as CR4.",
+    "anchor": "src/engine/gate/diff/renames.rs:189-197",
+    "anchor_hash": "02ae72c6c277694804801c5cb6694dc9845adf72204da6bd15460abad24b6c57",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F2",
+    "source": "sol",
+    "round": "final-1",
+    "file": "src/engine/gate/diff/renames.rs",
+    "line": 116,
+    "severity": "minor",
+    "text": "\"Exactly when\" wrongly leaves out two explicit entries sharing a target ({X:U, Y:U} merges live X and Y).",
+    "disposition": "fixed",
+    "evidence": "Doc now lists both ways: two entries onto one target (reported by rename-overlay-overlap, user entries only) and a live unmapped target (the collision). Same fix as CR3.",
+    "anchor": "src/engine/gate/diff/renames.rs:113-128",
+    "anchor_hash": "7b6f51605705867ea91177226dc6ea9b2c37e34b5c26dc2daf806db02be6c1e6",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "F3",
+    "source": "sol",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 15,
+    "severity": "minor",
+    "text": "\"Compared with the new one\" assumes the target exists in new; D1c/D1d diagnose collisions at stale targets.",
+    "disposition": "fixed",
+    "evidence": "CHANGELOG Added now says the two old ids' facts share one key; the renames.rs doc says the target may be stale in new. Same fix as CR5/G1.",
+    "anchor": "CHANGELOG.md:12-17",
+    "anchor_hash": "91033c3dcbd7a4738d1e553952a53f25728afc36d4c6ada4bcc0b3c561fac156",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G1",
+    "source": "opus",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 12,
+    "severity": "minor",
+    "text": "The Added entry says \"routine\" but the rule applies to any stable id (object entries exist, rename-overlay.json maps Codeunit:50100→50200).",
+    "disposition": "fixed",
+    "evidence": "CHANGELOG Added now names routine, object, table, field or key. Same fix as CR5.",
+    "anchor": "CHANGELOG.md:12-17",
+    "anchor_hash": "91033c3dcbd7a4738d1e553952a53f25728afc36d4c6ada4bcc0b3c561fac156",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR1",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/diff/indexes.rs",
+    "line": 261,
+    "severity": "important",
+    "text": "The collision check reads live old ids from identities.stableIds only, but normalize re-keys every old fact array; a key with facts but no identity row still merges silently.",
+    "disposition": "fixed",
+    "evidence": "Real by construction: derive_identity_table (src/engine/l5/snapshot.rs:1565-1588) writes objects, tables and routines only, and committed schema snapshots carry field/key facts with no identity row (schema-field-removed-old.snap.json: Table:50100#1, #2, #K0). indexes::live_ids = identity rows + every fact subject normalize re-keys; it feeds both the collision and stale checks. D1e pins it (red: two false stale, no collision); break 'identity rows only' fails D1e.",
+    "anchor": "src/engine/gate/diff/indexes.rs:58-87",
+    "anchor_hash": "a607191d03d8fa64d38a0e209003f53ec55c4f3df0ee5191b3bf7ce90c7cc2f5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR2",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "tests/cli/cli_b_diff_differential.rs",
+    "line": 1889,
+    "severity": "minor",
+    "text": "D1a/D1b pin row-order-dependent, partly false findings, so a future fix of the merge would read as a regression.",
+    "disposition": "fixed",
+    "evidence": "D1a-D1e assert the exact diagnostics, exit 0, renamesApplied and only the findings off the collided key (findings_off237, whose doc states the limit). Break (d) still fails D1a-D1e through the diagnostic; D1b checked alone with the loop flipped.",
+    "anchor": "tests/cli/cli_b_diff_differential.rs:1894-1979",
+    "anchor_hash": "398f10f1b4b77aea920b7164427d6651f0e3e0535017f74284beaf5a372c34d4",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR3",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/diff/renames.rs",
+    "line": 116,
+    "severity": "minor",
+    "text": "The \"exactly when\" doc is wrong: two user entries onto one target also merge two live routines.",
+    "disposition": "fixed",
+    "evidence": "Smaller honest option: the doc names the overlap case and says rename-overlay-overlap reports it; no second diagnostic. Same fix as F2.",
+    "anchor": "src/engine/gate/diff/renames.rs:113-128",
+    "anchor_hash": "7b6f51605705867ea91177226dc6ea9b2c37e34b5c26dc2daf806db02be6c1e6",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR4",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/diff/renames.rs",
+    "line": 181,
+    "severity": "minor",
+    "text": "A user key never pairs because the auto entry would REPLACE the user's entry (rename_table.insert, mod.rs:163), not because it adds a second routine.",
+    "disposition": "fixed",
+    "evidence": "Confirmed at mod.rs:162-163; doc rewritten with side-specific exclusions. Same fix as F1.",
+    "anchor": "src/engine/gate/diff/renames.rs:189-197",
+    "anchor_hash": "02ae72c6c277694804801c5cb6694dc9845adf72204da6bd15460abad24b6c57",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR5",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 12,
+    "severity": "minor",
+    "text": "CHANGELOG and docs say routines only; the diagnostic applies to any stable id, and the target may be stale in new.",
+    "disposition": "fixed",
+    "evidence": "CHANGELOG Added and the renames.rs doc name every id kind and say the old ids' facts share one key. Same fix as G1/F3.",
+    "anchor": "CHANGELOG.md:12-17",
+    "anchor_hash": "91033c3dcbd7a4738d1e553952a53f25728afc36d4c6ada4bcc0b3c561fac156",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR6",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "docs/superpowers/plans/2026-10-24-issue-237-one-hop-rename.md",
+    "line": 3,
+    "severity": "minor",
+    "text": "The plan cites .agent/issue-237/ledger.md, which is not committed.",
+    "disposition": "refuted",
+    "evidence": "The flow commits .agent/issue-237/ledger.md in its evidence commit before the merge, so the citation resolves on master.",
+    "anchor": ".agent/issue-237/ledger.md:350-350",
+    "anchor_hash": "65f7d464f2fb9c0cbc5475b4e010609e6b55402454c94485083dd90092d9f9a2",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR7",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/diff/renames.rs",
+    "line": 114,
+    "severity": "minor",
+    "text": "The validate_overlay_against_snapshots doc says it mirrors the TS validateOverlayAgainstSnapshots, but the collision diagnostic is #237's own.",
+    "disposition": "fixed",
+    "evidence": "The doc says it began as an al-sem port (the stale checks) and names the two #237 divergences: the live-id definition and the collision.",
+    "anchor": "src/engine/gate/diff/renames.rs:113-128",
+    "anchor_hash": "7b6f51605705867ea91177226dc6ea9b2c37e34b5c26dc2daf806db02be6c1e6",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR8",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "tests/cli/cli_b_diff_differential.rs",
+    "line": 1714,
+    "severity": "minor",
+    "text": "The #237 tests hand-build the alsem diff Command instead of reusing cli_diff_strict's alsem_diff helper.",
+    "disposition": "fixed",
+    "evidence": "Reuse is shorter: alsem_diff(args) takes any args, so it was made pub(crate) and diff237_ids calls crate::cli_diff_strict::alsem_diff (cross-member calls are an existing pattern in the cli umbrella).",
+    "anchor": "tests/cli/cli_b_diff_differential.rs:1697-1727",
+    "anchor_hash": "36bfd428eded7c984ad7ed5ae546a077d63e48eb2fe63211f465639b82510abb",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
