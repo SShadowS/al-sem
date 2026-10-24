@@ -1460,6 +1460,79 @@ enum 50106 "Other Kind" implements "Other Strategy"
         format!("#if CLEAN99\n{first}#else\n{second}#endif\n")
     }
 
+    /// Final panel N2-1: an object is declared twice under `#if`, its implicit
+    /// `Rec` on two tables whose `Kind` field is the closed and the extensible
+    /// enum: a page (`SourceTable`), a codeunit (`TableNo`) and a table
+    /// extension (`extends`). Both arms read `Rec.Kind`; the merged object must
+    /// not keep one arm's table.
+    #[test]
+    fn i264_n2_1_if_alternative_objects_on_two_tables_stay_open() {
+        let tables = format!(
+            "{ITEM}\ntable 50136 \"Open Item\"\n{{\n    fields\n    {{\n        field(1; \"No.\"; Code[20]) {{ }}\n        field(2; Kind; Enum \"Open Kind\") {{ }}\n    }}\n}}\n"
+        );
+        let body = format!(
+            "    procedure Dispatch()\n    var\n{S_VAR}\n    begin\n        S := Rec.Kind;\n        S.NextKm(1);\n    end;\n"
+        );
+        let object = |shape: &str, t: &str| match shape {
+            "page SourceTable" => {
+                format!("page 50137 \"Kind Card\"\n{{\n    SourceTable = \"{t}\";\n\n{body}}}\n")
+            }
+            "codeunit TableNo" => {
+                format!("codeunit 50138 \"Kind Runner\"\n{{\n    TableNo = \"{t}\";\n\n{body}}}\n")
+            }
+            _ => format!("tableextension 50139 \"Kind Ext\" extends \"{t}\"\n{{\n{body}}}\n"),
+        };
+        for shape in [
+            "page SourceTable",
+            "codeunit TableNo",
+            "tableextension extends",
+        ] {
+            let closed = object(shape, "Demo Item");
+            let open = object(shape, "Open Item");
+            let single = workspace(
+                caller(VARS, "", ""),
+                &[
+                    ("src/Item.al", tables.clone()),
+                    ("src/OpenKind.al", open_kind()),
+                    ("src/Page.al", closed.clone()),
+                ],
+            );
+            assert_eq!(
+                completeness(&single),
+                SetCompleteness::Complete,
+                "precondition: {shape} closes"
+            );
+            for (label, first, second) in [
+                ("closed first", &closed, &open),
+                ("open first", &open, &closed),
+            ] {
+                let label = format!("{shape}, {label}");
+                let ws = workspace(
+                    caller(VARS, "", ""),
+                    &[
+                        ("src/Item.al", tables.clone()),
+                        ("src/OpenKind.al", open_kind()),
+                        ("src/Page.al", if_arms(first, second)),
+                    ],
+                );
+                // One edge per `#if` arm: every one must stay open.
+                let report = crate::program::resolve::full::resolve_full_program(write(&ws).path())
+                    .expect("resolves");
+                let sites: Vec<SetCompleteness> = report
+                    .edges
+                    .iter()
+                    .filter(|c| {
+                        c.edge.from.name_lc.as_ref() == "dispatch"
+                            && c.edge.shape == DispatchShape::Polymorphic
+                    })
+                    .map(|c| c.edge.completeness)
+                    .collect();
+                assert_eq!(sites.len(), 2, "precondition: one site per arm");
+                assert!(sites.into_iter().all(is_open), "N2-1 {label}");
+            }
+        }
+    }
+
     /// Final panel FO3: the enum itself is declared twice under `#if`, once
     /// `Extensible = false` and once `Extensible = true`. The build merges the
     /// copies (`build::dedup_objects`, T16/T33) to an open enum, in both orders.

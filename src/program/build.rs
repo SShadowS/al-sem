@@ -673,11 +673,40 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
 /// empty unless closed. A table's `fields` are unioned too: an arm that
 /// declares a field with another type keeps both entries, so
 /// `ResolveIndex::field_in_table` declines the name instead of taking the
-/// first arm's type (identical copies add nothing).
+/// first arm's type (identical copies add nothing). The object-context facts
+/// `source_table` (with its temporary marker), `table_no` and `extends_target`
+/// are cleared when the copies disagree (#264 N2-1): keeping the first arm's
+/// would type the implicit `Rec` of every arm by one build.
 fn dedup_objects(objects: &mut Vec<ObjectNode>) {
+    use crate::program::node_extract::object_ref_pair_conflicts;
+    use al_syntax::IdentifierFoldExt;
+    let refs_disagree = |a: &Option<crate::program::node_extract::ObjectRef>,
+                         a_temp: bool,
+                         b: &Option<crate::program::node_extract::ObjectRef>,
+                         b_temp: bool| match (a, b) {
+        (None, None) => false,
+        (Some(x), Some(y)) => object_ref_pair_conflicts(&(x.clone(), a_temp), &(y.clone(), b_temp)),
+        _ => true,
+    };
     objects.dedup_by(|dup, kept| {
         if dup.id != kept.id {
             return false;
+        }
+        if refs_disagree(
+            &kept.source_table,
+            kept.source_table_temporary,
+            &dup.source_table,
+            dup.source_table_temporary,
+        ) {
+            kept.source_table = None;
+            kept.source_table_temporary = false;
+        }
+        if refs_disagree(&kept.table_no, false, &dup.table_no, false) {
+            kept.table_no = None;
+        }
+        let extends_lc = |o: &ObjectNode| o.extends_target.as_ref().map(|t| t.fold_identifier());
+        if extends_lc(kept) != extends_lc(dup) {
+            kept.extends_target = None;
         }
         for field in std::mem::take(&mut dup.fields) {
             if !kept.fields.contains(&field) {

@@ -770,7 +770,7 @@ fn singular_property_value(
 /// an `Id`/`Name` pair is always a conflict (no id<->name resolution happens
 /// at this syntactic layer), and a differing `temporary` marker is always a
 /// real conflict regardless of the reference shape.
-fn object_ref_pair_conflicts(a: &(ObjectRef, bool), b: &(ObjectRef, bool)) -> bool {
+pub(crate) fn object_ref_pair_conflicts(a: &(ObjectRef, bool), b: &(ObjectRef, bool)) -> bool {
     if a.1 != b.1 {
         return true;
     }
