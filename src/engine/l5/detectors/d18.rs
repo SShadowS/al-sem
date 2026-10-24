@@ -115,13 +115,12 @@ pub fn detect_d18(
                 None => continue,
             };
             let field_name = field_info.text.trim().to_string();
+            // The unquoted, folded field: the dedup key and the #252 loose subject.
+            let field_lc = unquoted_field_name(field_info).to_lowercase();
 
             let dedup_key = format!(
                 "{}|{}|{}|{}",
-                routine.id,
-                loop_info.id,
-                record_var,
-                unquoted_field_name(field_info).to_lowercase()
+                routine.id, loop_info.id, record_var, field_lc
             );
             if seen.contains(&dedup_key) {
                 continue;
@@ -215,14 +214,10 @@ pub fn detect_d18(
                 loose_subject: Some(LooseSubject {
                     object_id: None,
                     key: match &op.table_id {
-                        Some(_) => {
-                            format!("d18/{}", unquoted_field_name(field_info).to_lowercase())
+                        Some(_) => format!("d18/{field_lc}"),
+                        None => {
+                            format!("d18/{}/{field_lc}", op.record_variable_name.to_lowercase())
                         }
-                        None => format!(
-                            "d18/{}/{}",
-                            op.record_variable_name.to_lowercase(),
-                            unquoted_field_name(field_info).to_lowercase()
-                        ),
                     },
                 }),
             };

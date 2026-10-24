@@ -165,9 +165,9 @@ impl<'a> FingerprintIndex<'a> {
     /// blanked and, when the anchor is a routine, every occurrence of the anchor's
     /// internal or stable id in `rootCauseKey` (with the one `/op3`-style site-id
     /// segment minted on it) replaced by `~`. So the same problem moved to another routine of the
-    /// same object keeps this key. Not unique: several findings can share one. When
-    /// the anchor is not a routine (d64's object id, an unresolved id) it equals
-    /// `fingerprint_of`.
+    /// same object keeps this key. Not unique: several findings can share one. On the
+    /// `None` path, when the anchor is not a routine (d64's object id, an unresolved
+    /// id), it equals `fingerprint_of`.
     ///
     /// #252: when the detector states a [`LooseSubject`](crate::engine::l5::finding::LooseSubject),
     /// its key replaces the stripped `rootCauseKey` and is hashed as given (after

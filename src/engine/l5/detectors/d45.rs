@@ -138,6 +138,25 @@ pub fn detect_d45(
             .and_then(|e| event_kind_by_id.get(e.as_str()))
             .map(|s| s.to_string());
 
+        // #252: the publisher's events, on the publisher's object; one per publisher.
+        // The anchor IS the publisher for a primary one; for a dependency publisher it
+        // is the first primary subscriber, which a rename can move.
+        let loose_subject = LooseSubject {
+            object_id: Some(pub_routine.object_id.clone()),
+            key: if publisher_events.is_empty() {
+                format!("d45/{publisher}")
+            } else {
+                format!(
+                    "d45/{}",
+                    publisher_events
+                        .iter()
+                        .map(|e| e.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            },
+        };
+
         for (table, writer_set) in &writer_subs_by_table {
             // For a dependency publisher, only a table a PRIMARY subscriber writes is
             // the workspace's exposure; another dependency's subscriber writing its
@@ -229,24 +248,7 @@ pub fn detect_d45(
                 event_kind: publisher_event_kind.clone(),
                 cross_extension_subscribers: cross_ext,
                 cohort_contexts: None,
-                // #252: the publisher's events, on the publisher's object. The anchor
-                // IS the publisher for a primary one; for a dependency publisher it
-                // is the first primary subscriber, which a rename can move.
-                loose_subject: Some(LooseSubject {
-                    object_id: Some(pub_routine.object_id.clone()),
-                    key: if publisher_events.is_empty() {
-                        format!("d45/{publisher}")
-                    } else {
-                        format!(
-                            "d45/{}",
-                            publisher_events
-                                .iter()
-                                .map(|e| e.as_str())
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        )
-                    },
-                }),
+                loose_subject: Some(loose_subject.clone()),
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
             findings.push(finding);

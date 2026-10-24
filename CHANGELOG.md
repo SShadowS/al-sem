@@ -18,9 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rootCauseKey`. Moving the problem to another routine of the same object keeps it. A
   renamed record variable keeps it too when its table is known (d4, d18, d22, d60), and a
   moved parameter keeps it for d59. Each check still keeps its event, called routine or
-  global variable. d39–d42 findings on different record tables, two primary d45 publishers
-  on one table, d57 globals named like `op1`, and d16 self-calls no longer share a key.
-  These values change once; `fingerprint` and `rootCauseKey` do not (#252).
+  global variable; d43 also keeps the object of the code that raises the event. d39–d42
+  findings on different record tables, two primary d45 publishers on one table, d57
+  globals named like `op1`, d16 self-calls, and d43 raises of one event from two objects
+  no longer share a key. These values change once; `fingerprint` and `rootCauseKey` do
+  not (#252).
 
 ### Fixed
 

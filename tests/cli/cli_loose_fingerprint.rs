@@ -898,6 +898,57 @@ fn d48_loop_objects_distinct() {
     assert_ne!(loose(&fs[0]), loose(&fs[1]));
 }
 
+/// FR2 (refuted): an implicit `Rec` argument never reaches d39-d42, so it can never
+/// give a `?` caller table. Such a binding has no `source_record_variable_id`
+/// (`ir_walk.rs` `bound_rec_var = None`), so `calls.rs` `initial_binding_state` makes
+/// it `"non-record-arg"`, `upgrade_bindings` never upgrades that to `"resolved"`, and
+/// all four detectors require `"resolved"`. This pins that: the table procedure that
+/// passes `Rec` gives no finding; the one that passes a local `Cust` does. If it ever
+/// fires, the implicit-Rec caller table needs resolving (record_types pass 3 knows it).
+#[test]
+fn d41_implicit_rec_binding_is_not_reported() {
+    let table = r#"
+table 18 Customer
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    procedure ViaRec()
+    var H: Codeunit H;
+    begin
+        Rec.SetRange("No.", 'A');
+        H.ResetIt(Rec);
+        Rec.DeleteAll();
+    end;
+
+    procedure ViaLocal()
+    var H: Codeunit H; Cust: Record Customer;
+    begin
+        Cust.SetRange("No.", 'A');
+        H.ResetIt(Cust);
+        Cust.DeleteAll();
+    end;
+}
+
+codeunit 50300 H
+{
+    procedure ResetIt(var R: Record Customer)
+    begin
+        R.Reset();
+    end;
+}
+"#;
+    let (_g, ws) = temp_workspace_files("d41-rec", &[("src/Code.al", table)]);
+    let fs = findings_of(
+        &analyze_json_with(&ws, Some(D41.detector), true),
+        D41.detector,
+    );
+    assert_eq!(fs.len(), 1, "{fs:#?}");
+    assert_eq!(loc(&fs[0], "routineName"), "ViaLocal");
+}
+
 // --- d4, d18, d22: the table and the literal key or field ---
 
 const D4: &str = "d4-repeated-lookup-in-loop";
@@ -1238,6 +1289,100 @@ fn d43_move_caller() {
         step_routine(&fa[0], 0),
         step_routine(&fb[0], 0),
         "precondition: caller moves"
+    );
+    assert_move(&fa[0], &fb[0]);
+}
+
+/// A table `Doc` publishing `OnBeforePost(var IsHandled)`, a setter subscriber, and
+/// a guarded dispatch (inserting `Ws Log`) in `Doc.{in_table}` (when `Some`) and in
+/// a table extension `DocExt` procedure per name in `in_ext`.
+fn d43_ext_code(in_table: Option<&str>, in_ext: &[&str]) -> String {
+    let dispatch = |name: &str| {
+        format!(
+            "    procedure {name}()\n    var\n        Log: Record \"Ws Log\";\n        IsHandled: Boolean;\n    begin\n        IsHandled := false;\n        OnBeforePost(IsHandled);\n        if not IsHandled then\n            Log.Insert();\n    end;\n\n"
+        )
+    };
+    let table_proc = in_table.map(dispatch).unwrap_or_default();
+    let ext_procs: String = in_ext.iter().map(|n| dispatch(n)).collect();
+    format!(
+        r#"table 50290 "Ws Log"
+{{
+    fields
+    {{
+        field(1; "No."; Code[20]) {{ }}
+    }}
+}}
+
+table 50300 Doc
+{{
+    fields
+    {{
+        field(1; "No."; Code[20]) {{ }}
+    }}
+
+{table_proc}    [IntegrationEvent(false, false)]
+    procedure OnBeforePost(var IsHandled: Boolean)
+    begin
+    end;
+}}
+
+tableextension 50301 DocExt extends Doc
+{{
+{ext_procs}}}
+
+codeunit 50302 Setter
+{{
+    [EventSubscriber(ObjectType::Table, Database::Doc, 'OnBeforePost', '', false, false)]
+    local procedure SetHandled(var IsHandled: Boolean)
+    begin
+        IsHandled := true;
+    end;
+}}
+"#
+    )
+}
+
+const D43: &str = "d43-event-ishandled-skip";
+
+/// FR3 `d43_caller_objects_distinct`: one event's guarded dispatch from the table
+/// `Doc` and from its table extension `DocExt` (a bare call into the base table);
+/// both anchor on the one setter. The dispatching caller's OBJECT is in the subject,
+/// so they keep two keys. (A cross-object call through a codeunit variable is a
+/// `variable-typed-call` edge, which d43 does not walk.)
+#[test]
+fn d43_caller_objects_distinct() {
+    let fs = run_252("d43-objs", &d43_ext_code(Some("Post"), &["PostExt"]), D43);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(
+        loc(&fs[0], "routineId"),
+        loc(&fs[1], "routineId"),
+        "precondition: one anchor (the setter)"
+    );
+    assert_eq!(fs[0]["affectedTables"], fs[1]["affectedTables"]);
+    assert_ne!(
+        object_of_routine(step_routine(&fs[0], 0)),
+        object_of_routine(step_routine(&fs[1], 0)),
+        "precondition: callers in two objects"
+    );
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+/// FR3: the dispatch moves between two procedures of the table extension; the
+/// caller's object stays, so the loose key stays.
+#[test]
+fn d43_move_within_caller_object() {
+    let fa = run_252("d43-ext-a", &d43_ext_code(None, &["PostA"]), D43);
+    let fb = run_252("d43-ext-b", &d43_ext_code(None, &["PostB"]), D43);
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    assert_ne!(
+        step_routine(&fa[0], 0),
+        step_routine(&fb[0], 0),
+        "precondition: caller moves"
+    );
+    assert_eq!(
+        object_of_routine(step_routine(&fa[0], 0)),
+        object_of_routine(step_routine(&fb[0], 0)),
+        "precondition: same caller object"
     );
     assert_move(&fa[0], &fb[0]);
 }

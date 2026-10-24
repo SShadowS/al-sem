@@ -70,7 +70,7 @@ use std::collections::{HashMap, HashSet};
 use al_syntax::IdentifierFoldExt;
 
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::finding::SourceAnchor;
+use crate::engine::l5::finding::{LooseSubject, SourceAnchor};
 use crate::engine::l5::registry::{Detector, substrate};
 use crate::program::body::features::{
     PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PExpressionInfo,
@@ -1182,7 +1182,7 @@ pub(crate) fn anchor_of(a: &PAnchor, routine: &ModelRoutine) -> SourceAnchor {
 /// #252: the resolved table of the caller's record variable (`vars` = the caller's
 /// `record_variables`) that `binding` passes (d39-d42 loose subjects). Matched by
 /// record-variable id, else by folded name; `None` when neither resolves to a
-/// table (the detectors then write `?`).
+/// table ([`callee_param_table_subject`] then writes `?`).
 pub(crate) fn binding_source_table<'r>(
     vars: &'r [ModelRecordVariable],
     binding: &PCallArgumentBinding,
@@ -1196,6 +1196,24 @@ pub(crate) fn binding_source_table<'r>(
         vars.iter().find(|v| v.name.fold_identifier() == name)
     };
     by_id.or_else(by_name)?.table_id.as_deref()
+}
+
+/// #252: the d39-d42 loose subject `{prefix}/{callee}/{param index}/{caller table}`:
+/// the caller and its call site drop; an unresolved caller table is `?`.
+pub(crate) fn callee_param_table_subject(
+    prefix: &str,
+    callee_id: &str,
+    idx: u32,
+    vars: &[ModelRecordVariable],
+    binding: &PCallArgumentBinding,
+) -> LooseSubject {
+    LooseSubject {
+        object_id: None,
+        key: format!(
+            "{prefix}/{callee_id}/{idx}/{}",
+            binding_source_table(vars, binding).unwrap_or("?")
+        ),
+    }
 }
 
 /// `groupAndCap` — group findings by `key_of(finding)`, sort each group by
@@ -1814,6 +1832,18 @@ mod tests {
         assert_eq!(t(None, Some("other")), None, "no variable");
         assert_eq!(t(Some("v3"), None), None, "unresolved table");
         assert_eq!(t(None, None), None);
+    }
+
+    /// FR8: the d39-d42 subject carries `?` for an unresolved caller table, and the
+    /// resolved table otherwise. Break: `unwrap_or("?")` → `unwrap_or("")`.
+    #[test]
+    fn callee_param_table_subject_marks_an_unresolved_table() {
+        let vars = [rec_var("v1", "Cust", Some("app/table/18"))];
+        let s =
+            |id, name| callee_param_table_subject("d41", "callee", 2, &vars, &binding(id, name));
+        assert_eq!(s(Some("v1"), None).key, "d41/callee/2/app/table/18");
+        assert_eq!(s(None, Some("other")).key, "d41/callee/2/?");
+        assert_eq!(s(None, Some("other")).object_id, None);
     }
 }
 

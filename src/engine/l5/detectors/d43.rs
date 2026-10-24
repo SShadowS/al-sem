@@ -584,11 +584,16 @@ pub fn detect_d43(
                     event_kind: event_kind_by_id.get(site.event_id.as_str()).map(|s| s.to_string()),
                     cross_extension_subscribers: cross_ext,
                     cohort_contexts: None,
-                    // #252: the event (the table is a hashed part); the caller, its
-                    // call site and the setter drop.
+                    // #252: the event and the dispatching caller's OBJECT (the table
+                    // is a hashed part); the caller routine, its call site and the
+                    // setter drop, so a move inside the caller's object keeps it (FR3).
                     loose_subject: Some(LooseSubject {
                         object_id: None,
-                        key: format!("d43/{}", site.event_id),
+                        key: format!(
+                            "d43/{}|{}",
+                            site.event_id,
+                            caller.map_or("?", |c| c.object_id.as_str())
+                        ),
                     }),
                 };
                 finding.fingerprint = Some(fp_index.fingerprint_of(&finding));

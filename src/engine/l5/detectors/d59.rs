@@ -19,10 +19,16 @@ use crate::program::model::workspace::Model;
 
 pub(crate) const DETECTOR: &str = "d59-integrationevent-var-boolean-guard";
 
+/// A parameter name unquoted and folded: what [`is_guard_name`] judges and what the
+/// #252 loose subject keeps.
+fn fold_guard_name(raw: &str) -> String {
+    raw.trim_matches('"').to_lowercase()
+}
+
 /// Guard-name heuristic. Deny-list first (IsHandled is the sanctioned
 /// handshake), then permission/skip-shaped prefixes and substrings.
 fn is_guard_name(raw: &str) -> bool {
-    let n = raw.trim_matches('"').to_lowercase();
+    let n = fold_guard_name(raw);
     if n == "ishandled" || n == "handled" {
         return false;
     }
@@ -120,7 +126,7 @@ pub fn detect_d59(
                     key: format!(
                         "d59/{}/{}",
                         encode_event_id(&routine.object_id, &routine.name),
-                        p.name.trim_matches('"').to_lowercase()
+                        fold_guard_name(&p.name)
                     ),
                 }),
             };
