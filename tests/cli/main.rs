@@ -78,6 +78,7 @@ mod cli_b_fingerprint_differential;
 mod cli_b_fingerprint_oracles;
 mod cli_b_prove_differential;
 mod cli_b_snapshot_differential;
+mod cli_batch_merged_streams;
 mod cli_build_counters;
 mod cli_c_cache_differential;
 mod cli_c_events_differential;
