@@ -512,8 +512,10 @@ fn declared_type<'a>(cx: &ClosedEnumCx<'a>, name_lc: &str) -> Option<&'a str> {
 
 /// Spec §2: every implementation `enum_node` maps for `interface_lc` resolves,
 /// from the enum's own app, to exactly one codeunit that is the object of one
-/// of `routes`. Not vacuous (opus N3): the enum must be closed and hold at
-/// least one entry for EVERY interface it implements.
+/// of `routes`. The lookup is strict: two same-named codeunits in the enum's
+/// app (different namespaces) are ambiguous, since first-wins would pass
+/// coverage whichever one the enum meant. Not vacuous (opus N3): the enum must
+/// be closed and hold at least one entry for EVERY interface it implements.
 pub(crate) fn enum_covered_by_routes(
     graph: &ProgramGraph,
     index: &ResolveIndex,
@@ -543,7 +545,7 @@ pub(crate) fn enum_covered_by_routes(
         .filter(|(i, _)| i.as_ref() == interface_lc)
         .all(|(_, codeunit)| {
             matches!(
-                index.resolve_object_ref(graph, enum_node.id.clone(), ObjectKind::Codeunit, codeunit),
+                index.resolve_object_ref_strict(graph, enum_node.id.clone(), ObjectKind::Codeunit, codeunit),
                 ObjectRefResolution::Unique(id) if reached.contains(&id)
             )
         })
@@ -1327,6 +1329,29 @@ enum 50106 "Other Kind" implements "Other Strategy"
             SetCompleteness::Complete,
             "namespace-qualified"
         );
+    }
+
+    /// Task 4 follow-up: `Ns1."Demo Impl"` and `Ns2."Demo Impl"` are both
+    /// loaded, both implement I, so both are routes. The enum maps an
+    /// unqualified `"Demo Impl"`; which one it means cannot be told (no
+    /// namespaces in the graph), so first-wins coverage would pass whichever
+    /// it meant. The lookup is ambiguous and the site stays open.
+    #[test]
+    fn i264_same_named_implementers_in_two_namespaces_stay_open() {
+        let ws = workspace(
+            caller(VARS, "        S := K;\n        S.NextKm(1);", ""),
+            &[
+                (
+                    "src/Impl.al",
+                    format!("namespace Ns1;\n\n{}", implementer(50101, "Demo Impl")),
+                ),
+                (
+                    "src/Impl2.al",
+                    format!("namespace Ns2;\n\n{}", implementer(50121, "Demo Impl")),
+                ),
+            ],
+        );
+        assert!(is_open(completeness(&ws)));
     }
 
     /// `"X"::V` is an enum value only when no variable named X is in scope: a
