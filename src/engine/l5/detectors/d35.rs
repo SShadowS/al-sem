@@ -22,7 +22,8 @@
 //! stays `high`). The yes and direct arms are unchanged.
 //!
 //! #265 — when the gap is in the subscriber's own body, the unknown answer names
-//! those call sites (`; unresolved: <callee text> (line n)`, source order, up to
+//! those call sites (`; unresolved: <callee> (line n)`, the callee rendered from
+//! the structured `PCallee` as the snapshot does, source order, up to
 //! three) and lists only OTHER routines under "partly analysed". "Unresolved"
 //! here means a call whose callee set is not closed for this proof (the
 //! call-site-local kinds: interface-open-world, ambiguous-overload,
@@ -45,6 +46,7 @@ use crate::engine::l5::detectors::anchor_of;
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::engine::l5::snapshot::display_of_callee;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
 pub(crate) const DETECTOR: &str = "d35-commit-in-event-subscriber";
@@ -315,15 +317,17 @@ fn coverage_reasons(
             continue;
         };
         let a = &cs.source_anchor;
-        // The callee text is raw source and may span lines.
-        let text = cs
-            .callee_text
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        // The structured callee, as the snapshot shows it: the raw `callee_text`
+        // may span lines and hold comments.
         sites
             .entry((a.start_line, a.start_column, cs.id.as_str()))
-            .or_insert_with(|| format!("{text} (line {})", a.start_line + 1));
+            .or_insert_with(|| {
+                format!(
+                    "{} (line {})",
+                    display_of_callee(&cs.callee),
+                    a.start_line + 1
+                )
+            });
     }
     let drop_self =
         !sites.is_empty() && every_site_found && !incomplete_ids.contains(routine.id.as_str());
@@ -356,7 +360,7 @@ mod tests {
     use crate::engine::l5::test_support::{
         call_site, coverage, minimal_ctx, op_commit_routine, routine, summary,
     };
-    use crate::program::body::features::PCallSite;
+    use crate::program::body::features::{PCallSite, PCallee};
     use crate::program::model::workspace::{Model, ModelEntities, ModelRoutine};
 
     fn model_of(routines: &[ModelRoutine]) -> Model {
@@ -540,17 +544,24 @@ mod tests {
         out.remove(0)
     }
 
-    /// #265 A5: the subscriber's own site is named (whitespace runs collapsed
-    /// to one space, line 1-based) and the subscriber leaves "partly analysed".
+    /// #265 A5: the subscriber's own site is named (its structured callee,
+    /// line 1-based) and the subscriber leaves "partly analysed".
     #[test]
     fn own_site_named_and_self_dropped() {
-        let text = "Strategy\n    .NextKm";
+        // CR3: the site prints its structured callee, not the raw source text,
+        // which here spans lines and holds a comment.
+        let text = "Strategy // pick\n    .NextKm";
         assert!(
             text.contains('\n'),
             "precondition: a multi-line callee text"
         );
+        let mut cs = site_at("cs1", text, 10, 11);
+        cs.callee = PCallee::Member {
+            receiver: "Strategy".to_string(),
+            method: "NextKm".to_string(),
+        };
         let mut sub = routine("sub", "event-subscriber");
-        sub.call_sites = vec![site_at("cs1", text, 10, 11)];
+        sub.call_sites = vec![cs];
         let routines = vec![sub, routine("helper", "procedure")];
         let f = finding_with_edges(
             &routines,
@@ -559,7 +570,7 @@ mod tests {
         );
         assert_unknown_with(
             &f,
-            "interface-open-world; unresolved: Strategy .NextKm (line 11); partly analysed: \
+            "interface-open-world; unresolved: Strategy.NextKm (line 11); partly analysed: \
              helper (Codeunit 1)",
         );
     }

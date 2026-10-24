@@ -1102,8 +1102,9 @@ fn render_callee(callee: &PCallee) -> String {
 }
 
 /// `displayOfCallee` (al-sem `derive/callsite-resolutions.ts`). Object-run renders
-/// the target ref. Used for the callsite-resolution ledger calleeDisplay.
-fn display_of_callee(callee: &PCallee) -> String {
+/// the target ref. Used for the callsite-resolution ledger calleeDisplay and
+/// d35's own unresolved sites (#265).
+pub(crate) fn display_of_callee(callee: &PCallee) -> String {
     match callee {
         PCallee::Bare { name } => name.clone(),
         PCallee::Member { receiver, method } => format!("{receiver}.{method}"),

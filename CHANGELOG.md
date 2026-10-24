@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **d35's unknown answer names the subscriber's own unresolved call sites** (#265). When
   the gap is in the subscriber's own body, the root cause, evidence note and fix hint now
-  say `unresolved: <callee text> (line n)` (source order, up to three, then `+N more`)
-  and list only OTHER routines under "partly analysed". CentralGauge's direct repro now
+  say `unresolved: <callee> (line n)` (source order, up to three, then `+N more`; the
+  callee rendered from the parsed call as the snapshot's `calleeDisplay` does, so line
+  breaks and comments in the source do not leak in) and list only OTHER routines under "partly analysed". CentralGauge's direct repro now
   reads `(interface-open-world; unresolved: Strategy.NextKm (line 11))` instead of
   `partly analysed: ReleaseOnRegistered (Codeunit 50104)`. "Unresolved" means a call whose
   callee set is not closed for this proof (interface-open-world, ambiguous-overload,

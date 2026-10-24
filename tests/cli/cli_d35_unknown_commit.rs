@@ -633,6 +633,43 @@ fn centralgauge_direct_and_isdue_names_site_and_isdue() {
     }
 }
 
+/// #265 CR3: the subscriber's interface call spans two lines with a comment
+/// inside the callee; the site prints its structured callee, not that source.
+const CG_SUBSCRIBER_DIRECT_SPLIT: &str = r#"codeunit 50104 "Demo Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Demo Publisher", 'OnAfterRegistered', '', false, false)]
+    local procedure ReleaseOnRegistered(var DemoItem: Record "Demo Item")
+    var
+        Strategy: Interface "Demo Strategy";
+    begin
+        if not DemoItem.Blocked then
+            exit;
+        Strategy := DemoItem.Kind;
+        if Strategy // the kind's strategy
+            .NextKm(DemoItem.Km) > 0 then
+            exit;
+        DemoItem.Blocked := false;
+        DemoItem.Modify(true);
+    end;
+}
+"#;
+
+#[test]
+fn own_site_spanning_lines_prints_the_structured_callee() {
+    let (_tmp, ws) = cg_files("i265-cr3", CG_KIND, CG_SUBSCRIBER_DIRECT_SPLIT, &[]);
+    let findings = d35_findings(&analyze(&ws, None));
+    assert_eq!(
+        findings.len(),
+        1,
+        "expected one d35 finding, got {findings:#?}"
+    );
+    assert_eq!(
+        findings[0]["fixHint"]["description"],
+        "Check what could not be analysed (interface-open-world; unresolved: Strategy.NextKm \
+         (line 11)); if a Commit is reachable, move it out of the subscriber or defer it."
+    );
+}
+
 #[test]
 fn v2_real_commit_keeps_the_yes_wording() {
     assert_yes_finding(&run_variant("v2", COMMIT, PAGE_NO_TRIGGER, None), "V2");
