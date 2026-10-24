@@ -69,8 +69,9 @@ pub struct RunKey {
 /// What a command needs from its [`View`]. The fields are private: a plan is
 /// built only by the factories below (spec §4.4.4).
 pub struct Plan {
-    runs: Vec<Vec<Detector>>,
-    scope_primary: bool,
+    /// Each run's detectors and its own scope (#277 D5.5): `true` keeps the
+    /// primary app's findings only.
+    runs: Vec<(Vec<Detector>, bool)>,
     need_l4: bool,
     /// The substrate bits a post-run projection reads off `det`: digest and
     /// prove `TRANSACTION_SPANS` (the tx map), events `SUMMARIES` (the fanout
@@ -78,72 +79,120 @@ pub struct Plan {
     /// them, naming the missing bit (A2.10).
     after_run: u32,
     /// Whose raw inherited facts the view's composition keeps (#160 step 6
-    /// D3), fixed before it runs.
+    /// D3), fixed before it runs: the union of the jobs' requests (#277 D5).
     witness: WitnessRequest,
-    /// What `prepare` reads off a tree over the `Roots` request (#160 step 9
-    /// D5): digest's effects (step 6 D3, D7 (4)-(5)), a fingerprint read, or
-    /// no tree.
-    tree: TreeRead,
+    /// The tree jobs (#277 D5.2), each composed over its own subjects and
+    /// read inside `prepare`.
+    trees: Vec<(JobId, TreeDemand)>,
+}
+
+/// A job's index in its batch (#277).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct JobId(pub u32);
+
+/// One job's tree over the cone graph (#277 D5.2): composed over `subjects`,
+/// read by `read`, then dropped, all inside `prepare`.
+#[derive(Debug)]
+pub struct TreeDemand {
+    pub subjects: WitnessRequest,
     /// Digest's `--tests` (#254): the effects keep the tree's test-coverage
     /// graph.
-    tests: bool,
-    /// Prove's plan only (final panel C1): each root's unresolved cone also
-    /// counts the tree's analysis gaps it visits. Digest never reads it.
-    gaps_in_cone: bool,
+    pub tests: bool,
+    /// Prove's tree only (#160 step 9 final panel C1): each root's unresolved
+    /// cone also counts the tree's analysis gaps it visits. Per job, so a
+    /// digest on the same view never gets the count.
+    pub gaps_in_cone: bool,
+    pub read: TreeRead,
 }
 
-/// The routines a plan wants raw inherited facts for (#160 step 6 D3).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WitnessRequest {
-    None,
-    /// Digest's changed roots, by stable id: every row of each id is a subject
-    /// (a collided id's rows share its cone).
-    Roots(BTreeSet<String>),
-    /// Every `Role::Primary` routine (policy check).
-    Primary,
-}
-
-impl WitnessRequest {
-    /// The composition's raw scope over `model`. `pub(crate)` so the
-    /// scoped-equals-unscoped tests (#160 step 9 T17) compose with the view's
-    /// own mapping, not a copy of it.
-    pub(crate) fn scope(&self, model: &Model) -> WitnessScope {
-        match self {
-            WitnessRequest::None => WitnessScope::None,
-            WitnessRequest::Roots(ids) => WitnessScope::Subjects(
-                model
-                    .workspace
-                    .routines
-                    .iter()
-                    .filter(|r| ids.contains(&r.stable_routine_id))
-                    .map(|r| r.id.clone())
-                    .collect(),
-            ),
-            WitnessRequest::Primary => WitnessScope::Subjects(
-                model
-                    .workspace
-                    .routines
-                    .iter()
-                    .filter(|r| model.routine_role(r) == Role::Primary)
-                    .map(|r| r.id.clone())
-                    .collect(),
-            ),
-        }
-    }
-}
-
-/// What `prepare` reads off the tree it composes, right after the
-/// composition and before `det` (#160 step 9 D5). Every tree dies in that
-/// `prepare`, so only the read's owned result outlives it.
+/// What a job reads off its tree (#277 D5.2; #160 step 9 D5): the read runs
+/// right after the tree's composition, before `det`, and only its owned
+/// result outlives `prepare`.
 pub enum TreeRead {
-    /// No tree.
-    None,
-    /// Digest's (and prove's) effects, into `Cell::Effects`.
+    /// Digest's (and prove's) per-root effects (#160 step 6 D7 (5)), into
+    /// `Cell::Effects`.
     Effects,
     /// `fingerprint --routine`'s query result, into `Cell::TreeRead`.
     FingerprintQuery(QueryRead),
     /// `fingerprint --inventory-only`'s five keys, into `Cell::TreeRead`.
     Inventory(InventoryRead),
+}
+
+impl std::fmt::Debug for TreeRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            TreeRead::Effects => "Effects",
+            TreeRead::FingerprintQuery(_) => "FingerprintQuery",
+            TreeRead::Inventory(_) => "Inventory",
+        })
+    }
+}
+
+/// The routines a plan wants raw inherited facts for (#160 step 6 D3; #277
+/// D5.1): every row whose stable id is in `ids`, plus every `Role::Primary`
+/// row if `primary`. An empty request keeps no raw facts; it never means
+/// "no composition" ([`Plan::composes`], D5.1a).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WitnessRequest {
+    ids: BTreeSet<String>,
+    primary: bool,
+}
+
+impl WitnessRequest {
+    /// Digest's changed roots, by stable id: every row of each id is a subject
+    /// (a collided id's rows share its cone).
+    pub fn roots(ids: BTreeSet<String>) -> Self {
+        WitnessRequest {
+            ids,
+            primary: false,
+        }
+    }
+
+    /// Every `Role::Primary` routine (policy check).
+    pub fn primary() -> Self {
+        WitnessRequest {
+            ids: BTreeSet::new(),
+            primary: true,
+        }
+    }
+
+    pub fn empty() -> Self {
+        WitnessRequest::default()
+    }
+
+    pub fn union(&self, other: &Self) -> Self {
+        WitnessRequest {
+            ids: self.ids.union(&other.ids).cloned().collect(),
+            primary: self.primary || other.primary,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty() && !self.primary
+    }
+
+    /// Whether every subject `other` names is named here too.
+    fn covers(&self, other: &Self) -> bool {
+        other.ids.is_subset(&self.ids) && (self.primary || !other.primary)
+    }
+
+    /// The composition's raw scope over `model`. `pub(crate)` so the
+    /// scoped-equals-unscoped tests (#160 step 9 T17) compose with the view's
+    /// own mapping, not a copy of it.
+    pub(crate) fn scope(&self, model: &Model) -> WitnessScope {
+        WitnessScope::Subjects(
+            model
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| {
+                    self.ids.contains(&r.stable_routine_id)
+                        || (self.primary && model.routine_role(r) == Role::Primary)
+                })
+                .map(|r| r.id.clone())
+                .collect(),
+        )
+    }
 }
 
 /// The fingerprint query's tree-read inputs (#160 step 9 D3): its filters and
@@ -254,14 +303,11 @@ impl Cell {
 /// `alsem analyze`: the selected detectors.
 pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
     Plan {
-        runs: vec![detectors],
-        scope_primary,
+        runs: vec![(detectors, scope_primary)],
         need_l4: false,
         after_run: 0,
-        witness: WitnessRequest::None,
-        tree: TreeRead::None,
-        tests: false,
-        gaps_in_cone: false,
+        witness: WitnessRequest::empty(),
+        trees: vec![],
     }
 }
 
@@ -273,50 +319,69 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
 /// step 9 D2). No root (a digest or prove that resolved none): neither. `tests`
 /// (`digest --tests`, #254): the effects also keep the tree's test-coverage
 /// graph, which covers the whole workspace, so a tree is built even with no
-/// root (an empty `Roots` request: no raw facts).
+/// root (an empty request: no raw facts; the tree demand composes, D5.1a).
+/// Standalone, the tree is job 0's.
 pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: bool) -> Plan {
-    let needs_tree = tests || !roots.is_empty();
+    let witness = WitnessRequest::roots(roots);
+    let trees = if tests || !witness.is_empty() {
+        vec![(
+            JobId(0),
+            TreeDemand {
+                subjects: witness.clone(),
+                tests,
+                gaps_in_cone: false,
+                read: TreeRead::Effects,
+            },
+        )]
+    } else {
+        vec![]
+    };
     Plan {
-        runs: vec![detectors],
-        scope_primary: true,
+        runs: vec![(detectors, true)],
         need_l4: true,
         after_run: substrate::TRANSACTION_SPANS,
-        witness: if needs_tree {
-            WitnessRequest::Roots(roots)
-        } else {
-            WitnessRequest::None
-        },
-        tree: if needs_tree {
-            TreeRead::Effects
-        } else {
-            TreeRead::None
-        },
-        tests,
-        gaps_in_cone: false,
+        witness,
+        trees,
     }
 }
 
 /// `alsem prove` (#160 step 9 D2): digest's plan over its one root, or none,
 /// whose unresolved cone also counts the analysis gaps it visits (C1).
 pub fn prove_plan(detectors: Vec<Detector>, root: Option<String>) -> Plan {
-    Plan {
-        gaps_in_cone: true,
-        ..digest_plan(detectors, root.into_iter().collect(), false)
+    let mut plan = digest_plan(detectors, root.into_iter().collect(), false);
+    for (_, tree) in &mut plan.trees {
+        tree.gaps_in_cone = true;
     }
+    plan
 }
 
 /// One run at primary scope, with nothing read after it: fingerprint and
 /// `diff --strict`.
 fn run_only_plan(detectors: Vec<Detector>) -> Plan {
     Plan {
-        runs: vec![detectors],
-        scope_primary: true,
+        runs: vec![(detectors, true)],
         need_l4: false,
         after_run: 0,
-        witness: WitnessRequest::None,
-        tree: TreeRead::None,
-        tests: false,
-        gaps_in_cone: false,
+        witness: WitnessRequest::empty(),
+        trees: vec![],
+    }
+}
+
+/// [`run_only_plan`] with job 0's tree over `subjects`, read by `read`: the
+/// fingerprint tree reads (#160 step 9 D3, D4).
+fn run_and_tree_plan(detectors: Vec<Detector>, subjects: WitnessRequest, read: TreeRead) -> Plan {
+    Plan {
+        witness: subjects.clone(),
+        trees: vec![(
+            JobId(0),
+            TreeDemand {
+                subjects,
+                tests: false,
+                gaps_in_cone: false,
+                read,
+            },
+        )],
+        ..run_only_plan(detectors)
     }
 }
 
@@ -333,22 +398,22 @@ pub fn fingerprint_query_plan(
     pool: BTreeSet<String>,
     read: QueryRead,
 ) -> Plan {
-    Plan {
-        witness: WitnessRequest::Roots(pool),
-        tree: TreeRead::FingerprintQuery(read),
-        ..run_only_plan(detectors)
-    }
+    run_and_tree_plan(
+        detectors,
+        WitnessRequest::roots(pool),
+        TreeRead::FingerprintQuery(read),
+    )
 }
 
 /// `alsem fingerprint --inventory-only` (#160 step 9 D4): fingerprint's run and
-/// the inventory read off a tree over `Roots(∅)`: a composition with no raw
-/// facts (digest `--tests`' shape).
+/// the inventory read off a tree over an empty request: a composition with no
+/// raw facts (digest `--tests`' shape; the tree demand composes, #277 D5.1a).
 pub fn fingerprint_inventory_plan(detectors: Vec<Detector>, read: InventoryRead) -> Plan {
-    Plan {
-        witness: WitnessRequest::Roots(BTreeSet::new()),
-        tree: TreeRead::Inventory(read),
-        ..run_only_plan(detectors)
-    }
+    run_and_tree_plan(
+        detectors,
+        WitnessRequest::empty(),
+        TreeRead::Inventory(read),
+    )
 }
 
 /// `alsem diff --strict`, per side.
@@ -360,14 +425,11 @@ pub fn diff_strict_plan(detectors: Vec<Detector>) -> Plan {
 /// `det.summaries`.
 pub fn events_plan(detectors: Vec<Detector>) -> Plan {
     Plan {
-        runs: vec![detectors],
-        scope_primary: true,
+        runs: vec![(detectors, true)],
         need_l4: false,
         after_run: substrate::SUMMARIES,
-        witness: WitnessRequest::None,
-        tree: TreeRead::None,
-        tests: false,
-        gaps_in_cone: false,
+        witness: WitnessRequest::empty(),
+        trees: vec![],
     }
 }
 
@@ -376,14 +438,11 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
 /// step 6 Task 3).
 pub fn policy_plan(detectors: Vec<Detector>) -> Plan {
     Plan {
-        runs: vec![detectors],
-        scope_primary: true,
+        runs: vec![(detectors, true)],
         need_l4: false,
         after_run: substrate::SUMMARIES,
-        witness: WitnessRequest::Primary,
-        tree: TreeRead::None,
-        tests: false,
-        gaps_in_cone: false,
+        witness: WitnessRequest::primary(),
+        trees: vec![],
     }
 }
 
@@ -391,13 +450,10 @@ pub fn policy_plan(detectors: Vec<Detector>) -> Plan {
 pub fn query_plan() -> Plan {
     Plan {
         runs: vec![],
-        scope_primary: true,
         need_l4: true,
         after_run: 0,
-        witness: WitnessRequest::None,
-        tree: TreeRead::None,
-        tests: false,
-        gaps_in_cone: false,
+        witness: WitnessRequest::empty(),
+        trees: vec![],
     }
 }
 
@@ -410,14 +466,11 @@ impl Plan {
         after_run: u32,
     ) -> Plan {
         Plan {
-            runs,
-            scope_primary,
+            runs: runs.into_iter().map(|r| (r, scope_primary)).collect(),
             need_l4,
             after_run,
-            witness: WitnessRequest::None,
-            tree: TreeRead::None,
-            tests: false,
-            gaps_in_cone: false,
+            witness: WitnessRequest::empty(),
+            trees: vec![],
         }
     }
 
@@ -427,38 +480,53 @@ impl Plan {
         Plan { witness, ..self }
     }
 
-    /// The plan with tree read `tree`.
+    /// The plan with `trees`.
     #[cfg(test)]
-    pub(crate) fn with_tree(self, tree: TreeRead) -> Plan {
-        Plan { tree, ..self }
+    pub(crate) fn with_trees(self, trees: Vec<(JobId, TreeDemand)>) -> Plan {
+        Plan { trees, ..self }
     }
 
-    /// Whether `prepare` composes digest's tree and fills `Cell::Effects`: the
+    /// Whether `prepare` composes `job`'s tree and fills `Cell::Effects`: the
     /// one answer a caller reads before `View::effects` (final panel F1-C5).
-    pub fn needs_tree(&self) -> bool {
-        matches!(self.tree, TreeRead::Effects)
+    pub fn has_tree(&self, job: JobId) -> bool {
+        self.trees.iter().any(|(j, _)| *j == job)
     }
 
-    /// Whether `prepare` composes a tree at all (any read but `None`).
-    fn reads_tree(&self) -> bool {
-        !matches!(self.tree, TreeRead::None)
+    /// Whether the view's composition keeps raw facts: a request or a tree
+    /// demand (a tree takes `raw`, empty under an empty request).
+    fn keeps_raw(&self) -> bool {
+        !self.witness.is_empty() || !self.trees.is_empty()
+    }
+
+    /// Whether `prepare` composes (#277 D5.1a): a request, a tree demand
+    /// whatever its request's size, or a run that needs derived rows when
+    /// `det` is not filled. Never inferred from an empty request alone.
+    pub fn composes(&self, det_filled: bool) -> bool {
+        self.keeps_raw() || (!det_filled && !self.runs.is_empty() && self.needs_derived())
+    }
+
+    /// The derived rows are the det fill's (TRANSACTION_SPANS folds over the
+    /// summaries); the raw half is the witness request's.
+    fn needs_derived(&self) -> bool {
+        self.union() & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0
     }
 
     /// The key of each run, in plan order.
     pub fn keys(&self) -> Vec<RunKey> {
-        self.runs.iter().map(|r| self.key(r)).collect()
-    }
-
-    fn key(&self, run: &[Detector]) -> RunKey {
-        RunKey {
-            detectors: run.iter().map(|d| d.name.clone()).collect(),
-            demanded: mask(run),
-            scope_primary: self.scope_primary,
-        }
+        self.runs.iter().map(key).collect()
     }
 
     fn union(&self) -> u32 {
-        self.runs.iter().map(|r| mask(r)).fold(0, |a, m| a | m)
+        self.runs.iter().map(|(r, _)| mask(r)).fold(0, |a, m| a | m)
+    }
+}
+
+/// A run's key, its scope its own (#277 D5.5).
+fn key((run, scope_primary): &(Vec<Detector>, bool)) -> RunKey {
+    RunKey {
+        detectors: run.iter().map(|d| d.name.clone()).collect(),
+        demanded: mask(run),
+        scope_primary: *scope_primary,
     }
 }
 
@@ -520,7 +588,7 @@ impl View {
 
     /// Fill every cell `plan` needs that is still empty, in order (#160 step 6
     /// D7): ordering, rel, ONE composition into `caps` and `raw`; under a
-    /// tree read the tree (it takes `raw` by move and `caps.pd`; `Raw` is
+    /// tree demand the tree (it takes `raw` by move and `caps.pd`; `Raw` is
     /// released) and the read off it, the effects or a `TreeRead` result
     /// (then `Tree` is released, step 9 D5); det (it
     /// consumes `caps`, then `l4`, then its harvest; `Caps` is released), then
@@ -554,11 +622,9 @@ impl View {
         let core = union & substrate::CORE_SUMMARIES != 0;
         let need_l4 = plan.need_l4 || core;
         let need_ordering = union & substrate::ORDERING_FACTS != 0;
-        // The derived rows are the det fill's (TRANSACTION_SPANS folds over
-        // the summaries); the raw half is the witness request's.
-        let need_derived = union & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0;
-        let need_raw = plan.witness != WitnessRequest::None;
-        let need_caps = (need_det && self.det.is_none() && need_derived) || need_raw;
+        let need_derived = plan.needs_derived();
+        let need_raw = plan.keeps_raw();
+        let need_caps = plan.composes(self.det.is_some());
         let need_rel = need_det || need_l4 || need_raw;
         // D3: the subjects are fixed once, before the one composition: a
         // second request, or a request after the view composed without one.
@@ -569,9 +635,14 @@ impl View {
             "a View takes at most one witness request, in its one composing prepare"
         );
         assert!(
-            !plan.reads_tree() || matches!(plan.witness, WitnessRequest::Roots(_)),
-            "a tree is composed over a Roots witness request"
+            plan.trees
+                .iter()
+                .all(|(_, t)| plan.witness.covers(&t.subjects)),
+            "every tree demand's subjects are inside the view's request"
         );
+        // shortcut: one tree per view (it takes all of `raw`), until #277
+        // Task 4 composes several trees off one pass.
+        assert!(plan.trees.len() <= 1, "a View composes at most one tree");
         // (a) a released cell is never refilled: a refill after
         // `release(Det)` would find no `CoreSummaries`.
         for (cell, needed) in [
@@ -634,7 +705,7 @@ impl View {
             AnalysisTarget::CrossApp(b) => b.dependency_calls.take(),
             AnalysisTarget::SingleApp(_) => None,
         }
-        .filter(|_| plan.reads_tree());
+        .filter(|_| !plan.trees.is_empty());
         let target = &*target;
         let model = target.resolved();
         let cross_base = match target {
@@ -667,7 +738,11 @@ impl View {
             let r = rel.as_ref().expect("rel filled above");
             let scope = ConeScope {
                 derived: need_derived,
-                raw: plan.witness.scope(model),
+                raw: if need_raw {
+                    plan.witness.scope(model)
+                } else {
+                    WitnessScope::None
+                },
             };
             let _s = pt::span("context", "context.capability_cones");
             let (c, w) =
@@ -680,7 +755,7 @@ impl View {
         // D7 (4)-(5): the tree over the cone graph, its read (digest's effects
         // or a step 9 `TreeRead` result) off it, then the tree is released,
         // all before `det` takes `caps`.
-        if let (true, WitnessRequest::Roots(roots)) = (plan.reads_tree(), &plan.witness) {
+        if let Some((_, demand)) = plan.trees.first() {
             let r = rel.as_ref().expect("rel filled above");
             let app_names = cross_base.map(|b| b.loaded_app_names()).unwrap_or_default();
             // D9 (#160 step 9): the dependency apps with no source; none single-app.
@@ -707,8 +782,8 @@ impl View {
             ));
             note_release(released, Cell::Raw);
             drop(dependency_calls);
-            match &plan.tree {
-                TreeRead::None => unreachable!("the block runs for a tree read"),
+            let roots = &demand.subjects.ids;
+            match &demand.read {
                 TreeRead::Effects => {
                     let t = tree.as_mut().expect("tree filled above");
                     let roots: Vec<String> = roots.iter().cloned().collect();
@@ -716,8 +791,8 @@ impl View {
                         t,
                         model,
                         &roots,
-                        plan.tests,
-                        plan.gaps_in_cone,
+                        demand.tests,
+                        demand.gaps_in_cone,
                     ));
                 }
                 TreeRead::FingerprintQuery(read) => {
@@ -779,11 +854,7 @@ impl View {
         let art = det.as_ref().expect("det filled above");
         // The live-cell checkpoint (spec §4.7, A6.18): what is alive at the
         // first run. No tree, no pd arena and no raw facts of digest's (D7).
-        if plan
-            .runs
-            .iter()
-            .any(|run| !runs.contains_key(&plan.key(run)))
-        {
+        if plan.runs.iter().any(|run| !runs.contains_key(&key(run))) {
             let pd = caps.as_ref().is_some_and(|c| c.pd.is_some()) || tree.is_some();
             let live: Vec<&str> = [
                 ("Rel", rel.is_some()),
@@ -805,8 +876,8 @@ impl View {
             }
             pt::instant_lazy("view", "view.live", || serde_json::json!({ "cells": live }));
         }
-        for run in &plan.runs {
-            let key = plan.key(run);
+        for entry @ (run, scope_primary) in &plan.runs {
+            let key = key(entry);
             if runs.contains_key(&key) {
                 continue;
             }
@@ -821,8 +892,7 @@ impl View {
             } else {
                 &[]
             };
-            let out =
-                registry::finish_run(model, &ctx, run, cross_base, plan.scope_primary, summarize);
+            let out = registry::finish_run(model, &ctx, run, cross_base, *scope_primary, summarize);
             runs.insert(key, Arc::new(out));
         }
     }
@@ -1203,7 +1273,7 @@ mod tests {
         );
         assert!(v.raw.is_none(), "no witness request, no raw");
         let mut v = view();
-        v.prepare(&Plan::for_test(run(), true, false, 0).with_witness(WitnessRequest::Primary));
+        v.prepare(&Plan::for_test(run(), true, false, 0).with_witness(WitnessRequest::primary()));
         assert!(v.raw().is_empty(), "the empty model's primary raw is empty");
     }
 
@@ -1219,7 +1289,7 @@ mod tests {
                 false,
                 0,
             )
-            .with_witness(WitnessRequest::Primary)
+            .with_witness(WitnessRequest::primary())
         };
         let mut v = view();
         v.prepare(&plan());
@@ -1244,7 +1314,7 @@ mod tests {
                 let mut v = view();
                 v.prepare(&plain);
                 let with =
-                    Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::Primary);
+                    Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::primary());
                 v.prepare(&with);
             })),
         );
@@ -1263,7 +1333,7 @@ mod tests {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut v = view();
                 v.prepare(
-                    &Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::Primary),
+                    &Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::primary()),
                 );
                 v.prepare(&Plan::for_test(
                     vec![vec![probe(substrate::SUMMARIES, noop)]],
@@ -1285,15 +1355,12 @@ mod tests {
     #[test]
     fn a_raw_only_composition_is_released_by_prepare() {
         let mut v = view();
-        v.prepare(&Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::Primary));
+        v.prepare(&Plan::for_test(vec![], true, false, 0).with_witness(WitnessRequest::primary()));
         assert!(v.caps.is_none(), "Caps dropped");
         assert!(v.released & Cell::Caps.bit() != 0, "Caps released");
         assert!(v.raw.is_some(), "precondition: the raw half was filled");
     }
 
-    /// #160 step 6 D3: digest's plan carries its roots as a `Roots` request
-    /// with a tree; a digest with no root (prove, or none resolved) has
-    /// neither. `Roots` scopes every row of each stable id.
     /// Final panel C1: only prove's plan counts each cone's analysis gaps, read
     /// off the effects `prepare` leaves; digest's cone carries no count.
     /// Precondition: both cones exist. DISCRIMINATION: passing `true` in
@@ -1320,19 +1387,64 @@ mod tests {
         }
     }
 
+    /// #277 D5.1a: a tree demand composes whatever its request's size, with
+    /// no run to force it (step 9's `--inventory-only` shape: an empty
+    /// request and a tree). No standalone command shows this: digest's own
+    /// run composes anyway. DISCRIMINATION: dropping the tree term from
+    /// `Plan::composes` leaves the tree no composition, and `prepare` panics.
+    #[test]
+    fn a_tree_demand_composes_with_an_empty_request() {
+        let plan = Plan::for_test(vec![], true, false, 0).with_trees(vec![(
+            JobId(0),
+            TreeDemand {
+                subjects: WitnessRequest::empty(),
+                tests: false,
+                gaps_in_cone: false,
+                read: TreeRead::Effects,
+            },
+        )]);
+        assert!(
+            plan.witness.is_empty() && plan.runs.is_empty(),
+            "precondition: no request, no run"
+        );
+        let mut v = view();
+        v.prepare(&plan);
+        assert!(v.effects.is_some(), "the tree was composed and read");
+        assert!(
+            v.released & Cell::Caps.bit() != 0,
+            "the one composition was released"
+        );
+    }
+
+    /// #160 step 6 D3, #277 D5.2: digest's plan carries its roots as a
+    /// request and job 0's tree demand over them; a digest with no root
+    /// (prove, or none resolved) has neither. A roots request scopes every
+    /// row of each stable id.
     #[test]
     fn digest_plan_asks_a_tree_only_for_roots() {
         let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
+        // Job 0's effects tree over `subjects`, with no gap count (`TreeRead`
+        // carries no `PartialEq`: a query read's filters have none).
+        let is_tree = |p: &Plan, subjects: WitnessRequest, tests: bool| {
+            matches!(&p.trees[..], [(JobId(0), t)] if t.subjects == subjects
+                && t.tests == tests
+                && !t.gaps_in_cone
+                && matches!(t.read, TreeRead::Effects))
+        };
         let p = digest_plan(vec![probe(0, noop)], roots.clone(), false);
-        assert_eq!(p.witness, WitnessRequest::Roots(roots));
-        assert!(matches!(p.tree, TreeRead::Effects));
+        assert_eq!(p.witness, WitnessRequest::roots(roots.clone()));
+        assert!(
+            is_tree(&p, WitnessRequest::roots(roots), false),
+            "{:?}",
+            p.trees
+        );
         let p = digest_plan(vec![probe(0, noop)], BTreeSet::new(), false);
-        assert_eq!(p.witness, WitnessRequest::None);
-        assert!(matches!(p.tree, TreeRead::None));
-        // `--tests` covers the workspace: a tree with no root (#254).
+        assert!(p.witness.is_empty() && p.trees.is_empty());
+        // `--tests` covers the workspace: a tree with no root (#254), over an
+        // empty request (D5.1a).
         let p = digest_plan(vec![probe(0, noop)], BTreeSet::new(), true);
-        assert_eq!(p.witness, WitnessRequest::Roots(BTreeSet::new()));
-        assert!(matches!(p.tree, TreeRead::Effects) && p.tests);
+        assert!(p.witness.is_empty());
+        assert!(is_tree(&p, WitnessRequest::empty(), true), "{:?}", p.trees);
         let mut m = crate::engine::l5::test_support::empty_resolved();
         for id in ["r1", "r2", "r3"] {
             let mut r = crate::engine::l5::test_support::routine(id, "procedure");
@@ -1345,8 +1457,70 @@ mod tests {
             m.workspace.routines.push(r);
         }
         assert_eq!(
-            WitnessRequest::Roots(["a:Codeunit:1#x".to_string()].into()).scope(&m),
+            WitnessRequest::roots(["a:Codeunit:1#x".to_string()].into()).scope(&m),
             WitnessScope::Subjects(["r1".to_string(), "r2".to_string()].into())
+        );
+    }
+
+    /// #277 T14 (D5.1): the union of two requests scopes exactly the union of
+    /// their scopes. Rows stated by assignment: `p1`, `p2` in the primary app,
+    /// `d1` in a dependency. DISCRIMINATION: `primary: a.primary && b.primary`
+    /// in `union` fails the (roots, primary) case.
+    #[test]
+    fn witness_request_union() {
+        let mut m = crate::engine::l5::test_support::empty_resolved();
+        m.primary_app = Some(crate::engine::gate::app_attribution::App {
+            app_guid: "app".to_string(),
+            publisher: String::new(),
+            name: String::new(),
+            version: String::new(),
+        });
+        for (id, app) in [("p1", "app"), ("p2", "app"), ("d1", "dep")] {
+            let mut r = crate::engine::l5::test_support::routine(id, "procedure");
+            r.app_guid = app.to_string();
+            r.stable_routine_id = format!("s:{id}");
+            m.workspace.routines.push(r);
+        }
+        let subjects = |w: &WitnessRequest| match w.scope(&m) {
+            WitnessScope::Subjects(s) => s,
+            _ => panic!("a request scopes its subjects"),
+        };
+        let ids = |xs: &[&str]| -> BTreeSet<String> { xs.iter().map(|x| x.to_string()).collect() };
+        assert_eq!(
+            subjects(&WitnessRequest::primary()),
+            ids(&["p1", "p2"]),
+            "precondition: primary scopes the primary rows only"
+        );
+        for (name, a, b) in [
+            (
+                "(roots, roots)",
+                WitnessRequest::roots(ids(&["s:d1"])),
+                WitnessRequest::roots(ids(&["s:p1"])),
+            ),
+            (
+                "(roots, primary)",
+                WitnessRequest::roots(ids(&["s:d1"])),
+                WitnessRequest::primary(),
+            ),
+            (
+                "(empty, primary)",
+                WitnessRequest::empty(),
+                WitnessRequest::primary(),
+            ),
+            (
+                "(empty, empty)",
+                WitnessRequest::empty(),
+                WitnessRequest::empty(),
+            ),
+        ] {
+            let mut want = subjects(&a);
+            want.extend(subjects(&b));
+            assert_eq!(subjects(&a.union(&b)), want, "{name}");
+        }
+        assert!(
+            WitnessRequest::empty()
+                .union(&WitnessRequest::empty())
+                .is_empty()
         );
     }
 
@@ -1431,7 +1605,8 @@ mod tests {
         }
     }
 
-    /// A det-running plan over an empty `Roots` request with tree read `read`.
+    /// A det-running plan with job 0's tree, read by `read`, over an empty
+    /// request.
     fn tree_plan(read: TreeRead) -> Plan {
         Plan::for_test(
             vec![vec![probe(substrate::SUMMARIES, noop)]],
@@ -1439,8 +1614,15 @@ mod tests {
             false,
             0,
         )
-        .with_witness(WitnessRequest::Roots(BTreeSet::new()))
-        .with_tree(read)
+        .with_trees(vec![(
+            JobId(0),
+            TreeDemand {
+                subjects: WitnessRequest::empty(),
+                tests: false,
+                gaps_in_cone: false,
+                read,
+            },
+        )])
     }
 
     /// #160 step 9 T20 (spec §5): the tree-read lifecycle. (a) a
@@ -1509,7 +1691,10 @@ mod tests {
         // (d) and (e), Effects.
         let mut v = view();
         let plan = tree_plan(TreeRead::Effects);
-        assert!(plan.needs_tree(), "(e) an Effects plan needs the tree");
+        assert!(
+            plan.has_tree(JobId(0)),
+            "(e) an Effects plan has job 0's tree"
+        );
         v.prepare(&plan);
         assert!(v.tree.is_none(), "(e) the Effects tree died inside prepare");
         assert!(v.tree_read.is_none(), "(e) Effects fills no TreeRead cell");
@@ -1528,14 +1713,9 @@ mod tests {
             msg.contains("no tree read: the plan asked for none"),
             "(d) {msg}"
         );
-        for read in [
-            TreeRead::None,
-            TreeRead::FingerprintQuery(query_read()),
-            TreeRead::Inventory(inventory_read()),
-        ] {
-            let p = Plan::for_test(vec![], true, false, 0).with_tree(read);
-            assert!(!p.needs_tree(), "(e) only Effects reads the effects");
-        }
+        // (e)'s converse, that only `Effects` fills the effects, is (a)'s "a
+        // query read fills no effects" (#277: no `TreeRead::None`; no tree
+        // demand is no tree).
 
         // (f) Every variant, listed by an exhaustive match so a new one is listed too.
         let all = [

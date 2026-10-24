@@ -120,7 +120,7 @@ pub struct PolicyModel<'a> {
     pub field_indexes: FieldIndexes<'a>,
     pub summaries: &'a HashMap<String, FullRoutineSummary>,
     /// Every evaluated routine's raw inherited facts, by id (the view's
-    /// `Cell::Raw` under `WitnessRequest::Primary`).
+    /// `Cell::Raw` under `WitnessRequest::primary()`).
     pub raw: &'a HashMap<String, Vec<CapabilityFact>>,
     pub fingerprint_index: FingerprintIndex<'a>,
 }
