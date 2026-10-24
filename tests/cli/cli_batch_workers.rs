@@ -545,3 +545,60 @@ fn batch_diff_fifo_is_read_once() {
         String::from_utf8_lossy(&alone.stdout)
     );
 }
+
+/// #277 final r3 F2 (D2.5): a file a plan read crosses to the worker under
+/// any path the platform allows. Two batches run from a cwd whose name is
+/// not UTF-8, the first a `policy check --policy p.yaml` (absolutized
+/// against that cwd): the run finishes and the job equals its standalone run.
+#[cfg(unix)]
+#[test]
+fn batch_plan_file_under_a_non_utf8_path() {
+    use std::os::unix::ffi::OsStrExt;
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let cwd = d.path().join(std::ffi::OsStr::from_bytes(b"cwd-\xff"));
+    std::fs::create_dir(&cwd).unwrap();
+    std::fs::copy(crate::cli_build_counters::policy_yaml(), cwd.join("p.yaml")).unwrap();
+    let check = vec!["policy", "check", ws.as_str(), "--policy", "p.yaml"];
+    let jobs = [
+        check.clone(),
+        vec!["events", "fanout", ws.as_str(), "--single-app"],
+    ];
+    let manifest = d.path().join("m.json");
+    std::fs::write(&manifest, batches_doc(&jobs).to_string()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("batch")
+        .arg(&manifest)
+        .current_dir(&cwd)
+        .env("RUST_LOG", "off")
+        .env_remove("ALSEM_TRACE")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let alone = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(&check)
+        .current_dir(&cwd)
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    assert_eq!(
+        alone.status.code(),
+        Some(0),
+        "precondition: the policy loads"
+    );
+    assert_eq!(lines(&out)[0]["exit"], 0);
+    let read = |ext: &str| std::fs::read(d.path().join(format!("0.0.{ext}"))).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&read("stdout")),
+        String::from_utf8_lossy(&alone.stdout)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read("stderr")),
+        String::from_utf8_lossy(&alone.stderr)
+    );
+}

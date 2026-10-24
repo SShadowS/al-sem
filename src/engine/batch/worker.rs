@@ -36,11 +36,61 @@ pub struct WorkerInput {
 /// R2-1): each file's bytes or its read error's text, and each `exists`
 /// answer, by the path as the plan spelled it. A worker plans off its
 /// parent's, so it neither reads a file again (a FIFO gives its bytes once)
-/// nor answers anew what another job may have changed since.
+/// nor answers anew what another job may have changed since. The paths
+/// cross as the platform's raw units ([`os_keys`]), so a path that is not
+/// UTF-8 crosses too (#277 final r3 F2).
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct PlanFiles {
+    #[serde(with = "os_keys")]
     pub reads: BTreeMap<PathBuf, Result<Vec<u8>, String>>,
+    #[serde(with = "os_keys")]
     pub exists: BTreeMap<PathBuf, bool>,
+}
+
+/// A path-keyed map as `[raw path, value]` pairs: the path's bytes on unix,
+/// its UTF-16 units on Windows, never a string.
+mod os_keys {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[cfg(unix)]
+    type Raw = Vec<u8>;
+    #[cfg(windows)]
+    type Raw = Vec<u16>;
+
+    #[cfg(unix)]
+    fn to_raw(p: &Path) -> Raw {
+        std::os::unix::ffi::OsStrExt::as_bytes(p.as_os_str()).to_vec()
+    }
+    #[cfg(windows)]
+    fn to_raw(p: &Path) -> Raw {
+        std::os::windows::ffi::OsStrExt::encode_wide(p.as_os_str()).collect()
+    }
+
+    #[cfg(unix)]
+    fn from_raw(r: Raw) -> PathBuf {
+        <std::ffi::OsString as std::os::unix::ffi::OsStringExt>::from_vec(r).into()
+    }
+    #[cfg(windows)]
+    fn from_raw(r: Raw) -> PathBuf {
+        <std::ffi::OsString as std::os::windows::ffi::OsStringExt>::from_wide(&r).into()
+    }
+
+    pub fn serialize<S: Serializer, V: Serialize>(
+        map: &BTreeMap<PathBuf, V>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        s.collect_seq(map.iter().map(|(k, v)| (to_raw(k), v)))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>, V: Deserialize<'de>>(
+        d: D,
+    ) -> Result<BTreeMap<PathBuf, V>, D::Error> {
+        let pairs = Vec::<(Raw, V)>::deserialize(d)?;
+        Ok(pairs.into_iter().map(|(k, v)| (from_raw(k), v)).collect())
+    }
 }
 
 /// One job of a child's batch.
