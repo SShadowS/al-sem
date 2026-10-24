@@ -1,0 +1,63 @@
+{
+  "alsemVersion": "cli-fq-x-v1",
+  "deterministic": true,
+  "diagnostics": [
+    {
+      "code": "DIAG-detect",
+      "message": "d43-event-ishandled-skip: conditionReferences substrate empty; dispatch-site detection limited",
+      "severity": "warning"
+    }
+  ],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "fingerprint-query",
+  "payload": {
+    "blocks": [
+      {
+        "classificationSource": "ast",
+        "coverage": {
+          "directStatus": "partial",
+          "inheritedStatus": "partial",
+          "reasons": [
+            "external-target"
+          ],
+          "status": "partial",
+          "unknownTargets": [
+            "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea"
+          ]
+        },
+        "dispatch": {
+          "resolved": [],
+          "unresolved": []
+        },
+        "families": [],
+        "mayCommit": {
+          "presence": "unknown"
+        },
+        "requiredPermissions": [],
+        "rootKinds": [
+          "public-procedure"
+        ],
+        "routine": {
+          "display": "CallChain",
+          "objectDisplay": "Codeunit Ws Work",
+          "stableId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea"
+        }
+      }
+    ],
+    "diagnostics": [],
+    "filters": {
+      "includeInherited": true,
+      "routines": [
+        "CallChain"
+      ],
+      "witnessLimit": 3
+    },
+    "summary": {
+      "renderedBlocks": 1,
+      "rootsConfigIgnored": false,
+      "totalClassifications": 4
+    },
+    "workspaceFingerprint": "a58583f2c0a87186a025706119cf0ec782727b271215f88f8bdd4c7dc5c4a78d"
+  },
+  "schemaVersion": "1.2.0"
+}

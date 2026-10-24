@@ -30,16 +30,22 @@
 use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view};
 use crate::engine::l4::effect_query_cli::OwnerIndex;
 use crate::engine::l5::detectors::default_detectors;
+use crate::engine::l5::digest_cli::primary_guid_of;
 use crate::engine::l5::fingerprint_query::{
     FingerprintFilters, FingerprintQueryDiagnostic, WitnessLimit, fingerprint_query,
-    format_fingerprint_human_verbosity, project_fingerprint_query_full,
+    format_fingerprint_human_verbosity, primary_stable_ids, project_fingerprint_query_full,
 };
-use crate::engine::l5::snapshot::compose_snapshot;
+use crate::engine::l5::selector_index::{
+    build_selector_indexes, narrow_to_owner, resolve_selector,
+};
+use crate::engine::l5::snapshot::{compose_snapshot, derive_identity_table};
 use crate::engine::l5::snapshot_full::{
     EnvelopeDiagnostic, FullSnapshotOptions, build_inventory_envelope, compose_full_snapshot,
     serialize_cbor, serialize_cbor_gz, serialize_envelope, serialize_sharded,
 };
-use crate::engine::session::{RunKey, View, fingerprint_plan};
+use crate::engine::session::{
+    QueryRead, RunKey, TreeReadOut, View, fingerprint_plan, fingerprint_query_plan,
+};
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
 /// The format the fingerprint command outputs.
@@ -264,6 +270,10 @@ pub struct FingerprintOptions<'a> {
     /// rootsConfigIgnored` in the output is set to `true` — never a bare `false`
     /// that would contradict the flag.
     pub no_roots_config: bool,
+    /// `--single-app` (#160 step 9): the `--routine` query and `--inventory-only`
+    /// analyse the workspace alone; the default loads the dependencies it
+    /// requires. The other forms analyse the workspace alone in this release.
+    pub single_app: bool,
 }
 
 /// Result returned from `run_fingerprint_pipeline`.
@@ -363,8 +373,18 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         opts.is_query_requested,
     )?;
 
+    // B0 path: shard / cbor / cbor.gz / json-no-query.
+    let go_b0 = opts.shard.is_some()
+        || opts.format == FingerprintFormat::Cbor
+        || opts.format == FingerprintFormat::CborGz
+        || (opts.format == FingerprintFormat::Json && !opts.is_query_requested);
+    // #160 step 9 (S′, spec §4.3): the query with a `--routine` is on the
+    // view's tree, in both universes; every other form stays on the cut.
+    if !go_b0 && !opts.routine_selectors.is_empty() {
+        return run_routine_query(opts);
+    }
+
     // Assemble workspace.
-    let workspace = opts.inputs.workspace.as_path();
     let model_id = opts
         .inputs
         .model_instance_id
@@ -393,30 +413,10 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     view.release_all_but(&[]);
     let resolved = view.model();
 
-    // --strict gate (fingerprint.ts:187): BEFORE composeSnapshot. If any analyzer
-    // diagnostic is severity "error", print ALL analyzer diagnostics to stderr +
-    // exit 1, before any output / sharding.
-    if opts.strict {
-        let fatal = analyzer_diags.iter().any(|(_, sev, _)| sev == "error");
-        if fatal {
-            let stderr: Vec<String> = analyzer_diags
-                .iter()
-                .map(|(_, sev, msg)| format!("{sev}: {msg}"))
-                .collect();
-            return Ok(FingerprintRunResult {
-                output: FingerprintOutput::Text(String::new()),
-                exit_code: 1,
-                selector_error_message: None,
-                stderr_diagnostics: stderr,
-            });
-        }
+    // --strict gate: BEFORE composeSnapshot, before any output / sharding.
+    if let Some(r) = strict_gate(opts, &analyzer_diags) {
+        return Ok(r);
     }
-
-    // B0 path: shard / cbor / cbor.gz / json-no-query.
-    let go_b0 = opts.shard.is_some()
-        || opts.format == FingerprintFormat::Cbor
-        || opts.format == FingerprintFormat::CborGz
-        || (opts.format == FingerprintFormat::Json && !opts.is_query_requested);
 
     if go_b0 {
         let envelope_diags: Vec<EnvelopeDiagnostic> = analyzer_diags
@@ -494,27 +494,144 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         });
     }
 
-    // Query path: json-with-query or human.
+    // Query path with no `--routine`: json-with-query or human, on the cut.
     // Compose the consumed-core snapshot (not the full CBOR tree).
     let snap = compose_snapshot(resolved);
+    let filters = query_filters(opts);
+    let owners = OwnerIndex::build(resolved);
+    let guid = primary_guid_of(resolved);
+    let primary = primary_stable_ids(resolved);
+    let result = fingerprint_query(
+        &snap,
+        &filters,
+        roots_config_ignored,
+        &owners,
+        guid,
+        &|id| primary.contains(id),
+    );
+    Ok(emit_query(
+        opts,
+        &result,
+        &filters,
+        &analyzer_diags,
+        &owners,
+        || build_selector_indexes(&snap.identities, guid),
+    ))
+}
+
+/// The query's filters from the CLI options; the witness limit defaults to 3
+/// (the golden capturePoint default).
+fn query_filters(opts: &FingerprintOptions) -> FingerprintFilters {
+    FingerprintFilters {
+        roots: opts.roots.clone(),
+        routine_selectors: opts.routine_selectors.clone(),
+        include_inherited: opts.include_inherited,
+        witness_limit: opts.witness_limit.unwrap_or(WitnessLimit::Capped(3)),
+    }
+}
+
+/// `fingerprint --routine` (#160 step 9 D3): the view of the target (cross-app
+/// by default), the selectors resolved to a pool from the model alone, the
+/// query read off the view's tree inside `prepare` (the tree is dropped there)
+/// and the output from its owned result.
+fn run_routine_query(opts: &FingerprintOptions) -> Result<FingerprintRunResult, String> {
+    let target = AnalysisTarget::build_with(
+        opts.inputs,
+        opts.single_app,
+        opts.no_roots_config,
+        "fingerprint",
+    )?;
+    let roots_config_ignored = opts.no_roots_config && opts.inputs.roots_config_loaded();
+    let filters = query_filters(opts);
+    let mut view = View::new(target);
+    // The pool: every selector that names exactly one primary routine, as the
+    // query resolves it; a failing selector adds nothing (its diagnostic comes
+    // from the query).
+    let pool: std::collections::BTreeSet<String> = {
+        let model = view.model();
+        let identities = derive_identity_table(model);
+        let idx = build_selector_indexes(&identities, primary_guid_of(model));
+        let owners = OwnerIndex::build(model);
+        opts.routine_selectors
+            .iter()
+            .filter_map(|sel| {
+                let (m, form) = resolve_selector(sel, &idx);
+                let m = narrow_to_owner(sel, form, m, |id| owners.object_display(id));
+                (m.len() == 1).then(|| m.into_iter().next().expect("one match"))
+            })
+            .collect()
+    };
+    let plan = fingerprint_query_plan(
+        default_detectors(),
+        pool,
+        QueryRead {
+            filters: filters.clone(),
+            roots_config_ignored,
+        },
+    );
+    let key = plan.keys().remove(0);
+    view.prepare(&plan);
+    let analyzer_diags = analyzer_diags_for(&view, &key);
+    drop(view.take_run(&key));
+    let TreeReadOut::FingerprintQuery(result) = view.take_tree_read() else {
+        unreachable!("a FingerprintQuery read leaves a query result")
+    };
+    view.release_all_but(&[]);
+    if let Some(r) = strict_gate(opts, &analyzer_diags) {
+        return Ok(r);
+    }
+    let model = view.model();
+    let owners = OwnerIndex::build(model);
+    view.census_output();
+    Ok(emit_query(
+        opts,
+        &result,
+        &filters,
+        &analyzer_diags,
+        &owners,
+        // #239's hint, on the error path only: the model's identity table,
+        // the one the tree held.
+        || build_selector_indexes(&derive_identity_table(model), primary_guid_of(model)),
+    ))
+}
+
+/// `--strict` (fingerprint.ts:187): if any analyzer diagnostic is severity
+/// "error", every analyzer diagnostic goes to stderr and the command exits 1,
+/// before any output.
+fn strict_gate(
+    opts: &FingerprintOptions,
+    analyzer_diags: &[(String, String, String)],
+) -> Option<FingerprintRunResult> {
+    if !opts.strict || !analyzer_diags.iter().any(|(_, sev, _)| sev == "error") {
+        return None;
+    }
+    Some(FingerprintRunResult {
+        output: FingerprintOutput::Text(String::new()),
+        exit_code: 1,
+        selector_error_message: None,
+        stderr_diagnostics: analyzer_diags
+            .iter()
+            .map(|(_, sev, msg)| format!("{sev}: {msg}"))
+            .collect(),
+    })
+}
+
+/// The query's output (json or human) from its result, shared by the cut and
+/// the view's tree. `hint_index` builds #239's selector index, only when a
+/// human selector error needs it.
+fn emit_query(
+    opts: &FingerprintOptions,
+    result: &crate::engine::l5::fingerprint_query::FingerprintQueryResult,
+    filters: &FingerprintFilters,
+    analyzer_diags: &[(String, String, String)],
+    owners: &OwnerIndex<'_>,
+    hint_index: impl FnOnce() -> crate::engine::l5::selector_index::SelectorIndexes,
+) -> FingerprintRunResult {
+    let workspace = opts.inputs.workspace.as_path();
     let workspace_fp = crate::engine::l5::snapshot_full::workspace_fingerprint_of(
         opts.inputs,
         opts.driver_version,
     );
-
-    // Witness limit: default to 3 (the golden capturePoint default).
-    let witness_limit = opts.witness_limit.unwrap_or(WitnessLimit::Capped(3));
-
-    let filters = FingerprintFilters {
-        roots: opts.roots.clone(),
-        routine_selectors: opts.routine_selectors.clone(),
-        include_inherited: opts.include_inherited,
-        witness_limit,
-    };
-
-    let owners = OwnerIndex::build(resolved);
-    let result = fingerprint_query(&snap, &filters, roots_config_ignored, &owners);
-
     let selector_errors: Vec<&FingerprintQueryDiagnostic> = result
         .diagnostics
         .iter()
@@ -534,8 +651,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             // Human selector errors → stderr, exit 2, no stdout (fingerprint.ts:301).
             // #239: an `<owner>::<routine>` selector whose owner declares no such
             // routine gets one hint line naming the owners that do.
-            let idx =
-                crate::engine::l5::selector_index::build_selector_indexes(&snap.identities, None);
+            let idx = hint_index();
             let mut msg = String::new();
             for d in selector_errors {
                 msg.push_str(&format_selector_errors_human(std::slice::from_ref(d)));
@@ -553,47 +669,46 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
                     }
                 }
             }
-            return Ok(FingerprintRunResult {
+            return FingerprintRunResult {
                 output: FingerprintOutput::Text(String::new()),
                 exit_code: 2,
                 // Strip the single trailing newline — alsem.rs re-adds it via eprintln!.
                 selector_error_message: Some(msg.trim_end_matches('\n').to_string()),
                 stderr_diagnostics: Vec::new(),
-            });
+            };
         }
-        let human = format_fingerprint_human_verbosity(&result, opts.verbosity);
+        let human = format_fingerprint_human_verbosity(result, opts.verbosity);
         // human format prints analyze diagnostics to stderr at exit (fingerprint.ts:331).
         let stderr_diags: Vec<String> = analyzer_diags
             .iter()
             .map(|(_, sev, msg)| format!("{sev}: {msg}"))
             .collect();
-        return Ok(FingerprintRunResult {
+        return FingerprintRunResult {
             output: FingerprintOutput::Text(human),
             exit_code: 0,
             selector_error_message: None,
             stderr_diagnostics: stderr_diags,
-        });
+        };
     }
 
     // json + query: selector errors are embedded in payload.diagnostics + exit 2,
     // and NO analyze errors go to stderr (fingerprint.ts:281-297).
     let json_text = project_fingerprint_query_full(
-        &result,
-        &snap,
+        result,
         &workspace.to_string_lossy(),
-        &filters,
+        filters,
         opts.deterministic,
-        &analyzer_diags,
+        analyzer_diags,
         opts.driver_version,
         &workspace_fp,
     );
 
-    Ok(FingerprintRunResult {
+    FingerprintRunResult {
         output: FingerprintOutput::Text(json_text),
         exit_code,
         selector_error_message: None,
         stderr_diagnostics: Vec::new(),
-    })
+    }
 }
 
 /// Build the analyzer diagnostics list as `(code, severity, message)` tuples,

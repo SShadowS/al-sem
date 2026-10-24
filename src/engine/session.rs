@@ -142,9 +142,13 @@ pub enum TreeRead {
     Inventory(InventoryRead),
 }
 
-/// The fingerprint query's tree-read inputs (step 9 Task 3 fills them).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct QueryRead {}
+/// The fingerprint query's tree-read inputs (#160 step 9 D3): its filters and
+/// whether a `roots.config.json` was skipped. The roles come from the model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueryRead {
+    pub filters: crate::engine::l5::fingerprint_query::FingerprintFilters,
+    pub roots_config_ignored: bool,
+}
 
 /// The inventory's tree-read inputs (step 9 Task 4 fills them).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -156,19 +160,23 @@ pub enum TreeReadOut {
     Inventory(indexmap::IndexMap<String, crate::engine::gate::cbor::CborValue>),
 }
 
-/// The fingerprint query's read off the tree. Step 9 Task 3 runs
-/// `fingerprint_query` here; until then an empty result.
+/// The fingerprint query's read off the tree (#160 step 9 D3): the query with
+/// the model's owners and roles. Its result is owned (S9-16).
 fn read_fingerprint_query(
-    _tree: &CapabilitySnapshot,
-    _read: &QueryRead,
+    tree: &CapabilitySnapshot,
+    read: &QueryRead,
+    model: &Model,
 ) -> crate::engine::l5::fingerprint_query::FingerprintQueryResult {
-    crate::engine::l5::fingerprint_query::FingerprintQueryResult {
-        blocks: vec![],
-        diagnostics: vec![],
-        total_classifications: 0,
-        rendered_blocks: 0,
-        roots_config_ignored: false,
-    }
+    let owners = crate::engine::l4::effect_query_cli::OwnerIndex::build(model);
+    let primary = crate::engine::l5::fingerprint_query::primary_stable_ids(model);
+    crate::engine::l5::fingerprint_query::fingerprint_query(
+        tree,
+        &read.filters,
+        read.roots_config_ignored,
+        &owners,
+        crate::engine::l5::digest_cli::primary_guid_of(model),
+        &|id| primary.contains(id),
+    )
 }
 
 /// The inventory's read off the tree. Step 9 Task 4 runs
@@ -267,6 +275,21 @@ fn run_only_plan(detectors: Vec<Detector>) -> Plan {
 /// `alsem fingerprint`.
 pub fn fingerprint_plan(detectors: Vec<Detector>) -> Plan {
     run_only_plan(detectors)
+}
+
+/// `alsem fingerprint --routine` (#160 step 9 D3): fingerprint's run, the raw
+/// facts of `pool` (the selectors' routines, stable ids), and the query read
+/// off the view's tree inside `prepare`.
+pub fn fingerprint_query_plan(
+    detectors: Vec<Detector>,
+    pool: BTreeSet<String>,
+    read: QueryRead,
+) -> Plan {
+    Plan {
+        witness: WitnessRequest::Roots(pool),
+        tree: TreeRead::FingerprintQuery(read),
+        ..run_only_plan(detectors)
+    }
 }
 
 /// `alsem diff --strict`, per side.
@@ -622,7 +645,7 @@ impl View {
                 }
                 TreeRead::FingerprintQuery(read) => {
                     *tree_read = Some(TreeReadOut::FingerprintQuery(read_fingerprint_query(
-                        t, read,
+                        t, read, model,
                     )));
                 }
                 TreeRead::Inventory(read) => {
@@ -1278,6 +1301,19 @@ mod tests {
         );
     }
 
+    /// A query read with no filter (every root, witnesses off).
+    fn query_read() -> QueryRead {
+        QueryRead {
+            filters: crate::engine::l5::fingerprint_query::FingerprintFilters {
+                roots: None,
+                routine_selectors: vec![],
+                include_inherited: true,
+                witness_limit: crate::engine::l5::fingerprint_query::WitnessLimit::Disabled,
+            },
+            roots_config_ignored: false,
+        }
+    }
+
     /// A det-running plan over an empty `Roots` request with tree read `read`.
     fn tree_plan(read: TreeRead) -> Plan {
         Plan::for_test(
@@ -1305,7 +1341,7 @@ mod tests {
     fn tree_read_lifecycle() {
         // (a) and (c), FingerprintQuery.
         let mut v = view();
-        v.prepare(&tree_plan(TreeRead::FingerprintQuery(QueryRead::default())));
+        v.prepare(&tree_plan(TreeRead::FingerprintQuery(query_read())));
         assert!(
             v.det.is_some(),
             "(c) precondition: det ran in the same prepare"
@@ -1376,7 +1412,7 @@ mod tests {
         );
         for read in [
             TreeRead::None,
-            TreeRead::FingerprintQuery(QueryRead::default()),
+            TreeRead::FingerprintQuery(query_read()),
             TreeRead::Inventory(InventoryRead::default()),
         ] {
             let p = Plan::for_test(vec![], true, false, 0).with_tree(read);
