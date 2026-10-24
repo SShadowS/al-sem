@@ -594,6 +594,9 @@ pub struct DigestEffectFull {
     pub guarantees: Vec<String>,
     pub fact_id: String,
     pub scoped_guarantees: Vec<crate::engine::l5::ordering_engine::ScopedGuarantee>,
+    /// A boundary group's full `(resource id, display)` set (#160 step 9
+    /// D2 (6)); `detail` lists at most 10. Not serialized; empty off a group.
+    pub group_resources: Vec<(String, String)>,
 }
 
 pub struct FullAnchor {
@@ -785,21 +788,68 @@ pub struct DigestEffects {
 pub struct UnresolvedCone {
     pub items: Vec<UnresolvedConeItem>,
     pub traversal: UnresolvedTraversal,
+    /// The tree's analysis gaps whose subject the cone visits
+    /// ([`count_gaps_in_cone`]), counted before the tree is dropped (#160
+    /// step 9 D2 (5)): prove's `analysisGaps` obligation. `None` off prove's
+    /// plan: digest never reads it, so it never counts it (final panel C1).
+    pub gaps_in_cone: Option<usize>,
+}
+
+/// Count analysis gaps whose subject intersects the visited cone.
+///
+/// A gap subject is EITHER:
+///   - a StableRoutineId (parse-incomplete / body-unavailable gaps) → DIRECT match
+///     against the visited set, OR
+///   - a bare app GUID (symbol-only-boundary gaps, snapshot.rs:1860-1867) → matches
+///     when ANY visited routine's stable id starts with `{appGuid}:` (stable ids use
+///     ":" separators, NOT "/" — see digest-query.ts:722-728's documented soundness
+///     fix). WITHOUT this app-level branch every symbol-only-boundary gap is invisible,
+///     so a cone entering an opaque `.app` dep reports analysisGaps=0 → a FALSE absence
+///     proof. This is the exact class of bug digest-query.ts documents.
+fn count_gaps_in_cone(
+    gap_subjects: &[&str],
+    visited_ids: &std::collections::HashSet<String>,
+) -> usize {
+    let mut count = 0usize;
+    for subject in gap_subjects {
+        // Direct routine-subject match.
+        if visited_ids.contains(*subject) {
+            count += 1;
+            continue;
+        }
+        // App-level (symbol-only-boundary) match: subject is a bare app GUID and some
+        // visited routine has a stable id of the form `{appGuid}:Type:{n}#hash`.
+        let prefix = format!("{}:", subject);
+        if visited_ids.iter().any(|v| v.starts_with(&prefix)) {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// [`DigestEffects`] of `roots` off `tree`: `tests`' coverage graph (#254), the
 /// S4 entries and each root's unresolved cone are computed first, then the
 /// identity table and the coverage are moved out (the tree's other readers are
-/// done with them).
+/// done with them). `gaps_in_cone`: prove's plan, which counts each cone's
+/// analysis gaps.
 pub(crate) fn digest_effects(
     tree: &mut CapabilitySnapshot,
     model: &Model,
     roots: &[String],
     tests: bool,
+    gaps_in_cone: bool,
 ) -> DigestEffects {
     let coverage_graph =
         tests.then(|| crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model));
     let entries = compute_digest_effects_cli(tree, model, Some(roots));
+    let gap_subjects: Vec<&str> = if gaps_in_cone {
+        tree.analysis_gaps
+            .iter()
+            .map(|g| g.subject.as_str())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let unresolved = roots
         .iter()
         .map(|r| {
@@ -807,6 +857,8 @@ pub(crate) fn digest_effects(
             (
                 r.clone(),
                 UnresolvedCone {
+                    gaps_in_cone: gaps_in_cone
+                        .then(|| count_gaps_in_cone(&gap_subjects, &c.visited_ids)),
                     items: c.items,
                     traversal: c.traversal,
                 },
@@ -867,11 +919,14 @@ pub fn run_digest_query_full_from_entries(
         }
     }
 
-    // Build index of base entries by routineId
-    let base_by_rid: HashMap<&str, &DigestEntryResult> = effects
+    // Build index of base entries by routineId, by position: each boundary
+    // group's resource set is moved out of its entry below, not copied (final
+    // panel C2).
+    let base_by_rid: HashMap<String, usize> = effects
         .entries
         .iter()
-        .map(|e| (e.routine_id.as_str(), e))
+        .enumerate()
+        .map(|(i, e)| (e.routine_id.clone(), i))
         .collect();
 
     let mut out: Vec<DigestEntryFull> = Vec::new();
@@ -945,13 +1000,15 @@ pub fn run_digest_query_full_from_entries(
         };
 
         // Get base effects (from S4 ordering)
-        let base_entry = base_by_rid.get(rid.as_str());
+        let base_entry = base_by_rid
+            .get(rid.as_str())
+            .map(|&i| &mut effects.entries[i]);
 
         let mut full_effects: Vec<DigestEffectFull> = Vec::new();
         let mut entry_diagnostics: Vec<EntryDiagnostic> = Vec::new();
 
         if let Some(entry) = base_entry {
-            for eff in &entry.effects {
+            for eff in &mut entry.effects {
                 // Conditionality — the per-path value computed in digest_query and
                 // stored on the effect (#8 / #17). No recomputation here.
                 let cond = eff.conditionality;
@@ -1046,6 +1103,7 @@ pub fn run_digest_query_full_from_entries(
                     guarantees,
                     fact_id: eff.fact_id.clone(),
                     scoped_guarantees: eff.scoped_guarantees.clone(),
+                    group_resources: std::mem::take(&mut eff.group_resources),
                 });
             }
         }
@@ -2197,5 +2255,58 @@ mod tests {
             ),
             "reason=class-absent op=op-a missing: {text}"
         );
+    }
+
+    // -- #2 gaps-in-cone app-level prefix oracle (moved from prove.rs, #160 step 9)
+
+    /// The SOUNDNESS fix: a symbol-only-boundary gap whose subject is a bare app GUID
+    /// is counted when ANY visited routine's stable id starts with `{appGuid}:`. A
+    /// direct-match-only filter (the pre-fix bug) would report 0 → a false absence proof.
+    #[test]
+    fn gaps_in_cone_matches_app_level_prefix() {
+        use std::collections::HashSet;
+        // Visited routine inside an opaque dep app GUID "11112222...".
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert("11112222-0000-0000-0000-00000000aaaa:Codeunit:50000#deadbeef".to_string());
+        visited.insert("33334444-0000-0000-0000-00000000bbbb:Codeunit:60000#cafef00d".to_string());
+
+        // Gap subjects: one bare app GUID (symbol-only-boundary) that matches the prefix,
+        // one bare app GUID that does NOT match any visited routine.
+        let gap_subjects = vec![
+            "11112222-0000-0000-0000-00000000aaaa", // matches via `{guid}:` prefix
+            "99998888-0000-0000-0000-00000000cccc", // no visited routine in this app
+        ];
+        let count = count_gaps_in_cone(&gap_subjects, &visited);
+        assert_eq!(
+            count, 1,
+            "exactly the app-level-matching gap is in cone (the prefix branch must fire)"
+        );
+    }
+
+    /// Direct routine-subject gaps still match (the non-app branch).
+    #[test]
+    fn gaps_in_cone_matches_direct_routine_subject() {
+        use std::collections::HashSet;
+        let mut visited: HashSet<String> = HashSet::new();
+        let rid = "aaaa1111-0000-0000-0000-00000000dddd:Codeunit:70000#beadfeed".to_string();
+        visited.insert(rid.clone());
+
+        // A parse-incomplete gap whose subject IS a visited StableRoutineId.
+        let gap_subjects = vec![rid.as_str()];
+        let count = count_gaps_in_cone(&gap_subjects, &visited);
+        assert_eq!(count, 1, "direct routine-subject gap must match");
+    }
+
+    /// Negative: a gap subject neither directly present nor an app-prefix of any
+    /// visited routine is NOT counted.
+    #[test]
+    fn gaps_in_cone_excludes_unrelated_subject() {
+        use std::collections::HashSet;
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert("aaaa1111-0000-0000-0000-00000000dddd:Codeunit:70000#beadfeed".to_string());
+
+        let gap_subjects = vec!["zzzz9999-0000-0000-0000-00000000eeee"];
+        let count = count_gaps_in_cone(&gap_subjects, &visited);
+        assert_eq!(count, 0, "unrelated gap subject must not be counted");
     }
 }

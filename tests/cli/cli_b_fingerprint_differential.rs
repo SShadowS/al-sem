@@ -225,6 +225,7 @@ fn query_json_matches_goldens() {
             verbosity: "compact",
             inventory_only: false,
             no_roots_config: false,
+            single_app: true,
         };
         let result = run_fingerprint_pipeline(&opts)
             .unwrap_or_else(|e| panic!("{fixture}: fingerprint json pipeline error: {e}"));
@@ -269,6 +270,7 @@ fn human_compact_matches_goldens() {
             verbosity: "compact",
             inventory_only: false,
             no_roots_config: false,
+            single_app: true,
         };
         let result = run_fingerprint_pipeline(&opts)
             .unwrap_or_else(|e| panic!("{fixture}: fingerprint human pipeline error: {e}"));
@@ -312,6 +314,7 @@ fn witness_all_matches_golden() {
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        single_app: true,
     };
     let result = run_fingerprint_pipeline(&opts)
         .unwrap_or_else(|e| panic!("{WITNESS_FIXTURE}: witness-all pipeline error: {e}"));
@@ -350,6 +353,7 @@ fn witness_zero_matches_golden() {
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        single_app: true,
     };
     let result = run_fingerprint_pipeline(&opts)
         .unwrap_or_else(|e| panic!("{WITNESS_FIXTURE}: witness-0 pipeline error: {e}"));
@@ -388,6 +392,7 @@ fn witness_false_matches_golden() {
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        single_app: true,
     };
     let result = run_fingerprint_pipeline(&opts)
         .unwrap_or_else(|e| panic!("{WITNESS_FIXTURE}: witness-false pipeline error: {e}"));
@@ -430,6 +435,9 @@ fn selector_error_json_matches_golden_and_exits_2() {
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        // #160 step 9: a `--routine` query, cross-app by default (the fixture
+        // has no dependency, so the bytes are the single-app ones).
+        single_app: false,
     };
     let result = run_fingerprint_pipeline(&opts)
         .unwrap_or_else(|e| panic!("{ERROR_FIXTURE}: selector-error pipeline error: {e}"));
@@ -473,6 +481,7 @@ fn human_full_matches_golden() {
         verbosity: "full",
         inventory_only: false,
         no_roots_config: false,
+        single_app: true,
     };
     let result = run_fingerprint_pipeline(&opts)
         .unwrap_or_else(|e| panic!("{WITNESS_FIXTURE}: human-full pipeline error: {e}"));
@@ -576,6 +585,7 @@ fn opts_for<'a>(
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        single_app: true,
     }
 }
 

@@ -99,6 +99,7 @@ fn fingerprint_json(inputs: &Arc<InputSet>) -> serde_json::Value {
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        single_app: true,
     };
     let r = run_fingerprint_pipeline(&opts).expect("fingerprint pipeline");
     match r.output {

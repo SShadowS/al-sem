@@ -1,3 +1,215 @@
+# Issue #160 ledger: attempt 10 on server1 (epic step 9: prove and fingerprint cross-app)
+
+## Attempt 10: claim
+
+```json
+{"attempt":10,"body_hash":"2ec746e00deded290965d462f57e8ade73a96d606db1b7f89361f532a6d32883","branch":"issue/160-alsem-batch-build-the-model-onc-a10","issue":160,"run_id":"20261024-093848-0d842b","session":"claude-code-session:c8325c25-f1bf-436d-a204-90152a41120c","title":"alsem batch: build the model once and run several commands against it","worktree":"/work/al-sem-issue-160-a10"}
+```
+
+Issue body hash: `2ec746e00deded290965d462f57e8ade73a96d606db1b7f89361f532a6d32883`.
+Base `b028ec325c674c6746384a552e5781b7ef2f3047` (master with step 6 merged, #274).
+Pre-draft `/work/bench/160-9/draft-step9-design.md` (refreshed against step 6 head `581f3397`, re-cited here
+against `b028ec32`). Operator decisions taken before the claim: `/work/bench/160-9/OPERATOR-DECISIONS-2026-10-24.md`.
+`findings.json` is carried unchanged (88 entries, all accepted by both, from step 6); this step's entries take
+round names `9 r1`, `9 r2`, and so on.
+
+### Attempt 10: classification
+
+**architectural**: a SPEED step with memory risk (epic row 9, §5.12). It changes the `View`'s tree lifecycle
+(a kept tree), moves prove and two fingerprint forms onto the cross-app view, and adds a flag to two commands.
+
+### Attempt 10: operator decisions (already decided; written into the spec as decided)
+
+- OD-1 outcome **S′** (probes 2026-10-24, `/work/bench/160-9/probe-out/OD1-RESULT.md`): fold ratio 97.65 %, B0
+  cross-app OOM-killed at ≥ 29.1 GB in the shared 32 GiB cgroup. Step 9 ships prove, the fingerprint query
+  (`--routine`) and `--inventory-only` cross-app. Fingerprint B0 and `diff` cross-app are a follow-up (Discoveries).
+- OD-2 yes (prove falls back to digest's B2′ bound). OD-3 accepted (rule B in prove and the query).
+  OD-4: a bench round is void only when the external load exceeds 8. Memory ceiling: the shared 32 GiB cgroup.
+
+### Attempt 10: assumption probes
+
+Base binary: `cargo build --profile cdo --bin alsem` in the worktree at `b028ec32` (correctness profile; no wall
+time from it is quoted). Probe files: `/work/bench/160-9/a10-probe/`. CDO pinned workspace, read-only.
+
+| probe | result | evidence |
+|---|---|---|
+| P0 drift | 22 files moved between the pre-draft's `581f3397` and `b028ec32`; every spec cite re-read at `b028ec32`. Then rebased onto `317d3b34` (#278, grammar, no cited file) | `git diff --stat 581f3397 b028ec32 -- src tests`; `git diff --name-only b028ec32 317d3b34` |
+| P1 diagnostics | CDO digest `d`, `h`: 0 envelope diagnostics in both universes (move 1 latent on CDO) | `p14-{d,h}-{x,s}.sum` |
+| P4 caps | cross-app max visited `d` 19,284, `h` 19,201 of 25,000; 0 truncated; single-app max 354 / 366 | `p14-*.sum` |
+| P4 peaks | cross-app digest `d` 3,137,152 KiB, `h` 3,216,736 KiB; single-app 743,192 / 736,700 KiB | `p14-*.err` |
+| P15 prove == digest single-app | 18 of 18 non-dummy cli-b prove cases: the golden's evidence equals digest `--single-app --routine R`'s effects with the same factIds; 0 unresolved both (limit: cited effects only; no gap case) | `p15.txt` |
+| P5 dependency root rows | static: no role filter in `derive_root_classifications`; CDO not run (T6 hand-states, F10) | `snapshot.rs:2866` |
+| P7 no-dep r0 dirs | 201 of 216 (12 `.alpackages`, 13 app.json dependencies, 9 no app.json) | shell count |
+| P8 roots config | only `ws-d51-jobqueue` | `ls` |
+| P9 counters | prove and `FINGERPRINT_ROW` bcg 2/cone 2/scc 3/pd 2; `DIGEST_ROW` bcg 1/cone 1/scc 2/pd 1 | `cli_build_counters.rs:378-501` |
+| P13 fail-closed shapes | holds at the base | `snapshot.rs:2599-2600,2636-2637`; `unresolved_cone.rs:152-154` |
+| P16 routine_to_stable | the cut base uses `routine_to_stable_of(ws)` | `capability_cone.rs:4555,4647` |
+| P17 permissions | `derive_permissions` reads `base.raw` (every primary routine's raw facts): inventory's tree path passes none | `snapshot_full.rs:912-951` |
+| P18 cli-b prove fixtures | all have an `app.json`, so the cross-app default builds | case list |
+| P5 (re-run, static, after 9 r1) | the cross-app model DOES classify dependency routines: `classify_roots` runs over the whole cross-app `ModelEntities` with no role filter | `root_classification.rs:290`; `workspace.rs:1920-1921` |
+| P19 tree size (after 9 r1, `sonnet` agent) | CDO digest `d` tree census buckets: 296,115,964 B (282.4 MiB) cross-app (`pd_solution` 201,311,977 B exact), 14,488,230 B single-app; `--tests` same tree. Peaks 3,137,052 / 732,472 / 3,169,488 KiB | `/work/bench/160-9/a10-probe/census-{d-x,d-s,dt-x}.err` |
+
+### Attempt 10: timeline
+
+- 2026-10-24 09:40 UTC: claim read, worktree at base `b028ec32`, ledger section started.
+- 09:44: `cargo build --profile cdo --bin alsem` at the base, rc 0. 09:46-09:53: P15 (cli-b), P1/P4 (CDO digest
+  `d`, `h`, both universes; peak ≤ 3.3 GB; cgroup anon ≈ 8.5 GB before).
+- ~10:20: spec `cbbc7a79`, plan `f9c33f8e`; rebased onto `317d3b34` (origin/master moved, #278); spec note
+  `8fe927a6`. `check-diff --base origin/master --head HEAD`: `reasons: []`. Not pushed. Next: spec panel round
+  `9 r1` (issue step 5).
+- ~10:55: spec panel `9 r1` back (sol: 1 critical, 12 important, 2 minor; Opus: 11 important, 10 minor), both
+  fix-first. 30 register entries (6 merged across sources), all `fixed`, reviews `unreviewed`. P5 re-run
+  (static) and P19 (tree census, `sonnet`). Design change: every tree is read inside `prepare` before `det`
+  (no kept tree). Rebased onto `1134bed1` (#237); fix commit `50eed0c7`; check-diff `reasons: []`. Next: round
+  `9 r2` (diff-only briefing).
+- round `9 r2` back, both fix-first. Marks: Opus accepted all 30; sol accepted 28, re-raised S9-2 (terminal
+  evidence) and O9-4 (no app.json fails earlier, at the model-instance id: no change). 6 new entries (S9-16+O9-22,
+  S9-17..S9-20, O9-23). Fix commit `eb754df0` (self-contained query result, five inventory keys, u16 release
+  mask, F8/T24, F2 globals, D9's source-less set per caller); marks reset on the entries whose fix text moved:
+  S9-2, O9-4, O9-8, S9-10+O9-15, S9-12+O9-11, O9-3. check-diff `reasons: []` (master still `1134bed1`).
+  Register 124 entries. Next: round `9 r3`.
+- round `9 r3` back: Opus accepted all 12; sol accepted 11, re-raised S9-2 (trigger and event boundaries). New
+  O9-24 (boundary per path, empty paths). One fix `34e2f3a1`: per-path `PathBoundary` (cs:/op:/ev:), the fact's
+  evidence = first path's boundary else today's operation evidence; T25 five arms, breaks B1-B5. Marks reset:
+  S9-2, S9-16+O9-22 (its anchor text changed). check-diff `reasons: []` (master `1134bed1`). Register 125.
+  Next: round `9 r4` (the last pre-approved spec round).
+- round `9 r4`: Opus accepted S9-2, S9-16+O9-22, O9-24 (VERDICT converge) and raised O9-25 (minor: query contract
+  version). sol rate-limited: its marks on those 3 stay `unreviewed` for the coordinator. Fix `888e69f2` (docs
+  only): `FINGERPRINT_QUERY_CONTRACT_VERSION` 1.2.0 → 1.3.0, stated golden move, T25 pin, CHANGELOG step.
+  check-diff `reasons: []` (master `1134bed1`). Register 126.
+- ~12:05: impl Tasks 0-1. Task 0: base `1134bed1` release-fast `alsem` at `/work/bench/160-9/base-bin/alsem`
+  (sha256 `00856d74…085fc5`, `bins.sha`); sweep `/work/bench/160-9/sweep/sweep.sh`, base outputs
+  `/work/bench/160-9/sweep/base` (217 dirs, 798 roots, 19 cli-b cases, 8,235 cases; rc 0 except the cli-b dummy-doc
+  exit 2). Task 1 `ac447e3c`: red first (compile) for 1.2 and T20; task-affected 4058/4058, check-goldens rc 0 (no
+  move), 1.6 green unchanged, `ci-steps task` rc 0 (45.8 s), check-diff `reasons: []` (master `1134bed1`).
+- ~13:05: Task 2 `a95b95d0` (prove on the cross-app view). cli-b prove differential green with no regen;
+  task-affected 4071/4071; check-goldens rc 0 (no existing golden moved; 2 new T8 goldens under
+  `tests/cli-b-goldens/single-app/`, minted by the base binary, path-independent); `ci-steps task` rc 0 (43.5 s);
+  check-diff `reasons: []` (master `1134bed1`). T23 prove half: base default == head `--single-app`, 19,266 files
+  (6,422 cases: 798 roots × 4 questions × json/human + 19 cli-b cases), 0 differ. Head binary for the sweep: the dev
+  build (`/work/bench/160-9/head-dev/alsem`) because the coordinator killed the release-fast build (timing hold);
+  byte identity does not depend on the profile. Task 1 review items folded in (TreeRead in `view.live`; T20 pins an
+  unfilled TreeRead is not released). T2 is a lib test with a hand-stated body-less source row (no AL source
+  produces one: a symbols-only member of a source app has no model row, `external`; an interface or
+  declaration-only member is never a resolved target).
+- ~14:20: Task 3 `6f7a24ac` (fingerprint `--routine` on the cross-app view), plan 3.1-3.7 and the 3.9 sweep; 3.8
+  (CDO early read) NOT run: coordinator hold (no release builds, no CDO). Golden triage: 26 cli-b fingerprint
+  goldens moved, 25 by the `schemaVersion` 1.2.0 -> 1.3.0 line only, the ws-txn-d49-pos-modify-runmodal json by
+  that line + `mayCommit.presence` no -> unknown (ModifyThenRunModal inheritedStatus partial, object-run-unresolved,
+  inherited facts shown) and its human file by one `commit:     unknown` line; golden-diff-triager (sonnet): all
+  allowed; receipt `.agent/golden-triage.md`; regen == the triaged dump (26 files). No B0/snapshot golden moved.
+  T8 query goldens minted from the base binary (only the stated `schemaVersion` line differs from head
+  `--single-app`). T23 `--routine` half (dev head binary, `/work/bench/160-9/head-dev/alsem-t3`): 4,788 fq files,
+  3,975 identical, 783 differ by the version line only, 30 by `mayCommit` (15 json, each `no` -> `unknown` on a block
+  whose inheritedStatus is not complete, + their 15 human twins), 0 other; prove half still 19,266/0; inventory
+  651/0. Gates: task-affected 4087/4087, check-goldens rc 0, `ci-steps task` rc 0 (44.6 s).
+- ~14:35: origin/master moved to `70c3b743` (#264). Rebased (clean, autostash); the #264 `run_prove_pipeline` call
+  site needed `single_app`: fix-forward `ca542dde`. Rebased SHAs: Task 1 `bd007ed3`, Task 2 `96d9843a`, Task 3
+  `fedc1d2a`. check-goldens rc 0 (1151/1151), `ci-steps task` rc 0 (133.7 s), check-diff `reasons: []`. Base check:
+  a dev binary of `70c3b743` swept the corpus: 8,235/8,235 outputs equal `1134bed1`'s, so the sweep base and the T8
+  goldens stand. The rebased head (`ca542dde`, dev) re-swept `--single-app`: 24,705/24,705 files equal the
+  pre-rebase head's, so the T23 results above hold at `ca542dde`. Stopped before plan 3.8 (CDO early read) per the
+  coordinator's hold.
+- ~15:30: Task 2 review items (ship): (4) prove's zero-root branch now releases `L4`/`Effects` before exit 2, as
+  digest does; fix `dd8cb6e5` with `prove_with_no_root_releases_as_digest_does` (red before the fix). The Task 2
+  commit's "release sequence equals digest's" claim held only for a resolved root before `dd8cb6e5`; it holds for
+  both now. (5) the `scope` comment (same commit). (1) sweep coverage: `/work/bench/160-9/sweep/sweep-q.sh` adds, per
+  root, `writes-table:<t>` / `publishes-event:<e>` for every table the root writes and every event it publishes in
+  the base `--routine` output (name = the display, or the id's last segment when the display is the id): 281 cases
+  (219 tables, 62 events), answers 261 yes / 20 no; base default == head `--single-app` (dev `ca542dde`) on all
+  1,686 files. (2) T2-B1 reaching the claim and (3) prove T8 corrupt break: rows below.
+- ~16:10: Task 4 `90b92578` (inventory-only on a tree with no raw facts), dev profile only (hold). T18: cli-b B0 /
+  snapshot / diff differentials and `cli_snapshot_schema4` green with no regen after the split. Task 3 review items
+  folded in: `PathBoundary.kind` is an enum; the dependency-only `--routine` test; the `--single-app` help text naming
+  `--inventory-only` is now true. T8 inventory golden minted from the base binary (path-independent). T23: the dev
+  head (`/work/bench/160-9/head-dev/alsem-t4`) `--single-app` sweep equals the Task 3 head on all 24,705 files and the
+  base on all 651 inventory files. Gates: task-affected 4184/4184, check-goldens rc 0 (1158/1158, no golden moved),
+  `ci-steps task` rc 0 (106.5 s), check-diff `reasons: []` (master `70c3b743`). Not done: 3.8 (CDO), any release
+  build.
+- ~17:00: plan 3.8, the CDO early memory read (hold lifted for memory only; a `sonnet` runner, shared slot, one
+  process at a time, release-fast head `90b92578` built under its own CARGO_TARGET_DIR, sha256 `c91e893c…d0e0a`,
+  `/work/bench/160-9/head-bin/`; R = `IssueReminder`, the `d` root with the most visited routines (19,284), stable id
+  in `/work/bench/160-9/prove-routine.txt`; every wall time void: contended). Bound 1.08 × P_a = 3,411,638 KiB
+  (P_a 3,158,924 KiB, step 6 numbers file):
+
+  | run | peak KiB | output | note |
+  |---|---|---|---|
+  | head `--routine R` json, cross-app | 3,718,888 | 307,264,898 B (1 block, totalClassifications 3908) | **MISS** (+9.0 %) |
+  | same, `ALSEM_RETAINED_CENSUS=1` | 3,712,156 | same | `view.output cells= rel_strong=1 tree=0`; `witness.non_primary_members=0` |
+  | head `--single-app` json | 751,468 | 2,201,845 B | == base except the `schemaVersion` line |
+  | base `1134bed1` default (single-app) json | 746,048 | 2,201,845 B | |
+  | head cross-app, `--format human` | 3,161,736 | 40,401,340 B | under the bound |
+  | head cross-app, json `--witness false` | 3,170,732 | 6,865,332 B | under the bound |
+
+  Reading: F1 is clean (nothing alive at output). The tree read and the query result fit (human and witness-free
+  runs are under the bound); the ~550 MB over the bound is the json projection of a 307 MB document
+  (`project_fingerprint_query_full` builds one `serde_json::Value` of the whole document beside the result, then
+  the string). F2 trims the tree-read side (`fingerprint_query`'s indexes), so it cannot close this miss; F3 would
+  ship `--routine` single-app. NOT applied: reported to the coordinator for a decision (a projection-side fix is
+  not a pre-stated fallback).
+- ~17:20: Task 5 `1726e678` (D9) + Task 4 review items; master moved to `f40087d5` (#265): rebased clean. Rebased
+  SHAs: T1 `e0d82222`, T2 `b3c4d5ca`, T3 `88b1e7de`, #264 fix `c7c1fd1d`, T2 review `a2d2adc7`, T4 `b2e551c6`, T5
+  `402745a8`. D9 deviation: `cli_snapshot_schema4::opaque_gap_of_an_app_with_source_fires` hand-states a source app
+  to force F21's assertion; D9 removes its precondition by construction, so it is rewritten as
+  `..._is_per_routine` (spec said that file stays unchanged; this one test cannot). Task 4 review: T18 now exists
+  (goldens minted by the BASE code, `70c3b743`, via a scratch test in the base worktree, removed after; DD cross-app
+  and single-app, R5B cross-app; path-independent); a cross-app inventory content golden on the two-`OnRun`
+  fixture, triaged by hand: rootClassifications / coverage / routineInventory = the 5 primary routines only (the
+  classified dependency `Dep Runner.OnRun` absent); dependency identities = exactly those primary rows reference
+  (`Dep Lib`, `OnDepEvent`, `Outer` via RaiseDep / HandleInWs / CallChain; `Dep Runner` + its `OnRun` via
+  `Ws Runner.OnRun`'s `Codeunit.Run`; table 18 via TouchCust; `Inner`, `Dep Sub`, `HandleDep` absent); apps = primary
+  + XBase; the stale doc fixed. Gates on `402745a8`: check-goldens rc 0 (1163/1163, no golden moved), `ci-steps
+  task` rc 0 (85.2 s), check-diff `reasons: []` (master `f40087d5`).
+- ~18:10: **the B1q fix** `726d355b` (coordinator's decision: fix the root cause, not F3): the `--routine` json
+  projection streams (`Doc`: a normalized small value, a sorted null-dropping map, or a sequence built element by
+  element, serialized with serde_json's pretty formatter); no `serde_json::Value` of the whole document. Not a design
+  change (no spec round). Bytes: cli-b fingerprint goldens green with no regen; T23 sweep (dev
+  `/work/bench/160-9/head-dev/alsem-stream`, `--single-app`) == the Task 4 head on all 24,705 files; CDO
+  cross-app `fingerprint --routine R --format json`: 307,264,898 B, `cmp`-identical to `90b92578`'s. **B1q before
+  / after: 3,718,888 KiB (MISS) -> 3,158,988 KiB (pass; bound 3,411,638, 7.4 % under)** (release-fast `726d355b`,
+  sha256 `d6a60232…f0d33add`, one process, wall void: contended). Change: 322 insertions / 109 deletions in
+  `fingerprint_query.rs`, ~100 of them tests. Stated limit: the projection's USE of `Doc` (facts as a streamed
+  sequence) is pinned by the CDO peak, not by a unit test; the unit tests pin `Doc`'s bytes and its streaming.
+- ~18:30: Task 6 `16a48166` (CHANGELOG `Changed` and `Fixed`, `compose_snapshot`'s readers, 9A-6's label; Task 3
+  review item 4: the `--witness 0` / no-path evidence is the fact's own operation, stated as intended). `ci-steps
+  task` rc 0 (70.3 s), check-diff `reasons: []` (master `f40087d5`). Stopped before Task 7 (its bench waits for
+  #289).
+- ~19:20: **final panel round 1** `7ca8f996` (sol: 2 important; Opus: ship, 7 minor; code review: 8). Register
+  round "9 final r1", F9-S1..S2, F9-O1..O7, F9-C1..C8: 16 fixed, F9-C4 refuted (`--strict` needs the run's
+  diagnostics, and the run reads the one composition the tree reads; stated in `run_routine_query`'s doc).
+  Duplicates merged: O2 = S1, O1 = C1, O5 with C3. Proofs: 7 rows under "Discrimination proofs". Gates on
+  `7ca8f996`: `ci-steps task` rc 0 (124.3 s), check-goldens rc 0 (no golden moved), lib + cli 3218/3218,
+  check-diff `reasons: []` (master `f40087d5`). Byte identity against `726d355b` (dev `/work/bench/160-9/r1/
+  alsem-r1-dev` vs release-fast `alsem-726d`): T23 sweep default 0 / 24,705 differ, `--single-app` 0 / 24,705;
+  question sweep 0 / 1,687 each. CDO cross-app, release-fast `7ca8f996` (sha256 `e528347e…a2265f`) vs `726d355b`,
+  one process each: `fingerprint --routine R --format json` 307,264,898 B `cmp`-identical to `fq-x2.json`;
+  prove json and human, `--inventory-only` (32,147,319 B) and a failing selector (exit 2, 792 B) all
+  identical. **B1q peak re-read: 3,162,648 KiB** (bound 3,411,638; was 3,158,988 at `726d355b`; within noise,
+  so O3's earlier view drop does not move the peak, which is not at projection time). The failing-selector run
+  peaks at 3,153,632 KiB with no tree against 3,153,376 with one: the peak is the model and det build, not the
+  tree, so O4 saves time, not peak. Wall times void (contended).
+- ~19:45: final panel round 2 converged (all 17 accepted by both, ship). Master moved to `b2c73d4f` (#271) after
+  base `f40087d5`; not rebased (coordinator rebases).
+- ~21:10: **Task 7** on `7ca8f996` vs parent `f40087d5` (release-fast, clean detached worktrees
+  `/work/bench/160-9/final/{parent,head}-wt`; alsem sha256 `53f0dadb…` / `59dfccbb…`), one process at a time:
+  - Part 2 bounds (median of 3, KiB): D parent `a` 3,150,128 / head 3,162,204 (+0.38 %, pass); B2 `pv` 3,160,284,
+    B1q `fq` 3,164,904, B1i `fi` 3,165,108 (limit 3,244,631, pass); B1s `fp` 1,466,052 / 1,472,272 (pass); B3s
+    `df` 1,628,228 / 1,478,352 (pass, −9.2 %, not attributed); ceiling max 3,189,692. F1-F13: none fired (F6 not
+    needed). Walls void under OD-4 in all 3 rounds (external load 11.94 / 120.60 / 103.36) and affected by #289.
+  - Part 1: histogram identical; analyze SARIF 4/4 identical; single-app `pv` (json, human), `fi` identical, `fq`
+    only `schemaVersion`; `fp` json, cbor.gz, `df` identical. Census: `witness.non_primary_members=0` and
+    `view.output cells= rel_strong=1 tree=0` for `pv`, `fq`, `fi`.
+  - Triage (spec §3): `pv` yes → yes (evidence a `Base Application.OnRun` COMMIT group); `fq` 0 of 80 primary
+    fact keys lost (2 inherited facts' `via` call → object-run); `fi` 0 rows lost, apps 1 → 9, +742 dependency
+    identities, coverage moves explained (392 direct partial → complete were `external-target` only; 2
+    inherited complete → partial enter dependency `interface-open-world`). No defect.
+  - 7.5 T23 sweep (parent default vs head `--single-app`): 813 / 24,705 differ, all `fq` (798 `schemaVersion`,
+    15 `mayCommit` no → unknown with inherited `partial`); question sweep 0 / 1,687.
+  - 7.6 `cdo-gate` (executor, `bash scripts/cdo-gate`): rc 0, 2,721 passed, 469.5 s.
+  - Numbers file `docs/measurements/2026-10-24-issue-160-step9.md`: `4074f171` (its gate line was a placeholder by
+    a failed Edit) and `ded71251` (fixes that line; no amend). check-diff `reasons: []` against base `f40087d5`;
+    against `origin/master` it lists only #271's `.agent/issue-271/*` files, which master gained after the base.
+
 # Issue #160 ledger: attempt 7 on server1 (epic step 6: one cone graph, one scoped witness pass)
 
 Attempt 9 (carried over, 2026-10-24 07:27 UTC): run `20261024-072718-f20fa1`, branch
@@ -372,6 +584,73 @@ fallback F11. Re-cite every **[#220]** line after #220 merges, before the plan.
 | F1-O4 `a_multi_target_boundary_names_every_entered_routine` | red first (no per-identity display map) | FAIL `XDep.DepB` ≠ `XDep.DepA, XDep.DepB` | pass with fix | `66f4cd5a` |
 | F1-C3 `a_det_fill_after_a_raw_only_composition_names_the_rule` | red first (generic refill text) | FAIL "Caps released; a View fills each cell once" | pass with fix | `a25d0cad` |
 | note (final r1) | stated limit: F1-S2's prefix trim (pop of the raising call hop) is not pinned (intra labels read the owner group); the 502b1c8a body's "empty either way" is wrong, without the pop the chain holds one link | — | — | `502b1c8a` |
+| step 9 1.2 `build_with_no_roots_config_reaches_both_arms` | red first: `build_with` absent (E0599, compile) | FAIL (compile) | pass with 1.1 | `ac447e3c` |
+| step 9 1.2 same | literal `false` in `build_cross_app_base_with`'s `assemble_and_resolve_cross_app_program` call | FAIL at "cross-app: --no-roots-config leaves no config_entry_id" (left 1, right 0); single-app half passed first | pass after revert (re-read line 3825) | `ac447e3c` |
+| step 9 T20 `tree_read_lifecycle` | red first: `TreeRead`, `Cell::TreeRead`, `take_tree_read`, `census_output_line` absent (compile) | FAIL (compile) | pass with 1.3-1.4 | `ac447e3c` |
+| step 9 T20 same | B1: `*tree = None` skipped for `TreeRead::FingerprintQuery` | FAIL at (c) "the FingerprintQuery tree died inside prepare" (as named) | pass after revert | `ac447e3c` |
+| step 9 T20 same | B2: `Cell::bit` gives `TreeRead` the bit of `Det` | FAIL at (f) "every Cell bit is distinct" (left 8, right 9) (as named) | pass after revert | `ac447e3c` |
+| step 9 T20 (review item 2) | `release_all_but` releases `TreeRead` without the `is_some()` guard | FAIL at "(b) an unfilled TreeRead is not released, so no rel:TreeRead trace" (left 256) | pass after revert | `a95b95d0` |
+| step 9 Task 2 red | prove forced single-app (`single_app \|\| true`, the base's universe) | FAIL T1 (precondition: Outer → Work row), T8 (precondition: universes differ), T19 (precondition: coverage), T24 (answer `unknown`); T7, T12, T14, T15, T22, T16 pass (not universe tests) | pass after revert | `a95b95d0` |
+| step 9 T1 `prove_two_hop_not_proven` | B1: `&c[..0]` as the tree's dependency calls in `prepare` | FAIL at the PRECONDITION "the Outer → Work row" (digest reads the same ledger), not the named callsite assertion; direct run of the broken binary: blockers `analysis-gap`, `coverage-incomplete` only (callsite gone) | pass after revert | `a95b95d0` |
+| step 9 T1 same | B2: `gaps_in_cone: 0 *` in `digest_effects` | FAIL at "analysis-gap" (as named) | pass after revert | `a95b95d0` |
+| step 9 T2 `prove_one_hop_ledger_and_gap` (lib) | B1: `if false && into_unfetched` (`snapshot.rs:2599`) | FAIL at the PRECONDITION "CallWrite → Write is unfetched-dependency" (left `resolved`), not the named claim | pass after revert | `a95b95d0` |
+| step 9 T2 same | B2: `gaps_in_cone: 0 *` | FAIL at the blocker set (analysis-gap gone) (as named) | pass after revert | `a95b95d0` |
+| step 9 T12 `abi_only_target_blocks_prove` | skip `external` rows in `unresolved_cone`'s harvest | FAIL at the PRECONDITION "the row is external" (digest reads the same harvest); direct run: blockers `coverage-incomplete` only, answer `unknown` (as the spec states) | pass after revert | `a95b95d0` |
+| step 9 T19 `prove_commits_on_success_path_through_boundary_is_unknown` | boundary groups get their computed path conditionality (`digest.rs:3935`) | FAIL: answer `yes` (`unconditional-on-success`) (as named) | pass after revert | `a95b95d0` |
+| step 9 T24 `prove_matches_a_group_resource_beyond_ten` | `effect_resource_matches` on `detail` only (`\|\| false &&`) | FAIL: answer `no` (a false `no`, the S9-1 shape) | pass after revert | `a95b95d0` |
+| step 9 T15 `prove_cone_truncation_blocks` | `cone_truncated: false` (`prove.rs:175`) | FAIL at `coneTruncated` (answer `no`) (as named) | pass after revert | `a95b95d0` |
+| step 9 T14 `diagnostics_channel_prove` | the run's diagnostics replaced by `[]` in prove | FAIL at the version-warning assertion (as named) | pass after revert | `a95b95d0` |
+| step 9 T7 `no_dependency_parity_prove` | B1: a cross-app-only diagnostic appended to the envelope | FAIL at the failures assertion (every root) (as named) | pass after revert | `a95b95d0` |
+| step 9 T8 `single_app_flag_reaches_prove` | the flag ignored (`single_app && false`) | FAIL at the PRECONDITION "the universes differ" (both runs cross-app) | pass after revert | `a95b95d0` |
+| step 9 T22 `no_app_json_keeps_its_error_prove` | the build error remapped to `prove: workspace did not resolve` (the spec's break, a dummy model id, changes the same line; this form needs no fake id) | FAIL at the error-line assertion | pass after revert | `a95b95d0` |
+| step 9 T16 `prove`, `prove_single_app`, `prove_no_root` | prove also composes the cut (`compose_snapshot` after the run: "left on the cut") | FAIL all three (bcg 2, cone 2, scc 3, pd 2, snap 2, witness 2) | pass after revert | `a95b95d0` |
+| step 9 T16 `prove_no_root` | `digest_plan(.., tests: true)` (a tree with no root) | FAIL at `build.snapshot` 0 | pass after revert | `a95b95d0` |
+| step 9 T17 `prove_scoped_equals_unscoped` (lib) | `.take(0)` in `WitnessRequest::Roots`' scope (no subject) | FAIL at the failures assertion (every root with transitive effects, both universes) | pass after revert | `a95b95d0` |
+| step 9 Task 3 red | `--routine` path forced single-app (`opts.single_app \|\| true`) | FAIL T3 (claim: inherited modify), T25 call / two-boundary / witness-0 (precondition: no inherited insert), T26 (precondition: direct coverage partial), T8 (precondition: universes differ); T5, T6, T7, T13, T14, T22 pass (not universe tests) | pass after revert | `6f7a24ac` |
+| step 9 T3 `fingerprint_routine_inherits_through_dependency` | the pool never filled (`m.len() == 99`) | FAIL at "an inherited modify" (production pool pinned) | pass after revert | `6f7a24ac` |
+| step 9 T5 `fingerprint_selector_primary_only` | selector index with `None` (`primary_guid.and(None)`) | FAIL: exit 2, `selector-ambiguous` (as named; T6 also fails there) | pass after revert | `6f7a24ac` |
+| step 9 T6 `fingerprint_total_counts_primary_roots` | count every classification (`\|\| true`) | FAIL: total 7 vs 5 (TWO higher: the dependency OnRun and one more dependency classification; spec said one) | pass after revert | `6f7a24ac` |
+| step 9 T21 `fingerprint_wide_query_stays_single_app` | every query form to the new path | FAIL at `build.combined_graph` 1 vs 2 (human, no flag) (as named) | pass after revert | `6f7a24ac` |
+| step 9 T16 `fingerprint_query`, `fingerprint_query_single_app` | `--routine` left on the cut (`if false && ..`) | FAIL both: `combined_graph` 2 vs 1 | pass after revert | `6f7a24ac` |
+| step 9 T25 call arm | B1: the adapter's `boundary: idx.boundary.and(None)` | FAIL at "the witness never reaches Inner" (hops reach `Inner`) (as named); the two-boundary arm fails too | pass after revert | `6f7a24ac` |
+| step 9 T25 two-boundary arm | B2: the first path's boundary for every path (`ends.get(i * 0)`, `paths[0]`'s terminal) | FAIL at "each path its own call boundary" (as named) | pass after revert | `6f7a24ac` |
+| step 9 T25 trigger/event (lib `fingerprint_witness_boundary_trigger_and_event`) | B3: `path_boundary` for `cs:` only | FAIL at the trigger arm (no boundary); second run with only `ev:` dropped: FAIL at the event arm | pass after revert | `6f7a24ac` |
+| step 9 T25 two-boundary arm | B4: the evidence picked from a `HashMap` of boundaries, 5 runs | FAIL 5/5: 4 at "the evidence is the first path's boundary", 1 at "two runs are byte-equal" | pass after revert | `6f7a24ac` |
+| step 9 T25 `--witness 0` arm | B5: no evidence with no path (`.filter(\|_\| false)`) | FAIL (as named) | pass after revert | `6f7a24ac` |
+| step 9 T26 `fingerprint_may_commit_uses_inherited_coverage` | `direct_status` always (`include_inherited && false`) | FAIL: `no` vs `unknown` (as named) | pass after revert | `6f7a24ac` |
+| step 9 T17 `fingerprint_query_scoped_equals_unscoped` (lib) | `.take(0)` in `Roots`' scope | first FAIL at the precondition (inherited counted on the scoped side); counting moved to the unscoped side, then FAIL at the failures assertion | pass after revert | `6f7a24ac` |
+| step 9 T7 `no_dependency_parity_fingerprint_routine` | B1: a cross-app-only analyzer diagnostic on the new path | FAIL at the failures assertion | pass after revert | `6f7a24ac` |
+| step 9 T8 `single_app_flag_reaches_fingerprint_routine` | the flag ignored (`single_app && false`) | FAIL at the precondition "the universes differ" | pass after revert | `6f7a24ac` |
+| step 9 T8 same (Task 2 review item 3) | the single-app run's diagnostics cleared (universes still differ) | FAIL at "json: --single-app != the base's default" (golden equality) | pass after revert | `6f7a24ac` |
+| step 9 T13 `fingerprint_no_roots_config_cross_app_routine` | `build_with(.., false, ..)` on the new path | FAIL at "the AST kinds only" (as named) | pass after revert | `6f7a24ac` |
+| step 9 T14 `diagnostics_channel_fingerprint_routine` | the run's diagnostics dropped (`take(0)`) on the new path | FAIL (as named) | pass after revert | `6f7a24ac` |
+| step 9 T22 `no_app_json_keeps_its_error_fingerprint_routine` | the new path's error remapped | FAIL at the error line | pass after revert | `6f7a24ac` |
+| step 9 T2 `prove_one_hop_ledger_and_gap` (review item 2) | skip `unfetched-dependency` rows in `unresolved_cone`'s harvest (the tree's ledger, the precondition, unchanged) | FAIL at the CLAIM: blockers lack `unresolved-callsite: Lib.Write in CallWrite` | pass after revert | `dd8cb6e5` |
+| step 9 T8 `single_app_flag_reaches_prove` (review item 3) | the single-app run's diagnostics replaced by `[]` (universes still differ) | FAIL at "json: --single-app != the base's default" (golden equality) | pass after revert | `dd8cb6e5` |
+| step 9 `prove_with_no_root_releases_as_digest_does` | red first = the pre-fix code (no `release(L4)`/`release(Effects)` in the dummy branch) | FAIL: sequence lacks `rel:L4`, `rel:Effects` | pass with the fix | `dd8cb6e5` |
+| step 9 Task 4 red | inventory left on the cut (`if false && opts.inventory_only`; the old B0 inventory branch is deleted, so it falls to the full snapshot) | FAIL T11 (lib), T8, T13, both T16 inventory rows, 3 `cli_p1_inventory` tests; T7, T22 pass (not universe tests) | pass after revert | `90b92578` |
+| step 9 T11 `inventory_reads_a_tree_with_no_raw_facts` (lib) | `Roots(∅)`'s scope = every primary routine (in `WitnessRequest::scope`; the test's expected tree is hand-stated `Subjects(∅)`) | FAIL at the envelope equality; the counter row fails at `witness_pass` 1 | pass after revert | `90b92578` |
+| step 9 T7 `no_dependency_parity_inventory_only` | B1: a cross-app-only analyzer diagnostic | FAIL | pass after revert | `90b92578` |
+| step 9 T7 same | B2: `filter_by_class` drops the first primary `rootClassifications` row | FAIL | pass after revert | `90b92578` |
+| step 9 T8 `single_app_flag_reaches_inventory_only` | the flag ignored | FAIL at the precondition "the universes differ" | pass after revert | `90b92578` |
+| step 9 T8 same | the single-app inventory drops `coverage` | FAIL at "--single-app != the base's default" | pass after revert | `90b92578` |
+| step 9 T13 `inventory_only_no_roots_config_cross_app` | `build_with(.., false, ..)` on the inventory path | FAIL at the `configEntryId` count | pass after revert | `90b92578` |
+| step 9 T22 `no_app_json_keeps_its_error_inventory_only` | the error remapped | FAIL | pass after revert | `90b92578` |
+| step 9 T16 `fingerprint_inventory_only`, `_single_app` | inventory left on the cut | FAIL both: `combined_graph` 2 vs 1 | pass after revert | `90b92578` |
+| step 9 `fingerprint_selector_on_a_dependency_only_routine_is_not_found` | selector index with `None` | FAIL: exit 0 vs 2 | pass after revert | `90b92578` |
+| step 9 T27 `source_app_bodyless_row_gets_body_unavailable_gap` (lib) | red first = D9's filter removed (`true \|\| source_less(guid)`, the pre-D9 rule) | FAIL at "body-unavailable for Write" (an app-level symbol-only-boundary instead); T2 fails too; `cli_snapshot_schema4::opaque_gap_of_an_app_with_source_is_per_routine` fails with F21's debug assertion | pass with D9 | `1726e678` |
+| step 9 T18 `full_snapshot_split_is_byte_identical` | an empty permission array from `compose_full_snapshot` | first FAIL at the precondition (it read the head's own output); precondition moved onto the base golden, then FAIL at "full-snapshot.dd.cross-app: json" | pass after revert | `1726e678` |
+| step 9 `cross_app_inventory_matches_its_golden` | `filter_by_class` keeps every root classification (`\|\| true`) | FAIL at the golden equality (the dependency `OnRun` leaks) | pass after revert | `1726e678` |
+| step 9 B1q `doc_serializes_as_the_normalized_value` (lib) | `Doc::Map` without its key sort | FAIL | pass after revert | `726d355b` |
+| step 9 B1q same | `Doc::Map` without its null drop | FAIL | pass after revert | `726d355b` |
+| step 9 B1q `doc_builds_seq_items_while_writing` (lib) | `Doc::Seq` collects every element before writing (the old whole-array shape) | FAIL; the cli-b fingerprint byte tests PASS under the same break (they pin bytes, not memory), as expected | pass after revert | `726d355b` |
+| step 9 final r1 F9-S1 `query_projection_streams_its_facts` (lib, through `project_fingerprint_query_full`) | `families_doc` collects a resource's fact JSON (`Vec<Value>`) before its `Doc::Seq` | FAIL: `fact 1 is built after fact 0 is written: [641, 641]` | pass after revert (lib+cli 3218/3218; `ci-steps task` rc 0) | `7ca8f996` |
+| step 9 final r1 F9-S2 `routine_query_releases_its_tree_before_det` (cli, shipped binary's trace, both universes) | `prepare`'s `*tree = None; note_release(Tree)` moved after the det fill | FAIL: `["snap","rel:Raw","ctx","rel:Tree",…]` ("the tree outlives det") | pass after revert | `7ca8f996` |
+| step 9 final r1 F9-C1 `only_proves_plan_counts_the_gaps_in_its_cone` (lib, the view's effects) | `true` in place of `plan.gaps_in_cone` at `prepare`'s `digest_effects` call | FAIL: digest arm `Some(0)` vs `None` | pass after revert | `7ca8f996` |
+| step 9 final r1 F9-O4 `failing_routine_selector_composes_no_tree` (cli) | a failing selector sent down the tree path (`resolution.or_else(\|_\| Ok(empty pool))`) | FAIL: `(Some(0), 1, 1)` vs `(Some(2), 0, 1)` | pass after revert | `7ca8f996` |
+| step 9 final r1 F9-O4 `fingerprint_query_scoped_equals_unscoped`'s count arm (lib, every r0 dir + 4 dependency fixtures, both universes) | `selector_failure_result` without its primary filter (`\|\| true`) | FAIL: 7 cross-app dirs (e.g. `ws-cross-object-chain` 35 off the model vs 25 off the tree) | pass after revert | `7ca8f996` |
+| step 9 final r1 F9-C5 `selector_ambiguous_candidates_are_deterministic` (lib, now on `resolve_routine_selectors`) | candidates `.rev()` | FAIL | pass after revert | `7ca8f996` |
+| step 9 final r1 F9-C8 `tree_read_lifecycle` (b), `release_all_but_keeps_only_the_named_cells`, `views_release_their_cells_before_the_next_build` | `Cell::TreeRead` dropped from `Cell::ALL` (no special case) | FAIL all three: lifecycle at "(b) the untaken result is dropped" (line 1502; the line-865 panic is (a)'s caught one), the released mask, the policy/fingerprint/digest/prove/events sequences | pass after revert | `7ca8f996` |
 
 ## Findings register summary
 
@@ -434,7 +713,7 @@ within 100x of its threshold, so no void check can flip it.
 ## Discoveries
 
 ```json
-[{"subsystem": "l5 / digest (rule-B boundary groups)", "locator": "src/engine/l5/digest.rs boundary group conditionality (spec §14.3.5, A2-03)", "symptom": "Every rule-B boundary group is conditionality `unknown`, even when the boundary call itself sits behind a primary-side guard. On CDO `d` the parent graded 18 such effects (guarded-by-IsHandled 14, error-path 4; Base Application tables); on the cone graph all 998 effects are `unknown`. Operator accepted this for #160 (2026-10-23) and asked for this follow-up. Boundary occurrences also stay in the MAY pending-write check: a boundary write dominating an IO/UI op yields WRITE_PENDING_AT_*, a dominance test on a write the callee only may perform.", "kind": "enhancement", "origin_issue": 160, "pre_existing": false, "reproducer": "alsem digest <CDO> --file src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al --format json: parent (5b8d198f) vs #160 step 6 head; jq conditionality histogram.", "capability": "a group inherits the conditionality its primary prefix proves (guarded-by-IsHandled, error-path, conditional) and stays unknown otherwise; never a must-guarantee from inside the dependency", "acceptance": "the 18 CDO `d` effects regain their parent grade as groups; a fixture with an IsHandled-guarded boundary call pins it (break: force unknown); no group ever reports unconditional-on-success"}]
+[{"subsystem": "l5 / digest (rule-B boundary groups)", "locator": "src/engine/l5/digest.rs boundary group conditionality (spec §14.3.5, A2-03)", "symptom": "Every rule-B boundary group is conditionality `unknown`, even when the boundary call itself sits behind a primary-side guard. On CDO `d` the parent graded 18 such effects (guarded-by-IsHandled 14, error-path 4; Base Application tables); on the cone graph all 998 effects are `unknown`. Operator accepted this for #160 (2026-10-23) and asked for this follow-up. Boundary occurrences also stay in the MAY pending-write check: a boundary write dominating an IO/UI op yields WRITE_PENDING_AT_*, a dominance test on a write the callee only may perform.", "kind": "enhancement", "origin_issue": 160, "pre_existing": false, "reproducer": "alsem digest <CDO> --file src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al --format json: parent (5b8d198f) vs #160 step 6 head; jq conditionality histogram.", "capability": "a group inherits the conditionality its primary prefix proves (guarded-by-IsHandled, error-path, conditional) and stays unknown otherwise; never a must-guarantee from inside the dependency", "acceptance": "the 18 CDO `d` effects regain their parent grade as groups; a fixture with an IsHandled-guarded boundary call pins it (break: force unknown); no group ever reports unconditional-on-success"}, {"subsystem": "l5 / fingerprint B0 and gate/diff (cross-app)", "locator": "src/engine/l5/fingerprint_cli.rs B0 path (compose_full_snapshot with SnapshotUniverse::SingleApp) and src/engine/gate/diff/cli.rs load_snapshot_from_workspace (#160 step 9 spec, OD-1 = S')", "symptom": "Epic #160 row 9 is delivered for prove, fingerprint --routine and fingerprint --inventory-only only. Fingerprint's full snapshot (json with no query flag, cbor, cbor.gz, --shard), the query forms with no --routine (human with no flag, --roots alone) and diff stay single-app. Measured 2026-10-24 (/work/bench/160-9/probe-out/OD1-RESULT.md): cross-app B0 on CDO holds 8,483,157 capability facts and was OOM-killed by the shared 32 GiB cgroup at >= 29,113,888 KiB before it serialized (single-app: 101,776 facts, 1.47 GB peak, 130 MB JSON). The pre-draft's D9 fold does NOT help: folding dependency-carrier facts by (subject, op, resourceKind, resourceId, dispatch) keeps 97.65 % of the facts (>= 97.48 % under any carrier attribution), because the key holds the subject and the facts are already nearly distinct per subject. diff ws ws cross-app (P3) was not run: it would compose two such trees.", "kind": "enhancement", "origin_issue": 160, "pre_existing": false, "reproducer": "On the #160 step 9 head: alsem fingerprint <CDO> --format json reports analysisUniverse single-app while alsem fingerprint <CDO> --routine R reads the cross-app view. The probe patch /work/bench/160-9/probe-out/p2.patch reproduces the OOM (run it alone; it needs more than 29 GB).", "capability": "fingerprint B0 (every format and --shard), the wide query forms and diff build the cross-app view by default, with --single-app restoring today's bytes, within a stated peak bound that fits beside other work in a 32 GiB cgroup; cli-b B0 headers read cross-app; the dependency-shard output move and fixture (c) (dependency-mediated capability-gained in diff) are delivered", "acceptance": "a design that does not depend on a subject-keyed fold (for example a snapshot streamed from the composition, or a fact form that shares dependency-side facts across subjects), with a measured CDO peak and output size before the claim; fixture (c) passes with a discrimination break; no-dependency parity; --single-app byte-identical"}]
 ```
 
 ## Not delivered

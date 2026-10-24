@@ -31,8 +31,7 @@ use crate::engine::ids::{
     locale_compare, object_id_app_guid, object_signature_fingerprint, sha256_hex,
 };
 use crate::engine::l4::capability_cone::{
-    CapabilityFact, R3a3SourceBase, R3a5CrossAppBase, build_r3a3_source_only_base,
-    routine_to_stable_of,
+    CapabilityFact, R3a5CrossAppBase, build_r3a3_source_only_base, routine_to_stable_of,
 };
 use crate::engine::l5::snapshot::{
     SnapshotAnalysisGap, compose_snapshot_from_base, stable_routine_id,
@@ -68,7 +67,9 @@ pub struct FullSnapshotOptions<'a> {
     /// (sets `inputsMetadata.rootsConfigIgnored`). Pass false for the cli-b dump.
     pub roots_config_ignored: bool,
     /// #220 (spec §4.3): which model the snapshot describes
-    /// (`analysisUniverse`). Production callers pass `SingleApp` until step 9.
+    /// (`analysisUniverse`). Since #160 step 9 the cross-app inventory
+    /// (`--inventory-only`) passes `SnapshotUniverse::of(target)`; B0 and
+    /// `diff` still pass `SingleApp`.
     pub universe: SnapshotUniverse<'a>,
 }
 
@@ -135,6 +136,54 @@ fn snapshot_rows(inputs: &crate::program::inputs::InputSet) -> &[SnapshotInput] 
 }
 
 pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> CborValue {
+    // The consumed-core (identities, capabilityFacts, typedEdges, …, eventDeclarations,
+    // rootClassifications, [routineOrderFrames]).
+    // One base (cone + producer solve) for the core and the permission facts.
+    let base = build_r3a3_source_only_base(resolved);
+    // The composer's own copy: filtering it leaves every other in-memory
+    // snapshot unfiltered (I8).
+    // D9 (#160 step 9): a cross-app universe names its source-less apps.
+    let source_less = match &opts.universe {
+        SnapshotUniverse::CrossApp(u) => Some(crate::engine::l5::snapshot::source_less_apps(
+            &u.base.dependency_apps,
+        )),
+        SnapshotUniverse::SingleApp => None,
+    };
+    let core = compose_snapshot_from_base(resolved, &base, source_less.as_ref());
+    let permission_facts = derive_permissions(resolved, &base);
+    drop(base);
+    CborValue::Map(assemble_full_snapshot(
+        resolved,
+        core,
+        permission_facts,
+        opts,
+        SnapshotKeys::All,
+    ))
+}
+
+/// Which keys [`assemble_full_snapshot`] converts to `CborValue` (#160 step 9
+/// D4): all of them (B0, `diff`), or only the five `build_inventory_envelope`
+/// reads (`analysisUniverse`, `apps`, `identities`, `coverage`,
+/// `rootClassifications`), so the other keys are not built to be thrown away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SnapshotKeys {
+    All,
+    Inventory,
+}
+
+/// The assembly half of [`compose_full_snapshot`] (#160 step 9 D4): from a
+/// composed snapshot (`core`, the cut's or a tree) and its permission facts,
+/// the contracts, schema, reachable gaps, key classes, apps and the map in its
+/// literal key order. `reachable_gaps` and `filter_by_class` read only the
+/// model's `routine_to_stable_of`, the map the cut base's own field is built
+/// with, so either composition can come in.
+pub(crate) fn assemble_full_snapshot(
+    resolved: &Model,
+    mut core: crate::engine::l5::snapshot::CapabilitySnapshot,
+    permission_facts: CborValue,
+    opts: &FullSnapshotOptions,
+    keys: SnapshotKeys,
+) -> IndexMap<String, CborValue> {
     // O18: two revisions of one workspace share routine ids, so only a pointer
     // check proves the model and the universe come from ONE base.
     if let SnapshotUniverse::CrossApp(u) = &opts.universe {
@@ -157,13 +206,33 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
             "compose_full_snapshot: SingleApp with a model that holds dependency rows"
         );
     }
-    // The consumed-core (identities, capabilityFacts, typedEdges, …, eventDeclarations,
-    // rootClassifications, [routineOrderFrames]).
-    // One base (cone + producer solve) for the core and the permission facts.
-    let base = build_r3a3_source_only_base(resolved);
-    // The composer's own copy: filtering it leaves every other in-memory
-    // snapshot unfiltered (I8).
-    let mut core = compose_snapshot_from_base(resolved, &base);
+    // #220 D2/D4: cross-app, gaps by reach, then the key classes on the typed
+    // rows, before CBOR (O7). Single-app every row is primary (P3).
+    let mut referenced_apps = HashSet::new();
+    if let SnapshotUniverse::CrossApp(u) = &opts.universe {
+        let routine_to_stable = routine_to_stable_of(&resolved.workspace);
+        core.analysis_gaps = reachable_gaps(&core.analysis_gaps, u.base, &routine_to_stable);
+        // No primary app: every row is primary, nothing to filter.
+        if let Some(p) = primary_app_guid(resolved) {
+            referenced_apps = filter_by_class(&mut core, &permission_facts, p, &routine_to_stable);
+        }
+    }
+    let apps = project_apps(resolved, &core.identities, &referenced_apps, &opts.universe);
+    if keys == SnapshotKeys::Inventory {
+        let mut m: IndexMap<String, CborValue> = IndexMap::new();
+        m.insert(
+            "analysisUniverse".into(),
+            CborValue::Text(opts.universe.as_str().into()),
+        );
+        m.insert("apps".into(), apps);
+        m.insert("identities".into(), to_cbor_value(&core.identities));
+        m.insert("coverage".into(), to_cbor_value(&core.coverage));
+        m.insert(
+            "rootClassifications".into(),
+            to_cbor_value(&core.root_classifications),
+        );
+        return m;
+    }
 
     let inputs = snapshot_rows(opts.inputs);
     let workspace_fingerprint = compute_workspace_fingerprint(inputs, opts.driver_version);
@@ -171,20 +240,6 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
     // The three model-derived Inventory keys skip dependency rows by role.
     let contract_facts = derive_contracts(resolved);
     let schema_facts = derive_schema(resolved);
-    let permission_facts = derive_permissions(resolved, &base);
-
-    // #220 D2/D4: cross-app, gaps by reach, then the key classes on the typed
-    // rows, before CBOR (O7). Single-app every row is primary (P3).
-    let mut referenced_apps = HashSet::new();
-    if let SnapshotUniverse::CrossApp(u) = &opts.universe {
-        core.analysis_gaps = reachable_gaps(&core.analysis_gaps, u.base, &base);
-        // No primary app: every row is primary, nothing to filter.
-        if let Some(p) = primary_app_guid(resolved) {
-            referenced_apps =
-                filter_by_class(&mut core, &permission_facts, p, &base.routine_to_stable);
-        }
-    }
-    let apps = project_apps(resolved, &core.identities, &referenced_apps, &opts.universe);
 
     // Serialize the consumed-core typed parts to ordered CborValues (their custom
     // `Serialize` impls drive the per-fact field order).
@@ -249,7 +304,7 @@ pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> Cb
         m.insert("routineOrderFrames".into(), to_cbor_value(frames));
     }
 
-    CborValue::Map(m)
+    m
 }
 
 // ===========================================================================
@@ -507,7 +562,7 @@ fn reach(x: &R3a5CrossAppBase) -> HashSet<String> {
 fn reachable_gaps(
     gaps: &[SnapshotAnalysisGap],
     x: &R3a5CrossAppBase,
-    source: &R3a3SourceBase,
+    routine_to_stable: &HashMap<String, String>,
 ) -> Vec<SnapshotAnalysisGap> {
     // No dependency gap (CDO: none, P5): nothing to test against the reach.
     if gaps.iter().all(|g| g.role == Role::Primary.as_str()) {
@@ -520,7 +575,7 @@ fn reachable_gaps(
     let mut apps: HashSet<String> = HashSet::new();
     for r in x.resolved.workspace.routines.iter() {
         if reach.contains(&r.id) {
-            routines.insert(stable_routine_id(&r.id, &source.routine_to_stable));
+            routines.insert(stable_routine_id(&r.id, routine_to_stable));
             apps.extend(object_id_app_guid(&r.object_id).map(app_key));
         }
     }
@@ -533,16 +588,8 @@ fn reachable_gaps(
         })
         .cloned()
         .collect();
-    // F21: an opaque boundary is a source-less app.
-    debug_assert!(
-        kept.iter()
-            .filter(|g| g.kind == "symbol-only-boundary")
-            .all(|g| !x
-                .dependency_apps
-                .iter()
-                .any(|a| a.guid.eq_ignore_ascii_case(&g.subject) && a.has_source)),
-        "a symbol-only-boundary gap names an app with source"
-    );
+    // F21's "an opaque boundary is a source-less app" holds by construction
+    // since D9: every cross-app gap derivation passes `source_less_apps`.
     kept
 }
 

@@ -3159,6 +3159,10 @@ pub struct DigestEffectResult {
     pub origin_operation_ids: Vec<String>,
     /// S4: per-effect scoped guarantees (attached by `compute_ordering`).
     pub scoped_guarantees: Vec<crate::engine::l5::ordering_engine::ScopedGuarantee>,
+    /// A boundary group's full `(resource id, display)` set, in resource-id
+    /// order (#160 step 9 D2 (6)): `detail` lists at most 10, prove matches
+    /// every member. Not serialized; empty off a group.
+    pub group_resources: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -4103,9 +4107,15 @@ fn digest_one_root<'i>(
             // effectConditionality across ALL pre-capping paths (#8).
             let conditionality = acc.via.conditionality();
 
+            let boundary_group = acc.group.is_some();
+            // The group's whole resource set, moved (not copied): prove reads it.
+            let group_resources: Vec<(String, String)> = acc
+                .group
+                .map(|(_, resources)| resources.into_iter().collect())
+                .unwrap_or_default();
             effects.push(DigestEffectResult {
                 effect_type: acc.effect_type.to_string(),
-                boundary_group: acc.group.is_some(),
+                boundary_group,
                 detail,
                 provenance: acc.provenance,
                 evidence: ProjectedEvidence {
@@ -4132,6 +4142,7 @@ fn digest_one_root<'i>(
                 temp_state: acc.temp_state,
                 origin_operation_ids: acc.origin_operation_ids.into_iter().collect(),
                 scoped_guarantees: Vec::new(),
+                group_resources,
             });
         }
 
@@ -4996,6 +5007,87 @@ pub struct ProjectedPath {
     pub human_hops: Vec<HumanHop>,
     /// Terminal hop (if any) for human rendering only. NOT included in JSON output.
     pub terminal_hop: Option<TerminalHopInfo>,
+    /// Rule B (#160 step 9 S9-2, O9-24): the boundary this path was cut at,
+    /// from its last edge; `None` on the cut and on a path that ends at a carrier.
+    pub boundary: Option<PathBoundary>,
+}
+
+/// A witness path's rule-B boundary, one form per boundary kind: a call
+/// (`cs:<callsite>`), an implicit trigger (`op:<operation>`) or an event
+/// dispatch (`ev:<event>`). The anchor is the terminal hop's: the call site,
+/// the firing operation (else the edge's own anchor) or the publish site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathBoundary {
+    pub kind: PathBoundaryKind,
+    /// The boundary identity (`cs:` / `op:` / `ev:` prefixed).
+    pub id: String,
+    /// The callsite, operation or event id the identity names.
+    pub target: String,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+/// The three rule-B boundary kinds; a new kind is a compile error at every
+/// match, never a silent fall-through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathBoundaryKind {
+    Call,
+    Trigger,
+    Event,
+}
+
+impl PathBoundaryKind {
+    /// The JSON `kind` value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PathBoundaryKind::Call => "call",
+            PathBoundaryKind::Trigger => "trigger",
+            PathBoundaryKind::Event => "event",
+        }
+    }
+}
+
+impl PathBoundary {
+    /// The JSON key of [`PathBoundary::target`] for this kind.
+    pub fn target_key(&self) -> &'static str {
+        match self.kind {
+            PathBoundaryKind::Call => "callsiteId",
+            PathBoundaryKind::Trigger => "operationId",
+            PathBoundaryKind::Event => "eventId",
+        }
+    }
+}
+
+/// [`PathBoundary`] of boundary `b`, anchored at the path's terminal hop.
+fn path_boundary(b: &BoundaryEnd, terminal: Option<&WitnessHop>) -> PathBoundary {
+    // Every boundary identity is `cs:`, `op:` or `ev:` (`boundary_terminal`).
+    let (kind, target) = if let Some(t) = b.id.strip_prefix("cs:") {
+        (PathBoundaryKind::Call, t)
+    } else if let Some(t) = b.id.strip_prefix("op:") {
+        (PathBoundaryKind::Trigger, t)
+    } else if let Some(t) = b.id.strip_prefix("ev:") {
+        (PathBoundaryKind::Event, t)
+    } else {
+        unreachable!("a boundary identity with no cs:/op:/ev: prefix: {}", b.id)
+    };
+    let (file, line, column) = match terminal {
+        Some(WitnessHop::Terminal {
+            source_file,
+            line,
+            column,
+            ..
+        }) => (source_file.clone(), *line, *column),
+        _ => (None, None, None),
+    };
+    PathBoundary {
+        kind,
+        id: b.id.clone(),
+        target: target.to_string(),
+        file,
+        line,
+        column,
+    }
 }
 
 /// Public per-witness diagnostic (mirrors al-sem `WitnessDiagnostic`).
@@ -5039,6 +5131,10 @@ pub struct FingerprintIndexesPub<'a> {
     pub pd_solution: &'a PdArena,
     pub typed_edges: &'a [SnapshotGraphEdge],
     pub capability_facts: &'a [crate::engine::l5::snapshot::SnapshotCapabilityFact],
+    /// Rule B (spec §14.3.5; #160 step 9 S9-2): the snapshot's boundary, `None`
+    /// on the cut, and the identities that enter several dependency routines.
+    pub boundary: Option<&'a crate::engine::l5::snapshot::BoundaryRule>,
+    pub boundary_displays: HashMap<String, String>,
 }
 
 /// Build the public fingerprint indexes from a `CapabilitySnapshot`.
@@ -5082,6 +5178,8 @@ pub fn build_fingerprint_indexes_pub(snap: &CapabilitySnapshot) -> FingerprintIn
         pd_solution: &snap.pd_solution,
         typed_edges: &snap.typed_edges,
         capability_facts: &snap.capability_facts,
+        boundary: private.boundary,
+        boundary_displays: private.boundary_displays,
     }
 }
 
@@ -5152,9 +5250,8 @@ fn pub_idx_as_private<'i>(idx: &'i FingerprintIndexesPub<'_>) -> FingerprintInde
         pd: idx.pd_solution,
         typed_edges: idx.typed_edges,
         capability_facts: idx.capability_facts,
-        // The fingerprint query reads the cut: rule B is off.
-        boundary: None,
-        boundary_displays: HashMap::new(),
+        boundary: idx.boundary,
+        boundary_displays: idx.boundary_displays.clone(),
     }
 }
 
@@ -5205,8 +5302,16 @@ pub fn reconstruct_witness_paths_pub<'i>(
     let projected: Vec<ProjectedPath> = outcome
         .paths
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(i, p)| {
             let query_hops = project_path(p, root_id, &root_display, private_idx);
+            // Rule B: `ends[i]` is the boundary `paths[i]` was cut at (empty off
+            // rule B), each path its own (O9-24).
+            let boundary = outcome
+                .ends
+                .get(i)
+                .and_then(Option::as_ref)
+                .map(|b| path_boundary(b, p.hops.last().map(|h| &**h)));
             // Human hops: the RAW non-terminal hops, carrying short eventDisplay etc.
             let human_hops: Vec<HumanHop> =
                 p.hops.iter().filter_map(|h| raw_hop_to_human(h)).collect();
@@ -5240,6 +5345,7 @@ pub fn reconstruct_witness_paths_pub<'i>(
                 query_hops,
                 human_hops,
                 terminal_hop,
+                boundary,
             }
         })
         .collect();

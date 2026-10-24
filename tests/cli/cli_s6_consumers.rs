@@ -65,6 +65,7 @@ fn prove_follows_the_program_engines_calls() {
         "writes-table:S6 Log",
         "s6",
         true,
+        true, // single-app, as before #160 step 9
     )
     .expect("prove runs");
     let v: serde_json::Value = serde_json::from_str(&r.json_text).expect("json");
@@ -95,7 +96,9 @@ fn digest_follows_the_program_engines_calls() {
     assert!(r.json_text.contains("S6 Log"), "{}", r.json_text);
 }
 
-/// S6.3 `alsem fingerprint`: Run6's query output names the write.
+/// S6.3 `alsem fingerprint`: Run6's query output names the write. #160 step 9:
+/// the `--routine` query is cross-app by default, so this pins the cross-app
+/// path (the workspace has no dependency).
 #[test]
 fn fingerprint_follows_the_program_engines_calls() {
     use al_sem::engine::l5::fingerprint_cli::{
@@ -121,6 +124,7 @@ fn fingerprint_follows_the_program_engines_calls() {
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        single_app: false,
     };
     let r = run_fingerprint_pipeline(&opts).expect("fingerprint runs");
     let FingerprintOutput::Text(text) = r.output else {

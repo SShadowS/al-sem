@@ -47,10 +47,13 @@ pub struct View {
     tree: Option<CapabilitySnapshot>,
     /// Digest's per-root effects (D7 (5)), read by its query after the run.
     effects: Option<DigestEffects>,
+    /// A fingerprint tree read's owned result (#160 step 9 D5), read off the
+    /// tree inside `prepare`; taken by [`View::take_tree_read`].
+    tree_read: Option<TreeReadOut>,
     l4: Option<L4Analysis>,
     det: Option<DetectorArtifacts>,
     /// One bit per [`Cell`] released; a released cell is never refilled.
-    released: u8,
+    released: u16,
     ordering: Option<OrderingFactsMap>,
     runs: BTreeMap<RunKey, Arc<RunOutput>>,
 }
@@ -77,11 +80,16 @@ pub struct Plan {
     /// Whose raw inherited facts the view's composition keeps (#160 step 6
     /// D3), fixed before it runs.
     witness: WitnessRequest,
-    /// Digest's tree and effects (D3, D7 (4)-(5)) over the `Roots` request.
-    needs_tree: bool,
+    /// What `prepare` reads off a tree over the `Roots` request (#160 step 9
+    /// D5): digest's effects (step 6 D3, D7 (4)-(5)), a fingerprint read, or
+    /// no tree.
+    tree: TreeRead,
     /// Digest's `--tests` (#254): the effects keep the tree's test-coverage
     /// graph.
     tests: bool,
+    /// Prove's plan only (final panel C1): each root's unresolved cone also
+    /// counts the tree's analysis gaps it visits. Digest never reads it.
+    gaps_in_cone: bool,
 }
 
 /// The routines a plan wants raw inherited facts for (#160 step 6 D3).
@@ -96,8 +104,10 @@ pub enum WitnessRequest {
 }
 
 impl WitnessRequest {
-    /// The composition's raw scope over `model`.
-    fn scope(&self, model: &Model) -> WitnessScope {
+    /// The composition's raw scope over `model`. `pub(crate)` so the
+    /// scoped-equals-unscoped tests (#160 step 9 T17) compose with the view's
+    /// own mapping, not a copy of it.
+    pub(crate) fn scope(&self, model: &Model) -> WitnessScope {
         match self {
             WitnessRequest::None => WitnessScope::None,
             WitnessRequest::Roots(ids) => WitnessScope::Subjects(
@@ -122,6 +132,91 @@ impl WitnessRequest {
     }
 }
 
+/// What `prepare` reads off the tree it composes, right after the
+/// composition and before `det` (#160 step 9 D5). Every tree dies in that
+/// `prepare`, so only the read's owned result outlives it.
+pub enum TreeRead {
+    /// No tree.
+    None,
+    /// Digest's (and prove's) effects, into `Cell::Effects`.
+    Effects,
+    /// `fingerprint --routine`'s query result, into `Cell::TreeRead`.
+    FingerprintQuery(QueryRead),
+    /// `fingerprint --inventory-only`'s five keys, into `Cell::TreeRead`.
+    Inventory(InventoryRead),
+}
+
+/// The fingerprint query's tree-read inputs (#160 step 9 D3): its filters and
+/// whether a `roots.config.json` was skipped. The roles come from the model.
+pub struct QueryRead {
+    pub filters: crate::engine::l5::fingerprint_query::FingerprintFilters,
+    pub roots_config_ignored: bool,
+}
+
+/// The inventory's tree-read inputs (#160 step 9 D4): the snapshot options
+/// `assemble_full_snapshot` takes, owned (the universe comes from the target).
+pub struct InventoryRead {
+    pub inputs: Arc<crate::program::inputs::InputSet>,
+    pub driver_version: String,
+    pub deterministic: bool,
+    pub roots_config_ignored: bool,
+}
+
+/// A fingerprint tree read's owned result: nothing in it borrows the tree.
+pub enum TreeReadOut {
+    FingerprintQuery(crate::engine::l5::fingerprint_query::FingerprintQueryResult),
+    Inventory(indexmap::IndexMap<String, crate::engine::gate::cbor::CborValue>),
+}
+
+/// The fingerprint query's read off the tree (#160 step 9 D3): the query with
+/// the model's owners and roles, over the pool (the plan's roots: the routines
+/// the selectors named). Its result is owned (S9-16).
+fn read_fingerprint_query(
+    tree: &CapabilitySnapshot,
+    read: &QueryRead,
+    pool: &BTreeSet<String>,
+    model: &Model,
+) -> crate::engine::l5::fingerprint_query::FingerprintQueryResult {
+    let owners = crate::engine::l4::effect_query_cli::OwnerIndex::build(model);
+    let primary = crate::engine::l5::fingerprint_query::primary_stable_ids(model);
+    crate::engine::l5::fingerprint_query::fingerprint_query(
+        tree,
+        &read.filters,
+        Some(pool),
+        read.roots_config_ignored,
+        &owners,
+        &|id| primary.contains(id),
+    )
+}
+
+/// The inventory's read off the tree (#160 step 9 D4): the assembly half of
+/// the full snapshot over the tree, its five inventory keys only. The tree is
+/// composed over `Roots(∅)`, so it holds no raw facts and the permission
+/// facts are empty (§4.4 item 3).
+fn read_inventory(
+    tree: CapabilitySnapshot,
+    read: &InventoryRead,
+    target: &AnalysisTarget,
+) -> indexmap::IndexMap<String, crate::engine::gate::cbor::CborValue> {
+    use crate::engine::l5::snapshot_full::{
+        FullSnapshotOptions, SnapshotKeys, SnapshotUniverse, assemble_full_snapshot,
+    };
+    let opts = FullSnapshotOptions {
+        inputs: &read.inputs,
+        driver_version: &read.driver_version,
+        deterministic: read.deterministic,
+        roots_config_ignored: read.roots_config_ignored,
+        universe: SnapshotUniverse::of(target),
+    };
+    assemble_full_snapshot(
+        target.resolved(),
+        tree,
+        crate::engine::gate::cbor::CborValue::Array(vec![]),
+        &opts,
+        SnapshotKeys::Inventory,
+    )
+}
+
 /// The cells [`View::release`] drops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cell {
@@ -133,16 +228,26 @@ pub enum Cell {
     Raw,
     Tree,
     Effects,
+    TreeRead,
 }
 
 impl Cell {
     /// Every cell a command can hold past `prepare` and `finish_default_run`
     /// drops: `Caps` and `Tree` never outlive `prepare`, and digest keeps
-    /// `Effects` (with `L4`) for its query, then releases both.
-    const ALL: [Cell; 5] = [Cell::Det, Cell::L4, Cell::Ordering, Cell::Rel, Cell::Raw];
+    /// `Effects` (with `L4`) for its query, then releases both. `TreeRead` is
+    /// here as `Raw` is: released whether filled or not (a fingerprint tree
+    /// read is usually taken, and so released, first).
+    const ALL: [Cell; 6] = [
+        Cell::Det,
+        Cell::L4,
+        Cell::Ordering,
+        Cell::Rel,
+        Cell::Raw,
+        Cell::TreeRead,
+    ];
 
-    fn bit(self) -> u8 {
-        1 << self as u8
+    fn bit(self) -> u16 {
+        1 << self as u16
     }
 }
 
@@ -154,8 +259,9 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
         need_l4: false,
         after_run: 0,
         witness: WitnessRequest::None,
-        needs_tree: false,
+        tree: TreeRead::None,
         tests: false,
+        gaps_in_cone: false,
     }
 }
 
@@ -163,8 +269,8 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
 /// `det.transaction_spans` and the query off `l4`. Digest passes its changed
 /// roots (stable ids, resolved before the composition, #160 step 6 D3): the
 /// view composes their raw facts, builds the tree over the cone graph and
-/// keeps their effects ([`View::effects`]). No root (prove, which keeps
-/// its standalone snapshot, or a digest that resolved none): neither. `tests`
+/// keeps their effects ([`View::effects`]); prove passes its one root (#160
+/// step 9 D2). No root (a digest or prove that resolved none): neither. `tests`
 /// (`digest --tests`, #254): the effects also keep the tree's test-coverage
 /// graph, which covers the whole workspace, so a tree is built even with no
 /// root (an empty `Roots` request: no raw facts).
@@ -180,8 +286,22 @@ pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: boo
         } else {
             WitnessRequest::None
         },
-        needs_tree,
+        tree: if needs_tree {
+            TreeRead::Effects
+        } else {
+            TreeRead::None
+        },
         tests,
+        gaps_in_cone: false,
+    }
+}
+
+/// `alsem prove` (#160 step 9 D2): digest's plan over its one root, or none,
+/// whose unresolved cone also counts the analysis gaps it visits (C1).
+pub fn prove_plan(detectors: Vec<Detector>, root: Option<String>) -> Plan {
+    Plan {
+        gaps_in_cone: true,
+        ..digest_plan(detectors, root.into_iter().collect(), false)
     }
 }
 
@@ -194,14 +314,41 @@ fn run_only_plan(detectors: Vec<Detector>) -> Plan {
         need_l4: false,
         after_run: 0,
         witness: WitnessRequest::None,
-        needs_tree: false,
+        tree: TreeRead::None,
         tests: false,
+        gaps_in_cone: false,
     }
 }
 
 /// `alsem fingerprint`.
 pub fn fingerprint_plan(detectors: Vec<Detector>) -> Plan {
     run_only_plan(detectors)
+}
+
+/// `alsem fingerprint --routine` (#160 step 9 D3): fingerprint's run, the raw
+/// facts of `pool` (the selectors' routines, stable ids), and the query read
+/// off the view's tree inside `prepare`.
+pub fn fingerprint_query_plan(
+    detectors: Vec<Detector>,
+    pool: BTreeSet<String>,
+    read: QueryRead,
+) -> Plan {
+    Plan {
+        witness: WitnessRequest::Roots(pool),
+        tree: TreeRead::FingerprintQuery(read),
+        ..run_only_plan(detectors)
+    }
+}
+
+/// `alsem fingerprint --inventory-only` (#160 step 9 D4): fingerprint's run and
+/// the inventory read off a tree over `Roots(∅)`: a composition with no raw
+/// facts (digest `--tests`' shape).
+pub fn fingerprint_inventory_plan(detectors: Vec<Detector>, read: InventoryRead) -> Plan {
+    Plan {
+        witness: WitnessRequest::Roots(BTreeSet::new()),
+        tree: TreeRead::Inventory(read),
+        ..run_only_plan(detectors)
+    }
 }
 
 /// `alsem diff --strict`, per side.
@@ -218,8 +365,9 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
         need_l4: false,
         after_run: substrate::SUMMARIES,
         witness: WitnessRequest::None,
-        needs_tree: false,
+        tree: TreeRead::None,
         tests: false,
+        gaps_in_cone: false,
     }
 }
 
@@ -233,8 +381,9 @@ pub fn policy_plan(detectors: Vec<Detector>) -> Plan {
         need_l4: false,
         after_run: substrate::SUMMARIES,
         witness: WitnessRequest::Primary,
-        needs_tree: false,
+        tree: TreeRead::None,
         tests: false,
+        gaps_in_cone: false,
     }
 }
 
@@ -246,8 +395,9 @@ pub fn query_plan() -> Plan {
         need_l4: true,
         after_run: 0,
         witness: WitnessRequest::None,
-        needs_tree: false,
+        tree: TreeRead::None,
         tests: false,
+        gaps_in_cone: false,
     }
 }
 
@@ -265,8 +415,9 @@ impl Plan {
             need_l4,
             after_run,
             witness: WitnessRequest::None,
-            needs_tree: false,
+            tree: TreeRead::None,
             tests: false,
+            gaps_in_cone: false,
         }
     }
 
@@ -276,10 +427,21 @@ impl Plan {
         Plan { witness, ..self }
     }
 
+    /// The plan with tree read `tree`.
+    #[cfg(test)]
+    pub(crate) fn with_tree(self, tree: TreeRead) -> Plan {
+        Plan { tree, ..self }
+    }
+
     /// Whether `prepare` composes digest's tree and fills `Cell::Effects`: the
     /// one answer a caller reads before `View::effects` (final panel F1-C5).
     pub fn needs_tree(&self) -> bool {
-        self.needs_tree
+        matches!(self.tree, TreeRead::Effects)
+    }
+
+    /// Whether `prepare` composes a tree at all (any read but `None`).
+    fn reads_tree(&self) -> bool {
+        !matches!(self.tree, TreeRead::None)
     }
 
     /// The key of each run, in plan order.
@@ -329,7 +491,7 @@ fn bit_names(bits: u32) -> String {
 
 /// Mark `cell` released: one `view.release` trace instant naming it, so a
 /// CLI test can see when a command drops what.
-fn note_release(released: &mut u8, cell: Cell) {
+fn note_release(released: &mut u16, cell: Cell) {
     pt::instant_lazy(
         "view",
         "view.release",
@@ -347,6 +509,7 @@ impl View {
             raw: None,
             tree: None,
             effects: None,
+            tree_read: None,
             l4: None,
             det: None,
             released: 0,
@@ -356,9 +519,10 @@ impl View {
     }
 
     /// Fill every cell `plan` needs that is still empty, in order (#160 step 6
-    /// D7): ordering, rel, ONE composition into `caps` and `raw`; under
-    /// `needs_tree` the tree (it takes `raw` by move and `caps.pd`; `Raw` is
-    /// released) and the effects off it (then `Tree` is released); det (it
+    /// D7): ordering, rel, ONE composition into `caps` and `raw`; under a
+    /// tree read the tree (it takes `raw` by move and `caps.pd`; `Raw` is
+    /// released) and the read off it, the effects or a `TreeRead` result
+    /// (then `Tree` is released, step 9 D5); det (it
     /// consumes `caps`, then `l4`, then its harvest; `Caps` is released), then
     /// the runs. A plan with no run: rel, then `l4` alone. Rule 1's asserts
     /// (a), (b), (c), the one-witness assertion and the `after_run` assertion
@@ -405,7 +569,7 @@ impl View {
             "a View takes at most one witness request, in its one composing prepare"
         );
         assert!(
-            !plan.needs_tree || matches!(plan.witness, WitnessRequest::Roots(_)),
+            !plan.reads_tree() || matches!(plan.witness, WitnessRequest::Roots(_)),
             "a tree is composed over a Roots witness request"
         );
         // (a) a released cell is never refilled: a refill after
@@ -456,6 +620,7 @@ impl View {
             raw,
             tree,
             effects,
+            tree_read,
             l4,
             det,
             released,
@@ -463,13 +628,13 @@ impl View {
             runs,
         } = self;
         // Final panel F1-C2: the dependency calls (cross-app) are read only by
-        // digest's tree; they leave the base in the first prepare and die at
-        // the tree's composition below; a plan with no tree drops them here.
+        // a tree; they leave the base in the first prepare and die at the
+        // tree's composition below; a plan with no tree drops them here.
         let dependency_calls = match &mut *target {
             AnalysisTarget::CrossApp(b) => b.dependency_calls.take(),
             AnalysisTarget::SingleApp(_) => None,
         }
-        .filter(|_| plan.needs_tree);
+        .filter(|_| plan.reads_tree());
         let target = &*target;
         let model = target.resolved();
         let cross_base = match target {
@@ -512,11 +677,16 @@ impl View {
                 *raw = Some(w);
             }
         }
-        // D7 (4)-(5): digest's tree over the cone graph, its effects read off
-        // it, then the tree is released, all before `det` takes `caps`.
-        if let (true, WitnessRequest::Roots(roots)) = (plan.needs_tree, &plan.witness) {
+        // D7 (4)-(5): the tree over the cone graph, its read (digest's effects
+        // or a step 9 `TreeRead` result) off it, then the tree is released,
+        // all before `det` takes `caps`.
+        if let (true, WitnessRequest::Roots(roots)) = (plan.reads_tree(), &plan.witness) {
             let r = rel.as_ref().expect("rel filled above");
             let app_names = cross_base.map(|b| b.loaded_app_names()).unwrap_or_default();
+            // D9 (#160 step 9): the dependency apps with no source; none single-app.
+            let source_less = cross_base
+                .map(|b| crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps))
+                .unwrap_or_default();
             let calls: &[crate::program::model::calls::CallEdge] =
                 match (cross_base, &dependency_calls) {
                     (None, _) => &[],
@@ -533,16 +703,35 @@ impl View {
                 caps.as_mut().expect("caps filled above"),
                 raw.take().expect("raw filled above"),
                 &app_names,
+                &source_less,
             ));
             note_release(released, Cell::Raw);
             drop(dependency_calls);
-            let roots: Vec<String> = roots.iter().cloned().collect();
-            *effects = Some(crate::engine::l5::digest_cli::digest_effects(
-                tree.as_mut().expect("tree filled above"),
-                model,
-                &roots,
-                plan.tests,
-            ));
+            match &plan.tree {
+                TreeRead::None => unreachable!("the block runs for a tree read"),
+                TreeRead::Effects => {
+                    let t = tree.as_mut().expect("tree filled above");
+                    let roots: Vec<String> = roots.iter().cloned().collect();
+                    *effects = Some(crate::engine::l5::digest_cli::digest_effects(
+                        t,
+                        model,
+                        &roots,
+                        plan.tests,
+                        plan.gaps_in_cone,
+                    ));
+                }
+                TreeRead::FingerprintQuery(read) => {
+                    let t = tree.as_ref().expect("tree filled above");
+                    *tree_read = Some(TreeReadOut::FingerprintQuery(read_fingerprint_query(
+                        t, read, roots, model,
+                    )));
+                }
+                TreeRead::Inventory(read) => {
+                    // The assembly consumes the tree (its key classes filter it).
+                    let t = tree.take().expect("tree filled above");
+                    *tree_read = Some(TreeReadOut::Inventory(read_inventory(t, read, target)));
+                }
+            }
             *tree = None;
             note_release(released, Cell::Tree);
         }
@@ -603,6 +792,7 @@ impl View {
                 ("Raw", raw.is_some()),
                 ("Tree", tree.is_some()),
                 ("Effects", effects.is_some()),
+                ("TreeRead", tree_read.is_some()),
                 ("L4", l4.is_some()),
                 ("Det", true),
                 ("Ordering", ordering.is_some()),
@@ -651,6 +841,7 @@ impl View {
             Cell::Raw => self.raw = None,
             Cell::Tree => self.tree = None,
             Cell::Effects => self.effects = None,
+            Cell::TreeRead => self.tree_read = None,
         }
     }
 
@@ -663,6 +854,53 @@ impl View {
                 self.release(cell);
             }
         }
+    }
+
+    /// A fingerprint tree read's result, moved out (#160 step 9 D5); the cell
+    /// is released.
+    pub fn take_tree_read(&mut self) -> TreeReadOut {
+        let out = self
+            .tree_read
+            .take()
+            .expect("no tree read: the plan asked for none");
+        note_release(&mut self.released, Cell::TreeRead);
+        out
+    }
+
+    /// The output-time census (#160 step 9 §4.5): what is alive when a command
+    /// serializes, printed under `ALSEM_RETAINED_CENSUS`.
+    pub fn census_output(&self) {
+        if crate::engine::census::enabled() {
+            eprintln!("{}", self.census_output_line());
+        }
+    }
+
+    /// The filled cells, the relation's strong count (the target's own handle
+    /// included) and whether a tree is alive.
+    fn census_output_line(&self) -> String {
+        let cells: Vec<&str> = [
+            ("Rel", self.rel.is_some()),
+            ("Caps", self.caps.is_some()),
+            ("Raw", self.raw.is_some()),
+            ("Tree", self.tree.is_some()),
+            ("Effects", self.effects.is_some()),
+            ("TreeRead", self.tree_read.is_some()),
+            ("L4", self.l4.is_some()),
+            ("Det", self.det.is_some()),
+            ("Ordering", self.ordering.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, filled)| filled.then_some(name))
+        .collect();
+        let rel_strong = match &self.target {
+            AnalysisTarget::CrossApp(b) => Arc::strong_count(&b.rel),
+            AnalysisTarget::SingleApp(_) => self.rel.as_ref().map_or(0, Arc::strong_count),
+        };
+        format!(
+            "[retained-census] view.output cells={} rel_strong={rel_strong} tree={}",
+            cells.join(","),
+            u8::from(self.tree.is_some())
+        )
     }
 
     pub fn target(&self) -> &AnalysisTarget {
@@ -1056,19 +1294,45 @@ mod tests {
     /// #160 step 6 D3: digest's plan carries its roots as a `Roots` request
     /// with a tree; a digest with no root (prove, or none resolved) has
     /// neither. `Roots` scopes every row of each stable id.
+    /// Final panel C1: only prove's plan counts each cone's analysis gaps, read
+    /// off the effects `prepare` leaves; digest's cone carries no count.
+    /// Precondition: both cones exist. DISCRIMINATION: passing `true` in
+    /// place of `plan.gaps_in_cone` at `prepare`'s `digest_effects` call
+    /// fails the digest arm.
+    #[test]
+    fn only_proves_plan_counts_the_gaps_in_its_cone() {
+        let root = "app:Codeunit:1#a".to_string();
+        let run = || vec![probe(substrate::TRANSACTION_SPANS, noop)];
+        for (name, plan, want) in [
+            (
+                "digest",
+                digest_plan(run(), [root.clone()].into(), false),
+                None,
+            ),
+            ("prove", prove_plan(run(), Some(root.clone())), Some(0)),
+        ] {
+            let mut v = view();
+            v.prepare(&plan);
+            let effects = v.take_effects();
+            let cone = effects.unresolved.get(&root);
+            assert!(cone.is_some(), "{name}: precondition, the root's cone");
+            assert_eq!(cone.and_then(|c| c.gaps_in_cone), want, "{name}");
+        }
+    }
+
     #[test]
     fn digest_plan_asks_a_tree_only_for_roots() {
         let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
         let p = digest_plan(vec![probe(0, noop)], roots.clone(), false);
         assert_eq!(p.witness, WitnessRequest::Roots(roots));
-        assert!(p.needs_tree);
+        assert!(matches!(p.tree, TreeRead::Effects));
         let p = digest_plan(vec![probe(0, noop)], BTreeSet::new(), false);
         assert_eq!(p.witness, WitnessRequest::None);
-        assert!(!p.needs_tree);
+        assert!(matches!(p.tree, TreeRead::None));
         // `--tests` covers the workspace: a tree with no root (#254).
         let p = digest_plan(vec![probe(0, noop)], BTreeSet::new(), true);
         assert_eq!(p.witness, WitnessRequest::Roots(BTreeSet::new()));
-        assert!(p.needs_tree && p.tests);
+        assert!(matches!(p.tree, TreeRead::Effects) && p.tests);
         let mut m = crate::engine::l5::test_support::empty_resolved();
         for id in ["r1", "r2", "r3"] {
             let mut r = crate::engine::l5::test_support::routine(id, "procedure");
@@ -1135,7 +1399,174 @@ mod tests {
         assert!(v.l4.is_some(), "the kept cell stays");
         assert_eq!(
             v.released,
-            Cell::Det.bit() | Cell::Ordering.bit() | Cell::Rel.bit() | Cell::Raw.bit()
+            Cell::Det.bit()
+                | Cell::Ordering.bit()
+                | Cell::Rel.bit()
+                | Cell::Raw.bit()
+                | Cell::TreeRead.bit()
+        );
+    }
+
+    /// A query read with no filter (every root, witnesses off).
+    fn query_read() -> QueryRead {
+        QueryRead {
+            filters: crate::engine::l5::fingerprint_query::FingerprintFilters {
+                roots: None,
+                routine_selectors: vec![],
+                include_inherited: true,
+                witness_limit: crate::engine::l5::fingerprint_query::WitnessLimit::Disabled,
+            },
+            roots_config_ignored: false,
+        }
+    }
+
+    /// An inventory read over an empty workspace's input set.
+    fn inventory_read() -> InventoryRead {
+        let tmp = tempfile::tempdir().unwrap();
+        InventoryRead {
+            inputs: crate::program::inputs::InputSet::read(tmp.path(), &Default::default()),
+            driver_version: "t".to_string(),
+            deterministic: true,
+            roots_config_ignored: false,
+        }
+    }
+
+    /// A det-running plan over an empty `Roots` request with tree read `read`.
+    fn tree_plan(read: TreeRead) -> Plan {
+        Plan::for_test(
+            vec![vec![probe(substrate::SUMMARIES, noop)]],
+            true,
+            false,
+            0,
+        )
+        .with_witness(WitnessRequest::Roots(BTreeSet::new()))
+        .with_tree(read)
+    }
+
+    /// #160 step 9 T20 (spec §5): the tree-read lifecycle. (a) a
+    /// `FingerprintQuery` read leaves a result `take_tree_read` returns once;
+    /// (b) a `TreeRead` cell, filled and untaken or never filled, dies in
+    /// `release_all_but(&[])`;
+    /// (c) after `prepare` with any tree read the tree is gone, though `det`
+    /// ran after it (E18); (d) `take_tree_read` after an `Effects` plan panics
+    /// with its message; (e) `Effects` still fills the effects; (f) every
+    /// `Cell` bit is non-zero and distinct (the `u16` mask). The output-time
+    /// census line is read field by field beside (b).
+    /// DISCRIMINATION: B1, skipping the tree drop after a `FingerprintQuery`
+    /// read, fails (c); B2, giving `Cell::TreeRead` the bit of `Cell::Det`,
+    /// fails (f).
+    #[test]
+    fn tree_read_lifecycle() {
+        // (a) and (c), FingerprintQuery.
+        let mut v = view();
+        v.prepare(&tree_plan(TreeRead::FingerprintQuery(query_read())));
+        assert!(
+            v.det.is_some(),
+            "(c) precondition: det ran in the same prepare"
+        );
+        assert!(
+            v.tree.is_none() && v.released & Cell::Tree.bit() != 0,
+            "(c) the FingerprintQuery tree died inside prepare"
+        );
+        assert!(v.effects.is_none(), "(a) a query read fills no effects");
+        let TreeReadOut::FingerprintQuery(r) = v.take_tree_read() else {
+            panic!("(a) a FingerprintQuery read leaves a query result")
+        };
+        assert!(r.blocks.is_empty() && r.diagnostics.is_empty());
+        assert!(
+            v.tree_read.is_none() && v.released & Cell::TreeRead.bit() != 0,
+            "(a) the take empties and releases the cell"
+        );
+        let msg = panic_text(
+            "(a) a second take",
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(v.take_tree_read()))),
+        );
+        assert!(msg.contains("no tree read"), "(a) {msg}");
+
+        // (c) Inventory, then (b) and the census line.
+        let mut v = view();
+        v.prepare(&tree_plan(TreeRead::Inventory(inventory_read())));
+        assert!(
+            v.tree.is_none() && v.released & Cell::Tree.bit() != 0,
+            "(c) the Inventory tree died inside prepare"
+        );
+        assert!(
+            matches!(v.tree_read, Some(TreeReadOut::Inventory(_))),
+            "(b) precondition: an Inventory result is filled"
+        );
+        assert_eq!(
+            v.census_output_line(),
+            "[retained-census] view.output cells=Rel,TreeRead,Det rel_strong=1 tree=0"
+        );
+        v.release_all_but(&[]);
+        assert!(v.tree_read.is_none(), "(b) the untaken result is dropped");
+        assert!(v.released & Cell::TreeRead.bit() != 0, "(b) and released");
+        assert_eq!(
+            v.census_output_line(),
+            "[retained-census] view.output cells= rel_strong=0 tree=0"
+        );
+
+        // (d) and (e), Effects.
+        let mut v = view();
+        let plan = tree_plan(TreeRead::Effects);
+        assert!(plan.needs_tree(), "(e) an Effects plan needs the tree");
+        v.prepare(&plan);
+        assert!(v.tree.is_none(), "(e) the Effects tree died inside prepare");
+        assert!(v.tree_read.is_none(), "(e) Effects fills no TreeRead cell");
+        drop(v.take_effects());
+        v.release_all_but(&[]);
+        assert_ne!(
+            v.released & Cell::TreeRead.bit(),
+            0,
+            "(b) an unfilled TreeRead is released too, as an unfilled Raw is"
+        );
+        let msg = panic_text(
+            "(d) take_tree_read after Effects",
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(v.take_tree_read()))),
+        );
+        assert!(
+            msg.contains("no tree read: the plan asked for none"),
+            "(d) {msg}"
+        );
+        for read in [
+            TreeRead::None,
+            TreeRead::FingerprintQuery(query_read()),
+            TreeRead::Inventory(inventory_read()),
+        ] {
+            let p = Plan::for_test(vec![], true, false, 0).with_tree(read);
+            assert!(!p.needs_tree(), "(e) only Effects reads the effects");
+        }
+
+        // (f) Every variant, listed by an exhaustive match so a new one is listed too.
+        let all = [
+            Cell::Det,
+            Cell::L4,
+            Cell::Ordering,
+            Cell::Rel,
+            Cell::Caps,
+            Cell::Raw,
+            Cell::Tree,
+            Cell::Effects,
+            Cell::TreeRead,
+        ];
+        for c in all {
+            match c {
+                Cell::Det
+                | Cell::L4
+                | Cell::Ordering
+                | Cell::Rel
+                | Cell::Caps
+                | Cell::Raw
+                | Cell::Tree
+                | Cell::Effects
+                | Cell::TreeRead => assert_ne!(c.bit(), 0, "(f) {c:?} has a bit"),
+            }
+        }
+        let mask = all.iter().fold(0u16, |m, c| m | c.bit());
+        assert_eq!(
+            mask.count_ones() as usize,
+            all.len(),
+            "(f) every Cell bit is distinct"
         );
     }
 

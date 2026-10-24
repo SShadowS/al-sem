@@ -381,6 +381,8 @@ fn object_id_access_and_kind_flags() {
 fn routine_id_equals_alsem_stable_routine_id() {
     let v = analyze_json(FIXTURE);
 
+    // #160 step 9: `--inventory-only` is cross-app by default, as `analyze`
+    // is, so both sides read the same universe's ids.
     let out = output_with_empty_home(
         Command::new(env!("CARGO_BIN_EXE_alsem"))
             .current_dir(repo_root())

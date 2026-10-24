@@ -3808,11 +3808,21 @@ pub(crate) fn build_cross_app_base(
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
     model_instance_id: &str,
 ) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
+    build_cross_app_base_with(inputs, model_instance_id, false)
+}
+
+/// [`build_cross_app_base`] with `--no-roots-config` (#160 step 9 D1): the
+/// overlay is skipped when `no_roots_config`.
+pub(crate) fn build_cross_app_base_with(
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    model_instance_id: &str,
+    no_roots_config: bool,
+) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
     use crate::engine::l4::summary_runner::base_intraprocedural_summary;
     let mut x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
         inputs,
         model_instance_id,
-        false,
+        no_roots_config,
     )?;
     if x.resolved.primary_app.is_none() {
         return Err(

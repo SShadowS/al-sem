@@ -431,25 +431,45 @@ fn digest_single_app() {
     assert_row("digest single-app", &m, DIGEST_ROW);
 }
 
+/// #160 step 9 §4.6 (T16): prove is digest with one root, cross-app by
+/// default: one composition over the view's relation, its tree read inside
+/// `prepare` (no cut, so no second graph, cone, SCC or producer solve).
 #[test]
 fn prove() {
     let (_d, ws) = ws_dep();
     let m = run(&["prove", &ws, "CallLib", "may-commit", "--deterministic"]);
-    assert_row(
+    assert_row("prove", &m, DIGEST_ROW);
+}
+
+/// T16: `--single-app` takes the same path over the workspace alone.
+#[test]
+fn prove_single_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
         "prove",
-        &m,
-        Row {
-            program: 1,
-            bcg: 2,
-            cone: 2,
-            v2: 1,
-            scc: 3,
-            pd: 2,
-            ctx: 1,
-            snap: 1,
-            witness: 1,
-        },
+        &ws,
+        "CallLib",
+        "may-commit",
+        "--deterministic",
+        "--single-app",
+    ]);
+    assert_row("prove single-app", &m, DIGEST_ROW);
+}
+
+/// T16: a prove that resolves no root keeps no witness request and builds no
+/// tree, as digest's no-root case; it exits 2 with the dummy document.
+#[test]
+fn prove_no_root() {
+    let (_d, ws) = ws_dep();
+    let (out, m) = spawn_traced(&["prove", &ws, "NoSuchRoutine", "may-commit"], &[]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(
+        count(&m, "build.detector_context"),
+        1,
+        "precondition: the run\n{m:?}"
     );
+    assert_eq!(count(&m, "build.snapshot"), 0, "{m:?}");
+    assert_eq!(count(&m, "build.witness_pass"), 0, "{m:?}");
 }
 
 /// Spec §4.4.4 (A8): digest's no-input check runs right after the target
@@ -507,6 +527,8 @@ fn fingerprint_json() {
     assert_row("fingerprint json", &m, FINGERPRINT_ROW);
 }
 
+/// #160 step 9 §4.6 (T16): the `--routine` query reads a tree over the view's
+/// relation (cross-app by default): digest's row, no cut.
 #[test]
 fn fingerprint_query() {
     let (_d, ws) = ws_dep();
@@ -519,8 +541,161 @@ fn fingerprint_query() {
         "CallLib",
         "--deterministic",
     ]);
-    assert_row("fingerprint query", &m, FINGERPRINT_ROW);
+    assert_row("fingerprint query", &m, DIGEST_ROW);
 }
+
+/// T16: `--single-app` takes the same path over the workspace alone.
+#[test]
+fn fingerprint_query_single_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "fingerprint",
+        &ws,
+        "--format",
+        "json",
+        "--routine",
+        "CallLib",
+        "--deterministic",
+        "--single-app",
+    ]);
+    assert_row("fingerprint query single-app", &m, DIGEST_ROW);
+}
+
+/// #160 step 9 final panel S2 (spec §4.5): the `--routine` query's tree dies
+/// before `det` is built, read off the shipped binary's trace in both
+/// universes: `rel:Tree` comes before `ctx` (`build.detector_context`, the
+/// first line of `build_detector_artifacts`). The whole sequence is pinned
+/// too. DISCRIMINATION: moving `prepare`'s tree release after the det fill
+/// puts `rel:Tree` after `ctx` and fails it.
+#[test]
+fn routine_query_releases_its_tree_before_det() {
+    let (_d, ws) = ws_dep();
+    for extra in [&[][..], &["--single-app"][..]] {
+        let mut args = vec![
+            "fingerprint",
+            ws.as_str(),
+            "--format",
+            "json",
+            "--routine",
+            "CallLib",
+            "--deterministic",
+        ];
+        args.extend_from_slice(extra);
+        let got = release_sequence(&args);
+        let at = |t: &str| got.iter().position(|c| c == t);
+        let (tree, ctx) = (at("rel:Tree"), at("ctx"));
+        assert!(
+            tree.is_some() && ctx.is_some(),
+            "precondition: {extra:?} {got:?}"
+        );
+        assert!(tree < ctx, "{extra:?}: the tree outlives det: {got:?}");
+        assert_eq!(
+            got,
+            [
+                "snap",
+                "rel:Raw",
+                "rel:Tree",
+                "ctx",
+                "rel:Caps",
+                "rel:TreeRead",
+                "rel:Det",
+                "rel:L4",
+                "rel:Ordering",
+                "rel:Rel",
+            ],
+            "{extra:?}"
+        );
+    }
+}
+
+/// #160 step 9 final panel O4: a `--routine` whose selector fails composes no
+/// tree (`build.snapshot` 0); it still runs the default set, for the
+/// envelope's diagnostics. Precondition: the same command with a selector that
+/// resolves composes one. DISCRIMINATION: sending a failing selector down the
+/// tree path (`Err(diags) =>` taking the query plan) gives `build.snapshot` 1.
+#[test]
+fn failing_routine_selector_composes_no_tree() {
+    let (_d, ws) = ws_dep();
+    let snaps = |routine: &str| {
+        let (out, m) = spawn_traced(
+            &[
+                "fingerprint",
+                &ws,
+                "--format",
+                "json",
+                "--routine",
+                routine,
+                "--deterministic",
+            ],
+            &[],
+        );
+        (
+            out.status.code(),
+            count(&m, "build.snapshot"),
+            count(&m, "build.detector_context"),
+        )
+    };
+    assert_eq!(snaps("CallLib"), (Some(0), 1, 1), "precondition");
+    assert_eq!(snaps("NoSuchRoutine"), (Some(2), 0, 1));
+}
+
+/// #160 step 9 T21 (S′, spec §4.3): only a query with `--routine` moves to the
+/// view's tree. Precondition: on `ws_dep()` the cross-app `--routine CallLib`
+/// output differs from its `--single-app` one. Assertion: the human query
+/// with no flag and the `--roots` query with no `--routine` are byte-equal
+/// with and without `--single-app`, and stay on the cut (`build.combined_graph`
+/// 2, `FINGERPRINT_ROW`). DISCRIMINATION: routing every query form to the new
+/// path gives `combined_graph` 1 and different bytes.
+#[test]
+fn fingerprint_wide_query_stays_single_app() {
+    let (_d, ws) = ws_dep();
+    let routine = |extra: &[&str]| {
+        let mut a = vec![
+            "fingerprint",
+            ws.as_str(),
+            "--format",
+            "json",
+            "--routine",
+            "CallLib",
+            "--deterministic",
+        ];
+        a.extend_from_slice(extra);
+        let (out, _) = spawn_traced(&a, &[]);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert_ne!(
+        routine(&[]),
+        routine(&["--single-app"]),
+        "precondition: the universes differ on ws_dep"
+    );
+    for form in [
+        &["--format", "human"][..],
+        &["--format", "json", "--roots", "public-procedure"][..],
+    ] {
+        let mut outs = Vec::new();
+        for extra in [&[][..], &["--single-app"][..]] {
+            let mut a = vec!["fingerprint", ws.as_str(), "--deterministic"];
+            a.extend_from_slice(form);
+            a.extend_from_slice(extra);
+            let (out, m) = spawn_traced(&a, &[]);
+            assert_eq!(out.status.code(), Some(0), "{a:?}: {out:?}");
+            assert_row(&format!("{a:?}"), &m, FINGERPRINT_ROW);
+            outs.push(out.stdout);
+        }
+        assert!(
+            !outs[0].is_empty() && outs[0] == outs[1],
+            "{form:?}: equal with and without --single-app"
+        );
+    }
+}
+
+/// #160 step 9 §4.6 (T16, T11): `--inventory-only` reads a tree over the
+/// view's relation composed with no raw facts (`Roots(∅)`): digest's row with
+/// no witness pass.
+const INVENTORY_ROW: Row = Row {
+    witness: 0,
+    ..DIGEST_ROW
+};
 
 #[test]
 fn fingerprint_inventory_only() {
@@ -533,7 +708,23 @@ fn fingerprint_inventory_only() {
         "json",
         "--deterministic",
     ]);
-    assert_row("fingerprint --inventory-only", &m, FINGERPRINT_ROW);
+    assert_row("fingerprint --inventory-only", &m, INVENTORY_ROW);
+}
+
+/// T16: `--single-app` takes the same path over the workspace alone.
+#[test]
+fn fingerprint_inventory_only_single_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "fingerprint",
+        &ws,
+        "--inventory-only",
+        "--format",
+        "json",
+        "--deterministic",
+        "--single-app",
+    ]);
+    assert_row("fingerprint --inventory-only single-app", &m, INVENTORY_ROW);
 }
 
 /// `diff ws ws`: the row is per side, so the process total is twice it.
@@ -942,10 +1133,15 @@ fn diff_ends_each_sides_phase() {
 /// `build.detector_context`, `snap` per `build.snapshot`, `rel:<Cell>` per
 /// `view.release` (`View::release`'s instant).
 fn release_sequence(args: &[&str]) -> Vec<String> {
+    release_sequence_exit(args, 0)
+}
+
+/// [`release_sequence`] of a run that exits `code`.
+fn release_sequence_exit(args: &[&str], code: i32) -> Vec<String> {
     let (out, events) = spawn_trace_events(env!("CARGO_BIN_EXE_alsem"), args, &[]);
     assert_eq!(
         out.status.code(),
-        Some(0),
+        Some(code),
         "alsem {args:?}\nstderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
@@ -964,6 +1160,23 @@ fn release_sequence(args: &[&str]) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// #160 step 9 (Task 2 review item 4): a prove that resolves no root drops its
+/// cells in digest's no-root order, `l4` and `Effects` included, before its
+/// exit 2. Precondition: the sequence holds `l4`'s release. DISCRIMINATION:
+/// deleting the dummy branch's `release(Cell::L4)` / `release(Cell::Effects)`
+/// in `prove_on_target` fails it.
+#[test]
+fn prove_with_no_root_releases_as_digest_does() {
+    let (_d, ws) = ws_dep();
+    let digest = release_sequence_exit(&["digest", &ws, "--routine", "NoSuchRoutine"], 2);
+    let prove = release_sequence_exit(&["prove", &ws, "NoSuchRoutine", "may-commit"], 2);
+    assert!(
+        digest.iter().any(|c| c == "rel:L4"),
+        "precondition: {digest:?}"
+    );
+    assert_eq!(prove, digest);
 }
 
 /// #160 final panel P1-5: each command drops its cells where the code says,
@@ -986,22 +1199,34 @@ fn views_release_their_cells_before_the_next_build() {
     let (d, ws) = ws_dep();
     let policy = policy_yaml();
     let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
-    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Rel", "rel:Raw"];
+    // `TreeRead` is released as `Raw` is, filled or not (step 9 final panel C8).
+    let all = [
+        "rel:Det",
+        "rel:L4",
+        "rel:Ordering",
+        "rel:Rel",
+        "rel:Raw",
+        "rel:TreeRead",
+    ];
     // #160 step 6 D7 (6): the det fill consumes the view's one composition
     // and `prepare` releases `Caps` right after it.
     let det = ["ctx", "rel:Caps"];
     let per_side: Vec<&str> = [&det[..], &all, &["snap"]].concat();
-    // `finish_default_run`: every cell but `l4` before the snapshot, `l4`
-    // after the query.
-    let default_run = vec![
+    // #160 step 6 D7: the tree first (it takes `Raw`, and is released once
+    // the effects are read off it), then the run; `Effects` dies after the
+    // query, beside `l4`.
+    let tree_run = vec![
+        "snap",
+        "rel:Raw",
+        "rel:Tree",
         "ctx",
         "rel:Caps",
         "rel:Det",
         "rel:Ordering",
         "rel:Rel",
-        "rel:Raw",
-        "snap",
+        "rel:TreeRead",
         "rel:L4",
+        "rel:Effects",
     ];
     let cases: [(&str, Vec<&str>, Vec<&str>); 6] = [
         (
@@ -1015,6 +1240,7 @@ fn views_release_their_cells_before_the_next_build() {
                 "rel:L4",
                 "rel:Ordering",
                 "rel:Rel",
+                "rel:TreeRead",
                 "rel:Det",
                 "rel:Raw",
             ],
@@ -1036,28 +1262,15 @@ fn views_release_their_cells_before_the_next_build() {
             [&det[..], &["rel:L4"], &all[..1], &all[2..]].concat(),
         ),
         (
-            // #160 step 6 D7: the tree first (it takes `Raw`, and is released
-            // once the effects are read off it), then the run; `Effects` dies
-            // after the query, beside `l4`.
             "digest",
             vec!["digest", &ws, "--diff", &diff, "--deterministic"],
-            vec![
-                "snap",
-                "rel:Raw",
-                "rel:Tree",
-                "ctx",
-                "rel:Caps",
-                "rel:Det",
-                "rel:Ordering",
-                "rel:Rel",
-                "rel:L4",
-                "rel:Effects",
-            ],
+            tree_run.clone(),
         ),
         (
+            // #160 step 9 D2: prove is digest with one root.
             "prove",
             vec!["prove", &ws, "CallLib", "may-commit", "--deterministic"],
-            default_run,
+            tree_run,
         ),
     ];
     let mut bad = Vec::new();

@@ -2017,6 +2017,7 @@ fn entry_anchor_is_the_declaration() {
         "may-commit",
         VERSION_OVERRIDE,
         true,
+        true, // single-app, as before #160 step 9
     )
     .expect("prove runs");
     let p: Value = serde_json::from_str(&prove.json_text).unwrap();

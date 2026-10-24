@@ -273,8 +273,8 @@ fn query_effects(routine: &str) -> Vec<Value> {
 
 fn prove(routine: &str, question: &str) -> Value {
     let tmp = write_workspace();
-    let r =
-        run_prove_pipeline(&read(tmp.path()), routine, question, "t", true).expect("prove runs");
+    let r = run_prove_pipeline(&read(tmp.path()), routine, question, "t", true, true)
+        .expect("prove runs");
     serde_json::from_str(&r.json_text).expect("prove json")
 }
 

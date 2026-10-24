@@ -26,13 +26,11 @@ use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::digest_cli::{
-    ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, digest_effects,
-    finish_default_run, primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
+    ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, finish_default_run,
+    primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
-use crate::engine::l5::snapshot::compose_snapshot;
-use crate::engine::l5::unresolved_cone::unresolved_cone;
-use crate::engine::session::{Cell, View, digest_plan};
-use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
+use crate::engine::l5::snapshot::derive_identity_table;
+use crate::engine::session::{Cell, View, prove_plan};
 
 // ---------------------------------------------------------------------------
 // ProveQuestion
@@ -151,43 +149,8 @@ pub struct ProveResult {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: gaps-in-cone intersection (mirrors digest-query.ts:729-751)
-// ---------------------------------------------------------------------------
-
-/// Count analysis gaps whose subject intersects the visited cone.
-///
-/// A gap subject is EITHER:
-///   - a StableRoutineId (parse-incomplete / body-unavailable gaps) → DIRECT match
-///     against the visited set, OR
-///   - a bare app GUID (symbol-only-boundary gaps, snapshot.rs:1860-1867) → matches
-///     when ANY visited routine's stable id starts with `{appGuid}:` (stable ids use
-///     ":" separators, NOT "/" — see digest-query.ts:722-728's documented soundness
-///     fix). WITHOUT this app-level branch every symbol-only-boundary gap is invisible,
-///     so a cone entering an opaque `.app` dep reports analysisGaps=0 → a FALSE absence
-///     proof. This is the exact class of bug digest-query.ts documents.
-fn count_gaps_in_cone(
-    gap_subjects: &[&str],
-    visited_ids: &std::collections::HashSet<String>,
-) -> usize {
-    let mut count = 0usize;
-    for subject in gap_subjects {
-        // Direct routine-subject match.
-        if visited_ids.contains(*subject) {
-            count += 1;
-            continue;
-        }
-        // App-level (symbol-only-boundary) match: subject is a bare app GUID and some
-        // visited routine has a stable id of the form `{appGuid}:Type:{n}#hash`.
-        let prefix = format!("{}:", subject);
-        if visited_ids.iter().any(|v| v.starts_with(&prefix)) {
-            count += 1;
-        }
-    }
-    count
-}
-
-// ---------------------------------------------------------------------------
 // Internal: Obligation computation
+// (the gaps-in-cone count is `digest_cli::count_gaps_in_cone`, #160 step 9)
 // ---------------------------------------------------------------------------
 
 fn compute_obligations(entry: &DigestEntryFull, gaps_in_cone_count: usize) -> ProveObligations {
@@ -337,8 +300,6 @@ const UI_TYPES: &[&str] = &["UI_MESSAGE", "UI_CONFIRM", "UI_ERROR"];
 /// Case-insensitive match of `query` against the resourceDisplay or the
 /// trailing segment of the resourceId (after the last '/').
 fn resource_name_matches(detail: &[(String, String)], query: &str) -> bool {
-    let target = query.to_lowercase();
-
     let mut resource_display: Option<&str> = None;
     let mut resource_id: Option<&str> = None;
 
@@ -350,7 +311,17 @@ fn resource_name_matches(detail: &[(String, String)], query: &str) -> bool {
             resource_id = Some(v.as_str());
         }
     }
+    name_or_id_matches(resource_display, resource_id, query)
+}
 
+/// [`resource_name_matches`]'s rule over one resource: its display, or the
+/// trailing segment of its id, equals `query` case-insensitively.
+fn name_or_id_matches(
+    resource_display: Option<&str>,
+    resource_id: Option<&str>,
+    query: &str,
+) -> bool {
+    let target = query.to_lowercase();
     if let Some(disp) = resource_display
         && disp.to_lowercase() == target
     {
@@ -372,6 +343,17 @@ fn resource_name_matches(detail: &[(String, String)], query: &str) -> bool {
     false
 }
 
+/// An effect's resource matches `query`: its own detail, or, for a boundary
+/// group, any member of its full resource set (#160 step 9 D2 (6)), whose
+/// `detail` lists only the first 10.
+fn effect_resource_matches(eff: &DigestEffectFull, query: &str) -> bool {
+    resource_name_matches(&eff.detail, query)
+        || eff
+            .group_resources
+            .iter()
+            .any(|(id, display)| name_or_id_matches(Some(display), Some(id), query))
+}
+
 fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
     match question {
         ProveQuestion::MayCommit => eff.effect_type == "COMMIT",
@@ -380,13 +362,13 @@ fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
             if !DB_WRITE_TYPES.contains(&eff.effect_type.as_str()) {
                 return false;
             }
-            resource_name_matches(&eff.detail, table)
+            effect_resource_matches(eff, table)
         }
         ProveQuestion::PublishesEvent { event } => {
             if eff.effect_type != "EVENT_PUBLISH" {
                 return false;
             }
-            resource_name_matches(&eff.detail, event)
+            effect_resource_matches(eff, event)
         }
         ProveQuestion::ReachesUi => UI_TYPES.contains(&eff.effect_type.as_str()),
         ProveQuestion::ThrowsError => eff.effect_type == "ERROR_THROW",
@@ -843,6 +825,7 @@ pub fn run_prove_pipeline(
     question_text: &str,
     alsem_ver: &str,
     deterministic: bool,
+    single_app: bool,
 ) -> Result<ProveRunResult, String> {
     prove_pipeline_with(
         crate::engine::l5::detectors::default_detectors(),
@@ -851,11 +834,15 @@ pub fn run_prove_pipeline(
         question_text,
         alsem_ver,
         deterministic,
+        single_app,
     )
 }
 
 /// [`run_prove_pipeline`] over a given detector set: the plan is digest's,
-/// built from `detectors` (#160 §4.4.4, A2.10).
+/// built from `detectors` (#160 §4.4.4, A2.10). Prove is digest with one root
+/// (#160 step 9 D2): the cross-app view by default (`single_app` the
+/// workspace alone), the root resolved from the model before `prepare`, its
+/// effects, unresolved cone and gap count read off the view's tree inside it.
 pub(crate) fn prove_pipeline_with(
     detectors: Vec<crate::engine::l5::registry::Detector>,
     inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
@@ -863,46 +850,62 @@ pub(crate) fn prove_pipeline_with(
     question_text: &str,
     alsem_ver: &str,
     deterministic: bool,
+    single_app: bool,
 ) -> Result<ProveRunResult, String> {
-    // Assemble workspace
-    let model_id = inputs
-        .model_instance_id
-        .as_deref()
-        .ok_or_else(|| "prove: could not compute modelInstanceId".to_string())?;
-    // Engine-switch S6.1: the program-backed model (program calls and events).
-    let resolved = assemble_and_resolve_workspace_program(inputs, model_id, false)
-        .ok_or_else(|| "prove: workspace did not resolve".to_string())?;
+    // (1) The target: no model-instance id fails first, as before.
+    let target = AnalysisTarget::build(inputs, single_app, "prove")?;
+    prove_on_target(
+        detectors,
+        target,
+        inputs,
+        routine_selector,
+        question_text,
+        alsem_ver,
+        deterministic,
+    )
+}
 
-    // One View, digest's plan (#160 §4.4.4): the envelope diagnostics of the
-    // default run and the tx map, read before the snapshot is composed. Prove
-    // keeps its standalone single-app snapshot (6A-9), so its plan has no
-    // roots: no witness request, no tree.
-    let mut view = View::new(AnalysisTarget::SingleApp(Box::new(resolved)));
-    let plan = digest_plan(detectors, std::collections::BTreeSet::new(), false);
-    let key = plan.keys().remove(0);
-    view.prepare(&plan);
-    let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
-    let resolved = view.model();
+/// [`prove_pipeline_with`] past the target build: a test hand-states the
+/// model's precondition between the two (CLAUDE.md).
+pub(crate) fn prove_on_target(
+    detectors: Vec<crate::engine::l5::registry::Detector>,
+    target: AnalysisTarget,
+    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    routine_selector: &str,
+    question_text: &str,
+    alsem_ver: &str,
+    deterministic: bool,
+) -> Result<ProveRunResult, String> {
+    let mut view = View::new(target);
 
-    // Compose snapshot
-    let mut snap = compose_snapshot(resolved);
-    let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
-
-    // Resolve the routine selector → root IDs
+    // (2) The root is resolved before the composition, from the model alone;
+    // the identity table and the owner index die with this block.
     let changed_input = ChangedInput {
         files: None,
         routines: Some(vec![routine_selector.to_string()]),
         diff_text: None,
     };
-    let owners = OwnerIndex::build(resolved);
-    let changed_roots = resolve_changed_roots(
-        &snap.identities,
-        resolved,
-        &changed_input,
-        primary_guid_of(resolved),
-        &owners,
-    );
+    let changed_roots = {
+        let model = view.model();
+        let identities = derive_identity_table(model);
+        let owners = OwnerIndex::build(model);
+        resolve_changed_roots(
+            &identities,
+            model,
+            &changed_input,
+            primary_guid_of(model),
+            &owners,
+        )
+    };
+
+    // (3) Digest's plan over the one root prove reads (the first resolved);
+    // (4) none resolved: no tree, the run's diagnostics only.
+    let plan = prove_plan(detectors, changed_roots.roots.first().cloned());
+    let key = plan.keys().remove(0);
+    view.prepare(&plan);
+    let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
+    let workspace_fp =
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
     if changed_roots.roots.is_empty() {
@@ -921,6 +924,11 @@ pub(crate) fn prove_pipeline_with(
             obligations: dummy_oblg,
         };
 
+        // As digest's no-root path: `l4` and the (unfilled) effects die
+        // before the projection, so the release sequence is digest's.
+        view.release(Cell::L4);
+        view.release(Cell::Effects);
+        view.census_output();
         let json_text = project_prove_document(ProveDocumentArgs {
             workspace_fp: &workspace_fp,
             routine_stable_id: routine_selector,
@@ -948,26 +956,20 @@ pub(crate) fn prove_pipeline_with(
     // Use first root (prove always passes a single routine selector)
     let root_id = &changed_roots.roots[0];
 
-    // Compute gaps_in_cone count: run unresolved_cone for its visited_ids, then
-    // count snap.analysis_gaps whose subject intersects the cone. Before
-    // `digest_effects`, which moves the identity table out of the snapshot.
-    let gaps_in_cone_count = {
-        let cone_result = unresolved_cone(&snap, root_id);
-        let gap_subjects: Vec<&str> = snap
-            .analysis_gaps
-            .iter()
-            .map(|g| g.subject.as_str())
-            .collect();
-        count_gaps_in_cone(&gap_subjects, &cone_result.visited_ids)
-    };
-
-    // The S4 entry and the unresolved cone of the root alone (each root's pass
-    // is independent, so this equals computing every routine and picking it).
-    let mut effects = digest_effects(&mut snap, resolved, std::slice::from_ref(root_id), false);
-    drop(snap);
+    // (5) The root's S4 entry, unresolved cone and gap count, read off the
+    // view's tree inside `prepare` (the tree is gone).
+    let mut effects = view.take_effects();
+    let gaps_in_cone_count = effects
+        .unresolved
+        .get(root_id)
+        .ok_or_else(|| "prove: internal error — no unresolved cone for the root".to_string())?
+        .gaps_in_cone
+        .expect("prove's plan counts the gaps in the cone");
+    let resolved = view.model();
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's `l4`.
     let temp_states = DbTempStates::new(resolved, &view.l4().bundle);
+    let owners = OwnerIndex::build(resolved);
 
     // Run full digest query for this single root
     let query_full = run_digest_query_full_from_entries(
@@ -980,8 +982,10 @@ pub(crate) fn prove_pipeline_with(
     );
     // The bundle's only borrower is dead: release `l4`.
     drop(temp_states);
+    drop(owners);
     drop(effects);
     view.release(Cell::L4);
+    view.release(Cell::Effects);
 
     if query_full.entries.is_empty() {
         return Err("prove: internal error — entry missing after resolution".to_string());
@@ -997,6 +1001,7 @@ pub(crate) fn prove_pipeline_with(
     let prove_result = prove(entry, gaps_in_cone_count, &parsed_question);
 
     // Project document
+    view.census_output();
     let json_text = project_prove_document(ProveDocumentArgs {
         workspace_fp: &workspace_fp,
         routine_stable_id: root_id,
@@ -1046,6 +1051,252 @@ mod tests {
     };
     use crate::engine::l5::unresolved_cone::{UnresolvedConeItem, UnresolvedTraversal};
 
+    /// The cross-app target of `write_fixture_rule_b` (`CallWrite` → the
+    /// source dependency's `Dep Rec Lib.Write`) with `Write` hand-stated
+    /// body-less: a body-less demanded row of an app WITH source. No AL source
+    /// makes one (a routine with no body there is an interface or
+    /// declaration-only member, which the resolver never targets), so the
+    /// precondition is stated by assignment (CLAUDE.md).
+    fn bodyless_source_row_target(ws: &std::path::Path) -> AnalysisTarget {
+        let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+        let mut target = AnalysisTarget::build(&inputs, false, "prove").expect("cross-app base");
+        let AnalysisTarget::CrossApp(b) = &mut target else {
+            panic!("precondition: a cross-app target")
+        };
+        let primary = b
+            .resolved
+            .primary_app
+            .as_ref()
+            .expect("primary app")
+            .app_guid
+            .clone();
+        let mut stated = 0;
+        for r in b.resolved.workspace.routines.iter_mut() {
+            if r.name == "Write" && !r.app_guid.eq_ignore_ascii_case(&primary) {
+                assert!(r.body_available, "precondition: Write has a body before");
+                r.body_available = false;
+                stated += 1;
+            }
+        }
+        assert_eq!(stated, 1, "precondition: one dependency Write row");
+        target
+    }
+
+    /// #160 step 9 T2 (a'), spec §5: `prove CallWrite may-commit` cross-app,
+    /// where `CallWrite` calls a body-less row of a source dependency app.
+    /// Preconditions (asserted on the same hand-stated model's tree): the
+    /// `CallWrite → Write` ledger row is `unfetched-dependency`, and the tree's
+    /// one gap is `body-unavailable` on `Write` (D9: its app has source, so no
+    /// app-level `symbol-only-boundary`; Task 2 asserted that, Task 5 switched it).
+    /// Assertion: the blockers are exactly the callsite, the gap and
+    /// coverage. DISCRIMINATION: B1, `into_unfetched` forced false
+    /// (`snapshot.rs`) drops the callsite blocker; B2, `gaps_in_cone` forced 0
+    /// (`digest_effects`) drops the gap blocker.
+    #[test]
+    fn prove_one_hop_ledger_and_gap() {
+        use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
+        use crate::engine::l5::detector_context::{compose_capabilities, det_cone_inputs};
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine::l5::test_support::write_fixture_rule_b(tmp.path());
+
+        // Preconditions, off a tree of the same hand-stated model.
+        let target = bodyless_source_row_target(tmp.path());
+        let AnalysisTarget::CrossApp(b) = &target else {
+            unreachable!()
+        };
+        let model = &b.resolved;
+        let (mut caps, raw) = compose_capabilities(
+            model,
+            b.rel.cone(),
+            det_cone_inputs(model, &b.rel),
+            ConeScope {
+                derived: true,
+                raw: WitnessScope::None,
+            },
+        );
+        let tree = crate::engine::l5::snapshot::compose_tree(
+            model,
+            b.rel.cone(),
+            b.dependency_calls.as_deref().unwrap_or(&[]),
+            &mut caps,
+            raw,
+            &std::collections::HashMap::new(),
+            &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+        );
+        let call_write = model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "CallWrite")
+            .expect("CallWrite");
+        let rows: Vec<&str> = tree
+            .callsite_resolutions
+            .iter()
+            .filter(|r| r.from == call_write.stable_routine_id)
+            .map(|r| r.status.as_str())
+            .collect();
+        assert_eq!(
+            rows,
+            ["unfetched-dependency"],
+            "precondition: CallWrite → Write is unfetched-dependency"
+        );
+        // D9 (#160 step 9 Task 5): the gap is the routine's `body-unavailable`,
+        // never an app-level `symbol-only-boundary` (XRec has source).
+        let write = model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "Write" && !r.body_available)
+            .expect("the hand-stated Write");
+        let kinds: Vec<(&str, &str)> = tree
+            .analysis_gaps
+            .iter()
+            .map(|g| (g.kind.as_str(), g.subject.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [("body-unavailable", write.stable_routine_id.as_str())],
+            "precondition: the tree's gap for Write"
+        );
+        drop(tree);
+        drop(target);
+
+        // The claim, through prove's pipeline on a fresh hand-stated target.
+        let inputs = crate::program::inputs::InputSet::read(
+            tmp.path(),
+            &crate::program::inputs::InputNeeds {
+                fingerprint_rows: true,
+                ..Default::default()
+            },
+        );
+        let r = prove_on_target(
+            crate::engine::l5::detectors::default_detectors(),
+            bodyless_source_row_target(tmp.path()),
+            &inputs,
+            "CallWrite",
+            "may-commit",
+            "t",
+            true,
+        )
+        .expect("prove runs");
+        let doc: serde_json::Value = serde_json::from_str(&r.json_text).unwrap();
+        let result = &doc["payload"]["result"];
+        assert_eq!(result["answer"], "unknown", "{}", r.json_text);
+        let mut got: Vec<(String, String)> = result["blockedBy"]
+            .as_array()
+            .expect("blockedBy")
+            .iter()
+            .map(|b| {
+                (
+                    b["kind"].as_str().unwrap().to_string(),
+                    b["detail"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                (
+                    "analysis-gap".to_string(),
+                    "1 analysis gap(s) in cone".to_string()
+                ),
+                (
+                    "coverage-incomplete".to_string(),
+                    "coverage status: partial".to_string()
+                ),
+                (
+                    "unresolved-callsite".to_string(),
+                    "Lib.Write in CallWrite".to_string()
+                ),
+            ],
+            "{}",
+            r.json_text
+        );
+    }
+
+    /// #160 step 9 T27 (D9, spec §4.10): a source dependency app (`XRec`,
+    /// precondition: `has_source`) with one body-less demanded row (`Write`,
+    /// hand-stated). Assertions: the tree's gaps hold `body-unavailable` for
+    /// `Write` and no `symbol-only-boundary` for the app; the cross-app
+    /// inventory assembly over that tree does not panic. DISCRIMINATION: every body-less row's app back into
+    /// `opaque_apps` (D9's filter removed) fails the gap assertion.
+    #[test]
+    fn source_app_bodyless_row_gets_body_unavailable_gap() {
+        use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
+        use crate::engine::l5::detector_context::{compose_capabilities, det_cone_inputs};
+        use crate::engine::l5::snapshot_full::{
+            FullSnapshotOptions, SnapshotKeys, SnapshotUniverse, assemble_full_snapshot,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine::l5::test_support::write_fixture_rule_b(tmp.path());
+        let target = bodyless_source_row_target(tmp.path());
+        let AnalysisTarget::CrossApp(b) = &target else {
+            unreachable!()
+        };
+        let dep_guid = "bbbb1604-0000-0000-0000-000000000160"; // the fixture's XRec
+        assert!(
+            b.dependency_apps
+                .iter()
+                .any(|a| a.guid.eq_ignore_ascii_case(dep_guid) && a.has_source),
+            "precondition: XRec ships source"
+        );
+        let model = &b.resolved;
+        let (mut caps, raw) = compose_capabilities(
+            model,
+            b.rel.cone(),
+            det_cone_inputs(model, &b.rel),
+            ConeScope {
+                derived: true,
+                raw: WitnessScope::None,
+            },
+        );
+        let tree = crate::engine::l5::snapshot::compose_tree(
+            model,
+            b.rel.cone(),
+            b.dependency_calls.as_deref().unwrap_or(&[]),
+            &mut caps,
+            raw,
+            &std::collections::HashMap::new(),
+            &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+        );
+        let write = model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "Write" && !r.body_available)
+            .expect("the hand-stated Write");
+        assert!(
+            tree.analysis_gaps
+                .iter()
+                .any(|g| g.kind == "body-unavailable" && g.subject == write.stable_routine_id),
+            "body-unavailable for Write: {:?}",
+            tree.analysis_gaps
+        );
+        assert!(
+            tree.analysis_gaps
+                .iter()
+                .all(|g| g.kind != "symbol-only-boundary"),
+            "no app-level gap for an app with source: {:?}",
+            tree.analysis_gaps
+        );
+        let inputs = crate::program::inputs::InputSet::read(tmp.path(), &Default::default());
+        let keys = assemble_full_snapshot(
+            model,
+            tree,
+            crate::engine::gate::cbor::CborValue::Array(vec![]),
+            &FullSnapshotOptions {
+                inputs: &inputs,
+                driver_version: "t",
+                deterministic: true,
+                roots_config_ignored: false,
+                universe: SnapshotUniverse::of(&target),
+            },
+            SnapshotKeys::Inventory,
+        );
+        assert_eq!(keys.len(), 5, "the inventory assembled without a panic");
+    }
+
     /// A2.10: prove builds digest's plan from the set it is given.
     #[test]
     fn tx_context_without_d9() {
@@ -1054,8 +1305,15 @@ mod tests {
             "TRANSACTION_SPANS",
             "ws-d8-commit-in-tx",
             |set, inputs| {
-                let _ =
-                    prove_pipeline_with(set, inputs, "PostSalesDoc", "may-commit", "test", true);
+                let _ = prove_pipeline_with(
+                    set,
+                    inputs,
+                    "PostSalesDoc",
+                    "may-commit",
+                    "test",
+                    true,
+                    false,
+                );
             },
         );
     }
@@ -1212,6 +1470,7 @@ mod tests {
             guarantees: vec![],
             fact_id: "abcdef1234567890".to_string(),
             scoped_guarantees: vec![],
+            group_resources: vec![],
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::MayCommit);
@@ -1348,6 +1607,7 @@ mod tests {
             guarantees: vec![],
             fact_id: "1234567890abcdef".to_string(),
             scoped_guarantees: vec![],
+            group_resources: vec![],
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -1394,6 +1654,7 @@ mod tests {
             guarantees: vec![],
             fact_id: "fedcba0987654321".to_string(),
             scoped_guarantees: vec![],
+            group_resources: vec![],
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -1406,58 +1667,5 @@ mod tests {
             nu.anchor.is_none(),
             "unavailable evidence must drop the blocker anchor"
         );
-    }
-
-    // -- #2 gaps-in-cone app-level prefix oracle ----------------------------
-
-    /// The SOUNDNESS fix: a symbol-only-boundary gap whose subject is a bare app GUID
-    /// is counted when ANY visited routine's stable id starts with `{appGuid}:`. A
-    /// direct-match-only filter (the pre-fix bug) would report 0 → a false absence proof.
-    #[test]
-    fn gaps_in_cone_matches_app_level_prefix() {
-        use std::collections::HashSet;
-        // Visited routine inside an opaque dep app GUID "11112222...".
-        let mut visited: HashSet<String> = HashSet::new();
-        visited.insert("11112222-0000-0000-0000-00000000aaaa:Codeunit:50000#deadbeef".to_string());
-        visited.insert("33334444-0000-0000-0000-00000000bbbb:Codeunit:60000#cafef00d".to_string());
-
-        // Gap subjects: one bare app GUID (symbol-only-boundary) that matches the prefix,
-        // one bare app GUID that does NOT match any visited routine.
-        let gap_subjects = vec![
-            "11112222-0000-0000-0000-00000000aaaa", // matches via `{guid}:` prefix
-            "99998888-0000-0000-0000-00000000cccc", // no visited routine in this app
-        ];
-        let count = count_gaps_in_cone(&gap_subjects, &visited);
-        assert_eq!(
-            count, 1,
-            "exactly the app-level-matching gap is in cone (the prefix branch must fire)"
-        );
-    }
-
-    /// Direct routine-subject gaps still match (the non-app branch).
-    #[test]
-    fn gaps_in_cone_matches_direct_routine_subject() {
-        use std::collections::HashSet;
-        let mut visited: HashSet<String> = HashSet::new();
-        let rid = "aaaa1111-0000-0000-0000-00000000dddd:Codeunit:70000#beadfeed".to_string();
-        visited.insert(rid.clone());
-
-        // A parse-incomplete gap whose subject IS a visited StableRoutineId.
-        let gap_subjects = vec![rid.as_str()];
-        let count = count_gaps_in_cone(&gap_subjects, &visited);
-        assert_eq!(count, 1, "direct routine-subject gap must match");
-    }
-
-    /// Negative: a gap subject neither directly present nor an app-prefix of any
-    /// visited routine is NOT counted.
-    #[test]
-    fn gaps_in_cone_excludes_unrelated_subject() {
-        use std::collections::HashSet;
-        let mut visited: HashSet<String> = HashSet::new();
-        visited.insert("aaaa1111-0000-0000-0000-00000000dddd:Codeunit:70000#beadfeed".to_string());
-
-        let gap_subjects = vec!["zzzz9999-0000-0000-0000-00000000eeee"];
-        let count = count_gaps_in_cone(&gap_subjects, &visited);
-        assert_eq!(count, 0, "unrelated gap subject must not be counted");
     }
 }
