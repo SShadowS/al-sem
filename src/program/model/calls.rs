@@ -24,6 +24,11 @@ pub struct DispatchMeta {
     pub unresolved_impls: Vec<(String, String)>,
     /// internal object ids of enum implementers (metadata only).
     pub enum_implementers: Vec<String>,
+    /// #264: model object ids (sorted) of the closed enums the receiver
+    /// provably holds a value of. Non-empty only when every candidate is a
+    /// model routine (no dependency target, no unresolved implementer): the
+    /// site's candidate set is then closed. Empty = open.
+    pub closed_over: Vec<String>,
 }
 
 /// An external (out-of-index) type reference on a member edge.

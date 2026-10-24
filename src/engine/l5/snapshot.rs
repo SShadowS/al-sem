@@ -2455,6 +2455,11 @@ fn derive_callsite_resolutions(
                 .as_ref()
                 .map(|dm| dm.unresolved_impls.clone())
                 .unwrap_or_default();
+            // #264: a receiver proven to hold closed-enum values has a closed set.
+            let closed = representative
+                .dispatch_meta
+                .as_ref()
+                .is_some_and(|dm| !dm.closed_over.is_empty());
             out.push(SnapshotCallsiteResolution {
                 callsite_id: callsite_key.clone(),
                 from,
@@ -2467,7 +2472,7 @@ fn derive_callsite_resolutions(
                 } else {
                     Some(candidates)
                 },
-                open_world: Some(true),
+                open_world: Some(!closed),
                 unresolved_candidates: if unresolved.is_empty() {
                     None
                 } else {

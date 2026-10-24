@@ -152,6 +152,14 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
                 if row.status == "resolved" || row.status == "builtin" {
                     continue;
                 }
+                // #264: a closed interface site is a known candidate set, not an
+                // unresolved call.
+                if row.status == "polymorphic"
+                    && row.open_world == Some(false)
+                    && row.unresolved_candidates.as_ref().is_none_or(Vec::is_empty)
+                {
+                    continue;
+                }
                 let cs_key = row.callsite_id.clone();
                 if items_by_csid.contains_key(&cs_key) {
                     continue; // dedupe

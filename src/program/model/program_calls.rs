@@ -2057,11 +2057,8 @@ impl<'a> Converter<'a> {
         }
         c.adapter_interface_dependency_impls += dependency.len();
 
-        let name_lc = self
-            .site_facts
-            .get(&ce.obligation_id)
-            .and_then(|f| f.interface.clone())
-            .unwrap_or_default();
+        let facts = self.site_facts.get(&ce.obligation_id);
+        let name_lc = facts.and_then(|f| f.interface.clone()).unwrap_or_default();
         let interface_name = self
             .graph
             .objects
@@ -2087,18 +2084,31 @@ impl<'a> Converter<'a> {
             let object_id = self.model_object_id(&o.id);
             callees.iter().any(|t| t.object_id == object_id) || dependency.contains(&o.id)
         };
+        let unresolved_impls: Vec<(String, String)> = impls
+            .iter()
+            .filter(|o| !reached(o))
+            .map(|o| (self.model_object_id(&o.id), "not-found".to_string()))
+            .collect();
+        // #264 (spec §5): closed only when every candidate is in the model, the
+        // rule `test_coverage` applies, so every reader agrees.
+        let mut closed_over: Vec<String> = match facts {
+            Some(f) if dependency.is_empty() && unresolved_impls.is_empty() => f
+                .interface_closed_over
+                .iter()
+                .map(|o| self.model_object_id(o))
+                .collect(),
+            _ => Vec::new(),
+        };
+        closed_over.sort();
         let meta = DispatchMeta {
             interface_name,
             total_impls: impls.len(),
-            unresolved_impls: impls
-                .iter()
-                .filter(|o| !reached(o))
-                .map(|o| (self.model_object_id(&o.id), "not-found".to_string()))
-                .collect(),
+            unresolved_impls,
             enum_implementers: implements(&[ObjectKind::Enum, ObjectKind::EnumExtension])
                 .iter()
                 .map(|o| self.model_object_id(&o.id))
                 .collect(),
+            closed_over,
         };
         let base = || {
             let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);

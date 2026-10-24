@@ -332,6 +332,19 @@ pub(crate) fn assemble(
     // Interface callsites that already received an "interface-open-world" uncertainty
     // (emit exactly once per callsite even with multiple "maybe" edges).
     let mut interface_open_world_emitted: HashSet<String> = HashSet::new();
+    // #264: interface sites whose (owning-row) meta-carrying edge names the
+    // closed enums the receiver holds: a closed candidate set, no open world.
+    let closed_sites: HashSet<&str> = call_edges
+        .iter()
+        .filter(|ce| {
+            owns(ce)
+                && ce
+                    .dispatch_meta
+                    .as_ref()
+                    .is_some_and(|dm| !dm.closed_over.is_empty())
+        })
+        .map(|ce| ce.callsite_id.as_str())
+        .collect();
 
     // --- call-derived edges + uncertainty records ---
     for ce in call_edges {
@@ -362,6 +375,7 @@ pub(crate) fn assemble(
             // from the site's (last owning) row.
             if ce.dispatch_kind == DispatchKind::Interface
                 && owns(ce)
+                && !closed_sites.contains(ce.callsite_id.as_str())
                 && !interface_open_world_emitted.contains(&ce.callsite_id)
             {
                 interface_open_world_emitted.insert(ce.callsite_id.clone());
