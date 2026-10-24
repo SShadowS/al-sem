@@ -790,8 +790,9 @@ pub struct UnresolvedCone {
     pub traversal: UnresolvedTraversal,
     /// The tree's analysis gaps whose subject the cone visits
     /// ([`count_gaps_in_cone`]), counted before the tree is dropped (#160
-    /// step 9 D2 (5)): prove's `analysisGaps` obligation. Digest never prints it.
-    pub gaps_in_cone: usize,
+    /// step 9 D2 (5)): prove's `analysisGaps` obligation. `None` off prove's
+    /// plan: digest never reads it, so it never counts it (final panel C1).
+    pub gaps_in_cone: Option<usize>,
 }
 
 /// Count analysis gaps whose subject intersects the visited cone.
@@ -829,21 +830,26 @@ fn count_gaps_in_cone(
 /// [`DigestEffects`] of `roots` off `tree`: `tests`' coverage graph (#254), the
 /// S4 entries and each root's unresolved cone are computed first, then the
 /// identity table and the coverage are moved out (the tree's other readers are
-/// done with them).
+/// done with them). `gaps_in_cone`: prove's plan, which counts each cone's
+/// analysis gaps.
 pub(crate) fn digest_effects(
     tree: &mut CapabilitySnapshot,
     model: &Model,
     roots: &[String],
     tests: bool,
+    gaps_in_cone: bool,
 ) -> DigestEffects {
     let coverage_graph =
         tests.then(|| crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model));
     let entries = compute_digest_effects_cli(tree, model, Some(roots));
-    let gap_subjects: Vec<&str> = tree
-        .analysis_gaps
-        .iter()
-        .map(|g| g.subject.as_str())
-        .collect();
+    let gap_subjects: Vec<&str> = if gaps_in_cone {
+        tree.analysis_gaps
+            .iter()
+            .map(|g| g.subject.as_str())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let unresolved = roots
         .iter()
         .map(|r| {
@@ -851,7 +857,8 @@ pub(crate) fn digest_effects(
             (
                 r.clone(),
                 UnresolvedCone {
-                    gaps_in_cone: count_gaps_in_cone(&gap_subjects, &c.visited_ids),
+                    gaps_in_cone: gaps_in_cone
+                        .then(|| count_gaps_in_cone(&gap_subjects, &c.visited_ids)),
                     items: c.items,
                     traversal: c.traversal,
                 },
@@ -912,11 +919,14 @@ pub fn run_digest_query_full_from_entries(
         }
     }
 
-    // Build index of base entries by routineId
-    let base_by_rid: HashMap<&str, &DigestEntryResult> = effects
+    // Build index of base entries by routineId, by position: each boundary
+    // group's resource set is moved out of its entry below, not copied (final
+    // panel C2).
+    let base_by_rid: HashMap<String, usize> = effects
         .entries
         .iter()
-        .map(|e| (e.routine_id.as_str(), e))
+        .enumerate()
+        .map(|(i, e)| (e.routine_id.clone(), i))
         .collect();
 
     let mut out: Vec<DigestEntryFull> = Vec::new();
@@ -990,13 +1000,15 @@ pub fn run_digest_query_full_from_entries(
         };
 
         // Get base effects (from S4 ordering)
-        let base_entry = base_by_rid.get(rid.as_str());
+        let base_entry = base_by_rid
+            .get(rid.as_str())
+            .map(|&i| &mut effects.entries[i]);
 
         let mut full_effects: Vec<DigestEffectFull> = Vec::new();
         let mut entry_diagnostics: Vec<EntryDiagnostic> = Vec::new();
 
         if let Some(entry) = base_entry {
-            for eff in &entry.effects {
+            for eff in &mut entry.effects {
                 // Conditionality — the per-path value computed in digest_query and
                 // stored on the effect (#8 / #17). No recomputation here.
                 let cond = eff.conditionality;
@@ -1091,7 +1103,7 @@ pub fn run_digest_query_full_from_entries(
                     guarantees,
                     fact_id: eff.fact_id.clone(),
                     scoped_guarantees: eff.scoped_guarantees.clone(),
-                    group_resources: eff.group_resources.clone(),
+                    group_resources: std::mem::take(&mut eff.group_resources),
                 });
             }
         }

@@ -561,6 +561,84 @@ fn fingerprint_query_single_app() {
     assert_row("fingerprint query single-app", &m, DIGEST_ROW);
 }
 
+/// #160 step 9 final panel S2 (spec §4.5): the `--routine` query's tree dies
+/// before `det` is built, read off the shipped binary's trace in both
+/// universes: `rel:Tree` comes before `ctx` (`build.detector_context`, the
+/// first line of `build_detector_artifacts`). The whole sequence is pinned
+/// too. DISCRIMINATION: moving `prepare`'s tree release after the det fill
+/// puts `rel:Tree` after `ctx` and fails it.
+#[test]
+fn routine_query_releases_its_tree_before_det() {
+    let (_d, ws) = ws_dep();
+    for extra in [&[][..], &["--single-app"][..]] {
+        let mut args = vec![
+            "fingerprint",
+            ws.as_str(),
+            "--format",
+            "json",
+            "--routine",
+            "CallLib",
+            "--deterministic",
+        ];
+        args.extend_from_slice(extra);
+        let got = release_sequence(&args);
+        let at = |t: &str| got.iter().position(|c| c == t);
+        let (tree, ctx) = (at("rel:Tree"), at("ctx"));
+        assert!(
+            tree.is_some() && ctx.is_some(),
+            "precondition: {extra:?} {got:?}"
+        );
+        assert!(tree < ctx, "{extra:?}: the tree outlives det: {got:?}");
+        assert_eq!(
+            got,
+            [
+                "snap",
+                "rel:Raw",
+                "rel:Tree",
+                "ctx",
+                "rel:Caps",
+                "rel:TreeRead",
+                "rel:Det",
+                "rel:L4",
+                "rel:Ordering",
+                "rel:Rel",
+            ],
+            "{extra:?}"
+        );
+    }
+}
+
+/// #160 step 9 final panel O4: a `--routine` whose selector fails composes no
+/// tree (`build.snapshot` 0); it still runs the default set, for the
+/// envelope's diagnostics. Precondition: the same command with a selector that
+/// resolves composes one. DISCRIMINATION: sending a failing selector down the
+/// tree path (`Err(diags) =>` taking the query plan) gives `build.snapshot` 1.
+#[test]
+fn failing_routine_selector_composes_no_tree() {
+    let (_d, ws) = ws_dep();
+    let snaps = |routine: &str| {
+        let (out, m) = spawn_traced(
+            &[
+                "fingerprint",
+                &ws,
+                "--format",
+                "json",
+                "--routine",
+                routine,
+                "--deterministic",
+            ],
+            &[],
+        );
+        (
+            out.status.code(),
+            count(&m, "build.snapshot"),
+            count(&m, "build.detector_context"),
+        )
+    };
+    assert_eq!(snaps("CallLib"), (Some(0), 1, 1), "precondition");
+    assert_eq!(snaps("NoSuchRoutine"), (Some(2), 0, 1));
+}
+
 /// #160 step 9 T21 (S′, spec §4.3): only a query with `--routine` moves to the
 /// view's tree. Precondition: on `ws_dep()` the cross-app `--routine CallLib`
 /// output differs from its `--single-app` one. Assertion: the human query
@@ -1121,7 +1199,15 @@ fn views_release_their_cells_before_the_next_build() {
     let (d, ws) = ws_dep();
     let policy = policy_yaml();
     let diff = write_diff(d.path(), "src/Work.al", 18, "        Customer.Insert();");
-    let all = ["rel:Det", "rel:L4", "rel:Ordering", "rel:Rel", "rel:Raw"];
+    // `TreeRead` is released as `Raw` is, filled or not (step 9 final panel C8).
+    let all = [
+        "rel:Det",
+        "rel:L4",
+        "rel:Ordering",
+        "rel:Rel",
+        "rel:Raw",
+        "rel:TreeRead",
+    ];
     // #160 step 6 D7 (6): the det fill consumes the view's one composition
     // and `prepare` releases `Caps` right after it.
     let det = ["ctx", "rel:Caps"];
@@ -1138,6 +1224,7 @@ fn views_release_their_cells_before_the_next_build() {
         "rel:Det",
         "rel:Ordering",
         "rel:Rel",
+        "rel:TreeRead",
         "rel:L4",
         "rel:Effects",
     ];
@@ -1153,6 +1240,7 @@ fn views_release_their_cells_before_the_next_build() {
                 "rel:L4",
                 "rel:Ordering",
                 "rel:Rel",
+                "rel:TreeRead",
                 "rel:Det",
                 "rel:Raw",
             ],

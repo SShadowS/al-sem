@@ -711,7 +711,7 @@ fn t3_digest_scoped_equals_unscoped() {
                 raw: WitnessScope::All,
             },
         );
-        let unscoped = digest_effects(&mut all, model, &roots, false);
+        let unscoped = digest_effects(&mut all, model, &roots, false, false);
         for root in &roots {
             let subjects: BTreeSet<String> = model
                 .workspace
@@ -730,7 +730,13 @@ fn t3_digest_scoped_equals_unscoped() {
                     raw: WitnessScope::Subjects(subjects),
                 },
             );
-            let scoped = digest_effects(&mut scoped_tree, model, std::slice::from_ref(root), false);
+            let scoped = digest_effects(
+                &mut scoped_tree,
+                model,
+                std::slice::from_ref(root),
+                false,
+                false,
+            );
             let mut one = |e: &DigestEffects| {
                 let entry = e.entries.iter().find(|x| &x.routine_id == root);
                 inherited_seen += entry.map_or(0, |x| {
@@ -893,9 +899,9 @@ fn fingerprint_witness_boundary_trigger_and_event() {
                 include_inherited: true,
                 witness_limit: WitnessLimit::Capped(3),
             },
+            Some(&BTreeSet::from([root.clone()])),
             false,
             &crate::engine::l4::effect_query_cli::OwnerIndex::build(model),
-            primary_guid_of(model),
             &|id| primary.contains(id),
         );
         assert!(
@@ -998,7 +1004,7 @@ fn prove_scoped_equals_unscoped() {
                     raw: WitnessRequest::Primary.scope(model),
                 },
             );
-            let unscoped = digest_effects(&mut all, model, &roots, false);
+            let unscoped = digest_effects(&mut all, model, &roots, false, true);
             for root in &roots {
                 let mut scoped_tree = tree_of(
                     model,
@@ -1010,8 +1016,13 @@ fn prove_scoped_equals_unscoped() {
                         raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
                     },
                 );
-                let scoped =
-                    digest_effects(&mut scoped_tree, model, std::slice::from_ref(root), false);
+                let scoped = digest_effects(
+                    &mut scoped_tree,
+                    model,
+                    std::slice::from_ref(root),
+                    false,
+                    true,
+                );
                 let mut one = |e: &DigestEffects| {
                     let entry = e.entries.iter().find(|x| &x.routine_id == root);
                     inherited_seen += entry.map_or(0, |x| {
@@ -1021,9 +1032,9 @@ fn prove_scoped_equals_unscoped() {
                             .count()
                     });
                     let cone = &e.unresolved[root];
-                    gaps_seen += cone.gaps_in_cone;
+                    gaps_seen += cone.gaps_in_cone.expect("prove's plan counts the gaps");
                     format!(
-                        "{:?}\n{:?}\n{:?}\n{}",
+                        "{:?}\n{:?}\n{:?}\n{:?}",
                         entry.map(|x| &x.effects),
                         cone.items,
                         cone.traversal,
@@ -1056,6 +1067,10 @@ fn prove_scoped_equals_unscoped() {
 /// witnesses and evidence) equals the same query's over a tree with
 /// `WitnessRequest::Primary`. DISCRIMINATION: `Roots`' scope dropping its
 /// subjects (`.take(0)` in `scope`) loses the inherited facts and fails it.
+/// Final panel O4: in each universe the model's `totalClassifications`
+/// (`selector_failure_result`, the count a failing selector prints with no
+/// tree) equals the tree's. DISCRIMINATION: dropping its primary filter
+/// fails it.
 #[test]
 fn fingerprint_query_scoped_equals_unscoped() {
     use crate::engine::l5::fingerprint_query::{
@@ -1081,7 +1096,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
     for (i, t) in tmps.iter().enumerate() {
         dirs.push((format!("dependency fixture {i}"), t.path().to_path_buf()));
     }
-    let (mut roots_seen, mut inherited_seen) = (0usize, 0usize);
+    let (mut roots_seen, mut inherited_seen, mut totals_seen) = (0usize, 0usize, 0usize);
     let mut failures: Vec<String> = Vec::new();
     for (name, dir) in &dirs {
         for single in [true, false] {
@@ -1099,7 +1114,6 @@ fn fingerprint_query_scoped_equals_unscoped() {
             };
             let owners = crate::engine::l4::effect_query_cli::OwnerIndex::build(model);
             let primary = primary_stable_ids(model);
-            let guid = primary_guid_of(model);
             let query = |tree: &crate::engine::l5::snapshot::CapabilitySnapshot, r: &str| {
                 let res = fingerprint_query(
                     tree,
@@ -1109,9 +1123,9 @@ fn fingerprint_query_scoped_equals_unscoped() {
                         include_inherited: true,
                         witness_limit: WitnessLimit::Capped(3),
                     },
+                    Some(&BTreeSet::from([r.to_string()])),
                     false,
                     &owners,
-                    guid,
                     &|id| primary.contains(id),
                 );
                 (format!("{:?}\n{:?}", res.blocks, res.diagnostics), res)
@@ -1126,6 +1140,19 @@ fn fingerprint_query_scoped_equals_unscoped() {
                     raw: WitnessRequest::Primary.scope(model),
                 },
             );
+            // Final panel O4: a failing selector's count, read off the model
+            // with no tree, is the count the tree gives.
+            let tree_total = query(&all, "").1.total_classifications;
+            let model_total =
+                crate::engine::l5::fingerprint_query::selector_failure_result(model, vec![], false)
+                    .total_classifications;
+            totals_seen += tree_total;
+            if tree_total != model_total {
+                failures.push(format!(
+                    "{name} (single-app {single}): totalClassifications {model_total} off the \
+                     model, {tree_total} off the tree"
+                ));
+            }
             let roots: BTreeSet<String> = model
                 .root_classifications
                 .iter()
@@ -1169,6 +1196,10 @@ fn fingerprint_query_scoped_equals_unscoped() {
         "precondition: roots compared ({roots_seen})"
     );
     assert!(inherited_seen > 0, "precondition: inherited facts compared");
+    assert!(
+        totals_seen > 0,
+        "precondition: classification counts compared"
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

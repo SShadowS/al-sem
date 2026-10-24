@@ -2,7 +2,15 @@
 //!
 //! `run_fingerprint_pipeline` assembles the workspace, composes the consumed-core
 //! snapshot, runs the query, and format-dispatches per the contract from
-//! `src/cli/fingerprint.ts`:
+//! `src/cli/fingerprint.ts`. Two forms branch off first (#160 step 9, S′),
+//! each on a `View` of the target (cross-app by default, `--single-app` for
+//! the workspace alone) instead of the single-app cut:
+//!
+//! - a query with `--routine` (rows 5 and 6 below): `run_routine_query`
+//!   resolves the selectors from the model, reads the query off the view's
+//!   tree inside `prepare`, and projects the owned result;
+//! - `--inventory-only`: `run_inventory_only` assembles the five inventory keys
+//!   off a tree with no raw facts.
 //!
 //! ## Format dispatch (fingerprint.ts:207-298)
 //!
@@ -34,10 +42,9 @@ use crate::engine::l5::digest_cli::primary_guid_of;
 use crate::engine::l5::fingerprint_query::{
     FingerprintFilters, FingerprintQueryDiagnostic, WitnessLimit, fingerprint_query,
     format_fingerprint_human_verbosity, primary_stable_ids, project_fingerprint_query_full,
+    resolve_routine_selectors, selector_failure_result,
 };
-use crate::engine::l5::selector_index::{
-    build_selector_indexes, narrow_to_owner, resolve_selector,
-};
+use crate::engine::l5::selector_index::build_selector_indexes;
 use crate::engine::l5::snapshot::{compose_snapshot, derive_identity_table};
 use crate::engine::l5::snapshot_full::{
     EnvelopeDiagnostic, FullSnapshotOptions, build_inventory_envelope, compose_full_snapshot,
@@ -494,18 +501,18 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     }
 
     // Query path with no `--routine`: json-with-query or human, on the cut.
-    // Compose the consumed-core snapshot (not the full CBOR tree).
+    // Compose the consumed-core snapshot (not the full CBOR tree). With no
+    // selector, no selector can fail.
     let snap = compose_snapshot(resolved);
     let filters = query_filters(opts);
     let owners = OwnerIndex::build(resolved);
-    let guid = primary_guid_of(resolved);
     let primary = primary_stable_ids(resolved);
     let result = fingerprint_query(
         &snap,
         &filters,
+        None,
         roots_config_ignored,
         &owners,
-        guid,
         &|id| primary.contains(id),
     );
     Ok(emit_query(
@@ -513,8 +520,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         &result,
         &filters,
         &analyzer_diags,
-        &owners,
-        || build_selector_indexes(&snap.identities, guid),
+        &|_| Vec::new(),
     ))
 }
 
@@ -530,9 +536,16 @@ fn query_filters(opts: &FingerprintOptions) -> FingerprintFilters {
 }
 
 /// `fingerprint --routine` (#160 step 9 D3): the view of the target (cross-app
-/// by default), the selectors resolved to a pool from the model alone, the
-/// query read off the view's tree inside `prepare` (the tree is dropped there)
-/// and the output from its owned result.
+/// by default) and the selectors resolved once, from the model alone (final
+/// panel C5). A resolved pool: the query is read off the view's tree inside
+/// `prepare` (the tree is dropped there), and the view dies before the
+/// projection, which reads only the owned result (O3). A failing selector: no
+/// tree at all, the result off the model (O4).
+///
+/// `--strict` gates after `prepare`, before any output: its diagnostics are the
+/// detector run's, and that run reads the one composition the tree reads, so
+/// they exist only once the tree has been composed (the cut composed twice:
+/// once for its run, once again, after the gate, for the snapshot).
 fn run_routine_query(opts: &FingerprintOptions) -> Result<FingerprintRunResult, String> {
     let target = AnalysisTarget::build_with(
         opts.inputs,
@@ -541,30 +554,57 @@ fn run_routine_query(opts: &FingerprintOptions) -> Result<FingerprintRunResult, 
         "fingerprint",
     )?;
     let roots_config_ignored = opts.no_roots_config && opts.inputs.roots_config_loaded();
-    let filters = query_filters(opts);
     let mut view = View::new(target);
-    // The pool: every selector that names exactly one primary routine, as the
-    // query resolves it; a failing selector adds nothing (its diagnostic comes
-    // from the query).
-    let pool: std::collections::BTreeSet<String> = {
+    // #239's hint lines, kept for each unresolved selector while the model's
+    // owner index is at hand (read only by a human selector error).
+    let mut declared: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let resolution = {
         let model = view.model();
-        let identities = derive_identity_table(model);
-        let idx = build_selector_indexes(&identities, primary_guid_of(model));
+        let idx = build_selector_indexes(&derive_identity_table(model), primary_guid_of(model));
         let owners = OwnerIndex::build(model);
-        opts.routine_selectors
-            .iter()
-            .filter_map(|sel| {
-                let (m, form) = resolve_selector(sel, &idx);
-                let m = narrow_to_owner(sel, form, m, |id| owners.object_display(id));
-                (m.len() == 1).then(|| m.into_iter().next().expect("one match"))
-            })
-            .collect()
+        let resolution = resolve_routine_selectors(&opts.routine_selectors, &idx, &owners);
+        if let Err(diags) = &resolution {
+            for d in diags {
+                if let FingerprintQueryDiagnostic::SelectorUnresolved { selector } = d {
+                    let lines = crate::engine::l5::selector_index::owner_check_candidates(
+                        selector,
+                        &idx,
+                        |id, display| owners.qualified(id, display),
+                    );
+                    declared.insert(selector.clone(), lines);
+                }
+            }
+        }
+        resolution
+    };
+    let pool = match resolution {
+        Ok(pool) => pool,
+        Err(diags) => {
+            let plan = fingerprint_plan(default_detectors());
+            let key = plan.keys().remove(0);
+            view.prepare(&plan);
+            let analyzer_diags = analyzer_diags_for(&view, &key);
+            drop(view.take_run(&key));
+            view.release_all_but(&[]);
+            if let Some(r) = strict_gate(opts, &analyzer_diags) {
+                return Ok(r);
+            }
+            let result = selector_failure_result(view.model(), diags, roots_config_ignored);
+            view.census_output();
+            return Ok(emit_query(
+                opts,
+                &result,
+                &query_filters(opts),
+                &analyzer_diags,
+                &|sel| declared.get(sel).cloned().unwrap_or_default(),
+            ));
+        }
     };
     let plan = fingerprint_query_plan(
         default_detectors(),
         pool,
         QueryRead {
-            filters: filters.clone(),
+            filters: query_filters(opts),
             roots_config_ignored,
         },
     );
@@ -579,18 +619,14 @@ fn run_routine_query(opts: &FingerprintOptions) -> Result<FingerprintRunResult, 
     if let Some(r) = strict_gate(opts, &analyzer_diags) {
         return Ok(r);
     }
-    let model = view.model();
-    let owners = OwnerIndex::build(model);
     view.census_output();
+    drop(view);
     Ok(emit_query(
         opts,
         &result,
-        &filters,
+        &query_filters(opts),
         &analyzer_diags,
-        &owners,
-        // #239's hint, on the error path only: the model's identity table,
-        // the one the tree held.
-        || build_selector_indexes(&derive_identity_table(model), primary_guid_of(model)),
+        &|_| Vec::new(),
     ))
 }
 
@@ -667,15 +703,15 @@ fn strict_gate(
 }
 
 /// The query's output (json or human) from its result, shared by the cut and
-/// the view's tree. `hint_index` builds #239's selector index, only when a
-/// human selector error needs it.
+/// the view's tree. `declared_owners` gives #239's hint for an unresolved
+/// selector: the owners that do declare its routine (read only by a human
+/// selector error; a query with no failing selector passes an empty one).
 fn emit_query(
     opts: &FingerprintOptions,
     result: &crate::engine::l5::fingerprint_query::FingerprintQueryResult,
     filters: &FingerprintFilters,
     analyzer_diags: &[(String, String, String)],
-    owners: &OwnerIndex<'_>,
-    hint_index: impl FnOnce() -> crate::engine::l5::selector_index::SelectorIndexes,
+    declared_owners: &dyn Fn(&str) -> Vec<String>,
 ) -> FingerprintRunResult {
     let workspace = opts.inputs.workspace.as_path();
     let workspace_fp = crate::engine::l5::snapshot_full::workspace_fingerprint_of(
@@ -701,16 +737,11 @@ fn emit_query(
             // Human selector errors → stderr, exit 2, no stdout (fingerprint.ts:301).
             // #239: an `<owner>::<routine>` selector whose owner declares no such
             // routine gets one hint line naming the owners that do.
-            let idx = hint_index();
             let mut msg = String::new();
             for d in selector_errors {
                 msg.push_str(&format_selector_errors_human(std::slice::from_ref(d)));
                 if let FingerprintQueryDiagnostic::SelectorUnresolved { selector } = d {
-                    let declared = crate::engine::l5::selector_index::owner_check_candidates(
-                        selector,
-                        &idx,
-                        |id, display| owners.qualified(id, display),
-                    );
+                    let declared = declared_owners(selector);
                     if !declared.is_empty() {
                         msg.push_str(&format!(
                             "  no routine of that name on the named owner; declared as: {}\n",

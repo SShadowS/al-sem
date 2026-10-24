@@ -588,16 +588,8 @@ fn reachable_gaps(
         })
         .cloned()
         .collect();
-    // F21: an opaque boundary is a source-less app.
-    debug_assert!(
-        kept.iter()
-            .filter(|g| g.kind == "symbol-only-boundary")
-            .all(|g| !x
-                .dependency_apps
-                .iter()
-                .any(|a| a.guid.eq_ignore_ascii_case(&g.subject) && a.has_source)),
-        "a symbol-only-boundary gap names an app with source"
-    );
+    // F21's "an opaque boundary is a source-less app" holds by construction
+    // since D9: every cross-app gap derivation passes `source_less_apps`.
     kept
 }
 

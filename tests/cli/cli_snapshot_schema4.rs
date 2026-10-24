@@ -508,7 +508,7 @@ fn gap_app_gets_its_apps_row() {
 /// gap for DD's dependency.
 ///
 /// Break: count `parse_incomplete` rows into the opaque apps -> the app gap
-/// appears (or the F21 `has_source` assert fires).
+/// appears.
 #[test]
 fn parse_error_body_is_not_symbol_only() {
     let dir = dd_dir();
@@ -637,12 +637,12 @@ fn gap_app_subject_matches_case_insensitively() {
 
 /// Review F-3b, rewritten by #160 step 9 D9: an app WITH source that owns a
 /// reached body-less row (`dddd…`'s `has_source` hand-stated `true`) gets no
-/// app-level `symbol-only-boundary` gap, so F21's assertion (still in
-/// `reachable_gaps`) cannot fire on this path: each of its body-less rows gets
-/// a `body-unavailable` gap instead. Before D9 this case fired the assertion.
+/// app-level `symbol-only-boundary` gap (F21 holds by construction): each of
+/// its body-less rows gets a `body-unavailable` gap instead. Before D9 this
+/// case fired F21's debug assertion, since deleted (step 9 final panel O7).
 ///
 /// Break: D9's source-less filter removed from `derive_analysis_gaps` -> the
-/// `symbol-only-boundary` gap comes back and the debug assertion fires.
+/// `symbol-only-boundary` gap comes back.
 #[test]
 fn opaque_gap_of_an_app_with_source_is_per_routine() {
     let mut b = build(&r5b(), false);

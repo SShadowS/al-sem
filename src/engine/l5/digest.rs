@@ -4067,16 +4067,6 @@ fn digest_one_root<'i>(
             // A group's detail (spec §14.3.5 item 3): the dependency routine it
             // enters, its distinct resources' count and the first 10 of them,
             // in resource-id order. Values stay strings.
-            let group_resources: Vec<(String, String)> = acc
-                .group
-                .as_ref()
-                .map(|(_, resources)| {
-                    resources
-                        .iter()
-                        .map(|(id, display)| (id.clone(), display.clone()))
-                        .collect()
-                })
-                .unwrap_or_default();
             let detail = match &acc.group {
                 Some((b, resources)) => vec![
                     ("boundary".to_string(), b.display.clone()),
@@ -4117,9 +4107,15 @@ fn digest_one_root<'i>(
             // effectConditionality across ALL pre-capping paths (#8).
             let conditionality = acc.via.conditionality();
 
+            let boundary_group = acc.group.is_some();
+            // The group's whole resource set, moved (not copied): prove reads it.
+            let group_resources: Vec<(String, String)> = acc
+                .group
+                .map(|(_, resources)| resources.into_iter().collect())
+                .unwrap_or_default();
             effects.push(DigestEffectResult {
                 effect_type: acc.effect_type.to_string(),
-                boundary_group: acc.group.is_some(),
+                boundary_group,
                 detail,
                 provenance: acc.provenance,
                 evidence: ProjectedEvidence {
@@ -5065,16 +5061,15 @@ impl PathBoundary {
 
 /// [`PathBoundary`] of boundary `b`, anchored at the path's terminal hop.
 fn path_boundary(b: &BoundaryEnd, terminal: Option<&WitnessHop>) -> PathBoundary {
+    // Every boundary identity is `cs:`, `op:` or `ev:` (`boundary_terminal`).
     let (kind, target) = if let Some(t) = b.id.strip_prefix("cs:") {
         (PathBoundaryKind::Call, t)
     } else if let Some(t) = b.id.strip_prefix("op:") {
         (PathBoundaryKind::Trigger, t)
+    } else if let Some(t) = b.id.strip_prefix("ev:") {
+        (PathBoundaryKind::Event, t)
     } else {
-        // Every boundary identity is `cs:`, `op:` or `ev:` (`boundary_terminal`).
-        (
-            PathBoundaryKind::Event,
-            b.id.strip_prefix("ev:").unwrap_or(&b.id),
-        )
+        unreachable!("a boundary identity with no cs:/op:/ev: prefix: {}", b.id)
     };
     let (file, line, column) = match terminal {
         Some(WitnessHop::Terminal {
