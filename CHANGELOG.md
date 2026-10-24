@@ -26,8 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads `(interface-open-world; unresolved: Strategy.NextKm (line 11))` instead of
   `partly analysed: ReleaseOnRegistered (Codeunit 50104)`. "Unresolved" means a call whose
   callee set is not closed for this proof (interface-open-world, ambiguous-overload,
-  external-target, member-not-found). The subscriber stays listed when a gap of its own
-  has no located site, or another row with its id is opaque or parse-incomplete. Limit: a
+  external-target, member-not-found). A site in unreachable code is not named. The
+  subscriber stays listed when a gap of its own has no located reachable site in its own
+  row, or another row with its id is opaque or parse-incomplete. Limit: a
   subscriber in a dependency app (`--scope all`) keeps the old text, because its own
   uncertainty edges are not on the detector context. Ids, fingerprints, severity and
   confidence do not change.

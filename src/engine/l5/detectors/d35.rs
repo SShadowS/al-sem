@@ -28,9 +28,10 @@
 //! here means a call whose callee set is not closed for this proof (the
 //! call-site-local kinds: interface-open-world, ambiguous-overload,
 //! external-target, member-not-found), not the `unresolved-call` uncertainty
-//! kind, which is left out. The subscriber stays under "partly analysed" unless
-//! every own gap is accounted for: a site was named, every own edge's site was
-//! found, and no other row with its id is opaque or parse-incomplete. Primary
+//! kind, which is left out. A site in unreachable code is not named. The
+//! subscriber stays under "partly analysed" unless every own gap is accounted
+//! for: a site was named, every own edge's site was found (in its own row, and
+//! reachable), and no other row with its id is opaque or parse-incomplete. Primary
 //! subscribers only: a dependency subscriber's own edges are not on the
 //! detector context, so it keeps the #148 text (stated limit).
 //!
@@ -311,7 +312,9 @@ fn coverage_reasons(
         let cs = u
             .callsite_id
             .as_deref()
-            .and_then(|id| routine.call_sites.iter().find(|cs| cs.id == id));
+            .and_then(|id| routine.call_sites.iter().find(|cs| cs.id == id))
+            // Dead code is not the gap to point at (the cone's facts skip it).
+            .filter(|cs| cs.control_context.as_deref() != Some("unreachable"));
         let Some(cs) = cs else {
             every_site_found = false;
             continue;
@@ -674,6 +677,29 @@ mod tests {
                 "interface-open-world; unresolved: X (line 5); partly analysed: sub (Codeunit 1)",
             );
         }
+    }
+
+    /// #265 CR4: a site in unreachable code is not named (the cone's own fact
+    /// pass skips it); it counts as not found, so the subscriber stays listed.
+    #[test]
+    fn unreachable_own_site_is_not_named() {
+        let mut dead = site_at("cs-dead", "Dead", 6, 0);
+        dead.control_context = Some("unreachable".to_string());
+        let mut sub = routine("sub", "event-subscriber");
+        sub.call_sites = vec![site_at("cs1", "X", 4, 0), dead];
+        let routines = vec![sub];
+        let f = finding_with_edges(
+            &routines,
+            partial(&["interface-open-world"], &["sub"]),
+            vec![
+                own_edge("interface-open-world", "cs1"),
+                own_edge("interface-open-world", "cs-dead"),
+            ],
+        );
+        assert_unknown_with(
+            &f,
+            "interface-open-world; unresolved: X (line 5); partly analysed: sub (Codeunit 1)",
+        );
     }
 
     /// #265 CR1: two rows share the subscriber's id (e.g. `#if` alternatives), so
