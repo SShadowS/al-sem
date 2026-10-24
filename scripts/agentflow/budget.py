@@ -22,7 +22,7 @@ CAPS: dict[str, int] = {
     "subagents": 60,
     "pi_calls": 20,
 }
-WALL_CLOCK_SECONDS = 10 * 3600
+WALL_CLOCK_SECONDS = 24 * 3600
 _DEADLINE_MSG = f"{WALL_CLOCK_SECONDS // 3600} h wall-clock cap reached"
 
 
