@@ -10,12 +10,13 @@ use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l5::detector_context::{compose_capabilities, det_cone_inputs};
 use crate::engine::l5::digest::DigestEffectResult;
-use crate::engine::l5::snapshot::{compose_snapshot, compose_tree};
+use crate::engine::l5::snapshot::{compose_snapshot, compose_tree, source_less_apps};
 use crate::engine::l5::test_support::{
     write_fixture_dep_ambiguous, write_fixture_dep_uncertainty, write_fixture_rule_b,
     write_fixture_symbol_only_dep,
 };
 use crate::engine::session::digest_plan;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -281,6 +282,7 @@ fn an_event_boundary_group_is_in_the_may_relations() {
         model,
         &base.rel,
         base.dependency_calls.as_deref().unwrap_or(&[]),
+        &source_less_apps(&base.dependency_apps),
         ConeScope {
             derived: false,
             raw: WitnessScope::All,
@@ -401,11 +403,28 @@ fn tree_of(
     model: &Model,
     rel: &ExecRelation,
     calls: &[crate::program::model::calls::CallEdge],
+    source_less: &HashSet<String>,
     scope: ConeScope,
 ) -> crate::engine::l5::snapshot::CapabilitySnapshot {
     let (mut caps, raw) =
         compose_capabilities(model, rel.cone(), det_cone_inputs(model, rel), scope);
-    compose_tree(model, rel.cone(), calls, &mut caps, raw, &HashMap::new())
+    compose_tree(
+        model,
+        rel.cone(),
+        calls,
+        &mut caps,
+        raw,
+        &HashMap::new(),
+        source_less,
+    )
+}
+
+/// D9's source-less dependency apps of `target` (#160 step 9); none single-app.
+fn source_less_of(target: &AnalysisTarget) -> HashSet<String> {
+    match target {
+        AnalysisTarget::SingleApp(_) => HashSet::new(),
+        AnalysisTarget::CrossApp(b) => source_less_apps(&b.dependency_apps),
+    }
 }
 
 fn cross_base(ws: &Path) -> crate::engine::l4::capability_cone::R3a5CrossAppBase {
@@ -439,6 +458,7 @@ fn t7a_a_dependency_callers_rows_are_the_ledgers() {
         model,
         &base.rel,
         base.dependency_calls.as_deref().unwrap_or(&[]),
+        &source_less_apps(&base.dependency_apps),
         ConeScope {
             derived: true,
             raw: WitnessScope::None,
@@ -505,6 +525,7 @@ fn t7b_a_call_into_a_body_less_dependency_row_is_unfetched() {
         model,
         &base.rel,
         base.dependency_calls.as_deref().unwrap_or(&[]),
+        &source_less_apps(&base.dependency_apps),
         ConeScope {
             derived: true,
             raw: WitnessScope::None,
@@ -544,6 +565,7 @@ fn t8_the_trees_coverage_is_the_det_cells() {
         model,
         view.rel(),
         &[],
+        &HashSet::new(),
         ConeScope {
             derived: false,
             raw: WitnessScope::All,
@@ -670,6 +692,7 @@ fn t3_digest_scoped_equals_unscoped() {
             continue;
         };
         let model = target.resolved();
+        let sl = source_less_of(&target);
         let (rel, calls) = match &target {
             AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
             AnalysisTarget::CrossApp(b) => (
@@ -682,6 +705,7 @@ fn t3_digest_scoped_equals_unscoped() {
             model,
             &rel,
             calls,
+            &sl,
             ConeScope {
                 derived: false,
                 raw: WitnessScope::All,
@@ -700,6 +724,7 @@ fn t3_digest_scoped_equals_unscoped() {
                 model,
                 &rel,
                 calls,
+                &sl,
                 ConeScope {
                     derived: false,
                     raw: WitnessScope::Subjects(subjects),
@@ -737,4 +762,507 @@ fn t3_digest_scoped_equals_unscoped() {
         "precondition: transitive effects compared"
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #160 step 9 T25 (trigger and event arms, spec §5, S9-2): the fingerprint
+/// query's witness path names its rule-B boundary per kind. No compilable AL
+/// gives either edge cross-app (a workspace record operation's dependency
+/// trigger is a to-less external target, and a dependency cannot subscribe to a
+/// workspace event), so each arm adds the edge to the tree by hand, as
+/// `an_event_boundary_group_is_in_the_may_relations` does: `WriteThenRaise` →
+/// the dependency's `DoHttp` by an implicit trigger of its `Ws Log` insert
+/// (`op:`), or by an event dispatch from its `OnWsEvent` (`ev:`), and
+/// `CallHttp`'s inherited HTTP send moved onto `WriteThenRaise`.
+/// Assertion: the send's path ends at a `trigger` / `event` boundary with that
+/// identity and the operation's / publish site's anchor, and the witness's
+/// evidence is that boundary. DISCRIMINATION: B3, `path_boundary` filling
+/// call-site edges only, fails both arms.
+#[test]
+fn fingerprint_witness_boundary_trigger_and_event() {
+    use crate::engine::l5::fingerprint_query::{
+        FactEvidence, FingerprintFilters, WitnessLimit, fingerprint_query, primary_stable_ids,
+    };
+    use crate::engine::l5::snapshot::SnapshotGraphEdge;
+    for arm in ["trigger", "event"] {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine::l5::test_support::write_fixture_rule_b_event(tmp.path());
+        let base = cross_base(tmp.path());
+        let model = &base.resolved;
+        let id = |name: &str| -> String {
+            model
+                .workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("precondition: {name}"))
+                .stable_routine_id
+                .clone()
+        };
+        let (root, publisher, dep, call_http) = (
+            id("WriteThenRaise"),
+            id("OnWsEvent"),
+            id("DoHttp"),
+            id("CallHttp"),
+        );
+        let mut tree = tree_of(
+            model,
+            &base.rel,
+            base.dependency_calls.as_deref().unwrap_or(&[]),
+            &source_less_apps(&base.dependency_apps),
+            ConeScope {
+                derived: false,
+                raw: WitnessScope::All,
+            },
+        );
+        let mut fact = tree
+            .capability_facts
+            .iter()
+            .find(|f| f.subject == call_http && f.provenance == "inherited" && f.op == "send")
+            .expect("precondition: CallHttp's inherited HTTP send fact")
+            .clone();
+        fact.subject = root.clone();
+        // (the boundary identity, its anchor file and line)
+        let (want_id, want_file, want_line) = match arm {
+            "trigger" => {
+                let op = tree
+                    .operation_index
+                    .iter()
+                    .find(|o| o.routine == root)
+                    .expect("precondition: WriteThenRaise's Ws Log insert")
+                    .clone();
+                tree.typed_edges.push(SnapshotGraphEdge::ImplicitTrigger {
+                    kind: "implicit-trigger",
+                    from: root.clone(),
+                    to: dep.clone(),
+                    operation_id: op.operation_id.clone(),
+                    trigger_kind: "OnInsert".to_string(),
+                    fires: crate::engine::l4::combined_graph::TriggerFires::Always,
+                    anchor: None,
+                    edge_id: "t25-trigger".to_string(),
+                });
+                fact.witness_callsite_id = None;
+                fact.witness_first_hop_operation_id = Some(op.operation_id.clone());
+                (
+                    format!("op:{}", op.operation_id),
+                    op.source_file.clone(),
+                    op.start_line,
+                )
+            }
+            _ => {
+                let (cs, anchor) = tree
+                    .typed_edges
+                    .iter()
+                    .find_map(|e| match e {
+                        SnapshotGraphEdge::DirectCall {
+                            from,
+                            to,
+                            callsite_id,
+                            source_anchor,
+                            ..
+                        } if *from == root && *to == publisher => {
+                            Some((callsite_id.clone(), source_anchor.clone()))
+                        }
+                        _ => None,
+                    })
+                    .expect("precondition: WriteThenRaise calls OnWsEvent");
+                let event_id = "test/Codeunit/50191/event/onwsevent".to_string();
+                tree.typed_edges.push(SnapshotGraphEdge::EventDispatch {
+                    kind: "event-dispatch",
+                    from: publisher.clone(),
+                    to: dep.clone(),
+                    event_id: event_id.clone(),
+                    publish_anchor: anchor.clone(),
+                    subscriber_anchor: anchor.clone(),
+                    edge_id: "t25-dispatch".to_string(),
+                });
+                fact.witness_callsite_id = Some(cs);
+                (
+                    format!("ev:{event_id}"),
+                    anchor.source_unit_id.clone(),
+                    anchor.range.start_line,
+                )
+            }
+        };
+        tree.capability_facts.push(fact);
+        let primary = primary_stable_ids(model);
+        let result = fingerprint_query(
+            &tree,
+            &FingerprintFilters {
+                roots: None,
+                routine_selectors: vec![root.clone()],
+                include_inherited: true,
+                witness_limit: WitnessLimit::Capped(3),
+            },
+            false,
+            &crate::engine::l4::effect_query_cli::OwnerIndex::build(model),
+            primary_guid_of(model),
+            &|id| primary.contains(id),
+        );
+        assert!(
+            result.diagnostics.is_empty(),
+            "{arm}: {:?}",
+            result.diagnostics
+        );
+        let block = &result.blocks[0];
+        let (fi, _) = block
+            .rendered_facts
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.op == "send" && f.provenance == "inherited")
+            .unwrap_or_else(|| panic!("{arm}: precondition: the send fact is rendered"));
+        let w = block
+            .witnesses
+            .iter()
+            .find(|w| w.fact_index == fi)
+            .expect("its witness");
+        let b = w
+            .paths
+            .iter()
+            .find_map(|p| p.boundary.as_ref())
+            .unwrap_or_else(|| {
+                panic!(
+                    "{arm}: a path names its boundary: {:?} {:?}",
+                    w.paths, w.diagnostics
+                )
+            });
+        assert_eq!(b.kind.as_str(), arm, "{arm}: {b:?}");
+        assert_eq!(b.id, want_id, "{arm}");
+        assert_eq!(
+            (b.file.as_deref(), b.line),
+            (Some(want_file.as_str()), Some(want_line)),
+            "{arm}: the anchor"
+        );
+        assert!(
+            matches!(&w.evidence, Some(FactEvidence::Boundary(e)) if e == b),
+            "{arm}: the evidence is the boundary: {:?}",
+            w.evidence
+        );
+    }
+}
+
+/// #160 step 9 T17 (prove arm, 6A-9): prove reads one root's effects,
+/// unresolved cone and gap count off a tree whose witness request is
+/// `Roots({root})` (`prove_pipeline_with`'s `digest_plan`). For every
+/// reportable root of every r0 dir and of the dependency fixtures, in both
+/// universes, those equal the same root's under `WitnessRequest::Primary`
+/// (every primary routine a subject). The subjects come from
+/// `WitnessRequest::scope`, the view's own mapping. DISCRIMINATION:
+/// `Roots`' scope dropping its subjects (`.take(0)` in `scope`) loses the
+/// root's transitive effects and fails it.
+#[test]
+fn prove_scoped_equals_unscoped() {
+    use crate::engine::session::WitnessRequest;
+    let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+    let mut r0_dirs: Vec<_> = walkdir::WalkDir::new(&r0)
+        .into_iter()
+        .map(|e| e.unwrap().into_path())
+        .filter(|p| p.join("app.json").is_file())
+        .collect();
+    r0_dirs.sort();
+    for d in r0_dirs {
+        dirs.push((d.display().to_string(), d));
+    }
+    let tmps: Vec<tempfile::TempDir> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
+    write_fixture_rule_b(tmps[0].path());
+    write_fixture_dep_ambiguous(tmps[1].path());
+    write_fixture_dep_uncertainty(tmps[2].path());
+    write_fixture_symbol_only_dep(tmps[3].path());
+    for (i, t) in tmps.iter().enumerate() {
+        dirs.push((format!("dependency fixture {i}"), t.path().to_path_buf()));
+    }
+    let (mut roots_seen, mut inherited_seen, mut gaps_seen) = (0usize, 0usize, 0usize);
+    let mut failures: Vec<String> = Vec::new();
+    for (name, dir) in &dirs {
+        for single in [true, false] {
+            let Ok(target) = AnalysisTarget::build(&inputs(dir), single, "prove") else {
+                continue;
+            };
+            let model = target.resolved();
+            let sl = source_less_of(&target);
+            let (rel, calls) = match &target {
+                AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
+                AnalysisTarget::CrossApp(b) => (
+                    Arc::clone(&b.rel),
+                    b.dependency_calls.as_deref().unwrap_or(&[]),
+                ),
+            };
+            let roots = crate::engine::l5::digest::reportable_roots(model);
+            let mut all = tree_of(
+                model,
+                &rel,
+                calls,
+                &sl,
+                ConeScope {
+                    derived: false,
+                    raw: WitnessRequest::Primary.scope(model),
+                },
+            );
+            let unscoped = digest_effects(&mut all, model, &roots, false);
+            for root in &roots {
+                let mut scoped_tree = tree_of(
+                    model,
+                    &rel,
+                    calls,
+                    &sl,
+                    ConeScope {
+                        derived: false,
+                        raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
+                    },
+                );
+                let scoped =
+                    digest_effects(&mut scoped_tree, model, std::slice::from_ref(root), false);
+                let mut one = |e: &DigestEffects| {
+                    let entry = e.entries.iter().find(|x| &x.routine_id == root);
+                    inherited_seen += entry.map_or(0, |x| {
+                        x.effects
+                            .iter()
+                            .filter(|f| f.provenance == "transitive")
+                            .count()
+                    });
+                    let cone = &e.unresolved[root];
+                    gaps_seen += cone.gaps_in_cone;
+                    format!(
+                        "{:?}\n{:?}\n{:?}\n{}",
+                        entry.map(|x| &x.effects),
+                        cone.items,
+                        cone.traversal,
+                        cone.gaps_in_cone
+                    )
+                };
+                if one(&scoped) != one(&unscoped) {
+                    failures.push(format!("{name} (single-app {single}): {root}"));
+                }
+                roots_seen += 1;
+            }
+        }
+    }
+    assert!(
+        roots_seen > 200,
+        "precondition: roots compared ({roots_seen})"
+    );
+    assert!(
+        inherited_seen > 0,
+        "precondition: transitive effects compared"
+    );
+    assert!(gaps_seen > 0, "precondition: gap counts compared");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #160 step 9 T17 (query arm, 6A-9): `fingerprint --routine R` reads a tree
+/// whose witness request is `Roots({R})` (the pool). For every root
+/// classification of every r0 dir and of the dependency fixtures, in both
+/// universes, the query's block for `--routine R` (its facts, coverage,
+/// witnesses and evidence) equals the same query's over a tree with
+/// `WitnessRequest::Primary`. DISCRIMINATION: `Roots`' scope dropping its
+/// subjects (`.take(0)` in `scope`) loses the inherited facts and fails it.
+#[test]
+fn fingerprint_query_scoped_equals_unscoped() {
+    use crate::engine::l5::fingerprint_query::{
+        FingerprintFilters, WitnessLimit, fingerprint_query, primary_stable_ids,
+    };
+    use crate::engine::session::WitnessRequest;
+    let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+    let mut r0_dirs: Vec<_> = walkdir::WalkDir::new(&r0)
+        .into_iter()
+        .map(|e| e.unwrap().into_path())
+        .filter(|p| p.join("app.json").is_file())
+        .collect();
+    r0_dirs.sort();
+    for d in r0_dirs {
+        dirs.push((d.display().to_string(), d));
+    }
+    let tmps: Vec<tempfile::TempDir> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
+    write_fixture_rule_b(tmps[0].path());
+    write_fixture_dep_ambiguous(tmps[1].path());
+    write_fixture_dep_uncertainty(tmps[2].path());
+    write_fixture_symbol_only_dep(tmps[3].path());
+    for (i, t) in tmps.iter().enumerate() {
+        dirs.push((format!("dependency fixture {i}"), t.path().to_path_buf()));
+    }
+    let (mut roots_seen, mut inherited_seen) = (0usize, 0usize);
+    let mut failures: Vec<String> = Vec::new();
+    for (name, dir) in &dirs {
+        for single in [true, false] {
+            let Ok(target) = AnalysisTarget::build(&inputs(dir), single, "fingerprint") else {
+                continue;
+            };
+            let model = target.resolved();
+            let sl = source_less_of(&target);
+            let (rel, calls) = match &target {
+                AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
+                AnalysisTarget::CrossApp(b) => (
+                    Arc::clone(&b.rel),
+                    b.dependency_calls.as_deref().unwrap_or(&[]),
+                ),
+            };
+            let owners = crate::engine::l4::effect_query_cli::OwnerIndex::build(model);
+            let primary = primary_stable_ids(model);
+            let guid = primary_guid_of(model);
+            let query = |tree: &crate::engine::l5::snapshot::CapabilitySnapshot, r: &str| {
+                let res = fingerprint_query(
+                    tree,
+                    &FingerprintFilters {
+                        roots: None,
+                        routine_selectors: vec![r.to_string()],
+                        include_inherited: true,
+                        witness_limit: WitnessLimit::Capped(3),
+                    },
+                    false,
+                    &owners,
+                    guid,
+                    &|id| primary.contains(id),
+                );
+                (format!("{:?}\n{:?}", res.blocks, res.diagnostics), res)
+            };
+            let all = tree_of(
+                model,
+                &rel,
+                calls,
+                &sl,
+                ConeScope {
+                    derived: false,
+                    raw: WitnessRequest::Primary.scope(model),
+                },
+            );
+            let roots: BTreeSet<String> = model
+                .root_classifications
+                .iter()
+                .filter_map(|rc| {
+                    model.workspace.routines.iter().find(|r| {
+                        r.id == rc.routine_id && primary.contains(r.stable_routine_id.as_str())
+                    })
+                })
+                .map(|r| r.stable_routine_id.clone())
+                .collect();
+            for root in &roots {
+                let scoped_tree = tree_of(
+                    model,
+                    &rel,
+                    calls,
+                    &sl,
+                    ConeScope {
+                        derived: false,
+                        raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
+                    },
+                );
+                let (got, _) = query(&scoped_tree, root);
+                // Counted on the unscoped side, so a scope that drops the
+                // subject reaches the comparison.
+                let (want, res) = query(&all, root);
+                inherited_seen += res
+                    .blocks
+                    .iter()
+                    .flat_map(|b| &b.rendered_facts)
+                    .filter(|f| f.provenance == "inherited")
+                    .count();
+                if got != want {
+                    failures.push(format!("{name} (single-app {single}): {root}"));
+                }
+                roots_seen += 1;
+            }
+        }
+    }
+    assert!(
+        roots_seen > 200,
+        "precondition: roots compared ({roots_seen})"
+    );
+    assert!(inherited_seen > 0, "precondition: inherited facts compared");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #160 step 9 T11 (spec §5): `fingerprint --inventory-only` (cross-app, on the
+/// rule-B fixture, whose source dependency `Dep Rec Lib` writes `Customer`)
+/// is the inventory envelope of `assemble_full_snapshot`'s five keys over a
+/// tree composed with `Roots(∅)`. Precondition: that tree holds no inherited
+/// fact. DISCRIMINATION: giving the plan `Roots(every primary routine)` keeps
+/// the dependency identities its inherited facts reference, and fails it (its
+/// counter half, `build.witness_pass` 0, is `cli_build_counters`'
+/// `fingerprint_inventory_only`).
+#[test]
+fn inventory_reads_a_tree_with_no_raw_facts() {
+    use crate::engine::l5::fingerprint_cli::{
+        FingerprintFormat, FingerprintOptions, FingerprintOutput, run_fingerprint_pipeline,
+    };
+    use crate::engine::l5::snapshot_full::{
+        FullSnapshotOptions, SnapshotKeys, SnapshotUniverse, assemble_full_snapshot,
+        build_inventory_envelope,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    write_fixture_rule_b(tmp.path());
+    let inputs = crate::program::inputs::InputSet::read(
+        tmp.path(),
+        &crate::program::inputs::InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        },
+    );
+    let got = match run_fingerprint_pipeline(&FingerprintOptions {
+        inputs: &inputs,
+        driver_version: "t",
+        format: FingerprintFormat::Json,
+        out: None,
+        shard: None,
+        witness_limit: None,
+        roots: None,
+        routine_selectors: Vec::new(),
+        include_inherited: true,
+        is_query_requested: false,
+        deterministic: true,
+        strict: false,
+        verbosity: "compact",
+        inventory_only: true,
+        no_roots_config: false,
+        single_app: false,
+    })
+    .expect("inventory runs")
+    .output
+    {
+        FingerprintOutput::Text(t) => t,
+        _ => panic!("inventory output is text"),
+    };
+    let target = AnalysisTarget::build(&inputs, false, "fingerprint").expect("cross-app");
+    let AnalysisTarget::CrossApp(b) = &target else {
+        unreachable!()
+    };
+    let model = &b.resolved;
+    let tree = tree_of(
+        model,
+        &b.rel,
+        b.dependency_calls.as_deref().unwrap_or(&[]),
+        &source_less_apps(&b.dependency_apps),
+        ConeScope {
+            derived: false,
+            // Hand-stated: no subject (what `Roots(∅)` must mean).
+            raw: WitnessScope::Subjects(BTreeSet::new()),
+        },
+    );
+    assert!(
+        tree.capability_facts
+            .iter()
+            .all(|f| f.provenance != "inherited"),
+        "precondition: no inherited fact in a Roots(∅) tree"
+    );
+    let keys = assemble_full_snapshot(
+        model,
+        tree,
+        crate::engine::gate::cbor::CborValue::Array(vec![]),
+        &FullSnapshotOptions {
+            inputs: &inputs,
+            driver_version: "t",
+            deterministic: true,
+            roots_config_ignored: false,
+            universe: SnapshotUniverse::of(&target),
+        },
+        SnapshotKeys::Inventory,
+    );
+    assert_eq!(keys.len(), 5, "the five inventory keys");
+    let want = build_inventory_envelope(
+        &crate::engine::gate::cbor::CborValue::Map(keys),
+        model,
+        "t",
+        true,
+    );
+    assert_eq!(got, want);
 }

@@ -1,0 +1,7 @@
+--- Codeunit Ws Work::CallChain ---
+  question: may-commit
+  answer:   unknown
+  blockedBy: 2 blocker(s)
+    [coverage-incomplete] coverage status: partial
+    [unresolved-callsite] Lib.Outer in CallChain
+  obligations: unresolved=1, coverage=incomplete

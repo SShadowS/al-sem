@@ -1,0 +1,49 @@
+{
+  "alsemVersion": "cli-prove-x-v1",
+  "deterministic": true,
+  "diagnostics": [
+    {
+      "code": "DIAG-detect",
+      "message": "d43-event-ishandled-skip: conditionReferences substrate empty; dispatch-site detection limited",
+      "severity": "warning"
+    }
+  ],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "prove",
+  "payload": {
+    "question": "may-commit",
+    "result": {
+      "answer": "unknown",
+      "blockedBy": [
+        {
+          "detail": "coverage status: partial",
+          "kind": "coverage-incomplete"
+        },
+        {
+          "detail": "Lib.Outer in CallChain",
+          "kind": "unresolved-callsite"
+        }
+      ],
+      "obligations": {
+        "analysisGaps": 0,
+        "coneTruncated": false,
+        "coverageComplete": false,
+        "openWorldRows": 0,
+        "unresolvedCallsites": 1
+      }
+    },
+    "routine": {
+      "anchor": {
+        "column": 4,
+        "file": "ws:src/Work.al",
+        "line": 12,
+        "sourceKind": "source"
+      },
+      "display": "CallChain",
+      "objectDisplay": "Codeunit Ws Work",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea"
+    },
+    "workspaceFingerprint": "205bfd298c228dc5e0b1082339118d4ba526231e65c8f5f36b68984aa499201d"
+  },
+  "schemaVersion": "1.4.0"
+}

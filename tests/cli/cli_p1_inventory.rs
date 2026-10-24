@@ -50,6 +50,9 @@ fn base_opts(inputs: &std::sync::Arc<al_sem::program::inputs::InputSet>) -> Fing
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        // The default: `--inventory-only` is cross-app since #160 step 9; B0
+        // stays single-app whatever this says.
+        single_app: false,
     }
 }
 
@@ -106,13 +109,32 @@ fn inventory_only_projection_subset_self_consistency() {
         inv_doc["payload"]["apps"][0]["role"], "primary",
         "#220: the inventory doc's apps rows carry role"
     );
+    // #160 step 9: the default inventory is cross-app; its `--single-app` twin
+    // keeps "single-app".
     assert_eq!(
-        inv_doc["payload"]["analysisUniverse"], "single-app",
+        inv_doc["payload"]["analysisUniverse"], "cross-app",
         "#220: the inventory payload carries analysisUniverse"
+    );
+    let mut single_opts = base_opts(&inputs);
+    single_opts.inventory_only = true;
+    single_opts.single_app = true;
+    let single_doc: serde_json::Value = match run_fingerprint_pipeline(&single_opts)
+        .unwrap_or_else(|e| panic!("single-app inventory error: {e}"))
+        .output
+    {
+        FingerprintOutput::Text(t) => serde_json::from_str(&t).expect("single-app doc"),
+        _ => panic!("expected Text from the single-app inventory"),
+    };
+    assert_eq!(
+        single_doc["payload"]["analysisUniverse"], "single-app",
+        "the --single-app twin"
     );
 
     // (a) Projection-subset self-consistency: apps, coverage, rootClassifications,
     //     identities must be BYTE-IDENTICAL (same sub-values from the same derivers).
+    //     #160 step 9: this compares the cross-app inventory with the single-app
+    //     B0 envelope; it holds because ws-d8 has no dependency (cross-app adds
+    //     no row).
     for key in &["apps", "coverage", "rootClassifications", "identities"] {
         let full_val = &full_doc["payload"][key];
         let inv_val = &inv_doc["payload"][key];
@@ -251,6 +273,7 @@ fn inventory_only_cbor_rejected() {
         verbosity: "compact",
         inventory_only: true,
         no_roots_config: false,
+        single_app: true,
     };
     // Must return Err (rejected combo).
     let result = run_fingerprint_pipeline(&opts);
@@ -307,6 +330,7 @@ fn inventory_doc_for(tag: &str, al_file: &str, al_source: &str) -> serde_json::V
         verbosity: "compact",
         inventory_only: true,
         no_roots_config: false,
+        single_app: true,
     };
     let result = run_fingerprint_pipeline(&opts)
         .unwrap_or_else(|e| panic!("inventory pipeline error for {tag}: {e}"));
@@ -514,6 +538,7 @@ fn inventory_only_query_selector_rejected() {
         verbosity: "compact",
         inventory_only: true,
         no_roots_config: false,
+        single_app: true,
     };
     // FingerprintRunResult is not Debug, so match the Result rather than unwrap_err().
     let msg = match run_fingerprint_pipeline(&opts) {

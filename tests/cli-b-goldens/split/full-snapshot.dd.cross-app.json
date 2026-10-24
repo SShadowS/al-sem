@@ -1,0 +1,636 @@
+{
+  "alsemVersion": "cli-split-v1",
+  "analysisGaps": [],
+  "analysisUniverse": "cross-app",
+  "apps": [
+    {
+      "appGuid": "aaaa7070-0000-0000-0000-000000000070",
+      "name": "Ws70",
+      "publisher": "probe",
+      "role": "primary",
+      "version": "1.0.0.0"
+    },
+    {
+      "appGuid": "bbbb7070-0000-0000-0000-000000000070",
+      "name": "XBase",
+      "publisher": "probe",
+      "role": "dependency",
+      "version": "1.0.0.0"
+    }
+  ],
+  "callsiteIndex": [
+    {
+      "calleeDisplay": "Lib.OnDepEvent",
+      "callsiteId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0",
+      "controlContext": "top-level",
+      "endColumn": 24,
+      "endLine": 23,
+      "order": {
+        "dominatesSuccessReturn": true,
+        "frameId": 0,
+        "onSuccessPath": true,
+        "orderId": 0
+      },
+      "routine": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "sourceFile": "ws:src/Work.al",
+      "startColumn": 8,
+      "startLine": 23
+    },
+    {
+      "calleeDisplay": "Lib.Outer",
+      "callsiteId": "e006898c62269d9f/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae/cs0",
+      "controlContext": "top-level",
+      "endColumn": 19,
+      "endLine": 16,
+      "order": {
+        "dominatesSuccessReturn": true,
+        "frameId": 0,
+        "onSuccessPath": true,
+        "orderId": 0
+      },
+      "routine": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+      "sourceFile": "ws:src/Work.al",
+      "startColumn": 8,
+      "startLine": 16
+    }
+  ],
+  "callsiteResolutions": [
+    {
+      "calleeDisplay": "Lib.Outer",
+      "callsiteId": "e006898c62269d9f/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae/cs0",
+      "dispatchKind": "method",
+      "from": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+      "resolvedEdges": [
+        "65a694905faa7926"
+      ],
+      "status": "resolved"
+    },
+    {
+      "calleeDisplay": "Lib.OnDepEvent",
+      "callsiteId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0",
+      "dispatchKind": "method",
+      "from": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "resolvedEdges": [
+        "4c5739b89ec6636a"
+      ],
+      "status": "resolved"
+    }
+  ],
+  "capabilityFacts": [
+    {
+      "confidence": "static",
+      "extra": {
+        "kind": "table",
+        "opSubtype": "Insert",
+        "recordVariableId": "e006898c62269d9f/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e/rv/flag",
+        "tempState": {
+          "kind": "known",
+          "value": false
+        }
+      },
+      "op": "insert",
+      "provenance": "inherited",
+      "resourceId": "aaaa7070-0000-0000-0000-000000000070/table/50170",
+      "resourceKind": "table",
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "via": "call",
+      "witnessCallsiteId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0",
+      "witnessOperationId": "e006898c62269d9f/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e/op0"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "kind": "table",
+        "opSubtype": "Insert",
+        "recordVariableId": "e006898c62269d9f/4ba11e038e944a00934ed700e76fefb9340e97686afe8ef35ea06b7906844a71/rv/cust",
+        "tempState": {
+          "kind": "known",
+          "value": false
+        }
+      },
+      "op": "insert",
+      "provenance": "inherited",
+      "resourceId": "bbbb7070-0000-0000-0000-000000000070/table/18",
+      "resourceKind": "table",
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "via": "call",
+      "witnessCallsiteId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0",
+      "witnessOperationId": "e006898c62269d9f/4ba11e038e944a00934ed700e76fefb9340e97686afe8ef35ea06b7906844a71/op0"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "eventClass": "Integration",
+        "kind": "event"
+      },
+      "op": "publish",
+      "provenance": "inherited",
+      "resourceId": "bbbb7070-0000-0000-0000-000000000070/Codeunit/10/event/ondepevent",
+      "resourceKind": "event",
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "via": "call",
+      "witnessCallsiteId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "eventClass": "Integration",
+        "kind": "event"
+      },
+      "op": "subscribe",
+      "provenance": "inherited",
+      "resourceKind": "event",
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "via": "call",
+      "witnessCallsiteId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "kind": "table",
+        "opSubtype": "Insert",
+        "recordVariableId": "e006898c62269d9f/08a0e8321ca2e66246ab84a0358b5501013da2b83cf2eebbc85a56ed7652b149/rv/cust",
+        "tempState": {
+          "kind": "known",
+          "value": false
+        }
+      },
+      "op": "insert",
+      "provenance": "direct",
+      "resourceId": "bbbb7070-0000-0000-0000-000000000070/table/18",
+      "resourceKind": "table",
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+      "via": "self",
+      "witnessOperationId": "e006898c62269d9f/08a0e8321ca2e66246ab84a0358b5501013da2b83cf2eebbc85a56ed7652b149/op0"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "kind": "table",
+        "opSubtype": "Insert",
+        "recordVariableId": "e006898c62269d9f/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e/rv/flag",
+        "tempState": {
+          "kind": "known",
+          "value": false
+        }
+      },
+      "op": "insert",
+      "provenance": "direct",
+      "resourceId": "aaaa7070-0000-0000-0000-000000000070/table/50170",
+      "resourceKind": "table",
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "via": "self",
+      "witnessOperationId": "e006898c62269d9f/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e/op0"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "eventClass": "Integration",
+        "kind": "event"
+      },
+      "op": "subscribe",
+      "provenance": "direct",
+      "resourceKind": "event",
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "via": "self"
+    }
+  ],
+  "contractFacts": [
+    {
+      "attributes": [],
+      "kind": "object",
+      "signatureFingerprint": "d74e52bbc0045306a3ff801b24adcc97b5abfce184d7f3e16774ba29bc4cf2f1",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170",
+      "visibility": "public"
+    },
+    {
+      "attributes": [],
+      "kind": "routine",
+      "routineKind": "procedure",
+      "signatureFingerprint": "40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+      "visibility": "public"
+    },
+    {
+      "attributes": [],
+      "kind": "routine",
+      "routineKind": "procedure",
+      "signatureFingerprint": "b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "visibility": "public"
+    },
+    {
+      "attributes": [],
+      "kind": "routine",
+      "routineKind": "procedure",
+      "signatureFingerprint": "b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+      "visibility": "public"
+    },
+    {
+      "attributes": [],
+      "kind": "object",
+      "signatureFingerprint": "7f6460e51c45d90de48b05ad09b9b1e839ee80eb1d0f83eba364d376261d0958",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171",
+      "visibility": "public"
+    },
+    {
+      "attributes": [
+        {
+          "argsHash": "f39fad2693c33bb8affd335f91a56a5b31daafefa26d79f350625e5aeb7c94d6",
+          "name": "EventSubscriber"
+        }
+      ],
+      "kind": "routine",
+      "routineKind": "event-subscriber",
+      "signatureFingerprint": "f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "visibility": "local"
+    },
+    {
+      "attributes": [],
+      "kind": "object",
+      "signatureFingerprint": "28c4618311aed3b154fc043b273695ae77e39f6c93f4e3e050518a13ead9872f",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Table:50170",
+      "visibility": "public"
+    }
+  ],
+  "coverage": [
+    {
+      "directStatus": "complete",
+      "inheritedStatus": "complete",
+      "reasons": [],
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+      "unknownTargets": []
+    },
+    {
+      "directStatus": "complete",
+      "inheritedStatus": "complete",
+      "reasons": [],
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "unknownTargets": []
+    },
+    {
+      "directStatus": "complete",
+      "inheritedStatus": "complete",
+      "reasons": [],
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+      "unknownTargets": []
+    },
+    {
+      "directStatus": "complete",
+      "inheritedStatus": "complete",
+      "reasons": [],
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "unknownTargets": []
+    }
+  ],
+  "eventDeclarations": [
+    {
+      "binding": {
+        "eventName": "OnDepEvent",
+        "publisherObject": "bbbb7070-0000-0000-0000-000000000070:Codeunit:10"
+      },
+      "eventId": "bbbb7070-0000-0000-0000-000000000070:Codeunit:10::OnDepEvent::599faf1bf74753352b2ee4b536c3e14928b89aa14646e66947883d01e683bf51",
+      "kind": "subscriber",
+      "routine": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "sourceAnchor": {
+        "enclosingRoutineId": "e006898c62269d9f/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e",
+        "range": {
+          "endColumn": 8,
+          "endLine": 42,
+          "startColumn": 4,
+          "startLine": 37
+        },
+        "sourceUnitId": "ws:src/Work.al",
+        "syntaxKind": "procedure"
+      }
+    }
+  ],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "identities": {
+    "displayNames": [
+      "Ws Work",
+      "CallChain",
+      "RaiseDep",
+      "TouchCust",
+      "Ws Sub",
+      "HandleInWs",
+      "Ws Flag",
+      "Dep Lib",
+      "OnDepEvent",
+      "Outer",
+      "HandleDep",
+      "Customer"
+    ],
+    "stableIds": [
+      "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170",
+      "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+      "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+      "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171",
+      "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "aaaa7070-0000-0000-0000-000000000070:Table:50170",
+      "bbbb7070-0000-0000-0000-000000000070:Codeunit:10",
+      "bbbb7070-0000-0000-0000-000000000070:Codeunit:10#599faf1bf74753352b2ee4b536c3e14928b89aa14646e66947883d01e683bf51",
+      "bbbb7070-0000-0000-0000-000000000070:Codeunit:10#eb597b263b2335f917e714a9f79f795ffdf8557b5df28cc49e514933392a0257",
+      "bbbb7070-0000-0000-0000-000000000070:Codeunit:11#b2719ebaa321a4f878a37b3e7b56ca0365c0747ff3d151f54c4c60a0a09ed892",
+      "bbbb7070-0000-0000-0000-000000000070:Table:18"
+    ]
+  },
+  "inputs": [
+    {
+      "contentHash": "6468db920b15647c17d598ba8615a775f9a83e69b42072d8efec89e832b17acd",
+      "kind": "app-json",
+      "path": "app.json"
+    },
+    {
+      "contentHash": "a9cbf9843d33e95935c67edfa853ef61851c95ba09599c722f108e71a77e195d",
+      "kind": "dep-package",
+      "path": ".alpackages/probe_XBase_1.0.0.0.app"
+    }
+  ],
+  "operationIndex": [
+    {
+      "controlContext": "top-level",
+      "displayText": "Cust.Insert",
+      "endColumn": 21,
+      "endLine": 30,
+      "operationId": "e006898c62269d9f/08a0e8321ca2e66246ab84a0358b5501013da2b83cf2eebbc85a56ed7652b149/op0",
+      "order": {
+        "dominatesSuccessReturn": true,
+        "frameId": 0,
+        "onSuccessPath": true,
+        "orderId": 0
+      },
+      "routine": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+      "sourceFile": "ws:src/Work.al",
+      "startColumn": 8,
+      "startLine": 30
+    },
+    {
+      "controlContext": "top-level",
+      "displayText": "Flag.Insert",
+      "endColumn": 21,
+      "endLine": 41,
+      "operationId": "e006898c62269d9f/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e/op0",
+      "order": {
+        "dominatesSuccessReturn": true,
+        "frameId": 0,
+        "onSuccessPath": true,
+        "orderId": 0
+      },
+      "routine": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "sourceFile": "ws:src/Work.al",
+      "startColumn": 8,
+      "startLine": 41
+    },
+    {
+      "controlContext": "top-level",
+      "displayText": "Cust.Insert",
+      "endColumn": 21,
+      "endLine": 28,
+      "operationId": "e006898c62269d9f/4ba11e038e944a00934ed700e76fefb9340e97686afe8ef35ea06b7906844a71/op0",
+      "order": {
+        "dominatesSuccessReturn": true,
+        "frameId": 0,
+        "onSuccessPath": true,
+        "orderId": 0
+      },
+      "routine": "bbbb7070-0000-0000-0000-000000000070:Codeunit:11#b2719ebaa321a4f878a37b3e7b56ca0365c0747ff3d151f54c4c60a0a09ed892",
+      "sourceFile": "dep:bbbb7070-0000-0000-0000-000000000070:src/Lib.al",
+      "startColumn": 8,
+      "startLine": 28
+    }
+  ],
+  "permissionFacts": [
+    {
+      "coverage": "complete",
+      "derivedFromCapability": {
+        "op": "insert",
+        "witnessCallsiteId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0"
+      },
+      "kind": "required",
+      "rights": [
+        "I"
+      ],
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "target": "aaaa7070-0000-0000-0000-000000000070:Table:50170",
+      "targetKind": "TableData"
+    },
+    {
+      "coverage": "complete",
+      "derivedFromCapability": {
+        "op": "insert",
+        "witnessCallsiteId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0"
+      },
+      "kind": "required",
+      "rights": [
+        "I"
+      ],
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "target": "bbbb7070-0000-0000-0000-000000000070:Table:18",
+      "targetKind": "TableData"
+    },
+    {
+      "coverage": "complete",
+      "derivedFromCapability": {
+        "op": "insert"
+      },
+      "kind": "required",
+      "rights": [
+        "I"
+      ],
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+      "target": "bbbb7070-0000-0000-0000-000000000070:Table:18",
+      "targetKind": "TableData"
+    },
+    {
+      "coverage": "complete",
+      "derivedFromCapability": {
+        "op": "insert"
+      },
+      "kind": "required",
+      "rights": [
+        "I"
+      ],
+      "subject": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "target": "aaaa7070-0000-0000-0000-000000000070:Table:50170",
+      "targetKind": "TableData"
+    }
+  ],
+  "rootClassifications": [
+    {
+      "confidence": "static",
+      "externallyReachable": true,
+      "kinds": [
+        "public-procedure"
+      ],
+      "routineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+      "source": "ast",
+      "sourceAnchor": {
+        "enclosingRoutineId": "e006898c62269d9f/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae",
+        "range": {
+          "endColumn": 8,
+          "endLine": 17,
+          "startColumn": 4,
+          "startLine": 12
+        },
+        "sourceUnitId": "ws:src/Work.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "confidence": "static",
+      "externallyReachable": true,
+      "kinds": [
+        "public-procedure"
+      ],
+      "routineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "source": "ast",
+      "sourceAnchor": {
+        "enclosingRoutineId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f",
+        "range": {
+          "endColumn": 8,
+          "endLine": 24,
+          "startColumn": 4,
+          "startLine": 19
+        },
+        "sourceUnitId": "ws:src/Work.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "confidence": "static",
+      "externallyReachable": true,
+      "kinds": [
+        "public-procedure"
+      ],
+      "routineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
+      "source": "ast",
+      "sourceAnchor": {
+        "enclosingRoutineId": "e006898c62269d9f/08a0e8321ca2e66246ab84a0358b5501013da2b83cf2eebbc85a56ed7652b149",
+        "range": {
+          "endColumn": 8,
+          "endLine": 31,
+          "startColumn": 4,
+          "startLine": 26
+        },
+        "sourceUnitId": "ws:src/Work.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "confidence": "static",
+      "externallyReachable": true,
+      "kinds": [
+        "event-subscriber"
+      ],
+      "routineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
+      "source": "ast",
+      "sourceAnchor": {
+        "enclosingRoutineId": "e006898c62269d9f/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e",
+        "range": {
+          "endColumn": 8,
+          "endLine": 42,
+          "startColumn": 4,
+          "startLine": 37
+        },
+        "sourceUnitId": "ws:src/Work.al",
+        "syntaxKind": "procedure"
+      }
+    }
+  ],
+  "routineOrderFrames": {
+    "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ],
+    "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ],
+    "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ],
+    "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ],
+    "bbbb7070-0000-0000-0000-000000000070:Codeunit:11#b2719ebaa321a4f878a37b3e7b56ca0365c0747ff3d151f54c4c60a0a09ed892": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ]
+  },
+  "schemaFacts": [
+    {
+      "kind": "table",
+      "shapeFingerprint": "c5c15e508a31f93b772f8b5fce2e565e8fa160f3e93fbca32f6f0031d4ed1d53",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Table:50170"
+    },
+    {
+      "kind": "field",
+      "name": "Entry No.",
+      "shapeFingerprint": "26839cc5e09f3400e05e701c85022ec2bacd89495b27312a0730169c5fd8604d",
+      "stableId": "aaaa7070-0000-0000-0000-000000000070:Table:50170#1"
+    }
+  ],
+  "schemaVersion": 4,
+  "typedEdges": [
+    {
+      "callsiteId": "e006898c62269d9f/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae/cs0",
+      "edgeId": "65a694905faa7926",
+      "from": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
+      "kind": "variable-typed-call",
+      "receiverType": "Codeunit \"Dep Lib\"",
+      "sourceAnchor": {
+        "enclosingRoutineId": "e006898c62269d9f/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae",
+        "range": {
+          "endColumn": 19,
+          "endLine": 16,
+          "startColumn": 8,
+          "startLine": 16
+        },
+        "sourceUnitId": "ws:src/Work.al",
+        "syntaxKind": "call_expression"
+      },
+      "to": "bbbb7070-0000-0000-0000-000000000070:Codeunit:10#eb597b263b2335f917e714a9f79f795ffdf8557b5df28cc49e514933392a0257"
+    },
+    {
+      "callsiteId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0",
+      "edgeId": "4c5739b89ec6636a",
+      "from": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
+      "kind": "variable-typed-call",
+      "receiverType": "Codeunit \"Dep Lib\"",
+      "sourceAnchor": {
+        "enclosingRoutineId": "e006898c62269d9f/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f",
+        "range": {
+          "endColumn": 24,
+          "endLine": 23,
+          "startColumn": 8,
+          "startLine": 23
+        },
+        "sourceUnitId": "ws:src/Work.al",
+        "syntaxKind": "call_expression"
+      },
+      "to": "bbbb7070-0000-0000-0000-000000000070:Codeunit:10#599faf1bf74753352b2ee4b536c3e14928b89aa14646e66947883d01e683bf51"
+    }
+  ],
+  "workspaceFingerprint": "162a7d5395b58272461f30b35010ca6ae6e8d1a83ef04af730ed9cf6d49befcc"
+}

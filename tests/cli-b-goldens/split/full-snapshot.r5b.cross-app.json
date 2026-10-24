@@ -1,0 +1,705 @@
+{
+  "alsemVersion": "cli-split-v1",
+  "analysisGaps": [
+    {
+      "detail": "dependency app has symbols only (no parseable source); its cones are opaque",
+      "kind": "symbol-only-boundary",
+      "role": "dependency",
+      "subject": "dddddddd-0000-0000-0000-000000000001"
+    }
+  ],
+  "analysisUniverse": "cross-app",
+  "apps": [
+    {
+      "appGuid": "11111111-0000-0000-0000-0000000000aa",
+      "name": "R2.5b Host",
+      "publisher": "TestPub",
+      "role": "primary",
+      "version": "1.0.0.0"
+    },
+    {
+      "appGuid": "dddddddd-0000-0000-0000-000000000001",
+      "name": "Lib Core",
+      "publisher": "TestPub",
+      "role": "dependency",
+      "version": "1.0.0.0"
+    }
+  ],
+  "callsiteIndex": [
+    {
+      "calleeDisplay": "Codeunit.Run",
+      "callsiteId": "1dc54afacf55e729/31ac1e8ce52f87f61e974a83b4619629d984603acc523c4ada217f097608b8e0/cs0",
+      "controlContext": "top-level",
+      "endColumn": 47,
+      "endLine": 6,
+      "order": {
+        "dominatesSuccessReturn": true,
+        "frameId": 0,
+        "onSuccessPath": true,
+        "orderId": 0
+      },
+      "routine": "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "sourceFile": "ws:src/HostOpaque.Codeunit.al",
+      "startColumn": 8,
+      "startLine": 6
+    },
+    {
+      "calleeDisplay": "cu.Compute",
+      "callsiteId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/cs0",
+      "controlContext": "top-level",
+      "endColumn": 21,
+      "endLine": 10,
+      "order": {
+        "dominatesSuccessReturn": true,
+        "frameId": 0,
+        "onSuccessPath": true,
+        "orderId": 0
+      },
+      "routine": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "sourceFile": "ws:src/HostMgt.Codeunit.al",
+      "startColumn": 8,
+      "startLine": 10
+    },
+    {
+      "calleeDisplay": "cu.Apply",
+      "callsiteId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/cs3",
+      "controlContext": "top-level",
+      "endColumn": 27,
+      "endLine": 13,
+      "order": {
+        "dominatesSuccessReturn": true,
+        "frameId": 0,
+        "onSuccessPath": true,
+        "orderId": 3
+      },
+      "routine": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "sourceFile": "ws:src/HostMgt.Codeunit.al",
+      "startColumn": 8,
+      "startLine": 13
+    }
+  ],
+  "callsiteResolutions": [
+    {
+      "calleeDisplay": "cu.Compute",
+      "callsiteId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/cs0",
+      "dispatchKind": "method",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "resolvedEdges": [
+        "2d8cf2922b702ffc"
+      ],
+      "status": "resolved"
+    },
+    {
+      "calleeDisplay": "cu.InternalReset",
+      "callsiteId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/cs1",
+      "dispatchKind": "method",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "resolvedEdges": [],
+      "status": "external"
+    },
+    {
+      "calleeDisplay": "cu.LocalHelper",
+      "callsiteId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/cs2",
+      "dispatchKind": "method",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "resolvedEdges": [],
+      "status": "external"
+    },
+    {
+      "calleeDisplay": "cu.Apply",
+      "callsiteId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/cs3",
+      "dispatchKind": "method",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "resolvedEdges": [
+        "0986d309b5019676"
+      ],
+      "status": "resolved"
+    },
+    {
+      "calleeDisplay": "cu.Missing",
+      "callsiteId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/cs4",
+      "dispatchKind": "method",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "resolvedEdges": [],
+      "status": "external"
+    },
+    {
+      "calleeDisplay": "Codeunit.Run(Absent Dep Cu)",
+      "callsiteId": "1dc54afacf55e729/31ac1e8ce52f87f61e974a83b4619629d984603acc523c4ada217f097608b8e0/cs0",
+      "dispatchKind": "codeunit-run",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "resolvedEdges": [],
+      "resultConsumed": false,
+      "status": "unfetched-dependency"
+    },
+    {
+      "calleeDisplay": "gone.M",
+      "callsiteId": "1dc54afacf55e729/31ac1e8ce52f87f61e974a83b4619629d984603acc523c4ada217f097608b8e0/cs1",
+      "dispatchKind": "method",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "resolvedEdges": [],
+      "status": "external"
+    }
+  ],
+  "capabilityFacts": [
+    {
+      "confidence": "static",
+      "extra": {
+        "kind": "table",
+        "opSubtype": "FindFirst",
+        "recordVariableId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/rv/cust",
+        "tempState": {
+          "kind": "known",
+          "value": false
+        }
+      },
+      "op": "read",
+      "provenance": "direct",
+      "resourceId": "dddddddd-0000-0000-0000-000000000001/table/50000",
+      "resourceKind": "table",
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "via": "self",
+      "witnessOperationId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/op1"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "eventClass": "Integration",
+        "kind": "event"
+      },
+      "op": "publish",
+      "provenance": "direct",
+      "resourceId": "11111111-0000-0000-0000-0000000000aa/Codeunit/70000/event/onhoststarted",
+      "resourceKind": "event",
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#d41621000be87a46859562e78b5dd890a59ee60bfa07ab92cd19864ceba54175",
+      "via": "self"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "eventClass": "Integration",
+        "kind": "event"
+      },
+      "op": "subscribe",
+      "provenance": "direct",
+      "resourceKind": "event",
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70001#f171ccaa913934a0dfedce04b00036d2b588da4e682c844b42223418903380ee",
+      "via": "self"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "kind": "dispatch",
+        "objectType": "Codeunit"
+      },
+      "op": "execute",
+      "provenance": "direct",
+      "resourceArgSource": {
+        "enumName": "Codeunit",
+        "kind": "enum",
+        "member": "Absent Dep Cu"
+      },
+      "resourceKind": "codeunit",
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "via": "self",
+      "witnessCallsiteId": "1dc54afacf55e729/31ac1e8ce52f87f61e974a83b4619629d984603acc523c4ada217f097608b8e0/cs0"
+    },
+    {
+      "confidence": "static",
+      "extra": {
+        "eventClass": "Integration",
+        "kind": "event"
+      },
+      "op": "subscribe",
+      "provenance": "direct",
+      "resourceKind": "event",
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70003#7d5229a5a61f2c7744f955a92c794efe5eef2fbff782511f190594fe29c19788",
+      "via": "self"
+    }
+  ],
+  "contractFacts": [
+    {
+      "attributes": [],
+      "kind": "object",
+      "signatureFingerprint": "97d432b90073b4e8a804e49c67ff6448d8d0aeb834969ef50ffa3cf2e2c6cf6b",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000",
+      "visibility": "public"
+    },
+    {
+      "attributes": [],
+      "kind": "routine",
+      "routineKind": "procedure",
+      "signatureFingerprint": "7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "visibility": "public"
+    },
+    {
+      "attributes": [
+        {
+          "argsHash": "94a1cb2613334be74217450a907cf3564b30da9ef3704adcae23996da25203ef",
+          "name": "IntegrationEvent"
+        }
+      ],
+      "kind": "routine",
+      "parameters": [],
+      "routineKind": "event-publisher",
+      "signatureFingerprint": "d41621000be87a46859562e78b5dd890a59ee60bfa07ab92cd19864ceba54175",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#d41621000be87a46859562e78b5dd890a59ee60bfa07ab92cd19864ceba54175",
+      "visibility": "public"
+    },
+    {
+      "attributes": [],
+      "kind": "object",
+      "signatureFingerprint": "5fda4893d4ad2d1d9e1290f496d561b442a0feef30aa37168cd84db1eed2c098",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70001",
+      "visibility": "public"
+    },
+    {
+      "attributes": [
+        {
+          "argsHash": "46f90406e74c3458275c71f210afca6b6bacdcfe1a653d94883192a49e865159",
+          "name": "EventSubscriber"
+        }
+      ],
+      "kind": "routine",
+      "routineKind": "event-subscriber",
+      "signatureFingerprint": "f171ccaa913934a0dfedce04b00036d2b588da4e682c844b42223418903380ee",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70001#f171ccaa913934a0dfedce04b00036d2b588da4e682c844b42223418903380ee",
+      "visibility": "local"
+    },
+    {
+      "attributes": [],
+      "kind": "object",
+      "signatureFingerprint": "2e0fafe8fe03c0521389bc2144ddae6f030a56088a120d6d3706039fcbeb3ae1",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70002",
+      "visibility": "public"
+    },
+    {
+      "attributes": [],
+      "kind": "routine",
+      "routineKind": "procedure",
+      "signatureFingerprint": "3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "visibility": "public"
+    },
+    {
+      "attributes": [],
+      "kind": "object",
+      "signatureFingerprint": "676515821f2d949adb45eebaf006dd10c6f5c6d145f3a7c823c3de6c7d25cc4f",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70003",
+      "visibility": "public"
+    },
+    {
+      "attributes": [
+        {
+          "argsHash": "b43bce9ddaabce6951555b92fd890a0eb77d404daed45eac684f0d36715c03c7",
+          "name": "EventSubscriber"
+        }
+      ],
+      "kind": "routine",
+      "routineKind": "event-subscriber",
+      "signatureFingerprint": "7d5229a5a61f2c7744f955a92c794efe5eef2fbff782511f190594fe29c19788",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70003#7d5229a5a61f2c7744f955a92c794efe5eef2fbff782511f190594fe29c19788",
+      "visibility": "local"
+    },
+    {
+      "attributes": [],
+      "kind": "object",
+      "signatureFingerprint": "62a28633f390b31d6f1666839d079c460d39fa62b61e26d7843721d9666b9f38",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:TableExtension:70010",
+      "visibility": "public"
+    }
+  ],
+  "coverage": [
+    {
+      "directStatus": "partial",
+      "inheritedStatus": "partial",
+      "reasons": [
+        "external-target",
+        "opaque-dependency"
+      ],
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "unknownTargets": [
+        "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+        "dddddddd-0000-0000-0000-000000000001:Codeunit:50100#892d5f73c305a4590cf84476f2976e5dc36a2ed0b655294e7048bbfabd65a61f",
+        "dddddddd-0000-0000-0000-000000000001:Codeunit:50100#f9dbb2615e0a5935e54f675668759b67e13f59e2862878dcdf67f38a093ee754"
+      ]
+    },
+    {
+      "directStatus": "complete",
+      "inheritedStatus": "complete",
+      "reasons": [],
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#d41621000be87a46859562e78b5dd890a59ee60bfa07ab92cd19864ceba54175",
+      "unknownTargets": []
+    },
+    {
+      "directStatus": "complete",
+      "inheritedStatus": "complete",
+      "reasons": [],
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70001#f171ccaa913934a0dfedce04b00036d2b588da4e682c844b42223418903380ee",
+      "unknownTargets": []
+    },
+    {
+      "directStatus": "partial",
+      "inheritedStatus": "partial",
+      "reasons": [
+        "external-target",
+        "object-run-unresolved"
+      ],
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "unknownTargets": [
+        "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9"
+      ]
+    },
+    {
+      "directStatus": "complete",
+      "inheritedStatus": "complete",
+      "reasons": [],
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70003#7d5229a5a61f2c7744f955a92c794efe5eef2fbff782511f190594fe29c19788",
+      "unknownTargets": []
+    }
+  ],
+  "eventDeclarations": [
+    {
+      "eventId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000::OnHostStarted::d41621000be87a46859562e78b5dd890a59ee60bfa07ab92cd19864ceba54175",
+      "kind": "publisher",
+      "routine": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#d41621000be87a46859562e78b5dd890a59ee60bfa07ab92cd19864ceba54175",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/6b829fffe21d7e26c13d939aafbd3587cfe62ebcd9deabb916907b103428b729",
+        "range": {
+          "endColumn": 8,
+          "endLine": 22,
+          "startColumn": 4,
+          "startLine": 20
+        },
+        "sourceUnitId": "ws:src/HostMgt.Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "binding": {
+        "eventName": "OnBeforeCompute",
+        "publisherObject": "dddddddd-0000-0000-0000-000000000001:Codeunit:50100"
+      },
+      "eventId": "dddddddd-0000-0000-0000-000000000001:Codeunit:50100::OnBeforeCompute::59b6431c99e0ae34109d6236f73f2f783615126d46bef16c8d09be12798478fa",
+      "kind": "subscriber",
+      "routine": "11111111-0000-0000-0000-0000000000aa:Codeunit:70001#f171ccaa913934a0dfedce04b00036d2b588da4e682c844b42223418903380ee",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/a6ad128b276018559f2e328846b94a536afdd8461778ac849bd03b161fe035c6",
+        "range": {
+          "endColumn": 8,
+          "endLine": 5,
+          "startColumn": 4,
+          "startLine": 3
+        },
+        "sourceUnitId": "ws:src/HostSub.Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "binding": {
+        "eventName": "onneverpublished",
+        "publisherObject": "dddddddd-0000-0000-0000-000000000001:Codeunit:50100"
+      },
+      "eventId": "dddddddd-0000-0000-0000-000000000001:Codeunit:50100::onneverpublished::3f17497ccf66c36ed51f863e8daf048c61169304b0cc07c709c9b36a4b881cb7",
+      "kind": "subscriber",
+      "routine": "11111111-0000-0000-0000-0000000000aa:Codeunit:70003#7d5229a5a61f2c7744f955a92c794efe5eef2fbff782511f190594fe29c19788",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/9ba3365b0df8c28a56a76bf1b49b7ccf197300c9ad66771d47bbc1640d0641da",
+        "range": {
+          "endColumn": 8,
+          "endLine": 5,
+          "startColumn": 4,
+          "startLine": 3
+        },
+        "sourceUnitId": "ws:src/HostUnlinkedSub.Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    }
+  ],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "identities": {
+    "displayNames": [
+      "Host Mgt",
+      "DriveDeps",
+      "OnHostStarted",
+      "Host Sub",
+      "HandleOnBeforeCompute",
+      "Host Opaque",
+      "Split",
+      "Host Unlinked Sub",
+      "HandleOnNeverPublished",
+      "Host Cust Ext",
+      "Host Cust Ext",
+      "Dep Mgt",
+      "Compute",
+      "Apply",
+      "Dep Customer"
+    ],
+    "stableIds": [
+      "11111111-0000-0000-0000-0000000000aa:Codeunit:70000",
+      "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#d41621000be87a46859562e78b5dd890a59ee60bfa07ab92cd19864ceba54175",
+      "11111111-0000-0000-0000-0000000000aa:Codeunit:70001",
+      "11111111-0000-0000-0000-0000000000aa:Codeunit:70001#f171ccaa913934a0dfedce04b00036d2b588da4e682c844b42223418903380ee",
+      "11111111-0000-0000-0000-0000000000aa:Codeunit:70002",
+      "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "11111111-0000-0000-0000-0000000000aa:Codeunit:70003",
+      "11111111-0000-0000-0000-0000000000aa:Codeunit:70003#7d5229a5a61f2c7744f955a92c794efe5eef2fbff782511f190594fe29c19788",
+      "11111111-0000-0000-0000-0000000000aa:Table:70010",
+      "11111111-0000-0000-0000-0000000000aa:TableExtension:70010",
+      "dddddddd-0000-0000-0000-000000000001:Codeunit:50100",
+      "dddddddd-0000-0000-0000-000000000001:Codeunit:50100#892d5f73c305a4590cf84476f2976e5dc36a2ed0b655294e7048bbfabd65a61f",
+      "dddddddd-0000-0000-0000-000000000001:Codeunit:50100#f9dbb2615e0a5935e54f675668759b67e13f59e2862878dcdf67f38a093ee754",
+      "dddddddd-0000-0000-0000-000000000001:Table:50000"
+    ]
+  },
+  "inputs": [
+    {
+      "contentHash": "6883f2d60ddeff7126cae49be9d9c4b736d47bc0d0fd6265ec53f696cb9863ef",
+      "kind": "app-json",
+      "path": "app.json"
+    },
+    {
+      "contentHash": "d0ffd31e34b153c9bd150bcee6bb2687799e238fc504ccc4d5d59a11b09cd12b",
+      "kind": "dep-package",
+      "path": ".alpackages/dddddddd-0000-0000-0000-000000000001.app"
+    },
+    {
+      "contentHash": "3317b38465b722fed9df6259a4d24ef0a51063d269b1e4d22e8587772299c013",
+      "kind": "dep-package",
+      "path": ".alpackages/eeeeeeee-0000-0000-0000-000000000002.app"
+    }
+  ],
+  "operationIndex": [
+    {
+      "controlContext": "top-level",
+      "displayText": "cust.FindFirst",
+      "endColumn": 24,
+      "endLine": 16,
+      "operationId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/op1",
+      "order": {
+        "dominatesSuccessReturn": true,
+        "frameId": 0,
+        "onSuccessPath": true,
+        "orderId": 6
+      },
+      "routine": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "sourceFile": "ws:src/HostMgt.Codeunit.al",
+      "startColumn": 8,
+      "startLine": 16
+    }
+  ],
+  "permissionFacts": [
+    {
+      "coverage": "partial",
+      "derivedFromCapability": {
+        "op": "read"
+      },
+      "kind": "required",
+      "rights": [
+        "R"
+      ],
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "target": "dddddddd-0000-0000-0000-000000000001:Table:50000",
+      "targetKind": "TableData"
+    }
+  ],
+  "rootClassifications": [
+    {
+      "confidence": "static",
+      "externallyReachable": true,
+      "kinds": [
+        "public-procedure"
+      ],
+      "routineId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "source": "ast",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247",
+        "range": {
+          "endColumn": 8,
+          "endLine": 17,
+          "startColumn": 4,
+          "startLine": 5
+        },
+        "sourceUnitId": "ws:src/HostMgt.Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "confidence": "static",
+      "externallyReachable": true,
+      "kinds": [
+        "event-subscriber"
+      ],
+      "routineId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70001#f171ccaa913934a0dfedce04b00036d2b588da4e682c844b42223418903380ee",
+      "source": "ast",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/a6ad128b276018559f2e328846b94a536afdd8461778ac849bd03b161fe035c6",
+        "range": {
+          "endColumn": 8,
+          "endLine": 5,
+          "startColumn": 4,
+          "startLine": 3
+        },
+        "sourceUnitId": "ws:src/HostSub.Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "confidence": "static",
+      "externallyReachable": true,
+      "kinds": [
+        "public-procedure"
+      ],
+      "routineId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "source": "ast",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/31ac1e8ce52f87f61e974a83b4619629d984603acc523c4ada217f097608b8e0",
+        "range": {
+          "endColumn": 8,
+          "endLine": 8,
+          "startColumn": 4,
+          "startLine": 2
+        },
+        "sourceUnitId": "ws:src/HostOpaque.Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    },
+    {
+      "confidence": "static",
+      "externallyReachable": true,
+      "kinds": [
+        "event-subscriber"
+      ],
+      "routineId": "11111111-0000-0000-0000-0000000000aa:Codeunit:70003#7d5229a5a61f2c7744f955a92c794efe5eef2fbff782511f190594fe29c19788",
+      "source": "ast",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/9ba3365b0df8c28a56a76bf1b49b7ccf197300c9ad66771d47bbc1640d0641da",
+        "range": {
+          "endColumn": 8,
+          "endLine": 5,
+          "startColumn": 4,
+          "startLine": 3
+        },
+        "sourceUnitId": "ws:src/HostUnlinkedSub.Codeunit.al",
+        "syntaxKind": "procedure"
+      }
+    }
+  ],
+  "routineOrderFrames": {
+    "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ],
+    "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#d41621000be87a46859562e78b5dd890a59ee60bfa07ab92cd19864ceba54175": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ],
+    "11111111-0000-0000-0000-0000000000aa:Codeunit:70001#f171ccaa913934a0dfedce04b00036d2b588da4e682c844b42223418903380ee": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ],
+    "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ],
+    "11111111-0000-0000-0000-0000000000aa:Codeunit:70003#7d5229a5a61f2c7744f955a92c794efe5eef2fbff782511f190594fe29c19788": [
+      {
+        "frameId": 0,
+        "kind": "block",
+        "parentFrameId": -1
+      }
+    ]
+  },
+  "schemaFacts": [
+    {
+      "kind": "table",
+      "shapeFingerprint": "87200ea15d1c4ff2fd5a03fcdbb8c4c47956ecdfc30d468a7a767252d08383e9",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Table:70010"
+    },
+    {
+      "kind": "field",
+      "name": "Loyalty Points",
+      "shapeFingerprint": "26839cc5e09f3400e05e701c85022ec2bacd89495b27312a0730169c5fd8604d",
+      "stableId": "11111111-0000-0000-0000-0000000000aa:Table:70010#70010"
+    }
+  ],
+  "schemaVersion": 4,
+  "typedEdges": [
+    {
+      "callsiteId": "1dc54afacf55e729/31ac1e8ce52f87f61e974a83b4619629d984603acc523c4ada217f097608b8e0/cs0",
+      "edgeId": "a9fa7c84f65ebc61",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70002#3e956417cc3d13c496fd2ccdd905247a0d5c491e720c1dada1d1e72708701bc9",
+      "kind": "object-run-unresolved",
+      "objectType": "Codeunit",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/31ac1e8ce52f87f61e974a83b4619629d984603acc523c4ada217f097608b8e0",
+        "range": {
+          "endColumn": 47,
+          "endLine": 6,
+          "startColumn": 8,
+          "startLine": 6
+        },
+        "sourceUnitId": "ws:src/HostOpaque.Codeunit.al",
+        "syntaxKind": "call_expression"
+      },
+      "targetIdSource": {
+        "enumName": "Codeunit",
+        "kind": "enum",
+        "member": "Absent Dep Cu"
+      }
+    },
+    {
+      "callsiteId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/cs0",
+      "edgeId": "2d8cf2922b702ffc",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "kind": "variable-typed-call",
+      "receiverType": "Codeunit \"Dep Mgt\"",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247",
+        "range": {
+          "endColumn": 21,
+          "endLine": 10,
+          "startColumn": 8,
+          "startLine": 10
+        },
+        "sourceUnitId": "ws:src/HostMgt.Codeunit.al",
+        "syntaxKind": "call_expression"
+      },
+      "to": "dddddddd-0000-0000-0000-000000000001:Codeunit:50100#892d5f73c305a4590cf84476f2976e5dc36a2ed0b655294e7048bbfabd65a61f"
+    },
+    {
+      "callsiteId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/cs3",
+      "edgeId": "0986d309b5019676",
+      "from": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "kind": "variable-typed-call",
+      "receiverType": "Codeunit \"Dep Mgt\"",
+      "sourceAnchor": {
+        "enclosingRoutineId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247",
+        "range": {
+          "endColumn": 27,
+          "endLine": 13,
+          "startColumn": 8,
+          "startLine": 13
+        },
+        "sourceUnitId": "ws:src/HostMgt.Codeunit.al",
+        "syntaxKind": "call_expression"
+      },
+      "to": "dddddddd-0000-0000-0000-000000000001:Codeunit:50100#f9dbb2615e0a5935e54f675668759b67e13f59e2862878dcdf67f38a093ee754"
+    }
+  ],
+  "workspaceFingerprint": "b1578e8b94d638d36276c3f7ddbc5d47a8659560afbaff97b7599b85ef2b76a3"
+}

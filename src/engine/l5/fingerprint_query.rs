@@ -14,7 +14,7 @@
 //!   → B0's snapshot serializers — **NOT this module**.
 //! - `--format json` WITH query flag (`--witness`, `--roots`, `--routine`,
 //!   `--include-inherited`) → `fingerprint_query` → `project_fingerprint_query`
-//!   → JSON envelope (kind `fingerprint-query`, schemaVersion `1.2.0`).
+//!   → JSON envelope (kind `fingerprint-query`, schemaVersion `1.3.0`).
 //! - `--format human` → `fingerprint_query` → `format_fingerprint_human`.
 //!
 //! ## Witness modes
@@ -26,7 +26,6 @@
 
 use std::collections::HashMap;
 
-use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::ids::sha256_hex;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::digest::{
@@ -71,6 +70,7 @@ mod types {
     }
 
     /// Filters for a fingerprint query (mirrors `FingerprintFilters` in TS).
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FingerprintFilters {
         /// When Some, only root classifications whose `kinds` intersect this set are rendered.
         pub roots: Option<RootKindSet>,
@@ -92,6 +92,25 @@ mod types {
         pub truncated: bool,
         pub incomplete: bool,
         pub diagnostics: Vec<WitnessDiagnostic>,
+        /// The witness's terminal evidence (#160 step 9 S9-2, S9-16), computed
+        /// while the snapshot is alive: the boundary of the FIRST path that has
+        /// one, else the fact's operation evidence (also when `paths` is empty).
+        pub evidence: Option<FactEvidence>,
+    }
+
+    /// A fact's terminal evidence in its witness object.
+    #[derive(Debug, Clone)]
+    pub enum FactEvidence {
+        /// The fact's own operation (`witness_operation_id`) and its anchor.
+        Operation {
+            operation_id: String,
+            file: String,
+            line: u32,
+            column: u32,
+            excerpt: String,
+        },
+        /// Rule B: the boundary the first path was cut at.
+        Boundary(crate::engine::l5::digest::PathBoundary),
     }
 
     #[derive(Debug, Clone)]
@@ -293,6 +312,44 @@ fn table_op_to_right(op: &str) -> Option<&'static str> {
     }
 }
 
+/// A witness's terminal evidence (#160 step 9 S9-2): the boundary of the first
+/// of `paths` that has one, in their order; else the fact's own operation
+/// evidence from the snapshot's operation index (`None` when the fact names no
+/// operation the index holds).
+fn fact_evidence(
+    fact: &SnapFact,
+    paths: &[ProjectedPath],
+    idx: &FingerprintIndexesPub<'_>,
+) -> Option<FactEvidence> {
+    if let Some(b) = paths.iter().find_map(|p| p.boundary.as_ref()) {
+        return Some(FactEvidence::Boundary(b.clone()));
+    }
+    let op_id = fact.witness_operation_id.as_ref()?;
+    let ev = idx.operation_by_id.get(op_id.as_str())?;
+    Some(FactEvidence::Operation {
+        operation_id: op_id.clone(),
+        file: normalize_anchor_path(&ev.source_file),
+        line: ev.start_line,
+        column: ev.start_column,
+        excerpt: ev.display_text.clone(),
+    })
+}
+
+/// The stable ids of the model's `Role::Primary` routines: the query's
+/// `is_primary` (#160 step 9, Decision 28). A stable id any primary row
+/// carries is primary.
+pub(crate) fn primary_stable_ids(
+    model: &crate::program::model::workspace::Model,
+) -> std::collections::HashSet<&str> {
+    model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| model.routine_role(r) == crate::program::model::role::Role::Primary)
+        .map(|r| r.stable_routine_id.as_str())
+        .collect()
+}
+
 fn build_block<'w>(
     rid: &str,
     root: &crate::engine::l5::snapshot::SnapshotRootClassificationSlot,
@@ -441,12 +498,18 @@ fn build_block<'w>(
         });
     }
 
-    // mayCommit.
+    // mayCommit. `no` needs complete coverage over the facts the query renders
+    // (#160 step 9 S9-3): the inherited coverage when inherited facts are shown.
     let commit_fi = rendered_facts.iter().position(|f| f.op == "commit");
+    let commit_coverage = if filters.include_inherited {
+        &coverage.inherited_status
+    } else {
+        &coverage.direct_status
+    };
     let may_commit = BlockCommit {
         presence: if commit_fi.is_some() {
             "yes"
-        } else if coverage.direct_status == "complete" {
+        } else if commit_coverage == "complete" {
             "no"
         } else {
             "unknown"
@@ -567,12 +630,13 @@ fn build_block<'w>(
             rendered_facts
                 .iter()
                 .enumerate()
-                .map(|(fi, _)| BlockWitness {
+                .map(|(fi, f)| BlockWitness {
                     fact_index: fi,
                     paths: Vec::new(),
                     truncated: false,
                     incomplete: false,
                     diagnostics: Vec::new(),
+                    evidence: fact_evidence(f, &[], idx),
                 })
                 .collect()
         }
@@ -588,6 +652,7 @@ fn build_block<'w>(
                     );
                     BlockWitness {
                         fact_index: fi,
+                        evidence: fact_evidence(f, &outcome.paths, idx),
                         paths: outcome.paths,
                         truncated: outcome.truncated,
                         incomplete: outcome.incomplete,
@@ -641,18 +706,26 @@ fn build_block<'w>(
 /// `owners`: the model's [`OwnerIndex`] (#78). It names each block's owning
 /// object, narrows an `<owner>::<routine>` selector and labels ambiguity
 /// candidates.
+///
+/// Roles (#160 step 9, epic Decision 28): the selector index keeps the
+/// `primary_guid` app's routines only, so a selector never names a dependency
+/// routine; `total_classifications` counts the classifications whose routine
+/// `is_primary` (by stable id, read off the model's roles), before the
+/// selector and `--roots` filters. Single-app every row is primary.
 pub fn fingerprint_query(
     snap: &CapabilitySnapshot,
     filters: &FingerprintFilters,
     roots_config_ignored: bool,
     owners: &OwnerIndex<'_>,
+    primary_guid: Option<&str>,
+    is_primary: &dyn Fn(&str) -> bool,
 ) -> FingerprintQueryResult {
     // Build shared indexes (reuse B1's public entry point).
     let idx = build_fingerprint_indexes_pub(snap);
 
     // Selector index (5-form resolveSelector cascade) — built from the identity
     // table's source Vec, deterministic by construction. Shared with digest_cli.
-    let selector_idx = build_selector_indexes(&snap.identities, None);
+    let selector_idx = build_selector_indexes(&snap.identities, primary_guid);
 
     let mut diagnostics: Vec<FingerprintQueryDiagnostic> = Vec::new();
 
@@ -689,7 +762,11 @@ pub fn fingerprint_query(
         }
     }
 
-    let total_classifications = snap.root_classifications.len();
+    let total_classifications = snap
+        .root_classifications
+        .iter()
+        .filter(|r| is_primary(&r.routine_id))
+        .count();
 
     if any_selector_failed {
         return FingerprintQueryResult {
@@ -771,11 +848,13 @@ pub fn fact_id_of(f: &SnapFact) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// project_fingerprint_query — JSON envelope (fingerprint-query, 1.2.0)
+// project_fingerprint_query — JSON envelope (fingerprint-query, 1.3.0)
 // Mirrors `projectFingerprintQuery` in `src/contracts/fingerprint-query.ts`.
 // ---------------------------------------------------------------------------
 
-pub const FINGERPRINT_QUERY_CONTRACT_VERSION: &str = "1.2.0";
+/// 1.3.0 (#160 step 9, O9-25): additive, a path's `boundary` object and a
+/// boundary form of a witness's `evidence` (rule B, cross-app only).
+pub const FINGERPRINT_QUERY_CONTRACT_VERSION: &str = "1.3.0";
 
 /// Build a `normalizeAnchorPath`-normalized file path: forward slashes,
 /// keep the `ws:` prefix intact (it is NOT stripped — the golden keeps it).
@@ -789,37 +868,58 @@ fn normalize_anchor_path(source_file: &str) -> String {
     source_file.replace('\\', "/")
 }
 
-/// Project one block witness path set into the JSON contract form.
-fn project_witness_json(
-    bw: &BlockWitness,
-    fact: &SnapFact,
-    workspace_root: &str,
-    operation_index: &HashMap<String, &crate::engine::l5::snapshot::SnapshotOperationEvidence>,
-) -> serde_json::Value {
+/// A rule-B boundary's JSON object (#160 step 9 S9-2): `anchor`, `id`, `kind`
+/// and the kind's own id key (`callsiteId` | `operationId` | `eventId`).
+fn boundary_to_json(b: &crate::engine::l5::digest::PathBoundary) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    if let Some(file) = &b.file {
+        let mut anch = serde_json::Map::new();
+        anch.insert("sourceKind".into(), "source".into());
+        anch.insert("file".into(), normalize_anchor_path(file).into());
+        if let Some(l) = b.line {
+            anch.insert("line".into(), l.into());
+        }
+        if let Some(c) = b.column {
+            anch.insert("column".into(), c.into());
+        }
+        m.insert("anchor".into(), serde_json::Value::Object(anch));
+    }
+    m.insert("id".into(), b.id.clone().into());
+    m.insert("kind".into(), b.kind.as_str().into());
+    m.insert(b.target_key().into(), b.target.clone().into());
+    serde_json::Value::Object(m)
+}
+
+/// Project one block witness path set into the JSON contract form. The
+/// witness carries its own evidence (#160 step 9 S9-16), so no snapshot is read.
+fn project_witness_json(bw: &BlockWitness, workspace_root: &str) -> serde_json::Value {
     // Terminal evidence (anchor keys: column, excerpt, file, line, sourceKind — alphabetical).
-    let evidence = if let Some(op_id) = &fact.witness_operation_id {
-        if let Some(ev) = operation_index.get(op_id.as_str()) {
-            let file = normalize_anchor_path(&ev.source_file);
+    let evidence = bw.evidence.as_ref().map(|e| match e {
+        FactEvidence::Operation {
+            operation_id,
+            file,
+            line,
+            column,
+            excerpt,
+        } => {
             // Sorted: column, excerpt, file, line, sourceKind
             let mut anchor = serde_json::Map::new();
-            anchor.insert("column".into(), ev.start_column.into());
-            anchor.insert("excerpt".into(), ev.display_text.clone().into());
-            anchor.insert("file".into(), file.into());
-            anchor.insert("line".into(), ev.start_line.into());
+            anchor.insert("column".into(), (*column).into());
+            anchor.insert("excerpt".into(), excerpt.clone().into());
+            anchor.insert("file".into(), file.clone().into());
+            anchor.insert("line".into(), (*line).into());
             anchor.insert("sourceKind".into(), "source".into());
             // Sorted: anchor, operationId
             let mut ev_obj = serde_json::Map::new();
             ev_obj.insert("anchor".into(), serde_json::Value::Object(anchor));
-            ev_obj.insert("operationId".into(), op_id.clone().into());
-            Some(serde_json::Value::Object(ev_obj))
-        } else {
-            None
+            ev_obj.insert("operationId".into(), operation_id.clone().into());
+            serde_json::Value::Object(ev_obj)
         }
-    } else {
-        None
-    };
+        FactEvidence::Boundary(b) => boundary_to_json(b),
+    });
 
-    // Projected paths (already projected via reconstruct_witness_paths_pub).
+    // Projected paths (already projected via reconstruct_witness_paths_pub);
+    // a path cut at a rule-B boundary names it (absent on the cut).
     let projected_paths: Vec<serde_json::Value> = bw
         .paths
         .iter()
@@ -829,7 +929,10 @@ fn project_witness_json(
                 .iter()
                 .map(|h| query_hop_to_json(h, workspace_root))
                 .collect();
-            serde_json::json!({"hops": hops})
+            match &path.boundary {
+                Some(b) => serde_json::json!({"boundary": boundary_to_json(b), "hops": hops}),
+                None => serde_json::json!({"hops": hops}),
+            }
         })
         .collect();
 
@@ -912,19 +1015,153 @@ fn query_hop_to_json(hop: &QueryWitnessHop, _workspace_root: &str) -> serde_json
     serde_json::Value::Object(m)
 }
 
-/// Serialize the fingerprint-query envelope: sorted keys, null-drop,
-/// 2-space indent, trailing newline. Mirrors `serializeDocument` (contracts/document.ts).
-fn serialize_fingerprint_envelope(v: serde_json::Value) -> String {
-    // Use the existing sorted-JSON serializer that the digest pipeline uses.
-    // `serialize_document_value` always appends '\n'.
-    serialize_document_value(v)
+/// One node of the query document, serialized exactly as the
+/// `serde_json::Value` it stands for once sorted and null-dropped
+/// (`serialize_document_value`), but with its big arrays built element by
+/// element while serializing (#160 step 9, the B1q fix): no `Value` of the
+/// whole document is ever alive. serde_json's pretty serializer makes the same
+/// calls (`serialize_map` with sorted keys, `serialize_seq` with the length)
+/// for a `Value` and for this, so the bytes are the same.
+enum Doc<'a> {
+    /// A small subtree, already sorted and null-dropped.
+    Value(serde_json::Value),
+    /// An object; its entries are sorted by key, and `null` values dropped,
+    /// when serialized.
+    Map(Vec<(&'static str, Doc<'a>)>),
+    /// An array of `n` elements, the `i`-th built when it is serialized.
+    Seq(usize, Box<dyn Fn(usize) -> Doc<'a> + 'a>),
 }
 
-/// Full `projectFingerprintQuery` with all parameters injected.
-#[allow(clippy::too_many_arguments)] // query-document fields; grouping would obscure
+impl Doc<'_> {
+    /// A small subtree, normalized as `serialize_document_value` does.
+    fn value(v: serde_json::Value) -> Self {
+        Doc::Value(crate::engine::gate::format_json::sort_and_drop_nulls(v))
+    }
+
+    fn is_null(&self) -> bool {
+        matches!(self, Doc::Value(serde_json::Value::Null))
+    }
+}
+
+impl serde::Serialize for Doc<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeMap, SerializeSeq};
+        match self {
+            Doc::Value(v) => v.serialize(s),
+            Doc::Map(entries) => {
+                let mut kept: Vec<&(&'static str, Doc<'_>)> =
+                    entries.iter().filter(|(_, v)| !v.is_null()).collect();
+                kept.sort_by(|a, b| a.0.cmp(b.0));
+                let mut m = s.serialize_map(Some(kept.len()))?;
+                for (k, v) in kept {
+                    m.serialize_entry(k, v)?;
+                }
+                m.end()
+            }
+            Doc::Seq(n, item) => {
+                let mut seq = s.serialize_seq(Some(*n))?;
+                for i in 0..*n {
+                    seq.serialize_element(&item(i))?;
+                }
+                seq.end()
+            }
+        }
+    }
+}
+
+/// `format_json::serialize_document_value`'s bytes for a [`Doc`]: pretty,
+/// trailing newline.
+fn serialize_doc(doc: &Doc<'_>) -> String {
+    let mut out: Vec<u8> = Vec::new();
+    let mut ser =
+        serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::new());
+    serde::Serialize::serialize(doc, &mut ser).expect("query document serialization");
+    let mut text = String::from_utf8(out).expect("serde_json writes UTF-8");
+    text.push('\n');
+    text
+}
+
+/// One fact of a block as JSON, with its witness (`build_block` makes the
+/// witnesses positionally: the `fi`-th, when any, is fact `fi`'s).
+fn fact_doc(block: &FingerprintBlock, fi: usize, workspace_root: &str) -> serde_json::Value {
+    let fact = &block.rendered_facts[fi];
+    let bw = block.witnesses.get(fi).filter(|w| w.fact_index == fi);
+    let mut fj = serde_json::Map::new();
+    fj.insert("factId".into(), fact_id_of(fact).into());
+    fj.insert("op".into(), fact.op.clone().into());
+    fj.insert("resourceKind".into(), fact.resource_kind.clone().into());
+    if let Some(ref rid) = fact.resource_id {
+        fj.insert("resourceId".into(), rid.clone().into());
+    }
+    fj.insert("provenance".into(), fact.provenance.clone().into());
+    fj.insert("confidence".into(), fact.confidence.clone().into());
+    fj.insert("via".into(), fact.via.clone().into());
+    if let Some(bw) = bw {
+        fj.insert("witness".into(), project_witness_json(bw, workspace_root));
+    }
+    serde_json::Value::Object(fj)
+}
+
+/// A block's families: every resource's facts built one by one.
+fn families_doc<'a>(block: &'a FingerprintBlock, workspace_root: &'a str) -> Doc<'a> {
+    Doc::Seq(
+        block.families.len(),
+        Box::new(move |f| {
+            let family = &block.families[f];
+            Doc::Map(vec![
+                ("resourceKind", Doc::value(family.kind.clone().into())),
+                (
+                    "coneCoverage",
+                    Doc::value(family.cone_coverage.clone().into()),
+                ),
+                (
+                    "resources",
+                    Doc::Seq(
+                        family.resources.len(),
+                        Box::new(move |r| {
+                            let res = &family.resources[r];
+                            Doc::Map(vec![
+                                (
+                                    "id",
+                                    Doc::value(
+                                        res.id.clone().map_or(serde_json::Value::Null, Into::into),
+                                    ),
+                                ),
+                                ("display", Doc::value(res.display.clone().into())),
+                                (
+                                    "ops",
+                                    Doc::value(serde_json::Value::Array(
+                                        res.ops.iter().map(|o| o.clone().into()).collect(),
+                                    )),
+                                ),
+                                (
+                                    "facts",
+                                    Doc::Seq(
+                                        res.fact_indices.len(),
+                                        Box::new(move |i| {
+                                            Doc::value(fact_doc(
+                                                block,
+                                                res.fact_indices[i],
+                                                workspace_root,
+                                            ))
+                                        }),
+                                    ),
+                                ),
+                            ])
+                        }),
+                    ),
+                ),
+            ])
+        }),
+    )
+}
+
+/// Full `projectFingerprintQuery` with all parameters injected. The result is
+/// self-contained (#160 step 9 S9-16): no snapshot is read here. The blocks
+/// stream ([`Doc`], the B1q fix): each fact's JSON is built, written and
+/// dropped in turn.
 pub fn project_fingerprint_query_full(
     result: &FingerprintQueryResult,
-    snap: &CapabilitySnapshot,
     workspace_root: &str,
     filters: &FingerprintFilters,
     deterministic: bool,
@@ -932,67 +1169,25 @@ pub fn project_fingerprint_query_full(
     driver_version: &str,
     workspace_fingerprint: &str,
 ) -> String {
-    // Operation index (borrowed from snap; lives as long as snap).
-    let op_index: HashMap<String, &crate::engine::l5::snapshot::SnapshotOperationEvidence> = snap
-        .operation_index
-        .iter()
-        .map(|e| (e.operation_id.clone(), e))
-        .collect();
-
     // Project blocks.
-    let mut blocks_arr: Vec<serde_json::Value> = Vec::new();
-    for block in &result.blocks {
-        let witness_by_fi: HashMap<usize, &BlockWitness> =
-            block.witnesses.iter().map(|w| (w.fact_index, w)).collect();
+    let blocks = Doc::Seq(
+        result.blocks.len(),
+        Box::new(move |b| block_doc(&result.blocks[b], workspace_root)),
+    );
+    project_query_envelope(
+        result,
+        blocks,
+        filters,
+        deterministic,
+        analyzer_diagnostics,
+        driver_version,
+        workspace_fingerprint,
+    )
+}
 
-        // Families.
-        let mut families_arr: Vec<serde_json::Value> = Vec::new();
-        for family in &block.families {
-            let mut resources_arr: Vec<serde_json::Value> = Vec::new();
-            for res in &family.resources {
-                let mut facts_arr: Vec<serde_json::Value> = Vec::new();
-                for &fi in &res.fact_indices {
-                    let fact = &block.rendered_facts[fi];
-                    let fact_id = fact_id_of(fact);
-                    let bw = witness_by_fi.get(&fi).copied();
-
-                    let witness_val =
-                        bw.map(|bw| project_witness_json(bw, fact, workspace_root, &op_index));
-
-                    let mut fj = serde_json::Map::new();
-                    fj.insert("factId".into(), fact_id.into());
-                    fj.insert("op".into(), fact.op.clone().into());
-                    fj.insert("resourceKind".into(), fact.resource_kind.clone().into());
-                    if let Some(ref rid) = fact.resource_id {
-                        fj.insert("resourceId".into(), rid.clone().into());
-                    }
-                    fj.insert("provenance".into(), fact.provenance.clone().into());
-                    fj.insert("confidence".into(), fact.confidence.clone().into());
-                    fj.insert("via".into(), fact.via.clone().into());
-                    if let Some(w) = witness_val {
-                        fj.insert("witness".into(), w);
-                    }
-                    facts_arr.push(serde_json::Value::Object(fj));
-                }
-                let mut rj = serde_json::Map::new();
-                if let Some(ref id) = res.id {
-                    rj.insert("id".into(), id.clone().into());
-                }
-                rj.insert("display".into(), res.display.clone().into());
-                rj.insert(
-                    "ops".into(),
-                    serde_json::Value::Array(res.ops.iter().map(|o| o.clone().into()).collect()),
-                );
-                rj.insert("facts".into(), serde_json::Value::Array(facts_arr));
-                resources_arr.push(serde_json::Value::Object(rj));
-            }
-            let mut fam = serde_json::Map::new();
-            fam.insert("resourceKind".into(), family.kind.clone().into());
-            fam.insert("coneCoverage".into(), family.cone_coverage.clone().into());
-            fam.insert("resources".into(), serde_json::Value::Array(resources_arr));
-            families_arr.push(serde_json::Value::Object(fam));
-        }
-
+/// One block: its small parts as values, its families streamed.
+fn block_doc<'a>(block: &'a FingerprintBlock, workspace_root: &'a str) -> Doc<'a> {
+    {
         // mayCommit.
         let may_commit_fact_id = block
             .may_commit
@@ -1055,37 +1250,49 @@ pub fn project_fingerprint_query_full(
             "objectDisplay": block.object_display,
         });
 
-        let mut bj = serde_json::Map::new();
-        bj.insert("routine".into(), routine_ref);
-        bj.insert(
-            "rootKinds".into(),
-            serde_json::Value::Array(block.kinds.iter().map(|k| k.clone().into()).collect()),
-        );
-        bj.insert(
-            "classificationSource".into(),
-            block.classification_source.clone().into(),
-        );
-        bj.insert("coverage".into(), cov_obj);
-        bj.insert("families".into(), serde_json::Value::Array(families_arr));
-        bj.insert(
-            "mayCommit".into(),
-            serde_json::Value::Object(may_commit_obj),
-        );
-        bj.insert(
-            "dispatch".into(),
-            serde_json::json!({
-                "resolved": resolved_arr,
-                "unresolved": unresolved_arr,
-            }),
-        );
-        bj.insert(
-            "requiredPermissions".into(),
-            serde_json::Value::Array(perms_arr),
-        );
-
-        blocks_arr.push(serde_json::Value::Object(bj));
+        Doc::Map(vec![
+            ("routine", Doc::value(routine_ref)),
+            (
+                "rootKinds",
+                Doc::value(serde_json::Value::Array(
+                    block.kinds.iter().map(|k| k.clone().into()).collect(),
+                )),
+            ),
+            (
+                "classificationSource",
+                Doc::value(block.classification_source.clone().into()),
+            ),
+            ("coverage", Doc::value(cov_obj)),
+            ("families", families_doc(block, workspace_root)),
+            (
+                "mayCommit",
+                Doc::value(serde_json::Value::Object(may_commit_obj)),
+            ),
+            (
+                "dispatch",
+                Doc::value(serde_json::json!({
+                    "resolved": resolved_arr,
+                    "unresolved": unresolved_arr,
+                })),
+            ),
+            (
+                "requiredPermissions",
+                Doc::value(serde_json::Value::Array(perms_arr)),
+            ),
+        ])
     }
+}
 
+/// The query envelope around `blocks`: its small parts as values.
+fn project_query_envelope(
+    result: &FingerprintQueryResult,
+    blocks: Doc<'_>,
+    filters: &FingerprintFilters,
+    deterministic: bool,
+    analyzer_diagnostics: &[(String, String, String)],
+    driver_version: &str,
+    workspace_fingerprint: &str,
+) -> String {
     // Payload diagnostics.
     let payload_diags: Vec<serde_json::Value> = result
         .diagnostics
@@ -1142,17 +1349,29 @@ pub fn project_fingerprint_query_full(
     }
 
     // Payload.
-    let payload = serde_json::json!({
-        "workspaceFingerprint": workspace_fingerprint,
-        "filters": serde_json::Value::Object(filters_map),
-        "blocks": blocks_arr,
-        "diagnostics": payload_diags,
-        "summary": {
-            "totalClassifications": result.total_classifications,
-            "renderedBlocks": result.rendered_blocks,
-            "rootsConfigIgnored": result.roots_config_ignored,
-        }
-    });
+    let payload = Doc::Map(vec![
+        (
+            "workspaceFingerprint",
+            Doc::value(workspace_fingerprint.into()),
+        ),
+        (
+            "filters",
+            Doc::value(serde_json::Value::Object(filters_map)),
+        ),
+        ("blocks", blocks),
+        (
+            "diagnostics",
+            Doc::value(serde_json::Value::Array(payload_diags)),
+        ),
+        (
+            "summary",
+            Doc::value(serde_json::json!({
+                "totalClassifications": result.total_classifications,
+                "renderedBlocks": result.rendered_blocks,
+                "rootsConfigIgnored": result.roots_config_ignored,
+            })),
+        ),
+    ]);
 
     // Build envelope.
     let generated_at = crate::engine::gate::format_json::pinned_or_now_iso8601(deterministic);
@@ -1168,17 +1387,23 @@ pub fn project_fingerprint_query_full(
         })
         .collect();
 
-    let envelope = serde_json::json!({
-        "kind": "fingerprint-query",
-        "schemaVersion": FINGERPRINT_QUERY_CONTRACT_VERSION,
-        "alsemVersion": driver_version,
-        "deterministic": deterministic,
-        "generatedAt": generated_at,
-        "diagnostics": diags_arr,
-        "payload": payload,
-    });
+    let envelope = Doc::Map(vec![
+        ("kind", Doc::value("fingerprint-query".into())),
+        (
+            "schemaVersion",
+            Doc::value(FINGERPRINT_QUERY_CONTRACT_VERSION.into()),
+        ),
+        ("alsemVersion", Doc::value(driver_version.into())),
+        ("deterministic", Doc::value(deterministic.into())),
+        ("generatedAt", Doc::value(generated_at.into())),
+        (
+            "diagnostics",
+            Doc::value(serde_json::Value::Array(diags_arr)),
+        ),
+        ("payload", payload),
+    ]);
 
-    serialize_fingerprint_envelope(envelope)
+    serialize_doc(&envelope)
 }
 
 // ---------------------------------------------------------------------------
@@ -1659,6 +1884,89 @@ mod tests {
     use super::*;
     use crate::engine::l5::snapshot::SnapshotIdentityTable;
 
+    /// #160 step 9 (the B1q fix): a [`Doc`] serializes to exactly the bytes
+    /// `serialize_document_value` gives the `Value` it stands for: keys out of
+    /// order, a `null` entry (dropped), a `null` inside a small value (dropped
+    /// there too), nested maps, an empty and a non-empty streamed array.
+    /// DISCRIMINATION: `Doc::Map` without its sort, or without its null drop,
+    /// fails it.
+    #[test]
+    fn doc_serializes_as_the_normalized_value() {
+        let doc = Doc::Map(vec![
+            (
+                "zeta",
+                Doc::value(serde_json::json!({"b": 1, "a": null, "c": [1, 2]})),
+            ),
+            ("alpha", Doc::value(serde_json::Value::Null)),
+            ("empty", Doc::Seq(0, Box::new(|_| unreachable!()))),
+            (
+                "items",
+                Doc::Seq(
+                    2,
+                    Box::new(|i| {
+                        Doc::Map(vec![
+                            ("n", Doc::value((i as u64).into())),
+                            ("m", Doc::value(serde_json::json!({"y": "x", "x": i}))),
+                        ])
+                    }),
+                ),
+            ),
+            ("beta", Doc::Map(vec![("k", Doc::value(true.into()))])),
+        ]);
+        let want = crate::engine::gate::format_json::serialize_document_value(serde_json::json!({
+            "zeta": {"b": 1, "a": null, "c": [1, 2]},
+            "alpha": null,
+            "empty": [],
+            "items": [
+                {"n": 0, "m": {"y": "x", "x": 0}},
+                {"n": 1, "m": {"y": "x", "x": 1}},
+            ],
+            "beta": {"k": true},
+        }));
+        assert_eq!(serialize_doc(&doc), want);
+    }
+
+    /// #160 step 9 (the B1q fix): a streamed array builds each element while
+    /// the serializer writes, so element `i` is built only after element
+    /// `i - 1`'s bytes are out (no array is held whole). DISCRIMINATION:
+    /// `Doc::Seq` collecting every element before writing fails it.
+    #[test]
+    fn doc_builds_seq_items_while_writing() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+        struct Counting(Rc<Cell<usize>>);
+        impl std::io::Write for Counting {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.set(self.0.get() + b.len());
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let written = Rc::new(Cell::new(0usize));
+        let seen: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+        let (w, s) = (Rc::clone(&written), Rc::clone(&seen));
+        let doc = Doc::Seq(
+            3,
+            Box::new(move |i| {
+                s.borrow_mut().push(w.get());
+                Doc::value(serde_json::json!({"i": i, "pad": "0123456789"}))
+            }),
+        );
+        let mut ser = serde_json::Serializer::with_formatter(
+            Counting(Rc::clone(&written)),
+            serde_json::ser::PrettyFormatter::new(),
+        );
+        serde::Serialize::serialize(&doc, &mut ser).unwrap();
+        let at_build = seen.borrow().clone();
+        assert_eq!(at_build.len(), 3);
+        assert!(
+            at_build.windows(2).all(|w| w[1] > w[0] + 10),
+            "each element is built after the previous one is written: {at_build:?}"
+        );
+    }
+
     fn snap_with_identities(rows: &[(&str, &str)]) -> CapabilitySnapshot {
         let mut ids = SnapshotIdentityTable {
             stable_ids: Vec::new(),
@@ -1704,7 +2012,14 @@ mod tests {
             include_inherited: true,
             witness_limit: WitnessLimit::Disabled,
         };
-        let result = fingerprint_query(&snap, &filters, false, &OwnerIndex::default());
+        let result = fingerprint_query(
+            &snap,
+            &filters,
+            false,
+            &OwnerIndex::default(),
+            None,
+            &|_| true,
+        );
         assert_eq!(result.diagnostics.len(), 1);
         match &result.diagnostics[0] {
             FingerprintQueryDiagnostic::SelectorAmbiguous {
@@ -1805,7 +2120,14 @@ mod tests {
             witness_limit: WitnessLimit::Capped(3),
         };
         crate::engine::l5::digest::DAG_BUILDS.with(|c| c.set(0));
-        let result = fingerprint_query(&snap, &filters, false, &OwnerIndex::default());
+        let result = fingerprint_query(
+            &snap,
+            &filters,
+            false,
+            &OwnerIndex::default(),
+            None,
+            &|_| true,
+        );
         let witnessed = result.blocks[0]
             .witnesses
             .iter()

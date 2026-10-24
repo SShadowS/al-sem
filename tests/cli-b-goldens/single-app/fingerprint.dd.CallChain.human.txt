@@ -1,0 +1,10 @@
+Rendering 1 of 4 root classifications.
+
+Codeunit Ws Work::CallChain  [public-procedure]
+  coverage:   partial — external-target
+              1 opaque/unresolved targets: CallChain
+  writes:     none known reachable
+  reads:      none known reachable
+  commit:     unknown
+  publish:    none known reachable
+  no known http/storage/file/background/telemetry/ui capabilities — cone partial

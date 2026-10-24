@@ -244,7 +244,8 @@ fn run_one(fixture: &str, routine: &str, question: &str) -> Result<(String, Stri
         routine,
         question,
         VERSION_OVERRIDE,
-        true, // deterministic
+        true,  // deterministic
+        false, // cross-app, the default: no cli-b fixture has a dependency
     ) {
         Ok(result) => Ok((result.json_text, result.human_text, result.exit_code)),
         Err(msg) => Err(msg),

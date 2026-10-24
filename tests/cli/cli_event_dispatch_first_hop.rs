@@ -224,6 +224,7 @@ fn fingerprint_witness(ws: &Path, routine: &str) -> Value {
         verbosity: "compact",
         inventory_only: false,
         no_roots_config: false,
+        single_app: true,
     };
     let result = run_fingerprint_pipeline(&opts).expect("fingerprint runs");
     match result.output {
