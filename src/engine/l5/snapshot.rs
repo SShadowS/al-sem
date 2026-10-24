@@ -1450,6 +1450,8 @@ pub(crate) enum TreeRaw<'a> {
 /// dependency routine is named by its app, `app_names` (lowercase app guid →
 /// name, the loaded apps). `source_less_apps`: D9's set (#160 step 9), empty
 /// single-app.
+// The eighth input is step 9's `source_less_apps`, beside #277's `pd` (case B).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compose_tree(
     model: &Model,
     typed: &[TypedEdge],

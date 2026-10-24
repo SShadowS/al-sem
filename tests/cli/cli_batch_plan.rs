@@ -314,37 +314,66 @@ fn batch_counters_two_views_one_read() {
     );
 }
 
-/// T3, case A's cut readers (D6.4): fingerprint B0 and prove on one
-/// single-app view. Derived from `FINGERPRINT_ROW` and the `prove` row (each
-/// 1, 2, 2, 1, 3, 2, 1, 1, 1, 1: the view's relation and composition plus
-/// its own cut): the view's half once (program, v2, ctx, inputs 1; bcg, cone,
-/// scc, pd 1 each) and one cut per job (bcg, cone, pd, snap, witness +1 each;
-/// scc +1 each).
+/// T3, case B (spec §9, D10): prove is a tree job on its view (`DIGEST_ROW`,
+/// step 9 §4.6), so fingerprint B0 is the one cut reader left (D6.4, S′).
+/// (a) B0 and `prove --single-app` on ONE single-app view: the view's half
+/// once (program, v2, ctx, inputs 1; bcg, cone, pd 1; scc 2), prove's tree
+/// off the view's one composition (snap 1, witness 1) and B0's own cut (bcg,
+/// cone, scc, pd, snap, witness +1). (b) B0 and prove, cross-app by default:
+/// two views, the cross-app one `DIGEST_ROW` (1, 1, 1, 1, 2, 1, 1, 1, 1, 1)
+/// and the single-app one `FINGERPRINT_ROW` (1, 2, 2, 1, 3, 2, 1, 1, 1, 1),
+/// one workspace read.
 #[test]
 fn batch_counters_cut_readers() {
     let (_d, ws) = ws_dep();
-    let jobs = vec![
-        argv(&["fingerprint", &ws, "--format", "json", "--deterministic"]),
-        argv(&["prove", &ws, "CallLib", "may-commit", "--deterministic"]),
-    ];
-    let run = batch(&jobs);
-    assert_each_standalone(&run, &jobs, None);
-    assert_row(
-        "fingerprint + prove",
-        &run.counters,
-        Row {
-            program: 1,
-            bcg: 3,
-            cone: 3,
-            v2: 1,
-            scc: 4,
-            pd: 3,
-            ctx: 1,
-            snap: 2,
-            witness: 2,
-            inputs: 1,
-        },
-    );
+    let b0 = argv(&["fingerprint", &ws, "--format", "json", "--deterministic"]);
+    let prove = |extra: &[&str]| {
+        let mut a = vec![
+            "prove",
+            ws.as_str(),
+            "CallLib",
+            "may-commit",
+            "--deterministic",
+        ];
+        a.extend_from_slice(extra);
+        argv(&a)
+    };
+    let one_view = Row {
+        program: 1,
+        bcg: 2,
+        cone: 2,
+        v2: 1,
+        scc: 3,
+        pd: 2,
+        ctx: 1,
+        snap: 2,
+        witness: 2,
+        inputs: 1,
+    };
+    let two_views = Row {
+        program: 2,
+        bcg: 3,
+        cone: 3,
+        v2: 2,
+        scc: 5,
+        pd: 3,
+        ctx: 2,
+        snap: 2,
+        witness: 2,
+        inputs: 1,
+    };
+    for (case, jobs, row) in [
+        (
+            "(a) fingerprint + prove --single-app",
+            vec![b0.clone(), prove(&["--single-app"])],
+            one_view,
+        ),
+        ("(b) fingerprint + prove", vec![b0, prove(&[])], two_views),
+    ] {
+        let run = batch(&jobs);
+        assert_each_standalone(&run, &jobs, None);
+        assert_row(case, &run.counters, row);
+    }
 }
 
 /// T3, a run asking `ORDERING_FACTS` (d47) beside a digest: the digest row
@@ -454,7 +483,10 @@ fn analyze_and_digest_share_one_run() {
 /// --tests` that resolves no root (census `witness.members=0`) composes its
 /// tree: cone 1, snapshot 1, witness pass 0, alone and beside analyze. (b)
 /// query alone and query + graph (no run, no request, no tree) compose zero
-/// times.
+/// times. (c) case B (#160 step 9 D4): `fingerprint --inventory-only` (an
+/// empty request and an `Inventory` tree read) composes once with no raw
+/// facts, the same counts as (a), alone and beside analyze on its
+/// (cross-app) view.
 #[test]
 fn empty_request_composes_only_with_a_tree() {
     let (_d, ws) = ws_dep();
@@ -466,14 +498,27 @@ fn empty_request_composes_only_with_a_tree() {
         "--tests",
         "--deterministic",
     ]);
+    let inventory = argv(&[
+        "fingerprint",
+        &ws,
+        "--inventory-only",
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
     let analyze = argv(&["analyze", &ws, "--format", "json", "--deterministic"]);
-    for jobs in [vec![digest.clone()], vec![digest, analyze]] {
+    for jobs in [
+        vec![digest.clone()],
+        vec![digest, analyze.clone()],
+        vec![inventory.clone()],
+        vec![inventory, analyze],
+    ] {
         let run = batch_in(&jobs, None, &[("ALSEM_RETAINED_CENSUS", "1")]);
         assert_each_standalone(&run, &jobs, None);
         let err = String::from_utf8_lossy(&run.out.stderr);
         assert!(err.contains("witness.members=0"), "precondition: {err}");
         let m = &run.counters;
-        let what = format!("{} job(s): {m:?}", jobs.len());
+        let what = format!("{jobs:?}: {m:?}");
         assert_eq!(count(m, "build.cone"), 1, "{what}");
         assert_eq!(count(m, "build.snapshot"), 1, "{what}");
         assert_eq!(count(m, "build.witness_pass"), 0, "{what}");
