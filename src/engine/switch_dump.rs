@@ -360,20 +360,31 @@ mod tests {
         );
     }
 
-    /// The harness must measure production: `run_analyze_with_exit` builds its model
-    /// and coverage ONLY through the two functions the dump calls. Inlining either
-    /// back into the analyze path (or building a second model there) fails this.
+    /// The harness must measure production: `alsem analyze` builds its model
+    /// and coverage ONLY through the two functions the dump calls. Since #277
+    /// the model is the batch driver's view build (`build_view`, which analyze
+    /// reaches through its `analyze_extras` demand) and the coverage the
+    /// analyze job's compute (`analyze_view`). Inlining either back into the
+    /// analyze path (or building a second model there) fails this.
     #[test]
     fn analyze_builds_through_the_dumped_functions() {
-        let src = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine/gate/run.rs"),
-        )
-        .unwrap();
-        let start = src.find("pub fn run_analyze_with_exit(").unwrap();
-        let body = &src[start..];
-        let body = &body[..body.find("\n}\n").unwrap()];
-        assert_eq!(body.matches("build_analysis_model(").count(), 1);
-        assert_eq!(body.matches("analysis_coverage(").count(), 1);
+        let read = |p: &str| {
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(p)).unwrap()
+        };
+        let body_of = |src: &str, head: &str| -> String {
+            let start = src.find(head).unwrap_or_else(|| panic!("{head}"));
+            let body = &src[start..];
+            body[..body.find("\n}\n").unwrap()].to_string()
+        };
+        let run = read("src/engine/gate/run.rs");
+        let build = body_of(&read("src/engine/batch/mod.rs"), "\nfn build_view(");
+        let compute = body_of(&run, "\nfn analyze_view(");
+        assert_eq!(build.matches("build_analysis_model(").count(), 1);
+        assert_eq!(compute.matches("analysis_coverage(").count(), 1);
+        assert!(
+            body_of(&run, "impl Job for AnalyzeJob").contains("analyze_extras: true"),
+            "analyze's view is built by build_analysis_model"
+        );
         for banned in [
             "assemble_and_resolve_workspace",
             "attach_program_calls",
@@ -381,8 +392,8 @@ mod tests {
             "project_coverage_inputs",
         ] {
             assert!(
-                !body.contains(banned),
-                "run_analyze_with_exit calls {banned} directly; build through \
+                !build.contains(banned) && !compute.contains(banned),
+                "the analyze path calls {banned} directly; build through \
                  build_analysis_model / analysis_coverage so the switch harness sees it"
             );
         }

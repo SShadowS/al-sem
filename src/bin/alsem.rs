@@ -60,19 +60,22 @@ const _: () = assert!(
      from mimalloc.h before trusting MI_OPTION_PURGE_DELAY"
 );
 
+use al_sem::engine::batch::job::{Failed, Job};
+use al_sem::engine::batch::output::{JobOutput, WriteAction, replay};
+use al_sem::engine::batch::run_standalone;
 use al_sem::engine::gate::cache_prune::{format_prune_report, prune_cache};
-use al_sem::engine::gate::events::{
-    EventsChainsOptions, EventsFanoutOptions, run_events_chains, run_events_fanout,
-};
+use al_sem::engine::gate::events::{EventsChainsOptions, EventsFanoutOptions, EventsJob};
 use al_sem::engine::gate::exit_code::{exit, parse_fail_on};
 use al_sem::engine::gate::filter::Scope;
 use al_sem::engine::gate::presets::{preset_names, resolve_analyze_detectors};
-use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit};
+use al_sem::engine::gate::run::{AnalyzeArgs, AnalyzeJob, OutputFormat};
 use al_sem::engine::gate::version::driver_version;
 use al_sem::engine::l4::effect_query_cli::{
     Direction, QueryRunResult, run_query_effects_pipeline, run_query_touches_pipeline,
 };
-use al_sem::engine::l5::digest_cli::{ChangedAutoDetect, auto_detect_changed, run_digest_pipeline};
+use al_sem::engine::l5::digest_cli::{
+    ChangedAutoDetect, DigestJob, DigestRequest, auto_detect_changed,
+};
 use al_sem::engine::l5::event_flow::Scope as EventScope;
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintOptions, FingerprintOutput, ShardMode, SpecifiedFlags, default_format,
@@ -729,59 +732,44 @@ fn main() -> ExitCode {
     code
 }
 
-// ── output writers (#160 spec §4.2.5) ────────────────────────────────────────
+// ── output (#160 spec §4.2.5, #277 D1/D2.3) ──────────────────────────────────
 //
-// One text and one rule for a failed write: `al-sem: write error: <stdout|path>:
-// <OS message>` on stderr, and the command's own failure code (`fail`: 2 for
-// analyze, 1 for every other command). A closed pipe never aborts the process,
-// and neither does a closed stderr under it: the message goes through
-// `write_stderr`, never a panicking `eprintln!`.
+// A command through the batch driver: standalone is a batch of one, and its
+// writes replay in its standalone order (`al_sem::engine::batch::output`,
+// which holds the one write-failure rule). The commands not yet behind the
+// driver (#277 Task 6) write through `write_actions`, the same replay.
 
-/// Report a failed write of `target` and return `fail`.
-fn write_error(target: &str, e: &std::io::Error, fail: ExitCode) -> ExitCode {
-    let _ = write_stderr(
-        format!("al-sem: write error: {target}: {e}\n").as_bytes(),
-        fail,
-    );
-    fail
+/// Run `job` as a batch of one (#277 D1).
+fn standalone(job: &dyn Job) -> ExitCode {
+    ExitCode::from(run_standalone(job))
 }
 
-/// Write `bytes` to stdout and flush.
-fn write_stdout(bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
-    use std::io::Write;
-    let mut out = std::io::stdout().lock();
-    out.write_all(bytes)
-        .and_then(|()| out.flush())
-        .map_err(|e| write_error("stdout", &e, fail))
+/// A job that failed its own validation: `line` on stderr, exit `exit`.
+fn failed(line: impl Into<String>, exit: u8) -> ExitCode {
+    standalone(&Failed(JobOutput::lines(&[line.into()], exit)))
 }
 
-/// Write `bytes` to the file at `path`.
-fn write_file(path: &str, bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
-    std::fs::write(path, bytes).map_err(|e| write_error(path, &e, fail))
-}
-
-/// Write `bytes` to stderr. No message on failure: the stream is gone.
-fn write_stderr(bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
-    use std::io::Write;
-    let mut err = std::io::stderr().lock();
-    err.write_all(bytes)
-        .and_then(|()| err.flush())
-        .map_err(|_| fail)
-}
-
-/// Write `bytes` to `--out` when given, else stdout.
-fn write_out(out: Option<&str>, bytes: &[u8], fail: ExitCode) -> Result<(), ExitCode> {
-    match out {
-        Some(path) => write_file(path, bytes, fail),
-        None => write_stdout(bytes, fail),
+/// Write `actions` in order; a failed write ends them with `fail`.
+fn write_actions(actions: Vec<WriteAction>, fail: u8) -> Result<(), ExitCode> {
+    match replay(&JobOutput { actions, exit: 0 }, fail) {
+        0 => Ok(()),
+        code => Err(ExitCode::from(code)),
     }
 }
 
+/// Write `bytes` to stdout.
+fn write_stdout(bytes: impl Into<Vec<u8>>, fail: u8) -> Result<(), ExitCode> {
+    write_actions(vec![WriteAction::Stdout(bytes.into())], fail)
+}
+
+/// Write `bytes` to `--out` when given, else stdout.
+fn write_out(out: Option<&str>, bytes: impl Into<Vec<u8>>, fail: u8) -> Result<(), ExitCode> {
+    write_actions(vec![WriteAction::out(out, bytes)], fail)
+}
+
 /// Write each line plus `\n` to stderr (the lines a command prints after its output).
-fn write_stderr_lines(lines: &[String], fail: ExitCode) -> Result<(), ExitCode> {
-    lines
-        .iter()
-        .try_for_each(|line| write_stderr(format!("{line}\n").as_bytes(), fail))
+fn write_stderr_lines(lines: &[String], fail: u8) -> Result<(), ExitCode> {
+    write_actions(lines.iter().map(|l| WriteAction::line(l)).collect(), fail)
 }
 
 // ── graph command ────────────────────────────────────────────────────────────
@@ -799,7 +787,7 @@ fn run_graph_cmd(g: GraphCli) -> ExitCode {
         }
     };
     let text = graph.to_jsonl();
-    match write_out(g.out.as_deref(), text.as_bytes(), ExitCode::from(1)) {
+    match write_out(g.out.as_deref(), text, 1) {
         Ok(()) => ExitCode::SUCCESS,
         Err(code) => code,
     }
@@ -814,7 +802,7 @@ fn emit_query(result: QueryRunResult, format: &str, out: Option<&str>) -> ExitCo
     } else {
         result.human_text
     };
-    if let Err(code) = write_out(out, output.as_bytes(), ExitCode::from(1)) {
+    if let Err(code) = write_out(out, output, 1) {
         return code;
     }
     ExitCode::from(result.exit_code)
@@ -891,15 +879,15 @@ fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
 // ── policy check command ─────────────────────────────────────────────────────
 
 fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
-    use al_sem::engine::gate::policy::pipeline::{
-        PolicyCheckOptions, policy_request, run_policy_check,
-    };
+    use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, PolicyJob, policy_request};
 
     // Validate --format (human | json | sarif). al-sem writes the message + exit 1.
     const VALID_FORMATS: &[&str] = &["human", "json", "sarif"];
     if !VALID_FORMATS.contains(&c.format.as_str()) {
-        eprintln!("al-sem policy check: invalid --format '{}'", c.format);
-        return ExitCode::from(1);
+        return failed(
+            format!("al-sem policy check: invalid --format '{}'", c.format),
+            1,
+        );
     }
 
     let workspace = std::path::Path::new(&c.workspace);
@@ -920,34 +908,11 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         single_app: c.single_app,
     };
 
-    let outcome = run_policy_check(&opts);
-
-    // A non-zero exit with no text → stderr-only error (load error / strict gate /
-    // modelInstanceId failure). Print stderr lines, no stdout.
-    if outcome.text.is_none() {
-        for line in &outcome.stderr_lines {
-            eprintln!("{line}");
-        }
-        return ExitCode::from(outcome.exit_code);
+    // A bad policy is found before any build: a job with no view (#277 D3).
+    match PolicyJob::new(&opts) {
+        Ok(job) => standalone(&job),
+        Err(early) => standalone(&Failed(early.into_output())),
     }
-
-    if let Some(text) = &outcome.text
-        && let Err(code) = write_out(
-            outcome.out_path.as_deref(),
-            text.as_bytes(),
-            ExitCode::from(1),
-        )
-    {
-        return code;
-    }
-
-    // Analyzer diagnostics go to stderr AFTER the output (al-sem's
-    // `for (const d of diagnostics) process.stderr.write(...)` at the tail).
-    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, ExitCode::from(1)) {
-        return code;
-    }
-
-    ExitCode::from(outcome.exit_code)
 }
 
 // ── policy explain command ───────────────────────────────────────────────────
@@ -972,11 +937,11 @@ fn run_policy_explain_cmd(e: PolicyExplainCli) -> ExitCode {
     let outcome = run_policy_explain(&opts);
 
     if let Some(stdout) = &outcome.stdout
-        && let Err(code) = write_stdout(stdout.as_bytes(), ExitCode::from(1))
+        && let Err(code) = write_stdout(stdout.as_str(), 1)
     {
         return code;
     }
-    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, ExitCode::from(1)) {
+    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, 1) {
         return code;
     }
     ExitCode::from(outcome.exit_code)
@@ -1045,12 +1010,12 @@ fn run_diff_cmd(d: DiffCli) -> ExitCode {
     }
 
     if let Some(text) = outcome.output
-        && let Err(code) = write_out(d.out.as_deref(), text.as_bytes(), ExitCode::from(1))
+        && let Err(code) = write_out(d.out.as_deref(), text, 1)
     {
         return code;
     }
 
-    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, ExitCode::from(1)) {
+    if let Err(code) = write_stderr_lines(&outcome.stderr_lines, 1) {
         return code;
     }
 
@@ -1067,8 +1032,7 @@ const ORDER_REJECTION: &str = "al-sem: digest --order is not supported by the Ru
 fn run_digest_cmd(d: DigestCli) -> ExitCode {
     // Reject --order (CONFIG_ERROR — a not-ported flag rejected cleanly rather than silently ignored)
     if d.order {
-        eprintln!("{ORDER_REJECTION}");
-        return ExitCode::from(exit::CONFIG_ERROR);
+        return failed(ORDER_REJECTION, exit::CONFIG_ERROR);
     }
 
     // Validate --format. al-sem (cli/index.ts:578) writes this exact message and
@@ -1076,11 +1040,13 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
     // CLI layer, distinct from analyze's enum-flag CONFIG_ERROR exits (#4).
     const VALID_DIGEST_FORMATS: &[&str] = &["json", "human"];
     if !VALID_DIGEST_FORMATS.contains(&d.format.as_str()) {
-        eprintln!(
-            "al-sem digest: invalid --format '{}'. Expected: json | human",
-            d.format
+        return failed(
+            format!(
+                "al-sem digest: invalid --format '{}'. Expected: json | human",
+                d.format
+            ),
+            1,
         );
-        return ExitCode::from(1);
     }
 
     // Resolve the --changed alias FIRST (auto-detect into diff / files / routines),
@@ -1108,10 +1074,10 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
     if !has_files && !has_routines && !has_diff {
-        eprintln!(
-            "digest: at least one of --changed-files, --changed-routines, --diff, or --changed is required"
+        return failed(
+            "digest: at least one of --changed-files, --changed-routines, --diff, or --changed is required",
+            1,
         );
-        return ExitCode::from(1);
     }
 
     // Read diff input
@@ -1122,16 +1088,20 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
             use std::io::Read;
             let mut buf = String::new();
             if std::io::stdin().read_to_string(&mut buf).is_err() {
-                eprintln!("al-sem: digest: failed to read diff from stdin");
-                return ExitCode::from(exit::CONFIG_ERROR);
+                return failed(
+                    "al-sem: digest: failed to read diff from stdin",
+                    exit::CONFIG_ERROR,
+                );
             }
             Some(buf)
         }
         Some(path) => match std::fs::read_to_string(path) {
             Ok(s) => Some(s),
             Err(e) => {
-                eprintln!("al-sem: digest: could not read diff file '{path}': {e}");
-                return ExitCode::from(exit::CONFIG_ERROR);
+                return failed(
+                    format!("al-sem: digest: could not read diff file '{path}': {e}"),
+                    exit::CONFIG_ERROR,
+                );
             }
         },
     };
@@ -1155,38 +1125,17 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         },
     );
 
-    match run_digest_pipeline(
-        &inputs,
+    let req = DigestRequest {
+        inputs: &inputs,
         changed_files,
         changed_routines,
         diff_text,
-        &inputs.driver_version,
-        d.deterministic,
-        d.max_paths,
-        d.single_app,
-        d.tests,
-    ) {
-        Err(msg) => {
-            // A DigestPipelineError (input/analyze phase) → write the message verbatim
-            // and exit 1, mirroring cli/digest.ts's catch. The message already starts
-            // with "digest:" so no prefix is added (#3).
-            eprintln!("{msg}");
-            ExitCode::from(1)
-        }
-        Ok(result) => {
-            let output = if d.format == "human" {
-                result.human_text
-            } else {
-                result.json_text
-            };
-
-            if let Err(code) = write_out(d.out.as_deref(), output.as_bytes(), ExitCode::from(1)) {
-                return code;
-            }
-
-            ExitCode::from(result.exit_code)
-        }
-    }
+        alsem_ver: &inputs.driver_version,
+        deterministic: d.deterministic,
+        single_app: d.single_app,
+        tests: d.tests,
+    };
+    standalone(&DigestJob::new(req, d.format == "human", d.out.as_deref()))
 }
 
 // ── prove command ───────────────────────────────────────────────────────────
@@ -1244,7 +1193,7 @@ fn run_prove_cmd(p: ProveCli) -> ExitCode {
                 result.json_text
             };
 
-            if let Err(code) = write_out(p.out.as_deref(), output.as_bytes(), ExitCode::from(1)) {
+            if let Err(code) = write_out(p.out.as_deref(), output, 1) {
                 return code;
             }
 
@@ -1396,14 +1345,13 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
                 _ => true,
             };
             if should_write
-                && let Err(code) =
-                    write_fingerprint_output(&result.output, f.out.as_deref(), ExitCode::from(1))
+                && let Err(code) = write_fingerprint_output(result.output, f.out.as_deref(), 1)
             {
                 return code;
             }
 
             // Per-mode stderr diagnostics AFTER writing output (human/base-json/cbor).
-            if let Err(code) = write_stderr_lines(&result.stderr_diagnostics, ExitCode::from(1)) {
+            if let Err(code) = write_stderr_lines(&result.stderr_diagnostics, 1) {
                 return code;
             }
 
@@ -1415,26 +1363,22 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
 /// Write the fingerprint output to `--out` or stdout; shards go into the `--out`
 /// directory (the current directory when absent).
 fn write_fingerprint_output(
-    output: &FingerprintOutput,
+    output: FingerprintOutput,
     out: Option<&str>,
-    fail: ExitCode,
+    fail: u8,
 ) -> Result<(), ExitCode> {
     match output {
-        FingerprintOutput::Text(text) => write_out(out, text.as_bytes(), fail),
+        FingerprintOutput::Text(text) => write_out(out, text, fail),
         FingerprintOutput::Binary(bytes) => write_out(out, bytes, fail),
         FingerprintOutput::Shards(shards) => {
-            let dir = out.unwrap_or(".");
-            let dir_path = std::path::Path::new(dir);
-            if !dir_path.exists()
-                && let Err(e) = std::fs::create_dir_all(dir_path)
-            {
-                return Err(write_error(dir, &e, fail));
-            }
-            for (filename, content) in shards {
-                let file_path = dir_path.join(filename);
-                write_file(&file_path.to_string_lossy(), content, fail)?;
-            }
-            Ok(())
+            let dir = std::path::Path::new(out.unwrap_or("."));
+            let mut actions = vec![WriteAction::Dir(dir.to_path_buf())];
+            actions.extend(
+                shards
+                    .into_iter()
+                    .map(|(name, content)| WriteAction::File(dir.join(name), content)),
+            );
+            write_actions(actions, fail)
         }
     }
 }
@@ -1444,25 +1388,31 @@ fn write_fingerprint_output(
 fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
     const VALID_FORMATS: &[&str] = &["human", "json"];
     if !VALID_FORMATS.contains(&f.format.as_str()) {
-        eprintln!("al-sem events fanout: invalid --format '{}'", f.format);
-        return ExitCode::from(1);
+        return failed(
+            format!("al-sem events fanout: invalid --format '{}'", f.format),
+            1,
+        );
     }
 
     const VALID_COVERAGE: &[&str] = &["warn", "strict", "ignore"];
     if !VALID_COVERAGE.contains(&f.coverage_policy.as_str()) {
-        eprintln!(
-            "al-sem events fanout: invalid --coverage-policy '{}'",
-            f.coverage_policy
+        return failed(
+            format!(
+                "al-sem events fanout: invalid --coverage-policy '{}'",
+                f.coverage_policy
+            ),
+            1,
         );
-        return ExitCode::from(1);
     }
 
     let scope = match f.scope.as_str() {
         "primary" => EventScope::Primary,
         "all" => EventScope::All,
         other => {
-            eprintln!("al-sem events fanout: invalid --scope '{other}'. Expected: primary | all");
-            return ExitCode::from(1);
+            return failed(
+                format!("al-sem events fanout: invalid --scope '{other}'. Expected: primary | all"),
+                1,
+            );
         }
     };
 
@@ -1481,27 +1431,7 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
         single_app: f.single_app,
     };
 
-    let result = run_events_fanout(&opts);
-    emit_events(
-        &result.text,
-        &result.stderr_lines,
-        result.exit_code,
-        f.out.as_deref(),
-    )
-}
-
-/// Write an events command's text (when non-empty) to `--out` or stdout, then its
-/// stderr lines, returning its exit code.
-fn emit_events(text: &str, stderr_lines: &[String], exit_code: u8, out: Option<&str>) -> ExitCode {
-    if !text.is_empty()
-        && let Err(code) = write_out(out, text.as_bytes(), ExitCode::from(1))
-    {
-        return code;
-    }
-    if let Err(code) = write_stderr_lines(stderr_lines, ExitCode::from(1)) {
-        return code;
-    }
-    ExitCode::from(exit_code)
+    standalone(&EventsJob::fanout(&opts, f.out.as_deref()))
 }
 
 // ── events chains command ───────────────────────────────────────────────────
@@ -1509,33 +1439,38 @@ fn emit_events(text: &str, stderr_lines: &[String], exit_code: u8, out: Option<&
 fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
     const VALID_FORMATS: &[&str] = &["human", "json"];
     if !VALID_FORMATS.contains(&c.format.as_str()) {
-        eprintln!("al-sem events chains: invalid --format '{}'", c.format);
-        return ExitCode::from(1);
+        return failed(
+            format!("al-sem events chains: invalid --format '{}'", c.format),
+            1,
+        );
     }
 
     const VALID_COVERAGE: &[&str] = &["warn", "strict", "ignore"];
     if !VALID_COVERAGE.contains(&c.coverage_policy.as_str()) {
-        eprintln!(
-            "al-sem events chains: invalid --coverage-policy '{}'",
-            c.coverage_policy
+        return failed(
+            format!(
+                "al-sem events chains: invalid --coverage-policy '{}'",
+                c.coverage_policy
+            ),
+            1,
         );
-        return ExitCode::from(1);
     }
 
     let scope = match c.scope.as_str() {
         "primary" => EventScope::Primary,
         "all" => EventScope::All,
         other => {
-            eprintln!("al-sem events chains: invalid --scope '{other}'. Expected: primary | all");
-            return ExitCode::from(1);
+            return failed(
+                format!("al-sem events chains: invalid --scope '{other}'. Expected: primary | all"),
+                1,
+            );
         }
     };
 
     if let Some(md) = c.max_depth
         && md > 256
     {
-        eprintln!("al-sem events chains: --max-depth must be in 0..256");
-        return ExitCode::from(1);
+        return failed("al-sem events chains: --max-depth must be in 0..256", 1);
     }
 
     let inputs = WorkspaceInputs::read(
@@ -1555,13 +1490,7 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
         single_app: c.single_app,
     };
 
-    let result = run_events_chains(&opts);
-    emit_events(
-        &result.text,
-        &result.stderr_lines,
-        result.exit_code,
-        c.out.as_deref(),
-    )
+    standalone(&EventsJob::chains(&opts, c.out.as_deref()))
 }
 
 // ── cache prune command ─────────────────────────────────────────────────────
@@ -1569,7 +1498,7 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
 fn run_cache_prune_cmd(c: CachePruneCli) -> ExitCode {
     let result = prune_cache(c.dep_cache_dir.as_deref(), c.dry_run);
     let report = format_prune_report(&result, c.dry_run);
-    match write_stdout(report.as_bytes(), ExitCode::from(1)) {
+    match write_stdout(report, 1) {
         Ok(()) => ExitCode::SUCCESS,
         Err(code) => code,
     }
@@ -1602,43 +1531,51 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
     if let Some(sev) = &a.min_severity
         && !SEVERITY_VALUES.contains(&sev.as_str())
     {
-        eprintln!(
-            "al-sem: invalid --min-severity '{sev}'. Expected one of: {}",
-            SEVERITY_VALUES.join(", ")
+        return failed(
+            format!(
+                "al-sem: invalid --min-severity '{sev}'. Expected one of: {}",
+                SEVERITY_VALUES.join(", ")
+            ),
+            exit::CONFIG_ERROR,
         );
-        return ExitCode::from(3);
     }
 
     let scope = match a.scope.as_str() {
         "primary" => Scope::Primary,
         "all" => Scope::All,
         other => {
-            eprintln!("al-sem: invalid --scope '{other}'. Expected one of: primary, all");
-            return ExitCode::from(3);
+            return failed(
+                format!("al-sem: invalid --scope '{other}'. Expected one of: primary, all"),
+                exit::CONFIG_ERROR,
+            );
         }
     };
 
     // --- validate --format (accept auto + all concrete values) ---
     const VALID_FORMATS: &[&str] = &["auto", "sarif", "pr-summary", "terminal", "json", "html"];
     if !VALID_FORMATS.contains(&a.format.as_str()) {
-        eprintln!(
-            "al-sem: unsupported --format '{}'. Supported: {} (known presets: {})",
-            a.format,
-            VALID_FORMATS.join(", "),
-            preset_names().join(", ")
+        return failed(
+            format!(
+                "al-sem: unsupported --format '{}'. Supported: {} (known presets: {})",
+                a.format,
+                VALID_FORMATS.join(", "),
+                preset_names().join(", ")
+            ),
+            exit::CONFIG_ERROR,
         );
-        return ExitCode::from(3);
     }
     let format = resolve_auto_format(&a.format);
 
     // --- validate --group-by ---
     let group_by = if let Some(ref g) = a.group_by {
         if !GROUP_BY_VALUES.contains(&g.as_str()) {
-            eprintln!(
-                "al-sem: invalid --group-by '{g}'. Expected one of: {}",
-                GROUP_BY_VALUES.join(", ")
+            return failed(
+                format!(
+                    "al-sem: invalid --group-by '{g}'. Expected one of: {}",
+                    GROUP_BY_VALUES.join(", ")
+                ),
+                exit::CONFIG_ERROR,
             );
-            return ExitCode::from(3);
         }
         Some(g.clone())
     } else {
@@ -1649,10 +1586,7 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
     let fail_on = match &a.fail_on {
         Some(s) => match parse_fail_on(s) {
             Ok(sev) => Some(sev),
-            Err(msg) => {
-                eprintln!("al-sem: {msg}");
-                return ExitCode::from(3);
-            }
+            Err(msg) => return failed(format!("al-sem: {msg}"), exit::CONFIG_ERROR),
         },
         None => None,
     };
@@ -1683,48 +1617,13 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
     // A bad `--preset` / `--detector` is a usage error found before the
     // workspace is read (`run_analyze_with_exit` resolves the set again).
     if let Err(msg) = resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref()) {
-        eprintln!("al-sem: {msg}");
-        return ExitCode::from(3);
+        return failed(format!("al-sem: {msg}"), exit::CONFIG_ERROR);
     }
     let inputs = args.read_inputs();
     let request = args.read_request();
-    match run_analyze_with_exit(&inputs, &request, &args, &inputs.driver_version) {
-        Ok((mut out, exit_code, stderr_warning, baseline_bytes)) => {
-            // `--update-baseline`: the baseline is the first write, before any
-            // stderr line or stdout; a failure is a write error (exit 2) and
-            // stdout stays unwritten (#277 D2.4, S17).
-            if let (Some(path), Some(bytes)) = (&args.baseline, baseline_bytes)
-                && let Err(code) = write_file(path, &bytes, ExitCode::from(exit::ANALYSIS_FAILURE))
-            {
-                return code;
-            }
-            // F2: emit the preflight degraded warning to stderr (the "no silent clean"
-            // contract). Matches al-sem index.ts:263-264:
-            //   `if (pf.degraded) process.stderr.write(`al-sem: warning: ${pf.message}\n`)`.
-            if let Some(msg) = stderr_warning {
-                eprintln!("al-sem: warning: {msg}");
-            }
-            // al-sem appends a trailing newline to the formatted output. A failed
-            // write is an analysis failure (exit 2), never an abort (#160 §4.2.5).
-            out.push('\n');
-            match write_stdout(out.as_bytes(), ExitCode::from(exit::ANALYSIS_FAILURE)) {
-                Ok(()) => ExitCode::from(exit_code),
-                Err(code) => code,
-            }
-        }
-        Err(msg) => {
-            // "analysis failure — …" is tagged by run.rs for errors that al-sem maps to
-            // EXIT.ANALYSIS_FAILURE (2) — e.g. a malformed baseline file that would throw
-            // inside al-sem's loadBaseline and be caught by the analyze-action catch block.
-            // All other Err strings are config/usage errors → EXIT.CONFIG_ERROR (3).
-            if msg.starts_with("analysis failure — ") {
-                eprintln!("al-sem: {msg}");
-                ExitCode::from(2)
-            } else {
-                eprintln!("al-sem: {msg}");
-                ExitCode::from(3)
-            }
-        }
+    match AnalyzeJob::new(&inputs, &request, &args, &inputs.driver_version) {
+        Ok(job) => standalone(&job),
+        Err(msg) => failed(format!("al-sem: {msg}"), exit::CONFIG_ERROR),
     }
 }
 

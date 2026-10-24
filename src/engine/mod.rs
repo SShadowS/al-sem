@@ -4,6 +4,8 @@
 //! the differential harness. It must not depend on or alter the LSP method
 //! surface.
 
+/// #277: the batch driver; standalone is a batch of one.
+pub mod batch;
 /// The retained byte census under `ALSEM_RETAINED_CENSUS=1` (#160 §4.1.5).
 pub mod census;
 pub mod deps;

@@ -18,6 +18,11 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::engine::batch::job::{
+    Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+    ViewKey, ViewNeeds,
+};
+use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::policy::format_policy::{
     format_policy_human, format_policy_json, format_policy_sarif,
 };
@@ -27,10 +32,10 @@ use crate::engine::gate::policy::policy_loader::{
     load_policy_from_string,
 };
 use crate::engine::gate::policy::policy_types::{PolicyDoc, predicate_to_json};
-use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view, diagnostic_lines};
+use crate::engine::gate::run::{analyzer_diagnostics_of_view, diagnostic_lines};
 use crate::engine::l5::detectors::default_detectors;
 use crate::engine::root_classification::classify_roots;
-use crate::engine::session::{Cell, View, policy_plan};
+use crate::engine::session::{Cell, policy_plan};
 use crate::program::inputs::{PolicyOrigin, PolicyRequest, RequestInputs, WorkspaceInputs};
 use crate::program::model::workspace::ModelRoutine;
 
@@ -179,136 +184,213 @@ pub struct PolicyCheckOptions<'a> {
 /// `runPolicyCheck`. Exit: 0 on success ALWAYS (no fail-on gate); non-zero only on
 /// invalid format / strict analyzer error / policy-load error / write failure.
 pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
-    // A set read without a policy request holds no policy file even when the
-    // workspace has one: the check would silently run the bundled default.
-    assert!(
-        opts.request.policy_request != PolicyRequest::None,
-        "policy check: RequestInputs read without a policy request (use policy_request)"
-    );
-    // Resolve the effective policy before any build (#277 D3, Decision 7): a
-    // bad policy is reported even when the build would fail, or `--strict`
-    // would stop on an analyzer diagnostic.
-    let (policy_opt, source): (Option<PolicyDoc>, String) =
-        match resolve_policy_check(&opts.inputs.workspace, opts.request) {
+    match PolicyJob::new(opts) {
+        Err(early) => early,
+        Ok(job) => crate::engine::batch::run_doc(&job)
+            .one()
+            .unwrap_or_else(|f| unreachable!("policy check fails no side: {f:?}")),
+    }
+}
+
+impl PolicyCheckOutcome {
+    /// The writes `policy check` makes (#277 D2.3): an error's lines alone;
+    /// else the output (to `--out` or stdout), THEN the analyzer diagnostics
+    /// (al-sem's `for (const d of diagnostics) process.stderr.write(...)` at
+    /// the tail). A failed `--out` ends the list.
+    pub fn into_output(self) -> JobOutput {
+        let Some(text) = self.text else {
+            return JobOutput::lines(&self.stderr_lines, self.exit_code);
+        };
+        let mut actions = vec![WriteAction::out(self.out_path.as_deref(), text)];
+        actions.extend(self.stderr_lines.iter().map(|l| WriteAction::line(l)));
+        JobOutput {
+            actions,
+            exit: self.exit_code,
+        }
+    }
+}
+
+/// `alsem policy check` as a batch job (#277 D1). Its document is the
+/// [`PolicyCheckOutcome`].
+pub struct PolicyJob<'a> {
+    opts: &'a PolicyCheckOptions<'a>,
+    policy: Option<PolicyDoc>,
+    source: String,
+}
+
+impl<'a> PolicyJob<'a> {
+    /// The job with its policy resolved, before any build (#277 D3, Decision
+    /// 7): a bad policy is reported even when the build would fail, or
+    /// `--strict` would stop on an analyzer diagnostic. `Err` is that report.
+    pub fn new(opts: &'a PolicyCheckOptions<'a>) -> Result<PolicyJob<'a>, PolicyCheckOutcome> {
+        // A set read without a policy request holds no policy file even when the
+        // workspace has one: the check would silently run the bundled default.
+        assert!(
+            opts.request.policy_request != PolicyRequest::None,
+            "policy check: RequestInputs read without a policy request (use policy_request)"
+        );
+        let (policy, source) = match resolve_policy_check(&opts.inputs.workspace, opts.request) {
             ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
             ResolvedPolicy::Disabled => (None, "disabled".to_string()),
             ResolvedPolicy::Error(lines) => {
-                return PolicyCheckOutcome {
+                return Err(PolicyCheckOutcome {
                     text: None,
                     exit_code: 1,
                     stderr_lines: lines,
                     out_path: None,
-                };
+                });
             }
         };
-    // Build the model (assemble → resolve → detector context).
-    // #70: the cross-app base by default (rules see a dependency's table names and
-    // the facts its code adds), the workspace alone under `--single-app`. No
-    // model-instance id is `al-sem policy check: could not compute
-    // modelInstanceId`, exit 1 (`AnalysisTarget::build`).
-    let target = match AnalysisTarget::build(opts.inputs, opts.single_app, "al-sem policy check") {
-        Ok(t) => t,
-        Err(e) => {
+        Ok(PolicyJob {
+            opts,
+            policy,
+            source,
+        })
+    }
+}
+
+impl Job for PolicyJob<'_> {
+    fn demands(&self) -> Vec<ViewDemand> {
+        // #70: the cross-app base by default (rules see a dependency's table
+        // names and the facts its code adds), the workspace alone under
+        // `--single-app`.
+        vec![ViewDemand {
+            key: ViewKey::new(&self.opts.inputs.workspace, self.opts.single_app, false),
+            side: SideIx(0),
+            needs: ViewNeeds::default(),
+            inputs: std::sync::Arc::clone(self.opts.inputs),
+        }]
+    }
+
+    fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        Ok(PlanPart {
+            plan: policy_plan(default_detectors()),
+            reads: vec![Cell::Det, Cell::Raw],
+            carry: None,
+        })
+    }
+
+    fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        Ok(SideDoc::new(self.check(cx)))
+    }
+
+    fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        // No model-instance id is `al-sem policy check: could not compute
+        // modelInstanceId`, exit 1.
+        let ViewFailure::Target(f) = failure else {
+            unreachable!("policy's view is built by `AnalysisTarget`")
+        };
+        Ok(SideDoc::new(PolicyCheckOutcome {
+            text: None,
+            exit_code: 1,
+            stderr_lines: vec![f.message("al-sem policy check")],
+            out_path: None,
+        }))
+    }
+
+    fn serialize(&self, doc: Doc) -> JobOutput {
+        doc.one::<PolicyCheckOutcome>()
+            .unwrap_or_else(|f| unreachable!("policy check fails no side: {f:?}"))
+            .into_output()
+    }
+}
+
+impl PolicyJob<'_> {
+    /// The check off its prepared view.
+    fn check(&self, cx: &mut ViewCx<'_>) -> PolicyCheckOutcome {
+        let opts = self.opts;
+        let source = self.source.clone();
+        // #160 §4.4.4: analyzeWorkspace diagnostics come off the view's run of
+        // the default detector set, so detector-stage diagnostics surface
+        // exactly as al-sem does; the run is taken once read.
+        let key = cx.keys()[0].clone();
+        let diag_lines = diagnostic_lines(&analyzer_diagnostics_of_view(cx.view(), &key));
+        drop(cx.take_run(&key));
+
+        // --strict: any error-severity diagnostic → exit 1 (stderr the diagnostics).
+        if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
             return PolicyCheckOutcome {
                 text: None,
                 exit_code: 1,
-                stderr_lines: vec![e],
+                stderr_lines: diag_lines,
                 out_path: None,
             };
         }
-    };
-    // #160 §4.4.4: one `View`. analyzeWorkspace diagnostics come off its run
-    // of the default detector set, so detector-stage diagnostics surface
-    // exactly as al-sem does; the run is taken once read.
-    let mut view = View::new(target);
-    let plan = policy_plan(default_detectors());
-    let key = plan.keys().remove(0);
-    view.prepare(&plan);
-    let diag_lines = diagnostic_lines(&analyzer_diagnostics_of_view(&view, &key));
-    drop(view.take_run(&key));
 
-    // --strict: any error-severity diagnostic → exit 1 (stderr the diagnostics).
-    if opts.strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
-        return PolicyCheckOutcome {
-            text: None,
-            exit_code: 1,
-            stderr_lines: diag_lines,
-            out_path: None,
-        };
-    }
+        // #160 step 6 Task 3 (D7 (7)): the rule engine reads `det.summaries` and
+        // the view's witness pass (`Cell::Raw`: every primary routine's raw
+        // inherited facts); nothing else is read after the run.
+        cx.release_all_but(&[Cell::Det, Cell::Raw]);
+        let view = cx.view();
+        let resolved = view.model();
+        let target = view.target();
 
-    // #160 step 6 Task 3 (D7 (7)): the rule engine reads `det.summaries` and
-    // the view's witness pass (`Cell::Raw`: every primary routine's raw
-    // inherited facts); nothing else is read after the run.
-    view.release_all_but(&[Cell::Det, Cell::Raw]);
-    let resolved = view.model();
-    let target = view.target();
-
-    // Run the engine (runPolicy wrapper: disabled → empty result, version 0).
-    let result: PolicyRunResult = match &policy_opt {
-        None => PolicyRunResult {
-            policy_source: source,
-            policy_version: 0,
-            rule_summaries: Vec::new(),
-            findings: Vec::new(),
-            diagnostics: Vec::new(),
-        },
-        Some(policy) => {
-            let det = view.det();
-            let root_classifications = classify_roots(&resolved.workspace);
-            let ws = &resolved.workspace;
-            // #70: rules evaluate WORKSPACE routines only; the dependency routines
-            // stay in the model for lookup (tables, objects, inherited facts).
-            let routines: std::borrow::Cow<[ModelRoutine]> =
-                if ws.routines.iter().all(|r| target.is_primary_routine(r)) {
-                    std::borrow::Cow::Borrowed(&ws.routines)
-                } else {
-                    ws.routines
-                        .iter()
-                        .filter(|r| target.is_primary_routine(r))
-                        .cloned()
-                        .collect()
-                };
-            let model = PolicyModel::new(
-                &routines,
-                &ws.objects,
-                &ws.tables,
-                &det.event_graph.events,
-                &root_classifications,
-                &det.summaries,
-                view.raw(),
-            );
-            let out = run_policy_engine(&model, policy);
-            PolicyRunResult {
+        // Run the engine (runPolicy wrapper: disabled → empty result, version 0).
+        let result: PolicyRunResult = match &self.policy {
+            None => PolicyRunResult {
                 policy_source: source,
-                policy_version: policy.version,
-                rule_summaries: out.rule_summaries,
-                findings: out.findings,
-                diagnostics: out.diagnostics,
+                policy_version: 0,
+                rule_summaries: Vec::new(),
+                findings: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            Some(policy) => {
+                let det = view.det();
+                let root_classifications = classify_roots(&resolved.workspace);
+                let ws = &resolved.workspace;
+                // #70: rules evaluate WORKSPACE routines only; the dependency routines
+                // stay in the model for lookup (tables, objects, inherited facts).
+                let routines: std::borrow::Cow<[ModelRoutine]> =
+                    if ws.routines.iter().all(|r| target.is_primary_routine(r)) {
+                        std::borrow::Cow::Borrowed(&ws.routines)
+                    } else {
+                        ws.routines
+                            .iter()
+                            .filter(|r| target.is_primary_routine(r))
+                            .cloned()
+                            .collect()
+                    };
+                let model = PolicyModel::new(
+                    &routines,
+                    &ws.objects,
+                    &ws.tables,
+                    &det.event_graph.events,
+                    &root_classifications,
+                    &det.summaries,
+                    view.raw(),
+                );
+                let out = run_policy_engine(&model, policy);
+                PolicyRunResult {
+                    policy_source: source,
+                    policy_version: policy.version,
+                    rule_summaries: out.rule_summaries,
+                    findings: out.findings,
+                    diagnostics: out.diagnostics,
+                }
             }
+        };
+        let dependencies = target.dependencies();
+        // The rule engine was the last reader of `det` and the raw facts.
+        cx.release_all_but(&[]);
+
+        let text = match opts.format {
+            "json" => format_policy_json(
+                &result,
+                &dependencies,
+                opts.driver_version,
+                opts.deterministic,
+            ),
+            "sarif" => format_policy_sarif(&result, opts.driver_version),
+            _ => dependencies.prefix_human(format_policy_human(&result)),
+        };
+
+        // Exit 0 always; stderr = analyzer diagnostics (after writing output).
+        PolicyCheckOutcome {
+            text: Some(text),
+            exit_code: 0,
+            stderr_lines: diag_lines,
+            out_path: opts.out.map(|s| s.to_string()),
         }
-    };
-    let dependencies = target.dependencies();
-    // The rule engine was the last reader of `det` and the raw facts.
-    view.release_all_but(&[]);
-
-    let text = match opts.format {
-        "json" => format_policy_json(
-            &result,
-            &dependencies,
-            opts.driver_version,
-            opts.deterministic,
-        ),
-        "sarif" => format_policy_sarif(&result, opts.driver_version),
-        _ => dependencies.prefix_human(format_policy_human(&result)),
-    };
-
-    // Exit 0 always; stderr = analyzer diagnostics (after writing output).
-    PolicyCheckOutcome {
-        text: Some(text),
-        exit_code: 0,
-        stderr_lines: diag_lines,
-        out_path: opts.out.map(|s| s.to_string()),
     }
 }
 

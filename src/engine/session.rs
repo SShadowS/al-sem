@@ -496,6 +496,35 @@ impl Plan {
         self.trees.iter().any(|(j, _)| *j == job)
     }
 
+    /// A view's ONE plan from its jobs' plans (#277 D5): every distinct run
+    /// once (two jobs with one `RunKey` share it, D5.5), the union of the
+    /// requests (D5.1), `need_l4` and `after_run` ORed, and each job's tree
+    /// (a factory files it under `JobId(0)`) filed under the job's own id.
+    /// One part is that part's plan with its tree under `job`.
+    pub fn merge(parts: impl IntoIterator<Item = (JobId, Plan)>) -> Plan {
+        let mut out = Plan {
+            runs: vec![],
+            need_l4: false,
+            after_run: 0,
+            witness: WitnessRequest::empty(),
+            trees: vec![],
+        };
+        for (job, part) in parts {
+            assert!(part.trees.len() <= 1, "a job asks at most one tree");
+            for run in part.runs {
+                if !out.runs.iter().any(|r| key(r) == key(&run)) {
+                    out.runs.push(run);
+                }
+            }
+            out.need_l4 |= part.need_l4;
+            out.after_run |= part.after_run;
+            out.witness = out.witness.union(&part.witness);
+            out.trees
+                .extend(part.trees.into_iter().map(|(_, tree)| (job, tree)));
+        }
+        out
+    }
+
     /// Whether the view's composition keeps raw facts: a request or a tree
     /// demand (a tree takes `raw`, empty under an empty request).
     fn keeps_raw(&self) -> bool {
@@ -1778,6 +1807,52 @@ mod tests {
                 .union(&WitnessRequest::empty())
                 .is_empty()
         );
+    }
+
+    /// #277 D5: `Plan::merge` keeps every distinct run once, ORs `need_l4`
+    /// and `after_run`, unions the requests and files each job's tree under
+    /// its own id; one part comes back as itself. DISCRIMINATION: dropping
+    /// the run dedup (push every run) fails "one run per key".
+    #[test]
+    fn plan_union_of_parts() {
+        let run = || vec![probe(substrate::TRANSACTION_SPANS, noop)];
+        let roots =
+            |xs: &[&str]| -> BTreeSet<String> { xs.iter().map(|x| x.to_string()).collect() };
+        let digest = |r: &[&str]| digest_plan(run(), roots(r), false);
+        assert_eq!(
+            digest(&["a"]).keys(),
+            analyze_plan(run(), true).keys(),
+            "precondition: digest and analyze share the run key"
+        );
+
+        let one = Plan::merge([(JobId(3), digest(&["a"]))]);
+        assert_eq!(one.keys(), digest(&["a"]).keys());
+        assert!(one.has_tree(JobId(3)) && !one.has_tree(JobId(0)));
+        assert_eq!(one.witness, WitnessRequest::roots(roots(&["a"])));
+        assert!(one.need_l4);
+
+        let u = Plan::merge([
+            (JobId(0), analyze_plan(run(), true)),
+            (JobId(1), digest(&["a"])),
+            (JobId(2), analyze_plan(run(), false)),
+            (JobId(3), digest(&["b"])),
+            (
+                JobId(4),
+                policy_plan(vec![probe(substrate::SUMMARIES, noop)]),
+            ),
+        ]);
+        assert_eq!(u.runs.len(), 3, "one run per key");
+        assert!(u.need_l4);
+        assert_eq!(
+            u.after_run,
+            substrate::TRANSACTION_SPANS | substrate::SUMMARIES
+        );
+        assert_eq!(
+            u.witness,
+            WitnessRequest::roots(roots(&["a", "b"])).union(&WitnessRequest::primary())
+        );
+        let jobs: Vec<JobId> = u.trees.iter().map(|(j, _)| *j).collect();
+        assert_eq!(jobs, [JobId(1), JobId(3)]);
     }
 
     /// `take_run` removes the stored output: a second take, or a `run` of the
