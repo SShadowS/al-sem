@@ -1338,8 +1338,26 @@ fn base_protected_var_type(
     graph: &ProgramGraph,
     index: &ResolveIndex,
 ) -> Option<String> {
+    extension_base_object(from_object, graph, index)??
+        .protected_vars
+        .iter()
+        .find(|(n, _)| n == name_lc)
+        .map(|(_, ty)| ty.to_string())
+}
+
+/// The object `from_object` extends, as Step 2c reads it: `None` when
+/// `from_object` is not an extension; `Some(None)` when it is one but its base
+/// does not resolve uniquely in its closure (its inherited scope is unknown);
+/// `Some(Some(base))` otherwise.
+pub(crate) fn extension_base_object<'g>(
+    from_object: &ObjectNode,
+    graph: &'g ProgramGraph,
+    index: &ResolveIndex,
+) -> Option<Option<&'g ObjectNode>> {
     let base_kind = from_object.id.kind.extension_base_kind()?;
-    let extends = from_object.extends_target.as_deref()?;
+    let Some(extends) = from_object.extends_target.as_deref() else {
+        return Some(None);
+    };
     let base_ref = ObjectRef::Name {
         raw: extends.into(),
         normalized_lc: extends.fold_identifier(),
@@ -1347,13 +1365,9 @@ fn base_protected_var_type(
     let ObjectRefResolution::Unique(base_id) =
         index.resolve_object_ref(graph, from_object.id.clone(), base_kind, &base_ref)
     else {
-        return None;
+        return Some(None);
     };
-    object_by_id(graph, &base_id)?
-        .protected_vars
-        .iter()
-        .find(|(n, _)| n == name_lc)
-        .map(|(_, ty)| ty.to_string())
+    Some(object_by_id(graph, &base_id))
 }
 
 /// The element type of an `array[N, ...] of T` type text: `T`. `None` for any other

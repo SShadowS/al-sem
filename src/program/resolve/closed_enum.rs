@@ -39,7 +39,8 @@ use crate::program::resolve::extract::WithState;
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::receiver::{
     CallerScopeSymbol, ParsedType, ReceiverType, caller_scope_symbol, classify_type_text,
-    infer_receiver_type, name_shadows_bare_call, parse_object_kind_type, unquote_identifier,
+    extension_base_object, infer_receiver_type, name_shadows_bare_call, parse_object_kind_type,
+    unquote_identifier,
 };
 use crate::program::resolve::resolver::resolve_bare;
 
@@ -516,10 +517,21 @@ fn unique_enum(cx: &ClosedEnumCx, from: &ObjectNodeId, r: &ObjectRef) -> Option<
     }
 }
 
-/// Whether `name_lc` names a variable in scope at the routine: a local,
-/// parameter, the named return value, or an object global.
+/// Whether `name_lc` may name a variable in scope at the routine: a local,
+/// parameter, the named return value, an object global, or (in an extension)
+/// a protected variable of its base object, as receiver typing's Step 2c reads
+/// it (`receiver::extension_base_object`). An extension whose base cannot be
+/// resolved counts as shadowing every name: its inherited scope is unknown.
 fn in_scope(cx: &ClosedEnumCx, name_lc: &str) -> bool {
     name_shadows_bare_call(cx.routine, &cx.obj.globals, name_lc)
+        || match extension_base_object(cx.from_object, cx.graph, cx.index) {
+            None => false,
+            Some(None) => true,
+            Some(Some(base)) => base
+                .protected_vars
+                .iter()
+                .any(|(n, _)| n.as_ref() == name_lc),
+        }
 }
 
 /// `e` with parentheses removed.
@@ -1759,6 +1771,36 @@ enum 50106 "Other Kind" implements "Other Strategy"
         let report = crate::program::resolve::full::resolve_full_program(write(&ws).path())
             .expect("resolves");
         assert!(is_open(site_completeness(&report, "onaftergetrecord")));
+    }
+
+    /// Final panel N2-3: a table extension inherits its base table's protected
+    /// variable `"Demo Kind"` (of the extensible `Open Kind`), so in the
+    /// extension `"Demo Kind"::Standard` may be that variable's value. The
+    /// table has no field of that name, so only the inherited scope shadows it.
+    #[test]
+    fn i264_n2_3_inherited_protected_variable_shadows_the_value() {
+        let table = "table 50100 \"Demo Item\"\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n\n    protected var\n        \"Demo Kind\": Enum \"Open Kind\";\n}\n".to_string();
+        let ext = format!(
+            "tableextension 50140 \"Item Ext\" extends \"Demo Item\"\n{{\n    procedure Dispatch()\n    var\n{S_VAR}\n    begin\n        S := \"Demo Kind\"::Standard;\n        S.NextKm(1);\n    end;\n}}\n"
+        );
+        let ws = workspace(
+            caller(VARS, "", ""),
+            &[
+                ("src/Item.al", table),
+                ("src/Ext.al", ext),
+                ("src/OpenKind.al", open_kind()),
+            ],
+        );
+        let dir = write(&ws);
+        let ctx = crate::program::resolve::full::build_context_res(dir.path()).expect("context");
+        assert!(
+            ctx.graph().objects.iter().any(|o| o
+                .protected_vars
+                .iter()
+                .any(|(n, _)| n.as_ref() == "demo kind")),
+            "precondition: the base table's protected variable is extracted"
+        );
+        assert!(is_open(completeness_in(dir.path())));
     }
 
     /// Final panel N2-2: the implicit `Rec`'s field `"Demo Kind"` is declared in
