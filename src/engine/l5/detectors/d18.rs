@@ -17,7 +17,7 @@ use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, unquoted_field_name};
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PExpressionInfo;
@@ -210,7 +210,19 @@ pub fn detect_d18(
                 event_kind: None,
                 cross_extension_subscribers: None,
                 cohort_contexts: None,
-                loose_subject: None,
+                // #252: the table (hashed part) and the field; the record variable
+                // only when the table is unknown.
+                loose_subject: Some(LooseSubject {
+                    object_id: None,
+                    key: match &op.table_id {
+                        Some(_) => format!("d18/{}", field_name.to_lowercase()),
+                        None => format!(
+                            "d18/{}/{}",
+                            op.record_variable_name.to_lowercase(),
+                            field_name.to_lowercase()
+                        ),
+                    },
+                }),
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
             findings.push(finding);

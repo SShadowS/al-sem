@@ -12,9 +12,8 @@
 //! - T4: the loose key is deterministic across runs and workspace paths (pinned literal).
 //! - T5: an object-level finding (d64, no routine anchor) has `looseFingerprint ==
 //!   fingerprint`.
-//! - T6: two d60 findings in one routine on record variables `P1` and `P2` (key
-//!   `d60/{rid}/{loopId}/{var}`) keep different loose keys: the variable after the
-//!   loop segment is not a site id to strip (final review CR1).
+//! - T6 (rewritten by #252): d60 findings in one routine on two `Item` variables
+//!   share a loose key; a loop on `Customer` differs.
 //!
 //! T3 (the detector part) is a unit test in `src/engine/l5/fingerprint.rs`: on the
 //! production path the detector part is redundant with the key's `dNN/` prefix.
@@ -305,7 +304,8 @@ fn t5_object_level_finding_loose_equals_fingerprint() {
     }
 }
 
-/// T6: one upgrade trigger, two row-by-row loops on `P1` and `P2` (same table).
+/// T6: one upgrade trigger, row-by-row loops on `P1` and `P2` (both `Item`) and on
+/// `P3` (`Customer`).
 const T6: &str = r#"
 codeunit 50248 Loose247Upgrade
 {
@@ -315,6 +315,7 @@ codeunit 50248 Loose247Upgrade
     var
         P1: Record Item;
         P2: Record Item;
+        P3: Record Customer;
     begin
         if P1.FindSet() then
             repeat
@@ -326,29 +327,39 @@ codeunit 50248 Loose247Upgrade
                 P2."No." := 'Y';
                 P2.Modify();
             until P2.Next() = 0;
+        if P3.FindSet() then
+            repeat
+                P3."No." := 'Z';
+                P3.Modify();
+            until P3.Next() = 0;
     end;
 }
 "#;
 
-/// T6 (final review CR1/CR8): a variable named like a site id (`p1`, `p2`) after
-/// the loop segment of d60's key is the subject, so the two findings keep different
-/// loose keys. The old chain walk stripped `/loop0/p1` and `/loop1/p2` alike.
+/// T6, rewritten by #252: d60's subject is the table, not the record variable. The
+/// #247 version asserted that two same-table loops differ, which is the contract
+/// #252 drops (the variable is routine-bound). Now `P1` and `P2` on `Item` share a
+/// loose key, and the `Customer` loop differs.
 #[test]
-fn t6_variable_after_the_loop_segment_is_kept() {
+fn t6_same_table_loops_share_the_loose_key() {
     let (_g, ws) = temp_workspace("t6", T6);
     // d60 is opt-in (the `bcquality` preset), so select it.
     let d60 = "d60-upgrade-loop-should-be-datatransfer";
     let fs = findings_of(&analyze_json_with(&ws, Some(d60), false), d60);
-    assert_eq!(fs.len(), 2, "two d60 findings expected: {fs:#?}");
-    // Precondition: one routine, same tables.
-    assert_eq!(
-        fs[0]["primaryLocation"]["routineId"],
-        fs[1]["primaryLocation"]["routineId"]
+    assert_eq!(fs.len(), 3, "three d60 findings expected: {fs:#?}");
+    let item = "11111111-0000-0000-0000-000000000247/table/27";
+    let (items, other): (Vec<_>, Vec<_>) = fs.iter().partition(|f| f["affectedTables"][0] == item);
+    // Precondition: one routine; two Item loops and one Customer loop.
+    assert_eq!((items.len(), other.len()), (2, 1), "{fs:#?}");
+    assert!(
+        fs.iter()
+            .all(|f| loc(f, "routineId") == loc(&fs[0], "routineId"))
     );
-    assert_eq!(fs[0]["affectedTables"], fs[1]["affectedTables"]);
+    assert_eq!(loose(items[0]), loose(items[1]), "same table, one key");
     assert_ne!(
-        str_of(&fs[0], "looseFingerprint"),
-        str_of(&fs[1], "looseFingerprint"),
+        loose(items[0]),
+        loose(other[0]),
+        "another table, another key"
     );
 }
 
@@ -885,4 +896,413 @@ fn d48_loop_objects_distinct() {
         "precondition: loops in two objects"
     );
     assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+// --- d4, d18, d22: the table and the literal key or field ---
+
+const D4: &str = "d4-repeated-lookup-in-loop";
+
+/// A procedure `name` whose loop over `Item` looks up `Customer` `key` twice
+/// through `var`; `None`: an empty procedure.
+fn d4_proc(name: &str, body: Option<(&str, &str)>) -> String {
+    match body {
+        Some((var, key)) => format!(
+            "    procedure {name}()\n    var I: Record Item; {var}: Record Customer;\n    begin\n        if I.FindSet() then\n            repeat\n                {var}.Get('{key}');\n                {var}.Get('{key}');\n            until I.Next() = 0;\n    end;\n\n"
+        ),
+        None => format!("    procedure {name}()\n    begin\n    end;\n\n"),
+    }
+}
+
+fn codeunit(procs: &[String]) -> String {
+    format!("codeunit 50252 L252\n{{\n{}}}\n", procs.concat())
+}
+
+/// `d4_move_rename` (`ws-d4-repeated-get`): the loop moves from `A` to `B` and
+/// `Cust` is renamed `C`; the anchor moves with it.
+#[test]
+fn d4_move_rename() {
+    let a = codeunit(&[d4_proc("A", Some(("Cust", "C1"))), d4_proc("B", None)]);
+    let b = codeunit(&[d4_proc("A", None), d4_proc("B", Some(("C", "C1")))]);
+    let (fa, fb) = (run_252("d4-a", &a, D4), run_252("d4-b", &b, D4));
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    assert_eq!(loc(&fa[0], "routineName"), "A");
+    assert_eq!(loc(&fb[0], "routineName"), "B");
+    assert_move(&fa[0], &fb[0]);
+}
+
+/// `d4_literal_distinct`: loops in `A` and `B`, both through `Cust`, keys `'C1'`
+/// and `'C2'` (one key per routine, so master's key has no literal and collides).
+#[test]
+fn d4_literal_distinct() {
+    let code = codeunit(&[
+        d4_proc("A", Some(("Cust", "C1"))),
+        d4_proc("B", Some(("Cust", "C2"))),
+    ]);
+    let fs = run_252("d4-lit", &code, D4);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(fs[0]["affectedTables"], fs[1]["affectedTables"]);
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+const D18: &str = "d18-constant-filter-in-loop";
+
+/// A procedure `name` whose `for` loop sets a constant filter on `field` of
+/// `Customer` through `var`; `None`: an empty procedure.
+fn d18_proc(name: &str, body: Option<(&str, &str)>) -> String {
+    match body {
+        Some((var, field)) => format!(
+            "    procedure {name}()\n    var {var}: Record Customer; i: Integer;\n    begin\n        for i := 1 to 10 do begin\n            {var}.SetRange({field}, 'X');\n            {var}.FindFirst();\n        end;\n    end;\n\n"
+        ),
+        None => format!("    procedure {name}()\n    begin\n    end;\n\n"),
+    }
+}
+
+/// `d18_move_rename` (`ws-d18`): the loop moves from `A` to `B`, `Cust` → `C`.
+#[test]
+fn d18_move_rename() {
+    let a = codeunit(&[
+        d18_proc("A", Some(("Cust", "\"No.\""))),
+        d18_proc("B", None),
+    ]);
+    let b = codeunit(&[d18_proc("A", None), d18_proc("B", Some(("C", "\"No.\"")))]);
+    let (fa, fb) = (run_252("d18-a", &a, D18), run_252("d18-b", &b, D18));
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    assert_eq!(loc(&fa[0], "routineName"), "A");
+    assert_eq!(loc(&fb[0], "routineName"), "B");
+    assert_move(&fa[0], &fb[0]);
+}
+
+/// `d18_field_distinct`: constant filters in loops on `Customer."No."` and
+/// `Customer.Name`.
+#[test]
+fn d18_field_distinct() {
+    let code = codeunit(&[
+        d18_proc("A", Some(("Cust", "\"No.\""))),
+        d18_proc("B", Some(("Cust", "Name"))),
+    ]);
+    let fs = run_252("d18-f", &code, D18);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(fs[0]["affectedTables"], fs[1]["affectedTables"]);
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+const D22: &str = "d22-flowfield-without-calcfields";
+
+/// `Customer` with two FlowFields (`Balance`, `Sales`) over `Ledger Entry`.
+const TABLES_D22: &str = r#"
+table 18 Customer
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Balance; Decimal) { FieldClass = FlowField; CalcFormula = sum("Ledger Entry".Amount where("Customer No." = field("No."))); }
+        field(3; Sales; Decimal) { FieldClass = FlowField; CalcFormula = sum("Ledger Entry".Amount where("Customer No." = field("No."))); }
+    }
+}
+
+table 50801 "Ledger Entry"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+        field(2; "Customer No."; Code[20]) { }
+        field(3; Amount; Decimal) { }
+    }
+}
+"#;
+
+fn run_d22(tag: &str, code: &str) -> Vec<serde_json::Value> {
+    let files = [("src/Code.al", code), ("src/Tables.al", TABLES_D22)];
+    let (_g, ws) = temp_workspace_files(tag, &files);
+    findings_of(&analyze_json_with(&ws, Some(D22), true), D22)
+}
+
+/// A procedure `name` reading FlowFields `fields` of `Customer` through `var`
+/// without CalcFields; `None`: an empty procedure.
+fn d22_proc(name: &str, body: Option<(&str, &[&str])>) -> String {
+    match body {
+        Some((var, fields)) => {
+            let reads: String = fields
+                .iter()
+                .map(|f| format!("        Amount := {var}.{f};\n"))
+                .collect();
+            format!(
+                "    procedure {name}()\n    var {var}: Record Customer; Amount: Decimal;\n    begin\n        {var}.Get('C1');\n{reads}    end;\n\n"
+            )
+        }
+        None => format!("    procedure {name}()\n    begin\n    end;\n\n"),
+    }
+}
+
+/// `d22_move_rename` (`ws-d22`): the FlowField read moves from `A` to `B`,
+/// `Cust` → `C`.
+#[test]
+fn d22_move_rename() {
+    let a = codeunit(&[
+        d22_proc("A", Some(("Cust", &["Balance"]))),
+        d22_proc("B", None),
+    ]);
+    let b = codeunit(&[
+        d22_proc("A", None),
+        d22_proc("B", Some(("C", &["Balance"]))),
+    ]);
+    let (fa, fb) = (run_d22("d22-a", &a), run_d22("d22-b", &b));
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    assert_eq!(loc(&fa[0], "routineName"), "A");
+    assert_eq!(loc(&fb[0], "routineName"), "B");
+    assert_move(&fa[0], &fb[0]);
+}
+
+/// `d22_field_distinct`: two FlowFields of one table read in one routine.
+#[test]
+fn d22_field_distinct() {
+    let code = codeunit(&[d22_proc("A", Some(("Cust", &["Balance", "Sales"])))]);
+    let fs = run_d22("d22-f", &code);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(fs[0]["affectedTables"], fs[1]["affectedTables"]);
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+// --- d12, d59: the event (the anchor IS the event) ---
+
+/// `d12_events_distinct` (`ws-d12-dead-event`): two dead events in one codeunit. A
+/// move does not apply: the anchor is the event.
+#[test]
+fn d12_events_distinct() {
+    let code = r#"
+codeunit 50252 L252
+{
+    [IntegrationEvent(false, false)]
+    procedure OnA(SomeArg: Integer) begin end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnB(SomeArg: Integer) begin end;
+
+    procedure DoStuff() begin
+        OnA(1);
+        OnB(2);
+    end;
+}
+"#;
+    let d12 = "d12-dead-integration-event";
+    let fs = run_252("d12", code, d12);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(loc(&fs[0], "objectId"), loc(&fs[1], "objectId"));
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+const D59: &str = "d59-integrationevent-var-boolean-guard";
+
+/// `d59_param_reorder`: `var SkipCheck: Boolean` moves from index 0 to 1. Not a
+/// move (the anchor is the event). Internal routine ids hash the signature, so the
+/// anchor `routineId` differs; the event (object and name) stays.
+#[test]
+fn d59_param_reorder() {
+    let ev = |params: &str| {
+        format!(
+            "codeunit 50252 L252\n{{\n    [IntegrationEvent(false, false)]\n    procedure OnCheck({params})\n    begin\n    end;\n}}\n"
+        )
+    };
+    let fa = run_252("d59-r0", &ev("var SkipCheck: Boolean; A: Integer"), D59);
+    let fb = run_252("d59-r1", &ev("A: Integer; var SkipCheck: Boolean"), D59);
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    assert_eq!(loc(&fa[0], "routineName"), loc(&fb[0], "routineName"));
+    assert_eq!(last_segment(str_of(&fa[0], "id")), "0");
+    assert_eq!(last_segment(str_of(&fb[0], "id")), "1");
+    assert_move(&fa[0], &fb[0]);
+}
+
+/// `d59_params_distinct`: one event with `var SkipA` and `var SkipB`.
+#[test]
+fn d59_params_distinct() {
+    let code = "codeunit 50252 L252\n{\n    [IntegrationEvent(false, false)]\n    procedure OnCheck(var SkipA: Boolean; var SkipB: Boolean)\n    begin\n    end;\n}\n";
+    let fs = run_252("d59-p", code, D59);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(loc(&fs[0], "routineId"), loc(&fs[1], "routineId"));
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+/// `d59_events_distinct`: two events, each `var SkipCheck: Boolean` at index 0
+/// (master collides: `d59/~/0`).
+#[test]
+fn d59_events_distinct() {
+    let code = "codeunit 50252 L252\n{\n    [IntegrationEvent(false, false)]\n    procedure OnFirst(var SkipCheck: Boolean)\n    begin\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnSecond(var SkipCheck: Boolean)\n    begin\n    end;\n}\n";
+    let fs = run_252("d59-e", code, D59);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(last_segment(str_of(&fs[0], "id")), "0");
+    assert_eq!(last_segment(str_of(&fs[1], "id")), "0");
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+// --- d16: the obsolete routine called ---
+
+const D16: &str = "d16-obsolete-routine-call";
+
+/// `d16_self_calls_distinct`: two obsolete procedures, each calling itself. Master
+/// collapsed both to `d16/~/~/~`.
+#[test]
+fn d16_self_calls_distinct() {
+    let code = "codeunit 50252 L252\n{\n    [Obsolete('Use New', '1.0')]\n    procedure Old1()\n    begin\n        Old1();\n    end;\n\n    [Obsolete('Use New', '1.0')]\n    procedure Old2()\n    begin\n        Old2();\n    end;\n}\n";
+    let fs = run_252("d16-self", code, D16);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(loc(&fs[0], "objectId"), loc(&fs[1], "objectId"));
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+/// `d16_move`: a call to obsolete `Old` moves from `A` to `B`; the anchor moves.
+#[test]
+fn d16_move() {
+    let code = |a: &str, b: &str| {
+        format!(
+            "codeunit 50252 L252\n{{\n    [Obsolete('Use New', '1.0')]\n    procedure Old()\n    begin\n    end;\n\n    procedure A()\n    begin\n{a}    end;\n\n    procedure B()\n    begin\n{b}    end;\n}}\n"
+        )
+    };
+    let call = "        Old();\n";
+    let fa = run_252("d16-a", &code(call, ""), D16);
+    let fb = run_252("d16-b", &code("", call), D16);
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    assert_eq!(loc(&fa[0], "routineName"), "A");
+    assert_eq!(loc(&fb[0], "routineName"), "B");
+    assert_move(&fa[0], &fb[0]);
+}
+
+// --- d43: the event ---
+
+/// The `ws-event-ishandled` shape: the guarded dispatch sits in `with`, `other` is
+/// empty, and a subscriber sets `IsHandled`.
+fn d43_code(with: &str, other: &str) -> String {
+    format!(
+        r#"codeunit 50000 PostingMgr
+{{
+    procedure {with}(var Rec: Record Customer)
+    var
+        IsHandled: Boolean;
+    begin
+        IsHandled := false;
+        OnBeforePost(Rec, IsHandled);
+        if not IsHandled then
+            Rec.Insert(true);
+    end;
+
+    procedure {other}(var Rec: Record Customer)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnBeforePost(var Rec: Record Customer; var IsHandled: Boolean)
+    begin
+    end;
+}}
+codeunit 50001 PostingHandler
+{{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::PostingMgr, 'OnBeforePost', '', false, false)]
+    local procedure OnBeforePostHandler(var Rec: Record Customer; var IsHandled: Boolean)
+    begin
+        IsHandled := true;
+    end;
+}}
+"#
+    )
+}
+
+/// `d43_move_caller`: the guarded dispatch moves from `X` to `Y`. The anchor (the
+/// setter subscriber) stays; the caller (`evidencePath[0]`) moves.
+#[test]
+fn d43_move_caller() {
+    let d43 = "d43-event-ishandled-skip";
+    let fa = run_252("d43-a", &d43_code("X", "Y"), d43);
+    let fb = run_252("d43-b", &d43_code("Y", "X"), d43);
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    assert_eq!(
+        loc(&fa[0], "routineId"),
+        loc(&fb[0], "routineId"),
+        "precondition: anchor stays"
+    );
+    assert_ne!(
+        step_routine(&fa[0], 0),
+        step_routine(&fb[0], 0),
+        "precondition: caller moves"
+    );
+    assert_move(&fa[0], &fb[0]);
+}
+
+// --- d57: the global variable ---
+
+const D57: &str = "d57-singleinstance-growing-state";
+
+/// A SingleInstance codeunit with globals `op1`, `op2` and two subscribers whose
+/// bodies are `on_cust`, `on_item`.
+fn d57_code(on_cust: &str, on_item: &str) -> String {
+    format!(
+        r#"codeunit 50253 P252Single
+{{
+    SingleInstance = true;
+
+    var
+        op1: List of [Text];
+        op2: List of [Text];
+
+    [EventSubscriber(ObjectType::Table, Database::Customer, 'OnAfterInsertEvent', '', false, false)]
+    local procedure OnCust(var Rec: Record Customer)
+    begin
+        {on_cust}
+    end;
+
+    [EventSubscriber(ObjectType::Table, Database::Item, 'OnAfterInsertEvent', '', false, false)]
+    local procedure OnItem(var Rec: Record Item)
+    begin
+        {on_item}
+    end;
+}}
+"#
+    )
+}
+
+/// `d57_globals_distinct` (P2): globals `op1`, `op2` grown in two subscribers.
+/// Master stripped both names as site ids (`d57/~`).
+#[test]
+fn d57_globals_distinct() {
+    let code = d57_code("op1.Add(Rec.\"No.\");", "op2.Add(Rec.\"No.\");");
+    let fs = run_252("d57-g", &code, D57);
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(loc(&fs[0], "objectId"), loc(&fs[1], "objectId"));
+    assert_ne!(loose(&fs[0]), loose(&fs[1]));
+}
+
+/// `d57_move`: the `op1.Add` moves from `OnCust` to `OnItem`.
+#[test]
+fn d57_move() {
+    let add = "op1.Add(Rec.\"No.\");";
+    let fa = run_252("d57-a", &d57_code(add, ""), D57);
+    let fb = run_252("d57-b", &d57_code("", add), D57);
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    assert_eq!(loc(&fa[0], "routineName"), "OnCust");
+    assert_eq!(loc(&fb[0], "routineName"), "OnItem");
+    assert_move(&fa[0], &fb[0]);
+}
+
+// --- d60: the table ---
+
+/// `d60_move_rename` (the issue reproducer, P2 `d60a`/`d60b`): the loop moves from
+/// `OnUpgradePerCompany` to `Helper` and `P1` is renamed `Itm`.
+#[test]
+fn d60_move_rename() {
+    let code = |trigger: &str, helper: &str| {
+        format!(
+            "codeunit 50252 P252Upgrade\n{{\n    Subtype = Upgrade;\n\n    trigger OnUpgradePerCompany()\n{trigger}\n    local procedure Helper()\n{helper}}}\n"
+        )
+    };
+    let lp = |v: &str| {
+        format!(
+            "    var\n        {v}: Record Item;\n    begin\n        if {v}.FindSet() then\n            repeat\n                {v}.\"No.\" := 'X';\n                {v}.Modify();\n            until {v}.Next() = 0;\n    end;\n"
+        )
+    };
+    let empty = "    begin\n    end;\n".to_string();
+    let d60 = "d60-upgrade-loop-should-be-datatransfer";
+    let fa = run_252("d60-a", &code(&lp("P1"), &empty), d60);
+    let fb = run_252("d60-b", &code(&empty, &lp("Itm")), d60);
+    assert_eq!((fa.len(), fb.len()), (1, 1), "{fa:#?}\n{fb:#?}");
+    assert_eq!(loc(&fa[0], "routineName"), "OnUpgradePerCompany");
+    assert_eq!(loc(&fb[0], "routineName"), "Helper");
+    assert_move(&fa[0], &fb[0]);
 }

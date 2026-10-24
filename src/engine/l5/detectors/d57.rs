@@ -16,7 +16,7 @@ use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, is_known_temp};
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, SourceAnchor,
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject, SourceAnchor,
 };
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
@@ -247,7 +247,11 @@ fn build_finding(
         event_kind: None,
         cross_extension_subscribers: None,
         cohort_contexts: None,
-        loose_subject: None,
+        // #252: the global variable (it belongs to the object, not the routine).
+        loose_subject: Some(LooseSubject {
+            object_id: None,
+            key: format!("d57/{}", var_name.to_lowercase()),
+        }),
     };
     finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
     finding

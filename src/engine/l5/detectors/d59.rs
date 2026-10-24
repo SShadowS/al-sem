@@ -9,9 +9,12 @@
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
-use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
+use crate::engine::l5::finding::{
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject,
+};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::has_attribute;
+use crate::program::model::events::encode_event_id;
 use crate::program::model::workspace::Model;
 
 pub(crate) const DETECTOR: &str = "d59-integrationevent-var-boolean-guard";
@@ -110,7 +113,16 @@ pub fn detect_d59(
                 event_kind: None,
                 cross_extension_subscribers: None,
                 cohort_contexts: None,
-                loose_subject: None,
+                // #252: the event (= the anchor) and the parameter NAME (unquoted, as
+                // `is_guard_name` folds it); the position drops.
+                loose_subject: Some(LooseSubject {
+                    object_id: None,
+                    key: format!(
+                        "d59/{}/{}",
+                        encode_event_id(&routine.object_id, &routine.name),
+                        p.name.trim_matches('"').to_lowercase()
+                    ),
+                }),
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
             findings.push(finding);

@@ -20,7 +20,7 @@ use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, is_known_temp, op_targets_virtual_system_table};
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PExpressionInfo;
@@ -226,7 +226,15 @@ pub fn detect_d4(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                     event_kind: None,
                     cross_extension_subscribers: None,
                     cohort_contexts: None,
-                    loose_subject: None,
+                    // #252: the table (hashed part) and the literal key; the record
+                    // variable only when the table is unknown.
+                    loose_subject: Some(LooseSubject {
+                        object_id: None,
+                        key: match &first.table_id {
+                            Some(_) => format!("d4/{literal_key}"),
+                            None => format!("d4/{first_rec_var_lower}/{literal_key}"),
+                        },
+                    }),
                 };
                 finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
                 findings.push(finding);

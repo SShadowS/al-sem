@@ -142,9 +142,10 @@ Each finding in `--format json` carries two keys:
 
 - `fingerprint` — the same problem **in the same routine**. Baselines use it.
 - `looseFingerprint` — the same problem **in the same object**, with the routine ignored.
-  Move the code into another procedure of the same object (same variable names, same
-  parameter position) and it stays the same. It is **not unique**: several findings can
-  share one (same check, object and tables).
+  Move the code into another procedure of the same object and it stays the same; for the
+  checks listed below, a renamed record variable (when its table is known) or a moved
+  parameter does not matter either. It is **not unique**: several findings can share one
+  (same check, object and tables).
 
 Neither key drives inline `// al-sem-ignore` suppression; that matches check, file and line.
 
@@ -164,20 +165,19 @@ Limits:
 
 - Counting cancels out: fix one problem and add another with the same key in the same
   object, and you get 0 new.
-- Some checks keep a part of the key that belongs to the routine, so a move there does
-  change `looseFingerprint`: renamed local variables (d4, d18, d22, d57, d60); a parameter
-  that changes position (d19, d32, d59, d39–d42); the other members of an event cycle (d7);
-  the event name (d12) or event (d38); the caller (d43); and the loop routine (d48). For
-  d48 a move between a direct and a transitive finding also changes the key.
-- d16 keeps the called routine. When a routine calls itself (an obsolete routine calling
-  itself), the caller and the callee are both the moved routine, so both are removed and
-  every such self-call in the object shares one key.
-- d45: two primary publishers in one object that expose the same table share a key.
-- d39–d42 carry no table, so two of their findings in one object on the same parameter
-  position share a key whatever the record's table.
-- A local variable named exactly like a site id (`op2`, `cs1`, `loop0`, `u3`) that comes
-  straight after the routine id in the key (d22, d57) is removed with it, so two such
-  variables in one object share a key.
+- What each of these checks keeps in its loose key, besides the check, object and tables:
+  - d4, d18, d22, d60: the table (and the literal key or field). The record variable
+    name only when the table is unknown.
+  - d39–d42: the called routine, its parameter position and the caller's record table.
+  - d16: the obsolete routine called. d43: the event. d57: the global variable.
+  - d12, d45, d59: the event (the event is the routine, so renaming it is a new key);
+    d59 also the parameter name; two overloads of one event whose guard parameter has
+    the same name share a d59 key.
+  - d48: the object that holds the loop, and the IO kind and method.
+  - d7: the events and objects of the cycle.
+- The other checks keep the routine-independent rest of `rootCauseKey`, so some keep a
+  part that belongs to the routine and a move there does change `looseFingerprint`: a
+  parameter that changes position (d19, d32) and the event (d38).
 
 ## In your editor
 

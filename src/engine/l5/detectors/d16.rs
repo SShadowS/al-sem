@@ -12,7 +12,7 @@
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FixOption, SourceAnchor, id_list,
+    Evidence, EvidenceStep, Finding, FixOption, LooseSubject, SourceAnchor, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::{ObsoleteState, parse_routine_attributes};
@@ -121,7 +121,11 @@ pub fn detect_d16(
                 event_kind: None,
                 cross_extension_subscribers: None,
                 cohort_contexts: None,
-                loose_subject: None,
+                // #252: the obsolete callee; the caller and its call site drop.
+                loose_subject: Some(LooseSubject {
+                    object_id: None,
+                    key: format!("d16/{}", e.to),
+                }),
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
             findings.push(finding);
