@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `alsem diff`: a new `rename-overlay-collision` diagnostic (`{kind, from, to}`). It
+  fires when a `--renames` entry maps an old routine onto a target that is also a
+  routine in the old snapshot, and nothing maps that target away. The two old
+  routines are then compared with the new one as if they were one. Findings do not
+  change; the diagnostic says that they merged (#237).
+
 ### Changed
 
 - **Grammar: tree-sitter-al `main` at `c89c2ecb`** (D1, a parser state-reduction pass;
@@ -19,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero goldens moved, the stamp kept its length so `dry-run.txt` did not move, CDO
   `--program-call-graph-stats` byte-identical, and zero recovered files and zero
   `parseIncomplete` routines on CDO on both sides.
+- `alsem diff`: rename normalization is one hop, as a rule. A `--renames` target, or
+  a paired signature change's new id, is never looked up again as an old id. With a
+  user entry `X→T` and an old `T` paired to new `U`, `X`'s facts stay on `T` and old
+  `T`'s go to `U`. The 2.0.1 notes called this a limit; it is the intended behaviour,
+  because following the chain would put `X` and old `T` on one key (#237).
 - `alsem graph`: the node id of a source object without a number, whose name holds an
   escaped quote (`""` in the source), now comes from its logical name, where `""` is
   one `"`. That is the same name the model's object id uses. Such ids change once;

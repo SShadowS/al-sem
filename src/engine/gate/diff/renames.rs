@@ -112,6 +112,12 @@ pub fn build_rename_table(overlay: &RenameOverlay) -> (RenameTable, Vec<DiffDiag
 
 /// Validate the overlay against actual snapshot stable-id sets, emitting stale
 /// diagnostics. Mirrors `validateOverlayAgainstSnapshots`.
+///
+/// #237: no entry may put two live old routines on one key. Under one-hop
+/// normalization that happens exactly when an entry's old id and its target are
+/// both live old ids and nothing maps the target away; such an entry gets a
+/// `rename-overlay-collision`. Findings are unchanged (the maps stay last write
+/// wins); the diagnostic only says the two routines were compared as one.
 pub fn validate_overlay_against_snapshots(
     table: &RenameTable,
     old_ids: &HashSet<String>,
@@ -124,6 +130,22 @@ pub fn validate_overlay_against_snapshots(
         }
         if !new_ids.contains(&entry.new_id) {
             diagnostics.push(stale(&entry.new_id, "not-in-new"));
+        }
+        if old_ids.contains(old_id)
+            && old_ids.contains(&entry.new_id)
+            && !table.contains_key(&entry.new_id)
+        {
+            diagnostics.push(DiffDiagnostic {
+                kind: "rename-overlay-collision".into(),
+                fields: vec![
+                    (
+                        "kind".into(),
+                        CborValue::Text("rename-overlay-collision".into()),
+                    ),
+                    ("from".into(), CborValue::Text(old_id.clone())),
+                    ("to".into(), CborValue::Text(entry.new_id.clone())),
+                ],
+            });
         }
     }
     diagnostics
@@ -155,6 +177,13 @@ fn stale(stale_id: &str, reason: &str) -> DiffDiagnostic {
 /// `OnAction`s share name and signature but are different triggers; distinct
 /// member-less ids therefore always differ in signature. Ids the user overlay maps
 /// (either end) never pair. Returns `(old_id, new_id)` pairs in old-snapshot order.
+///
+/// #237: one principle decides which ids may pair: no rename-table entry may put
+/// two live old routines on one key. A user key never pairs, and a user target
+/// never pairs on the new side: either would add a second old routine to a key a
+/// user entry fills. An old routine that IS a user target may pair: that moves it
+/// off the key the user entry fills (user `X→T` plus auto `T→U` keeps `X` on `T`
+/// and old `T` on `U`). Normalization is one hop, so the chain is never followed.
 pub fn pair_signature_changes(
     old_snap: &CborValue,
     new_snap: &CborValue,
@@ -329,6 +358,44 @@ mod tests {
         assert_eq!(
             field_str(&stale_diags[1], "reason").as_deref(),
             Some("not-in-new")
+        );
+    }
+
+    fn ids(v: &[&str]) -> HashSet<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// #237: `{X→T}` with `X` and `T` both live in old → one collision; `{X→T,
+    /// T→U}` maps old `T` away → none.
+    #[test]
+    fn overlay_collision_diagnostic() {
+        let (table, _) = build_rename_table(&overlay(&[("X", "T")]));
+        let diags = validate_overlay_against_snapshots(&table, &ids(&["X", "T"]), &ids(&["T"]));
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].kind, "rename-overlay-collision");
+        let keys: Vec<&str> = diags[0].fields.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["kind", "from", "to"]);
+        assert_eq!(field_str(&diags[0], "from").as_deref(), Some("X"));
+        assert_eq!(field_str(&diags[0], "to").as_deref(), Some("T"));
+
+        let (table, _) = build_rename_table(&overlay(&[("X", "T"), ("T", "U")]));
+        let diags =
+            validate_overlay_against_snapshots(&table, &ids(&["X", "T"]), &ids(&["T", "U"]));
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    /// #237 O9: `{Y→T}` where only `T` is live in old: `Y` is a stale key, not a
+    /// second routine on `T`, so no collision.
+    #[test]
+    fn overlay_stale_key_is_not_a_collision() {
+        let (table, _) = build_rename_table(&overlay(&[("Y", "T")]));
+        let diags = validate_overlay_against_snapshots(&table, &ids(&["T"]), &ids(&["T"]));
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].kind, "rename-overlay-stale");
+        assert_eq!(field_str(&diags[0], "staleId").as_deref(), Some("Y"));
+        assert_eq!(
+            field_str(&diags[0], "reason").as_deref(),
+            Some("not-in-old")
         );
     }
 

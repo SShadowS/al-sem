@@ -46,6 +46,8 @@ pub struct DiffIndexes<'a> {
     rename_table: RenameTable,
 }
 
+/// One hop by design (#237): an entry's target is a new-side id and is never looked
+/// up again as an old id, so each old routine lands on its own entry's target.
 fn normalize(id: &str, table: &RenameTable) -> String {
     match table.get(id) {
         Some(e) => e.new_id.clone(),
