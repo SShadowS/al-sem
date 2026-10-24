@@ -54,15 +54,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependency code reaches also groups at the boundary. A group carries no
   `detail.tempState`. A temporary-record write and a physical write behind one boundary are
   two groups; their class shows only in the `factId` (the key carries it), so in the JSON
-  the two differ only by their resources.
+  the two differ only by their resources. A boundary call site with several dependency
+  targets (an interface dispatch, a multi-candidate call) is one group that names every
+  routine it enters, sorted: `"boundary": "<App>.<A>, <App>.<B>"`. A group behind an event
+  that workspace code raises into a dependency subscriber is ordered at the call that raises
+  it, so it takes part in the may-relations (a pending write at an HTTP call) like a call
+  group. The producer proofs' cap counts distinct groups, not raw proofs, so many proofs
+  behind one boundary no longer hide a proof through another.
 
   How: digest resolves its changed roots from the model before the view composes, so the
   view's one composition keeps those roots' raw facts and the digest tree is composed from
   it over the relation's cone graph (no second cone, graph, SCC or producer solve: build
   counters 1/1/1/2/1/1/1/1). The tree's call-site ledger reads the dependency routines' own
   calls too, and a resolved call whose every target is a body-less dependency routine is
-  `unfetched-dependency`. The unresolved cone's order is now total (anchor column, then the
-  candidate list, then the call-site id break the old ties): two dependency rows with no
+  `unfetched-dependency`. The unresolved cone's order is now total: the old key (routine,
+  file, line, callee) is unchanged, and the anchor column, then the candidate list, then the
+  call-site id break its ties: two dependency rows with no
   anchor, the same routine and the same callee kept hash order, so `--deterministic` output
   differed between runs. The tree is released as soon as each root's effects and
   unresolved cone are read off it, before the detector run. d47/d49/d51 (the ordering
@@ -82,7 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run's summaries. Policy no longer composes a second cone over every routine, dependency
   rows included (build counters 1/1/1/2/1/1/0/1, from 1/2/1/3/2/2/0/1). Output is unchanged.
   The policy-only `RAW_INHERITED_FACTS` substrate bit is deleted, and a summary's raw
-  inherited half is now test-only.
+  inherited half is now test-only. A rule that reads inherited facts still fails loudly
+  (a panic naming the routine) when an evaluated routine has a summary but no raw
+  entry, instead of passing it unseen; `facts: direct` rules never read that half.
 
 ### Fixed
 
@@ -139,8 +148,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- `aldump --issue160-full-graph-timings` and `aldump --issue160-step6-probe`, the
-  measurement-only modes of #160 step 6.
+- `aldump --issue160-full-graph-timings`, the measurement-only mode of #160 step 6.
 
 ## [2.0.3] - 2026-10-23
 
@@ -313,52 +321,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     input to `edgeId`. The program engine's graph names (`ObjKey::Name`, receiver
     type text) stay raw, so the call resolver still compares raw source names with
     logical dependency names (#250).
-- #160 step 6: digest sees dependency effects (one cone graph, #161 digest half). Digest
-  (cross-app, the default) now reports what a changed routine does through dependency code:
-  effects reached through a call into a dependency app are grouped per call and effect
-  type, with the dependency routine named (`enters <App>.<Routine>`), the number of
-  resources and up to 10 of them. These groups are reported, not graded: their
-  conditionality is `unknown`, and they never carry a must-guarantee. Witness paths stop at
-  the dependency boundary. Every printed witness path is a shortest one.
-
-  A group is one digest effect: `detail` is `{"boundary": "<App>.<Routine>",
-  "resourceCount": "<N>", "resources": "<r1>, <r2>, …"}` (the first 10 distinct resources in
-  resource-id order, each by its display name when it has one); `evidence` is the boundary
-  call site (else the firing record operation of a trigger, else the publish site of an
-  event), and `viaPaths` are the workspace-code prefixes up to it (`[]` when the root's own
-  call is the boundary). A dependency effect behind a workspace subscriber or trigger that
-  dependency code reaches also groups at the boundary. A group carries no
-  `detail.tempState`. A temporary-record write and a physical write behind one boundary are
-  two groups; their class shows only in the `factId` (the key carries it), so in the JSON
-  the two differ only by their resources.
-
-  How: digest resolves its changed roots from the model before the view composes, so the
-  view's one composition keeps those roots' raw facts and the digest tree is composed from
-  it over the relation's cone graph (no second cone, graph, SCC or producer solve: build
-  counters 1/1/1/2/1/1/1/1). The tree's call-site ledger reads the dependency routines' own
-  calls too, and a resolved call whose every target is a body-less dependency routine is
-  `unfetched-dependency`. The unresolved cone's order is now total (anchor column, then the
-  candidate list, then the call-site id break the old ties): two dependency rows with no
-  anchor, the same routine and the same callee kept hash order, so `--deterministic` output
-  differed between runs. The tree is released as soon as each root's effects and
-  unresolved cone are read off it, before the detector run. d47/d49/d51 (the ordering
-  cell), prove, fingerprint and diff stay on the cut graph; moving the ordering cell is the
-  #161 follow-up, and until then its cut composition keeps raw facts for every routine
-  (dependency rows included), the stated I5 exception.
-
-  `digest --tests` (#254) builds its coverage graph off the same tree, so it changes too:
-  a `[Test]` procedure that reaches a workspace routine only through dependency code (a
-  dependency routine that calls it, or a dependency event the workspace routine subscribes
-  to) now counts as covering it, and the dependency routines' own unresolved calls count
-  toward `testsWithUnresolvedTraversal`. With no resolved root the block still reports every
-  workspace test, as before.
-
-  `policy check` reads the same view (Task 3): its one composition keeps the raw inherited
-  facts of the workspace (primary) routines only, and the rule engine reads them beside the
-  run's summaries. Policy no longer composes a second cone over every routine, dependency
-  rows included (build counters 1/1/1/2/1/1/0/1, from 1/2/1/3/2/2/0/1). Output is unchanged.
-  The policy-only `RAW_INHERITED_FACTS` substrate bit is deleted, and a summary's raw
-  inherited half is now test-only.
 
 ## [2.0.2] - 2026-10-23
 
