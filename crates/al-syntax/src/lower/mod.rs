@@ -364,6 +364,8 @@ fn lower_object(
 fn collect_enum_values(node: RawNode, source: &str, out: &mut Vec<crate::ir::EnumValueDecl>) {
     match node.kind() {
         RawKind::EnumValueDeclaration => {
+            // A nameless value exists only in a recovered parse, which the
+            // engine's `parse_incomplete` gate (#264 Task 2) already leaves open.
             let Some(name) = node.field(FieldName::ValueName) else {
                 return;
             };
@@ -7804,6 +7806,33 @@ enum 50102 K implements I
         let values = &af.objects[0].enum_values;
         assert_eq!(values.len(), 1);
         assert_eq!(enum_impls(&values[0]), [r#""I" = "P""#, r#""I" = "Q""#]);
+    }
+
+    /// #264 (Task 1 review, I1): an `#if` BETWEEN implementation list elements
+    /// is not split. The value keeps ONE entry whose text still holds the
+    /// directive, which the Task 2 consumer reads as "cannot close".
+    #[test]
+    fn enum_value_implementation_element_if_stays_one_raw_entry() {
+        let src = r#"
+enum 50102 K implements I, J
+{
+    value(0; A)
+    {
+        Implementation = "I" = "P"
+#if X
+        , "J" = "Q"
+#endif
+        ;
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let values = &af.objects[0].enum_values;
+        assert_eq!(values.len(), 1);
+        let impls = enum_impls(&values[0]);
+        assert_eq!(impls.len(), 1, "{impls:?}");
+        assert!(impls[0].contains('#'), "{impls:?}");
     }
 
     /// #264 (Review Focus 5): a value declared only inside an `#if` wrapper is
