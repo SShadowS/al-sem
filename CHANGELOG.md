@@ -73,8 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now report the policy error; `--shard` without `--out` and a failing build report
   `--shard requires --out <directory>`; and `policy check --strict` with a bad policy and
   an error-severity analyzer diagnostic reports the policy error, not the diagnostic
-  lines (exit 1 either way). Neither case builds a model any more. `diff --renames` keeps
-  its order.
+  lines (exit 1 either way). Neither case builds a model any more. The `--shard`/`--out`
+  check also now runs before `fingerprint --strict`'s analyzer-diagnostic gate and before
+  its `fingerprint: could not compute modelInstanceId` error: with either of those, a
+  `--shard` without `--out` now reports the shard error (exit 1 in every case; only the
+  stderr text differs). `diff --renames` keeps its order.
 - **`analyze --update-baseline` write failure (#277).** The baseline file is now written
   by the command's output step, before stdout, under the one write-failure rule: a failed
   write prints `al-sem: write error: <path>: <OS message>` and exits 2 (was `al-sem:

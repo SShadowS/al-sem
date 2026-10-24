@@ -8,6 +8,11 @@
 //!    diagnostic: the policy error, exit 1 (before: the diagnostic lines).
 //!
 //! Each test first runs each failure alone, so both texts are known to differ.
+//!
+//! Limit: cases 1 and 2 build their failing workspace with `unreadable_ws`,
+//! which needs a file the test can make unreadable. Where it cannot (running
+//! as root, or a file system that ignores modes), they print `skipped: …` and
+//! return early, passing without asserting anything. Case 3 always runs.
 
 use std::path::Path;
 use std::process::Output;

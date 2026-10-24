@@ -384,9 +384,6 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     // --shard requires --out <directory> (fingerprint.ts:210) → exit 1. Checked
     // before the build (#277 D3, Decision 7): it wins over a failing build and
     // over the --strict gate.
-    // --shard requires --out <directory> (fingerprint.ts:210) → exit 1. Checked
-    // before the build (#277 D3, Decision 7): it wins over a failing build and
-    // over the --strict gate.
     if opts.shard.is_some() && opts.out.is_none() {
         return Ok(FingerprintRunResult {
             output: FingerprintOutput::Text(String::new()),
