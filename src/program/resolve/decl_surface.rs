@@ -117,7 +117,7 @@ pub(crate) fn file_routine_meta(
     // One text for the file, shared by every routine in it.
     let virtual_path = SharedStr::from(virtual_path);
     for obj in &file.objects {
-        let key = ObjKey::from_source(obj.id, &obj.name);
+        let key = ObjKey::from_source(obj);
         let obj_id = ObjectNodeId {
             app,
             kind: obj.kind,

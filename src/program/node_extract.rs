@@ -663,7 +663,7 @@ pub fn extract_nodes(
     routines: &mut Vec<RoutineNode>,
 ) {
     for obj in &file.objects {
-        let key = ObjKey::from_source(obj.id, &obj.name);
+        let key = ObjKey::from_source(obj);
         let obj_id = ObjectNodeId {
             app,
             kind: obj.kind,

@@ -59,7 +59,7 @@ use crate::program::resolve::abi_check::{
 };
 use crate::program::resolve::applicability::{
     RecordOpCtx, RecordOpKind, RunTrigger, implicit_trigger_route_applicable,
-    instance_builtin_route_applicable, interface_route_applicable,
+    instance_builtin_route_applicable, interface_route_applicable, target_is_on_table_or_extension,
 };
 use crate::program::resolve::differential::{
     CanonicalEdge, CanonicalTarget, project_fresh, verify_event_subscriber_route,
@@ -988,7 +988,7 @@ fn build_fan_out_site_context(
             }
 
             for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
-                let obj_key = ObjKey::from_source(obj.id, &obj.name);
+                let obj_key = ObjKey::from_source(obj);
                 let obj_node_id = ObjectNodeId {
                     app: primary_app_ref,
                     kind: obj.kind,
@@ -1118,43 +1118,6 @@ fn build_fan_out_site_context(
     ctx_map
 }
 
-/// `target_object == table_id` OR a `TableExtension` of it.
-///
-/// Used for `Validate` `ImplicitTrigger` routes, where
-/// [`FanOutSiteContext::Trigger`]'s `field` is always `None` (see
-/// [`build_fan_out_site_context`]'s doc comment) — with `field: None`, the
-/// full [`implicit_trigger_route_applicable`] ALWAYS returns `false` for a
-/// `Validate` target (it requires `(Some(ctx_field), Some(target_field))` to
-/// match), so this coarser table-identity check is the fallback, mirroring
-/// `differential::run_implicit_trigger_harness`'s identical, documented
-/// `target_is_on_table_or_extension` helper (duplicated here rather than
-/// imported to keep this module's `differential.rs`/`applicability.rs`
-/// footprint at zero non-`pub` touches).
-fn target_is_on_table_or_extension(
-    target_object: &ObjectNodeId,
-    table_id: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-) -> bool {
-    if target_object == table_id {
-        return true;
-    }
-    // The node's (raw) name, whatever the key arm: the extension index is keyed by
-    // the raw `extends_target`, and a name key holds the logical name (#250).
-    let table_name_lc: String = graph
-        .objects
-        .iter()
-        .find(|o| &o.id == table_id)
-        .map(|n| n.name.fold_identifier())
-        .unwrap_or_default();
-    if table_name_lc.is_empty() {
-        return false;
-    }
-    index
-        .table_extensions_of(&table_name_lc)
-        .contains(target_object)
-}
-
 /// Route-applicability contract: structural (witness↔evidence, ABI ingestion)
 /// AND, since 1B.3b Task 2, per-route fan-out SOUNDNESS (Interface,
 /// instance-builtin/enum-static, ImplicitTrigger, EventFlow) — see
@@ -1258,6 +1221,10 @@ pub fn route_applicability(
                             let ok = match &route.target {
                                 RouteTarget::Routine(rid) => {
                                     implicit_trigger_routes_checked += 1;
+                                    // A recovered `Validate` context has no field
+                                    // (`build_fan_out_site_context`), so the full
+                                    // check would always fail; only the table identity
+                                    // is checked.
                                     if matches!(ctx.kind, RecordOpKind::Validate) {
                                         target_is_on_table_or_extension(
                                             &rid.object,

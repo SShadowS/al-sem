@@ -72,8 +72,10 @@ impl AppRegistry {
     }
 }
 
-/// Object key: prefer the numeric id; fall back to the (lowercased) name for
-/// id-less objects (extension objects, or where the IR has no number).
+/// Object key: prefer the numeric id; fall back to the name for id-less objects
+/// (extension objects, or where the IR has no number). Every `Name` holds the
+/// folded LOGICAL name (an AL `""` is one `"`): a source key is built by
+/// [`Self::from_source`], an ABI key by [`Self::from_abi`] (#250).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum ObjKey {
     Id(i64),
@@ -93,15 +95,16 @@ impl ObjKey {
         }
     }
 
-    /// The key of a SOURCE object: its number, or its folded LOGICAL name. `raw` is
-    /// the IR's outer-stripped name (inner `""` kept), unescaped here exactly once.
-    /// Never pass an already-logical name (an ABI name): `A""B` would become `A"B`.
-    pub fn from_source(number: Option<i64>, raw: &str) -> ObjKey {
+    /// The key of a SOURCE object: its number, or its folded LOGICAL name
+    /// ([`crate::program::body::ir_walk::ir_object_name`], the one unescape of the
+    /// IR's raw name). It takes the declaration, not a string, so an
+    /// already-logical name (an ABI name) cannot be unescaped a second time.
+    pub(crate) fn from_source(o: &al_syntax::ir::ObjectDecl) -> ObjKey {
         use al_syntax::IdentifierFoldExt;
-        match number {
+        match o.id {
             Some(n) => ObjKey::Id(n),
             None => ObjKey::Name(
-                crate::program::body::scope::unescape_al_identifier(raw)
+                crate::program::body::ir_walk::ir_object_name(o)
                     .fold_identifier()
                     .into(),
             ),
@@ -372,15 +375,17 @@ mod tests {
     /// #250: a source key is the number, or the folded name unescaped once.
     #[test]
     fn from_source_keys_on_the_number_or_the_folded_logical_name() {
+        let key = |src: &str| {
+            let file = al_syntax::parse(src);
+            assert_eq!(file.objects.len(), 1, "precondition: one object in {src:?}");
+            ObjKey::from_source(&file.objects[0])
+        };
         assert_eq!(
-            ObjKey::from_source(None, "A\"\"\"\"B"),
+            key("interface \"A\"\"\"\"B\"\n{\n}\n"),
             ObjKey::Name("a\"\"b".into())
         );
-        assert_eq!(ObjKey::from_source(Some(7), "x"), ObjKey::Id(7));
-        assert_eq!(
-            ObjKey::from_source(None, "IFoo"),
-            ObjKey::Name("ifoo".into())
-        );
+        assert_eq!(key("codeunit 7 x\n{\n}\n"), ObjKey::Id(7));
+        assert_eq!(key("interface IFoo\n{\n}\n"), ObjKey::Name("ifoo".into()));
     }
 
     // ── T3 Task 11 review fix-wave: sig_fp must serialize as a STRING ──────

@@ -463,7 +463,7 @@ pub fn verify_event_subscriber_route(
             if obj.kind != sub_rid.object.kind {
                 continue;
             }
-            let key_matches = ObjKey::from_source(obj.id, &obj.name) == sub_rid.object.key;
+            let key_matches = ObjKey::from_source(obj) == sub_rid.object.key;
             if !key_matches {
                 continue;
             }

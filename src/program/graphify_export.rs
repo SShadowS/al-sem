@@ -1563,17 +1563,19 @@ mod tests {
         );
     }
 
-    /// CR4 (#83, restated #250): a source name key is the folded LOGICAL name
-    /// (`ObjKey::from_source` unescapes the IR's raw `I""Foo` once), so
-    /// `interface "I""Foo"` is `@i%22foo` here and in the model's object id.
+    /// CR4 (#83, restated #250): a source name key is already the folded LOGICAL
+    /// name (`ObjKey::from_source` unescapes the IR's raw `I""Foo` once), and the
+    /// graphify id encodes it as it is, so `interface "I""Foo"` is `@i%22foo` here
+    /// and in the model's object id.
     #[test]
-    fn object_id_str_unescapes_a_quoted_name_like_the_engine() {
+    fn object_id_str_encodes_an_already_logical_source_key() {
         let mut apps = AppRegistry::default();
         let a = apps.intern(&app_id("Dep"));
+        let file = al_syntax::parse("interface \"I\"\"Foo\"\n{\n}\n");
         let oid = ObjectNodeId {
             app: a,
             kind: ObjectKind::Interface,
-            key: ObjKey::from_source(None, "I\"\"Foo"),
+            key: ObjKey::from_source(&file.objects[0]),
         };
         assert_eq!(object_id_str(&oid, &apps), "al:obj:dep/interface/@i%22foo");
         assert_eq!(oid.key.model_key(), "@i%22foo");

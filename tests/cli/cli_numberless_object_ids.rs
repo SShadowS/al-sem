@@ -17,6 +17,14 @@
 //!   reports only its `object-added`, never a critical change on the old one.
 //! - T9: GitHub #245's repro (`tests/fixtures/ws-diff-interface-added`), through
 //!   `alsem fingerprint` and a diff of the two snapshot files.
+//!
+//! #250: every graph name key holds the folded LOGICAL name.
+//!
+//! - T1 (#250): a symbol-only dependency's `interface "A""""B"` (logical `A""B`) is
+//!   keyed `a""b`, and its graph id (P3) equals its model id (P8), `@a%22%22b`.
+//! - T2 (#250), the control: with both sides source, or a dependency that ships its
+//!   source, the interface keeps its id `@a%22%22b` and both escaped-name calls
+//!   resolve.
 
 use std::path::Path;
 
@@ -231,6 +239,9 @@ fn mixed_object_keys_keep_each_outputs_order() {
 ///
 /// Discrimination (2026-10-15): `model_object_id` (P3) without the unescape gives
 /// `%22%22` for the doubled quote and fails the P3 assertion; restored, it passes.
+/// Restated for #250 (2026-10-23), where the unescape moved into the graph key:
+/// `ObjKey::from_source` folding the raw name (no unescape) gives the same
+/// `%22%22` and fails the P3 assertion; restored, it passes.
 #[test]
 fn source_interfaces_get_distinct_ids_from_every_producer() {
     let dir = tempfile::tempdir().unwrap();
@@ -662,7 +673,9 @@ fn assert_t2(ws: &Path, guid: &str, impl_no: i64, cd_no: i64) {
 ///
 /// Discrimination (2026-10-23): `ObjKey::from_source` keying on `fold(raw)` (no
 /// unescape, `model_key` unchanged) gives `@a%22%22%22%22b` and fails; so does a
-/// second unescape in `model_key` (`@a%22b`); restored, it passes.
+/// second unescape in `model_key` (`@a%22b`); restored, it passes. Dropping the
+/// interface from S3's embedded source fails the S3 precondition (no
+/// `EmbeddedSource` node keyed `a""b`); restored, it passes.
 #[test]
 fn source_objects_with_escaped_quotes_keep_ids_and_resolution() {
     // S2: both sides source.
@@ -715,12 +728,21 @@ fn source_objects_with_escaped_quotes_keep_ids_and_resolution() {
         al_sem::program::profile::BuildProfile::FULL,
     )
     .unwrap();
-    assert!(
-        ctx.graph().objects.iter().any(|o| {
+    let tiers: Vec<_> = ctx
+        .graph()
+        .objects
+        .iter()
+        .filter(|o| {
             ctx.graph().apps.resolve(o.id.app).guid == DEP_GUID
-                && o.tier == al_sem::snapshot::TrustTier::EmbeddedSource
-        }),
-        "precondition: the dependency is read from its embedded source"
+                && o.id.kind == al_syntax::ir::ObjectKind::Interface
+                && o.id.key == al_sem::program::node::ObjKey::Name("a\"\"b".into())
+        })
+        .map(|o| o.tier)
+        .collect();
+    assert_eq!(
+        tiers,
+        vec![al_sem::snapshot::TrustTier::EmbeddedSource],
+        "precondition: the interface A\"\"B itself is read from the embedded source"
     );
     assert_t2(ws, DEP_GUID, 50201, 50200);
 }

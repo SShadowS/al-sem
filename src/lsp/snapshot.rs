@@ -1164,7 +1164,7 @@ pub(crate) fn recompute_file(
 
     let mut decls: Vec<DeclEntry> = Vec::new();
     for obj in &pf.file.objects {
-        let obj_key = ObjKey::from_source(obj.id, &obj.name);
+        let obj_key = ObjKey::from_source(obj);
         let obj_node_id = ObjectNodeId {
             app: primary_app_ref,
             kind: obj.kind,

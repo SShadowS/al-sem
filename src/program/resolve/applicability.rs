@@ -278,27 +278,36 @@ pub fn implicit_trigger_route_applicable(
     }
 
     // Object identity: target must be on ctx.table or a TableExtension of it.
-    if target.object == ctx.table {
+    target_is_on_table_or_extension(&target.object, &ctx.table, graph, index)
+}
+
+/// `target_object == table_id`, or `target_object` is a `TableExtension` of it.
+///
+/// The extension index is keyed by the folded RAW `extends_target`, so the table
+/// is looked up by its node's (raw) name, whatever its key arm: a name key holds
+/// the LOGICAL name (#250), which differs when the name holds `""`.
+///
+/// [`implicit_trigger_route_applicable`] uses it for the object-identity half, and
+/// `semantic_golden`'s route-applicability contract uses it alone for `Validate`
+/// routes (its recovered site context has no field, so the field-matching check
+/// would always fail).
+pub(crate) fn target_is_on_table_or_extension(
+    target_object: &ObjectNodeId,
+    table_id: &ObjectNodeId,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> bool {
+    if target_object == table_id {
         return true;
     }
-
-    // Look up the base table's folded name for the extension index. It is the
-    // node's (raw) name, whatever the key arm: the index is keyed by the raw
-    // `extends_target`, and a name key holds the logical name (#250).
-    let table_name_lc: String = graph
-        .objects
-        .iter()
-        .find(|o| o.id == ctx.table)
-        .map(|n| n.name.fold_identifier())
-        .unwrap_or_default();
-
-    if table_name_lc.is_empty() {
+    let Some(table) = graph.object(table_id) else {
         return false;
-    }
-
-    index
-        .table_extensions_of(&table_name_lc)
-        .contains(&target.object)
+    };
+    let table_name_lc = table.name.fold_identifier();
+    !table_name_lc.is_empty()
+        && index
+            .table_extensions_of(&table_name_lc)
+            .contains(target_object)
 }
 
 // ---------------------------------------------------------------------------

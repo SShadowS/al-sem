@@ -80,6 +80,14 @@ pub struct AbiIngestError {
 }
 
 impl ProgramGraph {
+    /// The object node with this id (binary search: `objects` is sorted by id).
+    pub fn object(&self, id: &ObjectNodeId) -> Option<&ObjectNode> {
+        self.objects
+            .binary_search_by(|o| o.id.cmp(id))
+            .ok()
+            .map(|i| &self.objects[i])
+    }
+
     /// Resolve `(kind, name)` as seen FROM `from` — fail-closed (I1).
     ///
     /// Search order:

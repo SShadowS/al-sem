@@ -98,7 +98,8 @@ pub fn canonicalize_type_text(raw: &str) -> String {
 /// `TableNo`, implicit-`Rec` dataitem table and `Codeunit.Run` target,
 /// `record_types::record_table_name_of`, and the ABI projection's quoted
 /// `SourceTable` / `TargetObject`), plus the object-fact census's graph side (the
-/// graph's object NAMES stay raw; only its keys are logical, #250 discovery D-A),
+/// graph's SOURCE object names stay raw; only its keys are logical, #250 discovery
+/// D-A),
 /// each unescaping its RAW value exactly once. Every
 /// consumer reads the stored logical name and must NOT unescape again. Limit:
 /// `implements_interfaces` and `ModelPageControl.target` stay raw; no lookup reads

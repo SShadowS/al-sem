@@ -1737,7 +1737,7 @@ fn dep_object_node_id(
     ObjectNodeId {
         app,
         kind: o.kind,
-        key: ObjKey::from_source(o.id, &o.name),
+        key: ObjKey::from_source(o),
     }
 }
 

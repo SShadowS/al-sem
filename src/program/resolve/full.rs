@@ -934,7 +934,7 @@ pub(crate) fn resolve_file_obligations(
     let mut parenless: Vec<al_syntax::ir::ExprId> = Vec::new();
 
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
-        let obj_key = ObjKey::from_source(obj.id, &obj.name);
+        let obj_key = ObjKey::from_source(obj);
         let obj_node_id = ObjectNodeId {
             app: caller_app,
             kind: obj.kind,
