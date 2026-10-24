@@ -5022,8 +5022,7 @@ pub struct ProjectedPath {
 /// the firing operation (else the edge's own anchor) or the publish site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathBoundary {
-    /// `"call"` | `"trigger"` | `"event"`.
-    pub kind: &'static str,
+    pub kind: PathBoundaryKind,
     /// The boundary identity (`cs:` / `op:` / `ev:` prefixed).
     pub id: String,
     /// The callsite, operation or event id the identity names.
@@ -5033,13 +5032,33 @@ pub struct PathBoundary {
     pub column: Option<u32>,
 }
 
+/// The three rule-B boundary kinds; a new kind is a compile error at every
+/// match, never a silent fall-through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathBoundaryKind {
+    Call,
+    Trigger,
+    Event,
+}
+
+impl PathBoundaryKind {
+    /// The JSON `kind` value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PathBoundaryKind::Call => "call",
+            PathBoundaryKind::Trigger => "trigger",
+            PathBoundaryKind::Event => "event",
+        }
+    }
+}
+
 impl PathBoundary {
     /// The JSON key of [`PathBoundary::target`] for this kind.
     pub fn target_key(&self) -> &'static str {
         match self.kind {
-            "call" => "callsiteId",
-            "trigger" => "operationId",
-            _ => "eventId",
+            PathBoundaryKind::Call => "callsiteId",
+            PathBoundaryKind::Trigger => "operationId",
+            PathBoundaryKind::Event => "eventId",
         }
     }
 }
@@ -5047,11 +5066,15 @@ impl PathBoundary {
 /// [`PathBoundary`] of boundary `b`, anchored at the path's terminal hop.
 fn path_boundary(b: &BoundaryEnd, terminal: Option<&WitnessHop>) -> PathBoundary {
     let (kind, target) = if let Some(t) = b.id.strip_prefix("cs:") {
-        ("call", t)
+        (PathBoundaryKind::Call, t)
     } else if let Some(t) = b.id.strip_prefix("op:") {
-        ("trigger", t)
+        (PathBoundaryKind::Trigger, t)
     } else {
-        ("event", b.id.strip_prefix("ev:").unwrap_or(&b.id))
+        // Every boundary identity is `cs:`, `op:` or `ev:` (`boundary_terminal`).
+        (
+            PathBoundaryKind::Event,
+            b.id.strip_prefix("ev:").unwrap_or(&b.id),
+        )
     };
     let (file, line, column) = match terminal {
         Some(WitnessHop::Terminal {

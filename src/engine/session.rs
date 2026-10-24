@@ -152,9 +152,38 @@ pub struct QueryRead {
     pub roots_config_ignored: bool,
 }
 
-/// The inventory's tree-read inputs (step 9 Task 4 fills them).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct InventoryRead {}
+/// The inventory's tree-read inputs (#160 step 9 D4): the snapshot options
+/// `assemble_full_snapshot` takes, owned (the universe comes from the target).
+#[derive(Clone)]
+pub struct InventoryRead {
+    pub inputs: Arc<crate::program::inputs::InputSet>,
+    pub driver_version: String,
+    pub deterministic: bool,
+    pub roots_config_ignored: bool,
+}
+
+/// By the input set's identity (an `InputSet` is one command's read).
+impl PartialEq for InventoryRead {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inputs, &other.inputs)
+            && self.driver_version == other.driver_version
+            && self.deterministic == other.deterministic
+            && self.roots_config_ignored == other.roots_config_ignored
+    }
+}
+
+impl Eq for InventoryRead {}
+
+impl std::fmt::Debug for InventoryRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InventoryRead")
+            .field("workspace", &self.inputs.workspace)
+            .field("driver_version", &self.driver_version)
+            .field("deterministic", &self.deterministic)
+            .field("roots_config_ignored", &self.roots_config_ignored)
+            .finish()
+    }
+}
 
 /// A fingerprint tree read's owned result: nothing in it borrows the tree.
 pub enum TreeReadOut {
@@ -181,13 +210,32 @@ fn read_fingerprint_query(
     )
 }
 
-/// The inventory's read off the tree. Step 9 Task 4 runs
-/// `assemble_full_snapshot` here; until then an empty map.
+/// The inventory's read off the tree (#160 step 9 D4): the assembly half of
+/// the full snapshot over the tree, its five inventory keys only. The tree is
+/// composed over `Roots(∅)`, so it holds no raw facts and the permission
+/// facts are empty (§4.4 item 3).
 fn read_inventory(
-    _tree: &CapabilitySnapshot,
-    _read: &InventoryRead,
+    tree: CapabilitySnapshot,
+    read: &InventoryRead,
+    target: &AnalysisTarget,
 ) -> indexmap::IndexMap<String, crate::engine::gate::cbor::CborValue> {
-    indexmap::IndexMap::new()
+    use crate::engine::l5::snapshot_full::{
+        FullSnapshotOptions, SnapshotKeys, SnapshotUniverse, assemble_full_snapshot,
+    };
+    let opts = FullSnapshotOptions {
+        inputs: &read.inputs,
+        driver_version: &read.driver_version,
+        deterministic: read.deterministic,
+        roots_config_ignored: read.roots_config_ignored,
+        universe: SnapshotUniverse::of(target),
+    };
+    assemble_full_snapshot(
+        target.resolved(),
+        tree,
+        crate::engine::gate::cbor::CborValue::Array(vec![]),
+        &opts,
+        SnapshotKeys::Inventory,
+    )
 }
 
 /// The cells [`View::release`] drops.
@@ -290,6 +338,17 @@ pub fn fingerprint_query_plan(
     Plan {
         witness: WitnessRequest::Roots(pool),
         tree: TreeRead::FingerprintQuery(read),
+        ..run_only_plan(detectors)
+    }
+}
+
+/// `alsem fingerprint --inventory-only` (#160 step 9 D4): fingerprint's run and
+/// the inventory read off a tree over `Roots(∅)`: a composition with no raw
+/// facts (digest `--tests`' shape).
+pub fn fingerprint_inventory_plan(detectors: Vec<Detector>, read: InventoryRead) -> Plan {
+    Plan {
+        witness: WitnessRequest::Roots(BTreeSet::new()),
+        tree: TreeRead::Inventory(read),
         ..run_only_plan(detectors)
     }
 }
@@ -636,22 +695,25 @@ impl View {
             ));
             note_release(released, Cell::Raw);
             drop(dependency_calls);
-            let t = tree.as_mut().expect("tree filled above");
             match &plan.tree {
                 TreeRead::None => unreachable!("the block runs for a tree read"),
                 TreeRead::Effects => {
+                    let t = tree.as_mut().expect("tree filled above");
                     let roots: Vec<String> = roots.iter().cloned().collect();
                     *effects = Some(crate::engine::l5::digest_cli::digest_effects(
                         t, model, &roots, plan.tests,
                     ));
                 }
                 TreeRead::FingerprintQuery(read) => {
+                    let t = tree.as_ref().expect("tree filled above");
                     *tree_read = Some(TreeReadOut::FingerprintQuery(read_fingerprint_query(
                         t, read, model,
                     )));
                 }
                 TreeRead::Inventory(read) => {
-                    *tree_read = Some(TreeReadOut::Inventory(read_inventory(t, read)));
+                    // The assembly consumes the tree (its key classes filter it).
+                    let t = tree.take().expect("tree filled above");
+                    *tree_read = Some(TreeReadOut::Inventory(read_inventory(t, read, target)));
                 }
             }
             *tree = None;
@@ -1316,6 +1378,17 @@ mod tests {
         }
     }
 
+    /// An inventory read over an empty workspace's input set.
+    fn inventory_read() -> InventoryRead {
+        let tmp = tempfile::tempdir().unwrap();
+        InventoryRead {
+            inputs: crate::program::inputs::InputSet::read(tmp.path(), &Default::default()),
+            driver_version: "t".to_string(),
+            deterministic: true,
+            roots_config_ignored: false,
+        }
+    }
+
     /// A det-running plan over an empty `Roots` request with tree read `read`.
     fn tree_plan(read: TreeRead) -> Plan {
         Plan::for_test(
@@ -1369,7 +1442,7 @@ mod tests {
 
         // (c) Inventory, then (b) and the census line.
         let mut v = view();
-        v.prepare(&tree_plan(TreeRead::Inventory(InventoryRead::default())));
+        v.prepare(&tree_plan(TreeRead::Inventory(inventory_read())));
         assert!(
             v.tree.is_none() && v.released & Cell::Tree.bit() != 0,
             "(c) the Inventory tree died inside prepare"
@@ -1415,7 +1488,7 @@ mod tests {
         for read in [
             TreeRead::None,
             TreeRead::FingerprintQuery(query_read()),
-            TreeRead::Inventory(InventoryRead::default()),
+            TreeRead::Inventory(inventory_read()),
         ] {
             let p = Plan::for_test(vec![], true, false, 0).with_tree(read);
             assert!(!p.needs_tree(), "(e) only Effects reads the effects");

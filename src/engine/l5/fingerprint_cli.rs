@@ -44,7 +44,8 @@ use crate::engine::l5::snapshot_full::{
     serialize_cbor, serialize_cbor_gz, serialize_envelope, serialize_sharded,
 };
 use crate::engine::session::{
-    QueryRead, RunKey, TreeReadOut, View, fingerprint_plan, fingerprint_query_plan,
+    InventoryRead, QueryRead, RunKey, TreeReadOut, View, fingerprint_inventory_plan,
+    fingerprint_plan, fingerprint_query_plan,
 };
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
@@ -383,6 +384,11 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
     if !go_b0 && !opts.routine_selectors.is_empty() {
         return run_routine_query(opts);
     }
+    // #160 step 9 D4: `--inventory-only` on a tree with no raw facts, in both
+    // universes.
+    if opts.inventory_only {
+        return run_inventory_only(opts);
+    }
 
     // Assemble workspace.
     let model_id = opts
@@ -459,14 +465,7 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
             });
         }
 
-        let output = if opts.inventory_only {
-            // Lean routine-inventory projection — reuses the already-composed full
-            // snapshot tree so apps/identities/coverage/rootClassifications are
-            // byte-identical. The consumed-core (heavy) keys are not included.
-            let text =
-                build_inventory_envelope(&tree, resolved, opts.driver_version, opts.deterministic);
-            FingerprintOutput::Text(text)
-        } else if let Some(mode) = opts.shard {
+        let output = if let Some(mode) = opts.shard {
             // serialize_sharded: primaryOnly = (mode == PrimaryOnly).
             let primary_only = mode == ShardMode::PrimaryOnly;
             let shards = serialize_sharded(&tree, resolved, opts.driver_version, primary_only);
@@ -593,6 +592,57 @@ fn run_routine_query(opts: &FingerprintOptions) -> Result<FingerprintRunResult, 
         // the one the tree held.
         || build_selector_indexes(&derive_identity_table(model), primary_guid_of(model)),
     ))
+}
+
+/// `fingerprint --inventory-only` (#160 step 9 D4): the view of the target
+/// (cross-app by default), a composition with no raw facts, and the five
+/// inventory keys assembled off its tree inside `prepare` (the tree is dropped
+/// there); `build_inventory_envelope` runs unchanged over them. Its stderr
+/// diagnostics and `--strict` are B0's (the inventory was a B0 form).
+fn run_inventory_only(opts: &FingerprintOptions) -> Result<FingerprintRunResult, String> {
+    let target = AnalysisTarget::build_with(
+        opts.inputs,
+        opts.single_app,
+        opts.no_roots_config,
+        "fingerprint",
+    )?;
+    let mut view = View::new(target);
+    let plan = fingerprint_inventory_plan(
+        default_detectors(),
+        InventoryRead {
+            inputs: std::sync::Arc::clone(opts.inputs),
+            driver_version: opts.driver_version.to_string(),
+            deterministic: opts.deterministic,
+            roots_config_ignored: opts.no_roots_config && opts.inputs.roots_config_loaded(),
+        },
+    );
+    let key = plan.keys().remove(0);
+    view.prepare(&plan);
+    let analyzer_diags = analyzer_diags_for(&view, &key);
+    drop(view.take_run(&key));
+    let TreeReadOut::Inventory(keys) = view.take_tree_read() else {
+        unreachable!("an Inventory read leaves the inventory keys")
+    };
+    view.release_all_but(&[]);
+    if let Some(r) = strict_gate(opts, &analyzer_diags) {
+        return Ok(r);
+    }
+    view.census_output();
+    let text = build_inventory_envelope(
+        &crate::engine::gate::cbor::CborValue::Map(keys),
+        view.model(),
+        opts.driver_version,
+        opts.deterministic,
+    );
+    Ok(FingerprintRunResult {
+        output: FingerprintOutput::Text(text),
+        exit_code: 0,
+        selector_error_message: None,
+        stderr_diagnostics: analyzer_diags
+            .iter()
+            .map(|(_, sev, msg)| format!("{sev}: {msg}"))
+            .collect(),
+    })
 }
 
 /// `--strict` (fingerprint.ts:187): if any analyzer diagnostic is severity

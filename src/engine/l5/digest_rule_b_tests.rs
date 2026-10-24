@@ -899,7 +899,7 @@ fn fingerprint_witness_boundary_trigger_and_event() {
                     w.paths, w.diagnostics
                 )
             });
-        assert_eq!(b.kind, arm, "{arm}: {b:?}");
+        assert_eq!(b.kind.as_str(), arm, "{arm}: {b:?}");
         assert_eq!(b.id, want_id, "{arm}");
         assert_eq!(
             (b.file.as_deref(), b.line),
@@ -1138,4 +1138,98 @@ fn fingerprint_query_scoped_equals_unscoped() {
     );
     assert!(inherited_seen > 0, "precondition: inherited facts compared");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #160 step 9 T11 (spec §5): `fingerprint --inventory-only` (cross-app, on the
+/// rule-B fixture, whose source dependency `Dep Rec Lib` writes `Customer`)
+/// is the inventory envelope of `assemble_full_snapshot`'s five keys over a
+/// tree composed with `Roots(∅)`. Precondition: that tree holds no inherited
+/// fact. DISCRIMINATION: giving the plan `Roots(every primary routine)` keeps
+/// the dependency identities its inherited facts reference, and fails it (its
+/// counter half, `build.witness_pass` 0, is `cli_build_counters`'
+/// `fingerprint_inventory_only`).
+#[test]
+fn inventory_reads_a_tree_with_no_raw_facts() {
+    use crate::engine::l5::fingerprint_cli::{
+        FingerprintFormat, FingerprintOptions, FingerprintOutput, run_fingerprint_pipeline,
+    };
+    use crate::engine::l5::snapshot_full::{
+        FullSnapshotOptions, SnapshotKeys, SnapshotUniverse, assemble_full_snapshot,
+        build_inventory_envelope,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    write_fixture_rule_b(tmp.path());
+    let inputs = crate::program::inputs::InputSet::read(
+        tmp.path(),
+        &crate::program::inputs::InputNeeds {
+            fingerprint_rows: true,
+            ..Default::default()
+        },
+    );
+    let got = match run_fingerprint_pipeline(&FingerprintOptions {
+        inputs: &inputs,
+        driver_version: "t",
+        format: FingerprintFormat::Json,
+        out: None,
+        shard: None,
+        witness_limit: None,
+        roots: None,
+        routine_selectors: Vec::new(),
+        include_inherited: true,
+        is_query_requested: false,
+        deterministic: true,
+        strict: false,
+        verbosity: "compact",
+        inventory_only: true,
+        no_roots_config: false,
+        single_app: false,
+    })
+    .expect("inventory runs")
+    .output
+    {
+        FingerprintOutput::Text(t) => t,
+        _ => panic!("inventory output is text"),
+    };
+    let target = AnalysisTarget::build(&inputs, false, "fingerprint").expect("cross-app");
+    let AnalysisTarget::CrossApp(b) = &target else {
+        unreachable!()
+    };
+    let model = &b.resolved;
+    let tree = tree_of(
+        model,
+        &b.rel,
+        b.dependency_calls.as_deref().unwrap_or(&[]),
+        ConeScope {
+            derived: false,
+            // Hand-stated: no subject (what `Roots(∅)` must mean).
+            raw: WitnessScope::Subjects(BTreeSet::new()),
+        },
+    );
+    assert!(
+        tree.capability_facts
+            .iter()
+            .all(|f| f.provenance != "inherited"),
+        "precondition: no inherited fact in a Roots(∅) tree"
+    );
+    let keys = assemble_full_snapshot(
+        model,
+        tree,
+        crate::engine::gate::cbor::CborValue::Array(vec![]),
+        &FullSnapshotOptions {
+            inputs: &inputs,
+            driver_version: "t",
+            deterministic: true,
+            roots_config_ignored: false,
+            universe: SnapshotUniverse::of(&target),
+        },
+        SnapshotKeys::Inventory,
+    );
+    assert_eq!(keys.len(), 5, "the five inventory keys");
+    let want = build_inventory_envelope(
+        &crate::engine::gate::cbor::CborValue::Map(keys),
+        model,
+        "t",
+        true,
+    );
+    assert_eq!(got, want);
 }
