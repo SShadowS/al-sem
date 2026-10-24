@@ -291,13 +291,14 @@ pub struct TableRef {
 ///
 /// Only the workspace app's routines are candidates: a cross-app model (#66) also
 /// holds dependency routines, and a bare `OnRun` must not become ambiguous with
-/// every dependency's.
+/// every dependency's. `declaring` is the run's one [`DeclaringObjects`] (the
+/// `RoutineJoin`'s), which names the `Object` part.
 pub fn resolve_routine_selector<'a>(
     resolved: &'a Model,
+    declaring: &DeclaringObjects<'_>,
     selector: &str,
 ) -> Resolution<&'a ModelRoutine> {
     let ws = &resolved.workspace;
-    let declaring = DeclaringObjects::new(&ws.objects);
     let object_name = |r: &ModelRoutine| declaring.of(r).map_or("", |o| o.name.as_str());
     let routines = || {
         ws.routines
@@ -815,9 +816,10 @@ fn render_query_touches_body(
         }
     };
 
+    let join = RoutineJoin::build(substrate.resolved());
     let from_routine = match from {
         None => None,
-        Some(sel) => match resolve_routine_selector(substrate.resolved(), sel) {
+        Some(sel) => match resolve_routine_selector(substrate.resolved(), &join.declaring, sel) {
             Resolution::Resolved(r) => Some(r),
             other => {
                 return selector_failure_doc(
@@ -834,7 +836,6 @@ fn render_query_touches_body(
     };
 
     let query = substrate.query();
-    let join = RoutineJoin::build(substrate.resolved());
     let ops = OperationJoin::build(substrate.resolved());
 
     let mut payload = Map::new();
@@ -1123,23 +1124,24 @@ fn render_query_effects_body(
     deterministic: bool,
 ) -> QueryRunResult {
     let deps = &substrate.dependencies;
-    let routine = match resolve_routine_selector(substrate.resolved(), routine_selector) {
-        Resolution::Resolved(r) => r,
-        other => {
-            return selector_failure_doc(
-                "query.effects",
-                "routine",
-                routine_selector,
-                &other,
-                deps,
-                alsem_ver,
-                deterministic,
-            );
-        }
-    };
+    let join = RoutineJoin::build(substrate.resolved());
+    let routine =
+        match resolve_routine_selector(substrate.resolved(), &join.declaring, routine_selector) {
+            Resolution::Resolved(r) => r,
+            other => {
+                return selector_failure_doc(
+                    "query.effects",
+                    "routine",
+                    routine_selector,
+                    &other,
+                    deps,
+                    alsem_ver,
+                    deterministic,
+                );
+            }
+        };
 
     let query = substrate.query();
-    let join = RoutineJoin::build(substrate.resolved());
     let ops = OperationJoin::build(substrate.resolved());
     let tables = TableNames::build(substrate.resolved());
     let rr = join.of(routine);
@@ -1302,12 +1304,14 @@ mod tests {
     /// #78: the owner index holds workspace-app rows only, a declaration-only
     /// row reads its own object, the `#if` arms of one routine (rows of ONE
     /// object sharing a stable id) give that object, two model objects with one
-    /// internal id give the name `RoutineJoin` keeps (the last), and an unknown
-    /// id gives `""`.
+    /// internal id and no anchors give the same owner as `RoutineJoin` (both read
+    /// `DeclaringObjects`, whose no-anchor fallback is the last row), and an
+    /// unknown id gives `""`. Which arm declares an anchored routine is
+    /// `declaring_objects_contains_by_anchor_else_last_row`'s.
     ///
     /// Mutations: drop the routine role filter -> (b) `Codeunit DepCu`; drop the
-    /// object role filter -> (c) `Interface DepIface`; key the name map first-wins
-    /// -> (f) `Codeunit Old`.
+    /// object role filter -> (c) `Interface DepIface`; make the no-anchor
+    /// fallback the first row -> (f) `Codeunit Old`.
     #[test]
     fn owner_index_filters_to_primary_and_follows_routine_join() {
         let alpha = object("ws", "Codeunit", 1, "Alpha", &[]);
@@ -1345,7 +1349,7 @@ mod tests {
         assert_eq!(owners.object_display("decl-ws"), "Interface WsIface");
         // (e) the arms of one routine
         assert_eq!(owners.object_display("s-arms"), "Codeunit Alpha");
-        // (f) one internal id, two names: RoutineJoin's (last) name, as `query effects`
+        // (f) one internal id, two names, no anchors: the last row, as `query effects`
         assert_eq!(
             owners.object_display("s-split"),
             RoutineJoin::build(&resolved)
@@ -1376,11 +1380,13 @@ mod tests {
     /// U1 (#241). `DeclaringObjects::of` over hand-stated rows sharing one id:
     /// without anchors it gives the LAST row (the pre-#241 owner); with anchors
     /// it gives the row whose declaration contains the routine's start, in
-    /// either row order, never a row of another file.
+    /// either row order, never a row of another file; of overlapping anchors,
+    /// the smallest.
     ///
     /// Discrimination: make the no-anchor fallback pick the first row -> (a)
     /// reads `Old`; fails. Replace containment with "first row" -> (c) reads
-    /// `Bar`'s routine as `Foo`; fails.
+    /// `Bar`'s routine as `Foo`; fails. Take the first containing row instead
+    /// of the smallest -> (f) reads `Outer`; fails.
     #[test]
     fn declaring_objects_contains_by_anchor_else_last_row() {
         let name = |o: Option<&ModelObject>| o.map(|o| o.name.clone());
@@ -1429,6 +1435,23 @@ mod tests {
             name(DeclaringObjects::new(&rows).of(&routine(&other, "r", "s"))),
             None
         );
+
+        // (f) overlapping (error-recovered) anchors: an outer row spanning the
+        // whole file contains the routine too; the SMALLEST containing anchor
+        // declares it, in either row order.
+        let mut outer = object("ws", "Codeunit", 9, "Outer", &[]);
+        outer.source_anchor = Some(anchor("ws:f.al", 0, 40));
+        let mut inner = object("ws", "Codeunit", 9, "Inner", &[]);
+        inner.source_anchor = Some(anchor("ws:f.al", 12, 20));
+        let mut in_inner = routine(&inner, "r-in", "s-in");
+        in_inner.source_anchor = anchor("ws:f.al", 14, 18);
+        for rows in [
+            vec![outer.clone(), inner.clone()],
+            vec![inner.clone(), outer.clone()],
+        ] {
+            let d = DeclaringObjects::new(&rows);
+            assert_eq!(name(d.of(&in_inner)), Some("Inner".into()), "(f)");
+        }
     }
 
     fn resolved_id(r: Resolution<TableRef>) -> String {

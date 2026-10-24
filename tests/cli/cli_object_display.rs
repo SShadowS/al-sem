@@ -1278,3 +1278,44 @@ fn split_object_owner_does_not_follow_arm_order() {
     assert_query_effects_owner(w, "Q", BAR);
     assert_digest_owners(ws);
 }
+
+/// A7 (#241, CR1). `alsem analyze`'s finding locations name each routine's own
+/// arm: d33's finding on P's `DeleteAll` reads `objectName: "Foo"`, on Q's
+/// `ModifyAll` `"Bar"`; both keep the one object id.
+///
+/// Discrimination: take `to_location`'s object from the id -> object map again
+/// -> P's finding reads `Bar`; fails.
+#[test]
+fn split_object_analyze_locations_name_the_declaring_object() {
+    let dir = tempfile::tempdir().unwrap();
+    split_workspace(dir.path(), false);
+    let (doc, code) = alsem(&[
+        "analyze",
+        dir.path().to_str().unwrap(),
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 0, "{doc}");
+    let mut got: Vec<(String, String, String)> = doc["payload"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["detector"] == "d33-unfiltered-bulk-write")
+        .map(|f| {
+            let p = &f["primaryLocation"];
+            let s = |k: &str| p[k].as_str().unwrap_or("<missing>").to_string();
+            (s("routineName"), s("objectName"), s("objectId"))
+        })
+        .collect();
+    got.sort();
+    let id = format!("{SPLIT_GUID}/Codeunit/50100");
+    assert_eq!(
+        got,
+        vec![
+            ("P".to_string(), "Foo".to_string(), id.clone()),
+            ("Q".to_string(), "Bar".to_string(), id),
+        ],
+        "{doc}"
+    );
+}

@@ -59,6 +59,25 @@ pub struct PAnchor {
     pub syntax_kind: String,
 }
 
+impl PAnchor {
+    /// 0-based containment: is `(line, column)` within `[start, end]` (inclusive)?
+    /// The file is not compared; callers check `source_unit_id` themselves.
+    pub fn contains(&self, line: u32, column: u32) -> bool {
+        (self.start_line, self.start_column) <= (line, column)
+            && (line, column) <= (self.end_line, self.end_column)
+    }
+
+    /// Total order on EXTENT (smaller = tighter container): spanned lines, then
+    /// spanned columns. Picks the smallest of several anchors containing a point.
+    pub fn extent_cmp(&self, other: &PAnchor) -> std::cmp::Ordering {
+        let lines = |a: &PAnchor| a.end_line.saturating_sub(a.start_line);
+        let cols = |a: &PAnchor| a.end_column.saturating_sub(a.start_column);
+        lines(self)
+            .cmp(&lines(other))
+            .then_with(|| cols(self).cmp(&cols(other)))
+    }
+}
+
 /// Structured expression classification (`model/expression.ts`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PExpressionInfo {

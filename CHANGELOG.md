@@ -63,7 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last arm's name (`Codeunit Bar::P` for `Foo`'s `P`). This fixes the `query effects`
   and `query touches` headers and effect lines, the `query effects` `Object.Routine`
   selector (`Foo.P`) and its ambiguity list, digest, fingerprint and prove
-  `objectDisplay` and headers, and the `<owner>::<routine>` selector of #239:
+  `objectDisplay` and headers, the `objectName` of `alsem analyze` finding locations
+  (JSON, SARIF, HTML, terminal; fingerprints do not change), and the
+  `<owner>::<routine>` selector of #239:
   `Codeunit Foo::P` now selects `P`, and `Codeunit Bar::P` is unmatched. The owner is the
   object declaration that contains the routine.
   - Limit: this holds when the two arms' routines have different signatures. A routine
@@ -72,6 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the second arm's name (`Codeunit Bar::P`) is now the unmatched one, where
     `Codeunit Foo::P` was. In that same-signature case, `query effects` effect lines may
     name the other arm's object.
+  - Limit: an `analyze` finding anchored on the object itself rather than a routine
+    (d64) still names the last arm.
 
 ## [2.0.3] - 2026-10-23
 
