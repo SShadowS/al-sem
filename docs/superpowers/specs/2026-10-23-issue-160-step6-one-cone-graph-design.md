@@ -1108,7 +1108,9 @@ Here, applied to the dependency boundary of digest's cone-graph tree:
    boundary's group, so a resource reached through two boundary calls is counted in BOTH groups' `resourceCount`
    (each group answers "what does this call do"). The group's `detail` is
    `{"boundary": "<Dep App name>.<Routine display>", "resourceCount": "<N>", "resources": "<r1>, <r2>, …"}` (detail
-   values stay strings, as today): N distinct resources, the first 10 in resource-id order, each its
+   values stay strings, as today; final panel F1-O4: an identity that enters SEVERAL dependency routines, an
+   interface dispatch or a multi-candidate call, names every one, sorted and `, `-joined, in `boundary` and in its
+   `enters …` terminal): N distinct resources, the first 10 in resource-id order, each its
    `resourceDisplay` when present, else its `resourceId`. `provenance` is `transitive`. Each group is its own
    effect: its `canonicalKey`/`factId` are built as today from its own via paths and its terminal (the boundary),
    so two groups of one fact never share an id. A fact with at least one witness that does not enter dependency code

@@ -191,6 +191,11 @@ struct FingerprintIndexes<'a> {
     capability_facts: &'a [Fact],
     /// Rule B (spec §14.3.5): the tree's dependency routines; `None` = off.
     boundary: Option<&'a crate::engine::l5::snapshot::BoundaryRule>,
+    /// Rule B, final panel F1-O4: a boundary identity that enters SEVERAL
+    /// dependency routines (an interface dispatch, a multi-candidate call, an
+    /// operation firing several triggers) → every `<App>.<Routine>` it
+    /// enters, sorted and `, `-joined. An identity with one target is absent.
+    boundary_displays: HashMap<String, String>,
 }
 
 impl FingerprintIndexes<'_> {
@@ -305,7 +310,7 @@ fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_
         event_display_by_id.insert(decl.event_id.clone(), event_name);
     }
 
-    FingerprintIndexes {
+    let mut idx = FingerprintIndexes {
         stable_id_to_display,
         routine_display_by_id,
         direct_facts_by_op_kind,
@@ -321,7 +326,24 @@ fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_
         typed_edges: &snap.typed_edges,
         capability_facts: &snap.capability_facts,
         boundary: snap.boundary.as_ref(),
+        boundary_displays: HashMap::new(),
+    };
+    if idx.boundary.is_some() {
+        let mut entered: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for e in idx.typed_edges {
+            if !idx.is_dependency(edge_from(e)) && edge_to(e).is_some_and(|t| idx.is_dependency(t))
+            {
+                let b = boundary_terminal(e, &idx).0;
+                entered.entry(b.id).or_default().insert(b.display);
+            }
+        }
+        idx.boundary_displays = entered
+            .into_iter()
+            .filter(|(_, d)| d.len() > 1)
+            .map(|(id, d)| (id, d.into_iter().collect::<Vec<_>>().join(", ")))
+            .collect();
     }
+    idx
 }
 
 // ---------------------------------------------------------------------------
@@ -1463,8 +1485,7 @@ fn boundary_terminal(e: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> (Bounda
         .and_then(|b| b.dependency_app.get(to))
         .map_or("", |a| &**a);
     let routine = idx.routine_display_by_id.get(to).map_or(to, String::as_str);
-    let display = format!("{app}.{routine}");
-    let display_text = format!("enters {display}");
+    let mut display = format!("{app}.{routine}");
     let at = |a: &crate::engine::l5::snapshot::SnapshotSourceAnchor| {
         (
             Some(a.source_unit_id.clone()),
@@ -1524,6 +1545,10 @@ fn boundary_terminal(e: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> (Bounda
             )
         }
     };
+    if let Some(all) = idx.boundary_displays.get(&id) {
+        display.clone_from(all);
+    }
+    let display_text = format!("enters {display}");
     (
         BoundaryEnd { id, display },
         WitnessHop::Terminal {
@@ -5129,6 +5154,7 @@ fn pub_idx_as_private<'i>(idx: &'i FingerprintIndexesPub<'_>) -> FingerprintInde
         capability_facts: idx.capability_facts,
         // The fingerprint query reads the cut: rule B is off.
         boundary: None,
+        boundary_displays: HashMap::new(),
     }
 }
 
@@ -8166,6 +8192,31 @@ codeunit 50102 "W10 Merge"
         assert_eq!(g.conditionality, crate::engine::l5::conditionality::UNKNOWN);
         assert_eq!(rb_via(g), vec![String::new()]);
         assert_eq!(g.evidence_callsite_id.as_deref(), Some("cs1"));
+    }
+
+    /// Final panel F1-O4: one boundary call site with SEVERAL dependency
+    /// targets (an interface dispatch, a multi-candidate call) is one group,
+    /// and it names every routine it enters, sorted: R's `cs1` reaches
+    /// `DepB` (table 36) and `DepA` (table 18).
+    #[test]
+    fn a_multi_target_boundary_names_every_entered_routine() {
+        let mut snap = rb_snapshot(
+            &["R", "DepA", "DepB"],
+            &["DepA", "DepB"],
+            &[(18, "Customer"), (36, "Sales Header")],
+        );
+        snap.typed_edges = vec![rb_call("R", "DepB", "cs1"), rb_call("R", "DepA", "cs1")];
+        snap.capability_facts = vec![
+            rb_fact("DepA", "modify", 18, Some("op18"), None),
+            rb_fact("DepB", "modify", 36, Some("op36"), None),
+            rb_fact("R", "modify", 36, None, Some("cs1")),
+            rb_fact("R", "modify", 18, None, Some("cs1")),
+        ];
+        let effects = rb_effects(&snap);
+        assert_eq!(effects.len(), 1, "{effects:?}");
+        let g = &effects[0];
+        assert_eq!(rb_detail(g, "boundary"), Some("XDep.DepA, XDep.DepB"));
+        assert_eq!(rb_detail(g, "resources"), Some("Customer, Sales Header"));
     }
 
     /// B2: a primary-terminal effect beside a boundary group is unchanged: R's
