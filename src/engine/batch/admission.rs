@@ -40,19 +40,31 @@ pub static KIND_PEAK_KIB: &[(JobKind, u64)] = &[
     (("policy check", X), POLICY_X),
     // `f` (B0) 1,465,740 KiB, step 6's 1.40 GiB → 1.5 GiB.
     (("fingerprint", S), 6 * STEP),
-    // shortcut: placeholders at the largest known row until plan Task 10
-    // Step 1 measures them (Task 12's Part 4b replaces every row).
-    (("digest", S), POLICY_X),
-    (("policy check", S), POLICY_X),
+    // Plan Task 10 Step 1's provisional rows (release-fast at de5b151e, max
+    // of 3 `maxrss.py` rounds; `/work/bench/160-12/task10-step1-peaks.md`).
+    // Task 12's Part 4b replaces every row.
+    // max 746,136 KiB → 0.75 GiB.
+    (("digest", S), 3 * STEP),
+    // max 751,848 KiB → 0.75 GiB.
+    (("policy check", S), 3 * STEP),
+    // max 3,187,260 KiB → 3.25 GiB.
+    (("prove", X), 13 * STEP),
+    // `diff $WS $WS`: max 1,472,632 KiB → 1.5 GiB.
+    (("diff", S), 6 * STEP),
+    // max 3,192,604 KiB → 3.25 GiB.
+    (("events fanout", X), 13 * STEP),
+    // max 747,860 KiB → 0.75 GiB.
+    (("events fanout", S), 3 * STEP),
+    // max 3,153,424 KiB → 3.25 GiB.
+    (("query touches", X), 13 * STEP),
+    // max 757,260 KiB → 0.75 GiB.
+    (("query touches", S), 3 * STEP),
+    // max 2,585,552 KiB → 2.5 GiB.
+    (("graph", X), 10 * STEP),
+    // shortcut: not measured yet (case B forms), placeholders at the largest
+    // known row; Task 12's Part 4b measures them.
     (("fingerprint", X), POLICY_X),
-    (("prove", X), POLICY_X),
     (("prove", S), POLICY_X),
-    (("diff", S), POLICY_X),
-    (("events fanout", X), POLICY_X),
-    (("events fanout", S), POLICY_X),
-    (("query touches", X), POLICY_X),
-    (("query touches", S), POLICY_X),
-    (("graph", X), POLICY_X),
 ];
 
 /// `P`: the largest row of any of `kinds` (a kind with no row takes the
@@ -160,14 +172,11 @@ mod tests {
         assert_eq!(committed("adhpeq"), 2, "U");
     }
 
-    /// T17's `U−p` case: 4 once plan Task 10 Step 1 measures the events and
-    /// query rows; while either is a placeholder at the largest row, 3 (the
-    /// repo forbids `#[ignore]`, so the pending case states its interim).
+    /// T17's `U−p` case: with Step 1's events and query rows, `U` without
+    /// policy runs at 4.
     #[test]
     fn worker_count_u_without_policy() {
-        let placeholder = |k: JobKind| peak_kib(&[k], KIND_PEAK_KIB) == POLICY_X;
-        let pending = placeholder(("events fanout", X)) || placeholder(("query touches", X));
-        assert_eq!(committed("adheq"), if pending { 3 } else { 4 }, "U−p");
+        assert_eq!(committed("adheq"), 4, "U−p");
     }
 
     #[test]

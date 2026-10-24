@@ -37,8 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at most `W` at once, started in manifest order: `W = max(1, min(batches, 4, ⌊28 GiB /
   P⌋))`, at most 2 when a job is `policy check`, `P` the largest measured CDO peak of the
   run's job kinds (`batch::admission::KIND_PEAK_KIB`; a kind with no row takes the largest;
-  the events, query, graph, prove, diff and single-app digest/policy rows are placeholders
-  at the largest row until measured). The parent reads stdin once and hands it to each
+  the cross-app `fingerprint` and single-app `prove` rows are placeholders at the largest
+  row until measured). The parent reads stdin once and hands it to each
   worker with a `--diff -` job, forwards each worker's stderr whole line by whole line as
   `[w<b>] …`, gives each worker the trace file `<ALSEM_TRACE_FILE>.w<b>`, and prints the job
   lines in manifest order after the last worker exits; a worker that dies without its lines
