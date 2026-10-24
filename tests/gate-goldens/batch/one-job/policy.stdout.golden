@@ -1,0 +1,87 @@
+{
+  "al_sem_version": "2.0.3",
+  "generated_at": "0",
+  "kind": "policy.check",
+  "dependencies": {
+    "apps": [],
+    "mode": "crossApp"
+  },
+  "policySource": "default",
+  "policyVersion": 1,
+  "ruleSummaries": [
+    {
+      "ruleId": "api-no-interactive-ui",
+      "routinesEvaluated": 4,
+      "routinesMatched": 0,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 0,
+      "findingsEmitted": 0
+    },
+    {
+      "ruleId": "api-no-user-dynamic-dispatch",
+      "routinesEvaluated": 4,
+      "routinesMatched": 0,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 0,
+      "findingsEmitted": 0
+    },
+    {
+      "ruleId": "exposed-root-no-direct-ledger-write",
+      "routinesEvaluated": 4,
+      "routinesMatched": 0,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 0,
+      "findingsEmitted": 0
+    },
+    {
+      "ruleId": "exposed-root-no-isolated-storage-write",
+      "routinesEvaluated": 4,
+      "routinesMatched": 0,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 0,
+      "findingsEmitted": 0
+    },
+    {
+      "ruleId": "install-codeunit-no-business-data-writes",
+      "routinesEvaluated": 4,
+      "routinesMatched": 0,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 0,
+      "findingsEmitted": 0
+    },
+    {
+      "ruleId": "no-commit-in-event-subscribers",
+      "routinesEvaluated": 4,
+      "routinesMatched": 0,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 0,
+      "findingsEmitted": 0
+    },
+    {
+      "ruleId": "no-commit-in-triggers",
+      "routinesEvaluated": 4,
+      "routinesMatched": 0,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 0,
+      "findingsEmitted": 0
+    },
+    {
+      "ruleId": "no-http-from-table-triggers",
+      "routinesEvaluated": 4,
+      "routinesMatched": 0,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 0,
+      "findingsEmitted": 0
+    }
+  ],
+  "findings": [],
+  "diagnostics": []
+}

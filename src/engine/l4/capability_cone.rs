@@ -5423,6 +5423,9 @@ codeunit 13 "Dep Rec Sub"
         use crate::engine::l4::effect_query_cli::{QueryJob, released_substrate};
         struct Owners<'a>(QueryJob<'a>);
         impl Job for Owners<'_> {
+            fn name(&self) -> &'static str {
+                "query"
+            }
             fn demands(&self) -> Vec<ViewDemand> {
                 self.0.demands()
             }

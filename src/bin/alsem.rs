@@ -60,9 +60,12 @@ const _: () = assert!(
      from mimalloc.h before trusting MI_OPTION_PURGE_DELAY"
 );
 
-use al_sem::engine::batch::job::{Failed, Job};
+use std::path::{Path, PathBuf};
+
+use al_sem::engine::batch::job::{Failed, Job, WorkspaceReader};
+use al_sem::engine::batch::manifest::BatchSpec;
 use al_sem::engine::batch::output::{JobOutput, WriteAction, replay};
-use al_sem::engine::batch::run_standalone;
+use al_sem::engine::batch::{JobLine, run_batch, run_standalone};
 use al_sem::engine::gate::cache_prune::{format_prune_report, prune_cache};
 use al_sem::engine::gate::events::{EventsChainsOptions, EventsFanoutOptions, EventsJob};
 use al_sem::engine::gate::exit_code::{exit, parse_fail_on};
@@ -80,7 +83,7 @@ use al_sem::engine::l5::fingerprint_cli::{
     normalize_witness, reject_illegal_combos, reject_inventory_only_combos, validate_roots,
 };
 use al_sem::engine::l5::prove::{ProveJob, parse_question, question_ids};
-use al_sem::program::inputs::{RequestInputs, WorkspaceInputs, WorkspaceNeeds};
+use al_sem::program::inputs::{RequestInputs, WorkspaceNeeds};
 use clap::{Parser, Subcommand};
 
 const SEVERITY_VALUES: &[&str] = &["critical", "high", "medium", "low", "info"];
@@ -120,6 +123,22 @@ enum Commands {
     /// Write the program's may-execute call graph as JSONL (schema
     /// `al-sem.callgraph` v1), for diff-scoped test selection.
     Graph(GraphCli),
+    /// Run the commands of a JSON manifest in one process: jobs on one
+    /// workspace share one build. Prints one JSON line per job.
+    Batch(BatchCli),
+}
+
+/// `BatchCli` — arguments for `alsem batch <manifest>` (#277 D2.1).
+#[derive(Parser)]
+struct BatchCli {
+    /// The manifest: `{"batches": [{"jobs": [...]}]}` or `{"jobs": [...]}`; a job
+    /// is `{"argv": [...], "stdout": <path>, "stderr": <path>}`, both paths optional.
+    manifest: String,
+
+    /// The directory of the jobs' default stdout/stderr files (default: the
+    /// manifest's directory).
+    #[arg(long = "out-dir")]
+    out_dir: Option<String>,
 }
 
 /// `GraphCli` — arguments for `alsem graph <ws>`.
@@ -701,27 +720,14 @@ fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
     let code = match cli.command {
-        Commands::Analyze(a) => run_analyze_cmd(a),
-        Commands::Digest(d) => run_digest_cmd(d),
-        Commands::Prove(p) => run_prove_cmd(p),
-        Commands::Fingerprint(f) => run_fingerprint_cmd(f),
-        Commands::Diff(d) => run_diff_cmd(d),
-        Commands::Events(e) => match e.command {
-            EventsCommands::Fanout(f) => run_events_fanout_cmd(f),
-            EventsCommands::Chains(c) => run_events_chains_cmd(c),
-        },
-        Commands::Policy(p) => match p.command {
-            PolicyCommands::Check(c) => run_policy_check_cmd(c),
-            PolicyCommands::Explain(e) => run_policy_explain_cmd(e),
-        },
-        Commands::Cache(c) => match c.command {
-            CacheCommands::Prune(p) => run_cache_prune_cmd(p),
-        },
-        Commands::Query(q) => match q.command {
-            QueryCommands::Touches(t) => run_query_touches_cmd(t),
-            QueryCommands::Effects(e) => run_query_effects_cmd(e),
-        },
-        Commands::Graph(g) => run_graph_cmd(g),
+        Commands::Batch(b) => run_batch_cmd(b),
+        Commands::Policy(PolicyCli {
+            command: PolicyCommands::Explain(e),
+        }) => run_policy_explain_cmd(e),
+        Commands::Cache(CacheCli {
+            command: CacheCommands::Prune(p),
+        }) => run_cache_prune_cmd(p),
+        job => run_planned(plan(job)),
     };
     // The process-cumulative cone census, once, after every cone the command
     // composed (#160 §4.1.7). One OnceLock read when off.
@@ -737,6 +743,54 @@ fn main() -> ExitCode {
 // (`policy explain`, `cache prune`) write through `write_actions`, the same
 // replay.
 
+/// A command parsed and validated, before its workspace is read (#277 D3):
+/// its validation failure (a job with no view), or what it reads and how its
+/// job is made off those reads.
+enum Planned {
+    Failed(Failed),
+    Ready {
+        /// Each workspace it reads, with what it reads of it.
+        reads: Vec<(PathBuf, WorkspaceNeeds)>,
+        /// Read the workspaces through the shared reader, make the job and hand
+        /// it on (the job borrows what this owns).
+        make: Box<MakeJob>,
+    },
+}
+
+/// Makes a command's job off the shared reads and hands it to the continuation.
+type MakeJob = dyn FnOnce(&WorkspaceReader, &mut dyn FnMut(&dyn Job));
+
+/// A command that reads `workspace` with `needs`, its job made by `make`.
+fn ready(
+    workspace: &str,
+    needs: WorkspaceNeeds,
+    make: impl FnOnce(&WorkspaceReader, &mut dyn FnMut(&dyn Job)) + 'static,
+) -> Planned {
+    Planned::Ready {
+        reads: vec![(PathBuf::from(workspace), needs)],
+        make: Box::new(make),
+    }
+}
+
+/// What digest, prove and fingerprint read: the snapshot's input rows.
+const FINGERPRINT_ROWS: WorkspaceNeeds = WorkspaceNeeds {
+    build_only: false,
+    fingerprint_rows: true,
+};
+
+/// Run a command as a batch of one (#277 D1).
+fn run_planned(planned: Planned) -> ExitCode {
+    match planned {
+        Planned::Failed(f) => standalone(&f),
+        Planned::Ready { reads, make } => {
+            let reader = WorkspaceReader::new(reads);
+            let mut code = None;
+            make(&reader, &mut |job| code = Some(standalone(job)));
+            code.expect("the command made its job")
+        }
+    }
+}
+
 /// Run `job` as a batch of one (#277 D1).
 fn standalone(job: &dyn Job) -> ExitCode {
     ExitCode::from(run_standalone(job))
@@ -744,11 +798,160 @@ fn standalone(job: &dyn Job) -> ExitCode {
 
 /// A job that failed its own validation: `line` on stderr, exit `exit`; a
 /// failed stderr write exits `write_failure_exit` (analyze 2, else 1).
-fn failed(line: impl Into<String>, exit: u8, write_failure_exit: u8) -> ExitCode {
-    standalone(&Failed {
+fn failed(line: impl Into<String>, exit: u8, write_failure_exit: u8) -> Planned {
+    Planned::Failed(Failed {
         output: JobOutput::lines(&[line.into()], exit),
         write_failure_exit,
     })
+}
+
+/// A parsed command as a planned job. `batch`, `policy explain` and `cache
+/// prune` are no jobs: `main` runs them, and a manifest refuses them first.
+fn plan(command: Commands) -> Planned {
+    match command {
+        Commands::Analyze(a) => plan_analyze(a),
+        Commands::Digest(d) => plan_digest(d),
+        Commands::Prove(p) => plan_prove(p),
+        Commands::Fingerprint(f) => plan_fingerprint(f),
+        Commands::Diff(d) => plan_diff(d),
+        Commands::Events(e) => match e.command {
+            EventsCommands::Fanout(f) => plan_events_fanout(f),
+            EventsCommands::Chains(c) => plan_events_chains(c),
+        },
+        Commands::Policy(p) => match p.command {
+            PolicyCommands::Check(c) => plan_policy_check(c),
+            PolicyCommands::Explain(_) => unreachable!("policy explain is no job"),
+        },
+        Commands::Query(q) => match q.command {
+            QueryCommands::Touches(t) => plan_query_touches(t),
+            QueryCommands::Effects(e) => plan_query_effects(e),
+        },
+        Commands::Graph(g) => plan_graph(g),
+        Commands::Cache(_) | Commands::Batch(_) => unreachable!("no job"),
+    }
+}
+
+// ── batch command (#277 D2) ──────────────────────────────────────────────────
+
+/// The command a manifest job may not name, or `None` for a job command.
+fn refused(command: &Commands) -> Option<&'static str> {
+    match command {
+        Commands::Batch(_) => Some("batch"),
+        Commands::Cache(_) => Some("cache prune"),
+        Commands::Policy(PolicyCli {
+            command: PolicyCommands::Explain(_),
+        }) => Some("policy explain"),
+        _ => None,
+    }
+}
+
+/// One manifest job's command, or the reason it cannot run: clap's first
+/// line, or a refused command.
+fn parse_job(argv: &[String]) -> Result<Commands, String> {
+    let cli = Cli::try_parse_from(std::iter::once("alsem").chain(argv.iter().map(String::as_str)))
+        .map_err(|e| {
+            // clap's `error:` line; a help or version request has none.
+            let text = e.to_string();
+            let line = text.lines().find(|l| l.starts_with("error:"));
+            match (argv.is_empty(), line) {
+                (true, _) => "no command".to_string(),
+                (false, Some(line)) => line.to_string(),
+                (false, None) => format!("not a command: {}", argv.join(" ")),
+            }
+        })?;
+    match refused(&cli.command) {
+        Some(name) => Err(format!("'{name}' cannot run in a batch")),
+        None => Ok(cli.command),
+    }
+}
+
+/// `alsem batch <manifest>`: every job's argv is parsed first (a usage error
+/// runs nothing, exit 3); then each batch runs in this process, in manifest
+/// order, and the run prints one line per job. Exit 0 when every job ran,
+/// whatever its own exit (D2.2).
+fn run_batch_cmd(b: BatchCli) -> ExitCode {
+    use al_sem::engine::batch::manifest::load;
+    let usage =
+        |line: String| ExitCode::from(replay(&JobOutput::lines(&[line], exit::CONFIG_ERROR), 1));
+    let manifest = match load(Path::new(&b.manifest), b.out_dir.as_deref().map(Path::new)) {
+        Ok(m) => m,
+        Err(line) => return usage(line),
+    };
+    let mut parsed = Vec::new();
+    for (bi, batch) in manifest.batches.iter().enumerate() {
+        let mut commands = Vec::new();
+        for (i, job) in batch.jobs.iter().enumerate() {
+            match parse_job(&job.argv) {
+                Ok(c) => commands.push(c),
+                Err(why) => return usage(format!("al-sem batch: batch {bi} job {i}: {why}")),
+            }
+        }
+        parsed.push(commands);
+    }
+    let mut lines = Vec::new();
+    for (bi, (batch, commands)) in manifest.batches.iter().zip(parsed).enumerate() {
+        let b = u32::try_from(bi).expect("at most u32::MAX batches");
+        lines.extend(run_one_batch(
+            b,
+            batch,
+            commands.into_iter().map(plan).collect(),
+        ));
+    }
+    let mut out = String::new();
+    for line in &lines {
+        out.push_str(&serde_json::to_string(line).expect("a job line serializes"));
+        out.push('\n');
+    }
+    ExitCode::from(replay(
+        &JobOutput {
+            actions: vec![WriteAction::Stdout(out.into_bytes())],
+            exit: exit::CLEAN,
+        },
+        1,
+    ))
+}
+
+/// One batch: every workspace read once with the union of its jobs' needs
+/// (D3), the jobs made off those reads, then the driver over all of them.
+fn run_one_batch(b: u32, batch: &BatchSpec, planned: Vec<Planned>) -> Vec<JobLine> {
+    let reads = planned.iter().flat_map(|p| match p {
+        Planned::Ready { reads, .. } => reads.clone(),
+        Planned::Failed(_) => vec![],
+    });
+    let reader = WorkspaceReader::new(reads.collect::<Vec<_>>());
+    let mut lines = None;
+    with_jobs(&mut planned.into_iter(), &reader, Vec::new(), &mut |jobs| {
+        let jobs: Vec<_> = jobs
+            .iter()
+            .zip(&batch.jobs)
+            .map(|(job, spec)| (*job, spec.streams.clone()))
+            .collect();
+        lines = Some(run_batch(b, &jobs));
+    });
+    lines.expect("the batch ran")
+}
+
+/// Make every planned job (each borrows what its plan owns) and hand them all
+/// to `run`, in order.
+fn with_jobs(
+    rest: &mut std::vec::IntoIter<Planned>,
+    reader: &WorkspaceReader,
+    made: Vec<&dyn Job>,
+    run: &mut dyn FnMut(&[&dyn Job]),
+) {
+    match rest.next() {
+        None => run(&made),
+        Some(Planned::Failed(f)) => {
+            let mut made = made;
+            made.push(&f);
+            with_jobs(rest, reader, made, run);
+        }
+        Some(Planned::Ready { make, .. }) => make(reader, &mut |job| {
+            let mut made: Vec<&dyn Job> = made.clone();
+            made.push(job);
+            with_jobs(rest, reader, made, run);
+        }),
+    }
 }
 
 /// Write `actions` in order; a failed write ends them with `fail`.
@@ -771,22 +974,25 @@ fn write_stderr_lines(lines: &[String], fail: u8) -> Result<(), ExitCode> {
 
 // ── graph command ────────────────────────────────────────────────────────────
 
-fn run_graph_cmd(g: GraphCli) -> ExitCode {
-    let inputs = WorkspaceInputs::read(
-        std::path::Path::new(&g.workspace),
-        &WorkspaceNeeds::default(),
-    );
-    standalone(&al_sem::program::impact_graph::GraphJob {
-        inputs: &inputs,
-        out: g.out.as_deref(),
-    })
+fn plan_graph(g: GraphCli) -> Planned {
+    ready(
+        &g.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |reader, k| {
+            let inputs = reader.read(Path::new(&g.workspace), WorkspaceNeeds::default());
+            k(&al_sem::program::impact_graph::GraphJob {
+                inputs: &inputs,
+                out: g.out.as_deref(),
+            })
+        },
+    )
 }
 
 // ── query commands ───────────────────────────────────────────────────────────
 
 const VALID_QUERY_FORMATS: &[&str] = &["human", "json"];
 
-fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
+fn plan_query_touches(t: QueryTouchesCli) -> Planned {
     if !VALID_QUERY_FORMATS.contains(&t.format.as_str()) {
         return failed(
             format!(
@@ -804,25 +1010,26 @@ fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
     // `--direction down` without `--from` is rejected by `render_query_touches`
     // itself, not duplicated here: one rule in one place, and the golden family
     // covers it end to end (a second copy could drift and would test nothing).
-    let inputs = WorkspaceInputs::read(
-        std::path::Path::new(&t.workspace),
-        &WorkspaceNeeds::default(),
-    );
-    standalone(
-        &QueryJob::touches(
-            &inputs,
-            &t.table,
-            t.from.as_deref(),
-            direction,
-            &inputs.driver_version,
-            t.deterministic,
-            t.single_app,
-        )
-        .written(t.format == "json", t.out.as_deref()),
+    ready(
+        &t.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |reader, k| {
+            let inputs = reader.read(Path::new(&t.workspace), WorkspaceNeeds::default());
+            k(&QueryJob::touches(
+                &inputs,
+                &t.table,
+                t.from.as_deref(),
+                direction,
+                &inputs.driver_version,
+                t.deterministic,
+                t.single_app,
+            )
+            .written(t.format == "json", t.out.as_deref()))
+        },
     )
 }
 
-fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
+fn plan_query_effects(e: QueryEffectsCli) -> Planned {
     if !VALID_QUERY_FORMATS.contains(&e.format.as_str()) {
         return failed(
             format!(
@@ -833,25 +1040,26 @@ fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
             1,
         );
     }
-    let inputs = WorkspaceInputs::read(
-        std::path::Path::new(&e.workspace),
-        &WorkspaceNeeds::default(),
-    );
-    standalone(
-        &QueryJob::effects(
-            &inputs,
-            &e.routine,
-            &inputs.driver_version,
-            e.deterministic,
-            e.single_app,
-        )
-        .written(e.format == "json", e.out.as_deref()),
+    ready(
+        &e.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |reader, k| {
+            let inputs = reader.read(Path::new(&e.workspace), WorkspaceNeeds::default());
+            k(&QueryJob::effects(
+                &inputs,
+                &e.routine,
+                &inputs.driver_version,
+                e.deterministic,
+                e.single_app,
+            )
+            .written(e.format == "json", e.out.as_deref()))
+        },
     )
 }
 
 // ── policy check command ─────────────────────────────────────────────────────
 
-fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
+fn plan_policy_check(c: PolicyCheckCli) -> Planned {
     use al_sem::engine::gate::policy::pipeline::{PolicyCheckOptions, PolicyJob, policy_request};
 
     // Validate --format (human | json | sarif). al-sem writes the message + exit 1.
@@ -864,32 +1072,38 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         );
     }
 
-    let workspace = std::path::Path::new(&c.workspace);
-    let inputs = WorkspaceInputs::read(workspace, &WorkspaceNeeds::default());
-    let request = RequestInputs::read(
-        workspace,
-        policy_request(c.policy.as_deref(), c.no_policy),
-        None,
-    );
-    let opts = PolicyCheckOptions {
-        inputs: &inputs,
-        request: &request,
-        format: &c.format,
-        out: c.out.as_deref(),
-        deterministic: c.deterministic,
-        strict: c.strict,
-        driver_version: &inputs.driver_version,
-        single_app: c.single_app,
-    };
+    ready(
+        &c.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |reader, k| {
+            let workspace = Path::new(&c.workspace);
+            let inputs = reader.read(workspace, WorkspaceNeeds::default());
+            let request = RequestInputs::read(
+                workspace,
+                policy_request(c.policy.as_deref(), c.no_policy),
+                None,
+            );
+            let opts = PolicyCheckOptions {
+                inputs: &inputs,
+                request: &request,
+                format: &c.format,
+                out: c.out.as_deref(),
+                deterministic: c.deterministic,
+                strict: c.strict,
+                driver_version: &inputs.driver_version,
+                single_app: c.single_app,
+            };
 
-    // A bad policy is found before any build: a job with no view (#277 D3).
-    match PolicyJob::new(&opts) {
-        Ok(job) => standalone(&job),
-        Err(early) => standalone(&Failed {
-            output: early.into_output(),
-            write_failure_exit: 1,
-        }),
-    }
+            // A bad policy is found before any build: a job with no view (#277 D3).
+            match PolicyJob::new(&opts) {
+                Ok(job) => k(&job),
+                Err(early) => k(&Failed {
+                    output: early.into_output(),
+                    write_failure_exit: 1,
+                }),
+            }
+        },
+    )
 }
 
 // ── policy explain command ───────────────────────────────────────────────────
@@ -926,8 +1140,8 @@ fn run_policy_explain_cmd(e: PolicyExplainCli) -> ExitCode {
 
 // ── diff command ────────────────────────────────────────────────────────────
 
-fn run_diff_cmd(d: DiffCli) -> ExitCode {
-    use al_sem::engine::gate::diff::cli::{DiffCliOptions, DiffJob};
+fn plan_diff(d: DiffCli) -> Planned {
+    use al_sem::engine::gate::diff::cli::{DIFF_NEEDS, DiffCliOptions, DiffJob};
     use al_sem::engine::gate::diff::{CoveragePolicy, Severity};
 
     // Validate --format (human | json | sarif). al-sem writes the message + exit 1.
@@ -974,26 +1188,37 @@ fn run_diff_cmd(d: DiffCli) -> ExitCode {
         }
     };
 
-    let version = driver_version();
-    let opts = DiffCliOptions {
-        old_arg: &d.old,
-        new_arg: &d.new,
-        format: &d.format,
-        out: d.out.as_deref(),
-        coverage_policy,
-        renames_path: d.renames.as_deref(),
-        fail_on,
-        strict: d.strict,
-        deterministic: d.deterministic,
-        driver_version: &version,
-    };
+    // Each side that is a directory is a workspace side (`DiffJob::new` decides).
+    let reads = [&d.old, &d.new]
+        .into_iter()
+        .filter(|arg| Path::new(arg).is_dir())
+        .map(|arg| (PathBuf::from(arg), DIFF_NEEDS))
+        .collect();
+    Planned::Ready {
+        reads,
+        make: Box::new(move |reader, k| {
+            let version = driver_version();
+            let opts = DiffCliOptions {
+                old_arg: &d.old,
+                new_arg: &d.new,
+                format: &d.format,
+                out: d.out.as_deref(),
+                coverage_policy,
+                renames_path: d.renames.as_deref(),
+                fail_on,
+                strict: d.strict,
+                deterministic: d.deterministic,
+                driver_version: &version,
+            };
 
-    // An input error is found before any build: a job with no view.
-    match DiffJob::new(&opts) {
-        Ok(job) => standalone(&job),
-        Err(early) => standalone(&Failed {
-            output: early.into_output(None),
-            write_failure_exit: 1,
+            // An input error is found before any build: a job with no view.
+            match DiffJob::new(&opts, reader) {
+                Ok(job) => k(&job),
+                Err(early) => k(&Failed {
+                    output: early.into_output(None),
+                    write_failure_exit: 1,
+                }),
+            }
         }),
     }
 }
@@ -1005,7 +1230,7 @@ const GROUP_BY_VALUES: &[&str] = &["object", "routine", "table", "detector", "fi
 /// The exact stderr message emitted when `--order` is used with `digest`.
 const ORDER_REJECTION: &str = "al-sem: digest --order is not supported by the Rust engine";
 
-fn run_digest_cmd(d: DigestCli) -> ExitCode {
+fn plan_digest(d: DigestCli) -> Planned {
     // Reject --order (CONFIG_ERROR — a not-ported flag rejected cleanly rather than silently ignored)
     if d.order {
         return failed(ORDER_REJECTION, exit::CONFIG_ERROR, 1);
@@ -1097,30 +1322,25 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         Some(routine_inputs)
     };
 
-    let inputs = WorkspaceInputs::read(
-        std::path::Path::new(&d.workspace),
-        &WorkspaceNeeds {
-            fingerprint_rows: true,
-            ..WorkspaceNeeds::default()
-        },
-    );
-
-    let req = DigestRequest {
-        inputs: &inputs,
-        changed_files,
-        changed_routines,
-        diff_text,
-        alsem_ver: &inputs.driver_version,
-        deterministic: d.deterministic,
-        single_app: d.single_app,
-        tests: d.tests,
-    };
-    standalone(&DigestJob::new(req, d.format == "human", d.out.as_deref()))
+    ready(&d.workspace.clone(), FINGERPRINT_ROWS, move |reader, k| {
+        let inputs = reader.read(Path::new(&d.workspace), FINGERPRINT_ROWS);
+        let req = DigestRequest {
+            inputs: &inputs,
+            changed_files,
+            changed_routines,
+            diff_text,
+            alsem_ver: &inputs.driver_version,
+            deterministic: d.deterministic,
+            single_app: d.single_app,
+            tests: d.tests,
+        };
+        k(&DigestJob::new(req, d.format == "human", d.out.as_deref()))
+    })
 }
 
 // ── prove command ───────────────────────────────────────────────────────────
 
-fn run_prove_cmd(p: ProveCli) -> ExitCode {
+fn plan_prove(p: ProveCli) -> Planned {
     // Validate --format
     const VALID_PROVE_FORMATS: &[&str] = &["json", "human"];
     if !VALID_PROVE_FORMATS.contains(&p.format.as_str()) {
@@ -1152,30 +1372,25 @@ fn run_prove_cmd(p: ProveCli) -> ExitCode {
         );
     }
 
-    let inputs = WorkspaceInputs::read(
-        std::path::Path::new(&p.workspace),
-        &WorkspaceNeeds {
-            fingerprint_rows: true,
-            ..WorkspaceNeeds::default()
-        },
-    );
-
-    standalone(&ProveJob {
-        detectors: al_sem::engine::l5::detectors::default_detectors(),
-        inputs: &inputs,
-        routine_selector: &p.routine,
-        question_text: &p.question,
-        alsem_ver: &inputs.driver_version,
-        deterministic: p.deterministic,
-        single_app: p.single_app,
-        human: p.format == "human",
-        out: p.out.as_deref(),
+    ready(&p.workspace.clone(), FINGERPRINT_ROWS, move |reader, k| {
+        let inputs = reader.read(Path::new(&p.workspace), FINGERPRINT_ROWS);
+        k(&ProveJob {
+            detectors: al_sem::engine::l5::detectors::default_detectors(),
+            inputs: &inputs,
+            routine_selector: &p.routine,
+            question_text: &p.question,
+            alsem_ver: &inputs.driver_version,
+            deterministic: p.deterministic,
+            single_app: p.single_app,
+            human: p.format == "human",
+            out: p.out.as_deref(),
+        })
     })
 }
 
 // ── fingerprint command ─────────────────────────────────────────────────────
 
-fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
+fn plan_fingerprint(f: FingerprintCli) -> Planned {
     // Parse --shard mode (primary-only | all). Invalid value → exit 1.
     let shard_mode: Option<ShardMode> = match f.shard.as_deref() {
         None => None,
@@ -1257,47 +1472,42 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
     ) {
         return failed(msg, 1, 1);
     }
-    let inputs = WorkspaceInputs::read(
-        std::path::Path::new(&f.workspace),
-        &WorkspaceNeeds {
-            fingerprint_rows: true,
-            ..WorkspaceNeeds::default()
-        },
-    );
+    ready(&f.workspace.clone(), FINGERPRINT_ROWS, move |reader, k| {
+        let inputs = reader.read(Path::new(&f.workspace), FINGERPRINT_ROWS);
+        let opts = FingerprintOptions {
+            inputs: &inputs,
+            driver_version: &inputs.driver_version,
+            format,
+            out: f.out.as_deref(),
+            shard: shard_mode,
+            witness_limit,
+            roots,
+            routine_selectors: f.routine.clone(),
+            // includeInherited default true; --no-include-inherited → direct-only.
+            include_inherited: !f.no_include_inherited,
+            is_query_requested,
+            deterministic: f.deterministic,
+            strict: f.strict,
+            verbosity: &f.verbosity,
+            inventory_only: f.inventory_only,
+            no_roots_config: f.no_roots_config,
+            single_app: f.single_app,
+        };
 
-    let opts = FingerprintOptions {
-        inputs: &inputs,
-        driver_version: &inputs.driver_version,
-        format,
-        out: f.out.as_deref(),
-        shard: shard_mode,
-        witness_limit,
-        roots,
-        routine_selectors: f.routine.clone(),
-        // includeInherited default true; --no-include-inherited → direct-only.
-        include_inherited: !f.no_include_inherited,
-        is_query_requested,
-        deterministic: f.deterministic,
-        strict: f.strict,
-        verbosity: &f.verbosity,
-        inventory_only: f.inventory_only,
-        no_roots_config: f.no_roots_config,
-        single_app: f.single_app,
-    };
-
-    // `--shard` without `--out` is found before any build: a job with no view.
-    match FingerprintJob::new(&opts) {
-        Ok(job) => standalone(&job),
-        Err(f) => standalone(&Failed {
-            output: f.into(),
-            write_failure_exit: 1,
-        }),
-    }
+        // `--shard` without `--out` is found before any build: a job with no view.
+        match FingerprintJob::new(&opts) {
+            Ok(job) => k(&job),
+            Err(fail) => k(&Failed {
+                output: fail,
+                write_failure_exit: 1,
+            }),
+        }
+    })
 }
 
 // ── events fanout command ───────────────────────────────────────────────────
 
-fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
+fn plan_events_fanout(f: EventsFanoutCli) -> Planned {
     const VALID_FORMATS: &[&str] = &["human", "json"];
     if !VALID_FORMATS.contains(&f.format.as_str()) {
         return failed(
@@ -1331,27 +1541,29 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
         }
     };
 
-    let inputs = WorkspaceInputs::read(
-        std::path::Path::new(&f.workspace),
-        &WorkspaceNeeds::default(),
-    );
-    let opts = EventsFanoutOptions {
-        inputs: &inputs,
-        format: &f.format,
-        scope,
-        coverage_policy: &f.coverage_policy,
-        driver_version: &inputs.driver_version,
-        deterministic: f.deterministic,
-        strict: f.strict,
-        single_app: f.single_app,
-    };
-
-    standalone(&EventsJob::fanout(&opts, f.out.as_deref()))
+    ready(
+        &f.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |reader, k| {
+            let inputs = reader.read(Path::new(&f.workspace), WorkspaceNeeds::default());
+            let opts = EventsFanoutOptions {
+                inputs: &inputs,
+                format: &f.format,
+                scope,
+                coverage_policy: &f.coverage_policy,
+                driver_version: &inputs.driver_version,
+                deterministic: f.deterministic,
+                strict: f.strict,
+                single_app: f.single_app,
+            };
+            k(&EventsJob::fanout(&opts, f.out.as_deref()))
+        },
+    )
 }
 
 // ── events chains command ───────────────────────────────────────────────────
 
-fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
+fn plan_events_chains(c: EventsChainsCli) -> Planned {
     const VALID_FORMATS: &[&str] = &["human", "json"];
     if !VALID_FORMATS.contains(&c.format.as_str()) {
         return failed(
@@ -1391,24 +1603,26 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
         return failed("al-sem events chains: --max-depth must be in 0..256", 1, 1);
     }
 
-    let inputs = WorkspaceInputs::read(
-        std::path::Path::new(&c.workspace),
-        &WorkspaceNeeds::default(),
-    );
-    let opts = EventsChainsOptions {
-        inputs: &inputs,
-        format: &c.format,
-        scope,
-        coverage_policy: &c.coverage_policy,
-        max_depth: c.max_depth,
-        max_nodes: c.max_nodes,
-        driver_version: &inputs.driver_version,
-        deterministic: c.deterministic,
-        strict: c.strict,
-        single_app: c.single_app,
-    };
-
-    standalone(&EventsJob::chains(&opts, c.out.as_deref()))
+    ready(
+        &c.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |reader, k| {
+            let inputs = reader.read(Path::new(&c.workspace), WorkspaceNeeds::default());
+            let opts = EventsChainsOptions {
+                inputs: &inputs,
+                format: &c.format,
+                scope,
+                coverage_policy: &c.coverage_policy,
+                max_depth: c.max_depth,
+                max_nodes: c.max_nodes,
+                driver_version: &inputs.driver_version,
+                deterministic: c.deterministic,
+                strict: c.strict,
+                single_app: c.single_app,
+            };
+            k(&EventsJob::chains(&opts, c.out.as_deref()))
+        },
+    )
 }
 
 // ── cache prune command ─────────────────────────────────────────────────────
@@ -1444,7 +1658,7 @@ fn resolve_auto_format(format_str: &str) -> OutputFormat {
     }
 }
 
-fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
+fn plan_analyze(a: AnalyzeCli) -> Planned {
     // --- enum-flag validation (mirrors the al-sem CLI's CONFIG_ERROR exits) ---
     if let Some(sev) = &a.min_severity
         && !SEVERITY_VALUES.contains(&sev.as_str())
@@ -1544,27 +1758,25 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
     // this is only the fallback for a real, unpinned invocation.
     // A bad `--preset` / `--detector` is a usage error found before the
     // workspace is read (`run_analyze_with_exit` resolves the set again).
-    let config_error = |msg: String| {
-        failed(
+    if let Err(msg) = resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref()) {
+        return failed(
             format!("al-sem: {msg}"),
             exit::CONFIG_ERROR,
             exit::ANALYSIS_FAILURE,
-        )
-    };
-    if let Err(msg) = resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref()) {
-        return config_error(msg);
+        );
     }
-    let inputs = args.read_inputs();
-    let request = args.read_request();
-    match AnalyzeJob::new(&inputs, &request, &args, &inputs.driver_version) {
-        Ok(job) => {
-            // The whole run, build included, as before the driver (#277 R5-2):
-            // `scripts/trace_summary.py` takes its percentages off this span.
-            let _analyze_span = al_sem::engine::perf_trace::span("analyze", "analyze.total");
-            standalone(&job)
-        }
-        Err(msg) => config_error(msg),
-    }
+    ready(
+        &args.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |reader, k| {
+            let inputs = reader.read(Path::new(&args.workspace), WorkspaceNeeds::default());
+            let request = args.read_request();
+            // `new` fails only on the detector set, resolved above.
+            let job = AnalyzeJob::new(&inputs, &request, &args, &inputs.driver_version)
+                .expect("the detector set resolved");
+            k(&job)
+        },
+    )
 }
 
 #[cfg(test)]

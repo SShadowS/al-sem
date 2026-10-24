@@ -5,17 +5,18 @@
 //! that document into ordered writes (`serialize`, D2.3).
 
 use std::any::Any;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
-use crate::engine::batch::output::{JobOutput, WriteAction};
+use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::run::{ModelFailure, TargetFailure};
 use crate::engine::l5::digest_cli::DigestEffects;
 use crate::engine::l5::registry::RunOutput;
 use crate::engine::l5::snapshot::{SnapshotIdentityTable, derive_identity_table};
 use crate::engine::session::{Cell, JobId, Plan, RunKey, TreeReadOut, View};
-use crate::program::inputs::WorkspaceInputs;
+use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 use crate::program::model::workspace::Model;
 use crate::program::resolve::full::FreshCoverage;
 use crate::program::resolved::ResolvedProgram;
@@ -40,10 +41,16 @@ pub struct ViewKey {
     pub no_roots_config: bool,
 }
 
+/// A workspace path as a view key and the reader spell it (D4.1):
+/// `std::path::absolute`, never canonical.
+fn absolute(workspace: &Path) -> PathBuf {
+    std::path::absolute(workspace).unwrap_or_else(|_| workspace.to_path_buf())
+}
+
 impl ViewKey {
     pub fn new(workspace: &Path, single_app: bool, no_roots_config: bool) -> ViewKey {
         ViewKey {
-            workspace: std::path::absolute(workspace).unwrap_or_else(|_| workspace.to_path_buf()),
+            workspace: absolute(workspace),
             universe: if single_app {
                 ViewUniverse::SingleApp
             } else {
@@ -97,11 +104,88 @@ pub struct ViewDemand {
     pub key: ViewKey,
     pub side: SideIx,
     pub needs: ViewNeeds,
-    /// The workspace the command read; every demand on a view holds the same
-    /// read. shortcut: each command reads its own `WorkspaceInputs`; a batch of
-    /// several jobs must read one per workspace path (with the union of their
-    /// needs) and hand it to each job (plan Task 7 Step 2b, the manifest).
+    /// The workspace's one read ([`WorkspaceReader`]); every demand on a view
+    /// holds the same read.
     pub inputs: Arc<WorkspaceInputs>,
+}
+
+impl ViewDemand {
+    pub fn new(
+        key: ViewKey,
+        side: SideIx,
+        needs: ViewNeeds,
+        inputs: Arc<WorkspaceInputs>,
+    ) -> ViewDemand {
+        ViewDemand {
+            key,
+            side,
+            needs,
+            inputs,
+        }
+    }
+
+    /// The demands of a job of one side (#277 E12-C8): side 0 on the view of
+    /// its workspace read, in its universe.
+    pub fn one(
+        inputs: &Arc<WorkspaceInputs>,
+        single_app: bool,
+        no_roots_config: bool,
+        needs: ViewNeeds,
+    ) -> Vec<ViewDemand> {
+        let key = ViewKey::new(&inputs.workspace, single_app, no_roots_config);
+        vec![ViewDemand::new(key, SideIx(0), needs, Arc::clone(inputs))]
+    }
+}
+
+/// One `WorkspaceInputs` per workspace path (D3; plan Task 7 Step 2b): every
+/// job of a batch reads its workspace through this, so jobs on one path share
+/// one `Arc`, read with the union of every job's needs on that path, stated
+/// before the first read. A read happens on the first ask, so a standalone
+/// command reads where it always did. The reader keeps no read alive: the
+/// jobs and then the driver hold them, and the driver drops each after its
+/// last view (#277 E12-C2).
+#[derive(Default)]
+pub struct WorkspaceReader {
+    planned: BTreeMap<PathBuf, WorkspaceNeeds>,
+    read: RefCell<BTreeMap<PathBuf, (WorkspaceNeeds, Weak<WorkspaceInputs>)>>,
+}
+
+impl WorkspaceReader {
+    /// A reader for the jobs that will read each `(workspace, needs)`.
+    pub fn new(reads: impl IntoIterator<Item = (PathBuf, WorkspaceNeeds)>) -> WorkspaceReader {
+        let mut planned = BTreeMap::new();
+        for (path, needs) in reads {
+            planned
+                .entry(absolute(&path))
+                .and_modify(|n: &mut WorkspaceNeeds| *n = n.union(needs))
+                .or_insert(needs);
+        }
+        WorkspaceReader {
+            planned,
+            read: RefCell::default(),
+        }
+    }
+
+    /// `workspace`'s one read, holding at least `needs`.
+    pub fn read(&self, workspace: &Path, needs: WorkspaceNeeds) -> Arc<WorkspaceInputs> {
+        let key = absolute(workspace);
+        let mut read = self.read.borrow_mut();
+        if let Some((held, inputs)) = read.get(&key)
+            && let Some(inputs) = inputs.upgrade()
+        {
+            assert_eq!(
+                held.union(needs),
+                *held,
+                "a workspace read without a job's needs: {}",
+                key.display()
+            );
+            return inputs;
+        }
+        let needs = self.planned.get(&key).map_or(needs, |p| p.union(needs));
+        let inputs = WorkspaceInputs::read(workspace, &needs);
+        read.insert(key, (needs, Arc::downgrade(&inputs)));
+        inputs
+    }
 }
 
 /// What one demand needs from its view's ONE plan (D5): its own plan (a
@@ -114,43 +198,9 @@ pub struct PlanPart {
     pub carry: Option<Box<dyn Any + Send>>,
 }
 
-/// A job's failure on one side: its writes (a stderr line) and its exit.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JobFailure {
-    pub actions: Vec<WriteAction>,
-    pub exit: u8,
-}
-
-impl JobFailure {
-    /// The failure `line` on stderr, exit `exit`.
-    pub fn line(line: &str, exit: u8) -> JobFailure {
-        JobFailure {
-            actions: vec![WriteAction::line(line)],
-            exit,
-        }
-    }
-
-    /// The failure's stderr text without its last newline (a library wrapper's
-    /// `Err` message).
-    pub fn message(&self) -> String {
-        let mut text = String::new();
-        for a in &self.actions {
-            if let WriteAction::Stderr(b) = a {
-                text.push_str(&String::from_utf8_lossy(b));
-            }
-        }
-        text.strip_suffix('\n').unwrap_or(&text).to_string()
-    }
-}
-
-impl From<JobFailure> for JobOutput {
-    fn from(f: JobFailure) -> JobOutput {
-        JobOutput {
-            actions: f.actions,
-            exit: f.exit,
-        }
-    }
-}
+/// A job's failure on one side: the writes (a stderr line) and the exit it
+/// ends with, a [`JobOutput`] (#277 E12-C7: one shape, not two).
+pub type JobFailure = JobOutput;
 
 /// One side's computed document; only its job reads it (no shared shape
 /// across commands).
@@ -225,6 +275,7 @@ pub struct ViewFailure {
 /// (D6.1, D6.2): a cell or run that a later demand on the view reads stays.
 pub struct ViewCx<'a> {
     pub(crate) view: &'a mut View,
+    pub(crate) inputs: &'a Arc<WorkspaceInputs>,
     pub(crate) fresh: Option<&'a Result<FreshCoverage, String>>,
     pub(crate) job: JobId,
     pub(crate) keys: Vec<RunKey>,
@@ -237,6 +288,11 @@ pub struct ViewCx<'a> {
 impl ViewCx<'_> {
     pub fn view(&self) -> &View {
         self.view
+    }
+
+    /// The view's workspace read.
+    pub fn inputs(&self) -> &Arc<WorkspaceInputs> {
+        self.inputs
     }
 
     /// The program coverage of an analyze view.
@@ -300,6 +356,14 @@ impl ViewCx<'_> {
 
 /// A command as the driver runs it (D1).
 pub trait Job {
+    /// The command, for the job's trace spans (`job.<i>.<name>`, D10).
+    fn name(&self) -> &'static str;
+    /// A span a standalone run opens around its whole driver run (analyze's
+    /// `analyze.total`, which `scripts/trace_summary.py` reads); none in a
+    /// batch, where it would cover the other jobs.
+    fn standalone_span(&self) -> Option<&'static str> {
+        None
+    }
     /// One per view the job reads; empty for a job with no view.
     fn demands(&self) -> Vec<ViewDemand>;
     /// Per view, after its build (D4.2): this demand's part of the plan.
@@ -339,6 +403,9 @@ pub struct Failed {
 }
 
 impl Job for Failed {
+    fn name(&self) -> &'static str {
+        "failed"
+    }
     fn demands(&self) -> Vec<ViewDemand> {
         vec![]
     }

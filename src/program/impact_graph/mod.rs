@@ -83,7 +83,7 @@ pub use project::{Inputs, Projection, project};
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds,
+    ViewNeeds,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::program::graph::ProgramGraph;
@@ -200,13 +200,11 @@ pub struct GraphJob<'a> {
 }
 
 impl Job for GraphJob<'_> {
+    fn name(&self) -> &'static str {
+        "graph"
+    }
     fn demands(&self) -> Vec<ViewDemand> {
-        vec![ViewDemand {
-            key: ViewKey::new(&self.inputs.workspace, false, false),
-            side: SideIx(0),
-            needs: ViewNeeds::GRAPH,
-            inputs: std::sync::Arc::clone(self.inputs),
-        }]
+        ViewDemand::one(self.inputs, false, false, ViewNeeds::GRAPH)
     }
 
     fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {

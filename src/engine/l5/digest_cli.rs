@@ -18,9 +18,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds,
+    ViewNeeds,
 };
-use crate::engine::batch::output::{JobOutput, WriteAction};
+use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::{
     serialize_normalized_value, sort_and_drop_nulls, sort_keys_keep_nulls,
 };
@@ -1814,13 +1814,16 @@ impl<'a> DigestJob<'a> {
 }
 
 impl Job for DigestJob<'_> {
+    fn name(&self) -> &'static str {
+        "digest"
+    }
     fn demands(&self) -> Vec<ViewDemand> {
-        vec![ViewDemand {
-            key: ViewKey::new(&self.req.inputs.workspace, self.req.single_app, false),
-            side: SideIx(0),
-            needs: ViewNeeds::MODEL,
-            inputs: std::sync::Arc::clone(self.req.inputs),
-        }]
+        ViewDemand::one(
+            self.req.inputs,
+            self.req.single_app,
+            false,
+            ViewNeeds::MODEL,
+        )
     }
 
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
@@ -1886,21 +1889,20 @@ impl Job for DigestJob<'_> {
 
     fn serialize(&self, doc: Doc) -> JobOutput {
         match doc.one::<Result<DigestRunResult, String>>() {
-            Err(f) => f.into(),
+            Err(f) => f,
             // A DigestPipelineError → the message verbatim (it already starts
             // with "digest:"), exit 1, mirroring cli/digest.ts's catch.
-            Ok(Err(msg)) => JobOutput::lines(&[msg], 1),
-            Ok(Ok(result)) => {
-                let text = if self.human {
-                    result.human_text
-                } else {
-                    result.json_text
-                };
-                JobOutput {
-                    actions: vec![WriteAction::out(self.out, text)],
-                    exit: result.exit_code,
-                }
-            }
+            Ok(r) => JobOutput::text(
+                self.out,
+                r.map(|r| {
+                    let text = if self.human {
+                        r.human_text
+                    } else {
+                        r.json_text
+                    };
+                    (text, r.exit_code)
+                }),
+            ),
         }
     }
 }

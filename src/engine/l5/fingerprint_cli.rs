@@ -37,7 +37,7 @@
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds,
+    ViewNeeds,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::run::analyzer_diagnostics_of_view;
@@ -495,16 +495,14 @@ impl<'a> FingerprintJob<'a> {
 }
 
 impl Job for FingerprintJob<'_> {
+    fn name(&self) -> &'static str {
+        "fingerprint"
+    }
     fn demands(&self) -> Vec<ViewDemand> {
         let o = self.opts;
         // The cut forms stay single-app (S′); the tree forms take `--single-app`.
         let single_app = FingerprintForm::of(o) == FingerprintForm::Cut || o.single_app;
-        vec![ViewDemand {
-            key: ViewKey::new(&o.inputs.workspace, single_app, o.no_roots_config),
-            side: SideIx(0),
-            needs: ViewNeeds::MODEL,
-            inputs: std::sync::Arc::clone(o.inputs),
-        }]
+        ViewDemand::one(o.inputs, single_app, o.no_roots_config, ViewNeeds::MODEL)
     }
 
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {

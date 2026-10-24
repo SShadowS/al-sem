@@ -26,7 +26,7 @@ pub(crate) fn spawn_traced(
 }
 
 /// [`spawn_traced`] for any binary, returning every trace event.
-fn spawn_trace_events(
+pub(crate) fn spawn_trace_events(
     exe: &str,
     args: &[&str],
     extra_env: &[(&str, &str)],
@@ -83,6 +83,33 @@ fn analyze_total_spans_the_build() {
     );
 }
 
+/// #277 E12-C3: the view (model, `det`, runs) is freed in a named span inside
+/// `analyze.total`, so its deallocation is not unattributed self time.
+#[test]
+fn analyze_frees_its_view_in_a_named_span() {
+    let (out, events) = spawn_trace_events(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["analyze", &ws_a(), "--format", "json"],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let ts = |ph: &str, name: &str| -> Vec<f64> {
+        events
+            .iter()
+            .filter(|e| e["ph"] == ph && e["name"] == name)
+            .filter_map(|e| e["ts"].as_f64())
+            .collect()
+    };
+    let (total_b, total_e) = (ts("B", "analyze.total"), ts("E", "analyze.total"));
+    assert_eq!((total_b.len(), total_e.len()), (1, 1), "precondition");
+    let (b, e) = (ts("B", "view.teardown"), ts("E", "view.teardown"));
+    assert_eq!((b.len(), e.len()), (1, 1), "one view.teardown span");
+    assert!(
+        total_b[0] <= b[0] && e[0] <= total_e[0],
+        "inside analyze.total"
+    );
+}
+
 /// The `phase.*` instant events, in trace order.
 fn phase_events(events: &[Value]) -> Vec<String> {
     events
@@ -94,7 +121,7 @@ fn phase_events(events: &[Value]) -> Vec<String> {
 
 /// LAST `C` event value per counter name (spec §4.1.2). `perf_trace`'s
 /// `add_counter` writes the running total under `args.<name>`.
-fn last_counters(events: &[Value]) -> BTreeMap<String, u64> {
+pub(crate) fn last_counters(events: &[Value]) -> BTreeMap<String, u64> {
     let mut m = BTreeMap::new();
     for ev in events {
         if ev.get("ph").and_then(Value::as_str) != Some("C") {
@@ -175,7 +202,7 @@ pub(crate) fn ws_a() -> String {
 }
 
 /// Workspace D: the dependency workspace, in a tempdir the caller keeps alive.
-fn ws_dep() -> (tempfile::TempDir, String) {
+pub(crate) fn ws_dep() -> (tempfile::TempDir, String) {
     let d = tempfile::tempdir().expect("tempdir");
     crate::cli_digest_query_dependencies::write_dependency_workspace(d.path());
     let ws = d.path().to_string_lossy().into_owned();
@@ -193,7 +220,7 @@ pub(crate) fn write_diff(dir: &Path, path: &str, n: usize, text: &str) -> String
     p.to_string_lossy().into_owned()
 }
 
-fn policy_yaml() -> String {
+pub(crate) fn policy_yaml() -> String {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli-c-policy/ws-policy-custom/al-sem.policy.yaml")
         .to_string_lossy()
@@ -958,6 +985,38 @@ fn policy_check_cross_app() {
             ctx: 1,
             snap: 0,
             witness: 1,
+            inputs: 1,
+        },
+    );
+}
+
+/// #277 E12-C5: with `--no-policy` no rule reads raw facts, so the view's
+/// composition keeps none (`witness` 0; `policy_check_cross_app` is 1).
+#[test]
+fn policy_check_no_policy_keeps_no_raw_facts() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "policy",
+        "check",
+        &ws,
+        "--no-policy",
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_row(
+        "policy check --no-policy",
+        &m,
+        Row {
+            program: 1,
+            bcg: 1,
+            cone: 1,
+            v2: 1,
+            scc: 2,
+            pd: 1,
+            ctx: 1,
+            snap: 0,
+            witness: 0,
             inputs: 1,
         },
     );

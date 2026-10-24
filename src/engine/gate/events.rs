@@ -34,7 +34,7 @@
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds,
+    ViewNeeds,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::run::{analyzer_diagnostics_of_view, diagnostic_lines};
@@ -416,17 +416,15 @@ impl<'a> EventsJob<'a> {
 }
 
 impl Job for EventsJob<'_> {
+    fn name(&self) -> &'static str {
+        "events"
+    }
     fn demands(&self) -> Vec<ViewDemand> {
         // #70: the cross-app base by default (a workspace subscriber to a
         // dependency event is BC's main events case), the workspace alone
         // under `--single-app`.
         let (inputs, single_app, ..) = self.head();
-        vec![ViewDemand {
-            key: ViewKey::new(&inputs.workspace, single_app, false),
-            side: SideIx(0),
-            needs: ViewNeeds::MODEL,
-            inputs: Arc::clone(inputs),
-        }]
+        ViewDemand::one(inputs, single_app, false, ViewNeeds::MODEL)
     }
 
     fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {

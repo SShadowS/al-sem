@@ -193,6 +193,9 @@ impl RequestInputs {
         baseline: Option<PathBuf>,
     ) -> RequestInputs {
         use crate::engine::gate::policy::pipeline::absolutize;
+        // Timed and tallied like the workspace read (#277 E12-C6); not charged
+        // to `inputs.read`, which counts workspace reads.
+        let _s = pt::span("inputs", "inputs.request_read");
         let policy_file = match &policy {
             PolicyRequest::None | PolicyRequest::Disabled => None,
             PolicyRequest::Path(p) => Some(PolicyInput {
@@ -208,11 +211,46 @@ impl RequestInputs {
                     file: FileInput::read(absolutize(candidate.to_string_lossy().as_ref())),
                 }),
         };
-        RequestInputs {
+        let request = RequestInputs {
             policy_file,
             policy_request: policy,
             baseline: baseline.map(FileInput::read),
+        };
+        if crate::engine::census::enabled() {
+            request
+                .census()
+                .emit("request_inputs", crate::engine::census::Kind::Exact);
         }
+        request
+    }
+
+    /// The `request_inputs` census bucket: the policy and baseline files' paths
+    /// and bytes, which the job holds until it ends.
+    #[must_use]
+    pub fn census(&self) -> crate::engine::census::Tally {
+        let mut t = crate::engine::census::Tally::default();
+        let policy = self.policy_file.iter().map(|p| &p.file);
+        policy
+            .chain(&self.baseline)
+            .for_each(|f| tally_file(&mut t, f));
+        t
+    }
+}
+
+/// A path's heap, by `len`.
+fn tally_path(t: &mut crate::engine::census::Tally, p: &Path) {
+    let n = p.as_os_str().len();
+    if n > 0 {
+        t.bytes += n;
+        t.allocs += 1;
+    }
+}
+
+/// A read file: its path and, when read, its bytes.
+fn tally_file(t: &mut crate::engine::census::Tally, f: &FileInput) {
+    tally_path(t, &f.path);
+    if let Ok(b) = &f.bytes {
+        t.buf::<u8>(b.len());
     }
 }
 
@@ -349,19 +387,7 @@ impl WorkspaceInputs {
     #[must_use]
     pub fn census(&self) -> crate::engine::census::Tally {
         use crate::engine::census::Tally;
-        fn path(t: &mut Tally, p: &Path) {
-            let n = p.as_os_str().len();
-            if n > 0 {
-                t.bytes += n;
-                t.allocs += 1;
-            }
-        }
-        fn file(t: &mut Tally, f: &FileInput) {
-            path(t, &f.path);
-            if let Ok(b) = &f.bytes {
-                t.buf::<u8>(b.len());
-            }
-        }
+        let (path, file) = (tally_path, tally_file);
         fn json(t: &mut Tally, v: &serde_json::Value) {
             match v {
                 serde_json::Value::String(s) => {
@@ -531,6 +557,26 @@ mod tests {
                 "{ws}"
             );
         }
+    }
+
+    /// #277 E12-C6: the request census charges the policy and baseline
+    /// files: each one's bytes and its path. Stated by assignment: a 100-byte
+    /// baseline and a 7-byte policy.
+    #[test]
+    fn request_census_charges_its_files() {
+        let d = tempfile::tempdir().unwrap();
+        let (baseline, policy) = (d.path().join("b.json"), d.path().join("p.yaml"));
+        std::fs::write(&baseline, [b'x'; 100]).unwrap();
+        std::fs::write(&policy, "rules:\n").unwrap();
+        let r = RequestInputs::read(
+            d.path(),
+            PolicyRequest::Path(policy.clone()),
+            Some(baseline.clone()),
+        );
+        let path_bytes = baseline.as_os_str().len() + policy.as_os_str().len();
+        let t = r.census();
+        assert_eq!(t.bytes, 100 + 7 + path_bytes);
+        assert_eq!(t.allocs, 4);
     }
 
     #[test]
