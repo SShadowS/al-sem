@@ -132,6 +132,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AnalysisTarget::build_target` are gone (`GraphJob`, `QuerySubstrate::of(&view)` with the
   test entry `query_view`, and `build_view_model` replace them); `diff_strict_plan` is
   `diff_plan(detectors, strict)`; `R3a5CrossAppBase.rel` is read through `rel()`.
+- **`prove`, `fingerprint --routine` and `fingerprint --inventory-only` share their view's
+  one pass in a batch (#277 on #160 step 9).** Each is a tree job: `prove` asks its one
+  root, the query its selected routines and the inventory nothing; the view composes once
+  at the union, and each job's tree is composed over its own subjects, read, and dropped
+  before `det`. A batch of the inventory, two queries and a prove gives each job its
+  standalone bytes. `fingerprint`'s full snapshot and the query forms with no `--routine` stay on their
+  own single-app snapshot. Library: the fingerprint reads are `TreeRead::FingerprintQuery`
+  / `TreeRead::Inventory` on a job's `TreeDemand` (prove's gap count is
+  `TreeDemand.gaps_in_cone`), `View::take_tree_read` takes a `JobId`, and the
+  `program::inputs::InputSet` alias is gone (use `WorkspaceInputs`).
 - **`diff ws ws`: both sides share one view (#277).** Two workspace sides that name one
   directory (after `std::path::absolute`, not canonicalised) are now read and built once;
   each side still composes its own snapshot. Output is unchanged. Counters
