@@ -6,8 +6,8 @@
 //!
 //! The BFS is DETERMINISTIC: the expansion queue is sorted by target routineId
 //! at each step (matching the TS sort). Items are deduped by callsiteId string
-//! and sorted by (owningRoutine, anchorFile, anchorLine, anchorColumn,
-//! calleeDisplay, candidates, callsiteId). The order is total: callsiteId is
+//! and sorted by (owningRoutine, anchorFile, anchorLine, calleeDisplay,
+//! anchorColumn, candidates, callsiteId). The order is total: callsiteId is
 //! unique per item, so the hash-map collection order never reaches the output.
 //!
 //! Default caps (must match witness BFS):
@@ -264,12 +264,13 @@ fn item_order(a: &UnresolvedConeItem, b: &UnresolvedConeItem) -> std::cmp::Order
                 .unwrap_or(0)
                 .cmp(&b.callsite_line.unwrap_or(0))
         })
+        .then_with(|| a.callee_display.cmp(&b.callee_display))
+        // The tie-breaks of the old key (routine, file, line, callee).
         .then_with(|| {
             a.callsite_column
                 .unwrap_or(0)
                 .cmp(&b.callsite_column.unwrap_or(0))
         })
-        .then_with(|| a.callee_display.cmp(&b.callee_display))
         .then_with(|| a.candidates.cmp(&b.candidates))
         .then_with(|| a.callsite_id.cmp(&b.callsite_id))
 }
@@ -432,6 +433,30 @@ mod tests {
             assert_eq!(got, expected, "run {run}");
             rows.reverse();
         }
+    }
+
+    /// Final panel F1-O3: the column only breaks the old key's ties. Two items
+    /// on one file and line with DIFFERENT callees keep the old order
+    /// (callee), whatever their columns.
+    #[test]
+    fn the_callee_sorts_before_the_column() {
+        let root = "app:Codeunit:1#root";
+        let mut snap = empty_snap();
+        let mut r = cs_ev("csR", root, "ws:src/X.al", 12);
+        r.start_column = 9;
+        let mut s = cs_ev("csS", root, "ws:src/X.al", 12);
+        s.start_column = 2;
+        snap.callsite_index = vec![r, s];
+        snap.callsite_resolutions = vec![
+            resolution("csS", root, "B.Second", "unresolved", None, None),
+            resolution("csR", root, "A.First", "unresolved", None, None),
+        ];
+        let got: Vec<String> = unresolved_cone(&snap, root)
+            .items
+            .into_iter()
+            .map(|i| i.callsite_id)
+            .collect();
+        assert_eq!(got, ["csR", "csS"]);
     }
 
     #[test]
