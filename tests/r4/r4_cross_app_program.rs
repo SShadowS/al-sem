@@ -630,6 +630,66 @@ fn d43_does_not_call_a_setter_after_an_early_exit_certain() {
     assert_eq!(d43_confidence(early.path()), vec!["likely"]);
 }
 
+/// #271: the dependency publishes `OnBeforeSend` on `Dep Sender` and has NO guarded
+/// dispatch of its own; the only one is the workspace `Ws Caller.Send`, which calls
+/// `Sender.OnBeforeSend(IsHandled)` through a codeunit variable.
+fn ishandled_var_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{WS_GUID}","name":"XWs","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50200,"to":50299}}],"dependencies":[{{"id":"{DEP_GUID}","name":"XDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    );
+    write(
+        &dir.join("src/Code.al"),
+        "codeunit 50230 \"Ws Caller\"\n{\n    procedure Send()\n    var\n        Sender: Codeunit \"Dep Sender\";\n        Log: Record \"Dep Log\";\n        IsHandled: Boolean;\n    begin\n        IsHandled := false;\n        Sender.OnBeforeSend(IsHandled);\n        if not IsHandled then\n            Log.Insert();\n    end;\n}\ncodeunit 50231 \"Ws Subs\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Sender\", 'OnBeforeSend', '', false, false)]\n    local procedure HandleSend(var IsHandled: Boolean)\n    begin\n        IsHandled := true;\n    end;\n}\n",
+    );
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    write_source_app(
+        &dir.join(".alpackages/probe_XDep_1.0.0.0.app"),
+        DEP_GUID,
+        "XDep",
+        "1.0.0.0",
+        &symbols,
+        &[
+            ("src/Log.al", &table(50130, "Dep Log")),
+            (
+                "src/Sender.al",
+                "codeunit 50131 \"Dep Sender\"\n{\n    [IntegrationEvent(false, false)]\n    procedure OnBeforeSend(var IsHandled: Boolean)\n    begin\n    end;\n}\n",
+            ),
+        ],
+        "",
+    );
+}
+
+/// #271 item 3: d43 reaches a dependency publisher called through a codeunit
+/// variable (a `variable-typed-call` edge). The dependency has no guarded dispatch,
+/// so the finding can only come from the workspace caller.
+#[test]
+fn d43_follows_a_codeunit_variable_call_to_a_dependency_publisher() {
+    use al_sem::engine::l5::detectors::registered_detectors;
+    use al_sem::engine::l5::finding::project_r4_findings_cross_app;
+    let dir = tempfile::tempdir().unwrap();
+    ishandled_var_workspace(dir.path());
+    let names = vec!["d43-event-ishandled-skip".to_string()];
+    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    let levels: Vec<&str> = p
+        .findings
+        .iter()
+        .map(|f| f.confidence.level.as_str())
+        .collect();
+    assert_eq!(levels, vec!["confirmed"]);
+    let step0 = &p.findings[0].evidence_path[0];
+    assert!(
+        step0
+            .routine_id
+            .starts_with(&format!("{WS_GUID}:Codeunit:50230#")),
+        "evidence starts at Ws Caller: {step0:#?}"
+    );
+}
+
 /// S7.4: the cross-app world is the workspace and the dependencies it requires. An
 /// app that depends ON the workspace — a test app — is loaded by the snapshot (DO's
 /// ancestor `.alpackages` holds one) but is not one of them; its subscribers made

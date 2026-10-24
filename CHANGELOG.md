@@ -136,6 +136,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **d43 sees a guarded IsHandled dispatch through a member call** (#271). It followed
+  bare calls and object runs only, so `Mgr.OnBeforePost(IsHandled)` through a
+  codeunit variable, a call on a record or page variable, and `this.OnBeforePost(..)`
+  gave no finding; a dependency publisher reached through a variable did not either.
+  d43 now also follows `variable-typed-call` edges (the same exact, resolved call as a
+  bare one). Calls through an interface stay out on purpose: they are a may-call
+  candidate set, which d43 would report as `confirmed`. d43 no longer checks for the
+  `dependency-export` edge kind, which is never built.
 - `alsem diff`: a `--renames` entry for a table field or key is no longer called
   stale (`rename-overlay-stale`, `not-in-old` or `not-in-new`) when the field exists.
   Field and key ids have schema facts but no `identities` row, and only identities
