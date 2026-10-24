@@ -140,6 +140,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are not unique in the whole program stay open. Known limit: the candidates are every
   implementer of the interface, so an implementer the enum does not map still counts;
   if it commits, d35 still reports YES (#264).
+- `#if` alternatives no longer type code by their first arm: a routine declared in
+  two arms that differ only in the return type has no return type in the program
+  graph (a call's result is not typed from it), and a table declared in two arms
+  keeps the fields of both, so a field declared with two types is not typed either.
+  A call site inside two `#if` alternatives of one routine is closed only when it
+  is closed in every arm (#264).
 - An object without a number, in a dependency that ships only symbols, whose name
   holds two quote characters in a row (`""`) now has the same id in the program graph
   and in the model. Before, the graph id dropped one of the two quotes (#250).
