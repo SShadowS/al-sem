@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 
 use al_sem::engine::l5::digest::{
-    DagCache, FingerprintIndexesPub, HopCache, HumanHop, TerminalHopInfo, WitnessOutcomePub,
-    reconstruct_witness_paths_pub, witness_index,
+    CarrierCache, DagCache, FingerprintIndexesPub, HopCache, HumanHop, TerminalHopInfo,
+    WitnessOutcomePub, reconstruct_witness_paths_pub, witness_index,
 };
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintFormat, SpecifiedFlags, default_format, normalize_witness, reject_illegal_combos,
@@ -45,6 +45,7 @@ fn witness(
         cap,
         &mut HopCache::default(),
         &mut DagCache::default(),
+        &CarrierCache::default(),
     )
 }
 

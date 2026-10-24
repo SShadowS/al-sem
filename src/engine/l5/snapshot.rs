@@ -1366,16 +1366,17 @@ struct TreeInputs<'a> {
 /// `rel.cone()`, the ledger over `model.calls` then `dependency_calls`, the
 /// direct facts and coverage from `caps`, the raw facts of the subjects drained
 /// by move, the pd arena taken from `caps` and scoped to the subjects' state
-/// closure. `identities`: a table the caller already built, else a fresh one.
-/// Rule B is on (spec §14.3.5): every dependency routine is named by its app,
-/// `app_names` (lowercase app guid → name, the loaded apps).
+/// closure, and its own identity table (digest's root resolution builds one
+/// too, but drops it before the composition so it never sits beside the
+/// composition's peak; final panel F1-C4). Rule B is on (spec §14.3.5): every
+/// dependency routine is named by its app, `app_names` (lowercase app guid →
+/// name, the loaded apps).
 pub(crate) fn compose_tree(
     model: &Model,
     typed: &[TypedEdge],
     dependency_calls: &[CallEdge],
     caps: &mut crate::engine::l5::detector_context::CapabilityAnalysis,
     mut raw: HashMap<String, Vec<CapabilityFact>>,
-    identities: Option<SnapshotIdentityTable>,
     app_names: &HashMap<String, String>,
 ) -> CapabilitySnapshot {
     crate::engine::perf_trace::counter_delta("build.snapshot", 1);
@@ -1406,7 +1407,7 @@ pub(crate) fn compose_tree(
         bodyless_dependency: Some(&bodyless),
     };
     let collided = CollidedRows::build(&ws.routines);
-    let identities = identities.unwrap_or_else(|| derive_identity_table(model));
+    let identities = derive_identity_table(model);
     // The two evidence indexes read the raw facts, so they run before the
     // drain; each subject's Vec is then moved in and dropped as it goes.
     let operation_index = derive_operation_evidence(&inp, &raw, &collided);
@@ -3220,7 +3221,7 @@ mod step6_tree_tests {
                     raw: WitnessScope::All,
                 },
             );
-            let tree = compose_tree(&m, rel.cone(), &[], &mut caps, raw, None, &HashMap::new());
+            let tree = compose_tree(&m, rel.cone(), &[], &mut caps, raw, &HashMap::new());
             with_inherited += usize::from(
                 cut.capability_facts
                     .iter()

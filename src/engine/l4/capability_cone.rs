@@ -2018,7 +2018,8 @@ fn inherited_facts_for_singleton<'g>(
         best.len() as u64,
     );
 
-    // Only the raw half reaches here (`DerivedOnly` returned above).
+    // Only the raw half reaches here (a scope with no raw member returned
+    // above).
     let _t = crate::engine::l5::detector_context::cones_census::start();
     let out: Vec<CapabilityFact> = best
         .values()
@@ -2035,7 +2036,8 @@ fn inherited_facts_for_singleton<'g>(
 /// Set-correct path for routines in recursive SCCs. Mirrors
 /// `inheritedFactsByBfs`.
 ///
-/// #160 step 7a: this walk feeds the RAW half only (`RawOnly`, `Both`). The
+/// #160 step 7a: this walk feeds the RAW half only (a member the `ConeScope`'s
+/// `raw: WitnessScope` keeps). The
 /// derived row of a recursive member is folded from its Cone-SCC's set (the
 /// SCC's fact cone) plus its own entries, never from these picks.
 ///
@@ -2133,8 +2135,9 @@ fn inherited_facts_by_bfs<'g>(
                     // `key` is the cone's `Arc<str>`; `seen` stays keyed by `String`
                     // because the sibling branch above feeds it `direct`'s own
                     // `String` keys. Since #160 step 7a this walk runs only for the
-                    // raw half (RawOnly, Both) and the test oracle, never under
-                    // `analyze`'s DerivedOnly, so the one owned copy per newly-seen
+                    // raw half (a member the scope's `raw` keeps) and the test
+                    // oracle, never under `analyze`'s `raw: WitnessScope::None`,
+                    // so the one owned copy per newly-seen
                     // key is not on any hot path.
                     if !seen.contains_key(&**key) {
                         seen.insert(key.to_string(), picked.len());
@@ -2485,7 +2488,7 @@ pub(crate) struct ComposeStats {
     /// Recursive SCCs by member count: 1, 2, 3-9, 10-99, >= 100.
     pub(crate) size_hist: [u64; 5],
     /// Calls of [`inherited_facts_by_bfs`] (the raw half only; 0 under
-    /// `DerivedOnly`). Their time is the census `walk_total`;
+    /// `raw: WitnessScope::None`). Their time is the census `walk_total`;
     /// `bfs_walk` also holds the set builds and borrows.
     pub(crate) member_walks: u64,
     /// Own (producer-solve) entries of the emitted recursive members.
@@ -2531,7 +2534,8 @@ pub(crate) mod raw_fold_hook {
         static ORACLE: RefCell<Option<ConeDerivedBuilder>> = const { RefCell::new(None) };
     }
 
-    /// Run `compose` (a `RawOnly` composition) with the hook on; return its
+    /// Run `compose` (a raw-only composition: `ConeScope { derived: false,
+    /// raw: WitnessScope::All }`) with the hook on; return its
     /// result and the oracle store.
     pub(crate) fn fold<T>(compose: impl FnOnce() -> T) -> (T, ConeDerivedStore) {
         ORACLE.with(|o| *o.borrow_mut() = Some(ConeDerivedBuilder::default()));
@@ -2842,7 +2846,8 @@ fn compose_inherited_cones(
             let inherited = if recursive {
                 stats.own_entries_recursive += own_entries(m).len() as u64;
                 stats.members_with_own_entry += u64::from(!own_entries(m).is_empty());
-                // The walk runs only for the raw half: never under `DerivedOnly`.
+                // The walk runs only for the raw half: never for a member the
+                // scope's `raw` drops.
                 let picks = if mode.wants_raw() {
                     stats.member_walks += 1;
                     let picks = inherited_facts_by_bfs(
@@ -4128,11 +4133,12 @@ pub fn project_r3a5_cross_app(
         &base.leaf_summaries,
         &base.fixed_roles,
     );
-    // ⟨C1 Task 3⟩ `RawOnly` — this projection path consumes the RAW cone (its
-    // exact `sort_inherited` byte order IS the R3a-5 golden surface, Global
-    // Constraint 7). It never reads `ConeOutcome::derived`, so folding one here
-    // was build-then-drop; `RawOnly` skips the fold outright. The raw Vec and its
-    // ordering are untouched.
+    // ⟨C1 Task 3⟩ Raw only (`derived: false`, `raw: WitnessScope::All`) — this
+    // projection path consumes the RAW cone (its exact `sort_inherited` byte
+    // order IS the R3a-5 golden surface, Global Constraint 7). It never reads
+    // `ConeOutcome::derived`, so folding one here was build-then-drop;
+    // `derived: false` skips the fold outright. The raw Vec and its ordering
+    // are untouched.
     let ConeOutcome { coverage, raw, .. } = compose_cone_over_graph(
         base.rel.cone(),
         nodes,
@@ -4404,7 +4410,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         })
         .collect();
 
-    // ⟨C1 Task 3⟩ `RawOnly` — this projection consumes the RAW cone (its
+    // ⟨C1 Task 3⟩ Raw only (`derived: false`) — this projection consumes the RAW cone (its
     // `sort_inherited` byte order IS the R3a-3 golden surface, Global Constraint
     // 7) and discards the derived store. Folding one was build-then-drop.
     let routines_by_id: HashMap<&str, &ModelRoutine> =
@@ -4950,7 +4956,7 @@ mod pd_uses_tests {
             },
             &mut derived,
         );
-        assert!(out.is_empty(), "DerivedOnly builds no raw Vec");
+        assert!(out.is_empty(), "raw: WitnessScope::None builds no raw Vec");
         derived.finish_routine("C");
         let store = derived.finish();
         assert_eq!(
@@ -6416,7 +6422,7 @@ codeunit 50111 "Cell Calls"
 /// (`docs/superpowers/specs/2026-10-20-issue-160-step7a-scc-membership-design.md`),
 /// T1-T11 and the §5.1 row comparator. Each asserts its precondition before
 /// its main assertions. Since step 7b's last commit the oracle is the fold of
-/// a `RawOnly` composition (raw inherited Vec ∪ raw direct facts per
+/// a raw-only composition (`derived: false`; raw inherited Vec ∪ raw direct facts per
 /// routine), the witness engine step 6 keeps (7b spec §4.7).
 #[cfg(test)]
 mod scc_set_tests {
@@ -6572,7 +6578,7 @@ mod scc_set_tests {
         compose_cone_over_graph(typed, nodes, direct_in, &HashMap::new(), &[], mode)
     }
 
-    /// The oracle store (7b §4.7): per routine, F(its `RawOnly` inherited Vec
+    /// The oracle store (7b §4.7): per routine, F(its raw-only inherited Vec
     /// ∪ its raw direct facts).
     fn raw_fold(raw: &ConeOutcome, direct_in: &Direct) -> ConeDerivedStore {
         let mut b = ConeDerivedBuilder::default();
@@ -6582,7 +6588,8 @@ mod scc_set_tests {
         b.finish()
     }
 
-    /// The production path (`DerivedOnly`), the `RawOnly` witness engine, and
+    /// The production path (`raw: WitnessScope::None`), the raw-only
+    /// (`derived: false`) witness engine, and
     /// the oracle store folded from the latter.
     fn derived_and_raw_fold(
         typed: &[TypedEdge],
@@ -6899,7 +6906,7 @@ codeunit 50100 C
         assert_eq!(s.max_recursive_members, 3, "max_recursive_members");
         assert_eq!(
             s.member_walks, 0,
-            "member_walks (DerivedOnly folds the sets)"
+            "member_walks (raw: WitnessScope::None folds the sets)"
         );
         assert_eq!(
             (s.scc_sets_built, s.scc_sets_borrowed),

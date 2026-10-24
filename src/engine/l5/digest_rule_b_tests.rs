@@ -405,15 +405,7 @@ fn tree_of(
 ) -> crate::engine::l5::snapshot::CapabilitySnapshot {
     let (mut caps, raw) =
         compose_capabilities(model, rel.cone(), det_cone_inputs(model, rel), scope);
-    compose_tree(
-        model,
-        rel.cone(),
-        calls,
-        &mut caps,
-        raw,
-        None,
-        &HashMap::new(),
-    )
+    compose_tree(model, rel.cone(), calls, &mut caps, raw, &HashMap::new())
 }
 
 fn cross_base(ws: &Path) -> crate::engine::l4::capability_cone::R3a5CrossAppBase {

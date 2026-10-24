@@ -828,7 +828,7 @@ pub(crate) fn digest_effects(
 /// subset of `changed.roots` (prove passes one). `owners`: each root's owning
 /// object, from the model's [`OwnerIndex`] (#78); `""` when absent.
 pub fn run_digest_query_full_from_entries(
-    effects: &DigestEffects,
+    effects: &mut DigestEffects,
     roots: &[String],
     tx_ctx_map: &HashMap<String, TransactionContext>,
     temp_states: &DbTempStates<'_>,
@@ -1055,9 +1055,11 @@ pub fn run_digest_query_full_from_entries(
         // it is NOT part of the digest JSON contract (contracts/digest.ts omits it)
         // and the CLI does not expose queryEntries, so it is intentionally not
         // computed here (#20).)
+        // Moved out, not cloned (final panel F1-C6): the caller drops the
+        // effects right after. `roots` holds each id once.
         let cone = effects
             .unresolved
-            .get(rid.as_str())
+            .remove(rid.as_str())
             .expect("digest_effects computes every root's cone");
 
         out.push(DigestEntryFull {
@@ -1069,8 +1071,8 @@ pub fn run_digest_query_full_from_entries(
             coverage_status: cov_status.to_string(),
             coverage_reasons: cov_reasons,
             effects: full_effects,
-            unresolved: cone.items.clone(),
-            unresolved_traversal: cone.traversal.clone(),
+            unresolved: cone.items,
+            unresolved_traversal: cone.traversal,
             entry_diagnostics,
             declaration_only: false,
         });
@@ -1779,6 +1781,11 @@ pub(crate) fn digest_pipeline_with(
     let key = plan.keys().remove(0);
     view.prepare(&plan);
     let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
+    let mut effects = if plan.needs_tree() {
+        view.take_effects()
+    } else {
+        DigestEffects::default()
+    };
     let resolved = view.model();
     let workspace_fp =
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
@@ -1786,17 +1793,13 @@ pub(crate) fn digest_pipeline_with(
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's
     // `l4`, solved the way `query effects` solves it in the same mode (#66).
     let temp_states = DbTempStates::new(resolved, &view.l4().bundle);
+    // Built again (F1-C4): the first borrows the model, and `prepare` takes
+    // the view mutably. It is small (one entry per primary routine).
     let owners = OwnerIndex::build(resolved);
-    let no_roots = DigestEffects::default();
-    let effects = if changed_roots.roots.is_empty() && !tests {
-        &no_roots
-    } else {
-        view.effects()
-    };
 
     // Run full digest query for the resolved roots
     let query_full = run_digest_query_full_from_entries(
-        effects,
+        &mut effects,
         &changed_roots.roots,
         &tx_ctx_map,
         &temp_states,
@@ -1823,6 +1826,7 @@ pub(crate) fn digest_pipeline_with(
     drop(temp_states);
     drop(tx_ctx_map);
     drop(owners);
+    drop(effects);
     view.release(Cell::L4);
     view.release(Cell::Effects);
 

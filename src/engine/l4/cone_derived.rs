@@ -495,7 +495,7 @@ impl ConeDerivedStore {
         self.rows.get(routine_id).unwrap_or(&EMPTY_ROW)
     }
 
-    /// True when no row was folded (e.g. a `RawOnly` composition).
+    /// True when no row was folded (e.g. a `derived: false` composition).
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
@@ -937,7 +937,8 @@ impl ConeDerivedBuilder {
     /// docs' dedup-asymmetry note). It exists for callers that already hold the
     /// literal reachable sequence — hand-built fixture summaries, whose inherited
     /// facts ARE the input rather than a cone output — and for the T7'/T8'
-    /// oracle (#160 step 7b), which folds each routine's streamed `RawOnly` Vec
+    /// oracle (#160 step 7b), which folds each routine's streamed raw Vec (a
+    /// `derived: false, raw: WitnessScope::All` composition)
     /// plus its raw direct facts (`capability_cone::raw_fold_hook`).
     ///
     /// ⟨fix M3⟩ `#[cfg(test)]` + `pub(crate)` keep that a STRUCTURAL guarantee

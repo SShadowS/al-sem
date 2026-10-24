@@ -276,6 +276,12 @@ impl Plan {
         Plan { witness, ..self }
     }
 
+    /// Whether `prepare` composes digest's tree and fills `Cell::Effects`: the
+    /// one answer a caller reads before `View::effects` (final panel F1-C5).
+    pub fn needs_tree(&self) -> bool {
+        self.needs_tree
+    }
+
     /// The key of each run, in plan order.
     pub fn keys(&self) -> Vec<RunKey> {
         self.runs.iter().map(|r| self.key(r)).collect()
@@ -526,7 +532,6 @@ impl View {
                 calls,
                 caps.as_mut().expect("caps filled above"),
                 raw.take().expect("raw filled above"),
-                None,
                 &app_names,
             ));
             note_release(released, Cell::Raw);
@@ -688,6 +693,13 @@ impl View {
     /// Digest's effects (#160 step 6 D7 (5)), read by its query at (8).
     pub fn effects(&self) -> &DigestEffects {
         self.effects.as_ref().expect("effects cell not filled")
+    }
+
+    /// The effects, moved out: digest's query consumes their unresolved cones
+    /// (final panel F1-C6). The cell is empty after; the caller still
+    /// `release`s `Cell::Effects` when it drops them.
+    pub fn take_effects(&mut self) -> DigestEffects {
+        self.effects.take().expect("effects cell not filled")
     }
 
     /// The stored output of a run `prepare` ran. An `Arc`: a caller may

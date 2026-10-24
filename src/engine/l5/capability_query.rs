@@ -59,7 +59,7 @@ pub enum EffectPresence {
 ///
 /// # Panics
 /// Panics (via `FullRoutineSummary::inherited_raw`) on a summary whose cone ran
-/// `DerivedOnly` — i.e. on anything the production path builds. That is the point:
+/// with `raw: WitnessScope::None` — i.e. on anything the production path builds. That is the point:
 /// it can only be applied to hand-built summaries that own their inherited facts.
 #[cfg(test)]
 pub fn may_commit(s: &FullRoutineSummary) -> EffectPresence {

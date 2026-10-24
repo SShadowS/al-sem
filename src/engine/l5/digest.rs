@@ -1188,7 +1188,7 @@ impl CarrierKey {
 /// them). A miss builds outside the lock; two threads racing on one key build
 /// the same set, and the first insert wins.
 #[derive(Default)]
-struct CarrierCache<'i>(
+pub struct CarrierCache<'i>(
     std::sync::Mutex<HashMap<CarrierKey, std::sync::Arc<std::collections::HashSet<&'i str>>>>,
 );
 
@@ -5171,7 +5171,9 @@ pub fn witness_index<'a>(idx: &'a FingerprintIndexesPub<'_>) -> WitnessIndex<'a>
 /// parameter).  Returns projected paths — terminal hops are stripped by `project_path`.
 /// Also tracks `incomplete` (a limit hit) and emits a `path-limit-reached`
 /// diagnostic when `truncated`. `hop_cache` and `dag_cache` are the root's: the
-/// caller holds one pair per root across its facts (spec §14.3.1 item 3).
+/// caller holds one pair per root across its facts (spec §14.3.1 item 3);
+/// `carrier_cache` may be shared by every root of the query, as digest shares
+/// one (final panel F1-C8).
 pub fn reconstruct_witness_paths_pub<'i>(
     root_id: &str,
     fact: &crate::engine::l5::snapshot::SnapshotCapabilityFact,
@@ -5179,6 +5181,7 @@ pub fn reconstruct_witness_paths_pub<'i>(
     cap: usize,
     hop_cache: &mut HopCache<'i>,
     dag_cache: &mut DagCache<'i>,
+    carrier_cache: &CarrierCache<'i>,
 ) -> WitnessOutcomePub {
     let private_idx = &idx.0;
     let root_display = private_idx
@@ -5194,7 +5197,7 @@ pub fn reconstruct_witness_paths_pub<'i>(
         cap,
         hop_cache,
         dag_cache,
-        &CarrierCache::default(),
+        carrier_cache,
     );
 
     // Project paths: strip terminal hops into query_hops; preserve terminal

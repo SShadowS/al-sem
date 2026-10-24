@@ -381,7 +381,7 @@ pub(crate) mod cones_census {
     // `BFS_FOLD_NANOS` the derived fold plus `emit_picks` in raw modes. Since
     // step 7b the set is folded ONCE per SCC (its row built, each member's
     // `fold_row` + own entries, and the row's destruction all charge it).
-    // `BFS_PICKS` counts picks of walks that ran (0 under DerivedOnly).
+    // `BFS_PICKS` counts picks of walks that ran (0 under `raw: WitnessScope::None`).
     pub(crate) static BFS_WALK_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static BFS_FOLD_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static BFS_PICKS: AtomicU64 = AtomicU64::new(0);
@@ -422,7 +422,7 @@ pub(crate) mod cones_census {
     pub(crate) static CLOSED_MEMO_LIVE_MAX: AtomicU64 = AtomicU64::new(0);
     /// Populations the scan time is per (since #160 step 7b, the raw-half scan
     /// only: these and the `SGL_CALLS_*` / `SGL_ENTRIES_N_CONES` counts stay 0
-    /// under `DerivedOnly`, and the report prints their two lines only when a
+    /// under `raw: WitnessScope::None`, and the report prints their two lines only when a
     /// singleton scanned). Accumulated in plain locals inside the
     /// walk and folded in with ONE `fetch_add` per call — the inner loop runs
     /// millions of times and must not touch an atomic (the distortion this
@@ -527,7 +527,7 @@ pub(crate) mod cones_census {
     /// A REPORT value, never a component (the §4.5 overlap rule): the time of
     /// the per-member walks only, from the same readings `BFS_WALK_NANOS`
     /// adds. `BFS_WALK_NANOS` also holds the set builds and borrows, so
-    /// `walk_total <= bfs_walk`; under DerivedOnly `walk_total` is 0.
+    /// `walk_total <= bfs_walk`; under `raw: WitnessScope::None` `walk_total` is 0.
     pub(crate) static WALK_TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
 
     /// Fold one compose call's stats into the Cone-SCC census, if it is on.
@@ -700,7 +700,7 @@ pub(crate) mod cones_census {
             ms(SGL_RAW_NANOS.load(Ordering::Relaxed)),
         );
         // #160 step 7b: the scan populations exist only where a singleton
-        // scanned `best` (the raw half); under `DerivedOnly` they would be zeros.
+        // scanned `best` (the raw half); under `raw: WitnessScope::None` they would be zeros.
         if SINGLETON_SCANS.load(Ordering::Relaxed) > 0 {
             eprintln!(
                 "[cones-census]   singleton calls: 0_cones={} 1_cone={} n_cones={} entries_under_n_cones={}",
@@ -1462,7 +1462,9 @@ pub(crate) fn build_detector_artifacts(
     // derived rows of every routine). SUBSTRATE-GATED: built only when some
     // selected detector demands SUMMARIES (or TRANSACTION_SPANS, which folds
     // over the summaries map). Skipped ⇒ empty `summaries` map.
-    let _cones_span = pt::span("context", "context.capability_cones");
+    // Not `context.capability_cones` (final panel F1-C7): that span is the
+    // composition's, opened by the caller (`View::prepare`, the shim above).
+    let _cones_span = pt::span("context", "context.summaries_assemble");
     // ⟨C1⟩ Assigned inside the block below (kept a separate binding so the whole
     // cone-assembly block stays at its original indentation).
     let mut cone_derived = ConeDerivedStore::default();

@@ -963,7 +963,7 @@ pub(crate) fn prove_pipeline_with(
 
     // The S4 entry and the unresolved cone of the root alone (each root's pass
     // is independent, so this equals computing every routine and picking it).
-    let effects = digest_effects(&mut snap, resolved, std::slice::from_ref(root_id), false);
+    let mut effects = digest_effects(&mut snap, resolved, std::slice::from_ref(root_id), false);
     drop(snap);
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's `l4`.
@@ -971,7 +971,7 @@ pub(crate) fn prove_pipeline_with(
 
     // Run full digest query for this single root
     let query_full = run_digest_query_full_from_entries(
-        &effects,
+        &mut effects,
         std::slice::from_ref(root_id),
         &tx_ctx_map,
         &temp_states,

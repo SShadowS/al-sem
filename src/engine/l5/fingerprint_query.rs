@@ -30,9 +30,9 @@ use crate::engine::gate::format_json::serialize_document_value;
 use crate::engine::ids::sha256_hex;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::digest::{
-    DagCache, FingerprintIndexesPub, HopCache, HumanHop, ProjectedPath, QueryWitnessHop,
-    TerminalHopInfo, WitnessIndex, build_fingerprint_indexes_pub, reconstruct_witness_paths_pub,
-    witness_index,
+    CarrierCache, DagCache, FingerprintIndexesPub, HopCache, HumanHop, ProjectedPath,
+    QueryWitnessHop, TerminalHopInfo, WitnessIndex, build_fingerprint_indexes_pub,
+    reconstruct_witness_paths_pub, witness_index,
 };
 use crate::engine::l5::selector_index::{
     build_selector_indexes, narrow_to_owner, resolve_selector,
@@ -293,11 +293,12 @@ fn table_op_to_right(op: &str) -> Option<&'static str> {
     }
 }
 
-fn build_block(
+fn build_block<'w>(
     rid: &str,
     root: &crate::engine::l5::snapshot::SnapshotRootClassificationSlot,
     idx: &FingerprintIndexesPub<'_>,
-    widx: &WitnessIndex<'_>,
+    widx: &'w WitnessIndex<'_>,
+    carriers: &CarrierCache<'w>,
     filters: &FingerprintFilters,
     owners: &OwnerIndex<'_>,
 ) -> FingerprintBlock {
@@ -582,8 +583,9 @@ fn build_block(
                 .iter()
                 .enumerate()
                 .map(|(fi, f)| {
-                    let outcome =
-                        reconstruct_witness_paths_pub(rid, f, widx, cap, &mut hops, &mut dags);
+                    let outcome = reconstruct_witness_paths_pub(
+                        rid, f, widx, cap, &mut hops, &mut dags, carriers,
+                    );
                     BlockWitness {
                         fact_index: fi,
                         paths: outcome.paths,
@@ -721,9 +723,19 @@ pub fn fingerprint_query(
 
     // Build blocks.
     let widx = witness_index(&idx);
+    // One carrier cache for the whole query (final panel F1-C8).
+    let carriers = CarrierCache::default();
     let mut blocks: Vec<FingerprintBlock> = Vec::new();
     for root in root_pool {
-        let block = build_block(&root.routine_id, root, &idx, &widx, filters, owners);
+        let block = build_block(
+            &root.routine_id,
+            root,
+            &idx,
+            &widx,
+            &carriers,
+            filters,
+            owners,
+        );
         blocks.push(block);
     }
 
