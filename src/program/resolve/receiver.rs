@@ -1338,8 +1338,26 @@ fn base_protected_var_type(
     graph: &ProgramGraph,
     index: &ResolveIndex,
 ) -> Option<String> {
+    extension_base_object(from_object, graph, index)??
+        .protected_vars
+        .iter()
+        .find(|(n, _)| n == name_lc)
+        .map(|(_, ty)| ty.to_string())
+}
+
+/// The object `from_object` extends, as Step 2c reads it: `None` when
+/// `from_object` is not an extension; `Some(None)` when it is one but its base
+/// does not resolve uniquely in its closure (its inherited scope is unknown);
+/// `Some(Some(base))` otherwise.
+pub(crate) fn extension_base_object<'g>(
+    from_object: &ObjectNode,
+    graph: &'g ProgramGraph,
+    index: &ResolveIndex,
+) -> Option<Option<&'g ObjectNode>> {
     let base_kind = from_object.id.kind.extension_base_kind()?;
-    let extends = from_object.extends_target.as_deref()?;
+    let Some(extends) = from_object.extends_target.as_deref() else {
+        return Some(None);
+    };
     let base_ref = ObjectRef::Name {
         raw: extends.into(),
         normalized_lc: extends.fold_identifier(),
@@ -1347,13 +1365,9 @@ fn base_protected_var_type(
     let ObjectRefResolution::Unique(base_id) =
         index.resolve_object_ref(graph, from_object.id.clone(), base_kind, &base_ref)
     else {
-        return None;
+        return Some(None);
     };
-    object_by_id(graph, &base_id)?
-        .protected_vars
-        .iter()
-        .find(|(n, _)| n == name_lc)
-        .map(|(_, ty)| ty.to_string())
+    Some(object_by_id(graph, &base_id))
 }
 
 /// The element type of an `array[N, ...] of T` type text: `T`. `None` for any other
@@ -2618,18 +2632,7 @@ fn infer_call_result_receiver(
     };
 
     // 1. Local-shadowing guard FIRST — see the doc above.
-    let shadowed = routine
-        .params
-        .iter()
-        .any(|p| p.name.fold_identifier() == function_lc)
-        || routine
-            .locals
-            .iter()
-            .any(|v| v.name.fold_identifier() == function_lc)
-        || object_globals
-            .iter()
-            .any(|v| v.name.fold_identifier() == function_lc);
-    if shadowed {
+    if name_shadows_bare_call(routine, object_globals, &function_lc) {
         return None;
     }
 
@@ -2693,6 +2696,22 @@ fn infer_call_result_receiver(
     // 4. Convert the parsed return type to a receiver — same fail-closed
     //    conversion Step 2's declared-variable path uses.
     Some(parsed_type_to_receiver(parsed, from_object, graph, index))
+}
+
+/// Whether a bare call `name_lc(..)` may instead read a variable of that name:
+/// a parameter, local, the routine's named return value, or an object global
+/// (an in-scope array `F` makes `F(1)` an index, not a call). A shadowed call
+/// has no proven callee, so its result is not typed.
+pub(crate) fn name_shadows_bare_call(
+    routine: &RoutineDecl,
+    object_globals: &[VarDecl],
+    name_lc: &str,
+) -> bool {
+    let named = |n: &str| n.fold_identifier() == name_lc;
+    routine.params.iter().any(|p| named(&p.name))
+        || routine.locals.iter().any(|v| named(&v.name))
+        || routine.return_name.as_deref().is_some_and(named)
+        || object_globals.iter().any(|v| named(&v.name))
 }
 
 // ---------------------------------------------------------------------------
@@ -3423,7 +3442,7 @@ pub(crate) fn strip_namespace(s: &str) -> &str {
     }
 }
 
-fn parse_object_kind_type(kind: ObjectKind, name_rest: &str) -> ParsedType {
+pub(crate) fn parse_object_kind_type(kind: ObjectKind, name_rest: &str) -> ParsedType {
     let trimmed = strip_namespace(name_rest);
     let object_ref = if let Ok(n) = trimmed.parse::<i64>() {
         ObjectRef::Id(n)
@@ -3773,6 +3792,8 @@ mod tests {
                 query_columns: Vec::new(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
+                closed_enum: false,
+                enum_impls: Vec::new(),
             };
 
         let mut objects = vec![
@@ -3899,6 +3920,8 @@ mod tests {
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         }
     }
 

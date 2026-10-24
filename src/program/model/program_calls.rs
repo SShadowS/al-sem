@@ -126,7 +126,6 @@ use super::calls::{
 use super::ix::RoutineIx;
 use super::taxonomy::{DispatchKind, Resolution};
 use super::workspace::{ModelEntities, ModelRecordOperation, ModelRoutine};
-use crate::program::abi_ingest::object_kind_from_abi_type;
 use crate::program::body::features::{PCallSite, PCallee};
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
@@ -1870,21 +1869,8 @@ impl<'a> Converter<'a> {
         callsite_id: &str,
         c: &mut SiteCensus,
     ) {
-        let id = match &route.target {
-            RouteTarget::Routine(id) => id.clone(),
-            RouteTarget::AbiSymbol { key } => RoutineNodeId {
-                object: ObjectNodeId {
-                    app: key.app,
-                    kind: object_kind_from_abi_type(&key.object_type),
-                    key: key.object_node_key(),
-                },
-                name_lc: key.routine_name_lc.as_str().into(),
-                // ABI routines are object-level (`abi_ingest`).
-                enclosing_member_lc: None,
-                params_count: key.params_count,
-                sig_fp: key.param_type_fp,
-            },
-            _ => return,
+        let Some(id) = Self::route_routine_id(route) else {
+            return;
         };
         let node = self
             .graph
@@ -1982,12 +1968,9 @@ impl<'a> Converter<'a> {
         match &route.target {
             RouteTarget::Routine(id) => Some(id.clone()),
             RouteTarget::AbiSymbol { key } => Some(RoutineNodeId {
-                object: ObjectNodeId {
-                    app: key.app,
-                    kind: object_kind_from_abi_type(&key.object_type),
-                    key: key.object_node_key(),
-                },
+                object: route.target_object()?,
                 name_lc: key.routine_name_lc.as_str().into(),
+                // ABI routines are object-level (`abi_ingest`).
                 enclosing_member_lc: None,
                 params_count: key.params_count,
                 sig_fp: key.param_type_fp,
@@ -2052,17 +2035,13 @@ impl<'a> Converter<'a> {
                 // A workspace implementer with no model routine: the whole site
                 // is an honest unknown (S3.1).
                 (Target::MissingFromModel, _) => return None,
-                (Target::Outside, RouteTarget::Routine(id)) => dependency.push(id.object.clone()),
-                (Target::Outside, RouteTarget::AbiSymbol { key }) => {
-                    dependency.push(ObjectNodeId {
-                        app: key.app,
-                        kind: object_kind_from_abi_type(&key.object_type),
-                        key: key.object_node_key(),
-                    });
+                (Target::Outside, _) => {
+                    // An implementer the resolver could not resolve (`None`): it is
+                    // listed in `unresolved_impls` below (no route reached its object).
+                    if let Some(object) = route.target_object() {
+                        dependency.push(object);
+                    }
                 }
-                // An implementer the resolver could not resolve: it is listed in
-                // `unresolved_impls` below (no route reached its object).
-                (Target::Outside, RouteTarget::Unresolved | RouteTarget::Builtin(_)) => {}
             }
         }
         callees.sort_by(|a, b| a.id.cmp(&b.id));
@@ -2078,11 +2057,8 @@ impl<'a> Converter<'a> {
         }
         c.adapter_interface_dependency_impls += dependency.len();
 
-        let name_lc = self
-            .site_facts
-            .get(&ce.obligation_id)
-            .and_then(|f| f.interface.clone())
-            .unwrap_or_default();
+        let facts = self.site_facts.get(&ce.obligation_id);
+        let name_lc = facts.and_then(|f| f.interface.clone()).unwrap_or_default();
         let interface_name = self
             .graph
             .objects
@@ -2108,18 +2084,36 @@ impl<'a> Converter<'a> {
             let object_id = self.model_object_id(&o.id);
             callees.iter().any(|t| t.object_id == object_id) || dependency.contains(&o.id)
         };
+        let unresolved_impls: Vec<(String, String)> = impls
+            .iter()
+            .filter(|o| !reached(o))
+            .map(|o| (self.model_object_id(&o.id), "not-found".to_string()))
+            .collect();
+        // #264 (spec §5): closed only when every candidate is in the model, the
+        // rule `test_coverage` applies, so every MODEL reader (combined graph,
+        // snapshot, prove/digest, test coverage) agrees. The resolver's edge can
+        // still be `Complete` when it is not: a route to a symbol-only or
+        // out-of-model implementer is a closed candidate set (the program
+        // graph's view, read by graphify's `open_world_reason`), but its body is
+        // outside the model, so the model keeps the site open.
+        let mut closed_over: Vec<String> = match facts {
+            Some(f) if dependency.is_empty() && unresolved_impls.is_empty() => f
+                .interface_closed_over
+                .iter()
+                .map(|o| self.model_object_id(o))
+                .collect(),
+            _ => Vec::new(),
+        };
+        closed_over.sort();
         let meta = DispatchMeta {
             interface_name,
             total_impls: impls.len(),
-            unresolved_impls: impls
-                .iter()
-                .filter(|o| !reached(o))
-                .map(|o| (self.model_object_id(&o.id), "not-found".to_string()))
-                .collect(),
+            unresolved_impls,
             enum_implementers: implements(&[ObjectKind::Enum, ObjectKind::EnumExtension])
                 .iter()
                 .map(|o| self.model_object_id(&o.id))
                 .collect(),
+            closed_over,
         };
         let base = || {
             let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);

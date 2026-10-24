@@ -305,7 +305,7 @@ fn build_dep_nodes(
     // (arbitrary but stable) — see `dedup_routines_preserving_genuine_overloads`'s
     // doc for why routines need content-aware, not blanket, dedup.
     objects.sort_by(|a, b| a.id.cmp(&b.id));
-    objects.dedup_by(|a, b| a.id == b.id);
+    dedup_objects(&mut objects);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
     let routines = Arc::new(routines);
@@ -368,7 +368,7 @@ pub fn assemble_program_graph(
     }
 
     objects.sort_by(|a, b| a.id.cmp(&b.id));
-    objects.dedup_by(|a, b| a.id == b.id);
+    dedup_objects(&mut objects);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
 
@@ -665,6 +665,68 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
     graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
 }
 
+/// Collapse a SORTED `objects` vec's runs of equal id to the first entry
+/// (arbitrary but stable). Two whole-object `#if` arms give two entries with
+/// one id, so the closed-enum fact (#264) merges: `closed_enum` is the AND of
+/// every copy (a closed arm never survives an extensible one) and
+/// `enum_impls` their union, cleared when the AND is `false` so it stays
+/// empty unless closed. A table's `fields` are unioned too: an arm that
+/// declares a field with another type keeps both entries, so
+/// `ResolveIndex::field_in_table` declines the name instead of taking the
+/// first arm's type (identical copies add nothing). The object-context facts
+/// `source_table` (with its temporary marker), `table_no` and `extends_target`
+/// are cleared when the copies disagree (#264 N2-1): keeping the first arm's
+/// would type the implicit `Rec` of every arm by one build.
+fn dedup_objects(objects: &mut Vec<ObjectNode>) {
+    use crate::program::node_extract::object_ref_pair_conflicts;
+    use al_syntax::IdentifierFoldExt;
+    let refs_disagree = |a: &Option<crate::program::node_extract::ObjectRef>,
+                         a_temp: bool,
+                         b: &Option<crate::program::node_extract::ObjectRef>,
+                         b_temp: bool| match (a, b) {
+        (None, None) => false,
+        (Some(x), Some(y)) => object_ref_pair_conflicts(&(x.clone(), a_temp), &(y.clone(), b_temp)),
+        _ => true,
+    };
+    objects.dedup_by(|dup, kept| {
+        if dup.id != kept.id {
+            return false;
+        }
+        if refs_disagree(
+            &kept.source_table,
+            kept.source_table_temporary,
+            &dup.source_table,
+            dup.source_table_temporary,
+        ) {
+            kept.source_table = None;
+            kept.source_table_temporary = false;
+        }
+        if refs_disagree(&kept.table_no, false, &dup.table_no, false) {
+            kept.table_no = None;
+        }
+        let extends_lc = |o: &ObjectNode| o.extends_target.as_ref().map(|t| t.fold_identifier());
+        if extends_lc(kept) != extends_lc(dup) {
+            kept.extends_target = None;
+        }
+        for field in std::mem::take(&mut dup.fields) {
+            if !kept.fields.contains(&field) {
+                kept.fields.push(field);
+            }
+        }
+        kept.closed_enum &= dup.closed_enum;
+        if kept.closed_enum {
+            for entry in std::mem::take(&mut dup.enum_impls) {
+                if !kept.enum_impls.contains(&entry) {
+                    kept.enum_impls.push(entry);
+                }
+            }
+        } else {
+            kept.enum_impls.clear();
+        }
+        true
+    });
+}
+
 /// Collapse a SORTED `routines` vec's runs of equal `RoutineNodeId` down to
 /// one canonical entry PER DISTINCT parameter-type signature.
 ///
@@ -804,13 +866,19 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
             // exists under its own build conditions, so the survivor exists
             // under either: it keeps only the symbols every collapsed copy
             // decides alike (`RoutineNode::preproc_context`).
-            contexts.push(Some(
+            // #264: copies that disagree on the return type (two `#if` arms
+            // that differ only there) leave the survivor with NO return type:
+            // keeping the first arm's would type every caller by one build.
+            let return_disagrees = r.tier != TrustTier::SymbolOnly
+                && copies.iter().any(|o| o.return_type != r.return_type);
+            contexts.push(Some((
                 r.preproc_context
                     .iter()
                     .filter(|e| copies.iter().all(|o| o.preproc_context.contains(e)))
                     .cloned()
                     .collect::<Box<[_]>>(),
-            ));
+                return_disagrees,
+            )));
             // Issue #103: the same declaration in two `#if` arms can subscribe
             // to, or publish, different events; the survivor stands for every
             // arm, so it carries the event facts of all of them. Only for the
@@ -853,8 +921,12 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         let ((verdict, context), facts) = decisions
             .next()
             .expect("retain_mut visits each routine exactly once");
-        if let Some(context) = context {
+        if let Some((context, return_disagrees)) = context {
             survivor.preproc_context = context;
+            if return_disagrees {
+                survivor.return_type = None;
+                survivor.return_type_id = None;
+            }
         }
         if let Some(facts) = facts {
             facts.apply(survivor);
@@ -1953,7 +2025,7 @@ codeunit 50301 "Preproc Dup Sig"
         }
         let raw_routines = routines.len();
         objects.sort_by(|a, b| a.id.cmp(&b.id));
-        objects.dedup_by(|a, b| a.id == b.id);
+        dedup_objects(&mut objects);
         routines.sort_by(|a, b| a.id.cmp(&b.id));
         dedup_routines_preserving_genuine_overloads(&mut routines);
 
@@ -2057,11 +2129,13 @@ codeunit 50301 "Preproc Dup Sig"
         assert_eq!(
             projection,
             vec![
+                // #264: the copies' return types differ (A1, A2), so the
+                // survivor has none.
                 (
                     s("a"),
                     10,
                     s("Integer"),
-                    Some(s("A1")),
+                    None,
                     vec![(s("CLEAN"), true)],
                     false,
                     false,
@@ -2081,7 +2155,7 @@ codeunit 50301 "Preproc Dup Sig"
                     s("c"),
                     30,
                     s("Text"),
-                    Some(s("C1")),
+                    None,
                     vec![(s("Z"), true)],
                     false,
                     false,
@@ -2842,5 +2916,56 @@ codeunit 50110 "Repro Obj Sub"
         dedup_routines_preserving_genuine_overloads(&mut routines);
 
         assert_eq!(routines, [want]);
+    }
+
+    /// T16/T33 (#264): two copies of one enum object (two whole-object `#if`
+    /// arms), one closed and one extensible, merge to an OPEN object with no
+    /// implementations, in either order. Stated precondition: equal ids and
+    /// the closure fields by assignment.
+    #[test]
+    fn dedup_objects_ands_closed_enum_and_clears_impls() {
+        use crate::program::node_extract::ObjectRef;
+        let mut closed = crate::program::node_extract::test_fixtures::fully_populated_object_node();
+        closed.closed_enum = true;
+        closed.enum_impls = vec![("i".into(), ObjectRef::Id(50100))];
+        let mut open = closed.clone();
+        open.closed_enum = false;
+        open.enum_impls = Vec::new();
+        for pair in [[closed.clone(), open.clone()], [open, closed]] {
+            let mut objects = pair.to_vec();
+            dedup_objects(&mut objects);
+            assert_eq!(objects.len(), 1);
+            assert!(!objects[0].closed_enum);
+            assert!(
+                objects[0].enum_impls.is_empty(),
+                "{:?}",
+                objects[0].enum_impls
+            );
+        }
+    }
+
+    /// Two closed copies keep the union of their implementations.
+    #[test]
+    fn dedup_objects_unions_impls_of_closed_copies() {
+        use crate::program::node_extract::ObjectRef;
+        let mut a = crate::program::node_extract::test_fixtures::fully_populated_object_node();
+        a.closed_enum = true;
+        a.enum_impls = vec![("i".into(), ObjectRef::Id(1))];
+        let mut b = a.clone();
+        b.enum_impls = vec![
+            ("i".into(), ObjectRef::Id(1)),
+            ("i".into(), ObjectRef::Id(2)),
+        ];
+        let mut objects = vec![a, b];
+        dedup_objects(&mut objects);
+        assert_eq!(objects.len(), 1);
+        assert!(objects[0].closed_enum);
+        assert_eq!(
+            objects[0].enum_impls,
+            [
+                ("i".into(), ObjectRef::Id(1)),
+                ("i".into(), ObjectRef::Id(2))
+            ]
+        );
     }
 }

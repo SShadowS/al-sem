@@ -180,6 +180,16 @@ pub struct ObjectNode {
     /// available on this struct, but every non-extraction call site is a
     /// hand-built fixture with no real parse to have recovered from).
     pub parse_incomplete: bool,
+    /// `true` ONLY for a SOURCE Enum that is provably not extensible, parsed
+    /// cleanly, and whose value → implementation map was read completely
+    /// ([`enum_closure`], #264). `false` for every other object, and for every
+    /// symbol-only enum (ABI extensibility is not modelled).
+    pub closed_enum: bool,
+    /// `(interface name folded, implementing codeunit)` for every value's
+    /// `Implementation` pair, every `DefaultImplementation` and every
+    /// `UnknownValueImplementation`, union over `#if` arms, document order, no
+    /// duplicates. Empty unless [`Self::closed_enum`].
+    pub enum_impls: Vec<(SharedStr, ObjectRef)>,
 }
 
 /// One retained ABI parameter's dispatch-relevant metadata (Task 2, roadmap-
@@ -455,6 +465,9 @@ impl ShareStrings for ObjectNode {
             pool.share(name);
             pool.share(ty);
         }
+        for (iface, _) in &mut self.enum_impls {
+            pool.share(iface);
+        }
     }
 }
 
@@ -499,6 +512,138 @@ fn param_sig_key(params: &[Param]) -> String {
         .map(|p| p.ty.as_deref().unwrap_or("").trim().fold_identifier())
         .collect::<Vec<_>>()
         .join("|")
+}
+
+/// The closed-enum fact of one SOURCE object (#264, spec §1), as
+/// `(closed_enum, enum_impls)` (see those [`ObjectNode`] fields). Closed only
+/// when the object is an Enum implementing at least one interface, its file
+/// parsed cleanly, every `Extensible`
+/// entry (one per `#if` arm) is `false` or there is none (absent = not
+/// extensible, AL0504), and every value maps every implemented interface by
+/// an `Implementation` pair or the enum's `DefaultImplementation` for it.
+/// Fails open: any doubt (an unmapped value, a pair [`parse_impl_pairs`]
+/// cannot read) gives `(false, [])`.
+pub(crate) fn enum_closure(
+    obj: &al_syntax::ir::ObjectDecl,
+    parse_incomplete: bool,
+) -> (bool, Vec<(SharedStr, ObjectRef)>) {
+    enum_closure_impls(obj, parse_incomplete).map_or((false, Vec::new()), |impls| (true, impls))
+}
+
+fn enum_closure_impls(
+    obj: &al_syntax::ir::ObjectDecl,
+    parse_incomplete: bool,
+) -> Option<Vec<(SharedStr, ObjectRef)>> {
+    if obj.kind != ObjectKind::Enum || obj.implements.is_empty() || parse_incomplete {
+        return None;
+    }
+    let extensible = |p: &&al_syntax::ir::ObjectProperty| p.name == "extensible";
+    if obj
+        .properties
+        .iter()
+        .filter(extensible)
+        .any(|p| p.value.fold_identifier() != "false")
+    {
+        return None;
+    }
+    let mut impls: Vec<(SharedStr, ObjectRef)> = Vec::new();
+    fn add(pairs: Vec<(String, ObjectRef)>, impls: &mut Vec<(SharedStr, ObjectRef)>) {
+        for (iface, codeunit) in pairs {
+            let entry = (SharedStr::from(iface.as_str()), codeunit);
+            if !impls.contains(&entry) {
+                impls.push(entry);
+            }
+        }
+    }
+    let mut defaults = Vec::new();
+    for p in &obj.properties {
+        let is_default = p.name == "defaultimplementation";
+        if is_default || p.name == "unknownvalueimplementation" {
+            let pairs = read_impl_pairs(&p.value)?;
+            if is_default {
+                defaults.extend(pairs.iter().map(|(iface, _)| iface.clone()));
+            }
+            add(pairs, &mut impls);
+        }
+    }
+    let implemented: Vec<String> = obj.implements.iter().map(|i| fold_ref_name(i)).collect();
+    for value in &obj.enum_values {
+        let mut mapped = Vec::new();
+        for raw in &value.implementations {
+            let pairs = read_impl_pairs(raw)?;
+            mapped.extend(pairs.iter().map(|(iface, _)| iface.clone()));
+            add(pairs, &mut impls);
+        }
+        let covered = |iface: &String| mapped.contains(iface) || defaults.contains(iface);
+        if !implemented.iter().all(covered) {
+            return None;
+        }
+    }
+    Some(impls)
+}
+
+/// [`parse_impl_pairs`] of `raw` with the interface folded and the codeunit
+/// as an [`ObjectRef`]. The interface may be namespace-qualified (it is matched
+/// by folded name); a qualified codeunit makes the whole value unreadable.
+fn read_impl_pairs(raw: &str) -> Option<Vec<(String, ObjectRef)>> {
+    let pairs = parse_impl_pairs(raw)?;
+    let read = |(iface, codeunit): (String, String)| {
+        // The graph holds no namespaces (`ResolveIndex::resolve_object_ref`), so
+        // `Ns2."Impl"` would resolve to an `Impl` in any namespace: unreadable.
+        let unqualified = crate::program::resolve::receiver::strip_namespace(&codeunit);
+        (unqualified == codeunit)
+            .then(|| (fold_ref_name(&iface), parse_object_ref_value(unqualified).0))
+    };
+    pairs.into_iter().map(read).collect()
+}
+
+/// An object reference's folded name: last namespace segment, unquoted.
+pub(crate) fn fold_ref_name(s: &str) -> String {
+    unquote_identifier(crate::program::resolve::receiver::strip_namespace(s)).fold_identifier()
+}
+
+/// The `"<interface>" = "<codeunit>"` pairs of one raw `Implementation`-style
+/// property value, split on `,` and `=` outside double quotes, each side
+/// trimmed. `None` unless EVERY pair reads fully: each side an object reference
+/// (outside quotes only letters, digits, `_` and `.`; no comment, no `#if`).
+fn parse_impl_pairs(raw: &str) -> Option<Vec<(String, String)>> {
+    split_outside_quotes(raw, ',')?
+        .into_iter()
+        .map(|pair| match split_outside_quotes(pair, '=')?.as_slice() {
+            [iface, codeunit] => Some((ref_text(iface)?, ref_text(codeunit)?)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `s` split on `sep` outside double quotes; `None` when a quote is left open.
+fn split_outside_quotes(s: &str, sep: char) -> Option<Vec<&str>> {
+    let mut parts = Vec::new();
+    let (mut start, mut in_quotes) = (0, false);
+    for (i, c) in s.char_indices() {
+        if c == '"' {
+            in_quotes = !in_quotes;
+        } else if c == sep && !in_quotes {
+            parts.push(&s[start..i]);
+            start = i + c.len_utf8();
+        }
+    }
+    parts.push(&s[start..]);
+    (!in_quotes).then_some(parts)
+}
+
+/// `s` trimmed, when it reads as one object reference (see [`parse_impl_pairs`]).
+fn ref_text(s: &str) -> Option<String> {
+    let s = s.trim();
+    let mut in_quotes = false;
+    let ok = !s.is_empty()
+        && s.chars().all(|c| {
+            if c == '"' {
+                in_quotes = !in_quotes;
+            }
+            c == '"' || in_quotes || c.is_alphanumeric() || c == '_' || c == '.'
+        });
+    ok.then(|| s.to_string())
 }
 
 /// Parse an object-property value (`SourceTable`/`TableNo`) or a page-control
@@ -625,7 +770,7 @@ fn singular_property_value(
 /// an `Id`/`Name` pair is always a conflict (no id<->name resolution happens
 /// at this syntactic layer), and a differing `temporary` marker is always a
 /// real conflict regardless of the reference shape.
-fn object_ref_pair_conflicts(a: &(ObjectRef, bool), b: &(ObjectRef, bool)) -> bool {
+pub(crate) fn object_ref_pair_conflicts(a: &(ObjectRef, bool), b: &(ObjectRef, bool)) -> bool {
     if a.1 != b.1 {
         return true;
     }
@@ -751,6 +896,8 @@ pub fn extract_nodes(
             Vec::new()
         };
 
+        let parse_incomplete = file.parse_status != ParseStatus::Clean;
+        let (closed_enum, enum_impls) = enum_closure(obj, parse_incomplete);
         objects.push(ObjectNode {
             id: obj_id.clone(),
             name: obj.name.as_str().into(),
@@ -781,7 +928,9 @@ pub fn extract_nodes(
                     Some((name.fold_identifier().into(), g.ty.as_deref()?.into()))
                 })
                 .collect(),
-            parse_incomplete: file.parse_status != ParseStatus::Clean,
+            parse_incomplete,
+            closed_enum,
+            enum_impls,
         });
         // Computed once per object — same value for every routine in the object.
         let subscriber_instance_manual = read_event_subscriber_instance(obj);
@@ -950,6 +1099,9 @@ pub(crate) mod test_fixtures {
             query_columns: Vec::new(),
             protected_vars: vec![("item".into(), "Record Item".into())],
             parse_incomplete: true,
+            // Maximal, not realistic: a Page carries no closure fact.
+            closed_enum: true,
+            enum_impls: vec![("icustominterface".into(), ObjectRef::Id(50101))],
         }
     }
 }
@@ -1467,5 +1619,244 @@ page 50110 "Temporary Marker Conflict"
             "a differing temporary marker across branches must still degrade \
              to None even though the table name identity matches"
         );
+    }
+
+    // -- #264: the closed-enum fact -------------------------------------------
+
+    /// `enum_closure` of the first object in `src`, entries as
+    /// `(interface, codeunit name lowercased)` for readable asserts.
+    fn closure(src: &str, parse_incomplete: bool) -> (bool, Vec<(String, String)>) {
+        let file = al_syntax::parse(src);
+        let (closed, impls) = enum_closure(&file.objects[0], parse_incomplete);
+        let impls = impls
+            .into_iter()
+            .map(|(iface, r)| match r {
+                ObjectRef::Name { normalized_lc, .. } => (iface.to_string(), normalized_lc),
+                ObjectRef::Id(n) => (iface.to_string(), n.to_string()),
+            })
+            .collect();
+        (closed, impls)
+    }
+
+    /// One interface, one value mapped, with `props` as extra object properties.
+    fn demo_enum(props: &str) -> String {
+        format!(
+            r#"
+enum 50102 "Demo Kind" implements "Demo Strategy"
+{{
+{props}
+    value(0; Fast) {{ Implementation = "Demo Strategy" = "Demo Impl"; }}
+}}
+"#
+        )
+    }
+
+    fn demo_impl() -> Vec<(String, String)> {
+        vec![("demo strategy".to_string(), "demo impl".to_string())]
+    }
+
+    #[test]
+    fn enum_closure_absent_extensible_is_closed() {
+        assert_eq!(closure(&demo_enum(""), false), (true, demo_impl()));
+    }
+
+    #[test]
+    fn enum_closure_false_is_closed() {
+        let src = demo_enum("    Extensible = false;");
+        assert_eq!(closure(&src, false), (true, demo_impl()));
+    }
+
+    #[test]
+    fn enum_closure_true_is_open() {
+        let src = demo_enum("    Extensible = true;");
+        assert_eq!(closure(&src, false), (false, vec![]));
+    }
+
+    #[test]
+    fn enum_closure_unknown_value_is_open() {
+        let src = demo_enum("    Extensible = maybe;");
+        assert_eq!(closure(&src, false), (false, vec![]));
+    }
+
+    /// T15: `#if` arms that disagree on `Extensible` — some build is extensible.
+    #[test]
+    fn enum_closure_if_arms_disagree_is_open() {
+        let src =
+            demo_enum("#if X\n    Extensible = false;\n#else\n    Extensible = true;\n#endif");
+        assert_eq!(closure(&src, false), (false, vec![]));
+    }
+
+    /// T17: a file that hit error recovery cannot back a closed claim.
+    #[test]
+    fn enum_closure_recovered_file_is_open() {
+        assert_eq!(closure(&demo_enum(""), true), (false, vec![]));
+    }
+
+    /// An enum that implements no interface carries no closure fact: the fact
+    /// is only ever read for a dispatch over an interface it implements.
+    #[test]
+    fn enum_closure_without_interfaces_is_open() {
+        let src = r#"
+enum 50102 "Plain Kind"
+{
+    Extensible = false;
+    value(0; A) { }
+}
+"#;
+        assert_eq!(closure(src, false), (false, vec![]));
+    }
+
+    /// Task 2 review (namespace): the graph holds no namespaces, so a qualified
+    /// implementation (`Ns2."Demo Impl"`) could resolve to a same-named codeunit
+    /// in ANOTHER namespace. It cannot be checked, so the enum stays open.
+    #[test]
+    fn enum_closure_namespace_qualified_implementation_is_open() {
+        let src = demo_enum("").replace(r#"= "Demo Impl""#, r#"= Ns2."Demo Impl""#);
+        assert!(
+            src.contains("Ns2."),
+            "precondition: the reference is qualified"
+        );
+        assert_eq!(closure(&src, false), (false, vec![]));
+    }
+
+    /// A non-Enum object (no `Extensible` property either) is never closed.
+    #[test]
+    fn enum_closure_non_enum_is_open() {
+        let src = r#"
+codeunit 50101 "Demo Impl" implements "Demo Strategy"
+{
+}
+"#;
+        assert_eq!(closure(src, false), (false, vec![]));
+    }
+
+    #[test]
+    fn enum_closure_value_without_mapping_or_default_is_open() {
+        let src = r#"
+enum 50102 "Demo Kind" implements "Demo Strategy"
+{
+    value(0; Fast) { Implementation = "Demo Strategy" = "Demo Impl"; }
+    value(1; Slow) { }
+}
+"#;
+        assert_eq!(closure(src, false), (false, vec![]));
+    }
+
+    /// T32 (fact half): `DefaultImplementation` covers an unmapped value, and both
+    /// it and `UnknownValueImplementation` are implementations a call can reach.
+    #[test]
+    fn enum_closure_default_and_unknown_are_mapped() {
+        let src = r#"
+enum 50102 "Demo Kind" implements "Demo Strategy"
+{
+    DefaultImplementation = "Demo Strategy" = "Demo Default";
+    UnknownValueImplementation = "Demo Strategy" = "Demo Unknown";
+    value(0; Fast) { Implementation = "Demo Strategy" = "Demo Impl"; }
+    value(1; Slow) { }
+}
+"#;
+        let (closed, impls) = closure(src, false);
+        assert!(closed);
+        for c in ["demo impl", "demo default", "demo unknown"] {
+            assert!(
+                impls.contains(&("demo strategy".to_string(), c.to_string())),
+                "{c} missing from {impls:?}"
+            );
+        }
+    }
+
+    /// Review Focus 4: an enum implementing two interfaces is closed only when
+    /// every value maps BOTH (or the enum has a default for the missing one).
+    #[test]
+    fn enum_closure_maps_each_implemented_interface() {
+        let both = r#"
+enum 50102 K implements I, J
+{
+    value(0; A) { Implementation = I = "A I", J = "A J"; }
+    value(1; B) { Implementation = I = "B I", J = "B J"; }
+}
+"#;
+        let (closed, impls) = closure(both, false);
+        assert!(closed);
+        assert_eq!(impls.iter().filter(|(i, _)| i == "i").count(), 2);
+        assert_eq!(impls.iter().filter(|(i, _)| i == "j").count(), 2);
+
+        let missing_j = r#"
+enum 50102 K implements I, J
+{
+    value(0; A) { Implementation = I = "A I", J = "A J"; }
+    value(1; B) { Implementation = I = "B I"; }
+}
+"#;
+        assert_eq!(closure(missing_j, false), (false, vec![]));
+    }
+
+    /// Review Focus 5: a value inside `#if` still contributes its implementation.
+    #[test]
+    fn enum_closure_includes_conditional_values() {
+        let src = r#"
+enum 50102 K implements I
+{
+    value(0; A) { Implementation = I = "Impl A"; }
+#if CLEAN27
+    value(1; X) { Implementation = I = "Impl X"; }
+#endif
+}
+"#;
+        let (closed, impls) = closure(src, false);
+        assert!(closed);
+        assert!(
+            impls.contains(&("i".to_string(), "impl x".to_string())),
+            "{impls:?}"
+        );
+    }
+
+    /// Task 1 review I1: an `#if` between implementation list elements stays raw
+    /// text holding the directive. It cannot be read, so the enum stays open,
+    /// even though the defaults would cover every interface without that value's
+    /// pairs: a reader that skips unreadable pairs would close it.
+    #[test]
+    fn enum_closure_element_if_in_implementation_list_is_open() {
+        let src = r#"
+enum 50102 K implements I, J
+{
+    DefaultImplementation = I = "Def I", J = "Def J";
+    value(0; A)
+    {
+        Implementation = I = "P"
+#if X
+        , J = "Q"
+#endif
+        ;
+    }
+}
+"#;
+        assert_eq!(al_syntax::parse(src).parse_status, ParseStatus::Clean);
+        assert_eq!(closure(src, false), (false, vec![]));
+    }
+
+    #[test]
+    fn parse_impl_pairs_reads_pairs_and_rejects_anything_else() {
+        let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(
+            parse_impl_pairs(r#""I" = "Impl, A", J = Ns."Impl=J""#),
+            Some(vec![
+                pair(r#""I""#, r#""Impl, A""#),
+                pair("J", r#"Ns."Impl=J""#)
+            ])
+        );
+        for bad in [
+            "",
+            r#""I""#,
+            r#""I" = "#,
+            r#"= "P""#,
+            r#""I" = "P" = "Q""#,
+            r#""I" = "P",, J = "Q""#,
+            "\"I\" = \"P\"\n#if X\n, J = \"Q\"\n#endif",
+            r#""I" = /* c */ "P""#,
+            r#""I" = "P"#,
+        ] {
+            assert_eq!(parse_impl_pairs(bad), None, "{bad:?}");
+        }
     }
 }

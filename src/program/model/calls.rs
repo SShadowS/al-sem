@@ -24,6 +24,11 @@ pub struct DispatchMeta {
     pub unresolved_impls: Vec<(String, String)>,
     /// internal object ids of enum implementers (metadata only).
     pub enum_implementers: Vec<String>,
+    /// #264: model object ids (sorted) of the closed enums the receiver
+    /// provably holds a value of. Non-empty only when every candidate is a
+    /// model routine (no dependency target, no unresolved implementer): the
+    /// site's candidate set is then closed. Empty = open.
+    pub closed_over: Vec<String>,
 }
 
 /// An external (out-of-index) type reference on a member edge.
@@ -94,6 +99,39 @@ impl UnknownReason {
             UnknownReason::NoProgramSite => "no-program-site",
         }
     }
+}
+
+/// #264: the call sites whose interface dispatch is closed over closed enums,
+/// the ONE answer every reader (combined graph, snapshot) uses. A call-site id
+/// can belong to several model rows: two `#if` alternatives of one routine share
+/// its routine id and its call-site ids. A site is closed only when EVERY row
+/// with an edge at it has a meta-carrying edge with non-empty `closed_over`, so
+/// one open arm (or a row that typed the receiver otherwise) keeps it open.
+/// Implicit-trigger edges are not call-site edges and are ignored.
+#[must_use]
+pub fn closed_interface_sites<'a>(
+    edges: impl IntoIterator<Item = &'a CallEdge>,
+) -> std::collections::HashSet<&'a str> {
+    let mut rows: HashMap<&str, HashMap<super::ix::RoutineIx, bool>> = HashMap::new();
+    for e in edges {
+        if e.dispatch_kind == DispatchKind::ImplicitTrigger {
+            continue;
+        }
+        let closed = e
+            .dispatch_meta
+            .as_ref()
+            .is_some_and(|dm| !dm.closed_over.is_empty());
+        let row = rows
+            .entry(e.callsite_id.as_str())
+            .or_default()
+            .entry(e.from_ix)
+            .or_insert(false);
+        *row |= closed;
+    }
+    rows.into_iter()
+        .filter(|(_, by_row)| by_row.values().all(|closed| *closed))
+        .map(|(site, _)| site)
+        .collect()
 }
 
 /// A resolved (or unresolved) call edge. Ids are INTERNAL until projected.

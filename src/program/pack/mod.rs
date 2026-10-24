@@ -68,7 +68,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 4: `ObjectNode::protected_vars` (engine-switch S9.0e).
 /// 5: `ObjectNode::query_columns` (engine-switch S9.0e).
 /// 6: `RoutineNode::preproc_context` (engine-switch S9.0e).
-pub const PACK_SCHEMA: u32 = 6;
+/// 7: `ObjectNode::closed_enum` / `enum_impls` (#264).
+pub const PACK_SCHEMA: u32 = 7;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -522,6 +523,29 @@ mod tests {
         assert!(back.files[0].parse_status_recovered);
         // Total, not field-by-field: a field added to `DepPack`/`PackedFile`/
         // `RoutineMeta` later is covered without editing this assertion.
+        assert_eq!(back, pack);
+    }
+
+    /// T31 (#264): the closed-enum fact is pack payload. Stated precondition:
+    /// the object carries `closed_enum: true` and one `enum_impls` entry by
+    /// assignment, whatever the shared fixture holds.
+    #[test]
+    fn pack_round_trips_closed_enum() {
+        assert_eq!(PACK_SCHEMA, 7);
+        let mut pack = sample_pack();
+        let obj = &mut pack.files[0].objects[0];
+        obj.closed_enum = true;
+        obj.enum_impls = vec![(
+            "demo strategy".into(),
+            crate::program::node_extract::ObjectRef::Name {
+                raw: "Demo Impl".to_string(),
+                normalized_lc: "demo impl".to_string(),
+            },
+        )];
+        pack.self_hash = compute_self_hash(&pack);
+        let back = decode(&encode(&pack).expect("encode")).expect("decode");
+        assert!(back.files[0].objects[0].closed_enum);
+        assert_eq!(back.files[0].objects[0].enum_impls.len(), 1);
         assert_eq!(back, pack);
     }
 

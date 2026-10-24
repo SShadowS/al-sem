@@ -482,6 +482,22 @@ impl Route {
         !self.conditions.contains(&Condition::ManualBinding)
             && !self.conditions.contains(&Condition::AmbiguousDispatch)
     }
+
+    /// The program object this route's target routine belongs to: its own
+    /// object for a source routine, rebuilt from the ABI key (as `abi_ingest`
+    /// builds an ABI object's id) for a symbol-only one. `None` otherwise.
+    #[must_use]
+    pub fn target_object(&self) -> Option<crate::program::node::ObjectNodeId> {
+        match &self.target {
+            RouteTarget::Routine(id) => Some(id.object.clone()),
+            RouteTarget::AbiSymbol { key } => Some(crate::program::node::ObjectNodeId {
+                app: key.app,
+                kind: crate::program::abi_ingest::object_kind_from_abi_type(&key.object_type),
+                key: key.object_node_key(),
+            }),
+            RouteTarget::Builtin(_) | RouteTarget::Unresolved => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

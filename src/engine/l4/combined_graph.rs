@@ -332,6 +332,9 @@ pub(crate) fn assemble(
     // Interface callsites that already received an "interface-open-world" uncertainty
     // (emit exactly once per callsite even with multiple "maybe" edges).
     let mut interface_open_world_emitted: HashSet<String> = HashSet::new();
+    // #264: interface sites closed over closed enums in EVERY row (the shared
+    // rule, also the snapshot's): a closed candidate set, no open world.
+    let closed_sites = crate::program::model::calls::closed_interface_sites(call_edges);
 
     // --- call-derived edges + uncertainty records ---
     for ce in call_edges {
@@ -362,6 +365,7 @@ pub(crate) fn assemble(
             // from the site's (last owning) row.
             if ce.dispatch_kind == DispatchKind::Interface
                 && owns(ce)
+                && !closed_sites.contains(ce.callsite_id.as_str())
                 && !interface_open_world_emitted.contains(&ce.callsite_id)
             {
                 interface_open_world_emitted.insert(ce.callsite_id.clone());
@@ -385,7 +389,10 @@ pub(crate) fn assemble(
         }
         // to-less edge → typed uncertainty on the `from` routine.
         if ce.dispatch_kind == DispatchKind::Interface {
-            // Zero-impl interface dispatch → "interface-open-world".
+            // Zero-impl interface dispatch → "interface-open-world". No
+            // closed-site check here (#264): a to-less edge is an implementer
+            // outside the model, so the open world is right whatever the closed
+            // set says.
             if owns(ce) && !interface_open_world_emitted.contains(&ce.callsite_id) {
                 interface_open_world_emitted.insert(ce.callsite_id.clone());
                 let interface_name = ce

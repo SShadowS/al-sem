@@ -124,6 +124,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Field and key ids have schema facts but no `identities` row, and only identities
   were checked. An id now counts as present when it has an identity row or is the
   subject of a fact (#237).
+- Interface calls whose value provably comes from a non-extensible source enum are now
+  a closed candidate set. That means a routine-local interface variable whose every
+  write comes from such an enum, in a cleanly parsed routine with no `with`, where
+  every implementation the enum maps is a loaded routine. The resolver edge is
+  `Complete`, the model's `DispatchMeta` lists the enums in `closed_over`, the
+  combined graph emits no `interface-open-world` uncertainty, the snapshot row has
+  `openWorld: false`, and `prove`/`digest` see no unresolved-call blocker for it. d35
+  therefore no longer reports an unknown Commit for such a call; a Commit in one of
+  the candidates is still reported. Routes, shapes and the call-graph histograms do
+  not change (byte-identical on CDO). Two outputs show the closed edges: the graphify
+  export's `open_world_reason` is empty for them (the edge is `Complete`), and
+  `aldump --switch-dump` prints the new `closed_over` field. Enums known only from
+  symbols, a dependency implementer outside the model (`--single-app`) and names that
+  are not unique in the whole program stay open. Known limit: the candidates are every
+  implementer of the interface, so an implementer the enum does not map still counts;
+  if it commits, d35 still reports YES (#264).
+- `#if` alternatives no longer type code by their first arm: a routine declared in
+  two arms that differ only in the return type has no return type in the program
+  graph (a call's result is not typed from it), and a table declared in two arms
+  keeps the fields of both, so a field declared with two types is not typed either.
+  A call site inside two `#if` alternatives of one routine is closed only when it
+  is closed in every arm (#264).
 - An object without a number, in a dependency that ships only symbols, whose name
   holds two quote characters in a row (`""`) now has the same id in the program graph
   and in the model. Before, the graph id dropped one of the two quotes (#250).

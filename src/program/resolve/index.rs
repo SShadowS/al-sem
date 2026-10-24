@@ -224,6 +224,11 @@ pub struct ResolveIndex {
     objects_by_name: HashMap<(ObjectKind, String), Vec<ObjectNodeId>>,
     /// Lowercased `extends_target` of a `TableExtension` → all extension ids.
     table_extensions: HashMap<String, Vec<ObjectNodeId>>,
+    /// `TableExtension`s with NO `extends_target`: `#if` alternatives that
+    /// extend different tables lose it in the build's merge (#264 N2-1), so
+    /// `table_extensions` lists them under no table although they extend one.
+    /// "May exist" queries count them for every table.
+    untargeted_table_extensions: Vec<ObjectNodeId>,
     /// Lowercased `extends_target` of a `PageExtension` → all extension ids
     /// (pageext-merge-and-final-residual plan, Task 1 — the `Page` analog of
     /// `table_extensions`, needed to close the engine gap: a `PageExtension`'s
@@ -543,6 +548,7 @@ impl ResolveIndex {
         let mut objects_by_id: HashMap<(ObjectKind, i64), Vec<ObjectNodeId>> = HashMap::new();
         let mut objects_by_name: HashMap<(ObjectKind, String), Vec<ObjectNodeId>> = HashMap::new();
         let mut table_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
+        let mut untargeted_table_extensions: Vec<ObjectNodeId> = Vec::new();
         let mut page_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
         let mut report_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
         let mut implementers: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
@@ -564,13 +570,14 @@ impl ResolveIndex {
                 .push(obj.id.clone());
 
             // TableExtension → base table name (lowercased).
-            if obj.id.kind == ObjectKind::TableExtension
-                && let Some(ref target) = obj.extends_target
-            {
-                table_extensions
-                    .entry(target.fold_identifier())
-                    .or_default()
-                    .push(obj.id.clone());
+            if obj.id.kind == ObjectKind::TableExtension {
+                match obj.extends_target {
+                    Some(ref target) => table_extensions
+                        .entry(target.fold_identifier())
+                        .or_default()
+                        .push(obj.id.clone()),
+                    None => untargeted_table_extensions.push(obj.id.clone()),
+                }
             }
 
             // PageExtension → base page name (lowercased) — the Task 1 analog
@@ -616,6 +623,7 @@ impl ResolveIndex {
             objects_by_id,
             objects_by_name,
             table_extensions,
+            untargeted_table_extensions,
             page_extensions,
             report_extensions,
             implementers,
@@ -633,6 +641,7 @@ impl ResolveIndex {
             objects_by_id,
             objects_by_name,
             table_extensions,
+            untargeted_table_extensions,
             page_extensions,
             report_extensions,
             implementers,
@@ -642,6 +651,10 @@ impl ResolveIndex {
             ("objects_by_id", Box::new(objects_by_id)),
             ("objects_by_name", Box::new(objects_by_name)),
             ("table_extensions", Box::new(table_extensions)),
+            (
+                "untargeted_table_extensions",
+                Box::new(untargeted_table_extensions),
+            ),
             ("page_extensions", Box::new(page_extensions)),
             ("report_extensions", Box::new(report_extensions)),
             ("implementers", Box::new(implementers)),
@@ -833,6 +846,45 @@ impl ResolveIndex {
         }
     }
 
+    /// [`Self::resolve_object_ref`] for proofs that must not guess (#264's
+    /// closed-enum facts). The graph holds no namespaces, so a name may mean an
+    /// object of another namespace than an own-app one of the same name (a
+    /// `using`, or a qualified name whose qualifier is dropped). A NAME
+    /// therefore resolves only when it is unique in the whole program
+    /// ([`Self::name_is_unique`]); else it is
+    /// [`ObjectRefResolution::Ambiguous`]. A NUMBER keeps the own-app rule,
+    /// except that two own objects with one number are `Ambiguous`.
+    pub fn resolve_object_ref_strict(
+        &self,
+        graph: &ProgramGraph,
+        from: ObjectNodeId,
+        kind: ObjectKind,
+        r: &ObjectRef,
+    ) -> ObjectRefResolution {
+        let ambiguous = match r {
+            ObjectRef::Id(n) => self
+                .objects_by_id
+                .get(&(kind, *n))
+                .is_some_and(|c| c.iter().filter(|o| o.app == from.app).count() > 1),
+            ObjectRef::Name { normalized_lc, .. } => self
+                .objects_by_name
+                .get(&(kind, normalized_lc.clone()))
+                .is_some_and(|c| c.len() > 1),
+        };
+        if ambiguous {
+            return ObjectRefResolution::Ambiguous;
+        }
+        self.resolve_object_ref(graph, from, kind, r)
+    }
+
+    /// Whether exactly one object of `kind` is named `name_lc` (folded) in the
+    /// whole program.
+    pub fn name_is_unique(&self, kind: ObjectKind, name_lc: &str) -> bool {
+        self.objects_by_name
+            .get(&(kind, name_lc.to_string()))
+            .is_some_and(|c| c.len() == 1)
+    }
+
     /// All `TableExtension` objects whose `extends_target` (lowercased) equals
     /// `base_table_name_lc` — [`WorldMode::AnalyzedSnapshot`], whole-program
     /// view (extensions live in reverse-dependent apps, outside the base
@@ -928,6 +980,20 @@ impl ResolveIndex {
         base: &ObjectNodeId,
         field_lc: &str,
     ) -> Option<FieldNode> {
+        self.field_with_owner_in_table(graph, from_object, base, field_lc)
+            .map(|(field, _)| field)
+    }
+
+    /// [`Self::field_in_table`], with the object that DECLARES the field (the
+    /// table, or the table extension that added it): a field's type text is
+    /// resolved where it was written (#264).
+    pub fn field_with_owner_in_table(
+        &self,
+        graph: &ProgramGraph,
+        from_object: &ObjectNode,
+        base: &ObjectNodeId,
+        field_lc: &str,
+    ) -> Option<(FieldNode, ObjectNodeId)> {
         let closure = graph.topology.closure(from_object.id.app);
         if !closure.contains(&base.app) {
             return None;
@@ -976,7 +1042,7 @@ impl ResolveIndex {
         }
 
         match deduped.as_slice() {
-            [(_, f)] => Some((*f).clone()),
+            [(owner, f)] => Some(((*f).clone(), (*owner).clone())),
             [] => None,
             _ => {
                 log::debug!(
@@ -1066,6 +1132,57 @@ impl ResolveIndex {
             }
         }
         false
+    }
+
+    /// Whether a field named `field_lc` is declared anywhere in the
+    /// visibility-scoped table surface for `base` (the table and its
+    /// closure-visible extensions), whatever its type and however many
+    /// declarations it has. Unlike [`Self::field_in_table`], which types a
+    /// field only when it is unique, this answers "may the name be a field?"
+    /// for proofs that must not mistake an ambiguous field for no field (#264).
+    /// `true` when `base` is outside `from_object`'s closure or is not found,
+    /// since its fields cannot then be ruled out. An untargeted table
+    /// extension (see [`Self::untargeted_table_extensions_in`]) may extend
+    /// `base`, so its fields count too.
+    pub fn table_scope_may_have_field(
+        &self,
+        graph: &ProgramGraph,
+        from_object: &ObjectNode,
+        base: &ObjectNodeId,
+        field_lc: &str,
+    ) -> bool {
+        let closure = graph.topology.closure(from_object.id.app);
+        if !closure.contains(&base.app) {
+            return true;
+        }
+        let Some(base_obj) = Self::find_object(graph, base) else {
+            return true;
+        };
+        let declares = |o: &ObjectNode| o.fields.iter().any(|f| f.name_lc.as_ref() == field_lc);
+        if declares(base_obj) {
+            return true;
+        }
+        let base_name_lc = base_obj.name.fold_identifier();
+        self.table_extensions_of(&base_name_lc)
+            .iter()
+            .filter(|ext_id| closure.contains(&ext_id.app))
+            .chain(self.untargeted_table_extensions_in(graph, from_object))
+            .any(|ext_id| Self::find_object(graph, ext_id).is_none_or(declares))
+    }
+
+    /// The table extensions in `from_object`'s closure that have NO
+    /// `extends_target` (#264 N2-1: `#if` alternatives extending different
+    /// tables). Each may extend any table, so a proof that asks "may this
+    /// table have member X?" must read them for every table.
+    pub fn untargeted_table_extensions_in<'a>(
+        &'a self,
+        graph: &ProgramGraph,
+        from_object: &ObjectNode,
+    ) -> impl Iterator<Item = &'a ObjectNodeId> {
+        let closure = graph.topology.closure(from_object.id.app);
+        self.untargeted_table_extensions
+            .iter()
+            .filter(move |ext_id| closure.contains(&ext_id.app))
     }
 
     /// Look up an `ObjectNode` by id via binary search — `graph.objects` is
@@ -1322,6 +1439,8 @@ mod tests {
             query_columns: Vec::new(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
+            closed_enum: false,
+            enum_impls: Vec::new(),
         }
     }
 

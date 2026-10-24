@@ -2390,6 +2390,9 @@ fn derive_callsite_resolutions(
         }
     }
 
+    let closed_sites = crate::program::model::calls::closed_interface_sites(
+        base.calls.iter().chain(base.dependency_calls),
+    );
     // Group callGraph edges by callsiteId (skip implicit-trigger). Preserve first.
     // BTreeMap for deterministic group iteration (M1). Every caller's calls:
     // the model's, then the dependency routines' (D6, Decision 18).
@@ -2455,6 +2458,8 @@ fn derive_callsite_resolutions(
                 .as_ref()
                 .map(|dm| dm.unresolved_impls.clone())
                 .unwrap_or_default();
+            // #264: closed in every row (the combined graph's rule too).
+            let closed = closed_sites.contains(callsite_key.as_str());
             out.push(SnapshotCallsiteResolution {
                 callsite_id: callsite_key.clone(),
                 from,
@@ -2467,7 +2472,7 @@ fn derive_callsite_resolutions(
                 } else {
                     Some(candidates)
                 },
-                open_world: Some(true),
+                open_world: Some(!closed),
                 unresolved_candidates: if unresolved.is_empty() {
                     None
                 } else {
