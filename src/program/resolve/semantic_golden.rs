@@ -280,7 +280,7 @@ pub fn dependency_closure_entries(workspace_root: &Path) -> ClosureEntries {
 }
 
 /// [`dependency_closure_entries`] over a discovery already made (the
-/// `InputSet`'s closure lists).
+/// `WorkspaceInputs`'s closure lists).
 pub(crate) fn dependency_closure_entries_from(
     workspace_root: &Path,
     files: &[crate::dependencies::DiscoveredAppFile],

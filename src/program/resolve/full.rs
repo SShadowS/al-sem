@@ -42,7 +42,7 @@ use crate::program::build::{DepInput, DepLayer, assemble_program_graph, build_de
 use crate::program::dep_cache::{DepCache, DepKey};
 use crate::program::dep_summary::parse_for_build;
 use crate::program::graph::ProgramGraph;
-use crate::program::inputs::InputSet;
+use crate::program::inputs::WorkspaceInputs;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::profile::{BuildProfile, DependencyBodies};
@@ -2221,7 +2221,7 @@ pub fn fresh_program_from_snapshot_with(
 /// cached verdict cannot give (the B3 removal of the preflight cache, see
 /// CHANGELOG).
 pub fn build_program_with_coverage(
-    inputs: &Arc<InputSet>,
+    inputs: &Arc<WorkspaceInputs>,
 ) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
     build_program_with_coverage_profiled(
         inputs,
@@ -2234,7 +2234,7 @@ pub fn build_program_with_coverage(
 /// [`build_program_with_coverage`] under a stated profile (engine-switch S7.3: the
 /// cross-app model reads dependency bodies, so it builds `FULL`).
 pub fn build_program_with_coverage_profiled(
-    inputs: &Arc<InputSet>,
+    inputs: &Arc<WorkspaceInputs>,
     profile: BuildProfile,
 ) -> Result<(ProgramContext, ProgramReport, FreshCoverage), String> {
     pt::counter_delta("build.program", 1);
@@ -4653,9 +4653,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn fresh_coverage(ws: &Path) -> Result<FreshCoverage, String> {
-        let inputs = crate::program::inputs::InputSet::read(
+        let inputs = crate::program::inputs::WorkspaceInputs::read(
             ws,
-            &crate::program::inputs::InputNeeds::default(),
+            &crate::program::inputs::WorkspaceNeeds::default(),
         );
         build_program_with_coverage(&inputs).map(|(_, _, fc)| fc)
     }

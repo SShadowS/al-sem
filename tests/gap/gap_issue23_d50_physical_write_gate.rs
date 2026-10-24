@@ -103,7 +103,7 @@ fn resolve_fixture() -> Model {
         dir.display()
     );
     assemble_and_resolve_workspace_program(
-        &al_sem::program::inputs::InputSet::read(&dir, &Default::default()),
+        &al_sem::program::inputs::WorkspaceInputs::read(&dir, &Default::default()),
         MODEL_INSTANCE_ID_DEFAULT,
         false,
     )

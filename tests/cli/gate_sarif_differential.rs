@@ -176,7 +176,13 @@ fn run_gate(workspace: &str, preset: Option<&str>, detector: Option<&str>) -> St
         with_evidence: false,
         single_app: false,
     };
-    run_analyze(&args.read_inputs(), &args, "engine-default").expect("run_analyze")
+    run_analyze(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .expect("run_analyze")
 }
 
 /// REGEN path (temp-state epoch rebaseline, Task 16). When `REGEN_TEMP_GOLDENS`

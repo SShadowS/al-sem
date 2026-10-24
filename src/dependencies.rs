@@ -634,7 +634,7 @@ pub fn load_all_apps_with(
 
 /// [`load_all_apps_with`] over a closure already discovered
 /// ([`discover_app_files`]'s two lists, read once into the command's
-/// `InputSet`, #160 step 1): the `.app` files themselves are still opened here.
+/// `WorkspaceInputs`, #160 step 1): the `.app` files themselves are still opened here.
 pub fn load_all_apps_from(
     project_root: &Path,
     closure: &crate::program::inputs::ClosureEntries,

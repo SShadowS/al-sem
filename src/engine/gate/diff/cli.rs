@@ -97,16 +97,16 @@ fn load_snapshot_from_workspace(
     use crate::engine::l5::detectors::default_detectors;
     use crate::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
     use crate::engine::session::{View, diff_strict_plan};
-    use crate::program::inputs::{InputNeeds, InputSet};
+    use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
     use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
 
     let ws = Path::new(dir);
     // #160 §4.2.6: one read of this side's workspace.
-    let inputs = InputSet::read(
+    let inputs = WorkspaceInputs::read(
         ws,
-        &InputNeeds {
+        &WorkspaceNeeds {
             fingerprint_rows: true,
-            ..InputNeeds::default()
+            ..WorkspaceNeeds::default()
         },
     );
     let model_id = inputs

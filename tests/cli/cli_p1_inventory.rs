@@ -28,12 +28,14 @@ fn corpus_dir() -> PathBuf {
 const FIXTURE: &str = "ws-d8-commit-in-tx";
 
 /// The command's one read of `ws` (#160).
-fn read(ws: &std::path::Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs())
+fn read(ws: &std::path::Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceInputs> {
+    al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs())
 }
 
 /// Build the base `FingerprintOptions` for the fixture.
-fn base_opts(inputs: &std::sync::Arc<al_sem::program::inputs::InputSet>) -> FingerprintOptions<'_> {
+fn base_opts(
+    inputs: &std::sync::Arc<al_sem::program::inputs::WorkspaceInputs>,
+) -> FingerprintOptions<'_> {
     FingerprintOptions {
         inputs,
         driver_version: "p1-test-v1",

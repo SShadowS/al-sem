@@ -71,8 +71,8 @@ fn sorted(mut v: Vec<String>) -> Vec<String> {
     v
 }
 
-fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceInputs> {
+    al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default())
 }
 
 /// T3's workspace: two interfaces and one ControlAddIn, none numbered. The second
@@ -108,9 +108,9 @@ fn full_snapshot(ws: &Path) -> serde_json::Value {
     use al_sem::engine::l5::snapshot_full::{
         FullSnapshotOptions, compose_full_snapshot, serialize_json,
     };
-    let inputs = al_sem::program::inputs::InputSet::read(
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(
         ws,
-        &al_sem::program::inputs::InputNeeds {
+        &al_sem::program::inputs::WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         },

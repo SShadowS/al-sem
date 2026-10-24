@@ -80,7 +80,7 @@ use al_sem::engine::l5::fingerprint_cli::{
     run_fingerprint_pipeline, validate_roots,
 };
 use al_sem::engine::l5::prove::{parse_question, question_ids, run_prove_pipeline};
-use al_sem::program::inputs::{InputNeeds, InputSet};
+use al_sem::program::inputs::{RequestInputs, WorkspaceInputs, WorkspaceNeeds};
 use clap::{Parser, Subcommand};
 
 const SEVERITY_VALUES: &[&str] = &["critical", "high", "medium", "low", "info"];
@@ -787,7 +787,10 @@ fn write_stderr_lines(lines: &[String], fail: ExitCode) -> Result<(), ExitCode> 
 // ── graph command ────────────────────────────────────────────────────────────
 
 fn run_graph_cmd(g: GraphCli) -> ExitCode {
-    let inputs = InputSet::read(std::path::Path::new(&g.workspace), &InputNeeds::default());
+    let inputs = WorkspaceInputs::read(
+        std::path::Path::new(&g.workspace),
+        &WorkspaceNeeds::default(),
+    );
     let graph = match al_sem::program::impact_graph::export_workspace(&inputs) {
         Ok(graph) => graph,
         Err(msg) => {
@@ -837,7 +840,10 @@ fn run_query_touches_cmd(t: QueryTouchesCli) -> ExitCode {
     // `--direction down` without `--from` is rejected by `render_query_touches`
     // itself, not duplicated here: one rule in one place, and the golden family
     // covers it end to end (a second copy could drift and would test nothing).
-    let inputs = InputSet::read(std::path::Path::new(&t.workspace), &InputNeeds::default());
+    let inputs = WorkspaceInputs::read(
+        std::path::Path::new(&t.workspace),
+        &WorkspaceNeeds::default(),
+    );
     match run_query_touches_pipeline(
         &inputs,
         &t.table,
@@ -863,7 +869,10 @@ fn run_query_effects_cmd(e: QueryEffectsCli) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    let inputs = InputSet::read(std::path::Path::new(&e.workspace), &InputNeeds::default());
+    let inputs = WorkspaceInputs::read(
+        std::path::Path::new(&e.workspace),
+        &WorkspaceNeeds::default(),
+    );
     match run_query_effects_pipeline(
         &inputs,
         &e.routine,
@@ -893,15 +902,16 @@ fn run_policy_check_cmd(c: PolicyCheckCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let inputs = InputSet::read(
-        std::path::Path::new(&c.workspace),
-        &InputNeeds {
-            policy: policy_request(c.policy.as_deref(), c.no_policy),
-            ..InputNeeds::default()
-        },
+    let workspace = std::path::Path::new(&c.workspace);
+    let inputs = WorkspaceInputs::read(workspace, &WorkspaceNeeds::default());
+    let request = RequestInputs::read(
+        workspace,
+        policy_request(c.policy.as_deref(), c.no_policy),
+        None,
     );
     let opts = PolicyCheckOptions {
         inputs: &inputs,
+        request: &request,
         format: &c.format,
         out: c.out.as_deref(),
         deterministic: c.deterministic,
@@ -1137,11 +1147,11 @@ fn run_digest_cmd(d: DigestCli) -> ExitCode {
         Some(routine_inputs)
     };
 
-    let inputs = InputSet::read(
+    let inputs = WorkspaceInputs::read(
         std::path::Path::new(&d.workspace),
-        &InputNeeds {
+        &WorkspaceNeeds {
             fingerprint_rows: true,
-            ..InputNeeds::default()
+            ..WorkspaceNeeds::default()
         },
     );
 
@@ -1207,11 +1217,11 @@ fn run_prove_cmd(p: ProveCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let inputs = InputSet::read(
+    let inputs = WorkspaceInputs::read(
         std::path::Path::new(&p.workspace),
-        &InputNeeds {
+        &WorkspaceNeeds {
             fingerprint_rows: true,
-            ..InputNeeds::default()
+            ..WorkspaceNeeds::default()
         },
     );
 
@@ -1332,11 +1342,11 @@ fn run_fingerprint_cmd(f: FingerprintCli) -> ExitCode {
         eprintln!("{msg}");
         return ExitCode::from(1);
     }
-    let inputs = InputSet::read(
+    let inputs = WorkspaceInputs::read(
         std::path::Path::new(&f.workspace),
-        &InputNeeds {
+        &WorkspaceNeeds {
             fingerprint_rows: true,
-            ..InputNeeds::default()
+            ..WorkspaceNeeds::default()
         },
     );
 
@@ -1456,7 +1466,10 @@ fn run_events_fanout_cmd(f: EventsFanoutCli) -> ExitCode {
         }
     };
 
-    let inputs = InputSet::read(std::path::Path::new(&f.workspace), &InputNeeds::default());
+    let inputs = WorkspaceInputs::read(
+        std::path::Path::new(&f.workspace),
+        &WorkspaceNeeds::default(),
+    );
     let opts = EventsFanoutOptions {
         inputs: &inputs,
         format: &f.format,
@@ -1525,7 +1538,10 @@ fn run_events_chains_cmd(c: EventsChainsCli) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let inputs = InputSet::read(std::path::Path::new(&c.workspace), &InputNeeds::default());
+    let inputs = WorkspaceInputs::read(
+        std::path::Path::new(&c.workspace),
+        &WorkspaceNeeds::default(),
+    );
     let opts = EventsChainsOptions {
         inputs: &inputs,
         format: &c.format,
@@ -1671,8 +1687,17 @@ fn run_analyze_cmd(a: AnalyzeCli) -> ExitCode {
         return ExitCode::from(3);
     }
     let inputs = args.read_inputs();
-    match run_analyze_with_exit(&inputs, &args, &inputs.driver_version) {
-        Ok((mut out, exit_code, stderr_warning)) => {
+    let request = args.read_request();
+    match run_analyze_with_exit(&inputs, &request, &args, &inputs.driver_version) {
+        Ok((mut out, exit_code, stderr_warning, baseline_bytes)) => {
+            // `--update-baseline`: the baseline is the first write, before any
+            // stderr line or stdout; a failure is a write error (exit 2) and
+            // stdout stays unwritten (#277 D2.4, S17).
+            if let (Some(path), Some(bytes)) = (&args.baseline, baseline_bytes)
+                && let Err(code) = write_file(path, &bytes, ExitCode::from(exit::ANALYSIS_FAILURE))
+            {
+                return code;
+            }
             // F2: emit the preflight degraded warning to stderr (the "no silent clean"
             // contract). Matches al-sem index.ts:263-264:
             //   `if (pf.degraded) process.stderr.write(`al-sem: warning: ${pf.message}\n`)`.
@@ -1766,7 +1791,7 @@ mod tests {
                 single_app: false,
             };
             let inputs = args.read_inputs();
-            let result = run_analyze_with_exit(&inputs, &args, "test");
+            let result = run_analyze_with_exit(&inputs, &args.read_request(), &args, "test");
             assert!(
                 result.is_ok(),
                 "Terminal format must succeed (Stage A3 implemented); got: {result:?}"
@@ -1794,7 +1819,7 @@ mod tests {
                 single_app: false,
             };
             let inputs = args.read_inputs();
-            let result = run_analyze_with_exit(&inputs, &args, "test");
+            let result = run_analyze_with_exit(&inputs, &args.read_request(), &args, "test");
             assert!(
                 result.is_ok(),
                 "Html format must succeed (Stage A4 implemented); got: {result:?}"

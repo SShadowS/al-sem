@@ -3244,7 +3244,7 @@ mod step6_tree_tests {
         let mut failures: Vec<String> = Vec::new();
         for dir in &dirs {
             let where_ = dir.strip_prefix(&root).unwrap_or(dir).display().to_string();
-            let inputs = crate::program::inputs::InputSet::read(dir, &Default::default());
+            let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
             let Some(m) =
                 crate::program::model::program_calls::assemble_and_resolve_workspace_program(
                     &inputs,

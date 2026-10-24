@@ -18,7 +18,7 @@ use al_sem::engine::gate::policy::pipeline::{
     PolicyCheckOptions, policy_request, run_policy_check,
 };
 use al_sem::engine::l5::event_flow::Scope;
-use al_sem::program::inputs::{InputNeeds, InputSet};
+use al_sem::program::inputs::{RequestInputs, WorkspaceInputs};
 
 use crate::cli_diff_strict::{MULTI_APP_ERROR, error_ws};
 
@@ -33,7 +33,7 @@ fn expected_lines(ws: &Path) -> Vec<String> {
     )]
 }
 
-fn fanout(inputs: &Arc<InputSet>, strict: bool) -> EventsRunResult {
+fn fanout(inputs: &Arc<WorkspaceInputs>, strict: bool) -> EventsRunResult {
     run_events_fanout(&EventsFanoutOptions {
         inputs,
         format: "json",
@@ -46,7 +46,7 @@ fn fanout(inputs: &Arc<InputSet>, strict: bool) -> EventsRunResult {
     })
 }
 
-fn chains(inputs: &Arc<InputSet>, strict: bool) -> EventsRunResult {
+fn chains(inputs: &Arc<WorkspaceInputs>, strict: bool) -> EventsRunResult {
     run_events_chains(&EventsChainsOptions {
         inputs,
         format: "json",
@@ -65,12 +65,12 @@ fn chains(inputs: &Arc<InputSet>, strict: bool) -> EventsRunResult {
 fn events_strict_exits_1_on_an_error_diagnostic() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let ws = error_ws(tmp.path(), "ws");
-    let inputs = InputSet::read(&ws, &Default::default());
+    let inputs = WorkspaceInputs::read(&ws, &Default::default());
     let want = expected_lines(&ws);
     for (cmd, run) in [
         (
             "fanout",
-            fanout as fn(&Arc<InputSet>, bool) -> EventsRunResult,
+            fanout as fn(&Arc<WorkspaceInputs>, bool) -> EventsRunResult,
         ),
         ("chains", chains),
     ] {
@@ -99,16 +99,12 @@ fn events_strict_exits_1_on_an_error_diagnostic() {
 fn policy_check_strict_exits_1_on_an_error_diagnostic() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let ws = error_ws(tmp.path(), "ws");
-    let inputs = InputSet::read(
-        &ws,
-        &InputNeeds {
-            policy: policy_request(None, false),
-            ..Default::default()
-        },
-    );
+    let inputs = WorkspaceInputs::read(&ws, &Default::default());
+    let request = RequestInputs::read(&ws, policy_request(None, false), None);
     let run = |strict| {
         run_policy_check(&PolicyCheckOptions {
             inputs: &inputs,
+            request: &request,
             format: "json",
             out: None,
             deterministic: true,

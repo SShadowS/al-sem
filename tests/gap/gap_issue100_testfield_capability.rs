@@ -31,7 +31,7 @@ use al_sem::engine::l5::snapshot_full::{
     FullSnapshotOptions, compose_full_snapshot, serialize_json,
 };
 use al_sem::program::body::l2_workspace::project_workspace;
-use al_sem::program::inputs::{InputNeeds, InputSet};
+use al_sem::program::inputs::{RequestInputs, WorkspaceInputs, WorkspaceNeeds};
 use al_sem::program::model::program_calls::{
     assemble_and_resolve_inline_program_default, assemble_and_resolve_workspace_program,
 };
@@ -62,10 +62,10 @@ fn write_ws(files: &[(String, String)]) -> tempfile::TempDir {
 }
 
 /// The workspace's inputs, read once (#160 step 1), with the snapshot's hash rows.
-fn read_inputs(dir: &Path) -> std::sync::Arc<InputSet> {
-    InputSet::read(
+fn read_inputs(dir: &Path) -> std::sync::Arc<WorkspaceInputs> {
+    WorkspaceInputs::read(
         dir,
-        &InputNeeds {
+        &WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         },
@@ -714,15 +714,11 @@ fn policy_hits(ws: &Path, yaml: &str) -> Result<BTreeSet<String>, String> {
     let policy = ws.join("policy.yaml");
     std::fs::write(&policy, yaml).unwrap();
     let policy = policy.to_string_lossy().to_string();
-    let inputs = InputSet::read(
-        ws,
-        &InputNeeds {
-            policy: policy_request(Some(&policy), false),
-            ..Default::default()
-        },
-    );
+    let inputs = WorkspaceInputs::read(ws, &Default::default());
+    let request = RequestInputs::read(ws, policy_request(Some(&policy), false), None);
     let out = run_policy_check(&PolicyCheckOptions {
         inputs: &inputs,
+        request: &request,
         format: "json",
         out: None,
         deterministic: true,

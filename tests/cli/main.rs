@@ -49,9 +49,9 @@ pub(crate) fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
 
 /// What `fingerprint`, `digest`, `prove` and `diff` read besides the build's
 /// inputs (#160 §4.2.6): the snapshot hash rows. Harnesses that call those
-/// pipelines read their `InputSet` with it.
-pub(crate) fn fingerprint_needs() -> al_sem::program::inputs::InputNeeds {
-    al_sem::program::inputs::InputNeeds {
+/// pipelines read their `WorkspaceInputs` with it.
+pub(crate) fn fingerprint_needs() -> al_sem::program::inputs::WorkspaceNeeds {
+    al_sem::program::inputs::WorkspaceNeeds {
         fingerprint_rows: true,
         ..Default::default()
     }
@@ -59,6 +59,7 @@ pub(crate) fn fingerprint_needs() -> al_sem::program::inputs::InputNeeds {
 
 mod al2dump_smoke;
 mod aldump_smoke;
+mod batch_records;
 mod cli_11b_policy_collision;
 mod cli_a_html_differential;
 mod cli_a_json_differential;
@@ -82,6 +83,7 @@ mod cli_c_cache_differential;
 mod cli_c_events_differential;
 mod cli_c_policy_differential;
 mod cli_d35_unknown_commit;
+mod cli_decision7_precedence;
 mod cli_dependency_diagnostics;
 mod cli_diff_strict;
 mod cli_digest_changed_spans;
@@ -112,6 +114,7 @@ mod cli_snapshot_schema4;
 mod cli_stderr_logger;
 mod cli_step5_coverage_fold;
 mod cli_strict_events_policy;
+mod cli_update_baseline_write;
 mod cli_workspace_fingerprint_closure;
 mod cli_workspace_source;
 mod cli_write_failure;

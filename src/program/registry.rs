@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn body_states_on_the_cross_app_fixture() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r3a5-fixtures/ws");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let (ctx, _r, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let reg = ctx.registry();
@@ -259,7 +259,7 @@ mod tests {
         )
         .unwrap();
 
-        let inputs = crate::program::inputs::InputSet::read(&root, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&root, &Default::default());
         let (ctx, _r, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let reg = ctx.registry();

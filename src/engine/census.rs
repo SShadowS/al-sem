@@ -15,7 +15,7 @@
 //! every `Vec`, `String` and hash table at CAPACITY with one control byte per
 //! hash slot. They keep the accounting of the pre-#160 `solve_bytes` figure
 //! (525 MiB on CDO, epic §3), so step 0's numbers stay comparable with it.
-//! The `inputs` bucket (`InputSet::census`) walks no `io::Error` held in a
+//! The `inputs` bucket (`WorkspaceInputs::census`) walks no `io::Error` held in a
 //! slot, and needs none: a census runs only after a successful build, and the
 //! one error that can carry a heap payload (a failed `.al` walk, `al_walk`)
 //! fails the build first (`snapshot/provider.rs`); the file-read slots hold OS

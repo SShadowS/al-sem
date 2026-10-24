@@ -212,8 +212,8 @@ fn fixture_is_where_the_literals_say() {
 // ---------------------------------------------------------------------------
 
 /// The command's one read of `ws` (#160).
-fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs())
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceInputs> {
+    al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs())
 }
 
 fn digest(ws: &Path, file: &str, single_app: bool) -> Value {
@@ -1140,12 +1140,11 @@ fn a6_dependency_origin_trigger_reaches_the_workspace_cone() {
 
     let run = |single_app: bool| -> Vec<u64> {
         let out = run_policy_check(&PolicyCheckOptions {
-            inputs: &al_sem::program::inputs::InputSet::read(
+            inputs: &al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
+            request: &al_sem::program::inputs::RequestInputs::read(
                 &ws,
-                &al_sem::program::inputs::InputNeeds {
-                    policy: policy_request(Some(&policy), false),
-                    ..Default::default()
-                },
+                policy_request(Some(&policy), false),
+                None,
             ),
             format: "json",
             out: None,

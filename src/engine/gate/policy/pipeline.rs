@@ -31,7 +31,7 @@ use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view, dia
 use crate::engine::l5::detectors::default_detectors;
 use crate::engine::root_classification::classify_roots;
 use crate::engine::session::{Cell, View, policy_plan};
-use crate::program::inputs::{InputSet, PolicyOrigin, PolicyRequest};
+use crate::program::inputs::{PolicyOrigin, PolicyRequest, RequestInputs, WorkspaceInputs};
 use crate::program::model::workspace::ModelRoutine;
 
 /// How the effective policy was resolved.
@@ -46,8 +46,8 @@ enum ResolvedPolicy {
 
 /// The policy file `policy check` reads (#160): `--no-policy` reads none,
 /// `--policy <path>` that path, else the auto-detected workspace file. The
-/// command's `InputSet` is read with it, and [`resolve_policy_check`] then
-/// reads only the set.
+/// command's `RequestInputs` is read with it, and [`resolve_policy_check`] then
+/// reads only those.
 #[must_use]
 pub fn policy_request(policy_path: Option<&str>, no_policy: bool) -> PolicyRequest {
     if no_policy {
@@ -61,14 +61,14 @@ pub fn policy_request(policy_path: Option<&str>, no_policy: bool) -> PolicyReque
 
 /// Auto-detect / explicit / default policy resolution for `check`. Mirrors
 /// `runPolicyCheck`'s resolution block. The explicit-or-auto choice (and the
-/// exists-first auto-detect rule) was applied when the `InputSet` was read
+/// exists-first auto-detect rule) was applied when the `RequestInputs` was read
 /// ([`policy_request`]); this loads the bytes it holds.
-fn resolve_policy_check(inputs: &InputSet) -> ResolvedPolicy {
-    if inputs.policy_request == PolicyRequest::Disabled {
+fn resolve_policy_check(workspace: &Path, request: &RequestInputs) -> ResolvedPolicy {
+    if request.policy_request == PolicyRequest::Disabled {
         return ResolvedPolicy::Disabled;
     }
-    if let Some(p) = &inputs.policy_file {
-        let ws_abs = absolutize(&inputs.workspace);
+    if let Some(p) = &request.policy_file {
+        let ws_abs = absolutize(workspace);
         let label = match p.origin {
             PolicyOrigin::Explicit => "explicit",
             PolicyOrigin::Auto => "auto",
@@ -161,10 +161,12 @@ pub struct PolicyCheckOutcome {
 
 /// Options for `run_policy_check`.
 pub struct PolicyCheckOptions<'a> {
-    /// The command's one read of the workspace (#160), read with
-    /// [`policy_request`]: it holds the `--policy` / auto-detected file and the
-    /// request itself (`--no-policy` included).
-    pub inputs: &'a std::sync::Arc<InputSet>,
+    /// The command's one read of the workspace (#160).
+    pub inputs: &'a std::sync::Arc<WorkspaceInputs>,
+    /// The command's request files (#277 D3), read with [`policy_request`]: the
+    /// `--policy` / auto-detected file and the request itself (`--no-policy`
+    /// included).
+    pub request: &'a RequestInputs,
     pub format: &'a str, // "human" | "json" | "sarif"
     pub out: Option<&'a str>,
     pub deterministic: bool,
@@ -180,9 +182,25 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
     // A set read without a policy request holds no policy file even when the
     // workspace has one: the check would silently run the bundled default.
     assert!(
-        opts.inputs.policy_request != PolicyRequest::None,
-        "policy check: InputSet read without a policy request (use policy_request)"
+        opts.request.policy_request != PolicyRequest::None,
+        "policy check: RequestInputs read without a policy request (use policy_request)"
     );
+    // Resolve the effective policy before any build (#277 D3, Decision 7): a
+    // bad policy is reported even when the build would fail, or `--strict`
+    // would stop on an analyzer diagnostic.
+    let (policy_opt, source): (Option<PolicyDoc>, String) =
+        match resolve_policy_check(&opts.inputs.workspace, opts.request) {
+            ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
+            ResolvedPolicy::Disabled => (None, "disabled".to_string()),
+            ResolvedPolicy::Error(lines) => {
+                return PolicyCheckOutcome {
+                    text: None,
+                    exit_code: 1,
+                    stderr_lines: lines,
+                    out_path: None,
+                };
+            }
+        };
     // Build the model (assemble → resolve → detector context).
     // #70: the cross-app base by default (rules see a dependency's table names and
     // the facts its code adds), the workspace alone under `--single-app`. No
@@ -219,20 +237,6 @@ pub fn run_policy_check(opts: &PolicyCheckOptions) -> PolicyCheckOutcome {
         };
     }
 
-    // Resolve the effective policy.
-    let (policy_opt, source): (Option<PolicyDoc>, String) = match resolve_policy_check(opts.inputs)
-    {
-        ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
-        ResolvedPolicy::Disabled => (None, "disabled".to_string()),
-        ResolvedPolicy::Error(lines) => {
-            return PolicyCheckOutcome {
-                text: None,
-                exit_code: 1,
-                stderr_lines: lines,
-                out_path: None,
-            };
-        }
-    };
     // #160 step 6 Task 3 (D7 (7)): the rule engine reads `det.summaries` and
     // the view's witness pass (`Cell::Raw`: every primary routine's raw
     // inherited facts); nothing else is read after the run.

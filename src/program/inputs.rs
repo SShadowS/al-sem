@@ -1,7 +1,11 @@
-//! The frozen workspace inputs (#160 step 1, spec §4.2): every file a command
-//! reads from the workspace, read ONCE by [`InputSet::read`] before the
-//! semantic build. Every reader after that reads the set, never the disk, so
-//! an edit on disk during a run cannot give two readers two answers.
+//! The frozen inputs (#160 step 1, spec §4.2): every file a command reads,
+//! read ONCE before the semantic build. Every reader after that reads the
+//! set, never the disk, so an edit on disk during a run cannot give two
+//! readers two answers.
+//!
+//! Two halves (#277 spec D3): [`WorkspaceInputs`], what the workspace path
+//! itself gives (one `Arc` per path, which several jobs can share), and
+//! [`RequestInputs`], the files one command's flags name (policy, baseline).
 //!
 //! One exception, by design (spec §4.2.2): the dependency `.app` files. The set
 //! holds the closure's LIST (and, with `fingerprint_rows`, one hash per file),
@@ -29,8 +33,12 @@ use crate::source_text::{
 #[path = "../../tests/common/unreadable.rs"]
 mod unreadable;
 
-/// Every workspace input of one command, read once (spec §4.2.1).
-pub struct InputSet {
+// shortcut: digest.rs test code (step 9's lane, hands-off for #277) still names
+// `InputSet`; remove this alias when digest.rs is free.
+pub type InputSet = WorkspaceInputs;
+
+/// Every input the workspace path gives, read once (spec §4.2.1).
+pub struct WorkspaceInputs {
     /// The workspace root as the command line spelled it (never canonicalized:
     /// `ws:` unit ids and messages use it as given).
     pub workspace: PathBuf,
@@ -47,21 +55,10 @@ pub struct InputSet {
     pub roots_config: Option<Result<Vec<u8>, String>>,
     /// `<workspace>/al-sem.coverage.yaml` (a fingerprint input only).
     pub coverage_yaml: Option<Vec<u8>>,
-    /// The policy file the command asked for (see [`PolicyRequest`]). Auto-detect
-    /// takes the FIRST of `al-sem.policy.yaml`, `.yml` that exists; an unreadable
-    /// `.yaml` is stored as `Err` and does not fall through. The path is absolutized.
-    pub policy_file: Option<PolicyInput>,
-    /// The policy request the set was read with. `policy_file` is `None` both
-    /// under `--no-policy` and when auto-detect finds no file; this tells them
-    /// apart, so the policy mode comes from the set alone.
-    pub policy_request: PolicyRequest,
-    /// `--baseline <path>`: `None` = no flag; `Some` with `Err(NotFound)` is the
-    /// "no baseline yet" case.
-    pub baseline: Option<FileInput>,
     /// The dependency closure the loader reads (`dependencies::discover_app_files`).
     pub closure: ClosureEntries,
     /// The snapshot's reproducibility input rows (`derive_inputs_from_parts`),
-    /// present only when [`InputNeeds::fingerprint_rows`] was asked for.
+    /// present only when [`WorkspaceNeeds::fingerprint_rows`] was asked for.
     pub snapshot_inputs: Option<Vec<SnapshotInput>>,
     /// The `.al` walk itself: `Err` on an unreadable folder or a link loop. Then
     /// `al_files` is EMPTY: a partial list must never reach the build as if it
@@ -75,7 +72,7 @@ pub struct InputSet {
     /// `compute_gate_model_instance_id`'s value, from the fields above with the
     /// same algorithm; `None` = fail-closed.
     pub model_instance_id: Option<String>,
-    /// `InputNeeds::build_only` as asked.
+    /// `WorkspaceNeeds::build_only` as asked.
     pub build_only: bool,
     /// `rel_posix` -> index into `al_files`.
     index: HashMap<String, usize>,
@@ -138,27 +135,83 @@ pub struct WsFile {
     pub text: Result<Arc<str>, String>,
 }
 
-/// What a command reads beyond the build's own inputs.
-#[derive(Default)]
-pub struct InputNeeds {
+/// What a command reads from the workspace beyond the build's own inputs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkspaceNeeds {
     /// Only what the snapshot build reads: `app.json`, the `.al` walk and texts,
     /// the closure. Set by `SnapshotBuilder::build*`, by no command. `read` then
     /// skips the `app.json` walk, the `nested_app` checks (all `false`), the
-    /// model-instance id (`None`), `roots.config.json`, the coverage yaml, policy,
-    /// baseline and hash rows. `app_scoped_files()` and `roots_config_loaded()`
-    /// assert `!build_only`, so an empty slot is never read as an answer.
+    /// model-instance id (`None`), `roots.config.json`, the coverage yaml and
+    /// hash rows. `app_scoped_files()` and `roots_config_loaded()` assert
+    /// `!build_only`, so an empty slot is never read as an answer.
     pub build_only: bool,
     pub fingerprint_rows: bool,
-    pub policy: PolicyRequest,
-    pub baseline: Option<PathBuf>,
 }
 
-impl InputNeeds {
+impl WorkspaceNeeds {
     /// `build_only: true`, the rest default.
-    pub fn build_only() -> InputNeeds {
-        InputNeeds {
+    pub fn build_only() -> WorkspaceNeeds {
+        WorkspaceNeeds {
             build_only: true,
-            ..InputNeeds::default()
+            ..WorkspaceNeeds::default()
+        }
+    }
+
+    /// What two jobs on one workspace read together: a set read with the
+    /// union serves both (a job never reads a field it did not ask for).
+    #[must_use]
+    pub fn union(self, other: WorkspaceNeeds) -> WorkspaceNeeds {
+        WorkspaceNeeds {
+            build_only: self.build_only && other.build_only,
+            fingerprint_rows: self.fingerprint_rows || other.fingerprint_rows,
+        }
+    }
+}
+
+/// The files one command's flags name, read once before the build (#277 D3):
+/// one per job, never shared.
+pub struct RequestInputs {
+    /// The policy file the command asked for (see [`PolicyRequest`]). Auto-detect
+    /// takes the FIRST of `al-sem.policy.yaml`, `.yml` that exists; an unreadable
+    /// `.yaml` is stored as `Err` and does not fall through. The path is absolutized.
+    pub policy_file: Option<PolicyInput>,
+    /// The policy request read. `policy_file` is `None` both under `--no-policy`
+    /// and when auto-detect finds no file; this tells them apart, so the policy
+    /// mode comes from the inputs alone.
+    pub policy_request: PolicyRequest,
+    /// `--baseline <path>`: `None` = no flag; `Some` with `Err(NotFound)` is the
+    /// "no baseline yet" case.
+    pub baseline: Option<FileInput>,
+}
+
+impl RequestInputs {
+    /// Read the policy file `policy` names (auto-detect looks in `workspace`)
+    /// and the `baseline` file. Never fails: a read error stays in its slot.
+    pub fn read(
+        workspace: &Path,
+        policy: PolicyRequest,
+        baseline: Option<PathBuf>,
+    ) -> RequestInputs {
+        use crate::engine::gate::policy::pipeline::absolutize;
+        let policy_file = match &policy {
+            PolicyRequest::None | PolicyRequest::Disabled => None,
+            PolicyRequest::Path(p) => Some(PolicyInput {
+                origin: PolicyOrigin::Explicit,
+                file: FileInput::read(absolutize(p)),
+            }),
+            PolicyRequest::AutoDetect => ["al-sem.policy.yaml", "al-sem.policy.yml"]
+                .iter()
+                .map(|name| workspace.join(name))
+                .find(|candidate| candidate.exists())
+                .map(|candidate| PolicyInput {
+                    origin: PolicyOrigin::Auto,
+                    file: FileInput::read(absolutize(candidate.to_string_lossy().as_ref())),
+                }),
+        };
+        RequestInputs {
+            policy_file,
+            policy_request: policy,
+            baseline: baseline.map(FileInput::read),
         }
     }
 }
@@ -177,9 +230,9 @@ pub enum PolicyRequest {
     Disabled,
 }
 
-impl InputSet {
-    /// The ONE disk reader (spec §4.2.2). Charges the `inputs.read` counter.
-    pub fn read(workspace: &Path, needs: &InputNeeds) -> Arc<InputSet> {
+impl WorkspaceInputs {
+    /// The ONE workspace reader (spec §4.2.2). Charges the `inputs.read` counter.
+    pub fn read(workspace: &Path, needs: &WorkspaceNeeds) -> Arc<WorkspaceInputs> {
         pt::counter_delta("inputs.read", 1);
         // A command reads before its own top span (`analyze.total`) opens, so the
         // read is timed here.
@@ -238,45 +291,16 @@ impl InputSet {
             )
         };
 
-        let policy_file = if build_only {
-            None
-        } else {
-            use crate::engine::gate::policy::pipeline::absolutize;
-            match &needs.policy {
-                PolicyRequest::None | PolicyRequest::Disabled => None,
-                PolicyRequest::Path(p) => Some(PolicyInput {
-                    origin: PolicyOrigin::Explicit,
-                    file: FileInput::read(absolutize(p)),
-                }),
-                PolicyRequest::AutoDetect => ["al-sem.policy.yaml", "al-sem.policy.yml"]
-                    .iter()
-                    .map(|name| workspace.join(name))
-                    .find(|candidate| candidate.exists())
-                    .map(|candidate| PolicyInput {
-                        origin: PolicyOrigin::Auto,
-                        file: FileInput::read(absolutize(candidate.to_string_lossy().as_ref())),
-                    }),
-            }
-        };
-        let baseline = if build_only {
-            None
-        } else {
-            needs.baseline.clone().map(FileInput::read)
-        };
-
         let (files, unreadable) = crate::dependencies::discover_app_files(workspace);
         let closure = ClosureEntries { files, unreadable };
 
-        let mut set = InputSet {
+        let mut set = WorkspaceInputs {
             workspace: workspace.to_path_buf(),
             app_json,
             app_json_value,
             app_json_paths,
             roots_config,
             coverage_yaml,
-            policy_file,
-            policy_request: needs.policy.clone(),
-            baseline,
             closure,
             snapshot_inputs: None,
             al_walk,
@@ -304,7 +328,7 @@ impl InputSet {
     pub fn app_scoped_files(&self) -> impl Iterator<Item = &WsFile> {
         assert!(
             !self.build_only,
-            "InputSet read with build_only: nested_app was not computed"
+            "WorkspaceInputs read with build_only: nested_app was not computed"
         );
         self.al_files.iter().filter(|f| !f.nested_app)
     }
@@ -355,7 +379,7 @@ impl InputSet {
             }
         }
         let mut t = Tally::default();
-        t.arc::<InputSet>();
+        t.arc::<WorkspaceInputs>();
         path(&mut t, &self.workspace);
         file(&mut t, &self.app_json);
         match &self.app_json_value {
@@ -378,15 +402,6 @@ impl InputSet {
         }
         if let Some(b) = &self.coverage_yaml {
             t.buf::<u8>(b.len());
-        }
-        if let Some(p) = &self.policy_file {
-            file(&mut t, &p.file);
-        }
-        if let PolicyRequest::Path(p) = &self.policy_request {
-            path(&mut t, p);
-        }
-        if let Some(b) = &self.baseline {
-            file(&mut t, b);
         }
         t.buf::<DiscoveredAppFile>(self.closure.files.len());
         for f in &self.closure.files {
@@ -434,7 +449,7 @@ impl InputSet {
     pub fn roots_config_loaded(&self) -> bool {
         assert!(
             !self.build_only,
-            "InputSet read with build_only: roots.config.json was not read"
+            "WorkspaceInputs read with build_only: roots.config.json was not read"
         );
         matches!(&self.roots_config, Some(Ok(b))
             if crate::engine::root_classification::roots_config_bytes_load(b))
@@ -509,7 +524,7 @@ mod tests {
             let root = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/r0-corpus")
                 .join(ws);
-            let inputs = InputSet::read(&root, &InputNeeds::default());
+            let inputs = WorkspaceInputs::read(&root, &WorkspaceNeeds::default());
             assert_eq!(
                 inputs.model_instance_id,
                 crate::engine::gate::model_instance_id::compute_gate_model_instance_id(&root),
@@ -527,7 +542,7 @@ mod tests {
         std::fs::create_dir_all(d.path().join("sub/src")).unwrap();
         std::fs::write(d.path().join("sub/app.json"), "{}").unwrap();
         std::fs::write(d.path().join("sub/src/B.al"), "codeunit 50101 B { }").unwrap();
-        let i = InputSet::read(d.path(), &InputNeeds::default());
+        let i = WorkspaceInputs::read(d.path(), &WorkspaceNeeds::default());
         let all: Vec<_> = i
             .al_files
             .iter()
@@ -561,7 +576,7 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(sub.join("app.json"), "{}").unwrap();
         std::fs::write(sub.join("B.al"), "codeunit 50101 B { }").unwrap();
-        let i = InputSet::read(d.path(), &InputNeeds::default());
+        let i = WorkspaceInputs::read(d.path(), &WorkspaceNeeds::default());
         assert_eq!(i.al_files.len(), 1, "precondition: the walk lists B.al");
         assert!(i.al_files[0].nested_app, "{}", i.al_files[0].rel_posix);
     }
@@ -571,7 +586,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("app.json");
         std::fs::write(&p, [0xff, 0xfe, 0x00]).unwrap();
-        let i = InputSet::read(d.path(), &InputNeeds::default());
+        let i = WorkspaceInputs::read(d.path(), &WorkspaceNeeds::default());
         let want = std::fs::read_to_string(&p).unwrap_err().to_string();
         assert_eq!(i.app_json.text().unwrap_err().to_string(), want);
         assert!(i.app_json_value.is_none());
@@ -580,7 +595,7 @@ mod tests {
     #[test]
     fn build_only_skips_command_inputs() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d1-multi-caller");
-        let i = InputSet::read(&root, &InputNeeds::build_only());
+        let i = WorkspaceInputs::read(&root, &WorkspaceNeeds::build_only());
         assert!(i.build_only && i.model_instance_id.is_none() && i.app_json_paths.is_empty());
         assert!(i.al_files.iter().all(|f| !f.nested_app));
     }
@@ -589,7 +604,7 @@ mod tests {
     #[should_panic(expected = "build_only")]
     fn build_only_set_refuses_app_scoped_reads() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d1-multi-caller");
-        let _ = InputSet::read(&root, &InputNeeds::build_only())
+        let _ = WorkspaceInputs::read(&root, &WorkspaceNeeds::build_only())
             .app_scoped_files()
             .count();
     }
@@ -604,7 +619,7 @@ mod tests {
             eprintln!("skipped: cannot make {} unreadable here", f.display());
             return;
         };
-        let i = InputSet::read(d.path(), &InputNeeds::default());
+        let i = WorkspaceInputs::read(d.path(), &WorkspaceNeeds::default());
         assert!(i.file("A.al").unwrap().text.is_err());
     }
 
@@ -621,16 +636,32 @@ mod tests {
             eprintln!("skipped: cannot make {} unreadable here", yaml.display());
             return;
         };
-        let needs = InputNeeds {
-            policy: PolicyRequest::AutoDetect,
-            ..InputNeeds::default()
-        };
-        let i = InputSet::read(d.path(), &needs);
+        let i = RequestInputs::read(d.path(), PolicyRequest::AutoDetect, None);
         let p = i.policy_file.as_ref().expect("auto-detect found a file");
         assert!(matches!(p.origin, PolicyOrigin::Auto));
         assert!(p.file.path.is_absolute());
         assert_eq!(p.file.path, yaml);
         assert!(p.file.bytes.is_err());
+    }
+
+    /// A set read with the union serves both asks: hash rows if either wants
+    /// them, the full read unless both are build-only.
+    #[test]
+    fn needs_union() {
+        let b = WorkspaceNeeds::build_only();
+        let f = WorkspaceNeeds {
+            fingerprint_rows: true,
+            ..WorkspaceNeeds::default()
+        };
+        assert_eq!(b.union(b), b);
+        assert_eq!(
+            b.union(f),
+            WorkspaceNeeds {
+                build_only: false,
+                fingerprint_rows: true
+            }
+        );
+        assert_eq!(f.union(WorkspaceNeeds::default()), f);
     }
 
     const APP_JSON: &str = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#;
@@ -653,7 +684,7 @@ mod tests {
         std::fs::create_dir_all(d.path().join("sub")).unwrap();
         std::fs::write(d.path().join("sub/app.json"), "{}").unwrap();
         std::fs::write(d.path().join("sub/C.al"), "codeunit 50102 C { }").unwrap();
-        let inputs = InputSet::read(d.path(), &InputNeeds::build_only());
+        let inputs = WorkspaceInputs::read(d.path(), &WorkspaceNeeds::build_only());
         let new = workspace_source_from_inputs(&inputs).unwrap().unwrap();
         let old = walk_al_source(d.path(), TrustTier::Workspace)
             .unwrap()
@@ -680,7 +711,7 @@ mod tests {
     fn no_al_file_is_symbol_only() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("app.json"), APP_JSON).unwrap();
-        let inputs = InputSet::read(d.path(), &InputNeeds::build_only());
+        let inputs = WorkspaceInputs::read(d.path(), &WorkspaceNeeds::build_only());
         assert!(
             crate::snapshot::provider::workspace_source_from_inputs(&inputs)
                 .unwrap()
@@ -703,7 +734,7 @@ mod tests {
             eprintln!("skipped: cannot make {} unreadable here", sub.display());
             return;
         };
-        let inputs = InputSet::read(d.path(), &InputNeeds::default());
+        let inputs = WorkspaceInputs::read(d.path(), &WorkspaceNeeds::default());
         assert!(inputs.al_walk.is_err());
         assert!(inputs.al_files.is_empty());
         assert!(inputs.model_instance_id.is_none());
@@ -745,7 +776,7 @@ mod tests {
             eprintln!("skipped: cannot make {} here", link.display());
             return;
         }
-        let inputs = InputSet::read(d.path(), &InputNeeds::default());
+        let inputs = WorkspaceInputs::read(d.path(), &WorkspaceNeeds::default());
         assert!(inputs.al_walk.is_err());
         assert!(inputs.al_files.is_empty());
         assert!(inputs.model_instance_id.is_none());

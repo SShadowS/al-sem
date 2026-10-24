@@ -243,7 +243,7 @@ pub enum ShardMode {
 pub struct FingerprintOptions<'a> {
     /// The command's one read of the workspace (#160); the path is
     /// `inputs.workspace`.
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
+    pub inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     /// al-sem version string (e.g. `"cli-b-v1"`).
     pub driver_version: &'a str,
     /// Output format.
@@ -381,6 +381,21 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
         opts.is_query_requested,
     )?;
 
+    // --shard requires --out <directory> (fingerprint.ts:210) → exit 1. Checked
+    // before the build (#277 D3, Decision 7): it wins over a failing build and
+    // over the --strict gate.
+    // --shard requires --out <directory> (fingerprint.ts:210) → exit 1. Checked
+    // before the build (#277 D3, Decision 7): it wins over a failing build and
+    // over the --strict gate.
+    if opts.shard.is_some() && opts.out.is_none() {
+        return Ok(FingerprintRunResult {
+            output: FingerprintOutput::Text(String::new()),
+            exit_code: 1,
+            selector_error_message: Some("--shard requires --out <directory>".to_string()),
+            stderr_diagnostics: Vec::new(),
+        });
+    }
+
     // B0 path: shard / cbor / cbor.gz / json-no-query.
     let go_b0 = opts.shard.is_some()
         || opts.format == FingerprintFormat::Cbor
@@ -461,16 +476,6 @@ pub fn run_fingerprint_pipeline(opts: &FingerprintOptions) -> Result<Fingerprint
                 .map(|(_, sev, msg)| format!("{sev}: {msg}"))
                 .collect()
         };
-
-        // --shard requires --out <directory> (fingerprint.ts:210) → exit 1.
-        if opts.shard.is_some() && opts.out.is_none() {
-            return Ok(FingerprintRunResult {
-                output: FingerprintOutput::Text(String::new()),
-                exit_code: 1,
-                selector_error_message: Some("--shard requires --out <directory>".to_string()),
-                stderr_diagnostics: Vec::new(),
-            });
-        }
 
         let output = if let Some(mode) = opts.shard {
             // serialize_sharded: primaryOnly = (mode == PrimaryOnly).

@@ -479,7 +479,7 @@ mod tests {
         out.write_all(&[0u8; 40]).unwrap();
         out.write_all(bytes.get_ref()).unwrap();
 
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
             .expect("cross-app base");
         let model = &base.resolved;

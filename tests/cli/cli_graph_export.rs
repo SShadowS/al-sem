@@ -818,7 +818,7 @@ fn export_refuses_a_workspace_scoped_program() {
     use al_sem::program::resolved::{ProgramScope, ResolvedProgram};
     let dir = tempfile::tempdir().expect("tempdir");
     cross_app_workspace(dir.path());
-    let inputs = al_sem::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default());
     let export = |scope| {
         let program = ResolvedProgram::build(&inputs, scope).expect("the fixture builds");
         al_sem::program::impact_graph::export_from_program(&program)

@@ -21,8 +21,8 @@ fn write(path: &Path, text: &str) {
 }
 
 /// The command's one read of `ws` (#160).
-fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &Default::default())
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceInputs> {
+    al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default())
 }
 
 /// Workspace and dependency both declare a codeunit named "Shared Name" with a
@@ -274,7 +274,7 @@ fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
     for ws in cross_app_fixtures() {
         let ctx = build_context(&ws).expect("context");
         let (model, _) = assemble_and_resolve_cross_app_from_program(
-            &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
+            &al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
             MI,
             false,
             &ctx,
@@ -1170,8 +1170,9 @@ fn d45_json_findings(dir: &Path) -> Vec<serde_json::Value> {
         single_app: false,
         with_evidence: false,
     };
-    let (out, _, _) = run_analyze_with_exit(&args.read_inputs(), &args, "252-test")
-        .unwrap_or_else(|e| panic!("run_analyze failed: {e}"));
+    let (out, ..) =
+        run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "252-test")
+            .unwrap_or_else(|e| panic!("run_analyze failed: {e}"));
     let json: serde_json::Value = serde_json::from_str(&out).expect("analyze JSON");
     json["payload"]["findings"]
         .as_array()

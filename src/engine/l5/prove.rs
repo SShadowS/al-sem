@@ -820,7 +820,7 @@ pub struct ProveRunResult {
 ///   Ok(result) with exit_code 0 (answered) or 2 (routine not resolved → dummy-doc).
 ///   Err(message) for workspace/pipeline errors → emit to stderr, exit 1.
 pub fn run_prove_pipeline(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     routine_selector: &str,
     question_text: &str,
     alsem_ver: &str,
@@ -845,7 +845,7 @@ pub fn run_prove_pipeline(
 /// effects, unresolved cone and gap count read off the view's tree inside it.
 pub(crate) fn prove_pipeline_with(
     detectors: Vec<crate::engine::l5::registry::Detector>,
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     routine_selector: &str,
     question_text: &str,
     alsem_ver: &str,
@@ -1162,9 +1162,9 @@ mod tests {
         drop(target);
 
         // The claim, through prove's pipeline on a fresh hand-stated target.
-        let inputs = crate::program::inputs::InputSet::read(
+        let inputs = crate::program::inputs::WorkspaceInputs::read(
             tmp.path(),
-            &crate::program::inputs::InputNeeds {
+            &crate::program::inputs::WorkspaceNeeds {
                 fingerprint_rows: true,
                 ..Default::default()
             },

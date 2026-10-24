@@ -177,8 +177,13 @@ fn analyze_in(
         single_app,
         with_evidence: true,
     };
-    let (out, exit) = match run_analyze_with_exit(&args.read_inputs(), &args, "i148-test") {
-        Ok((out, exit, _)) => (out, exit),
+    let (out, exit) = match run_analyze_with_exit(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "i148-test",
+    ) {
+        Ok((out, exit, ..)) => (out, exit),
         Err(e) => panic!("run_analyze failed: {e}"),
     };
     (

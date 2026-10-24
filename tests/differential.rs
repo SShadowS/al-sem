@@ -1910,7 +1910,7 @@ fn discover_l3cov_goldens() -> Vec<(String, PathBuf)> {
 fn rust_coverage_projection(fixture_dir: &Path) -> AnalysisCoverage {
     match assemble_and_resolve_workspace_with_program_calls(fixture_dir) {
         Some(resolved) => resolved.project_coverage_inputs(
-            &al_sem::program::inputs::InputSet::read(fixture_dir, &Default::default()),
+            &al_sem::program::inputs::WorkspaceInputs::read(fixture_dir, &Default::default()),
         ),
         None => AnalysisCoverage {
             source_units_total: 0,

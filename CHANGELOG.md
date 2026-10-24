@@ -67,6 +67,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dependency app (`--scope all`) keeps the old text, because its own uncertainty edges
   are not on the detector context. Ids, fingerprints, severity and confidence do not
   change.
+- **Errors found before the build win (#277).** `policy check` loads its policy, and
+  `fingerprint` checks `--shard` against `--out`, before the model is built. So when an
+  invocation has two problems, the stderr text changes: a bad policy and a failing build
+  now report the policy error; `--shard` without `--out` and a failing build report
+  `--shard requires --out <directory>`; and `policy check --strict` with a bad policy and
+  an error-severity analyzer diagnostic reports the policy error, not the diagnostic
+  lines (exit 1 either way). Neither case builds a model any more. `diff --renames` keeps
+  its order.
+- **`analyze --update-baseline` write failure (#277).** The baseline file is now written
+  by the command's output step, before stdout, under the one write-failure rule: a failed
+  write prints `al-sem: write error: <path>: <OS message>` and exits 2 (was `al-sem:
+  failed to write baseline '<path>': <OS message>`, exit 3). Stdout stays empty in both.
+- Library: `InputSet` is now `WorkspaceInputs` (read once per workspace path) and
+  `InputNeeds` is `WorkspaceNeeds` (with `union`). The policy file and the baseline moved
+  to a new per-command `RequestInputs`. `run_analyze_with_exit` takes the request and
+  returns the baseline bytes instead of writing them; `save_baseline` is gone.
+
 - **Grammar: tree-sitter-al `main` at `c89c2ecb`** (D1, a parser state-reduction pass;
   package version still 4.4.1; was `960ed312`). `node-types.json` is byte-identical, so the
   generated vocabulary, `kind_policy` and the 501 named kinds did not move, and no valid

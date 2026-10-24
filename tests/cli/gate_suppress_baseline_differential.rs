@@ -176,7 +176,13 @@ fn first_diff(label: &str, golden: &str, rust: &str) {
 #[test]
 fn inline_suppression_suppressed_sarif_byte_matches() {
     let args = inline_suppress_args(false); // suppression ON
-    let rust = run_analyze(&args.read_inputs(), &args, "engine-default").expect("run_analyze");
+    let rust = run_analyze(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .expect("run_analyze");
     if maybe_regen("ws-inline-suppress.suppressed.sarif.json", &rust) {
         return;
     }
@@ -197,7 +203,13 @@ fn inline_suppression_suppressed_sarif_byte_matches() {
 #[test]
 fn inline_suppression_unsuppressed_sarif_byte_matches() {
     let args = inline_suppress_args(true); // suppression OFF
-    let rust = run_analyze(&args.read_inputs(), &args, "engine-default").expect("run_analyze");
+    let rust = run_analyze(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .expect("run_analyze");
     if maybe_regen("ws-inline-suppress.unsuppressed.sarif.json", &rust) {
         return;
     }
@@ -221,7 +233,13 @@ fn inline_suppression_prsummary_byte_matches() {
     let mut args = inline_suppress_args(false); // suppression ON
     args.format = OutputFormat::PrSummary;
     args.sarif_version_override = None; // PR-summary embeds no version
-    let rust = run_analyze(&args.read_inputs(), &args, "engine-default").expect("run_analyze");
+    let rust = run_analyze(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .expect("run_analyze");
     if maybe_regen("ws-inline-suppress.suppressed.prsummary.md", &rust) {
         return;
     }
@@ -246,8 +264,15 @@ fn inline_suppression_prsummary_byte_matches() {
 #[test]
 fn anti_degenerate_suppression_removes_one_d47_keeps_wrong_detector() {
     let (on, off) = (inline_suppress_args(false), inline_suppress_args(true));
-    let suppressed = run_analyze(&on.read_inputs(), &on, "engine-default").unwrap();
-    let unsuppressed = run_analyze(&off.read_inputs(), &off, "engine-default").unwrap();
+    let suppressed =
+        run_analyze(&on.read_inputs(), &on.read_request(), &on, "engine-default").unwrap();
+    let unsuppressed = run_analyze(
+        &off.read_inputs(),
+        &off.read_request(),
+        &off,
+        "engine-default",
+    )
+    .unwrap();
     assert_eq!(sarif_result_count(&unsuppressed), 5);
     assert_eq!(sarif_result_count(&suppressed), 4);
 
@@ -310,7 +335,13 @@ fn d8_args(baseline: Option<&str>, update: bool, fail_on: Option<&str>) -> Analy
 fn baseline_full_zero_results_byte_matches() {
     let baseline_path = goldens_dir().join("ws-d8-commit-in-tx.baseline.json");
     let args = d8_args(Some(&baseline_path.to_string_lossy()), false, None);
-    let rust = run_analyze(&args.read_inputs(), &args, "engine-default").expect("run_analyze");
+    let rust = run_analyze(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .expect("run_analyze");
     assert_eq!(sarif_result_count(&rust), 0, "full baseline → 0 results");
     if maybe_regen("ws-d8-commit-in-tx.baselined.sarif.json", &rust) {
         return;
@@ -326,7 +357,13 @@ fn baseline_full_zero_results_byte_matches() {
 fn baseline_partial_one_result_byte_matches() {
     let baseline_path = goldens_dir().join("ws-d8-commit-in-tx.partial-baseline.json");
     let args = d8_args(Some(&baseline_path.to_string_lossy()), false, None);
-    let rust = run_analyze(&args.read_inputs(), &args, "engine-default").expect("run_analyze");
+    let rust = run_analyze(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .expect("run_analyze");
     assert_eq!(sarif_result_count(&rust), 1, "partial baseline → 1 result");
     if maybe_regen("ws-d8-commit-in-tx.partial-baselined.sarif.json", &rust) {
         return;
@@ -340,18 +377,23 @@ fn baseline_partial_one_result_byte_matches() {
 }
 
 /// `--update-baseline` reproduces the committed full baseline byte-for-byte (proves the
-/// edit-stable fingerprints + sorted-dedup + epoch generatedAt). We write to a temp path
-/// (NOT the committed golden) and compare the written bytes to the committed file.
+/// edit-stable fingerprints + sorted-dedup + epoch generatedAt). The pipeline returns
+/// the bytes the bin writes (#277 D2.4); the path is never written here.
 #[test]
 fn update_baseline_round_trips_committed_file() {
     let tmp = std::env::temp_dir().join(format!("alsem-gate-baseline-{}.json", std::process::id()));
     // --update-baseline writes the current finding set (no baseline applied yet ⇒ both
     // findings), which is exactly the committed full baseline.
     let args = d8_args(Some(&tmp.to_string_lossy()), true, None);
-    let _ = run_analyze(&args.read_inputs(), &args, "engine-default").expect("run_analyze");
-
-    let written = std::fs::read_to_string(&tmp).expect("baseline written");
-    let _ = std::fs::remove_file(&tmp);
+    let (.., bytes) = run_analyze_with_exit(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .expect("run_analyze_with_exit");
+    assert!(!tmp.exists(), "compute writes no file");
+    let written = String::from_utf8(bytes.expect("baseline bytes")).unwrap();
 
     let committed = read_golden("ws-d8-commit-in-tx.baseline.json");
     if written != committed {
@@ -380,9 +422,13 @@ fn exit_code_matrix_matches_golden() {
     // (label, baseline, expected from golden key)
     let run_exit = |baseline: Option<&str>, fail_on: &str| -> u8 {
         let args = d8_args(baseline, false, Some(fail_on));
-        let (_out, code, _warn) =
-            run_analyze_with_exit(&args.read_inputs(), &args, "engine-default")
-                .expect("run_analyze_with_exit");
+        let (_out, code, ..) = run_analyze_with_exit(
+            &args.read_inputs(),
+            &args.read_request(),
+            &args,
+            "engine-default",
+        )
+        .expect("run_analyze_with_exit");
         code
     };
 
@@ -423,8 +469,13 @@ fn anti_degenerate_baseline_zero_vs_partial_and_exit() {
         .to_string();
 
     let args = d8_args(Some(&full), false, Some("high"));
-    let (full_out, full_exit, _) =
-        run_analyze_with_exit(&args.read_inputs(), &args, "engine-default").unwrap();
+    let (full_out, full_exit, ..) = run_analyze_with_exit(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .unwrap();
     assert_eq!(
         sarif_result_count(&full_out),
         0,
@@ -433,8 +484,13 @@ fn anti_degenerate_baseline_zero_vs_partial_and_exit() {
     assert_eq!(full_exit, 0, "full baseline → exit CLEAN");
 
     let args = d8_args(Some(&partial), false, Some("high"));
-    let (partial_out, partial_exit, _) =
-        run_analyze_with_exit(&args.read_inputs(), &args, "engine-default").unwrap();
+    let (partial_out, partial_exit, ..) = run_analyze_with_exit(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .unwrap();
     assert_eq!(
         sarif_result_count(&partial_out),
         1,
