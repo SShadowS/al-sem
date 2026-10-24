@@ -1381,12 +1381,13 @@ mod tests {
     /// without anchors it gives the LAST row (the pre-#241 owner); with anchors
     /// it gives the row whose declaration contains the routine's start, in
     /// either row order, never a row of another file; of overlapping anchors,
-    /// the smallest.
+    /// the innermost (latest start, then earliest end).
     ///
     /// Discrimination: make the no-anchor fallback pick the first row -> (a)
     /// reads `Old`; fails. Replace containment with "first row" -> (c) reads
     /// `Bar`'s routine as `Foo`; fails. Take the first containing row instead
-    /// of the smallest -> (f) reads `Outer`; fails.
+    /// of the innermost -> (f) reads `Outer`; fails. Order by
+    /// `PAnchor::extent_cmp` instead -> (g) reads `Outer` (a tie); fails.
     #[test]
     fn declaring_objects_contains_by_anchor_else_last_row() {
         let name = |o: Option<&ModelObject>| o.map(|o| o.name.clone());
@@ -1451,6 +1452,25 @@ mod tests {
         ] {
             let d = DeclaringObjects::new(&rows);
             assert_eq!(name(d.of(&in_inner)), Some("Inner".into()), "(f)");
+        }
+
+        // (g) a strictly nested anchor whose line/column extent TIES its
+        // container (outer (0,0)..(40,0), inner (0,5)..(40,0)): the innermost
+        // (latest start) declares it, in either row order.
+        let mut outer = object("ws", "Codeunit", 10, "Outer", &[]);
+        outer.source_anchor = Some(anchor("ws:f.al", 0, 40));
+        let mut inner = object("ws", "Codeunit", 10, "Inner", &[]);
+        let mut inner_anchor = anchor("ws:f.al", 0, 40);
+        inner_anchor.start_column = 5;
+        inner.source_anchor = Some(inner_anchor);
+        let mut in_inner = routine(&inner, "r-in", "s-in");
+        in_inner.source_anchor = anchor("ws:f.al", 14, 18);
+        for rows in [
+            vec![outer.clone(), inner.clone()],
+            vec![inner.clone(), outer.clone()],
+        ] {
+            let d = DeclaringObjects::new(&rows);
+            assert_eq!(name(d.of(&in_inner)), Some("Inner".into()), "(g)");
         }
     }
 

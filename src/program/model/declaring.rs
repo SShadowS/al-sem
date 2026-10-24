@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use super::workspace::{ModelObject, ModelRoutine};
+use crate::program::body::features::PAnchor;
 
 /// Object rows by id, each id's rows in model order.
 pub struct DeclaringObjects<'a> {
@@ -26,8 +27,9 @@ impl<'a> DeclaringObjects<'a> {
 
     /// The object row that declares `r`: `None` when no row has its id; the one
     /// row; of several, the row whose declaration anchor contains the routine's
-    /// start in the same file (the smallest such anchor, when error-recovered
-    /// anchors overlap); when none does (rows without an anchor), the LAST row,
+    /// start in the same file (the innermost, when error-recovered anchors
+    /// overlap: the latest start, then the earliest end, then model order); when
+    /// none does (rows without an anchor), the LAST row,
     /// the owner an id -> name map gave before #241.
     pub fn of(&self, r: &ModelRoutine) -> Option<&'a ModelObject> {
         let rows = self.by_id.get(r.object_id.as_str())?;
@@ -40,7 +42,11 @@ impl<'a> DeclaringObjects<'a> {
             .filter(|(_, a)| {
                 a.source_unit_id == ra.source_unit_id && a.contains(ra.start_line, ra.start_column)
             })
-            .min_by(|(_, a), (_, b)| a.extent_cmp(b))
+            .min_by(|(_, a), (_, b)| {
+                let start = |x: &PAnchor| (x.start_line, x.start_column);
+                let end = |x: &PAnchor| (x.end_line, x.end_column);
+                start(b).cmp(&start(a)).then(end(a).cmp(&end(b)))
+            })
             .map(|(o, _)| o)
             .or(rows.last().copied())
     }
