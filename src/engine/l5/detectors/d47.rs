@@ -168,6 +168,7 @@ fn build_d47_finding(
         event_kind: None,
         cross_extension_subscribers: None,
         cohort_contexts: None,
+        loose_subject: None,
     };
     finding.fingerprint = Some(fp.fingerprint_of(&finding));
     finding
@@ -347,6 +348,7 @@ fn build_d47_event_advisory_finding(
         event_kind: None,
         cross_extension_subscribers: None,
         cohort_contexts: None,
+        loose_subject: None,
     };
     finding.fingerprint = Some(fp.fingerprint_of(&finding));
     finding

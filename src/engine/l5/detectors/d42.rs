@@ -22,8 +22,8 @@ use crate::engine::l4::summary::FieldList;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
-    anchor_of, before_anchor, flow_field_names_lc, normalize_load_field_arg,
-    primary_key_field_names_lc,
+    anchor_of, before_anchor, callee_param_table_subject, flow_field_names_lc,
+    normalize_load_field_arg, primary_key_field_names_lc,
 };
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
@@ -318,6 +318,14 @@ pub fn detect_d42(
                     event_kind: None,
                     cross_extension_subscribers: None,
                     cohort_contexts: None,
+                    // #252: the callee, its parameter and the caller's table.
+                    loose_subject: Some(callee_param_table_subject(
+                        "d42",
+                        &callee.id,
+                        binding.parameter_index,
+                        &routine.record_variables,
+                        binding,
+                    )),
                 };
                 finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
                 findings.push(finding);

@@ -70,10 +70,14 @@ use std::collections::{HashMap, HashSet};
 use al_syntax::IdentifierFoldExt;
 
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::finding::SourceAnchor;
+use crate::engine::l5::finding::{LooseSubject, SourceAnchor};
 use crate::engine::l5::registry::{Detector, substrate};
-use crate::program::body::features::{PAnchor, PCFNNode, PCallSite, PCallee, PExpressionInfo};
-use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine, ModelTable};
+use crate::program::body::features::{
+    PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PExpressionInfo,
+};
+use crate::program::model::workspace::{
+    ModelRecordOperation, ModelRecordVariable, ModelRoutine, ModelTable,
+};
 
 /// `beforeAnchor(a, b)` — true iff `a` is strictly before `b` by source position.
 /// Port of al-sem `src/engine/source-anchor.ts:beforeAnchor`.
@@ -1175,6 +1179,43 @@ pub(crate) fn anchor_of(a: &PAnchor, routine: &ModelRoutine) -> SourceAnchor {
     }
 }
 
+/// #252: the resolved table of the caller's record variable (`vars` = the caller's
+/// `record_variables`) that `binding` passes (d39-d42 loose subjects). Matched by
+/// record-variable id, else by folded name; `None` when neither resolves to a
+/// table ([`callee_param_table_subject`] then writes `?`).
+pub(crate) fn binding_source_table<'r>(
+    vars: &'r [ModelRecordVariable],
+    binding: &PCallArgumentBinding,
+) -> Option<&'r str> {
+    let by_id = binding
+        .source_record_variable_id
+        .as_deref()
+        .and_then(|id| vars.iter().find(|v| v.id == id));
+    let by_name = || {
+        let name = binding.source_variable_name.as_deref()?.fold_identifier();
+        vars.iter().find(|v| v.name.fold_identifier() == name)
+    };
+    by_id.or_else(by_name)?.table_id.as_deref()
+}
+
+/// #252: the d39-d42 loose subject `{prefix}/{callee}/{param index}/{caller table}`:
+/// the caller and its call site drop; an unresolved caller table is `?`.
+pub(crate) fn callee_param_table_subject(
+    prefix: &str,
+    callee_id: &str,
+    idx: u32,
+    vars: &[ModelRecordVariable],
+    binding: &PCallArgumentBinding,
+) -> LooseSubject {
+    LooseSubject {
+        object_id: None,
+        key: format!(
+            "{prefix}/{callee_id}/{idx}/{}",
+            binding_source_table(vars, binding).unwrap_or("?")
+        ),
+    }
+}
+
 /// `groupAndCap` — group findings by `key_of(finding)`, sort each group by
 /// `compareStrings(id)`, then keep the first `max_per_key` of each group (group
 /// iteration in sorted-key order). Returns `(kept, truncated_count)`. Port of
@@ -1733,6 +1774,76 @@ mod tests {
         // (4) counts: a default deleted outright passes (1)-(3).
         assert_eq!(default.len(), 40, "default_detectors() count");
         assert_eq!(all.len(), 54, "registered_detectors() count");
+    }
+
+    fn rec_var(id: &str, name: &str, table_id: Option<&str>) -> ModelRecordVariable {
+        ModelRecordVariable {
+            id: id.to_string(),
+            name: name.to_string(),
+            table_name: None,
+            table_id: table_id.map(str::to_string),
+            is_parameter: false,
+            parameter_index: None,
+            temp_state: crate::program::body::features::PTempState {
+                kind: "unknown".to_string(),
+                value: None,
+                parameter_index: None,
+            },
+            scope: None,
+        }
+    }
+
+    fn binding(var_id: Option<&str>, name: Option<&str>) -> PCallArgumentBinding {
+        PCallArgumentBinding {
+            parameter_index: 0,
+            source_kind: "local".to_string(),
+            source_variable_name: name.map(str::to_string),
+            source_record_variable_id: var_id.map(str::to_string),
+            source_parameter_index: None,
+            caller_source_parameter_is_var: None,
+            source_temp_state: None,
+            argument_anchor: PAnchor {
+                source_unit_id: "ws:x.al".to_string(),
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 1,
+                syntax_kind: "identifier".to_string(),
+            },
+        }
+    }
+
+    /// #252 `binding_source_table`: by id first; else by FOLDED name (the binding
+    /// holds `cust`, the variable is declared `Cust`); `None` (the detectors' `?`)
+    /// when no variable matches or the match has no resolved table. Breaks: drop the
+    /// name fallback (the `cust` row → `None`); return `""` instead of `None` for
+    /// an unresolved table.
+    #[test]
+    fn binding_source_table_matches_id_then_folded_name() {
+        let vars = [
+            rec_var("v1", "Cust", Some("app/table/18")),
+            rec_var("v2", "Item", Some("app/table/27")),
+            rec_var("v3", "Loose", None),
+        ];
+        let t = |id, name| binding_source_table(&vars, &binding(id, name));
+        assert_eq!(t(Some("v2"), Some("cust")), Some("app/table/27"), "id wins");
+        assert_eq!(t(None, Some("cust")), Some("app/table/18"), "folded name");
+        assert_eq!(t(Some("nope"), Some("cust")), Some("app/table/18"));
+        assert_eq!(t(None, Some("other")), None, "no variable");
+        assert_eq!(t(Some("v3"), None), None, "unresolved table");
+        assert_eq!(t(None, None), None);
+    }
+
+    /// FR8: the d39-d42 subject carries `?` for an unresolved caller table, and the
+    /// resolved table otherwise. Break: `unwrap_or("?")` → `unwrap_or("")`.
+    #[test]
+    fn callee_param_table_subject_marks_an_unresolved_table() {
+        let vars = [rec_var("v1", "Cust", Some("app/table/18"))];
+        let s =
+            |id, name| callee_param_table_subject("d41", "callee", 2, &vars, &binding(id, name));
+        assert_eq!(s(Some("v1"), None).key, "d41/callee/2/app/table/18");
+        assert_eq!(s(None, Some("other")).key, "d41/callee/2/?");
+        assert_eq!(s(None, Some("other")).object_id, None);
     }
 }
 

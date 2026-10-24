@@ -20,7 +20,7 @@ use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
 use crate::engine::l5::detectors::{whole_set_advance, whole_set_break};
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::{PAnchor, PCFNNode, PLoop};
@@ -269,6 +269,15 @@ pub fn detect_d60(
                 event_kind: None,
                 cross_extension_subscribers: None,
                 cohort_contexts: None,
+                // #252: the table (hashed part); the record variable only when the
+                // table is unknown.
+                loose_subject: Some(LooseSubject {
+                    object_id: None,
+                    key: match &op.table_id {
+                        Some(_) => "d60".to_string(),
+                        None => format!("d60/{var_lc}"),
+                    },
+                }),
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
             findings.push(finding);

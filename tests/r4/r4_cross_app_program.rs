@@ -1074,6 +1074,77 @@ fn d45_reports_a_dependency_publisher_the_workspace_subscribes_to() {
     );
 }
 
+/// [`dep_publisher_workspace`] plus a second workspace codeunit `Ws Sub Two` whose
+/// subscriber `sub` (to the same dependency event) also writes `Ws Log`.
+fn dep_publisher_two_subs_workspace(dir: &Path, sub: &str) {
+    dep_publisher_workspace(dir);
+    write(
+        &dir.join("src/Sub2.al"),
+        &format!(
+            "codeunit 50292 \"Ws Sub Two\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnThing', '', false, false)]\n    local procedure {sub}()\n    var\n        Log: Record \"Ws Log\";\n    begin\n        Log.Insert();\n    end;\n}}\n"
+        ),
+    );
+}
+
+/// The d45 findings of `alsem analyze --format json` (cross-app by default).
+fn d45_json_findings(dir: &Path) -> Vec<serde_json::Value> {
+    use al_sem::engine::gate::filter::Scope;
+    use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit};
+    let d45 = "d45-event-transitive-table-exposure";
+    let args = AnalyzeArgs {
+        workspace: dir.to_string_lossy().to_string(),
+        min_severity: None,
+        detector: Some(d45.to_string()),
+        preset: None,
+        scope: Scope::Primary,
+        limit: None,
+        format: OutputFormat::Json,
+        sarif_version_override: None,
+        fail_on: None,
+        require_dependencies: false,
+        baseline: None,
+        update_baseline: false,
+        disable_inline_suppression: false,
+        group_by: None,
+        deterministic: true,
+        single_app: false,
+        with_evidence: false,
+    };
+    let (out, _, _) = run_analyze_with_exit(&args.read_inputs(), &args, "252-test")
+        .unwrap_or_else(|e| panic!("run_analyze failed: {e}"));
+    let json: serde_json::Value = serde_json::from_str(&out).expect("analyze JSON");
+    json["payload"]["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| f["detector"] == d45)
+        .cloned()
+        .collect()
+}
+
+/// #252 `d45_dep_anchor_switch`: a dependency publisher's d45 finding anchors on the
+/// first primary subscriber by internal routine id. Renaming `Ws Sub Two`'s
+/// subscriber from `OnThing` to `H6` moves that anchor from `Ws Sub Two` (50292) to
+/// `Ws Sub` (50291) (probed over 20 names, 2026-10-24). The loose key uses the
+/// publisher's object, so it does not follow the anchor.
+#[test]
+fn d45_dep_anchor_switch() {
+    let run = |sub: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        dep_publisher_two_subs_workspace(dir.path(), sub);
+        let fs = d45_json_findings(dir.path());
+        assert_eq!(fs.len(), 1, "{fs:#?}");
+        fs.into_iter().next().unwrap()
+    };
+    let (a, b) = (run("OnThing"), run("H6"));
+    assert_ne!(
+        a["primaryLocation"]["objectId"], b["primaryLocation"]["objectId"],
+        "precondition: the anchor moves to the other codeunit"
+    );
+    assert_eq!(a["affectedTables"], b["affectedTables"]);
+    assert_eq!(a["looseFingerprint"], b["looseFingerprint"]);
+}
+
 /// One workspace: tables `Wide` (key + 3 fields), `Narrow` (key + 1 field) and the
 /// platform `Field` (2000000041, declared so it RESOLVES, as the cross-app model
 /// resolves it), and one codeunit whose `body` is the procedure under test.

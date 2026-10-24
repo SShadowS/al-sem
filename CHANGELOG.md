@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escaped quote (`""` in the source), now comes from its logical name, where `""` is
   one `"`. That is the same name the model's object id uses. Such ids change once;
   ids of every other object stay the same (#250).
+- `looseFingerprint` for d4, d7, d12, d16, d18, d22, d39–d42, d43, d45, d48, d57, d59 and
+  d60 is now built from what each check names as its subject, not cut out of
+  `rootCauseKey`. Moving the problem to another routine of the same object keeps it. A
+  renamed record variable keeps it too when its table is known (d4, d18, d22, d60), and a
+  moved parameter keeps it for d59. Each check still keeps its event, called routine or
+  global variable; d43 also keeps the object of the code that raises the event. d39–d42
+  findings on different record tables, two primary d45 publishers on one table, d57
+  globals named like `op1`, d16 self-calls, and d43 raises of one event from two objects
+  no longer share a key. These values change once; `fingerprint` and `rootCauseKey` do
+  not (#252).
 
 ### Fixed
 

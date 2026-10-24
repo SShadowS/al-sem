@@ -19,7 +19,7 @@ use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, before_anchor, unquoted_field_name};
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
@@ -185,6 +185,11 @@ pub fn detect_d22(
                 event_kind: None,
                 cross_extension_subscribers: None,
                 cohort_contexts: None,
+                // #252: the table (hashed part, always resolved here) and the field.
+                loose_subject: Some(LooseSubject {
+                    object_id: None,
+                    key: format!("d22/{field_name_lc}"),
+                }),
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
             findings.push(finding);

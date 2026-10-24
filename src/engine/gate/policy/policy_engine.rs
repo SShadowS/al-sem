@@ -440,6 +440,7 @@ fn emit_match_finding(
         event_kind: None,
         cross_extension_subscribers: None,
         cohort_contexts: None,
+        loose_subject: None,
     };
     finding.fingerprint = Some(model.fingerprint_index.fingerprint_of(&finding));
     finding
@@ -490,6 +491,7 @@ fn emit_coverage_finding(
         event_kind: None,
         cross_extension_subscribers: None,
         cohort_contexts: None,
+        loose_subject: None,
     };
     finding.fingerprint = Some(model.fingerprint_index.fingerprint_of(&finding));
     finding
@@ -533,6 +535,7 @@ fn emit_unknown_finding(rule: &Rule, routine: &ModelRoutine, model: &PolicyModel
         event_kind: None,
         cross_extension_subscribers: None,
         cohort_contexts: None,
+        loose_subject: None,
     };
     finding.fingerprint = Some(model.fingerprint_index.fingerprint_of(&finding));
     finding

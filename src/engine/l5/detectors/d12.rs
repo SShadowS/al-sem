@@ -17,7 +17,9 @@ use std::collections::HashMap;
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
+use crate::engine::l5::finding::{
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject,
+};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 
 use super::anchor_of;
@@ -116,6 +118,11 @@ pub fn detect_d12(
             event_kind: None,
             cross_extension_subscribers: None,
             cohort_contexts: None,
+            // #252: the event (the anchor IS the event); equals `root_cause_key`.
+            loose_subject: Some(LooseSubject {
+                object_id: None,
+                key: format!("d12/{}", ev.id),
+            }),
         };
         finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
         findings.push(finding);

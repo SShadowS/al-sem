@@ -17,7 +17,7 @@ use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{anchor_of, unquoted_field_name};
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PExpressionInfo;
@@ -115,13 +115,12 @@ pub fn detect_d18(
                 None => continue,
             };
             let field_name = field_info.text.trim().to_string();
+            // The unquoted, folded field: the dedup key and the #252 loose subject.
+            let field_lc = unquoted_field_name(field_info).to_lowercase();
 
             let dedup_key = format!(
                 "{}|{}|{}|{}",
-                routine.id,
-                loop_info.id,
-                record_var,
-                unquoted_field_name(field_info).to_lowercase()
+                routine.id, loop_info.id, record_var, field_lc
             );
             if seen.contains(&dedup_key) {
                 continue;
@@ -210,6 +209,17 @@ pub fn detect_d18(
                 event_kind: None,
                 cross_extension_subscribers: None,
                 cohort_contexts: None,
+                // #252: the table (hashed part) and the field; the record variable
+                // only when the table is unknown.
+                loose_subject: Some(LooseSubject {
+                    object_id: None,
+                    key: match &op.table_id {
+                        Some(_) => format!("d18/{field_lc}"),
+                        None => {
+                            format!("d18/{}/{field_lc}", op.record_variable_name.to_lowercase())
+                        }
+                    },
+                }),
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
             findings.push(finding);

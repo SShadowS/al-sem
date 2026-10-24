@@ -221,6 +221,7 @@ mod tests {
             event_kind: None,
             cross_extension_subscribers: None,
             cohort_contexts: cohorts,
+            loose_subject: None,
         }
     }
 

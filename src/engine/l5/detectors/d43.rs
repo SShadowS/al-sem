@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::event_flow::{event_kind_of, is_handled_re};
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, SourceAnchor,
+    Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, LooseSubject, SourceAnchor,
 };
 use crate::program::body::features::{PAnchor, PCFNNode, PConditionReference};
 use crate::program::model::workspace::{Model, ModelRoutine};
@@ -584,6 +584,17 @@ pub fn detect_d43(
                     event_kind: event_kind_by_id.get(site.event_id.as_str()).map(|s| s.to_string()),
                     cross_extension_subscribers: cross_ext,
                     cohort_contexts: None,
+                    // #252: the event and the dispatching caller's OBJECT (the table
+                    // is a hashed part); the caller routine, its call site and the
+                    // setter drop, so a move inside the caller's object keeps it (FR3).
+                    loose_subject: Some(LooseSubject {
+                        object_id: None,
+                        key: format!(
+                            "d43/{}|{}",
+                            site.event_id,
+                            caller.map_or("?", |c| c.object_id.as_str())
+                        ),
+                    }),
                 };
                 finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
                 findings.push(finding);

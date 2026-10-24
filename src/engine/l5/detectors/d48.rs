@@ -33,7 +33,7 @@ use crate::engine::l5::confidence::{UncertaintyLite, to_confidence};
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
 use crate::engine::l5::finding::{
-    Evidence, EvidenceStep, Finding, FixOption, SourceAnchor, id_list,
+    Evidence, EvidenceStep, Finding, FixOption, LooseSubject, SourceAnchor, id_list,
 };
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::path_walker::{
@@ -76,6 +76,20 @@ struct IoTerminal {
     /// al-sem `IoTerminal.localLoopDepth` = the witness callsite's `loopStack.length`.
     /// The walker computes `effectiveLoopDepth = inheritedLoopDepth + localLoopDepth`.
     local_loop_depth: i64,
+}
+
+/// #252: the loose subject of both builders: the object holding the loop, and the
+/// IO kind and method. The loop routine and the IO routine are dropped, so a move
+/// inside the loop's object (direct to transitive included) keeps the key.
+fn loose_subject(loop_object_id: &str, terminal: &IoTerminal) -> LooseSubject {
+    LooseSubject {
+        object_id: None,
+        key: format!(
+            "d48/{loop_object_id}/{}/{}",
+            terminal.io_kind,
+            terminal.method_name.as_deref().unwrap_or("")
+        ),
+    }
 }
 
 /// `directIoTerminalsFor` — LOCAL/DIRECT IO effects of a routine. Uses
@@ -406,6 +420,7 @@ pub fn detect_d48(
                     event_kind: None,
                     cross_extension_subscribers: None,
                     cohort_contexts: None,
+                    loose_subject: Some(loose_subject(&routine.object_id, terminal)),
                 };
                 finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
                 findings.push(finding);
@@ -554,6 +569,7 @@ pub fn detect_d48(
                     event_kind: None,
                     cross_extension_subscribers: None,
                     cohort_contexts: None,
+                    loose_subject: Some(loose_subject(&routine.object_id, matched)),
                 };
                 finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
                 findings.push(finding);

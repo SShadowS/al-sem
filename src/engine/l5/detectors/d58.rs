@@ -130,6 +130,7 @@ pub fn detect_d58(
                             event_kind: None,
                             cross_extension_subscribers: None,
                             cohort_contexts: None,
+                            loose_subject: None,
                         };
                         finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
                         findings.push(finding);
