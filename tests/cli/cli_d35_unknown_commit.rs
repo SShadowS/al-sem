@@ -147,12 +147,23 @@ fn analyze(ws: &Path, detector: Option<&str>) -> Value {
 
 /// The whole analyze report and the exit code, with `--fail-on <fail_on>`.
 fn analyze_with(ws: &Path, detector: Option<&str>, fail_on: Option<&str>) -> (Value, u8) {
+    analyze_in(ws, detector, fail_on, Scope::Primary, false)
+}
+
+/// As [`analyze_with`], at `scope`, and with `--single-app` when `single_app`.
+fn analyze_in(
+    ws: &Path,
+    detector: Option<&str>,
+    fail_on: Option<&str>,
+    scope: Scope,
+    single_app: bool,
+) -> (Value, u8) {
     let args = AnalyzeArgs {
         workspace: ws.to_string_lossy().to_string(),
         min_severity: None,
         detector: detector.map(str::to_string),
         preset: None,
-        scope: Scope::Primary,
+        scope,
         limit: None,
         format: OutputFormat::Json,
         sarif_version_override: None,
@@ -163,7 +174,7 @@ fn analyze_with(ws: &Path, detector: Option<&str>, fail_on: Option<&str>) -> (Va
         disable_inline_suppression: false,
         group_by: None,
         deterministic: true,
-        single_app: false,
+        single_app,
         with_evidence: true,
     };
     let (out, exit) = match run_analyze_with_exit(&args.read_inputs(), &args, "i148-test") {
@@ -549,9 +560,123 @@ fn centralgauge_repro_direct_interface_call_is_unknown_at_medium() {
         "cg-direct",
         CG_SUBSCRIBER_DIRECT,
         json!({"level": "possible", "cappedBy": ["dynamic-dispatch", "opaque-callee"]}),
-        "Check what could not be analysed (interface-open-world; partly analysed: \
-         ReleaseOnRegistered (Codeunit 50104)); if a Commit is reachable, move it out of the \
-         subscriber or defer it.",
+        // #265 A1: the gap is the subscriber's own call site, so that site is
+        // named and the subscriber is not listed as "partly analysed".
+        "Check what could not be analysed (interface-open-world; unresolved: Strategy.NextKm \
+         (line 11)); if a Commit is reachable, move it out of the subscriber or defer it.",
+    );
+}
+
+/// #265 A3: the subscriber makes the interface call itself AND calls `IsDue`,
+/// which makes one too: its own site is named, and `IsDue` (another routine)
+/// stays under "partly analysed".
+const CG_SUBSCRIBER_DIRECT_AND_ISDUE: &str = r#"codeunit 50104 "Demo Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Demo Publisher", 'OnAfterRegistered', '', false, false)]
+    local procedure ReleaseOnRegistered(var DemoItem: Record "Demo Item")
+    var
+        DemoPublisher: Codeunit "Demo Publisher";
+        Strategy: Interface "Demo Strategy";
+    begin
+        if not DemoItem.Blocked then
+            exit;
+        Strategy := DemoItem.Kind;
+        if Strategy.NextKm(DemoItem.Km) > 0 then
+            exit;
+        if DemoPublisher.IsDue(DemoItem."No.") then
+            exit;
+        DemoItem.Blocked := false;
+        DemoItem.Modify(true);
+    end;
+}
+"#;
+
+#[test]
+fn centralgauge_direct_and_isdue_names_site_and_isdue() {
+    let (_tmp, ws) = cg_files("i265-a3", CG_KIND, CG_SUBSCRIBER_DIRECT_AND_ISDUE, &[]);
+    let reasons = "interface-open-world; unresolved: Strategy.NextKm (line 12); partly analysed: \
+                   IsDue (Codeunit 50103)";
+    for single_app in [false, true] {
+        let label = if single_app {
+            "single-app"
+        } else {
+            "cross-app"
+        };
+        let findings = d35_findings(&analyze_in(&ws, None, None, Scope::Primary, single_app).0);
+        assert_eq!(
+            findings.len(),
+            1,
+            "{label}: expected one d35 finding, got {findings:#?}"
+        );
+        let f = &findings[0];
+        assert_eq!(
+            f["primaryLocation"]["routineName"], "ReleaseOnRegistered",
+            "{label}: routine"
+        );
+        assert_eq!(
+            f["rootCause"],
+            format!(
+                "ReleaseOnRegistered is an event subscriber whose call coverage is incomplete \
+                 ({reasons}); a Commit cannot be ruled out \u{2014} the publisher could not roll \
+                 back committed state if one exists."
+            ),
+            "{label}: rootCause"
+        );
+        assert_eq!(
+            f["fixHint"]["description"],
+            format!(
+                "Check what could not be analysed ({reasons}); if a Commit is reachable, move \
+                 it out of the subscriber or defer it."
+            ),
+            "{label}: fixHint"
+        );
+        let path = f["evidencePath"].as_array().expect("evidencePath");
+        assert_eq!(path.len(), 1, "{label}: evidencePath {path:#?}");
+        assert_eq!(
+            path[0]["note"],
+            format!(
+                "[EventSubscriber] ReleaseOnRegistered may commit (mayCommit(summary) == \
+                 \"unknown\"; incomplete coverage: {reasons})"
+            ),
+            "{label}: evidence note"
+        );
+    }
+}
+
+/// #265 CR3: the subscriber's interface call spans two lines with a comment
+/// inside the callee; the site prints its structured callee, not that source.
+const CG_SUBSCRIBER_DIRECT_SPLIT: &str = r#"codeunit 50104 "Demo Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Demo Publisher", 'OnAfterRegistered', '', false, false)]
+    local procedure ReleaseOnRegistered(var DemoItem: Record "Demo Item")
+    var
+        Strategy: Interface "Demo Strategy";
+    begin
+        if not DemoItem.Blocked then
+            exit;
+        Strategy := DemoItem.Kind;
+        if Strategy // the kind's strategy
+            .NextKm(DemoItem.Km) > 0 then
+            exit;
+        DemoItem.Blocked := false;
+        DemoItem.Modify(true);
+    end;
+}
+"#;
+
+#[test]
+fn own_site_spanning_lines_prints_the_structured_callee() {
+    let (_tmp, ws) = cg_files("i265-cr3", CG_KIND, CG_SUBSCRIBER_DIRECT_SPLIT, &[]);
+    let findings = d35_findings(&analyze(&ws, None));
+    assert_eq!(
+        findings.len(),
+        1,
+        "expected one d35 finding, got {findings:#?}"
+    );
+    assert_eq!(
+        findings[0]["fixHint"]["description"],
+        "Check what could not be analysed (interface-open-world; unresolved: Strategy.NextKm \
+         (line 11)); if a Commit is reachable, move it out of the subscriber or defer it."
     );
 }
 
@@ -1610,4 +1735,96 @@ fn i264_fo1_if_alternative_routines_close_only_when_every_arm_is_closed() {
             .collect();
         assert!(closed_rows.is_empty(), "FO1 {label}: {closed_rows:#?}");
     }
+}
+
+/// #265 A6d's dependency: `Dep Pub.Raise` raises `OnRaised`; `Dep Sub` handles
+/// it with an interface call of its own (`S.NextKm`, open world).
+const DEP_PUB: &str = r#"codeunit 70010 "Dep Pub"
+{
+    procedure Raise()
+    begin
+        OnRaised();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnRaised()
+    begin
+    end;
+}
+"#;
+
+const DEP_SUB: &str = r#"codeunit 70011 "Dep Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnRaised', '', false, false)]
+    local procedure HandleRaised()
+    var
+        S: Interface "Dep Strategy";
+    begin
+        if S.NextKm(1) > 0 then
+            exit;
+    end;
+}
+"#;
+
+const A6D_WS: &str = r#"codeunit 50101 "Ws Caller"
+{
+    procedure Go()
+    var
+        P: Codeunit "Dep Pub";
+    begin
+        P.Raise();
+    end;
+}
+"#;
+
+/// #265 A6d (stated limit, Discovery D1): a subscriber that lives in a SOURCE
+/// dependency, reported at `--scope all` in the default cross-app mode, keeps
+/// today's text: its own uncertainty edges are not on the detector context, so
+/// no `unresolved:` segment, and it stays under "partly analysed".
+#[test]
+fn dependency_subscriber_keeps_todays_text() {
+    let (_tmp, ws) = write_files(
+        "i265-a6d",
+        &[("app.json", &dep264_app_json()), ("src/Ws.al", A6D_WS)],
+    );
+    // DEP_STRATEGY_SYMBOLS's codeunit list plus `Dep Pub` and `Dep Sub`.
+    let codeunits = DEP_STRATEGY_SYMBOLS
+        .strip_suffix(']')
+        .expect("precondition: the symbols end with the codeunit list");
+    let symbols = format!(
+        r#"{codeunits},{{"Id":70010,"Name":"Dep Pub","Methods":[{{"Name":"Raise","Parameters":[]}}]}},{{"Id":70011,"Name":"Dep Sub","Methods":[]}}]"#
+    );
+    write_dep264(
+        &ws,
+        &symbols,
+        &[
+            ("src/DepStrategy.al", DEP_STRATEGY),
+            ("src/DepImpl.al", DEP_IMPL),
+            ("src/DepPub.al", DEP_PUB),
+            ("src/DepSub.al", DEP_SUB),
+        ],
+    );
+    let findings = d35_findings(&analyze_in(&ws, None, None, Scope::All, false).0);
+    let dep: Vec<&Value> = findings
+        .iter()
+        .filter(|f| f["primaryLocation"]["routineName"] == "HandleRaised")
+        .collect();
+    // Preconditions: the dependency subscriber has a d35 unknown finding, and
+    // it names itself as partly analysed (so the next check is not vacuous).
+    assert_eq!(
+        dep.len(),
+        1,
+        "A6d precondition: one d35 finding on HandleRaised, got {findings:#?}"
+    );
+    let fix = dep[0]["fixHint"]["description"]
+        .as_str()
+        .expect("fixHint.description");
+    assert!(
+        fix.contains("partly analysed: HandleRaised (Codeunit 70011)"),
+        "A6d precondition: listed under partly analysed: {fix}"
+    );
+    assert!(
+        !fix.contains("unresolved:"),
+        "A6d: no own-site segment: {fix}"
+    );
 }
