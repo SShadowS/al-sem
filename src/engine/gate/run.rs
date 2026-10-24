@@ -976,9 +976,9 @@ fn build_finding_evidence(
                 .iter()
                 .filter(|(range, _, _)| {
                     range.source_unit_id == loc.source_unit_id
-                        && range_contains(range, loc.start_line, loc.start_column)
+                        && range.contains(loc.start_line, loc.start_column)
                 })
-                .min_by(|(a, _, _), (b, _, _)| range_extent_cmp(a, b));
+                .min_by(|(a, _, _), (b, _, _)| a.extent_cmp(b));
             let (enclosing_member, originating_object) = match best {
                 Some((_, member, oo)) => ((*member).clone(), (*oo).clone()),
                 None => (None, None),
@@ -999,29 +999,6 @@ fn build_finding_evidence(
             }
         })
         .collect()
-}
-
-/// 0-based containment: is `(line, column)` within `[start, end]` of `range` (inclusive)?
-fn range_contains(range: &crate::program::body::features::PAnchor, line: u32, column: u32) -> bool {
-    let after_start = (line, column) >= (range.start_line, range.start_column);
-    let before_end = (line, column) <= (range.end_line, range.end_column);
-    after_start && before_end
-}
-
-/// Total order on range EXTENT (smaller = tighter container): primary by spanned lines,
-/// secondary by spanned columns on the start line. Deterministic for the smallest-range
-/// selection (two disjoint field triggers never tie because only one contains the point).
-fn range_extent_cmp(
-    a: &crate::program::body::features::PAnchor,
-    b: &crate::program::body::features::PAnchor,
-) -> std::cmp::Ordering {
-    let a_lines = a.end_line.saturating_sub(a.start_line);
-    let b_lines = b.end_line.saturating_sub(b.start_line);
-    a_lines.cmp(&b_lines).then_with(|| {
-        let a_cols = a.end_column.saturating_sub(a.start_column);
-        let b_cols = b.end_column.saturating_sub(b.start_column);
-        a_cols.cmp(&b_cols)
-    })
 }
 
 /// The analyzer diagnostics for a resolved single-app workspace:

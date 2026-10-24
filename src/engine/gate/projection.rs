@@ -8,6 +8,7 @@
 
 use crate::engine::l5::finding::{Finding, SourceAnchor};
 use crate::engine::l5::fingerprint::FingerprintIndex;
+use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::{ModelObject, ModelRoutine};
 
 /// `FindingLocation` (finding-summary.ts). `line`/`column` are 1-based.
@@ -49,23 +50,26 @@ pub struct FindingSummary {
 
 /// Per-model id indexes for the projection (mirror `indexFor`). The routine and
 /// object maps are the `FingerprintIndex`'s own, which also computes
-/// `looseFingerprint`.
+/// `looseFingerprint`. A routine's object NAME comes from `declaring` (#241): an
+/// `#if`-split object has one id for two names.
 pub struct ProjectionIndex<'a> {
     pub fingerprints: FingerprintIndex<'a>,
+    declaring: DeclaringObjects<'a>,
 }
 
 impl<'a> ProjectionIndex<'a> {
     pub fn build(objects: &'a [ModelObject], routines: &'a [ModelRoutine]) -> Self {
         ProjectionIndex {
             fingerprints: FingerprintIndex::build(routines, objects),
+            declaring: DeclaringObjects::new(objects),
         }
     }
 }
 
 /// `toLocation(anchor)` — resolve an internal anchor to a 1-based display location
 /// with the owning routine + object display names.
-fn to_location(anchor: &SourceAnchor, idx: &ProjectionIndex) -> FindingLocation {
-    let idx = &idx.fingerprints;
+fn to_location(anchor: &SourceAnchor, pidx: &ProjectionIndex) -> FindingLocation {
+    let idx = &pidx.fingerprints;
     let routine = idx.routine(anchor.enclosing_routine_id.as_str());
     // Object-level finding convention (d64): `enclosing_routine_id` IS the
     // object's own internal id when there is no routine to anchor on (e.g. a
@@ -76,7 +80,7 @@ fn to_location(anchor: &SourceAnchor, idx: &ProjectionIndex) -> FindingLocation 
     // routine-anchored finding: the `or_else` only runs when the routine
     // branch already missed.
     let object = routine
-        .and_then(|r| idx.object(r.object_id.as_str()))
+        .and_then(|r| pidx.declaring.of(r))
         .or_else(|| idx.object(anchor.enclosing_routine_id.as_str()));
     FindingLocation {
         file: anchor.source_unit_id.clone(),

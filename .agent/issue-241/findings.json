@@ -1,0 +1,257 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-241/ledger.md",
+    "line": 105,
+    "severity": "minor",
+    "text": "A4 specifies unsupported `prove --routine` syntax; exit 2 could be argument rejection rather than unmatched selection. Use `alsem prove <ws> <selector> may-commit`; assert the JSON answer too.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: `alsem prove --help` takes <WORKSPACE> <ROUTINE> <QUESTION> positionally (src/bin/alsem.rs:531-542). A4 now calls `prove <ws> 'Codeunit Foo::P' may-commit` and asserts payload.routine.objectDisplay and payload.result.answer ('no' when selected, 'unknown' + exit 2 when unmatched), values probed on base.",
+    "anchor": ".agent/issue-241/ledger.md:111-111",
+    "anchor_hash": "aeee8ca71f1432ddec2453a68756d27a7a1215fa25fa52a7762adc9bea342d0b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-241/ledger.md",
+    "line": 38,
+    "severity": "minor",
+    "text": "R6 incorrectly says 'two internal ids'. Say two model rows sharing both the internal and the stable id.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: the internal routine id is built from the object key and signature with no body/location part (src/engine/ids.rs:333-356, src/program/model/workspace.rs:1048-1060). R6 now says the two rows share both ids.",
+    "anchor": ".agent/issue-241/ledger.md:38-38",
+    "anchor_hash": "569c0ce5f951a915a427144a2908fb0e9649b3289f3fe92e56da6ced0f256147",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-241/ledger.md",
+    "line": 107,
+    "severity": "minor",
+    "text": "A6 cannot kill a mutation changing only step 4 to first-wins: its anchored declarations take step 3. Describe the mutation as replacing step 3; add a duplicate-id/missing-anchor unit test to pin fallback ordering.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: native rows always carry source_anchor (workspace.rs:925), so they never reach step 4. A6's break is now 'replace step 3 with first-wins'; new U1 hand-states two same-id rows with source_anchor None and asserts the last row, plus an anchored case in both orders.",
+    "anchor": ".agent/issue-241/ledger.md:113-114",
+    "anchor_hash": "afa02ab9a36b8a7b5de17df05089e2bf98c594697b146ec6265d269218a9601f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l5/test_coverage.rs",
+    "line": 407,
+    "severity": "minor",
+    "text": "The S2 list for the discovery is incomplete: test_coverage reads object_subtype through a last-wins id map (test_coverage.rs:407,474), and detectors read ctx.objects_by_id (d14.rs:119, d17.rs:118, d50.rs:194). Name them in the discovery; say l5/fingerprint.rs is exempt.",
+    "disposition": "fixed",
+    "evidence": "Confirmed by grep. Discovery D1 now names policy, detector_context, d14/d17/d50, root_classification and test_coverage, marks l5/fingerprint.rs:98 exempt (type/key only), and says the later fix swaps each site to DeclaringObjects::of. Probe S2 row updated too.",
+    "anchor": ".agent/issue-241/ledger.md:157-171",
+    "anchor_hash": "c5a33fa37394d0c6144373c9423585990ff008a1257a50fd0134f8ca3c7f1ff3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": "src/bin/alsem.rs",
+    "line": 531,
+    "severity": "minor",
+    "text": "A4 says `prove --routine`; prove takes the routine as a positional argument (`prove <ws> <routine> <question>`). Reword A4.",
+    "disposition": "fixed",
+    "evidence": "Same fix as S1: A4 now uses `alsem prove <ws> 'Codeunit Foo::P' may-commit` and asserts the JSON answer.",
+    "anchor": ".agent/issue-241/ledger.md:111-111",
+    "anchor_hash": "aeee8ca71f1432ddec2453a68756d27a7a1215fa25fa52a7762adc9bea342d0b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": "src/engine/l4/effect_query_cli.rs",
+    "line": 383,
+    "severity": "minor",
+    "text": "The RoutineJoin doc ('plus object names') also states the id-keyed lookup; the design rewrote only the OwnerIndex doc. Rewrite both.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (effect_query_cli.rs:383-384). The Design now rewrites both the RoutineJoin doc and the OwnerIndex doc (:451-463).",
+    "anchor": ".agent/issue-241/ledger.md:88-90",
+    "anchor_hash": "a0e4f1fce76821e9b51cb1f717f7eaf567393de52ae4ee0bb93dbbd44d774c8d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-241/ledger.md",
+    "line": 119,
+    "severity": "minor",
+    "text": "In the same-signature split, after the fix `Codeunit Bar::P` becomes exit 2 (today `Foo::P` fails), so #239's L1 closes only for splits whose arms differ in signature. CHANGELOG and limit text must say so.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: OwnerIndex uses or_insert (effect_query_cli.rs:490-492), so one stable id takes the first arm's owner. Goal, the CHANGELOG step and the new Limit L1' now say L1 closes only when the arms' signatures differ, and that the failure moves to `Codeunit Bar::P`.",
+    "anchor": ".agent/issue-241/ledger.md:126-132",
+    "anchor_hash": "fcdb02284a27640c57d7f8df24ccd4d14f6754a255e7252af3c594e09589f86d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-241/ledger.md",
+    "line": 190,
+    "severity": "minor",
+    "text": "Same-signature arms: RoutineJoin.by_id (internal id) is last-wins, so query effects can print a Foo header with effect lines naming Bar; L1' does not say so.",
+    "disposition": "fixed",
+    "evidence": "Limit L1' extended (ledger spec-round-2 note); the implementer adds the sentence to the CHANGELOG limit; marked at the final panel.",
+    "anchor": ".agent/issue-241/ledger.md:190-192",
+    "anchor_hash": "5b871a422cbefe6ac5ed90a3e3c83abe881334ecaf5cacdd0ab82f4729964ca0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR1",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/projection.rs",
+    "line": 86,
+    "severity": "important",
+    "text": "analyze finding locations read object_name through FingerprintIndex::object (id map, last row wins), so SARIF/JSON/HTML/terminal still name Bar for a finding inside Foo's routine; the CHANGELOG over-claims.",
+    "disposition": "fixed",
+    "evidence": "Confirmed on ws241 (d33 in P: objectName Bar). ProjectionIndex now holds DeclaringObjects and to_location takes a routine's object from it. Fingerprints read type/key only and are byte-identical (ws241: 702adb9f2312b942 / 94571b64c23b332e before and after); check-goldens green, no golden moved. Test A7 split_object_analyze_locations_name_the_declaring_object; break P6 (id map again) fails it with P -> Bar. The object-level (d64) fallback keeps the id map and is a stated CHANGELOG limit. Commit c99ad275 (rebased from e477d595).",
+    "anchor": "src/engine/gate/projection.rs:82-84",
+    "anchor_hash": "46956980e73c3f98c02daa34f27bded0c8a34db50b1063e149db2fe4d7d0f260",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR2",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l4/effect_query_cli.rs",
+    "line": 389,
+    "severity": "minor",
+    "text": "Build RoutineJoin.by_id first-wins so query effects names one owner per routine in the same-signature case; update O5/L1' to say effect lines agree with the header.",
+    "disposition": "refuted",
+    "evidence": "Built and probed: with by_id first-wins, ws241b `query effects --routine Foo.P` still prints `Codeunit Bar::P` on both effect lines. Effect-line owners come from OperationJoin (effect_query_cli.rs:527-537), keyed by operation id, which keeps the LAST owning row by design (#160 step 11b §4.6, class P); both effects carry Bar's operation. Agreement needs an OperationJoin change, which is D2's shape and a #160 decision. Change reverted; O5 sentence stays accurate.",
+    "anchor": "src/engine/l4/effect_query_cli.rs:527-537",
+    "anchor_hash": "4f78cbab0dbaf9e45a1d39cafe367c9941fafcf50fc0f06ea0e2705b82cf0a83",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR3",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l4/effect_query_cli.rs",
+    "line": 1309,
+    "severity": "minor",
+    "text": "The doc and mutation note of owner_index_filters_to_primary_and_follows_routine_join still describe the deleted id -> name map.",
+    "disposition": "fixed",
+    "evidence": "Rewritten: (f) is the DeclaringObjects no-anchor fallback (last row), shared with RoutineJoin; mutation is 'no-anchor fallback first row -> (f) Codeunit Old'. Commit c99ad275 (rebased from e477d595).",
+    "anchor": "src/engine/l4/effect_query_cli.rs:1304-1316",
+    "anchor_hash": "626bde5bb860a7f809acea90fd0ec7995212e4ee8d5ec6914ad6bbefe9782bb7",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR4",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/model/declaring.rs",
+    "line": 38,
+    "severity": "minor",
+    "text": "When several rows contain the routine (overlapping or error-recovered anchors), pick the smallest containing anchor, not the first.",
+    "disposition": "fixed",
+    "evidence": "Round final-2 (sol re-raise: extent_cmp subtracts columns per anchor, so outer (0,0)..(40,0) and nested inner (0,5)..(40,0) tie and min_by kept the first row): DeclaringObjects::of now takes the INNERMOST containing anchor: latest start (line, col), then earliest end (line, col), then model order (min_by keeps the first). Exact for nested containment. declaring.rs no longer uses PAnchor::extent_cmp, which stays unchanged for gate/run.rs (CR5). U1 case (f) (outer 0-40 / inner 12-20) and new case (g) (sol's tie), each in both row orders, give Inner. Breaks: P7 (.next()) fails (f) with Outer; P8 (back to min_by(extent_cmp)) fails (g) with Outer. Commits c99ad275, 62473c34 (rebased onto 83ba322a).",
+    "anchor": "src/program/model/declaring.rs:39-51",
+    "anchor_hash": "e67f3bcbf9ac904a3014394dce59f4c7ac58bdd72b2d8b0951ad24c98a114d52",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR5",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/run.rs",
+    "line": 1005,
+    "severity": "minor",
+    "text": "Add PAnchor::contains(line, col) and use it in declaring.rs and in place of gate/run.rs's private range_contains if behaviour-identical.",
+    "disposition": "fixed",
+    "evidence": "range_contains was the same inclusive tuple comparison; moved verbatim to PAnchor::contains, with range_extent_cmp moved to PAnchor::extent_cmp (same lines-then-columns order) so CR4 reuses it. run.rs and declaring.rs use both; full suite and goldens green. Commit c99ad275 (rebased from e477d595).",
+    "anchor": "src/program/body/features.rs:62-79",
+    "anchor_hash": "59f967bb086d18ce5b5d795a61028b3bb773586ffef3a33e090a4c580f75c386",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR6",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/model/workspace.rs",
+    "line": 436,
+    "severity": "minor",
+    "text": "Store the declaring row on ModelRoutine instead of a lookup.",
+    "disposition": "refuted",
+    "evidence": "The spec panel weighed this against the 39 ModelRoutine constructors and two producers and chose the lookup (Design, Fallbacks). D1 records the later sites, which swap to the same lookup.",
+    "anchor": ".agent/issue-241/ledger.md:292-294",
+    "anchor_hash": "8adcc37f0d25092b28477c673d2eee3e972bd5e1c4d4c11bc0df17ed1b7d2b21",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "CR7",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l4/effect_query_cli.rs",
+    "line": 300,
+    "severity": "minor",
+    "text": "Build DeclaringObjects once per query effects run: pass the join's instance to resolve_routine_selector.",
+    "disposition": "fixed",
+    "evidence": "resolve_routine_selector now takes &DeclaringObjects; query touches (--from) and query effects build the RoutineJoin first and pass &join.declaring. SmallVec skipped (unmeasured gain). Commit c99ad275 (rebased from e477d595).",
+    "anchor": "src/engine/l4/effect_query_cli.rs:294-301",
+    "anchor_hash": "9441d5bd98d73baedd170fa7361c9131eeea762c2289c96e98593df9ee649ae8",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
