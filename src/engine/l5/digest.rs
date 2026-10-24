@@ -904,31 +904,50 @@ struct ProofOutcome {
     /// The state or depth limit cut the enumeration.
     incomplete: bool,
     diagnostics: Vec<(String, Option<String>)>,
-    /// Partial paths expanded (the perf guard reads it, #289).
+    /// Partial paths popped (the count `MAX_STATES` limits; the perf guard
+    /// reads it, #289).
     popped: usize,
 }
 
-/// A candidate key of [`enumerate_proofs`]: the projected hops' JSON and the
-/// boundary identity. The walk hashes one per crossing or proof, never per
-/// partial path (#289); tests count the hashes to hold that.
-#[derive(PartialEq, Eq)]
-struct ProofKey(Vec<String>, Option<BoundaryEnd>);
+/// [`ProofKey`] lives in its own module so its fields are opaque to the rest
+/// of this file: the proof walk can reach a candidate key only as a
+/// `ProofKey`, whose hashes the perf guard counts (#289).
+mod proof_key {
+    use super::BoundaryEnd;
 
-// Hand-written only to count calls in tests; it hashes exactly the fields `Eq`
-// compares, so it agrees with the derived `Eq`.
-impl std::hash::Hash for ProofKey {
-    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
-        #[cfg(test)]
-        PROOF_KEY_HASHES.with(|n| n.set(n.get() + 1));
-        self.0.hash(h);
-        self.1.hash(h);
+    /// A candidate key of [`super::enumerate_proofs`]: the projected hops'
+    /// JSON and the boundary identity. The walk hashes one per crossing or
+    /// uncrossed proof, never per partial path (#289); tests count the hashes
+    /// to hold that.
+    #[derive(PartialEq, Eq)]
+    pub(super) struct ProofKey(Vec<String>, Option<BoundaryEnd>);
+
+    impl ProofKey {
+        pub(super) fn new(json: Vec<String>, boundary: Option<BoundaryEnd>) -> Self {
+            ProofKey(json, boundary)
+        }
+    }
+
+    // Hand-written only to count calls in tests; it hashes exactly the fields
+    // `Eq` compares, so it agrees with the derived `Eq`.
+    impl std::hash::Hash for ProofKey {
+        fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+            #[cfg(test)]
+            PROOF_KEY_HASHES.with(|n| n.set(n.get() + 1));
+            self.0.hash(h);
+            self.1.hash(h);
+        }
+    }
+
+    #[cfg(test)]
+    thread_local! {
+        pub(super) static PROOF_KEY_HASHES: std::cell::Cell<usize> =
+            const { std::cell::Cell::new(0) };
     }
 }
-
 #[cfg(test)]
-thread_local! {
-    static PROOF_KEY_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+use proof_key::PROOF_KEY_HASHES;
+use proof_key::ProofKey;
 
 /// Depth-0 proofs (#69 D3) for inherited fact `f` at `root`: for every NON-seed
 /// arena state of `root` whose producer fact is `fact_equivalent` to `f` and
@@ -961,7 +980,7 @@ fn enumerate_proofs<'i>(
 ) -> ProofOutcome {
     /// A partial path's last state, its parent node plus the edge between them
     /// (`None` at the root state), and, once it has crossed into dependency
-    /// code, its candidate key and the level it crossed at.
+    /// code, its candidate key's id and the level it crossed at (key id, level).
     struct Node {
         state: StateIx,
         parent: Option<(usize, EdgeIx)>,
@@ -983,7 +1002,7 @@ fn enumerate_proofs<'i>(
                 cur = parent;
             }
             json.reverse();
-            ProofKey(json, boundary)
+            ProofKey::new(json, boundary)
         };
     let mut out = ProofOutcome::default();
     if fact_first_hop(f).is_none() {
@@ -1014,15 +1033,16 @@ fn enumerate_proofs<'i>(
     let mut crossed_q: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
     let mut seen: std::collections::HashSet<(Vec<EdgeIx>, usize)> =
         std::collections::HashSet::new();
-    // Each distinct key once, as a dense id: a pop tests `found[id]` and never
-    // hashes the key again (#289: hashing it per pop cost ×15 on CDO).
-    let mut key_ids: HashMap<ProofKey, usize> = HashMap::new();
+    // Each distinct key once, as a dense id (its index in `key_ids`): a pop
+    // tests `found[id]` and never hashes the key again (#289: hashing it per
+    // pop cost ≈4× CPU on CDO `h`). `IndexSet` keeps each entry's hash, so
+    // growing it never rehashes a key.
+    let mut key_ids: indexmap::IndexSet<ProofKey> = indexmap::IndexSet::new();
     let mut found: Vec<bool> = Vec::new();
     let mut found_count = 0usize;
     let mut intern = |key: ProofKey, found: &mut Vec<bool>| {
-        let next = key_ids.len();
-        let id = *key_ids.entry(key).or_insert(next);
-        if id == found.len() {
+        let (id, new) = key_ids.insert_full(key);
+        if new {
             found.push(false);
         }
         id
@@ -8779,14 +8799,19 @@ codeunit 50102 "W10 Merge"
 
     /// Perf guard (#289): the proof walk tests a crossed partial path's key by
     /// its id, never by hashing the key. Hand-stated precondition, the CDO
-    /// shape: one boundary's key is FOUND early (`cs-a`, seed `H1` at depth
-    /// 1), and another boundary (`cs-w`) opens a dependency lattice of 6
-    /// layers × 3 routines, fully linked, with no seed: 3 + 9 + … + 729 = 1092
-    /// crossed partial paths, each popped while `found` is non-empty. `cs-a`'s
-    /// dead branch `X1 → X2` is dropped once its key is found.
-    /// Limit: it pins per-pop key hashing and the drop-at-pop on this fixture,
+    /// shape: one boundary's key is FOUND early (the boundary into DepA,
+    /// `cs-P-DepA`, seed `H1` at depth 1), and another boundary (into DepW,
+    /// `cs-P-DepW`) opens a dependency lattice of 6 layers × 3 routines, fully
+    /// linked, with no seed: 3 + 9 + … + 729 = 1092 crossed partial paths, each
+    /// popped while `found` is non-empty. DepA's dead branch `X1 → X2` is
+    /// dropped once its key is found.
+    /// Limits: it pins per-pop key hashing and the drop-at-pop on this fixture,
     /// not enumeration work in general (an extra-pop regression shows only as
-    /// `popped`, and only here).
+    /// `popped`, and only here). It counts only `ProofKey`'s `Hash`; the
+    /// `proof_key` module keeps the key's fields private, so the walk cannot
+    /// key `found` on the raw `Vec<String>`. Still uncounted: comparing keys
+    /// with `==` per pop (a linear scan), or keying `found` on another value
+    /// built per pop (the edge list, a string made from the hops).
     #[test]
     fn proof_walk_hashes_keys_per_crossing_not_per_partial_path() {
         let mut names: Vec<String> = ["R", "P", "DepA", "H1", "X1", "X2", "DepW"]
@@ -8881,7 +8906,9 @@ codeunit 50102 "W10 Merge"
         assert!(!out.truncated && !out.incomplete, "{:?}", out.diagnostics);
         // R, P, DepA, DepW, H1, then the lattice; X1 is dropped unexpanded.
         assert_eq!(out.popped, 5 + 1092);
-        // Two crossings (cs-a, cs-w), each key hashed once on insert.
-        assert!(hashes <= 4, "{hashes} key hashes for {} pops", out.popped);
+        // Two crossings (cs-P-DepA, cs-P-DepW), each key hashed once on insert;
+        // the seed reuses its crossed id. Design fallback F3 allows loosening
+        // this only to `2 * (crossings + seeds)`, never to a per-pop number.
+        assert_eq!(hashes, 2, "{hashes} key hashes for {} pops", out.popped);
     }
 }
