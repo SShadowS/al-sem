@@ -41,7 +41,7 @@ use serde_json::{Map, Value, json};
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewNeeds,
+    ViewNeeds, WorkspaceRead,
 };
 use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document_value};
@@ -207,7 +207,7 @@ enum QueryAsk<'a> {
 /// `Result<QueryRunResult, String>`; its writes are the `--format` text (to
 /// `--out` or stdout), or an error line and exit 1.
 pub struct QueryJob<'a> {
-    inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    inputs: &'a dyn WorkspaceRead,
     ask: QueryAsk<'a>,
     alsem_ver: &'a str,
     deterministic: bool,
@@ -221,7 +221,7 @@ impl<'a> QueryJob<'a> {
     /// `alsem query touches` (see [`run_query_touches_pipeline`]), written as
     /// JSON to stdout until [`QueryJob::written`].
     pub fn touches(
-        inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+        inputs: &'a dyn WorkspaceRead,
         table: &'a str,
         from: Option<&'a str>,
         direction: Direction,
@@ -239,7 +239,7 @@ impl<'a> QueryJob<'a> {
 
     /// `alsem query effects` (see [`run_query_effects_pipeline`]).
     pub fn effects(
-        inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+        inputs: &'a dyn WorkspaceRead,
         routine: &'a str,
         alsem_ver: &'a str,
         deterministic: bool,
@@ -250,7 +250,7 @@ impl<'a> QueryJob<'a> {
     }
 
     fn with(
-        inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+        inputs: &'a dyn WorkspaceRead,
         ask: QueryAsk<'a>,
         alsem_ver: &'a str,
         deterministic: bool,

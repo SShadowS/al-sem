@@ -23,7 +23,7 @@
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewNeeds,
+    ViewNeeds, WorkspaceRead,
 };
 use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::serialize_document_value;
@@ -910,7 +910,8 @@ pub(crate) fn prove_on_target(
 /// `--out` or stdout), or an error line and exit 1.
 pub struct ProveJob<'a> {
     pub detectors: Vec<crate::engine::l5::registry::Detector>,
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    /// Handed to the driver; compute reads `ViewCx::inputs` (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
     pub routine_selector: &'a str,
     pub question_text: &'a str,
     pub alsem_ver: &'a str,
@@ -987,7 +988,6 @@ impl Job for ProveJob<'_> {
 /// Prove off its prepared view.
 fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult, String> {
     let ProveJob {
-        inputs,
         routine_selector,
         question_text,
         alsem_ver,
@@ -997,9 +997,9 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // The roots `resolve` resolved off the model, before the composition.
     let changed_roots: crate::engine::l5::digest_cli::ChangedRootsResult = cx.take_carry();
     let key = cx.keys()[0].clone();
-    let (diagnostics_json, tx_ctx_map) = finish_default_run(cx, &key);
     let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(cx.inputs(), alsem_ver);
+    let (diagnostics_json, tx_ctx_map) = finish_default_run(cx, &key);
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
     if changed_roots.roots.is_empty() {

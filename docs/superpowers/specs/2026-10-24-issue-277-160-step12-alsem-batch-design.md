@@ -545,10 +545,14 @@ after the last view: (11) again, for every job left
   earlier job are finished, so a worker holds across a view boundary only:
   (a) the `SideDoc`s of a diff job whose other side is on a later view (one side's snapshot; P-N6 sizes it at
   ≈ 160 MB on CDO), and (b) the `JobOutput`s of finished jobs that wait for an EARLIER job still on a later
-  view. A manifest whose jobs are listed grouped by view holds nothing under (b). The bound: **retained
-  bytes at a view boundary ≤ Σ of the held `JobOutput`s + Σ of the held `SideDoc`s**, both printed under
-  `ALSEM_RETAINED_CENSUS=1` as `[retained-census] batch.held outputs=<bytes> sides=<bytes>` at each view
-  start. **No tree term**: every tree read's output is fully owned and each tree is dropped right after its
+  view. A manifest whose jobs are listed grouped by view holds nothing under (b). (c) (amended at Task 8,
+  R7-1) the `WorkspaceInputs` of views still to come: D3 reads every workspace before the first build, so a
+  later view's read exists from the start; each read is freed after its last view (a job hands its read to
+  the driver in `demands` and reads it only through `ViewCx::inputs`/`ResolveCx::inputs`). The bound:
+  **retained bytes at a view boundary ≤ Σ of the held `JobOutput`s + Σ of the held `SideDoc`s + Σ of the
+  later views' reads**, printed under `ALSEM_RETAINED_CENSUS=1` as `[retained-census] batch.held
+  outputs=<bytes> sides=<bytes> inputs=<bytes>` at each view start (`sides` counts diff's snapshot sides,
+  the only side that can wait; `inputs` is each read's `inputs` census bucket, once per read). **No tree term**: every tree read's output is fully owned and each tree is dropped right after its
   read (D5.4), so held tree reads (`DigestEffects`, case B `TreeReadOut`) are part of the jobs' `SideDoc`s /
   `JobOutput`s, never a tree. CDO output sizes (step 6 Part 1 files): analyze SARIF 9.8 MB (primary), 74 MB (`--scope all`);
   digest `d` 20 MB, `h` 443 MB; fingerprint B0 JSON 130 MB. Part 2's output-heavy manifest `O` measures the
@@ -574,6 +578,14 @@ written:
 
 A line printed from a rayon worker mid-fill: F11. Census and trace stay on the worker's stderr or trace file
 (decided, Q-d).
+
+As built (Task 8): Task 1 found two library job lines, both printed on the driver's thread: the L4
+non-convergence line (`build_l4`, rendered from `L4Analysis.warnings`) and `graph`'s coverage warning. Both
+print through `batch::output::job_line`, which hands the line to the driver step running on that thread
+(`capture`) and prints it anywhere else. The lines `prepare` captures are the `l4` solve's: each job whose
+own plan solves `l4` (`Plan::builds_l4`) replays them once per view; the lines a `compute` or a graph
+`program` captures are that job's side's. `serialize` puts a job's lines before its own writes, where
+standalone printed them; a side after a failed side contributes none (D8).
 
 ### 4.8 D8: diff in a batch (S5)
 
@@ -640,11 +652,16 @@ A line printed from a rayon worker mid-fill: F11. Census and trace stay on the w
     not); T3 derives the other cells from `FINGERPRINT_ROW` and the `prove` row (`:435-454`) before it is
     written;
   - a view whose runs ask `ORDERING_FACTS`: + the cut composition (step 6 §14.10).
+  - case B (§9, measured at Task 11): fingerprint B0 + `prove --single-app` on one single-app view:
+    **1, 2, 2, 1, 3, 2, 1, 2, 2, 1**; B0 + prove cross-app on two views (`DIGEST_ROW` + `FINGERPRINT_ROW`):
+    **2, 3, 3, 2, 5, 3, 2, 2, 2, 1**.
 - Traces: one file per process (a child's file is per pid when `ALSEM_TRACE_FILE` is unset; when it is set,
   the parent passes `<file>.w<b>` to child `b`). The job index and command go in the span NAME
   (`job.3.digest`, `view.1`), plus an `instant_lazy` with the args (`perf_trace.rs` `pub fn span(cat:
   &'static str, name: impl Into<TraceName>)` takes no args). Every fill span lies inside a `view` span; every
-  resolve, compute, finalize and serialize span inside exactly one `job` span (T6). `batch.driver` (D1) and
+  resolve, compute, finalize and serialize span inside exactly one `job` span (T6). A fill lies inside no
+  `job` span, except a cut reader's own composition (D6.4: it composes inside its `compute`), whose fills
+  lie inside its own job span and inside a `view` span (amended at Task 8, R7-4). `batch.driver` (D1) and
   `batch.workers` (D12) are instants.
 
 ### 4.11 D11: the `Arc` census (12A-5)
@@ -723,7 +740,7 @@ in the spawned binary exist only under `cfg(debug_assertions)` (the test profile
 | T3 | `batch_counters_one_per_view` (I1; "separate passes → counter 2 fails") | — | D10's rows exactly | **Break 1: one `View` per job** (each job builds and prepares its own view) → `build.program`, `build.detector_context`, `build.witness_pass` read 2, `assert_row` fails, no panic. **Break 2 (the guard): one `prepare` per job on ONE view** → the second composing prepare panics `a View composes once` / `a View takes at most one witness request` (`session.rs:400-437`) |
 | T4 | `batch_views_are_sequential`: cross-app + `--single-app` jobs on one workspace | two `view` spans | the second view's first fill starts after the first view's drop instant | build every view before any compute |
 | T5 | `batch_write_conflicts_and_failures`: (a) a job that fails after an earlier one succeeded; (b) two jobs with one `--out`; (b2) one job's `stdout` and `stderr` naming one file; (b3) a `--out` inside another job's shard directory; (b4) two `--update-baseline` jobs on one baseline; (b5) read-after-write: `fingerprint --out X` then `diff X ws`; `--update-baseline B` then `--baseline B`; a `--policy`/`--renames` file another job writes; (c) the run's own stdout is a closed pipe; (d) a fingerprint job whose `--out` directory does not exist, and an analyze job whose manifest `stdout` target is in a directory that does not exist (analyze has no `--out`, `alsem.rs:454-529`) | — | (a) both written in job order, the failed one with its standalone stderr/exit; (b)-(b5) exit 3, `build.program` 0, one line naming both jobs; (c) Decision 49's text, run exit 1; (d) the job line's exit 1 (fingerprint) / 2 (analyze), the write-error line on the worker's stderr, the other jobs written, run exit 0 | write at compute; drop each path check in turn; map a job write failure to the run's exit |
-| T6 | `batch_trace_split_per_job` | — | every resolve/compute/finalize/serialize span inside exactly one `job` span; every fill span inside a `view` span, none inside a `job` span | open the first job's span around `prepare` |
+| T6 | `batch_trace_split_per_job` | — | every resolve/compute/finalize/serialize span inside exactly one `job` span; every fill span inside a `view` span, none inside a `job` span, except a cut reader's own composition, whose fills lie inside its own job span and a `view` span (D10, amended at Task 8) | open the first job's span around `prepare` |
 | T7 | `batch_arc_census` (D11): one cross-app view with default-detector jobs only (analyze default, digest, policy, events fanout) | `ALSEM_RETAINED_CENSUS=1`; census lines read from the worker's stderr; **every job's run mask equals the union mask** (asserted from the trace's `RunKey`s: one distinct `demanded`), since `det`/`l4` are built at the union mask (O19) | **dedup**: the `model`, `rel`, `det`, `l4` buckets equal the largest standalone job's (exact bytes; the same allocation), and `runs` = Σ over DISTINCT `RunKey`s of the standalone `runs` bytes (analyze + digest sharing a key: the analyze standalone `runs` bytes once); `job_refs` = the number of reading jobs. **Union**: `raw` ≥ max and ≤ Σ of the jobs' standalone `raw` buckets (no clones, D5.3) | clone the `RunOutput` per job → `runs` doubles, the dedup assertion fails |
 | T8 | `rayon_threads_size_the_big_stack_pool` (cli, spawned with `RAYON_NUM_THREADS=2` in the CHILD's environment; no `set_var`) | — | the `pool.threads` trace instant (new, not debug-only: free when tracing is off) reads 2. It is emitted by `big_stack_pool()` from the NEWLY BUILT pool (`pool.current_num_threads()` on the returned `ThreadPool`), not from rayon's free function, which reports the calling thread's pool | `.num_threads(available_parallelism)` |
 | T9 | `decision7_precedence_<move>`, one per change of D3 (policy + build, shard/out + build, policy + `--strict` diagnostics) | both failures asserted separately | the stated text and exit, `build.program` 0 for the first two | validate after the build |
@@ -737,7 +754,7 @@ in the spawned binary exist only under `cfg(debug_assertions)` (the test profile
 | T17 | `batch_worker_count`: (lib) the admission function over an injected table: `⌊budget / P⌋` = 0, 1, 3, ≥ 4 (enough batches) → `W` = 1, 1, 3, 4 without policy and **1, 1, 2, 2** with policy (the formula's `min`, then the cap: S16); (lib, the COMMITTED table, the shape-charging rule O16) the bench manifests `AD`, `ADF`, `U−p`, `O` ×4 batches → `W` 4, and `U` ×4 → 2: a shape's peak raised only its heaviest member's row, so the analyze and digest rows stay under `budget / 4`; (cli, the real table) manifests of 1, 3, 5 batches without policy and 3 batches with one `policy check` job | — | lib: the stated `W`s; cli: the `batch.workers` instant reads 1, 3, 4, **2**, and the child start/exit instants never show more than `W` children alive | drop the policy cap → 3; drop `max(1, …)` → 0; charge `U`'s peak to every kind in it → `ADF` gets 3 |
 | T19 | `empty_request_composes_only_with_a_tree` (cli, counters from the trace; `witness.members` from the worker's stderr with `ALSEM_RETAINED_CENSUS=1`, `detector_context.rs:1380-1387`): (a) `digest --tests` on a change that resolves no root, alone and in a batch with analyze; (b) `query` alone and a batch of query + graph (no run, no request, no tree); (c) case B adds `fingerprint --inventory-only` | (a) the census line reads `witness.members=0` | (a) `build.cone` 1, `build.snapshot` 1, `build.witness_pass` 0; (b) `build.cone` 0, `build.witness_pass` 0 | infer "no composition" from `witness.is_empty()` → (a) `build.snapshot` 0 and the `testCoverage` block is missing; make an empty request compose → (b) `build.cone` 1 |
 | T20 | `write_order_under_merged_streams` (cli, standalone, `2>&1` into one pipe): degraded analyze (the `al-sem: warning:` line before stdout, `alsem.rs:1664-1670`); `policy check` with diagnostics and `--out` (output file, then the diagnostic lines, `:921-925`); a policy job whose `--out` write fails (the stderr lines that follow are not written) | the warning / diagnostics are non-empty (asserted) | the merged bytes equal goldens minted from the base binary at Task 0 | write a fixed stdout, stderr, files order → the degraded-analyze golden differs |
-| T22 | **case B only; activates on the rebase onto step 9** (`#[ignore]` with reason "needs step 9" until then): `batch_tree_reads_use_own_subjects` (cli): ONE cross-app batch of `fingerprint --inventory-only`, `fingerprint --routine R1`, `fingerprint --routine R2` (R1 ≠ R2), `prove R1 may-commit`, on `ws_dep()` | R1's and R2's standalone query outputs differ, and R1's cone reaches a dependency routine R2's does not (asserted), so a shared raw set is observable | each job byte-equal to its standalone run (stdout, stderr lines, exit, files) | give every tree read the whole union `raw` → inventory gains inherited facts / dependency apps (`filter_by_class`) and the R2 query gains R1's dependency rows |
+| T22 | **case B only; activates on the rebase onto step 9** (`#[ignore]` with reason "needs step 9" until then): `batch_tree_reads_use_own_subjects` (cli): ONE cross-app batch of `fingerprint --inventory-only`, `fingerprint --routine R1`, `fingerprint --routine R2` (R1 ≠ R2), `prove R1 may-commit`, on `ws_split` (not `ws_dep()`: there `DoWork` writes the dependency's table 18 itself, so no output shows a shared raw set and the union break is not observable; measured at Task 11) | R1's and R2's standalone query outputs differ, and R1's cone reaches a dependency routine R2's does not (asserted), so a shared raw set is observable | each job byte-equal to its standalone run (stdout, stderr lines, exit, files) | give every tree read the whole union `raw` → inventory gains inherited facts / dependency apps (`filter_by_class`) and the R2 query gains R1's dependency rows |
 | T21 | `batch_diff_sides` (cli): `[diff A B, diff B A]`; `[diff A B, analyze A]`; `diff A A`; a diff whose old side fails to load, with a new side that would print a build line | — | each job equals standalone (bytes, stderr lines, exit); the old-side error wins and the new side's lines are absent; `diff A A` reads D8's expected rows | finalize on the first view → job 2 compares half-loaded sides; replay the new side's lines on an old-side failure |
 | T23 | `update_baseline_write_failure` (cli, standalone; S17): `analyze --baseline <dir-that-does-not-exist>/b.json --update-baseline` | the base behaviour, from a golden minted at Task 0 from the base binary: `al-sem: failed to write baseline '…': …`, exit 3, empty stdout (asserted from the golden) | the head: `al-sem: write error: <path>: <OS message>`, exit 2, empty stdout; the golden is kept as the record of the stated change | keep the compute-side `save_baseline` → the head still prints the old text and exit 3 |
 | T24 | `batch_zero_view_jobs` (cli; S18): (a) a batch with a file/file `diff` (two snapshot files written by an earlier, separate run) between two workspace jobs; (b) a batch whose every job fails its own validation (`events fanout --format bad`, `fingerprint --shard` with a bad value) | — | (a) the diff job equals standalone and is written in job order; (b) every job's line and stderr equal standalone, `build.program` 0, run exit 0 | skip the zero-view phase → (a) the diff job has no line; (b) the run writes nothing |
@@ -942,7 +959,8 @@ neither redesigns.
   - Case B (9 first): this step rebases step 9's `Roots(ids)` to `{ ids, primary: false }`, moves step 9's
     `Plan.tree: TreeRead` into `TreeDemand.read` (its `None` becomes "no tree demand"), makes the
     `TreeRead` cell per job, moves prove's and the fingerprint query's root resolution into
-    `resolve(&Model)`, and turns on T22.
+    `resolve(&Model)`, and turns on T22, on the `ws_split` fixture (on `ws_dep()` the union break is not
+    observable).
 - **No kept trees**: both read and drop every tree inside `prepare`, before `det` (step 9 §4.5; D6.5). Step 9
   dropped `TreeUse` and `take_tree`. Every read's output is fully owned (step 9 §4.7 at `eb754df0`), which is
   what lets the driver drop each tree right after its read (D5.4).
@@ -1013,6 +1031,15 @@ Asked of the epic:
   contention. The operator chose a working `alsem batch` now over the throughput target: `W` stays as D12
   derives it; Task 12 measures and reports B6 (on #289's fix if it has landed); a follow-up investigation of
   four-worker throughput is filed as a discovery. B1a, B1b, B2, B2u, B2o, B5 and B7 stay gating.
+- **Stated deviation (Task 8, R7-3)**: `diff` reads both workspace sides when the job is made, before the
+  first build (D3: every input is read before any write, and read-after-write is checked against them), not
+  when the new side's view starts. Standalone `diff A B` therefore holds B's read during A's build (D6.3 (c)
+  counts it), and a `diff` whose old side fails still reads its new side (`inputs.read` 2, R6-3's row).
+  Reading the new side lazily would let a later read see another job's write, which D2.4 refuses only
+  because every read comes first. B4 reads diff's peak.
+- **Stated limit (Task 8, R7-8)**: jobs that spell one workspace path differently share its one read
+  (D3), which carries the first job's spelling. graph's missing-`id` error names the job's own spelling; any
+  other build error text of a shared view names the first spelling.
 
 ## 11. Open questions
 

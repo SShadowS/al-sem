@@ -34,7 +34,7 @@
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewNeeds,
+    ViewNeeds, WorkspaceRead,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::run::{analyzer_diagnostics_of_view, diagnostic_lines};
@@ -44,9 +44,7 @@ use crate::engine::l5::event_flow::{
 };
 use crate::engine::l5::registry::Detector;
 use crate::engine::session::{Cell, events_plan};
-use crate::program::inputs::WorkspaceInputs;
 use crate::program::resolve::full::LoadedDependencies;
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // JSON insertion-order serializer — the shared `gate::ordered_json` module (one
@@ -400,7 +398,7 @@ impl<'a> EventsJob<'a> {
     }
 
     /// The job's workspace, universe, `--strict` and error-line prefix.
-    fn head(&self) -> (&'a Arc<WorkspaceInputs>, bool, bool, &'static str) {
+    fn head(&self) -> (&'a dyn WorkspaceRead, bool, bool, &'static str) {
         match self.report {
             EventsReport::Fanout(o) => (o.inputs, o.single_app, o.strict, "al-sem events fanout"),
             EventsReport::Chains(o) => (o.inputs, o.single_app, o.strict, "al-sem events chains"),
@@ -503,8 +501,9 @@ fn release_cells(cx: &mut ViewCx<'_>) {
 
 /// Options for `run_events_fanout`.
 pub struct EventsFanoutOptions<'a> {
-    /// The command's one read of the workspace (#160).
-    pub inputs: &'a Arc<WorkspaceInputs>,
+    /// The command's one read of the workspace (#160), handed to the driver
+    /// (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
     pub format: &'a str, // "human" | "json"
     pub scope: Scope,
     /// "warn" (default) | "strict" | "ignore". Mirrors `--coverage-policy` in
@@ -624,8 +623,9 @@ fn fanout_report(
 
 /// Options for `run_events_chains`.
 pub struct EventsChainsOptions<'a> {
-    /// The command's one read of the workspace (#160).
-    pub inputs: &'a Arc<WorkspaceInputs>,
+    /// The command's one read of the workspace (#160), handed to the driver
+    /// (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
     pub format: &'a str,
     pub scope: Scope,
     /// "warn" | "strict" | "ignore". al-sem `events-chains.ts` VALIDATES this flag

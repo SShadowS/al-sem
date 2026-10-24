@@ -73,6 +73,16 @@ impl JobOutput {
         }
     }
 
+    /// The bytes its actions hold (the `batch.held` census, D6.3).
+    pub fn bytes(&self) -> u64 {
+        let len = |a: &WriteAction| match a {
+            WriteAction::Stdout(b) | WriteAction::Stderr(b) => b.len(),
+            WriteAction::File(p, b) => p.as_os_str().len() + b.len(),
+            WriteAction::Dir(p) => p.as_os_str().len(),
+        };
+        self.actions.iter().map(|a| len(a) as u64).sum()
+    }
+
     /// The stderr text without its last newline (a library wrapper's `Err`
     /// message).
     pub fn message(&self) -> String {
@@ -162,6 +172,48 @@ fn create_dir(path: &Path) -> Result<(), Failure> {
         return Ok(());
     }
     std::fs::create_dir_all(path).map_err(|e| (path.display().to_string(), e))
+}
+
+thread_local! {
+    /// The job lines printed by the driver step running on this thread, while
+    /// the driver captures them (#277 D7).
+    static JOB_LINES: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A library job line (#277 D7): the L4 non-convergence line, graph's
+/// coverage warning. Inside a driver step it goes to the driver, which
+/// replays it in the stderr of each job whose standalone run prints it;
+/// anywhere else (a test, `aldump`, a rayon worker: F11) it is printed.
+pub fn job_line(line: String) {
+    let unclaimed = JOB_LINES.with(|c| match c.borrow_mut().as_mut() {
+        Some(lines) => {
+            lines.push(line);
+            None
+        }
+        None => Some(line),
+    });
+    if let Some(line) = unclaimed {
+        eprintln!("{line}");
+    }
+}
+
+/// `f`'s result and the job lines it printed on this thread.
+pub(crate) fn capture<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+    /// Restores the outer capture, also when `f` panics.
+    struct Restore(Option<Option<Vec<String>>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(outer) = self.0.take() {
+                JOB_LINES.with(|c| *c.borrow_mut() = outer);
+            }
+        }
+    }
+    let mut restore = Restore(Some(JOB_LINES.with(|c| c.replace(Some(Vec::new())))));
+    let t = f();
+    let outer = restore.0.take().expect("restored once");
+    let lines = JOB_LINES.with(|c| c.replace(outer)).unwrap_or_default();
+    (t, lines)
 }
 
 /// Write `bytes` to stderr and flush.

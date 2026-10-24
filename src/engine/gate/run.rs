@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewKey, ViewNeeds, ViewUniverse,
+    ViewKey, ViewNeeds, ViewUniverse, WorkspaceRead,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::app_attribution::App;
@@ -367,6 +367,7 @@ pub fn build_view_model(
     let no_id = || ViewFailure {
         target: TargetFailure::NoModelInstanceId,
         analyze: None,
+        inputs: Arc::clone(inputs),
     };
     if single_app || (!needs.graph && model_instance_id.is_none()) {
         assert!(
@@ -444,6 +445,7 @@ pub fn build_view_model(
             Err(ViewFailure {
                 target: TargetFailure::CrossApp(e),
                 analyze: analyze.map(Box::new),
+                inputs: Arc::clone(inputs),
             })
         }
     }
@@ -482,6 +484,7 @@ fn build_single_app(
                     };
                     Box::new((Err(why), model))
                 }),
+                inputs: Arc::clone(inputs),
             });
         }
     };
@@ -489,6 +492,7 @@ fn build_single_app(
     let failed = |program: crate::program::resolved::ResolvedProgram, model| ViewFailure {
         target: target_failure(),
         analyze: extras.then(|| Box::new((Ok(program.into_parts().0.coverage), model))),
+        inputs: Arc::clone(inputs),
     };
     let Some(model_instance_id) = id else {
         return Err(failed(program, ModelFailure::NoModelInstanceId));
@@ -639,7 +643,7 @@ pub fn run_analyze_with_exit(
 /// `Result<AnalyzeOutput, String>`; its writes are the baseline (when
 /// `--update-baseline`), the degraded warning, then the report (D2.3, D2.4).
 pub struct AnalyzeJob<'a> {
-    inputs: &'a Arc<WorkspaceInputs>,
+    inputs: &'a dyn WorkspaceRead,
     request: &'a RequestInputs,
     args: &'a AnalyzeArgs,
     /// The SARIF `driver.version`: the override, else the engine's.
@@ -650,7 +654,7 @@ pub struct AnalyzeJob<'a> {
 impl<'a> AnalyzeJob<'a> {
     /// `Err`: a detector/preset resolution failure, found before any build.
     pub fn new(
-        inputs: &'a Arc<WorkspaceInputs>,
+        inputs: &'a dyn WorkspaceRead,
         request: &'a RequestInputs,
         args: &'a AnalyzeArgs,
         default_version: &str,
@@ -698,15 +702,14 @@ impl Job for AnalyzeJob<'_> {
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
         Ok(SideDoc::new(analyze_view(
             cx,
-            self.inputs,
             self.request,
             self.args,
             &self.version,
         )))
     }
 
-    fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
-        let (fresh, failure) = failure
+    fn view_failed(&self, _: SideIx, view: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        let (fresh, failure) = view
             .analyze
             .as_deref()
             .expect("analyze's view is built with its extras");
@@ -715,7 +718,7 @@ impl Job for AnalyzeJob<'_> {
             // could-not-verify (never a fabricated clean — spec §3), gated on `fresh`.
             // No finding set, so no baseline is written (as before #277).
             ModelFailure::NoModelInstanceId | ModelFailure::AssemblyFailed => {
-                empty_output_result(self.inputs, self.args, &self.version, fresh)
+                empty_output_result(&view.inputs, self.args, &self.version, fresh)
                     .map(|(out, exit, warn)| -> AnalyzeOutput { (out, exit, warn, None) })
             }
             ModelFailure::ProgramBuildFailed(why) => Err(format!(
@@ -773,11 +776,12 @@ impl Job for AnalyzeJob<'_> {
 /// preflight and exit.
 fn analyze_view(
     cx: &mut ViewCx<'_>,
-    inputs: &Arc<WorkspaceInputs>,
     request: &RequestInputs,
     args: &AnalyzeArgs,
     version: &str,
 ) -> Result<AnalyzeOutput, String> {
+    let inputs = Arc::clone(cx.inputs());
+    let inputs = &inputs;
     // L4 + L5: the selected detectors ran on the view (#160 §4.4.4). Findings
     // come pre-sorted by (detector, primaryLocationKey, rootCauseKey). Cross-app,
     // the run drops dependency-anchored findings itself for `--scope primary`

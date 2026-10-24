@@ -23,20 +23,33 @@ use crate::engine::perf_trace as pt;
 use crate::engine::session::{JobId, Plan, View};
 
 use job::{Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, ViewCx, ViewDemand};
-use output::{JobOutput, Stream, replay, replay_on, write_error};
+use output::{JobOutput, Stream, WriteAction, capture, replay, replay_on, write_error};
 
 /// Run one job as its own process does (D1): through the driver, then its
 /// writes on the real streams in its standalone order (D2.3). Returns the exit.
 pub fn run_standalone(job: &dyn Job) -> u8 {
     let _total = job.standalone_span().map(|name| pt::span(job.name(), name));
-    let out = serialize(0, job, run_doc(job));
+    let mut done = None;
+    drive(&[job], &mut |_, doc, lines| {
+        done = Some((doc, lines));
+        0
+    });
+    let (doc, lines) = done.expect("one document per job");
+    let out = serialize(0, job, doc, lines);
     replay(&out, job.write_failure_exit())
 }
 
-/// One job's document, through the driver: a library entry point's run.
+/// One job's document, through the driver: a library entry point's run. Its
+/// job lines are printed, as a solve printed them before #277 D7.
 pub(crate) fn run_doc(job: &dyn Job) -> Doc {
     let mut doc = None;
-    drive(&[job], &mut |_, d| doc = Some(d));
+    drive(&[job], &mut |_, d, lines| {
+        for line in lines {
+            let _ = output::write_stderr(format!("{line}\n").as_bytes());
+        }
+        doc = Some(d);
+        0
+    });
     doc.expect("one document per job")
 }
 
@@ -51,7 +64,7 @@ pub(crate) fn run_on_target(
 ) -> Result<SideDoc, JobFailure> {
     let d = job.demands().into_iter().next().expect("a job with a view");
     let mut view = View::new(target);
-    let part = job.resolve(d.side, &ResolveCx::new(view.model()))?;
+    let part = job.resolve(d.side, &ResolveCx::new(view.model(), &d.inputs))?;
     let (keys, has_tree) = (part.plan.keys(), part.plan.has_tree(JobId(0)));
     view.prepare(&Plan::merge([(JobId(0), part.plan)]));
     let mut cx = ViewCx {
@@ -81,12 +94,10 @@ pub struct JobStreams {
 pub struct JobLine {
     pub batch: u32,
     pub job: u32,
-    pub exit: Option<u8>,
+    pub exit: u8,
     pub stdout: PathBuf,
     pub stderr: PathBuf,
     pub files: Vec<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub worker: Option<String>,
 }
 
 /// Run batch `b` in this process (D2.5): one driver over every job, each
@@ -96,20 +107,26 @@ pub fn run_batch(b: u32, jobs: &[(&dyn Job, JobStreams)]) -> Vec<JobLine> {
     let only: Vec<&dyn Job> = jobs.iter().map(|(job, _)| *job).collect();
     let mut outputs: Vec<Option<JobOutput>> = jobs.iter().map(|_| None).collect();
     let mut lines = Vec::new();
-    drive(&only, &mut |j, doc| {
-        outputs[j] = Some(serialize(j, only[j], doc));
+    drive(&only, &mut |j, doc, job_lines| {
+        outputs[j] = Some(serialize(j, only[j], doc, job_lines));
         while let Some(out) = outputs.get_mut(lines.len()).and_then(Option::take) {
             let i = lines.len();
             lines.push(write_job(b, i, jobs[i].0, &jobs[i].1, &out));
         }
+        outputs.iter().flatten().map(JobOutput::bytes).sum()
     });
     lines
 }
 
-/// Job `j`'s document as its writes, inside its job span.
-fn serialize(j: usize, job: &dyn Job, doc: Doc) -> JobOutput {
+/// Job `j`'s document as its writes, inside its job span: first the job
+/// lines its view build and computes printed (D7), as standalone prints them
+/// before any of its own writes.
+fn serialize(j: usize, job: &dyn Job, doc: Doc, lines: Vec<String>) -> JobOutput {
     let _s = job_span(j, job, "serialize");
-    job.serialize(doc)
+    let mut out = job.serialize(doc);
+    out.actions
+        .splice(0..0, lines.iter().map(|l| WriteAction::line(l)));
+    out
 }
 
 /// Job `i`'s writes: its stdout and stderr actions into its two files, its
@@ -117,8 +134,10 @@ fn serialize(j: usize, job: &dyn Job, doc: Doc) -> JobOutput {
 /// line on the process's stderr, the job's write-failure exit.
 fn write_job(b: u32, i: usize, job: &dyn Job, streams: &JobStreams, out: &JobOutput) -> JobLine {
     let create = |p: &Path| File::create(p).map_err(|e| write_error(&p.display().to_string(), &e));
-    let (exit, files) = match (create(&streams.stdout), create(&streams.stderr)) {
-        (Ok(mut stdout), Ok(mut stderr)) => {
+    // A failed stdout file stops the job before its stderr file (D2.2).
+    let streams_open = create(&streams.stdout).and_then(|o| Ok((o, create(&streams.stderr)?)));
+    let (exit, files) = match streams_open {
+        Ok((mut stdout, mut stderr)) => {
             let (o, e) = (
                 streams.stdout.display().to_string(),
                 streams.stderr.display().to_string(),
@@ -135,11 +154,10 @@ fn write_job(b: u32, i: usize, job: &dyn Job, streams: &JobStreams, out: &JobOut
     JobLine {
         batch: b,
         job: u32::try_from(i).expect("a batch of at most u32::MAX jobs"),
-        exit: Some(exit),
+        exit,
         stdout: streams.stdout.clone(),
         stderr: streams.stderr.clone(),
         files,
-        worker: None,
     }
 }
 
@@ -155,8 +173,14 @@ fn job_span(j: usize, job: &dyn Job, step: &'static str) -> pt::SpanGuard {
     span
 }
 
-/// The driver: hands each job's document to `done` as the job finalizes.
-fn drive(jobs: &[&dyn Job], done: &mut dyn FnMut(usize, Doc)) {
+/// One side's result and the job lines printed while it was built and
+/// computed (D7).
+type Side = (Result<SideDoc, JobFailure>, Vec<String>);
+
+/// The driver: hands each job's document and job lines to `done` as the job
+/// finalizes; `done` returns the bytes of the finished outputs it now holds
+/// (the `batch.held` census, D6.3).
+fn drive(jobs: &[&dyn Job], done: &mut dyn FnMut(usize, Doc, Vec<String>) -> u64) {
     // A demand is dropped with its view, and with it its workspace read
     // (E12-C2).
     let mut demands: Vec<Vec<Option<ViewDemand>>> = jobs
@@ -185,31 +209,40 @@ fn drive(jobs: &[&dyn Job], done: &mut dyn FnMut(usize, Doc)) {
         "batch.driver",
         || serde_json::json!({ "jobs": jobs.len(), "views": keys.len(), "workers": 1 }),
     );
-    let mut sides: Vec<Vec<Option<Result<SideDoc, JobFailure>>>> = demands
+    let mut sides: Vec<Vec<Option<Side>>> = demands
         .iter()
         .map(|ds| ds.iter().map(|_| None).collect())
         .collect();
-    let mut finalize = |j: usize, sides: &mut Vec<Option<Result<SideDoc, JobFailure>>>| {
+    let mut finalize = |j: usize, sides: &mut Vec<Option<Side>>| {
+        // The lines of each side up to the first failed one: standalone never
+        // reads a side after a failed one (D8), so prints none of its lines.
+        let mut lines = Vec::new();
+        let mut failed = false;
         let ran = sides
             .drain(..)
-            .map(|s| s.expect("every side ran"))
+            .map(|s| {
+                let (side, side_lines) = s.expect("every side ran");
+                if !failed {
+                    lines.extend(side_lines);
+                }
+                failed |= side.is_err();
+                side
+            })
             .collect();
         let doc = {
             let _s = job_span(j, jobs[j], "finalize");
             jobs[j].finalize(ran)
         };
-        done(j, doc);
+        done(j, doc, lines)
     };
-    // (0) The jobs with no view.
+    // (0) The jobs with no view, before the first view builds (D2.2).
+    let mut held_outputs = 0;
     for (j, last) in last_view.iter().enumerate() {
         if last.is_none() {
-            finalize(j, &mut sides[j]);
+            held_outputs = finalize(j, &mut sides[j]);
         }
     }
     for (v, key) in keys.iter().enumerate() {
-        // Every fill of the view lies inside its span (D10); the next view
-        // builds only after this one's drop instant (D4.1).
-        let view_span = pt::span("batch", format!("view.{v}"));
         // Each demand on the view, and its slot (job, demand index).
         let mut on_view: Vec<(usize, &ViewDemand)> = Vec::new();
         let mut slots = Vec::new();
@@ -224,9 +257,9 @@ fn drive(jobs: &[&dyn Job], done: &mut dyn FnMut(usize, Doc)) {
                 let failed = sides[j][..k]
                     .iter()
                     .flatten()
-                    .find_map(|s| s.as_ref().err());
+                    .find_map(|(s, _)| s.as_ref().err());
                 match failed.cloned() {
-                    Some(f) => sides[j][k] = Some(Err(f)),
+                    Some(f) => sides[j][k] = Some((Err(f), vec![])),
                     None => {
                         on_view.push((j, d));
                         slots.push((j, k));
@@ -234,33 +267,66 @@ fn drive(jobs: &[&dyn Job], done: &mut dyn FnMut(usize, Doc)) {
                 }
             }
         }
+        // A view whose every demand was skipped builds nothing and opens no
+        // span (R7-9). Every fill of a view lies inside its span (D10); the
+        // next view builds only after this one's drop instant (D4.1).
         if !on_view.is_empty() {
+            if crate::engine::census::enabled() {
+                held_census(&sides, &demands, key, held_outputs);
+            }
+            let view_span = pt::span("batch", format!("view.{v}"));
             for ((j, k), side) in slots.into_iter().zip(run_view(jobs, &on_view)) {
                 sides[j][k] = Some(side);
             }
+            pt::instant_lazy("batch", "view.drop", || serde_json::json!({ "view": v }));
+            drop(view_span);
         }
         for d in demands.iter_mut().flatten() {
             if d.as_ref().is_some_and(|d| d.key == *key) {
                 *d = None;
             }
         }
-        pt::instant_lazy("batch", "view.drop", || serde_json::json!({ "view": v }));
-        drop(view_span);
         // (10) Every job whose last view this was.
         for (j, last) in last_view.iter().enumerate() {
             if *last == Some(v) {
-                finalize(j, &mut sides[j]);
+                held_outputs = finalize(j, &mut sides[j]);
             }
         }
     }
 }
 
+/// `[retained-census] batch.held outputs=<bytes> sides=<bytes> inputs=<bytes>`
+/// at a view's start (D6.3): the finished outputs waiting for an earlier job,
+/// the side documents waiting for a later view, and the workspace reads of
+/// views still to come (read before the first build, D3; R7-1), each read once.
+fn held_census(
+    sides: &[Vec<Option<Side>>],
+    demands: &[Vec<Option<ViewDemand>>],
+    key: &job::ViewKey,
+    outputs: u64,
+) {
+    let sides: u64 = sides
+        .iter()
+        .flatten()
+        .flatten()
+        .filter_map(|(s, _)| s.as_ref().ok())
+        .map(SideDoc::bytes)
+        .sum();
+    let mut reads: Vec<&Arc<crate::program::inputs::WorkspaceInputs>> = Vec::new();
+    for d in demands.iter().flatten().flatten() {
+        if d.key != *key && !reads.iter().any(|r| Arc::ptr_eq(r, &d.inputs)) {
+            reads.push(&d.inputs);
+        }
+    }
+    let inputs: usize = reads.iter().map(|r| r.census().bytes).sum();
+    eprintln!("[retained-census] batch.held outputs={outputs} sides={sides} inputs={inputs}");
+}
+
 /// One view: its build, its demands' parts, one `prepare`, their computes.
-/// Returns each demand's result, in the order given.
-fn run_view(
-    jobs: &[&dyn Job],
-    on_view: &[(usize, &ViewDemand)],
-) -> Vec<Result<SideDoc, JobFailure>> {
+/// Returns each demand's result and job lines, in the order given: a
+/// demand's own lines (its compute's, its program's) after the solve's lines
+/// of `prepare` when its own plan solves `l4` (D7).
+fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
     let (_, first) = on_view[0];
     // The view is built from the first demand's read: every demand on it must
     // hold that same read, never a second one of the workspace.
@@ -273,20 +339,19 @@ fn run_view(
     let needs = on_view
         .iter()
         .fold(first.needs, |n, (_, d)| n.union(d.needs));
-    let finish = |results: Vec<Option<Result<SideDoc, JobFailure>>>| {
+    let finish = |results: Vec<Option<Side>>| {
         results
             .into_iter()
             .map(|r| r.expect("every demand computed"))
             .collect()
     };
-    let mut results: Vec<Option<Result<SideDoc, JobFailure>>> =
-        on_view.iter().map(|_| None).collect();
+    let mut results: Vec<Option<Side>> = on_view.iter().map(|_| None).collect();
     // (1) The one builder; graph demands are done off its program.
     let built = build_view_model(&first.inputs, &first.key, needs, |program| {
         for (i, (j, d)) in on_view.iter().enumerate() {
             if d.needs.graph {
                 let _s = job_span(*j, jobs[*j], "compute");
-                results[i] = Some(jobs[*j].program(d.side, program));
+                results[i] = Some(capture(|| jobs[*j].program(d.side, program)));
             }
         }
     });
@@ -297,7 +362,7 @@ fn run_view(
             for (i, (j, d)) in on_view.iter().enumerate() {
                 results[i].get_or_insert_with(|| {
                     let _s = job_span(*j, jobs[*j], "compute");
-                    jobs[*j].view_failed(d.side, &failure)
+                    capture(|| jobs[*j].view_failed(d.side, &failure))
                 });
             }
             return finish(results);
@@ -313,7 +378,7 @@ fn run_view(
     let mut view = View::new(target);
     // (2b) Each demand's part, the identity table shared and dropped here.
     let parts: Vec<Result<PlanPart, JobFailure>> = {
-        let cx = ResolveCx::new(view.model());
+        let cx = ResolveCx::new(view.model(), &first.inputs);
         on_view
             .iter()
             .map(|(_, (j, d))| {
@@ -323,12 +388,13 @@ fn run_view(
             .collect()
     };
     // What each demand reads, kept before the parts' plans merge (D6.1, D6.2).
-    let reads: Vec<Option<(Vec<_>, Vec<_>, bool)>> = parts
+    let reads: Vec<Option<(Vec<_>, Vec<_>, bool, bool)>> = parts
         .iter()
         .map(|p| {
-            p.as_ref()
-                .ok()
-                .map(|p| (p.reads.clone(), p.plan.keys(), p.plan.has_tree(JobId(0))))
+            p.as_ref().ok().map(|p| {
+                let has_tree = p.plan.has_tree(JobId(0));
+                (p.reads.clone(), p.plan.keys(), has_tree, p.plan.builds_l4())
+            })
         })
         .collect();
     let mut carries = Vec::new();
@@ -341,15 +407,15 @@ fn run_view(
             }
             Err(f) => {
                 carries.push(None);
-                results[*i] = Some(Err(f));
+                results[*i] = Some((Err(f), vec![]));
             }
         }
     }
-    // (4)-(8) ONE plan, ONE prepare.
-    view.prepare(&Plan::merge(plans));
+    // (4)-(8) ONE plan, ONE prepare; its job lines are the `l4` solve's.
+    let ((), l4_lines) = capture(|| view.prepare(&Plan::merge(plans)));
     // (9) Each demand's compute, in job order.
     for (k, (i, (j, d))) in on_view.iter().enumerate() {
-        let Some((_, keys, has_tree)) = reads[k].clone() else {
+        let Some((_, keys, has_tree, builds_l4)) = reads[k].clone() else {
             continue;
         };
         let later = || reads[k + 1..].iter().flatten();
@@ -365,7 +431,16 @@ fn run_view(
             carry: carries[k].take(),
         };
         let _s = job_span(*j, jobs[*j], "compute");
-        results[*i] = Some(jobs[*j].compute(d.side, &mut cx));
+        let (side, own) = capture(|| jobs[*j].compute(d.side, &mut cx));
+        // Once per job and view: `diff A A`'s two sides share one solve.
+        let first_of_job = !on_view[..k].iter().any(|(_, (jj, _))| jj == j);
+        let mut lines = if builds_l4 && first_of_job {
+            l4_lines.clone()
+        } else {
+            vec![]
+        };
+        lines.extend(own);
+        results[*i] = Some((side, lines));
     }
     // Freeing the view is a large deallocation: named, so it is not left in an
     // enclosing span's self time (E12-C3, as analyze's `gate.teardown`).
@@ -433,7 +508,7 @@ mod tests {
         let key = ViewKey::new(d.path(), true, false);
         let (ja, jb) = (OnView(key.clone(), a), OnView(key, b));
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            drive(&[&ja, &jb], &mut |_, _| {})
+            drive(&[&ja, &jb], &mut |_, _, _| 0)
         }));
         let msg = r.expect_err("the driver refuses the view");
         let msg = msg
@@ -514,7 +589,10 @@ mod tests {
     /// Every job's sides, in job order.
     fn drive_probes(jobs: &[&dyn Job]) -> Vec<Sides> {
         let mut docs: Vec<Option<Sides>> = jobs.iter().map(|_| None).collect();
-        drive(jobs, &mut |j, doc| docs[j] = Some(doc.take()));
+        drive(jobs, &mut |j, doc, _| {
+            docs[j] = Some(doc.take());
+            0
+        });
         docs.into_iter().map(|d| d.expect("finalized")).collect()
     }
 
@@ -583,6 +661,43 @@ mod tests {
             side.0
         });
         assert_eq!(drive_probes(&[&job]), vec![vec![Ok(0), Ok(1)]]);
+    }
+
+    /// #277 R7-1 (D6.3): a real job made the way the binary makes it (its read
+    /// in a [`HandOff`]) keeps no workspace read past its view. Two
+    /// workspaces, no diff: `events fanout` on A, then a job on B that looks
+    /// for A's read while B computes. Precondition: the job holds A's read
+    /// before the batch runs (the test holds only a `Weak`).
+    #[test]
+    fn a_job_holds_no_read_past_its_view() {
+        use crate::engine::gate::events::{EventsFanoutOptions, EventsJob};
+        let (a, b) = (r0("ws-d1-multi-caller"), r0("ws-d14-dead-routine"));
+        let a_read = Arc::downgrade(&a);
+        let held = HandOff::new(a);
+        let opts = EventsFanoutOptions {
+            inputs: &held,
+            format: "json",
+            scope: crate::engine::l5::event_flow::Scope::Primary,
+            coverage_policy: "warn",
+            driver_version: "test",
+            deterministic: true,
+            strict: false,
+            single_app: true,
+        };
+        let events = EventsJob::fanout(&opts, None);
+        assert!(a_read.upgrade().is_some(), "precondition: the job holds A");
+        let key = ViewKey::new(&b.workspace, true, false);
+        let mut later = Probe::new(vec![(key, &b)]);
+        later.compute = Box::new(move |_, _| {
+            assert!(a_read.upgrade().is_none(), "A's read outlived its view");
+            1
+        });
+        let mut docs = 0;
+        drive(&[&events, &later], &mut |_, _, _| {
+            docs += 1;
+            0
+        });
+        assert_eq!(docs, 2, "both jobs finalized");
     }
 
     /// #277 D6.1, D6.2: on one view, a cell or run an earlier job releases or
