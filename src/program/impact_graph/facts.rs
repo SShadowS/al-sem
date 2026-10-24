@@ -78,10 +78,7 @@ pub fn extract_source_facts(
                 let obj_id = ObjectNodeId {
                     app,
                     kind: obj.kind,
-                    key: match obj.id {
-                        Some(n) => ObjKey::Id(n),
-                        None => ObjKey::Name(obj.name.fold_identifier().into()),
-                    },
+                    key: ObjKey::from_source(obj),
                 };
                 let of = object_facts(obj, &obj_id, graph, index);
                 if of != ObjectFacts::default() {

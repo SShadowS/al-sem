@@ -91,14 +91,16 @@ pub fn canonicalize_type_text(raw: &str) -> String {
 /// `pub(crate)` deliberately: the callers are [`super::ir_walk::ir_enclosing_member`]
 /// (the member discriminator), [`super::ir_walk::ir_object_name`] (a source
 /// object's logical name, which [`super::ir_walk::ir_object_key`] keys a numberless
-/// object on, #83/#240), [`crate::program::model::model_object_id`] (the same
-/// segment from a graph node's folded name key), and the producers of every
+/// object on, #83/#240), [`crate::program::node::ObjKey::from_source`] (a source
+/// object's graph name key, the same folded logical name, #250), and the producers of every
 /// reference the model's lookups match (#240: the model's `SourceTable` /
 /// `extends`, `ir_walk`'s record-variable table (declared, dataitem-named),
 /// `TableNo`, implicit-`Rec` dataitem table and `Codeunit.Run` target,
 /// `record_types::record_table_name_of`, and the ABI projection's quoted
 /// `SourceTable` / `TargetObject`), plus the object-fact census's graph side (the
-/// graph stays raw, #250), each unescaping its RAW value exactly once. Every
+/// graph's SOURCE object names stay raw; only its keys are logical, #250 discovery
+/// D-A),
+/// each unescaping its RAW value exactly once. Every
 /// consumer reads the stored logical name and must NOT unescape again. Limit:
 /// `implements_interfaces` and `ModelPageControl.target` stay raw; no lookup reads
 /// them. Keeping the visibility crate-internal stops an

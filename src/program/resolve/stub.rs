@@ -47,10 +47,7 @@ pub fn resolve_program(graph: &ProgramGraph, parsed: &[ParsedUnit]) -> Vec<Edge>
             let sites = extract_raw_sites(&pf.file, &pf.text, &pf.virtual_path);
 
             for obj in &pf.file.objects {
-                let key = match obj.id {
-                    Some(n) => ObjKey::Id(n),
-                    None => ObjKey::Name(obj.name.fold_identifier().into()),
-                };
+                let key = ObjKey::from_source(obj);
                 let obj_id = ObjectNodeId {
                     app: app_ref,
                     kind: obj.kind,

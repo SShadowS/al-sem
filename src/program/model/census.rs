@@ -247,8 +247,8 @@ pub fn object_fact_census(
             }
         };
         // The model's names and references are logical, the graph's raw (workspace
-        // objects only; #250 would make the graph logical too), so the graph side
-        // is unescaped once (#240).
+        // objects only). #250 made only the graph's KEYS logical; its names stay raw
+        // (#250 discovery D-A), so the graph side is unescaped once (#240).
         differ("name", o.name.clone(), unescape_al_identifier(&n.name));
         differ(
             "number",

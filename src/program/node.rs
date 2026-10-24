@@ -72,8 +72,10 @@ impl AppRegistry {
     }
 }
 
-/// Object key: prefer the numeric id; fall back to the (lowercased) name for
-/// id-less objects (extension objects, or where the IR has no number).
+/// Object key: prefer the numeric id; fall back to the name for id-less objects
+/// (extension objects, or where the IR has no number). Every `Name` holds the
+/// folded LOGICAL name (an AL `""` is one `"`): a source key is built by
+/// [`Self::from_source`], an ABI key by [`Self::from_abi`] (#250).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum ObjKey {
     Id(i64),
@@ -93,6 +95,22 @@ impl ObjKey {
         }
     }
 
+    /// The key of a SOURCE object: its number, or its folded LOGICAL name
+    /// ([`crate::program::body::ir_walk::ir_object_name`], the one unescape of the
+    /// IR's raw name). It takes the declaration, not a string, so an
+    /// already-logical name (an ABI name) cannot be unescaped a second time.
+    pub(crate) fn from_source(o: &al_syntax::ir::ObjectDecl) -> ObjKey {
+        use al_syntax::IdentifierFoldExt;
+        match o.id {
+            Some(n) => ObjKey::Id(n),
+            None => ObjKey::Name(
+                crate::program::body::ir_walk::ir_object_name(o)
+                    .fold_identifier()
+                    .into(),
+            ),
+        }
+    }
+
     /// The key as plain text: the number, or the name as stored.
     pub fn raw_text(&self) -> String {
         match self {
@@ -102,16 +120,13 @@ impl ObjKey {
     }
 
     /// The model's object-id segment for this key (`engine::ids::object_key`): the
-    /// number, or `@` + the encoded name. A source name key is the folded RAW name
-    /// (inner `""` kept), so it is unescaped first; an ABI name key is already the
-    /// folded logical name (see the #83 spec's Limits for one that holds `""`).
+    /// number, or `@` + the encoded name. Every name key, source
+    /// ([`Self::from_source`]) and ABI ([`Self::from_abi`]) alike, is already the
+    /// folded logical name, so it is encoded as it is (#250).
     pub fn model_key(&self) -> String {
         match self {
             ObjKey::Id(n) => n.to_string(),
-            ObjKey::Name(n) => crate::engine::ids::object_key(
-                None,
-                &crate::program::body::scope::unescape_al_identifier(n),
-            ),
+            ObjKey::Name(n) => crate::engine::ids::object_key(None, n),
         }
     }
 }
@@ -348,6 +363,29 @@ mod tests {
             na, nb,
             "same type+name in different apps must be distinct nodes"
         );
+    }
+
+    /// #250: a name key is already the folded logical name; `model_key` encodes it
+    /// as it is, so an ABI `a""b` keeps both quotes.
+    #[test]
+    fn model_key_encodes_a_logical_name_key_as_it_is() {
+        assert_eq!(ObjKey::Name("a\"\"b".into()).model_key(), "@a%22%22b");
+    }
+
+    /// #250: a source key is the number, or the folded name unescaped once.
+    #[test]
+    fn from_source_keys_on_the_number_or_the_folded_logical_name() {
+        let key = |src: &str| {
+            let file = al_syntax::parse(src);
+            assert_eq!(file.objects.len(), 1, "precondition: one object in {src:?}");
+            ObjKey::from_source(&file.objects[0])
+        };
+        assert_eq!(
+            key("interface \"A\"\"\"\"B\"\n{\n}\n"),
+            ObjKey::Name("a\"\"b".into())
+        );
+        assert_eq!(key("codeunit 7 x\n{\n}\n"), ObjKey::Id(7));
+        assert_eq!(key("interface IFoo\n{\n}\n"), ObjKey::Name("ifoo".into()));
     }
 
     // ── T3 Task 11 review fix-wave: sig_fp must serialize as a STRING ──────

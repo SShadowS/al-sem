@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `alsem graph`: the node id of a source object without a number, whose name holds an
+  escaped quote (`""` in the source), now comes from its logical name, where `""` is
+  one `"`. That is the same name the model's object id uses. Such ids change once;
+  ids of every other object stay the same (#250).
+
+### Fixed
+
+- An object without a number, in a dependency that ships only symbols, whose name
+  holds two quote characters in a row (`""`) now has the same id in the program graph
+  and in the model. Before, the graph id dropped one of the two quotes (#250).
+
 ## [2.0.3] - 2026-10-23
 
 ### Added

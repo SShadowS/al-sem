@@ -1734,14 +1734,10 @@ fn dep_object_node_id(
     o: &al_syntax::ir::ObjectDecl,
 ) -> crate::program::node::ObjectNodeId {
     use crate::program::node::{ObjKey, ObjectNodeId};
-    use al_syntax::IdentifierFoldExt;
     ObjectNodeId {
         app,
         kind: o.kind,
-        key: match o.id {
-            Some(n) => ObjKey::Id(n),
-            None => ObjKey::Name(o.name.fold_identifier().into()),
-        },
+        key: ObjKey::from_source(o),
     }
 }
 
