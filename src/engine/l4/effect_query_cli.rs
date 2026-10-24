@@ -46,6 +46,7 @@ use crate::engine::l4::effect_query::{
     AncestorTouch, DbEffectQuery, TableTouch, UNKNOWN_TABLE_ID, is_unknown_table,
 };
 use crate::engine::session::{View, query_plan};
+use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::{
     Model, ModelRecordOperation, ModelRoutine, table_by_id_preferring_real,
 };
@@ -296,11 +297,8 @@ pub fn resolve_routine_selector<'a>(
     selector: &str,
 ) -> Resolution<&'a ModelRoutine> {
     let ws = &resolved.workspace;
-    let object_name_by_id: HashMap<&str, &str> = ws
-        .objects
-        .iter()
-        .map(|o| (o.id.as_str(), o.name.as_str()))
-        .collect();
+    let declaring = DeclaringObjects::new(&ws.objects);
+    let object_name = |r: &ModelRoutine| declaring.of(r).map_or("", |o| o.name.as_str());
     let routines = || {
         ws.routines
             .iter()
@@ -316,10 +314,7 @@ pub fn resolve_routine_selector<'a>(
 
     let want = selector.to_lowercase();
     let qualified: Vec<&ModelRoutine> = routines()
-        .filter(|r| {
-            let obj = object_name_by_id.get(r.object_id.as_str()).unwrap_or(&"");
-            format!("{obj}.{}", r.name).to_lowercase() == want
-        })
+        .filter(|r| format!("{}.{}", object_name(r), r.name).to_lowercase() == want)
         .collect();
     let bare: Vec<&ModelRoutine> = routines()
         .filter(|r| r.name.to_lowercase() == want)
@@ -339,10 +334,7 @@ pub fn resolve_routine_selector<'a>(
         1 => Resolution::Resolved(hits[0]),
         _ => Resolution::Ambiguous(
             hits.iter()
-                .map(|r| {
-                    let obj = object_name_by_id.get(r.object_id.as_str()).unwrap_or(&"");
-                    format!("{}.{} ({})", obj, r.name, r.stable_routine_id)
-                })
+                .map(|r| format!("{}.{} ({})", object_name(r), r.name, r.stable_routine_id))
                 .collect(),
         ),
     }
@@ -381,10 +373,12 @@ impl RoutineRef {
     }
 }
 
-/// The join table: internal routine id -> its `ModelRoutine`, plus object names.
+/// The join table: internal routine id -> its `ModelRoutine`, plus each
+/// routine's declaring object ([`DeclaringObjects`], #241: an `#if`-split object
+/// has one id for two names, so the owner is never looked up by id alone).
 pub struct RoutineJoin<'a> {
     by_id: HashMap<&'a str, &'a ModelRoutine>,
-    object_name_by_id: HashMap<&'a str, &'a str>,
+    declaring: DeclaringObjects<'a>,
 }
 
 impl<'a> RoutineJoin<'a> {
@@ -392,11 +386,7 @@ impl<'a> RoutineJoin<'a> {
         let ws = &resolved.workspace;
         RoutineJoin {
             by_id: ws.routines.iter().map(|r| (r.id.as_str(), r)).collect(),
-            object_name_by_id: ws
-                .objects
-                .iter()
-                .map(|o| (o.id.as_str(), o.name.as_str()))
-                .collect(),
+            declaring: DeclaringObjects::new(&ws.objects),
         }
     }
 
@@ -414,11 +404,7 @@ impl<'a> RoutineJoin<'a> {
     }
 
     pub fn of(&self, r: &ModelRoutine) -> RoutineRef {
-        let object_name = self
-            .object_name_by_id
-            .get(r.object_id.as_str())
-            .copied()
-            .unwrap_or("");
+        let object_name = self.declaring.of(r).map_or("", |o| o.name.as_str());
         RoutineRef {
             display: r.name.clone(),
             object_display: object_display(&r.object_type, object_name),
@@ -454,11 +440,12 @@ pub fn owner_qualified(object_display: &str, routine_display: &str) -> String {
 /// name of the real table with its own number there. (An object's id segment is
 /// its key, `engine::ids::object_key`: the number, or `@` + the name for an
 /// unnumbered object, #83.) Declaration-only rows read their
-/// declaring object directly. Ordinary rows read the name `RoutineJoin` reads
-/// (last object per internal id), so two model objects with ONE internal id
-/// (`#if`-split object declarations) share one name, as in
-/// `query effects`. Rows that share a stable id share its object (the stable id
-/// folds in the object), so they give one owner.
+/// declaring object directly. Ordinary rows read their declaring object through
+/// [`DeclaringObjects`], as `RoutineJoin` does, so the arms of an `#if`-split
+/// object (two model objects with ONE internal id and two names) each name their
+/// own routines (#241). Rows that share a stable id give one owner, the first
+/// row's: for a routine declared with one signature in both arms, that is the
+/// first arm.
 ///
 /// The index holds borrowed rows only; a display string is built on lookup, so
 /// a run pays for the roots and candidates it asks about.
@@ -472,21 +459,14 @@ impl<'a> OwnerIndex<'a> {
     pub fn build(resolved: &'a Model) -> Self {
         use crate::program::model::role::Role;
         let ws = &resolved.workspace;
-        let name_by_object_id: HashMap<&str, &str> = ws
-            .objects
-            .iter()
-            .map(|o| (o.id.as_str(), o.name.as_str()))
-            .collect();
+        let declaring = DeclaringObjects::new(&ws.objects);
         let mut by_stable_id: HashMap<&'a str, (&'a str, &'a str)> = HashMap::new();
         for r in ws
             .routines
             .iter()
             .filter(|r| is_primary_routine(resolved, r))
         {
-            let name = name_by_object_id
-                .get(r.object_id.as_str())
-                .copied()
-                .unwrap_or("");
+            let name = declaring.of(r).map_or("", |o| o.name.as_str());
             by_stable_id
                 .entry(r.stable_routine_id.as_str())
                 .or_insert((r.object_type.as_str(), name));
@@ -1378,6 +1358,77 @@ mod tests {
         assert_eq!(owners.object_display("nope"), "");
         assert_eq!(owners.qualified("nope", "Run"), "Run");
         assert_eq!(owners.qualified("s-alpha", "Run"), "Codeunit Alpha::Run");
+    }
+
+    /// An anchor in `file` from `(start_line, 0)` to `(end_line, 0)`.
+    fn anchor(
+        file: &str,
+        start_line: u32,
+        end_line: u32,
+    ) -> crate::program::body::features::PAnchor {
+        let mut a = crate::engine::l5::test_support::dummy_anchor();
+        a.source_unit_id = file.to_string();
+        a.start_line = start_line;
+        a.end_line = end_line;
+        a
+    }
+
+    /// U1 (#241). `DeclaringObjects::of` over hand-stated rows sharing one id:
+    /// without anchors it gives the LAST row (the pre-#241 owner); with anchors
+    /// it gives the row whose declaration contains the routine's start, in
+    /// either row order, never a row of another file.
+    ///
+    /// Discrimination: make the no-anchor fallback pick the first row -> (a)
+    /// reads `Old`; fails. Replace containment with "first row" -> (c) reads
+    /// `Bar`'s routine as `Foo`; fails.
+    #[test]
+    fn declaring_objects_contains_by_anchor_else_last_row() {
+        let name = |o: Option<&ModelObject>| o.map(|o| o.name.clone());
+
+        // (a) no anchors: the last row.
+        let old = object("ws", "Codeunit", 6, "Old", &[]);
+        let new = object("ws", "Codeunit", 6, "New", &[]);
+        assert_eq!(old.id, new.id, "precondition: one internal object id");
+        let r = routine(&old, "r", "s");
+        let rows = vec![old, new];
+        assert_eq!(
+            name(DeclaringObjects::new(&rows).of(&r)),
+            Some("New".into())
+        );
+
+        // (b) / (c) anchors: the containing row, whichever comes first.
+        let mut arm1 = object("ws", "Codeunit", 7, "Foo", &[]);
+        arm1.source_anchor = Some(anchor("ws:f.al", 1, 10));
+        let mut arm2 = object("ws", "Codeunit", 7, "Bar", &[]);
+        arm2.source_anchor = Some(anchor("ws:f.al", 12, 20));
+        let mut in_foo = routine(&arm1, "r-foo", "s-foo");
+        in_foo.source_anchor = anchor("ws:f.al", 3, 8);
+        let mut in_bar = routine(&arm2, "r-bar", "s-bar");
+        in_bar.source_anchor = anchor("ws:f.al", 14, 18);
+        for rows in [
+            vec![arm1.clone(), arm2.clone()],
+            vec![arm2.clone(), arm1.clone()],
+        ] {
+            let d = DeclaringObjects::new(&rows);
+            assert_eq!(name(d.of(&in_foo)), Some("Foo".into()), "(b)");
+            assert_eq!(name(d.of(&in_bar)), Some("Bar".into()), "(c)");
+        }
+
+        // (d) a routine of another file is in neither row: the last row.
+        let mut elsewhere = routine(&arm1, "r-x", "s-x");
+        elsewhere.source_anchor = anchor("ws:g.al", 3, 8);
+        let rows = vec![arm1, arm2];
+        assert_eq!(
+            name(DeclaringObjects::new(&rows).of(&elsewhere)),
+            Some("Bar".into())
+        );
+
+        // (e) no row for the id.
+        let other = object("ws", "Codeunit", 8, "Other", &[]);
+        assert_eq!(
+            name(DeclaringObjects::new(&rows).of(&routine(&other, "r", "s"))),
+            None
+        );
     }
 
     fn resolved_id(r: Resolution<TableRef>) -> String {

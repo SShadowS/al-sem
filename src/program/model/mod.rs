@@ -13,6 +13,7 @@ pub mod abi_rows;
 pub mod calls;
 pub mod census;
 pub mod coverage;
+pub mod declaring;
 pub mod event_param_temp;
 pub mod events;
 pub mod extension_fields;

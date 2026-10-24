@@ -1017,3 +1017,264 @@ fn unloaded_escaped_table_is_described_by_its_logical_name() {
         "d52: {causes:#?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #241: an object split across `#if` arms with different names under one id
+// (`codeunit 50100 "Foo"` / `codeunit 50100 "Bar"`): each routine's owner is the
+// declaration that contains it, never the last arm's name for the id.
+// ---------------------------------------------------------------------------
+
+const SPLIT_GUID: &str = "24124124-0000-0000-0000-000000000241";
+const SPLIT_FILE: &str = "src/Split.Codeunit.al";
+const FOO: &str = "Codeunit Foo";
+const BAR: &str = "Codeunit Bar";
+
+/// One `#if` arm: `codeunit 50100 "<name>"` whose `<routine>` runs `<stmt>` on
+/// the table.
+fn split_arm(name: &str, routine: &str, stmt: &str) -> String {
+    format!(
+        "codeunit 50100 \"{name}\"\n{{\n    procedure {routine}()\n    var\n        R: Record \"Probe Rec\";\n    begin\n        {stmt};\n    end;\n}}\n"
+    )
+}
+
+/// `Foo` (P: DeleteAll) and `Bar` (Q: ModifyAll) as the two arms of one `#if`,
+/// `Foo` first unless `bar_first`.
+fn split_workspace(dir: &Path, bar_first: bool) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{SPLIT_GUID}","name":"Probe241","publisher":"probe","version":"1.0.0.0","platform":"1.0.0.0","application":"1.0.0.0","idRanges":[{{"from":50100,"to":50199}}],"runtime":"14.0"}}"#
+        ),
+    );
+    write(
+        &dir.join("src/T.Table.al"),
+        "table 50190 \"Probe Rec\"\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n}\n",
+    );
+    let arm_p = split_arm("Foo", "P", "R.DeleteAll()");
+    let arm_q = split_arm("Bar", "Q", "R.ModifyAll(\"No.\", 'X')");
+    let (first, second) = if bar_first {
+        (arm_q, arm_p)
+    } else {
+        (arm_p, arm_q)
+    };
+    write(
+        &dir.join(SPLIT_FILE),
+        &format!("#if A\n{first}#else\n{second}#endif\n"),
+    );
+}
+
+/// `query effects --routine <routine>`: the header's owner and every effect
+/// origin's owner name `owner`, and the human header reads `<owner>::<routine>`.
+fn assert_query_effects_owner(w: &str, routine: &str, owner: &str) {
+    let (q, code) = alsem(&[
+        "query",
+        "effects",
+        w,
+        "--routine",
+        routine,
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 0, "{q}");
+    let p = &q["payload"];
+    assert_eq!(p["routine"]["routine"]["objectDisplay"], owner, "{q}");
+    let effects = p["effects"].as_array().unwrap();
+    assert_eq!(effects.len(), 1, "precondition: one effect line: {q}");
+    assert_eq!(
+        effects[0]["origin"]["routine"]["objectDisplay"], owner,
+        "{q}"
+    );
+
+    let (text, code) = alsem_text(&[
+        "query",
+        "effects",
+        w,
+        "--routine",
+        routine,
+        "--deterministic",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.lines()
+            .any(|l| l == format!("--- effects of {owner}::{routine} ---")),
+        "{text}"
+    );
+}
+
+/// The split file's digest: P's entry names `Foo`, Q's names `Bar`, and P's
+/// human header reads `--- Codeunit Foo::P ---`.
+fn assert_digest_owners(ws: &Path) {
+    let (doc, code) = digest_file(ws, SPLIT_FILE);
+    assert_eq!(code, 0, "{doc}");
+    let mut got: Vec<(String, String)> = entries(&doc)
+        .iter()
+        .map(|e| {
+            (
+                e["routine"]["display"].as_str().unwrap().to_string(),
+                e["routine"]["objectDisplay"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            ("P".to_string(), FOO.to_string()),
+            ("Q".to_string(), BAR.to_string())
+        ],
+        "{doc}"
+    );
+    let (text, code) = alsem_text(&[
+        "digest",
+        ws.to_str().unwrap(),
+        "--file",
+        SPLIT_FILE,
+        "--deterministic",
+        "--format",
+        "human",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.lines().any(|l| l == format!("--- {FOO}::P ---")),
+        "{text}"
+    );
+}
+
+/// A1 (#241). `query effects` names each routine's own arm: P is `Foo`'s, Q is
+/// `Bar`'s, in the header and on the effect line.
+///
+/// Discrimination: revert `RoutineJoin::of` to the id -> name map -> P reads
+/// `Codeunit Bar`; fails.
+#[test]
+fn split_object_query_effects_names_each_routines_own_object() {
+    let dir = tempfile::tempdir().unwrap();
+    split_workspace(dir.path(), false);
+    let w = dir.path().to_str().unwrap();
+    assert_query_effects_owner(w, "P", FOO);
+    assert_query_effects_owner(w, "Q", BAR);
+}
+
+/// A2 (#241). The digest names each routine's own arm, in JSON and in the human
+/// header.
+///
+/// Discrimination: revert `OwnerIndex::build` to the id -> name map -> P's
+/// entry reads `Codeunit Bar`; fails.
+#[test]
+fn split_object_digest_names_each_routines_own_object() {
+    let dir = tempfile::tempdir().unwrap();
+    split_workspace(dir.path(), false);
+    assert_digest_owners(dir.path());
+}
+
+/// A3 (#241). The fingerprint block of P and prove on P name `Codeunit Foo`.
+///
+/// Discrimination: as A2 -> `Codeunit Bar`; fails.
+#[test]
+fn split_object_fingerprint_and_prove_name_the_declaring_object() {
+    let dir = tempfile::tempdir().unwrap();
+    split_workspace(dir.path(), false);
+    let w = dir.path().to_str().unwrap();
+
+    let (fp, code) = alsem(&[
+        "fingerprint",
+        w,
+        "--routine",
+        "P",
+        "--format",
+        "json",
+        "--deterministic",
+    ]);
+    assert_eq!(code, 0, "{fp}");
+    let blocks = fp["payload"]["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 1, "{fp}");
+    assert_eq!(blocks[0]["routine"]["objectDisplay"], FOO, "{fp}");
+    let (text, code) = alsem_text(&[
+        "fingerprint",
+        w,
+        "--routine",
+        "P",
+        "--deterministic",
+        "--format",
+        "human",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.lines().any(|l| l.starts_with(&format!("{FOO}::P  ["))),
+        "{text}"
+    );
+
+    let (p, code) = alsem(&["prove", w, "P", "may-commit", "--deterministic"]);
+    assert_eq!(code, 0, "{p}");
+    assert_eq!(p["payload"]["routine"]["objectDisplay"], FOO, "{p}");
+}
+
+/// A4 (#241, closes #239 L1 for arms with different routines).
+/// `Codeunit Foo::P` selects P in digest, fingerprint and prove (prove answers
+/// `no`: P only deletes); `Codeunit Bar::P` matches nothing in all three.
+///
+/// Discrimination: as A2 -> `Codeunit Foo::P` is unmatched and
+/// `Codeunit Bar::P` selects P; fails.
+#[test]
+fn split_object_owner_selector_names_the_declaring_object() {
+    let dir = tempfile::tempdir().unwrap();
+    split_workspace(dir.path(), false);
+    let ws = dir.path();
+    let w = ws.to_str().unwrap();
+    let id = stable_id_of(ws, SPLIT_FILE, "P");
+
+    assert_eq!(per_command(w, &format!("{FOO}::P")), selects(FOO, &id));
+    let bar_p = format!("{BAR}::P");
+    assert_eq!(per_command(w, &bar_p), unmatched(&bar_p));
+}
+
+/// A5 (#241). `query effects`' `Object.Routine` selector reads the declaring
+/// object: `Foo.P` selects P, `Bar.P` matches nothing.
+///
+/// Discrimination: revert `resolve_routine_selector`'s map to the id -> name
+/// map -> `Foo.P` is unmatched; fails.
+#[test]
+fn split_object_dotted_selector_names_the_declaring_object() {
+    let dir = tempfile::tempdir().unwrap();
+    split_workspace(dir.path(), false);
+    let w = dir.path().to_str().unwrap();
+    let query = |sel: &str| {
+        alsem(&[
+            "query",
+            "effects",
+            w,
+            "--routine",
+            sel,
+            "--format",
+            "json",
+            "--deterministic",
+        ])
+    };
+
+    let (q, code) = query("Foo.P");
+    assert_eq!(code, 0, "{q}");
+    let r = &q["payload"]["routine"];
+    assert_eq!(r["resolution"], "resolved", "{q}");
+    assert_eq!(r["routine"]["display"], "P", "{q}");
+    assert_eq!(r["routine"]["objectDisplay"], FOO, "{q}");
+
+    let (q, code) = query("Bar.P");
+    assert_eq!(code, 2, "{q}");
+    assert_eq!(q["payload"]["routine"]["resolution"], "unmatched", "{q}");
+}
+
+/// A6 (#241). With the arms swapped (`Bar` first), each routine still names its
+/// own arm: the owner is found by declaration, not by arm order.
+///
+/// Discrimination: make the several-rows case pick the FIRST row -> P reads
+/// `Codeunit Bar`; fails (A1 alone catches "last row wins").
+#[test]
+fn split_object_owner_does_not_follow_arm_order() {
+    let dir = tempfile::tempdir().unwrap();
+    split_workspace(dir.path(), true);
+    let ws = dir.path();
+    let w = ws.to_str().unwrap();
+    assert_query_effects_owner(w, "P", FOO);
+    assert_query_effects_owner(w, "Q", BAR);
+    assert_digest_owners(ws);
+}
