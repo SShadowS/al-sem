@@ -137,6 +137,10 @@ pub struct SiteFacts {
     /// #264: the closed enums an interface call's receiver provably holds a
     /// value of (sorted), when the edge is `Complete` because of them
     /// ([`crate::program::resolve::closed_enum::closed_over`]). Empty = open.
+    /// This is the program graph's answer (the candidate set is closed). The
+    /// model passes it on as `DispatchMeta.closed_over` only when every
+    /// candidate is a model routine; a symbol-only implementer keeps the
+    /// model's site open (its body is not analysed).
     pub interface_closed_over: Vec<ObjectNodeId>,
     /// The member call's receiver as the resolver typed it.
     pub receiver: Option<ReceiverFact>,

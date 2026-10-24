@@ -1452,6 +1452,82 @@ enum 50106 "Other Kind" implements "Other Strategy"
         format!("#if CLEAN99\n{first}#else\n{second}#endif\n")
     }
 
+    /// Final panel FO3: the enum itself is declared twice under `#if`, once
+    /// `Extensible = false` and once `Extensible = true`. The build merges the
+    /// copies (`build::dedup_objects`, T16/T33) to an open enum, in both orders.
+    /// This pins the USE of that merge, not only the helper.
+    #[test]
+    fn i264_fo3_if_alternative_enum_declarations_stay_open() {
+        let closed = demo_kind();
+        let open = demo_kind().replace("Extensible = false;", "Extensible = true;");
+        assert!(open.contains("Extensible = true;"), "precondition");
+        for (label, first, second) in [
+            ("closed first", &closed, &open),
+            ("open first", &open, &closed),
+        ] {
+            let ws = workspace(
+                caller(VARS, "        S := K;\n        S.NextKm(1);", ""),
+                &[("src/Kind.al", if_arms(first, second))],
+            );
+            assert!(is_open(completeness(&ws)), "FO3 {label}");
+        }
+    }
+
+    /// FO3, the dependency population (`build_dep_layer`'s dedup): the same two
+    /// `#if` declarations of an enum shipped as a dependency's SOURCE. A
+    /// precondition run with the closed declaration in both arms closes.
+    #[test]
+    fn i264_fo3_if_alternative_dependency_enum_declarations_stay_open() {
+        let dep_kind = |extensible: &str| {
+            format!(
+                "enum 70002 \"Dep Kind\" implements \"Dep Strategy\"\n{{\n    Extensible = {extensible};\n    value(0; Standard) {{ Implementation = \"Dep Strategy\" = \"Dep Impl\"; }}\n}}\n"
+            )
+        };
+        let dep_strategy = "interface \"Dep Strategy\"\n{\n    procedure NextKm(CurrentKm: Integer): Integer;\n}\n";
+        let dep_impl = "codeunit 70001 \"Dep Impl\" implements \"Dep Strategy\"\n{\n    procedure NextKm(CurrentKm: Integer): Integer\n    begin\n        exit(CurrentKm);\n    end;\n}\n";
+        let run = |kind_source: String| {
+            let files: Vec<(String, String)> = vec![
+                ("app.json".into(), dep_ws_app_json()),
+                (
+                    "src/Caller.al".into(),
+                    caller(
+                        "        S: Interface \"Dep Strategy\";\n        K: Enum \"Dep Kind\";",
+                        "        S := K;\n        S.NextKm(1);",
+                        "",
+                    ),
+                ),
+            ];
+            let dir = write(&files);
+            let more = r#","EnumTypes":[{"Id":70002,"Name":"Dep Kind","ImplementedInterfaces":["Dep Strategy"]}]"#;
+            write_dep(
+                dir.path(),
+                more,
+                &[
+                    ("src/DepStrategy.al", dep_strategy),
+                    ("src/DepImpl.al", dep_impl),
+                    ("src/DepKind.al", &kind_source),
+                ],
+            );
+            completeness_in(dir.path())
+        };
+        let closed = dep_kind("false");
+        let open = dep_kind("true");
+        assert_eq!(
+            run(if_arms(&closed, &closed)),
+            SetCompleteness::Complete,
+            "precondition: a closed dependency enum closes"
+        );
+        for (label, first, second) in [
+            ("closed first", &closed, &open),
+            ("open first", &open, &closed),
+        ] {
+            assert!(
+                is_open(run(if_arms(first, second))),
+                "FO3 dependency {label}"
+            );
+        }
+    }
+
     /// Final panel FO2a (FC1): two `#if` alternatives of `PickKind` differ only
     /// in the return type (closed `Demo Kind`, extensible `Open Kind`). The
     /// build keeps one routine node; whichever survives, the site stays open.

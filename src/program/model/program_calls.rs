@@ -2090,7 +2090,12 @@ impl<'a> Converter<'a> {
             .map(|o| (self.model_object_id(&o.id), "not-found".to_string()))
             .collect();
         // #264 (spec §5): closed only when every candidate is in the model, the
-        // rule `test_coverage` applies, so every reader agrees.
+        // rule `test_coverage` applies, so every MODEL reader (combined graph,
+        // snapshot, prove/digest, test coverage) agrees. The resolver's edge can
+        // still be `Complete` when it is not: a route to a symbol-only or
+        // out-of-model implementer is a closed candidate set (the program
+        // graph's view, read by graphify's `open_world_reason`), but its body is
+        // outside the model, so the model keeps the site open.
         let mut closed_over: Vec<String> = match facts {
             Some(f) if dependency.is_empty() && unresolved_impls.is_empty() => f
                 .interface_closed_over
