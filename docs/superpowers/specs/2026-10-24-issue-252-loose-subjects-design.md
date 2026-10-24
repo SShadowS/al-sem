@@ -1,7 +1,9 @@
 # #252: each detector states its loose subject
 
-Status: revision 2 (spec panel round 1: sol 1-5, opus 1-10). Base `ae3439c5`. Builds on
-#247 (`7c35891a`).
+Status: revision 2.4 (spec panel round 1: sol 1-5, opus 1-10; rev 2.3: the P7
+table-mismatch fixture; rev 2.4: final panel round 1, d43 keeps the caller's object
+(FR3) and the d59 reorder precondition (FR9)). Base `ae3439c5`. Builds on #247
+(`7c35891a`).
 
 ## Goal
 
@@ -150,7 +152,7 @@ bytes). "table" below is the finding's `affectedTables`, which is already a hash
 | d18 | `d18/{field_lc}`; when `op.table_id` is `None`: `d18/{recVar_lc}/{field_lc}` | `d18.rs:161-168` | table + field | different fields/tables |
 | d22 | `d22/{field_lc}` (table always resolved: `d22.rs:76-91` skips otherwise) | `d22.rs:143` | table + field | different fields/tables |
 | d39–d42 | `dNN/{callee.id}/{calleeParamIndex}/{callerTable}`. `callerTable` = the resolved `table_id` of the caller's source record variable for this binding: `caller.record_variables` entry whose `id == binding.source_record_variable_id`, else the one whose name folds equal to `binding.source_variable_name`; `?` when neither resolves. One new helper `binding_source_table(caller, binding) -> Option<&str>` in `detectors/mod.rs`, used by all four. `affected_tables` is NOT touched (it feeds `fingerprint`) | `d39.rs:245`, `d40.rs:194`, `d41.rs:199`, `d42.rs:277` | the caller and its call site are dropped | different callees, parameters, **or caller tables**. The table is stated outright (sol 1, P5): a generic `Record` callee takes two tables through one callee and index. `RecordRef`/`Variant` parameters get no record roles (`ir_walk.rs:2778-2796`, `summary_runner.rs:600-610`), so they do not reach these detectors |
-| d43 | `d43/{site.event_id}` | `d43.rs:508` | caller, call site and setter dropped; event and table (hashed) stay | different events/tables |
+| d43 | `d43/{site.event_id}\|{caller's object id}` (`?` when the caller is not in the model) (rev 2.4, FR3) | `d43.rs:508` | caller routine, call site and setter dropped; event, the caller's object and table (hashed) stay | different events/tables; raises of one event from two objects (a table and its table extension: d43 walks bare calls, not `variable-typed-call` edges) |
 | d45 | key `d45/{publisher's event ids joined ","}` (`publisher_events`, `d45.rs:128-133`); empty list: `d45/{publisher}`. **`object_id` = `pub_routine.object_id`** (the publisher's object) | `d45.rs:169` | the anchor publisher IS the event. A dependency publisher anchors on the first primary subscriber by routine id (`d45.rs:79-96`), which a rename can move to another object; the publisher's object does not move (sol 2, opus 4). For a primary publisher it equals the anchor object, so nothing changes there | **two primary publishers on one table no longer merge** |
 | d48 | `d48/{loopRoutine.object_id}/{io_kind}/{method or ""}`, from `routine` and `terminal` (direct, loop at `d48.rs:330`) / `matched` (transitive, `d48.rs:493`) | both builders | loop routine and IO routine dropped; the loop's object stays, so a **direct↔transitive move within one object keeps the key** | different IO kinds/methods; loops in different objects reaching one IO helper |
 | d57 | `d57/{var_lc}` (a global) | `d57.rs:214` | globals belong to the object | **`op1`/`op2` globals no longer merge** |
@@ -235,6 +237,8 @@ PASSES is evidence about the TEST"). "`None`" means "this detector sets
 | d39–d42 (×4) | `dNN_callees_distinct` | distinct: two callers, two different callees, **same table** and index | drop the callee from the key |
 | d39–d42 (×4) | `dNN_same_callee_tables_distinct` | distinct: one callee whose parameter is declared `var R: Record Customer`, called from `CallerC` with a `Customer` and from `CallerI` with an `Item`, same index (sol 1; P7 shape — a type mismatch the AL compiler rejects, but the file parses with no recovery, and on master each of d39–d42 gives two findings sharing one loose key). The generic-`Record` P5 shape fires only for d41 (P7), so it is used only as an extra d41 case. The test carries a comment that the code is compile-invalid on purpose: the engine still builds the findings, and that is exactly the shape that defeats callee+index alone. Precondition: both findings' second evidence step has the same callee `routineId` | drop the caller table from the key; also `None` |
 | d43 | `d43_move_caller` | move: the guarded dispatch moved from caller `X` to `Y` of one codeunit (`ws-event-ishandled`). Precondition: anchor (setter) `routineId` equal across runs; `evidencePath[0].routineId` (the caller) differs | `None` |
+| d43 | `d43_caller_objects_distinct` (rev 2.4) | distinct: one table event raised from the table `Doc` and from its table extension `DocExt`, one setter. Precondition: one anchor, caller objects differ | drop the caller object from the key |
+| d43 | `d43_move_within_caller_object` (rev 2.4) | move: the dispatch moves between two procedures of `DocExt`. Precondition: caller routine differs, caller object equal | put the caller routine id in place of its object |
 | d45 | `d45_publishers_distinct` | distinct: P2 d45 (`OnFirst`, `OnSecond` → `Customer`) | `None` |
 | d45 | `d45_dep_anchor_switch` (r4 file) | object switch: a dependency publisher (`dep_publisher_workspace`), two workspace subscribers in two codeunits both writing one table; one subscriber renamed so the first primary subscriber by id moves to the other codeunit. Precondition: anchor objects differ. Move for primary publishers does not apply (the anchor IS the event) | `object_id: None` |
 | d48 | `d48_move_transitive` | move: a loop calling HTTP helper `H.Send` moved from `A.P` to `A.Q`. Precondition: anchor routine (in `H`) equal; `evidencePath[0].routineId` (the loop) differs | `None` |
@@ -242,7 +246,7 @@ PASSES is evidence about the TEST"). "`None`" means "this detector sets
 | d48 | `d48_loop_objects_distinct` | distinct: codeunits `A` and `B` each loop calling `H.Send`; both findings anchor in `H` (sol 3, opus 1) | the transitive builder (`d48.rs:519-525`) drops the loop object |
 | d57 | `d57_globals_distinct` | distinct: P2 d57 (`op1`, `op2`) | `None` |
 | d57 | `d57_move` | move: the `.Add` moved to another subscriber of the same codeunit | put the anchor routine id into the key (opus 5) |
-| d59 | `d59_param_reorder` | position change (not a move: the anchor is the event, opus 4): `var SkipCheck: Boolean` from index 0 to 1. Precondition: anchor `routineId` equal, raw `id` last segment `0` vs `1` | `None` |
+| d59 | `d59_param_reorder` | position change (not a move: the anchor is the event, opus 4): `var SkipCheck: Boolean` from index 0 to 1. Precondition (rev 2.4): same `routineName` and object (internal routine ids hash the signature, so the anchor `routineId` changes with the reorder), raw `id` last segment `0` vs `1` | `None` |
 | d59 | `d59_params_distinct` | distinct: one event with `var SkipA` and `var SkipB` | drop the parameter name from the key |
 | d59 | `d59_events_distinct` | distinct: two events in one codeunit, each `var SkipCheck: Boolean` at index 0 (master collides: `d59/~/0`) | drop the event id from the key; also `None` |
 | d60 | `d60_move_rename` | move + rename: the issue reproducer, P2 `d60a`/`d60b` | `None` |
@@ -252,7 +256,7 @@ Plus:
 
 | # | item | proof | break → red |
 |---|---|---|---|
-| A3 | `fingerprint` bytes and non-cli-a goldens unchanged | `scripts/check-goldens --regen`, then `git diff --stat -- 'tests/*-goldens' tests/r2-5a-vectors tests/r3a2-vectors tests/l4-summary-baseline tests/goldens` lists only the 3 cli-a files, and `git diff -U0 -- tests/cli-a-goldens \| grep '^[-+] '` shows only `"looseFingerprint"` lines, exactly 4 removed + 4 added, on the d45/d48 findings at `ws-d8-commit-in-tx.all.json:129`, `ws-d8-commit-in-tx.default.json:129`, `ws-txn-d48-pos.all.json:25,59`. CDO: fingerprint multiset before == after | let `fingerprint_of` hash `loose_subject` → cli-a/r4 goldens |
+| A3 | `fingerprint` bytes and non-cli-a goldens unchanged | `scripts/check-goldens --regen`, then `git diff --stat -- 'tests/*-goldens' tests/r2-5a-vectors tests/r3a2-vectors tests/l4-summary-baseline tests/goldens` lists only the 3 cli-a files, and `git diff -U0 -- tests/cli-a-goldens \| grep '^[-+] '` shows only `"looseFingerprint"` lines, exactly 4 removed + 4 added, on the d45/d48 findings at `ws-d8-commit-in-tx.all.json:129`, `ws-d8-commit-in-tx.default.json:129`, `ws-txn-d48-pos.all.json:25,55`. CDO: fingerprint multiset before == after | let `fingerprint_of` hash `loose_subject` → cli-a/r4 goldens |
 | U1 | the key is hashed verbatim | `fingerprint.rs` unit: a subject key holding the anchor's id keeps it (the d16 self-call shape) | strip the subject key |
 | U2 | `None` keeps the #247 bytes | the existing `strip_anchor_shapes` and T1–T5 (T4 pinned `406a88f5e0b896a6`) stay green unchanged | (#247's own proofs) |
 | U4 | an `object_id` not in `objects_by_id` is hashed verbatim, not dropped | `fingerprint.rs` unit, two hand-made findings with unknown object ids `x/A`, `x/B` differ | map an unknown id to `""` |

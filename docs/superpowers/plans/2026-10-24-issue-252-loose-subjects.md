@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust; the `cli` umbrella (`tests/cli/cli_loose_fingerprint.rs`), `tests/r4/r4_cross_app_program.rs`; cargo-nextest via `scripts/ci-steps`.
 
-**Spec:** `docs/superpowers/specs/2026-10-24-issue-252-loose-subjects-design.md` (rev 2.2; converged after 3 spec rounds). It fixes every subject, test, break, precondition, golden expectation and doc change; this plan only orders the work.
+**Spec:** `docs/superpowers/specs/2026-10-24-issue-252-loose-subjects-design.md` (rev 2.4; converged after 3 spec rounds, then rev 2.3 for the P7 fixture and rev 2.4 for final-panel round 1). It fixes every subject, test, break, precondition, golden expectation and doc change; this plan only orders the work.
 
 ## Global Constraints
 
