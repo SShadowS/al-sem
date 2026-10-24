@@ -3220,15 +3220,7 @@ mod step6_tree_tests {
                     raw: WitnessScope::All,
                 },
             );
-            let tree = compose_tree(
-                &m,
-                rel.cone(),
-                rel.dependency_calls(),
-                &mut caps,
-                raw,
-                None,
-                &HashMap::new(),
-            );
+            let tree = compose_tree(&m, rel.cone(), &[], &mut caps, raw, None, &HashMap::new());
             with_inherited += usize::from(
                 cut.capability_facts
                     .iter()

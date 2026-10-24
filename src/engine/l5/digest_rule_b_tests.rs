@@ -280,6 +280,7 @@ fn an_event_boundary_group_is_in_the_may_relations() {
     let mut tree = tree_of(
         model,
         &base.rel,
+        base.dependency_calls.as_deref().unwrap_or(&[]),
         ConeScope {
             derived: false,
             raw: WitnessScope::All,
@@ -347,11 +348,59 @@ fn an_event_boundary_group_is_in_the_may_relations() {
     );
 }
 
+/// Final panel F1-C2: the dependency calls live on the base only until the
+/// view's first prepare. Digest's tree reads them there (its unresolved cone
+/// for `Go` lists the dependency's to-less call `R.NoSuchMethod`, a ledger row
+/// only the dependency calls give), and every plan, with a tree or not, leaves
+/// the base without them.
+#[test]
+fn the_dependency_calls_leave_the_base_in_the_first_prepare() {
+    use crate::engine::session::analyze_plan;
+    let tmp = tempfile::tempdir().unwrap();
+    crate::engine::l5::test_support::write_fixture_dep_ledger(tmp.path());
+    let calls_of = |v: &View| match v.target() {
+        AnalysisTarget::CrossApp(b) => b.dependency_calls.as_ref().map(Vec::len),
+        AnalysisTarget::SingleApp(_) => panic!("precondition: cross-app"),
+    };
+    let target =
+        AnalysisTarget::build(&inputs(tmp.path()), false, "digest").expect("cross-app base");
+    let mut view = View::new(target);
+    assert!(
+        calls_of(&view).is_some_and(|n| n > 0),
+        "precondition: the base holds dependency calls"
+    );
+    let roots = stable_roots(view.model(), &["Go"]);
+    let go = roots.iter().next().unwrap().clone();
+    view.prepare(&digest_plan(
+        crate::engine::l5::detectors::default_detectors(),
+        roots,
+        false,
+    ));
+    assert_eq!(calls_of(&view), None, "digest: released");
+    let items: Vec<&str> = view.effects().unresolved[&go]
+        .items
+        .iter()
+        .map(|i| i.callee_display.as_str())
+        .collect();
+    assert!(items.contains(&"R.NoSuchMethod"), "{items:?}");
+
+    let target =
+        AnalysisTarget::build(&inputs(tmp.path()), false, "analyze").expect("cross-app base");
+    let mut view = View::new(target);
+    view.prepare(&analyze_plan(
+        crate::engine::l5::detectors::default_detectors(),
+        true,
+    ));
+    assert_eq!(calls_of(&view), None, "analyze: released");
+}
+
 /// The cross-app base of `ws`, its relation, and the tree `compose_tree`
-/// composes over `rel.cone()` for `scope` (the view's path, unreleased).
+/// composes over `rel.cone()` for `scope` (the view's path, unreleased), with
+/// the dependency calls `calls` (the base's; empty single-app).
 fn tree_of(
     model: &Model,
     rel: &ExecRelation,
+    calls: &[crate::program::model::calls::CallEdge],
     scope: ConeScope,
 ) -> crate::engine::l5::snapshot::CapabilitySnapshot {
     let (mut caps, raw) =
@@ -359,7 +408,7 @@ fn tree_of(
     compose_tree(
         model,
         rel.cone(),
-        rel.dependency_calls(),
+        calls,
         &mut caps,
         raw,
         None,
@@ -397,6 +446,7 @@ fn t7a_a_dependency_callers_rows_are_the_ledgers() {
     let tree = tree_of(
         model,
         &base.rel,
+        base.dependency_calls.as_deref().unwrap_or(&[]),
         ConeScope {
             derived: true,
             raw: WitnessScope::None,
@@ -462,6 +512,7 @@ fn t7b_a_call_into_a_body_less_dependency_row_is_unfetched() {
     let tree = tree_of(
         model,
         &base.rel,
+        base.dependency_calls.as_deref().unwrap_or(&[]),
         ConeScope {
             derived: true,
             raw: WitnessScope::None,
@@ -500,6 +551,7 @@ fn t8_the_trees_coverage_is_the_det_cells() {
     let tree = tree_of(
         model,
         view.rel(),
+        &[],
         ConeScope {
             derived: false,
             raw: WitnessScope::All,
@@ -626,14 +678,18 @@ fn t3_digest_scoped_equals_unscoped() {
             continue;
         };
         let model = target.resolved();
-        let rel = match &target {
-            AnalysisTarget::SingleApp(m) => Arc::new(ExecRelation::single_app(m)),
-            AnalysisTarget::CrossApp(b) => Arc::clone(&b.rel),
+        let (rel, calls) = match &target {
+            AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
+            AnalysisTarget::CrossApp(b) => (
+                Arc::clone(&b.rel),
+                b.dependency_calls.as_deref().unwrap_or(&[]),
+            ),
         };
         let roots = crate::engine::l5::digest::reportable_roots(model);
         let mut all = tree_of(
             model,
             &rel,
+            calls,
             ConeScope {
                 derived: false,
                 raw: WitnessScope::All,
@@ -651,6 +707,7 @@ fn t3_digest_scoped_equals_unscoped() {
             let mut scoped_tree = tree_of(
                 model,
                 &rel,
+                calls,
                 ConeScope {
                     derived: false,
                     raw: WitnessScope::Subjects(subjects),

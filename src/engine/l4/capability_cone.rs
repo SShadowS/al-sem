@@ -3687,6 +3687,12 @@ pub struct R3a5CrossAppBase {
     /// dependency code's own calls included) drives the cone, and its SCC is
     /// the one every cross-app `build_l4` shares by pointer.
     pub rel: std::sync::Arc<crate::engine::l4::exec_relation::ExecRelation>,
+    /// The calls dependency routines make, in emission order: the `rel`
+    /// split's dependency half, read only by digest's tree (its call-site
+    /// ledger, #160 step 6 D6). The view takes it in its first `prepare` and
+    /// drops it there unless that prepare composes the tree (final panel
+    /// F1-C2), so no other command holds it past its first fill.
+    pub dependency_calls: Option<Vec<crate::program::model::calls::CallEdge>>,
     /// The solver field index: the leaf summaries' and every cross-app
     /// `build_l4` solve's (through [`Self::cross_app_inputs`]), built once.
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
@@ -3845,7 +3851,7 @@ pub(crate) fn build_cross_app_base(
     let rel = crate::engine::l4::exec_relation::ExecRelation::new(
         ws,
         &primary_calls,
-        dependency_calls,
+        &dependency_calls,
         &x.resolved.events.graph,
     );
     let calls = crate::program::model::calls::ResolvedCalls {
@@ -3944,6 +3950,7 @@ pub(crate) fn build_cross_app_base(
         resolved,
         dep_routine_ids,
         rel: std::sync::Arc::new(rel),
+        dependency_calls: Some(dependency_calls),
         field_index,
         leaf_summaries,
         fixed_roles,
@@ -3991,6 +3998,12 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
     );
     emit("base.resolved.rows", &mut census_model_rows(&b.resolved));
     emit("base.resolved.calls", &mut census_calls(&b.resolved.calls));
+    emit(
+        "base.dependency_calls",
+        Tally::default().buf::<crate::program::model::calls::CallEdge>(
+            b.dependency_calls.as_ref().map_or(0, Vec::len),
+        ),
+    );
     emit(
         "base.dep_routine_ids",
         Tally::default()

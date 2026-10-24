@@ -446,6 +446,14 @@ impl View {
             ordering,
             runs,
         } = self;
+        // Final panel F1-C2: the dependency calls (cross-app) are read only by
+        // digest's tree; they leave the base in the first prepare and die at
+        // the tree's composition below; a plan with no tree drops them here.
+        let dependency_calls = match &mut *target {
+            AnalysisTarget::CrossApp(b) => b.dependency_calls.take(),
+            AnalysisTarget::SingleApp(_) => None,
+        }
+        .filter(|_| plan.needs_tree);
         let target = &*target;
         let model = target.resolved();
         let cross_base = match target {
@@ -493,16 +501,26 @@ impl View {
         if let (true, WitnessRequest::Roots(roots)) = (plan.needs_tree, &plan.witness) {
             let r = rel.as_ref().expect("rel filled above");
             let app_names = cross_base.map(|b| b.loaded_app_names()).unwrap_or_default();
+            let calls: &[crate::program::model::calls::CallEdge] =
+                match (cross_base, &dependency_calls) {
+                    (None, _) => &[],
+                    (Some(_), Some(c)) => c,
+                    (Some(_), None) => panic!(
+                        "the dependency calls left the base in an earlier prepare: \
+                         digest's tree composes in the view's first prepare"
+                    ),
+                };
             *tree = Some(crate::engine::l5::snapshot::compose_tree(
                 model,
                 r.cone(),
-                r.dependency_calls(),
+                calls,
                 caps.as_mut().expect("caps filled above"),
                 raw.take().expect("raw filled above"),
                 None,
                 &app_names,
             ));
             note_release(released, Cell::Raw);
+            drop(dependency_calls);
             let roots: Vec<String> = roots.iter().cloned().collect();
             *effects = Some(crate::engine::l5::digest_cli::digest_effects(
                 tree.as_mut().expect("tree filled above"),

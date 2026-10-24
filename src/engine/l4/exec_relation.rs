@@ -40,10 +40,6 @@ pub struct ExecRelation {
     /// sorts them. Read by the coverage fold through
     /// [`ExecRelation::uncertainty_all`] (#160 step 5) and by the census.
     dependency_uncertainty: Vec<UncertaintyEdge>,
-    /// The calls dependency routines make (the `dependency` argument of
-    /// [`ExecRelation::new`], moved in), in emission order. Read only by the
-    /// snapshot tree's call-site ledger (#160 step 6 D6, Decision 18).
-    dependency_calls: Vec<CallEdge>,
 }
 
 impl ExecRelation {
@@ -55,7 +51,7 @@ impl ExecRelation {
         let rel = ExecRelation::new(
             &model.workspace,
             &model.calls.edges,
-            Vec::new(),
+            &[],
             &model.events.graph,
         );
         rel.emit_census();
@@ -69,12 +65,11 @@ impl ExecRelation {
     /// assembled over an empty event graph (its dispatch is already in the
     /// primary half), and only its typed edges (appended to the Cone payload)
     /// and its uncertainty edges (kept apart) survive. Counts one
-    /// `build.combined_graph`, however many halves it assembles. `dependency`
-    /// is kept (moved in) for [`ExecRelation::dependency_calls`].
+    /// `build.combined_graph`, however many halves it assembles.
     pub fn new(
         ws: &ModelEntities,
         primary: &[CallEdge],
-        dependency: Vec<CallEdge>,
+        dependency: &[CallEdge],
         events: &EventGraph,
     ) -> ExecRelation {
         pt::counter_delta("build.combined_graph", 1);
@@ -83,7 +78,7 @@ impl ExecRelation {
         let (primary, mut typed) = (graph.primary, graph.typed_edges);
         let mut dependency_uncertainty = Vec::new();
         if !dependency.is_empty() {
-            let d = assemble(ws, &dependency, &EventGraph::default());
+            let d = assemble(ws, dependency, &EventGraph::default());
             typed.extend(d.typed_edges);
             dependency_uncertainty = d.primary.uncertainty_edges;
         }
@@ -94,7 +89,6 @@ impl ExecRelation {
             typed: Arc::new(typed),
             scc: Arc::new(scc),
             dependency_uncertainty,
-            dependency_calls: dependency,
         }
     }
 
@@ -112,15 +106,6 @@ impl ExecRelation {
         Tally::default()
             .buf::<UncertaintyEdge>(self.dependency_uncertainty.len())
             .emit("rel.dependency_uncertainty", Kind::Shallow);
-        Tally::default()
-            .buf::<CallEdge>(self.dependency_calls.len())
-            .emit("rel.dependency_calls", Kind::Shallow);
-    }
-
-    /// The calls dependency routines make (empty single-app): the snapshot
-    /// tree's call-site ledger reads them after the model's own calls (D6).
-    pub fn dependency_calls(&self) -> &[CallEdge] {
-        &self.dependency_calls
     }
 
     /// `Transfer::Cone`: every typed edge, every caller.
@@ -286,7 +271,7 @@ mod tests {
         if !lunc.is_empty() {
             stats.dep_uncertainty += 1;
         }
-        let rel = ExecRelation::new(ws, &primary, dependency.clone(), events);
+        let rel = ExecRelation::new(ws, &primary, &dependency, events);
         let g = &*rel.primary;
         let mut diffs: Vec<String> = Vec::new();
         diffs.extend(diff_vec("nodes", &g.nodes, &lg.nodes));
