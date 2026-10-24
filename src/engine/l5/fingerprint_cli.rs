@@ -37,7 +37,7 @@
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewNeeds,
+    ViewNeeds, WorkspaceRead,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::run::analyzer_diagnostics_of_view;
@@ -246,8 +246,9 @@ pub enum ShardMode {
 /// Options for `run_fingerprint_pipeline`.
 pub struct FingerprintOptions<'a> {
     /// The command's one read of the workspace (#160); the path is
-    /// `inputs.workspace`.
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    /// `inputs.workspace`. Handed to the driver; the job reads the view's
+    /// (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
     /// al-sem version string (e.g. `"cli-b-v1"`).
     pub driver_version: &'a str,
     /// Output format.
@@ -450,7 +451,27 @@ pub(crate) enum FingerprintDoc {
         analyzer_diags: Vec<(String, String, String)>,
         /// #239's hint lines per unresolved selector.
         declared: std::collections::HashMap<String, Vec<String>>,
+        workspace: QueryWorkspace,
     },
+}
+
+/// What the query's output reads of its workspace, taken off the view's read
+/// so the document holds no read (#277 R7-1).
+pub(crate) struct QueryWorkspace {
+    path: std::path::PathBuf,
+    fingerprint: String,
+}
+
+impl QueryWorkspace {
+    fn of(inputs: &crate::program::inputs::WorkspaceInputs, opts: &FingerprintOptions) -> Self {
+        QueryWorkspace {
+            path: inputs.workspace.clone(),
+            fingerprint: crate::engine::l5::snapshot_full::workspace_fingerprint_of(
+                inputs,
+                opts.driver_version,
+            ),
+        }
+    }
 }
 
 impl FingerprintDoc {
@@ -461,8 +482,10 @@ impl FingerprintDoc {
                 result,
                 analyzer_diags,
                 declared,
+                workspace,
             } => Ok(emit_query(
                 opts,
+                &workspace,
                 &result,
                 &query_filters(opts),
                 &analyzer_diags,
@@ -507,7 +530,7 @@ impl Job for FingerprintJob<'_> {
 
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
         let opts = self.opts;
-        let roots_config_ignored = opts.no_roots_config && opts.inputs.roots_config_loaded();
+        let roots_config_ignored = opts.no_roots_config && cx.inputs().roots_config_loaded();
         let form = FingerprintForm::of(opts);
         let (plan, carry): (_, Option<Box<dyn std::any::Any + Send>>) = match form {
             FingerprintForm::Cut => (fingerprint_plan(default_detectors()), None),
@@ -516,7 +539,7 @@ impl Job for FingerprintJob<'_> {
                 fingerprint_inventory_plan(
                     default_detectors(),
                     InventoryRead {
-                        inputs: std::sync::Arc::clone(opts.inputs),
+                        inputs: std::sync::Arc::clone(cx.inputs()),
                         driver_version: opts.driver_version.to_string(),
                         deterministic: opts.deterministic,
                         roots_config_ignored,
@@ -622,7 +645,7 @@ fn fingerprint_view(
     // existed (and would have loaded+validated) AND --no-roots-config skipped it.
     // Passing --no-roots-config in a workspace with no such file is a no-op, not
     // a lie — it must report `false`, same as never having passed the flag.
-    let roots_config_ignored = opts.no_roots_config && opts.inputs.roots_config_loaded();
+    let roots_config_ignored = opts.no_roots_config && cx.inputs().roots_config_loaded();
 
     // The default set's run (#160 §4.4.4); the run and its cells are released
     // before snapshot composition, as today's context died inside the runner.
@@ -648,7 +671,7 @@ fn fingerprint_view(
             .collect();
 
         let full_opts = FullSnapshotOptions {
-            inputs: opts.inputs,
+            inputs: cx.inputs(),
             driver_version: opts.driver_version,
             deterministic: opts.deterministic,
             roots_config_ignored,
@@ -713,6 +736,7 @@ fn fingerprint_view(
     );
     Ok(emit_query(
         opts,
+        &QueryWorkspace::of(cx.inputs(), opts),
         &result,
         &filters,
         &analyzer_diags,
@@ -766,7 +790,7 @@ fn resolve_selectors(cx: &ResolveCx<'_>, opts: &FingerprintOptions) -> SelectorR
 /// they exist only once the tree has been composed (the cut composed twice:
 /// once for its run, once again, after the gate, for the snapshot).
 fn routine_query_view(cx: &mut ViewCx<'_>, opts: &FingerprintOptions) -> FingerprintDoc {
-    let roots_config_ignored = opts.no_roots_config && opts.inputs.roots_config_loaded();
+    let roots_config_ignored = opts.no_roots_config && cx.inputs().roots_config_loaded();
     let resolution: SelectorResolution = cx.take_carry();
     let key = cx.keys()[0].clone();
     let analyzer_diags = analyzer_diags_for(cx.view(), &key);
@@ -793,6 +817,7 @@ fn routine_query_view(cx: &mut ViewCx<'_>, opts: &FingerprintOptions) -> Fingerp
         result,
         analyzer_diags,
         declared,
+        workspace: QueryWorkspace::of(cx.inputs(), opts),
     }
 }
 
@@ -860,16 +885,14 @@ fn strict_gate(
 /// selector error; a query with no failing selector passes an empty one).
 fn emit_query(
     opts: &FingerprintOptions,
+    ws: &QueryWorkspace,
     result: &crate::engine::l5::fingerprint_query::FingerprintQueryResult,
     filters: &FingerprintFilters,
     analyzer_diags: &[(String, String, String)],
     declared_owners: &dyn Fn(&str) -> Vec<String>,
 ) -> FingerprintRunResult {
-    let workspace = opts.inputs.workspace.as_path();
-    let workspace_fp = crate::engine::l5::snapshot_full::workspace_fingerprint_of(
-        opts.inputs,
-        opts.driver_version,
-    );
+    let workspace = ws.path.as_path();
+    let workspace_fp = &ws.fingerprint;
     let selector_errors: Vec<&FingerprintQueryDiagnostic> = result
         .diagnostics
         .iter()
@@ -933,7 +956,7 @@ fn emit_query(
         opts.deterministic,
         analyzer_diags,
         opts.driver_version,
-        &workspace_fp,
+        workspace_fp,
     );
 
     FingerprintRunResult {

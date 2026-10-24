@@ -125,15 +125,66 @@ impl ViewDemand {
     }
 
     /// The demands of a job of one side (#277 E12-C8): side 0 on the view of
-    /// its workspace read, in its universe.
+    /// its workspace read, in its universe. The read is handed to the driver
+    /// ([`WorkspaceRead::hand_off`]).
     pub fn one(
-        inputs: &Arc<WorkspaceInputs>,
+        inputs: &dyn WorkspaceRead,
         single_app: bool,
         no_roots_config: bool,
         needs: ViewNeeds,
     ) -> Vec<ViewDemand> {
+        let inputs = inputs.hand_off();
         let key = ViewKey::new(&inputs.workspace, single_app, no_roots_config);
-        vec![ViewDemand::new(key, SideIx(0), needs, Arc::clone(inputs))]
+        vec![ViewDemand::new(key, SideIx(0), needs, inputs)]
+    }
+}
+
+/// A job's hold on its workspace read (#277 R7-1, D6.3). A job derives what
+/// it needs from the read when it is made ([`get`](Self::get)), hands the
+/// read to the driver in `demands` ([`hand_off`](Self::hand_off)), and from
+/// then on reads it only through [`ViewCx::inputs`]. The driver drops each
+/// read after its last view, so in a batch over several workspaces a read
+/// does not outlive its views.
+pub trait WorkspaceRead {
+    /// The read, while the job holds it.
+    fn get(&self) -> Arc<WorkspaceInputs>;
+    /// The read, for the job's demand.
+    fn hand_off(&self) -> Arc<WorkspaceInputs>;
+}
+
+/// A library caller's read: the caller keeps its own `Arc`, as a standalone
+/// run of one workspace may.
+impl WorkspaceRead for Arc<WorkspaceInputs> {
+    fn get(&self) -> Arc<WorkspaceInputs> {
+        Arc::clone(self)
+    }
+    fn hand_off(&self) -> Arc<WorkspaceInputs> {
+        Arc::clone(self)
+    }
+}
+
+/// The binary's read: given up to the driver by `hand_off`, so nothing but
+/// the driver holds it once the batch runs.
+pub struct HandOff(RefCell<Option<Arc<WorkspaceInputs>>>);
+
+impl HandOff {
+    pub fn new(inputs: Arc<WorkspaceInputs>) -> HandOff {
+        HandOff(RefCell::new(Some(inputs)))
+    }
+}
+
+impl WorkspaceRead for HandOff {
+    fn get(&self) -> Arc<WorkspaceInputs> {
+        self.0
+            .borrow()
+            .clone()
+            .expect("a job reads its workspace through ViewCx::inputs once the driver holds it")
+    }
+    fn hand_off(&self) -> Arc<WorkspaceInputs> {
+        self.0
+            .borrow_mut()
+            .take()
+            .expect("a job hands its read off once")
     }
 }
 
@@ -203,16 +254,32 @@ pub struct PlanPart {
 pub type JobFailure = JobOutput;
 
 /// One side's computed document; only its job reads it (no shared shape
-/// across commands).
-pub struct SideDoc(Box<dyn Any + Send>);
+/// across commands). `bytes`: what it holds, for the `batch.held` census
+/// (D6.3); only a side that can wait for a later view (diff's) states it.
+pub struct SideDoc {
+    doc: Box<dyn Any + Send>,
+    bytes: u64,
+}
 
 impl SideDoc {
     pub fn new<T: Any + Send>(doc: T) -> SideDoc {
-        SideDoc(Box::new(doc))
+        SideDoc::held(doc, 0)
+    }
+
+    /// A side document of `bytes` bytes.
+    pub fn held<T: Any + Send>(doc: T, bytes: u64) -> SideDoc {
+        SideDoc {
+            doc: Box::new(doc),
+            bytes,
+        }
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
     }
 
     pub fn take<T: Any>(self) -> T {
-        *self.0.downcast().expect("a side document of its own job")
+        *self.doc.downcast().expect("a side document of its own job")
     }
 }
 
@@ -236,24 +303,31 @@ impl Doc {
     }
 }
 
-/// What `resolve` reads: the view's model, and its identity table, derived
-/// once per view on the first ask and dropped when the resolve step ends
-/// (D4.2 (3)).
+/// What `resolve` reads: the view's model and workspace read, and its
+/// identity table, derived once per view on the first ask and dropped when
+/// the resolve step ends (D4.2 (3)).
 pub struct ResolveCx<'a> {
     model: &'a Model,
+    inputs: &'a Arc<WorkspaceInputs>,
     ids: OnceCell<SnapshotIdentityTable>,
 }
 
 impl<'a> ResolveCx<'a> {
-    pub(crate) fn new(model: &'a Model) -> ResolveCx<'a> {
+    pub(crate) fn new(model: &'a Model, inputs: &'a Arc<WorkspaceInputs>) -> ResolveCx<'a> {
         ResolveCx {
             model,
+            inputs,
             ids: OnceCell::new(),
         }
     }
 
     pub fn model(&self) -> &'a Model {
         self.model
+    }
+
+    /// The view's workspace read (#277 R7-1: the job handed its own off).
+    pub fn inputs(&self) -> &'a Arc<WorkspaceInputs> {
+        self.inputs
     }
 
     pub fn ids(&self) -> &SnapshotIdentityTable {
@@ -264,11 +338,22 @@ impl<'a> ResolveCx<'a> {
 /// Why a view built no model; each job words it as its own command does
 /// (D4.1): `target` as `AnalysisTarget`'s callers word it, `analyze` as
 /// `alsem analyze` classifies it, with its program coverage (`Some` on a view
-/// with analyze's extras).
-#[derive(Debug)]
+/// with analyze's extras). `inputs`: the view's read, which analyze's empty
+/// report reads (the job handed its own off, #277 R7-1).
 pub struct ViewFailure {
     pub target: TargetFailure,
     pub analyze: Option<Box<(Result<FreshCoverage, String>, ModelFailure)>>,
+    pub inputs: Arc<WorkspaceInputs>,
+}
+
+impl std::fmt::Debug for ViewFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ViewFailure")
+            .field("target", &self.target)
+            .field("analyze", &self.analyze)
+            .field("workspace", &self.inputs.workspace)
+            .finish()
+    }
 }
 
 /// One demand's access to its prepared view. Releases go through the driver

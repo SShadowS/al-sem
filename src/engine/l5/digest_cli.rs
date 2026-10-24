@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewNeeds,
+    ViewNeeds, WorkspaceRead,
 };
 use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::{
@@ -1753,7 +1753,8 @@ pub fn run_digest_pipeline(
 /// The CLI inputs of one digest run ([`run_digest_pipeline`]'s flags).
 /// `max_paths_override` is not here: the pipeline has never read it.
 pub struct DigestRequest<'a> {
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    /// Handed to the driver; compute reads `ViewCx::inputs` (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
     pub changed_files: Option<Vec<String>>,
     pub changed_routines: Option<Vec<String>>,
     pub diff_text: Option<String>,
@@ -1912,7 +1913,6 @@ impl Job for DigestJob<'_> {
 /// `l4` (#160 §4.4.4, step 6 D7).
 fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult {
     let DigestRequest {
-        inputs,
         changed_files,
         changed_routines,
         diff_text,
@@ -1933,7 +1933,7 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
     };
     let resolved = cx.view().model();
     let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(cx.inputs(), alsem_ver);
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's
     // `l4`, solved the way `query effects` solves it in the same mode (#66).

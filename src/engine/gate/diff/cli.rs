@@ -80,6 +80,17 @@ fn detect_input_kind(arg: &str) -> Result<InputKind, String> {
     Ok(InputKind::Snapshot)
 }
 
+/// What `diff old new` reads, in the one place it is stated (#277 R7-5): each
+/// workspace side ([`detect_input_kind`], as [`DiffJob::new`] decides it) with
+/// [`DIFF_NEEDS`].
+pub fn diff_reads(old_arg: &str, new_arg: &str) -> Vec<(std::path::PathBuf, WorkspaceNeeds)> {
+    [old_arg, new_arg]
+        .into_iter()
+        .filter(|arg| detect_input_kind(arg) == Ok(InputKind::Workspace))
+        .map(|arg| (std::path::PathBuf::from(arg), DIFF_NEEDS))
+        .collect()
+}
+
 /// Load a snapshot from a file path → deserialized CborValue tree. The format hint
 /// comes from the extension (al-sem `loadSnapshotFromPath`).
 fn load_snapshot_from_path(path: &str) -> Result<CborValue, String> {
@@ -237,7 +248,15 @@ impl Job for DiffJob<'_> {
             universe: crate::engine::l5::snapshot_full::SnapshotUniverse::SingleApp,
         };
         let snapshot = compose_full_snapshot(cx.view().model(), &opts);
-        Ok(SideDoc::new((snapshot, diag_lines)))
+        // A side may wait for the job's other view (D6.3): its size, for the
+        // `batch.held` census, measured only when the census is on.
+        let bytes = if crate::engine::census::enabled() {
+            let lines: usize = diag_lines.iter().map(String::capacity).sum();
+            snapshot.heap_bytes() + lines as u64
+        } else {
+            0
+        };
+        Ok(SideDoc::held((snapshot, diag_lines), bytes))
     }
 
     fn view_failed(&self, side: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {

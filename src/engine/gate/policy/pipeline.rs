@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewNeeds,
+    ViewNeeds, WorkspaceRead,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::policy::format_policy::{
@@ -36,7 +36,7 @@ use crate::engine::gate::run::{analyzer_diagnostics_of_view, diagnostic_lines};
 use crate::engine::l5::detectors::default_detectors;
 use crate::engine::root_classification::classify_roots;
 use crate::engine::session::{Cell, policy_plan};
-use crate::program::inputs::{PolicyOrigin, PolicyRequest, RequestInputs, WorkspaceInputs};
+use crate::program::inputs::{PolicyOrigin, PolicyRequest, RequestInputs};
 use crate::program::model::workspace::ModelRoutine;
 
 /// How the effective policy was resolved.
@@ -166,8 +166,9 @@ pub struct PolicyCheckOutcome {
 
 /// Options for `run_policy_check`.
 pub struct PolicyCheckOptions<'a> {
-    /// The command's one read of the workspace (#160).
-    pub inputs: &'a std::sync::Arc<WorkspaceInputs>,
+    /// The command's one read of the workspace (#160), handed to the driver
+    /// (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
     /// The command's request files (#277 D3), read with [`policy_request`]: the
     /// `--policy` / auto-detected file and the request itself (`--no-policy`
     /// included).
@@ -229,18 +230,19 @@ impl<'a> PolicyJob<'a> {
             opts.request.policy_request != PolicyRequest::None,
             "policy check: RequestInputs read without a policy request (use policy_request)"
         );
-        let (policy, source) = match resolve_policy_check(&opts.inputs.workspace, opts.request) {
-            ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
-            ResolvedPolicy::Disabled => (None, "disabled".to_string()),
-            ResolvedPolicy::Error(lines) => {
-                return Err(PolicyCheckOutcome {
-                    text: None,
-                    exit_code: 1,
-                    stderr_lines: lines,
-                    out_path: None,
-                });
-            }
-        };
+        let (policy, source) =
+            match resolve_policy_check(&opts.inputs.get().workspace, opts.request) {
+                ResolvedPolicy::Loaded { policy, source } => (Some(policy), source),
+                ResolvedPolicy::Disabled => (None, "disabled".to_string()),
+                ResolvedPolicy::Error(lines) => {
+                    return Err(PolicyCheckOutcome {
+                        text: None,
+                        exit_code: 1,
+                        stderr_lines: lines,
+                        out_path: None,
+                    });
+                }
+            };
         Ok(PolicyJob {
             opts,
             policy,

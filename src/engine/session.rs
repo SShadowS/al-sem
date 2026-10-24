@@ -568,6 +568,13 @@ impl Plan {
     fn union(&self) -> u32 {
         self.runs.iter().map(|(r, _)| mask(r)).fold(0, |a, m| a | m)
     }
+
+    /// Whether `prepare` solves `l4` for this plan (`prepare_inner`'s
+    /// `need_l4`): a standalone run of it prints the solve's
+    /// non-convergence line (#277 D7).
+    pub fn builds_l4(&self) -> bool {
+        self.need_l4 || self.union() & substrate::CORE_SUMMARIES != 0
+    }
 }
 
 /// A run's key, its scope its own (#277 D5.5).
@@ -674,8 +681,7 @@ impl View {
         );
         let union = plan.union();
         let need_det = !plan.runs.is_empty();
-        let core = union & substrate::CORE_SUMMARIES != 0;
-        let need_l4 = plan.need_l4 || core;
+        let need_l4 = plan.builds_l4();
         let need_ordering = union & substrate::ORDERING_FACTS != 0;
         let need_derived = plan.needs_derived();
         let need_raw = plan.keeps_raw();
@@ -895,7 +901,7 @@ impl View {
                 }
                 // No tree read asks `primary`: digest, prove and the query ask
                 // their roots, inventory nothing (#277 D5.1's table).
-                debug_assert!(!demand.subjects.primary);
+                assert!(!demand.subjects.primary, "no tree read asks primary");
                 let roots = &demand.subjects.ids;
                 match &demand.read {
                     TreeRead::Effects => {

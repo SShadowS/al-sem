@@ -48,6 +48,27 @@ impl CborValue {
     pub fn map() -> CborValue {
         CborValue::Map(IndexMap::new())
     }
+
+    /// The heap bytes the tree owns, for the `batch.held` census (#277
+    /// D6.3): text capacities and each array's and map's slots. A map's
+    /// hash-index bytes are not counted (shallow there).
+    pub fn heap_bytes(&self) -> u64 {
+        let slot = std::mem::size_of::<CborValue>() as u64;
+        match self {
+            CborValue::Text(s) => s.capacity() as u64,
+            CborValue::Array(v) => {
+                v.capacity() as u64 * slot + v.iter().map(CborValue::heap_bytes).sum::<u64>()
+            }
+            CborValue::Map(m) => m
+                .iter()
+                .map(|(k, v)| {
+                    let key = std::mem::size_of::<String>() as u64 + k.capacity() as u64;
+                    key + slot + v.heap_bytes()
+                })
+                .sum(),
+            _ => 0,
+        }
+    }
 }
 
 /// Encode a `CborValue` to its cbor-x-compatible byte form.

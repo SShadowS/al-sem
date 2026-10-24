@@ -73,6 +73,7 @@ pub(crate) mod facts;
 mod project;
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -83,7 +84,7 @@ pub use project::{Inputs, Projection, project};
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
-    ViewNeeds,
+    ViewNeeds, WorkspaceRead,
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::program::graph::ProgramGraph;
@@ -195,7 +196,11 @@ impl ImpactGraph {
 /// program alone. Its writes are the JSONL (to `--out` or stdout), or
 /// `al-sem graph: <error>` and exit 1.
 pub struct GraphJob<'a> {
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    pub inputs: &'a dyn WorkspaceRead,
+    /// The workspace as this job's command line spells it: the one read of a
+    /// path in a batch carries the first job's spelling, and the export's
+    /// errors name this one, as standalone does (#277 R7-8).
+    pub workspace: &'a Path,
     pub out: Option<&'a str>,
 }
 
@@ -226,7 +231,7 @@ impl Job for GraphJob<'_> {
     ) -> Result<SideDoc, JobFailure> {
         let graph = program
             .map_err(str::to_string)
-            .and_then(export_from_program);
+            .and_then(|p| export_as(p, self.workspace));
         Ok(SideDoc::new(graph))
     }
 
@@ -248,6 +253,11 @@ impl Job for GraphJob<'_> {
 /// The program must be [`ProgramScope::CrossApp`]: a workspace-scoped build has
 /// no dependency call-site edges, so its graph would lose them silently.
 pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, String> {
+    export_as(program, &program.meta().inputs.workspace)
+}
+
+/// [`export_from_program`], its errors naming the workspace as `workspace`.
+fn export_as(program: &ResolvedProgram, workspace: &Path) -> Result<ImpactGraph, String> {
     let pm = program.meta();
     let inputs = &pm.inputs;
     if pm.scope() != ProgramScope::CrossApp {
@@ -263,7 +273,7 @@ pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, Str
     if inputs.app_id().is_none() {
         return Err(format!(
             "could not compute modelInstanceId for workspace '{}': app.json has no non-empty string id",
-            inputs.workspace.display()
+            workspace.display()
         ));
     }
     let body = program.body();
@@ -319,11 +329,11 @@ pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, Str
         },
     });
     if !crate::program::resolve::full::coverage_holds(&pm.coverage_contract) {
-        eprintln!(
+        crate::engine::batch::output::job_line(format!(
             "al-sem graph: warning: the coverage contract does not hold ({} obligations without an edge); \
              their routines are linked to the universal hub",
             pm.coverage_contract.missing.len()
-        );
+        ));
     }
     Ok(ImpactGraph {
         meta,

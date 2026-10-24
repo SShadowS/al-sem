@@ -14,13 +14,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{"batches": [...]}`) in one process. Jobs on one workspace and universe share one
   view: one read of the workspace, one build, one witness pass at the union of the jobs'
   requests, one `det`, and one run per distinct detector set and scope. Views are built
-  one after another. Every job's stdout, stderr and exit equal its standalone run; its
-  streams go to `DIR/<batch>.<job>.stdout`/`.stderr` unless the manifest names them. The
-  run prints one JSON line per job (`batch`, `job`, `exit`, `stdout`, `stderr`, `files`)
-  and exits 0 when every job ran; a bad manifest (an argv clap rejects, `batch`, `policy
-  explain`, `cache prune`, no command, no job) exits 3 and runs nothing. Several batches
-  run one after another for now. Traces gain `batch.driver`, `view.<i>`, `view.drop`,
-  `view.teardown`, `view.run`, `job.<i>.<cmd>` and `inputs.request_read`.
+  one after another, and a workspace read is freed after its last view. Every job's
+  stdout, stderr and exit equal its standalone run, with two stated exceptions: a
+  view's `log` lines (`RUST_LOG`) are printed once on the run's stderr, and a job's own
+  write-error line goes to the run's stderr too. The library's job lines (the L4
+  non-convergence line, `graph`'s coverage warning) are replayed in the stderr of each
+  job whose standalone run prints them. A job's streams go to
+  `DIR/<batch>.<job>.stdout`/`.stderr` unless the manifest names them (relative paths
+  against the manifest's directory; `--out` stays relative to the cwd). The run prints
+  one JSON line per job (`batch`, `job`, `exit`, `stdout`, `stderr`, `files`) and exits 0
+  when every job ran, whatever their exits; a job whose own write fails gets its
+  command's write-failure exit (analyze 2, else 1). A bad manifest (an argv clap rejects,
+  `batch`, `policy explain`, `cache prune`, no command, no job) exits 3 and runs nothing,
+  and so do two write targets naming one file (also one job's stdout and stderr), a file
+  inside another job's shard directory, and a file one job reads (a diff side,
+  `--baseline`, `--renames`, `--policy`, a digest diff, a workspace's own files) that
+  another job writes. Stdin is read once for every `--diff -` job; a closed run stdout
+  exits 1. Several batches run one after another for now. Traces gain `batch.driver`,
+  `view.<i>`, `view.drop`, `view.teardown`, `view.run`, `job.<i>.<cmd>` and
+  `inputs.request_read`; `ALSEM_RETAINED_CENSUS=1` prints `[retained-census] batch.held
+  outputs= sides= inputs=` at each view's start. Limit: jobs that spell one workspace
+  path differently share its read, so a program build error names the first spelling
+  (graph's missing-`id` error names the job's own).
 
 - `alsem diff`: a new `rename-overlay-collision` diagnostic (`{kind, from, to}`). It
   fires when a `--renames` entry maps an old id (a routine, object, table, field or
