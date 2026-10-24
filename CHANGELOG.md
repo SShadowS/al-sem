@@ -30,9 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside another job's shard directory, and a file one job reads (a diff side,
   `--baseline`, `--renames`, `--policy`, a digest diff, a workspace's own files) that
   another job writes. Paths are compared after their deepest existing directory is
-  canonicalized, so a symlink, a Windows case difference or an 8.3 name hides no clash; a
+  canonicalized and each `..` is taken as the OS takes it (after a symlink, the target's
+  parent), so a symlink, a Windows case difference or an 8.3 name hides no clash; a
   workspace's own files are its `.al`/`.app` files in any case, its `app.json` and config
-  files, and the `.app` files of every ancestor `.alpackages` the loader reads. Stdin is read once for every `--diff -` job; a closed run stdout
+  files, and the `.app` files of every ancestor `.alpackages` the loader reads (the
+  ancestors of the workspace as spelled, as the loader walks them). Stdin is read once for every `--diff -` job; a closed run stdout
   exits 1. Two or more batches run in worker processes (`alsem batch --worker <b>`, hidden),
   at most `W` at once, started in manifest order: `W = max(1, min(batches, 4, ⌊28 GiB /
   P⌋))`, at most 2 when a job is `policy check`, `P` the largest measured CDO peak of the
