@@ -1,6 +1,8 @@
 # #160 step 9: prove and the fingerprint query cross-app (scope S′)
 
-Status: spec, attempt 10, 2026-10-24. Base `b028ec32` (master with step 6 merged, #274).
+Status: spec, attempt 10, 2026-10-24. Cited at `b028ec32` (master with step 6 merged, #274). The branch
+was then rebased onto `317d3b34` (#278, a grammar bump with no node-type change); it touches none of the
+files cited here, so every cite holds there too.
 
 Child of `2026-10-18-issue-160-analysis-session-design.md` (the epic): §9 row **9**; E6, E7, E9, E12;
 §5.10, §5.12; §11 "false PROVEN", "a cone reaching a routine with no model row must fail closed (step 9
