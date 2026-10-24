@@ -38,8 +38,8 @@ use crate::program::resolve::edge::{Evidence, Route, RouteTarget};
 use crate::program::resolve::extract::WithState;
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::receiver::{
-    ParsedType, ReceiverType, classify_type_text, infer_receiver_type, name_shadows_bare_call,
-    parse_object_kind_type, unquote_identifier,
+    CallerScopeSymbol, ParsedType, ReceiverType, caller_scope_symbol, classify_type_text,
+    infer_receiver_type, name_shadows_bare_call, parse_object_kind_type, unquote_identifier,
 };
 use crate::program::resolve::resolver::resolve_bare;
 
@@ -337,7 +337,8 @@ fn value_enum(cx: &ClosedEnumCx, e: ExprId) -> Option<ObjectNodeId> {
         ExprKind::QualifiedEnum { enum_type, .. } => match &ir.expr(*enum_type).kind {
             ExprKind::QualifiedEnum { .. } => enum_type_static(cx, *enum_type),
             ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x)
-                if !in_scope(cx, &x.fold_identifier()) =>
+                if !in_scope(cx, &x.fold_identifier())
+                    && !implicit_rec_may_have_field(cx, &x.fold_identifier()) =>
             {
                 enum_by_name(cx, x, from)
             }
@@ -407,6 +408,30 @@ fn field_enum(cx: &ClosedEnumCx, object: ExprId, member: &str) -> Option<ObjectN
         return None;
     }
     declared_enum(cx, &field.type_text, &owner)
+}
+
+/// Whether a bare name `name_lc` in this routine may be a field of the implicit
+/// `Rec` (a table, table extension, or an object with a `SourceTable`): `Rec`
+/// types as a record whose table has that field, or as a record whose table is
+/// unknown. Then `"X"::V` may be the field's value, not the enum X's.
+fn implicit_rec_may_have_field(cx: &ClosedEnumCx, name_lc: &str) -> bool {
+    match infer_receiver_type(
+        "rec",
+        cx.routine,
+        &cx.obj.globals,
+        cx.from_object,
+        cx.graph,
+        cx.index,
+        None,
+        Some((cx.surface, cx.with_state)),
+    ) {
+        ReceiverType::Record { table: Some(table) } => cx
+            .index
+            .field_in_table(cx.graph, cx.from_object, &table, name_lc)
+            .is_some(),
+        ReceiverType::Record { table: None } => true,
+        _ => false,
+    }
 }
 
 /// Rule 1 for a type read from ANOTHER object (a field, a callee's return
@@ -496,42 +521,16 @@ fn unparen(ir: &Ir, mut e: ExprId) -> ExprId {
     e
 }
 
-/// The declared type text of the variable `name_lc` in scope at the routine:
-/// its locals, parameters and named return value, else the object's globals.
-/// `None` when it has none, or its declarations (`#if` arms) disagree.
+/// The declared type text of the variable `name_lc` in scope at the routine,
+/// by receiver typing's own lookup (`receiver::caller_scope_symbol`: parameter,
+/// local, named return value, global). `None` when it has none, or when its
+/// declarations conflict (`#if` arms with different types, a return name that
+/// clashes with a parameter or local: `MalformedDuplicate`).
 fn declared_type<'a>(cx: &ClosedEnumCx<'a>, name_lc: &str) -> Option<&'a str> {
-    let r = cx.routine;
-    let named = |n: &str| n.fold_identifier() == name_lc;
-    let routine_scope: Vec<Option<&str>> = r
-        .locals
-        .iter()
-        .filter(|v| named(&v.name))
-        .map(|v| v.ty.as_deref())
-        .chain(
-            r.params
-                .iter()
-                .filter(|p| named(&p.name))
-                .map(|p| p.ty.as_deref()),
-        )
-        .chain(
-            r.return_name
-                .as_deref()
-                .filter(|n| named(n))
-                .map(|_| r.return_type.as_deref()),
-        )
-        .collect();
-    let decls = if routine_scope.is_empty() {
-        cx.obj
-            .globals
-            .iter()
-            .filter(|g| named(&g.name))
-            .map(|g| g.ty.as_deref())
-            .collect()
-    } else {
-        routine_scope
-    };
-    let first = (*decls.first()?)?;
-    decls.iter().all(|t| *t == Some(first)).then_some(first)
+    match caller_scope_symbol(name_lc, cx.routine, &cx.obj.globals) {
+        CallerScopeSymbol::Found(ty) => ty,
+        _ => None,
+    }
 }
 
 /// Spec §2: every implementation `enum_node` maps for `interface_lc` resolves,
@@ -1575,6 +1574,57 @@ enum 50106 "Other Kind" implements "Other Strategy"
             ],
         );
         assert!(is_open(completeness(&ws)));
+    }
+
+    /// Final panel FC3: in a table (or a page on a SourceTable), `"X"::V` may
+    /// name the implicit `Rec`'s field X: here a field `"Demo Kind"` of the
+    /// extensible `Open Kind`. The arm declines; the site stays open.
+    #[test]
+    fn i264_fc3_quoted_value_named_like_an_implicit_rec_field_stays_open() {
+        let body = format!(
+            "\n    procedure Dispatch()\n    var\n{S_VAR}\n    begin\n        S := \"Demo Kind\"::Standard;\n        S.NextKm(1);\n    end;\n"
+        );
+        let table = format!(
+            "table 50100 \"Demo Item\"\n{{\n    fields\n    {{\n        field(1; \"No.\"; Code[20]) {{ }}\n        field(2; \"Demo Kind\"; Enum \"Open Kind\") {{ }}\n    }}\n{body}}}\n"
+        );
+        let page = format!(
+            "page 50133 \"Item Card\"\n{{\n    SourceTable = \"Demo Item\";\n{}}}\n",
+            body.replace("procedure Dispatch()", "procedure Dispatch2()")
+        );
+        let ws = workspace(
+            caller(VARS, "", ""),
+            &[
+                ("src/Item.al", table),
+                ("src/Page.al", page),
+                ("src/OpenKind.al", open_kind()),
+            ],
+        );
+        let report = crate::program::resolve::full::resolve_full_program(write(&ws).path())
+            .expect("resolves");
+        assert!(is_open(site_completeness(&report, "dispatch")), "table");
+        assert!(is_open(site_completeness(&report, "dispatch2")), "page");
+    }
+
+    /// Final panel FC5: the enum variable is declared in two `#if` arms of the
+    /// var section with different types (receiver typing's
+    /// `MalformedDuplicate`): its value has no single enum, so the site stays
+    /// open, in both arm orders.
+    #[test]
+    fn i264_fc5_conflicting_if_declarations_of_the_value_stay_open() {
+        let decl = |kind: &str| format!("        K: Enum \"{kind}\";\n");
+        let closed = decl("Demo Kind");
+        let open = decl("Open Kind");
+        for (label, first, second) in [
+            ("closed first", &closed, &open),
+            ("open first", &open, &closed),
+        ] {
+            let vars = format!("{S_VAR}\n{}", if_arms(first, second));
+            let ws = workspace(
+                caller(&vars, "        S := K;\n        S.NextKm(1);", ""),
+                &[("src/OpenKind.al", open_kind())],
+            );
+            assert!(is_open(completeness(&ws)), "FC5 {label}");
+        }
     }
 
     /// `"X"::V` is an enum value only when no variable named X is in scope: a
