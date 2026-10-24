@@ -30,7 +30,7 @@ use crate::engine::l5::digest_cli::{
     primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::snapshot::derive_identity_table;
-use crate::engine::session::{Cell, View, digest_plan};
+use crate::engine::session::{Cell, View, prove_plan};
 
 // ---------------------------------------------------------------------------
 // ProveQuestion
@@ -900,11 +900,7 @@ pub(crate) fn prove_on_target(
 
     // (3) Digest's plan over the one root prove reads (the first resolved);
     // (4) none resolved: no tree, the run's diagnostics only.
-    let plan = digest_plan(
-        detectors,
-        changed_roots.roots.first().cloned().into_iter().collect(),
-        false,
-    );
+    let plan = prove_plan(detectors, changed_roots.roots.first().cloned());
     let key = plan.keys().remove(0);
     view.prepare(&plan);
     let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
@@ -966,8 +962,9 @@ pub(crate) fn prove_on_target(
     let gaps_in_cone_count = effects
         .unresolved
         .get(root_id)
-        .map(|c| c.gaps_in_cone)
-        .ok_or_else(|| "prove: internal error — no unresolved cone for the root".to_string())?;
+        .ok_or_else(|| "prove: internal error — no unresolved cone for the root".to_string())?
+        .gaps_in_cone
+        .expect("prove's plan counts the gaps in the cone");
     let resolved = view.model();
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's `l4`.
@@ -1222,8 +1219,7 @@ mod tests {
     /// precondition: `has_source`) with one body-less demanded row (`Write`,
     /// hand-stated). Assertions: the tree's gaps hold `body-unavailable` for
     /// `Write` and no `symbol-only-boundary` for the app; the cross-app
-    /// inventory assembly over that tree (where F21's debug assertion runs)
-    /// does not panic. DISCRIMINATION: every body-less row's app back into
+    /// inventory assembly over that tree does not panic. DISCRIMINATION: every body-less row's app back into
     /// `opaque_apps` (D9's filter removed) fails the gap assertion.
     #[test]
     fn source_app_bodyless_row_gets_body_unavailable_gap() {

@@ -22,11 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross-app by default** (part of #160). Each builds the model of the workspace plus the
   dependency code it requires, as `analyze` and `digest` do, and reads a tree over that
   cone graph, so behaviour follows calls into dependency code. `--single-app` (new on
-  `prove` and `fingerprint`) analyses the workspace alone and gives the previous output.
+  `prove` and `fingerprint`) analyses the workspace alone. Its output is the previous
+  output for `prove` and `--inventory-only`. For `fingerprint --routine` two things
+  differ: the document's `schemaVersion` is `1.3.0`, and `mayCommit` follows the fix
+  under Fixed. `--no-roots-config` applies to the cross-app build too.
   - `prove` is `digest` with one root: a dependency effect counts as evidence, and
     dependency code that has no body, is ABI-only or has an analysis gap keeps the answer
     `unknown`. A must-question answered only through dependency code is `unknown`
     (rule B: a dependency effect is a boundary group with conditionality `unknown`).
+    `writes-table:` and `publishes-event:` match a boundary group by every resource in
+    it, not only the 10 its `detail` lists.
   - `fingerprint --routine`: inherited dependency facts appear on the routine, and each
     witness path stops at the first dependency routine. A selector never names a
     dependency routine, and `summary.totalClassifications` counts primary classifications
@@ -172,15 +177,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   candidate set, which d43 would report as `confirmed`. d43 no longer checks for the
   `dependency-export` edge kind, which is never built.
 - #160 step 9 (part of #160):
-  - `--no-roots-config` now reaches a cross-app build (`AnalysisTarget::build_with`);
-    before, only the single-app build skipped the `roots.config.json` overlay.
   - `fingerprint`'s `mayCommit` reads the inherited coverage when inherited facts are
     shown: a routine whose own body is fully analysed but whose cone is not now says
     `unknown`, not `no`. It reads the direct coverage with `--no-include-inherited`.
     One cli-b query golden moved (`ws-txn-d49-pos-modify-runmodal`).
-  - `prove` matches a dependency effect inside a boundary group by every resource of the
-    group, not only the 10 its `detail` lists, so `writes-table:` / `publishes-event:` no
-    longer answer a false `no` for the 11th.
   - A dependency app that ships source but has a body-less routine gets a
     `body-unavailable` gap for that routine, not an app-level `symbol-only-boundary` gap
     (which names only an app with no source). Both kinds still block `prove`. This also

@@ -33,9 +33,7 @@ use crate::engine::l5::digest::{
     QueryWitnessHop, TerminalHopInfo, WitnessIndex, build_fingerprint_indexes_pub,
     reconstruct_witness_paths_pub, witness_index,
 };
-use crate::engine::l5::selector_index::{
-    build_selector_indexes, narrow_to_owner, resolve_selector,
-};
+use crate::engine::l5::selector_index::{SelectorIndexes, narrow_to_owner, resolve_selector};
 use crate::engine::l5::snapshot::{CapabilitySnapshot, SnapCapabilityExtra, SnapValueSource};
 
 // Re-export for use by the CLI module.
@@ -70,7 +68,6 @@ mod types {
     }
 
     /// Filters for a fingerprint query (mirrors `FingerprintFilters` in TS).
-    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FingerprintFilters {
         /// When Some, only root classifications whose `kinds` intersect this set are rendered.
         pub roots: Option<RootKindSet>,
@@ -707,76 +704,31 @@ fn build_block<'w>(
 /// object, narrows an `<owner>::<routine>` selector and labels ambiguity
 /// candidates.
 ///
-/// Roles (#160 step 9, epic Decision 28): the selector index keeps the
-/// `primary_guid` app's routines only, so a selector never names a dependency
-/// routine; `total_classifications` counts the classifications whose routine
-/// `is_primary` (by stable id, read off the model's roles), before the
-/// selector and `--roots` filters. Single-app every row is primary.
+/// Roles (#160 step 9, epic Decision 28): `total_classifications` counts the
+/// classifications whose routine `is_primary` (by stable id, read off the
+/// model's roles), before the selector and `--roots` filters. Single-app every
+/// row is primary.
+///
+/// `pool`: the routines `--routine` names, resolved once by
+/// [`resolve_routine_selectors`] (final panel C5); `None` when no `--routine`
+/// was given. A failing selector never reaches the query: its result is
+/// [`selector_failure_result`], with no tree composed.
 pub fn fingerprint_query(
     snap: &CapabilitySnapshot,
     filters: &FingerprintFilters,
+    pool: Option<&std::collections::BTreeSet<String>>,
     roots_config_ignored: bool,
     owners: &OwnerIndex<'_>,
-    primary_guid: Option<&str>,
     is_primary: &dyn Fn(&str) -> bool,
 ) -> FingerprintQueryResult {
     // Build shared indexes (reuse B1's public entry point).
     let idx = build_fingerprint_indexes_pub(snap);
-
-    // Selector index (5-form resolveSelector cascade) — built from the identity
-    // table's source Vec, deterministic by construction. Shared with digest_cli.
-    let selector_idx = build_selector_indexes(&snap.identities, primary_guid);
-
-    let mut diagnostics: Vec<FingerprintQueryDiagnostic> = Vec::new();
-
-    // Resolve routine selectors.
-    let mut resolved_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut any_selector_failed = false;
-    for sel in &filters.routine_selectors {
-        let (matches, matched_form) = resolve_selector(sel, &selector_idx);
-        let matches = narrow_to_owner(sel, matched_form, matches, |id| owners.object_display(id));
-        if matches.is_empty() {
-            diagnostics.push(FingerprintQueryDiagnostic::SelectorUnresolved {
-                selector: sel.clone(),
-            });
-            any_selector_failed = true;
-        } else if matches.len() >= 2 {
-            // candidates: (stableId, `<owner>::<display>`) — display falls back
-            // to "" (TS: `routineDisplayById.get(id) ?? ""`), NOT to the id.
-            let candidates = matches
-                .iter()
-                .take(MAX_AMBIGUOUS_CANDIDATES)
-                .map(|id| {
-                    let display = idx.routine_display_by_id.get(id).map_or("", String::as_str);
-                    (id.clone(), owners.qualified(id, display))
-                })
-                .collect();
-            diagnostics.push(FingerprintQueryDiagnostic::SelectorAmbiguous {
-                selector: sel.clone(),
-                matched_form: matched_form.to_string(),
-                candidates,
-            });
-            any_selector_failed = true;
-        } else {
-            resolved_set.insert(matches.into_iter().next().unwrap());
-        }
-    }
 
     let total_classifications = snap
         .root_classifications
         .iter()
         .filter(|r| is_primary(&r.routine_id))
         .count();
-
-    if any_selector_failed {
-        return FingerprintQueryResult {
-            blocks: Vec::new(),
-            diagnostics,
-            total_classifications,
-            rendered_blocks: 0,
-            roots_config_ignored,
-        };
-    }
 
     // Filter root pool.
     let root_pool: Vec<&crate::engine::l5::snapshot::SnapshotRootClassificationSlot> = snap
@@ -789,12 +741,7 @@ pub fn fingerprint_query(
                     return false;
                 }
             }
-            if !filters.routine_selectors.is_empty()
-                && !resolved_set.contains(r.routine_id.as_str())
-            {
-                return false;
-            }
-            true
+            pool.is_none_or(|p| p.contains(r.routine_id.as_str()))
         })
         .collect();
 
@@ -822,9 +769,84 @@ pub fn fingerprint_query(
     let rendered_blocks = blocks.len();
     FingerprintQueryResult {
         blocks,
-        diagnostics,
+        diagnostics: Vec::new(),
         total_classifications,
         rendered_blocks,
+        roots_config_ignored,
+    }
+}
+
+/// `--routine`'s selectors resolved once, against the model's own identity
+/// table (the one every tree holds), before any tree is composed (final panel
+/// C5): the routines they name, or one diagnostic per failing selector, in
+/// selector order. `idx` is [`build_selector_indexes`] of that table with the
+/// primary app's guid, so a selector never names a dependency routine.
+pub(crate) fn resolve_routine_selectors(
+    selectors: &[String],
+    idx: &SelectorIndexes,
+    owners: &OwnerIndex<'_>,
+) -> Result<std::collections::BTreeSet<String>, Vec<FingerprintQueryDiagnostic>> {
+    let mut pool = std::collections::BTreeSet::new();
+    let mut diagnostics = Vec::new();
+    for sel in selectors {
+        let (matches, matched_form) = resolve_selector(sel, idx);
+        let matches = narrow_to_owner(sel, matched_form, matches, |id| owners.object_display(id));
+        if matches.is_empty() {
+            diagnostics.push(FingerprintQueryDiagnostic::SelectorUnresolved {
+                selector: sel.clone(),
+            });
+        } else if matches.len() >= 2 {
+            // candidates: (stableId, `<owner>::<display>`) — display falls back
+            // to "" (TS: `routineDisplayById.get(id) ?? ""`), NOT to the id.
+            let candidates = matches
+                .iter()
+                .take(MAX_AMBIGUOUS_CANDIDATES)
+                .map(|id| {
+                    let display = idx.routine_display_by_id.get(id).map_or("", String::as_str);
+                    (id.clone(), owners.qualified(id, display))
+                })
+                .collect();
+            diagnostics.push(FingerprintQueryDiagnostic::SelectorAmbiguous {
+                selector: sel.clone(),
+                matched_form: matched_form.to_string(),
+                candidates,
+            });
+        } else {
+            pool.extend(matches);
+        }
+    }
+    if diagnostics.is_empty() {
+        Ok(pool)
+    } else {
+        Err(diagnostics)
+    }
+}
+
+/// A query whose selectors failed: no block, the diagnostics, and the count
+/// [`fingerprint_query`] reads off a tree, here off the model the tree is
+/// derived from (`derive_root_classifications` keeps a model classification
+/// whose routine has a stable id), so no tree is composed (final panel O4).
+pub(crate) fn selector_failure_result(
+    model: &crate::program::model::workspace::Model,
+    diagnostics: Vec<FingerprintQueryDiagnostic>,
+    roots_config_ignored: bool,
+) -> FingerprintQueryResult {
+    let primary = primary_stable_ids(model);
+    let stable = crate::engine::l4::capability_cone::routine_to_stable_of(&model.workspace);
+    let total_classifications = model
+        .root_classifications
+        .iter()
+        .filter(|c| {
+            stable
+                .get(&c.routine_id)
+                .is_some_and(|s| primary.contains(s.as_str()))
+        })
+        .count();
+    FingerprintQueryResult {
+        blocks: Vec::new(),
+        diagnostics,
+        total_classifications,
+        rendered_blocks: 0,
         roots_config_ignored,
     }
 }
@@ -1069,14 +1091,41 @@ impl serde::Serialize for Doc<'_> {
     }
 }
 
+// Test hook (final panel S1): the bytes `serialize_doc` has written on this
+// thread, and that count at each `fact_doc` build, so a test reads off the
+// production projection whether a fact is built only after the previous one
+// is written.
+#[cfg(test)]
+thread_local! {
+    static DOC_WRITTEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FACT_BUILT_AT: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The query document's output buffer (it feeds `DOC_WRITTEN` under test).
+struct DocOut(Vec<u8>);
+
+impl std::io::Write for DocOut {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.extend_from_slice(b);
+        #[cfg(test)]
+        DOC_WRITTEN.with(|c| c.set(self.0.len()));
+        Ok(b.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// `format_json::serialize_document_value`'s bytes for a [`Doc`]: pretty,
 /// trailing newline.
 fn serialize_doc(doc: &Doc<'_>) -> String {
-    let mut out: Vec<u8> = Vec::new();
+    let mut out = DocOut(Vec::new());
     let mut ser =
         serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::new());
     serde::Serialize::serialize(doc, &mut ser).expect("query document serialization");
-    let mut text = String::from_utf8(out).expect("serde_json writes UTF-8");
+    let mut text = String::from_utf8(out.0).expect("serde_json writes UTF-8");
     text.push('\n');
     text
 }
@@ -1084,6 +1133,8 @@ fn serialize_doc(doc: &Doc<'_>) -> String {
 /// One fact of a block as JSON, with its witness (`build_block` makes the
 /// witnesses positionally: the `fi`-th, when any, is fact `fi`'s).
 fn fact_doc(block: &FingerprintBlock, fi: usize, workspace_root: &str) -> serde_json::Value {
+    #[cfg(test)]
+    FACT_BUILT_AT.with(|v| v.borrow_mut().push(DOC_WRITTEN.with(std::cell::Cell::get)));
     let fact = &block.rendered_facts[fi];
     let bw = block.witnesses.get(fi).filter(|w| w.fact_index == fi);
     let mut fj = serde_json::Map::new();
@@ -2006,22 +2057,12 @@ mod tests {
             ("app:Codeunit:3#ccc", "Codeunit \"C\"::Run"),
             ("app:Codeunit:4#ddd", "Codeunit \"D\"::Run"),
         ]);
-        let filters = FingerprintFilters {
-            roots: None,
-            routine_selectors: vec!["Run".to_string()],
-            include_inherited: true,
-            witness_limit: WitnessLimit::Disabled,
-        };
-        let result = fingerprint_query(
-            &snap,
-            &filters,
-            false,
-            &OwnerIndex::default(),
-            None,
-            &|_| true,
-        );
-        assert_eq!(result.diagnostics.len(), 1);
-        match &result.diagnostics[0] {
+        let idx = crate::engine::l5::selector_index::build_selector_indexes(&snap.identities, None);
+        let diagnostics =
+            resolve_routine_selectors(&["Run".to_string()], &idx, &OwnerIndex::default())
+                .expect_err("Run names four routines");
+        assert_eq!(diagnostics.len(), 1);
+        match &diagnostics[0] {
             FingerprintQueryDiagnostic::SelectorAmbiguous {
                 matched_form,
                 candidates,
@@ -2059,6 +2100,76 @@ mod tests {
     /// two facts of one root that enter through one first hop build one DAG.
     #[test]
     fn w8_one_dag_per_root_across_its_facts() {
+        let snap = root_with_two_inherited_facts();
+        crate::engine::l5::digest::DAG_BUILDS.with(|c| c.set(0));
+        let result = fingerprint_query(
+            &snap,
+            &witnessing_filters(),
+            None,
+            false,
+            &OwnerIndex::default(),
+            &|_| true,
+        );
+        let witnessed = result.blocks[0]
+            .witnesses
+            .iter()
+            .filter(|w| w.paths.len() == 1)
+            .count();
+        assert_eq!(witnessed, 2, "precondition: both inherited facts witnessed");
+        assert_eq!(crate::engine::l5::digest::DAG_BUILDS.with(|c| c.get()), 1);
+    }
+
+    /// #160 step 9 final panel S1: the production projection
+    /// (`project_fingerprint_query_full`) streams a block's facts: each fact's
+    /// JSON is built only after the previous fact's bytes are written, so no
+    /// resource's facts are collected first. Read through the `FACT_BUILT_AT`
+    /// hook. Precondition: one block whose one resource has two witnessed
+    /// facts. DISCRIMINATION: `families_doc` collecting a resource's fact JSON
+    /// before its `Doc::Seq` fails it.
+    #[test]
+    fn query_projection_streams_its_facts() {
+        let snap = root_with_two_inherited_facts();
+        let filters = witnessing_filters();
+        let result = fingerprint_query(
+            &snap,
+            &filters,
+            None,
+            false,
+            &OwnerIndex::default(),
+            &|_| true,
+        );
+        let resources: Vec<usize> = result
+            .blocks
+            .iter()
+            .flat_map(|b| &b.families)
+            .flat_map(|f| &f.resources)
+            .map(|r| r.fact_indices.len())
+            .collect();
+        assert_eq!(resources, [2], "precondition: one resource, two facts");
+        DOC_WRITTEN.with(|c| c.set(0));
+        FACT_BUILT_AT.with(|v| v.borrow_mut().clear());
+        let text = project_fingerprint_query_full(&result, "ws", &filters, true, &[], "v", "fp");
+        let at = FACT_BUILT_AT.with(|v| v.borrow().clone());
+        assert_eq!(at.len(), 2, "precondition: each fact built once");
+        // A fact's JSON holds at least its 16-hex `factId`.
+        assert!(
+            at[1] > at[0] + 16 && at[1] < text.len(),
+            "fact 1 is built after fact 0 is written: {at:?}"
+        );
+    }
+
+    fn witnessing_filters() -> FingerprintFilters {
+        FingerprintFilters {
+            roots: None,
+            routine_selectors: Vec::new(),
+            include_inherited: true,
+            witness_limit: WitnessLimit::Capped(3),
+        }
+    }
+
+    /// Root `R` calls `W` once (`cs1`); `W` inserts and modifies `T`, so `R`
+    /// inherits both facts through one first hop.
+    fn root_with_two_inherited_facts() -> CapabilitySnapshot {
         use crate::engine::l5::snapshot::{
             SnapshotGraphEdge, SnapshotRange, SnapshotRootClassificationSlot, SnapshotSourceAnchor,
         };
@@ -2113,27 +2224,6 @@ mod tests {
             config_entry_id: None,
             resolution_status: None,
         }];
-        let filters = FingerprintFilters {
-            roots: None,
-            routine_selectors: Vec::new(),
-            include_inherited: true,
-            witness_limit: WitnessLimit::Capped(3),
-        };
-        crate::engine::l5::digest::DAG_BUILDS.with(|c| c.set(0));
-        let result = fingerprint_query(
-            &snap,
-            &filters,
-            false,
-            &OwnerIndex::default(),
-            None,
-            &|_| true,
-        );
-        let witnessed = result.blocks[0]
-            .witnesses
-            .iter()
-            .filter(|w| w.paths.len() == 1)
-            .count();
-        assert_eq!(witnessed, 2, "precondition: both inherited facts witnessed");
-        assert_eq!(crate::engine::l5::digest::DAG_BUILDS.with(|c| c.get()), 1);
+        snap
     }
 }
