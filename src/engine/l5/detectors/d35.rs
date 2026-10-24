@@ -274,7 +274,7 @@ fn push_capped<'a>(out: &mut String, label: &str, items: impl ExactSizeIterator<
 /// Why the commit answer is unknown, for the message: the subscriber's coverage
 /// reasons, deduplicated, sorted and joined (or a fallback naming what is
 /// missing), then `; unresolved: …` naming the subscriber's own call-site-local
-/// gaps in source order, then `; partly analysed: …` naming the cone's other
+/// gaps (sites of `routine`'s own row) in source order, then `; partly analysed: …` naming the cone's other
 /// partially analysed routines, sorted; each list capped at [`SHOWN_TARGETS`]
 /// with `+N more`. The subscriber itself is left out of "partly analysed" only
 /// when its own sites account for its whole gap (module doc, #265).
@@ -304,10 +304,12 @@ fn coverage_reasons(
         if !is_callsite_local_kind(&u.kind) {
             continue;
         }
+        // This row's own site: rows sharing the id (e.g. `#if` alternatives) share
+        // the edge list and site ids, and `call_site_by_id` keeps only the last.
         let cs = u
             .callsite_id
             .as_deref()
-            .and_then(|id| ctx.call_site_by_id.get(id));
+            .and_then(|id| routine.call_sites.iter().find(|cs| cs.id == id));
         let Some(cs) = cs else {
             every_site_found = false;
             continue;
@@ -661,6 +663,77 @@ mod tests {
                 "interface-open-world; unresolved: X (line 5); partly analysed: sub (Codeunit 1)",
             );
         }
+    }
+
+    /// #265 CR1: two rows share the subscriber's id (e.g. `#if` alternatives), so
+    /// their own edges are merged under one id. Each finding names only a site
+    /// from its OWN row; an edge whose site is in the other row only counts as
+    /// not found, so the subscriber stays listed.
+    #[test]
+    fn same_id_rows_name_only_their_own_sites() {
+        let run = |a_sites: Vec<PCallSite>, b_sites: Vec<PCallSite>, edges: &[&str]| {
+            let mut a = routine("sub", "event-subscriber");
+            a.call_sites = a_sites;
+            let mut b = routine("sub", "event-subscriber");
+            b.call_sites = b_sites;
+            let routines = vec![a, b];
+            let mut owned = minimal_ctx(
+                &routines,
+                HashMap::new(),
+                HashMap::from([(
+                    "sub".to_string(),
+                    partial(&["interface-open-world"], &["sub"]),
+                )]),
+            );
+            owned.art_mut().uncertainty_edges_by_from.insert(
+                "sub".to_string(),
+                edges
+                    .iter()
+                    .map(|cs| own_edge("interface-open-world", cs))
+                    .collect(),
+            );
+            let ctx = owned.ctx();
+            let out = detect_d35(&model_of(&routines), &ctx).unwrap().findings;
+            out.into_iter()
+                .map(|f| f.fix_options[0].description.to_string())
+                .collect::<Vec<_>>()
+        };
+        let fix = |reasons: &str| {
+            format!(
+                "Check what could not be analysed ({reasons}); if a Commit is reachable, move \
+                 it out of the subscriber or defer it."
+            )
+        };
+        // The rows share the site id `cs1` at different lines.
+        assert_eq!(
+            run(
+                vec![site_at("cs1", "A", 2, 0)],
+                vec![site_at("cs1", "B", 7, 0)],
+                &["cs1"],
+            ),
+            vec![
+                fix("interface-open-world; unresolved: A (line 3)"),
+                fix("interface-open-world; unresolved: B (line 8)"),
+            ],
+            "shared site id"
+        );
+        // Each row has a site the other lacks.
+        assert_eq!(
+            run(
+                vec![site_at("cs-a", "A", 2, 0)],
+                vec![site_at("cs-b", "B", 7, 0)],
+                &["cs-a", "cs-b"],
+            ),
+            vec![
+                fix(
+                    "interface-open-world; unresolved: A (line 3); partly analysed: sub (Codeunit 1)"
+                ),
+                fix(
+                    "interface-open-world; unresolved: B (line 8); partly analysed: sub (Codeunit 1)"
+                ),
+            ],
+            "distinct site ids"
+        );
     }
 
     /// The unknown arm's confidence is the subscriber's own uncertainty set,
