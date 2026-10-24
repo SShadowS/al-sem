@@ -886,7 +886,7 @@ fn boundary_to_json(b: &crate::engine::l5::digest::PathBoundary) -> serde_json::
         m.insert("anchor".into(), serde_json::Value::Object(anch));
     }
     m.insert("id".into(), b.id.clone().into());
-    m.insert("kind".into(), b.kind.into());
+    m.insert("kind".into(), b.kind.as_str().into());
     m.insert(b.target_key().into(), b.target.clone().into());
     serde_json::Value::Object(m)
 }

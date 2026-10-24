@@ -268,6 +268,41 @@ fn fingerprint_selector_primary_only() {
     );
 }
 
+/// Decision 28 (Task 3 review item 2): a `--routine` naming a routine that only
+/// a dependency declares (`Dep Lib`'s `Inner`, demanded through `Outer`;
+/// precondition, read off the model) is not found: exit 2 with a
+/// `selector-unresolved` diagnostic, never an empty result. DISCRIMINATION:
+/// the selector index built with `None` resolves it (exit 0).
+#[test]
+fn fingerprint_selector_on_a_dependency_only_routine_is_not_found() {
+    let tmp = tempfile::tempdir().unwrap();
+    dd::write_own(tmp.path(), "");
+    let t = cross_model(tmp.path());
+    let m = t.resolved();
+    let inner: Vec<al_sem::program::model::role::Role> = m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.name == "Inner")
+        .map(|r| m.routine_role(r))
+        .collect();
+    assert_eq!(
+        inner,
+        [al_sem::program::model::role::Role::Dependency],
+        "precondition: only a dependency declares Inner"
+    );
+    let (v, code) = query(tmp.path(), "Inner", &[]);
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(
+        v["payload"]["diagnostics"][0]["kind"], "selector-unresolved",
+        "{v}"
+    );
+    assert!(
+        v["payload"]["blocks"].as_array().is_some_and(Vec::is_empty),
+        "{v}"
+    );
+}
+
 /// T6 (d), spec §5, T5's fixture: the cross-app model classifies the
 /// dependency `OnRun` (precondition, P5). Assertion: `totalClassifications`
 /// equals the primary root classifications, counted before the selector.

@@ -611,6 +611,14 @@ fn fingerprint_wide_query_stays_single_app() {
     }
 }
 
+/// #160 step 9 §4.6 (T16, T11): `--inventory-only` reads a tree over the
+/// view's relation composed with no raw facts (`Roots(∅)`): digest's row with
+/// no witness pass.
+const INVENTORY_ROW: Row = Row {
+    witness: 0,
+    ..DIGEST_ROW
+};
+
 #[test]
 fn fingerprint_inventory_only() {
     let (_d, ws) = ws_dep();
@@ -622,7 +630,23 @@ fn fingerprint_inventory_only() {
         "json",
         "--deterministic",
     ]);
-    assert_row("fingerprint --inventory-only", &m, FINGERPRINT_ROW);
+    assert_row("fingerprint --inventory-only", &m, INVENTORY_ROW);
+}
+
+/// T16: `--single-app` takes the same path over the workspace alone.
+#[test]
+fn fingerprint_inventory_only_single_app() {
+    let (_d, ws) = ws_dep();
+    let m = run(&[
+        "fingerprint",
+        &ws,
+        "--inventory-only",
+        "--format",
+        "json",
+        "--deterministic",
+        "--single-app",
+    ]);
+    assert_row("fingerprint --inventory-only single-app", &m, INVENTORY_ROW);
 }
 
 /// `diff ws ws`: the row is per side, so the process total is twice it.
