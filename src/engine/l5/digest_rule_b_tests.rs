@@ -1001,7 +1001,7 @@ fn prove_scoped_equals_unscoped() {
                 &sl,
                 ConeScope {
                     derived: false,
-                    raw: WitnessRequest::Primary.scope(model),
+                    raw: WitnessRequest::primary().scope(model),
                 },
             );
             let unscoped = digest_effects(&mut all, model, &roots, false, true);
@@ -1013,7 +1013,7 @@ fn prove_scoped_equals_unscoped() {
                     &sl,
                     ConeScope {
                         derived: false,
-                        raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
+                        raw: WitnessRequest::roots([root.clone()].into()).scope(model),
                     },
                 );
                 let scoped = digest_effects(
@@ -1137,7 +1137,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
                 &sl,
                 ConeScope {
                     derived: false,
-                    raw: WitnessRequest::Primary.scope(model),
+                    raw: WitnessRequest::primary().scope(model),
                 },
             );
             // Final panel O4: a failing selector's count, read off the model
@@ -1171,7 +1171,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
                     &sl,
                     ConeScope {
                         derived: false,
-                        raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
+                        raw: WitnessRequest::roots([root.clone()].into()).scope(model),
                     },
                 );
                 let (got, _) = query(&scoped_tree, root);

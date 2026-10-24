@@ -1766,7 +1766,7 @@ pub(crate) fn digest_pipeline_with(
     req: DigestRequest<'_>,
 ) -> Result<DigestRunResult, String> {
     use crate::engine::gate::run::AnalysisTarget;
-    use crate::engine::session::digest_plan;
+    use crate::engine::session::{JobId, digest_plan};
     let DigestRequest {
         inputs,
         changed_files,
@@ -1839,7 +1839,7 @@ pub(crate) fn digest_pipeline_with(
     let key = plan.keys().remove(0);
     view.prepare(&plan);
     let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
-    let mut effects = if plan.needs_tree() {
+    let mut effects = if plan.has_tree(JobId(0)) {
         view.take_effects()
     } else {
         DigestEffects::default()

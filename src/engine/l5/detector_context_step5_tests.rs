@@ -472,9 +472,9 @@ fn step5_t5_both_cross_app_producers_fold_the_same() {
 }
 
 /// #160 step 6 T8 (I5, the materialized half) on T4's workspace: a view
-/// prepared with policy's request (`WitnessRequest::Primary`) materializes raw
+/// prepared with policy's request (`WitnessRequest::primary()`) materializes raw
 /// for no dependency routine, and `Go`'s raw (which reaches `Inner`'s write)
-/// equals a `WitnessScope::All` composition's. Break 1: resolve `Primary` as
+/// equals a `WitnessScope::All` composition's. Break 1: resolve `primary` as
 /// `All` -> the dependency members get raw -> the count is > 0 -> fails.
 #[test]
 fn step6_t8_a_primary_witness_request_materializes_no_dependency_member() {
@@ -490,7 +490,7 @@ fn step6_t8_a_primary_witness_request_materializes_no_dependency_member() {
     let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
     view.prepare(
         &analyze_plan(vec![d35], true)
-            .with_witness(crate::engine::session::WitnessRequest::Primary),
+            .with_witness(crate::engine::session::WitnessRequest::primary()),
     );
     let raw = view.raw();
     assert_eq!(
