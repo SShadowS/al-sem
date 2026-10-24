@@ -1199,6 +1199,7 @@ fn i264_t22_prove_and_digest_see_no_blocker_for_a_closed_site() {
         "may-commit",
         "t",
         true,
+        true, // single-app, as #264 wrote it (before #160 step 9)
     )
     .expect("prove runs");
     let prove: Value = serde_json::from_str(&prove.json_text).expect("prove json");
