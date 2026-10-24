@@ -427,7 +427,8 @@ not here. Post-attach peaks are not readable on Linux (#204): "not measured" (9A
 
 None is needed: the bounded forms (B2, B1q, B1i) are feasible on estimate, and the infeasible forms are out of
 scope. After Task 4 lands, the implementer runs `fq` once on CDO (cdo profile is enough for a peak, ≤ 4 GB
-expected) as an early read of B1q. If it exceeds 1.03 × P_a by more than 5 %, F2 is applied before Task 5.
+expected) as an early read of B1q. If it exceeds 1.08 × P_a (the bound plus 5 %, since the `cdo` profile is not the bench's), F2 is
+applied before Task 4 (plan task numbers).
 
 ### 8.3 Bench parts (conductor, after the final panel)
 
