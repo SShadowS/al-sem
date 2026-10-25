@@ -5956,7 +5956,7 @@ mod step4_tests {
     use crate::engine::l5::detectors::registered_detectors;
     use crate::engine::l5::registry::Detector;
     use crate::engine::l5::test_support::{
-        dependency_half, write_fixture_dep_uncertainty, write_fixture_step4,
+        dependency_half, write_fixture_dep_uncertainty_both_halves, write_fixture_step4,
     };
     use crate::engine::session::{View, analyze_plan, digest_plan};
     use std::path::Path;
@@ -6177,13 +6177,20 @@ mod step4_tests {
     /// maps to (observed on the base `c554b704`), at that edge's call site;
     /// (2) neither `rel.primary().uncertainty_edges` nor the detector
     /// context (a plan holding d1, so the context is built) carries it.
+    /// #287 (the fixture adds `WsUnc`, so both halves are non-empty): (3) the
+    /// context's `dependency_uncertainty_edges_by_from` holds exactly
+    /// DepCaller's kept edge, and `own_uncertainty_edges` yields it; (4)
+    /// `uncertainty_edges_by_from` is the Primary half grouped by `from`, in
+    /// edge order; (5) a single-app context's dependency map is empty.
     #[test]
     fn step4_dependency_uncertainty_stays_out_of_primary() {
+        use crate::engine::l4::combined_graph::Uncertainty;
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
-        write_fixture_dep_uncertainty(&ws);
+        write_fixture_dep_uncertainty_both_halves(&ws);
         let base = base_of(&ws);
         let dep_caller = id_of(&base, "DepCaller");
+        let ws_unc = id_of(&base, "WsUnc");
         assert!(
             base.dep_routine_ids.contains(&dep_caller),
             "precondition: DepCaller is a dependency routine"
@@ -6236,6 +6243,8 @@ mod step4_tests {
                 "(2) rel.primary().uncertainty_edges from DepCaller: {in_graph:?}"
             ));
         }
+        let primary_edges = base.rel().primary().uncertainty_edges.clone();
+        let dep_edges = base.rel().dependency_uncertainty().to_vec();
         let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
         view.prepare(&analyze_plan(
             vec![detector(crate::engine::l5::detectors::d1::DETECTOR)],
@@ -6244,6 +6253,75 @@ mod step4_tests {
         if let Some(u) = view.det().uncertainty_edges_by_from.get(&dep_caller) {
             failures.push(format!(
                 "(2) context uncertainty_edges_by_from[DepCaller]: {u:?}"
+            ));
+        }
+        // (3) #287: the dependency map holds exactly DepCaller's kept edge,
+        // and the accessor yields exactly that.
+        let want_dep: HashMap<String, Vec<Uncertainty>> = dep_edges
+            .iter()
+            .map(|u| (u.from.clone(), vec![u.uncertainty.clone()]))
+            .collect();
+        if dep_edges.len() != 1 || !want_dep.contains_key(&dep_caller) {
+            failures.push(format!(
+                "(3) precondition: one kept edge, from DepCaller: {dep_edges:?}"
+            ));
+        }
+        let det = view.det();
+        if det.dependency_uncertainty_edges_by_from != want_dep {
+            failures.push(format!(
+                "(3) context dependency_uncertainty_edges_by_from: want {want_dep:?}, got {:?}",
+                det.dependency_uncertainty_edges_by_from
+            ));
+        }
+        let own: Vec<&Uncertainty> = det.own_uncertainty_edges(&dep_caller).collect();
+        let want_own: Vec<&Uncertainty> = dep_edges.iter().map(|u| &u.uncertainty).collect();
+        if own != want_own {
+            failures.push(format!(
+                "(3) own_uncertainty_edges(DepCaller): want {want_own:?}, got {own:?}"
+            ));
+        }
+        // (4) #287: the Primary map is the Primary half grouped by `from`, in
+        // edge order, multiplicity kept: `WsUnc`'s edge is there.
+        let mut want_primary: HashMap<String, Vec<Uncertainty>> = HashMap::new();
+        for u in &primary_edges {
+            want_primary
+                .entry(u.from.clone())
+                .or_default()
+                .push(u.uncertainty.clone());
+        }
+        if !want_primary.contains_key(&ws_unc) {
+            failures.push(format!(
+                "(4) precondition: WsUnc has a Primary edge: {primary_edges:?}"
+            ));
+        }
+        if view.det().uncertainty_edges_by_from != want_primary {
+            failures.push(format!(
+                "(4) context uncertainty_edges_by_from: want {want_primary:?}, got {:?}",
+                view.det().uncertainty_edges_by_from
+            ));
+        }
+        // (5) #287: a single-app context over the same workspace has an empty
+        // dependency map (its Primary map is filled, so the context was built).
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
+        let single = crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+            &inputs, "r0", false,
+        )
+        .expect("single-app model");
+        let mut single = View::new(AnalysisTarget::SingleApp(Box::new(single)));
+        single.prepare(&analyze_plan(
+            vec![detector(crate::engine::l5::detectors::d1::DETECTOR)],
+            true,
+        ));
+        if !single.det().uncertainty_edges_by_from.contains_key(&ws_unc) {
+            failures.push(format!(
+                "(5) precondition: the single-app Primary map holds WsUnc: {:?}",
+                single.det().uncertainty_edges_by_from
+            ));
+        }
+        if !single.det().dependency_uncertainty_edges_by_from.is_empty() {
+            failures.push(format!(
+                "(5) single-app dependency_uncertainty_edges_by_from: {:?}",
+                single.det().dependency_uncertainty_edges_by_from
             ));
         }
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));

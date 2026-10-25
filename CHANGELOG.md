@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dry-run.txt` did not move); `cache_version_grammar_tracks_the_linked_grammar` requires
   the package version in it. The two hand-made cache fixtures carry the new string.
 
+### Fixed
+
+- **d35 names a dependency subscriber's own unresolved call sites** (#287). This lifts
+  the limit stated in the #265 entry: a subscriber that lives in a dependency app
+  (reported at `--scope all`) now gets the same `; unresolved: <callee> (line n)` segment
+  as a workspace subscriber, and drops itself from "partly analysed" under the same rule.
+  The detector context now also indexes the dependency half of the uncertainty edges,
+  keyed by caller (`dependency_uncertainty_edges_by_from`, with its own census row);
+  the Primary index and every detector that reads it are unchanged, and single-app the
+  new index is empty. Ids, fingerprints, severity and confidence do not change. Limit:
+  the confidence cap still reads only the Primary half, so a dependency subscriber's own
+  dependency-half edges do not lower its confidence (its inherited uncertainties still
+  do).
+
 ## [2.1.1] - 2026-10-25
 
 ### Changed

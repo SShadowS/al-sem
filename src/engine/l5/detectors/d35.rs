@@ -1,7 +1,9 @@
 //! D35 — Commit reachable from an event subscriber. Port of al-sem
 //! `src/detectors/d35-commit-in-event-subscriber.ts`.
 //!
-//! event-subscriber routines, primary+body+!parseIncomplete only.
+//! event-subscriber routines with a body and not parse-incomplete, of any role
+//! (in cross-app mode `ws.routines` holds the dependency rows too; the scope
+//! filter drops theirs at `--scope primary`).
 //! summaryCommits = summary None → "unknown" else may_commit(summary); skip if "no".
 //! directCommit = first operation_sites kind=="commit"; isDirect = present.
 //!
@@ -35,9 +37,14 @@
 //! subscriber stays under "partly analysed" unless every own gap is accounted
 //! for: a site was named, every other own edge's site was found (in its own
 //! row, and reachable), and no other row with its id is opaque or
-//! parse-incomplete. Primary
-//! subscribers only: a dependency subscriber's own edges are not on the
-//! detector context, so it keeps the #148 text (stated limit).
+//! parse-incomplete. #287 — the own edges are read through
+//! `DetectorArtifacts::own_uncertainty_edges` (the Primary half, then the
+//! dependency half), so a dependency subscriber names its own sites and drops
+//! itself under the same rule as a primary one.
+//! Stated limit (#287): the unknown arm's confidence cap reads
+//! `uncertainty_view()`, built from the core summaries and the Primary map
+//! only. A dependency subscriber's own dependency-half edges therefore do not
+//! lower its confidence (its core-summary uncertainties still do).
 //! Stated limit (#288 FC2): the unknown arm's confidence cap reads the L4
 //! summary's uncertainty set, which the db-effect solver still builds from
 //! every site, dead ones included (discovery D1); so a dropped dead gap can
@@ -315,8 +322,7 @@ fn coverage_reasons(
     // Own sites, one per site id, in source order.
     let mut sites: BTreeMap<(u32, u32, &str), String> = BTreeMap::new();
     let mut every_site_found = true;
-    let own_edges = ctx.uncertainty_edges_by_from.get(&routine.id);
-    for u in own_edges.into_iter().flatten() {
+    for u in ctx.own_uncertainty_edges(&routine.id) {
         // A dead site is no gap (the coverage fold leaves it out), so it is not
         // missing evidence either (#288).
         if !is_callsite_local_kind(&u.kind)

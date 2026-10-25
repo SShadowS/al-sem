@@ -453,6 +453,7 @@ pub fn empty_artifacts(
         transaction_spans: vec![],
         resolved_call_edge_by_callsite: HashMap::new(),
         uncertainty_edges_by_from: HashMap::new(),
+        dependency_uncertainty_edges_by_from: HashMap::new(),
         uncertainties_by_node: HashMap::new(),
         uncertainties: Default::default(),
         // ⟨C1⟩ Fold BEFORE the move so the derived substrate always mirrors this
@@ -597,10 +598,9 @@ pub fn write_fixture_step4(ws: &std::path::Path) {
     write_ws_with_dep(ws, ws_al, &methods, lib);
 }
 
-/// Spec §5.4: a dependency routine `DepCaller` whose call names a method no
-/// record has (a to-less call), called from the workspace so it is demanded.
-pub fn write_fixture_dep_uncertainty(ws: &std::path::Path) {
-    let lib = r#"codeunit 12 "Dep Rec Lib"
+/// The dependency of [`write_fixture_dep_uncertainty`]: `DepCaller` makes a
+/// to-less call (`R.NoSuchMethod()`).
+const DEP_UNCERTAINTY_LIB: &str = r#"codeunit 12 "Dep Rec Lib"
 {
     procedure DepCaller()
     var
@@ -610,6 +610,11 @@ pub fn write_fixture_dep_uncertainty(ws: &std::path::Path) {
     end;
 }
 "#;
+const DEP_UNCERTAINTY_METHODS: &str = r#"[{"Name":"DepCaller","Parameters":[]}]"#;
+
+/// Spec §5.4: a dependency routine `DepCaller` whose call names a method no
+/// record has (a to-less call), called from the workspace so it is demanded.
+pub fn write_fixture_dep_uncertainty(ws: &std::path::Path) {
     let ws_al = r#"codeunit 50181 "Ws Call"
 {
     procedure Go()
@@ -620,7 +625,31 @@ pub fn write_fixture_dep_uncertainty(ws: &std::path::Path) {
     end;
 }
 "#;
-    write_ws_with_dep(ws, ws_al, r#"[{"Name":"DepCaller","Parameters":[]}]"#, lib);
+    write_ws_with_dep(ws, ws_al, DEP_UNCERTAINTY_METHODS, DEP_UNCERTAINTY_LIB);
+}
+
+/// #287 A3: [`write_fixture_dep_uncertainty`] plus a workspace routine
+/// `WsUnc` with its own to-less call, so both halves of the uncertainty
+/// edges are non-empty.
+pub fn write_fixture_dep_uncertainty_both_halves(ws: &std::path::Path) {
+    let ws_al = r#"codeunit 50181 "Ws Call"
+{
+    procedure Go()
+    var
+        Lib: Codeunit "Dep Rec Lib";
+    begin
+        Lib.DepCaller();
+    end;
+
+    procedure WsUnc()
+    var
+        R: Record Customer;
+    begin
+        R.NoSuchMethod();
+    end;
+}
+"#;
+    write_ws_with_dep(ws, ws_al, DEP_UNCERTAINTY_METHODS, DEP_UNCERTAINTY_LIB);
 }
 
 /// #160 step 6 D6 (T7 (a)): the dependency's `DepCaller`, demanded by the
