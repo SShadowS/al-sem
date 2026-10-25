@@ -24,7 +24,7 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::{PAnchor, PCFNNode, PLoop};
-use crate::program::model::workspace::{Model, ModelRecordOperation};
+use crate::program::model::workspace::{Model, ModelObject, ModelRecordOperation};
 
 pub(crate) const DETECTOR: &str = "d60-upgrade-loop-should-be-datatransfer";
 
@@ -84,24 +84,21 @@ pub fn detect_d60(
     let mut skipped_traversal = 0u64;
     let mut skipped_body_unsupported_op = 0u64;
 
-    let lifecycle_objects: HashSet<&str> = ws
-        .objects
-        .iter()
-        .filter(|o| {
-            o.object_type == "Codeunit"
-                && o.object_subtype.as_deref().is_some_and(|s| {
-                    s.eq_ignore_ascii_case("Upgrade") || s.eq_ignore_ascii_case("Install")
-                })
-        })
-        .map(|o| o.id.as_str())
-        .collect();
-    if lifecycle_objects.is_empty() {
+    // The routine's OWN declaring object is an Install/Upgrade codeunit (#279;
+    // was "any row of the id", see d57 for the fallback note).
+    let is_lifecycle = |o: &ModelObject| {
+        o.object_type == "Codeunit"
+            && o.object_subtype.as_deref().is_some_and(|s| {
+                s.eq_ignore_ascii_case("Upgrade") || s.eq_ignore_ascii_case("Install")
+            })
+    };
+    if !ws.objects.iter().any(is_lifecycle) {
         let stats = DetectorStats::new(DETECTOR, 0, 0);
         return Ok(DetectorOutput::no_diag(findings, stats));
     }
 
     for routine in &ws.routines {
-        if !lifecycle_objects.contains(routine.object_id.as_str()) {
+        if !ctx.declaring.of(routine).is_some_and(is_lifecycle) {
             continue;
         }
         if !routine.body_available || routine.parse_incomplete {

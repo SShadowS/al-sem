@@ -116,7 +116,7 @@ fn classify_routine(
     if !access_flaggable {
         return D14Class::NonFlaggableAccess;
     }
-    if let Some(obj) = ctx.objects_by_id.get(r.object_id.as_str()).copied() {
+    if let Some(obj) = ctx.declaring.of(r) {
         if ends_with_test_ci(&obj.name) {
             return D14Class::TestObject;
         }
@@ -192,7 +192,7 @@ pub fn detect_d14(
         }
 
         let access = r.access_modifier.as_deref();
-        let obj = ctx.objects_by_id.get(r.object_id.as_str()).copied();
+        let obj = ctx.declaring.of(r);
         let access_note = if access == Some("internal") {
             " The workspace's app.json has no `internalsVisibleTo` entries, so no other app can call it."
         } else {

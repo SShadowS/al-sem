@@ -66,6 +66,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Stated limit: d35's confidence cap still reads the L4 summary's
   uncertainties, which include dead sites. No golden moves; on the pinned CDO
   baseline no finding moves.
+- **An object split across `#if` arms no longer lends one arm's properties to
+  the other arm's routines (#279).** A numbered object's id is its number, so
+  `#if A codeunit 50100 "Foo" … #else codeunit 50100 "Bar" … #endif` gives two
+  object rows with one id. Finding locations and owner display already read
+  the routine's declaring row (#241); the remaining id-keyed readers of "this
+  routine's object" took the last row for the id, so a routine of the first
+  arm got the second arm's name, subtype, SourceTable, InherentCommitBehavior
+  or Editable. Now each reads the routine's own declaring row
+  (`DeclaringObjects::of`): policy `object.name` and `root.kinds`, root
+  classification, d14, d39 (`page_may_modify`), d50 (cap 4), the
+  test-coverage Test-subtype check, the return summaries'
+  InherentCommitBehavior, the implicit `Rec`'s table, and the HTML report's
+  event-graph labels. d57 (SingleInstance) and d60 (Install/Upgrade) used to
+  accept a routine when ANY row of its id qualified; they now test the
+  routine's own row. `[HandlerFunctions]` finds a handler only in the test's
+  own arm, so the other arm's same-named procedure no longer makes a phantom
+  coverage path. d2, d13, d17 and d46 were swapped to the declaring row too,
+  with no test that pins their behaviour (d13 and d17 compare the app id,
+  which every arm shares, so they do not change). `DetectorContext.objects_by_id`
+  is gone (replaced by `declaring`, which d50 now reads too);
+  `FingerprintIndex::object` is renamed `object_row_by_id`, for reads every
+  arm agrees on (object-scoped, or the object type and key). The retained
+  census bucket `context.objects_by_id` is now `context.declaring`. Stated
+  limits: a routine whose signature is the same in both arms is still one
+  routine id, so readers that look a routine up by id see one arm's answer;
+  d57's clearing evidence is still collected per object id, so a `Clear` in
+  one SingleInstance arm hides a growing collection in another SingleInstance
+  arm (a missed finding, never a false one); a table event's publisher label
+  in the HTML report falls back to the last-wins row, so a table split across
+  arms is labelled with its last arm's name; the program graph still merges
+  the arms into one node with the first arm's name. No golden moves; on the
+  pinned CDO baseline no finding moves.
 
 ### Added
 

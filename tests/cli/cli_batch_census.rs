@@ -36,7 +36,7 @@ fn field(line: &str, key: &str) -> Option<u64> {
 /// (one per run), not with `det`'s one fill.
 const PER_CONTEXT: &[&str] = &[
     "context.routine_by_id",
-    "context.objects_by_id",
+    "context.declaring",
     "context.table_by_id",
     "context.call_site_by_id",
     "context.fingerprint_index",

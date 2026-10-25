@@ -34,6 +34,7 @@ use crate::engine::gate::app_attribution::App;
 use crate::engine::gate::projection::FindingSummary;
 use crate::engine::l5::finding::Finding;
 use crate::program::model::coverage::AnalysisCoverage;
+use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::workspace::{Model, ModelObject, ModelRoutine, ModelTable};
 
@@ -145,7 +146,10 @@ fn trunc(s: &str, n: usize) -> String {
 
 struct Maps<'a> {
     routines: std::collections::HashMap<&'a str, &'a ModelRoutine>,
+    /// Object-scoped reads only (an event with no publisher routine).
     objects: std::collections::HashMap<&'a str, &'a ModelObject>,
+    /// A routine's object (#279): an `#if`-split id has several rows.
+    declaring: DeclaringObjects<'a>,
     tables: std::collections::HashMap<&'a str, &'a ModelTable>,
 }
 
@@ -158,6 +162,7 @@ impl<'a> Maps<'a> {
         Maps {
             routines: routines.iter().map(|r| (r.id.as_str(), r)).collect(),
             objects: objects.iter().map(|o| (o.id.as_str(), o)).collect(),
+            declaring: DeclaringObjects::new(objects),
             // G-5: REAL table wins an id collision with a tableextension stub.
             tables: crate::program::model::workspace::table_by_id_preferring_real(tables),
         }
@@ -169,13 +174,10 @@ fn routine_label(routine_id: &str, m: &Maps) -> String {
     let r = m.routines.get(routine_id);
     match r {
         None => trunc(routine_id, 24),
-        Some(r) => {
-            let o = m.objects.get(r.object_id.as_str());
-            match o {
-                Some(o) => format!("{} :: {}", o.name, r.name),
-                None => r.name.clone(),
-            }
-        }
+        Some(r) => match m.declaring.of(r) {
+            Some(o) => format!("{} :: {}", o.name, r.name),
+            None => r.name.clone(),
+        },
     }
 }
 
@@ -451,9 +453,21 @@ fn cmp_str(a: &str, b: &str) -> std::cmp::Ordering {
     a.cmp(b)
 }
 
-/// `pubLabel(ev, m)` — owning object name or publisherObjectId.
+/// `pubLabel(ev, m)` — owning object name or publisherObjectId. The publisher
+/// routine's declaring row when there is one (#279), else the object row (a
+/// table event has no publisher routine).
+///
+/// Stated limit: the object-row fallback is the last-wins id map, so a TABLE
+/// split across `#if` arms with different names labels its table events
+/// (`OnAfterInsertEvent`, …) with the LAST arm's name. The event carries no
+/// declaration to pick an arm by.
 fn pub_label(ev: &EventSymbol, m: &Maps) -> String {
-    match m.objects.get(ev.publisher_object_id.as_str()) {
+    let declared = ev
+        .publisher_routine_id
+        .as_deref()
+        .and_then(|id| m.routines.get(id))
+        .and_then(|r| m.declaring.of(r));
+    match declared.or_else(|| m.objects.get(ev.publisher_object_id.as_str()).copied()) {
         Some(o) => o.name.clone(),
         None => ev.publisher_object_id.clone(),
     }
@@ -958,6 +972,7 @@ mod tests {
         Maps {
             routines: std::collections::HashMap::new(),
             objects: std::collections::HashMap::new(),
+            declaring: DeclaringObjects::new(&[]),
             tables: std::collections::HashMap::new(),
         }
     }

@@ -1174,7 +1174,7 @@ const NEGATIVES: &[NegativeAssertion] = &[
         neutral_fixture: "ws-e2e",
     },
     // d57: ws-e2e declares no SingleInstance codeunit at all (grep-verified) — the
-    // si_objects set is empty, so the detector short-circuits to 0 findings before
+    // workspace has no SingleInstance codeunit row, so the detector short-circuits to 0 findings before
     // ever scanning a routine.
     NegativeAssertion {
         detector: "d57-singleinstance-growing-state",
@@ -1195,7 +1195,7 @@ const NEGATIVES: &[NegativeAssertion] = &[
         neutral_fixture: "ws-e2e",
     },
     // d60: ws-e2e declares no Codeunit with `Subtype = Upgrade`/`Install` at all
-    // (grep-verified) — the lifecycle_objects set is empty, so the detector
+    // (grep-verified) — no workspace row is a lifecycle codeunit, so the detector
     // short-circuits to 0 findings before ever scanning a routine.
     NegativeAssertion {
         detector: "d60-upgrade-loop-should-be-datatransfer",

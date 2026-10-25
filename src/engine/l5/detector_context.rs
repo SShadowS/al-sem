@@ -2,7 +2,7 @@
 //!
 //! The shared, eager indexes + derived graphs detectors read from, built once at
 //! the top of `run_detectors`. This R4-A wave builds the EAGER indexes the task
-//! enumerates: routine_by_id / objects_by_id / table_by_id / reverse_call_graph /
+//! enumerates: routine_by_id / declaring (a routine's object, #279) / table_by_id / reverse_call_graph /
 //! entry_points / transaction_spans / resolved_call_edge_by_callsite /
 //! uncertainty_edges_by_from / call_site_by_id, plus the combined graph + the
 //! per-routine `FullRoutineSummary` map (transaction_spans needs it).
@@ -43,6 +43,7 @@ use crate::engine::l5::transaction_spans::{TransactionSpan, compute_transaction_
 use crate::engine::perf_trace as pt;
 use crate::program::body::features::PCallSite;
 use crate::program::model::calls::{CallEdge, UpgradedBinding};
+use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::projection;
 use crate::program::model::workspace::{Model, ModelObject, ModelRoutine, ModelTable};
@@ -1035,7 +1036,9 @@ pub struct DetectorContext<'v> {
     /// parallel detector loop (filling inside it can deadlock, see that bit).
     pub ordering: Option<&'v OrderingFactsMap>,
     pub routine_by_id: HashMap<&'v str, &'v ModelRoutine>,
-    pub objects_by_id: HashMap<&'v str, &'v ModelObject>,
+    /// A routine's object is its DECLARING row (#279): an `#if`-split object
+    /// has several rows under one id, so there is no id -> object map here.
+    pub declaring: DeclaringObjects<'v>,
     pub table_by_id: HashMap<&'v str, &'v ModelTable>,
     /// Every call site indexed by id.
     pub call_site_by_id: HashMap<&'v str, &'v PCallSite>,
@@ -1069,7 +1072,7 @@ impl<'v> DetectorContext<'v> {
             &projection::RowsOfId::build(routines),
             routines.iter().map(Some).collect(),
         );
-        let objects_by_id = objects.iter().map(|o| (o.id.as_str(), o)).collect();
+        let declaring = DeclaringObjects::new(objects);
         // G-5: REAL table wins an id collision with a tableextension stub (the stub's
         // id reuses the extension's own object number) — otherwise rootCause text
         // renders the EXTENSION's name for ops on the real table.
@@ -1086,7 +1089,7 @@ impl<'v> DetectorContext<'v> {
             art,
             ordering,
             routine_by_id,
-            objects_by_id,
+            declaring,
             table_by_id,
             call_site_by_id,
             fingerprint_index,
@@ -1768,7 +1771,7 @@ pub(crate) fn build_detector_artifacts(
     let root_classifications_by_routine: HashMap<
         String,
         crate::engine::root_classification::RootClassification,
-    > = crate::engine::root_classification::classification_per_id(
+    > = crate::engine::root_classification::classification_per_id_over(
         &resolved.root_classifications,
         &resolved.workspace.routines,
         &resolved.workspace.objects,
@@ -2013,10 +2016,7 @@ fn census_borrowed_maps(c: &DetectorContext<'_>) {
         "context.routine_by_id",
         Tally::default().buf::<(&str, &ModelRoutine)>(c.routine_by_id.len()),
     );
-    emit(
-        "context.objects_by_id",
-        Tally::default().buf::<(&str, &ModelObject)>(c.objects_by_id.len()),
-    );
+    emit("context.declaring", &mut c.declaring.census_tally());
     emit(
         "context.table_by_id",
         Tally::default().buf::<(&str, &ModelTable)>(c.table_by_id.len()),

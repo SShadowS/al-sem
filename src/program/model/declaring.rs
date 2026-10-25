@@ -11,18 +11,31 @@ use std::collections::HashMap;
 use super::workspace::{ModelObject, ModelRoutine};
 use crate::program::body::features::PAnchor;
 
+/// One id's rows. A `Vec`, not a `SmallVec<[_; 1]>`: SmallVec is invariant in
+/// `'a`, which breaks every borrow of `DetectorContext<'v>` (#279, measured).
+type Rows<'a> = Vec<&'a ModelObject>;
+
 /// Object rows by id, each id's rows in model order.
 pub struct DeclaringObjects<'a> {
-    by_id: HashMap<&'a str, Vec<&'a ModelObject>>,
+    by_id: HashMap<&'a str, Rows<'a>>,
 }
 
 impl<'a> DeclaringObjects<'a> {
     pub fn new(objects: &'a [ModelObject]) -> Self {
-        let mut by_id: HashMap<&'a str, Vec<&'a ModelObject>> = HashMap::new();
+        let mut by_id: HashMap<&'a str, Rows<'a>> = HashMap::new();
         for o in objects {
             by_id.entry(o.id.as_str()).or_default().push(o);
         }
         DeclaringObjects { by_id }
+    }
+
+    /// The retained census's shallow walk (#160 §4.1.5): the id map and each
+    /// id's row list.
+    pub(crate) fn census_tally(&self) -> crate::engine::census::Tally {
+        let mut t = crate::engine::census::Tally::default();
+        t.buf::<(&str, Rows<'a>)>(self.by_id.len())
+            .bufs(self.by_id.values());
+        t
     }
 
     /// The object row that declares `r`: `None` when no row has its id; the one

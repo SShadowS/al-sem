@@ -81,7 +81,7 @@ fn to_location(anchor: &SourceAnchor, pidx: &ProjectionIndex) -> FindingLocation
     // branch already missed.
     let object = routine
         .and_then(|r| pidx.declaring.of(r))
-        .or_else(|| idx.object(anchor.enclosing_routine_id.as_str()));
+        .or_else(|| idx.object_row_by_id(anchor.enclosing_routine_id.as_str()));
     FindingLocation {
         file: anchor.source_unit_id.clone(),
         line: anchor.start_line + 1,

@@ -275,11 +275,13 @@ fn run_without_raw_of(drop: &str, policy: &str) -> RunOutput {
     );
     let mut raw = view.raw().clone();
     raw.remove(&id);
-    let classes = crate::engine::root_classification::classify_roots(&model.workspace);
+    let declaring =
+        crate::program::model::declaring::DeclaringObjects::new(&model.workspace.objects);
+    let classes = crate::engine::root_classification::classify_roots(&model.workspace, &declaring);
     let pm = PolicyModel::new(
         &routines,
-        &model.workspace.objects,
-        &model.workspace.tables,
+        &model.workspace,
+        declaring,
         &det.event_graph.events,
         &classes,
         &det.summaries,

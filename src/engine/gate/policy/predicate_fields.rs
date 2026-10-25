@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
+use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::{ModelObject, ModelRoutine, ModelTable};
 
 /// Field scope. al-sem `FieldScope`.
@@ -61,7 +62,8 @@ pub enum FieldValue {
 /// field evaluation. `root_kinds_by_routine_id` maps a routine id → its root kinds
 /// (absent ⇒ `[]`, NOT unknown — classification is exhaustive).
 pub struct FieldIndexes<'a> {
-    pub objects_by_id: HashMap<&'a str, &'a ModelObject>,
+    /// The routine's declaring object (#279): an `#if`-split id has two rows.
+    pub declaring: DeclaringObjects<'a>,
     pub root_kinds_by_routine_id: HashMap<&'a str, &'a [String]>,
     pub tables_by_id: HashMap<&'a str, &'a ModelTable>,
     pub events_by_id: HashMap<&'a str, &'a str>, // event id → event name
@@ -409,8 +411,5 @@ pub fn evaluate_field(def: &PredicateFieldDef, ctx: &FieldEvalContext) -> FieldV
 
 /// The containing object for a routine, when present. al-sem `objectOf`.
 fn object_of<'a>(ctx: &'a FieldEvalContext<'a>) -> Option<&'a ModelObject> {
-    ctx.indexes
-        .objects_by_id
-        .get(ctx.routine.object_id.as_str())
-        .copied()
+    ctx.indexes.declaring.of(ctx.routine)
 }

@@ -1,0 +1,818 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "R1 first-wins break does not discriminate: both arm orders put the deleting routine first; reorder declarations or assert owner-specific ops from both arms.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 R1: fixB has Bar first with P deleting and Q modifying; B2 (first row) gives bar-deletes on P at :13, so first-wins now fails.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "R4 (and R2) lack the other arm: also digest Main (excludedTestCode 0, changedRoutines 1) and reject the normal-arm Plain routine.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: every row asserts the other arm negative (Main R4, Plain R2, Wipe R5, Rewrite R6, PlainSub R7, Touch R8); both orders run, catching first-row and last-row lookups.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The structural guard does not cover return_summary, the d50 own lookup, d57 membership, page_may_modify or the HTML publisher fallback; add production split witnesses.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: production pins R11 (d50 cap 4), R12 (return_summary), R7 (d57), R8 (page_may_modify), R9 (HTML publisher + fallback, broken alone by B5); guard claim limited (shape d).",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The last-row fallback is not today's behaviour for d57/d60 (old any-arm membership); document the exception and test the fallback policy.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.1: the probe row and shape (b) now distinguish a missing anchor from an unmatched one; the fallback is stated as not reached in well-formed source with the anchored-but-unmatched case kept as a documented limitation (declaring.rs:53-64, U1); the d57 comment correction is listed for implementation.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Shared-id case (a): say last classified/owning row; add an anchored shared-signature test with a final non-root row.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 shape (a) rewritten around the last classified (owning) row; R13 adds the anchored shared-signature test with a final non-root row.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "S6",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "R3 does not pin the second d14 read (the rootCause name); assert rootCause DeadLive on Live.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 R3 asserts rootCause DeadLive on Live is not called; B6 (only d14.rs:195 broken) fails it.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "S7",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Claimed doc/comment fixes are absent in the prototype; the root_classification public signatures are described wrongly.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 Changes item 6 states the public root_classification signatures unchanged; the d50, detector_context and r4_differential comments are in the prototype; CHANGELOG marked to do.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "S8",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "The Discovery 2 reproducer needs both arms SingleInstance.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 Discovery 2 reproducer has both arms SingleInstance.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "DetectorContext.fingerprint_index is pub and FingerprintIndex::object is a last-wins id lookup (a back door); format_html keeps Maps.objects; d50 and return_summary build their own DeclaringObjects. Restrict or document FingerprintIndex::object, reword the claim, and add lib tests for d50 cap-4 and compute_return_summaries with two rows under one id.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: FingerprintIndex::object renamed object_row_by_id, doc object-scoped only, two object-scoped callers; guard claim reworded (shape d); R11, R12 lib tests.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "R6 passes vacuously (the Upgrade arm routine is empty); give it a real loop and assert exactly one finding on that arm. R2/R4/R5 catch only a last-row lookup, not a first-row one (say so or reuse the reversed fixture).",
+    "disposition": "fixed",
+    "evidence": "As S2; R6 Upgrade arm has a real loop, exactly one d60 on UpgradeRows.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "R3 objectName comes from projection.rs (#241), not d14; assert rootCause.",
+    "disposition": "fixed",
+    "evidence": "As S6.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Case (a) effect misstated: classify_roots may keep an extra copy per id (snapshot root slots, R4-F, switch_dump, snapshot_full); the first-arm row of a shared id still gets the last arm's root.kinds, and d50 cap-4 and d13/d17 callers via routine_by_id likewise; add to Not delivered.",
+    "disposition": "fixed",
+    "evidence": "As S5; Not delivered lists the class-P first-arm answers (object.name vs root.kinds can disagree).",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Fallback (b) 'today' wording is wrong for d57/d60; the fallback is unreachable (multi-row ids are always anchored).",
+    "disposition": "fixed",
+    "evidence": "Rev 2.1: the probe row and shape (b) now distinguish a missing anchor from an unmatched one; the fallback is stated as not reached in well-formed source with the anchored-but-unmatched case kept as a documented limitation (declaring.rs:53-64, U1); the d57 comment correction is listed for implementation.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Inventory misses test_coverage.rs:419-424 [HandlerFunctions] keyed by object id (a fake coverage edge across arms: swap or discovery); closed_world_temp.rs:122-127 (exempt), l5/snapshot.rs:1678 (exempt), FingerprintIndex::object (exempt).",
+    "disposition": "fixed",
+    "evidence": "Rev 2: [HandlerFunctions] swapped in scope (key includes the declaring row), pinned by R10 (B4 fails it); closed_world_temp, snapshot.rs:1678, FingerprintIndex::object listed exempt with reasons.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Doc/comment edits claimed prototyped but missing (d50 comments, detector_context doc, r4_differential comments, CHANGELOG): mark them to do.",
+    "disposition": "fixed",
+    "evidence": "As S7.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "DeclaringObjects allocates a list per id; RowsOfId uses a one-slot SmallVec (optional).",
+    "disposition": "fixed",
+    "evidence": "Rev 2: measured not trivial (SmallVec invariant in a lifetime; build errors at 4+ sites); kept Vec, cost noted; fallback (d).",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "accepted",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "S9",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "R13 never exercises the per-id selection branch of classification_per_id (one copy returns early at lines 349-350); add a shared id classified differently in both arms and break that lookup alone.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2 R13b: three anchored rows Upgrade, Install, normal sharing one routine id; expect Install (last classified row); reverting only the per-id lookup to the old last-object lookup keeps the Upgrade copy, so the test fails (sol r3 recipe). Second break (Opus r3): a first-row pick returns Upgrade, also failing; both breaks recorded at implementation.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2.1)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "re-raised",
+    "round3_opus": "re-raised"
+  },
+  {
+    "id": "S10",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Stale evidence: fixB base probe names Q (it is P at :13); the SmallVec failure cites build-after.log, which holds only the successful build.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2 probe row: fixB base foo-deletes matches P at :13 (correct by accident, the last-wins map picks P own arm), install-inserts matches both arms (wrong); SmallVec failure stated as observed, not retained.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2.1)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "re-raised",
+    "round3_opus": "accepted"
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N1: the classification_per_id swap is not pinned by R2/R13 (no id has two copies); add an Install+Upgrade case or reword.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2 R13b: three anchored rows Upgrade, Install, normal sharing one routine id; expect Install (last classified row); reverting only the per-id lookup to the old last-object lookup keeps the Upgrade copy, so the test fails (sol r3 recipe). Second break (Opus r3): a first-row pick returns Upgrade, also failing; both breaks recorded at implementation.",
+    "anchor": ".agent/issue-279/ledger.md ## Design (revision 2.1)",
+    "anchor_hash": "d364ac14e52462a73e19f18fa1399b18a6b8e29bd01de9d1a0de23b9d24cea79",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_sol": "re-raised",
+    "round3_opus": "re-raised"
+  },
+  {
+    "id": "FS1",
+    "source": "sol",
+    "round": "final-1",
+    "file": "tests/cli/cli_split_object_readers.rs",
+    "line": 443,
+    "severity": "minor",
+    "text": "alsem_raw drops the exit status; JSON tests accept the payload even on an unexpected exit; assert command-appropriate exit codes.",
+    "disposition": "fixed",
+    "evidence": "Fixed in f4a1cd82 (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit f4a1cd82",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "f4a1cd82"
+  },
+  {
+    "id": "FS2",
+    "source": "sol",
+    "round": "final-1",
+    "file": "docs/superpowers/plans/2026-10-25-issue-279-declaring-objects.md",
+    "line": 49,
+    "severity": "minor",
+    "text": "The plan promises R14 fails on base and has a single-site proof; the recorded break stays green; describe R14 as a consistency edit.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 65026f0a (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 65026f0a",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "65026f0a"
+  },
+  {
+    "id": "FS3",
+    "source": "sol",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 39,
+    "severity": "minor",
+    "text": "CHANGELOG overstates: say the remaining id-keyed routine-owner readers, not every reader (projection already used declaring rows since #241).",
+    "disposition": "fixed",
+    "evidence": "Fixed in 65026f0a (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 65026f0a",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "65026f0a"
+  },
+  {
+    "id": "FO1",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 220,
+    "severity": "minor",
+    "text": "d50 builds its own DeclaringObjects; pass &ctx.declaring (one rebuild less, under the context guard).",
+    "disposition": "fixed",
+    "evidence": "Fixed in 900b94bd (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 900b94bd",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "900b94bd"
+  },
+  {
+    "id": "FO2",
+    "source": "opus",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 36,
+    "severity": "minor",
+    "text": "CHANGELOG says every reader took the last row and lists SingleInstance, but d57/d60 tested any row; omits the Discovery 2 limit (cleared_by_object keyed by id).",
+    "disposition": "fixed",
+    "evidence": "Fixed in 65026f0a (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 65026f0a",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "65026f0a"
+  },
+  {
+    "id": "FO3",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/fingerprint.rs",
+    "line": 148,
+    "severity": "minor",
+    "text": "object_row_by_id doc says never a routine object, but anchor_of / object_part do that read (safe: type/key only); say so in the doc.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 900b94bd (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 900b94bd",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "900b94bd"
+  },
+  {
+    "id": "FO4",
+    "source": "opus",
+    "round": "final-1",
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Single-site breaks only revert to last row and each CLI test stops at its first failing order; do not describe the guards as proven both ways.",
+    "disposition": "fixed",
+    "evidence": "Ledger Not delivered records the proof scope (FO4) and the R9 both-order assertion (FO5).",
+    "anchor": ".agent/issue-279/ledger.md ## Not delivered",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FO5",
+    "source": "opus",
+    "round": "final-1",
+    "file": ".agent/issue-279/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "The R9 ledger row says first order only; the test checks both orders (stale text).",
+    "disposition": "fixed",
+    "evidence": "Ledger Not delivered records the proof scope (FO4) and the R9 both-order assertion (FO5).",
+    "anchor": ".agent/issue-279/ledger.md ## Not delivered",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FO6",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 975,
+    "severity": "minor",
+    "text": "The test anchor helper span is duplicated in d50, return_summary and root_classification tests (cosmetic).",
+    "disposition": "deferred",
+    "evidence": "Optional cosmetic; not done (three local span helpers kept). Accepted as is.",
+    "anchor": "n/a",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FC1",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/d57.rs",
+    "line": 68,
+    "severity": "important",
+    "text": "cleared_by_object is still keyed by object id, so a Clear in one SingleInstance arm hides the other arm's growing collection (false negative).",
+    "disposition": "refuted",
+    "evidence": "Known and pre-stated: Design shape (c) and Not delivered list d57 per-id clearing evidence; filed as Discovery 2 (both arms SingleInstance reproducer). Hides findings only, never adds false ones. FO2 adds the limit to the CHANGELOG.",
+    "anchor": "commit a933ba3e (implementation)",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FC2",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/model/declaring.rs",
+    "line": 47,
+    "severity": "minor",
+    "text": "Altitude: the declaring row is recomputed at ~15 readers by anchor containment with a silent last-row fallback; assembly could store the object row index on each routine (exact, O(1)).",
+    "disposition": "deferred",
+    "evidence": "Better architecture but outside the converged design (it changes ModelRoutine and assembly); filed as a new discovery (store the declaring object row on each routine at assembly; retire anchor containment). Minor, non-blocking.",
+    "anchor": "commit a933ba3e (implementation)",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FC3",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/fingerprint.rs",
+    "line": 225,
+    "severity": "minor",
+    "text": "anchor_of still looks up a routine's object through the last-wins objects_by_id map; safe only because it reads type/key.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 900b94bd (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 900b94bd",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "900b94bd"
+  },
+  {
+    "id": "FC4",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/d13.rs",
+    "line": 58,
+    "severity": "minor",
+    "text": "d2/d13/d17/d46 swaps are unpinned but the CHANGELOG lists them as fixed.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 65026f0a (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 65026f0a",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "65026f0a"
+  },
+  {
+    "id": "FC5",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/d50.rs",
+    "line": 220,
+    "severity": "minor",
+    "text": "detect_d50 builds its own DeclaringObjects although ctx.declaring is the same index (same as FO1).",
+    "disposition": "fixed",
+    "evidence": "Fixed in 900b94bd (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 900b94bd",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "900b94bd"
+  },
+  {
+    "id": "FC6",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/policy/policy_engine.rs",
+    "line": 141,
+    "severity": "minor",
+    "text": "One policy build makes three DeclaringObjects (PolicyModel::new, classification_per_id, classify_roots); same in compute_root_classifications; pass one in.",
+    "disposition": "fixed",
+    "evidence": "900b94bd + b99baad0: one DeclaringObjects per policy build and per compute_root_classifications, passed into classify_roots / classification_per_id; PolicyModel::new takes &ModelEntities (no lint allow).",
+    "anchor": "commit 900b94bd",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "900b94bd"
+  },
+  {
+    "id": "FC7",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/gate/format_html.rs",
+    "line": 465,
+    "severity": "minor",
+    "text": "pub_label falls back to the last-wins m.objects map; a split table (table events) is still labelled with the last arm; not a stated limit.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 900b94bd (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 900b94bd",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "900b94bd"
+  },
+  {
+    "id": "FC8",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/test_coverage.rs",
+    "line": 421,
+    "severity": "minor",
+    "text": "[HandlerFunctions] key uses a raw pointer with a redundant object_id; owner() reruns of() per handler name; use a row index or ptr::eq against the test's row computed once.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 900b94bd (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 900b94bd",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "900b94bd"
+  },
+  {
+    "id": "FC9",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "tests/cli/cli_split_object_readers.rs",
+    "line": 525,
+    "severity": "minor",
+    "text": "~30 debug alsem spawns where ~10 would do; build each order's workspace and outputs once (OnceLock).",
+    "disposition": "fixed",
+    "evidence": "Fixed in f4a1cd82 (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit f4a1cd82",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "f4a1cd82"
+  },
+  {
+    "id": "FC10",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "docs/superpowers/plans/2026-10-25-issue-279-declaring-objects.md",
+    "line": 11,
+    "severity": "minor",
+    "text": "The committed plan cites .agent/ ledger and /work/bench paths that do not exist in version control.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 65026f0a (see the implementer report in the ledger timeline and the r2 proof rows).",
+    "anchor": "commit 65026f0a",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "65026f0a"
+  },
+  {
+    "id": "FR2a",
+    "source": "opus",
+    "round": "final-2",
+    "file": "tests/cli/cli_split_object_readers.rs",
+    "line": 456,
+    "severity": "minor",
+    "text": "N1 (Opus) / sol 1: fixture TempDirs live in static OnceLocks and are never dropped; temp workspaces leak per test process.",
+    "disposition": "fixed",
+    "evidence": "2b1cf934: no static owns a TempDir; uncached commands run in a fresh workspace that is dropped before the output is cached (outputs hold no workspace path); a full module run adds no Probe279 temp dirs.",
+    "anchor": "commit 2b1cf934",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "2b1cf934"
+  },
+  {
+    "id": "FR2b",
+    "source": "opus",
+    "round": "final-2",
+    "file": "tests/cli/cli_split_object_readers.rs",
+    "line": 1,
+    "severity": "minor",
+    "text": "N2: the FC9 spawn saving applies under cargo test only; nextest shares within a test; say so in the module doc.",
+    "disposition": "fixed",
+    "evidence": "2b1cf934: module doc states the saving applies under cargo test; nextest shares within a test only.",
+    "anchor": "commit 2b1cf934",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "2b1cf934"
+  },
+  {
+    "id": "FR2c",
+    "source": "sol",
+    "round": "final-2",
+    "file": "src/engine/l5/detector_context.rs",
+    "line": 1771,
+    "severity": "minor",
+    "text": "build_detector_artifacts builds a DeclaringObjects unconditionally though classification_per_id returns early when ids are unique; restore lazy construction.",
+    "disposition": "fixed",
+    "evidence": "2b1cf934: classification_per_id_over builds the index only on a collision; shared private per-id core takes the index lazily; FC6 one index per policy build unchanged; R13a/R13b re-proved.",
+    "anchor": "commit 2b1cf934",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "2b1cf934"
+  }
+]

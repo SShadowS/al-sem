@@ -19,7 +19,7 @@ use crate::program::body::features::{
     PAnchor, PCallArgumentBinding, PCallSite, PCallee, PLoop, POperationSite, PTempState,
 };
 use crate::program::model::workspace::{
-    Model, ModelEntities, ModelRecordOperation, ModelRoutine, RoutineVariables,
+    Model, ModelEntities, ModelObject, ModelRecordOperation, ModelRoutine, RoutineVariables,
 };
 
 /// ⟨C1⟩ The derived cone substrate for a set of hand-built summaries — each
@@ -388,12 +388,20 @@ pub fn empty_resolved() -> Model {
 /// [`DetectorContext`] borrows. Call sites do `let ctx = owned.ctx();`.
 pub struct MinimalCtx<'a> {
     routines: &'a [ModelRoutine],
+    objects: &'a [ModelObject],
     art: DetectorArtifacts,
 }
 
-impl MinimalCtx<'_> {
+impl<'a> MinimalCtx<'a> {
     pub fn ctx(&self) -> DetectorContext<'_> {
-        DetectorContext::new(self.routines, &[], &[], &self.art, None)
+        DetectorContext::new(self.routines, self.objects, &[], &self.art, None)
+    }
+
+    /// The object rows the context's `declaring` index is built over (none by
+    /// default).
+    pub fn with_objects(mut self, objects: &'a [ModelObject]) -> Self {
+        self.objects = objects;
+        self
     }
 
     /// Mutate the artifacts BEFORE borrowing a context.
@@ -421,6 +429,7 @@ pub fn minimal_ctx<'a>(
     };
     MinimalCtx {
         routines,
+        objects: &[],
         art: empty_artifacts(graph, summaries),
     }
 }

@@ -21,7 +21,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PCallee;
-use crate::program::model::workspace::Model;
+use crate::program::model::workspace::{Model, ModelObject, ModelRoutine};
 
 pub(crate) const DETECTOR: &str = "d57-singleinstance-growing-state";
 
@@ -46,14 +46,14 @@ pub fn detect_d57(
     let mut skipped_cleared_in_object = 0u64;
     let mut skipped_not_collection = 0u64;
 
-    // SingleInstance codeunit object ids.
-    let si_objects: HashSet<&str> = ws
-        .objects
-        .iter()
-        .filter(|o| o.object_type == "Codeunit" && o.single_instance == Some(true))
-        .map(|o| o.id.as_str())
-        .collect();
-    if si_objects.is_empty() {
+    // A routine's OWN declaring object is a SingleInstance codeunit (#279: an
+    // `#if`-split id's other arm may not be). Before #279 this was "any row of
+    // the id"; `of`'s fallback (the last row) differs from that, but only for
+    // multi-row ids whose anchors contain no routine start, which the current
+    // assembly does not produce.
+    let is_si = |o: &ModelObject| o.object_type == "Codeunit" && o.single_instance == Some(true);
+    let in_si = |r: &ModelRoutine| ctx.declaring.of(r).is_some_and(is_si);
+    if !ws.objects.iter().any(is_si) {
         let stats = DetectorStats::new(DETECTOR, 0, 0);
         return Ok(DetectorOutput::no_diag(findings, stats));
     }
@@ -62,7 +62,7 @@ pub fn detect_d57(
     // signal anywhere in the object.
     let mut cleared_by_object: HashMap<&str, HashSet<String>> = HashMap::new();
     for r in &ws.routines {
-        if !si_objects.contains(r.object_id.as_str()) {
+        if !in_si(r) {
             continue;
         }
         let set = cleared_by_object.entry(r.object_id.as_str()).or_default();
@@ -99,7 +99,7 @@ pub fn detect_d57(
         if routine.kind != "event-subscriber" {
             continue;
         }
-        if !si_objects.contains(routine.object_id.as_str()) {
+        if !in_si(routine) {
             continue;
         }
         if !routine.body_available || routine.parse_incomplete {
