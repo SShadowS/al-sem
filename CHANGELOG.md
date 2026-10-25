@@ -36,6 +36,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`alsem digest --include-reads`: table reads as `DB_READ` effects (#246).**
+  Opt-in. Each table read site (`Get`, `Find*`, `IsEmpty`, `Count*`, `Next`,
+  `CalcFields`, `CalcSums`) becomes a `DB_READ` effect with
+  `detail.resourceId` / `resourceDisplay`, under the same coverage, witness
+  and dependency-boundary rules as writes. A read reached only through a
+  dependency call is a boundary group that stops at the first dependency
+  routine. Reads get `detail.tempState` through the same L4 join as writes,
+  and the document gets `payload.includeReads: true`. Without the flag the
+  output is byte-identical (no golden moved). `schemaVersion` stays 1.6.0:
+  `DB_READ` and `includeReads` are opt-in and additive.
+  - **Limits:**
+    - One effect per read SITE, not per table. Physical and temporary reads
+      of one table are separate effects.
+    - A read of an unresolved table has no `resourceId`.
+    - A dependency-boundary group has no `resourceId` and no `tempState`. Its
+      `resourceCount` is complete, but `resources` names at most 10 tables.
+    - `LockTable` is not a read.
+    - `CalcFields` reads only the record's own table, not the FlowField's
+      source tables.
+    - `DB_READ` is **not ordering-graded**: its `guarantees` and
+      `scopedGuarantees` are always empty, meaning "not graded", not "no
+      label applies". The other effects' guarantees do not change.
+  - **Cost on CDO** (pinned `bc3ccb18`, release-fast, `VmHWM`, median of 3,
+    flag on against off; full table in
+    `docs/measurements/2026-10-25-issue-246-digest-include-reads.md`):
+
+    | shape | CPU-s | peak (KiB) | output bytes |
+    |---|---|---|---|
+    | `d` (`--file $F`) | 127.5 vs 125.5 (+1.6%) | 3,155,088 vs 3,163,188 (−0.3%) | +22% |
+    | `h` (`--file $F88`, 88 roots) | 493.4 vs 423.4 (+16.5%) | 3,663,632 vs 3,412,092 (+7.4%) | +21% |
+    | `ds` (single-app) | 30.5 vs 30.5 | 732,292 vs 722,476 (+1.4%) | +25% |
+    | `Up` batch `[a, d, h, ev, qt]` | 486.0 vs 442.3 (+9.9%) | 4,062,196 vs 3,729,108 (+8.9%) | +21% (d+h) |
+
+    Walls were measured under host load 5–24, so CPU-seconds are the cost
+    figure (wall `d` 27.5 vs 27.4 s, `h` 58.4 vs 47.8 s, `Up` 61.0 vs 56.1 s).
+    The `Up` peak passed the batch admission row, so `("digest", X)` is now
+    16 × 256 MiB = 4,194,304 KiB (was 15). The worker count does not change
+    for any measured shape.
+  - **Known `tempState` gap:** on CDO, 1,059 of `d`'s 1,133 reads (21,707 of
+    `h`'s 23,248) have no `tempState` and a `temp-state-incoherent`
+    (`no-l4-row`) diagnostic. This is not read-specific: the default output
+    already carries 772 write effects with the same diagnostic. The
+    capability cone reaches operations that the root's L4 summary does not
+    hold.
+    - Almost all of them (1,047 on `d`) are witnessed at one RecordRef
+      `FindFirst` with no resolved table. Such a fact matches a read of any
+      table (`fact_equivalent`), so for those effects the evidence line is
+      not where the table is read.
+    - The count is also inflated by that one RecordRef site.
+
 - **Hidden `--l4-host` LSP flag: an incremental L4 host (#222).** Off by default and
   hidden from `--help`. With the flag, each workspace root, once built, gets a
   background worker that keeps the L4 summaries up to date. After every snapshot swap
