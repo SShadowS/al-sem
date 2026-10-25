@@ -5,6 +5,7 @@ two runs' builds contend, #60), but that directory is a junction into
 `<target_root>/<worktree name>`. The disk guard then reserves each live run's
 build space on the drive that holds it."""
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,6 +61,53 @@ def test_make_worktree_without_a_target_root_makes_no_link(capsys, repo_pair):
     code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True))
     assert code == 0 and not (Path(claim["worktree"]) / "target").exists()
     assert out.get("target") is None
+
+
+def _fake_reflink(src, dst_dir):   # stands in for `cp --reflink=always`, which needs btrfs/xfs
+    shutil.copytree(src, dst_dir / src.name)
+
+
+def _root_target(root):
+    for d in ("debug", "release", "flycheck0", "tmp"):
+        (root / "target" / d).mkdir(parents=True)
+        (root / "target" / d / "dep.rlib").write_text(d)
+
+
+def test_seed_target_copies_the_root_build_cache_except_rust_analyzer_and_scratch(tmp_path, monkeypatch):
+    root, wt = tmp_path / "root", tmp_path / "al-sem-issue-9-a1"
+    _root_target(root)
+    wt.mkdir()
+    monkeypatch.setattr(worktrees, "_reflink_copy", _fake_reflink)
+    assert worktrees.seed_target(root, wt) is True
+    assert sorted(p.name for p in (wt / "target").iterdir()) == ["debug", "release"]
+    assert (wt / "target" / "debug" / "dep.rlib").read_text() == "debug"
+
+
+def test_seed_target_leaves_no_target_when_reflinks_are_unsupported(tmp_path, monkeypatch):
+    root, wt = tmp_path / "root", tmp_path / "al-sem-issue-9-a1"
+    _root_target(root)
+    wt.mkdir()
+
+    calls = []
+
+    def failing_cp(src, dst_dir):   # `cp --reflink=always` on overlayfs/ext4 exits 1
+        calls.append(src.name)
+        if len(calls) == 2:
+            raise subprocess.CalledProcessError(1, ["cp"])
+        _fake_reflink(src, dst_dir)
+    monkeypatch.setattr(worktrees, "_reflink_copy", failing_cp)
+    assert worktrees.seed_target(root, wt) is False
+    assert len(calls) == 2 and not (wt / "target").exists()   # half a copy is removed; cargo builds cold
+
+
+def test_make_worktree_seeds_target_from_the_root_checkout(capsys, repo_pair, monkeypatch):
+    _, clone = repo_pair
+    (clone / "target" / "debug").mkdir(parents=True)
+    monkeypatch.setattr(worktrees, "_reflink_copy", _fake_reflink)
+    code, claim = _claim(capsys, clone, 8, FakeRunner(CLAIM_GH), "run-test")
+    code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True))
+    assert code == 0 and out["seeded"] is True
+    assert (Path(claim["worktree"]) / "target" / "debug").is_dir()
 
 
 def test_spike_cleanup_removes_the_build_folder_too(repo_pair, tmp_path):

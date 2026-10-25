@@ -472,7 +472,8 @@ def test_make_worktree_branches_the_claim_from_origin_master(capsys, repo_pair, 
     assert not Path(claim["worktree"]).exists()
     code, out = run(capsys, clone, "make-worktree", gh_run=FakeRunner(readonly=True))
     assert code == 0, out
-    assert out == {"worktree": claim["worktree"], "branch": claim["branch"], "base": sibling, "target": None}
+    assert out == {"worktree": claim["worktree"], "branch": claim["branch"], "base": sibling, "target": None,
+                   "seeded": False}
     wt = Git(claim["worktree"])
     assert wt.branch() == claim["branch"] and wt.rev("HEAD") == sibling
     assert Git(clone).rev("master") == local_before          # the root's master is not moved
