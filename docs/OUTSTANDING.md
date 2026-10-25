@@ -702,14 +702,12 @@ sizings marked pre-arc).
   1 723 MB, `gate.coverage` 1 157 MB — so the cone span is no longer the
   dominant consumer, but the arc did NOT reach sub-GB whole-process: the
   remaining ~7.8 GB peak is L3-substrate work, not reachable by B1 + C1 alone.
-- [ ] **A future incremental L4 path over the new `EffectStore`** (a redesign, NOT
-  a re-port of the deleted R3b). The reusable design intent — fine-grained Salsa
-  query topology, SCC-identity rules (interned sorted-member `SccKey`), fixed-leaf
-  successor handling, deterministic sorted member-order, the demand-order /
-  DB-provenance / fixpoint-schedule / `RUST_HASH_SEED` nondeterminism invariants,
-  and the strict-subset minimal-invalidation fixtures — is preserved in
-  `docs/superpowers/notes/2026-07-24-r3b-incremental-l4-design-intent.md`. Wake: a
-  real incremental-analyze consumer.
+- [x] **A future incremental L4 path over the new `EffectStore`** — done in #222 as
+  the hidden `--l4-host` incremental L4 host (no Salsa: settled-summary reuse with an
+  explicit invalidation rule, checked against a fresh solve by an oracle suite). Spec:
+  `docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md`. The
+  earlier design intent stays in
+  `docs/superpowers/notes/2026-07-24-r3b-incremental-l4-design-intent.md`.
 - [x] **`salsa` derive-only dependency** — done in #221: the dependency and its
   23 `SalsaValue` derives in `l4` (left over after the R3b `incremental/`
   deletion, Task B1) were removed, byte-neutral.

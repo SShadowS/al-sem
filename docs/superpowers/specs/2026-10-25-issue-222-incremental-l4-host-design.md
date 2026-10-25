@@ -841,3 +841,66 @@ Where sol added a condition, it is recorded and applied.
   into the row (P6).
 - Pre-draft §4.4 moved the diagnostics recompute to a worker: dropped (OQ5).
 - The pre-draft's salsa and watcher sections were 13a's and are done.
+
+## 13. As built (2026-10-25)
+
+Built on branch `al-sem-issue-222-a1` in Tasks 1-10. The design above holds. No
+fallback fired: P3 held (F1 not taken), no oracle case showed a design bug (F2 and F4
+not taken), and T1i stayed Incremental (F6 not taken). Every test in the plan's coverage
+map exists by name. Every break and every redundancy is recorded in the task commit
+bodies. The ledger, `.agent/issue-222/ledger.md`, holds the full list. The deviations:
+
+- **`build_l4_controlled` returns `Option<SolveOutcome>`**: `None` exactly when the
+  request carries no control. `build_l4` calls it and asserts there is no control.
+  The plan's signature would have left it dead code until Task 2 and failed
+  `-D warnings`.
+- **The seeded entry takes a `V2Inputs` struct.** Its signature is
+  `compute_summaries_v2_bundle_seeded(&V2Inputs, &L4Control)`. Eight positional
+  parameters would trip `clippy::too_many_arguments`.
+- **`pub` where the plan said `pub(crate)`:**
+  - `SolveBaseline`, `SolveOutcome`, `L4Control`, `L4Reuse`, `View::prepare_l4_seeded`
+    and `View::take_l4`;
+  - `L4Projection::of`, `without_core` and `routine`.
+
+  A `pub(crate)` item read only by tests trips dead-code. A `pub` method cannot take a
+  `pub(crate)` type (`private_interfaces`). An integration test cannot reach
+  `pub(crate)`.
+- **The row digest also covers leaf ids with no model row**, because callers read their
+  summaries. This can only over-invalidate.
+- **T0b compares `without_core()` projections.** `prepare` drops the core summaries,
+  and `build_l4` is `pub(crate)`.
+- **T1g's fixture was reshaped.** `S`'s body is `Rec.Reset();`, not `Rec.Modify()`. A db
+  effect carries the parameter's name in `record_variable_id`, so with `Modify` `S`
+  itself projected differently. The precondition is kept whole.
+- **T1e and T1f breaks:** each break also makes the `diag_of[..]` lookup tolerant
+  (`.get(..).cloned().flatten()`). A seeded SCC with a new key has no diagnostic slot,
+  so the spec's break would otherwise panic on the index before reaching the oracle.
+- **T1s was added** (review R4-1, §5.2 row). It moves `implements` between two unchanged
+  codeunits: an interface rebind that changes no routine row and puts no id in Δ. It is
+  the case where the `edges_by_from` part of the row is the only guard. Its break,
+  edges out of the row digest, fails the oracle.
+- **T1j has three parts in three tests:**
+  - (a) the dependency's bytes only;
+  - (b) a semantic change, via `write_own_modify`, so `write_dependency_lib` stays
+    private;
+  - (c) a symbol-only package that the workspace does not declare. It changes the
+    closure and nothing else, and it gives the `lsp` crate a use of
+    `symbol_app::write_symbol_app`, so no `#[allow]` is needed.
+
+  B9 fails the kind assertion in all three.
+- **T3 is two-sided** (review R5-1). The recovery refresh also counts its `cancel`
+  calls, `PHASE_CHECKS + total`, so an added check fails as well as a removed one.
+- **`build_server_state` takes `&RootBuild`** instead of seven loose arguments: an eighth
+  would trip `clippy::too_many_arguments`. `build_workspace` keeps its seven arguments,
+  and `run_server` sets `root.build.l4_host` on every root right after building them.
+- **T5e break (ii) is synchronous.** The extra `publishDiagnostics` goes through the
+  sink inside `build_server_state` when the host is spawned, not from the worker after
+  its publish, which would race `shutdown`.
+- **`ServerState.l4_host` keeps its `(HostHandle, JoinHandle)` type** (review R8-2). The
+  comments now say it is never joined, and that the worker usually lives until the
+  process exits, because the updater's `on_swap` holds a handle clone.
+- **The publish `debug!` line logs `kind`, `seeded` and `total` only** (review R7-2).
+- **The test names follow §5.6**, not the plan's step list:
+  `t5a_no_host_without_flag`, `t5b_didsave_requests_a_refresh`,
+  `t5c_config_only_requests_a_refresh`, `t5d_flag_parses_and_is_hidden` and
+  `t5e_flag_on_sends_nothing_new`.

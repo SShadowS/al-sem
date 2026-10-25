@@ -34,6 +34,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uncertainties, which include dead sites. No golden moves; on the pinned CDO
   baseline no finding moves.
 
+### Added
+
+- **Hidden `--l4-host` LSP flag: an incremental L4 host (#222).** Off by default and
+  hidden from `--help`. With the flag, each workspace root, once built, gets a
+  background worker that keeps the L4 summaries up to date. After every snapshot swap
+  (config-only swaps included) the worker re-solves only the routines a change can reach,
+  and seeds every other SCC from the last result. The re-solved set is: an SCC whose
+  membership is new, an SCC with a member whose model row changed, an SCC with a callee
+  in that set, and an SCC with a callee that came out different. The row covers the
+  routine's model rows, its out-edges, call bindings, uncertainty edges, leaf summary
+  and shared-event bits. The result equals a fresh solve; an oracle suite checks this
+  case by case.
+  - **No editor output.** The host publishes only to its own status and one
+    `debug!` line, `l4-host: published generation <g>: <kind>, seeded <s> of <t>`
+    (visible with `--verbose`). The diagnostics recompute is unchanged.
+  - **Cross-app only.** The host always analyses the workspace plus the dependency code
+    it uses.
+  - **What forces a full refresh:** adding, removing or renaming an `.al` file (every
+    routine id changes with the file list), any `app.json` change such as a version
+    bump, any change to the dependency closure (any `.app` in `.alpackages`, even one
+    nothing reads), and a change to the table fields or to collided call sites.
+  - **Cancellation.** A newer request cancels a running refresh between phases and
+    between SCCs, and a cancelled refresh keeps the last baseline. A complete refresh
+    that was overtaken still becomes the baseline but is not published.
+  - **A crash in the host ends the server.** The shipped binaries abort on panic.
+  - **Two findings shaped the design.** The solve reads the model rows of its callees,
+    not only their summaries, so a caller of a changed routine is always re-solved
+    (one hop), even when the callee's summary does not change. And a file add or
+    remove cannot reuse anything, because it renames every id.
+
 ## [2.1.0] - 2026-10-25
 
 ### Added
