@@ -43,9 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and seeds every other SCC from the last result. The re-solved set is: an SCC whose
   membership is new, an SCC with a member whose model row changed, an SCC with a callee
   in that set, and an SCC with a callee that came out different. The row covers the
-  routine's model rows, its out-edges, call bindings, uncertainty edges, leaf summary
-  and shared-event bits. The result equals a fresh solve; an oracle suite checks this
-  case by case.
+  routine's model rows, its out-edges, call bindings, uncertainty edges, leaf summary,
+  shared-event bits and fixed-role flag. The result equals a fresh solve; an oracle
+  suite checks this case by case.
   - **No editor output.** The host publishes only to its own status and one
     `debug!` line, `l4-host: published generation <g>: <kind>, seeded <s> of <t>`
     (visible with `--verbose`). The diagnostics recompute is unchanged.
@@ -58,7 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Cancellation.** A newer request cancels a running refresh between phases and
     between SCCs, and a cancelled refresh keeps the last baseline. A complete refresh
     that was overtaken still becomes the baseline but is not published.
-  - **A crash in the host ends the server.** The shipped binaries abort on panic.
+  - **A crash in the host ends the server**, in every build: the worker catches a panic,
+    logs `l4-host: panicked: …` to stderr and aborts the process.
+  - **Trace counters** (with `ALSEM_TRACE`): `host.refresh`, `host.full`,
+    `host.sccs_resolved` and `host.sccs_seeded`, per refresh whose solve completed.
   - **Two findings shaped the design.** The solve reads the model rows of its callees,
     not only their summaries, so a caller of a changed routine is always re-solved
     (one hop), even when the callee's summary does not change. And a file add or

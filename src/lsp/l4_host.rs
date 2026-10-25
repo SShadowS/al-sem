@@ -74,25 +74,41 @@ pub(crate) fn run_worker(
     mut host: impl Refresher,
     after_drain: impl Fn(),
 ) {
+    // The generation of the last complete refresh. A wake whose request was
+    // already read into it (sent after the drain) needs no second refresh:
+    // every new request bumps `requested` past it (final r1 FX-12).
+    let mut done = None;
     while wake.recv().is_ok() {
         // Drain BEFORE reading `g`: a request after the read keeps its wake.
         while wake.try_recv().is_ok() {}
         after_drain();
         let g = lock(&shared).requested;
+        if done == Some(g) {
+            continue;
+        }
         match host.refresh(&|| lock(&shared).requested != g) {
             Ok(report) => {
                 // A complete refresh is a settled revision: always the baseline (OQ4).
                 host.commit();
-                let mut s = lock(&shared);
-                if s.requested == g {
+                done = Some(g);
+                let (kind, seeded, total) = (report.kind, report.seeded, report.total);
+                let published = {
+                    let mut s = lock(&shared);
+                    let current = s.requested == g;
+                    if current {
+                        s.status = Some(HostStatus {
+                            generation: g,
+                            report,
+                        });
+                    }
+                    current
+                };
+                // Logged after the lock is released: a blocked stderr must
+                // never block `request()` (final r1 FX-1).
+                if published {
                     debug!(
-                        "l4-host: published generation {g}: {:?}, seeded {} of {}",
-                        report.kind, report.seeded, report.total
+                        "l4-host: published generation {g}: {kind:?}, seeded {seeded} of {total}"
                     );
-                    s.status = Some(HostStatus {
-                        generation: g,
-                        report,
-                    });
                 }
             }
             Err(RefreshError::Build(e)) => debug!("l4-host: generation {g}: build error: {e}"),
@@ -107,10 +123,42 @@ pub fn spawn_l4_host(root: PathBuf, universe: ViewUniverse) -> (HostHandle, Join
     let (handle, shared, wake) = channel();
     let join = thread::Builder::new()
         .name("l4-host".into())
-        .spawn(move || run_worker(shared, wake, IncrementalHost::new(&root, universe), || {}))
+        .spawn(move || {
+            guarded(
+                || {
+                    // Debug-only seam for the spawned-binary test of FX-13.
+                    #[cfg(debug_assertions)]
+                    if std::env::var_os("AL_SEM_L4_HOST_TEST_PANIC").is_some() {
+                        panic!("AL_SEM_L4_HOST_TEST_PANIC");
+                    }
+                    run_worker(shared, wake, IncrementalHost::new(&root, universe), || {})
+                },
+                end_the_server,
+            )
+        })
         .expect("spawn the l4-host thread");
     handle.request();
     (handle, join)
+}
+
+/// Run `work`; a panic in it goes to `on_panic` with its message. In an
+/// unwinding build (dev, test, `--release`) a panic would otherwise end only
+/// the worker thread, silently (final r1 FX-13).
+fn guarded(work: impl FnOnce(), on_panic: impl FnOnce(&str)) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+        let msg = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("a non-string panic");
+        on_panic(msg);
+    }
+}
+
+/// A host crash ends the server, as the help text says, in every profile.
+fn end_the_server(msg: &str) {
+    eprintln!("l4-host: panicked: {msg}; ending the server");
+    std::process::abort();
 }
 
 #[cfg(test)]
@@ -281,6 +329,52 @@ mod tests {
         join.join().unwrap();
     }
 
+    /// [`CheckOnce`] that counts its refreshes.
+    struct Counted(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Refresher for Counted {
+        fn refresh(&mut self, cancel: &dyn Fn() -> bool) -> Result<RefreshReport, RefreshError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            CheckOnce.refresh(cancel)
+        }
+        fn commit(&mut self) {}
+    }
+
+    /// Final r1 FX-12 (T4b's harness): the hook's request (made after the
+    /// drain) is read into `g = 2` and served by ONE refresh; its wake,
+    /// left in the channel, causes no second refresh of generation 2. A
+    /// later request is still served. Break: drop the `done == Some(g)`
+    /// skip → three refreshes.
+    #[test]
+    fn t4d_leftover_wake_refreshes_nothing() {
+        let (handle, shared, wake) = channel();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hook = Mutex::new(Some(handle.clone()));
+        let (drained, drains) = mpsc::channel();
+        let join = start((shared, wake), Counted(Arc::clone(&count)), move || {
+            if let Some(h) = hook.lock().unwrap().take() {
+                h.request();
+            }
+            let _ = drained.send(());
+        });
+        handle.request();
+        assert!(reaches(&handle, 2), "status: {:?}", handle.status());
+        // The leftover wake's drain: past it, the skip (or the refresh) is
+        // done before the next `recv`.
+        for _ in 0..2 {
+            drains.recv_timeout(TIMEOUT).expect("a drain");
+        }
+        handle.request();
+        assert!(reaches(&handle, 3), "status: {:?}", handle.status());
+        drop(handle);
+        join.join().unwrap();
+        assert_eq!(
+            count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "one refresh per generation"
+        );
+    }
+
     /// Holds refresh #1 until released; never calls `cancel`.
     struct Held {
         entered: Sender<()>,
@@ -290,7 +384,13 @@ mod tests {
     impl Refresher for Held {
         fn refresh(&mut self, _: &dyn Fn() -> bool) -> Result<RefreshReport, RefreshError> {
             self.entered.send(()).unwrap();
-            let _ = self.release.recv_timeout(TIMEOUT);
+            // A release or a closed channel lets the refresh end; a timeout
+            // means the test never got to release it, which fails (FX-2): a
+            // refresh that just ended would let a blocked `request()` return
+            // inside its own wait.
+            if let Err(mpsc::RecvTimeoutError::Timeout) = self.release.recv_timeout(TIMEOUT) {
+                panic!("refresh #1 was never released");
+            }
             Ok(report(RefreshKind::Incremental))
         }
         fn commit(&mut self) {}

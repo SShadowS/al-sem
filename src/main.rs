@@ -112,32 +112,27 @@ fn main() -> Result<()> {
         anyhow::bail!("--analyze requires --project <path>");
     }
 
-    if args.lsp {
-        // `--lsp` was parsed but never consulted below — passing it alongside
-        // `--project` silently ran CLI/analyze mode instead of the LSP server it
-        // asked for. Give it real, unconditional effect (highest precedence): it
-        // always starts the LSP server, regardless of --project/--analyze.
-        info!("Starting AL Call Hierarchy LSP server (--lsp)");
-        run_server(
-            args.no_watcher,
-            args.no_telemetry,
-            args.no_diagnostics,
-            args.dependency_source,
-            args.l4_host,
-        )?;
-    } else if let Some(project) = args.project {
+    // `--lsp` was once parsed but never consulted — passing it alongside
+    // `--project` silently ran CLI/analyze mode instead of the LSP server it
+    // asked for. It has real, unconditional effect (highest precedence): it
+    // always starts the LSP server, regardless of --project/--analyze.
+    if let (false, Some(project)) = (args.lsp, &args.project) {
         if args.analyze {
             // Analysis mode
-            run_analysis(&project, &args.format, args.dependency_source)?;
+            run_analysis(project, &args.format, args.dependency_source)?;
         } else {
             // CLI mode for testing/indexing (T3 Task 15: re-pointed at the
             // program-engine snapshot — see this block's own doc below).
             info!("Indexing project: {}", project.display());
-            report_index_stats(&project, args.dependency_source)?;
+            report_index_stats(project, args.dependency_source)?;
         }
     } else {
-        // LSP server mode (default)
-        info!("Starting AL Call Hierarchy LSP server");
+        // LSP server mode: `--lsp`, or the default without `--project`. ONE
+        // call, so every flag reaches both (#222 final r1 FX-7).
+        info!(
+            "Starting AL Call Hierarchy LSP server{}",
+            if args.lsp { " (--lsp)" } else { "" }
+        );
         run_server(
             args.no_watcher,
             args.no_telemetry,

@@ -714,13 +714,20 @@ with `control: None`, which is today's function.
   `EffectSetId` numbers, and some reader exposes them. Guard: the projection hides them
   (§4.7); a reader that uses the numbers as output is a bug of its own.
 - **S4 digest blind spot.** A solve input that is neither in the row nor in R0. The most
-  likely silent bug. Guards: the row is defined from the solve's own reads (P5), the R0
-  list is closed, and each oracle case varies one input class.
+  likely silent bug. Guards: the row is defined from the solve's own reads (P5) and the
+  R0 list is closed. Not every oracle case varies one input class. The digest parts that
+  an edit can make the ONLY guard each have a case where a break of that part alone fails
+  the oracle or the kind: the model rows (T1d, T1o), the out-edges (T1s), the shared-event
+  bit (T1n), the uncertainty edges (T1t), `FieldIndex` (T1k), `collided_site_callee`
+  (T1u), and the host half (T1h, T1j, T1q). The other three parts (the upgraded
+  bindings, the leaf-summary content and the fixed-role flag) are redundant: each is a
+  function of digested inputs (§13, final round 1).
 - **S5 closure A-B-A.** A `.app` swapped to new bytes and back between the digest and the
   program build: the digest matches the baseline while the build read other bytes. Not
   guarded. Improbable; stated.
-- **S6 a host panic ends the LSP.** The shipped binary aborts on panic (P17). Hidden flag,
-  off by default; stated, not fixed.
+- **S6 a host panic ends the LSP.** The shipped binary aborts on panic (P17). As built
+  (final round 1, FX-13), every build does: the worker catches the panic, logs it and
+  aborts. Hidden flag, off by default; stated, not fixed.
 - **S7 stdout.** Anything the host's build path printed to stdout would corrupt the LSP's
   JSON-RPC stream. P18 found none by grep; T5e checks the real stdout of a spawned server
   with the flag on (the in-process server tests use an in-memory `Connection` and cannot).
@@ -904,3 +911,74 @@ bodies. The ledger, `.agent/issue-222/ledger.md`, holds the full list. The devia
   `t5a_no_host_without_flag`, `t5b_didsave_requests_a_refresh`,
   `t5c_config_only_requests_a_refresh`, `t5d_flag_parses_and_is_hidden` and
   `t5e_flag_on_sends_nothing_new`.
+
+### Final round 1 (2026-10-25)
+
+Fixed, each with a test whose break was run (the ledger has the proof rows):
+
+- **The publish `debug!` line runs after the lock is released** (FX-1), so a blocked
+  stderr cannot block `request()`. Stated limit: no test; a blocking logger would have
+  to replace the process-global one.
+- **T4c's held refresh panics when it is never released** (FX-2), instead of ending.
+- **T5e builds its URIs with `protocol::path_to_uri`** and does not canonicalize on
+  Windows, so it never sends a `\\?\` path (FX-3). Stated limit: CI and this tentacle
+  are Linux, so the Windows path is not run.
+- **`prepare_l4_seeded` refuses a released `Base` or `Rel`** (FX-4) and drops the
+  cross-app dependency calls, as `prepare` does for a plan with no tree (FX-10).
+- **§7's counters are emitted** (FX-5), once per refresh whose solve completed (a refresh
+  cancelled inside the solve counts nothing). T5e reads them from a trace of the flag-on
+  server.
+- **FX-6: every digest part is pinned or shown redundant.** Two new oracle cases make a
+  part the only guard:
+  - **T1t, the uncertainty edges.** `A` calls `V.Go()` on `V: Codeunit Y`, and `Y` has
+    no `Go` (`member-not-found`). Renaming object `Y` makes the call `external-target`.
+    No routine row changes (a routine row carries no object name), and `A` has no
+    out-edge.
+  - **T1u, `collided_site_callee`.** `K(var R)`'s two `#if` rows call `V.Go(R)` on
+    `Foo` and `Bar`. Swapping the two object names moves the site's callee (the last
+    row's), while `K`'s rows, its out-edge union and both `Go` rows stay equal. The
+    refresh is `Full(SolveGlobal)`.
+
+  The other three parts are redundant: each is a function of digested inputs, so no edit
+  makes one of them the only guard.
+  - **Upgraded bindings.** A binding starts from the caller's own call site
+    (`calls.rs:286`). It is upgraded against the route's model callee, whose id the same
+    route writes into the edge (`program_calls.rs:1829-1830`): that is an out-edge, or the
+    collided site's callee, of the caller, and the callee's `var` flags are in its row
+    (one hop). Otherwise it is upgraded from a dependency's declaration or ABI
+    (`program_calls.rs:1915-1952`), which comes from a `.app` in the closure (R0 host
+    half).
+  - **Leaf-summary content.** A leaf is
+    `base_intraprocedural_summary(row, _, field_index)` (`capability_cone.rs:3968-3981`),
+    which ignores its second argument (`summary_runner.rs:511-516`). The rows of the id
+    are digested, and the field index is the solve's own (`analysis.rs:93-96`), which is
+    in R0's solve half.
+  - **Fixed-role flag.** It is set for a dependency routine with a body and a primary
+    out-edge (`capability_cone.rs:3968-3975`). The role is the row's `app_guid` against
+    the primary app (`role.rs:44-46`, `app.json` in R0); `body_available` is in the row;
+    the out-edges are in the row.
+- **One `run_server` call in `main.rs`** (FX-7): `--lsp` and the default branch are the
+  same call, so T5e pins both.
+- **`sha256_of_debug` streams into the hasher** (FX-9). A lib test checks it against the
+  old `format!` + digest on every seeded-test case.
+- **Labels are built for the re-solved SCCs only** (FX-11).
+- **A wake left over after the drain does not refresh `g` twice** (FX-12): the worker
+  skips a `g` it has already refreshed. Every new request bumps `requested` past it,
+  so no request is dropped (T4b, and T4d on the same harness).
+- **A panic in the worker is caught, logged and aborts the process** (FX-13), in every
+  profile. A spawned-binary test uses a debug-only seam, `AL_SEM_L4_HOST_TEST_PANIC`.
+
+Stated limits and accepted design:
+
+- **FX-14.** Invalidation depends on `Debug` staying deterministic and complete (noted at
+  `sha256_of_debug`). T1m catches non-determinism; a custom `Debug` or an unsorted
+  `HashMap` in a digested value would not be caught.
+- **FX-15.** Every refresh reads and hashes the full bytes of every `.app` in the closure.
+  Correctness first: the closure digest decides Full. A metadata-keyed cache is a
+  follow-up.
+- **FX-16.** `L4Request.control` adds `control: None` at every call site: accepted (the
+  Task 1 plan correction).
+- **FX-17.** `build_workspace` hardcodes `l4_host: false` and `run_server` sets it after:
+  accepted (`clippy::too_many_arguments`; review R8-3).
+- **FX-18.** The host is cross-app only and rebuilds the front end on every swap,
+  ignoring `dependency_source`: accepted by OQ1 and Q1.

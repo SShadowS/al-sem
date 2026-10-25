@@ -1211,10 +1211,19 @@ impl View {
             "View::prepare_l4_seeded inside the detector loop"
         );
         assert!(self.l4.is_none(), "L4 filled; a View fills each cell once");
-        assert!(
-            self.released & Cell::L4.bit() == 0,
-            "L4 released; a View fills each cell once"
-        );
+        // The cells this fill reads or fills; a released one is never refilled
+        // (final r1 FX-4, as `prepare`'s check (a)).
+        for cell in [Cell::Base, Cell::Rel, Cell::L4] {
+            assert!(
+                self.released & cell.bit() == 0,
+                "{cell:?} released; a View fills each cell once"
+            );
+        }
+        // #160 F1-C2, as `prepare` does for a plan with no tree: only a tree
+        // reads the dependency calls (final r1 FX-10).
+        if let AnalysisTarget::CrossApp(b) = &mut self.target {
+            b.dependency_calls = None;
+        }
         let target = &self.target;
         let rel = Arc::clone(self.rel.get_or_insert_with(|| relation_of(target)));
         // §4.2: the host's third phase check, after the relation.
@@ -2086,6 +2095,50 @@ mod tests {
             msg.contains("L4 filled; a View fills each cell once"),
             "second prepare: {msg}"
         );
+    }
+
+    /// #222 final r1 FX-4: `prepare_l4_seeded` refuses a released `Rel` or
+    /// `Base`, as `prepare` does, instead of refilling `rel`. DISCRIMINATION:
+    /// checking only `Cell::L4` lets both fills run.
+    #[test]
+    fn prepare_l4_seeded_refuses_a_released_rel_or_base() {
+        for cell in [Cell::Rel, Cell::Base] {
+            let mut v = view();
+            v.release(cell);
+            let msg = panic_text(
+                "prepare_l4_seeded after a release",
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = prepare_l4_unseeded(&mut v);
+                })),
+            );
+            assert!(
+                msg.contains(&format!("{cell:?} released; a View fills each cell once")),
+                "{cell:?}: {msg}"
+            );
+            assert!(v.rel.is_none(), "{cell:?}: rel is not refilled");
+        }
+    }
+
+    /// #222 final r1 FX-10: like `prepare` with no tree (#160 F1-C2),
+    /// `prepare_l4_seeded` drops the cross-app base's dependency calls.
+    /// Precondition: the base holds some. DISCRIMINATION: deleting the drop
+    /// leaves them.
+    #[test]
+    fn prepare_l4_seeded_drops_the_dependency_calls() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::engine::l5::test_support::write_fixture_dep_ledger(tmp.path());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(tmp.path(), &Default::default());
+        let mut v = View::new(AnalysisTarget::build(&inputs, false, "l4-host").expect("cross-app"));
+        let calls = |v: &View| match v.target() {
+            AnalysisTarget::CrossApp(b) => b.dependency_calls.as_ref().map(Vec::len),
+            AnalysisTarget::SingleApp(_) => panic!("precondition: cross-app"),
+        };
+        assert!(
+            calls(&v).is_some_and(|n| n > 0),
+            "precondition: the base holds dependency calls"
+        );
+        let _ = prepare_l4_unseeded(&mut v);
+        assert_eq!(calls(&v), None, "dropped by the seeded prepare");
     }
 
     /// `release_all_but` drops every filled cell but the kept ones, Ordering

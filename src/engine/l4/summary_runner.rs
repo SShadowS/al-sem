@@ -2038,9 +2038,27 @@ fn row_digests(
         .collect()
 }
 
+/// sha256 of `value`'s `Debug` text, streamed into the hasher (no `String`
+/// of the whole text; final r1 FX-9).
+///
+/// Stated limit (final r1 FX-14): the invalidation rule is only as good as
+/// this text. It must stay deterministic (T1m: two no-edit refreshes re-solve
+/// nothing) and complete. A field the solve reads but `Debug` skips (a
+/// custom `Debug`), or a `HashMap` whose order differs between two equal
+/// values, would break it; a digest over a `HashMap` sorts it first.
 pub(crate) fn sha256_of_debug(value: &impl std::fmt::Debug) -> [u8; 32] {
     use sha2::{Digest, Sha256};
-    Sha256::digest(format!("{value:?}").as_bytes()).into()
+    use std::fmt::Write;
+    struct Hasher(Sha256);
+    impl Write for Hasher {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.update(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut h = Hasher(Sha256::new());
+    write!(h, "{value:?}").expect("hashing never fails");
+    h.0.finalize().into()
 }
 
 /// Compat shim (spec Part A, "Public API"): wraps

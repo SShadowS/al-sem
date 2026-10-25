@@ -8,7 +8,9 @@
 //! sync point, O26), waits for that response (the flag-on run also for the
 //! stderr line `l4-host: published generation 1`), then `shutdown` and
 //! `exit`. Stdout and stderr are read on two threads; every wait has a
-//! timeout; the child is killed when its guard drops.
+//! timeout; the child is killed when its guard drops. The flag-on run is
+//! traced, for the host's counters (final r1 FX-5). `host_panic_ends_the_server`
+//! (final r1 FX-13) spawns the same server with the debug-only panic seam.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -88,27 +90,40 @@ fn next(rx: &Receiver<Value>, deadline: Instant, what: &str) -> Value {
         .unwrap_or_else(|e| panic!("waiting for {what}: {e}"))
 }
 
-/// One session. Returns every server-to-client message (normalized, sorted)
-/// and the number of `publishDiagnostics` before the prepare response.
-fn session(dir: &Path, l4_host: bool) -> (Vec<String>, usize) {
+/// A spawned server: the child (killed on drop), its stdin, its stdout
+/// frames, its stderr lines and the stdout reader thread.
+struct Server {
+    guard: Guard,
+    stdin: ChildStdin,
+    out: Receiver<Value>,
+    err: Receiver<String>,
+    out_thread: thread::JoinHandle<()>,
+    _home: tempfile::TempDir,
+}
+
+/// Spawn `al-call-hierarchy <args> --no-watcher --no-telemetry --verbose`
+/// with `env` set and a private home.
+fn spawn(args: &[&str], env: &[(&str, &std::ffi::OsStr)]) -> Server {
     let home = tempfile::tempdir().unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_al-call-hierarchy"));
-    cmd.args(["--lsp", "--no-watcher", "--no-telemetry", "--verbose"]);
-    if l4_host {
-        cmd.arg("--l4-host");
+    cmd.args(args)
+        .args(["--no-watcher", "--no-telemetry", "--verbose"])
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env_remove("RUST_LOG")
+        .env_remove("AL_SEM_L4_HOST_TEST_PANIC");
+    for (k, v) in env {
+        cmd.env(k, v);
     }
     let mut guard = Guard(
-        cmd.env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .env("XDG_CONFIG_HOME", home.path())
-            .env_remove("RUST_LOG")
-            .stdin(Stdio::piped())
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn al-call-hierarchy"),
     );
-    let mut stdin = guard.0.stdin.take().unwrap();
+    let stdin = guard.0.stdin.take().unwrap();
     let mut stdout = BufReader::new(guard.0.stdout.take().unwrap());
     let stderr = BufReader::new(guard.0.stderr.take().unwrap());
     let (out_tx, out) = mpsc::channel();
@@ -127,29 +142,87 @@ fn session(dir: &Path, l4_host: bool) -> (Vec<String>, usize) {
             }
         }
     });
+    Server {
+        guard,
+        stdin,
+        out,
+        err,
+        out_thread,
+        _home: home,
+    }
+}
 
-    let deadline = Instant::now() + TIMEOUT;
-    let mut received = Vec::new();
-    let root = format!("file://{}", dir.display());
+/// `dir` as a file URI (final r1 FX-3: the repo's own encoder, so a Windows
+/// path or a space gives a valid URI).
+fn uri(dir: &Path) -> String {
+    al_sem::protocol::path_to_uri(dir).as_str().to_string()
+}
+
+/// A tempdir path the server sees as written: canonical (macOS `/tmp` is a
+/// link), but never Windows' `\\?\` verbatim form, which no file URI has.
+fn ws_dir(tmp: &tempfile::TempDir) -> std::path::PathBuf {
+    if cfg!(windows) {
+        tmp.path().to_path_buf()
+    } else {
+        tmp.path().canonicalize().unwrap()
+    }
+}
+
+/// Send `initialize` (without waiting), `initialized` and one
+/// `prepareCallHierarchy` on `A`, the request that builds the root.
+fn open(
+    stdin: &mut ChildStdin,
+    root: &str,
+    out: Option<(&Receiver<Value>, Instant)>,
+) -> Option<Value> {
     send(
-        &mut stdin,
+        stdin,
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "processId": null, "rootUri": root, "capabilities": {},
             "workspaceFolders": [{"uri": root, "name": "t1a"}]}}),
     );
-    let init = next(&out, deadline, "the initialize response");
-    assert_eq!(init["id"], 1, "{init}");
-    received.push(init);
+    let init = out.map(|(out, deadline)| next(out, deadline, "the initialize response"));
     send(
-        &mut stdin,
+        stdin,
         json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
     );
     send(
-        &mut stdin,
+        stdin,
         json!({"jsonrpc": "2.0", "id": 2, "method": "textDocument/prepareCallHierarchy",
             "params": {"textDocument": {"uri": format!("{root}/src/A.al")},
                 "position": {"line": 2, "character": 14}}}),
     );
+    init
+}
+
+/// One session. Returns every server-to-client message (normalized, sorted),
+/// the number of `publishDiagnostics` before the prepare response, and the
+/// stderr `published generation 1` line (flag on only).
+fn session(
+    dir: &Path,
+    l4_host: bool,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> (Vec<String>, usize, Option<String>) {
+    let mut args = vec!["--lsp"];
+    if l4_host {
+        args.push("--l4-host");
+    }
+    let Server {
+        guard,
+        mut stdin,
+        out,
+        err,
+        out_thread,
+        _home,
+    } = spawn(&args, env);
+    let mut guard = guard;
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut received = Vec::new();
+    let root = uri(dir);
+    let init = open(&mut stdin, &root, Some((&out, deadline))).unwrap();
+    assert_eq!(init["id"], 1, "{init}");
+    received.push(init);
     let mut diagnostics_before = 0;
     loop {
         let msg = next(&out, deadline, "the prepareCallHierarchy response");
@@ -168,7 +241,7 @@ fn session(dir: &Path, l4_host: bool) -> (Vec<String>, usize) {
             break;
         }
     }
-    if l4_host {
+    let published = l4_host.then(|| {
         let want = "l4-host: published generation 1";
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -176,10 +249,10 @@ fn session(dir: &Path, l4_host: bool) -> (Vec<String>, usize) {
                 .recv_timeout(left)
                 .unwrap_or_else(|e| panic!("waiting for {want:?} on stderr: {e}"));
             if line.contains(want) {
-                break;
+                break line;
             }
         }
-    }
+    });
     send(
         &mut stdin,
         json!({"jsonrpc": "2.0", "id": 3, "method": "shutdown", "params": null}),
@@ -210,19 +283,46 @@ fn session(dir: &Path, l4_host: bool) -> (Vec<String>, usize) {
     }
     let mut all: Vec<String> = received.iter().map(canonical).collect();
     all.sort();
-    (all, diagnostics_before)
+    (all, diagnostics_before, published)
+}
+
+/// The last value of each counter (`ph: "C"`) in the Chrome trace at `path`.
+fn trace_counters(path: &Path) -> BTreeMap<String, u64> {
+    let text = std::fs::read_to_string(path).expect("the trace file");
+    let events: Vec<Value> = serde_json::from_str(&text).expect("a JSON trace");
+    let mut last = BTreeMap::new();
+    for e in events.iter().filter(|e| e["ph"] == "C") {
+        for (k, v) in e["args"].as_object().into_iter().flatten() {
+            if let Some(v) = v.as_u64() {
+                last.insert(k.clone(), v);
+            }
+        }
+    }
+    last
 }
 
 /// T5e. Breaks: (i) `main.rs` drops the `l4_host` pass-through → the stderr
 /// wait times out; (ii) an extra `publishDiagnostics` under the flag → the
-/// multisets differ.
+/// multisets differ. `main.rs` has one `run_server` call, so the default
+/// branch (no `--lsp`) is the same call (final r1 FX-7).
+///
+/// The flag-on run is traced (final r1 FX-5): its one refresh counts
+/// `host.refresh` 1, `host.full` 1, `host.sccs_resolved` the published
+/// total and `host.sccs_seeded` 0. Break: drop any one emission → that
+/// counter is missing.
 #[test]
 fn t5e_flag_on_sends_nothing_new() {
     let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().canonicalize().unwrap();
+    let dir = ws_dir(&tmp);
     write_ws(&dir, T1A);
-    let (on, on_before) = session(&dir, true);
-    let (off, off_before) = session(&dir, false);
+    let trace_dir = tempfile::tempdir().unwrap();
+    let trace = trace_dir.path().join("trace.json");
+    let env: [(&str, &std::ffi::OsStr); 2] = [
+        ("ALSEM_TRACE", "1".as_ref()),
+        ("ALSEM_TRACE_FILE", trace.as_os_str()),
+    ];
+    let (on, on_before, published) = session(&dir, true, &env);
+    let (off, off_before, _) = session(&dir, false, &[]);
     assert_eq!(
         on, off,
         "the same server-to-client messages, with and without --l4-host"
@@ -230,5 +330,62 @@ fn t5e_flag_on_sends_nothing_new() {
     assert_eq!(
         on_before, off_before,
         "the same publishDiagnostics count before the prepare response"
+    );
+    let published = published.expect("flag on");
+    let total: u64 = published
+        .rsplit_once(" of ")
+        .and_then(|(_, n)| n.trim().parse().ok())
+        .unwrap_or_else(|| panic!("a total in {published:?}"));
+    assert!(total > 0, "precondition: SCCs to solve");
+    let c = trace_counters(&trace);
+    let get = |k: &str| c.get(k).copied();
+    assert_eq!(
+        (
+            get("host.refresh"),
+            get("host.full"),
+            get("host.sccs_resolved"),
+            get("host.sccs_seeded")
+        ),
+        (Some(1), Some(1), Some(total), Some(0)),
+        "host counters: {c:?}"
+    );
+}
+
+/// Final r1 FX-13: a panic in the host's worker ends the server in every
+/// profile, this unwinding test build included: the worker catches it,
+/// logs it and aborts. The debug-only seam `AL_SEM_L4_HOST_TEST_PANIC`
+/// panics inside the worker. Break: the worker only logs (no abort) → the
+/// server keeps running and the exit wait times out.
+#[test]
+fn host_panic_ends_the_server() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = ws_dir(&tmp);
+    write_ws(&dir, T1A);
+    let Server {
+        mut guard,
+        mut stdin,
+        out: _out,
+        err,
+        out_thread: _,
+        _home,
+    } = spawn(
+        &["--lsp", "--l4-host"],
+        &[("AL_SEM_L4_HOST_TEST_PANIC", "1".as_ref())],
+    );
+    open(&mut stdin, &uri(&dir), None);
+    let deadline = Instant::now() + TIMEOUT;
+    let status = loop {
+        if let Some(status) = guard.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the server ends after the panic");
+        thread::yield_now();
+    };
+    assert!(!status.success(), "a failure status: {status:?}");
+    // The process is gone, so its stderr ends.
+    let stderr: Vec<String> = err.iter().collect();
+    assert!(
+        stderr.iter().any(|l| l.contains("l4-host: panicked")),
+        "the panic is logged: {stderr:?}"
     );
 }

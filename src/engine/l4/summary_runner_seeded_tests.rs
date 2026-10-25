@@ -596,3 +596,31 @@ fn t2b_mixed_equals_fresh_for_every_k() {
     assert!(c2_checked, "precondition: C2 ran with k = {{C}}");
     assert_no_failures(&failures);
 }
+
+/// Final r1 FX-9: the streaming `sha256_of_debug` gives exactly the bytes of
+/// the old `Sha256::digest(format!("{v:?}"))`, on every case's solve inputs
+/// (the model rows, the upgraded bindings, the out-edges, the uncertainty
+/// edges and the field index). Precondition: at least one case's text is
+/// longer than 64 KiB, so the stream crosses many `write_str` calls and
+/// hasher blocks.
+#[test]
+fn sha256_of_debug_streams_the_old_bytes() {
+    use sha2::{Digest, Sha256};
+    let mut longest = 0;
+    for case in &all_cases() {
+        let p = Prepared::new(case);
+        let i = p.inputs();
+        let value = (
+            i.routines,
+            i.upgraded_bindings,
+            &i.graph.edges_by_from,
+            &i.graph.uncertainty_edges,
+            i.fields,
+        );
+        let text = format!("{value:?}");
+        longest = longest.max(text.len());
+        let old: [u8; 32] = Sha256::digest(text.as_bytes()).into();
+        assert_eq!(sha256_of_debug(&value), old, "{}", case.name);
+    }
+    assert!(longest > 64 * 1024, "precondition: a long text ({longest})");
+}

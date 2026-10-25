@@ -946,6 +946,171 @@ fn t1s_interface_rebind() {
     );
 }
 
+/// `name`/`params`'s uncertainty edges in the primary graph, as `Debug`.
+fn uncertainty(f: &Fresh, name: &str, params: usize) -> String {
+    let id = f.id(name, params);
+    let u: Vec<_> = f
+        .view
+        .rel()
+        .primary()
+        .uncertainty_edges
+        .iter()
+        .filter(|u| u.from == id)
+        .collect();
+    format!("{u:?}")
+}
+
+/// T1t (final r1 FX-6, the uncertainty-edge part of the row alone): `A`
+/// calls `V.Go()` on `V: Codeunit Y`, and `Y` has no `Go`. The edit renames
+/// object `Y` to `Z` (the header only), so `V`'s type no longer resolves and
+/// the to-less call's uncertainty changes kind. No routine row changes (a
+/// routine row carries no object name), `A` has no out-edge before or after,
+/// and no id is new. Break: the uncertainty edges out of the row digest
+/// seeds `A` with its old uncertainty.
+#[test]
+fn t1t_uncertainty_kind() {
+    let ws = fixture(&[
+        (
+            "src/A.al",
+            cu(
+                50100,
+                "A",
+                "    procedure A()\n    var\n        V: Codeunit Y;\n    begin\n        V.Go();\n    end;\n",
+            ),
+        ),
+        (
+            "src/Y.al",
+            cu(50103, "Y", "    procedure Other()\n    begin\n    end;\n"),
+        ),
+    ]);
+    let pre = |r0: &Fresh, r1: &Fresh| {
+        for n in ["A", "Other"] {
+            assert_eq!(r0.rows(n, 0).len(), 1, "precondition: one {n} row");
+            assert_eq!(
+                format!("{:?}", r0.rows(n, 0)),
+                format!("{:?}", r1.rows(n, 0)),
+                "precondition: the {n} row is equal at r0 and r1"
+            );
+        }
+        assert_eq!(r0.edges("A", 0), "None", "precondition: A has no out-edge");
+        assert_eq!(r1.edges("A", 0), "None", "precondition: A has no out-edge");
+        assert_ne!(
+            uncertainty(r0, "A", 0),
+            uncertainty(r1, "A", 0),
+            "precondition: A's uncertainty edges differ"
+        );
+        assert_ne!(
+            r0.routine("A", 0),
+            r1.routine("A", 0),
+            "precondition: A's projection differs between r0 and r1"
+        );
+    };
+    case_pre(
+        "t1t",
+        &as_refs(&ws),
+        |d| replace_once(d, "src/Y.al", "codeunit 50103 Y\n", "codeunit 50103 Z\n"),
+        RefreshKind::Incremental,
+        &[&["A.A()"]],
+        Some(&pre),
+    );
+}
+
+/// T1u (final r1 FX-6, `collided_site_callee` in R0's solve half alone):
+/// `K(var R)` is declared in an `#if A` / `#else` pair whose rows call
+/// `V.Go(R)` on `V: Codeunit Foo` and `V: Codeunit Bar`. The site's callee
+/// is the LAST row's (`Bar.Go`, which does nothing; `Foo.Go` resets `R`).
+/// The edit swaps the two object names (headers only), so the last row now
+/// reaches the resetting `Go`. `K`'s rows, its out-edge union and both `Go`
+/// rows are unchanged. Break: `collided_site_callee` out of the solve-global
+/// digest seeds `K` with its old role.
+#[test]
+fn t1u_collided_site_callee() {
+    let go = |no: u32, path: &'static str, name: &str, body: &str| {
+        (
+            path,
+            cu(
+                no,
+                name,
+                &format!("    procedure Go(var R: Record Cust)\n    begin\n{body}    end;\n"),
+            ),
+        )
+    };
+    let arm = |callee: &str| {
+        format!(
+            "    procedure K(var R: Record Cust)\n    var\n        V: Codeunit {callee};\n    begin\n        V.Go(R);\n    end;\n"
+        )
+    };
+    let ws = fixture(&[
+        (
+            "src/K.al",
+            cu(
+                50105,
+                "K",
+                &format!("#if A\n{}#else\n{}#endif\n", arm("Foo"), arm("Bar")),
+            ),
+        ),
+        go(50103, "src/X.al", "Foo", "        R.Reset();\n"),
+        go(50104, "src/Y.al", "Bar", ""),
+    ]);
+    let pre = |r0: &Fresh, r1: &Fresh| {
+        assert_eq!(r0.rows("K", 1).len(), 2, "precondition: two rows of K");
+        assert_eq!(r0.rows("Go", 1).len(), 2, "precondition: two Go rows");
+        for n in ["K", "Go"] {
+            assert_eq!(
+                format!("{:?}", r0.rows(n, 1)),
+                format!("{:?}", r1.rows(n, 1)),
+                "precondition: every {n} row is equal at r0 and r1"
+            );
+        }
+        assert_eq!(
+            r0.edges("K", 1),
+            r1.edges("K", 1),
+            "precondition: K's out-edges are equal"
+        );
+        let collided = |f: &Fresh| {
+            let c: std::collections::BTreeMap<_, _> =
+                f.view.rel().primary().collided_site_callee.iter().collect();
+            format!("{c:?}")
+        };
+        assert_ne!(
+            collided(r0),
+            collided(r1),
+            "precondition: the collided site's callee moves"
+        );
+        let role = |f: &Fresh| {
+            f.routine("K", 1).0.as_ref().unwrap().parameter_roles[0].resets_filters_on_param
+        };
+        assert_eq!(role(r0), EffectPresence::No, "precondition: K at r0");
+        assert_eq!(role(r1), EffectPresence::Yes, "precondition: K at r1");
+    };
+    case_pre(
+        "t1u",
+        &as_refs(&ws),
+        |d| {
+            replace_once(
+                d,
+                "src/X.al",
+                "codeunit 50103 Foo\n",
+                "codeunit 50103 Bar\n",
+            );
+            replace_once(
+                d,
+                "src/Y.al",
+                "codeunit 50104 Bar\n",
+                "codeunit 50104 Foo\n",
+            );
+        },
+        RefreshKind::Full(FullReason::SolveGlobal),
+        &[
+            &["Bar.Go(var Record Cust)"],
+            &["Foo.Go(var Record Cust)"],
+            &["K.K(var Record Cust)"],
+            &["U.U()"],
+        ],
+        Some(&pre),
+    );
+}
+
 /// T1q: a `description` in `app.json` changes no row, but `app.json` bytes
 /// are in R0's host half. Break B15 (no `app.json` bytes in R0) makes it
 /// Incremental; the oracle holds either way.

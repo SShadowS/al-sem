@@ -5,7 +5,7 @@
 //! `rel` and `l4` only) and seeds every SCC the invalidation rule (§4.3)
 //! leaves clean from the last committed revision. There is no second engine.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::engine::batch::job::ViewUniverse;
@@ -17,6 +17,7 @@ use crate::engine::l4::summary::{DbEffect, RoutineSummary};
 use crate::engine::l4::summary_runner::{
     Cancelled, L4Control, L4Reuse, SolveBaseline, SummarizeDiagnostic, sha256_of_debug,
 };
+use crate::engine::perf_trace as pt;
 use crate::engine::session::View;
 use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 use crate::program::model::workspace::Model;
@@ -165,7 +166,21 @@ impl Refresher for IncrementalHost {
             (Some(_), Some(_)) if outcome.full => RefreshKind::Full(FullReason::SolveGlobal),
             _ => RefreshKind::Incremental,
         };
-        let label = labels(view.model());
+        // §7's trace counters, per refresh whose solve completed.
+        pt::counter_delta("host.refresh", 1);
+        if matches!(kind, RefreshKind::Full(_)) {
+            pt::counter_delta("host.full", 1);
+        }
+        pt::counter_delta("host.sccs_resolved", outcome.resolved.len() as u64);
+        pt::counter_delta("host.sccs_seeded", outcome.seeded as u64);
+        // Labels for the re-solved SCCs' members only (final r1 FX-11).
+        let wanted: HashSet<&str> = outcome
+            .resolved
+            .iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        let label = labels(view.model(), &wanted);
         let resolved = outcome
             .resolved
             .iter()
@@ -208,8 +223,8 @@ impl Refresher for IncrementalHost {
 
 /// Each routine id's signature label, `Object.[Member.]Routine(var T1; T2): R`:
 /// the fields `compute_routine_id` hashes, so two overloads never share one.
-/// A collided id takes its first row's.
-fn labels(model: &Model) -> HashMap<&str, String> {
+/// A collided id takes its first row's. Only the ids in `wanted`.
+fn labels<'m>(model: &'m Model, wanted: &HashSet<&str>) -> HashMap<&'m str, String> {
     let ws = &model.workspace;
     let object: HashMap<&str, &str> = ws
         .objects
@@ -217,7 +232,11 @@ fn labels(model: &Model) -> HashMap<&str, String> {
         .map(|o| (o.id.as_str(), o.name.as_str()))
         .collect();
     let mut out = HashMap::new();
-    for r in &ws.routines {
+    for r in ws
+        .routines
+        .iter()
+        .filter(|r| wanted.contains(r.id.as_str()))
+    {
         out.entry(r.id.as_str()).or_insert_with(|| {
             let params: Vec<String> = r
                 .parameters
