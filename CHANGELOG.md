@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`alsem digest --diff` reads `diff -r`'s `Only in <dir>: <name>` lines** (#111), which it
+  ignored before, so a diff that adds or deletes files no longer drops them silently. The
+  path is `<dir>/<name>` with one `/` between (`Only in new/: x.al` is `new/x.al`). It is
+  looked up like a header path (same normalisation, same workspace file match): a path that
+  is a workspace file, such as `Only in ./src: new.al` from `diff -ru ../old .` run at the
+  workspace root, makes every routine of that file a root, as a rename with no hunk does.
+  Any other path is reported as `diff-file-unmatched` on `<dir>/<name>`.
+  `src/engine/l5/diff_parser.rs` (`DiffParseResult::only_in`),
+  `src/engine/l5/digest_cli.rs` (`resolve_changed_roots`). Not covered: an `Only in` line is
+  read anywhere at the top level, so one in a commit message gives a stray diagnostic, or,
+  when it names a workspace file, extra roots with no diagnostic; an `Only in` directory is one unmatched entry, not its files, so tool
+  folders such as `.git` or `.alpackages` add noise; a directory name containing `: ` is
+  split at the wrong place; and `Only in` misses share the `diff-file-unmatched` kind and
+  are listed after the per-file diagnostics.
+
 ### Fixed
+
+- **`alsem digest --diff` reads plain `diff -u` / `diff -ru` headers** (#111), when their
+  paths are relative to the workspace (run `diff` from the workspace root, or use
+  `--label`). GNU `diff` writes each `---`/`+++` header as `<path><TAB><timestamp>`, and the
+  TAB and timestamp stayed in the path, so every plain-diff file was `diff-file-unmatched`
+  and a timestamped `/dev/null` was not seen as an addition or deletion. The header path now
+  ends at the first raw TAB, before the `/dev/null` test and before unquoting, so GNU's
+  quoted form `"./src/a b.al"<TAB><time>` matches too. Both GNU diff and git C-quote a name
+  that holds a TAB, so a raw TAB only ever ends the path (checked on GNU diffutils 3.12 and
+  git 2.53.0); a producer that writes such a name raw and unquoted would cut it at that TAB.
+  `src/engine/l5/diff_parser.rs` (`extract_path`). Not covered: `diff -ru old new` run from
+  a parent folder writes a tree-root folder (`n/src/…`) that is not matched; `diff -ruN`'s
+  epoch-dated deletions are not read as deletions (one reads as a modified file with every
+  line deleted); the `a/`/`b/` prefix is now stripped from plain GNU paths too, so a
+  workspace whose top folder is literally `a` or `b` loses that segment; and a git name with
+  a trailing space still loses it to the existing trim.
 
 - **A call that never runs no longer makes an analysis incomplete (#288).** A
   call or record operation after `exit;` (or after a stop such as
