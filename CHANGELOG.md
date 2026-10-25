@@ -26,8 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after the entries, or after `digest: no changed roots resolved` when there are none. A
   `diff-file-ambiguous` line names its candidates and suggests `--diff-root <folder>`.
   Control characters and bidi or line-separator characters in a path print escaped
-  (`\n`, `\t`, `\u{202e}`), so each diagnostic stays on one line and reads as written. The `--tests` line stays last. The JSON does not change. Six cli-b human
-  goldens gain the line `changed-roots: file-unmatched src/Rec.Table.al`.
+  (`\n`, `\t`, `\u{202e}`), so each diagnostic stays on one line and reads as written.
+  The `--tests` line stays last. The JSON does not change. Six cli-b human goldens gain
+  the line `changed-roots: file-unmatched src/Rec.Table.al`.
 - **d35 names a dependency subscriber's own unresolved call sites** (#287). This lifts
   the limit stated in the #265 entry: a subscriber that lives in a dependency app
   (reported at `--scope all`) now gets the same `; unresolved: <callee> (line n)` segment
