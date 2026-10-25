@@ -1,0 +1,55 @@
+{
+  "RuntimeVersion": "13.0",
+  "AppId": "22222222-0000-0000-0000-000000000302",
+  "Name": "Dep302",
+  "Publisher": "probe",
+  "Version": "1.0.0.0",
+  "Tables": [
+    {
+      "Id": 70300,
+      "Name": "Dep Cust",
+      "Fields": [
+        {"Id": 1, "Name": "No.", "TypeDefinition": {"Name": "Code"}},
+        {"Id": 2, "Name": "Name", "TypeDefinition": {"Name": "Text"}}
+      ]
+    }
+  ],
+  "Pages": [
+    {
+      "Id": 70301,
+      "Name": "Dep RO List",
+      "Properties": [
+        {"Name":"PageType","Value":"List"},
+        {"Name":"SourceTable","Value":"70300"},
+        {"Name":"Editable","Value":"0"}
+      ]
+    },
+    {
+      "Id": 70302,
+      "Name": "Dep NoMod Card",
+      "Properties": [
+        {"Name":"PageType","Value":"List"},
+        {"Name":"SourceTable","Value":"70300"},
+        {"Name":"ModifyAllowed","Value":"0"}
+      ]
+    },
+    {
+      "Id": 70303,
+      "Name": "Dep Card",
+      "Properties": [
+        {"Name":"PageType","Value":"List"},
+        {"Name":"SourceTable","Value":"70300"}
+      ]
+    },
+    {
+      "Id": 70304,
+      "Name": "Dep Editable Card",
+      "Properties": [
+        {"Name":"PageType","Value":"List"},
+        {"Name":"SourceTable","Value":"70300"},
+        {"Name":"Editable","Value":"1"},
+        {"Name":"ModifyAllowed","Value":"1"}
+      ]
+    }
+  ]
+}

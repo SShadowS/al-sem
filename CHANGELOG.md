@@ -42,6 +42,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callees') do not cap its confidence. Core-summary uncertainties still do (for example
   a parse-incomplete row sharing its id); with none, the confidence is uncapped.
 
+- **A dependency page known only from its symbols now carries its write-surface
+  properties (#302).** When a dependency `.app` has no embedded `.al` source, ABI
+  ingestion now reads each page's `Editable`, `InsertAllowed`, `ModifyAllowed`,
+  `DeleteAllowed` and `SourceTableTemporary` from `SymbolReference.json` into the model,
+  as the source path already did. Symbols write these values as `"0"` / `"1"`; `true` /
+  `false` are read too, and any other value counts as "not declared". Effects:
+  - d39 now reports a pageext over a read-only (`Editable = false` or
+    `ModifyAllowed = false`) symbol-only dependency page, with the same finding and
+    fingerprint as when that dependency ships its source. Before, such a page counted as
+    modifiable, so the read-only rule never fired.
+  - Opt-in d64 no longer reports "API page write surface not declared" for symbol-only
+    API pages that do declare it. On the pinned CDO workspace with every dependency
+    stripped to symbols, all 8 such findings were false positives and are gone.
+  - Pinned CDO (whose page-bearing dependencies all embed source): 0 findings moved.
+  No ABI vector or golden needed an update: no committed fixture or vector carries these
+  properties, so the parse is pinned by new unit and CLI tests instead. No Windows
+  confirmation is relevant: this changes how symbols are read, not a claim about BC
+  runtime behaviour.
+
 ## [2.1.1] - 2026-10-25
 
 ### Changed

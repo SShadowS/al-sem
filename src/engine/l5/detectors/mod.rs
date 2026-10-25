@@ -463,10 +463,11 @@ const TABLEEXT_TRIGGERS_AFTER_WRITE: &[&str] = &["OnAfterInsert", "OnAfterModify
 /// still owed.
 ///
 /// Limits:
-/// - **Main limit: a pageext over a dependency page is always exempt.** A
-///   dependency (ABI, symbol-only) page carries no `Editable` / `ModifyAllowed`
-///   in the model (`abi_rows.rs` leaves both `None`), so it counts as modifiable,
-///   and the read-only rule never fires for an extension of a Base App page.
+/// - A pageext over a read-only base page with `SourceTableTemporary = true`
+///   still reports (a false positive): `record_types` marks `Rec` temporary from
+///   the DECLARING object's flag, the pageext's, never its base page's, so d39's
+///   temp skip (G-13) misses it. This holds for workspace, embedded-source and
+///   (since #302) symbol-only base pages alike.
 /// - A table field OnLookup is exempt even when the field sits behind a
 ///   read-only page (the Table arm does not look at pages).
 /// - An event subscriber inside a page is a page procedure here, so it is exempt
@@ -560,9 +561,8 @@ pub(crate) fn receiver_reset_after(
 /// The page holding `routine` (for a PageExtension, its base page, looked up by
 /// name like `record_types` pass 3 does: last-wins when several pages share the
 /// name) is neither `Editable = false` nor `ModifyAllowed = false`. A page that is
-/// not in the model counts as modifiable, and so does a dependency page, whose
-/// properties the model does not carry (see [`implicit_rec_persisted_by_owner`]'s
-/// main limit).
+/// not in the model counts as modifiable. A dependency page known only from its
+/// symbols carries both properties too (#302, `abi_rows.rs`).
 fn page_may_modify(routine: &ModelRoutine, ctx: &DetectorContext, symbols: &SymbolTable) -> bool {
     let Some(obj) = ctx.declaring.of(routine) else {
         return true;

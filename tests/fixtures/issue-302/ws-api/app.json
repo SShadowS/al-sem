@@ -1,0 +1,11 @@
+{
+  "id": "11111111-0000-0000-0000-000000000302",
+  "name": "Ws302",
+  "publisher": "probe",
+  "version": "1.0.0.0",
+  "runtime": "13.0",
+  "idRanges": [{"from": 50300, "to": 50399}],
+  "dependencies": [
+    {"id": "22222222-0000-0000-0000-000000000302", "name": "Dep302", "publisher": "probe", "version": "1.0.0.0"}
+  ]
+}
