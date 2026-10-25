@@ -115,7 +115,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al grammar (currently **v4.4.1 + `main` at `c89c2ecb`**, see the Grammar
+- tree-sitter-al grammar (currently **v4.4.1 + `main` at `940ba71b`**, see the Grammar
   section — the package version did not move for 463 commits, many of them shape changes): a plain, gitignored clone of
   `SShadowS/tree-sitter-al` at `tree-sitter-al/`, on its `main` branch. **It is NOT pinned
   and NOT a submodule** (it was one until 2026-10-03). Local builds and CI both build
@@ -333,10 +333,10 @@ scans: genuinely O(distinct callers), a different complexity class than
 `prepare`/`outgoing` (whose cost doesn't scale with fan-in). 20ms is still
 editor-imperceptible for a "who calls this" panel.
 
-## Grammar (tree-sitter-al v4.4.1 + main `c89c2ecb`)
+## Grammar (tree-sitter-al v4.4.1 + main `940ba71b`)
 
 **Current reality:** the grammar is **v4.4.1** by `tree-sitter-al/package.json`, but the
-committed `node-types.sha256` matches `main` at **`c89c2ecb`** (2026-10-22), hundreds of
+committed `node-types.sha256` matches `main` at **`940ba71b`** (2026-10-25), hundreds of
 commits past the v4.4.1 tag commit (`7819df5`) with the package version unchanged. **The package
 version is NOT a grammar identity any more** — name the commit. What each bump moved is in
 CHANGELOG.md.
