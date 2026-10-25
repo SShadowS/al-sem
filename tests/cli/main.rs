@@ -99,6 +99,7 @@ mod cli_decision7_precedence;
 mod cli_dependency_diagnostics;
 mod cli_diff_strict;
 mod cli_digest_changed_spans;
+mod cli_digest_include_reads;
 mod cli_digest_query_dependencies;
 mod cli_digest_temp_state;
 mod cli_digest_test_coverage;

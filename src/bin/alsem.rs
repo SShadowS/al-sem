@@ -720,6 +720,18 @@ struct DigestCli {
     #[arg(long, default_value_t = false)]
     tests: bool,
 
+    /// Add DB_READ effects: one per table read site (Get, Find*, IsEmpty,
+    /// Count*, Next, CalcFields, CalcSums), with the same coverage, witness and
+    /// dependency-boundary rules as writes, and `payload.includeReads: true`.
+    /// Limits: per read SITE, not per table (physical and temporary reads of a
+    /// table are separate effects); an unresolved table has no resourceId; a
+    /// dependency-boundary group has no resourceId or tempState and names at
+    /// most 10 tables; LockTable is not a read; CalcFields reads only the
+    /// record's own table, not FlowField sources; DB_READ is NOT ordering-graded,
+    /// so its guarantees are always empty ("not graded", not "no label applies").
+    #[arg(long = "include-reads", default_value_t = false)]
+    include_reads: bool,
+
     /// A batch's decision whether `--changed` names an existing diff file,
     /// made once by the parent ([`pin_changed`]); `None`: ask the file system.
     #[arg(skip)]
@@ -1204,6 +1216,8 @@ fn job_kind(command: &Commands) -> Option<JobKind> {
     };
     Some(match command {
         Commands::Analyze(a) => ("analyze", universe(a.single_app)),
+        // `--include-reads` has its own, larger admission row (#246).
+        Commands::Digest(d) if d.include_reads => ("digest reads", universe(d.single_app)),
         Commands::Digest(d) => ("digest", universe(d.single_app)),
         Commands::Prove(p) => ("prove", universe(p.single_app)),
         Commands::Fingerprint(f) => ("fingerprint", universe(fingerprint_single_app(f))),
@@ -1719,6 +1733,7 @@ fn plan_digest(d: DigestCli) -> Planned {
                 deterministic: d.deterministic,
                 single_app: d.single_app,
                 tests: d.tests,
+                include_reads: d.include_reads,
             };
             Box::new(DigestJob::new(req, d.format == "human", d.out.as_deref()))
         },
@@ -2194,6 +2209,25 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #246 G-2: a digest's admission kind follows `--include-reads`, so only
+    /// a flag-on job takes the raised row.
+    #[test]
+    fn digest_job_kind_follows_include_reads() {
+        let kind = |args: &[&str]| {
+            let cli = Cli::try_parse_from([&["alsem", "digest", "ws"][..], args].concat()).unwrap();
+            job_kind(&cli.command)
+        };
+        assert_eq!(kind(&[]), Some(("digest", ViewUniverse::CrossApp)));
+        assert_eq!(
+            kind(&["--include-reads"]),
+            Some(("digest reads", ViewUniverse::CrossApp))
+        );
+        assert_eq!(
+            kind(&["--include-reads", "--single-app"]),
+            Some(("digest reads", ViewUniverse::SingleApp))
+        );
+    }
 
     /// Non-TTY stdout (piped) resolves `auto` → `Json`. This is the corpus-differential
     /// contract: differentials always pipe, so they always get JSON under `--format auto`.

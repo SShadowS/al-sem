@@ -150,15 +150,17 @@ pub fn write_own(dir: &Path, extra_al: &str) {
     write_dependency(&dir.join(".alpackages").join(DEP_APP_FILE), 0);
 }
 
-/// #161's text: [`write_own`] whose `Inner` does `Cust.Modify()` instead of
-/// `Cust.Insert()`.
-pub fn write_own_modify(dir: &Path, extra_al: &str) {
-    let lib = DEP_LIB_AL.replacen(
-        "Cust.Insert();\n        Commit();",
-        "Cust.Modify();\n        Commit();",
-        1,
-    );
+/// [`write_own`] whose `Inner` body is `inner` instead of its insert and commit:
+/// #161's modify ([`write_own_modify`]), #246's read-only `Cust.Get('A');`.
+pub fn write_own_inner(dir: &Path, extra_al: &str, inner: &str) {
+    let lib = DEP_LIB_AL.replacen("Cust.Insert();\n        Commit();", inner, 1);
     assert_ne!(lib, DEP_LIB_AL, "fixture: Inner's insert is replaced");
     write_workspace(dir, extra_al);
     write_dependency_lib(&dir.join(".alpackages").join(DEP_APP_FILE), 0, &lib);
+}
+
+/// #161's text: [`write_own`] whose `Inner` does `Cust.Modify()` instead of
+/// `Cust.Insert()`.
+pub fn write_own_modify(dir: &Path, extra_al: &str) {
+    write_own_inner(dir, extra_al, "Cust.Modify();\n        Commit();");
 }

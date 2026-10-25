@@ -1,0 +1,461 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": "246 r1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1482,
+    "severity": "important",
+    "text": "A1 strip-equality fails when reads exist: summary.totalEffects still counts them and DB_READ entry diagnostics remain; the fallback misattributes these to bugs.",
+    "disposition": "fixed",
+    "evidence": "Verified: totalEffects = sum of entry effects (digest_cli.rs:1476,1482); the only entry diagnostics are evidence-unavailable (:1045-1053) and temp-state-incoherent (:1092-1097), both tagged effectType; rootsRequested/rootsResolved/totalUnresolved do not read effects (:1473-1483). Design T2 now states a 4-step normalization (drop DB_READ effects, drop effectType==DB_READ diagnostics, subtract from totalEffects, drop payload.includeReads) and the fallback forbids widening it. Byte goldens remain the default oracle (T1). Anchor re-hashed after the O10 wording edit on line 72.",
+    "anchor": ".agent/issue-246/ledger.md:64-72",
+    "anchor_hash": "d49a42845387e874b80588b53cd035235ffd1b011102827d2732c4c9ad92ce8d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": "246 r1",
+    "file": "src/engine/l5/ordering_engine.rs",
+    "line": 489,
+    "severity": "important",
+    "text": "Feeding reads into ordering is not a reliable discrimination break under strip-equality; P9's 'no label' claim is false (COMMIT_REACHABLE / ORDERING_UNKNOWN attach to unclassified effects).",
+    "disposition": "fixed",
+    "evidence": "Verified ordering_engine.rs:489-525: ORDERING_UNKNOWN when ordered_op or owner is missing, COMMIT_REACHABLE when the group has any COMMIT, regardless of type. P9 corrected (ledger:31). New T4 (read+modify+message+commit fixture) asserts DB_READ guarantees/scopedGuarantees == [] and non-read labels equal flag-off; separate breaks for exclusion (read gains COMMIT_REACHABLE) and off-by-position remap (UI_MESSAGE sorts after DB_READ, digest.rs:4203-4212). T2 no longer claims to pin item 4.",
+    "anchor": ".agent/issue-246/ledger.md:86-90",
+    "anchor_hash": "ebd3a45729637ef15fd6f5747f918617b18d87a2cb802d67df66a6a1955cc40e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": "246 r1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1080,
+    "severity": "important",
+    "text": "No assertion pins the new DB_READ temp-state join, nor a primary caller->callee inherited read witness.",
+    "disposition": "fixed",
+    "evidence": "T3 now asserts detail.tempState known(false) on a physical read and known(true) on a temporary-record read (strings from temp_state_str, effect_query_cli.rs:740-746), and Caller->Helper inherited read with provenance transitive, via Caller>Helper, evidence at Helper's Get line. Breaks: drop DB_READ from the join match; clear inherited read paths.",
+    "anchor": ".agent/issue-246/ledger.md:73-85",
+    "anchor_hash": "d417be898dafc0a5c579ae912ccd35d1e8d08a5a516c3497d1e1d326e58f78f8",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": "246 r1",
+    "file": "src/engine/batch/admission.rs",
+    "line": 39,
+    "severity": "important",
+    "text": "Batch fallback tolerated under-reservation until a 'real overrun'; reads share the digest admission row and a standalone measurement does not validate a batch shape.",
+    "disposition": "fixed",
+    "evidence": "Verified rows keyed by (command, universe) (admission.rs:32-72), digest X = 15*STEP = 3,932,160 KiB set by Up 3,711,548 (measurement doc :123,:158). Design now measures d/h/ds and the Up batch with reads (Up-r) by #277's method, and fixes the rule in advance: any reads median above the row raises the row in this issue in its own commit; above 7,340,032 KiB (where W drops below 4) stop and go to the operator. CHANGELOG-only fallback removed.",
+    "anchor": ".agent/issue-246/ledger.md:108-112",
+    "anchor_hash": "5fdc2a1dafae90f57653200c94bd219fda3c6a2bdc1fdbe815af5a884084cda8",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": "246 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 4125,
+    "severity": "minor",
+    "text": "Distinct resourceId is not a complete tables-read view: boundary groups omit resourceId, list only 10 names, and get no tempState.",
+    "disposition": "fixed",
+    "evidence": "Verified group detail = boundary/resourceCount/resources with take(10) (digest.rs:4120-4140); group origin_operation_ids is empty so TempJoin::render returns None (digest_cli.rs:693-703). Added a Documented-limits list (help + CHANGELOG) covering per-site counting, unresolved tables, group exceptions, LockTable, CalcFields and not-graded.",
+    "anchor": ".agent/issue-246/ledger.md:52-58",
+    "anchor_hash": "034a5c1c0ccceadff689446a62cd6e2ef65ecd6349b0e6f1fc67526057c3edd5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": "246 r1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1045,
+    "severity": "important",
+    "text": "Strip test must also remove DB_READ-tagged entry diagnostics and assert the corpus has >0 DB_READ.",
+    "disposition": "fixed",
+    "evidence": "Same as S1. Preconditions added: >0 DB_READ overall and >=1 in each of ws-d1-multi-caller, ws-txn-d46-pos, ws-d8-commit-in-tx (sources contain FindSet/Get, e.g. ws-d8-commit-in-tx/src/posting.al:8). Anchor re-hashed after the O10 wording edit on line 72.",
+    "anchor": ".agent/issue-246/ledger.md:64-72",
+    "anchor_hash": "d49a42845387e874b80588b53cd035235ffd1b011102827d2732c4c9ad92ce8d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": "246 r1",
+    "file": "src/engine/l5/ordering_engine.rs",
+    "line": 491,
+    "severity": "important",
+    "text": "'Feed DB_READ into ordering_inputs' would not fail the strip test; item 4 is claimed pinned but is not.",
+    "disposition": "fixed",
+    "evidence": "Same as S2: T4 pins it directly (read gains COMMIT_REACHABLE in a commit group, ordering_engine.rs:522-525); fallback if no fixture makes break (a) fail: state item 4 as cost-only limit. 'Default flag true' kept as T1's break.",
+    "anchor": ".agent/issue-246/ledger.md:86-90",
+    "anchor_hash": "ebd3a45729637ef15fd6f5747f918617b18d87a2cb802d67df66a6a1955cc40e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": "246 r1",
+    "file": "src/engine/l5/ordering_engine.rs",
+    "line": 491,
+    "severity": "important",
+    "text": "Exclusion gives DB_READ a unique meaning: guarantees [] means 'not graded', unlike other unclassified types; must be documented.",
+    "disposition": "fixed",
+    "evidence": "Item 4 now states DB_READ is not ordering-graded, [] means 'not graded', contrasted with TELEMETRY/EVENT_PUBLISH/UI_ERROR which stay graded; help text and CHANGELOG carry it; listed in Documented limits.",
+    "anchor": ".agent/issue-246/ledger.md:47-47",
+    "anchor_hash": "079b8ea89c86708a7ba7f27117f9f6ebb64f0265618c1e9cd204425a5758dfba",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": "246 r1",
+    "file": "src/engine/batch/admission.rs",
+    "line": 39,
+    "severity": "important",
+    "text": "Measure #277's exact d and h argv with maxrss.py, report bytes and DB_READ count; decide the admission-row action before measuring.",
+    "disposition": "fixed",
+    "evidence": "Measurement plan uses the doc's verbatim argv ($F, $F88; docs/measurements/2026-10-25-issue-277-160-step12.md:78-88), release-fast, VmHWM via /work/bench/160-10-11a/maxrss.py, 3 alternating runs, median/range, output bytes, DB_READ count, plus ds and Up-r. Admission rule decided: raise the row in this issue, own commit, citing numbers (coordinator preference).",
+    "anchor": ".agent/issue-246/ledger.md:97-112",
+    "anchor_hash": "fad8f9f586681a48c41d57ca8dcfe91d4da19243c18c82053ddfe1dcb1d3c272",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": "246 r1",
+    "file": "tests/cli/cli_digest_query_dependencies.rs",
+    "line": 621,
+    "severity": "minor",
+    "text": "A3's break tests rule B generally, not reads; add a read-specific break.",
+    "disposition": "fixed",
+    "evidence": "T5 adds break: restrict the read arm to provenance == direct; the dependency read is inherited so the group vanishes.",
+    "anchor": ".agent/issue-246/ledger.md:91-93",
+    "anchor_hash": "86535151f27f302e1c7c191c871c682f82f507a1719699d8cfeb55c1e17cb5a8",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": "246 r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 85,
+    "severity": "minor",
+    "text": "resourceDisplay only appears for resolved tables; fixture must declare tables; unresolved reads lack resourceId.",
+    "disposition": "fixed",
+    "evidence": "Verified resource_display_of returns None unless the table resolves (digest.rs:85-104). T3 declares Customer and Vendor and asserts resourceId and display; limit documented.",
+    "anchor": ".agent/issue-246/ledger.md:54-54",
+    "anchor_hash": "92ba66b5d003984286e881945c829f68c281aa02eea00f85d263c442e6adeac0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": "246 r1",
+    "file": "src/program/body/capability/table_commit.rs",
+    "line": 38,
+    "severity": "minor",
+    "text": "LockTable is not DB_READ; kt and nt reads of one table are separate effects. Document both.",
+    "disposition": "fixed",
+    "evidence": "Verified table_commit.rs:38 maps LockTable to lock; kt/nt in dedupe key (digest.rs:3040) and group key (:3997-4004). Both in Documented limits.",
+    "anchor": ".agent/issue-246/ledger.md:53-56",
+    "anchor_hash": "55ef155ca6e72a05c4764e533dff6b08803819a72ec22c3b08f6a4115740ac50",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": "246 r1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1080,
+    "severity": "minor",
+    "text": "Cone/L4 alignment for inherited reads is unchecked; count DB_READ temp-state-incoherent diagnostics on CDO.",
+    "disposition": "fixed",
+    "evidence": "M1 records the count of temp-state-incoherent diagnostics with effectType DB_READ; above 0 becomes a discovery, no fix in scope.",
+    "anchor": ".agent/issue-246/ledger.md:105-105",
+    "anchor_hash": "5f2f4d98ac8fc23de0c2db3dc6b1908d37aa20c6dbb3e47f7b4e197de7fef5af",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": "246 r1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1552,
+    "severity": "minor",
+    "text": "A document without DB_READ cannot distinguish 'no reads' from 'flag off'; echo payload.includeReads when set.",
+    "disposition": "fixed",
+    "evidence": "Item 7: payload.includeReads: true only when set (absent when off, so flag-off bytes unchanged); T2 normalization step 4 removes it; T3 asserts its absence without the flag.",
+    "anchor": ".agent/issue-246/ledger.md:50-50",
+    "anchor_hash": "e435885bb0c59216d01f46fb8969a9059a304b0d4ec2a89d5a0232cc04c1bd3b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O10",
+    "source": "opus",
+    "round": "246 r2",
+    "file": ".agent/issue-246/ledger.md",
+    "line": 72,
+    "severity": "minor",
+    "text": "The Design claims the off-by-position remap break fails T2, but names no corpus fixture where a labelled effect sorts after a DB_READ; T4 already pins the remap.",
+    "disposition": "fixed",
+    "evidence": "Design line 72 now says T2 fails only if such a fixture exists. The implementer records the fixture it failed on, or records that T4 alone pins the remap.",
+    "anchor": ".agent/issue-246/ledger.md:72-72",
+    "anchor_hash": "02149d526a83d9872feda6f1064f0d1d1d7ebdc29c957a7dbbe6a633efff78a0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-1",
+    "source": "code-review",
+    "round": "246 final r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 4184,
+    "severity": "minor",
+    "text": "The canonical key behind `factId` leaves out `resourceId`. `DB_READ` effects for different tables that reach the same operation by the same via path therefore share one `factId`, and a `temp-state-incoherent` diagnostic names a `factId` that matches hundreds of effects. Fix it for `DB_READ` only, which is new and opt-in, so default output cannot move: add `resourceId` to the `DB_READ` canonical key. Add a test with two reads of different tables that reach the same operation.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor src/engine/l5/digest.rs:4184-4190.",
+    "anchor": "src/engine/l5/digest.rs:4184-4190",
+    "anchor_hash": "7b6e1afd51d3aa26649725cde9df4a0ad55d940dc4373a03ec3a6b730ffa550b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-2",
+    "source": "code-review",
+    "round": "246 final r1",
+    "file": "src/engine/batch/admission.rs",
+    "line": 38,
+    "severity": "minor",
+    "text": "The `(\"digest\", X)` row was raised for every cross-app digest, but only `--include-reads` needs it. Fix: restore `(\"digest\", X)` to 15 × STEP. Add a separate kind for a digest run with `--include-reads` (for example `\"digest reads\"` from `job_kind`) at 16 × STEP. Keep or adapt `digest_row_covers_include_reads`, and add a test that a flag-off digest keeps the 15-step row.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor src/engine/batch/admission.rs:38-47.",
+    "anchor": "src/engine/batch/admission.rs:38-47",
+    "anchor_hash": "25174e1584c900f81fee3c8c08a6c885d1e491ba30b27886d9444ed7bb0cd001",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-3",
+    "source": "code-review",
+    "round": "246 final r1",
+    "file": "src/engine/l5/digest_cli.rs",
+    "line": 1559,
+    "severity": "minor",
+    "text": "The `schemaVersion` history comment doesn't record that 1.6.0 documents may carry `DB_READ` and `payload.includeReads` when the flag is set. Add the note. The version stays 1.6.0, as the design decided.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor src/engine/l5/digest_cli.rs:1559-1560.",
+    "anchor": "src/engine/l5/digest_cli.rs:1559-1560",
+    "anchor_hash": "d317f9f5d56ce30aa976781ce7dc8f66a579fd1fce5fb0e70f02eb7e3cb35928",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-4",
+    "source": "code-review",
+    "round": "246 final r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 4282,
+    "severity": "minor",
+    "text": "A local closure named `effect_type_of` shadows the module function of the same name. Rename it (for example `effect_type_with_reads`). Drop the redundant `include_reads &&` in `graded`, or keep it with a one-line reason.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor src/engine/l5/digest.rs:4282-4282.",
+    "anchor": "src/engine/l5/digest.rs:4282-4282",
+    "anchor_hash": "073c723f365e5c386afc4a59b651f7632882a27f6a643f2c73a71170abf9e974",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-5",
+    "source": "code-review",
+    "round": "246 final r1",
+    "file": "src/engine/l5/digest.rs",
+    "line": 56,
+    "severity": "minor",
+    "text": "`map_op`'s doc says it returns None for \"read\". Add that `digest_one_root` maps table reads to `DB_READ` under `--include-reads`.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor src/engine/l5/digest.rs:56-57.",
+    "anchor": "src/engine/l5/digest.rs:56-57",
+    "anchor_hash": "797e21a7eb376fec96e3feea09806638e7a236b5bef62ed0e71ba0a917541d5a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-6",
+    "source": "sol",
+    "round": "246 final r1",
+    "file": "docs/measurements/2026-10-25-issue-246-digest-include-reads.md",
+    "line": 10,
+    "severity": "minor",
+    "text": "The doc claims cross-round byte equality, but the check compared sizes only and ran without `--deterministic`. Change it to \"equal byte sizes\".",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor docs/measurements/2026-10-25-issue-246-digest-include-reads.md:10-11.",
+    "anchor": "docs/measurements/2026-10-25-issue-246-digest-include-reads.md:10-11",
+    "anchor_hash": "855f464c0b6809dbac098ca5ba561842a139d691831caa0a87273f6d7c6f3c19",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-7",
+    "source": "opus",
+    "round": "246 final r1",
+    "file": "tests/cli/cli_digest_include_reads.rs",
+    "line": 504,
+    "severity": "minor",
+    "text": "The module doc says \"the batch view plumbing\" is pinned, but no test runs `alsem batch`. Add one mixed batch test, `[digest --include-reads, digest]` on one workspace: the first has `DB_READ`, the second is byte-equal to a standalone flag-off digest (`--deterministic`). This pins per-job isolation. Prove it with a break that applies the flag to every job.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor tests/cli/cli_digest_include_reads.rs:504-504.",
+    "anchor": "tests/cli/cli_digest_include_reads.rs:504-504",
+    "anchor_hash": "f63ccae5acf4268eaf1c691ff8bb4088be704e8af2ed405092182df34ada0a8f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-8",
+    "source": "opus",
+    "round": "246 final r1",
+    "file": "CHANGELOG.md",
+    "line": 45,
+    "severity": "minor",
+    "text": "\"Reads get `detail.tempState` through the same L4 join as writes\" reads stronger than the facts. Add \"where L4 holds the operation (about 7% of reads on CDO; see below)\".",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor CHANGELOG.md:45-46.",
+    "anchor": "CHANGELOG.md:45-46",
+    "anchor_hash": "0a2a0d66e7a57ddd8cc97278d01178e69b4765a635bed806379a91eeb11d2227",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-9",
+    "source": "code-review",
+    "round": "246 final r1",
+    "file": ".agent/issue-246/ledger.md",
+    "line": 212,
+    "severity": "minor",
+    "text": "`DB_READ` evidence points at a RecordRef carrier site for about 92% of CDO reads.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor .agent/issue-246/ledger.md:212-249. Anchor narrowed to the Final round 1 fixes section (unchanged text) after later ledger appends.",
+    "anchor": ".agent/issue-246/ledger.md:212-244",
+    "anchor_hash": "e2ace7486cd0470db6b31e7aea7a1c393682a054acdeb2769fe4059eac118219",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-10",
+    "source": "code-review",
+    "round": "246 final r1",
+    "file": ".agent/issue-246/ledger.md",
+    "line": 212,
+    "severity": "minor",
+    "text": "93% of reads have `no-l4-row`.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor .agent/issue-246/ledger.md:212-249. Anchor narrowed to the Final round 1 fixes section (unchanged text) after later ledger appends.",
+    "anchor": ".agent/issue-246/ledger.md:212-244",
+    "anchor_hash": "e2ace7486cd0470db6b31e7aea7a1c393682a054acdeb2769fe4059eac118219",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-11",
+    "source": "code-review",
+    "round": "246 final r1",
+    "file": ".agent/issue-246/ledger.md",
+    "line": 212,
+    "severity": "minor",
+    "text": "Wrapper APIs (`digest_query_reads`, `digest_reads_plan`).",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor .agent/issue-246/ledger.md:212-249. Anchor narrowed to the Final round 1 fixes section (unchanged text) after later ledger appends.",
+    "anchor": ".agent/issue-246/ledger.md:212-244",
+    "anchor_hash": "e2ace7486cd0470db6b31e7aea7a1c393682a054acdeb2769fe4059eac118219",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "G-12",
+    "source": "code-review",
+    "round": "246 final r1",
+    "file": ".agent/issue-246/ledger.md",
+    "line": 212,
+    "severity": "minor",
+    "text": "Three bools in a row in `digest_effects`.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in be0ae929 (#246 final r1); proofs in the ledger, section Final round 1 fixes. Anchor .agent/issue-246/ledger.md:212-249. Anchor narrowed to the Final round 1 fixes section (unchanged text) after later ledger appends.",
+    "anchor": ".agent/issue-246/ledger.md:212-244",
+    "anchor_hash": "e2ace7486cd0470db6b31e7aea7a1c393682a054acdeb2769fe4059eac118219",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
