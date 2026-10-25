@@ -7,13 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.1.0-rc.3] - 2026-10-25
+## [2.1.0-rc.4] - 2026-10-25
 
 Release candidate, cut from #277's reviewed and gated head (76ef00cb) before its CDO bench.
-rc.1 and rc.2 published nothing: the batch one-job goldens depend on the version
-(`alsemVersion`, digest's `workspaceFingerprint`), so the release build's test run failed
-on the bump. rc.3 pins the version in that test with `ALCH_DRIVER_VERSION_OVERRIDE`, as the
-other differential goldens do (test-only; the binaries are rc.1's code).
+rc.1 to rc.3 published nothing:
+- rc.1/rc.2: the batch one-job goldens depend on the version (`alsemVersion`, digest's
+  `workspaceFingerprint`), so the release build's test run failed on the bump. The test now
+  pins it with `ALCH_DRIVER_VERSION_OVERRIDE`, as the other differential goldens do.
+- rc.3: the Linux binary failed the glibc 2.34 floor. `alsem batch` spawns its workers with
+  `std::process::Command`, and std then links `pidfd_spawnp` at `GLIBC_2.39` when built on
+  ubuntu-latest. The Linux release build runs on ubuntu-22.04 (glibc 2.35) instead.
+Test and build changes only; the engine code is #277's.
 
 ### Added
 
