@@ -217,7 +217,7 @@ pub enum ChangedRootsDiagnostic {
 
 impl ChangedRootsDiagnostic {
     /// The `kind` string, shared by the JSON and the human output (#340).
-    pub fn kind(&self) -> &'static str {
+    fn kind(&self) -> &'static str {
         match self {
             Self::FileUnmatched { .. } => "file-unmatched",
             Self::SelectorUnmatched { .. } => "selector-unmatched",
@@ -1631,12 +1631,21 @@ fn changed_roots_diagnostic_human(d: &ChangedRootsDiagnostic) -> String {
     format!("changed-roots: {} {rest}", d.kind())
 }
 
-/// `s` with every control character in its `escape_default` form (`\n`, `\t`,
-/// `\u{1b}`, …); every other character as it is.
+/// `s` with every control character, and every bidi or line-breaking format
+/// character (U+200E/F, U+202A–E, U+2066–9, U+2028/9), in its `escape_default`
+/// form (`\n`, `\t`, `\u{202e}`, …); every other character, `\` included, as
+/// it is. It guards the `changed-roots:` lines only: the entry block's strings
+/// (evidence, detail, reasons) are printed as before.
 fn escape_controls(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        if c.is_control() {
+        if c.is_control()
+            || matches!(
+                c,
+                '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+                    | '\u{2028}' | '\u{2029}'
+            )
+        {
             out.extend(c.escape_default());
         } else {
             out.push(c);
@@ -2695,6 +2704,10 @@ mod tests {
             D::FileUnmatched {
                 file: s("src/a\nb\t.al"),
             },
+            // Bidi override and line separator are escaped; a backslash is not.
+            D::FileUnmatched {
+                file: s("src\\x\u{202e}y\u{2028}z.al"),
+            },
         ];
         let lines = concat!(
             "changed-roots: file-unmatched src/a.al\n",
@@ -2708,6 +2721,7 @@ mod tests {
             "changed-roots: diff-parse-error src/e.al: bad hunk header\n",
             "changed-roots: diff-parse-error truncated hunk\n",
             "changed-roots: file-unmatched src/a\\nb\\t.al\n",
+            "changed-roots: file-unmatched src\\x\\u{202e}y\\u{2028}z.al\n",
         );
         // (a) no entries.
         assert_eq!(
