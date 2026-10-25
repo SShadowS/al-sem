@@ -55,8 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at most `W` at once, started in manifest order: `W = max(1, min(batches, 4, ⌊28 GiB /
   P⌋))`, at most 2 when a job is `policy check`, `P` the largest measured CDO peak of the
   run's job kinds that build a view (`batch::admission::KIND_PEAK_KIB`; a kind with no row
-  takes the largest; the cross-app `fingerprint` and single-app `prove` rows are
-  placeholders at the largest row until measured; a job that fails its validation or a
+  takes the largest; a job that fails its validation or a
   `diff` of two snapshot files counts for none, nor sets the policy cap). The parent writes
   each worker its batch, its `--changed` decisions, the one stdin read and every file its
   plans read (a digest's `--diff` file, a policy file) on the worker's stdin (a worker never
@@ -80,6 +79,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computes (each distinct run allocation counted once). Limit: jobs that spell one workspace
   path differently share its read, so a program build error names the first spelling
   (graph's missing-`id` error names the job's own).
+  `KIND_PEAK_KIB` holds the step-12 CDO bench's measured rows
+  (`docs/measurements/2026-10-25-issue-277-160-step12.md` Part 4b), one per command and
+  universe, rounded up to 256 MiB: cross-app 13 steps (3.25 GiB) for analyze, fingerprint,
+  prove, events fanout/chains and query touches/effects, 15 (3.75 GiB) for digest, 39
+  (9.75 GiB) for policy check, 10 (2.5 GiB) for graph; single-app 3 (0.75 GiB), and 6
+  (1.5 GiB) for fingerprint and diff. A manifest without `policy check` derives `W` = 4,
+  with it 2. Stated limits (spec 12A-19): a batch whose view holds `policy check` and
+  other cross-app jobs peaks at about 1.22 × the policy job alone (the union of the jobs'
+  requests; measured 10,056,180 KiB against `policy check`'s 8,273,244), above the 1.15 ×
+  bound, reported and not gating; and a manifest path or stream directory that is not
+  UTF-8 still fails, because a run's job lines and its worker stream names are JSON
+  strings.
 
 - `alsem diff`: a new `rename-overlay-collision` diagnostic (`{kind, from, to}`). It
   fires when a `--renames` entry maps an old id (a routine, object, table, field or
@@ -93,6 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A tree read that asks for the primary app's facts now stops the run in release builds
   too: the view's "no tree read asks primary" check is an `assert!`, not a
   `debug_assert!` (#277).
+- Tests: `standalone_is_a_batch_of_one` pins `ALCH_DRIVER_VERSION_OVERRIDE` to the
+  version the `tests/gate-goldens/batch/one-job/` goldens were minted at (2.0.3), so a
+  version bump no longer breaks them: `alsemVersion`/`al_sem_version`, graph's `engine`
+  and digest's, prove's and fingerprint's `workspaceFingerprint` all carry it. The pin goes
+  to each child process, not the test process, where a concurrent test's standalone run
+  read it (#277).
 - **#160 step 9: `prove`, `fingerprint --routine` and `fingerprint --inventory-only` are
   cross-app by default** (part of #160). Each builds the model of the workspace plus the
   dependency code it requires, as `analyze` and `digest` do, and reads a tree over that

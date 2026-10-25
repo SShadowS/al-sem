@@ -899,13 +899,13 @@ Batches:
 
 | Bound | Rule | Void check |
 |---|---|---|
-| **B1a** (decided) | `AD + bAD < (a − ba) + (d − bd)` | expected saving ≥ 2 × (ba + bd + bAD), else the round set is void and reruns once |
-| **B1b** (decided) | `ADF + bADF < (a − ba) + (d − bd) + (f − bf)` | same form |
+| **B1a** (decided) | `AD + bAD < (a − ba) + (d − bd)` — **reported, not gating (12A-19, operator 2026-10-25)** | expected saving ≥ 2 × (ba + bd + bAD), else the round set is void and reruns once |
+| **B1b** (decided) | `ADF + bADF < (a − ba) + (d − bd) + (f − bf)` — **reported, not gating (12A-19)** | same form |
 | B2 | `AD_peak ≤ 1.15 × max(a_peak, d_peak)`; `ADF_peak ≤ 1.15 × max(a_peak, d_peak, f_peak)` | — |
 | B3 | `AS_peak ≤ 1.15 × max(a_peak, s_peak)` | — |
-| **B2u** | `U_peak ≤ 1.15 × max(peaks of U's jobs standalone)` (policy's, in practice) | — |
+| **B2u** | `U_peak ≤ 1.15 × max(peaks of U's jobs standalone)` (policy's, in practice) — **reported, not gating (12A-19, operator 2026-10-25)** | — |
 | **B2o** | `O_peak ≤ 1.15 × max(peaks of O's jobs standalone)` (`h`'s, in practice) | — |
-| B4 | for every Part 3 command x: `H_x ≤ 1.03 × P_x` (peaks) and `H_x + bH_x ≤ P_x + bP_x` (walls). `diff ws ws` is read against D8's stated change: its peak may drop, never rise | — |
+| B4 | for every Part 3 command x: `H_x ≤ 1.03 × P_x` (peaks) and `H_x + bH_x ≤ P_x + bP_x` (walls). `diff ws ws` is read against D8's stated change: its peak may drop, never rise. **Walls reported, not gating; peaks stay gating (12A-19, operator 2026-10-25)** | — |
 | B5 (decided budget) | `Σ(W4) ≤ 29,360,128 KiB` and `Σ(W4u) ≤ 29,360,128 KiB` | — |
 | B5p (decided cap) | `W2p` runs at most 2 workers at once and the Σ of any two concurrent workers ≤ 29,360,128 KiB | — |
 | B6 | `W4 + bW4 ≤ 1.25 × (W1q − bW1q)` (throughput ≥ 0.8 × 4 × one at CPUs/4) — **reported, not gating (12A-18, operator 2026-10-24)** | — |
@@ -1095,6 +1095,18 @@ Asked of the epic:
   contention. The operator chose a working `alsem batch` now over the throughput target: `W` stays as D12
   derives it; Task 12 measures and reports B6 (on #289's fix if it has landed); a follow-up investigation of
   four-worker throughput is filed as a discovery. B1a, B1b, B2, B2u, B2o, B5 and B7 stay gating.
+- **12A-19 (operator decision, 2026-10-25, "Accept and merge", after Task 12's bench)**: three bounds that
+  Task 12 missed are **reported, not gating**; the numbers are in
+  `docs/measurements/2026-10-25-issue-277-160-step12.md`.
+  - **B2u**: `U` peaked at 10,056,180 KiB, 1.216 × `p` 8,273,244 (bound 1.15 ×; rerun 1.215). F13's diagnosis
+    is case (c): the miss is the union itself, not an entry or a tree kept alive past its reader. Reported,
+    not gating; a follow-up is filed. `KIND_PEAK_KIB`'s policy check cross-app row carries `U`'s peak (39
+    steps), so `W` is derived from it.
+  - **B1a, B1b**: void twice (F3). The walls' bands on the shared host (3-9 s, rerun 7-18 s) exceed what the
+    void check allows, while the saving was stable at about 15.5 s per round. Reported, not gating.
+  - **B4 walls**: `H + bH ≤ P + bP` missed on 13 of 24 rows (F8), H 0-1.9 s over P and mostly inside the
+    band; every B4 peak passed. B4's walls are reported, not gating; its peaks stay gating.
+  - **B6** stays reported (12A-18). B2, B3, B2o and the B4 peaks stay gating.
 - **Stated deviation (Task 8, R7-3)**: `diff` reads both workspace sides when the job is made, before the
   first build (D3: every input is read before any write, and read-after-write is checked against them), not
   when the new side's view starts. Standalone `diff A B` therefore holds B's read during A's build (D6.3 (c)
