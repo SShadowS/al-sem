@@ -55,6 +55,14 @@ register is `.agent/issue-222/findings.json`.
 | T5e: `--no-telemetry`, two pipe threads, timeouts, child cleanup; compares normalized message multisets; a second break emits an extra existing-method notification | §5.6 | O24, S15 |
 | F7 never replaces T5e | §9 | S14 |
 
+### Changes in r3 (spec panel round 3)
+
+| Change | Where | Findings |
+|---|---|---|
+| F1(a) gets its own gates: keeps projection equality, capped diagnostics and mixed core-summary reuse; drops the seeded-db-row and numbering assertions; adds "every SCC's db effects recomputed" and a curated C5 where reused roles feed a re-solved caller | §9 F1 | S16 |
+| The fresh comparison host calls `refresh_committed` | §5.1 | O25 |
+| T5e's sync point in both runs: the `prepareCallHierarchy` response, after the root's initial diagnostics | §5.6 | O26 |
+
 ## Words
 
 - **Revision**: one frozen set of workspace inputs (`WorkspaceInputs`,
@@ -487,7 +495,8 @@ revisions (P16), so line shifts and the instance id cannot dirty an unrelated ro
 For each case: write the r0 sources into a tempdir, `host.refresh_committed(&never)`
 (assert `Full(NoBaseline)`), apply the edit with `std::fs::write` after asserting the old
 text holds the replaced snippet exactly once, `host.refresh_committed(&never)`, then build
-a SECOND, fresh host on the same directory and refresh it once. Assert:
+a SECOND, fresh host on the same directory and call `refresh_committed(&never)` on it once
+(a plain `refresh` only stages, so `projection()` would be `None`; O25). Assert:
 
 1. **oracle**: `host.projection() == fresh.projection()`;
 2. **kind**: the report's kind is the hand-stated one;
@@ -677,6 +686,16 @@ is a no-op unless a tracer was set up from the environment, `perf_trace.rs:522-5
   `textDocument/publishDiagnostics` for the published generation through the server's
   sink → the multisets differ.
 
+T5e's sync point, in BOTH runs (O26): `shutdown` is sent only after the
+`prepareCallHierarchy` response has arrived. That response is the sync point because the
+root builds lazily inside that request on the main-loop thread, and `build_server_state`
+publishes the root's initial diagnostics (`server.rs:603-611`) before the request is
+answered, through the same sink. So every root-build `publishDiagnostics` precedes the
+response. The flag-on run additionally waits for its stderr line before `shutdown`. With
+`--no-watcher` and no edit, nothing else sends to the client. The test also asserts that
+both runs received the same number of `publishDiagnostics` before the response, so a
+timing difference shows up as its own failure, not as a multiset mismatch.
+
 ### 5.7 Unchanged tests
 
 The 8 golden targets, `cargo test -p al-sem --lib`, `tests/lsp/lsp_incremental_parity.rs`
@@ -753,7 +772,7 @@ with `control: None`, which is today's function.
 
 | F# | If | Then |
 |---|---|---|
-| F1 | T2 or T2b fails: a seeded solve does not project equal to a fresh one | (a) seed only `v2_map` (the core summaries) and run `solve_scc_db_effects` for EVERY SCC, so the bundle is always fresh and only the roles fixpoint is reused; T0a, T2 and T2b are re-run against (a) and must pass. If they still fail, (b) reuse at revision level only: R0 equal and Δ empty → reuse the whole baseline `L4Analysis`; anything else → Full. (b) drops acceptance (A6-A8 become "a no-op refresh solves nothing"), so it needs the panel's approval before any code builds on it |
+| F1 | T2 or T2b fails: a seeded solve does not project equal to a fresh one | (a) seed only `v2_map` (the core summaries) and run `solve_scc_db_effects` for EVERY SCC, so the bundle is always fresh and only the roles fixpoint is reused. Its gates are defined for (a), not copied from §5.3 (S16): KEPT unchanged are T0a, projection equality in T2 and T2b on the corpus and C1-C4, C1's capped diagnostics, and mixed core-summary reuse; DROPPED are the assertions about seeded db rows (C2's differing `EffectId`, B12, and the "push seeded rows after the loop" break), because (a) seeds no db row and its effect numbering follows the fresh solve; ADDED are (1) every SCC's db effects are recomputed: the builder receives a row from `solve_scc_db_effects` for exactly the recomputed ids a fresh solve gives rows to (asserted as equal id sets), and (2) reused roles feed a re-solved caller, on a curated fixture C5: `C(var R: Record Cust)` passes `R` to `S(var R: Record Cust)`, which assigns `R.F`; T2b with `k = {C}` seeds `S`'s core summary and re-solves `C`; precondition: `C`'s fresh `parameter_roles` carry `S`'s `writesFields`. Break for (2): under (a), skip inserting the reused core summary into `v2_map` → `C`'s roles lose `writesFields`; T2b fails on C5. If (a) fails these gates, (b) reuse at revision level only: R0 equal and Δ empty → reuse the whole baseline `L4Analysis`; anything else → Full. (b) drops acceptance (A6-A8 become "a no-op refresh solves nothing"), so it needs the panel's approval before any code builds on it |
 | F2 | an oracle case fails although R2/R3 were applied as written (a solve read beyond one hop) | widen R2 to "no member reaches Δ through any chain of successors" (full reverse reachability, cutoff kept for summaries only); if that still fails, Full on any non-empty Δ, and A6 is restated |
 | F3 | the in-loop `cancel()` needs more than the one new parameter of §4.4 | check `cancel` only between phases (before and after the solve); S12 then covers the solve too |
 | F4 | an oracle case finds a global input missing from R0 | add it to R0 (a Full refresh), with its own T1 row and break |
