@@ -1,0 +1,1176 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 330,
+    "severity": "important",
+    "text": "Fixed stdout, stderr, files ordering loses standalone stream/write order and omits stderr_first.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: alsem.rs:1664-1670 writes analyze's warning before stdout; :921-925 writes policy diagnostics after the output. JobOutput is now an ordered list of write actions with failure short-circuits (D2.3, 12A-15); T20 pins degraded analyze and a diagnostic-producing --out job under 2>&1 against base-minted goldens.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:283-292",
+    "anchor_hash": "041b45910af0dbb231aee5678b5c510d35fd370b226a16b1258d96b2c9c0c48a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 177,
+    "severity": "important",
+    "text": "Job write failures become unspecified run-level failures; no rule sets the job's standalone write-failure code.",
+    "disposition": "fixed",
+    "evidence": "Round 1: D2.2 separates run-transport failure from a job's own write failure (job exit = its command's write-failure code). Round 2 (sol re-raise A): confirmed analyze has no --out (AnalyzeCli flags at alsem.rs:454-529), so T5 (d) now tests analyze through an unwritable manifest stdout target (exit 2) and fingerprint through a --out in a missing directory (exit 1).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:806-806",
+    "anchor_hash": "c33702ae4d625721b03bbf14159dfe3a45e5c490eabc4db25c7f337efd82a1b1",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 174,
+    "severity": "important",
+    "text": "--update-baseline missing from writable-path validation, write migration and T1.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: run.rs:594 save_baseline inside run_analyze_with_exit. D2.4 moves it into the job's File action (bytes from baseline.rs:88), adds it to the write set and read-after-write rule; T1 covers --baseline/--update-baseline; T5 (b4), (b5).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:294-349",
+    "anchor_hash": "f0b8cf653f12d2cf833724d4823c358c87eae87047b9f3aba435193fe12a3510",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 174,
+    "severity": "important",
+    "text": "Intra-job stdout/stderr aliases and shard-directory/contained-file collisions unspecified.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: alsem.rs:1416-1430 writes shard files inside the directory. D2.4 checks every target before any build: same file across and within jobs, a file inside a directory target, nested directories; exit 3; T5 (b2), (b3).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:294-349",
+    "anchor_hash": "f0b8cf653f12d2cf833724d4823c358c87eae87047b9f3aba435193fe12a3510",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 362,
+    "severity": "important",
+    "text": "Diff's two-view scheduling contradicts a singular view_key and per-view serialization; [diff A B, diff B A] cannot keep both side orders.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: diff/cli.rs:224, :228 load old then new; :240 strict gate; :254 renames. D1 has per-side demands and finalize after the last demand; D8 defines SideDoc, deferred finalization in logical old-first order; diff A A shares one view with every changed counter column restated. T21.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:650-681",
+    "anchor_hash": "1f27486f308165096ee12e9c3c9bec49e4b648fa2f4b1294c393e4a99bf046bd",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 410,
+    "severity": "critical",
+    "text": "Largest standalone-kind peak does not bound an unrestricted batch: union raw, effects/trees, runs and held outputs grow with jobs.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (session.rs:44-55; detector_context.rs:1370-1396). D6.3 writes each job as soon as job order allows and states the retained-bytes bound (no tree term: every tree read is fully owned and each tree drops right after its read). D12: explicit admission; P covers the measured shapes (standalone, AD, ADF, AS, U, O) charged to each shape's heaviest member; Limit L1 for the rest. B2u, B2o, W4u.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:739-783",
+    "anchor_hash": "239dd7b60b39abb82d4531fd473a226864cbe7e40606db295ae689e72ff385d6",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 396,
+    "severity": "important",
+    "text": "T7's 'each bucket <= largest standalone' is impossible for legitimate unions (raw, runs).",
+    "disposition": "fixed",
+    "evidence": "Confirmed. D11 has two rules: shared allocations counted once vs union storage bounded by the sum of the jobs' own buckets. T7 asserts each separately.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:727-737",
+    "anchor_hash": "6535674b8ffc34b971b19bb62d2c66470c6ced845b98d2b296f745d692904e62",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S8",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 599,
+    "severity": "important",
+    "text": "F13/F14 license a second view/pass for the same key, abandoning the acceptance.",
+    "disposition": "fixed",
+    "evidence": "Confirmed against issue-277.md and epic I1. §8 opens with a stop rule; F13/F14 end in STOP; no fallback adds a second view or pass.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:985-987",
+    "anchor_hash": "4fac4464b5b921803dc2a21ce60c6e2152e20091ac1648538190c2a4eca0c3a5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S9",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 403,
+    "severity": "important",
+    "text": "Parent-computed RAYON_NUM_THREADS narrows Decision 36 without approval.",
+    "disposition": "fixed",
+    "evidence": "Conductor activated F18: alsem batch neither reads nor sets RAYON_NUM_THREADS; children inherit; the bench sets Q.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:741-743",
+    "anchor_hash": "07009c35789e188a976b6453596a595c22fef43fba0c65d7fa1ad08cef962d3b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S10",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 449,
+    "severity": "important",
+    "text": "T3's mutation cannot show 'counter reads 2': the second composing prepare asserts before rebuilding.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: session.rs:400-437. T3 break 1 is one View per job (counters 2, assert_row fails, no panic); break 2 keeps the guard panic.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:804-804",
+    "anchor_hash": "89957c09c04944b6fcb7ea1fd13a888834d8e0da38e4370a1a22451f48343b37",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S11",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 447,
+    "severity": "important",
+    "text": "T1's non-convergence break cannot reach the spawned binary; B6 needs an observable PD-sensitive second digest.",
+    "disposition": "fixed",
+    "evidence": "Round 1: debug-only env seam; B6 precondition on enumerate_proofs (digest.rs:186-189). Round 2 (sol re-raise C): confirmed extra_diagnostics are appended after render_warnings and never print (analysis.rs:40-44, :104-106). The seam now pushes a non-convergence diagnostic into `diagnostics` BEFORE render_warnings in build_l4, so the warning is rendered and replayed.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:802-802",
+    "anchor_hash": "dc3e52d87dff2f62292287c9cc0263c3957487d657393a4dbc59b60e0841952e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S12",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 459,
+    "severity": "minor",
+    "text": "T13 stays green when standalone bypasses the driver; the wiring claim is unproved.",
+    "disposition": "fixed",
+    "evidence": "D1 adds a batch.driver trace instant; T13 asserts exactly one per standalone command; bypassing the driver fails it.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:814-814",
+    "anchor_hash": "ef79de899061c505d8274a315295de8257656792f457ce4488ce02ee1933c262",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S13",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 508,
+    "severity": "important",
+    "text": "B4 bounds only a/d/f/s although every pipeline is rewired; diff omitted.",
+    "disposition": "fixed",
+    "evidence": "Round 1: Part 3 bounded B4 over every rewired command. Round 2 (sol re-raise D): confirmed --single-app on events, policy and query (alsem.rs:189-192, :267-272, :364-368); Part 3 now lists events, policy and query in both universes (graph cross-app only).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:879-883",
+    "anchor_hash": "1e63b38ca577d3e73ce5a7cf8922b490167f4fb12ba12e4a89598eeb708817a1",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S14",
+    "source": "sol",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 464,
+    "severity": "minor",
+    "text": "T19 reads witness.members 'from the trace' but it is emitted only on census stderr.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: detector_context.rs:1380-1387. T19 runs with ALSEM_RETAINED_CENSUS=1 and reads the line from the worker's stderr.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:819-819",
+    "anchor_hash": "45d7089c95c8f9a19b5eb893b933099f26266af6284f76d6d2884d9a091fbbcc",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 449,
+    "severity": "important",
+    "text": "T3's break cannot make a counter read 2; it fails by panic.",
+    "disposition": "fixed",
+    "evidence": "Same root as S10 (session.rs:398-404, :546). Break 1 = one View per job; break 2 = the guard panic.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:804-804",
+    "anchor_hash": "89957c09c04944b6fcb7ea1fd13a888834d8e0da38e4370a1a22451f48343b37",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 137,
+    "severity": "important",
+    "text": "contribute has no model, but digest (and case B prove/--routine) resolve roots from the model; the no-input check sits between build and plan.",
+    "disposition": "fixed",
+    "evidence": "Round 1: D4.2 two-phase planning, one identity table per view. Round 2 (sol re-raise B): confirmed no input returns Err before any prepare (digest_cli.rs:1745-1749) while no resolved root still prepares digest_plan(.., ∅, tests), runs, builds the tx map and l4, then exits 2 (:1776-1831; session.rs:171-186). D4.2 now separates them: no input contributes nothing; no root contributes the default run, need_l4, TRANSACTION_SPANS and, with --tests, an empty-subject tree.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:409-432",
+    "anchor_hash": "2d27dc97a4a33ac19623a0b69c9407acd2fb6cf8cbd1e115a6ccaeb0c7385c51",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 352,
+    "severity": "important",
+    "text": "D7 misses the 49 bin eprintln! and env_logger log lines printed during the shared view build (timestamped).",
+    "disposition": "fixed",
+    "evidence": "Confirmed: 49 eprintln! in alsem.rs; env_logger init alsem.rs:688; warn! sites in dependencies.rs, snapshot/cache.rs, workspace.rs and (round 2 nit) engine/deps/app_package_zip.rs:142,175,253. D7 inventories three classes; log lines are view lines, printed once per view.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:628-640",
+    "anchor_hash": "3dfc66d529b7d0c3709600a4fa00065aa4f4b411beaa32cadaaf415376e36c2c",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 33,
+    "severity": "important",
+    "text": "stderr_first dropped; fixed stdout/stderr/files order changes 2>&1 output of a batch of one.",
+    "disposition": "fixed",
+    "evidence": "Same root as S1. D2.3 ordered write actions; T20.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:283-292",
+    "anchor_hash": "041b45910af0dbb231aee5678b5c510d35fd370b226a16b1258d96b2c9c0c48a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 174,
+    "severity": "important",
+    "text": "--update-baseline missing from the write set; no read-after-write rule.",
+    "disposition": "fixed",
+    "evidence": "Confirmed (run.rs:594). D2.4 write set, write moved out of compute, read-after-write usage error; T5 (b5).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:294-349",
+    "anchor_hash": "f0b8cf653f12d2cf833724d4823c358c87eae87047b9f3aba435193fe12a3510",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 383,
+    "severity": "minor",
+    "text": "assert_row ties inputs.read to build.program; a two-view, one-workspace batch reads inputs once.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: cli_build_counters.rs:120-121. Row gains its own inputs cell.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:698-726",
+    "anchor_hash": "a21be5fd8f3595a2e21728d3aaecc0e4c744cfe416c5885d3b51155cc4824610",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 112,
+    "severity": "minor",
+    "text": "A12.2 '1 + one per cut reader' vs D10 'witness 2' name different counters.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: capability_cone.rs:3221. A12.2 and D10 name cone and witness apart.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:176-176",
+    "anchor_hash": "15ac26bebf1b77454d30a05b62a07169ce02257f55117845c78c66a8d2e35062",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 197,
+    "severity": "minor",
+    "text": "Moving the policy load early also changes policy check --strict with error diagnostics plus a bad policy.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: pipeline.rs:211-219 before :223. D3 precedence change 3; T9.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:358-367",
+    "anchor_hash": "6c924a756353a5313f823c4c95ee071c511d548e3ecfee9b34dfd97a05d11eac",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 410,
+    "severity": "minor",
+    "text": "floor(budget/P) can be 0; P ignores held JobOutput bytes.",
+    "disposition": "fixed",
+    "evidence": "D12: W = max(1, ...) with a stated stderr line; held bytes bounded by D6.3 and covered through shape O, else Limit L1.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:746-756",
+    "anchor_hash": "90627ad49b2cdc5074d44aa79a548c6eceebcbbe5ffa6f51dc451c6ce5fea194",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O10",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 402,
+    "severity": "minor",
+    "text": "Setting RAYON_NUM_THREADS in children is thread-count code; ask for an amendment rather than leaving it to F18.",
+    "disposition": "fixed",
+    "evidence": "Conductor chose F18: no thread code at all; children inherit; the bench sets Q.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:741-743",
+    "anchor_hash": "07009c35789e188a976b6453596a595c22fef43fba0c65d7fa1ad08cef962d3b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O11",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 454,
+    "severity": "minor",
+    "text": "T8 as a lib test needs unsafe set_var and races other tests.",
+    "disposition": "fixed",
+    "evidence": "T8 is a spawned cli test; the pool.threads instant now reads the newly built pool (open point 3).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:809-809",
+    "anchor_hash": "722aa509b4910b0b5833eb0f8a5803784b1bcdcb86e30c2df931fb97da11aaee",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O12",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 463,
+    "severity": "minor",
+    "text": "ALSEM_BATCH_PEAK_TABLE ships in release as a worker knob.",
+    "disposition": "fixed",
+    "evidence": "Override removed; T17 lib over an injected table plus the real table's cli cases.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:818-818",
+    "anchor_hash": "a6e7fbe9008c864fe828bf95e99f0c915153fec532af09d31038ea7f9f678dca",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O13",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 368,
+    "severity": "minor",
+    "text": "A graph job on a view whose model fails must still get its program and own text.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: run.rs:184-188; impact_graph/mod.rs:213. D9 builds the program first when a graph job is on the view; T12.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:689-694",
+    "anchor_hash": "996f2915c6fbe7b310c5234af80f7cee9a30d0cc0b8345a42902e3087fcb0b20",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O14",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "ledger-spec-r1.md",
+    "line": 75,
+    "severity": "minor",
+    "text": "Ledger cites spec §8.4 for projections (it is §7.4); P-N7 has no fallback without an exclusive slot.",
+    "disposition": "fixed",
+    "evidence": "Ledger cites §7.4; §7.4 and F19 state the wait-and-schedule fallback.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:961-976",
+    "anchor_hash": "9fc96b5edbab8615b7e707bc5178e6a5d7ad79c7738037a53524baef803dae66",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O15",
+    "source": "opus",
+    "round": "12 r1",
+    "file": "spec-r1.md",
+    "line": 176,
+    "severity": "minor",
+    "text": "A job's own write failure exit unstated; children's process lines interleave on one stderr.",
+    "disposition": "fixed",
+    "evidence": "Round 1: D2.2 job write-failure code and worker-stderr write-error line; D2.5 [w<b>] whole-line forwarding. Round 2 (sol re-raise A): T5 (d) exercises analyze through an unwritable manifest stdout target (analyze has no --out, alsem.rs:454-529).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:806-806",
+    "anchor_hash": "c33702ae4d625721b03bbf14159dfe3a45e5c490eabc4db25c7f337efd82a1b1",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O16",
+    "source": "opus",
+    "round": "12 r2",
+    "file": "spec-r2.md",
+    "line": 588,
+    "severity": "important",
+    "text": "KIND_PEAK_KIB charges U's ~9 GB to every kind in U, so ADF gets P ~9 GB and W = 3, contradicting 'no policy -> 4', W4, W4u and triggering F17.",
+    "disposition": "fixed",
+    "evidence": "Confirmed from the spec's own numbers (U ~8.7-9.0 GB > budget/4 = 7,340,032 KiB). Decided: a shape's peak is charged only to its heaviest standalone member's row (U -> policy; U-p, O, AD, ADF -> digest; AS -> analyze); rows keyed by shape rejected. Recomputed W: no policy 4, policy 2. T17 lib case over the committed table (AD, ADF, U-p, O -> 4; U -> 2), break: charge U to every kind -> ADF 3. Round 3 (sol re-raise): Part 4b (spec L809-813) now states the same heaviest-member-only rule as D12 (L677-681).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:890-894",
+    "anchor_hash": "0b3d3cedd4b15c0436b480f5cd2af75f77ec45f40699d7e229def7a9a0597114",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O17",
+    "source": "opus",
+    "round": "12 r2",
+    "file": "spec-r2.md",
+    "line": 113,
+    "severity": "minor",
+    "text": "Two unstated exceptions to E13's stderr equality: a view's log lines and a job's own write-error line go to the worker's stderr.",
+    "disposition": "fixed",
+    "evidence": "Goal 2 and A12.5 name both; amendment 12A-17; T12 and T5 (d) pin them; a one-job batch keeps today's process stderr.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:131-135",
+    "anchor_hash": "7952c4b921430d5ee81c2ef33c7666232ba029457f918047282ae38a9518fe91",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O18",
+    "source": "opus",
+    "round": "12 r2",
+    "file": "spec-r2.md",
+    "line": 787,
+    "severity": "minor",
+    "text": "§7.4 stops on a projected B2u miss before F13's borrowed form is tried; make the borrowed form the design.",
+    "disposition": "fixed",
+    "evidence": "Confirmed derive_capability_facts is generic over R: Borrow<[CapabilityFact]> (snapshot.rs:1637-1642) and the cut path already borrows (:1305). D5.3 now has a drain mode (standalone, unchanged) and a borrow mode (no clone) when a later reader exists; the clone term leaves U's estimate; P-N9 is read with it applied; F13 becomes census checks then STOP.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:509-551",
+    "anchor_hash": "12c8bd9a2436acd914eff7624d406267e6750aefc66def6497f939582f86d035",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O19",
+    "source": "opus",
+    "round": "12 r2",
+    "file": "spec-r2.md",
+    "line": 632,
+    "severity": "minor",
+    "text": "T7's det/l4 equality holds only when one job's mask equals the union mask.",
+    "disposition": "fixed",
+    "evidence": "T7 now uses default-detector jobs only and asserts one distinct demanded mask from the trace's RunKeys as a precondition.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:808-808",
+    "anchor_hash": "37af78102c408ff188b03476417db016c51d76fc59d16aca6a4f97db6209f374",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S15",
+    "source": "sol",
+    "round": "12 r2",
+    "file": "spec-r2.md",
+    "line": 588,
+    "severity": "important",
+    "text": "Assigning U's peak to every kind in U raises the analyze/digest rows used by ADF, so W becomes 3, not four.",
+    "disposition": "fixed",
+    "evidence": "Same root as O16; fixed by the heaviest-member charging rule; W recomputed (no policy 4, policy 2); T17 lib case. Round 3 (sol re-raise): Part 4b (spec L809-813) now states the same heaviest-member-only rule as D12 (L677-681).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:890-894",
+    "anchor_hash": "0b3d3cedd4b15c0436b480f5cd2af75f77ec45f40699d7e229def7a9a0597114",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S16",
+    "source": "sol",
+    "round": "12 r2",
+    "file": "spec-r2.md",
+    "line": 642,
+    "severity": "minor",
+    "text": "T17 expects policy W = 2 'whatever the table', contradicting the formula when floor(budget/P) is 0 or 1.",
+    "disposition": "fixed",
+    "evidence": "T17 lib now expects 1, 1, 2, 2 with policy for floors 0, 1, 3, >=4; D12 states the cap is applied after the formula's min (W = min(formula, 2)).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:818-818",
+    "anchor_hash": "a6e7fbe9008c864fe828bf95e99f0c915153fec532af09d31038ea7f9f678dca",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S17",
+    "source": "sol",
+    "round": "12 r2",
+    "file": "spec-r2.md",
+    "line": 238,
+    "severity": "important",
+    "text": "Moving the baseline write changes a standalone error: exit 3 'failed to write baseline' becomes exit 2 with the canonical write-error text.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: run.rs:594-595 returns Err('failed to write baseline ...'), printed by alsem.rs:1675-1689 with exit 3. The adopted rule is kept; D2.4 and §2 state the change (new: 'al-sem: write error: <path>: <OS message>', exit 2, stdout unwritten in both); T23 records the base behaviour in a golden minted at Task 0 and asserts the new one.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:294-349",
+    "anchor_hash": "f0b8cf653f12d2cf833724d4823c358c87eae87047b9f3aba435193fe12a3510",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S18",
+    "source": "sol",
+    "round": "12 r2",
+    "file": "spec-r2.md",
+    "line": 455,
+    "severity": "important",
+    "text": "Jobs with no view (file/file diff, validation-only jobs) have no finalize/write phase.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: D1 allows empty demands; diff file sides load without a view (diff/cli.rs:153-164). D2.2 adds a zero-view phase before the first view (item (0) of D6); an all-zero-view batch builds nothing and still writes every job. T24 tests a file/file diff among workspace jobs and an entirely validation-failing batch.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:277-281",
+    "anchor_hash": "8c0a5ee5f2806d86ffaecbc59b4f890d5b3cf8383f3488928a88aeb0b5251bf1",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O20",
+    "source": "opus",
+    "round": "12 r3",
+    "file": "spec-r3.md",
+    "line": 456,
+    "severity": "minor",
+    "text": "In D5.3's borrow mode, the raw readers inside compose_tree (both evidence indexes, derive_capability_facts and the pd-arena subject set) walk every workspace routine and look it up in the map, so a tree handed the shared union map would pick up other jobs' subjects.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: subjects = raw.keys() (snapshot.rs:1396) scopes the pd arena (:1424-1431); the operation and callsite indexes loop over base.ws_routines with raw.get(&r.id) (:2143, :2269); derive_capability_facts calls take_raw(&r.id) over inp.ws_routines (:1658). D5.3 borrow mode now takes the subject set from the TreeDemand and routes all four readers through a SubjectRaw accessor that returns None outside those subjects; drain mode gets an extracted own-subjects map (two last-reader trees with disjoint roots would otherwise see each other's entries). T1 break B2 and T2 catch a missed reader on output; new lib test T25 checks the accessor hides another subject.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:518-544",
+    "anchor_hash": "b1cbf5835a45643d2375c6a45e3085b345d9a254c48e8dae8443b7477514eba3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O21",
+    "source": "opus",
+    "round": "12 r3",
+    "file": "spec-r3b.md",
+    "line": 475,
+    "severity": "minor",
+    "text": "In borrow mode the TreeDemand subject set can be larger than today's raw.keys(): a scoped id with no raw entry would enter the set and widen the pd-arena scope, so pd_solution would differ from drain and from standalone.",
+    "disposition": "fixed",
+    "evidence": "Confirmed: the composition skips members outside routine_ids (capability_cone.rs:2828) and inserts a raw entry only for a walked member (:2950-2951); today's subject set is raw.keys() (snapshot.rs:1396) and scopes the pd arena (:1424-1431). D5.3's borrow bullet now defines subjects = TreeDemand scope ∩ the map's keys, which equals what drain's per-subject remove yields. T25 case (b): a scoped id with no entry is absent from the subject set and pd_solution equals case (a); break: take the subject set from the scope alone.",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:530-536",
+    "anchor_hash": "17521ed8f1fbe6c8d67075fad288e7e3b06785380cd33815cb835280a25a2b45",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "E12-C1",
+    "source": "code-review",
+    "round": "12 early",
+    "file": "src/engine/batch/mod.rs",
+    "line": 205,
+    "severity": "important",
+    "text": "The driver finalized a job at the view holding the LAST entry of its demand list, not the last view it visits; [diff A B, diff B A] panicked \"every side ran\".",
+    "disposition": "fixed",
+    "evidence": "Fixed in Task 7 (6b307bb6 lineage): last_view is the max visit position over the job's demands (batch/mod.rs:205-215). Lib test a_job_finalizes_after_its_last_view_in_visit_order and cli batch_diff_sides (T21 shape); break .max()->.last() panics. The sub-point \"a side never runs before its old side\" is refuted by D8: \"Job 1's old side and job 2's new side compute on A\".",
+    "anchor": "src/engine/batch/mod.rs:205-215",
+    "anchor_hash": "5bed219cc5331da2ab0166b263c747c031b74aac4fe97139241b7a02f18d011c",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "E12-C2",
+    "source": "code-review",
+    "round": "12 early",
+    "file": "src/engine/batch/job.rs",
+    "line": 130,
+    "severity": "important",
+    "text": "DiffJob::new read both sides up front and held both Arcs through both builds: standalone diff A B peak rises by one workspace's inputs (B4); new side read even when the old fails (D8).",
+    "disposition": "fixed",
+    "evidence": "Fixed in Task 7/8: reads are handed to the driver (HandOff, job.rs:130-165) and dropped with their view, so standalone diff A B holds only B's read during B's build (lib a_view_drops_its_read_before_the_next_view, a_job_holds_no_read_past_its_view). Reading both sides before the first build stays (D3: every read precedes every write, D2.4); the extra new-side read on an old-side failure is the stated counter change R6-3, recorded as a deviation in spec s10 (R7-3).",
+    "anchor": "src/engine/batch/job.rs:130-165",
+    "anchor_hash": "2ed2911f15156124dbe03b5f5bba51261f33de5d1958efedbae45bee6b2aef31",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "E12-C3",
+    "source": "code-review",
+    "round": "12 early",
+    "file": "src/engine/batch/mod.rs",
+    "line": 462,
+    "severity": "minor",
+    "text": "Analyze's view was dropped by the driver outside the gate.teardown span; trace_summary loses teardown attribution.",
+    "disposition": "fixed",
+    "evidence": "Fixed in Task 7: the view and fresh are dropped inside a view.teardown span (batch/mod.rs:462-472); stale run.rs comment fixed. cli analyze_frees_its_view_in_a_named_span; break removes the span and fails.",
+    "anchor": "src/engine/batch/mod.rs:462-472",
+    "anchor_hash": "e90d7f649cae2196d4d4b242d688e768758ab4c30340b4457880ddfbf75690dc",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "E12-C4",
+    "source": "code-review",
+    "round": "12 early",
+    "file": "src/engine/gate/run.rs",
+    "line": 410,
+    "severity": "important",
+    "text": "Cross-app build_view_model ignored ViewKey.no_roots_config: a cross-app --no-roots-config demand still applied roots.config.json.",
+    "disposition": "fixed",
+    "evidence": "Fixed in the Task 11 rebase: build_cross_app_base_from takes key.no_roots_config (run.rs:410-422); single-app and no-id arms pass it too. Step 9's fingerprint_no_roots_config_cross_app_routine and inventory_only_no_roots_config_cross_app fail when the flag is dropped (ledger 12 early C4).",
+    "anchor": "src/engine/gate/run.rs:402-422",
+    "anchor_hash": "8b63f728c570d5e7a24fdb4fa6bba1d0d6cd0ccb0231e3f9c4978ebfe2e52913",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "E12-C5",
+    "source": "code-review",
+    "round": "12 early",
+    "file": "src/engine/session.rs",
+    "line": 455,
+    "severity": "minor",
+    "text": "PolicyJob asked WitnessRequest::primary() even under --no-policy, running a raw-facts witness pass nobody reads.",
+    "disposition": "fixed",
+    "evidence": "Fixed in Task 7: policy_plan(.., rules) asks an empty request when no policy is loaded (session.rs:455). cli policy_check_no_policy_keeps_no_raw_facts (build.witness_pass 0); break restores primary() and fails.",
+    "anchor": "src/engine/session.rs:455-470",
+    "anchor_hash": "7971d0c341b242b99b9dc361430bb6e145cd33e1162ed303bf5807aa53efb0a2",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "E12-C6",
+    "source": "code-review",
+    "round": "12 early",
+    "file": "src/program/inputs.rs",
+    "line": 188,
+    "severity": "minor",
+    "text": "RequestInputs::read had no inputs span or census bytes; a large --baseline/policy file showed in no bucket.",
+    "disposition": "fixed",
+    "evidence": "Fixed in Task 7: inputs.request_read span and a request_inputs census bucket (inputs.rs:188-200); deliberately not counted in inputs.read (the counter rows key on workspace reads). Lib request_census_charges_its_files; break drops the tally and fails.",
+    "anchor": "src/program/inputs.rs:208-222",
+    "anchor_hash": "75cfe0a0106bf3af56004c1f30abc3a3a895f5b658196f578e4a6d954b160c64",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "E12-C7",
+    "source": "code-review",
+    "round": "12 early",
+    "file": "src/engine/batch/job.rs",
+    "line": 250,
+    "severity": "minor",
+    "text": "JobFailure duplicated JobOutput (actions, exit) with conversions between them.",
+    "disposition": "fixed",
+    "evidence": "Fixed in Task 7: pub type JobFailure = JobOutput (job.rs:254). Refactor, no behaviour change; whole suite and every golden green.",
+    "anchor": "src/engine/batch/job.rs:259-265",
+    "anchor_hash": "c04f85deba049da6f7788d429dc0aac1ca319d6ed55115f54db1ddd8468865c0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "E12-C8",
+    "source": "code-review",
+    "round": "12 early",
+    "file": "src/engine/batch/job.rs",
+    "line": 126,
+    "severity": "minor",
+    "text": "Eight jobs copied the same single-demand block; query/prove/digest copied one serialize arm.",
+    "disposition": "fixed",
+    "evidence": "Fixed in Task 7: ViewDemand::one (job.rs:130) and JobOutput::text as the shared serializer. Refactor, no behaviour change; whole suite and goldens green.",
+    "anchor": "src/engine/batch/job.rs:126-140",
+    "anchor_hash": "1ca2498cbe284add2a67a11c6544882cfdcecd50170659efed8ec8fa268e053d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-1",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/bin/alsem.rs",
+    "line": 1983,
+    "severity": "important",
+    "text": "`--format auto` (analyze's default) resolves from the PROCESS stdout's tty-ness; a one-batch run from a terminal writes terminal text into the job's stdout file. A12.3 says auto = Json in a batch. T1 pipes both sides so cannot fail. CHANGELOG over-claims.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/bin/alsem.rs:1983-2010.",
+    "anchor": "src/bin/alsem.rs:2043-2070",
+    "anchor_hash": "58ff483ef78fd298f2a87dd26ff696cc3afc5990a56778523d799a5b7819894d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-2",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/bin/alsem.rs",
+    "line": 925,
+    "severity": "important",
+    "text": "`fingerprint --shard` without `--out` (and `--shard bad`) gets a phantom `Dir(\".\")` write target; when the stream files are under cwd the whole run exits 3 instead of the job failing alone (exit 1, D2.1, T24b).",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/bin/alsem.rs:925-936.",
+    "anchor": "src/bin/alsem.rs:1063-1069",
+    "anchor_hash": "8c5cb6e2cae43adede18e69091d5c4e22c534c30ace1b39b5ca81a75359111d2",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-3",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/engine/batch/worker.rs",
+    "line": 22,
+    "severity": "important",
+    "text": "Workers reopen the manifest and re-plan from the filesystem: (a) a job may write the manifest, so a later worker reads a different document; (b) `digest --changed foo.diff` where an earlier batch writes foo.diff: the parent saw no file (routine list, no read-after-write check), the later worker reads it as a diff. Fix: workers get the parent's validated plan/manifest bytes (no re-read), and the plan's file/routine decision is made once in the parent; refuse the manifest as a write target.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/engine/batch/worker.rs:22-48.",
+    "anchor": "src/engine/batch/worker.rs:22-94",
+    "anchor_hash": "a0dcc32e34bfeacbafadb9fb798695b442fc50ef85362792d6921ea16d6fea46",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-4",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 3744,
+    "severity": "important",
+    "text": "With the census on, `[query touches WS, fingerprint WS --inventory-only]` panics: query releases `Cell::Base`, then fingerprint's `census_output` calls `b.rel()` unconditionally. Prove and routine fingerprints too.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/engine/l4/capability_cone.rs:3744-3751.",
+    "anchor": "src/engine/l4/capability_cone.rs:3744-3751",
+    "anchor_hash": "538f04f50999b9701e99283657b2272aa1c1dd62af2124b51cc855a74bd86baa",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-5",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/engine/batch/manifest.rs",
+    "line": 143,
+    "severity": "important",
+    "text": "`read_by_workspace` requires a written path to resolve under the resolved workspace root, but source discovery follows symlinks (source_text.rs:65-66): `WS/src/link.al -> /outside/A.al` lets another job write `/outside/A.al`. Same for linked config files / dependency packages. CHANGELOG claims symlinks hide no clash.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/engine/batch/manifest.rs:143-196.",
+    "anchor": "src/engine/batch/manifest.rs:135-217",
+    "anchor_hash": "5444f123602812099906bec917e7cf43f04b7f89c1c4281a04a2a3c916d5e96a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-6",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/engine/gate/run.rs",
+    "line": 402,
+    "severity": "important",
+    "text": "Graph + analyze on an id-less workspace: the builder builds `ResolvedProgram`, discards it, and `build_single_app` builds another — two program builds for one view, against A12.6 (one build per view; a miss is a STOP per spec, not a fallback).",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/engine/gate/run.rs:402-415.",
+    "anchor": "src/engine/gate/run.rs:402-415",
+    "anchor_hash": "2a00a80ca7a77e931ed8c30a5c10c403940b20a737d185255d60842a263babb7",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-7",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/bin/alsem.rs",
+    "line": 1515,
+    "severity": "important",
+    "text": "`reads_stdin` looks at raw `--diff -` before digest validation and `--changed` override resolution, so the parent blocks on stdin EOF for a job that will never read it (e.g. `--diff - --changed existing.patch`, or an invalid `--format`). Standalone never reads stdin there.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/bin/alsem.rs:1515-1528.",
+    "anchor": "src/bin/alsem.rs:1538-1551",
+    "anchor_hash": "bc48240b936c0a06327cbbc445a60ebb04a4d9c76eaa8b7a856ef1cb742bfbb9",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-8",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/bin/alsem.rs",
+    "line": 1515,
+    "severity": "important",
+    "text": "`let _ = stdin().read_to_end(..)` drops read errors; standalone reports `al-sem: digest: failed to read diff from stdin` with exit 3, the multi-batch job gets empty bytes and a different result.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/bin/alsem.rs:1515-1528.",
+    "anchor": "src/bin/alsem.rs:1538-1551",
+    "anchor_hash": "bc48240b936c0a06327cbbc445a60ebb04a4d9c76eaa8b7a856ef1cb742bfbb9",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-9",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/engine/gate/policy/pipeline.rs",
+    "line": 305,
+    "severity": "minor",
+    "text": "`--no-policy` still declares `Cell::Raw` in `reads`, so an earlier policy job's raw map is kept for it (D6.1).",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/engine/gate/policy/pipeline.rs:305-314.",
+    "anchor": "src/engine/gate/policy/pipeline.rs:333-342",
+    "anchor_hash": "e8c5ec6ee11f575c44b0c34af7a4c314f514244da063e5512096a3f50f2cffd7",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-10",
+    "source": "sol",
+    "round": "12 final r1",
+    "file": "src/bin/alsem.rs",
+    "line": 1079,
+    "severity": "minor",
+    "text": "The in-process one-batch run omits D12's `[batch] worker 0 peak_kib=…` census line; only `run_worker` calls `report_peak`.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/bin/alsem.rs:1079-1082.",
+    "anchor": "src/bin/alsem.rs:1091-1094",
+    "anchor_hash": "6968f6435deccc8505484a09ad3d3e70d854913b328d2163fdd3f63fff31865e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-11",
+    "source": "opus",
+    "round": "12 final r1",
+    "file": "src/engine/gate/policy/pipeline.rs",
+    "line": 236,
+    "severity": "minor",
+    "text": "A job that fails its own validation after its workspace was read (bad policy file; `--shard` without `--out`) never hands its read off, so the read lives for the whole batch and `batch.held inputs=` does not count it (R7-1/D6.3).",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/engine/gate/policy/pipeline.rs:236-246.",
+    "anchor": "src/engine/gate/policy/pipeline.rs:223-285",
+    "anchor_hash": "4421a0f39d35477896c4fbcd5a709e41a13725c7e353d82bb593aefda3e86d74",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-12",
+    "source": "opus",
+    "round": "12 final r1",
+    "file": "src/bin/alsem.rs",
+    "line": 795,
+    "severity": "minor",
+    "text": "`with_jobs` recurses once per job on the main thread and every view build runs at the bottom; a large manifest shrinks the stack left for the engine or overflows. Build jobs in a loop into owned storage.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/bin/alsem.rs:795-826.",
+    "anchor": "src/bin/alsem.rs:810-827",
+    "anchor_hash": "3b359b6c73ce15905c3d4fc673da7faecec28e629d95f97595c0caf3a5f15443",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-13",
+    "source": "opus",
+    "round": "12 final r1",
+    "file": "src/engine/batch/manifest.rs",
+    "line": 275,
+    "severity": "minor",
+    "text": "A missing `--out-dir` or a missing stream directory is found only after every job has built and computed.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/engine/batch/manifest.rs:275-299.",
+    "anchor": "src/engine/batch/manifest.rs:298-322",
+    "anchor_hash": "43e64bb55c2b04db2bd138cfd4be62a085d3421060c276b950ae7794adf113d0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FR-14",
+    "source": "code-review",
+    "round": "12 final r1",
+    "file": "src/bin/alsem.rs",
+    "line": 1054,
+    "severity": "minor",
+    "text": "Admission counts jobs that will never build: a `fingerprint --format bad` is classed cross-app (8 GiB placeholder) and lowers W; failed jobs and file-only diffs count too.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 47a1282f (#277 final r1); verified red on dc6df5a1 first; discrimination proof in the ledger, section Final round 1 fixes. Fix at src/bin/alsem.rs:1054-1060.",
+    "anchor": "src/bin/alsem.rs:1063-1071",
+    "anchor_hash": "840ea88139a4282715fa5c3d7e0d0f107759fcb5fb6b65f10751de13d115c97f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R2-1",
+    "source": "sol",
+    "round": "12 final r2",
+    "file": "src/bin/alsem.rs",
+    "line": 1549,
+    "severity": "important",
+    "text": "Workers still re-plan filesystem-dependent inputs from argv. (a) `digest --diff <file>` missing at parent plan time → parent plans `Failed`, `Failed` drops the job's READS with its writes, so D2.4 never sees `<file>` and admission does not count it; a worker re-plans, finds the file another batch wrote, runs a view nobody admitted and reads another job's output. On dc6df5a1 the same manifest exited 3: regression. (b) An existing diff file is read twice (parent and worker): a FIFO given once blocks the second read. Fix: the worker must not re-decide anything the parent decided from the filesystem — hand the parent's read result (bytes or failure) to the worker, as stdin and `changed_is_file` already are; and a `Failed` plan keeps its reads in the write check, dropping only its writes. Test: two batches, batch 0 `digest … --out foo.diff`, batch 1 `digest … --diff foo.diff`, foo.diff absent at start → exit 3.",
+    "disposition": "fixed",
+    "evidence": "Fixed in d7ef7a79 (#277 final r2); verified red on 47a1282f (R2-3 red only against a restored recursion); proofs in the ledger, section Final round 2 fixes. Fix at src/bin/alsem.rs:1549-1571.",
+    "anchor": "src/bin/alsem.rs:1559-1590",
+    "anchor_hash": "6601383e01acd643318ba841c005f3597df1e9b6c7ca2de81f5d281a407d7674",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R2-2",
+    "source": "sol",
+    "round": "12 final r2",
+    "file": "src/engine/batch/manifest.rs",
+    "line": 146,
+    "severity": "important",
+    "text": "`taken_files` records only existing files. With `WS/src/shared -> /outside/shared`, another job may write the absent `/outside/shared/New.al`: outside the workspace prefix and not in `taken`; the loader would follow the directory link and read it. Linked DIRECTORIES must count as read roots (a write beneath a linked directory's canonical target, of a kind the loader takes, conflicts). Test with a new file under a linked dir.",
+    "disposition": "fixed",
+    "evidence": "Fixed in d7ef7a79 (#277 final r2); verified red on 47a1282f (R2-3 red only against a restored recursion); proofs in the ledger, section Final round 2 fixes. Fix at src/engine/batch/manifest.rs:146-217.",
+    "anchor": "src/engine/batch/manifest.rs:146-217",
+    "anchor_hash": "25feb57328b8a874c92f5fff4055ea86168e372dabfb5f6bc674712fd93d15c5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R2-3",
+    "source": "sol",
+    "round": "12 final r2",
+    "file": "src/bin/alsem.rs",
+    "line": 2282,
+    "severity": "minor",
+    "text": "The recursion fix has no test that could fail if recursion came back. Add one that discriminates (e.g. a many-job batch run under a small stack — `ulimit -s` in a unix-only spawned shell, or a thread with a small stack in a lib test over the job builder), with a proof against the old recursive shape.",
+    "disposition": "fixed",
+    "evidence": "Fixed in d7ef7a79 (#277 final r2); verified red on 47a1282f (R2-3 red only against a restored recursion); proofs in the ledger, section Final round 2 fixes. Fix at src/bin/alsem.rs:2282-2299.",
+    "anchor": "src/bin/alsem.rs:2299-2316",
+    "anchor_hash": "e8072136fd4d968deae22f2c8b2511d4394c441fae704b0a9e228c3aef835db2",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R2-4",
+    "source": "sol",
+    "round": "12 final r2",
+    "file": "src/engine/gate/policy/pipeline.rs",
+    "line": 249,
+    "severity": "minor",
+    "text": "A bad `--policy` file stays `Planned::Ready` and becomes `Failed` only at job construction, so it still counts toward admission (four bad-policy batches get W=2). Resolve the policy in planning so the plan is `Failed`, or count admission from built jobs. Test: 4 batches of bad-policy jobs → W 4 (or no policy cap).",
+    "disposition": "fixed",
+    "evidence": "Fixed in d7ef7a79 (#277 final r2); verified red on 47a1282f (R2-3 red only against a restored recursion); proofs in the ledger, section Final round 2 fixes. Fix at src/engine/gate/policy/pipeline.rs:249-283.",
+    "anchor": "src/engine/gate/policy/pipeline.rs:249-283",
+    "anchor_hash": "8f916a5d4b55fb50183931aad89a0cd3b39f495c6de9986da7e23b182e7d1665",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R2-5",
+    "source": "sol",
+    "round": "12 final r2",
+    "file": "src/engine/batch/job.rs",
+    "line": 200,
+    "severity": "important",
+    "text": "FR-11's early `hand_off` drop in a failed policy job drops the only strong workspace handle during sequential job construction; the reader holds a `Weak`, so the next job on that workspace reads it AGAIN: `[policy check WS --policy bad.yaml, analyze WS]` gives `inputs.read=2`, against D3. Fix so construction never re-reads (e.g. the reader holds strong handles until every job is constructed, then demotes to `Weak`), while a failed job still holds no read past construction. Test exactly that manifest: `inputs.read` 1, and the failed job holds no read once the batch runs.",
+    "disposition": "fixed",
+    "evidence": "Fixed in d7ef7a79 (#277 final r2); verified red on 47a1282f (R2-3 red only against a restored recursion); proofs in the ledger, section Final round 2 fixes. Fix at src/engine/batch/job.rs:200-250.",
+    "anchor": "src/engine/batch/job.rs:200-250",
+    "anchor_hash": "fb7cf825f89657693c7f8231be53a3678dccf3821607eb367c248553000292c0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R3-1",
+    "source": "sol",
+    "round": "12 final r3",
+    "file": "src/bin/alsem.rs",
+    "line": 1048,
+    "severity": "important",
+    "text": "A failed auto-detected policy lost its actual read from conflict validation: job_paths records only explicit --policy paths and the R2-4 early failure dropped the workspace entry, so [policy check WS, events fanout WS --format bad] with job 1's stdout naming the invalid WS/al-sem.policy.yaml ran and truncated it instead of exiting 3.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 76ef00cb (#277 final r3); verified red on d7ef7a79; proofs in the ledger, section Final round 3 fixes. Fix at src/bin/alsem.rs:1048-1070.",
+    "anchor": "src/bin/alsem.rs:1048-1070",
+    "anchor_hash": "381403a59cf650c73419dc2a27020fa8f523bdbf422d74bf6904a3517ec9f121",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R3-2",
+    "source": "sol",
+    "round": "12 final r3",
+    "file": "src/engine/batch/worker.rs",
+    "line": 35,
+    "severity": "important",
+    "text": "The plan-file transport panicked on non-UTF-8 paths: a relative --policy absolutized against a non-UTF-8 cwd put a non-UTF-8 PathBuf in PlanFiles.reads and expect(\"a worker input serializes\") panicked for multi-batch runs.",
+    "disposition": "fixed",
+    "evidence": "Fixed in 76ef00cb (#277 final r3); verified red on d7ef7a79; proofs in the ledger, section Final round 3 fixes. Fix at src/engine/batch/worker.rs:35-94.",
+    "anchor": "src/engine/batch/worker.rs:35-94",
+    "anchor_hash": "334fac2898ffa6092935ee50e64e10f14b97432e6cccdbb05078ddf1380f78ca",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "R5-1",
+    "source": "opus",
+    "round": "12 final r5",
+    "file": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md",
+    "line": 1107,
+    "severity": "minor",
+    "text": "Spec 12A-19 (and the numbers file) stated the B4 wall misses as 13 of 24 rows with H 0-1.9 s over P; the bench tables show 14 of 24, and on a, ecs and qes H is at or below P (noise band only).",
+    "disposition": "fixed",
+    "evidence": "Fixed in 33a820bc (spec 12A-19 bullet, docs only); the numbers file count is corrected with Part 4. Raiser-only acceptance (minor, gate-inert).",
+    "anchor": "docs/superpowers/specs/2026-10-24-issue-277-160-step12-alsem-batch-design.md:1107-1110",
+    "anchor_hash": "46510554656890364172845f54bfa46f315982db34af61f0b026dd9f786afd09",
+    "fix_commit": "33a820bc050379004cf82576f8af8d620d9c578c",
+    "reviews": {
+      "sol": "accepted-by-rule",
+      "opus": "accepted"
+    }
+  }
+]

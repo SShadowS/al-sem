@@ -16,6 +16,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use crate::engine::batch::job::{
+    Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+    ViewNeeds, WorkspaceRead,
+};
+use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::{
     serialize_normalized_value, sort_and_drop_nulls, sort_keys_keep_nulls,
 };
@@ -30,23 +35,23 @@ use crate::engine::l5::digest::{
     DigestEntryResult, compute_digest_effects_cli, is_known_temp_state,
 };
 use crate::engine::l5::snapshot::{
-    CapabilitySnapshot, SnapshotCoverageRecord, SnapshotIdentityTable, derive_identity_table,
+    CapabilitySnapshot, SnapshotCoverageRecord, SnapshotIdentityTable,
 };
 use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use crate::engine::l5::unresolved_cone::{
     DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
 };
-use crate::engine::session::{Cell, RunKey, View};
+use crate::engine::session::{Cell, RunKey};
 use crate::program::model::workspace::Model;
 
 // ---------------------------------------------------------------------------
 // Shared envelope-diagnostics projection
 // ---------------------------------------------------------------------------
 
-/// Finishes digest's and prove's default run on a prepared [`View`]: reads
-/// the envelope diagnostics and the tx map, then takes and drops the run and
+/// Finishes digest's and prove's default run on a prepared view: reads the
+/// envelope diagnostics and the tx map, then takes and drops the run and
 /// releases `det`, the relation (`Cell::Rel`) and the ordering facts (#160
-/// §4.4.4).
+/// §4.4.4), each kept when a later job on the view reads it (#277 D6.1).
 ///
 /// Shared so the two cannot desync. The envelope `diagnostics` is the JSON
 /// array of the run `key` (each entry `{code: "DIAG-<stage>", message,
@@ -55,13 +60,14 @@ use crate::program::model::workspace::Model;
 /// base still owns the relation (its graph and SCC): releasing `Cell::Rel`
 /// drops only the view's `Arc`.
 pub(crate) fn finish_default_run(
-    view: &mut View,
+    cx: &mut ViewCx<'_>,
     key: &RunKey,
 ) -> (serde_json::Value, HashMap<String, TransactionContext>) {
+    let view = cx.view();
     let diagnostics = diagnostics_json(&analyzer_diagnostics_of_view(view, key));
     let tx_ctx_map = tx_context_map(&view.det().transaction_spans);
-    drop(view.take_run(key));
-    view.release_all_but(&[Cell::L4]);
+    drop(cx.take_run(key));
+    cx.release_all_but(&[Cell::L4]);
     (diagnostics, tx_ctx_map)
 }
 
@@ -1719,7 +1725,7 @@ pub struct DigestRunResult {
 /// from `payload.dependencies.mode` (a contract test).
 #[allow(clippy::too_many_arguments)] // CLI flags, one each
 pub fn run_digest_pipeline(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     changed_files: Option<Vec<String>>,
     changed_routines: Option<Vec<String>>,
     diff_text: Option<String>,
@@ -1746,8 +1752,9 @@ pub fn run_digest_pipeline(
 
 /// The CLI inputs of one digest run ([`run_digest_pipeline`]'s flags).
 /// `max_paths_override` is not here: the pipeline has never read it.
-pub(crate) struct DigestRequest<'a> {
-    pub inputs: &'a std::sync::Arc<crate::program::inputs::InputSet>,
+pub struct DigestRequest<'a> {
+    /// Handed to the driver; compute reads `ViewCx::inputs` (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
     pub changed_files: Option<Vec<String>>,
     pub changed_routines: Option<Vec<String>>,
     pub diff_text: Option<String>,
@@ -1765,92 +1772,172 @@ pub(crate) fn digest_pipeline_with(
     detectors: Vec<crate::engine::l5::registry::Detector>,
     req: DigestRequest<'_>,
 ) -> Result<DigestRunResult, String> {
-    use crate::engine::gate::run::AnalysisTarget;
-    use crate::engine::session::digest_plan;
+    let job = DigestJob {
+        detectors,
+        req,
+        human: false,
+        out: None,
+    };
+    crate::engine::batch::run_doc(&job)
+        .one::<Result<DigestRunResult, String>>()
+        .unwrap_or_else(|f| Err(f.message()))
+}
+
+/// `alsem digest` as a batch job (#277 D1). Its side document is
+/// `Result<DigestRunResult, String>`; the no-input failure (after the build,
+/// before `prepare`) contributes nothing to the view's plan (D4.2).
+pub struct DigestJob<'a> {
+    detectors: Vec<crate::engine::l5::registry::Detector>,
+    req: DigestRequest<'a>,
+    /// `--format human`: the human text, else the JSON.
+    human: bool,
+    out: Option<&'a str>,
+}
+
+impl<'a> DigestJob<'a> {
+    /// The default detectors over `req`, written as `--format` and `--out` say.
+    pub fn new(req: DigestRequest<'a>, human: bool, out: Option<&'a str>) -> DigestJob<'a> {
+        DigestJob {
+            detectors: crate::engine::l5::detectors::default_detectors(),
+            req,
+            human,
+            out,
+        }
+    }
+
+    fn changed_input(&self) -> ChangedInput {
+        ChangedInput {
+            files: self.req.changed_files.clone(),
+            routines: self.req.changed_routines.clone(),
+            diff_text: self.req.diff_text.clone(),
+        }
+    }
+}
+
+impl Job for DigestJob<'_> {
+    fn name(&self) -> &'static str {
+        "digest"
+    }
+    fn demands(&self) -> Vec<ViewDemand> {
+        ViewDemand::one(
+            self.req.inputs,
+            self.req.single_app,
+            false,
+            ViewNeeds::MODEL,
+        )
+    }
+
+    fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        use crate::engine::session::digest_plan;
+        // The no-input check runs right after the build (an id or build error
+        // still wins), before any detector run or solve (#160 §4.4.4).
+        let has_input = self
+            .req
+            .changed_files
+            .as_ref()
+            .is_some_and(|f| !f.is_empty())
+            || self
+                .req
+                .changed_routines
+                .as_ref()
+                .is_some_and(|r| !r.is_empty())
+            || self
+                .req
+                .diff_text
+                .as_ref()
+                .is_some_and(|d| !d.trim().is_empty());
+        if !has_input {
+            return Err(JobFailure::line(
+                "digest: at least one of changedFiles, changedRoutines, or diffText is required",
+                1,
+            ));
+        }
+        // D3: the roots are resolved before the composition, from the model
+        // alone; the owner index dies here, the identity table with the
+        // resolve step.
+        let model = cx.model();
+        let changed_roots = resolve_changed_roots(
+            cx.ids(),
+            model,
+            &self.changed_input(),
+            primary_guid_of(model),
+            &OwnerIndex::build(model),
+        );
+        // The plan composes the roots' raw facts, the tree over the cone graph
+        // and their effects; no resolved root composes no tree (exit 2 below).
+        let plan = digest_plan(
+            self.detectors.clone(),
+            changed_roots.roots.iter().cloned().collect(),
+            self.req.tests,
+        );
+        Ok(PlanPart {
+            plan,
+            reads: vec![Cell::Det, Cell::L4, Cell::Effects],
+            carry: Some(Box::new(changed_roots)),
+        })
+    }
+
+    fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        Ok(SideDoc::new(Ok::<_, String>(digest_view(cx, &self.req))))
+    }
+
+    fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        // No model-instance id: `digest: could not compute modelInstanceId`.
+        Ok(SideDoc::new(Err::<DigestRunResult, _>(
+            failure.target.message("digest"),
+        )))
+    }
+
+    fn serialize(&self, doc: Doc) -> JobOutput {
+        match doc.one::<Result<DigestRunResult, String>>() {
+            Err(f) => f,
+            // A DigestPipelineError → the message verbatim (it already starts
+            // with "digest:"), exit 1, mirroring cli/digest.ts's catch.
+            Ok(r) => JobOutput::text(
+                self.out,
+                r.map(|r| {
+                    let text = if self.human {
+                        r.human_text
+                    } else {
+                        r.json_text
+                    };
+                    (text, r.exit_code)
+                }),
+            ),
+        }
+    }
+}
+
+/// Digest off its prepared view: the default run (the envelope diagnostics),
+/// the tx map off its `det`, the effects off its tree and the L4 store off its
+/// `l4` (#160 §4.4.4, step 6 D7).
+fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult {
     let DigestRequest {
-        inputs,
         changed_files,
         changed_routines,
         diff_text,
         alsem_ver,
         deterministic,
-        single_app,
         tests,
+        ..
     } = req;
-    // Assemble workspace (no model-instance id: `digest: could not compute
-    // modelInstanceId`, `AnalysisTarget::build`).
-    let target = AnalysisTarget::build(inputs, single_app, "digest")?;
-    let dependencies = target.dependencies();
-
-    // The no-input check runs right after the target build (an id or build
-    // error still wins), before any detector run or solve (#160 §4.4.4).
-    let has_input = changed_files
-        .as_ref()
-        .map(|f| !f.is_empty())
-        .unwrap_or(false)
-        || changed_routines
-            .as_ref()
-            .map(|r| !r.is_empty())
-            .unwrap_or(false)
-        || diff_text
-            .as_ref()
-            .map(|d| !d.trim().is_empty())
-            .unwrap_or(false);
-
-    if !has_input {
-        return Err(
-            "digest: at least one of changedFiles, changedRoutines, or diffText is required"
-                .to_string(),
-        );
-    }
-
-    // One View: the default run (the envelope diagnostics), the tx map off its
-    // `det`, the effects off its tree and the L4 store off its `l4` (#160
-    // §4.4.4, step 6 D7).
-    let mut view = View::new(target);
-
-    // D3: the roots are resolved before the composition, from the model alone;
-    // the identity table and the owner index die with this block.
-    let changed_input = ChangedInput {
-        files: changed_files.clone(),
-        routines: changed_routines.clone(),
-        diff_text: diff_text.clone(),
-    };
-    let changed_roots = {
-        let model = view.model();
-        let identities = derive_identity_table(model);
-        let owners = OwnerIndex::build(model);
-        resolve_changed_roots(
-            &identities,
-            model,
-            &changed_input,
-            primary_guid_of(model),
-            &owners,
-        )
-    };
-
-    // The plan composes the roots' raw facts, the tree over the cone graph and
-    // their effects; no resolved root composes no tree (exit 2 below).
-    let plan = digest_plan(
-        detectors,
-        changed_roots.roots.iter().cloned().collect(),
-        tests,
-    );
-    let key = plan.keys().remove(0);
-    view.prepare(&plan);
-    let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
-    let mut effects = if plan.needs_tree() {
-        view.take_effects()
+    let (alsem_ver, deterministic, tests) = (*alsem_ver, *deterministic, *tests);
+    let changed_roots: ChangedRootsResult = cx.take_carry();
+    let dependencies = cx.view().target().dependencies();
+    let key = cx.keys()[0].clone();
+    let (diagnostics_json, tx_ctx_map) = finish_default_run(cx, &key);
+    let mut effects = if cx.has_tree() {
+        cx.take_effects()
     } else {
         DigestEffects::default()
     };
-    let resolved = view.model();
+    let resolved = cx.view().model();
     let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(cx.inputs(), alsem_ver);
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's
     // `l4`, solved the way `query effects` solves it in the same mode (#66).
-    let temp_states = DbTempStates::new(resolved, &view.l4().bundle);
+    let temp_states = DbTempStates::new(resolved, &cx.view().l4().bundle);
     // Built again (F1-C4): the first borrows the model, and `prepare` takes
     // the view mutably. It is small (one entry per primary routine).
     let owners = OwnerIndex::build(resolved);
@@ -1885,14 +1972,14 @@ pub(crate) fn digest_pipeline_with(
     drop(tx_ctx_map);
     drop(owners);
     drop(effects);
-    view.release(Cell::L4);
-    view.release(Cell::Effects);
+    cx.release(Cell::L4);
+    cx.release(Cell::Effects);
 
     let exit_code: u8 = if changed_roots.roots.is_empty() { 2 } else { 0 };
 
     let changed_input_contract = ChangedInputContract {
-        files: changed_files,
-        routines: changed_routines,
+        files: changed_files.clone(),
+        routines: changed_routines.clone(),
         diff_provided: diff_text.is_some(),
     };
 
@@ -1918,11 +2005,11 @@ pub(crate) fn digest_pipeline_with(
         human_text.push('\n');
     }
 
-    Ok(DigestRunResult {
+    DigestRunResult {
         json_text,
         human_text,
         exit_code,
-    })
+    }
 }
 
 /// A2.10's use test, shared by digest, prove and events: `pipeline` runs over
@@ -1937,7 +2024,7 @@ pub(crate) fn assert_prepare_refuses_a_reduced_set(
     fixture: &str,
     pipeline: impl FnOnce(
         Vec<crate::engine::l5::registry::Detector>,
-        &std::sync::Arc<crate::program::inputs::InputSet>,
+        &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     ),
 ) {
     let set: Vec<_> = crate::engine::l5::detectors::default_detectors()
@@ -1952,9 +2039,9 @@ pub(crate) fn assert_prepare_refuses_a_reduced_set(
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/r0-corpus")
         .join(fixture);
-    let inputs = crate::program::inputs::InputSet::read(
+    let inputs = crate::program::inputs::WorkspaceInputs::read(
         &ws,
-        &crate::program::inputs::InputNeeds {
+        &crate::program::inputs::WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         },

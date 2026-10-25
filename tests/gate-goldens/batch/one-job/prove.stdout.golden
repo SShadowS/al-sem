@@ -1,0 +1,33 @@
+{
+  "alsemVersion": "2.0.3",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "prove",
+  "payload": {
+    "question": "may-commit",
+    "result": {
+      "answer": "no",
+      "obligations": {
+        "analysisGaps": 0,
+        "coneTruncated": false,
+        "coverageComplete": true,
+        "openWorldRows": 0,
+        "unresolvedCallsites": 0
+      }
+    },
+    "routine": {
+      "anchor": {
+        "column": 4,
+        "file": "ws:src/D1MultiCaller.al",
+        "line": 21,
+        "sourceKind": "source"
+      },
+      "display": "CallerA",
+      "objectDisplay": "Codeunit D1 Multi Caller",
+      "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
+    },
+    "workspaceFingerprint": "450419199dc399835e4930b0b2b8568717dbc88066e20fa77134485d64043dee"
+  },
+  "schemaVersion": "1.4.0"
+}

@@ -18,7 +18,7 @@ fn repo() -> PathBuf {
 
 /// `compose_full_snapshot`'s (json, cbor) of `ws` in its own universe.
 fn compose(ws: &Path, single_app: bool) -> (String, Vec<u8>) {
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let target = AnalysisTarget::build(&inputs, single_app, "t").expect("target");
     let tree = compose_full_snapshot(
         target.resolved(),

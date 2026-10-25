@@ -496,7 +496,7 @@ pub(crate) fn no_dependency_dirs() -> Vec<PathBuf> {
 
 /// The root classifications' routine ids of `ws`, from the single-app model.
 pub(crate) fn root_ids(ws: &Path) -> Vec<String> {
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let Ok(t) = al_sem::engine::gate::run::AnalysisTarget::build(&inputs, true, "t") else {
         return vec![];
     };
@@ -535,8 +535,10 @@ fn no_dependency_parity_prove() {
             let (failures, compared) = (&failures, &compared);
             s.spawn(move || {
                 for dir in chunk {
-                    let inputs =
-                        al_sem::program::inputs::InputSet::read(dir, &crate::fingerprint_needs());
+                    let inputs = al_sem::program::inputs::WorkspaceInputs::read(
+                        dir,
+                        &crate::fingerprint_needs(),
+                    );
                     for root in root_ids(dir) {
                         let run = |single: bool| {
                             al_sem::engine::l5::prove::run_prove_pipeline(

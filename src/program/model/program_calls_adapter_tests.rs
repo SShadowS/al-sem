@@ -1493,7 +1493,7 @@ fn cross_app_census_has_no_losses_with_a_dependency_body() {
         Some((symbols, &[("src/DepCu.Codeunit.al", dep_src)])),
     );
     let a = cross_app_assemble(
-        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
@@ -1609,7 +1609,7 @@ fn two_apps_same_path_same_expr_pair_within_their_app() {
         .unwrap();
     }
     let a = cross_app_assemble(
-        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )

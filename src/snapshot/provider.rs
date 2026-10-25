@@ -2,7 +2,7 @@
 
 use crate::dependencies::AppFileStamp;
 use crate::program::dep_cache::DepCache;
-use crate::program::inputs::InputSet;
+use crate::program::inputs::WorkspaceInputs;
 use crate::snapshot::cache::cached_source;
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::identity::{AppId, TrustTier};
@@ -67,14 +67,14 @@ fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
     })
 }
 
-/// The workspace app's source from the frozen [`InputSet`] (#160 step 1, spec
+/// The workspace app's source from the frozen [`WorkspaceInputs`] (#160 step 1, spec
 /// §4.2.3 row 1): [`walk_al_source`]'s rules over the set's `.al` list instead
 /// of the disk. Every `al_files` entry in `rel_posix` order (nested apps
 /// included), the SAME `Arc<str>` texts, blake3 over the texts in that order;
 /// no file is `Ok(None)` (symbol-only). A failed walk or an unreadable file
 /// fails with `walk_al_source`'s text, the walk's stored `io::Error` keeping
 /// its whole `source()` chain.
-pub fn workspace_source_from_inputs(inputs: &InputSet) -> Result<Option<SourceRoot>> {
+pub fn workspace_source_from_inputs(inputs: &WorkspaceInputs) -> Result<Option<SourceRoot>> {
     if let Err(e) = &inputs.al_walk {
         return Err(anyhow::Error::new(Arc::clone(e)))
             .with_context(|| format!("walking source {}", inputs.workspace.display()));

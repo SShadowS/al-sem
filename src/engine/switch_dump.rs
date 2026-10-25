@@ -46,7 +46,7 @@ pub fn dump_lines(ws: &Path) -> Dump {
     // the registry yet, so it comes from its own program build. The workspace
     // diagnostics' index rows come from that build's parse (#160 §4.2.4): none
     // when it fails.
-    let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let built = crate::program::resolve::full::build_program_with_coverage(&inputs);
     d.insert(
         "diagnostics.workspace".into(),
@@ -360,20 +360,48 @@ mod tests {
         );
     }
 
-    /// The harness must measure production: `run_analyze_with_exit` builds its model
-    /// and coverage ONLY through the two functions the dump calls. Inlining either
-    /// back into the analyze path (or building a second model there) fails this.
+    /// The harness must measure production: `alsem analyze` builds its model
+    /// and coverage ONLY through the functions the dump calls. Since #277 the
+    /// model is the batch driver's one view builder (`run_view` calls
+    /// `build_view_model`, which the dump's `build_analysis_model` calls with
+    /// the same `ViewNeeds::ANALYZE` analyze's demand states) and the coverage
+    /// the analyze job's compute (`analyze_view`). Inlining either back into
+    /// the analyze path (the job's `impl Job` body included), or building a
+    /// second model there, fails this.
     #[test]
     fn analyze_builds_through_the_dumped_functions() {
-        let src = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine/gate/run.rs"),
-        )
-        .unwrap();
-        let start = src.find("pub fn run_analyze_with_exit(").unwrap();
-        let body = &src[start..];
-        let body = &body[..body.find("\n}\n").unwrap()];
-        assert_eq!(body.matches("build_analysis_model(").count(), 1);
-        assert_eq!(body.matches("analysis_coverage(").count(), 1);
+        let read = |p: &str| {
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(p)).unwrap()
+        };
+        let body_of = |src: &str, head: &str| -> String {
+            let start = src.find(head).unwrap_or_else(|| panic!("{head}"));
+            let body = &src[start..];
+            body[..body.find("\n}\n").unwrap()].to_string()
+        };
+        let run = read("src/engine/gate/run.rs");
+        let build = body_of(&read("src/engine/batch/mod.rs"), "\nfn run_view(");
+        let dumped = body_of(&run, "\npub fn build_analysis_model(");
+        let job = body_of(&run, "impl Job for AnalyzeJob");
+        let compute = body_of(&run, "\nfn analyze_view(");
+        let path = [build.as_str(), job.as_str(), compute.as_str()].concat();
+        for model_build in ["build_view_model(", "build_analysis_model("] {
+            assert_eq!(
+                path.matches(model_build).count(),
+                usize::from(model_build == "build_view_model("),
+                "one model build on the analyze path (run_view's): {model_build}"
+            );
+        }
+        assert_eq!(build.matches("build_view_model(").count(), 1);
+        assert!(
+            dumped.contains("build_view_model(") && dumped.contains("ViewNeeds::ANALYZE"),
+            "the dump builds through the view builder, with analyze's needs"
+        );
+        assert_eq!(path.matches("analysis_coverage(").count(), 1);
+        assert_eq!(compute.matches("analysis_coverage(").count(), 1);
+        assert!(
+            job.contains("ViewNeeds::ANALYZE"),
+            "analyze's view is built with the needs the dump builds with"
+        );
         for banned in [
             "assemble_and_resolve_workspace",
             "attach_program_calls",
@@ -381,8 +409,8 @@ mod tests {
             "project_coverage_inputs",
         ] {
             assert!(
-                !body.contains(banned),
-                "run_analyze_with_exit calls {banned} directly; build through \
+                !path.contains(banned),
+                "the analyze path calls {banned} directly; build through \
                  build_analysis_model / analysis_coverage so the switch harness sees it"
             );
         }
@@ -421,7 +449,7 @@ mod tests {
         )
         .unwrap();
 
-        let inputs = crate::program::inputs::InputSet::read(&root, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&root, &Default::default());
         let (ctx, _report, _) =
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let program_paths: Vec<&str> = ctx
@@ -444,15 +472,16 @@ mod tests {
         assert_eq!(selected, vec!["src/Root.al".to_string()]);
     }
 
-    /// `build_analysis_model` must build through the program-backed entry (S2a);
-    /// the disk entry may appear only on its failure path.
+    /// The view builder's single-app half (`build_analysis_model`'s, since
+    /// #277) must build through the program-backed entry (S2a); the disk entry
+    /// may appear only on its failure path.
     #[test]
     fn analysis_model_uses_the_program_parse() {
         let src = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine/gate/run.rs"),
         )
         .unwrap();
-        let start = src.find("pub fn build_analysis_model(").unwrap();
+        let start = src.find("\nfn build_single_app(").unwrap();
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").unwrap()];
         assert_eq!(

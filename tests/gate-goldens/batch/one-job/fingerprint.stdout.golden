@@ -1,0 +1,723 @@
+{
+  "alsemVersion": "2.0.3",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "capability-snapshot",
+  "payload": {
+    "analysisGaps": [],
+    "analysisUniverse": "single-app",
+    "apps": [
+      {
+        "appGuid": "11111111-0000-0000-0000-00000000d01a",
+        "name": "D1 Multi Caller",
+        "publisher": "PT",
+        "role": "primary",
+        "version": "1.0.0.0"
+      }
+    ],
+    "callsiteIndex": [
+      {
+        "calleeDisplay": "ModifyHelper",
+        "callsiteId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/cs0",
+        "controlContext": "loop-body",
+        "endColumn": 30,
+        "endLine": 26,
+        "order": {
+          "dominatesSuccessReturn": false,
+          "frameId": 1,
+          "onSuccessPath": true,
+          "orderId": 1
+        },
+        "routine": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "sourceFile": "ws:src/D1MultiCaller.al",
+        "startColumn": 12,
+        "startLine": 26
+      },
+      {
+        "calleeDisplay": "ModifyHelper",
+        "callsiteId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/cs0",
+        "controlContext": "loop-body",
+        "endColumn": 30,
+        "endLine": 34,
+        "order": {
+          "dominatesSuccessReturn": false,
+          "frameId": 1,
+          "onSuccessPath": true,
+          "orderId": 1
+        },
+        "routine": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "sourceFile": "ws:src/D1MultiCaller.al",
+        "startColumn": 12,
+        "startLine": 34
+      },
+      {
+        "calleeDisplay": "ModifyHelper",
+        "callsiteId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/cs0",
+        "controlContext": "loop-body",
+        "endColumn": 30,
+        "endLine": 42,
+        "order": {
+          "dominatesSuccessReturn": false,
+          "frameId": 1,
+          "onSuccessPath": true,
+          "orderId": 1
+        },
+        "routine": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "sourceFile": "ws:src/D1MultiCaller.al",
+        "startColumn": 12,
+        "startLine": 42
+      }
+    ],
+    "callsiteResolutions": [
+      {
+        "calleeDisplay": "ModifyHelper",
+        "callsiteId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/cs0",
+        "dispatchKind": "direct",
+        "from": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "resolvedEdges": [
+          "11cc5b0d310ec7df"
+        ],
+        "status": "resolved"
+      },
+      {
+        "calleeDisplay": "ModifyHelper",
+        "callsiteId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/cs0",
+        "dispatchKind": "direct",
+        "from": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "resolvedEdges": [
+          "c6b03cdf83b28a19"
+        ],
+        "status": "resolved"
+      },
+      {
+        "calleeDisplay": "ModifyHelper",
+        "callsiteId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/cs0",
+        "dispatchKind": "direct",
+        "from": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "resolvedEdges": [
+          "7ca13ad9d6fe6d47"
+        ],
+        "status": "resolved"
+      }
+    ],
+    "capabilityFacts": [
+      {
+        "confidence": "static",
+        "extra": {
+          "kind": "table",
+          "opSubtype": "Modify",
+          "recordVariableId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/rv/cust",
+          "tempState": {
+            "kind": "known",
+            "value": false
+          }
+        },
+        "op": "modify",
+        "provenance": "inherited",
+        "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "resourceKind": "table",
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "via": "call",
+        "witnessCallsiteId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/cs0",
+        "witnessOperationId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+      },
+      {
+        "confidence": "static",
+        "extra": {
+          "kind": "table",
+          "opSubtype": "FindSet",
+          "recordVariableId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/rv/cust",
+          "tempState": {
+            "kind": "known",
+            "value": false
+          }
+        },
+        "op": "read",
+        "provenance": "direct",
+        "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "resourceKind": "table",
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "via": "self",
+        "witnessOperationId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/op0"
+      },
+      {
+        "confidence": "static",
+        "extra": {
+          "kind": "table",
+          "opSubtype": "Modify",
+          "recordVariableId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/rv/cust",
+          "tempState": {
+            "kind": "known",
+            "value": false
+          }
+        },
+        "op": "modify",
+        "provenance": "inherited",
+        "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "resourceKind": "table",
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "via": "call",
+        "witnessCallsiteId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/cs0",
+        "witnessOperationId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+      },
+      {
+        "confidence": "static",
+        "extra": {
+          "kind": "table",
+          "opSubtype": "FindSet",
+          "recordVariableId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/rv/cust",
+          "tempState": {
+            "kind": "known",
+            "value": false
+          }
+        },
+        "op": "read",
+        "provenance": "direct",
+        "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "resourceKind": "table",
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "via": "self",
+        "witnessOperationId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/op0"
+      },
+      {
+        "confidence": "static",
+        "extra": {
+          "kind": "table",
+          "opSubtype": "Modify",
+          "recordVariableId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/rv/cust",
+          "tempState": {
+            "kind": "known",
+            "value": false
+          }
+        },
+        "op": "modify",
+        "provenance": "inherited",
+        "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "resourceKind": "table",
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "via": "call",
+        "witnessCallsiteId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/cs0",
+        "witnessOperationId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+      },
+      {
+        "confidence": "static",
+        "extra": {
+          "kind": "table",
+          "opSubtype": "FindSet",
+          "recordVariableId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/rv/cust",
+          "tempState": {
+            "kind": "known",
+            "value": false
+          }
+        },
+        "op": "read",
+        "provenance": "direct",
+        "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "resourceKind": "table",
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "via": "self",
+        "witnessOperationId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/op0"
+      },
+      {
+        "confidence": "static",
+        "extra": {
+          "kind": "table",
+          "opSubtype": "Modify",
+          "recordVariableId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/rv/cust",
+          "tempState": {
+            "kind": "parameter-dependent",
+            "parameterIndex": 0
+          }
+        },
+        "op": "modify",
+        "provenance": "direct",
+        "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "resourceKind": "table",
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f",
+        "via": "self",
+        "witnessOperationId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+      }
+    ],
+    "contractFacts": [
+      {
+        "attributes": [],
+        "kind": "object",
+        "signatureFingerprint": "e149a0e3903dbabefb57bd6516f5280d51b52463bdab8b8ad3076103d9fad317",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101",
+        "visibility": "public"
+      },
+      {
+        "attributes": [],
+        "kind": "routine",
+        "routineKind": "procedure",
+        "signatureFingerprint": "22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "visibility": "public"
+      },
+      {
+        "attributes": [],
+        "kind": "routine",
+        "routineKind": "procedure",
+        "signatureFingerprint": "77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "visibility": "public"
+      },
+      {
+        "attributes": [],
+        "kind": "routine",
+        "routineKind": "procedure",
+        "signatureFingerprint": "b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "visibility": "public"
+      },
+      {
+        "attributes": [],
+        "kind": "routine",
+        "routineKind": "procedure",
+        "signatureFingerprint": "bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f",
+        "visibility": "public"
+      },
+      {
+        "attributes": [],
+        "kind": "object",
+        "signatureFingerprint": "cfbdc7799332e879a39e29714639b2fcf5860130cc9aabae8500d29390b60f67",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Table:50101",
+        "visibility": "public"
+      }
+    ],
+    "coverage": [
+      {
+        "directStatus": "complete",
+        "inheritedStatus": "complete",
+        "reasons": [],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "unknownTargets": []
+      },
+      {
+        "directStatus": "complete",
+        "inheritedStatus": "complete",
+        "reasons": [],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "unknownTargets": []
+      },
+      {
+        "directStatus": "complete",
+        "inheritedStatus": "complete",
+        "reasons": [],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "unknownTargets": []
+      },
+      {
+        "directStatus": "complete",
+        "inheritedStatus": "complete",
+        "reasons": [],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f",
+        "unknownTargets": []
+      }
+    ],
+    "eventDeclarations": [],
+    "identities": {
+      "displayNames": [
+        "D1 Multi Caller",
+        "CallerB",
+        "CallerC",
+        "CallerA",
+        "ModifyHelper",
+        "MC Customer"
+      ],
+      "stableIds": [
+        "11111111-0000-0000-0000-00000000d01a:Codeunit:50101",
+        "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f",
+        "11111111-0000-0000-0000-00000000d01a:Table:50101"
+      ]
+    },
+    "inputs": [
+      {
+        "contentHash": "c20baf6be3c233260b160aae9b9607d5d90ad7effc00e6d2a9a264c388dda396",
+        "kind": "app-json",
+        "path": "app.json"
+      }
+    ],
+    "operationIndex": [
+      {
+        "controlContext": "top-level",
+        "displayText": "Cust.FindSet",
+        "endColumn": 22,
+        "endLine": 24,
+        "operationId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/op0",
+        "order": {
+          "dominatesSuccessReturn": true,
+          "frameId": 0,
+          "onSuccessPath": true,
+          "orderId": 0
+        },
+        "routine": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "sourceFile": "ws:src/D1MultiCaller.al",
+        "startColumn": 8,
+        "startLine": 24
+      },
+      {
+        "controlContext": "top-level",
+        "displayText": "Cust.FindSet",
+        "endColumn": 22,
+        "endLine": 32,
+        "operationId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/op0",
+        "order": {
+          "dominatesSuccessReturn": true,
+          "frameId": 0,
+          "onSuccessPath": true,
+          "orderId": 0
+        },
+        "routine": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "sourceFile": "ws:src/D1MultiCaller.al",
+        "startColumn": 8,
+        "startLine": 32
+      },
+      {
+        "controlContext": "top-level",
+        "displayText": "Cust.FindSet",
+        "endColumn": 22,
+        "endLine": 40,
+        "operationId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/op0",
+        "order": {
+          "dominatesSuccessReturn": true,
+          "frameId": 0,
+          "onSuccessPath": true,
+          "orderId": 0
+        },
+        "routine": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "sourceFile": "ws:src/D1MultiCaller.al",
+        "startColumn": 8,
+        "startLine": 40
+      },
+      {
+        "controlContext": "top-level",
+        "displayText": "Cust.Modify",
+        "endColumn": 21,
+        "endLine": 18,
+        "operationId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0",
+        "order": {
+          "dominatesSuccessReturn": true,
+          "frameId": 0,
+          "onSuccessPath": true,
+          "orderId": 0
+        },
+        "routine": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f",
+        "sourceFile": "ws:src/D1MultiCaller.al",
+        "startColumn": 8,
+        "startLine": 18
+      }
+    ],
+    "permissionFacts": [
+      {
+        "coverage": "complete",
+        "derivedFromCapability": {
+          "op": "modify",
+          "witnessCallsiteId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/cs0"
+        },
+        "kind": "required",
+        "rights": [
+          "M"
+        ],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "target": "11111111-0000-0000-0000-00000000d01a:Table:50101",
+        "targetKind": "TableData"
+      },
+      {
+        "coverage": "complete",
+        "derivedFromCapability": {
+          "op": "read"
+        },
+        "kind": "required",
+        "rights": [
+          "R"
+        ],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "target": "11111111-0000-0000-0000-00000000d01a:Table:50101",
+        "targetKind": "TableData"
+      },
+      {
+        "coverage": "complete",
+        "derivedFromCapability": {
+          "op": "modify",
+          "witnessCallsiteId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/cs0"
+        },
+        "kind": "required",
+        "rights": [
+          "M"
+        ],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "target": "11111111-0000-0000-0000-00000000d01a:Table:50101",
+        "targetKind": "TableData"
+      },
+      {
+        "coverage": "complete",
+        "derivedFromCapability": {
+          "op": "read"
+        },
+        "kind": "required",
+        "rights": [
+          "R"
+        ],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "target": "11111111-0000-0000-0000-00000000d01a:Table:50101",
+        "targetKind": "TableData"
+      },
+      {
+        "coverage": "complete",
+        "derivedFromCapability": {
+          "op": "modify",
+          "witnessCallsiteId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/cs0"
+        },
+        "kind": "required",
+        "rights": [
+          "M"
+        ],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "target": "11111111-0000-0000-0000-00000000d01a:Table:50101",
+        "targetKind": "TableData"
+      },
+      {
+        "coverage": "complete",
+        "derivedFromCapability": {
+          "op": "read"
+        },
+        "kind": "required",
+        "rights": [
+          "R"
+        ],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "target": "11111111-0000-0000-0000-00000000d01a:Table:50101",
+        "targetKind": "TableData"
+      },
+      {
+        "coverage": "complete",
+        "derivedFromCapability": {
+          "op": "modify"
+        },
+        "kind": "required",
+        "rights": [
+          "M"
+        ],
+        "subject": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f",
+        "target": "11111111-0000-0000-0000-00000000d01a:Table:50101",
+        "targetKind": "TableData"
+      }
+    ],
+    "rootClassifications": [
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "public-procedure"
+        ],
+        "routineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d",
+          "range": {
+            "endColumn": 8,
+            "endLine": 35,
+            "startColumn": 4,
+            "startLine": 29
+          },
+          "sourceUnitId": "ws:src/D1MultiCaller.al",
+          "syntaxKind": "procedure"
+        }
+      },
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "public-procedure"
+        ],
+        "routineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030",
+          "range": {
+            "endColumn": 8,
+            "endLine": 43,
+            "startColumn": 4,
+            "startLine": 37
+          },
+          "sourceUnitId": "ws:src/D1MultiCaller.al",
+          "syntaxKind": "procedure"
+        }
+      },
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "public-procedure"
+        ],
+        "routineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2",
+          "range": {
+            "endColumn": 8,
+            "endLine": 27,
+            "startColumn": 4,
+            "startLine": 21
+          },
+          "sourceUnitId": "ws:src/D1MultiCaller.al",
+          "syntaxKind": "procedure"
+        }
+      },
+      {
+        "confidence": "static",
+        "externallyReachable": true,
+        "kinds": [
+          "public-procedure"
+        ],
+        "routineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f",
+        "source": "ast",
+        "sourceAnchor": {
+          "enclosingRoutineId": "225874ed4a5f49e9/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513",
+          "range": {
+            "endColumn": 8,
+            "endLine": 19,
+            "startColumn": 4,
+            "startLine": 16
+          },
+          "sourceUnitId": "ws:src/D1MultiCaller.al",
+          "syntaxKind": "procedure"
+        }
+      }
+    ],
+    "routineOrderFrames": {
+      "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf": [
+        {
+          "frameId": 0,
+          "kind": "block",
+          "parentFrameId": -1
+        },
+        {
+          "frameId": 1,
+          "kind": "loop",
+          "parentFrameId": 0
+        }
+      ],
+      "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c": [
+        {
+          "frameId": 0,
+          "kind": "block",
+          "parentFrameId": -1
+        },
+        {
+          "frameId": 1,
+          "kind": "loop",
+          "parentFrameId": 0
+        }
+      ],
+      "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c": [
+        {
+          "frameId": 0,
+          "kind": "block",
+          "parentFrameId": -1
+        },
+        {
+          "frameId": 1,
+          "kind": "loop",
+          "parentFrameId": 0
+        }
+      ],
+      "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f": [
+        {
+          "frameId": 0,
+          "kind": "block",
+          "parentFrameId": -1
+        }
+      ]
+    },
+    "schemaFacts": [
+      {
+        "kind": "table",
+        "shapeFingerprint": "a13176e6fa8d2674c1c2d6a954183b0f387017dbf3ffa7fe112b1f081c06a651",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Table:50101"
+      },
+      {
+        "kind": "field",
+        "name": "No.",
+        "shapeFingerprint": "d45c6f5aaa93a9d7b25b6943991d9d2292f40e6a6fee95b9ad930448031da73b",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Table:50101#1"
+      },
+      {
+        "kind": "field",
+        "name": "Name",
+        "shapeFingerprint": "c6d6e6c422e554c234dc411ad41fd5f57ed04e3dc94188c26601f65a9f0214b4",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Table:50101#2"
+      },
+      {
+        "kind": "key",
+        "shapeFingerprint": "baaa75bd8d93c2e766ada399e9c5a4067de5c02171fcf0d8692869ae3d142e7e",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Table:50101#K0"
+      }
+    ],
+    "snapshotSchemaVersion": 4,
+    "typedEdges": [
+      {
+        "callsiteId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/cs0",
+        "edgeId": "11cc5b0d310ec7df",
+        "from": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+        "kind": "direct-call",
+        "sourceAnchor": {
+          "enclosingRoutineId": "225874ed4a5f49e9/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d",
+          "range": {
+            "endColumn": 30,
+            "endLine": 34,
+            "startColumn": 12,
+            "startLine": 34
+          },
+          "sourceUnitId": "ws:src/D1MultiCaller.al",
+          "syntaxKind": "call_expression"
+        },
+        "to": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+      },
+      {
+        "callsiteId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/cs0",
+        "edgeId": "c6b03cdf83b28a19",
+        "from": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+        "kind": "direct-call",
+        "sourceAnchor": {
+          "enclosingRoutineId": "225874ed4a5f49e9/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030",
+          "range": {
+            "endColumn": 30,
+            "endLine": 42,
+            "startColumn": 12,
+            "startLine": 42
+          },
+          "sourceUnitId": "ws:src/D1MultiCaller.al",
+          "syntaxKind": "call_expression"
+        },
+        "to": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+      },
+      {
+        "callsiteId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/cs0",
+        "edgeId": "7ca13ad9d6fe6d47",
+        "from": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+        "kind": "direct-call",
+        "sourceAnchor": {
+          "enclosingRoutineId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2",
+          "range": {
+            "endColumn": 30,
+            "endLine": 26,
+            "startColumn": 12,
+            "startLine": 26
+          },
+          "sourceUnitId": "ws:src/D1MultiCaller.al",
+          "syntaxKind": "call_expression"
+        },
+        "to": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+      }
+    ],
+    "workspaceFingerprint": "450419199dc399835e4930b0b2b8568717dbc88066e20fa77134485d64043dee"
+  },
+  "schemaVersion": "1.1.0"
+}

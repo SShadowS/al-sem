@@ -23,7 +23,7 @@ use std::sync::OnceLock;
 
 use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l4::combined_graph::build_combined_graph;
-use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, render_query_effects};
+use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, query_view, render_query_effects};
 use al_sem::engine::l5::detector_context::build_detector_context;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::digest_cli::run_digest_pipeline;
@@ -212,8 +212,8 @@ fn fixture_is_where_the_literals_say() {
 // ---------------------------------------------------------------------------
 
 /// The command's one read of `ws` (#160).
-fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::InputSet> {
-    al_sem::program::inputs::InputSet::read(ws, &crate::fingerprint_needs())
+fn read(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceInputs> {
+    al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs())
 }
 
 fn digest(ws: &Path, file: &str, single_app: bool) -> Value {
@@ -256,13 +256,13 @@ fn model() -> &'static Model {
 /// L4 `query effects` rows of `Trig Caller.<routine>`, single-app (the store
 /// is the same in both modes here: no dependency).
 fn query_effects(routine: &str) -> Vec<Value> {
-    static WS: OnceLock<(tempfile::TempDir, QuerySubstrate)> = OnceLock::new();
-    let (_, substrate) = WS.get_or_init(|| {
+    static WS: OnceLock<(tempfile::TempDir, al_sem::engine::session::View)> = OnceLock::new();
+    let (_, view) = WS.get_or_init(|| {
         let tmp = write_workspace();
-        let id = compute_gate_model_instance_id(tmp.path()).expect("model id");
-        let s = QuerySubstrate::build(&read(tmp.path()), &id, true).expect("query substrate");
-        (tmp, s)
+        let v = query_view(&read(tmp.path()), true).expect("query view");
+        (tmp, v)
     });
+    let substrate = &QuerySubstrate::of(view);
     let q = render_query_effects(substrate, &format!("Trig Caller.{routine}"), "t", true);
     let doc: Value = serde_json::from_str(&q.json_text).expect("query json");
     doc["payload"]["effects"]
@@ -1040,8 +1040,8 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
     write_cross_app_workspace(ws);
     let mut f = Vec::new();
 
-    let model_id = compute_gate_model_instance_id(ws).expect("model id");
-    let substrate = QuerySubstrate::build(&read(ws), &model_id, false).expect("query substrate");
+    let view = query_view(&read(ws), false).expect("query view");
+    let substrate = QuerySubstrate::of(&view);
     let q = render_query_effects(&substrate, "Ws Caller.ValidateDep", "t", true);
     let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");
     let l4: Vec<(String, String)> = qdoc["payload"]["effects"]
@@ -1140,12 +1140,11 @@ fn a6_dependency_origin_trigger_reaches_the_workspace_cone() {
 
     let run = |single_app: bool| -> Vec<u64> {
         let out = run_policy_check(&PolicyCheckOptions {
-            inputs: &al_sem::program::inputs::InputSet::read(
+            inputs: &al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
+            request: &al_sem::program::inputs::RequestInputs::read(
                 &ws,
-                &al_sem::program::inputs::InputNeeds {
-                    policy: policy_request(Some(&policy), false),
-                    ..Default::default()
-                },
+                policy_request(Some(&policy), false),
+                None,
             ),
             format: "json",
             out: None,

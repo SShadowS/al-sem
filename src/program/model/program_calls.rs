@@ -670,7 +670,7 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
     workspace: &std::path::Path,
 ) -> Option<crate::program::model::workspace::Model> {
     assemble_and_resolve_workspace_program(
-        &crate::program::inputs::InputSet::read(workspace, &Default::default()),
+        &crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
@@ -683,7 +683,7 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
 /// Every workspace input comes from `inputs`, the command's one read (#160).
 #[must_use]
 pub fn assemble_and_resolve_workspace_program(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Option<crate::program::model::workspace::Model> {
@@ -716,7 +716,7 @@ pub fn assemble_and_resolve_inline_program(
 ) -> crate::program::model::workspace::Model {
     let dir = write_inline_workspace(files, app_guid);
     assemble_and_resolve_workspace_program(
-        &crate::program::inputs::InputSet::read(dir.path(), &Default::default()),
+        &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
         model_instance_id,
         true,
     )
@@ -735,7 +735,7 @@ pub fn assemble_and_resolve_inline_program_reversed_groups(
     app_guid: &str,
 ) -> crate::program::model::workspace::Model {
     let dir = write_inline_workspace(files, app_guid);
-    let inputs = crate::program::inputs::InputSet::read(dir.path(), &Default::default());
+    let inputs = crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default());
     let program = ResolvedProgram::build(&inputs, ProgramScope::Workspace)
         .unwrap_or_else(|_| panic!("program build failed for inline workspace {app_guid}"));
     let rows =
@@ -839,11 +839,28 @@ pub enum CrossAppFailure {
 /// (`ProgramContext::resolve_dependency_bodies`) — and its event graph over all of
 /// them. `Err` when the program build or the model assembly fails.
 pub fn assemble_and_resolve_cross_app_program(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Result<CrossAppProgram, CrossAppFailure> {
-    cross_app_program_census(inputs, model_instance_id, skip_roots_config).map(|(p, _)| p)
+    cross_app_program_from(
+        ResolvedProgram::build(inputs, ProgramScope::CrossApp),
+        inputs,
+        model_instance_id,
+        skip_roots_config,
+    )
+}
+
+/// [`assemble_and_resolve_cross_app_program`] over a program built (or failed)
+/// already: the batch view builder builds it first and lends it to `alsem
+/// graph` before the model is assembled from it (#277 D9).
+pub(crate) fn cross_app_program_from(
+    program: Result<ResolvedProgram, String>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+) -> Result<CrossAppProgram, CrossAppFailure> {
+    cross_app_program_census(program, inputs, model_instance_id, skip_roots_config).map(|(p, _)| p)
 }
 
 /// The cross-app build up to the attach: the program, the demand the model was
@@ -857,13 +874,27 @@ pub(crate) struct CrossAppAssembled {
 }
 
 pub(crate) fn cross_app_assemble(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    model_instance_id: &str,
+    skip_roots_config: bool,
+) -> Result<CrossAppAssembled, CrossAppFailure> {
+    cross_app_assemble_from(
+        ResolvedProgram::build(inputs, ProgramScope::CrossApp),
+        inputs,
+        model_instance_id,
+        skip_roots_config,
+    )
+}
+
+/// [`cross_app_assemble`] over `program`, the build's own result.
+fn cross_app_assemble_from(
+    program: Result<ResolvedProgram, String>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Result<CrossAppAssembled, CrossAppFailure> {
     use crate::engine::perf_trace as pt;
-    let program =
-        ResolvedProgram::build(inputs, ProgramScope::CrossApp).map_err(CrossAppFailure::Build)?;
+    let program = program.map_err(CrossAppFailure::Build)?;
     let body = program.body();
     let ctx = &body.ctx;
     // S8.2: only what the workspace can reach, and the code around the dependency
@@ -907,7 +938,7 @@ pub(crate) fn cross_app_assemble(
 #[doc(hidden)]
 #[must_use]
 pub fn cross_app_rows_before_attach(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
 ) -> Option<crate::program::model::workspace::ModelRows> {
     cross_app_assemble(inputs, model_instance_id, true)
@@ -922,7 +953,7 @@ pub fn cross_app_rows_before_attach(
 #[doc(hidden)]
 #[must_use]
 pub fn cross_app_event_graph_after(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     edit: impl FnOnce(&mut crate::program::model::workspace::ModelRows),
 ) -> Option<crate::program::model::events::EventGraph> {
@@ -942,7 +973,8 @@ pub fn cross_app_event_graph_after(
 /// [`assemble_and_resolve_cross_app_program`] plus the adapter's census, from
 /// the same attach (#160 §5.2).
 fn cross_app_program_census(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    program: Result<ResolvedProgram, String>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Result<(CrossAppProgram, SiteCensus), CrossAppFailure> {
@@ -952,7 +984,7 @@ fn cross_app_program_census(
         demand,
         rows,
         abi_rows,
-    } = cross_app_assemble(inputs, model_instance_id, skip_roots_config)?;
+    } = cross_app_assemble_from(program, inputs, model_instance_id, skip_roots_config)?;
     let body = program.body();
     let ctx = &body.ctx;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
@@ -1030,8 +1062,10 @@ fn cross_app_program_census(
 pub fn adapter_census_for_workspace_cross_app(
     workspace: &std::path::Path,
 ) -> Result<SiteCensus, String> {
+    let inputs = crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default());
     cross_app_program_census(
-        &crate::program::inputs::InputSet::read(workspace, &Default::default()),
+        ResolvedProgram::build(&inputs, ProgramScope::CrossApp),
+        &inputs,
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
@@ -2313,16 +2347,16 @@ pub(crate) fn build_models(
     ),
     String,
 > {
-    build_models_with(&crate::program::inputs::InputSet::read(
+    build_models_with(&crate::program::inputs::WorkspaceInputs::read(
         workspace,
         &Default::default(),
     ))
 }
 
-/// [`build_models`] over one already-read `InputSet`: the snapshot and the
+/// [`build_models`] over one already-read `WorkspaceInputs`: the snapshot and the
 /// model's file selection read the same set, so the workspace is read once.
 pub(crate) fn build_models_with(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
 ) -> Result<
     (
         ProgramContext,
@@ -2513,7 +2547,7 @@ mod tests {
                 || manifest.get("platform").is_some()
                 || manifest.get("application").is_some();
             let must_warn = declares && !ws.join(".alpackages").exists();
-            let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+            let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
             let disk = assemble_and_resolve_workspace_program(&inputs, "r0", true).expect("disk");
             let inline = assemble_and_resolve_inline_program(&files, guid, "r0");
             let mut disk_text = model_text(&disk);
@@ -2601,7 +2635,7 @@ mod tests {
         std::fs::write(dir.path().join("app.json"), APP_JSON).unwrap();
         std::fs::write(dir.path().join("A.al"), "codeunit 50100 A { }").unwrap();
         std::fs::write(dir.path().join("B.al"), "codeunit 50101 B { }").unwrap();
-        let inputs = crate::program::inputs::InputSet::read(dir.path(), &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default());
         std::fs::remove_file(dir.path().join("B.al")).unwrap();
         let built = build_models_with(&inputs);
         assert!(built.is_ok(), "{:?}", built.err());
@@ -3260,7 +3294,7 @@ mod tests {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
         let a = cross_app_assemble(
-            &crate::program::inputs::InputSet::read(&ws, &Default::default()),
+            &crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
             crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
             false,
         )

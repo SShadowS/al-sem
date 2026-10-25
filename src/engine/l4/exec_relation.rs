@@ -326,7 +326,7 @@ mod tests {
 
     fn workspace_model(dir: &Path) -> Option<Model> {
         assemble_and_resolve_workspace_program(
-            &crate::program::inputs::InputSet::read(dir, &Default::default()),
+            &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
             MODEL_INSTANCE_ID_DEFAULT,
             false,
         )
@@ -349,7 +349,7 @@ mod tests {
             ),
             None => failures.push(format!("{where_}: no single-app model built")),
         }
-        let inputs = crate::program::inputs::InputSet::read(dir, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
         let Ok(x) =
             assemble_and_resolve_cross_app_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
         else {

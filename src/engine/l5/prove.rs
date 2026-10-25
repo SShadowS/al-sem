@@ -21,16 +21,19 @@
 //! ## Blocker sort
 //!   Deterministic: (kind, anchor file, anchor line, detail) ascending NUL-delimited.
 
+use crate::engine::batch::job::{
+    Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+    ViewNeeds, WorkspaceRead,
+};
+use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::digest_cli::{
     ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, finish_default_run,
     primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
-use crate::engine::l5::snapshot::derive_identity_table;
-use crate::engine::session::{Cell, View, prove_plan};
+use crate::engine::session::{Cell, prove_plan};
 
 // ---------------------------------------------------------------------------
 // ProveQuestion
@@ -820,7 +823,7 @@ pub struct ProveRunResult {
 ///   Ok(result) with exit_code 0 (answered) or 2 (routine not resolved → dummy-doc).
 ///   Err(message) for workspace/pipeline errors → emit to stderr, exit 1.
 pub fn run_prove_pipeline(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     routine_selector: &str,
     question_text: &str,
     alsem_ver: &str,
@@ -845,67 +848,158 @@ pub fn run_prove_pipeline(
 /// effects, unresolved cone and gap count read off the view's tree inside it.
 pub(crate) fn prove_pipeline_with(
     detectors: Vec<crate::engine::l5::registry::Detector>,
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     routine_selector: &str,
     question_text: &str,
     alsem_ver: &str,
     deterministic: bool,
     single_app: bool,
 ) -> Result<ProveRunResult, String> {
-    // (1) The target: no model-instance id fails first, as before.
-    let target = AnalysisTarget::build(inputs, single_app, "prove")?;
-    prove_on_target(
+    let job = ProveJob {
         detectors,
-        target,
         inputs,
         routine_selector,
         question_text,
         alsem_ver,
         deterministic,
-    )
+        single_app,
+        human: false,
+        out: None,
+    };
+    crate::engine::batch::run_doc(&job)
+        .one()
+        .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"))
 }
 
-/// [`prove_pipeline_with`] past the target build: a test hand-states the
-/// model's precondition between the two (CLAUDE.md).
+/// [`prove_pipeline_with`] on a target built already: a test hand-states the
+/// model's precondition between the build and the job (CLAUDE.md).
+#[cfg(test)]
 pub(crate) fn prove_on_target(
     detectors: Vec<crate::engine::l5::registry::Detector>,
-    target: AnalysisTarget,
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    target: crate::engine::gate::run::AnalysisTarget,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     routine_selector: &str,
     question_text: &str,
     alsem_ver: &str,
     deterministic: bool,
 ) -> Result<ProveRunResult, String> {
-    let mut view = View::new(target);
-
-    // (2) The root is resolved before the composition, from the model alone;
-    // the identity table and the owner index die with this block.
-    let changed_input = ChangedInput {
-        files: None,
-        routines: Some(vec![routine_selector.to_string()]),
-        diff_text: None,
+    let job = ProveJob {
+        detectors,
+        inputs,
+        routine_selector,
+        question_text,
+        alsem_ver,
+        deterministic,
+        single_app: matches!(
+            target,
+            crate::engine::gate::run::AnalysisTarget::SingleApp(_)
+        ),
+        human: false,
+        out: None,
     };
-    let changed_roots = {
-        let model = view.model();
-        let identities = derive_identity_table(model);
-        let owners = OwnerIndex::build(model);
-        resolve_changed_roots(
-            &identities,
+    crate::engine::batch::run_on_target(&job, target)
+        .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"))
+        .take()
+}
+
+/// `alsem prove` as a batch job (#277 D1; case B, #160 step 9 D2): digest with
+/// one root, on the cross-app view by default (`single_app` the workspace
+/// alone). `resolve` resolves the root from the model; the view's tree over it
+/// gives its effects, unresolved cone and gap count. Its document is
+/// `Result<ProveRunResult, String>`; its writes are the `--format` text (to
+/// `--out` or stdout), or an error line and exit 1.
+pub struct ProveJob<'a> {
+    pub detectors: Vec<crate::engine::l5::registry::Detector>,
+    /// Handed to the driver; compute reads `ViewCx::inputs` (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
+    pub routine_selector: &'a str,
+    pub question_text: &'a str,
+    pub alsem_ver: &'a str,
+    pub deterministic: bool,
+    /// `--single-app`: the workspace alone.
+    pub single_app: bool,
+    /// `--format human`: the human text, else the JSON.
+    pub human: bool,
+    pub out: Option<&'a str>,
+}
+
+impl Job for ProveJob<'_> {
+    fn name(&self) -> &'static str {
+        "prove"
+    }
+    fn demands(&self) -> Vec<ViewDemand> {
+        ViewDemand::one(self.inputs, self.single_app, false, ViewNeeds::MODEL)
+    }
+
+    fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        // The root is resolved before the composition, from the model alone
+        // (#160 step 9 D2); the owner index dies here, the identity table
+        // with the resolve step.
+        let model = cx.model();
+        let changed_input = ChangedInput {
+            files: None,
+            routines: Some(vec![self.routine_selector.to_string()]),
+            diff_text: None,
+        };
+        let changed_roots = resolve_changed_roots(
+            cx.ids(),
             model,
             &changed_input,
             primary_guid_of(model),
-            &owners,
-        )
-    };
+            &OwnerIndex::build(model),
+        );
+        // Digest's plan over the one root prove reads (the first resolved);
+        // none resolved: no tree, the run's diagnostics only.
+        Ok(PlanPart {
+            plan: prove_plan(self.detectors.clone(), changed_roots.roots.first().cloned()),
+            reads: vec![Cell::Det, Cell::L4, Cell::Effects],
+            carry: Some(Box::new(changed_roots)),
+        })
+    }
 
-    // (3) Digest's plan over the one root prove reads (the first resolved);
-    // (4) none resolved: no tree, the run's diagnostics only.
-    let plan = prove_plan(detectors, changed_roots.roots.first().cloned());
-    let key = plan.keys().remove(0);
-    view.prepare(&plan);
-    let (diagnostics_json, tx_ctx_map) = finish_default_run(&mut view, &key);
+    fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        Ok(SideDoc::new(prove_view(cx, self)))
+    }
+
+    fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        Ok(SideDoc::new(Err::<ProveRunResult, _>(
+            failure.target.message("prove"),
+        )))
+    }
+
+    fn serialize(&self, doc: Doc) -> JobOutput {
+        let r = doc
+            .one::<Result<ProveRunResult, String>>()
+            .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"));
+        JobOutput::text(
+            self.out,
+            r.map(|r| {
+                let text = if self.human {
+                    r.human_text
+                } else {
+                    r.json_text
+                };
+                (text, r.exit_code)
+            }),
+        )
+    }
+}
+
+/// Prove off its prepared view.
+fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult, String> {
+    let ProveJob {
+        routine_selector,
+        question_text,
+        alsem_ver,
+        deterministic,
+        ..
+    } = *job;
+    // The roots `resolve` resolved off the model, before the composition.
+    let changed_roots: crate::engine::l5::digest_cli::ChangedRootsResult = cx.take_carry();
+    let key = cx.keys()[0].clone();
     let workspace_fp =
-        crate::engine::l5::snapshot_full::workspace_fingerprint_of(inputs, alsem_ver);
+        crate::engine::l5::snapshot_full::workspace_fingerprint_of(cx.inputs(), alsem_ver);
+    let (diagnostics_json, tx_ctx_map) = finish_default_run(cx, &key);
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
     if changed_roots.roots.is_empty() {
@@ -926,9 +1020,9 @@ pub(crate) fn prove_on_target(
 
         // As digest's no-root path: `l4` and the (unfilled) effects die
         // before the projection, so the release sequence is digest's.
-        view.release(Cell::L4);
-        view.release(Cell::Effects);
-        view.census_output();
+        cx.release(Cell::L4);
+        cx.release(Cell::Effects);
+        cx.view().census_output();
         let json_text = project_prove_document(ProveDocumentArgs {
             workspace_fp: &workspace_fp,
             routine_stable_id: routine_selector,
@@ -958,17 +1052,17 @@ pub(crate) fn prove_on_target(
 
     // (5) The root's S4 entry, unresolved cone and gap count, read off the
     // view's tree inside `prepare` (the tree is gone).
-    let mut effects = view.take_effects();
+    let mut effects = cx.take_effects();
     let gaps_in_cone_count = effects
         .unresolved
         .get(root_id)
         .ok_or_else(|| "prove: internal error — no unresolved cone for the root".to_string())?
         .gaps_in_cone
         .expect("prove's plan counts the gaps in the cone");
-    let resolved = view.model();
+    let resolved = cx.view().model();
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's `l4`.
-    let temp_states = DbTempStates::new(resolved, &view.l4().bundle);
+    let temp_states = DbTempStates::new(resolved, &cx.view().l4().bundle);
     let owners = OwnerIndex::build(resolved);
 
     // Run full digest query for this single root
@@ -984,8 +1078,8 @@ pub(crate) fn prove_on_target(
     drop(temp_states);
     drop(owners);
     drop(effects);
-    view.release(Cell::L4);
-    view.release(Cell::Effects);
+    cx.release(Cell::L4);
+    cx.release(Cell::Effects);
 
     if query_full.entries.is_empty() {
         return Err("prove: internal error — entry missing after resolution".to_string());
@@ -1001,7 +1095,7 @@ pub(crate) fn prove_on_target(
     let prove_result = prove(entry, gaps_in_cone_count, &parsed_question);
 
     // Project document
-    view.census_output();
+    cx.view().census_output();
     let json_text = project_prove_document(ProveDocumentArgs {
         workspace_fp: &workspace_fp,
         routine_stable_id: root_id,
@@ -1046,6 +1140,7 @@ pub(crate) fn prove_on_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::gate::run::AnalysisTarget;
     use crate::engine::l5::digest_cli::{
         DigestEffectFull, DigestEntryFull, EntryDiagnostic, FullAnchor,
     };
@@ -1058,7 +1153,7 @@ mod tests {
     /// declaration-only member, which the resolver never targets), so the
     /// precondition is stated by assignment (CLAUDE.md).
     fn bodyless_source_row_target(ws: &std::path::Path) -> AnalysisTarget {
-        let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
         let mut target = AnalysisTarget::build(&inputs, false, "prove").expect("cross-app base");
         let AnalysisTarget::CrossApp(b) = &mut target else {
             panic!("precondition: a cross-app target")
@@ -1107,21 +1202,25 @@ mod tests {
         let model = &b.resolved;
         let (mut caps, raw) = compose_capabilities(
             model,
-            b.rel.cone(),
-            det_cone_inputs(model, &b.rel),
+            b.rel().cone(),
+            det_cone_inputs(model, b.rel()),
             ConeScope {
                 derived: true,
                 raw: WitnessScope::None,
             },
         );
+        let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
         let tree = crate::engine::l5::snapshot::compose_tree(
             model,
-            b.rel.cone(),
+            b.rel().cone(),
             b.dependency_calls.as_deref().unwrap_or(&[]),
-            &mut caps,
-            raw,
-            &std::collections::HashMap::new(),
-            &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+            &caps,
+            crate::engine::l5::snapshot::TreeRaw::Drain(raw),
+            pd,
+            &crate::engine::l5::snapshot::TreeApps {
+                names: Default::default(),
+                source_less: crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+            },
         );
         let call_write = model
             .workspace
@@ -1162,9 +1261,9 @@ mod tests {
         drop(target);
 
         // The claim, through prove's pipeline on a fresh hand-stated target.
-        let inputs = crate::program::inputs::InputSet::read(
+        let inputs = crate::program::inputs::WorkspaceInputs::read(
             tmp.path(),
-            &crate::program::inputs::InputNeeds {
+            &crate::program::inputs::WorkspaceNeeds {
                 fingerprint_rows: true,
                 ..Default::default()
             },
@@ -1244,21 +1343,25 @@ mod tests {
         let model = &b.resolved;
         let (mut caps, raw) = compose_capabilities(
             model,
-            b.rel.cone(),
-            det_cone_inputs(model, &b.rel),
+            b.rel().cone(),
+            det_cone_inputs(model, b.rel()),
             ConeScope {
                 derived: true,
                 raw: WitnessScope::None,
             },
         );
+        let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
         let tree = crate::engine::l5::snapshot::compose_tree(
             model,
-            b.rel.cone(),
+            b.rel().cone(),
             b.dependency_calls.as_deref().unwrap_or(&[]),
-            &mut caps,
-            raw,
-            &std::collections::HashMap::new(),
-            &crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+            &caps,
+            crate::engine::l5::snapshot::TreeRaw::Drain(raw),
+            pd,
+            &crate::engine::l5::snapshot::TreeApps {
+                names: Default::default(),
+                source_less: crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+            },
         );
         let write = model
             .workspace
@@ -1280,7 +1383,7 @@ mod tests {
             "no app-level gap for an app with source: {:?}",
             tree.analysis_gaps
         );
-        let inputs = crate::program::inputs::InputSet::read(tmp.path(), &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(tmp.path(), &Default::default());
         let keys = assemble_full_snapshot(
             model,
             tree,

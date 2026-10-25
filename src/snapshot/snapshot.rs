@@ -5,7 +5,7 @@
 use crate::app_package::ParsedAppPackage;
 use crate::dependencies::load_all_apps_from;
 use crate::program::dep_cache::DepCache;
-use crate::program::inputs::{InputNeeds, InputSet};
+use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 use crate::snapshot::compilation::{
     CompilationContext, context_from_app_json, context_from_metadata,
 };
@@ -168,23 +168,23 @@ impl SnapshotBuilder {
         self.build_with_inputs(&Self::read_build_inputs(self), dependency_source, cache)
     }
 
-    /// [`Self::build_with_options`] over an already-read [`InputSet`] (#160
+    /// [`Self::build_with_options`] over an already-read [`WorkspaceInputs`] (#160
     /// step 1): the workspace's `app.json`, `.al` files and dependency closure
     /// come from `inputs`, never the disk. `inputs` must be this builder's
     /// workspace.
     pub fn build_with_inputs(
         &self,
-        inputs: &Arc<InputSet>,
+        inputs: &Arc<WorkspaceInputs>,
         dependency_source: DependencySource,
         cache: &DepCache,
     ) -> Result<(AppSetSnapshot, crate::dependencies::DependencyLoadReport)> {
         self.build_inner(inputs, dependency_source, cache, false)
     }
 
-    /// The one fresh read a `build*` without an [`InputSet`] makes: exactly
-    /// what the build reads ([`InputNeeds::build_only`]).
-    fn read_build_inputs(&self) -> Arc<InputSet> {
-        InputSet::read(&self.workspace_root, &InputNeeds::build_only())
+    /// The one fresh read a `build*` without an [`WorkspaceInputs`] makes: exactly
+    /// what the build reads ([`WorkspaceNeeds::build_only`]).
+    fn read_build_inputs(&self) -> Arc<WorkspaceInputs> {
+        WorkspaceInputs::read(&self.workspace_root, &WorkspaceNeeds::build_only())
     }
 
     /// [`Self::build_with_options`], but a dependency whose embedded source
@@ -202,7 +202,7 @@ impl SnapshotBuilder {
 
     fn build_inner(
         &self,
-        inputs: &Arc<InputSet>,
+        inputs: &Arc<WorkspaceInputs>,
         dependency_source: DependencySource,
         cache: &DepCache,
         defer_text: bool,
@@ -210,7 +210,7 @@ impl SnapshotBuilder {
         let ws = &self.workspace_root;
         assert!(
             inputs.workspace == *ws,
-            "SnapshotBuilder: the InputSet was read for {}, not {}",
+            "SnapshotBuilder: the WorkspaceInputs was read for {}, not {}",
             inputs.workspace.display(),
             ws.display()
         );

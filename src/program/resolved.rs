@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::engine::census::{Kind, Tally};
-use crate::program::inputs::InputSet;
+use crate::program::inputs::WorkspaceInputs;
 use crate::program::node::AppRef;
 use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::edge::Histogram;
@@ -77,7 +77,7 @@ pub struct ResolvedProgram {
 /// what the model builder hands back when it releases the body.
 pub struct ProgramMeta {
     /// The set the build read (shared with the command's own `Arc`).
-    pub inputs: Arc<InputSet>,
+    pub inputs: Arc<WorkspaceInputs>,
     /// What the build resolved. Private: only [`ResolvedProgram::build`] sets it,
     /// so a reader that gates on it (the call-graph export) cannot be talked past.
     scope: ProgramScope,
@@ -228,7 +228,10 @@ impl ResolvedProgram {
     /// choice; the call-graph export must not apply it (it would remove dependency
     /// code reachable only through interface implementations, extension triggers
     /// or run hubs).
-    pub fn build(inputs: &Arc<InputSet>, scope: ProgramScope) -> Result<ResolvedProgram, String> {
+    pub fn build(
+        inputs: &Arc<WorkspaceInputs>,
+        scope: ProgramScope,
+    ) -> Result<ResolvedProgram, String> {
         use crate::engine::perf_trace as pt;
         let cross_app = scope == ProgramScope::CrossApp;
         let (ctx, mut report, coverage) = {
@@ -387,7 +390,7 @@ impl ResolvedProgram {
     fn for_test(scope: ProgramScope) -> ResolvedProgram {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-cross-object-chain");
-        let inputs = InputSet::read(&ws, &Default::default());
+        let inputs = WorkspaceInputs::read(&ws, &Default::default());
         ResolvedProgram::build(&inputs, scope).expect("fixture builds")
     }
 }

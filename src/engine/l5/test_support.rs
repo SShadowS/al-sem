@@ -915,7 +915,7 @@ codeunit 12 "Dep Rec Lib"
 /// for callers whose `app_guid` differs from the primary app's (the base's own
 /// rule). Emission order kept.
 pub fn dependency_half(ws: &std::path::Path) -> Vec<crate::program::model::calls::CallEdge> {
-    let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &inputs, "r0", false,
     )

@@ -1,0 +1,17 @@
+{
+  "al_sem_version": "2.0.3",
+  "generated_at": "0",
+  "kind": "events.fanout",
+  "dependencies": {
+    "apps": [],
+    "mode": "crossApp"
+  },
+  "summary": {
+    "totalPublishers": 0,
+    "totalEvents": 0,
+    "zeroSubscriberEvents": 0,
+    "hotEvents": 0,
+    "coveragePartialEvents": 0
+  },
+  "entries": []
+}

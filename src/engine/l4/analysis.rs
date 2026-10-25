@@ -99,6 +99,8 @@ pub(crate) fn build_l4(
         "build_l4's core summaries must carry EMPTY db_effects"
     );
 
+    #[cfg(debug_assertions)]
+    let diagnostics = with_test_seam(diagnostics);
     let warnings = render_warnings(&diagnostics);
     let mut summarize_diagnostics = diagnostics;
     summarize_diagnostics.extend(req.extra_diagnostics);
@@ -113,9 +115,10 @@ pub(crate) fn build_l4(
         census_l4(&l4);
     }
     // The ONE print site of a solve's non-convergence line (§4.4.7); the
-    // injected `extra_diagnostics` were never rendered, so never print.
+    // injected `extra_diagnostics` were never rendered, so never print. A
+    // job line (#277 D7): the batch driver replays it per job.
     for w in &l4.warnings {
-        eprintln!("{w}");
+        crate::engine::batch::output::job_line(w.clone());
     }
     (l4, CoreSummaries(core_summaries))
 }
@@ -226,6 +229,22 @@ fn emit_scc_stats(graph: &PrimaryGraph, scc: &SccResult) {
             "largest_scc": largest_scc,
         })
     });
+}
+
+/// #277 spec T1 B1's seam, compiled into debug builds only (R8-6): under
+/// `ALSEM_TEST_SUMMARIZE_DIAGNOSTIC`, one non-convergence diagnostic, rendered
+/// and printed like a real one, so a test can see a solve's job line (D7) on
+/// any fixture.
+#[cfg(debug_assertions)]
+fn with_test_seam(mut diagnostics: Vec<SummarizeDiagnostic>) -> Vec<SummarizeDiagnostic> {
+    if std::env::var_os("ALSEM_TEST_SUMMARIZE_DIAGNOSTIC").is_some() {
+        diagnostics.push(SummarizeDiagnostic {
+            severity: "warning".to_string(),
+            stage: "summarize".to_string(),
+            message: format!("test seam: a forced non-convergence{NON_CONVERGENCE_TAIL}"),
+        });
+    }
+    diagnostics
 }
 
 /// #160 §4.1.5: the `l4.*` buckets, shallow. No `l4.scc`: the SCC is the

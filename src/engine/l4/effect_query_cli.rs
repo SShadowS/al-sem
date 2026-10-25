@@ -39,13 +39,18 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 
+use crate::engine::batch::job::{
+    Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+    ViewNeeds, WorkspaceRead,
+};
+use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document_value};
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query::{
     AncestorTouch, DbEffectQuery, TableTouch, UNKNOWN_TABLE_ID, is_unknown_table,
 };
-use crate::engine::session::{View, query_plan};
+use crate::engine::session::{Cell, View, query_plan};
 use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::{
     Model, ModelRecordOperation, ModelRoutine, table_by_id_preferring_real,
@@ -106,63 +111,46 @@ pub struct QueryRunResult {
 // The owned substrate (one workspace load per invocation).
 // ---------------------------------------------------------------------------
 
-/// What a [`DbEffectQuery`] borrows: the parts of a [`View`] whose `l4` cell
-/// query's plan filled (no detector run, #160 §4.4.4): the model, the graph
-/// and the `l4` analysis (the bundle and its SCC). The cross-app base's other
-/// fields drop before the query is built ([`View::into_query_parts`]).
-pub struct QuerySubstrate {
-    model: Model,
+/// What a [`DbEffectQuery`] reads, off a [`View`] whose `l4` cell query's plan
+/// filled (no detector run, #160 §4.4.4): the model and the `l4` analysis (the
+/// bundle and its SCC) by borrow, so a query shares its view with the batch's
+/// other jobs (#277 D9), and the relation's graph by its own `Arc`, so the
+/// relation itself can go before the render ([`QueryJob`]'s compute).
+///
+/// Cross-app (the default, #66), the view is `alsem analyze`'s cross-app base:
+/// its graph and SCC, with every source-bearing dependency routine a FIXED
+/// leaf holding its own direct db effects, so a dependency's tables resolve
+/// and are selectable. With no dependency there are no leaves and the same
+/// graph, so the two modes agree.
+pub struct QuerySubstrate<'a> {
+    model: &'a Model,
     graph: std::sync::Arc<crate::engine::l4::combined_graph::PrimaryGraph>,
-    l4: crate::engine::l4::analysis::L4Analysis,
+    l4: &'a crate::engine::l4::analysis::L4Analysis,
     /// Which dependencies the model holds (#66), stated in every document.
     pub dependencies: LoadedDependencies,
 }
 
-impl QuerySubstrate {
-    /// Assemble the target and fill its `l4` cell: `build_l4` over the target's
-    /// graph, the BUNDLE entry point so the compact rows survive.
-    ///
-    /// `single_app == false` (the default, #66) builds `alsem analyze`'s cross-app
-    /// base instead: its graph and SCC, with every source-bearing dependency
-    /// routine a FIXED leaf holding its own direct db effects, so a dependency's
-    /// tables resolve and are selectable. With no dependency there are no leaves
-    /// and the same graph, so the two modes agree.
-    pub fn build(
-        inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
-        model_instance_id: &str,
-        single_app: bool,
-    ) -> Result<Self, String> {
-        let target = if single_app {
-            // Engine-switch S6.7: the program-backed model (program calls and events).
-            let resolved =
-                crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-                    inputs,
-                    model_instance_id,
-                    false,
-                )
-                .ok_or_else(|| "query: workspace did not resolve".to_string())?;
-            AnalysisTarget::SingleApp(Box::new(resolved))
-        } else {
-            let base =
-                crate::engine::l4::capability_cone::build_cross_app_base(inputs, model_instance_id)
-                    .map_err(|e| AnalysisTarget::cross_app_failure_message("query", &e))?;
-            AnalysisTarget::CrossApp(Box::new(base))
-        };
-        let dependencies = target.dependencies();
-        let mut view = View::new(target);
-        view.prepare(&query_plan());
-        let (model, graph, l4) = view.into_query_parts();
-        Ok(QuerySubstrate {
-            model,
+impl<'a> QuerySubstrate<'a> {
+    /// The substrate of a view prepared with [`query_plan`].
+    pub fn of(view: &'a View) -> Self {
+        Self::with_graph(view, std::sync::Arc::clone(view.rel().primary()))
+    }
+
+    fn with_graph(
+        view: &'a View,
+        graph: std::sync::Arc<crate::engine::l4::combined_graph::PrimaryGraph>,
+    ) -> Self {
+        QuerySubstrate {
+            model: view.model(),
             graph,
-            l4,
-            dependencies,
-        })
+            l4: view.l4(),
+            dependencies: view.target().dependencies(),
+        }
     }
 
     /// The model the selectors and joins read.
     pub fn resolved(&self) -> &Model {
-        &self.model
+        self.model
     }
 
     /// The query surface over this substrate.
@@ -176,6 +164,176 @@ impl QuerySubstrate {
         (
             std::sync::Arc::strong_count(&self.graph),
             std::sync::Arc::strong_count(&self.l4.scc),
+        )
+    }
+}
+
+/// The query's substrate off its prepared view, with what the render does not
+/// read released first (#160 Task 27 review I1): the relation (its cone
+/// payload; the substrate keeps the graph's `Arc`) and the cross-app base's
+/// prepare-only parts. A later job on the view keeps what it declared.
+pub(crate) fn released_substrate<'v>(cx: &'v mut ViewCx<'_>) -> QuerySubstrate<'v> {
+    let graph = std::sync::Arc::clone(cx.view().rel().primary());
+    cx.release_all_but(&[Cell::L4]);
+    cx.release(Cell::Base);
+    QuerySubstrate::with_graph(cx.view(), graph)
+}
+
+/// Test entry: a workspace's view prepared with [`query_plan`], outside the
+/// batch driver, for tests that render many queries off one build.
+#[doc(hidden)]
+pub fn query_view(
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    single_app: bool,
+) -> Result<View, String> {
+    let mut view = View::new(AnalysisTarget::build(inputs, single_app, "query")?);
+    view.prepare(&query_plan());
+    Ok(view)
+}
+
+/// What an `alsem query` job answers.
+enum QueryAsk<'a> {
+    Touches {
+        table: &'a str,
+        from: Option<&'a str>,
+        direction: Direction,
+    },
+    Effects {
+        routine: &'a str,
+    },
+}
+
+/// `alsem query touches` / `effects` as a batch job (#277 D1). Its document is
+/// `Result<QueryRunResult, String>`; its writes are the `--format` text (to
+/// `--out` or stdout), or an error line and exit 1.
+pub struct QueryJob<'a> {
+    inputs: &'a dyn WorkspaceRead,
+    ask: QueryAsk<'a>,
+    alsem_ver: &'a str,
+    deterministic: bool,
+    single_app: bool,
+    /// `--format json`: the JSON text, else the human text.
+    json: bool,
+    out: Option<&'a str>,
+}
+
+impl<'a> QueryJob<'a> {
+    /// `alsem query touches` (see [`run_query_touches_pipeline`]), written as
+    /// JSON to stdout until [`QueryJob::written`].
+    pub fn touches(
+        inputs: &'a dyn WorkspaceRead,
+        table: &'a str,
+        from: Option<&'a str>,
+        direction: Direction,
+        alsem_ver: &'a str,
+        deterministic: bool,
+        single_app: bool,
+    ) -> QueryJob<'a> {
+        let ask = QueryAsk::Touches {
+            table,
+            from,
+            direction,
+        };
+        Self::with(inputs, ask, alsem_ver, deterministic, single_app)
+    }
+
+    /// `alsem query effects` (see [`run_query_effects_pipeline`]).
+    pub fn effects(
+        inputs: &'a dyn WorkspaceRead,
+        routine: &'a str,
+        alsem_ver: &'a str,
+        deterministic: bool,
+        single_app: bool,
+    ) -> QueryJob<'a> {
+        let ask = QueryAsk::Effects { routine };
+        Self::with(inputs, ask, alsem_ver, deterministic, single_app)
+    }
+
+    fn with(
+        inputs: &'a dyn WorkspaceRead,
+        ask: QueryAsk<'a>,
+        alsem_ver: &'a str,
+        deterministic: bool,
+        single_app: bool,
+    ) -> QueryJob<'a> {
+        QueryJob {
+            inputs,
+            ask,
+            alsem_ver,
+            deterministic,
+            single_app,
+            json: true,
+            out: None,
+        }
+    }
+
+    /// The text `--format` names (`json` or human), to `--out` or stdout.
+    pub fn written(self, json: bool, out: Option<&'a str>) -> QueryJob<'a> {
+        QueryJob { json, out, ..self }
+    }
+
+    /// The job's result, through the driver.
+    fn run(&self) -> Result<QueryRunResult, String> {
+        crate::engine::batch::run_doc(self)
+            .one()
+            .unwrap_or_else(|f| unreachable!("query fails no side: {f:?}"))
+    }
+}
+
+impl Job for QueryJob<'_> {
+    fn name(&self) -> &'static str {
+        "query"
+    }
+    fn demands(&self) -> Vec<ViewDemand> {
+        ViewDemand::one(self.inputs, self.single_app, false, ViewNeeds::MODEL)
+    }
+
+    fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        Ok(PlanPart {
+            plan: query_plan(),
+            reads: vec![Cell::Rel, Cell::L4],
+            carry: None,
+        })
+    }
+
+    fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        let substrate = released_substrate(cx);
+        let result = match self.ask {
+            QueryAsk::Touches {
+                table,
+                from,
+                direction,
+            } => render_query_touches(
+                &substrate,
+                table,
+                from,
+                direction,
+                self.alsem_ver,
+                self.deterministic,
+            ),
+            QueryAsk::Effects { routine } => {
+                render_query_effects(&substrate, routine, self.alsem_ver, self.deterministic)
+            }
+        };
+        Ok(SideDoc::new(Ok::<_, String>(result)))
+    }
+
+    fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        Ok(SideDoc::new(Err::<QueryRunResult, _>(
+            failure.target.message("query"),
+        )))
+    }
+
+    fn serialize(&self, doc: Doc) -> JobOutput {
+        let r = doc
+            .one::<Result<QueryRunResult, String>>()
+            .unwrap_or_else(|f| unreachable!("query fails no side: {f:?}"));
+        JobOutput::text(
+            self.out,
+            r.map(|r| {
+                let text = if self.json { r.json_text } else { r.human_text };
+                (text, r.exit_code)
+            }),
         )
     }
 }
@@ -712,7 +870,7 @@ fn selector_failure_doc<T>(
 ///   does not touch T.
 /// - no `--from` — the workspace-global list, count first, uncapped.
 pub fn run_query_touches_pipeline(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     table_selector: &str,
     from: Option<&str>,
     direction: Direction,
@@ -720,19 +878,16 @@ pub fn run_query_touches_pipeline(
     deterministic: bool,
     single_app: bool,
 ) -> Result<QueryRunResult, String> {
-    let model_id = inputs
-        .model_instance_id
-        .as_deref()
-        .ok_or_else(|| "query: could not compute modelInstanceId".to_string())?;
-    let substrate = QuerySubstrate::build(inputs, model_id, single_app)?;
-    Ok(render_query_touches(
-        &substrate,
+    QueryJob::touches(
+        inputs,
         table_selector,
         from,
         direction,
         alsem_ver,
         deterministic,
-    ))
+        single_app,
+    )
+    .run()
 }
 
 /// The pure rendering half of [`run_query_touches_pipeline`] — split out so the
@@ -1085,23 +1240,20 @@ fn render_query_touches_body(
 /// down-list for one routine, WITH `via` (which the posting lists drop and
 /// `ConeDerivedStore` never carried).
 pub fn run_query_effects_pipeline(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     routine_selector: &str,
     alsem_ver: &str,
     deterministic: bool,
     single_app: bool,
 ) -> Result<QueryRunResult, String> {
-    let model_id = inputs
-        .model_instance_id
-        .as_deref()
-        .ok_or_else(|| "query: could not compute modelInstanceId".to_string())?;
-    let substrate = QuerySubstrate::build(inputs, model_id, single_app)?;
-    Ok(render_query_effects(
-        &substrate,
+    QueryJob::effects(
+        inputs,
         routine_selector,
         alsem_ver,
         deterministic,
-    ))
+        single_app,
+    )
+    .run()
 }
 
 /// The pure rendering half of [`run_query_effects_pipeline`].

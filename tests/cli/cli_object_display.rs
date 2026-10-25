@@ -130,7 +130,7 @@ fn stable_id_of(ws: &Path, file: &str, display: &str) -> String {
 /// caught.
 fn assert_identity_table_holds_extension_name(ws: &Path) {
     let model_id = compute_gate_model_instance_id(ws).unwrap();
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
     let snap = compose_snapshot(&model);
     let ids = &snap.identities;

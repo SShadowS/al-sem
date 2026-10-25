@@ -11,7 +11,7 @@
 //!      ([PARSER001] native parser unavailable), or `index` (failed-to-index warn).
 //!
 //! It is computed DETERMINISTICALLY from the command's one read of the workspace
-//! (`InputSet`, #160) so BOTH the success path (the model's
+//! (`WorkspaceInputs`, #160) so BOTH the success path (the model's
 //! `workspace_diagnostics`, built in `attach_program_calls`) and the fail-closed
 //! path (`empty_output_result`) can thread it into the JSON envelope's
 //! `diagnostics` array. The index rows come from the program build's own parse
@@ -25,7 +25,7 @@
 //! iteration leaks into the output order.
 
 use crate::engine::l5::registry::Diagnostic;
-use crate::program::inputs::InputSet;
+use crate::program::inputs::WorkspaceInputs;
 
 /// Compute al-sem's `workspace.diagnostics` for the workspace `inputs` read:
 /// PROVIDER diagnostics (remapped to `stage: "discover"`) concatenated with INDEX
@@ -40,12 +40,12 @@ use crate::program::inputs::InputSet;
 /// file (the source-only corpus's common case — which is why the 40 goldens have
 /// `diagnostics: []`).
 pub fn compute_workspace_diagnostics(
-    inputs: &InputSet,
+    inputs: &WorkspaceInputs,
     files_without_object: Option<&[String]>,
 ) -> Vec<Diagnostic> {
     assert!(
         !inputs.build_only,
-        "InputSet read with build_only: the app.json list and nested flags were not read"
+        "WorkspaceInputs read with build_only: the app.json list and nested flags were not read"
     );
     let workspace = inputs.workspace.as_path();
     let mut out: Vec<Diagnostic> = Vec::new();

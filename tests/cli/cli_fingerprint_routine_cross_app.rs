@@ -215,7 +215,7 @@ fn fingerprint_may_commit_uses_inherited_coverage() {
 
 /// The cross-app model of `ws`.
 fn cross_model(ws: &Path) -> al_sem::engine::gate::run::AnalysisTarget {
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     al_sem::engine::gate::run::AnalysisTarget::build(&inputs, false, "t").expect("cross-app")
 }
 
@@ -484,8 +484,10 @@ fn no_dependency_parity_fingerprint_routine() {
             let (failures, compared) = (&failures, &compared);
             s.spawn(move || {
                 for dir in chunk {
-                    let inputs =
-                        al_sem::program::inputs::InputSet::read(dir, &crate::fingerprint_needs());
+                    let inputs = al_sem::program::inputs::WorkspaceInputs::read(
+                        dir,
+                        &crate::fingerprint_needs(),
+                    );
                     for root in crate::cli_prove_cross_app::root_ids(dir) {
                         for format in [FingerprintFormat::Json, FingerprintFormat::Human] {
                             let run = |single_app: bool| {

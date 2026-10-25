@@ -1,0 +1,99 @@
+{
+  "alsemVersion": "2.0.3",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "routines": [
+        "CallerA"
+      ]
+    },
+    "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "reasons": [],
+          "status": "complete"
+        },
+        "effects": [
+          {
+            "conditionality": "loop-body",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "MC Customer",
+              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 18,
+              "sourceKind": "source"
+            },
+            "factId": "1381f82cf1fe9786",
+            "guarantees": [],
+            "provenance": "transitive",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "DB_MODIFY",
+            "viaPaths": [
+              [
+                {
+                  "anchor": {
+                    "column": 12,
+                    "file": "ws:src/D1MultiCaller.al",
+                    "line": 26,
+                    "sourceKind": "source"
+                  },
+                  "calleeDisplay": "ModifyHelper",
+                  "callsiteId": "225874ed4a5f49e9/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/cs0",
+                  "edgeKind": "direct-call",
+                  "fromDisplay": "CallerA",
+                  "fromRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+                  "kind": "call",
+                  "toDisplay": "ModifyHelper",
+                  "toRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+                }
+              ]
+            ],
+            "viaPathsTruncated": false
+          }
+        ],
+        "entryDiagnostics": [],
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D1MultiCaller.al",
+            "line": 21,
+            "sourceKind": "source"
+          },
+          "display": "CallerA",
+          "objectDisplay": "Codeunit D1 Multi Caller",
+          "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
+        },
+        "unresolved": [],
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      }
+    ],
+    "summary": {
+      "rootsRequested": 1,
+      "rootsResolved": 1,
+      "totalEffects": 1,
+      "totalUnresolved": 0
+    },
+    "workspaceFingerprint": "450419199dc399835e4930b0b2b8568717dbc88066e20fa77134485d64043dee"
+  },
+  "schemaVersion": "1.6.0"
+}

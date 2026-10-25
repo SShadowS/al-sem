@@ -9,6 +9,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`alsem batch <manifest> [--out-dir DIR]` (#277).** Runs the commands of a JSON
+  manifest (`{"jobs": [{"argv": [...], "stdout": ..., "stderr": ...}]}`, or several
+  `{"batches": [...]}`); a batch runs in one process. Jobs on one workspace and universe share one
+  view: one read of the workspace, one build, one witness pass at the union of the jobs'
+  requests, one `det`, and one run per distinct detector set and scope. Views are built
+  one after another, and a workspace read is freed after its last view. Every job's
+  stdout, stderr and exit equal its standalone run with its stdout off a terminal
+  (`analyze`'s `--format auto` is JSON in a batch, whatever the run's own stdout is,
+  with one batch or several), with two stated exceptions: a
+  view's `log` lines (`RUST_LOG`) are printed once on the run's stderr, and a job's own
+  write-error line goes to the run's stderr too. The library's job lines (the L4
+  non-convergence line, `graph`'s coverage warning) are replayed in the stderr of each
+  job whose standalone run prints them. A job's streams go to
+  `DIR/<batch>.<job>.stdout`/`.stderr` unless the manifest names them (relative paths
+  against the manifest's directory; `--out` stays relative to the cwd); a missing stream
+  directory or `--out-dir` exits 3 before any build. The run prints
+  one JSON line per job (`batch`, `job`, `exit`, `stdout`, `stderr`, `files`) and exits 0
+  when every job ran, whatever their exits; a job whose own write fails gets its
+  command's write-failure exit (analyze 2, else 1). A bad manifest (an argv clap rejects,
+  `batch`, `policy explain`, `cache prune`, no command, no job) exits 3 and runs nothing,
+  and so do two write targets naming one file (also one job's stdout and stderr), a file
+  inside another job's shard directory, a job writing the manifest, and a file one job
+  reads (a diff side, `--baseline`, `--renames`, `--policy`, a digest diff, a workspace's
+  own files) that another job writes. A job that fails its own validation (a bad
+  `--format`, `--shard` without `--out`, a policy that does not load, …) writes only its
+  two streams, so nothing it would write is checked, but it keeps the files it reads (a
+  `digest --diff foo.diff` that failed because `foo.diff` is absent still clashes with the
+  job that writes it), named or not (an auto-detected `al-sem.policy.yaml` that does not
+  load still clashes with a job writing it); it is a job of its own exit, never a usage
+  error. Paths
+  are compared after their deepest existing directory is canonicalized and each `..` is
+  taken as the OS takes it (after a symlink, the target's parent), so a symlink, a Windows
+  case difference or an 8.3 name hides no clash; a workspace's own files are its
+  `.al`/`.app` files in any case, its `app.json` and config files, and the `.app` files of
+  every ancestor `.alpackages` the loader reads (the ancestors of the workspace as spelled,
+  as the loader walks them), each also at the target of a symlink that leads outside the
+  workspace, as the loader follows it; a linked directory (a linked `.alpackages`
+  included) is compared at its target, so a new `.al`, `.app` or config file written
+  under it clashes too. Every job is validated once, before anything runs:
+  whether `digest --changed <value>` names a diff file is decided then, and stdin is read
+  then, once, only when a job that passed its validation reads it, as standalone (a read
+  that fails is each such job's `failed to read diff from stdin`, exit 3); a closed run
+  stdout exits 1. Two or more batches run in worker processes (`alsem batch --worker <b>`, hidden),
+  at most `W` at once, started in manifest order: `W = max(1, min(batches, 4, ⌊28 GiB /
+  P⌋))`, at most 2 when a job is `policy check`, `P` the largest measured CDO peak of the
+  run's job kinds that build a view (`batch::admission::KIND_PEAK_KIB`; a kind with no row
+  takes the largest; a job that fails its validation or a
+  `diff` of two snapshot files counts for none, nor sets the policy cap). The parent writes
+  each worker its batch, its `--changed` decisions, the one stdin read and every file its
+  plans read (a digest's `--diff` file, a policy file) on the worker's stdin (a worker never
+  opens the manifest, and each such file is read once per run, so a FIFO works; a path
+  that is not UTF-8 crosses as raw bytes), forwards each worker's stderr whole line by whole line as
+  `[w<b>] …`, gives each worker the trace file `<ALSEM_TRACE_FILE>.w<b>`, and prints the job
+  lines in manifest order after the last worker exits; a worker that dies without its lines
+  leaves its jobs `"exit": null` with `"worker": "<signal or status>"`, and the run exits 1.
+  `alsem batch --help` states the budget's limit (the measured shapes only) and that the
+  table is CDO-calibrated. Neither `alsem batch` nor its workers read or set
+  `RAYON_NUM_THREADS`; each big-stack pool reports its size in a `pool.threads` trace
+  instant. Under `ALSEM_RETAINED_CENSUS=1` each worker, a one-batch run's in-process one
+  included, prints `[batch] worker <b> peak_kib=<VmHWM>` (where `/proc/self/status`
+  exists). Traces gain `batch.workers`
+  (`w`, `p_kib`, `policy_cap`), `batch.worker.start`, `batch.worker.exit`, `batch.driver`,
+  `view.<i>`, `view.drop`, `view.teardown`, `view.run`, `job.<i>.<cmd>` and
+  `inputs.request_read`; `ALSEM_RETAINED_CENSUS=1` prints `[retained-census] batch.held
+  outputs= sides= inputs=` at each view's start, `batch.shared cell=<model|rel|raw|l4|det>
+  job_refs=<n>` after its one prepare (each cell one allocation, its bytes the cell's own
+  buckets, printed once) and `batch.shared cell=runs bytes= allocs= job_refs=` after its
+  computes (each distinct run allocation counted once). Limit: jobs that spell one workspace
+  path differently share its read, so a program build error names the first spelling
+  (graph's missing-`id` error names the job's own).
+  `KIND_PEAK_KIB` holds the step-12 CDO bench's measured rows
+  (`docs/measurements/2026-10-25-issue-277-160-step12.md` Part 4b), one per command and
+  universe, rounded up to 256 MiB: cross-app 13 steps (3.25 GiB) for analyze, fingerprint,
+  prove, events fanout/chains and query touches/effects, 15 (3.75 GiB) for digest, 39
+  (9.75 GiB) for policy check, 10 (2.5 GiB) for graph; single-app 3 (0.75 GiB), and 6
+  (1.5 GiB) for fingerprint and diff. A manifest without `policy check` derives `W` = 4,
+  with it 2. Stated limits (spec 12A-19): a batch whose view holds `policy check` and
+  other cross-app jobs peaks at about 1.22 × the policy job alone (the union of the jobs'
+  requests; measured 10,056,180 KiB against `policy check`'s 8,273,244), above the 1.15 ×
+  bound, reported and not gating; and a manifest path or stream directory that is not
+  UTF-8 still fails, because a run's job lines and its worker stream names are JSON
+  strings.
+
 - `alsem diff`: a new `rename-overlay-collision` diagnostic (`{kind, from, to}`). It
   fires when a `--renames` entry maps an old id (a routine, object, table, field or
   key) onto a target that is also an id in the old snapshot, and nothing maps that
@@ -18,6 +101,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A tree read that asks for the primary app's facts now stops the run in release builds
+  too: the view's "no tree read asks primary" check is an `assert!`, not a
+  `debug_assert!` (#277).
+- Tests: `standalone_is_a_batch_of_one` pins `ALCH_DRIVER_VERSION_OVERRIDE` to the
+  version the `tests/gate-goldens/batch/one-job/` goldens were minted at (2.0.3), so a
+  version bump no longer breaks them: `alsemVersion`/`al_sem_version`, graph's `engine`
+  and digest's, prove's and fingerprint's `workspaceFingerprint` all carry it. The pin goes
+  to each child process, not the test process, where a concurrent test's standalone run
+  read it (#277).
 - **#160 step 9: `prove`, `fingerprint --routine` and `fingerprint --inventory-only` are
   cross-app by default** (part of #160). Each builds the model of the workspace plus the
   dependency code it requires, as `analyze` and `digest` do, and reads a tree over that
@@ -67,6 +159,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dependency app (`--scope all`) keeps the old text, because its own uncertainty edges
   are not on the detector context. Ids, fingerprints, severity and confidence do not
   change.
+- **`policy check --no-policy` keeps no raw facts (#277 E12-C5).** No rule reads them, so
+  the view's composition no longer keeps every primary routine's raw facts
+  (`build.witness_pass` 0, was 1), and in a batch it no longer claims them as a later
+  reader, so a policy with rules before it frees them after its own use. Output is
+  unchanged.
+- **Each workspace read is dropped with its last view (#277 E12-C2).** `diff A B` no
+  longer holds A's read through B's build. A `RequestInputs` read (policy, baseline) is
+  now timed (`inputs.request_read`) and tallied in a `request_inputs` census bucket
+  (E12-C6). The view's own cells are freed in a `view.teardown` span (E12-C3).
+- Library: `JobFailure` is now an alias of `JobOutput` (E12-C7); `ViewDemand::one` builds
+  a one-side job's demand and `JobOutput::text` a text command's writes (E12-C8);
+  `DiffJob::new` takes a `WorkspaceReader` and `policy_plan` a `rules` flag.
+
+- **Errors found before the build win (#277).** `policy check` loads its policy, and
+  `fingerprint` checks `--shard` against `--out`, before the model is built. So when an
+  invocation has two problems, the stderr text changes: a bad policy and a failing build
+  now report the policy error; `--shard` without `--out` and a failing build report
+  `--shard requires --out <directory>`; and `policy check --strict` with a bad policy and
+  an error-severity analyzer diagnostic reports the policy error, not the diagnostic
+  lines (exit 1 either way). Neither case builds a model any more, and a bad policy no
+  longer reads the workspace before it is reported. The `--shard`/`--out`
+  check also now runs before `fingerprint --strict`'s analyzer-diagnostic gate and before
+  its `fingerprint: could not compute modelInstanceId` error: with either of those, a
+  `--shard` without `--out` now reports the shard error (exit 1 in every case; only the
+  stderr text differs). `diff --renames` keeps its order.
+- **`analyze --update-baseline` write failure (#277).** The baseline file is now written
+  by the command's output step, before stdout, under the one write-failure rule: a failed
+  write prints `al-sem: write error: <path>: <OS message>` and exits 2 (was `al-sem:
+  failed to write baseline '<path>': <OS message>`, exit 3). Stdout stays empty in both.
+- Library: `InputSet` is now `WorkspaceInputs` (read once per workspace path) and
+  `InputNeeds` is `WorkspaceNeeds` (with `union`). The policy file and the baseline moved
+  to a new per-command `RequestInputs`. `run_analyze_with_exit` takes the request and
+  returns the baseline bytes instead of writing them; `save_baseline` is gone.
+- **`analyze`, `digest`, `policy check` and `events` run through one batch driver
+  (#277).** Each command is a job (`engine::batch`): the driver builds the view,
+  prepares one plan and the job computes off it; its writes are an ordered list that
+  a standalone run replays in today's order, so stdout, stderr, exit codes and files
+  are unchanged. Two small differences: a validation error line is now written like
+  every other stderr line, so when stderr is closed the command exits with its own
+  write-failure code (analyze 2, every other command 1) instead of panicking; and the
+  trace span `l4_l5.run_detectors` is gone (the detector run is the driver's `prepare`).
+  `analyze.total` still spans the whole analyze run, model build included. The trace
+  carries a `batch.driver` instant (`jobs`, `views`, `workers`).
+- **`query`, `graph`, `prove`, `fingerprint` and `diff` run through the batch driver too
+  (#277), and every view is built by one builder (`gate::run::build_view_model`).** Their
+  stdout, stderr, exit codes and files are unchanged, and so are their validation errors
+  and their closed-stderr exit (as above). `query` reads its view's model and `l4` by
+  borrow and keeps its own `Arc` of the graph; before its render it releases the view's
+  relation and the cross-app base's prepare-only parts (a new `Cell::Base`), so they die
+  where they did before. `graph` gets the cross-app program from the builder
+  before any model is built from it. `fingerprint`'s `--shard` without `--out` is a job
+  with no view. Library: `impact_graph::export_workspace`, `View::into_query_parts` and
+  `AnalysisTarget::build_target` are gone (`GraphJob`, `QuerySubstrate::of(&view)` with the
+  test entry `query_view`, and `build_view_model` replace them); `diff_strict_plan` is
+  `diff_plan(detectors, strict)`; `R3a5CrossAppBase.rel` is read through `rel()`.
+- **`prove`, `fingerprint --routine` and `fingerprint --inventory-only` share their view's
+  one pass in a batch (#277 on #160 step 9).** Each is a tree job: `prove` asks its one
+  root, the query its selected routines and the inventory nothing; the view composes once
+  at the union, and each job's tree is composed over its own subjects, read, and dropped
+  before `det`. A batch of the inventory, two queries and a prove gives each job its
+  standalone bytes. `fingerprint`'s full snapshot and the query forms with no `--routine` stay on their
+  own single-app snapshot. Library: the fingerprint reads are `TreeRead::FingerprintQuery`
+  / `TreeRead::Inventory` on a job's `TreeDemand` (prove's gap count is
+  `TreeDemand.gaps_in_cone`), `View::take_tree_read` takes a `JobId`, and the
+  `program::inputs::InputSet` alias is gone (use `WorkspaceInputs`).
+- **`diff ws ws`: both sides share one view (#277).** Two workspace sides that name one
+  directory (after `std::path::absolute`, not canonicalised) are now read and built once;
+  each side still composes its own snapshot. Output is unchanged. Counters
+  (program, combined_graph, cone, summaries_v2, graph_scc, pd_solve, detector_context,
+  snapshot, witness_pass, inputs.read): without `--strict` 2, 2, 2, 0, 2, 2, 0, 2, 2, 2
+  → **1**, 2, 2, 0, 2, 2, 0, 2, 2, **1**; with `--strict` 2, 4, 4, 2, 6, 4, 2, 2, 2, 2 →
+  **1, 3, 3, 1, 4, 3, 1**, 2, 2, **1** (one detector run serves both sides' gates). Also:
+  every workspace side is read before the first build, so a `diff` whose old workspace
+  side fails now counts the new side's read (`inputs.read` 2, was 1; still no new-side
+  build and the same error); the `diff --strict` trace releases the view's cells once.
+- **Traces (#277).** A view's post-attach phase now ends when the driver drops the view
+  (every command; `diff` ended it per side before), so `peak.post_attach_mb` no longer
+  covers a command's writes. Every single-app view build now opens `preflight.fresh_program`
+  and `l3.assemble_resolve` (only `analyze --single-app` did), and every cross-app model
+  build opens `crossapp.base_total` (only `analyze` did; `graph`'s program-only build opens
+  none): `scripts/trace_summary.py` shows those rows for more commands.
+
 - **Grammar: tree-sitter-al `main` at `c89c2ecb`** (D1, a parser state-reduction pass;
   package version still 4.4.1; was `960ed312`). `node-types.json` is byte-identical, so the
   generated vocabulary, `kind_policy` and the 501 named kinds did not move, and no valid

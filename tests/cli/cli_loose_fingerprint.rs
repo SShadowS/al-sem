@@ -169,10 +169,11 @@ fn analyze_json_with(ws: &Path, detector: Option<&str>, with_evidence: bool) -> 
         single_app: false,
         with_evidence,
     };
-    let out = match run_analyze_with_exit(&args.read_inputs(), &args, "247-test") {
-        Ok((out, _, _)) => out,
-        Err(e) => panic!("run_analyze failed: {e}"),
-    };
+    let out =
+        match run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "247-test") {
+            Ok((out, ..)) => out,
+            Err(e) => panic!("run_analyze failed: {e}"),
+        };
     serde_json::from_str(&out).expect("analyze JSON must parse")
 }
 
@@ -1642,7 +1643,7 @@ codeunit 50302 Setter
 
     // Precondition: the call really is an `interface-dispatch` edge from
     // `PostingCaller.DoPost` to the publisher, so "no finding" means d43 skipped it.
-    let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
     let id = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
         .expect("model id");
     let m = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(

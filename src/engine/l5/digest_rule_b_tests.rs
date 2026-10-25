@@ -15,13 +15,13 @@ use crate::engine::l5::test_support::{
     write_fixture_dep_ambiguous, write_fixture_dep_uncertainty, write_fixture_rule_b,
     write_fixture_symbol_only_dep,
 };
-use crate::engine::session::digest_plan;
+use crate::engine::session::{JobId, View, digest_plan};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
-fn inputs(ws: &Path) -> Arc<crate::program::inputs::InputSet> {
-    crate::program::inputs::InputSet::read(ws, &Default::default())
+fn inputs(ws: &Path) -> Arc<crate::program::inputs::WorkspaceInputs> {
+    crate::program::inputs::WorkspaceInputs::read(ws, &Default::default())
 }
 
 /// The internal → stable ids of the roots named `displays` (workspace rows).
@@ -62,7 +62,7 @@ fn effects_of<'v>(view: &'v View, display: &str) -> &'v [DigestEffectResult] {
         .expect("the root")
         .stable_routine_id;
     &view
-        .effects()
+        .effects(JobId(0))
         .entries
         .iter()
         .find(|e| &e.routine_id == id)
@@ -280,7 +280,7 @@ fn an_event_boundary_group_is_in_the_may_relations() {
     );
     let mut tree = tree_of(
         model,
-        &base.rel,
+        base.rel(),
         base.dependency_calls.as_deref().unwrap_or(&[]),
         &source_less_apps(&base.dependency_apps),
         ConeScope {
@@ -379,7 +379,7 @@ fn the_dependency_calls_leave_the_base_in_the_first_prepare() {
         false,
     ));
     assert_eq!(calls_of(&view), None, "digest: released");
-    let items: Vec<&str> = view.effects().unresolved[&go]
+    let items: Vec<&str> = view.effects(JobId(0)).unresolved[&go]
         .items
         .iter()
         .map(|i| i.callee_display.as_str())
@@ -408,14 +408,18 @@ fn tree_of(
 ) -> crate::engine::l5::snapshot::CapabilitySnapshot {
     let (mut caps, raw) =
         compose_capabilities(model, rel.cone(), det_cone_inputs(model, rel), scope);
+    let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
     compose_tree(
         model,
         rel.cone(),
         calls,
-        &mut caps,
-        raw,
-        &HashMap::new(),
-        source_less,
+        &caps,
+        crate::engine::l5::snapshot::TreeRaw::Drain(raw),
+        pd,
+        &crate::engine::l5::snapshot::TreeApps {
+            names: HashMap::new(),
+            source_less: source_less.clone(),
+        },
     )
 }
 
@@ -456,7 +460,7 @@ fn t7a_a_dependency_callers_rows_are_the_ledgers() {
         .expect("precondition: DepCaller is demanded");
     let tree = tree_of(
         model,
-        &base.rel,
+        base.rel(),
         base.dependency_calls.as_deref().unwrap_or(&[]),
         &source_less_apps(&base.dependency_apps),
         ConeScope {
@@ -523,7 +527,7 @@ fn t7b_a_call_into_a_body_less_dependency_row_is_unfetched() {
     assert!(!write.body_available, "precondition: Write has no body");
     let tree = tree_of(
         model,
-        &base.rel,
+        base.rel(),
         base.dependency_calls.as_deref().unwrap_or(&[]),
         &source_less_apps(&base.dependency_apps),
         ConeScope {
@@ -620,9 +624,9 @@ fn t9a_a_routine_selector_reads_the_table_digest_builds() {
     let tmp = tempfile::tempdir().unwrap();
     write_fixture_rule_b(tmp.path());
     let r = run_digest_pipeline(
-        &crate::program::inputs::InputSet::read(
+        &crate::program::inputs::WorkspaceInputs::read(
             tmp.path(),
-            &crate::program::inputs::InputNeeds {
+            &crate::program::inputs::WorkspaceNeeds {
                 fingerprint_rows: true,
                 ..Default::default()
             },
@@ -648,7 +652,7 @@ fn t9a_a_routine_selector_reads_the_table_digest_builds() {
     assert_eq!(roots, vec!["CallWrite"]);
     let view = digest_view(tmp.path(), &["CallWrite"]);
     assert!(
-        view.effects()
+        view.effects(JobId(0))
             .identities
             .stable_ids
             .iter()
@@ -696,7 +700,7 @@ fn t3_digest_scoped_equals_unscoped() {
         let (rel, calls) = match &target {
             AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
             AnalysisTarget::CrossApp(b) => (
-                Arc::clone(&b.rel),
+                Arc::clone(b.rel()),
                 b.dependency_calls.as_deref().unwrap_or(&[]),
             ),
         };
@@ -812,7 +816,7 @@ fn fingerprint_witness_boundary_trigger_and_event() {
         );
         let mut tree = tree_of(
             model,
-            &base.rel,
+            base.rel(),
             base.dependency_calls.as_deref().unwrap_or(&[]),
             &source_less_apps(&base.dependency_apps),
             ConeScope {
@@ -948,12 +952,12 @@ fn fingerprint_witness_boundary_trigger_and_event() {
 
 /// #160 step 9 T17 (prove arm, 6A-9): prove reads one root's effects,
 /// unresolved cone and gap count off a tree whose witness request is
-/// `Roots({root})` (`prove_pipeline_with`'s `digest_plan`). For every
+/// `WitnessRequest::roots({root})` (`ProveJob`'s `prove_plan`). For every
 /// reportable root of every r0 dir and of the dependency fixtures, in both
-/// universes, those equal the same root's under `WitnessRequest::Primary`
+/// universes, those equal the same root's under `WitnessRequest::primary()`
 /// (every primary routine a subject). The subjects come from
 /// `WitnessRequest::scope`, the view's own mapping. DISCRIMINATION:
-/// `Roots`' scope dropping its subjects (`.take(0)` in `scope`) loses the
+/// a roots request's scope dropping its subjects (`.take(0)` in `scope`) loses the
 /// root's transitive effects and fails it.
 #[test]
 fn prove_scoped_equals_unscoped() {
@@ -989,7 +993,7 @@ fn prove_scoped_equals_unscoped() {
             let (rel, calls) = match &target {
                 AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
                 AnalysisTarget::CrossApp(b) => (
-                    Arc::clone(&b.rel),
+                    Arc::clone(b.rel()),
                     b.dependency_calls.as_deref().unwrap_or(&[]),
                 ),
             };
@@ -1001,7 +1005,7 @@ fn prove_scoped_equals_unscoped() {
                 &sl,
                 ConeScope {
                     derived: false,
-                    raw: WitnessRequest::Primary.scope(model),
+                    raw: WitnessRequest::primary().scope(model),
                 },
             );
             let unscoped = digest_effects(&mut all, model, &roots, false, true);
@@ -1013,7 +1017,7 @@ fn prove_scoped_equals_unscoped() {
                     &sl,
                     ConeScope {
                         derived: false,
-                        raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
+                        raw: WitnessRequest::roots([root.clone()].into()).scope(model),
                     },
                 );
                 let scoped = digest_effects(
@@ -1061,11 +1065,11 @@ fn prove_scoped_equals_unscoped() {
 }
 
 /// #160 step 9 T17 (query arm, 6A-9): `fingerprint --routine R` reads a tree
-/// whose witness request is `Roots({R})` (the pool). For every root
-/// classification of every r0 dir and of the dependency fixtures, in both
+/// whose witness request is `WitnessRequest::roots({R})` (the pool). For every
+/// root classification of every r0 dir and of the dependency fixtures, in both
 /// universes, the query's block for `--routine R` (its facts, coverage,
 /// witnesses and evidence) equals the same query's over a tree with
-/// `WitnessRequest::Primary`. DISCRIMINATION: `Roots`' scope dropping its
+/// `WitnessRequest::primary()`. DISCRIMINATION: a roots request's scope dropping its
 /// subjects (`.take(0)` in `scope`) loses the inherited facts and fails it.
 /// Final panel O4: in each universe the model's `totalClassifications`
 /// (`selector_failure_result`, the count a failing selector prints with no
@@ -1108,7 +1112,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
             let (rel, calls) = match &target {
                 AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
                 AnalysisTarget::CrossApp(b) => (
-                    Arc::clone(&b.rel),
+                    Arc::clone(b.rel()),
                     b.dependency_calls.as_deref().unwrap_or(&[]),
                 ),
             };
@@ -1137,7 +1141,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
                 &sl,
                 ConeScope {
                     derived: false,
-                    raw: WitnessRequest::Primary.scope(model),
+                    raw: WitnessRequest::primary().scope(model),
                 },
             );
             // Final panel O4: a failing selector's count, read off the model
@@ -1171,7 +1175,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
                     &sl,
                     ConeScope {
                         derived: false,
-                        raw: WitnessRequest::Roots([root.clone()].into()).scope(model),
+                        raw: WitnessRequest::roots([root.clone()].into()).scope(model),
                     },
                 );
                 let (got, _) = query(&scoped_tree, root);
@@ -1206,8 +1210,8 @@ fn fingerprint_query_scoped_equals_unscoped() {
 /// #160 step 9 T11 (spec §5): `fingerprint --inventory-only` (cross-app, on the
 /// rule-B fixture, whose source dependency `Dep Rec Lib` writes `Customer`)
 /// is the inventory envelope of `assemble_full_snapshot`'s five keys over a
-/// tree composed with `Roots(∅)`. Precondition: that tree holds no inherited
-/// fact. DISCRIMINATION: giving the plan `Roots(every primary routine)` keeps
+/// tree composed over an empty request. Precondition: that tree holds no
+/// inherited fact. DISCRIMINATION: giving the plan every primary routine keeps
 /// the dependency identities its inherited facts reference, and fails it (its
 /// counter half, `build.witness_pass` 0, is `cli_build_counters`'
 /// `fingerprint_inventory_only`).
@@ -1222,9 +1226,9 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
     };
     let tmp = tempfile::tempdir().unwrap();
     write_fixture_rule_b(tmp.path());
-    let inputs = crate::program::inputs::InputSet::read(
+    let inputs = crate::program::inputs::WorkspaceInputs::read(
         tmp.path(),
-        &crate::program::inputs::InputNeeds {
+        &crate::program::inputs::WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         },
@@ -1260,12 +1264,12 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
     let model = &b.resolved;
     let tree = tree_of(
         model,
-        &b.rel,
+        b.rel(),
         b.dependency_calls.as_deref().unwrap_or(&[]),
         &source_less_apps(&b.dependency_apps),
         ConeScope {
             derived: false,
-            // Hand-stated: no subject (what `Roots(∅)` must mean).
+            // Hand-stated: no subject (what an empty request must mean).
             raw: WitnessScope::Subjects(BTreeSet::new()),
         },
     );
@@ -1273,7 +1277,7 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
         tree.capability_facts
             .iter()
             .all(|f| f.provenance != "inherited"),
-        "precondition: no inherited fact in a Roots(∅) tree"
+        "precondition: no inherited fact in a tree of an empty request"
     );
     let keys = assemble_full_snapshot(
         model,

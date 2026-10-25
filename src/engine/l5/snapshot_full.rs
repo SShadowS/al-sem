@@ -58,7 +58,7 @@ pub const SNAPSHOT_SCHEMA_VERSION: i64 = 4;
 pub struct FullSnapshotOptions<'a> {
     /// The command's one read of the workspace (#160), read with
     /// `fingerprint_rows`: the `inputs[]` rows come from it.
-    pub inputs: &'a crate::program::inputs::InputSet,
+    pub inputs: &'a crate::program::inputs::WorkspaceInputs,
     /// The al-sem version string (`alsemVersion`; e.g. `cli-b-v1`).
     pub driver_version: &'a str,
     /// When true, `generatedAt` is pinned to the Unix epoch for byte-stable output.
@@ -119,16 +119,16 @@ pub const ANALYSIS_UNIVERSES: [&str; 2] = ["single-app", "cross-app"];
 /// `compose_snapshot` (which `compose_full_snapshot` calls internally) just to fish
 /// the fingerprint out of a CBOR map (#19).
 pub fn workspace_fingerprint_of(
-    inputs: &crate::program::inputs::InputSet,
+    inputs: &crate::program::inputs::WorkspaceInputs,
     driver_version: &str,
 ) -> String {
     compute_workspace_fingerprint(snapshot_rows(inputs), driver_version)
 }
 
-/// The reproducibility input rows the command's `InputSet` hashed when it was
+/// The reproducibility input rows the command's `WorkspaceInputs` hashed when it was
 /// read (`derive_inputs`' rows, #160). The command declares the need
-/// (`InputNeeds::fingerprint_rows`); a set read without it is a wiring bug.
-fn snapshot_rows(inputs: &crate::program::inputs::InputSet) -> &[SnapshotInput] {
+/// (`WorkspaceNeeds::fingerprint_rows`); a set read without it is a wiring bug.
+fn snapshot_rows(inputs: &crate::program::inputs::WorkspaceInputs) -> &[SnapshotInput] {
     inputs
         .snapshot_inputs
         .as_deref()
@@ -534,7 +534,7 @@ fn to_cbor_inputs(inputs: &[SnapshotInput]) -> CborValue {
 /// routine of the model (spec §4.2: the cone, not the cut, F9).
 fn reach(x: &R3a5CrossAppBase) -> HashSet<String> {
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
-    for e in x.rel.cone() {
+    for e in x.rel().cone() {
         if let Some(to) = &e.to {
             adj.entry(e.from.as_str()).or_default().push(to.as_str());
         }
@@ -1132,8 +1132,8 @@ pub struct SnapshotInput {
 }
 
 /// The inputs that contribute to snapshot identity, over the files the
-/// command's `InputSet` read (#160; `InputSet::read` calls this once, under
-/// `InputNeeds::fingerprint_rows`):
+/// command's `WorkspaceInputs` read (#160; `WorkspaceInputs::read` calls this once, under
+/// `WorkspaceNeeds::fingerprint_rows`):
 ///   app.json (readable bytes, parse or no parse) → "app-json"; every
 ///   dependency-closure `.app` the loader reads (own and ancestor
 ///   `.alpackages`) → "dep-package", keyed `.alpackages/x.app` /
@@ -1955,11 +1955,11 @@ mod tests {
         std::fs::write(ws.join(".alpackages").join("a.app"), b"own package").unwrap();
         std::fs::write(ws.join("app.json"), b"{}").unwrap();
 
-        let needs = crate::program::inputs::InputNeeds {
+        let needs = crate::program::inputs::WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         };
-        let inputs = crate::program::inputs::InputSet::read(&ws, &needs);
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &needs);
         let mut got: Vec<String> = snapshot_rows(&inputs)
             .iter()
             .filter(|i| i.kind == "dep-package")

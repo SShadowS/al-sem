@@ -2,7 +2,7 @@
 //! al-sem `src/cli/inline-suppression.ts`.
 //!
 //! The parse tree is not retained after indexing, so directives are scanned in the
-//! workspace `.al` text the command's `InputSet` read (#160), never the disk again.
+//! workspace `.al` text the command's `WorkspaceInputs` read (#160), never the disk again.
 //! A workspace source unit's id is `ws:<relpath>`; `<relpath>` keys the set's file.
 //!
 //! DIRECTIVE SYNTAX: `// al-sem-ignore <detector-id>[: <reason>]`.
@@ -17,7 +17,7 @@
 //! findings is surfaced to the caller (the bin emits it to stderr).
 
 use crate::engine::gate::projection::FindingSummary;
-use crate::program::inputs::InputSet;
+use crate::program::inputs::WorkspaceInputs;
 use std::collections::HashMap;
 
 /// A parsed `// al-sem-ignore` directive found in a source file.
@@ -183,9 +183,9 @@ fn is_word_or_hyphen(b: u8) -> bool {
 
 /// Build a `SuppressionMap` by scanning the given workspace source units. Only `ws:`
 /// prefixed units are scanned (dependency `.app` sources are not workspace-authored).
-/// The text is the one the command's `InputSet` read (#160), never a later disk
+/// The text is the one the command's `WorkspaceInputs` read (#160), never a later disk
 /// read; a file the set could not read (or did not list) yields no suppressions.
-pub fn build_suppression_map<'a, I>(inputs: &InputSet, source_unit_ids: I) -> SuppressionMap
+pub fn build_suppression_map<'a, I>(inputs: &WorkspaceInputs, source_unit_ids: I) -> SuppressionMap
 where
     I: IntoIterator<Item = &'a str>,
 {

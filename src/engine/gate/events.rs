@@ -32,16 +32,19 @@
 //! `--deterministic` pins `generated_at = "0"` and reads the version override from
 //! the caller rather than the live version. Used by every differential test.
 
-use crate::engine::gate::run::{AnalysisTarget, analyzer_diagnostics_of_view, diagnostic_lines};
+use crate::engine::batch::job::{
+    Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+    ViewNeeds, WorkspaceRead,
+};
+use crate::engine::batch::output::{JobOutput, WriteAction};
+use crate::engine::gate::run::{analyzer_diagnostics_of_view, diagnostic_lines};
 use crate::engine::l5::event_flow::{
     ChainNode, ChainReport, ChainWalkOptions, FanoutCoverage, FanoutReport, Scope,
     compute_chain_report, compute_fanout_report,
 };
 use crate::engine::l5::registry::Detector;
-use crate::engine::session::{Cell, Plan, View, events_plan};
-use crate::program::inputs::InputSet;
+use crate::engine::session::{Cell, events_plan};
 use crate::program::resolve::full::LoadedDependencies;
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // JSON insertion-order serializer — the shared `gate::ordered_json` module (one
@@ -345,50 +348,152 @@ pub struct EventsRunResult {
     pub stderr_lines: Vec<String>,
 }
 
-/// Both events commands' start (#160 §4.4.4): the target, a [`View`] prepared
-/// with `plan` (each command builds it with `events_plan`), and the analyzer
-/// diagnostic lines of its one run, which is taken once read. `Err` is the
-/// command's early result: no model-instance id (`<cmd>: could not compute
-/// modelInstanceId`, exit 1, `AnalysisTarget::build`), or `--strict` with an
-/// error-severity diagnostic.
+/// An events command's early result: `stderr_lines`, no text, exit 1.
+fn early(stderr_lines: Vec<String>) -> EventsRunResult {
+    EventsRunResult {
+        text: String::new(),
+        exit_code: 1,
+        stderr_lines,
+    }
+}
+
+/// Which report an events job writes; the job owns its options, so a batch
+/// makes its jobs in a loop (#277 final r1 FR-12).
+enum EventsReport<'a> {
+    Fanout(EventsFanoutOptions<'a>),
+    Chains(EventsChainsOptions<'a>),
+}
+
+/// `alsem events fanout` / `chains` as a batch job (#277 D1). Its document
+/// is the [`EventsRunResult`]; its writes are the text (when non-empty, to
+/// `--out` or stdout), then the stderr lines.
+pub struct EventsJob<'a> {
+    detectors: Vec<Detector>,
+    report: EventsReport<'a>,
+    out: Option<&'a str>,
+}
+
+impl<'a> EventsJob<'a> {
+    pub fn fanout(opts: EventsFanoutOptions<'a>, out: Option<&'a str>) -> EventsJob<'a> {
+        Self::with(
+            crate::engine::l5::detectors::default_detectors(),
+            EventsReport::Fanout(opts),
+            out,
+        )
+    }
+
+    pub fn chains(opts: EventsChainsOptions<'a>, out: Option<&'a str>) -> EventsJob<'a> {
+        Self::with(
+            crate::engine::l5::detectors::default_detectors(),
+            EventsReport::Chains(opts),
+            out,
+        )
+    }
+
+    fn with(detectors: Vec<Detector>, report: EventsReport<'a>, out: Option<&'a str>) -> Self {
+        EventsJob {
+            detectors,
+            report,
+            out,
+        }
+    }
+
+    /// The job's workspace, universe, `--strict` and error-line prefix.
+    fn head(&self) -> (&'a dyn WorkspaceRead, bool, bool, &'static str) {
+        match &self.report {
+            EventsReport::Fanout(o) => (o.inputs, o.single_app, o.strict, "al-sem events fanout"),
+            EventsReport::Chains(o) => (o.inputs, o.single_app, o.strict, "al-sem events chains"),
+        }
+    }
+
+    /// The job's result, through the driver.
+    fn run(&self) -> EventsRunResult {
+        crate::engine::batch::run_doc(self)
+            .one()
+            .unwrap_or_else(|f| unreachable!("events fails no side: {f:?}"))
+    }
+}
+
+impl Job for EventsJob<'_> {
+    fn name(&self) -> &'static str {
+        "events"
+    }
+    fn demands(&self) -> Vec<ViewDemand> {
+        // #70: the cross-app base by default (a workspace subscriber to a
+        // dependency event is BC's main events case), the workspace alone
+        // under `--single-app`.
+        let (inputs, single_app, ..) = self.head();
+        ViewDemand::one(inputs, single_app, false, ViewNeeds::MODEL)
+    }
+
+    fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        Ok(PlanPart {
+            plan: events_plan(self.detectors.clone()),
+            reads: vec![Cell::Det],
+            carry: None,
+        })
+    }
+
+    fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        let (_, _, strict, _) = self.head();
+        let result = match events_head(cx, strict) {
+            Err(early) => early,
+            Ok(diag_lines) => match &self.report {
+                EventsReport::Fanout(o) => fanout_report(cx, o, diag_lines),
+                EventsReport::Chains(o) => chains_report(cx, o, diag_lines),
+            },
+        };
+        Ok(SideDoc::new(result))
+    }
+
+    fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        // No model-instance id: `<cmd>: could not compute modelInstanceId`, exit 1.
+        let (.., cmd) = self.head();
+        Ok(SideDoc::new(early(vec![failure.target.message(cmd)])))
+    }
+
+    fn serialize(&self, doc: Doc) -> JobOutput {
+        let r = doc
+            .one::<EventsRunResult>()
+            .unwrap_or_else(|f| unreachable!("events fails no side: {f:?}"));
+        let mut actions = Vec::new();
+        if !r.text.is_empty() {
+            actions.push(WriteAction::out(self.out, r.text));
+        }
+        actions.extend(r.stderr_lines.iter().map(|l| WriteAction::line(l)));
+        JobOutput {
+            actions,
+            exit: r.exit_code,
+        }
+    }
+}
+
+/// Both events commands' start (#160 §4.4.4), off the prepared view: the
+/// analyzer diagnostic lines of its one run, which is taken once read. `Err`
+/// is the command's early result: `--strict` with an error-severity
+/// diagnostic.
 ///
 /// The lines are `analyzeWorkspace`'s diagnostics: workspace + dependency-ledger
 /// warnings + overlay + the default detectors' (e.g. `d43-event-ishandled-skip`).
 /// events-fanout.ts emits them to stderr at the end; `infra_diagnostics` alone
 /// omits the detector-stage ones the goldens' `.stderr.txt` capture.
-fn events_view(
-    plan: Plan,
-    inputs: &Arc<InputSet>,
-    single_app: bool,
-    strict: bool,
-    cmd: &str,
-) -> Result<(View, Vec<String>), EventsRunResult> {
-    let early = |stderr_lines| EventsRunResult {
-        text: String::new(),
-        exit_code: 1,
-        stderr_lines,
-    };
-    // #70: the cross-app base by default (a workspace subscriber to a dependency
-    // event is BC's main events case), the workspace alone under `--single-app`.
-    let target = AnalysisTarget::build(inputs, single_app, cmd).map_err(|e| early(vec![e]))?;
-    let mut view = View::new(target);
-    let key = plan.keys().remove(0);
-    view.prepare(&plan);
-    let diag_lines = diagnostic_lines(&analyzer_diagnostics_of_view(&view, &key));
-    drop(view.take_run(&key));
+fn events_head(cx: &mut ViewCx<'_>, strict: bool) -> Result<Vec<String>, EventsRunResult> {
+    let key = cx.keys()[0].clone();
+    let diag_lines = diagnostic_lines(&analyzer_diagnostics_of_view(cx.view(), &key));
+    drop(cx.take_run(&key));
     // `l4` is filled when the run demands `CORE_SUMMARIES`; nothing after the
     // run reads it (as in policy check).
-    view.release(Cell::L4);
+    cx.release(Cell::L4);
     if strict && diag_lines.iter().any(|l| l.starts_with("error:")) {
         return Err(early(diag_lines));
     }
-    Ok((view, diag_lines))
+    Ok(diag_lines)
 }
 
 /// After the report, its last reader: `det` holds the graph's `Arc`, so every
-/// cell goes together. (`l4` went right after the run, in [`events_view`].)
-fn release_cells(view: &mut View) {
-    view.release_all_but(&[]);
+/// cell goes together. (`l4` went right after the run, in [`events_head`].)
+fn release_cells(cx: &mut ViewCx<'_>) {
+    cx.release_all_but(&[]);
 }
 
 // ---------------------------------------------------------------------------
@@ -396,9 +501,11 @@ fn release_cells(view: &mut View) {
 // ---------------------------------------------------------------------------
 
 /// Options for `run_events_fanout`.
+#[derive(Clone, Copy)]
 pub struct EventsFanoutOptions<'a> {
-    /// The command's one read of the workspace (#160).
-    pub inputs: &'a Arc<InputSet>,
+    /// The command's one read of the workspace (#160), handed to the driver
+    /// (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
     pub format: &'a str, // "human" | "json"
     pub scope: Scope,
     /// "warn" (default) | "strict" | "ignore". Mirrors `--coverage-policy` in
@@ -426,29 +533,27 @@ pub(crate) fn events_fanout_with(
     detectors: Vec<Detector>,
     opts: &EventsFanoutOptions,
 ) -> EventsRunResult {
-    let (mut view, diag_lines) = match events_view(
-        events_plan(detectors),
-        opts.inputs,
-        opts.single_app,
-        opts.strict,
-        "al-sem events fanout",
-    ) {
-        Ok(v) => v,
-        Err(early) => return early,
-    };
+    EventsJob::with(detectors, EventsReport::Fanout(*opts), None).run()
+}
 
+/// The fanout report off the prepared view, after [`events_head`].
+fn fanout_report(
+    cx: &mut ViewCx<'_>,
+    opts: &EventsFanoutOptions,
+    diag_lines: Vec<String>,
+) -> EventsRunResult {
     // The report reads `det.summaries` (which `events_plan` declares), and of
     // each summary only `sum.coverage.as_ref().map(|c| c.inherited_status)`
     // (`l5/event_flow.rs`'s `capabilityComposition` roll-up). No fact Vec is
     // touched, so the derived-only cone the run built is enough.
-    let det = view.det();
+    let det = cx.view().det();
     let mut report = compute_fanout_report(
         &det.event_graph,
         &det.event_flow_indexes,
         &det.summaries,
         opts.scope,
     );
-    release_cells(&mut view);
+    release_cells(cx);
 
     // --- --coverage-policy application (fanout only; chains validates but no-ops) ---
     //
@@ -491,7 +596,7 @@ pub(crate) fn events_fanout_with(
         _ => {} // "warn" (default): pass through unchanged.
     }
 
-    let dependencies = view.target().dependencies();
+    let dependencies = cx.view().target().dependencies();
     let text = match opts.format {
         "json" => format_fanout_json(
             &report,
@@ -519,9 +624,11 @@ pub(crate) fn events_fanout_with(
 // ---------------------------------------------------------------------------
 
 /// Options for `run_events_chains`.
+#[derive(Clone, Copy)]
 pub struct EventsChainsOptions<'a> {
-    /// The command's one read of the workspace (#160).
-    pub inputs: &'a Arc<InputSet>,
+    /// The command's one read of the workspace (#160), handed to the driver
+    /// (#277 R7-1).
+    pub inputs: &'a dyn WorkspaceRead,
     pub format: &'a str,
     pub scope: Scope,
     /// "warn" | "strict" | "ignore". al-sem `events-chains.ts` VALIDATES this flag
@@ -550,17 +657,15 @@ pub(crate) fn events_chains_with(
     detectors: Vec<Detector>,
     opts: &EventsChainsOptions,
 ) -> EventsRunResult {
-    let (mut view, diag_lines) = match events_view(
-        events_plan(detectors),
-        opts.inputs,
-        opts.single_app,
-        opts.strict,
-        "al-sem events chains",
-    ) {
-        Ok(v) => v,
-        Err(early) => return early,
-    };
+    EventsJob::with(detectors, EventsReport::Chains(*opts), None).run()
+}
 
+/// The chain report off the prepared view, after [`events_head`].
+fn chains_report(
+    cx: &mut ViewCx<'_>,
+    opts: &EventsChainsOptions,
+    diag_lines: Vec<String>,
+) -> EventsRunResult {
     // NOTE: `opts.coverage_policy` is intentionally UNUSED here — al-sem
     // `events-chains.ts` validates it but never applies it to the chain report.
 
@@ -569,10 +674,10 @@ pub(crate) fn events_chains_with(
         max_depth: opts.max_depth,
         max_nodes: opts.max_nodes,
     };
-    let report = compute_chain_report(&view.det().event_flow_indexes, &walk_opts, opts.scope);
-    release_cells(&mut view);
+    let report = compute_chain_report(&cx.view().det().event_flow_indexes, &walk_opts, opts.scope);
+    release_cells(cx);
 
-    let dependencies = view.target().dependencies();
+    let dependencies = cx.view().target().dependencies();
     let text = match opts.format {
         "json" => format_chains_json(
             &report,

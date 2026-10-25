@@ -271,7 +271,7 @@ fn step5_t3_context_coverage_equals_the_snapshot_on_r0() {
     let mut dirs_with_kind = 0usize;
     for dir in &dirs {
         let where_ = dir.strip_prefix(&root).unwrap_or(dir).display().to_string();
-        let inputs = crate::program::inputs::InputSet::read(dir, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
         let Some(m) = assemble_and_resolve_workspace_program(
             &inputs,
             crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
@@ -329,7 +329,7 @@ fn step5_t3_context_coverage_equals_the_snapshot_on_r0() {
 // ---------------------------------------------------------------------------
 
 fn cross_app_base(ws: &Path) -> R3a5CrossAppBase {
-    let inputs = crate::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     build_cross_app_base(&inputs, "r0").expect("cross-app base")
 }
 
@@ -344,12 +344,12 @@ fn dep_ambiguous_preconditions(base: &R3a5CrossAppBase) -> (String, String) {
         "precondition: Inner is dependency code, Go is the workspace's"
     );
     assert_eq!(
-        four_kind_edges(base.rel.dependency_uncertainty()),
+        four_kind_edges(base.rel().dependency_uncertainty()),
         vec![(inner.as_str(), "ambiguous-overload")],
         "precondition: the dependency half holds exactly one four-kind edge, from Inner"
     );
     assert_eq!(
-        four_kind_edges(&base.rel.primary().uncertainty_edges),
+        four_kind_edges(&base.rel().primary().uncertainty_edges),
         Vec::<(&str, &str)>::new(),
         "precondition: the Primary half holds no four-kind edge"
     );
@@ -380,7 +380,7 @@ fn step5_t4_dependency_half_folds_into_the_cross_app_context() {
     write_fixture_dep_ambiguous(&ws);
     let base = cross_app_base(&ws);
     let (go, inner) = dep_ambiguous_preconditions(&base);
-    let rel = Arc::clone(&base.rel);
+    let rel = Arc::clone(base.rel());
 
     let d35 = registered_detectors()
         .into_iter()
@@ -453,7 +453,7 @@ fn step5_t5_both_cross_app_producers_fold_the_same() {
     write_fixture_dep_ambiguous(&ws);
     let base = cross_app_base(&ws);
     let (_go, inner) = dep_ambiguous_preconditions(&base);
-    let pa = det_cone_inputs(&base.resolved, &base.rel).coverage_in;
+    let pa = det_cone_inputs(&base.resolved, base.rel()).coverage_in;
     let pb = &base.direct_coverage;
     let want = (
         "partial".to_string(),
@@ -472,9 +472,9 @@ fn step5_t5_both_cross_app_producers_fold_the_same() {
 }
 
 /// #160 step 6 T8 (I5, the materialized half) on T4's workspace: a view
-/// prepared with policy's request (`WitnessRequest::Primary`) materializes raw
+/// prepared with policy's request (`WitnessRequest::primary()`) materializes raw
 /// for no dependency routine, and `Go`'s raw (which reaches `Inner`'s write)
-/// equals a `WitnessScope::All` composition's. Break 1: resolve `Primary` as
+/// equals a `WitnessScope::All` composition's. Break 1: resolve `primary` as
 /// `All` -> the dependency members get raw -> the count is > 0 -> fails.
 #[test]
 fn step6_t8_a_primary_witness_request_materializes_no_dependency_member() {
@@ -490,7 +490,7 @@ fn step6_t8_a_primary_witness_request_materializes_no_dependency_member() {
     let mut view = View::new(AnalysisTarget::CrossApp(Box::new(base)));
     view.prepare(
         &analyze_plan(vec![d35], true)
-            .with_witness(crate::engine::session::WitnessRequest::Primary),
+            .with_witness(crate::engine::session::WitnessRequest::primary()),
     );
     let raw = view.raw();
     assert_eq!(

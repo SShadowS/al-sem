@@ -1227,7 +1227,7 @@ pub(crate) fn build_detector_context_with<'a>(
     // Cross-app the base's relation (its SCC included, no second Tarjan);
     // single-app one built here over every call.
     let rel = match base {
-        Some(b) => Arc::clone(&b.rel),
+        Some(b) => Arc::clone(b.rel()),
         None => Arc::new(ExecRelation::single_app(resolved)),
     };
     let l4 = (demanded & substrate::CORE_SUMMARIES != 0).then(|| L4Request {
@@ -1379,8 +1379,20 @@ pub(crate) fn compose_capabilities(
     drop(coverage_in);
     if crate::engine::census::enabled() {
         let non_primary = witness_non_primary_members(model, &outcome.raw);
+        // Bytes of the pass's `raw` map (#277 P-N9): key heap + each fact
+        // vector's capacity + every fact's owned heap. Map slots not counted.
+        let raw_bytes: u64 = outcome
+            .raw
+            .iter()
+            .map(|(k, v)| {
+                (k.len() + v.capacity() * std::mem::size_of::<CapabilityFact>()) as u64
+                    + v.iter()
+                        .map(crate::engine::l4::cone_census::capability_fact_heap_bytes)
+                        .sum::<u64>()
+            })
+            .sum();
         eprintln!(
-            "[retained-census] witness.members={} witness.non_primary_members={non_primary}",
+            "[retained-census] witness.members={} witness.non_primary_members={non_primary} witness.raw_bytes={raw_bytes}",
             outcome.raw.len()
         );
     }

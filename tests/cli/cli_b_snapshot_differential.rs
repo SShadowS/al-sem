@@ -151,9 +151,9 @@ fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, Model, 
     let model_instance_id = compute_gate_model_instance_id(&fixture_dir)
         .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
     // Engine-switch S6.4: the model `alsem diff`'s workspace mode builds.
-    let inputs = al_sem::program::inputs::InputSet::read(
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(
         &fixture_dir,
-        &al_sem::program::inputs::InputNeeds {
+        &al_sem::program::inputs::WorkspaceNeeds {
             fingerprint_rows: true,
             ..Default::default()
         },

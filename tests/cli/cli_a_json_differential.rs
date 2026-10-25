@@ -182,8 +182,13 @@ fn run_json(fixture: &str, detector_csv: &str) -> String {
     };
     // The pipeline returns (output, exit_code, warning); we only need the output.
     // The trailing newline is appended by the bin — add it here to match the golden.
-    match run_analyze_with_exit(&args.read_inputs(), &args, "engine-default") {
-        Ok((out, _, _)) => format!("{out}\n"),
+    match run_analyze_with_exit(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    ) {
+        Ok((out, ..)) => format!("{out}\n"),
         Err(e) => panic!("{TEST_NAME}: run_analyze failed for {fixture}: {e}"),
     }
 }
@@ -528,8 +533,13 @@ fn run_json_path(ws: &Path, detector_csv: &str) -> String {
         with_evidence: false,
         single_app: false,
     };
-    match run_analyze_with_exit(&args.read_inputs(), &args, "engine-default") {
-        Ok((out, _, _)) => format!("{out}\n"),
+    match run_analyze_with_exit(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    ) {
+        Ok((out, ..)) => format!("{out}\n"),
         Err(e) => panic!("{TEST_NAME}: run_analyze failed for {}: {e}", ws.display()),
     }
 }

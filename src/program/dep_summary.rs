@@ -542,7 +542,7 @@ codeunit 60002 "Plain Cu"
                 "{profile:?}"
             );
         }
-        let inputs = crate::program::inputs::InputSet::read(&root, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&root, &Default::default());
         assert_eq!(
             build_program_with_coverage(&inputs)
                 .expect("fresh coverage")

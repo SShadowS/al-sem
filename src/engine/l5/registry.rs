@@ -330,6 +330,19 @@ pub struct RunOutput {
     pub d1_cohort_index: Option<D1CohortIndex>,
 }
 
+impl RunOutput {
+    /// The run's buffers, shallow (#277 D11's `runs` census): findings,
+    /// diagnostics, stats and summarize diagnostics by `len × size_of`.
+    pub fn census_tally(&self) -> crate::engine::census::Tally {
+        let mut t = crate::engine::census::Tally::default();
+        t.buf::<Finding>(self.findings.len())
+            .buf::<Diagnostic>(self.diagnostics.len())
+            .buf::<DetectorStats>(self.detector_stats.len())
+            .buf::<Diagnostic>(self.summarize_diagnostics.len());
+        t
+    }
+}
+
 /// Convert an L4 `SummarizeDiagnostic` into the shared `l5::registry::Diagnostic`
 /// shape — the same seam-conversion `gate/run.rs` already does for
 /// `root_classification::InfraDiagnostic`.
@@ -819,7 +832,7 @@ mod tests {
     fn cross_app_scope_drops_a_finding_located_in_dependency_source() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-d13-internal-call");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
             .expect("cross-app base");
         let d13 = crate::engine::l5::detectors::registered_detectors()
@@ -867,7 +880,7 @@ mod tests {
     fn cross_app_scope_uses_role() {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-d13-internal-call");
-        let inputs = crate::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
             .expect("cross-app base");
         let primary = base

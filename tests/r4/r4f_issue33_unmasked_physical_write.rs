@@ -74,9 +74,9 @@ fn fixture_dir() -> PathBuf {
 fn fingerprint_json() -> Value {
     let ws = fixture_dir();
     let opts = FingerprintOptions {
-        inputs: &al_sem::program::inputs::InputSet::read(
+        inputs: &al_sem::program::inputs::WorkspaceInputs::read(
             &ws,
-            &al_sem::program::inputs::InputNeeds {
+            &al_sem::program::inputs::WorkspaceNeeds {
                 fingerprint_rows: true,
                 ..Default::default()
             },

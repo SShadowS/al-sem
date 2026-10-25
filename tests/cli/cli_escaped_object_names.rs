@@ -45,7 +45,7 @@ fn dep_dependency() -> String {
 }
 
 fn model(ws: &Path) -> al_sem::program::model::workspace::Model {
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(&inputs, MI, true)
         .expect("model")
 }
@@ -445,7 +445,7 @@ fn already_quoted_dependency_parameter_binds_its_logical_table() {
         &ws.join("src/Work.al"),
         "codeunit 50100 \"Ws Work\"\n{\n    procedure DoWork()\n    var\n        Lib: Codeunit \"Dep Lib\";\n        X: Record \"A\"\"B\";\n    begin\n        Lib.Take(X);\n    end;\n}\n",
     );
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let cross = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &inputs, MI, true,
     )

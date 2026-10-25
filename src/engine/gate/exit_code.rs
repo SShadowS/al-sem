@@ -15,6 +15,19 @@
 //!
 //! PREFLIGHT_FAILED (4) is a higher NUMERIC value than CONFIG_ERROR (3) but LOWER
 //! priority — the ordering above is by semantic priority, not numeric value.
+//!
+//! `alsem batch` (#277 D2.2) exits for the RUN, not for its jobs: each job's own
+//! exit (by the table above, a write failure included) is on that job's stdout
+//! line.
+//!
+//! ```text
+//!   0  — every job ran, whatever its own exit
+//!   1  — a run-transport failure: the run's own stdout line write failed, or a
+//!        worker died without its lines (its jobs' `exit` is null, `worker`
+//!        its signal or status)
+//!   3  — a manifest or usage error (an argv clap rejects, a refused command, an
+//!        empty manifest or batch): nothing runs
+//! ```
 
 /// `EXIT` const map (al-sem `exit-code.ts`).
 pub mod exit {

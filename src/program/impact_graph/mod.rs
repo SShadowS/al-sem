@@ -73,6 +73,7 @@ pub(crate) mod facts;
 mod project;
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -81,6 +82,11 @@ pub use facts::{ObjectFacts, RoutineFacts, RunTarget, SourceFacts, extract_sourc
 use project::{Hub, Key};
 pub use project::{Inputs, Projection, project};
 
+use crate::engine::batch::job::{
+    Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
+    ViewNeeds, WorkspaceRead,
+};
+use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::program::graph::ProgramGraph;
 use crate::program::graphify_export::object_kind_str;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId};
@@ -184,20 +190,74 @@ impl ImpactGraph {
     }
 }
 
-/// Build the export for a workspace: the cross-app program
-/// ([`ResolvedProgram::build`] at [`ProgramScope::CrossApp`]), then
-/// [`export_from_program`].
-pub fn export_workspace(
-    inputs: &std::sync::Arc<crate::program::inputs::InputSet>,
-) -> Result<ImpactGraph, String> {
-    let program = ResolvedProgram::build(inputs, ProgramScope::CrossApp)?;
-    export_from_program(&program)
+/// `alsem graph` as a batch job (#277 D9): the export of its workspace's
+/// cross-app program, which the view builder lends before any model is built
+/// from it ([`export_from_program`]). A view with no other job builds the
+/// program alone. Its writes are the JSONL (to `--out` or stdout), or
+/// `al-sem graph: <error>` and exit 1.
+pub struct GraphJob<'a> {
+    pub inputs: &'a dyn WorkspaceRead,
+    /// The workspace as this job's command line spells it: the one read of a
+    /// path in a batch carries the first job's spelling, and the export's
+    /// errors name this one, as standalone does (#277 R7-8).
+    pub workspace: &'a Path,
+    pub out: Option<&'a str>,
+}
+
+impl Job for GraphJob<'_> {
+    fn name(&self) -> &'static str {
+        "graph"
+    }
+    fn demands(&self) -> Vec<ViewDemand> {
+        ViewDemand::one(self.inputs, false, false, ViewNeeds::GRAPH)
+    }
+
+    fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        unreachable!("a graph job reads only the program")
+    }
+
+    fn compute(&self, _: SideIx, _: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        unreachable!("a graph job reads only the program")
+    }
+
+    fn view_failed(&self, _: SideIx, _: &ViewFailure) -> Result<SideDoc, JobFailure> {
+        unreachable!("a graph job is done off the program, built or failed")
+    }
+
+    fn program(
+        &self,
+        _: SideIx,
+        program: Result<&ResolvedProgram, &str>,
+    ) -> Result<SideDoc, JobFailure> {
+        let graph = program
+            .map_err(str::to_string)
+            .and_then(|p| export_as(p, self.workspace));
+        Ok(SideDoc::new(graph))
+    }
+
+    fn serialize(&self, doc: Doc) -> JobOutput {
+        match doc
+            .one::<Result<ImpactGraph, String>>()
+            .unwrap_or_else(|f| unreachable!("graph fails no side: {f:?}"))
+        {
+            Err(msg) => JobOutput::lines(&[format!("al-sem graph: {msg}")], 1),
+            Ok(graph) => JobOutput {
+                actions: vec![WriteAction::out(self.out, graph.to_jsonl())],
+                exit: 0,
+            },
+        }
+    }
 }
 
 /// The export of a built program: its source facts, the projection and `meta`.
 /// The program must be [`ProgramScope::CrossApp`]: a workspace-scoped build has
 /// no dependency call-site edges, so its graph would lose them silently.
 pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, String> {
+    export_as(program, &program.meta().inputs.workspace)
+}
+
+/// [`export_from_program`], its errors naming the workspace as `workspace`.
+fn export_as(program: &ResolvedProgram, workspace: &Path) -> Result<ImpactGraph, String> {
     let pm = program.meta();
     let inputs = &pm.inputs;
     if pm.scope() != ProgramScope::CrossApp {
@@ -213,7 +273,7 @@ pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, Str
     if inputs.app_id().is_none() {
         return Err(format!(
             "could not compute modelInstanceId for workspace '{}': app.json has no non-empty string id",
-            inputs.workspace.display()
+            workspace.display()
         ));
     }
     let body = program.body();
@@ -268,18 +328,33 @@ pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, Str
             "dependencyBodies": histogram_json(&dependency_histogram),
         },
     });
-    if !crate::program::resolve::full::coverage_holds(&pm.coverage_contract) {
-        eprintln!(
+    if !crate::program::resolve::full::coverage_holds(&pm.coverage_contract)
+        || forced_coverage_warning()
+    {
+        crate::engine::batch::output::job_line(format!(
             "al-sem graph: warning: the coverage contract does not hold ({} obligations without an edge); \
              their routines are linked to the universal hub",
             pm.coverage_contract.missing.len()
-        );
+        ));
     }
     Ok(ImpactGraph {
         meta,
         nodes: projection.nodes,
         edges: projection.edges,
     })
+}
+
+/// #277 R8-5's seam, debug builds only: `ALSEM_TEST_GRAPH_COVERAGE_WARNING`
+/// prints the coverage warning on any fixture (no fixture breaks the
+/// contract), so a test can see graph's job line replayed per job (D7).
+#[cfg(debug_assertions)]
+fn forced_coverage_warning() -> bool {
+    std::env::var_os("ALSEM_TEST_GRAPH_COVERAGE_WARNING").is_some()
+}
+
+#[cfg(not(debug_assertions))]
+fn forced_coverage_warning() -> bool {
+    false
 }
 
 fn histogram_json(h: &Histogram) -> Value {
