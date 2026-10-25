@@ -468,6 +468,15 @@ pub struct ModelRoutine {
     /// L2 `parseIncomplete` — the routine's subtree has a tree-sitter ERROR node.
     /// R2d projects parse-incomplete routines' StableRoutineIds.
     pub parse_incomplete: bool,
+    /// Whether this row's `unreachable` marks are sound enough to drop a coverage
+    /// gap or a cone edge (#288, `capability_cone::DeadSites`). FAILS CLOSED:
+    /// `false` (untrusted) is the default, and any constructor that cannot run
+    /// the checks must leave it `false`. Set at assembly by
+    /// [`source_dead_mark_trust`] (no preprocessor directive in the routine; every
+    /// `Error(...)` provably takes the Text overload), then narrowed after
+    /// resolution by [`settle_dead_mark_trust`] (every `Error(...)` binds to the
+    /// builtin, not to a procedure named `Error`).
+    pub dead_marks_trusted: bool,
     pub record_variables: Vec<ModelRecordVariable>,
     pub record_operations: Vec<ModelRecordOperation>,
     /// Field accesses (from L2 body walk). Required by the R3a-2 summary
@@ -576,6 +585,15 @@ pub struct ModelRoutine {
     pub entry_temp_guard_receiver: Option<String>,
 }
 
+impl ModelRoutine {
+    /// Whether this row believes a site of its own with `control_context`
+    /// never runs (#288): its dead marks are trusted and the site is marked
+    /// `unreachable`. The one test `capability_cone::DeadSites` and d35 share.
+    pub(crate) fn site_is_dead_marked(&self, control_context: Option<&str>) -> bool {
+        self.dead_marks_trusted && control_context == Some("unreachable")
+    }
+}
+
 /// The assembled workspace L3 model (pre-resolve until `resolve` runs).
 #[derive(Debug, Clone)]
 pub struct ModelEntities {
@@ -661,6 +679,212 @@ pub(crate) fn declaration_start_line(r: &al_syntax::ir::RoutineDecl) -> u32 {
         .iter()
         .map(|a| a.origin.start.row)
         .fold(r.origin.start.row, u32::min)
+}
+
+/// Whether `text` holds a line that starts with a preprocessor conditional
+/// directive (`#if`, `#elif`, `#else`, `#endif`; the spaced `# else` spelling
+/// too). A source-text test, so it covers every shape the lowerer splices
+/// (plain groups, split bodies, split closings, flat recoveries, nested groups)
+/// without knowing them. A directive inside a comment or string also counts,
+/// which only distrusts more (#288).
+pub(crate) fn has_preproc_directive(text: &str) -> bool {
+    // CR, LF and CRLF all end a line (`str::lines` splits on LF only).
+    text.split(['\r', '\n'])
+        .filter_map(|l| l.trim_start().strip_prefix('#'))
+        .map(|rest| {
+            rest.trim_start()
+                .split(|c: char| !c.is_ascii_alphabetic())
+                .next()
+                .unwrap_or("")
+        })
+        .any(|w| {
+            ["if", "elif", "else", "endif"]
+                .iter()
+                .any(|d| w.eq_fold_identifier(d))
+        })
+}
+
+/// `source[range]` scanned clean of preprocessor directives. Fails closed: a
+/// range that does not index `source` is not clean.
+pub(crate) fn source_clean(source: &str, range: &std::ops::Range<usize>) -> bool {
+    source
+        .get(range.clone())
+        .is_some_and(|t| !has_preproc_directive(t))
+}
+
+/// AL identifier equality of two canonical (already unquoted) names: exact
+/// apart from AL's Unicode-aware case folding. A quote inside a name is part
+/// of it (`"""X"""` is the name `"X"`), so nothing is trimmed here.
+fn same_identifier(a: &str, b: &str) -> bool {
+    a.eq_fold_identifier(b)
+}
+
+/// `t` without ONE pair of surrounding double quotes, as the lowerer stores a
+/// quoted identifier's name (`ident_text`); `t` itself when it is not quoted.
+fn unquote_once(t: &str) -> &str {
+    t.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(t)
+}
+
+/// A bare call to `Error` (any case, quoted or not).
+fn is_bare_error_call(cs: &crate::program::body::features::PCallSite) -> bool {
+    matches!(&cs.callee, crate::program::body::features::PCallee::Bare { name }
+        if same_identifier(unquote_once(name), "Error"))
+}
+
+/// The assembly half of [`ModelRoutine::dead_marks_trusted`] (#288). Today's
+/// `unreachable` mark is unsound in two known cases, so a row that could hit
+/// either trusts none of its marks:
+/// - a preprocessor directive in the routine's source: the lowerer splices
+///   every live `#if` branch into one statement run, so an exit in one branch
+///   marks the other branch dead;
+/// - an `Error(...)` whose argument is not proven Text: `Error(ErrorInfo)` goes
+///   on when the error is collectible and any method on the stack collects
+///   errors (BC 28.4 Linux sidecar, #288 O4), yet the mark treats every `Error`
+///   as a stop. Two or more arguments always select the Text overload (alc
+///   18.0.41: `Error(ErrInfo, 1)` is AL0133 "cannot convert from 'ErrorInfo' to
+///   'Text'"). One argument is proven by a string literal, or by a Text, Label
+///   or Code variable; a GLOBAL variable proves it only when the whole object is
+///   free of directives, because a `#if` around the global `var` section can give
+///   the name another type in another build, and the variable table keeps only
+///   the first declaration. The lookup follows AL's scope order — params, the
+///   named return value (`procedure P() Ret: ErrorInfo`, which `variables` does
+///   not list), locals, then globals — and compares names with AL identifier
+///   equality, which folds non-ASCII case too (`"StopVälue"` is `"STOPVÄLUE"`).
+///
+/// `object_clean` caches the object scan across the object's routines.
+///
+/// shortcut: distrusts whole routines, so their dead code still counts; upgrade
+/// when the reachability mark itself is sound (the split-off discovery D2).
+fn source_dead_mark_trust(
+    source: &str,
+    object: &al_syntax::ir::ObjectDecl,
+    object_clean: &mut Option<bool>,
+    routine: &al_syntax::ir::RoutineDecl,
+    call_sites: &[crate::program::body::features::PCallSite],
+    variables: &RoutineVariables,
+) -> bool {
+    if !source_clean(source, &routine.origin.byte) {
+        return false;
+    }
+    let mut object_clean =
+        || *object_clean.get_or_insert_with(|| source_clean(source, &object.origin.byte));
+    call_sites
+        .iter()
+        .filter(|cs| is_bare_error_call(cs))
+        .all(|cs| match cs.argument_infos.as_slice() {
+            [] => false,
+            [arg] => error_argument_proves_text(
+                arg,
+                routine.return_name.as_deref(),
+                routine.return_type.as_deref(),
+                variables,
+                &mut object_clean,
+            ),
+            _ => true,
+        })
+}
+
+/// Whether the one argument `arg` of a bare `Error(...)` provably selects the
+/// Text overload ([`source_dead_mark_trust`]): a string literal, or a name
+/// that resolves, in AL's scope order, to a Text, Label or Code variable.
+/// `object_clean` answers whether the enclosing object is directive-free; it
+/// is asked for every proof that does not rest on a local or a parameter
+/// (a global, or a variable whose scope is unknown).
+///
+/// Names are compared canonical (one outer quote pair off, as the lowerer and
+/// the variable table store them). The argument's `value` is NOT used: it
+/// strips every outer quote (`"""X"""` → `X`), so it can name another
+/// variable. Fails closed when the argument or any candidate name holds a
+/// quote, an escaped one (`""`) being the only way a name can.
+pub(crate) fn error_argument_proves_text(
+    arg: &crate::program::body::features::PExpressionInfo,
+    return_name: Option<&str>,
+    return_type: Option<&str>,
+    variables: &RoutineVariables,
+    mut object_clean: impl FnMut() -> bool,
+) -> bool {
+    let texty = |ty: &str| {
+        let head = ty.split(['[', ' ']).next().unwrap_or("");
+        ["Text", "Label", "Code"]
+            .iter()
+            .any(|t| head.eq_fold_identifier(t))
+    };
+    match arg.kind.as_str() {
+        "string_literal" => true,
+        "identifier" | "quoted_identifier" => {
+            let name = unquote_once(arg.text.trim());
+            if name.contains('"')
+                || return_name.is_some_and(|r| r.contains('"'))
+                || variables.iter().any(|v| v.name.contains('"'))
+            {
+                return false;
+            }
+            let param = variables
+                .iter()
+                .find(|v| v.is_parameter && same_identifier(&v.name, name));
+            if param.is_none() && return_name.is_some_and(|r| same_identifier(r, name)) {
+                // A named return with no type proves nothing.
+                return return_type.is_some_and(texty);
+            }
+            let Some(v) =
+                param.or_else(|| variables.iter().find(|v| same_identifier(&v.name, name)))
+            else {
+                return false;
+            };
+            texty(&v.declared_type)
+                && (matches!(v.scope.as_deref(), Some("local" | "parameter")) || object_clean())
+        }
+        _ => false,
+    }
+}
+
+/// The resolution half of [`ModelRoutine::dead_marks_trusted`] (#288): a row
+/// stays trusted only when every bare `Error(...)` call site binds to the
+/// builtin. An object may declare its own `procedure Error`, and a bare call
+/// then runs it and returns (BC 28.4 Linux sidecar: both `Error('x')` and
+/// `Error('x %1', 1)` called the own-object procedure and the next statement
+/// ran); the resolver also gives the extension base and the table scope
+/// precedence over the builtin. Fails closed: a site with no builtin edge, or
+/// with any other edge, is not proven.
+pub(crate) fn settle_dead_mark_trust(m: &mut Model) {
+    use crate::program::model::taxonomy::Resolution;
+    // The bare `Error` sites of trusted rows, then one pass over the edges
+    // that records, for those keys only, (seen a builtin edge, seen another).
+    let mut sites: HashMap<(usize, &str), (bool, bool)> = m
+        .workspace
+        .routines
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.dead_marks_trusted)
+        .flat_map(|(i, r)| {
+            r.call_sites
+                .iter()
+                .filter(|cs| is_bare_error_call(cs))
+                .map(move |cs| ((i, cs.id.as_str()), (false, false)))
+        })
+        .collect();
+    if sites.is_empty() {
+        return;
+    }
+    for e in &m.calls.edges {
+        if let Some((builtin, other)) = sites.get_mut(&(e.from_ix.get(), e.callsite_id.as_str())) {
+            if e.resolution == Resolution::Builtin {
+                *builtin = true;
+            } else {
+                *other = true;
+            }
+        }
+    }
+    let unproven: Vec<usize> = sites
+        .into_iter()
+        .filter(|(_, (builtin, other))| !builtin || *other)
+        .map(|((i, _), _)| i)
+        .collect();
+    for i in unproven {
+        m.workspace.routines[i].dead_marks_trusted = false;
+    }
 }
 
 /// `ModelParameter` rows from the routine-id path's `ParameterSymbol`s.
@@ -1030,6 +1254,8 @@ fn project_ir(
                 .collect::<Vec<_>>(),
         );
 
+        // #288: whether the object's source is free of directives, scanned once.
+        let mut object_clean: Option<bool> = None;
         for (rix, ir_routine) in routine_ixs.iter().map(|&ri| (ri, &o.routines[ri])) {
             let rname = ir_routine.name.clone();
             if rname.is_empty() {
@@ -1418,6 +1644,14 @@ fn project_ir(
                 "{routine_id}: one key per site"
             );
             positions.push((oi, rix));
+            let dead_marks_trusted = source_dead_mark_trust(
+                source,
+                o,
+                &mut object_clean,
+                ir_routine,
+                &call_sites,
+                &variables,
+            );
             workspace.routines.push(ModelRoutine {
                 id: routine_id,
                 stable_routine_id,
@@ -1446,6 +1680,7 @@ fn project_ir(
                 site_exprs,
                 source_anchor,
                 declaration_start_line: declaration_start_line(ir_routine),
+                dead_marks_trusted,
                 identifier_references,
                 unreachable_statements,
                 has_branching,

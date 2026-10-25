@@ -28,17 +28,26 @@
 //! here means a call whose callee set is not closed for this proof (the
 //! call-site-local kinds: interface-open-world, ambiguous-overload,
 //! external-target, member-not-found), not the `unresolved-call` uncertainty
-//! kind, which is left out. A site in unreachable code is not named. The
+//! kind, which is left out. #288 — a site in unreachable code whose row's dead
+//! marks are trusted (`ModelRoutine::dead_marks_trusted`) is no gap at all (the
+//! coverage fold leaves it out), so it is neither named nor counted missing; an
+//! untrusted row's dead-marked site is named like a live one. The
 //! subscriber stays under "partly analysed" unless every own gap is accounted
-//! for: a site was named, every own edge's site was found (in its own row, and
-//! reachable), and no other row with its id is opaque or parse-incomplete. Primary
+//! for: a site was named, every other own edge's site was found (in its own
+//! row, and reachable), and no other row with its id is opaque or
+//! parse-incomplete. Primary
 //! subscribers only: a dependency subscriber's own edges are not on the
 //! detector context, so it keeps the #148 text (stated limit).
+//! Stated limit (#288 FC2): the unknown arm's confidence cap reads the L4
+//! summary's uncertainty set, which the db-effect solver still builds from
+//! every site, dead ones included (discovery D1); so a dropped dead gap can
+//! still lower the confidence of a finding that has other gaps.
 //!
 //! Within-detector sort by `a.id.cmp(&b.id)` (byte order).
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::engine::l4::capability_cone::{DeadSites, site_of};
 use crate::engine::l4::db_effect_solver::is_callsite_local_kind;
 use crate::engine::l5::capability_query::{EffectPresence, may_commit_derived};
 use crate::engine::l5::confidence::{UncertaintyLite, to_confidence};
@@ -70,6 +79,8 @@ pub fn detect_d35(
         .filter(|r| !r.body_available || r.parse_incomplete)
         .map(|r| r.id.as_str())
         .collect();
+    // The sites the coverage fold leaves out (#288).
+    let dead = DeadSites::of(&ws.routines);
 
     for routine in &ws.routines {
         // roleOf(routine) === "primary": source-only ⇒ every routine is primary.
@@ -173,7 +184,7 @@ pub fn detect_d35(
             ),
             // `summary_commits` is "unknown" here ("no" was skipped above).
             (None, _) => {
-                let reasons = coverage_reasons(summary, routine, &incomplete_ids, ctx);
+                let reasons = coverage_reasons(summary, routine, &incomplete_ids, &dead, ctx);
                 // Capped by what kept the cone incomplete — the subscriber's own
                 // uncertainty set (CORE_SUMMARIES). It may be empty: a cone can be
                 // partial for a reason the summarize step does not record.
@@ -286,6 +297,7 @@ fn coverage_reasons(
     summary: Option<&FullRoutineSummary>,
     routine: &ModelRoutine,
     incomplete_ids: &BTreeSet<&str>,
+    dead: &DeadSites<'_>,
     ctx: &DetectorContext,
 ) -> String {
     let Some(summary) = summary else {
@@ -305,7 +317,11 @@ fn coverage_reasons(
     let mut every_site_found = true;
     let own_edges = ctx.uncertainty_edges_by_from.get(&routine.id);
     for u in own_edges.into_iter().flatten() {
-        if !is_callsite_local_kind(&u.kind) {
+        // A dead site is no gap (the coverage fold leaves it out), so it is not
+        // missing evidence either (#288).
+        if !is_callsite_local_kind(&u.kind)
+            || dead.contains(&routine.id, site_of(&u.callsite_id, &u.operation_id))
+        {
             continue;
         }
         // This row's own site: rows sharing the id (e.g. `#if` alternatives) share
@@ -314,8 +330,10 @@ fn coverage_reasons(
             .callsite_id
             .as_deref()
             .and_then(|id| routine.call_sites.iter().find(|cs| cs.id == id))
-            // Dead code is not the gap to point at (the cone's facts skip it).
-            .filter(|cs| cs.control_context.as_deref() != Some("unreachable"));
+            // A trusted row's dead site that is live in another row of the id is
+            // that row's gap, not this one's. An untrusted row's marks are not
+            // believed, so its dead-marked site is named (#288 O24).
+            .filter(|cs| !routine.site_is_dead_marked(cs.control_context.as_deref()));
         let Some(cs) = cs else {
             every_site_found = false;
             continue;
@@ -707,26 +725,45 @@ mod tests {
         );
     }
 
-    /// #265 CR4: a site in unreachable code is not named (the cone's own fact
-    /// pass skips it); it counts as not found, so the subscriber stays listed.
-    #[test]
-    fn unreachable_own_site_is_not_named() {
+    /// The finding for a subscriber with a live site `cs1` and an `unreachable`
+    /// site `cs-dead`, both with an own edge, in a row whose dead marks are
+    /// `trusted` or not.
+    fn live_and_dead_site_finding(trusted: bool) -> Finding {
         let mut dead = site_at("cs-dead", "Dead", 6, 0);
         dead.control_context = Some("unreachable".to_string());
         let mut sub = routine("sub", "event-subscriber");
         sub.call_sites = vec![site_at("cs1", "X", 4, 0), dead];
+        sub.dead_marks_trusted = trusted;
         let routines = vec![sub];
-        let f = finding_with_edges(
+        finding_with_edges(
             &routines,
             partial(&["interface-open-world"], &["sub"]),
             vec![
                 own_edge("interface-open-world", "cs1"),
                 own_edge("interface-open-world", "cs-dead"),
             ],
-        );
+        )
+    }
+
+    /// #265 CR4 + #288 D1: in a row whose dead marks are TRUSTED, a dead site
+    /// is no gap (the coverage fold leaves it out) and is not named, so the live
+    /// site accounts for the whole gap and the subscriber leaves "partly
+    /// analysed".
+    #[test]
+    fn unreachable_own_site_is_not_named() {
         assert_unknown_with(
-            &f,
-            "interface-open-world; unresolved: X (line 5); partly analysed: sub (Codeunit 1)",
+            &live_and_dead_site_finding(true),
+            "interface-open-world; unresolved: X (line 5)",
+        );
+    }
+
+    /// #288 D1' (O24): in an UNTRUSTED row the dead mark is not believed: the
+    /// site stays a gap and is named like any live site.
+    #[test]
+    fn untrusted_unreachable_own_site_is_named() {
+        assert_unknown_with(
+            &live_and_dead_site_finding(false),
+            "interface-open-world; unresolved: X (line 5), Dead (line 7)",
         );
     }
 

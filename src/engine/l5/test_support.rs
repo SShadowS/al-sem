@@ -142,6 +142,7 @@ pub fn routine(id: &str, kind: &str) -> ModelRoutine {
         site_exprs: Default::default(),
         source_anchor: dummy_anchor(),
         declaration_start_line: 0,
+        dead_marks_trusted: false,
         identifier_references: Vec::new(),
         unreachable_statements: Vec::new(),
         has_branching: false,
@@ -859,6 +860,13 @@ codeunit 50191 "Ws Pub"
 /// lenient (the `ws-overload-negatives` `O` shape). The tests that use it
 /// assert the ambiguous edge exists, so a stricter resolver fails them loudly.
 pub fn write_fixture_dep_ambiguous(ws: &std::path::Path) {
+    write_fixture_dep_ambiguous_after(ws, "");
+}
+
+/// [`write_fixture_dep_ambiguous`] with `lead` written before `Inner`'s
+/// ambiguous call (#288 P4: `"exit;"` makes it and the `Modify` dead).
+pub fn write_fixture_dep_ambiguous_after(ws: &std::path::Path, lead: &str) {
+    const CALL: &str = "        O(L);\n";
     let lib = r#"interface "Dep ILog"
 {
     procedure Touch();
@@ -891,6 +899,12 @@ codeunit 12 "Dep Rec Lib"
     end;
 }
 "#;
+    assert_eq!(lib.matches(CALL).count(), 1, "one ambiguous call to lead");
+    let lib = if lead.is_empty() {
+        lib.to_string()
+    } else {
+        lib.replace(CALL, &format!("        {lead}\n{CALL}"))
+    };
     let ws_al = r#"codeunit 50181 "Ws Call"
 {
     procedure Go()
@@ -905,7 +919,7 @@ codeunit 12 "Dep Rec Lib"
         ws,
         ws_al,
         r#"[{"Name":"Outer","Parameters":[]},{"Name":"Inner","Parameters":[]}]"#,
-        lib,
+        &lib,
     );
 }
 

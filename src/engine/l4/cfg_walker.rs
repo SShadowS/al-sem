@@ -1893,6 +1893,7 @@ mod tests {
             site_exprs: Default::default(),
             source_anchor: dummy_anchor(),
             declaration_start_line: 0,
+            dead_marks_trusted: false,
             identifier_references: Vec::new(),
             unreachable_statements: Vec::new(),
             has_branching: false,

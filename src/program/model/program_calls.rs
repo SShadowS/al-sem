@@ -581,6 +581,9 @@ fn attach_program_calls_with(
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
     };
+    // #288: a row's dead marks stay trusted only if its `Error` calls bind to the
+    // builtin.
+    crate::program::model::workspace::settle_dead_mark_trust(&mut resolved);
     // A `local` event raised only with temporary records makes its subscribers'
     // same-named `var` parameters temporary (engine-switch S8).
     crate::program::model::event_param_temp::prove_event_param_temps(&mut resolved);

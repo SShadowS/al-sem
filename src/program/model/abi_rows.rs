@@ -231,6 +231,8 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
             syntax_kind: String::new(),
         },
         declaration_start_line: 0,
+        // Bodyless ABI rows cannot run the #288 checks: untrusted.
+        dead_marks_trusted: false,
         identifier_references: Vec::new(),
         unreachable_statements: Vec::new(),
         // Dep routines are bodyless (ABI symbol-only) — no branching / assignments /
