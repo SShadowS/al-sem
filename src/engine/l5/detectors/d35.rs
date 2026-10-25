@@ -41,10 +41,10 @@
 //! `DetectorArtifacts::own_uncertainty_edges` (the Primary half, then the
 //! dependency half), so a dependency subscriber names its own sites and drops
 //! itself under the same rule as a primary one.
-//! Stated limit (#287): the unknown arm's confidence cap reads
-//! `uncertainty_view()`, built from the core summaries and the Primary map
-//! only. A dependency subscriber's own dependency-half edges therefore do not
-//! lower its confidence (its core-summary uncertainties still do).
+//! Stated limit (#287): the unknown arm's confidence cap reads the core
+//! summaries (solved over the Primary half, where a dependency routine has no
+//! out-edges unless it publishes an event) and the Primary index, so a
+//! dependency subscriber's own and callee gaps do not cap its confidence.
 //! Stated limit (#288 FC2): the unknown arm's confidence cap reads the L4
 //! summary's uncertainty set, which the db-effect solver still builds from
 //! every site, dead ones included (discovery D1); so a dropped dead gap can
@@ -90,7 +90,7 @@ pub fn detect_d35(
     let dead = DeadSites::of(&ws.routines);
 
     for routine in &ws.routines {
-        // roleOf(routine) === "primary": source-only ⇒ every routine is primary.
+        // Subscribers of any role: cross-app `ws.routines` holds the dependency rows.
         if routine.kind != "event-subscriber" {
             continue;
         }

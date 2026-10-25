@@ -4,7 +4,8 @@
 //! the top of `run_detectors`. This R4-A wave builds the EAGER indexes the task
 //! enumerates: routine_by_id / declaring (a routine's object, #279) / table_by_id / reverse_call_graph /
 //! entry_points / transaction_spans / resolved_call_edge_by_callsite /
-//! uncertainty_edges_by_from / call_site_by_id, plus the combined graph + the
+//! uncertainty_edges_by_from / dependency_uncertainty_edges_by_from (#287) /
+//! call_site_by_id, plus the combined graph + the
 //! per-routine `FullRoutineSummary` map (transaction_spans needs it).
 //!
 //! DEFERRED to later waves (TODO):

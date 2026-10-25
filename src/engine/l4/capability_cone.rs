@@ -6171,17 +6171,22 @@ mod step4_tests {
         );
     }
 
-    /// Spec §5.4: a dependency routine's to-less call is kept, apart from
+    /// Spec §5.4: a dependency routine's to-less calls are kept, apart from
     /// the Primary payload. (1) `rel.dependency_uncertainty` holds exactly
-    /// one edge from `DepCaller`, the `unresolved-call` its to-less edge
-    /// maps to (observed on the base `c554b704`), at that edge's call site;
-    /// (2) neither `rel.primary().uncertainty_edges` nor the detector
-    /// context (a plan holding d1, so the context is built) carries it.
-    /// #287 (the fixture adds `WsUnc`, so both halves are non-empty): (3) the
+    /// one edge per to-less call of `DepCaller` (two since #287), the
+    /// `unresolved-call` each maps to (observed on the base `c554b704`), at
+    /// that call's site, in call order; (2) neither
+    /// `rel.primary().uncertainty_edges` nor the detector context's PRIMARY
+    /// index (a plan holding d1, so the context is built) carries them; the
+    /// dependency index holds them (3).
+    /// #287 (the fixture adds `WsUnc` with two edges of its own, so both
+    /// halves are non-empty and each caller's edges have an order): (3) the
     /// context's `dependency_uncertainty_edges_by_from` holds exactly
-    /// DepCaller's kept edge, and `own_uncertainty_edges` yields it; (4)
-    /// `uncertainty_edges_by_from` is the Primary half grouped by `from`, in
-    /// edge order; (5) a single-app context's dependency map is empty.
+    /// DepCaller's kept edges, in order, and `own_uncertainty_edges(DepCaller)`
+    /// yields them; (4) `uncertainty_edges_by_from` is the Primary half grouped
+    /// by `from`, in edge order, and `own_uncertainty_edges(WsUnc)` yields
+    /// WsUnc's Primary edges in that order; (5) a single-app context's
+    /// dependency map is empty.
     #[test]
     fn step4_dependency_uncertainty_stays_out_of_primary() {
         use crate::engine::l4::combined_graph::Uncertainty;
@@ -6200,10 +6205,10 @@ mod step4_tests {
             .iter()
             .filter(|e| e.from == dep_caller && e.to.is_none())
             .collect();
-        assert_eq!(
-            to_less.len(),
-            1,
-            "precondition: the dependency half holds one to-less edge from DepCaller: {dep:?}"
+        assert!(
+            to_less.len() == 2 && to_less[0].callsite_id != to_less[1].callsite_id,
+            "precondition: the dependency half holds two to-less edges from DepCaller, at \
+             distinct sites: {dep:?}"
         );
         // All checked and reported together.
         let mut failures: Vec<String> = Vec::new();
@@ -6220,11 +6225,16 @@ mod step4_tests {
                 )
             })
             .collect();
-        let want = vec![(
-            dep_caller.as_str(),
-            "unresolved-call",
-            Some(to_less[0].callsite_id.as_str()),
-        )];
+        let want: Vec<(&str, &str, Option<&str>)> = to_less
+            .iter()
+            .map(|e| {
+                (
+                    dep_caller.as_str(),
+                    "unresolved-call",
+                    Some(e.callsite_id.as_str()),
+                )
+            })
+            .collect();
         if kept != want {
             failures.push(format!(
                 "(1) rel.dependency_uncertainty: want {want:?}, got {kept:?}"
@@ -6255,15 +6265,15 @@ mod step4_tests {
                 "(2) context uncertainty_edges_by_from[DepCaller]: {u:?}"
             ));
         }
-        // (3) #287: the dependency map holds exactly DepCaller's kept edge,
-        // and the accessor yields exactly that.
-        let want_dep: HashMap<String, Vec<Uncertainty>> = dep_edges
-            .iter()
-            .map(|u| (u.from.clone(), vec![u.uncertainty.clone()]))
-            .collect();
-        if dep_edges.len() != 1 || !want_dep.contains_key(&dep_caller) {
+        // (3) #287: the dependency map holds exactly DepCaller's kept edges,
+        // in edge order, and the accessor yields exactly those.
+        let want_dep: HashMap<String, Vec<Uncertainty>> = HashMap::from([(
+            dep_caller.clone(),
+            dep_edges.iter().map(|u| u.uncertainty.clone()).collect(),
+        )]);
+        if dep_edges.len() != 2 || dep_edges.iter().any(|u| u.from != dep_caller) {
             failures.push(format!(
-                "(3) precondition: one kept edge, from DepCaller: {dep_edges:?}"
+                "(3) precondition: two kept edges, both from DepCaller: {dep_edges:?}"
             ));
         }
         let det = view.det();
@@ -6281,7 +6291,7 @@ mod step4_tests {
             ));
         }
         // (4) #287: the Primary map is the Primary half grouped by `from`, in
-        // edge order, multiplicity kept: `WsUnc`'s edge is there.
+        // edge order, multiplicity kept: `WsUnc`'s two edges are there.
         let mut want_primary: HashMap<String, Vec<Uncertainty>> = HashMap::new();
         for u in &primary_edges {
             want_primary
@@ -6289,15 +6299,24 @@ mod step4_tests {
                 .or_default()
                 .push(u.uncertainty.clone());
         }
-        if !want_primary.contains_key(&ws_unc) {
+        let ws_unc_edges: &[Uncertainty] = want_primary.get(&ws_unc).map_or(&[], Vec::as_slice);
+        if ws_unc_edges.len() != 2 || ws_unc_edges[0] == ws_unc_edges[1] {
             failures.push(format!(
-                "(4) precondition: WsUnc has a Primary edge: {primary_edges:?}"
+                "(4) precondition: WsUnc has two distinct Primary edges: {primary_edges:?}"
             ));
         }
-        if view.det().uncertainty_edges_by_from != want_primary {
+        if det.uncertainty_edges_by_from != want_primary {
             failures.push(format!(
                 "(4) context uncertainty_edges_by_from: want {want_primary:?}, got {:?}",
-                view.det().uncertainty_edges_by_from
+                det.uncertainty_edges_by_from
+            ));
+        }
+        // (4) #287 C9: the accessor's Primary half, in order.
+        let own_ws: Vec<&Uncertainty> = det.own_uncertainty_edges(&ws_unc).collect();
+        let want_own_ws: Vec<&Uncertainty> = ws_unc_edges.iter().collect();
+        if own_ws != want_own_ws {
+            failures.push(format!(
+                "(4) own_uncertainty_edges(WsUnc): want {want_own_ws:?}, got {own_ws:?}"
             ));
         }
         // (5) #287: a single-app context over the same workspace has an empty

@@ -1868,14 +1868,26 @@ fn dependency_uncertainty_index_has_a_census_row() {
         .output()
         .expect("spawn alsem");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "A5: alsem analyze failed ({}); stderr:\n{stderr}",
+        out.status
+    );
     let bytes: Vec<u64> = stderr
         .lines()
         .filter_map(|l| {
-            l.strip_prefix(
+            let rest = l.strip_prefix(
                 "[retained-census] bucket=context.dependency_uncertainty_edges_by_from bytes=",
+            )?;
+            let n = rest
+                .split(' ')
+                .next()
+                .unwrap_or_else(|| panic!("A5: no bytes value in census line: {l}"));
+            Some(
+                n.parse()
+                    .unwrap_or_else(|e| panic!("A5: bytes {n:?} in census line {l}: {e}")),
             )
         })
-        .map(|rest| rest.split(' ').next().unwrap().parse().unwrap())
         .collect();
     assert!(
         matches!(bytes.as_slice(), [b] if *b > 0),
