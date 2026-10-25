@@ -165,9 +165,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inherited half is now test-only. A rule that reads inherited facts still fails loudly
   (a panic naming the routine) when an evaluated routine has a summary but no raw
   entry, instead of passing it unseen; `facts: direct` rules never read that half.
+- **d39 decides who persists an implicit `Rec` by an owner rule** (#272). It used to
+  skip only a table-level OnInsert/OnModify/OnDelete/OnRename trigger
+  (`autoPersistTriggerRec`); now that an implicit `Rec` argument binds (see Fixed), d39
+  skips it wherever the caller or the platform writes `Rec` after the call
+  (`implicitRecOwnerPersists`): any table or tableext procedure or field trigger (the
+  caller owns `Rec`), every table and tableext trigger except tableext
+  OnAfterInsert/OnAfterModify/OnAfterRename, and a page or pageext procedure or
+  OnAction/OnValidate/OnLookup/OnAssistEdit/OnDrillDown/OnNewRecord/OnInsertRecord/
+  OnModifyRecord/OnBefore/OnAfterAction/OnBefore/OnAfterValidate on a page (for a
+  pageext, its base page) that is neither `Editable = false` nor `ModifyAllowed =
+  false`. The trigger lists were measured on the BC 28.4 Linux sidecar through
+  TestPage; a Windows Cronus confirmation is still owed, and OnBeforeValidate is by
+  analogy. The delete triggers (table OnDelete, tableext OnAfterDelete, page
+  OnDeleteRecord) are exempt as moot (the row is gone), not measured.
+  d39 still reports `xRec`, OnAfterGetRecord and other page triggers, a read-only page,
+  those three tableext triggers, and a routine that reloads `Rec` after the call.
+  **Main limit:** a pageext over a dependency page is always exempt, because the model
+  carries no `Editable`/`ModifyAllowed` for dependency (symbol-only) pages, so the
+  read-only rule never fires for an extension of a Base App page. Known false
+  negative, as before: a modifiable page opened in view mode loses the write too, but
+  the open mode is a runtime fact.
+- **d37 is more conservative at `Rec` call sites** (#272): a `Validate` on `Rec`
+  followed by a call that hands `Rec` to an unresolved, ambiguous or arity-mismatched
+  callee is now suppressed as unknown, exactly as for a local record. In cross-app mode
+  this also suppresses d37 for dependency callers, whose calls have no callee edge in
+  the workspace graph (CDO `--scope all`: d37 345 → 163; primary unchanged; measured on
+  the final code, identical to the design prototype by fingerprint).
+- **d11, d21 and d33 now see helper loads and filters on `Rec`** (#272): a `var` helper
+  that loads (d11, d21) or filters (d33) the implicit `Rec` now counts, as it does for a
+  local record (Base App single-app: d11 −20, all false positives; measured on the
+  final code, identical to the design prototype by fingerprint).
 
 ### Fixed
 
+- **An implicit `Rec`/`xRec` passed as a bare argument binds to its known table** (#272).
+  On a table, tableext, pageext or page with a SourceTable, `Helper(Rec)` now starts as
+  an upgradable binding, so d41 and d42 report it the way they report a local record
+  (d40 still skips it). For `Rec` the finding has the same loose fingerprint as a local;
+  `xRec`'s loose subject table stays `?` (not resolved, a stated non-goal). The
+  `implicit-rec` label is now exact:
+  the object must have its own record, and no parameter, local or object global of any
+  type may be named `Rec`/`xRec`. An undeclared `Rec` in a codeunit without TableNo was
+  labelled `implicit-rec`; it is now `unknown` (the `ws-argument-bindings` l2 goldens
+  moved for that one site). A declared `Rec` of any type, scalar included, no longer
+  leaves a phantom synthetic `Rec` record row; on a table or page an object-global
+  record `Rec` binds `global` with its own table (robustness only: alc rejects such a
+  global, AL0155). A codeunit `TableNo` or report dataitem `Rec` keeps its typed
+  binding even next to a global `Rec`. An implicit-`Rec` argument on a page over a
+  `TableType = Temporary` table is now temporary, as its `Rec` variable already was, so
+  d39 no longer reports it there.
 - **`digest` is no longer several times slower since #160 step 6** (#289). Step 6's
   proof cap (count distinct candidates after the boundary cut) made the proof walk
   hash each crossed partial path's full candidate key (the projected hops' JSON) on

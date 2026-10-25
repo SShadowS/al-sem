@@ -145,11 +145,40 @@ fn has_implicit_rec(o: &al_syntax::ir::ObjectDecl, source_table_name: Option<&st
         && o.properties
             .iter()
             .any(|p| p.name == "tableno" && !p.value.trim().is_empty());
+    has_own_record_rec(o, source_table_name) || codeunit_tableno
+}
+
+/// [`has_implicit_rec`] without the codeunit `TableNo` case: the object's `Rec` is
+/// the object's own record (table/tableext/pageext, or a page with a resolved
+/// SourceTable), typed later from that object (`record_types` pass 3). A codeunit
+/// `TableNo` or report dataitem `Rec` is typed directly instead (a `local`).
+fn has_own_record_rec(o: &al_syntax::ir::ObjectDecl, source_table_name: Option<&str>) -> bool {
     matches!(
         o.kind,
         ObjectKind::Table | ObjectKind::TableExtension | ObjectKind::PageExtension
     ) || (o.kind == ObjectKind::Page && source_table_name.is_some())
-        || codeunit_tableno
+}
+
+/// Does a declaration take the implicit name `name` (`Rec` / `xRec`) away from the
+/// implicit record (#272)? A parameter or local of ANY type always does (a scalar
+/// `Rec` must not bind to a phantom record). An object global does only where the
+/// object's own record is `Rec` (`own_record_rec`, O15): a codeunit `TableNo` /
+/// report dataitem `Rec` keeps its typed row. The one rule behind both the
+/// argument label (`routine_features_partial`) and the synthetic `Rec` row
+/// ([`ir_record_variables`]).
+fn shadows_implicit_rec(
+    o: &al_syntax::ir::ObjectDecl,
+    routine: &RoutineDecl,
+    own_record_rec: bool,
+    name: &str,
+) -> bool {
+    routine
+        .params
+        .iter()
+        .map(|p| &p.name)
+        .chain(routine.locals.iter().map(|v| &v.name))
+        .any(|n| n.eq_ignore_ascii_case(name))
+        || (own_record_rec && o.globals.iter().any(|v| v.name.eq_ignore_ascii_case(name)))
 }
 
 /// [`has_implicit_rec`] with the page's `SourceTable` read from `o` itself, the
@@ -1812,6 +1841,10 @@ pub fn routine_features_partial(
         .enumerate()
         .map(|(i, p)| (p.name.to_ascii_lowercase(), (i as u32, p.by_ref)))
         .collect();
+    // #272: a bare `Rec`/`xRec` is the implicit record only when the object has its
+    // own record AND no parameter, local or object global of any type takes the name.
+    let obj = &file.objects[object_idx];
+    let own_record_rec = has_own_record_rec(obj, source_table_name);
     let mut call_sites = spine.call_sites;
     for (cs, arg_exprs) in call_sites.iter_mut().zip(spine.cs_arg_exprs.iter()) {
         // The record the call is made on (a table method's `Rec`): the member
@@ -1855,7 +1888,8 @@ pub fn routine_features_partial(
                 let param = param_by_lc.get(&lc);
                 let rec_var = rv_by_lc.get(&lc);
                 let is_implicit_rec = (lc == "rec" || lc == "xrec")
-                    && rec_var.map(|rv| rv.table_name.is_none()).unwrap_or(true);
+                    && own_record_rec
+                    && !shadows_implicit_rec(obj, routine, own_record_rec, &lc);
                 let source_kind = if param.is_some() {
                     "parameter"
                 } else if is_implicit_rec {
@@ -2121,12 +2155,12 @@ pub fn ir_record_variables(
     // Page implicit Rec is gated on the RESOLVED source_table_name (as in
     // `implicit_base_receiver`), not merely the SourceTable property's presence —
     // mirroring `project_routine_features`'s `source_table_name` arg.
-    let has_implicit_rec = matches!(
-        o.kind,
-        ObjectKind::Table | ObjectKind::TableExtension | ObjectKind::PageExtension
-    ) || (o.kind == ObjectKind::Page && source_table_name.is_some())
-        || direct_rec_table.is_some();
-    if has_implicit_rec && !out.iter().any(|v| v.name.eq_ignore_ascii_case("Rec")) {
+    let own_record_rec = has_own_record_rec(o, source_table_name);
+    let has_implicit_rec = own_record_rec || direct_rec_table.is_some();
+    // A declared `Rec` shadows the implicit one ([`shadows_implicit_rec`]); a global
+    // record `Rec` is then promoted at L3 (`workspace.rs`), which skips names
+    // already present.
+    if has_implicit_rec && !shadows_implicit_rec(o, routine, own_record_rec, "Rec") {
         // A table (extension) PROCEDURE runs on the record it is called on, so its
         // `Rec` is as temporary as the caller's receiver: parameter-dependent on
         // the reserved receiver index, substituted at each call site from

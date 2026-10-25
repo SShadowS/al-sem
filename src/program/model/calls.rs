@@ -277,7 +277,10 @@ pub(crate) struct BindingState {
 /// al-sem's `intraprocedural-body.ts` construction:
 ///   - non-identifier arg (sourceKind "expression") → "non-record-arg"
 ///   - identifier bound to a record variable → "unresolved-callee" (upgradable)
-///   - any other identifier (param / implicit-rec / unknown) → "non-record-arg"
+///   - the object's implicit `Rec`/`xRec` ("implicit-rec") → "unresolved-callee"
+///     (#272: it binds like a declared record; it has no record-variable id, its
+///     table comes from the object)
+///   - any other identifier (param / unknown) → "non-record-arg"
 ///
 /// `calleeParameterIsVar` starts `false` (upgraded later).
 pub(crate) fn initial_binding_state(
@@ -289,7 +292,7 @@ pub(crate) fn initial_binding_state(
         .map(|b| {
             let resolution = if b.source_kind == "expression" {
                 "non-record-arg"
-            } else if b.source_record_variable_id.is_some() {
+            } else if b.source_record_variable_id.is_some() || b.source_kind == "implicit-rec" {
                 "unresolved-callee"
             } else {
                 "non-record-arg"

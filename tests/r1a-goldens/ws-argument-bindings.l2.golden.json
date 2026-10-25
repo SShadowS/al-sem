@@ -385,8 +385,7 @@
             "argumentBindings": [
               {
                 "parameterIndex": 0,
-                "sourceKind": "implicit-rec",
-                "sourceVariableName": "rec",
+                "sourceKind": "unknown",
                 "argumentAnchor": {
                   "sourceUnitId": "ws:src/Codeunit.al",
                   "startLine": 10,

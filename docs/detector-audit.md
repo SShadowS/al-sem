@@ -23,8 +23,10 @@ and AUTO-PERSISTS it after the trigger. Affects:
 - **d39** (record-left-dirty): no auto-persist-trigger gate → FP on normal trigger patterns.
 FIX: add OnInsert/OnModify/OnDelete/OnRename (table-level, receiver Rec) to the platform-loaded/auto-persist gate; d37/d39 treat those triggers as persisting.
 FIXED: `TABLE_TRIGGERS_REC_AUTO_PERSIST` added to the `is_platform_loaded_trigger_rec` table arm
-(covers d11/d21/d37, which consume the gate directly); new `is_auto_persist_trigger_rec` gates d39's
-caller-side persist check (`autoPersistTriggerRec` skip stat). Tests: `tests/gap_audit_b_table_triggers.rs`
+(covers d11/d21/d37, which consume the gate directly). d39's caller-side check was
+`is_auto_persist_trigger_rec` (`autoPersistTriggerRec` skip stat); since #272 it is the owner rule
+`implicit_rec_persisted_by_owner` (`implicitRecOwnerPersists` skip stat), which covers these triggers
+too. Tests: [`tests/gap/gap_audit_b_table_triggers.rs`](../tests/gap/gap_audit_b_table_triggers.rs)
 (suppression + non-trigger / non-Rec controls); g9/g14 suites unchanged-green.
 
 ## Shared-root class C — loop-detector guards (Next-terminator + virtual table) missing in d2/d18 (FP)
