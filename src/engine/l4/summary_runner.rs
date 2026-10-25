@@ -2038,7 +2038,7 @@ fn row_digests(
         .collect()
 }
 
-fn sha256_of_debug(value: &impl std::fmt::Debug) -> [u8; 32] {
+pub(crate) fn sha256_of_debug(value: &impl std::fmt::Debug) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     Sha256::digest(format!("{value:?}").as_bytes()).into()
 }

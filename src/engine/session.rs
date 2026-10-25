@@ -1216,6 +1216,10 @@ impl View {
         );
         let target = &self.target;
         let rel = Arc::clone(self.rel.get_or_insert_with(|| relation_of(target)));
+        // §4.2: the host's third phase check, after the relation.
+        if (control.cancel)() {
+            return Err(Cancelled);
+        }
         let req = L4Request {
             extra_diagnostics: vec![],
             control: Some(control),

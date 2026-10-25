@@ -4,78 +4,16 @@
 
 use super::*;
 use crate::engine::l4::analysis::field_index;
-use crate::engine::l4::effect_store::EffectSetId;
 use crate::engine::l4::exec_relation::ExecRelation;
-use crate::engine::l4::scc::SccResult;
-use crate::engine::l4::summary::DbEffect;
 use crate::program::model::program_calls::{
     assemble_and_resolve_inline_program_default, assemble_and_resolve_workspace_program,
 };
 use crate::program::model::workspace::{MODEL_INSTANCE_ID_DEFAULT, Model};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// §4.7's projection: per id the core summary and its owned db effects
-/// (`None` without a bundle row), the `terminal_base` partition as sorted id
-/// groups, the diagnostics, and the SCC list with its flags. No `EffectId`
-/// or `EffectSetId` number appears in it.
-#[derive(Debug, PartialEq)]
-pub(crate) struct Projection {
-    per_id: BTreeMap<String, (Option<RoutineSummary>, Option<Vec<DbEffect>>)>,
-    terminal_groups: Vec<Vec<String>>,
-    diagnostics: Vec<SummarizeDiagnostic>,
-    sccs: Vec<(Vec<String>, bool)>,
-}
-
-pub(crate) fn l4_projection(
-    bundle: &SummaryBundle,
-    core: &HashMap<String, RoutineSummary>,
-    diagnostics: &[SummarizeDiagnostic],
-    scc: &SccResult,
-) -> Projection {
-    let row_of = |id: &str| bundle.routine_ix(id).filter(|&ix| bundle.has_row(ix));
-    let mut ids: BTreeSet<String> = core.keys().cloned().collect();
-    ids.extend(
-        bundle
-            .routines_with_rows()
-            .map(|ix| bundle.routine_id(ix).to_string()),
-    );
-    let per_id = ids
-        .into_iter()
-        .map(|id| {
-            let effects =
-                row_of(&id).map(|ix| bundle.db_effects(ix).map(|e| e.to_owned()).collect());
-            let summary = core.get(&id).cloned();
-            (id, (summary, effects))
-        })
-        .collect();
-    let mut groups: BTreeMap<EffectSetId, Vec<String>> = BTreeMap::new();
-    for ix in bundle.routines_with_rows() {
-        let set = bundle.terminal_base(ix).expect("a row has a terminal base");
-        groups
-            .entry(set)
-            .or_default()
-            .push(bundle.routine_id(ix).to_string());
-    }
-    let mut terminal_groups: Vec<Vec<String>> = groups
-        .into_values()
-        .map(|mut g| {
-            g.sort();
-            g
-        })
-        .collect();
-    terminal_groups.sort();
-    Projection {
-        per_id,
-        terminal_groups,
-        diagnostics: diagnostics.to_vec(),
-        sccs: scc
-            .sccs
-            .iter()
-            .map(|s| (s.members.clone(), s.recursive))
-            .collect(),
-    }
-}
+/// §4.7's projection, lifted to the host in Task 3.
+pub(crate) use crate::engine::incremental::{L4Projection as Projection, l4_projection};
 
 /// One solve input set: a model plus the hand-stated cross-app maps and the
 /// roles round cap.

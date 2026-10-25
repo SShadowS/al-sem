@@ -4,6 +4,7 @@
 #[path = "../common/cdo.rs"]
 mod cdo;
 
+mod l4_host_oracle;
 mod lsp_incremental_parity;
 mod perf_support_smoke;
 mod program_graph;
