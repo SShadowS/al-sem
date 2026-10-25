@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust; al-sem program model, policy engine, L5 detectors, HTML report.
 
-**Spec:** `## Design` (revision 2.2) and the inventory under `## Assumption probes` in `.agent/issue-279/ledger.md`. Reviewed prototype: `/work/bench/279/rev2/proto.diff` (tree `/work/bench/279/proto`, cut from 3f5030f9).
+**Spec:** the converged design of issue #279 (revision 2.2, with its inventory of id-keyed readers), kept in the issue's run ledger, not in the repository. A reviewed prototype cut from 3f5030f9 was measured before this plan; it is not in the repository either.
 
 ## Global Constraints
 
@@ -23,8 +23,8 @@
 
 1. `classification_per_id` must still pick the LAST classified row's copy (R13b): the per-row lookup reads the routine's own row.
 2. d57 and d60 change meaning from "any row of the id" to "the routine's own row"; their fallback note says "multi-row ids whose anchors contain no routine start".
-3. `test_coverage`'s `[HandlerFunctions]` key compares the declaring row by address; a routine with no row keeps `None`.
-4. `pub_label` falls back to the object row only when the event has no publisher routine (table events).
+3. `test_coverage`'s `[HandlerFunctions]` lookup keeps each candidate's declaring row and compares it with the test's row (`ptr::eq`, computed once per test routine); a routine with no row matches only another with none.
+4. `pub_label` falls back to the object row only when the event has no publisher routine (table events); a split table's events keep the last arm's name (stated limit).
 
 ---
 
@@ -37,25 +37,26 @@
 - Modify: `src/engine/l5/detectors/{d2,d13,d14,d17,d46,d50,d57,d60,mod}.rs`
 - Modify: `src/engine/gate/policy/{predicate_fields,policy_engine}.rs`
 - Modify: `src/engine/root_classification.rs`, `src/engine/l5/test_coverage.rs`, `src/engine/return_summary.rs`, `src/program/model/workspace.rs`, `src/engine/gate/format_html.rs`
-- Modify: `tests/cli/cli_batch_census.rs` (R14), `tests/r4/r4_differential.rs` (comments)
+- Modify: `tests/cli/cli_batch_census.rs` (R14: a consistency edit for the renamed census bucket; it passes on base and with the old name, so it discriminates nothing and is not a pin), `tests/r4/r4_differential.rs` (comments)
 - Tests: `d50::tests::cap4_reads_the_declaring_arms_icb` (R11), `return_summary::tests::bulk_icb_merge_reads_the_declaring_arm` (R12), `root_classification::tests::split_arms_classify_against_their_own_row` (R13a), `root_classification::tests::per_id_classification_is_the_last_classified_rows` (R13b)
 
 **Interfaces:**
 - `DetectorContext<'v>.declaring: DeclaringObjects<'v>` replaces `objects_by_id`.
 - `FieldIndexes<'a>.declaring: DeclaringObjects<'a>` replaces `objects_by_id`.
-- `FingerprintIndex::object_row_by_id(&self, id) -> Option<&ModelObject>` (object-scoped only).
-- `classify_roots(&ModelEntities)` and `classification_per_id(roots, routines, objects)` keep their signatures; the private `ast_classification` takes the routine's resolved object.
+- `FingerprintIndex::object_row_by_id(&self, id) -> Option<&ModelObject>` (reads every arm agrees on: object-scoped, or type and key).
+- `classify_roots(&ModelEntities, &DeclaringObjects)` and `classification_per_id(roots, routines, &DeclaringObjects)`: one index per policy build (`PolicyModel::new` takes it) and per `compute_root_classifications`; the private `ast_classification` takes the routine's resolved object.
+- d50 cap 4 reads `ctx.declaring`.
 
-- [ ] Step 1: Red on base (tests and the d50 interface skeleton only): R11, R12, R13a, R13b, R14 fail for their stated reason; logs under `/work/bench/279/impl/`.
+- [ ] Step 1: Red on base (tests and a d50 interface skeleton only): R11, R12, R13a, R13b fail for their stated reason. R14 is not a red test.
 - [ ] Step 2: Implement changes 1-11; remove the d50 skeleton helper.
-- [ ] Step 3: R11-R14 green; `scripts/check-goldens` green with no golden moved.
-- [ ] Step 4: Single-site proofs for R11, R12, R13a, R13b (two breaks), R14.
+- [ ] Step 3: R11-R13b green; `scripts/check-goldens` green with no golden moved.
+- [ ] Step 4: Single-site proofs for R11, R12, R13a, R13b (two breaks). R14 gets none (it discriminates nothing).
 - [ ] Step 5: `scripts/ci-steps task-affected`; `check-diff`; commit naming #279.
 
 ### Task 2: CLI acceptance tests and CHANGELOG (R1-R10)
 
 **Files:**
-- Create: `tests/cli/cli_split_object_readers.rs` (tempdir fixture from `/work/bench/279/rev2/fixA`, both arm orders); register in `tests/cli/main.rs`
+- Create: `tests/cli/cli_split_object_readers.rs` (tempdir fixture of ten `#if`-split objects, both arm orders, each order's workspace and command outputs built once per test process, every exit code asserted); register in `tests/cli/main.rs`
 - Modify: `CHANGELOG.md` (`Fixed`)
 
 **Interfaces:**
