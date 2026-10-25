@@ -1771,10 +1771,10 @@ pub(crate) fn build_detector_artifacts(
     let root_classifications_by_routine: HashMap<
         String,
         crate::engine::root_classification::RootClassification,
-    > = crate::engine::root_classification::classification_per_id(
+    > = crate::engine::root_classification::classification_per_id_over(
         &resolved.root_classifications,
         &resolved.workspace.routines,
-        &DeclaringObjects::new(&resolved.workspace.objects),
+        &resolved.workspace.objects,
     )
     .into_iter()
     .map(|(id, rc)| (id.to_string(), rc.clone()))

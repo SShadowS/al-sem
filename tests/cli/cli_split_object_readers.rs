@@ -11,9 +11,11 @@
 //! one order. Each test asserts its arm's positive and the other arm's negative.
 //!
 //! Tempdir fixtures (the #241 style of `cli_object_display.rs`), not r0-corpus
-//! dirs, so no golden family moves. Each order's workspace is written once per
-//! test process and each command spawned once ([`fixture`]); every spawn's exit
-//! code is asserted.
+//! dirs, so no golden family moves. Each command is spawned once per test
+//! process and order ([`runs`]), in a workspace deleted right after; every
+//! spawn's exit code is asserted. The saving applies under `cargo test`, where
+//! the tests share one process; nextest runs one process per test, so there a
+//! command is shared only within a test.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -451,41 +453,37 @@ struct Run {
     code: Option<i32>,
 }
 
-/// One arm order's workspace, written once per test process, and every command
-/// run on it, each spawned once (the tests share them under `cargo test`).
-struct Fixture {
-    dir: tempfile::TempDir,
-    runs: Mutex<HashMap<Vec<String>, Run>>,
-}
-
-fn fixture(order: Order) -> &'static Fixture {
-    static FIRST: OnceLock<Fixture> = OnceLock::new();
-    static SECOND: OnceLock<Fixture> = OnceLock::new();
-    let cell = match order {
+/// Each arm order's command outputs, keyed by the args as written (`{ws}`
+/// unexpanded), so each command is spawned once per process. No workspace is
+/// kept: a static is never dropped, so a cached `TempDir` would leak.
+fn runs(order: Order) -> &'static Mutex<HashMap<Vec<String>, Run>> {
+    static FIRST: OnceLock<Mutex<HashMap<Vec<String>, Run>>> = OnceLock::new();
+    static SECOND: OnceLock<Mutex<HashMap<Vec<String>, Run>>> = OnceLock::new();
+    match order {
         Order::InterestingFirst => &FIRST,
         Order::InterestingSecond => &SECOND,
-    };
-    cell.get_or_init(|| Fixture {
-        dir: workspace(order),
-        runs: Mutex::default(),
-    })
+    }
+    .get_or_init(Mutex::default)
 }
 
-/// `alsem <args>` on `order`'s workspace (`{ws}` in an arg is its path), spawned
-/// once per process: its stdout, after asserting the exit code is `code`.
+/// `alsem <args>` on `order`'s workspace (`{ws}` in an arg is its path): its
+/// stdout, after asserting the exit code is `code`. A command not yet cached
+/// runs in a fresh workspace that is deleted before the output is cached (the
+/// outputs hold no workspace path).
 fn alsem_raw(order: Order, args: &[&str], code: i32) -> String {
-    let fx = fixture(order);
-    let ws = fx.dir.path().to_str().unwrap();
-    let args: Vec<String> = args.iter().map(|a| a.replace("{ws}", ws)).collect();
-    let mut runs = fx.runs.lock().unwrap_or_else(PoisonError::into_inner);
-    let run = runs
-        .entry(args.clone())
+    let key: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    let mut cache = runs(order).lock().unwrap_or_else(PoisonError::into_inner);
+    let run = cache
+        .entry(key)
         .or_insert_with(|| {
+            let dir = workspace(order);
+            let ws = dir.path().to_str().unwrap();
             let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
-                .args(&args)
+                .args(args.iter().map(|a| a.replace("{ws}", ws)))
                 .env("ALCH_DRIVER_VERSION_OVERRIDE", VERSION_OVERRIDE)
                 .output()
                 .expect("spawn alsem");
+            drop(dir);
             Run {
                 stdout: String::from_utf8_lossy(&out.stdout).replace('\r', ""),
                 stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -493,7 +491,7 @@ fn alsem_raw(order: Order, args: &[&str], code: i32) -> String {
             }
         })
         .clone();
-    drop(runs);
+    drop(cache);
     assert_eq!(
         run.code,
         Some(code),

@@ -340,6 +340,26 @@ pub fn classification_per_id<'a>(
     routines: &[ModelRoutine],
     declaring: &DeclaringObjects,
 ) -> HashMap<&'a str, &'a RootClassification> {
+    per_id(roots, routines, || declaring)
+}
+
+/// [`classification_per_id`] for a caller with no index at hand: the index
+/// over `objects` is built only when some id has several copies.
+#[must_use]
+pub fn classification_per_id_over<'a>(
+    roots: &'a [RootClassification],
+    routines: &[ModelRoutine],
+    objects: &[ModelObject],
+) -> HashMap<&'a str, &'a RootClassification> {
+    per_id(roots, routines, || DeclaringObjects::new(objects))
+}
+
+/// The per-id pick; `declaring` runs only for a collided id.
+fn per_id<'a, 'o, D: std::borrow::Borrow<DeclaringObjects<'o>>>(
+    roots: &'a [RootClassification],
+    routines: &[ModelRoutine],
+    declaring: impl FnOnce() -> D,
+) -> HashMap<&'a str, &'a RootClassification> {
     let mut out: HashMap<&'a str, &'a RootClassification> = HashMap::new();
     let mut several: HashSet<&'a str> = HashSet::new();
     for rc in roots {
@@ -350,6 +370,8 @@ pub fn classification_per_id<'a>(
     if several.is_empty() {
         return out;
     }
+    let declaring = declaring();
+    let declaring = declaring.borrow();
     for r in routines.iter().filter(|r| several.contains(r.id.as_str())) {
         if let Some(own) = declaring.of(r).and_then(|o| ast_classification(r, o))
             && let Some(rc) = roots.iter().find(|rc| **rc == own)
