@@ -11,10 +11,14 @@
 //! one order. Each test asserts its arm's positive and the other arm's negative.
 //!
 //! Tempdir fixtures (the #241 style of `cli_object_display.rs`), not r0-corpus
-//! dirs, so no golden family moves.
+//! dirs, so no golden family moves. Each order's workspace is written once per
+//! test process and each command spawned once ([`fixture`]); every spawn's exit
+//! code is asserted.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use serde_json::Value;
 
@@ -439,41 +443,91 @@ fn line_of(file: &str, order: Order, needle: &str) -> u64 {
     hits[0] as u64
 }
 
-/// Spawn `alsem <args>` -> (stdout, stderr).
-fn alsem_raw(args: &[&str]) -> (String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
-        .args(args)
-        .env("ALCH_DRIVER_VERSION_OVERRIDE", VERSION_OVERRIDE)
-        .output()
-        .expect("spawn alsem");
-    (
-        String::from_utf8_lossy(&out.stdout).replace('\r', ""),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
+/// One spawn's stdout, stderr and exit code.
+#[derive(Clone)]
+struct Run {
+    stdout: String,
+    stderr: String,
+    code: Option<i32>,
 }
 
-/// Spawn `alsem <args>` -> stdout parsed as JSON.
-fn alsem(args: &[&str]) -> Value {
-    let (stdout, stderr) = alsem_raw(args);
+/// One arm order's workspace, written once per test process, and every command
+/// run on it, each spawned once (the tests share them under `cargo test`).
+struct Fixture {
+    dir: tempfile::TempDir,
+    runs: Mutex<HashMap<Vec<String>, Run>>,
+}
+
+fn fixture(order: Order) -> &'static Fixture {
+    static FIRST: OnceLock<Fixture> = OnceLock::new();
+    static SECOND: OnceLock<Fixture> = OnceLock::new();
+    let cell = match order {
+        Order::InterestingFirst => &FIRST,
+        Order::InterestingSecond => &SECOND,
+    };
+    cell.get_or_init(|| Fixture {
+        dir: workspace(order),
+        runs: Mutex::default(),
+    })
+}
+
+/// `alsem <args>` on `order`'s workspace (`{ws}` in an arg is its path), spawned
+/// once per process: its stdout, after asserting the exit code is `code`.
+fn alsem_raw(order: Order, args: &[&str], code: i32) -> String {
+    let fx = fixture(order);
+    let ws = fx.dir.path().to_str().unwrap();
+    let args: Vec<String> = args.iter().map(|a| a.replace("{ws}", ws)).collect();
+    let mut runs = fx.runs.lock().unwrap_or_else(PoisonError::into_inner);
+    let run = runs
+        .entry(args.clone())
+        .or_insert_with(|| {
+            let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+                .args(&args)
+                .env("ALCH_DRIVER_VERSION_OVERRIDE", VERSION_OVERRIDE)
+                .output()
+                .expect("spawn alsem");
+            Run {
+                stdout: String::from_utf8_lossy(&out.stdout).replace('\r', ""),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                code: out.status.code(),
+            }
+        })
+        .clone();
+    drop(runs);
+    assert_eq!(
+        run.code,
+        Some(code),
+        "exit code of {args:?} in {order:?}: stderr={}",
+        run.stderr
+    );
+    run.stdout
+}
+
+/// `alsem <args>` on `order`'s workspace -> stdout parsed as JSON, after
+/// asserting the exit code is `code`.
+fn alsem(order: Order, args: &[&str], code: i32) -> Value {
+    let stdout = alsem_raw(order, args, code);
     serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("{e}: args={args:?} stdout={stdout} stderr={stderr}"))
+        .unwrap_or_else(|e| panic!("{e}: args={args:?} in {order:?} stdout={stdout}"))
 }
 
-/// `policy check` with the fixture's policy: every finding of rule `rule` as
-/// `(file, startLine)`.
-fn policy_hits(ws: &Path, rule: &str) -> Vec<(String, u64)> {
-    let w = ws.to_str().unwrap();
-    let policy = ws.join("al-sem.policy.yaml");
-    let doc = alsem(&[
-        "policy",
-        "check",
-        w,
-        "--policy",
-        policy.to_str().unwrap(),
-        "--format",
-        "json",
-        "--deterministic",
-    ]);
+/// `policy check` with the fixture's policy (exit 0: the rules are `low` and
+/// nothing gates): every finding of rule `rule` as `(file, startLine)`.
+fn policy_hits(order: Order, rule: &str) -> Vec<(String, u64)> {
+    let doc = alsem(
+        order,
+        &[
+            "policy",
+            "check",
+            "{ws}",
+            "--policy",
+            "{ws}/al-sem.policy.yaml",
+            "--format",
+            "json",
+            "--deterministic",
+        ],
+        0,
+    );
     let detector = format!("policy-{rule}");
     let mut hits: Vec<(String, u64)> = doc["findings"]
         .as_array()
@@ -492,16 +546,14 @@ fn policy_hits(ws: &Path, rule: &str) -> Vec<(String, u64)> {
     hits
 }
 
-/// `analyze --format json`: every finding of the detector whose id starts with
-/// `prefix` as `(routineName, objectName, rootCause)`.
-fn analyze_hits(ws: &Path, prefix: &str) -> Vec<(String, String, String)> {
-    let doc = alsem(&[
-        "analyze",
-        ws.to_str().unwrap(),
-        "--format",
-        "json",
-        "--deterministic",
-    ]);
+/// `analyze --format json` (exit 0): every finding of the detector whose id
+/// starts with `prefix` as `(routineName, objectName, rootCause)`.
+fn analyze_hits(order: Order, prefix: &str) -> Vec<(String, String, String)> {
+    let doc = alsem(
+        order,
+        &["analyze", "{ws}", "--format", "json", "--deterministic"],
+        0,
+    );
     let mut hits: Vec<(String, String, String)> = doc["payload"]["findings"]
         .as_array()
         .unwrap_or_else(|| panic!("no findings array: {doc}"))
@@ -524,8 +576,7 @@ fn analyze_hits(ws: &Path, prefix: &str) -> Vec<(String, String, String)> {
 /// orders: `routine` in `object`, and nothing on the other arm.
 fn assert_one_finding(prefix: &str, routine: &str, object: &str) {
     for order in ORDERS {
-        let dir = workspace(order);
-        let got: Vec<(String, String)> = analyze_hits(dir.path(), prefix)
+        let got: Vec<(String, String)> = analyze_hits(order, prefix)
             .into_iter()
             .map(|(r, o, _)| (r, o))
             .collect();
@@ -537,18 +588,22 @@ fn assert_one_finding(prefix: &str, routine: &str, object: &str) {
     }
 }
 
-/// `digest --routine <routine> --tests`: the payload's `testCoverage`.
-fn test_coverage(ws: &Path, routine: &str) -> Value {
-    let doc = alsem(&[
-        "digest",
-        ws.to_str().unwrap(),
-        "--routine",
-        routine,
-        "--tests",
-        "--format",
-        "json",
-        "--deterministic",
-    ]);
+/// `digest --routine <routine> --tests` (exit 0): the payload's `testCoverage`.
+fn test_coverage(order: Order, routine: &str) -> Value {
+    let doc = alsem(
+        order,
+        &[
+            "digest",
+            "{ws}",
+            "--routine",
+            routine,
+            "--tests",
+            "--format",
+            "json",
+            "--deterministic",
+        ],
+        0,
+    );
     let tc = doc["payload"]["testCoverage"].clone();
     assert!(tc.is_object(), "no testCoverage: {doc}");
     tc
@@ -563,16 +618,14 @@ fn test_coverage(ws: &Path, routine: &str) -> Value {
 #[test]
 fn r1_policy_object_name_is_the_declaring_arm() {
     for order in ORDERS {
-        let dir = workspace(order);
-        let ws = dir.path();
         let p = line_of("src/Split.Codeunit.al", order, "procedure P()");
         assert_eq!(
-            policy_hits(ws, "foo-deletes"),
+            policy_hits(order, "foo-deletes"),
             vec![("ws:src/Split.Codeunit.al".to_string(), p)],
             "foo-deletes in {order:?}"
         );
         assert_eq!(
-            policy_hits(ws, "bar-deletes"),
+            policy_hits(order, "bar-deletes"),
             Vec::<(String, u64)>::new(),
             "bar-deletes in {order:?}"
         );
@@ -588,14 +641,13 @@ fn r1_policy_object_name_is_the_declaring_arm() {
 #[test]
 fn r2_policy_root_kinds_are_the_declaring_arms() {
     for order in ORDERS {
-        let dir = workspace(order);
         let line = line_of(
             "src/SplitInstall.Codeunit.al",
             order,
             "trigger OnInstallAppPerCompany()",
         );
         assert_eq!(
-            policy_hits(dir.path(), "install-inserts"),
+            policy_hits(order, "install-inserts"),
             vec![("ws:src/SplitInstall.Codeunit.al".to_string(), line)],
             "install-inserts in {order:?}"
         );
@@ -613,8 +665,7 @@ fn r2_policy_root_kinds_are_the_declaring_arms() {
 #[test]
 fn r3_d14_reads_the_declaring_arm() {
     for order in ORDERS {
-        let dir = workspace(order);
-        let hits = analyze_hits(dir.path(), "d14-");
+        let hits = analyze_hits(order, "d14-");
         assert_eq!(hits.len(), 1, "one d14 in {order:?}: {hits:?}");
         let (routine, object, root_cause) = &hits[0];
         assert_eq!(
@@ -639,15 +690,13 @@ fn r3_d14_reads_the_declaring_arm() {
 #[test]
 fn r4_test_subtype_is_the_declaring_arms() {
     for order in ORDERS {
-        let dir = workspace(order);
-        let ws = dir.path();
-        let helper = test_coverage(ws, "Helper");
+        let helper = test_coverage(order, "Helper");
         assert_eq!(
             (&helper["excludedTestCode"], &helper["changedRoutines"]),
             (&Value::from(1), &Value::from(0)),
             "Helper in {order:?}: {helper}"
         );
-        let main = test_coverage(ws, "Main");
+        let main = test_coverage(order, "Main");
         assert_eq!(
             (&main["excludedTestCode"], &main["changedRoutines"]),
             (&Value::from(0), &Value::from(1)),
@@ -665,19 +714,21 @@ fn r4_test_subtype_is_the_declaring_arms() {
 #[test]
 fn r5_implicit_rec_binds_the_declaring_arms_source_table() {
     for order in ORDERS {
-        let dir = workspace(order);
-        let w = dir.path().to_str().unwrap();
         for (routine, table) in [("OnOpenPage", "Probe Rec"), ("Wipe", "Other Rec")] {
-            let doc = alsem(&[
-                "query",
-                "effects",
-                w,
-                "--routine",
-                routine,
-                "--format",
-                "json",
-                "--deterministic",
-            ]);
+            let doc = alsem(
+                order,
+                &[
+                    "query",
+                    "effects",
+                    "{ws}",
+                    "--routine",
+                    routine,
+                    "--format",
+                    "json",
+                    "--deterministic",
+                ],
+                0,
+            );
             let tables: Vec<&str> = doc["payload"]["effects"]
                 .as_array()
                 .unwrap_or_else(|| panic!("no effects: {doc}"))
@@ -721,21 +772,19 @@ fn r8_d39_page_may_modify_reads_the_declaring_page() {
     assert_one_finding("d39-", "OnAction", "Probe RO");
 }
 
-/// Every `<title>` of `analyze --format html`'s event-graph nodes.
-fn html_titles(ws: &Path) -> Vec<String> {
-    let (html, stderr) = alsem_raw(&[
-        "analyze",
-        ws.to_str().unwrap(),
-        "--format",
-        "html",
-        "--deterministic",
-    ]);
+/// Every `<title>` of `analyze --format html`'s event-graph nodes (exit 0).
+fn html_titles(order: Order) -> Vec<String> {
+    let html = alsem_raw(
+        order,
+        &["analyze", "{ws}", "--format", "html", "--deterministic"],
+        0,
+    );
     let titles: Vec<String> = html
         .split("<title>")
         .skip(1)
         .filter_map(|s| s.split_once("</title>").map(|(t, _)| t.to_string()))
         .collect();
-    assert!(titles.len() > 1, "no node titles: stderr={stderr}");
+    assert!(titles.len() > 1, "no node titles in {order:?}");
     titles
 }
 
@@ -750,8 +799,7 @@ fn html_titles(ws: &Path) -> Vec<String> {
 #[test]
 fn r9_html_labels_name_the_declaring_arm() {
     for order in ORDERS {
-        let dir = workspace(order);
-        let titles = html_titles(dir.path());
+        let titles = html_titles(order);
         for want in [
             "Pub A",
             "SI Keep :: KeepSub",
@@ -785,8 +833,7 @@ fn r9_html_labels_name_the_declaring_arm() {
 #[test]
 fn r10_handler_functions_resolve_in_the_declaring_arm() {
     for order in ORDERS {
-        let dir = workspace(order);
-        let tc = test_coverage(dir.path(), "Prod");
+        let tc = test_coverage(order, "Prod");
         assert_eq!(tc["covered"], Value::Array(vec![]), "{order:?}: {tc}");
         let uncovered: Vec<(&str, &str)> = tc["uncovered"]
             .as_array()
