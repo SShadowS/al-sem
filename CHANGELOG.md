@@ -71,11 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     global the routine declared itself with that name. A declared `Rec: Record X` now keeps
     its own temp state, so d3 and d39 report it as they would any physical record. The
     model marks the implicit row (`ModelRecordVariable.is_implicit_rec`).
-- Measured on the pinned CDO workspace (whose page-bearing dependencies all embed source),
-  final code against the base: 2,217 findings at `--scope primary` and 30,006 at
-  `--scope all` on both sides, 0 fingerprints moved, and both JSON payloads
-  byte-identical. Neither entry above moves a CDO finding. No ABI vector or golden needed
-  an update: no golden or ABI vector that existed before this change carries the page
+
+  Both #302 entries, measured on the pinned CDO workspace (whose page-bearing dependencies
+  all embed source), final code against the base: 2,217 findings at `--scope primary` and
+  30,006 at `--scope all` on both sides, 0 fingerprints moved, and both JSON payloads
+  byte-identical. Neither entry moves a CDO finding. No ABI vector or golden needed an
+  update: no golden or ABI vector that existed before this change carries the page
   properties or the shapes above, so new unit and CLI tests (with their own fixtures,
   checked by direct asserts) pin them instead. No Windows confirmation is relevant: both
   entries read facts the code already declares (symbol properties, `SourceTableTemporary`)
