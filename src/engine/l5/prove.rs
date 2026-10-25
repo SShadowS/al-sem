@@ -940,6 +940,8 @@ impl Job for ProveJob<'_> {
             files: None,
             routines: Some(vec![self.routine_selector.to_string()]),
             diff_text: None,
+            diff_root: Default::default(),
+            workspace_files: &[],
         };
         let changed_roots = resolve_changed_roots(
             cx.ids(),

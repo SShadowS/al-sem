@@ -228,6 +228,7 @@ through some *other* branch.
 alsem digest <ws> --file src/Posting.al       # what the code in this file actually touches
 alsem digest <ws> --diff my.patch             # same, resolved straight from a diff (or `-` for stdin)
 alsem digest <ws> --diff my.patch --tests     # also: which changed routines a [Test] reaches
+alsem digest <ws> --diff my.patch --diff-root <repo> # diff paths relative to <repo> (default: the git top level)
 alsem prove <ws> PostDocument may-commit      # yes / no / unknown, with the reason
 ```
 
