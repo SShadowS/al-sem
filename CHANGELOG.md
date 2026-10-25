@@ -7,12 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.1.0-rc.2] - 2026-10-25
+## [2.1.0-rc.3] - 2026-10-25
 
 Release candidate, cut from #277's reviewed and gated head (76ef00cb) before its CDO bench.
-rc.1 published nothing: the batch one-job goldens embedded the version, so the release
-build's test run failed on the bump. rc.2 compares them with the version normalized
-(test-only; the binaries are rc.1's code).
+rc.1 and rc.2 published nothing: the batch one-job goldens depend on the version
+(`alsemVersion`, digest's `workspaceFingerprint`), so the release build's test run failed
+on the bump. rc.3 pins the version in that test with `ALCH_DRIVER_VERSION_OVERRIDE`, as the
+other differential goldens do (test-only; the binaries are rc.1's code).
 
 ### Added
 
