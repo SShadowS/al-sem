@@ -4,6 +4,14 @@
 #[path = "../common/cdo.rs"]
 mod cdo;
 
+#[path = "../common/symbol_app.rs"]
+mod symbol_app;
+
+#[path = "../common/dep_dispatch_fixture.rs"]
+mod dep_dispatch_fixture;
+
+mod l4_host_binary;
+mod l4_host_oracle;
 mod lsp_incremental_parity;
 mod perf_support_smoke;
 mod program_graph;

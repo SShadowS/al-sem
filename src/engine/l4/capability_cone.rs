@@ -5416,6 +5416,7 @@ codeunit 13 "Dep Rec Sub"
             base.rel(),
             crate::engine::l4::analysis::L4Request {
                 extra_diagnostics: vec![],
+                control: None,
             },
             Some(&base.cross_app_inputs()),
         );

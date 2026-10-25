@@ -597,6 +597,21 @@ impl SummaryBundleBuilder {
         }
     }
 
+    /// A row's effects with their vias (terminal half, then PD half), or
+    /// `None` without a row: what the seeded solve compares against the
+    /// baseline's row (#222 §4.3 R3).
+    pub(crate) fn row_effects(&self, r: SolveIx) -> Option<Vec<(EffectId, ViaRank)>> {
+        let row = self.rows.get(&r)?;
+        let terminal = iter_set_bits(&self.arena[row.terminal_set.0 as usize])
+            .zip(row.base_via.iter().copied());
+        let pd = row
+            .pd_delta
+            .iter()
+            .copied()
+            .zip(row.delta_via.iter().copied());
+        Some(terminal.chain(pd).collect())
+    }
+
     /// Freeze into an immutable [`SummaryBundle`] (spec lifecycle steps 5-7):
     /// hash-cons the terminal-set arena into the [`EffectStore`], then rewrite
     /// every row's `terminal_base` `SetRef` → [`EffectSetId`]. `base_via` is

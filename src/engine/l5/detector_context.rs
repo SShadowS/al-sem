@@ -1232,6 +1232,7 @@ pub(crate) fn build_detector_context_with<'a>(
     };
     let l4 = (demanded & substrate::CORE_SUMMARIES != 0).then(|| L4Request {
         extra_diagnostics: vec![],
+        control: None,
     });
     let cross = base.map(|b| b.cross_app_inputs());
     let (art, l4) = compose_detector_artifacts(resolved, demanded, &rel, l4, cross);

@@ -1,0 +1,1073 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 176,
+    "severity": "important",
+    "text": "The first refresh skipped the closure digest, so the first baseline had no closure term to compare against; the digest's Err arm was unspecified.",
+    "disposition": "fixed",
+    "evidence": "Spec 240-244 (§4.1 step 1): the closure digest runs on every refresh, the first included, before the build; its Err (semantic_golden.rs:351 returns Result) becomes RefreshError::Build and the baseline stays. R0's host half lists it. r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:248-252",
+    "anchor_hash": "ebb3aad914afac907e4e8927e3d1ea7b5ea62ee7b4b807e35c2a237a9644888d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 294,
+    "severity": "important",
+    "text": "Cancellation travelled inside the seed, but the first and fresh solves passed None, so they could not poll cancel between SCCs as §4.2 promised.",
+    "disposition": "fixed",
+    "evidence": "Spec 405-447 (§4.4) and §4.1 step 4: L4Request.control = cancel + optional reuse; the host passes Some(control) on EVERY refresh (reuse None for Full), so cancel is polled at the top of every SCC turn. Commands keep control: None. T3 cancels inside the loop. r2: the range's text changed (O22's sentence in the Seeded bullet), so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:413-455",
+    "anchor_hash": "f4875bc4d220d6c34691d9d122c6873d8f246cd6f08d675fa845fe99deeabfa5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 224,
+    "severity": "important",
+    "text": "The generation check and the status write were separate steps from the atomic bump, so a request could land between them and a superseded result could be published.",
+    "disposition": "fixed",
+    "evidence": "Spec 308-317 (§4.2): one Mutex<Shared{requested, status}>; request() bumps under it; publish is `lock; if requested == g { status = .. }; unlock`, so bump and publish are linearized. T4a pins it. r2: the paragraph now names the worker's unconditional commit (S4/O20), so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:316-325",
+    "anchor_hash": "59bdbb8389821cdf67a2db558dffdb0eae37d481c3e201cc9e91fe187e1a8da2",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 410,
+    "severity": "important",
+    "text": "T4 tested a helper and forced no race; r2 re-raised: T4a passed &never into the host, so its retention break (ii) could not fail.",
+    "disposition": "fixed",
+    "evidence": "r2: §4.1 (Refresher trait, 221-236; step 6, 262-266) splits commit from refresh; §4.2 (294-300) run_worker commits after every Ok. §5.5 (609-635): T4a's Refresher calls host.refresh with the WORKER's cancel closure and pauses AFTER the host's last cancel check; both breaks live in run_worker: (i) drop the publish guard, (ii) commit only when requested == g -> #2 is Full(NoBaseline). T4b (after_drain hook) and T4c unchanged.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:619-645",
+    "anchor_hash": "9e4b1d2e733497a002d33390b9941dcae3f071539d2bf0e682d258dcc593ddcc",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 388,
+    "severity": "important",
+    "text": "T2 never had a re-solved caller read a seeded callee; r2 re-raised: T0a/T2 demanded caps and other structural preconditions of every corpus fixture, which an acyclic fixture cannot meet, and did not assert a caller really reads a seeded non-fixed callee's PD effect.",
+    "disposition": "fixed",
+    "evidence": "r2: §5.3 (546-593) splits the unrestricted corpus (no structural precondition) from curated fixtures C1-C4: C1 a hand-stated recursive roles fixture under with_roles_iteration_cap (the cap only applies to recursive roles, summary_runner.rs:2023-2053); C2 a seeded recomputed callee S with a PD effect that re-solved caller C substitutes (asserted); C3 leaf/fixed role; C4 multi-member SCC. T0a (500-504) uses the same split. F1 re-gate unchanged.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:556-603",
+    "anchor_hash": "408374b2483e59805a28ade068b06993c41961433815035e7352076afd059db9",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 377,
+    "severity": "important",
+    "text": "T1e/T1f's key break B5 could not fail: the edited member is in Δ and the other is its one-hop caller, so both stay dirty with any key.",
+    "disposition": "fixed",
+    "evidence": "Spec 532-533: T1e reshaped so the key condition is A's only guard; T1f is a stated redundancy with a combined break. r2: T1f's row gained one sentence (why its break reaches the oracle, O22), so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:541-542",
+    "anchor_hash": "5e0386b4d15021d62c8b47388ab4b0adeb02c68baf92e2abdd2d9b8d13286a9d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 375,
+    "severity": "important",
+    "text": "Fixtures lacked needed facts: T1d's L had no distinct effect, T1e-g had no unrelated SCC, and T1i edited a multi-routine Work.al.",
+    "disposition": "fixed",
+    "evidence": "Spec 516-544 (§5.2): one codeunit per routine per file, an unrelated U in every case; T1d distinct tables; T1i's CallChain alone in src/Chain.al. r2: the table changed (labels, T1c, T1f, T1i, T1n, new T1r), so the anchor was re-pointed and needs re-review. r4: the range holds T1r (line 553), which was rebuilt on resets_filters_on_param (S17), so the hash changed and the entry needs re-review; S7's own content (file rule, unrelated U, T1d, T1i) is unchanged.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:525-554",
+    "anchor_hash": "23d8510e93f6cef5700fef2a7e3789158081b1dffb4dce9c05716f32529a1c47",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S8",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 382,
+    "severity": "important",
+    "text": "T1j's bytes-only change cannot catch a wrong result; there was no app.json-only test, and a claim about app.json edits was false.",
+    "disposition": "fixed",
+    "evidence": "Spec 537-543: T1j (b) semantic dependency change; T1q app.json-only edit; false claim removed. r2: the range now holds T1n's added edge precondition (O23), so the anchor was re-pointed and needs re-review; T1j and T1q themselves are unchanged.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:546-552",
+    "anchor_hash": "3ccd23be4c86604017b880dfc31f965bd299a019716e8e8e4fb9f664a7246773",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S9",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 398,
+    "severity": "important",
+    "text": "T3 stated no changed revision and no completed SCC before the cancel, so projection equality could survive a wrong baseline replacement.",
+    "disposition": "fixed",
+    "evidence": "Spec 595-607 (§5.4): r0, T1a's edit, cancel at the last SCC turn; projection and baseline_fingerprint unchanged; recovery is Incremental {L},{B},{A}; break last.take(). r2: T3 now names refresh_committed (the new commit split), so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:605-617",
+    "anchor_hash": "20e15c8ac6a3a1328af411bb7e0a4b6b2aa650f1ed1daf10dddbd7dfe8f28534",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S10",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 203,
+    "severity": "important",
+    "text": "T4b asserted the worker's projection, which HostStatus does not carry, and where ServerState keeps the status and worker handles was unstated.",
+    "disposition": "fixed",
+    "evidence": "Spec 323-335: ServerState.l4_host owns HostHandle and JoinHandle; status() reads the status. r2: one line added (spawn_l4_host runs run_worker with an IncrementalHost), so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:331-343",
+    "anchor_hash": "a3b47cff48366c6737bded0772e32247d1db91cdb038fbed48f67d303b549eee",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S11",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 422,
+    "severity": "important",
+    "text": "T5 did not pin the CLI flag path or off-on_swap solving; its counter is a no-op without tracing; config-only swaps were untested.",
+    "disposition": "fixed",
+    "evidence": "Spec 637-678 (§5.6): T5a-T5e; counters trace-only. r2: T5e rewritten (O24, S15), so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:647-688",
+    "anchor_hash": "44d4bba7815e423e4bc520ef5c3a6573482ad99fbf488563f09d78cf0491d8a5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S12",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 256,
+    "severity": "important",
+    "text": "The key inputs P6 and step 11b exposed (shared-event bit, collided rows) had no discriminating test.",
+    "disposition": "fixed",
+    "evidence": "Spec 541-542: T1n and T1o. r2: T1n gained the edges precondition (O23), so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:550-551",
+    "anchor_hash": "dbc033db732e9ed6becb2ed06adb3a377b3b36efb5d144f13dc22cfa70a6577a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S13",
+    "source": "sol",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 281,
+    "severity": "minor",
+    "text": "Overclaims: the coverage yaml is read; not every caller passes None once the host exists; rayon pools are local; a subprocess is not inherently a daemon; the in-memory Connection does not prove stdout framing.",
+    "disposition": "fixed",
+    "evidence": "Spec 392-398 (R4) plus §4.4, §6 S7/S10, OQ9 and T5e. r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:400-406",
+    "anchor_hash": "dc156702e8f7e9ee041b99606ec0ac8183c914056bf59017aff771d81474e810",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S14",
+    "source": "sol",
+    "round": "222 r2",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 696,
+    "severity": "important",
+    "text": "F7 allowed replacing T5e with a direct on_swap lib test, losing the CLI-plumbing and real-stdout coverage.",
+    "disposition": "fixed",
+    "evidence": "Spec 762 (F7): T5e is never replaced; a T5e flake is fixed in its own synchronization (pipe threads, timeouts, child cleanup, specified in T5e at 663-678). Only T5b/T5c may move to a lib test.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:789-789",
+    "anchor_hash": "9d6ce75a1a09a00c1b0ef9496e603c3f20640388e5f1902024091aaa93f43b1b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S15",
+    "source": "sol",
+    "round": "222 r2",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 605,
+    "severity": "important",
+    "text": "Comparing only the set of notification methods does not prove no new editor output; an extra publishDiagnostics would pass.",
+    "disposition": "fixed",
+    "evidence": "Spec 663-678 (T5e): the flag-on and flag-off sessions run on the same tempdir and their server-to-client messages must be equal as multisets of normalized payloads (sorted keys; notifications by method+params, responses by id+result). Break (ii): the worker sends one extra textDocument/publishDiagnostics through the sink -> the multisets differ.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:673-688",
+    "anchor_hash": "933057c83bff7c3ed2e48cdbf55b7a52ec228b677b0f887d54e0c2b02370242c",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 302,
+    "severity": "important",
+    "text": "The seeded branch wrote every member, including fixed leaves and ids with no model row, diverging from the fresh loop.",
+    "disposition": "fixed",
+    "evidence": "Spec 424-438: only is_recomputed members are seeded; fixed leaves and row-less ids untouched (summary_runner.rs:1484-1496, :1530-1537, :2030-2034). r2: the bullet gained O22's baseline-entry sentence, so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:432-446",
+    "anchor_hash": "e8ea1cb6426efc9ab9baf76c9331730e5daf071876bfcb416524ab93ca9d7cc3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 393,
+    "severity": "important",
+    "text": "T2 seeded every SCC, so the mixed path was untested; r2 (sol) re-raised: T2b did not establish that numbering differs or that a seeded callee carries an effect whose loss changes the caller.",
+    "disposition": "fixed",
+    "evidence": "r2: T2b (579-592) asserts, on curated C2 with k = {C}: S seeded and C re-solved in the report; S recomputed with a PD effect; C's fresh projection holds the substituted effect; at least one identity's EffectId differs between the mixed and fresh bundles. C2 (§5.3) writes S's Zeta insert before its Cust insert so body order and key_rank order differ. Break: push seeded rows after the loop -> T2b fails on C2, T2 stays green.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:589-602",
+    "anchor_hash": "a7728e85419b0eb2ade98b14e262a912f4ee173627c584054851de7b88d08b7b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 182,
+    "severity": "important",
+    "text": "With seed None on the first and Full refreshes, cancel was never polled inside the solve and diag_of was never recorded.",
+    "disposition": "fixed",
+    "evidence": "Spec 248-261: the host always passes Some(control); §4.4 records diag_of on every solve. r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:256-269",
+    "anchor_hash": "7df9a263ed768e4b41fe7bdb1930b956557e8de6d96a2a4168a31b52deb331a8",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 182,
+    "severity": "important",
+    "text": "Ordering error: the seed carried the new rows' Δ, but rows come from rel, built after the seed; a host-side digest is a second reader.",
+    "disposition": "fixed",
+    "evidence": "Spec 337-360: digests, Δ and the solve half of R0 are computed inside the seeded entry. r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:345-368",
+    "anchor_hash": "28f9b752d7d04c4f832e3adf3fe72de5be49d93ae46aa67dd2489f7d0b483b05",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 383,
+    "severity": "important",
+    "text": "B5 could not fail in T1e/T1f; for merges the key rule is always redundant.",
+    "disposition": "fixed",
+    "evidence": "Spec 532: T1e takes the suggested shape. r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:541-541",
+    "anchor_hash": "b92a7932003bb8fe513a39e65b1a5a72b0a8335b5b84afedab2f6a9dde89df99",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 381,
+    "severity": "important",
+    "text": "T1c's break could not fail; r2 (sol) re-raised: 'R2 always true' would also seed the new L, which has no baseline, so the combined break could panic before reaching the oracle.",
+    "disposition": "fixed",
+    "evidence": "r2: Spec 530 (T1c): the combined break drops only R2's two Δ conditions and KEEPS the key match, so the new L has no candidate key and is solved normally; R3 treats a member with no baseline entry as equal; B (key {B} unchanged) is then seeded with the old L operation ids and the oracle fails. §4.4 (424-438) states a seeded member always has a baseline entry.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:539-539",
+    "anchor_hash": "2b125b5f10150ac3ae56f892123b00f86eeca8574c8fff68dff925b687b5f249",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 421,
+    "severity": "important",
+    "text": "T5a could not read a counter and ServerState had no field for the host.",
+    "disposition": "fixed",
+    "evidence": "Spec 637-655: T5 reads ServerState.l4_host and status(). r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:647-665",
+    "anchor_hash": "5fee2b82e7af0eba1b628ef39a5ce1166da4dbc12c0618c8b5bde8ee2853d2a6",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 387,
+    "severity": "important",
+    "text": "T1i broke the file rule; r2 (sol) re-raised: the inherited insert does not exist in L4, because dependency calls are cone-only and Outer is a leaf with no effect, so seeding CallChain could leave the oracle green.",
+    "disposition": "fixed",
+    "evidence": "r2: Spec 536 (T1i). Verified at capability_cone.rs:3896-3920 (dependency calls partitioned out of the Primary payload) and :3966-3981 (a dependency routine with no Primary out-edge is a leaf with its own base summary). CallChain now calls Lib.Inner() directly (Inner is a leaf carrying its Customer insert, dep_dispatch_fixture.rs:21-35); r1 deletes that call; precondition: CallChain's fresh projection differs between r0 and r1. Break: drop R2's 'no member in Δ' (no new id at r1).",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:545-545",
+    "anchor_hash": "4d81a26a5a491f9b9260484e35d49b509fdcf4ff25abea16d91529fb4b4537a2",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 0,
+    "severity": "important",
+    "text": "No test pinned P6's shared-event bit.",
+    "disposition": "fixed",
+    "evidence": "Spec 541: T1n. r2: the row gained O23's edge precondition, so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:550-550",
+    "anchor_hash": "4862e35082ba52bb4f25d9ae3da4fd22daa606e43564ae5e7b1875420e9a84c7",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O10",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 415,
+    "severity": "minor",
+    "text": "T4b's break was mis-described and timing-dependent.",
+    "disposition": "fixed",
+    "evidence": "Spec 609-635: run_worker is generic over a Refresher; T4a-T4c are scripted. r2: §5.5 changed for S4/O20, so the anchor was re-pointed and needs re-review; T4b is unchanged.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:619-645",
+    "anchor_hash": "9e4b1d2e733497a002d33390b9941dcae3f071539d2bf0e682d258dcc593ddcc",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O11",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 202,
+    "severity": "minor",
+    "text": "T4b asserted a projection that HostStatus does not carry.",
+    "disposition": "fixed",
+    "evidence": "Spec 609-635: no projection on the worker tests. r2: §5.5 changed for S4/O20, so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:619-645",
+    "anchor_hash": "9e4b1d2e733497a002d33390b9941dcae3f071539d2bf0e682d258dcc593ddcc",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O12",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 175,
+    "severity": "minor",
+    "text": "Computing the closure digest only with a baseline leaves the first baseline without a closure term; the Err arm was undefined.",
+    "disposition": "fixed",
+    "evidence": "Spec 240-244 (same fix as S1). r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:248-252",
+    "anchor_hash": "ebb3aad914afac907e4e8927e3d1ea7b5ea62ee7b4b807e35c2a237a9644888d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O13",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 249,
+    "severity": "minor",
+    "text": "driver_version was in R0 although the solve never reads it.",
+    "disposition": "fixed",
+    "evidence": "Spec 358-360: dropped from R0 (gate/version.rs:37-39). r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:366-368",
+    "anchor_hash": "5adb3c8880a688dd779d958bd71c9a8a315538fceb7bd9523dc24fe1d0700323",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O14",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 404,
+    "severity": "minor",
+    "text": "T3's break could not be written, and T3 must run on a second refresh.",
+    "disposition": "fixed",
+    "evidence": "Spec 595-607: T3 cancels the second refresh; break last.take(). r2: T3 names refresh_committed, so the anchor was re-pointed and needs re-review.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:605-617",
+    "anchor_hash": "20e15c8ac6a3a1328af411bb7e0a4b6b2aa650f1ed1daf10dddbd7dfe8f28534",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O15",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 234,
+    "severity": "minor",
+    "text": "Nothing pinned the flag's route main.rs -> run_server -> RootBuild.",
+    "disposition": "fixed",
+    "evidence": "Spec 656-678: T5d and T5e. r2: T5e rewritten (O24, S15), so the anchor was re-pointed and needs re-review; break (i) still drops the main.rs pass-through.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:666-688",
+    "anchor_hash": "e3a57e8480aa464907d686cad62b18d9113fcdcd3d345b8f102f9f0ea4a3528a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O16",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 159,
+    "severity": "minor",
+    "text": "Labels collided for overloads; r2 (sol) re-raised: a parameter count still collides for same-arity overloads such as F(Integer) and F(Text).",
+    "disposition": "fixed",
+    "evidence": "r2: Spec 212-216: labels are 'Object.[Member.]Routine(var T1; T2): R', the fields compute_routine_id hashes (body/scope.rs:126-156: routine name, enclosing member, each parameter's type_text and is_var, return type; ModelParameter carries type_text and is_var, workspace.rs:422-431), so two overloads never share a label. T1c and T1i use them (530, 536).",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:220-224",
+    "anchor_hash": "8ebe15b1c4799c327c52282707ae04c8104012103c20b2edfb8c74fd7dbb00c2",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O17",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 391,
+    "severity": "minor",
+    "text": "T1m listed no break.",
+    "disposition": "fixed",
+    "evidence": "Spec 540: B12. r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:549-549",
+    "anchor_hash": "43162cbf06e130f5620a092d2c95e3a084f8b3e6340f47927a18a6a199be8d97",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O18",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 273,
+    "severity": "minor",
+    "text": "R3's db-effect comparison mixed shapes (rvid).",
+    "disposition": "fixed",
+    "evidence": "Spec 378-391: compared without record_variable_id. r2: lines shifted only.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:386-399",
+    "anchor_hash": "b4871bf5154e80649bccbd256e8475868ebc74a6e947448c6a0c387c5e04802c",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O19",
+    "source": "opus",
+    "round": "222 r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 393,
+    "severity": "minor",
+    "text": "T2 could not reach tests/common or a cap-hit; r2 (sol) re-raised: the cap override cannot make a capped SCC in an acyclic corpus fixture.",
+    "disposition": "fixed",
+    "evidence": "r2: §5.3 (546-593): the cap is reached only by curated C1, a hand-stated recursive SCC {P,Q} whose roles need more than one round, under with_roles_iteration_cap(1, ..) (summary_runner.rs:70; the cap applies in the recursive roles loop, :2023-2053), with a non-convergence diagnostic asserted. The corpus runs unrestricted. Cross-app inputs are C3's hand-stated maps.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:556-603",
+    "anchor_hash": "408374b2483e59805a28ade068b06993c41961433815035e7352076afd059db9",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O20",
+    "source": "opus",
+    "round": "222 r2",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 581,
+    "severity": "important",
+    "text": "T4a's break (ii) could not fail: the scripted refresh passed &never, so 'commit only when cancel() is false' still committed #1.",
+    "disposition": "fixed",
+    "evidence": "Spec 609-635 with §4.1/§4.2: commit is a separate Refresher step that run_worker calls after every Ok; T4a passes the worker's real cancel closure and pauses after the host's last cancel check; break (ii) is in run_worker (commit only when requested == g) -> #2's report is Full(NoBaseline).",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:619-645",
+    "anchor_hash": "9e4b1d2e733497a002d33390b9941dcae3f071539d2bf0e682d258dcc593ddcc",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O21",
+    "source": "opus",
+    "round": "222 r2",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 0,
+    "severity": "important",
+    "text": "R3's core-summary half (roles, uncertainties, has_unresolved_calls) had no test that guards it alone; 'compare db effects only' stayed green everywhere.",
+    "disposition": "fixed",
+    "evidence": "Spec 553 (T1r). r4 correction (S17): the r2 edit `R.F := 1` could not change any role (only Validate fills writes_fields, summary_runner.rs:647-655; the c1b fold never carries writes_fields, :918-967), so B16 could never fail. T1r now edits L with `R.Reset();`: Reset -> resetsFilter (:498) -> resets_filters_on_param = Yes (:672); the fold joins it into the caller for a resolved var-to-var binding (:795-851, :942-943); Reset is not db-touching (:464-483, :557-559) and fires no trigger, so db effects stay equal (empty). Preconditions asserted first: L's, B's and A's resets_filters_on_param are No at r0 and Yes at r1; all db effects equal. Break B16 (R3 compares db effects only) seeds A with the stale No.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:553-553",
+    "anchor_hash": "d814dd3a542968b1112f3af1b5df56ad78bc22ee151acbb7bc0db172f926abe0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O22",
+    "source": "opus",
+    "round": "222 r2",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 518,
+    "severity": "minor",
+    "text": "'R2 always true' also seeds new ids with no baseline, so T1c's (and T1i's r2) combined breaks fail on a panic, not the oracle.",
+    "disposition": "fixed",
+    "evidence": "Spec 424-438 (§4.4): a seeded member always has a baseline entry because its key matched; the branch expects it with a message. T1c (530) keeps the key match; T1f (533) states no id is new; T1i (536) breaks only 'no member in Δ' at r1, where no id is new.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:432-446",
+    "anchor_hash": "e8ea1cb6426efc9ab9baf76c9331730e5daf071876bfcb416524ab93ca9d7cc3",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O23",
+    "source": "opus",
+    "round": "222 r2",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 529,
+    "severity": "minor",
+    "text": "T1n did not assert P1's out-edges unchanged; a resolution change would put P1 in Δ and make B13 unable to fail.",
+    "disposition": "fixed",
+    "evidence": "Spec 541: precondition that P1's edges_by_from list is equal at r0 and r1 (event_dispatch.rs:78-84), so P1's row differs only by the shared-event bit.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:550-550",
+    "anchor_hash": "4862e35082ba52bb4f25d9ae3da4fd22daa606e43564ae5e7b1875420e9a84c7",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O24",
+    "source": "opus",
+    "round": "222 r2",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 627,
+    "severity": "minor",
+    "text": "T5e ran without --no-telemetry and did not read stdout and stderr concurrently, so a full pipe could deadlock it.",
+    "disposition": "fixed",
+    "evidence": "Spec 663-678: --no-telemetry added; stdout and stderr read on two threads; every wait has a timeout; the child is killed when the guard drops; --verbose sends debug logs to stderr (main.rs:94-100).",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:673-688",
+    "anchor_hash": "933057c83bff7c3ed2e48cdbf55b7a52ec228b677b0f887d54e0c2b02370242c",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S16",
+    "source": "sol",
+    "round": "222 r3",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 756,
+    "severity": "important",
+    "text": "F1(a) re-ran T2/T2b unchanged, but C2's differing-EffectId assertion and the delayed-seeded-row break target db-row seeding that F1(a) removes, so F1(a) could never pass its own re-gate.",
+    "disposition": "fixed",
+    "evidence": "Spec 775 (§9 F1): F1(a) gets its own gates. Kept: T0a, projection equality in T2/T2b on the corpus and C1-C4, C1's capped diagnostics, mixed core-summary reuse. Dropped: C2's differing EffectId, B12 and the 'push seeded rows after the loop' break. Added: every SCC's db effects recomputed (builder rows from solve_scc_db_effects for exactly the ids a fresh solve gives rows to), and curated C5 where reused roles feed a re-solved caller, with break 'skip inserting the reused core summary into v2_map'. §5.3 (555-602) is untouched: it is the gate of the main design. r4 (sol re-raise): C5 relied on `R.F` setting writesFields, which cannot happen (summary_runner.rs:647-655, :918-967). C5 now has S's body `R.Reset();`, C passing R as a var argument: Reset sets resets_filters_on_param (:498, :672), the c1b fold carries it to C (:795-851, :942-943), and it adds no db effect (:464-483, :557-559). Preconditions asserted first: S's and C's fresh resets_filters_on_param are Yes, no db effect. Break: without the reused summary in v2_map the fold takes the opaque branch (:841-842, :918-930), so C's value is Unknown, not Yes.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:783-783",
+    "anchor_hash": "f02d75aba9dbc9455817ee54e147de3cd1b392729e1dbb1a9513ebeec9278c5f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O25",
+    "source": "opus",
+    "round": "222 r3",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 490,
+    "severity": "minor",
+    "text": "The fresh comparison host 'refreshed once' with a plain refresh, which after the commit split only stages, so its projection() would be None.",
+    "disposition": "fixed",
+    "evidence": "Spec 498-499 (§5.1): the fresh host calls refresh_committed(&never) once, with the reason stated.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:498-499",
+    "anchor_hash": "f2b1266bfb4754b4fed1cdcd441c56b8111370bfd480f588360e8847ee0e5ccb",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O26",
+    "source": "opus",
+    "round": "222 r3",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 663,
+    "severity": "minor",
+    "text": "T5e's no-flag run had no stated sync point before shutdown, so the two message multisets could differ by timing alone.",
+    "disposition": "fixed",
+    "evidence": "Spec 689-697: in both runs shutdown waits for the prepareCallHierarchy response; the root builds lazily inside that request and build_server_state publishes the initial diagnostics (server.rs:603-611) through the same sink before the request is answered, so they precede the response; with --no-watcher and no edit nothing else is sent; both runs must also see the same publishDiagnostics count before the response. Added as a paragraph after T5e, so the accepted T5e anchors (S11, S15, O15, O24) are unchanged.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:690-698",
+    "anchor_hash": "37633c6dd8ecff4e01320ff6ea10aa9d16cbbe685266dd9f68422577dc307ad7",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S17",
+    "source": "conductor",
+    "round": "222 r4",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 553,
+    "severity": "important",
+    "text": "T1r's precondition relied on R.F := 1 setting writesFields; only Validate sets it and writesFields does not propagate (summary_runner.rs:647-655, 918-967)",
+    "disposition": "fixed",
+    "evidence": "Spec 553: T1r rebuilt on resets_filters_on_param. L gains `R.Reset();`; Reset -> resetsFilter (summary_runner.rs:498) -> resets_filters_on_param = Yes (:672); the c1b fold joins it into each var-forwarding caller (:795-851, :942-943); Reset is not db-touching (:464-483), so it makes no db effect (:557-559), and it is not a trigger op. Preconditions asserted first: L's, B's and A's resets_filters_on_param are No at r0 and Yes at r1; all db effects equal (empty). Validate was not chosen: it can add an implicit OnValidate trigger edge.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:553-553",
+    "anchor_hash": "d814dd3a542968b1112f3af1b5df56ad78bc22ee151acbb7bc0db172f926abe0",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-1",
+    "source": "sol",
+    "round": "222 final r1",
+    "file": "src/lsp/l4_host.rs",
+    "line": 89,
+    "severity": "important",
+    "text": "The worker holds `Shared`'s mutex while the `debug!` line runs. Under `--verbose`, a blocked stderr write stops `request()` from taking the lock, which blocks `on_swap`. Fix: update the status under the lock, then log after releasing it.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/lsp/l4_host.rs:89-113.",
+    "anchor": "src/lsp/l4_host.rs:90-114",
+    "anchor_hash": "ea3387bf8ea622e670074417694211ddeba158b9056f117b571b6691792f4e5d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-2",
+    "source": "sol",
+    "round": "222 final r1",
+    "file": "src/lsp/l4_host.rs",
+    "line": 385,
+    "severity": "important",
+    "text": "`Held::refresh` quietly stops waiting after `TIMEOUT`. The request assertion's timeout starts later, so a request that blocked through the whole refresh can still pass. Fix: when the barrier is never released, FAIL instead of finishing the refresh.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/lsp/l4_host.rs:385-395.",
+    "anchor": "src/lsp/l4_host.rs:390-400",
+    "anchor_hash": "cba9162004b5cef0b89cab4e80a18fc3f7eb23861df970546c369e08e042c89f",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-3",
+    "source": "sol",
+    "round": "222 final r1",
+    "file": "tests/lsp/l4_host_binary.rs",
+    "line": 157,
+    "severity": "important",
+    "text": "`format!(\"file://{}\", dir.display())` on a `canonicalize()`d path produces an invalid URI on Windows (`\\\\?\\`, backslashes) and leaves spaces unescaped. Fix: use `al_sem::protocol::path_to_uri` and drop the `\\\\?\\` prefix.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor tests/lsp/l4_host_binary.rs:157-170.",
+    "anchor": "tests/lsp/l4_host_binary.rs:157-170",
+    "anchor_hash": "891455b31ca0b7c2e3ddce71e43ef03541db519f10af7953ba7928ff69725b15",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-4",
+    "source": "sol",
+    "round": "222 final r1",
+    "file": "src/engine/session.rs",
+    "line": 1216,
+    "severity": "minor",
+    "text": "`prepare_l4_seeded` checks only `Cell::L4`, then refills `rel` with `get_or_insert_with`. That brings back a released `Rel`/`Base` cell, which `prepare` would refuse. Fix: check the released `Rel` and `Base` cells first, and add a test.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/engine/session.rs:1216-1221.",
+    "anchor": "src/engine/session.rs:1216-1221",
+    "anchor_hash": "d1f145a036f11484c84e6098a83b41121a9550762c7a56d406e7a0c888c9cd18",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-5",
+    "source": "sol",
+    "round": "222 final r1",
+    "file": "src/engine/incremental.rs",
+    "line": 169,
+    "severity": "minor",
+    "text": "The trace counters `host.refresh`, `host.full`, `host.sccs_resolved` and `host.sccs_seeded` were promised but never emitted. Fix: emit them (pt counters), or record the omission in §13. Prefer emitting.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/engine/incremental.rs:169-175.",
+    "anchor": "src/engine/incremental.rs:169-175",
+    "anchor_hash": "02577258f42264bf75f1fccb885ee9be5fd50cccb692b7623db2063ce1e064c2",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-6",
+    "source": "opus",
+    "round": "222 final r1",
+    "file": "tests/lsp/l4_host_oracle.rs",
+    "line": 950,
+    "severity": "minor",
+    "text": "Five digest guards have no test that can fail: upgraded bindings, uncertainty edges, leaf-summary content, the fixed-role flag, and `collided_site_callee`. Opus ran a combined break of all five and every test stayed green. Fix: write a test for each guard where an edit can make it the only guard. Otherwise record each one as redundant or as a stated limit in spec §5.2/§13, and correct S4's sentence \"each oracle case varies one input class\".",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor tests/lsp/l4_host_oracle.rs:950-1100.",
+    "anchor": "tests/lsp/l4_host_oracle.rs:950-1100",
+    "anchor_hash": "808e01b6807069b20f2191ed9408c6bcd8072e7b47cf9f4a9829fb33faa51194",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-7",
+    "source": "opus",
+    "round": "222 final r1",
+    "file": "src/main.rs",
+    "line": 119,
+    "severity": "minor",
+    "text": "T5e always passes `--lsp`. The default branch passes `args.l4_host` in a second call that no test covers. Fix: cover it, for example with a T5e variant with no `--lsp`, or with one shared call site.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/main.rs:119-143.",
+    "anchor": "src/main.rs:119-143",
+    "anchor_hash": "3617115a5285d346b5d29b59d01757a7e8eff580373b34a3e1b42e49b1e8356d",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-9",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "src/engine/l4/summary_runner.rs",
+    "line": 2041,
+    "severity": "minor",
+    "text": "Each refresh builds the full `{:?}` String of every row (shared globals included) before hashing it. Fix: hash through a streaming `fmt::Write` adapter into the sha256 state (same bytes, no big String), and do the same for `solve_global_digest`.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/engine/l4/summary_runner.rs:2041-2063.",
+    "anchor": "src/engine/l4/summary_runner.rs:2041-2063",
+    "anchor_hash": "f8def25663bb5a13b5034c165c18210a0b12e601b4f4c0a5f4764916c576ea3b",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-10",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "src/engine/session.rs",
+    "line": 1222,
+    "severity": "minor",
+    "text": "`prepare_l4_seeded` never takes and drops the target's cross-app `dependency_calls`, but `prepare` drops them before the L4 solve (#160 F1-C2). Fix: do the same.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/engine/session.rs:1222-1226.",
+    "anchor": "src/engine/session.rs:1222-1226",
+    "anchor_hash": "a2eb8e655a388330078098ab2b63b6b7ae665251ea76af092715283e1c6314cb",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-11",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "src/engine/incremental.rs",
+    "line": 177,
+    "severity": "minor",
+    "text": "Every refresh builds a label for every routine. Fix: build labels only for the re-solved SCCs.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/engine/incremental.rs:177-182.",
+    "anchor": "src/engine/incremental.rs:177-182",
+    "anchor_hash": "b716fdf4f612de1b9428a5b0be7a86a350b96185edd7396bda15680ab8b9e242",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-12",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "src/lsp/l4_host.rs",
+    "line": 77,
+    "severity": "minor",
+    "text": "A wake left over after the drain triggers a second refresh of the same `g`. Fix: skip a refresh when `g` equals the last refreshed generation. Add a test or a discrimination proof.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/lsp/l4_host.rs:77-88.",
+    "anchor": "src/lsp/l4_host.rs:78-89",
+    "anchor_hash": "9b3d7650ae61aa15ce2b15f65bcd6652f9953fd814d5e5f5a713e32902d0f861",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-13",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "src/lsp/l4_host.rs",
+    "line": 122,
+    "severity": "minor",
+    "text": "In unwinding builds (dev, test, `--release`) a panic in the host silently kills only the worker, which contradicts the help text and the CHANGELOG (\"ends the server\"). Fix: catch the panic in the worker thread, log it, and abort the process, so every profile matches the docs.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor src/lsp/l4_host.rs:122-162.",
+    "anchor": "src/lsp/l4_host.rs:123-164",
+    "anchor_hash": "e805248f0aa8ca6cd716fbe7fa685a90321e8cd1411ba58efcc2798b2c04a281",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-8",
+    "source": "opus",
+    "round": "222 final r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 915,
+    "severity": "minor",
+    "text": "The list of what the row covers leaves out the fixed-role flag.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984",
+    "anchor_hash": "8b706525a8f0b080cb87ab105d087286a08710dd038825c6dfcac2349098bc7e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-14",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 915,
+    "severity": "minor",
+    "text": "Invalidation depends on `Debug` staying deterministic and complete.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984",
+    "anchor_hash": "8b706525a8f0b080cb87ab105d087286a08710dd038825c6dfcac2349098bc7e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-15",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 915,
+    "severity": "minor",
+    "text": "Every refresh reads and hashes the full bytes of each `.app` in the closure.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984",
+    "anchor_hash": "8b706525a8f0b080cb87ab105d087286a08710dd038825c6dfcac2349098bc7e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-16",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 915,
+    "severity": "minor",
+    "text": "`L4Request.control` adds `control: None` boilerplate at every call site.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984",
+    "anchor_hash": "8b706525a8f0b080cb87ab105d087286a08710dd038825c6dfcac2349098bc7e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-17",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 915,
+    "severity": "minor",
+    "text": "`build_workspace` hardcodes `l4_host: false`, and `run_server` mutates it afterwards.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984",
+    "anchor_hash": "8b706525a8f0b080cb87ab105d087286a08710dd038825c6dfcac2349098bc7e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FX-18",
+    "source": "code-review",
+    "round": "222 final r1",
+    "file": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md",
+    "line": 915,
+    "severity": "minor",
+    "text": "The host is cross-app only and re-parses on every swap, ignoring `dependency_source`.",
+    "disposition": "fixed",
+    "evidence": "Fixed or recorded in 1c42ba9e (#222 final r1); verified first; proofs in the ledger, section Final round 1 fixes. Anchor docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984.",
+    "anchor": "docs/superpowers/specs/2026-10-25-issue-222-incremental-l4-host-design.md:915-984",
+    "anchor_hash": "8b706525a8f0b080cb87ab105d087286a08710dd038825c6dfcac2349098bc7e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FY-1",
+    "source": "sol",
+    "round": "222 final r2",
+    "file": "tests/lsp/l4_host_binary.rs",
+    "line": 355,
+    "severity": "important",
+    "text": "host_panic_ends_the_server relies on the debug-only AL_SEM_L4_HOST_TEST_PANIC seam but was not cfg-gated, so it times out under cargo test --release (also opus r2 F1).",
+    "disposition": "fixed",
+    "evidence": "Fixed in d2e7baf6 (#222 final r2). Anchor tests/lsp/l4_host_binary.rs:355-362.",
+    "anchor": "tests/lsp/l4_host_binary.rs:355-362",
+    "anchor_hash": "be18df7269f80adcd6d2488859593b344516a662cc34fd36143af2d2f777fab5",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FY-2",
+    "source": "sol",
+    "round": "222 final r2",
+    "file": "src/lsp/l4_host.rs",
+    "line": 160,
+    "severity": "important",
+    "text": "end_the_server used eprintln!, which panics on a stderr write failure outside catch_unwind, so the process::abort() could be bypassed.",
+    "disposition": "fixed",
+    "evidence": "Fixed in d2e7baf6 (#222 final r2). Anchor src/lsp/l4_host.rs:160-164.",
+    "anchor": "src/lsp/l4_host.rs:160-164",
+    "anchor_hash": "d0f721af10fcbcc4669e9f6ed689bf7115b2845b12208e3ea1b0e167f2d9fa4e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  }
+]
