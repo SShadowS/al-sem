@@ -32,7 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   There `Rec` is the receiver: the record the caller called the method on (`Cust.Foo()`),
   or the record the platform or caller fired the trigger for. The caller owns it, as it
   owns a parameter record, which both detectors already skipped. d11 (`Modify`/`Validate`
-  with no load) skips the receiver in every such routine. This is ownership, not proof
+  with no load) skips the receiver in every such routine, unless the routine itself
+  replaced `Rec` with a bare `Rec := Other` before the op. This is ownership, not proof
   that the caller loaded the record. d37 (`Validate` with no persist) skips it when d39's
   owner rule says the owner persists `Rec` (every routine except a table extension
   `OnAfterInsert`/`OnAfterModify`/`OnAfterRename`) and the routine does not put `Rec` in a
@@ -49,14 +50,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   false positives (Base App d11 18/18, d37 18/18, field `OnLookup` 6/6; CDO primary d37
   9/9, d11 13/13). The table field `OnLookup` case relies on a write that was measured as
   persisted on the BC 28.4 Linux sidecar; **a Windows Cronus confirmation is still owed**.
-  Known limits: a reload through a method called on the receiver itself (`ReloadMe()`,
-  which does `Get`) is not seen, so d37 skips that `Validate`; a replacement whose right
-  side or target is not a bare unquoted identifier (`Rec := GetRec()`, `"Rec" := Other`)
-  is not seen as a new state, so d37 skips that too; and `Rec := Other` in the other arm
-  of a branch holding the `Validate` keeps the d37 finding (a conservative false
-  positive). Page `Rec`, d21 on table `Rec` and a codeunit `TableNo` `OnRun` `Rec` are
+  Known limits. The rule moves the question to the caller, and d11/d37 do not judge a
+  method call on a record (the same blind spot they have for parameter records today),
+  so these real problems are now missed: a caller that runs a table method on a record it
+  never loaded (d11 used to fire inside the method); a method that only `Validate`s `Rec`
+  whose callers never persist the record, including a table procedure called only from a
+  table extension `OnAfterInsert`/`OnAfterModify`/`OnAfterRename` trigger (d39 does not
+  see a method call on a local either). In the routine itself: a reload through a method
+  called on the receiver (`ReloadMe()`, which does `Get`) is not seen, so d37 skips that
+  `Validate`; a reload that comes before the `Validate` in the source but runs after it in
+  a loop is not seen either (d39 has the same limit); a replacement whose right side or
+  target is not a bare unquoted identifier (`Rec := GetRec()`, `"Rec" := Other`) is not
+  seen as a new state; `Validate` followed by `Clear(Rec)` is not reported, because d37's
+  older rule for a call that takes the record and cannot be resolved already hides it, for
+  any record; and `Rec := Other` in the other arm of a branch holding the `Validate` keeps
+  the d37 finding (a conservative false positive). Page `Rec`, d21 on table `Rec` and a codeunit `TableNo` `OnRun` `Rec` are
   not changed. `src/engine/l5/detectors/mod.rs` (`is_table_receiver_rec`,
-  `table_rec_persisted_by_owner`, `receiver_reset_after`), `d11.rs`, `d37.rs`,
+  `table_rec_persisted_by_owner`, `receiver_reset_after`, and `load_point_after` with
+  `LoadPointCache`, now shared with d39), `d11.rs`, `d37.rs`, `d39.rs`,
   `src/program/body/ir_walk.rs` (`ir_record_variables`).
 
 - **`alsem digest --diff` reads `diff -r`'s `Only in <dir>: <name>` lines** (#111), which it

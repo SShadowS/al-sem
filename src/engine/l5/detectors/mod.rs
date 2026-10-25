@@ -234,6 +234,49 @@ pub(crate) fn record_load_points<'a>(
     out
 }
 
+/// [`record_load_points`] built at most once per routine for one detector run
+/// (d37, d39). Keyed by the routine's address, not its id: ids can collide.
+#[derive(Default)]
+pub(crate) struct LoadPointCache<'a>(
+    HashMap<*const ModelRoutine, HashMap<String, Vec<LoadPoint<'a>>>>,
+);
+
+impl<'a> LoadPointCache<'a> {
+    pub fn get(
+        &mut self,
+        routine: &'a ModelRoutine,
+        ctx: &DetectorContext,
+    ) -> &HashMap<String, Vec<LoadPoint<'a>>> {
+        self.0
+            .entry(std::ptr::from_ref(routine))
+            .or_insert_with(|| record_load_points(routine, ctx))
+    }
+}
+
+/// Is record variable `var_lc` (lowercased; `var_id` narrows by id when both
+/// sides carry one) put in a loaded state after `anchor`, the node `node_id`,
+/// in source order? A point in the other arm of a branch holding the node
+/// ([`branch_exclusive`]) does not count. The one "reset after" check of d39
+/// (dirt reset after a call) and d37 (#299, receiver reset after a `Validate`).
+/// Limit: source order, so a reload earlier in a loop body that runs again
+/// after the node is not seen.
+pub(crate) fn load_point_after(
+    points: &HashMap<String, Vec<LoadPoint<'_>>>,
+    tree: Option<&PCFNNode>,
+    var_lc: &str,
+    var_id: Option<&str>,
+    anchor: &PAnchor,
+    node_id: &str,
+) -> bool {
+    points.get(var_lc).is_some_and(|pts| {
+        pts.iter().any(|p| {
+            before_anchor(anchor, p.anchor)
+                && p.is_variable(var_id)
+                && !branch_exclusive(tree, node_id, p.node_id)
+        })
+    })
+}
+
 /// Whether every caller of `routine` is visible, so a detector that hands a
 /// finding up to the callers ("the owner decides") will actually judge them:
 /// either the routine has a resolved workspace caller, or it cannot be called
@@ -474,34 +517,44 @@ pub(crate) fn is_table_receiver_rec(routine: &ModelRoutine, record_variable_name
             .any(|rv| rv.is_receiver && rv.name.eq_fold_identifier("rec"))
 }
 
+/// #299: the anchors of every bare whole-record replacement `Rec := Other` in
+/// `routine` (both sides bare identifiers: `rhs_identifier` is set; a member
+/// target `X.Rec := v` never sets it). d37 reads the ones after a `Validate`,
+/// d11 the ones before a `Modify` / `Validate`.
+pub(crate) fn bare_rec_assignments(routine: &ModelRoutine) -> impl Iterator<Item = &PAnchor> {
+    routine
+        .var_assignments
+        .iter()
+        .filter(|asg| asg.lhs_name == "rec" && asg.rhs_identifier.is_some())
+        .map(|asg| &asg.source_anchor)
+}
+
 /// #299: does `routine` put its receiver `Rec` in a new state after `anchor`
-/// (the `Validate` d37 judges, node `op_id`)? The shared "loaded" definition
-/// ([`record_load_points`]: own Get / Find* / Next / Init / Copy /
-/// TransferFields and `var` helpers that load), minus a point in the other arm
-/// of a branch holding the op ([`branch_exclusive`]), as d39's
-/// `reset_after_call`; plus a bare whole-record copy `Rec := Other` (both sides
-/// bare identifiers: `rhs_identifier` is set; a member target `X.Rec := v` never
-/// sets it). Assignments are not leaves of `statement_tree`, so no branch
-/// exclusion applies to them: one in the other arm keeps the finding.
+/// (the `Validate` d37 judges, node `op_id`)? Two kinds of point:
+/// - the shared "loaded" definition ([`record_load_points`]: own Get / Find* /
+///   Next / Init / Copy / TransferFields and `var` helpers that load), read
+///   through [`load_point_after`], the same check as d39;
+/// - a bare `Rec := Other` ([`bare_rec_assignments`]). Assignments are not
+///   leaves of `statement_tree`, so no branch exclusion applies to them: one in
+///   the other arm keeps the finding.
+///
+/// `Clear(Rec)` never reaches here: d37's helper verdict already suppresses a
+/// `Validate` followed by a call that takes the record through an unresolved
+/// binding (`suppress-unknown`), which a builtin `Clear(Rec)` is.
 pub(crate) fn receiver_reset_after(
     routine: &ModelRoutine,
-    ctx: &DetectorContext,
+    points: &HashMap<String, Vec<LoadPoint<'_>>>,
     anchor: &PAnchor,
     op_id: &str,
 ) -> bool {
-    let tree = routine.statement_tree.as_ref();
-    record_load_points(routine, ctx)
-        .get("rec")
-        .is_some_and(|pts| {
-            pts.iter().any(|p| {
-                before_anchor(anchor, p.anchor) && !branch_exclusive(tree, op_id, p.node_id)
-            })
-        })
-        || routine.var_assignments.iter().any(|asg| {
-            asg.lhs_name == "rec"
-                && asg.rhs_identifier.is_some()
-                && before_anchor(anchor, &asg.source_anchor)
-        })
+    load_point_after(
+        points,
+        routine.statement_tree.as_ref(),
+        "rec",
+        None,
+        anchor,
+        op_id,
+    ) || bare_rec_assignments(routine).any(|a| before_anchor(anchor, a))
 }
 
 /// The page holding `routine` (for a PageExtension, its base page, looked up by

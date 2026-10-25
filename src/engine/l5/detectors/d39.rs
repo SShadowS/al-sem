@@ -51,8 +51,8 @@ use crate::engine::l4::effect_lattice::EffectPresence;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
-    anchor_of, before_anchor, branch_exclusive, callee_param_table_subject,
-    implicit_rec_persisted_by_owner, record_load_points,
+    LoadPointCache, anchor_of, before_anchor, callee_param_table_subject,
+    implicit_rec_persisted_by_owner, load_point_after,
 };
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
@@ -77,6 +77,8 @@ pub fn detect_d39(
     let mut skipped_temp_record = 0u64;
     let mut skipped_implicit_rec_owner_persists = 0u64;
     let mut skipped_dirt_returned_to_caller = 0u64;
+    // Each caller's load points, built once however many calls it makes.
+    let mut load_points = LoadPointCache::default();
 
     for callee in &ws.routines {
         if !callee.body_available {
@@ -175,20 +177,15 @@ pub fn detect_d39(
                 // arm of a branch holding the call (`branch_exclusive`). A reset is
                 // the shared "loaded" definition: own load ops and `var` helpers
                 // that load.
-                let reset_after_call = || {
-                    record_load_points(caller, ctx)
-                        .get(&source_name_lc)
-                        .is_some_and(|pts| {
-                            pts.iter().any(|p| {
-                                before_anchor(&cs.source_anchor, p.anchor)
-                                    && p.is_variable(binding.source_record_variable_id.as_deref())
-                                    && !branch_exclusive(
-                                        caller.statement_tree.as_ref(),
-                                        &cs.id,
-                                        p.node_id,
-                                    )
-                            })
-                        })
+                let mut reset_after_call = || {
+                    load_point_after(
+                        load_points.get(caller, ctx),
+                        caller.statement_tree.as_ref(),
+                        &source_name_lc,
+                        binding.source_record_variable_id.as_deref(),
+                        &cs.source_anchor,
+                        &cs.id,
+                    )
                 };
 
                 // #272 (absorbs detector-audit class B): an implicit `Rec` that the

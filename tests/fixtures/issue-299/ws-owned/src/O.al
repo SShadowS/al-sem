@@ -235,3 +235,29 @@ codeunit 50294 "O H"
         C.Modify();
     end;
 }
+
+table 50296 "O Repl"
+{
+    fields { field(1; "No."; Code[20]) { } field(2; Name; Text[100]) { } }
+    keys { key(PK; "No.") { } }
+
+    procedure ProcAssignThenModify()       // routine replaced Rec with an unloaded record -> d11 fires
+    var Other: Record "O Repl";
+    begin
+        Rec := Other;
+        Modify();
+    end;
+
+    procedure ProcModifyThenAssign()       // replacement after the Modify -> no d11
+    var Other: Record "O Repl";
+    begin
+        Modify();
+        Rec := Other;
+    end;
+
+    procedure ProcValidateThenClear()      // Clear(Rec) drops the Validate, but d37's helper rule
+    begin                                  // (unresolved call on Rec) suppresses it first -> no d37 (limit)
+        Validate(Name, 'x');
+        Clear(Rec);
+    end;
+}

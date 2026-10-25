@@ -7,8 +7,9 @@
 //! by-var and by-value (the caller is responsible for loading them), and, for
 //! the same reason, the receiver `Rec` of a Table / TableExtension routine
 //! (#299, [`is_table_receiver_rec`]: the record the method was called on or the
-//! trigger fired for; stats key `callerOwnedRec`, checked last). This is
-//! ownership, not proof that the caller loaded it. G-10/G-16: a prior call that
+//! trigger fired for; stats key `callerOwnedRec`, checked last), unless the
+//! routine replaced `Rec` itself with a bare `Rec := Other` before the op. This
+//! is ownership, not proof that the caller loaded it. G-10/G-16: a prior call that
 //! loads the record also counts — the platform built-in `GetBySystemId` and any
 //! resolved callee chain that loads the by-var argument (bounded multi-hop
 //! callee summary, `detectors::record_loaded_by_call_before`) — as does a
@@ -24,8 +25,9 @@
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
-    RECORD_LOAD_OPS, anchor_of, before_anchor, is_platform_loaded_trigger_rec,
-    is_table_receiver_rec, record_loaded_by_assignment_before, record_loaded_by_call_before,
+    RECORD_LOAD_OPS, anchor_of, bare_rec_assignments, before_anchor,
+    is_platform_loaded_trigger_rec, is_table_receiver_rec, record_loaded_by_assignment_before,
+    record_loaded_by_call_before,
 };
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
@@ -125,8 +127,12 @@ pub fn detect_d11(
             // #299: the receiver `Rec` of a Table / TableExtension routine is the
             // caller's (or the platform's) record; its entry state is the caller's
             // responsibility, as for a parameter record. Checked last, so the
-            // counter holds only ops that would otherwise be reported.
-            if is_table_receiver_rec(routine, &op.record_variable_name) {
+            // counter holds only ops that would otherwise be reported. Not when
+            // the routine itself replaced `Rec` (bare `Rec := Other`) before the
+            // op: the state is then this routine's, not the caller's.
+            if is_table_receiver_rec(routine, &op.record_variable_name)
+                && !bare_rec_assignments(routine).any(|a| before_anchor(a, &op.source_anchor))
+            {
                 skipped_caller_owned_rec += 1;
                 continue;
             }

@@ -18,6 +18,12 @@
 //!   `ProcValidateThenAssign`), when the assignment is in the other arm of the
 //!   branch (`ProcValidateOppositeBranchAssign`, a stated conservative limit), and
 //!   in a tableext after-write trigger (`OnAfterModify`).
+//! - d11 still fires when the routine replaced `Rec` itself (bare `Rec := Other`)
+//!   before the op (`ProcAssignThenModify`), not when the replacement comes after
+//!   (`ProcModifyThenAssign`).
+//! - A stated limit, pinned: `Validate; Clear(Rec)` (`ProcValidateThenClear`) has
+//!   no row. d37's helper rule suppresses it before the receiver rule runs (an
+//!   unresolved call that takes `Rec`), as it does for any record.
 //! - Fail closed: a named return `Rec` (`ProcNamedReturn`) is not the receiver.
 //! - Controls: a local record in a table (`ProcLocal`) and in a codeunit
 //!   (`LocalControl`), and the page copies of #272's reader shapes (`O Card`),
@@ -101,6 +107,7 @@ fn table_receiver_rec_is_caller_owned() {
         "d11 | O Cust | ProcShadowRecRef | L75",
         "d11 | O H | LocalControl | L234",
         "d11 | O H | LocalControl | L235",
+        "d11 | O Repl | ProcAssignThenModify | L248",
         "d37 | O Card | D37ByValue | L150",
         "d37 | O Card | D37NoPersist | L143",
         "d37 | O Card | D37Order | L179",

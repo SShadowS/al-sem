@@ -258,12 +258,13 @@ fn shapes_d40_still_skips_the_implicit_rec() {
 }
 
 /// A4: the other readers of argument bindings now see the implicit `Rec`.
-/// - d37 is suppressed when the helper persists `Rec` by var (`D37Persists`), the
-///   callee is unresolved (`D37Unresolved`) or the arity does not match
-///   (`D37Arity`); it still fires for a read-only helper, a by-value helper, a
-///   helper given another record and a helper that runs before the Validate.
-/// - d11 is suppressed when a helper loads `Rec` by var (`D11Loaded`); it fires for
-///   a by-value loader and a load after the Modify.
+/// - d37 and d11 no longer fire on this table's `Rec` at all (#299, below). Their
+///   helper cases are pinned on the page copies in `ws-owned` instead: d37 is
+///   suppressed when the helper persists `Rec` by var, the callee is unresolved or
+///   the arity does not match, and fires for a read-only helper, a by-value helper,
+///   a helper given another record and a helper that runs before the Validate; d11
+///   is suppressed when a helper loads `Rec` by var, and fires for a by-value
+///   loader and a load after the Modify.
 /// - d21 is suppressed when a helper loads `Rec` (`D21Loaded`); it fires when the
 ///   helper loads another record.
 /// - d33 is suppressed when a helper filters `Rec` by var (`D33Filtered`); it fires
