@@ -24,7 +24,6 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::transaction_spans::SeedKind;
 use crate::program::attributes::has_attribute;
-use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
 pub(crate) const DETECTOR: &str = "d50-checked-run-implicit-commit";
@@ -130,11 +129,7 @@ fn is_transaction_managing(routine_id: &str, ctx: &DetectorContext) -> bool {
 ///   2. root classification has NO untrusted RootKind.
 ///   3. routine does NOT carry [TryFunction].
 ///   4. effective CommitBehavior is "normal" (not "ignore" or "error").
-fn is_explicit_commit_proven_effective(
-    routine_id: &str,
-    ctx: &DetectorContext,
-    declaring: &DeclaringObjects,
-) -> bool {
+fn is_explicit_commit_proven_effective(routine_id: &str, ctx: &DetectorContext) -> bool {
     let Some(r) = ctx.routine_by_id.get(routine_id) else {
         return false;
     };
@@ -192,7 +187,7 @@ fn is_explicit_commit_proven_effective(
         // Argless [CommitBehavior] or non-suppressing value — cap-4 passes.
     } else {
         // No routine-level attr → object-level InherentCommitBehavior applies.
-        let obj = declaring.of(r);
+        let obj = ctx.declaring.of(r);
         if let Some(o) = obj
             && let Some(icb) = &o.inherent_commit_behavior
             && (icb == "ignore" || icb == "error")
@@ -210,14 +205,10 @@ fn routine_anchor(r: &ModelRoutine) -> SourceAnchor {
 }
 
 pub fn detect_d50(
-    resolved: &Model,
+    _resolved: &Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
-    let ws = &resolved.workspace;
     let fp_index = &ctx.fingerprint_index;
-
-    // Each routine's declaring object, for the CommitBehavior lookup (cap 4).
-    let declaring = DeclaringObjects::new(&ws.objects);
 
     // Build routinesWithExplicitCommit from ExplicitCommit spans — O(1) membership.
     let mut routines_with_explicit_commit: HashSet<&str> = HashSet::new();
@@ -340,7 +331,7 @@ pub fn detect_d50(
         // on the same checked-run-implicit span.
         let has_proven_effective_explicit_commit = span.routines_in_span.iter().any(|rid| {
             routines_with_explicit_commit.contains(rid.as_str())
-                && is_explicit_commit_proven_effective(rid.as_str(), ctx, &declaring)
+                && is_explicit_commit_proven_effective(rid.as_str(), ctx)
         });
         let severity = if has_proven_effective_explicit_commit {
             "medium"
@@ -454,7 +445,6 @@ mod tests {
     };
     use crate::engine::root_classification::RootClassification;
     use crate::program::attributes::{AttributeArg, AttributeInfo};
-    use crate::program::model::declaring::DeclaringObjects;
     use crate::program::model::workspace::{Model, ModelEntities, ModelObject, ModelRoutine};
 
     // -----------------------------------------------------------------------
@@ -573,9 +563,11 @@ mod tests {
     fn minimal_ctx<'a>(
         routines: &'a [crate::program::model::workspace::ModelRoutine],
         root_classes: Vec<RootClassification>,
+        objects: &'a [ModelObject],
     ) -> MinimalCtx<'a> {
         let mut owned =
-            crate::engine::l5::test_support::minimal_ctx(routines, HashMap::new(), HashMap::new());
+            crate::engine::l5::test_support::minimal_ctx(routines, HashMap::new(), HashMap::new())
+                .with_objects(objects);
         owned.art_mut().root_classifications_by_routine = root_classes
             .into_iter()
             .map(|rc| (rc.routine_id.clone(), rc))
@@ -637,8 +629,9 @@ mod tests {
         let routines_slice = vec![r_seed.clone(), r_manager.clone(), r_committer.clone()];
 
         // Build a minimal object for r_committer (no ICB → cap-4 passes).
-        // detect_d50 builds its OWN DeclaringObjects from resolved.workspace.objects,
-        // so we provide the object there (in ws_objects below).
+        // detect_d50 reads the context's `declaring`, built from
+        // resolved.workspace.objects, so we provide the object there (in
+        // ws_objects below).
         let obj_committer = mk_object("obj-committer", None);
         let ws_objects = vec![obj_committer.clone()];
 
@@ -706,8 +699,8 @@ mod tests {
             )
         };
 
-        // Build a minimal Model for detect_d50 (it uses ws.routines and ws.objects
-        // to build its DeclaringObjects internally); the context borrows it.
+        // Build a minimal Model for detect_d50 (it uses ws.routines; the
+        // context's `declaring` is built over ws.objects); the context borrows it.
         let resolved = Model {
             workspace: ModelEntities {
                 objects: ws_objects,
@@ -756,10 +749,9 @@ mod tests {
         let mut r = routine("r1", "procedure");
         r.body_available = false;
         let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![], &[]);
         let ctx = owned.ctx();
-        let objects = DeclaringObjects::new(&[]);
-        assert!(!is_explicit_commit_proven_effective("r1", &ctx, &objects));
+        assert!(!is_explicit_commit_proven_effective("r1", &ctx));
     }
 
     // -----------------------------------------------------------------------
@@ -772,10 +764,9 @@ mod tests {
         let r = routine("r2a", "procedure");
         let routines = vec![r];
         let rc = mk_root_class("r2a", &["public-procedure"]);
-        let owned = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc], &[]);
         let ctx = owned.ctx();
-        let objects = DeclaringObjects::new(&[]);
-        assert!(!is_explicit_commit_proven_effective("r2a", &ctx, &objects));
+        assert!(!is_explicit_commit_proven_effective("r2a", &ctx));
     }
 
     #[test]
@@ -783,10 +774,9 @@ mod tests {
         let r = routine("r2b", "procedure");
         let routines = vec![r];
         let rc = mk_root_class("r2b", &["event-subscriber"]);
-        let owned = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc], &[]);
         let ctx = owned.ctx();
-        let objects = DeclaringObjects::new(&[]);
-        assert!(!is_explicit_commit_proven_effective("r2b", &ctx, &objects));
+        assert!(!is_explicit_commit_proven_effective("r2b", &ctx));
     }
 
     #[test]
@@ -800,10 +790,9 @@ mod tests {
         let r = routine("r2c", "trigger");
         let routines = vec![r];
         let rc = mk_root_class("r2c", &["onrun-codeunit"]);
-        let owned = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc], &[]);
         let ctx = owned.ctx();
-        let objects = DeclaringObjects::new(&[]);
-        assert!(!is_explicit_commit_proven_effective("r2c", &ctx, &objects));
+        assert!(!is_explicit_commit_proven_effective("r2c", &ctx));
     }
 
     #[test]
@@ -814,10 +803,9 @@ mod tests {
         let r = routine("r2d", "trigger");
         let routines = vec![r];
         let rc = mk_root_class("r2d", &["job-queue-entrypoint", "onrun-codeunit"]);
-        let owned = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc], &[]);
         let ctx = owned.ctx();
-        let objects = DeclaringObjects::new(&[]);
-        assert!(!is_explicit_commit_proven_effective("r2d", &ctx, &objects));
+        assert!(!is_explicit_commit_proven_effective("r2d", &ctx));
     }
 
     #[test]
@@ -827,10 +815,9 @@ mod tests {
         let r = routine("r2e", "trigger");
         let routines = vec![r];
         let rc = mk_root_class("r2e", &["job-queue-entrypoint"]);
-        let owned = minimal_ctx(&routines, vec![rc]);
+        let owned = minimal_ctx(&routines, vec![rc], &[]);
         let ctx = owned.ctx();
-        let objects = DeclaringObjects::new(&[]);
-        assert!(is_explicit_commit_proven_effective("r2e", &ctx, &objects));
+        assert!(is_explicit_commit_proven_effective("r2e", &ctx));
     }
 
     // -----------------------------------------------------------------------
@@ -841,10 +828,9 @@ mod tests {
         let mut r = routine("r3", "procedure");
         r.attributes_parsed = vec![try_fn_attr()];
         let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![]);
+        let owned = minimal_ctx(&routines, vec![], &[]);
         let ctx = owned.ctx();
-        let objects = DeclaringObjects::new(&[]);
-        assert!(!is_explicit_commit_proven_effective("r3", &ctx, &objects));
+        assert!(!is_explicit_commit_proven_effective("r3", &ctx));
     }
 
     // -----------------------------------------------------------------------
@@ -857,11 +843,10 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_qualified("Ignore")];
         r.object_id = "obj-4a".to_string();
         let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![]);
-        let ctx = owned.ctx();
         let obj = mk_object("obj-4a", None);
-        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
-        assert!(!is_explicit_commit_proven_effective("r4a", &ctx, &objects));
+        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
+        let ctx = owned.ctx();
+        assert!(!is_explicit_commit_proven_effective("r4a", &ctx));
     }
 
     #[test]
@@ -870,11 +855,10 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_qualified("Error")];
         r.object_id = "obj-4b".to_string();
         let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![]);
-        let ctx = owned.ctx();
         let obj = mk_object("obj-4b", None);
-        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
-        assert!(!is_explicit_commit_proven_effective("r4b", &ctx, &objects));
+        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
+        let ctx = owned.ctx();
+        assert!(!is_explicit_commit_proven_effective("r4b", &ctx));
     }
 
     // -----------------------------------------------------------------------
@@ -886,11 +870,10 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_plain("Ignore")];
         r.object_id = "obj-4c".to_string();
         let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![]);
-        let ctx = owned.ctx();
         let obj = mk_object("obj-4c", None);
-        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
-        assert!(!is_explicit_commit_proven_effective("r4c", &ctx, &objects));
+        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
+        let ctx = owned.ctx();
+        assert!(!is_explicit_commit_proven_effective("r4c", &ctx));
     }
 
     // -----------------------------------------------------------------------
@@ -902,11 +885,10 @@ mod tests {
         let mut r = routine("r4d", "procedure");
         r.object_id = "obj-4d".to_string();
         let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![]);
-        let ctx = owned.ctx();
         let obj = mk_object("obj-4d", Some("ignore"));
-        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
-        assert!(!is_explicit_commit_proven_effective("r4d", &ctx, &objects));
+        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
+        let ctx = owned.ctx();
+        assert!(!is_explicit_commit_proven_effective("r4d", &ctx));
     }
 
     #[test]
@@ -914,11 +896,10 @@ mod tests {
         let mut r = routine("r4e", "procedure");
         r.object_id = "obj-4e".to_string();
         let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![]);
-        let ctx = owned.ctx();
         let obj = mk_object("obj-4e", Some("error"));
-        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
-        assert!(!is_explicit_commit_proven_effective("r4e", &ctx, &objects));
+        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
+        let ctx = owned.ctx();
+        assert!(!is_explicit_commit_proven_effective("r4e", &ctx));
     }
 
     // -----------------------------------------------------------------------
@@ -935,13 +916,12 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_argless()]; // [CommitBehavior] — argless
         r.object_id = "obj-fix1a".to_string();
         let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![]);
-        let ctx = owned.ctx();
         let obj = mk_object("obj-fix1a", Some("ignore")); // ICB = ignore, but irrelevant
-        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
+        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
+        let ctx = owned.ctx();
         // FIX 1b: routine attr present → object ICB NOT consulted → TRUE.
         assert!(
-            is_explicit_commit_proven_effective("r_fix1a", &ctx, &objects),
+            is_explicit_commit_proven_effective("r_fix1a", &ctx),
             "argless [CommitBehavior] + object ICB ignore must return TRUE (routine attr wins)"
         );
     }
@@ -960,13 +940,12 @@ mod tests {
         r.attributes_parsed = vec![cb_attr_miscased_ignore()]; // [Commitbehavior(...)] — miscased
         r.object_id = "obj-fix1b".to_string();
         let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![]);
-        let ctx = owned.ctx();
         let obj = mk_object("obj-fix1b", None); // no object ICB
-        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
+        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
+        let ctx = owned.ctx();
         // FIX 1a: case-sensitive match misses → no object ICB → TRUE.
         assert!(
-            is_explicit_commit_proven_effective("r_fix1b", &ctx, &objects),
+            is_explicit_commit_proven_effective("r_fix1b", &ctx),
             "miscased [Commitbehavior(Ignore)] + no object ICB must return TRUE (case-sensitive miss)"
         );
     }
@@ -1000,10 +979,10 @@ mod tests {
             r.object_id = "obj-split".to_string();
             r.source_anchor = span(line, line + 2);
             let routines = vec![r];
-            let owned = minimal_ctx(&routines, vec![]);
+            let owned = minimal_ctx(&routines, vec![], &rows);
             let ctx = owned.ctx();
             assert_eq!(
-                is_explicit_commit_proven_effective("r_split", &ctx, &DeclaringObjects::new(&rows)),
+                is_explicit_commit_proven_effective("r_split", &ctx),
                 expect,
                 "routine at line {line}"
             );
@@ -1059,7 +1038,7 @@ mod tests {
             routine_id.to_string(),
             summary(routine_id, facts, vec![], None),
         );
-        let mut owned = minimal_ctx(routines, vec![]);
+        let mut owned = minimal_ctx(routines, vec![], &[]);
         owned.art_mut().cone_derived = cone_store_of(&summaries);
         owned.art_mut().summaries = summaries;
         owned

@@ -37,6 +37,7 @@ use crate::engine::l5::detectors::default_detectors;
 use crate::engine::root_classification::classify_roots;
 use crate::engine::session::{Cell, policy_plan};
 use crate::program::inputs::{PolicyOrigin, PolicyRequest, RequestInputs};
+use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::ModelRoutine;
 
 /// How the effective policy was resolved.
@@ -378,8 +379,10 @@ impl PolicyJob<'_> {
             },
             Some(policy) => {
                 let det = view.det();
-                let root_classifications = classify_roots(&resolved.workspace);
                 let ws = &resolved.workspace;
+                // One declaring-row index for the AST pass and the policy model.
+                let declaring = DeclaringObjects::new(&ws.objects);
+                let root_classifications = classify_roots(ws, &declaring);
                 // #70: rules evaluate WORKSPACE routines only; the dependency routines
                 // stay in the model for lookup (tables, objects, inherited facts).
                 let routines: std::borrow::Cow<[ModelRoutine]> =
@@ -395,6 +398,7 @@ impl PolicyJob<'_> {
                 let model = PolicyModel::new(
                     &routines,
                     &ws.objects,
+                    declaring,
                     &ws.tables,
                     &det.event_graph.events,
                     &root_classifications,

@@ -415,20 +415,22 @@ impl CoverageGraph {
                 .iter()
                 .filter(|r| !r.stable_routine_id.is_empty())
         };
-        // (owning object, folded name) → ids: the `[HandlerFunctions]` lookup.
-        // The owner is the declaring ROW (#279), compared by address: a handler
-        // in the other arm of an `#if`-split id is not this test's handler.
-        type Owner<'o> = (&'o str, Option<*const ModelObject>);
-        fn owner<'o>(d: &DeclaringObjects<'_>, r: &'o ModelRoutine) -> Owner<'o> {
-            (r.object_id.as_str(), d.of(r).map(std::ptr::from_ref))
-        }
-        let mut by_name: HashMap<(Owner, String), Vec<&str>> = HashMap::new();
+        // (owning object id, folded name) → (id, declaring row): the
+        // `[HandlerFunctions]` lookup. A handler counts only when it has the
+        // test's own declaring ROW (#279): one in the other arm of an
+        // `#if`-split id is not this test's handler.
+        type Handlers<'o> = Vec<(&'o str, Option<&'o ModelObject>)>;
+        let mut by_name: HashMap<(&str, String), Handlers> = HashMap::new();
         for r in routines() {
             by_name
-                .entry((owner(&declaring, r), folded(&r.name)))
+                .entry((r.object_id.as_str(), folded(&r.name)))
                 .or_default()
-                .push(&r.stable_routine_id);
+                .push((&r.stable_routine_id, declaring.of(r)));
         }
+        let same_row = |a: Option<&ModelObject>, b: Option<&ModelObject>| match (a, b) {
+            (Some(a), Some(b)) => std::ptr::eq(a, b),
+            (a, b) => a.is_none() && b.is_none(),
+        };
         for r in routines() {
             let id = r.stable_routine_id.as_str();
             let dependency = resolved.routine_role(r) == Role::Dependency;
@@ -459,6 +461,7 @@ impl CoverageGraph {
             if find_attribute(&r.attributes_parsed, "Test").is_some() {
                 g.roots.insert(id.to_string());
                 g.test_code.insert(id.to_string());
+                let own_row = declaring.of(r);
                 // The platform runs each named handler during the test.
                 for name in r
                     .attributes_parsed
@@ -467,10 +470,11 @@ impl CoverageGraph {
                     .filter_map(|a| string_arg(a, 0))
                     .flat_map(|list| handler_names(&list))
                 {
-                    for h in by_name
-                        .get(&(owner(&declaring, r), name))
+                    for (h, _) in by_name
+                        .get(&(r.object_id.as_str(), name))
                         .into_iter()
                         .flatten()
+                        .filter(|(_, row)| same_row(*row, own_row))
                     {
                         g.edges
                             .entry(id.to_string())

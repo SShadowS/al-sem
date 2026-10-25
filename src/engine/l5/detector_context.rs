@@ -1774,7 +1774,7 @@ pub(crate) fn build_detector_artifacts(
     > = crate::engine::root_classification::classification_per_id(
         &resolved.root_classifications,
         &resolved.workspace.routines,
-        &resolved.workspace.objects,
+        &DeclaringObjects::new(&resolved.workspace.objects),
     )
     .into_iter()
     .map(|(id, rc)| (id.to_string(), rc.clone()))

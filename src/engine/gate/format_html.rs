@@ -456,6 +456,11 @@ fn cmp_str(a: &str, b: &str) -> std::cmp::Ordering {
 /// `pubLabel(ev, m)` — owning object name or publisherObjectId. The publisher
 /// routine's declaring row when there is one (#279), else the object row (a
 /// table event has no publisher routine).
+///
+/// Stated limit: the object-row fallback is the last-wins id map, so a TABLE
+/// split across `#if` arms with different names labels its table events
+/// (`OnAfterInsertEvent`, …) with the LAST arm's name. The event carries no
+/// declaration to pick an arm by.
 fn pub_label(ev: &EventSymbol, m: &Maps) -> String {
     let declared = ev
         .publisher_routine_id

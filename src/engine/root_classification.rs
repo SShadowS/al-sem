@@ -288,11 +288,13 @@ fn kinds_for(routine: &ModelRoutine, object: &ModelObject) -> Vec<String> {
 /// AST-only root classifier (al-sem `classifyRoots`). Produces a
 /// `RootClassification` for every routine that qualifies as >=1 RootKind, sorted
 /// by internal RoutineId ascending. Routines whose object is missing are skipped.
-pub fn classify_roots(workspace: &ModelEntities) -> Vec<RootClassification> {
-    // Each routine classifies against its DECLARING row (#279): an `#if`-split
-    // object has one row per arm, with its own subtype.
-    let declaring = DeclaringObjects::new(&workspace.objects);
-
+/// Each routine classifies against its DECLARING row in `declaring` (built over
+/// `workspace.objects`, #279): an `#if`-split object has one row per arm, with
+/// its own subtype.
+pub fn classify_roots(
+    workspace: &ModelEntities,
+    declaring: &DeclaringObjects,
+) -> Vec<RootClassification> {
     let mut result: Vec<RootClassification> = workspace
         .routines
         .iter()
@@ -331,12 +333,12 @@ fn ast_classification(routine: &ModelRoutine, object: &ModelObject) -> Option<Ro
 /// #160 step 11b §4.6. An id with one entry in `roots` gets it. A collided id
 /// whose rows keep several distinct AST copies (class K, [`classify_roots`])
 /// gets the copy of its LAST row that has one (the last owning row), never the
-/// greatest by value.
+/// greatest by value. Each row reads its own declaring row in `declaring`.
 #[must_use]
 pub fn classification_per_id<'a>(
     roots: &'a [RootClassification],
     routines: &[ModelRoutine],
-    objects: &[ModelObject],
+    declaring: &DeclaringObjects,
 ) -> HashMap<&'a str, &'a RootClassification> {
     let mut out: HashMap<&'a str, &'a RootClassification> = HashMap::new();
     let mut several: HashSet<&'a str> = HashSet::new();
@@ -348,7 +350,6 @@ pub fn classification_per_id<'a>(
     if several.is_empty() {
         return out;
     }
-    let declaring = DeclaringObjects::new(objects);
     for r in routines.iter().filter(|r| several.contains(r.id.as_str())) {
         if let Some(own) = declaring.of(r).and_then(|o| ast_classification(r, o))
             && let Some(rc) = roots.iter().find(|rc| **rc == own)
@@ -550,6 +551,7 @@ fn overlay_config_roots(
     ast_roots: Vec<RootClassification>,
     config: Option<&RootsConfig>,
     workspace: &ModelEntities,
+    declaring: &DeclaringObjects,
 ) -> (Vec<RootClassification>, Vec<InfraDiagnostic>) {
     let Some(config) = config else {
         return (ast_roots, vec![]);
@@ -561,7 +563,7 @@ fn overlay_config_roots(
     // #160 step 11b §4.6). `by_routine` holds only the ids a config entry
     // decides; every other AST entry passes through as `classify_roots` made
     // it, so a config never changes the entries of an id it does not name.
-    let ast_by_routine = classification_per_id(&ast_roots, &workspace.routines, &workspace.objects);
+    let ast_by_routine = classification_per_id(&ast_roots, &workspace.routines, declaring);
     let mut by_routine: BTreeMap<String, RootClassification> = BTreeMap::new();
 
     for entry in &config.roots {
@@ -692,14 +694,16 @@ pub fn compute_root_classifications(
     workspace: &ModelEntities,
     roots_config: Option<&Result<Vec<u8>, String>>,
 ) -> (Vec<RootClassification>, Vec<InfraDiagnostic>) {
-    let ast_roots = classify_roots(workspace);
+    // One declaring-row index for the AST pass and the overlay's per-id pick.
+    let declaring = DeclaringObjects::new(&workspace.objects);
+    let ast_roots = classify_roots(workspace, &declaring);
     // `roots_config` is the file's bytes as `WorkspaceInputs::read` read them (#160):
     // `None` = no file (or skipped), `Some(Err)` = unreadable, which loads no
     // config, as a failed disk read did.
     let config = roots_config
         .and_then(|r| r.as_ref().ok())
         .and_then(|b| roots_config_from_bytes(b));
-    overlay_config_roots(ast_roots, config.as_ref(), workspace)
+    overlay_config_roots(ast_roots, config.as_ref(), workspace, &declaring)
 }
 
 // ---------------------------------------------------------------------------
@@ -926,7 +930,7 @@ mod tests {
         r.enclosing_member_range = wrapper.map(anchor);
         let ws = workspace(vec![obj], vec![r]);
 
-        let roots = classify_roots(&ws);
+        let roots = classify_roots(&ws, &DeclaringObjects::new(&ws.objects));
         assert_eq!(roots.len(), 1, "the witness routine must be classified");
         roots[0].kinds.clone()
     }
@@ -1014,7 +1018,7 @@ mod tests {
         r.enclosing_member_range = Some(anchor("action_declaration"));
 
         let ws = workspace(vec![obj], vec![r]);
-        let roots = classify_roots(&ws);
+        let roots = classify_roots(&ws, &DeclaringObjects::new(&ws.objects));
         assert_eq!(roots.len(), 1);
         assert_eq!(
             roots[0].kinds,
@@ -1063,7 +1067,7 @@ mod tests {
         r.enclosing_member_range = Some(anchor("action_declaration"));
         let ws = workspace(vec![obj], vec![r]);
 
-        let roots = classify_roots(&ws);
+        let roots = classify_roots(&ws, &DeclaringObjects::new(&ws.objects));
         assert_eq!(roots.len(), 1, "the procedure must still be classified");
         assert_eq!(roots[0].kinds, vec!["public-procedure".to_string()]);
         assert!(
@@ -1162,7 +1166,7 @@ mod tests {
     fn ast_pass_emits_exactly_the_eleven_derivable_kinds() {
         let ws = eleven_kind_witness_workspace();
         // UNFILTERED union — every kind any witness produces, nothing dropped.
-        let emitted: BTreeSet<String> = classify_roots(&ws)
+        let emitted: BTreeSet<String> = classify_roots(&ws, &DeclaringObjects::new(&ws.objects))
             .iter()
             .flat_map(|rc| rc.kinds.iter().cloned())
             .collect();
@@ -1208,7 +1212,7 @@ mod tests {
         let mut r = routine("r1", "app/Codeunit/50100", kind);
         r.name = name.to_string();
         let ws = workspace(vec![obj], vec![r]);
-        match classify_roots(&ws).first() {
+        match classify_roots(&ws, &DeclaringObjects::new(&ws.objects)).first() {
             Some(rc) => rc.kinds.clone(),
             None => Vec::new(),
         }
@@ -1269,7 +1273,7 @@ mod tests {
         let mut r = routine("r1", "app/Codeunit/50100", "trigger");
         r.name = "OnRun".to_string();
         let ws = workspace(vec![obj], vec![r]);
-        let roots = classify_roots(&ws);
+        let roots = classify_roots(&ws, &DeclaringObjects::new(&ws.objects));
         assert_eq!(roots.len(), 1);
         assert_eq!(
             roots[0].kinds,
@@ -1414,14 +1418,15 @@ mod tests {
                     shared_local("shared", id, 12),
                 ],
             );
-            let roots = classify_roots(&ws);
+            let roots = classify_roots(&ws, &DeclaringObjects::new(&ws.objects));
             let kinds: Vec<&[String]> = roots.iter().map(|rc| rc.kinds.as_slice()).collect();
             assert_eq!(
                 kinds,
                 [["install-codeunit".to_string()].as_slice()],
                 "install_first={install_first}"
             );
-            let per_id = classification_per_id(&roots, &ws.routines, &ws.objects);
+            let per_id =
+                classification_per_id(&roots, &ws.routines, &DeclaringObjects::new(&ws.objects));
             assert_eq!(per_id["shared"].kinds, ["install-codeunit"]);
         }
     }
@@ -1460,7 +1465,8 @@ mod tests {
                 shared_local("shared", id, 22),
             ],
         );
-        let roots = classify_roots(&ws);
+        let declaring = DeclaringObjects::new(&ws.objects);
+        let roots = classify_roots(&ws, &declaring);
         let kinds: Vec<&[String]> = roots.iter().map(|rc| rc.kinds.as_slice()).collect();
         assert_eq!(
             kinds,
@@ -1470,13 +1476,13 @@ mod tests {
             ],
             "precondition: two copies for one id"
         );
-        let first_loop = classification_per_id(&roots, &[], &ws.objects);
+        let first_loop = classification_per_id(&roots, &[], &declaring);
         assert_eq!(
             first_loop["shared"].kinds,
             ["upgrade-codeunit"],
             "precondition: the first loop alone keeps Upgrade"
         );
-        let per_id = classification_per_id(&roots, &ws.routines, &ws.objects);
+        let per_id = classification_per_id(&roots, &ws.routines, &declaring);
         assert_eq!(per_id["shared"].kinds, ["install-codeunit"]);
     }
 }

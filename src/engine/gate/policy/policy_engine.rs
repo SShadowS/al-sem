@@ -22,6 +22,7 @@ use crate::engine::l4::capability_cone::CapabilityFact;
 use crate::engine::l5::finding::{Evidence, Finding, FindingConfidence, SourceAnchor};
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::full_summary::FullRoutineSummary;
+use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::events::EventSymbol;
 use crate::program::model::workspace::{ModelObject, ModelRoutine, ModelTable};
 
@@ -128,23 +129,25 @@ pub struct PolicyModel<'a> {
 impl<'a> PolicyModel<'a> {
     /// Build the model-input view. `event_names` is the (id → name) map for the
     /// `capability.resource.event.name` field; callers derive it from the event
-    /// graph.
+    /// graph. `declaring` is built over `objects`, the same index the caller
+    /// gave `classify_roots` (#279: one per policy build).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         routines: &'a [ModelRoutine],
         objects: &'a [ModelObject],
+        declaring: DeclaringObjects<'a>,
         tables: &'a [ModelTable],
         events: &'a [EventSymbol],
         root_classifications: &'a [crate::engine::root_classification::RootClassification],
         summaries: &'a HashMap<String, FullRoutineSummary>,
         raw: &'a HashMap<String, Vec<CapabilityFact>>,
     ) -> Self {
-        let declaring = crate::program::model::declaring::DeclaringObjects::new(objects);
         // One classification per id (class P, #160 step 11b §4.6).
         let root_kinds_by_routine_id: HashMap<&str, &[String]> =
             crate::engine::root_classification::classification_per_id(
                 root_classifications,
                 routines,
-                objects,
+                &declaring,
             )
             .into_iter()
             .map(|(id, rc)| (id, rc.kinds.as_slice()))

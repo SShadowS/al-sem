@@ -145,10 +145,13 @@ impl<'a> FingerprintIndex<'a> {
         self.routines_by_id.get(id).copied()
     }
 
-    /// The LAST model object row with internal id `id`, for an OBJECT-scoped
-    /// read only (an object-anchored finding, an object's role). Never "a
-    /// routine's object": an `#if`-split id has one row per arm, and that is
-    /// `DeclaringObjects::of` (#279).
+    /// The LAST model object row with internal id `id`. An `#if`-split id has
+    /// one row per arm, so the row is the right one only for a read every arm
+    /// agrees on: an object-scoped read (an object-anchored finding, an
+    /// object's role), or the object type and key (the id holds both), as the
+    /// fingerprint's own `anchor_of` / `object_part` read for a routine. Any
+    /// other property of a routine's object comes from `DeclaringObjects::of`
+    /// (#279).
     pub fn object_row_by_id(&self, id: &str) -> Option<&'a ModelObject> {
         self.objects_by_id.get(id).copied()
     }
@@ -201,7 +204,9 @@ impl<'a> FingerprintIndex<'a> {
 
     /// The `objectType/objectKey` part of the object with internal id `id`, or `id`
     /// itself when the index does not hold it (internal object ids are
-    /// `{appGuid}/{type}/{key}`, so still stable).
+    /// `{appGuid}/{type}/{key}`, so still stable). The last-wins row is safe
+    /// here (#279): only type and key are read, and every row of the id has
+    /// them, because the id contains them.
     fn object_part(&self, id: &str) -> String {
         self.objects_by_id
             .get(id)
@@ -221,6 +226,9 @@ impl<'a> FingerprintIndex<'a> {
         // `routine_name` correctly stays empty below (there is no routine).
         // Behavior-preserving for every routine-anchored finding: the `or_else`
         // only runs when the routine branch already missed.
+        // A routine's object through the last-wins id map (#279): safe because
+        // only `object_type_key` (type and key, both in the id) is read from it,
+        // so every `#if` arm's row gives the same part.
         let obj = routine
             .and_then(|r| self.objects_by_id.get(r.object_id.as_str()))
             .or_else(|| self.objects_by_id.get(enclosing));
