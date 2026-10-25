@@ -55,9 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Opt-in d64 no longer reports "API page write surface not declared" for symbol-only
     API pages that do declare it. On the pinned CDO workspace with every dependency
     stripped to symbols, all 8 such findings were false positives and are gone.
-  - Pinned CDO (whose page-bearing dependencies all embed source): 0 findings moved.
-  No ABI vector or golden needed an update: no committed fixture or vector carries these
-  properties, so the parse is pinned by new unit and CLI tests instead. No Windows
+  - A pageext's implicit `Rec` / `xRec` is now temporary when its BASE page declares
+    `SourceTableTemporary = true` (before, only the pageext's own flag was read, and a
+    pageext never carries it). So d39 no longer reports a pageext over a read-only,
+    temporary base page, whether that page is in the workspace, a dependency's source or
+    its symbols.
+  - Pinned CDO (whose page-bearing dependencies all embed source), measured on the final
+    code against the base: 2,217 findings at `--scope primary` and 30,006 at `--scope all`
+    on both sides, 0 fingerprints moved, and both JSON payloads byte-identical. The `Rec`
+    fix above moves no CDO finding either.
+  No ABI vector or golden needed an update: no golden or ABI vector that existed before this
+  change carries these properties, so the parse is pinned by new unit and CLI tests (with
+  their own fixtures, checked by direct asserts) instead. No Windows
   confirmation is relevant: this changes how symbols are read, not a claim about BC
   runtime behaviour.
 
