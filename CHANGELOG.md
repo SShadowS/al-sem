@@ -27,9 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keyed by caller (`dependency_uncertainty_edges_by_from`, with its own census row);
   the Primary index and every detector that reads it are unchanged, and single-app the
   new index is empty. Ids, fingerprints, severity and confidence do not change. Limit:
-  the confidence cap reads the core summaries (solved over the Primary half, where a
-  dependency routine has no out-edges unless it publishes an event) and the Primary
-  index, so a dependency subscriber's own and callee gaps do not cap its confidence.
+  the confidence cap reads the core summaries and the Primary index, not the dependency
+  index, so a dependency subscriber's dependency-half call-edge gaps (its own and its
+  callees') do not cap its confidence. Core-summary uncertainties still do (for example
+  a parse-incomplete row sharing its id); with none, the confidence is uncapped.
 
 ## [2.1.1] - 2026-10-25
 
