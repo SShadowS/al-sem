@@ -111,13 +111,13 @@ fn strip_scheme(p: &str) -> String {
 /// `..` is never cancelled (a symlinked `link/..` need not be the parent), and
 /// a rooted path stays rooted, so neither matches a workspace file (#76).
 fn normalize_input(p: &str) -> String {
-    clean_input(p).to_lowercase()
+    clean_segments(&strip_scheme(p)).to_lowercase()
 }
 
-/// [`normalize_input`] without the lowercasing: the case-kept path whose
-/// leading folders a [`DiffRoot`] prefix is compared with (#77).
-fn clean_input(p: &str) -> String {
-    let path = strip_scheme(p);
+/// [`normalize_input`]'s lexical clean-up of a `/`-separated path, case kept
+/// and with no scheme stripping: a file-system folder may be named `ws:Cloud`
+/// (#77), so a [`DiffRoot`] prefix and the folders compared with it use this.
+fn clean_segments(path: &str) -> String {
     let root = path.split('/').take_while(|s| s.is_empty()).count().min(2);
     let kept: Vec<&str> = std::iter::repeat_n("", root)
         .chain(path.split('/').filter(|s| !s.is_empty() && *s != "."))
@@ -224,14 +224,14 @@ pub struct ChangedRootsResult {
     pub spans: RoutineSpanIndex,
 }
 
-pub struct ChangedInput {
+pub struct ChangedInput<'a> {
     pub files: Option<Vec<String>>,
     pub routines: Option<Vec<String>>,
     pub diff_text: Option<String>,
     pub diff_root: DiffRoot,
-    /// The workspace's `.al` files (`WorkspaceInputs::al_files`' `rel_posix`):
-    /// which readings of a diff path name a FILE, routines or not (#77).
-    pub workspace_files: Vec<String>,
+    /// The workspace's `.al` files (`WorkspaceInputs::al_files`): which
+    /// readings of a diff path name a FILE, routines or not (#77).
+    pub workspace_files: &'a [crate::program::inputs::WsFile],
 }
 
 /// What a diff's paths are relative to (#77), held as the workspace's path
@@ -252,7 +252,7 @@ pub enum DiffRoot {
 impl DiffRoot {
     /// The workspace's path below the root as `rel`'s `/`-joined components.
     pub fn below(rel: &std::path::Path, explicit: bool) -> DiffRoot {
-        let prefix = clean_input(
+        let prefix = clean_segments(
             &rel.components()
                 .map(|c| c.as_os_str().to_string_lossy())
                 .collect::<Vec<_>>()
@@ -276,9 +276,10 @@ fn same_folder(a: &str, b: &str) -> bool {
 
 /// The workspace key `path` names below `prefix`: its leading folders must be
 /// `prefix`'s ([`same_folder`]), and only the rest keys like
-/// [`normalize_input`]. `None` when it does not start with `prefix`.
+/// [`normalize_input`]. `None` when it does not start with `prefix`. The
+/// folders are file-system names, so no scheme is stripped ([`clean_segments`]).
 fn strip_diff_prefix(prefix: &str, path: &str) -> Option<String> {
-    let clean = clean_input(path);
+    let clean = clean_segments(&path.replace('\\', "/"));
     let mut parts = clean.split('/');
     for want in prefix.split('/') {
         if !same_folder(parts.next()?, want) {
@@ -289,19 +290,18 @@ fn strip_diff_prefix(prefix: &str, path: &str) -> Option<String> {
     (!rest.is_empty()).then(|| rest.to_lowercase())
 }
 
-/// The workspace's `.al` files by [`normalize_input`] key, each key's units
-/// (`ws:<rel>`) sorted.
-fn workspace_file_keys(files: &[String]) -> HashMap<String, Vec<String>> {
-    let mut by_key: HashMap<String, Vec<String>> = HashMap::new();
+/// The workspace's `.al` files by [`normalize_input`] key, borrowing each
+/// file's `rel_posix` (several spellings may share a key).
+type FileKeys<'a> = HashMap<String, Vec<&'a str>>;
+
+/// [`FileKeys`] of `files`, built once per diff run.
+fn workspace_file_keys(files: &[crate::program::inputs::WsFile]) -> FileKeys<'_> {
+    let mut by_key = FileKeys::new();
     for f in files {
         by_key
-            .entry(normalize_input(f))
+            .entry(normalize_input(&f.rel_posix))
             .or_default()
-            .push(format!("ws:{f}"));
-    }
-    for units in by_key.values_mut() {
-        units.sort();
-        units.dedup();
+            .push(&f.rel_posix);
     }
     by_key
 }
@@ -309,7 +309,7 @@ fn workspace_file_keys(files: &[String]) -> HashMap<String, Vec<String>> {
 /// The keys of the workspace FILES `path` names under `root` (#77), in order:
 /// as written, then below the git top level. A file counts whether or not it
 /// holds a routine, so a table-only reading still makes a path ambiguous.
-fn diff_readings(files: &HashMap<String, Vec<String>>, root: &DiffRoot, path: &str) -> Vec<String> {
+fn diff_readings(files: &FileKeys<'_>, root: &DiffRoot, path: &str) -> Vec<String> {
     let as_written = || Some(normalize_input(path));
     let readings = match root {
         DiffRoot::Workspace => [as_written(), None],
@@ -328,16 +328,23 @@ fn diff_readings(files: &HashMap<String, Vec<String>>, root: &DiffRoot, path: &s
 /// before #77). Two: `diff-file-ambiguous` with every unit of both readings.
 fn diff_key(
     spans: &RoutineSpanIndex,
-    files: &HashMap<String, Vec<String>>,
+    files: &FileKeys<'_>,
     root: &DiffRoot,
     path: &str,
 ) -> Result<String, ChangedRootsDiagnostic> {
     let readings = diff_readings(files, root, path);
+    // A reading's units (`ws:<rel>`), sorted.
+    let units = |key: &String| {
+        let mut u: Vec<String> = files[key].iter().map(|f| format!("ws:{f}")).collect();
+        u.sort();
+        u.dedup();
+        u
+    };
     match &readings[..] {
         [key] if !spans.of_file(key).is_empty() => Ok(key.clone()),
         [_, _] => Err(ChangedRootsDiagnostic::DiffFileAmbiguous {
             file: path.to_string(),
-            candidates: readings.iter().flat_map(|k| files[k].clone()).collect(),
+            candidates: readings.iter().flat_map(units).collect(),
         }),
         _ => Err(ChangedRootsDiagnostic::DiffFileUnmatched {
             file: path.to_string(),
@@ -514,7 +521,7 @@ pub fn primary_guid_of(resolved: &Model) -> Option<&str> {
 pub fn resolve_changed_roots(
     identities: &SnapshotIdentityTable,
     resolved: &Model,
-    input: &ChangedInput,
+    input: &ChangedInput<'_>,
     primary_app_guid: Option<&str>,
     owners: &OwnerIndex<'_>,
 ) -> ChangedRootsResult {
@@ -594,7 +601,7 @@ pub fn resolve_changed_roots(
         // would hide the error (#72). Keyed by every file the errored path may
         // name (#77): an ambiguous one vetoes both, as its changes are unknown
         // for either.
-        let files = workspace_file_keys(&input.workspace_files);
+        let files = workspace_file_keys(input.workspace_files);
         let poisoned: std::collections::HashSet<String> = parsed
             .file_errors
             .iter()
@@ -1968,20 +1975,16 @@ impl<'a> DigestJob<'a> {
         }
     }
 
-    fn changed_input(&self, inputs: &crate::program::inputs::WorkspaceInputs) -> ChangedInput {
+    fn changed_input<'i>(
+        &self,
+        inputs: &'i crate::program::inputs::WorkspaceInputs,
+    ) -> ChangedInput<'i> {
         ChangedInput {
             files: self.req.changed_files.clone(),
             routines: self.req.changed_routines.clone(),
             diff_text: self.req.diff_text.clone(),
             diff_root: self.req.diff_root.clone(),
-            workspace_files: match self.req.diff_text {
-                Some(_) => inputs
-                    .al_files
-                    .iter()
-                    .map(|f| f.rel_posix.clone())
-                    .collect(),
-                None => Vec::new(),
-            },
+            workspace_files: &inputs.al_files,
         }
     }
 }

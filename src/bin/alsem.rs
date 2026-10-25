@@ -1595,13 +1595,19 @@ static PLAN_FILES: std::sync::LazyLock<std::sync::Mutex<PlanFiles>> =
 /// adds them to that job's reads (D2.4; #277 final r3 F1).
 static PLAN_TOUCHED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
-/// `path`'s bytes as a plan reads them: read once per run ([`PLAN_FILES`]).
-/// The error keeps its text, not its kind.
-fn plan_read(path: &Path) -> std::io::Result<Vec<u8>> {
+/// Record that the plan being made probed `path` ([`PLAN_TOUCHED`]), whatever
+/// the probe's outcome.
+fn plan_touch(path: &Path) {
     PLAN_TOUCHED
         .lock()
         .expect("plan touches")
         .push(path.to_path_buf());
+}
+
+/// `path`'s bytes as a plan reads them: read once per run ([`PLAN_FILES`]).
+/// The error keeps its text, not its kind.
+fn plan_read(path: &Path) -> std::io::Result<Vec<u8>> {
+    plan_touch(path);
     let mut files = PLAN_FILES.lock().expect("plan files");
     let read = files
         .reads
@@ -1612,10 +1618,7 @@ fn plan_read(path: &Path) -> std::io::Result<Vec<u8>> {
 
 /// Whether `path` exists, as a plan asks it: answered once per run.
 fn plan_exists(path: &Path) -> bool {
-    PLAN_TOUCHED
-        .lock()
-        .expect("plan touches")
-        .push(path.to_path_buf());
+    plan_touch(path);
     let mut files = PLAN_FILES.lock().expect("plan files");
     *files
         .exists
@@ -1660,36 +1663,66 @@ fn pin_diff_root(
     let Commands::Digest(d) = command else {
         return None;
     };
-    let root = decided.unwrap_or_else(|| decide_diff_root(d));
+    // The batch parse pinned `--changed` ([`pin_changed`]), so this asks the
+    // file system nothing more about it.
+    let root = decided.unwrap_or_else(|| decide_diff_root(d, DigestInputs::of(d).has_diff()));
     d.diff_root_decided = Some(root.clone());
     Some(root)
 }
 
-/// Whether a digest reads a diff: `--diff`, or `--changed` naming a file.
-fn digest_has_diff(d: &DigestCli) -> bool {
-    let nonempty = |s: &Option<String>| s.as_deref().is_some_and(|s| !s.trim().is_empty());
-    nonempty(&d.diff)
-        || (nonempty(&d.changed)
-            && matches!(
-                detect_changed(d, d.changed.as_deref().unwrap_or_default()),
-                ChangedAutoDetect::Diff(_)
-            ))
+/// A digest's inputs with the `--changed` alias resolved (auto-detected into
+/// diff / files / routines, mirroring cli/index.ts) and merged with the
+/// explicit flags.
+struct DigestInputs {
+    files: Vec<String>,
+    routines: Vec<String>,
+    diff: Option<String>,
+}
+
+impl DigestInputs {
+    fn of(d: &DigestCli) -> DigestInputs {
+        let mut inputs = DigestInputs {
+            files: d.file.clone(),
+            routines: d.routine.clone(),
+            diff: d.diff.clone(),
+        };
+        if let Some(changed) = d.changed.as_deref()
+            && !changed.trim().is_empty()
+        {
+            match detect_changed(d, changed) {
+                ChangedAutoDetect::Diff(p) => inputs.diff = Some(p),
+                ChangedAutoDetect::Files(fs) => inputs.files.extend(fs),
+                ChangedAutoDetect::Routines(rs) => inputs.routines.extend(rs),
+            }
+        }
+        inputs
+    }
+
+    /// Whether a diff is read: a non-blank `--diff`, or `--changed` naming one.
+    fn has_diff(&self) -> bool {
+        self.diff.as_deref().is_some_and(|s| !s.trim().is_empty())
+    }
 }
 
 /// What a digest's diff paths are relative to (#77), decided once per run
 /// ([`pin_diff_root`]). `--diff-root`: it must be an existing folder; the
 /// workspace's path below it, first as spelled (a symlinked workspace keeps
-/// its link name), else canonically; not inside it is an error. Else the
+/// its link name), else canonically; not inside it is an error; a workspace
+/// that cannot be canonicalized is left to the load's error. Else the
 /// nearest folder at or above the canonical workspace holding `.git` (a
 /// folder, or a worktree's or submodule's file); none, or a workspace that
 /// cannot be canonicalized: the workspace itself (auto mode never fails). No
-/// diff: the workspace, probing nothing.
-fn decide_diff_root(d: &DigestCli) -> Result<DiffRoot, String> {
-    if !digest_has_diff(d) {
+/// diff (`has_diff`, decided once by the caller): the workspace, probing
+/// nothing. Every probe is recorded ([`plan_touch`]), so a batch job's reads
+/// hold `--diff-root` and the workspace even when the probe fails.
+fn decide_diff_root(d: &DigestCli, has_diff: bool) -> Result<DiffRoot, String> {
+    if !has_diff {
         return Ok(DiffRoot::Workspace);
     }
+    plan_touch(Path::new(&d.workspace));
+    let canonical_ws = std::fs::canonicalize(&d.workspace);
     let Some(root) = &d.diff_root else {
-        let Ok(ws) = std::fs::canonicalize(&d.workspace) else {
+        let Ok(ws) = canonical_ws else {
             return Ok(DiffRoot::Workspace);
         };
         return Ok(ws
@@ -1699,6 +1732,7 @@ fn decide_diff_root(d: &DigestCli) -> Result<DiffRoot, String> {
             .map_or(DiffRoot::Workspace, |rel| DiffRoot::below(rel, false)));
     };
     // Checked first, so a lexical containment cannot pass a missing root.
+    plan_touch(Path::new(root));
     match std::fs::metadata(root) {
         Ok(m) if m.is_dir() => {}
         Ok(_) => {
@@ -1708,6 +1742,11 @@ fn decide_diff_root(d: &DigestCli) -> Result<DiffRoot, String> {
         }
         Err(e) => return Err(format!("al-sem: digest: --diff-root '{root}': {e}")),
     }
+    // A workspace that does not resolve is left to the load, which reports it
+    // (exit 1) however it is spelled, as in auto mode.
+    let Ok(ws) = canonical_ws else {
+        return Ok(DiffRoot::Workspace);
+    };
     let lexical = std::path::absolute(&d.workspace)
         .ok()
         .zip(std::path::absolute(root).ok())
@@ -1719,13 +1758,8 @@ fn decide_diff_root(d: &DigestCli) -> Result<DiffRoot, String> {
     let rel = match lexical {
         Some(rel) => rel,
         None => {
-            let canon = |p: &str, what: &str| {
-                std::fs::canonicalize(p).map_err(|e| format!("al-sem: digest: {what} '{p}': {e}"))
-            };
-            let (ws, r) = (
-                canon(&d.workspace, "workspace")?,
-                canon(root, "--diff-root")?,
-            );
+            let r = std::fs::canonicalize(root)
+                .map_err(|e| format!("al-sem: digest: --diff-root '{root}': {e}"))?;
             ws.strip_prefix(&r).map(Path::to_path_buf).map_err(|_| {
                 format!(
                     "al-sem: digest: workspace '{}' is not inside --diff-root '{root}'",
@@ -1758,27 +1792,21 @@ fn plan_digest(d: DigestCli) -> Planned {
         );
     }
 
-    // Resolve the --changed alias FIRST (auto-detect into diff / files / routines),
-    // mirroring cli/index.ts. The detected values are merged with explicit flags.
-    let mut file_inputs: Vec<String> = d.file.clone();
-    let mut routine_inputs: Vec<String> = d.routine.clone();
-    let mut diff_arg: Option<String> = d.diff.clone();
-    if let Some(changed) = d.changed.as_deref()
-        && !changed.trim().is_empty()
-    {
-        match detect_changed(&d, changed) {
-            ChangedAutoDetect::Diff(p) => diff_arg = Some(p),
-            ChangedAutoDetect::Files(fs) => file_inputs.extend(fs),
-            ChangedAutoDetect::Routines(rs) => routine_inputs.extend(rs),
-        }
-    }
+    // Resolve the --changed alias FIRST, once: the diff decision below and the
+    // diff-root decision both use this one answer (#77).
+    let inputs = DigestInputs::of(&d);
+    let has_diff = inputs.has_diff();
+    let DigestInputs {
+        files: file_inputs,
+        routines: routine_inputs,
+        diff: diff_arg,
+    } = inputs;
 
     // No-input check (cli/digest.ts:138): emit the exact CLI message + exit 1.
     // Done at the CLI layer BEFORE the pipeline so the user sees the --changed-files
     // wording (the pipeline's own message is the internal run-digest-pipeline one).
     let has_files = !file_inputs.is_empty();
     let has_routines = !routine_inputs.is_empty();
-    let has_diff = digest_has_diff(&d);
     // Before the no-input check: a lone `--diff-root` is a flag misuse (exit 3).
     if d.diff_root.is_some() && !has_diff {
         return failed(
@@ -1824,7 +1852,7 @@ fn plan_digest(d: DigestCli) -> Planned {
     let diff_root = match d
         .diff_root_decided
         .clone()
-        .unwrap_or_else(|| decide_diff_root(&d))
+        .unwrap_or_else(|| decide_diff_root(&d, has_diff))
     {
         Ok(r) => r,
         Err(line) => return failed(line, exit::CONFIG_ERROR, 1),

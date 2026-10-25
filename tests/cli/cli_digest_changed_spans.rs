@@ -2801,8 +2801,9 @@ fn table_only_reading_still_ambiguous() {
 /// it as `src/posting.al` (`D8PostingChain`), the workspace itself as
 /// `Cloud/src/posting.al` (`D8PostingChainCopy`).
 ///
-/// Mutations: `Explicit` read as `GitTop` -> ambiguous in both; `below` with
-/// an empty prefix returns `Explicit("")` -> the A6b run unmatched.
+/// Mutations: `Explicit` read as `GitTop` -> the repository-root run is
+/// ambiguous (the workspace-root run is `Workspace`, not `Explicit`); `below`
+/// with an empty prefix returns `Explicit("")` -> the A6b run unmatched.
 #[test]
 fn diff_root_settles_an_ambiguous_path() {
     let t = tempfile::tempdir().unwrap();
@@ -3012,6 +3013,7 @@ fn ambiguous_broken_record_blocks_both_candidates() {
         let diff = format!("{bad}{}", healthy("src/subscriber.al"));
         let (doc, code) = digest(&ws, &[], Some(&diff));
         assert_eq!(roots(&doc), vec!["HandlePosted"], "{diff}: {doc}");
+        assert_malformed_error_of(&doc, "Cloud/src/posting.al", &diff);
         assert_eq!(code, 0, "{diff}: {doc}");
     }
 }
@@ -3137,26 +3139,138 @@ fn diff_root_not_containing_the_workspace_is_exit_3() {
     assert!(stderr.contains("is not inside --diff-root"), "{stderr}");
 }
 
-/// A18c. `--diff-root` must exist and be a folder, checked before either
-/// containment test: a missing root (workspace spelled below it) and a regular
-/// file (workspace spelled below it) are exit 3, not exit 1 at loading.
+/// Asserts `digest <root>/Cloud --diff-root <root>` is exit 3 naming
+/// `--diff-root` (A18c).
+fn assert_bad_diff_root(root: &Path) {
+    let (_, stderr, code) = digest_raw(
+        &root.join("Cloud"),
+        &["--diff-root", arg(root)],
+        Some(&git_line9("src/posting.al")),
+    );
+    assert_eq!(code, 3, "{root:?}: {stderr}");
+    assert!(stderr.contains("--diff-root"), "{root:?}: {stderr}");
+}
+
+/// A18c (missing). `--diff-root` must exist, checked before either
+/// containment test: a missing root with the workspace spelled below it is
+/// exit 3, not the load's exit 1.
 ///
-/// Mutation: drop the existence check -> the lexical containment succeeds and
-/// both runs reach workspace loading (exit 1).
+/// Mutation: drop the existence check -> the run reaches workspace loading
+/// (exit 1).
 #[test]
-fn diff_root_must_be_an_existing_folder() {
+fn diff_root_must_exist() {
+    let t = tempfile::tempdir().unwrap();
+    assert_bad_diff_root(&t.path().join("missing"));
+}
+
+/// A18c (file). `--diff-root` must be a folder: a regular file with the
+/// workspace spelled below it is exit 3, not the load's exit 1.
+///
+/// Mutations: drop the existence check, or only its `is_dir` test -> the run
+/// reaches workspace loading (exit 1).
+#[test]
+fn diff_root_must_be_a_folder() {
     let t = tempfile::tempdir().unwrap();
     write(&t.path().join("file"), "x");
-    for root in ["missing", "file"] {
-        let root = t.path().join(root);
+    assert_bad_diff_root(&t.path().join("file"));
+}
+
+/// C5. With `--diff-root`, a workspace that does not exist is the load's
+/// error whatever its spelling, as in auto mode (A19): spelled below the root,
+/// and spelled through `sub/..` (no lexical containment), both exit as the
+/// `--routine` run does, never exit 3.
+///
+/// Mutation: the canonical branch reports the workspace's canonicalize error
+/// (exit 3) -> the `sub/..` spelling is exit 3.
+#[test]
+fn missing_workspace_under_diff_root_is_the_load_error() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("sub")).unwrap();
+    let below = t.path().join("gone/Cloud");
+    let (_, routine_err, routine_code) = digest_raw(&below, &["--routine", "PostSalesDoc"], None);
+    assert_ne!(routine_code, 3, "precondition: {routine_err}");
+    for ws in [below.clone(), t.path().join("sub/../gone/Cloud")] {
         let (_, stderr, code) = digest_raw(
-            &root.join("Cloud"),
-            &["--diff-root", arg(&root)],
-            Some(&git_line9("src/posting.al")),
+            &ws,
+            &["--diff-root", arg(t.path())],
+            Some(&git_line9("Cloud/src/posting.al")),
         );
-        assert_eq!(code, 3, "{root:?}: {stderr}");
-        assert!(stderr.contains("--diff-root"), "{root:?}: {stderr}");
+        assert_eq!(code, routine_code, "{ws:?}: {stderr}");
     }
+}
+
+/// F1. A workspace folder named like a snapshot scheme (`ws:Cloud`) keeps
+/// its whole name as the prefix: with a sibling `Cloud`, a diff of the
+/// sibling's `Cloud/src/posting.al` stays unmatched in auto mode and with
+/// `--diff-root`. Skips where `:` cannot be in a folder name.
+///
+/// Mutation: build the prefix with `strip_scheme` (via `normalize_input`'s
+/// clean-up) -> the prefix is `Cloud` and the workspace's `PostSalesDoc` is
+/// rooted.
+#[test]
+fn scheme_like_workspace_folder_keeps_its_prefix() {
+    let t = tempfile::tempdir().unwrap();
+    let repo = t.path().join("repo");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let ws = repo.join("ws:Cloud");
+    if std::fs::create_dir_all(&ws).is_err() {
+        return;
+    }
+    d8_workspace(&ws, &d8_posting());
+    d8_workspace(&repo.join("Cloud"), &d8_posting());
+    let diff = git_line9("Cloud/src/posting.al");
+    for args in [vec![], vec!["--diff-root", arg(&repo)]] {
+        let (doc, code) = digest(&ws, &args, Some(&diff));
+        assert_unmatched(&doc, code, "Cloud/src/posting.al", &format!("{args:?}"));
+    }
+}
+
+/// F3. A `--diff-root` probe is one of the job's reads: in a batch, a digest
+/// whose `--diff-root` names a regular file (so it fails planning) and a job
+/// whose `--out` writes that file are refused as a conflict before either
+/// runs (exit 3, nothing written). A write INSIDE a read folder is no
+/// conflict by the manifest's read rule, so the root is a file here.
+///
+/// Mutation: drop the `plan_touch` of the root -> the run is not refused and
+/// job 1 overwrites the file.
+#[test]
+fn diff_root_probe_is_a_batch_read() {
+    use crate::cli_batch_writes::{job, run_manifest_doc};
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("Cloud");
+    d8_workspace(&ws, &d8_posting());
+    let diff = t.path().join("change.diff");
+    std::fs::write(&diff, git_line9("src/posting.al")).unwrap();
+    let file = t.path().join("file");
+    std::fs::write(&file, "x").unwrap();
+    let (s, ws_s, diff_s) = (arg(&file), arg(&ws), arg(&diff));
+    let jobs = vec![
+        job(
+            &["digest", ws_s, "--diff", diff_s, "--diff-root", s],
+            None,
+            None,
+        ),
+        job(
+            &["digest", ws_s, "--routine", "PostSalesDoc", "--out", s],
+            None,
+            None,
+        ),
+    ];
+    let run = tempfile::tempdir().unwrap();
+    let (out, _) = run_manifest_doc(
+        run.path(),
+        &serde_json::json!({ "jobs": jobs }),
+        None,
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains(&format!("reads {s}, which batch 0 job 1 writes")),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "x");
 }
 
 /// A18b. A lone `--diff-root` (no diff) is exit 3, before the no-input check.
