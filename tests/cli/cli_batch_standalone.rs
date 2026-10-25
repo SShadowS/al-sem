@@ -12,7 +12,6 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::batch_records::{batch_goldens, write_golden};
-use crate::cli_batch_merged_streams::normalize;
 use crate::cli_batch_plan::{argv, batch_in, standalone_in};
 use crate::cli_build_counters::{last_counters, spawn_trace_events};
 use crate::regen::regen_mode;
@@ -88,7 +87,10 @@ fn standalone_is_a_batch_of_one() {
     };
     assert_eq!(builds(run.counters.clone()), builds(last_counters(&events)));
 
-    // The one-job family.
+    // The one-job family. The version feeds `alsemVersion` and digest's
+    // `workspaceFingerprint`, so it is pinned to the value the goldens were minted at.
+    let _env = crate::env_guard();
+    unsafe { std::env::set_var("ALCH_DRIVER_VERSION_OVERRIDE", "2.0.3") };
     let dir = batch_goldens().join("one-job");
     for (name, job) in commands() {
         let run = batch_in(std::slice::from_ref(&job), Some(root()), &[]);
@@ -121,13 +123,13 @@ fn standalone_is_a_batch_of_one() {
             line,
             "{name}: line"
         );
-        // The version is normalized so a version bump does not move the golden.
         assert_eq!(
-            normalize(&std::fs::read(&stdout_path).unwrap()),
-            normalize(&stdout),
+            String::from_utf8_lossy(&std::fs::read(&stdout_path).unwrap()),
+            String::from_utf8_lossy(&stdout),
             "{name}: stdout"
         );
     }
+    unsafe { std::env::remove_var("ALCH_DRIVER_VERSION_OVERRIDE") };
 }
 
 /// `alsem <args>` from the repository root, traced.

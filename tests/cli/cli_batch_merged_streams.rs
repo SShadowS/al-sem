@@ -40,7 +40,7 @@ fn merged(args: &[&str]) -> (Vec<u8>, i32) {
 }
 
 /// `text` with every `"alsemVersion": "<v>"` value replaced by `<version>`.
-pub(crate) fn normalize(text: &[u8]) -> String {
+fn normalize(text: &[u8]) -> String {
     const KEY: &str = "\"alsemVersion\": \"";
     let text = String::from_utf8(text.to_vec()).unwrap();
     let mut out = String::new();
