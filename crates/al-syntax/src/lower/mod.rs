@@ -5570,6 +5570,62 @@ codeunit 50110 T
         );
     }
 
+    /// Grammar `main` 940ba71b (f78aa68b, ac8a8665): an `#if` tail or operand prefix
+    /// may have an EMPTY arm, and a prefix arm may be a lone `not`. Each shape below
+    /// was an ERROR on c89c2ecb; now it is a `preproc_conditional_expression_tail` /
+    /// `preproc_operand_prefix` sibling of the value it continues, which the lowerer
+    /// already skips. The value keeps its slot and its call stays linked.
+    #[test]
+    fn empty_arm_tail_and_prefix_keep_the_value() {
+        let src = r#"
+codeunit 50111 T
+{
+    procedure P()
+    begin
+        I := Foo()
+#if X
+            + 1
+#else
+#endif
+            ;
+        I :=
+#if X
+            1 +
+#else
+#endif
+            Bar();
+        Baz(1
+#if X
+            + 2
+#else
+#endif
+            , Qux());
+        if
+#if X
+            not
+#else
+#endif
+            Ok() then
+            Quux();
+    end;
+}
+"#;
+        let calls = linked_calls(&parse(src));
+        assert_eq!(
+            calls,
+            vec![
+                ("foo".to_string(), 0),
+                ("bar".to_string(), 0),
+                ("baz".to_string(), 2),
+                ("qux".to_string(), 0),
+                // the then-branch statement is in the arena before its `if`
+                ("quux".to_string(), 0),
+                ("ok".to_string(), 0),
+            ],
+            "{calls:?}"
+        );
+    }
+
     /// Lowercased names of every `StmtKind::Call` whose callee is a plain identifier.
     fn stmt_callees(af: &crate::ir::AlFile) -> Vec<String> {
         af.ir
