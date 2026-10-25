@@ -12,7 +12,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::batch_records::{batch_goldens, write_golden};
-use crate::cli_batch_plan::{argv, batch_in, standalone_in};
+use crate::cli_batch_plan::{argv, batch_in};
 use crate::cli_build_counters::{last_counters, spawn_trace_events};
 use crate::regen::regen_mode;
 
@@ -89,11 +89,12 @@ fn standalone_is_a_batch_of_one() {
 
     // The one-job family. The version feeds `alsemVersion` and digest's
     // `workspaceFingerprint`, so it is pinned to the value the goldens were minted at.
-    let _env = crate::env_guard();
-    unsafe { std::env::set_var("ALCH_DRIVER_VERSION_OVERRIDE", "2.0.3") };
+    // The pin goes to each child, never into this process's environment: a
+    // concurrent test's standalone run would read it.
+    let pin = [("ALCH_DRIVER_VERSION_OVERRIDE", "2.0.3")];
     let dir = batch_goldens().join("one-job");
     for (name, job) in commands() {
-        let run = batch_in(std::slice::from_ref(&job), Some(root()), &[]);
+        let run = batch_in(std::slice::from_ref(&job), Some(root()), &pin);
         assert_eq!(run.out.status.code(), Some(0), "{name}");
         let mut line: Value = run.lines().remove(0);
         let base = run.dir.path();
@@ -104,7 +105,13 @@ fn standalone_is_a_batch_of_one() {
         let line = format!("{}\n", serde_json::to_string_pretty(&line).unwrap());
         let (stdout, _) = run.streams(0);
         // The batch's stdout is the standalone stdout.
-        assert_eq!(stdout, standalone_in(&job, Some(root())).0, "{name}");
+        let args: Vec<&str> = job.iter().map(String::as_str).collect();
+        let alone = spawn_trace_events(
+            env!("CARGO_BIN_EXE_alsem"),
+            &args,
+            &[pin[0], ("RUST_LOG", "off")],
+        );
+        assert_eq!(stdout, alone.0.stdout, "{name}");
         let (line_path, stdout_path) = (
             dir.join(format!("{name}.line.golden.json")),
             dir.join(format!("{name}.stdout.golden")),
@@ -129,7 +136,6 @@ fn standalone_is_a_batch_of_one() {
             "{name}: stdout"
         );
     }
-    unsafe { std::env::remove_var("ALCH_DRIVER_VERSION_OVERRIDE") };
 }
 
 /// `alsem <args>` from the repository root, traced.
