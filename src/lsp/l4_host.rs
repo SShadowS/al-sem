@@ -6,6 +6,7 @@
 //! the baseline (OQ4), but published to `status` only if `g` is still the
 //! newest request, checked under the same lock a bump takes (S3).
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
@@ -157,7 +158,11 @@ fn guarded(work: impl FnOnce(), on_panic: impl FnOnce(&str)) {
 
 /// A host crash ends the server, as the help text says, in every profile.
 fn end_the_server(msg: &str) {
-    eprintln!("l4-host: panicked: {msg}; ending the server");
+    // Best effort: a failed stderr write must not unwind past the abort.
+    let _ = writeln!(
+        std::io::stderr(),
+        "l4-host: panicked: {msg}; ending the server"
+    );
     std::process::abort();
 }
 

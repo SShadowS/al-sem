@@ -356,6 +356,8 @@ fn t5e_flag_on_sends_nothing_new() {
 /// logs it and aborts. The debug-only seam `AL_SEM_L4_HOST_TEST_PANIC`
 /// panics inside the worker. Break: the worker only logs (no abort) → the
 /// server keeps running and the exit wait times out.
+// The panic seam is compiled only with debug assertions.
+#[cfg(debug_assertions)]
 #[test]
 fn host_panic_ends_the_server() {
     let tmp = tempfile::tempdir().unwrap();
