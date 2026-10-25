@@ -866,12 +866,11 @@ fn t1o_collided_rows() {
 /// sees it. Break: edges out of the row digest seeds `A` with `Cust`.
 #[test]
 fn t1s_interface_rebind() {
-    let go = |no: u32, name: &'static str, implements: &str, table: &str| {
+    let go = |no: u32, path: &'static str, name: &str, implements: &str, table: &str| {
         (
-            name,
+            path,
             format!(
-                "codeunit {no} {}{implements}\n{{\n    procedure Go()\n    var\n        R: Record {table};\n    begin\n        R.Insert();\n    end;\n}}\n",
-                &name[4..name.len() - 3]
+                "codeunit {no} {name}{implements}\n{{\n    procedure Go()\n    var\n        R: Record {table};\n    begin\n        R.Insert();\n    end;\n}}\n"
             ),
         )
     };
@@ -888,10 +887,34 @@ fn t1s_interface_rebind() {
                 "    procedure A()\n    var\n        G: Interface IGo;\n    begin\n        G.Go();\n    end;\n",
             ),
         ),
-        go(50103, "src/X.al", " implements IGo", "Cust"),
-        go(50104, "src/Y.al", "", "Item"),
+        go(50103, "src/X.al", "X", " implements IGo", "Cust"),
+        go(50104, "src/Y.al", "Y", "", "Item"),
     ]);
+    // `X`'s and `Y`'s OBJECT rows, which carry `implements_interfaces`.
+    let objects = |f: &Fresh| {
+        let ws = &f.view.model().workspace;
+        let rows: Vec<String> = ["X", "Y"]
+            .iter()
+            .map(|n| {
+                let o: Vec<_> = ws.objects.iter().filter(|o| o.name == *n).collect();
+                assert_eq!(o.len(), 1, "precondition: one object {n}");
+                format!("{:?}", o[0])
+            })
+            .collect();
+        rows
+    };
     let pre = |r0: &Fresh, r1: &Fresh| {
+        assert_eq!(
+            r0.rows("Go", 0).len(),
+            2,
+            "precondition: X and Y each have a Go row (the interface has none)"
+        );
+        assert_eq!(r0.rows("A", 0).len(), 1, "precondition: one A row");
+        let (o0, o1) = (objects(r0), objects(r1));
+        assert!(
+            o0[0] != o1[0] && o0[1] != o1[1],
+            "precondition: X's and Y's object rows change (implements)"
+        );
         for n in ["A", "Go"] {
             assert_eq!(
                 format!("{:?}", r0.rows(n, 0)),
@@ -1190,8 +1213,9 @@ fn t1j_c_undeclared_package() {
 /// T3 (spec §5.4): a refresh cancelled at the top of the LAST SCC turn (call
 /// `PHASE_CHECKS + total`: every earlier SCC, `L`'s re-solved one included,
 /// has completed) returns `Cancelled` and keeps the r0 baseline whole; the
-/// next refresh is Incremental against it. The exact call count pins the
-/// three phase checks (inputs, target, relation) and one check per SCC turn.
+/// next refresh is Incremental against it. The exact call counts (the
+/// cancelled run's, and the next, uncancelled run's) pin the three phase
+/// checks (inputs, target, relation) and one check per SCC turn, both ways.
 /// Break (O14): `last.take()` at the start of `refresh` leaves no projection.
 #[test]
 fn t3_cancel_keeps_baseline() {
@@ -1223,7 +1247,21 @@ fn t3_cancel_keeps_baseline() {
             "{universe:?}: cancelled: {err:?}"
         );
         assert_eq!(calls.get(), at, "{universe:?}: cancel calls");
-        let report = refresh(&mut host);
+        // Two-sided (review R5-1): a refresh that never cancels makes exactly
+        // `PHASE_CHECKS + total` checks, so an ADDED check fails too.
+        let counted = std::cell::Cell::new(0);
+        let report = host
+            .refresh_committed(&|| {
+                counted.set(counted.get() + 1);
+                false
+            })
+            .expect("a good refresh");
+        assert_eq!(
+            counted.get(),
+            PHASE_CHECKS + report.total,
+            "{universe:?}: cancel calls of a full run"
+        );
+        assert_eq!(report.total, r0.total, "{universe:?}: same SCC count");
         assert_eq!(report.kind, RefreshKind::Incremental, "{universe:?}");
         assert_eq!(
             report.resolved,

@@ -9,6 +9,7 @@ pub mod def_surface;
 pub mod diagnostics;
 pub mod encoding;
 pub mod handlers;
+pub mod l4_host;
 pub mod lens;
 pub mod snapshot;
 pub mod updater;
