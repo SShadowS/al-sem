@@ -35,8 +35,11 @@ pub static KIND_PEAK_KIB: &[(JobKind, u64)] = &[
     (("analyze", X), 13 * STEP),
     // Part 4b: `s` 727,772 KiB → 0.75 GiB.
     (("analyze", S), 3 * STEP),
-    // Part 4b: max(`d`, `h`, `AD`, `ADF`, `O`, `Up` 3,711,548) KiB → 3.75 GiB.
-    (("digest", X), 15 * STEP),
+    // Part 4b: max(`d`, `h`, `AD`, `ADF`, `O`, `Up` 3,711,548) KiB; #246
+    // (`docs/measurements/2026-10-25-issue-246-digest-include-reads.md`): `Up`
+    // with `--include-reads` on d and h, median 4,062,196 (max 4,075,056) KiB
+    // → 4.0 GiB. The row is per kind, not per flag, so it covers both.
+    (("digest", X), 16 * STEP),
     // Part 4b: `ds` 747,896 KiB → 0.75 GiB.
     (("digest", S), 3 * STEP),
     (("policy check", X), POLICY_X),
@@ -218,6 +221,16 @@ mod tests {
         assert_eq!(peak_kib(&[("prove", S)], KIND_PEAK_KIB), 3 * STEP);
         assert_eq!(peak_kib(&[("events chains", X)], KIND_PEAK_KIB), 13 * STEP);
         assert_eq!(peak_kib(&[("query effects", S)], KIND_PEAK_KIB), 3 * STEP);
+    }
+
+    /// #246: digest's cross-app row covers `--include-reads` (its `Up` median
+    /// 4,062,196 KiB), and every T17 shape keeps its `W`: 16 steps still fit
+    /// the budget 7 times.
+    #[test]
+    fn digest_row_covers_include_reads() {
+        assert_eq!(peak_kib(&[("digest", X)], KIND_PEAK_KIB), 16 * STEP);
+        assert_eq!(E16_BUDGET_KIB / (16 * STEP), 7);
+        assert_eq!(committed("adheq"), 4, "Up");
     }
 
     #[test]
