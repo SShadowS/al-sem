@@ -53,10 +53,11 @@ fn analyze(ws: &Path, detectors: &str) -> Vec<serde_json::Value> {
         single_app: false,
         with_evidence: false,
     };
-    let out = match run_analyze_with_exit(&args.read_inputs(), &args, "272-test") {
-        Ok((out, _, _)) => out,
-        Err(e) => panic!("run_analyze failed: {e}"),
-    };
+    let out =
+        match run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "272-test") {
+            Ok((out, ..)) => out,
+            Err(e) => panic!("run_analyze failed: {e}"),
+        };
     let json: serde_json::Value = serde_json::from_str(&out).expect("analyze JSON must parse");
     json["payload"]["findings"]
         .as_array()
