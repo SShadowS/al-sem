@@ -191,11 +191,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callee is now suppressed as unknown, exactly as for a local record. In cross-app mode
   this also suppresses d37 for dependency callers, whose calls have no callee edge in
   the workspace graph (CDO `--scope all`: d37 345 → 163; primary unchanged; measured on
-  the design prototype, re-measured at merge).
+  the final code, identical to the design prototype by fingerprint).
 - **d11, d21 and d33 now see helper loads and filters on `Rec`** (#272): a `var` helper
   that loads (d11, d21) or filters (d33) the implicit `Rec` now counts, as it does for a
   local record (Base App single-app: d11 −20, all false positives; measured on the
-  design prototype, re-measured at merge).
+  final code, identical to the design prototype by fingerprint).
 
 ### Fixed
 
