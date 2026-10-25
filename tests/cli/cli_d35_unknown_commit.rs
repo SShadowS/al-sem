@@ -1783,35 +1783,116 @@ const A6D_WS: &str = r#"codeunit 50101 "Ws Caller"
 }
 "#;
 
-/// #265 A6d (stated limit, Discovery D1): a subscriber that lives in a SOURCE
-/// dependency, reported at `--scope all` in the default cross-app mode, keeps
-/// today's text: its own uncertainty edges are not on the detector context, so
-/// no `unresolved:` segment, and it stays under "partly analysed".
+/// #287 A1 (lifts #265 A6d's stated limit): a subscriber that lives in a SOURCE
+/// dependency, reported at `--scope all` in the default cross-app mode, names
+/// its own unresolved site, as a primary subscriber does: the detector context
+/// now indexes the dependency half of the uncertainty edges too. It no longer
+/// lists itself under "partly analysed". Its id, severity, confidence and
+/// fingerprint are the base 08c58d63 values (recorded from a run on that base,
+/// as is the reasons string's leading `interface-open-world`), in the default
+/// selection and with `--detector d35` alone.
 #[test]
-fn dependency_subscriber_keeps_todays_text() {
+fn dependency_subscriber_names_its_own_sites() {
+    const REASONS: &str = "interface-open-world; unresolved: S.NextKm (line 8)";
+    const BASE_FINGERPRINT: &str = "84abf5ea8c006512";
     let (_tmp, ws) = dependency_subscriber_ws();
-    let findings = d35_findings(&analyze_in(&ws, None, None, Scope::All, false).0);
-    let dep: Vec<&Value> = findings
-        .iter()
-        .filter(|f| f["primaryLocation"]["routineName"] == "HandleRaised")
+    for detector in [None, Some(D35)] {
+        let label = format!("A1 {detector:?}");
+        let findings = d35_findings(&analyze_in(&ws, detector, None, Scope::All, false).0);
+        let dep: Vec<&Value> = findings
+            .iter()
+            .filter(|f| f["primaryLocation"]["routineName"] == "HandleRaised")
+            .collect();
+        // Precondition: the dependency subscriber has one d35 finding.
+        assert_eq!(
+            dep.len(),
+            1,
+            "{label} precondition: one d35 finding on HandleRaised, got {findings:#?}"
+        );
+        let f = dep[0];
+        let texts = [
+            (
+                "fixHint",
+                &f["fixHint"]["description"],
+                format!(
+                    "Check what could not be analysed ({REASONS}); if a Commit is reachable, \
+                     move it out of the subscriber or defer it."
+                ),
+            ),
+            (
+                "rootCause",
+                &f["rootCause"],
+                format!(
+                    "HandleRaised is an event subscriber whose call coverage is incomplete \
+                     ({REASONS}); a Commit cannot be ruled out \u{2014} the publisher could not \
+                     roll back committed state if one exists."
+                ),
+            ),
+            (
+                "evidence note",
+                &f["evidencePath"][0]["note"],
+                format!(
+                    "[EventSubscriber] HandleRaised may commit (mayCommit(summary) == \
+                     \"unknown\"; incomplete coverage: {REASONS})"
+                ),
+            ),
+        ];
+        for (what, got, want) in texts {
+            let got = got.as_str().unwrap_or_else(|| panic!("{label}: {what}"));
+            assert_eq!(got, want, "{label}: {what}");
+            assert!(!got.contains("partly analysed"), "{label}: {what}: {got}");
+        }
+        assert_transitive_id(f);
+        assert_eq!(f["severity"], "medium", "{label}: severity");
+        assert_eq!(
+            f["confidence"],
+            json!({"level": "possible"}),
+            "{label}: confidence"
+        );
+        assert_eq!(f["fingerprint"], BASE_FINGERPRINT, "{label}: fingerprint");
+    }
+}
+
+/// #287 A5: a census run on A6d's workspace prints the context's dependency
+/// uncertainty index, with non-zero bytes.
+#[test]
+fn dependency_uncertainty_index_has_a_census_row() {
+    let (_tmp, ws) = dependency_subscriber_ws();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["analyze", &ws.to_string_lossy(), "--scope", "all"])
+        .args(["--format", "json"])
+        .env("RUST_LOG", "off")
+        .env("ALSEM_RETAINED_CENSUS", "1")
+        .env_remove("ALSEM_TRACE")
+        .env_remove("ALSEM_TRACE_FILE")
+        .output()
+        .expect("spawn alsem");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "A5: alsem analyze failed ({}); stderr:\n{stderr}",
+        out.status
+    );
+    let bytes: Vec<u64> = stderr
+        .lines()
+        .filter_map(|l| {
+            let rest = l.strip_prefix(
+                "[retained-census] bucket=context.dependency_uncertainty_edges_by_from bytes=",
+            )?;
+            let n = rest
+                .split(' ')
+                .next()
+                .unwrap_or_else(|| panic!("A5: no bytes value in census line: {l}"));
+            Some(
+                n.parse()
+                    .unwrap_or_else(|e| panic!("A5: bytes {n:?} in census line {l}: {e}")),
+            )
+        })
         .collect();
-    // Preconditions: the dependency subscriber has a d35 unknown finding, and
-    // it names itself as partly analysed (so the next check is not vacuous).
-    assert_eq!(
-        dep.len(),
-        1,
-        "A6d precondition: one d35 finding on HandleRaised, got {findings:#?}"
-    );
-    let fix = dep[0]["fixHint"]["description"]
-        .as_str()
-        .expect("fixHint.description");
     assert!(
-        fix.contains("partly analysed: HandleRaised (Codeunit 70011)"),
-        "A6d precondition: listed under partly analysed: {fix}"
-    );
-    assert!(
-        !fix.contains("unresolved:"),
-        "A6d: no own-site segment: {fix}"
+        matches!(bytes.as_slice(), [b] if *b > 0),
+        "A5: one context.dependency_uncertainty_edges_by_from bucket with bytes > 0, got \
+         {bytes:?}; stderr:\n{stderr}"
     );
 }
 

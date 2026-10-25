@@ -4,7 +4,8 @@
 //! the top of `run_detectors`. This R4-A wave builds the EAGER indexes the task
 //! enumerates: routine_by_id / declaring (a routine's object, #279) / table_by_id / reverse_call_graph /
 //! entry_points / transaction_spans / resolved_call_edge_by_callsite /
-//! uncertainty_edges_by_from / call_site_by_id, plus the combined graph + the
+//! uncertainty_edges_by_from / dependency_uncertainty_edges_by_from (#287) /
+//! call_site_by_id, plus the combined graph + the
 //! per-routine `FullRoutineSummary` map (transaction_spans needs it).
 //!
 //! DEFERRED to later waves (TODO):
@@ -855,8 +856,15 @@ pub struct DetectorArtifacts {
     pub transaction_spans: Vec<TransactionSpan>,
     /// Resolved CallEdges keyed by callsiteId (first edge per callsite wins).
     pub resolved_call_edge_by_callsite: HashMap<String, CallEdge>,
-    /// Uncertainty edges grouped by source routine.
+    /// The Primary half's uncertainty edges (`rel.primary().uncertainty_edges`)
+    /// grouped by source routine, in edge order. The dependency half is in
+    /// [`Self::dependency_uncertainty_edges_by_from`].
     pub uncertainty_edges_by_from:
+        HashMap<String, Vec<crate::engine::l4::combined_graph::Uncertainty>>,
+    /// The dependency half's uncertainty edges (`rel.dependency_uncertainty()`)
+    /// grouped by source routine, in edge order (#287). Empty single-app. Read
+    /// through [`Self::own_uncertainty_edges`].
+    pub dependency_uncertainty_edges_by_from:
         HashMap<String, Vec<crate::engine::l4::combined_graph::Uncertainty>>,
     /// Per-node merged uncertainty set the path-walker accumulates per branch.
     /// `uncertaintiesAt(node) = core_summary.uncertainties ∪
@@ -1006,6 +1014,27 @@ pub struct DetectorArtifacts {
 }
 
 impl DetectorArtifacts {
+    /// `routine_id`'s own uncertainty edges: its Primary edges, then its
+    /// dependency edges. In the production build a caller's uncertainty edges
+    /// sit in at most one half: the cross-app split partitions calls by caller
+    /// (`capability_cone.rs`, `partition(|e| dep_routine_ids.contains(&e.from))`)
+    /// and `assemble` makes uncertainty edges from call edges only, with
+    /// `from: ce.from` (event dispatch adds plain edges only;
+    /// `combined_graph.rs`). So this is the routine's whole own-edge list in
+    /// either mode. `ExecRelation::new` itself does not enforce it.
+    pub fn own_uncertainty_edges(
+        &self,
+        routine_id: &str,
+    ) -> impl Iterator<Item = &crate::engine::l4::combined_graph::Uncertainty> {
+        [
+            &self.uncertainty_edges_by_from,
+            &self.dependency_uncertainty_edges_by_from,
+        ]
+        .into_iter()
+        .filter_map(move |m| m.get(routine_id))
+        .flatten()
+    }
+
     /// Test-only: intern `set` and attach it to `node`.
     #[cfg(test)]
     pub(crate) fn set_uncertainties_for_test(&mut self, node: &str, set: Vec<Uncertainty>) {
@@ -1621,16 +1650,9 @@ pub(crate) fn build_detector_artifacts(
     let resolved_call_edge_by_callsite =
         first_resolved_edge_per_callsite(std::mem::take(&mut calls.edges), &ws.routines);
 
-    let mut uncertainty_edges_by_from: HashMap<
-        String,
-        Vec<crate::engine::l4::combined_graph::Uncertainty>,
-    > = HashMap::new();
-    for ue in &graph.uncertainty_edges {
-        uncertainty_edges_by_from
-            .entry(ue.from.clone())
-            .or_default()
-            .push(ue.uncertainty.clone());
-    }
+    let uncertainty_edges_by_from = index_uncertainty_by_from(&graph.uncertainty_edges);
+    let dependency_uncertainty_edges_by_from =
+        index_uncertainty_by_from(rel.dependency_uncertainty());
 
     // --- Per-node uncertainty wiring (the path-walker source) --------------
     // al-sem `walkEvidence` computes
@@ -1793,6 +1815,7 @@ pub(crate) fn build_detector_artifacts(
         transaction_spans,
         resolved_call_edge_by_callsite,
         uncertainty_edges_by_from,
+        dependency_uncertainty_edges_by_from,
         uncertainties_by_node,
         uncertainties,
         summaries,
@@ -1877,6 +1900,13 @@ fn census_context(c: &DetectorArtifacts) {
             .buf::<(String, Vec<Uncertainty>)>(c.uncertainty_edges_by_from.len())
             .strs(c.uncertainty_edges_by_from.keys())
             .bufs(c.uncertainty_edges_by_from.values()),
+    );
+    emit(
+        "context.dependency_uncertainty_edges_by_from",
+        Tally::default()
+            .buf::<(String, Vec<Uncertainty>)>(c.dependency_uncertainty_edges_by_from.len())
+            .strs(c.dependency_uncertainty_edges_by_from.keys())
+            .bufs(c.dependency_uncertainty_edges_by_from.values()),
     );
     emit(
         "context.uncertainties_by_node",
@@ -2041,6 +2071,23 @@ fn census_ordering_facts(m: &HashMap<String, crate::engine::l5::ordering_facts::
         .strs(m.values().map(|f| &f.routine_id))
         .bufs(m.values().map(|f| &f.facts));
     t.emit("context.ordering_facts", Kind::Shallow);
+}
+
+/// `edges`' uncertainties grouped by `from`, in edge order, duplicates kept.
+/// Builds both `uncertainty_edges_by_from` and
+/// `dependency_uncertainty_edges_by_from`.
+fn index_uncertainty_by_from(
+    edges: &[crate::engine::l4::combined_graph::UncertaintyEdge],
+) -> HashMap<String, Vec<crate::engine::l4::combined_graph::Uncertainty>> {
+    let mut by_from: HashMap<String, Vec<crate::engine::l4::combined_graph::Uncertainty>> =
+        HashMap::new();
+    for ue in edges {
+        by_from
+            .entry(ue.from.clone())
+            .or_default()
+            .push(ue.uncertainty.clone());
+    }
+    by_from
 }
 
 /// `resolved_call_edge_by_callsite`: per call site, the FIRST edge that has a

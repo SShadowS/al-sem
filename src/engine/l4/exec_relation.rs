@@ -38,7 +38,9 @@ pub struct ExecRelation {
     scc: Arc<SccResult>,
     /// The dependency half's uncertainty edges, in the order the half-build
     /// sorts them. Read by the coverage fold through
-    /// [`ExecRelation::uncertainty_all`] (#160 step 5) and by the census.
+    /// [`ExecRelation::uncertainty_all`] (#160 step 5), by the census, and by
+    /// the detector context, which indexes them in their own map,
+    /// `dependency_uncertainty_edges_by_from` (#287).
     dependency_uncertainty: Vec<UncertaintyEdge>,
 }
 
@@ -130,14 +132,16 @@ impl ExecRelation {
     }
 
     /// The dependency half's uncertainty edges. The coverage fold reads them
-    /// through [`ExecRelation::uncertainty_all`].
+    /// through [`ExecRelation::uncertainty_all`]; the detector context indexes
+    /// them by `from` in `dependency_uncertainty_edges_by_from` (#287).
     pub fn dependency_uncertainty(&self) -> &[UncertaintyEdge] {
         &self.dependency_uncertainty
     }
 
     /// The uncertainty edges of every caller the Cone carries: the Primary half,
     /// then the dependency half. Read by the coverage fold only; the solve and
-    /// the context's indexes read `primary().uncertainty_edges`.
+    /// the context's `uncertainty_edges_by_from` read `primary().uncertainty_edges`,
+    /// and the context indexes the dependency half in its own map (#287).
     pub fn uncertainty_all(&self) -> impl Iterator<Item = &UncertaintyEdge> {
         self.primary
             .uncertainty_edges

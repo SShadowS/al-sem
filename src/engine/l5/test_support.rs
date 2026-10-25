@@ -453,6 +453,7 @@ pub fn empty_artifacts(
         transaction_spans: vec![],
         resolved_call_edge_by_callsite: HashMap::new(),
         uncertainty_edges_by_from: HashMap::new(),
+        dependency_uncertainty_edges_by_from: HashMap::new(),
         uncertainties_by_node: HashMap::new(),
         uncertainties: Default::default(),
         // ⟨C1⟩ Fold BEFORE the move so the derived substrate always mirrors this
@@ -597,30 +598,73 @@ pub fn write_fixture_step4(ws: &std::path::Path) {
     write_ws_with_dep(ws, ws_al, &methods, lib);
 }
 
-/// Spec §5.4: a dependency routine `DepCaller` whose call names a method no
-/// record has (a to-less call), called from the workspace so it is demanded.
-pub fn write_fixture_dep_uncertainty(ws: &std::path::Path) {
-    let lib = r#"codeunit 12 "Dep Rec Lib"
-{
+/// The dependency of [`write_fixture_dep_uncertainty`]: `DepCaller`, whose
+/// statements are `calls` (to-less calls on a `Customer`).
+fn dep_uncertainty_lib(calls: &str) -> String {
+    format!(
+        r#"codeunit 12 "Dep Rec Lib"
+{{
     procedure DepCaller()
     var
         R: Record Customer;
     begin
-        R.NoSuchMethod();
-    end;
+{calls}    end;
+}}
+"#
+    )
 }
-"#;
-    let ws_al = r#"codeunit 50181 "Ws Call"
-{
+/// The workspace of [`write_fixture_dep_uncertainty`]: `Go` calls `DepCaller`,
+/// then `more` (further procedures, or nothing).
+fn ws_call(more: &str) -> String {
+    format!(
+        r#"codeunit 50181 "Ws Call"
+{{
     procedure Go()
     var
         Lib: Codeunit "Dep Rec Lib";
     begin
         Lib.DepCaller();
     end;
+{more}}}
+"#
+    )
 }
-"#;
-    write_ws_with_dep(ws, ws_al, r#"[{"Name":"DepCaller","Parameters":[]}]"#, lib);
+const DEP_UNCERTAINTY_METHODS: &str = r#"[{"Name":"DepCaller","Parameters":[]}]"#;
+/// Two distinct to-less calls (call sites `cs0`, `cs1`), so an index that
+/// reorders a caller's edges is caught (#287 C8).
+const TWO_TO_LESS: &str = "        R.NoSuchMethod();\n        R.OtherMissing();\n";
+
+/// Spec §5.4: a dependency routine `DepCaller` whose call names a method no
+/// record has (a to-less call), called from the workspace so it is demanded.
+pub fn write_fixture_dep_uncertainty(ws: &std::path::Path) {
+    write_ws_with_dep(
+        ws,
+        &ws_call(""),
+        DEP_UNCERTAINTY_METHODS,
+        &dep_uncertainty_lib("        R.NoSuchMethod();\n"),
+    );
+}
+
+/// #287 A3: [`write_fixture_dep_uncertainty`]'s shape, with two to-less calls
+/// in `DepCaller` and a workspace routine `WsUnc` making two of its own, so
+/// both halves of the uncertainty edges are non-empty and each caller's edges
+/// have an order.
+pub fn write_fixture_dep_uncertainty_both_halves(ws: &std::path::Path) {
+    let ws_unc = format!(
+        r#"
+    procedure WsUnc()
+    var
+        R: Record Customer;
+    begin
+{TWO_TO_LESS}    end;
+"#
+    );
+    write_ws_with_dep(
+        ws,
+        &ws_call(&ws_unc),
+        DEP_UNCERTAINTY_METHODS,
+        &dep_uncertainty_lib(TWO_TO_LESS),
+    );
 }
 
 /// #160 step 6 D6 (T7 (a)): the dependency's `DepCaller`, demanded by the

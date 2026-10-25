@@ -25,7 +25,7 @@ use rayon::prelude::*;
 /// the model's calls and event graph, combined graph, reverse graph, entry
 /// points, reachable roots, all borrowed indexes (routine/object/table/call-site
 /// maps), `resolved_call_edge_by_callsite`, `uncertainty_edges_by_from`,
-/// `upgraded_bindings_by_callsite`, `event_flow_indexes`, `cross_extension_subscribers`
+/// `dependency_uncertainty_edges_by_from` (#287), `upgraded_bindings_by_callsite`, `event_flow_indexes`, `cross_extension_subscribers`
 /// (T3), `fingerprint_index` (T1), and `root_classifications_by_routine`. The four
 /// EXPENSIVE substrates below are built only when some selected detector demands them;
 /// `run_detectors` folds every detector's `requires` into the union it passes here.
