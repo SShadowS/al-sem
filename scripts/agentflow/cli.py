@@ -613,8 +613,9 @@ def cmd_make_worktree(args, ctx, gh, git):
     git.worktree_add(Path(claim["worktree"]), claim["branch"], base)
     target_root = config(ctx)["target_root"]
     built = worktrees.link_target(Path(claim["worktree"]), Path(target_root)) if target_root else None
+    seeded = False if built else worktrees.seed_target(ctx.paths.root, Path(claim["worktree"]))
     return _emit({"worktree": claim["worktree"], "branch": claim["branch"], "base": base,
-                  "target": str(built) if built else None})
+                  "target": str(built) if built else None, "seeded": seeded})
 
 
 def cmd_beat(args, ctx, gh, git):

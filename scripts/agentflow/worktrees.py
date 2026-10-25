@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -57,6 +58,39 @@ def link_target(worktree: Path, target_root: Path) -> Path:
     else:
         os.symlink(built, link, target_is_directory=True)
     return built
+
+
+SEED_SKIP = {"flycheck0", "tmp"}   # rust-analyzer's own builds and scratch: never reused
+
+
+def _reflink_copy(src: Path, dst_dir: Path) -> None:
+    subprocess.run(["cp", "-a", "--reflink=always", str(src), str(dst_dir)],
+                   check=True, capture_output=True)
+
+
+def seed_target(root: Path, worktree: Path) -> bool:
+    """Start `<worktree>/target` as a copy-on-write copy of the root
+    checkout's `target/`, so a new worktree does not rebuild every dependency
+    from scratch (deps build at opt-level 2, in up to four profiles).
+
+    SAFE AGAINST STALE TEST BINARIES (see `verify_path`): a fresh checkout
+    gives every workspace source a newer mtime than any copied artifact, so
+    cargo rebuilds every workspace crate (and re-bakes `CARGO_MANIFEST_DIR`)
+    and reuses only registry dependencies. `cp --reflink=always` fails rather
+    than doing a full copy on a filesystem without reflinks; any failure
+    leaves no `target/` and returns False, so cargo builds cold as before."""
+    src, dst = root / "target", worktree / "target"
+    if os.name == "nt" or not src.is_dir() or dst.exists():
+        return False
+    dst.mkdir()
+    try:
+        for entry in src.iterdir():
+            if entry.name not in SEED_SKIP:
+                _reflink_copy(entry, dst)
+    except (OSError, subprocess.CalledProcessError):
+        shutil.rmtree(dst, ignore_errors=True)
+        return False
+    return True
 
 
 def unlink_target(worktree: Path, target_root: Path) -> None:
