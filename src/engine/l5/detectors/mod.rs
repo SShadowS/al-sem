@@ -332,8 +332,9 @@ const TABLE_TRIGGERS_REC_AUTO_PERSIST: &[&str] = &["OnInsert", "OnModify", "OnDe
 /// (detector-audit class B), AND the op's receiver is the trigger's implicit
 /// current record `Rec`. In all of these the AL platform loaded `Rec` before
 /// the trigger ran, so "never loaded" / "never persisted" detectors
-/// (d11/d21/d37) must not fire on it (for d37 the table-level triggers also
-/// auto-persist — see `is_auto_persist_trigger_rec`). When unsure (any other
+/// (d11/d21/d37) must not fire on it (the table-level triggers also
+/// auto-persist; d39's rule for who persists `Rec` is
+/// [`implicit_rec_persisted_by_owner`]). When unsure (any other
 /// kind / object type / trigger name / receiver) returns `false` — the
 /// detectors keep firing.
 pub(crate) fn is_platform_loaded_trigger_rec(
@@ -363,28 +364,90 @@ pub(crate) fn is_platform_loaded_trigger_rec(
     }
 }
 
-/// Class-B auto-persist signal (exact, structural): true iff `routine` is a
-/// table-LEVEL `OnInsert`/`OnModify`/`OnDelete`/`OnRename` trigger of a
-/// `Table`/`TableExtension` object AND `record_variable_name` is the trigger's
-/// implicit current record `Rec`. The platform persists `Rec` after these
-/// triggers return (`OnDelete` deletes it), so a Validate-dirty `Rec` at
-/// trigger exit is NOT discarded — d39 (record-left-dirty) must not flag the
-/// trigger for "never persists after the call". When unsure returns `false` —
-/// the detector keeps firing.
-pub(crate) fn is_auto_persist_trigger_rec(
+/// Page / pageext triggers after which a modifiable page writes `Rec` itself
+/// (#272; TestPage on BC 28.4, a helper doing only `Validate` on `Rec`, no
+/// `Modify`). OnBeforeValidate is by analogy with OnAfterValidate (not probed);
+/// the rest were measured. Measured lost, so absent: OnAfterGetRecord. Every
+/// trigger not listed (OnOpenPage, ...) counts as not persisting.
+const PAGE_TRIGGERS_REC_PERSISTED: &[&str] = &[
+    "OnAction",
+    "OnValidate",
+    "OnLookup",
+    "OnAssistEdit",
+    "OnDrillDown",
+    "OnNewRecord",
+    "OnInsertRecord",
+    "OnModifyRecord",
+    "OnBeforeAction",
+    "OnAfterAction",
+    "OnAfterValidate",
+    "OnBeforeValidate",
+];
+
+/// Table-extension triggers that run AFTER the platform wrote `Rec`, so a
+/// `Validate` there is lost (all three measured on BC 28.4, #272). OnAfterDelete
+/// is absent on purpose: the row is gone, so there is no write to lose and no
+/// fix to offer (the reason table OnDelete is exempt too).
+const TABLEEXT_TRIGGERS_AFTER_WRITE: &[&str] = &["OnAfterInsert", "OnAfterModify", "OnAfterRename"];
+
+/// Does someone other than `routine` persist the implicit `Rec` it leaves dirty?
+/// d39's owner rule (#272; it absorbs detector-audit class B). True for:
+/// - a Table / TableExtension procedure or field trigger: `Rec` is the caller's
+///   record (`Cust.Foo()`, `Cust.Validate(F)`), which the caller persists;
+/// - any other table / tableext trigger except [`TABLEEXT_TRIGGERS_AFTER_WRITE`]:
+///   table OnInsert / OnModify / OnRename and tableext OnBefore* were measured to
+///   persist; OnDelete / OnAfterDelete are moot (the row is gone);
+/// - a Page / PageExtension procedure or one of [`PAGE_TRIGGERS_REC_PERSISTED`],
+///   on a page that is not `Editable = false` and not `ModifyAllowed = false`
+///   (each measured to lose the write on its own; [`page_may_modify`]).
+///
+/// False (d39 reports) for every other trigger (OnAfterGetRecord measured lost,
+/// OnOpenPage, ...), a read-only page and every other object type.
+///
+/// Known false negative, runtime-only (as before #272): a modifiable page opened
+/// in VIEW mode loses the write too (measured), but the open mode is a runtime
+/// fact this cannot see. The same holds for a page procedure called from a
+/// trigger that does not persist.
+pub(crate) fn implicit_rec_persisted_by_owner(
     routine: &ModelRoutine,
-    record_variable_name: &str,
+    ctx: &DetectorContext,
 ) -> bool {
-    if !record_variable_name.eq_fold_identifier("rec") {
-        return false;
+    let is_trigger = routine.kind == "trigger";
+    let named = |names: &[&str]| names.iter().any(|t| routine.name.eq_ignore_ascii_case(t));
+    match routine.object_type.as_str() {
+        "Table" | "TableExtension" => !is_trigger || !named(TABLEEXT_TRIGGERS_AFTER_WRITE),
+        "Page" | "PageExtension" => {
+            (!is_trigger || named(PAGE_TRIGGERS_REC_PERSISTED)) && page_may_modify(routine, ctx)
+        }
+        _ => false,
     }
-    if routine.kind != "trigger" {
-        return false;
-    }
-    matches!(routine.object_type.as_str(), "Table" | "TableExtension")
-        && TABLE_TRIGGERS_REC_AUTO_PERSIST
-            .iter()
-            .any(|t| routine.name.eq_ignore_ascii_case(t))
+}
+
+/// The page holding `routine` (for a PageExtension, its base page found by name)
+/// is neither `Editable = false` nor `ModifyAllowed = false`. A page that is not
+/// in the model (e.g. a pageext's base page in a dependency the model does not
+/// hold), or a base name more than one page carries, counts as modifiable (the
+/// exemption holds; a stated limit, no fixture).
+fn page_may_modify(routine: &ModelRoutine, ctx: &DetectorContext) -> bool {
+    let Some(&obj) = ctx.objects_by_id.get(routine.object_id.as_str()) else {
+        return true;
+    };
+    let page = if obj.object_type == "PageExtension" {
+        let Some(base) = obj.extends_target_name.as_deref() else {
+            return true;
+        };
+        let mut pages = ctx
+            .objects_by_id
+            .values()
+            .filter(|o| o.object_type == "Page" && o.name.eq_fold_identifier(base));
+        match (pages.next(), pages.next()) {
+            (Some(&p), None) => p,
+            _ => return true,
+        }
+    } else {
+        obj
+    };
+    page.editable != Some(false) && page.modify_allowed != Some(false)
 }
 
 /// The record-op names d11/d21 recognize as satisfying the "record is loaded"

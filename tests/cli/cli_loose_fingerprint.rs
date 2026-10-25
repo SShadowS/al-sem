@@ -898,15 +898,14 @@ fn d48_loop_objects_distinct() {
     assert_ne!(loose(&fs[0]), loose(&fs[1]));
 }
 
-/// FR2 (refuted): an implicit `Rec` argument never reaches d39-d42, so it can never
-/// give a `?` caller table. Such a binding has no `source_record_variable_id`
-/// (`ir_walk.rs` `bound_rec_var = None`), so `calls.rs` `initial_binding_state` makes
-/// it `"non-record-arg"`, `upgrade_bindings` never upgrades that to `"resolved"`, and
-/// all four detectors require `"resolved"`. This pins that: the table procedure that
-/// passes `Rec` gives no finding; the one that passes a local `Cust` does. If it ever
-/// fires, the implicit-Rec caller table needs resolving (record_types pass 3 knows it).
+/// #272 A1: an implicit `Rec` argument binds like a declared record variable.
+/// `calls.rs` `initial_binding_state` starts an `"implicit-rec"` binding as
+/// `"unresolved-callee"`, so `upgrade_bindings` resolves it and d41 sees it. The
+/// table procedure that passes `Rec` and the one that passes a local `Cust` both give
+/// a d41 finding, and both carry the same `looseFingerprint`: the caller table comes
+/// from record_types pass 3 (the table's own `Rec`), the same table as the local's.
 #[test]
-fn d41_implicit_rec_binding_is_not_reported() {
+fn d41_implicit_rec_binding_is_reported() {
     let table = r#"
 table 18 Customer
 {
@@ -945,8 +944,13 @@ codeunit 50300 H
         &analyze_json_with(&ws, Some(D41.detector), true),
         D41.detector,
     );
-    assert_eq!(fs.len(), 1, "{fs:#?}");
-    assert_eq!(loc(&fs[0], "routineName"), "ViaLocal");
+    let mut routines: Vec<_> = fs
+        .iter()
+        .map(|f| loc(f, "routineName").as_str().unwrap())
+        .collect();
+    routines.sort_unstable();
+    assert_eq!(routines, ["ViaLocal", "ViaRec"], "{fs:#?}");
+    assert_eq!(loose(&fs[0]), loose(&fs[1]), "{fs:#?}");
 }
 
 // --- d4, d18, d22: the table and the literal key or field ---

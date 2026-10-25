@@ -95,6 +95,7 @@ mod cli_events_policy_dependencies;
 mod cli_fingerprint_routine_cross_app;
 mod cli_full_snapshot_split;
 mod cli_graph_export;
+mod cli_implicit_rec_bindings;
 mod cli_implicit_trigger_cone;
 mod cli_inputs_frozen;
 mod cli_inventory_cross_app;

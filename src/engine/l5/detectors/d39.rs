@@ -25,6 +25,16 @@
 //! and a whole-record assignment (`Cust := Other`) is not a record op, so it does
 //! not count as a reset.
 //!
+//! An implicit `Rec` (#272) is reported only where nobody else persists it
+//! (`implicit_rec_persisted_by_owner`): a table / tableext procedure or field
+//! trigger hands `Rec` back to its caller, the platform writes it after the table
+//! triggers, the tableext OnBefore* triggers, and the listed triggers and the
+//! procedures of a modifiable page. It reports in a tableext OnAfterInsert /
+//! OnAfterModify / OnAfterRename, OnAfterGetRecord or any other page trigger, on an
+//! `Editable = false` / `ModifyAllowed = false` page, and wherever the routine
+//! reloads `Rec` after the call. `xRec` always reports. Known false negative: a
+//! modifiable page opened in view mode (a runtime fact).
+//!
 //! Reads the CORE `RoutineSummary.parameterRoles` via `ctx.parameter_roles_by_routine`
 //! (the `dirtyAtExit` fact), `ctx.reverse_call_graph`, and the post-upgrade per-callsite
 //! bindings via `ctx.upgraded_bindings_by_callsite` joined positionally with
@@ -40,7 +50,7 @@ use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
     anchor_of, before_anchor, branch_exclusive, callee_param_table_subject,
-    is_auto_persist_trigger_rec, record_load_points,
+    implicit_rec_persisted_by_owner, record_load_points,
 };
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
@@ -60,7 +70,7 @@ pub fn detect_d39(
     let mut candidates_considered = 0usize;
     let mut skipped_caller_persists = 0u64;
     let mut skipped_temp_record = 0u64;
-    let mut skipped_auto_persist_trigger = 0u64;
+    let mut skipped_implicit_rec_owner_persists = 0u64;
     let mut skipped_dirt_returned_to_caller = 0u64;
 
     for callee in &ws.routines {
@@ -155,39 +165,13 @@ pub fn detect_d39(
 
                 candidates_considered += 1;
 
-                // Class B (docs/detector-audit.md): the caller is a table-level
-                // OnInsert/OnModify/OnDelete/OnRename trigger forwarding its
-                // implicit `Rec` — the platform persists `Rec` after the
-                // trigger returns (OnDelete deletes it), so the dirty state is
-                // not discarded.
-                if is_auto_persist_trigger_rec(caller, &source_name_lc) {
-                    skipped_auto_persist_trigger += 1;
-                    continue;
-                }
-
-                // A `var` parameter hands the record back to the caller's caller.
-                // When the caller's OWN parameter is dirty at exit (the L4 walker
-                // composes the callee's dirt into it), nothing is discarded here:
-                // this loop judges that parameter's callers instead. A caller that
-                // drops the dirt itself (e.g. reloads after the call) is not
-                // dirty at exit and still falls through to be flagged. The role is
-                // a whole-routine fact, so a caller that reloads after THIS call
-                // and dirties the record again itself is dirty at exit too, yet it
-                // lost the callee's write: a load/init/copy into the source after
-                // the call keeps it flagged. Source order, like the persist check
-                // below, except that a reload in the other arm of a branch holding
-                // the call does not count (`branch_exclusive`). A reset is the shared
-                // "loaded" definition: own load ops and `var` helpers that load.
-                // No caller-visibility gate (see the module doc): the dirt goes back
-                // to the caller whether or not that caller is in the workspace.
-                if binding.source_kind == "parameter"
-                    && let Some(src_ix) = binding.source_parameter_index
-                    && ctx
-                        .parameter_roles_by_routine
-                        .get(&caller.id)
-                        .and_then(|rs| rs.iter().find(|r| r.parameter_index == src_ix))
-                        .is_some_and(|r| r.dirty_at_exit == EffectPresence::Yes)
-                    && !record_load_points(caller, ctx)
+                // A load / init / copy into the source after the call drops the
+                // dirt in this routine: source order, except a reset in the other
+                // arm of a branch holding the call (`branch_exclusive`). A reset is
+                // the shared "loaded" definition: own load ops and `var` helpers
+                // that load.
+                let reset_after_call = || {
+                    record_load_points(caller, ctx)
                         .get(&source_name_lc)
                         .is_some_and(|pts| {
                             pts.iter().any(|p| {
@@ -200,6 +184,43 @@ pub fn detect_d39(
                                     )
                             })
                         })
+                };
+
+                // #272 (absorbs detector-audit class B): an implicit `Rec` that the
+                // caller or the platform persists, unless this routine drops the
+                // dirt itself. `xRec` is persisted by nobody, so it always reports.
+                // `is_variable` inside `reset_after_call` matches any point here:
+                // an implicit binding has no record-variable id, so the `rec` name
+                // bucket is the match.
+                if binding.source_kind == "implicit-rec"
+                    && source_name_lc == "rec"
+                    && !reset_after_call()
+                    && implicit_rec_persisted_by_owner(caller, ctx)
+                {
+                    skipped_implicit_rec_owner_persists += 1;
+                    continue;
+                }
+
+                // A `var` parameter hands the record back to the caller's caller.
+                // When the caller's OWN parameter is dirty at exit (the L4 walker
+                // composes the callee's dirt into it), nothing is discarded here:
+                // this loop judges that parameter's callers instead. A caller that
+                // drops the dirt itself (e.g. reloads after the call) is not
+                // dirty at exit and still falls through to be flagged. The role is
+                // a whole-routine fact, so a caller that reloads after THIS call
+                // and dirties the record again itself is dirty at exit too, yet it
+                // lost the callee's write: a reset after the call
+                // (`reset_after_call`) keeps it flagged.
+                // No caller-visibility gate (see the module doc): the dirt goes back
+                // to the caller whether or not that caller is in the workspace.
+                if binding.source_kind == "parameter"
+                    && let Some(src_ix) = binding.source_parameter_index
+                    && ctx
+                        .parameter_roles_by_routine
+                        .get(&caller.id)
+                        .and_then(|rs| rs.iter().find(|r| r.parameter_index == src_ix))
+                        .is_some_and(|r| r.dirty_at_exit == EffectPresence::Yes)
+                    && !reset_after_call()
                 {
                     skipped_dirt_returned_to_caller += 1;
                     continue;
@@ -306,7 +327,10 @@ pub fn detect_d39(
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
     stats.add_skip("callerPersists", skipped_caller_persists);
     stats.add_skip("tempRecord", skipped_temp_record);
-    stats.add_skip("autoPersistTriggerRec", skipped_auto_persist_trigger);
+    stats.add_skip(
+        "implicitRecOwnerPersists",
+        skipped_implicit_rec_owner_persists,
+    );
     stats.add_skip("dirtReturnedToCaller", skipped_dirt_returned_to_caller);
     Ok(DetectorOutput::no_diag(findings, stats))
 }

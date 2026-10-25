@@ -1,6 +1,6 @@
 ws-api-page/src/api.al::0::OnOpenPage	271e903b62c05583
 ws-api-page/src/api.al::0::ApiHelper	f4e3e482839d9c2b
-ws-argument-bindings/src/Codeunit.al::0::CallVariations	f5a3cce0e59a4158
+ws-argument-bindings/src/Codeunit.al::0::CallVariations	2783889a203ca185
 ws-argument-bindings/src/Codeunit.al::0::WithVarParam	dd37a4d2a8ecb23b
 ws-argument-bindings/src/Codeunit.al::0::WithByValueParam	76fb44f7e52d5d8e
 ws-argument-bindings/src/Codeunit.al::0::HelperLocalRecord	001679575b347f75

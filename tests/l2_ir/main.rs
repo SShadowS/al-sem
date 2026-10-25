@@ -7,6 +7,7 @@ mod encoder_vectors;
 mod ir_l2_snapshot;
 mod ir_lowering_audit;
 mod ir_robustness;
+mod l2_implicit_rec_source_kind;
 mod l2_receiver_oracles;
 mod l2_vectors;
 mod l2cap_oracles;
