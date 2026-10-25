@@ -14,7 +14,8 @@ use std::path::Path;
 use al_sem::engine::batch::job::ViewUniverse;
 use al_sem::engine::gate::run::AnalysisTarget;
 use al_sem::engine::incremental::{
-    FullReason, IncrementalHost, L4Projection, RefreshError, RefreshKind, RefreshReport, Refresher,
+    FullReason, IncrementalHost, L4Projection, PHASE_CHECKS, RefreshError, RefreshKind,
+    RefreshReport, Refresher,
 };
 use al_sem::engine::l4::effect_lattice::EffectPresence;
 use al_sem::engine::l4::summary::{DbEffect, RoutineSummary, TempState};
@@ -1184,4 +1185,55 @@ fn t1j_c_undeclared_package() {
         },
         &same_projection,
     );
+}
+
+/// T3 (spec §5.4): a refresh cancelled at the top of the LAST SCC turn (call
+/// `PHASE_CHECKS + total`: every earlier SCC, `L`'s re-solved one included,
+/// has completed) returns `Cancelled` and keeps the r0 baseline whole; the
+/// next refresh is Incremental against it. The exact call count pins the
+/// three phase checks (inputs, target, relation) and one check per SCC turn.
+/// Break (O14): `last.take()` at the start of `refresh` leaves no projection.
+#[test]
+fn t3_cancel_keeps_baseline() {
+    for universe in UNIVERSES {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_ws(dir, T1A);
+        let mut host = IncrementalHost::new(dir, universe);
+        let r0 = refresh(&mut host);
+        let proj = host.projection();
+        let fingerprint = host.baseline_fingerprint();
+        assert!(fingerprint.is_some(), "{universe:?}: r0 has a baseline");
+        replace_once(dir, "src/L.al", "C.Insert();", "C.Insert(); C.Modify();");
+        let at = PHASE_CHECKS + r0.total;
+        let calls = std::cell::Cell::new(0);
+        let cancel = || {
+            calls.set(calls.get() + 1);
+            calls.get() == at
+        };
+        let err = host.refresh_committed(&cancel);
+        assert_eq!(host.projection(), proj, "{universe:?}: projection kept");
+        assert_eq!(
+            host.baseline_fingerprint(),
+            fingerprint,
+            "{universe:?}: baseline fingerprint kept"
+        );
+        assert!(
+            matches!(err, Err(RefreshError::Cancelled)),
+            "{universe:?}: cancelled: {err:?}"
+        );
+        assert_eq!(calls.get(), at, "{universe:?}: cancel calls");
+        let report = refresh(&mut host);
+        assert_eq!(report.kind, RefreshKind::Incremental, "{universe:?}");
+        assert_eq!(
+            report.resolved,
+            labels(&[&["L.L()"], &["B.B()"], &["A.A()"]]),
+            "{universe:?}: re-solved against the r0 baseline"
+        );
+        assert_eq!(
+            host.projection().expect("committed"),
+            fresh_projection(dir, universe),
+            "{universe:?}: oracle"
+        );
+    }
 }
