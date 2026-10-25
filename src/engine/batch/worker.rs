@@ -101,6 +101,9 @@ pub struct WorkerJob {
     /// `digest --changed`: whether the parent took the value for an existing
     /// diff file (`None`: the job has no `--changed`).
     pub changed_is_file: Option<bool>,
+    /// `digest`: the parent's diff-root decision, failure included (#77);
+    /// `None` for every other command.
+    pub diff_root: Option<Result<crate::engine::l5::digest_cli::DiffRoot, String>>,
 }
 
 /// The parent's stdin read: its text, or the read failed.

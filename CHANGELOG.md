@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`alsem digest --diff` reads paths relative to the enclosing git top level** (#77). `git
+  diff` writes repository-root paths from any folder, so a workspace in a repository
+  subfolder (`<repo>/Cloud`) got `diff-file-unmatched` for `a/Cloud/src/posting.al`. The top
+  level is the nearest folder at or above the canonical workspace that holds `.git` (a
+  folder, or a worktree's or submodule's file), with no depth limit and no `git` command. A
+  path is read as written and with the workspace's folder (`Cloud/`) removed; a
+  workspace-relative diff still works. The prefix compares folder by folder, exactly, case
+  included, on every platform. With no enclosing repository, paths stay workspace-relative.
+- **`alsem digest --diff-root <dir>`** (#77): the folder the diff's paths are relative to,
+  for a workspace outside git or a `diff -ru old new` run from a parent folder. The
+  workspace must be inside it (as spelled, so a symlinked workspace keeps its link name, or
+  after resolving symlinks); every path is then read below it only. A root that does not
+  exist, is not a folder or does not contain the workspace, and a `--diff-root` with no
+  diff, are exit 3. In a batch the parent decides the root once and its workers use that
+  decision. `src/bin/alsem.rs` (`decide_diff_root`, `pin_diff_root`),
+  `src/engine/l5/digest_cli.rs` (`DiffRoot`, `diff_readings`, `diff_key`).
+  Not covered: `--file` / `--changed-files` still take workspace-relative paths only; a
+  diff whose prefix differs from the on-disk folder only by case stays unmatched (use `git
+  diff --relative`); macOS decomposed (NFD) folder names do not match git's composed ones;
+  `GIT_DIR` / `GIT_WORK_TREE` are not read; human output still shows no changed-roots
+  diagnostics; under auto mode a repository-root path outside the workspace still resolves
+  when the workspace holds the same relative path (as before).
+
 ### Changed
 
 - **Grammar: tree-sitter-al `main` at `940ba71b`** (package version still 4.4.1; was
@@ -71,6 +96,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LoadPointCache`, now shared with d39), `d11.rs`, `d37.rs`, `d39.rs`,
   `src/program/body/ir_walk.rs` (`ir_record_variables`).
 
+- **Digest `schemaVersion` 1.7.0: new `diff-file-ambiguous` changed-roots diagnostic**
+  (#77). A diff path that names a workspace file both as written and below the git top level
+  (`Cloud/src/posting.al` when the workspace holds both `src/posting.al` and
+  `Cloud/src/posting.al`) gives no roots and one `{kind: "diff-file-ambiguous", file,
+  candidates}`, the as-written reading's units first, each reading's units sorted. Any
+  workspace `.al` file counts, routines or not. `--diff-root` settles it. If such a file
+  also has a broken hunk header, both candidates are blocked (#72). Other files still
+  resolve, and the run exits 0 when one did. Contract, stated at the `schemaVersion` line: a
+  minor bump is additive; `changedRootsDiagnostics[].kind` is an open set (treat an unknown
+  kind as a diagnostic, not a parse error); exit 0 does not mean every diff file resolved.
+  Consumers that pin digest 1.6.0, such as CentralGauge's `ALSEM_SCHEMAS`, must add 1.7.0.
+  Prove's schema does not change.
 - **`alsem digest --diff` reads `diff -r`'s `Only in <dir>: <name>` lines** (#111), which it
   ignored before, so a diff that adds or deletes files no longer drops them silently. The
   path is `<dir>/<name>` with one `/` between (`Only in new/: x.al` is `new/x.al`). It is
@@ -90,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`alsem digest --diff` reads plain `diff -u` / `diff -ru` headers** (#111), when their
   paths are relative to the workspace (run `diff` from the workspace root, or use
-  `--label`). GNU `diff` writes each `---`/`+++` header as `<path><TAB><timestamp>`, and the
+  `--label`, or pass `--diff-root`, #77). GNU `diff` writes each `---`/`+++` header as `<path><TAB><timestamp>`, and the
   TAB and timestamp stayed in the path, so every plain-diff file was `diff-file-unmatched`
   and a timestamped `/dev/null` was not seen as an addition or deletion. The header path now
   ends at the first raw TAB, before the `/dev/null` test and before unquoting, so GNU's
@@ -98,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that holds a TAB, so a raw TAB only ever ends the path (checked on GNU diffutils 3.12 and
   git 2.53.0); a producer that writes such a name raw and unquoted would cut it at that TAB.
   `src/engine/l5/diff_parser.rs` (`extract_path`). Not covered: `diff -ru old new` run from
-  a parent folder writes a tree-root folder (`n/src/…`) that is not matched; `diff -ruN`'s
+  a parent folder writes a tree-root folder (`n/src/…`) that resolves only with
+  `--diff-root` (#77); `diff -ruN`'s
   epoch-dated deletions are not read as deletions (one reads as a modified file with every
   line deleted); the `a/`/`b/` prefix is now stripped from plain GNU paths too, so a
   workspace whose top folder is literally `a` or `b` loses that segment; and a git name with

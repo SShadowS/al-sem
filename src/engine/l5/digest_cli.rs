@@ -111,12 +111,18 @@ fn strip_scheme(p: &str) -> String {
 /// `..` is never cancelled (a symlinked `link/..` need not be the parent), and
 /// a rooted path stays rooted, so neither matches a workspace file (#76).
 fn normalize_input(p: &str) -> String {
+    clean_input(p).to_lowercase()
+}
+
+/// [`normalize_input`] without the lowercasing: the case-kept path whose
+/// leading folders a [`DiffRoot`] prefix is compared with (#77).
+fn clean_input(p: &str) -> String {
     let path = strip_scheme(p);
     let root = path.split('/').take_while(|s| s.is_empty()).count().min(2);
     let kept: Vec<&str> = std::iter::repeat_n("", root)
         .chain(path.split('/').filter(|s| !s.is_empty() && *s != "."))
         .collect();
-    kept.join("/").to_lowercase()
+    kept.join("/")
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +193,12 @@ pub enum ChangedRootsDiagnostic {
     DiffFileUnmatched {
         file: String,
     },
+    /// A diff path that names a workspace file both as workspace-relative and
+    /// as git-top-relative (#77); it gives no roots.
+    DiffFileAmbiguous {
+        file: String,
+        candidates: Vec<String>,
+    },
     HunkOutsideRoutines {
         file: String,
         start_line: i32,
@@ -216,6 +228,121 @@ pub struct ChangedInput {
     pub files: Option<Vec<String>>,
     pub routines: Option<Vec<String>>,
     pub diff_text: Option<String>,
+    pub diff_root: DiffRoot,
+    /// The workspace's `.al` files (`WorkspaceInputs::al_files`' `rel_posix`):
+    /// which readings of a diff path name a FILE, routines or not (#77).
+    pub workspace_files: Vec<String>,
+}
+
+/// What a diff's paths are relative to (#77), held as the workspace's path
+/// below that directory, `/`-joined with its case kept (`Cloud`, never empty:
+/// a root that IS the workspace is [`DiffRoot::Workspace`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DiffRoot {
+    /// Paths are workspace-relative.
+    #[default]
+    Workspace,
+    /// The enclosing git top level, found: a path reads either way, and one
+    /// naming a workspace file both ways is ambiguous.
+    GitTop(String),
+    /// `--diff-root`: every path is relative to it.
+    Explicit(String),
+}
+
+impl DiffRoot {
+    /// The workspace's path below the root as `rel`'s `/`-joined components.
+    pub fn below(rel: &std::path::Path, explicit: bool) -> DiffRoot {
+        let prefix = clean_input(
+            &rel.components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/"),
+        );
+        match (prefix.is_empty(), explicit) {
+            (true, _) => DiffRoot::Workspace,
+            (false, false) => DiffRoot::GitTop(prefix),
+            (false, true) => DiffRoot::Explicit(prefix),
+        }
+    }
+}
+
+/// Whether two folder names name one folder: exactly equal, case included, on
+/// every platform. Platform is not file-system identity (case-sensitive APFS
+/// and NTFS folders exist), and an exact match can only leave a path
+/// unmatched, never read it as a case-distinct sibling (#77).
+fn same_folder(a: &str, b: &str) -> bool {
+    a == b
+}
+
+/// The workspace key `path` names below `prefix`: its leading folders must be
+/// `prefix`'s ([`same_folder`]), and only the rest keys like
+/// [`normalize_input`]. `None` when it does not start with `prefix`.
+fn strip_diff_prefix(prefix: &str, path: &str) -> Option<String> {
+    let clean = clean_input(path);
+    let mut parts = clean.split('/');
+    for want in prefix.split('/') {
+        if !same_folder(parts.next()?, want) {
+            return None;
+        }
+    }
+    let rest = parts.collect::<Vec<_>>().join("/");
+    (!rest.is_empty()).then(|| rest.to_lowercase())
+}
+
+/// The workspace's `.al` files by [`normalize_input`] key, each key's units
+/// (`ws:<rel>`) sorted.
+fn workspace_file_keys(files: &[String]) -> HashMap<String, Vec<String>> {
+    let mut by_key: HashMap<String, Vec<String>> = HashMap::new();
+    for f in files {
+        by_key
+            .entry(normalize_input(f))
+            .or_default()
+            .push(format!("ws:{f}"));
+    }
+    for units in by_key.values_mut() {
+        units.sort();
+        units.dedup();
+    }
+    by_key
+}
+
+/// The keys of the workspace FILES `path` names under `root` (#77), in order:
+/// as written, then below the git top level. A file counts whether or not it
+/// holds a routine, so a table-only reading still makes a path ambiguous.
+fn diff_readings(files: &HashMap<String, Vec<String>>, root: &DiffRoot, path: &str) -> Vec<String> {
+    let as_written = || Some(normalize_input(path));
+    let readings = match root {
+        DiffRoot::Workspace => [as_written(), None],
+        DiffRoot::Explicit(p) => [strip_diff_prefix(p, path), None],
+        DiffRoot::GitTop(p) => [as_written(), strip_diff_prefix(p, path)],
+    };
+    readings
+        .into_iter()
+        .flatten()
+        .filter(|k| files.contains_key(k))
+        .collect()
+}
+
+/// The span-index key a diff path names under `root`, or the diagnostic. One
+/// reading: that file, `diff-file-unmatched` when it holds no routine (as
+/// before #77). Two: `diff-file-ambiguous` with every unit of both readings.
+fn diff_key(
+    spans: &RoutineSpanIndex,
+    files: &HashMap<String, Vec<String>>,
+    root: &DiffRoot,
+    path: &str,
+) -> Result<String, ChangedRootsDiagnostic> {
+    let readings = diff_readings(files, root, path);
+    match &readings[..] {
+        [key] if !spans.of_file(key).is_empty() => Ok(key.clone()),
+        [_, _] => Err(ChangedRootsDiagnostic::DiffFileAmbiguous {
+            file: path.to_string(),
+            candidates: readings.iter().flat_map(|k| files[k].clone()).collect(),
+        }),
+        _ => Err(ChangedRootsDiagnostic::DiffFileUnmatched {
+            file: path.to_string(),
+        }),
+    }
 }
 
 /// One routine DECLARATION's span (#71). Lines are 0-based and inclusive.
@@ -464,12 +591,14 @@ pub fn resolve_changed_roots(
         }
         // A file with a hunk-header error gives no diff-derived roots, in ANY of
         // its records: the dropped hunk's changes are unknown, so whole-file roots
-        // would hide the error (#72). Keyed by the normalized path, the key
-        // `spans.of_file` matches with.
+        // would hide the error (#72). Keyed by every file the errored path may
+        // name (#77): an ambiguous one vetoes both, as its changes are unknown
+        // for either.
+        let files = workspace_file_keys(&input.workspace_files);
         let poisoned: std::collections::HashSet<String> = parsed
             .file_errors
             .iter()
-            .map(|fe| normalize_input(&fe.path))
+            .flat_map(|fe| diff_readings(&files, &input.diff_root, &fe.path))
             .collect();
         for diff_file in &parsed.files {
             if diff_file.kind == DiffFileKind::Deleted {
@@ -478,14 +607,14 @@ pub fn resolve_changed_roots(
                 });
                 continue;
             }
-            let key = normalize_input(&diff_file.path);
+            let key = match diff_key(&spans, &files, &input.diff_root, &diff_file.path) {
+                Ok(key) => key,
+                Err(d) => {
+                    diagnostics.push(d);
+                    continue;
+                }
+            };
             let ixs = spans.of_file(&key);
-            if ixs.is_empty() {
-                diagnostics.push(ChangedRootsDiagnostic::DiffFileUnmatched {
-                    file: diff_file.path.clone(),
-                });
-                continue;
-            }
             if poisoned.contains(&key) {
                 continue;
             }
@@ -516,12 +645,10 @@ pub fn resolve_changed_roots(
         // file (the new tree added it) is a whole-file hit, like a hunkless rename;
         // any other is reported, never dropped silently.
         for file in &parsed.only_in {
-            let key = normalize_input(file);
-            let ixs = spans.of_file(&key);
-            if ixs.is_empty() {
-                diagnostics.push(ChangedRootsDiagnostic::DiffFileUnmatched { file: file.clone() });
-            } else if !poisoned.contains(&key) {
-                hits.extend_from_slice(ixs);
+            match diff_key(&spans, &files, &input.diff_root, file) {
+                Err(d) => diagnostics.push(d),
+                Ok(key) if !poisoned.contains(&key) => hits.extend_from_slice(spans.of_file(&key)),
+                Ok(_) => {}
             }
         }
     }
@@ -1416,6 +1543,11 @@ fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::
             m.insert("kind".into(), "diff-file-unmatched".into());
             m.insert("file".into(), file.clone().into());
         }
+        ChangedRootsDiagnostic::DiffFileAmbiguous { file, candidates } => {
+            m.insert("kind".into(), "diff-file-ambiguous".into());
+            m.insert("file".into(), file.clone().into());
+            m.insert("candidates".into(), candidates.clone().into());
+        }
         ChangedRootsDiagnostic::HunkOutsideRoutines {
             file,
             start_line,
@@ -1570,7 +1702,12 @@ pub fn project_digest_document(
     // Still 1.6.0: `payload.testCoverage` is opt-in (`--tests`, #254) and additive.
     // Still 1.6.0: with `--include-reads` (#246, opt-in) a document may carry
     // `DB_READ` effects and `payload.includeReads: true`; without it, neither.
-    env.insert("schemaVersion".into(), "1.6.0".into());
+    // 1.7.0: additive default-on `diff-file-ambiguous` changed-roots diagnostic
+    // with `file` and `candidates` (#77). Contract: a minor bump is additive;
+    // `changedRootsDiagnostics[].kind` is an open set (a consumer treats an
+    // unknown kind as a diagnostic, not a parse error); exit 0 does not mean
+    // every diff file resolved.
+    env.insert("schemaVersion".into(), "1.7.0".into());
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
     // keep-nulls sort then orders it (and the payload key it lands in).
@@ -1767,6 +1904,7 @@ pub fn run_digest_pipeline(
             single_app,
             tests,
             include_reads: false,
+            diff_root: DiffRoot::Workspace,
         },
     )
 }
@@ -1786,6 +1924,8 @@ pub struct DigestRequest<'a> {
     pub tests: bool,
     /// `--include-reads`: add `DB_READ` effects and `payload.includeReads` (#246).
     pub include_reads: bool,
+    /// What `diff_text`'s paths are relative to (#77).
+    pub diff_root: DiffRoot,
 }
 
 /// [`run_digest_pipeline`] over a given detector set (#160 §4.4.4): the plan
@@ -1828,11 +1968,20 @@ impl<'a> DigestJob<'a> {
         }
     }
 
-    fn changed_input(&self) -> ChangedInput {
+    fn changed_input(&self, inputs: &crate::program::inputs::WorkspaceInputs) -> ChangedInput {
         ChangedInput {
             files: self.req.changed_files.clone(),
             routines: self.req.changed_routines.clone(),
             diff_text: self.req.diff_text.clone(),
+            diff_root: self.req.diff_root.clone(),
+            workspace_files: match self.req.diff_text {
+                Some(_) => inputs
+                    .al_files
+                    .iter()
+                    .map(|f| f.rel_posix.clone())
+                    .collect(),
+                None => Vec::new(),
+            },
         }
     }
 }
@@ -1882,7 +2031,7 @@ impl Job for DigestJob<'_> {
         let changed_roots = resolve_changed_roots(
             cx.ids(),
             model,
-            &self.changed_input(),
+            &self.changed_input(cx.inputs()),
             primary_guid_of(model),
             &OwnerIndex::build(model),
         );
@@ -2115,6 +2264,7 @@ mod tests {
                         single_app: false,
                         tests: false,
                         include_reads: false,
+                        diff_root: DiffRoot::Workspace,
                     },
                 );
             },
@@ -2159,6 +2309,40 @@ mod tests {
             (".\\SRC\\x.al", "src/x.al"),
         ] {
             assert_eq!(normalize_input(input), expected, "{input}");
+        }
+    }
+
+    // --- #77 diff prefixes --------------------------------------------------
+
+    /// #77 A8b. Folder names compare exactly on every platform.
+    /// Mutation: fold case (`eq_ignore_ascii_case`) -> `Cloud`/`cloud` match.
+    #[test]
+    fn same_folder_is_exact() {
+        assert!(same_folder("Cloud", "Cloud"));
+        assert!(!same_folder("Cloud", "cloud"));
+    }
+
+    /// #77 A24. The prefix is removed folder by folder, exactly; the rest keys
+    /// like `normalize_input`; nothing left names nothing.
+    /// Mutation: a string `starts_with` instead of the per-folder comparison ->
+    /// `Cloudy/x.al` gives `y/x.al`.
+    #[test]
+    fn strip_diff_prefix_cases() {
+        for (prefix, path, expected) in [
+            ("Cloud", "Cloud/src/x.al", Some("src/x.al")),
+            ("Cloud", "./Cloud/SRC/x.al", Some("src/x.al")),
+            ("Cloud", "Cloudy/x.al", None),
+            ("Cloud", "Cloud", None),
+            ("Cloud", "Cloud/", None),
+            ("Cloud", "cloud/src/x.al", None),
+            ("a/b", "a/b/X.al", Some("x.al")),
+            ("a/b", "a/x.al", None),
+        ] {
+            assert_eq!(
+                strip_diff_prefix(prefix, path).as_deref(),
+                expected,
+                "{prefix} {path}"
+            );
         }
     }
 

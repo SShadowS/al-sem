@@ -81,7 +81,7 @@ use al_sem::engine::gate::run::{AnalyzeArgs, AnalyzeJob, OutputFormat};
 use al_sem::engine::gate::version::driver_version;
 use al_sem::engine::l4::effect_query_cli::{Direction, QueryJob};
 use al_sem::engine::l5::digest_cli::{
-    ChangedAutoDetect, DigestJob, DigestRequest, auto_detect_changed_with,
+    ChangedAutoDetect, DiffRoot, DigestJob, DigestRequest, auto_detect_changed_with,
 };
 use al_sem::engine::l5::event_flow::Scope as EventScope;
 use al_sem::engine::l5::fingerprint_cli::{
@@ -690,6 +690,17 @@ struct DigestCli {
     #[arg(long = "changed")]
     changed: Option<String>,
 
+    /// The folder the diff's paths are relative to (a relative path resolves
+    /// against the current directory). The workspace must be inside it, as
+    /// spelled or after resolving symlinks. Default: the nearest enclosing git
+    /// top level (a `.git` folder or file at or above the workspace), where a
+    /// path may also be workspace-relative; a path naming a workspace file both
+    /// ways is reported `diff-file-ambiguous` and gives no roots. With no
+    /// enclosing repository, paths are workspace-relative. Folder names compare
+    /// exactly, case included, on every platform.
+    #[arg(long = "diff-root")]
+    diff_root: Option<String>,
+
     /// Maximum number of via-paths per effect (reserved; wired but not yet honoured).
     #[arg(long = "max-paths")]
     max_paths: Option<usize>,
@@ -736,6 +747,12 @@ struct DigestCli {
     /// made once by the parent ([`pin_changed`]); `None`: ask the file system.
     #[arg(skip)]
     changed_is_file: Option<bool>,
+
+    /// The run's diff-root decision ([`decide_diff_root`]), made once by the
+    /// parent and carried to its worker ([`pin_diff_root`], #77); `None`:
+    /// decide in `plan_digest`.
+    #[arg(skip)]
+    diff_root_decided: Option<Result<DiffRoot, String>>,
 }
 
 fn main() -> ExitCode {
@@ -1064,10 +1081,12 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
     let (mut paths, mut kinds, mut planned, mut changed) = (vec![], vec![], vec![], vec![]);
     for (bi, (batch, commands)) in manifest.batches.iter().zip(parsed).enumerate() {
         let (mut plans, mut decided) = (Vec::new(), Vec::new());
-        for (i, (job, command)) in batch.jobs.iter().zip(commands).enumerate() {
-            decided.push(changed_is_file(&command));
+        for (i, (job, mut command)) in batch.jobs.iter().zip(commands).enumerate() {
             let (kind, mut written) = (job_kind(&command), job_paths(&command, &job.streams));
             PLAN_TOUCHED.lock().expect("plan touches").clear();
+            // After the clear: the `.git` probes join this job's reads.
+            let root = pin_diff_root(&mut command, None);
+            decided.push((changed_is_file(&command), root));
             let p = plan(command, true);
             written
                 .reads
@@ -1122,10 +1141,11 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
                     .jobs
                     .iter()
                     .zip(decided)
-                    .map(|(j, c)| WorkerJob {
+                    .map(|(j, (c, root))| WorkerJob {
                         argv: j.argv.clone(),
                         streams: j.streams.clone(),
                         changed_is_file: *c,
+                        diff_root: root.clone(),
                     })
                     .collect(),
                 stdin: stdin.clone(),
@@ -1171,6 +1191,7 @@ fn run_worker(b: u32) -> ExitCode {
         match parse_job(&job.argv) {
             Ok(mut c) => {
                 pin_changed(&mut c, job.changed_is_file);
+                pin_diff_root(&mut c, job.diff_root.clone());
                 planned.push(plan(c, true));
             }
             Err(why) => return usage(format!("al-sem batch: batch {b} job {i}: {why}")),
@@ -1629,6 +1650,93 @@ fn detect_changed(d: &DigestCli, value: &str) -> ChangedAutoDetect {
     })
 }
 
+/// Decide a digest's diff root once (#77): `decided` when a batch's parent
+/// decided it (a worker never decides it again), else the file system now.
+/// Returns the decision, for the worker.
+fn pin_diff_root(
+    command: &mut Commands,
+    decided: Option<Result<DiffRoot, String>>,
+) -> Option<Result<DiffRoot, String>> {
+    let Commands::Digest(d) = command else {
+        return None;
+    };
+    let root = decided.unwrap_or_else(|| decide_diff_root(d));
+    d.diff_root_decided = Some(root.clone());
+    Some(root)
+}
+
+/// Whether a digest reads a diff: `--diff`, or `--changed` naming a file.
+fn digest_has_diff(d: &DigestCli) -> bool {
+    let nonempty = |s: &Option<String>| s.as_deref().is_some_and(|s| !s.trim().is_empty());
+    nonempty(&d.diff)
+        || (nonempty(&d.changed)
+            && matches!(
+                detect_changed(d, d.changed.as_deref().unwrap_or_default()),
+                ChangedAutoDetect::Diff(_)
+            ))
+}
+
+/// What a digest's diff paths are relative to (#77), decided once per run
+/// ([`pin_diff_root`]). `--diff-root`: it must be an existing folder; the
+/// workspace's path below it, first as spelled (a symlinked workspace keeps
+/// its link name), else canonically; not inside it is an error. Else the
+/// nearest folder at or above the canonical workspace holding `.git` (a
+/// folder, or a worktree's or submodule's file); none, or a workspace that
+/// cannot be canonicalized: the workspace itself (auto mode never fails). No
+/// diff: the workspace, probing nothing.
+fn decide_diff_root(d: &DigestCli) -> Result<DiffRoot, String> {
+    if !digest_has_diff(d) {
+        return Ok(DiffRoot::Workspace);
+    }
+    let Some(root) = &d.diff_root else {
+        let Ok(ws) = std::fs::canonicalize(&d.workspace) else {
+            return Ok(DiffRoot::Workspace);
+        };
+        return Ok(ws
+            .ancestors()
+            .find(|dir| plan_exists(&dir.join(".git")))
+            .and_then(|top| ws.strip_prefix(top).ok())
+            .map_or(DiffRoot::Workspace, |rel| DiffRoot::below(rel, false)));
+    };
+    // Checked first, so a lexical containment cannot pass a missing root.
+    match std::fs::metadata(root) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => {
+            return Err(format!(
+                "al-sem: digest: --diff-root '{root}' is not a folder"
+            ));
+        }
+        Err(e) => return Err(format!("al-sem: digest: --diff-root '{root}': {e}")),
+    }
+    let lexical = std::path::absolute(&d.workspace)
+        .ok()
+        .zip(std::path::absolute(root).ok())
+        .and_then(|(ws, r)| ws.strip_prefix(&r).ok().map(Path::to_path_buf))
+        .filter(|rel| {
+            !rel.components()
+                .any(|c| c == std::path::Component::ParentDir)
+        });
+    let rel = match lexical {
+        Some(rel) => rel,
+        None => {
+            let canon = |p: &str, what: &str| {
+                std::fs::canonicalize(p).map_err(|e| format!("al-sem: digest: {what} '{p}': {e}"))
+            };
+            let (ws, r) = (
+                canon(&d.workspace, "workspace")?,
+                canon(root, "--diff-root")?,
+            );
+            ws.strip_prefix(&r).map(Path::to_path_buf).map_err(|_| {
+                format!(
+                    "al-sem: digest: workspace '{}' is not inside --diff-root '{root}'",
+                    d.workspace
+                )
+            })?
+        }
+    };
+    Ok(DiffRoot::below(&rel, true))
+}
+
 fn plan_digest(d: DigestCli) -> Planned {
     // Reject --order (CONFIG_ERROR — a not-ported flag rejected cleanly rather than silently ignored)
     if d.order {
@@ -1670,10 +1778,15 @@ fn plan_digest(d: DigestCli) -> Planned {
     // wording (the pipeline's own message is the internal run-digest-pipeline one).
     let has_files = !file_inputs.is_empty();
     let has_routines = !routine_inputs.is_empty();
-    let has_diff = diff_arg
-        .as_deref()
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
+    let has_diff = digest_has_diff(&d);
+    // Before the no-input check: a lone `--diff-root` is a flag misuse (exit 3).
+    if d.diff_root.is_some() && !has_diff {
+        return failed(
+            "al-sem: digest: --diff-root needs a diff (--diff or --changed <file>)",
+            exit::CONFIG_ERROR,
+            1,
+        );
+    }
     if !has_files && !has_routines && !has_diff {
         return failed(
             "digest: at least one of --changed-files, --changed-routines, --diff, or --changed is required",
@@ -1707,6 +1820,16 @@ fn plan_digest(d: DigestCli) -> Planned {
         },
     };
 
+    // A batch's parent decided it (its workers get the decision); else now.
+    let diff_root = match d
+        .diff_root_decided
+        .clone()
+        .unwrap_or_else(|| decide_diff_root(&d))
+    {
+        Ok(r) => r,
+        Err(line) => return failed(line, exit::CONFIG_ERROR, 1),
+    };
+
     let changed_files = if file_inputs.is_empty() {
         None
     } else {
@@ -1734,6 +1857,7 @@ fn plan_digest(d: DigestCli) -> Planned {
                 single_app: d.single_app,
                 tests: d.tests,
                 include_reads: d.include_reads,
+                diff_root,
             };
             Box::new(DigestJob::new(req, d.format == "human", d.out.as_deref()))
         },
