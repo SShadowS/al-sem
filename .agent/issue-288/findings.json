@@ -1,0 +1,1454 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "unreachable is unsound under #if: the CFN concatenates all preprocessor branches (ir_walk.rs:1432-1447), so an exit inside #if marks later code dead even when the branch is off; the fold would hide a real gap.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: reachability fix moved to discovery D2; #288 distrusts any routine whose source holds a directive (gate a), tests G1, G2, G7.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "A3 break (filter != top-level) does not discriminate: asserterror lowers to an other wrapper, the following call stays top-level.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: W1 dropped (asserterror unchanged here); gate treatment pinned by G5 and fixture OnBeforePrintAssertError.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "re-raised"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "A5 mutates build_cross_app_base_with but a T4-style test reads view.det().summaries (det_cone_inputs); add per-producer assertions.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 P4: base.direct_coverage and view.det() asserted separately, producer-only break.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Matrix misses mixed dead+live sites of one kind in one routine (both orders), all-dead counterparts and callsite_id None; owned() drops site identity; A7 scan test never invokes the fold.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 M1–M5 through production assembly.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "d35 display: a dead edge sets every_site_found=false, so a subscriber with a live and a dead uncertain call keeps its partly-analysed wording; skip known-dead edges, keep conservative handling for absent sites.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 change 4: d35 skips trusted-dead edges; CR4 test both trusted/untrusted; fixture OnMixedLiveDead.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Five coverage producers is inaccurate: four production callers plus a scan test.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: four production producers named.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Same as S2: A3 break cannot fail A3; the break must be in the walker or lowerer.",
+    "disposition": "fixed",
+    "evidence": "As S2.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "re-raised"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Same as S3, plus A1 all four producers cannot be reached from model(SRC): the cross-app producer reads an InputSet from disk; each producer needs its own assertion and break.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 P1–P4, each with its own break; P4 via InputSet.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "A7 (and likely A6) test the helper, not the use; use the collided-rows pattern (detector_context_11b_tests.rs:219-235) or a hand-built graph through build_r3a3_source_only_base_over.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 M4–M7 through build_r3a3_source_only_base_over and the 11b collided-rows pattern.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Soundness claim false for collectible errors: is_error_fn matches Error regardless of argument (ir_walk.rs:1457-1460); Error(ErrorInfo) under ErrorBehavior::Collect continues; measure on BC, state the limit, file a control_context discovery. Round 4 (sol): a named ErrorInfo return shadowing a Text global defeats the Text proof (ir_walk.rs:2512-2516, 2581-2590). Round 5 (sol): the scope lookup uses eq_ignore_ascii_case (workspace.rs:760-777); AL identifier equality is Unicode-aware (al-syntax casing.rs:62-73), so a differently cased non-ASCII named return (\"StopVälue\" vs \"STOPVÄLUE\") still falls back to the Text global. Required at implementation: AL identifier equality throughout the lookup; extend G11/G12 with differently cased non-ASCII named-return references (uncertainty and committing-callee edge both survive). Final r1 (sol): trim_matches quote trimming lets an escaped-quote parameter name (\"\"\"StopValue\"\"\") equal StopValue, proving Text against an ErrorInfo global (workspace.rs:706-709).",
+    "disposition": "fixed",
+    "evidence": "508c38d6: same_identifier compares already-unquoted names exactly (AL case fold only, no trimming); the argument name is the raw text minus one outer quote pair (lossy argument_infos.value no longer read); any quote in the argument or a candidate name proves nothing; tests fs1_escaped_quote_parameter_keeps_the_gap / _edge (red on 14118192) and fs1_escaped_quote_argument_keeps_the_gap, proofs in the ledger.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Consistent with direct_facts_for_routine overstates: object-run-unresolved edges and resolved edges from dead sites still make coverage partial / pass facts (capability_cone.rs:1234-1239, 2433-2436; combined_graph.rs:349-361); list as non-goals, widen D1.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 build_typed_edge_graph filter with C1–C6; fixture object-run, callee, trigger, SCC removed, live witness/trigger kept.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M1: five producers is four (same as S6).",
+    "disposition": "fixed",
+    "evidence": "As S6.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M2: fallback (b) gives the same merged result as per-row, not an alternative; unstated conservative #if shapes: site absent in the other row, same ordinal cs{N} naming different calls.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: per-row vs id-level stated; fallbacks rewritten.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M3: census patch and CDO census exit code not kept.",
+    "disposition": "fixed",
+    "evidence": "rev2/census-v1.diff with exit codes.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M4: two doc comments need updating (capability_cone.rs:3547-3570 and :3585-3588).",
+    "disposition": "fixed",
+    "evidence": "Rev 3: the Every coverage producer paragraph updated in proto-rev3.diff.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O10",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M5: fold set now per site with a linear scan of call sites; note only.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: single-pass DeadSites, O(1) lookup.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O11",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M6: fixture OnAfterInsertDeadUnresolved result not recorded in the probe table.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 probe row OnAfterInsertDeadUnresolved.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round1_marks": {
+      "sol": "unreviewed",
+      "opus": "unreviewed"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Split routine bodies (lower_preproc_split_routine_body), split-closing recovery and cond_only_shape concatenate live arms unmarked; an exit in one arm marks the other dead (lower/mod.rs:2192-2218, :2330-2347, :2788-2812).",
+    "disposition": "fixed",
+    "evidence": "Rev 3: split-body/split-closing/cond_only shapes go to D2; the source-scan gate (a) covers them in #288 shape-agnostically.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S8",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "O4 classifier not conservative: Error((ErrInfo)), ErrorInfo-returning calls, array elements, named returns still terminate (ir_walk.rs:1480-1497). Round 4 (sol): a named ErrorInfo return shadowing a Text global defeats the Text proof (ir_walk.rs:2512-2516, 2581-2590). Round 5 (sol): the scope lookup uses eq_ignore_ascii_case (workspace.rs:760-777); AL identifier equality is Unicode-aware (al-syntax casing.rs:62-73), so a differently cased non-ASCII named return (\"StopVälue\" vs \"STOPVÄLUE\") still falls back to the Text global. Required at implementation: AL identifier equality throughout the lookup; extend G11/G12 with differently cased non-ASCII named-return references (uncertainty and committing-callee edge both survive). Final r1 (sol): trim_matches quote trimming lets an escaped-quote parameter name (\"\"\"StopValue\"\"\") equal StopValue, proving Text against an ErrorInfo global (workspace.rs:706-709).",
+    "disposition": "fixed",
+    "evidence": "508c38d6: same_identifier compares already-unquoted names exactly (AL case fold only, no trimming); the argument name is the raw text minus one outer quote pair (lossy argument_infos.value no longer read); any quote in the argument or a candidate name proves nothing; tests fs1_escaped_quote_parameter_keeps_the_gap / _edge (red on 14118192) and fs1_escaped_quote_argument_keeps_the_gap, proofs in the ledger.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "S9",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "W1 and W3 mutations do not discriminate (nested block result discarded; marking a post-#endif call changes nothing).",
+    "disposition": "fixed",
+    "evidence": "Rev 3: W1 dropped; the W3/#endif rule is in D2 acceptance.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S10",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Termination rule manufactures dominance: a flagged exit inside an if arm yields Fallthrough, so a later Commit gets dominatesSuccessReturn=true despite a return path; ordering.rs trusts the bit.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: no dominance change in #288; the must-terminate vs may-return contract is in D2 acceptance.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S11",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "O5 lacks rows for dead operation-site edges, SCC breaking, surviving live witness; the r3a3 oracle shares the filter.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 C3 (operation-site trigger + live control), C4 (SCC), C5 (live witness), hand-stated expectations; shared r3a3 oracle noted.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S12",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Fixture count is 12→9, not 14→9.",
+    "disposition": "fixed",
+    "evidence": "Rev 3 Measurement restates counts per revision (rev 2 12→9; rev 3 23→14 on the rev-3 fixture).",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S13",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "No-extra-ir_variables claim contradicts the prototype; mark mutation outcomes as planned.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: no reuse claim (#288 calls no ir_variables); acceptance rows marked planned.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O12",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "N1: split-closing, cond_only_shape and generic flat-recovery paths splice #if branches unmarked (lower/mod.rs:2346-2360, :2790-2816, :2848-2853).",
+    "disposition": "fixed",
+    "evidence": "Rev 3: to D2; covered in #288 by gate (a).",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O13",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "N2: W3 break is more conservative and cannot fail; no test pins != PreprocEndif; no #elif or nested-group tests.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: W3/#elif/nested/#endif tests to D2 acceptance; G1 covers #elif and nested for the gate.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O14",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "N3: O4 recognises only a plain ErrorInfo variable or ErrorInfo.Create; use a sound rule or state limits. Round 4 (sol): a named ErrorInfo return shadowing a Text global defeats the Text proof (ir_walk.rs:2512-2516, 2581-2590). Round 5 (sol): the scope lookup uses eq_ignore_ascii_case (workspace.rs:760-777); AL identifier equality is Unicode-aware (al-syntax casing.rs:62-73), so a differently cased non-ASCII named return (\"StopVälue\" vs \"STOPVÄLUE\") still falls back to the Text global. Required at implementation: AL identifier equality throughout the lookup; extend G11/G12 with differently cased non-ASCII named-return references (uncertainty and committing-callee edge both survive). Final r1 (sol): trim_matches quote trimming lets an escaped-quote parameter name (\"\"\"StopValue\"\"\") equal StopValue, proving Text against an ErrorInfo global (workspace.rs:706-709).",
+    "disposition": "fixed",
+    "evidence": "508c38d6: same_identifier compares already-unquoted names exactly (AL case fold only, no trimming); the argument name is the raw text minus one outer quote pair (lossy argument_infos.value no longer read); any quote in the argument or a candidate name proves nothing; tests fs1_escaped_quote_parameter_keeps_the_gap / _edge (red on 14118192) and fs1_escaped_quote_argument_keeps_the_gap, proofs in the ledger.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "O15",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N4: a branch the build context decides true is still marked (d20 false negative).",
+    "disposition": "fixed",
+    "evidence": "As S16.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O16",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N5: snapshot tree, snapshot_full::reach and BFS oracles walk the unfiltered cone; the r3a3 oracle shares the filter.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: stated as a limit (D3); C1–C6 hand-stated expectations are the independent check.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O17",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N6: D3 half wrong — return_summary, dep_artifact_l4, cfg_walker branch on node kind and pick up O4.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: O4 no longer changes node kinds in #288; walkers item in D2 acceptance.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O18",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N7: O4 calls ir_variables again; W8 needs separate assertions and mixed-case names (CDO has Error(Error)).",
+    "disposition": "fixed",
+    "evidence": "Rev 3: no ir_variables call in #288; per-form assertions G4.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O19",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N8: golden churn comes from Debug, not serde; note it.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: no CFN field change; l2 output and golden byte-identical (check-goldens, --l2).",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O20",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "O9 note: the Every coverage producer doc paragraph is not touched by the prototype.",
+    "disposition": "fixed",
+    "evidence": "Rev 3: paragraph updated (as O9).",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S14",
+    "source": "sol",
+    "round": 3,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Conditional global types bypass the gate: has_preproc_directive scans only the routine, but error_call_is_text trusts a variable table whose globals are first-name-wins across #if alternatives (ir_walk.rs:2595-2619); Text in one build, ErrorInfo in another.",
+    "disposition": "fixed",
+    "evidence": "Rev 4: a global-based proof needs the whole object clean (the variable table holds one declaration per name); fixture both orders kept + plain control removed; G8; CDO 1 of 582 files has a directive, 0 findings move.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S15",
+    "source": "sol",
+    "round": 3,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "A Text argument does not prove the builtin: an own-object procedure named Error takes precedence (resolver.rs:5-9,28-33), so Error(text) may return; require builtin-binding evidence or distrust shadowed Error.",
+    "disposition": "fixed",
+    "evidence": "Rev 4: alc compiles an own procedure Error and the BC sidecar runs it for both forms; settle_dead_mark_trust requires the resolver Builtin edge for every Error site; fixture OnOwnErrorText/OnOwnErrorFormat kept; G9.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S16",
+    "source": "sol",
+    "round": 3,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "O15 not covered by D2 acceptance: a branch the build context proves active must keep its termination.",
+    "disposition": "fixed",
+    "evidence": "Rev 4: D2 acceptance (2): a branch the build context proves active keeps its termination.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O21",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "N1: G2 break cannot fail if the routine also has #if/#endif; G2 needs only spaced directives and a direct has_preproc_directive assertion.",
+    "disposition": "fixed",
+    "evidence": "Rev 4 G2: a routine whose only directives are spaced; has_preproc_directive asserted directly; fixture OnSpacedDirective.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O22",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N2: the gate fails open: source.get(origin.byte).unwrap_or(\"\") and the false default mean trusted; require true from constructors that cannot scan.",
+    "disposition": "fixed",
+    "evidence": "Rev 4: field fails closed (default false, documented); source_clean untrusted on an unindexable range; settle pass untrusted without a builtin edge; G10.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O23",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N3: an own-object procedure Error(Text) would return; settle with one BC compile.",
+    "disposition": "fixed",
+    "evidence": "As S15 (alc + BC sidecar evidence, rev4/alcprobe/RESULT.txt).",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O24",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N4: d35 drops untrusted dead sites from its unresolved list (partly analysed: self); apply the raw unreachable filter only to trusted rows.",
+    "disposition": "fixed",
+    "evidence": "Rev 4 change 5: raw unreachable filter only for trusted rows; CR4 untrusted branch names Dead (line 7); D1prime + fixture.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O25",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N5: run.log records lib exit=101; the effect_query_cli.rs fix is not in the prototype diff; the passing lib.log is an unrecorded rerun.",
+    "disposition": "fixed",
+    "evidence": "Rev 4: effect_query_cli.rs has no net change; lib exit=0 (2,501) recorded in rev4/run.log.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O26",
+    "source": "opus",
+    "round": 4,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N1: the object directive-free check is cached per routine; every routine with a global Label proof rescans the object; cache per object and re-measure timings.",
+    "disposition": "fixed",
+    "evidence": "Rev 5: object scan cached once per object (Option<bool> in project_ir); CDO timings re-measured on the final prototype (fingerprint 6.8→7.5 s, primary 25.0→25.3 s, all 24.6→24.4 s, indicative).",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O27",
+    "source": "opus",
+    "round": 4,
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N2: in G8 only OnGlobalTextFirst fails the object-scan break; name it in the proof record.",
+    "disposition": "fixed",
+    "evidence": "Rev 5 G8 break names OnGlobalTextFirst as the failing assertion; OnGlobalErrInfoFirst untrusted either way.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": "fdb779a45a507e80bdcbcd3b1bec0e385f05f121ce1a7aed34c4dcdcf7fefe3a",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FS1",
+    "source": "sol",
+    "round": "final-1",
+    "file": "workspace.rs",
+    "line": 706,
+    "severity": "important",
+    "text": "Identifier equality uses trim_matches(\"\\\"\"), removing payload quotes; an escaped-quote parameter name equals a different identifier, giving a wrong Text proof; argument_infos.value also strips quotes lossily (ir_walk.rs:445-456).",
+    "disposition": "fixed",
+    "evidence": "508c38d6: same_identifier compares already-unquoted names exactly (AL case fold only, no trimming); the argument name is the raw text minus one outer quote pair (lossy argument_infos.value no longer read); any quote in the argument or a candidate name proves nothing; tests fs1_escaped_quote_parameter_keeps_the_gap / _edge (red on 14118192) and fs1_escaped_quote_argument_keeps_the_gap, proofs in the ledger.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FS2",
+    "source": "sol",
+    "round": "final-1",
+    "file": "src/engine/l5/detector_context_288_tests.rs",
+    "line": 1294,
+    "severity": "minor",
+    "text": "No single-argument Label/Code positive cases; per-head breaks missing.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: g6_single_argument_label_and_code_drop_the_gap with per-head breaks (OnLabelOneError, OnCodeError).",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FO1",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/detector_context_288_tests.rs",
+    "line": 201,
+    "severity": "minor",
+    "text": "Same as FS2: one-argument Label and Code untested.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: g6_single_argument_label_and_code_drop_the_gap with per-head breaks (OnLabelOneError, OnCodeError).",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FO2",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/detector_context_288_tests.rs",
+    "line": 569,
+    "severity": "minor",
+    "text": "G11u/G12u lack a positive control (a trusted non-ASCII Text named return that drops the gap).",
+    "disposition": "fixed",
+    "evidence": "508c38d6: g11u_control_non_ascii_text_named_return_drops_the_gap; ASCII-only break fails it plus G11u/G12u.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FO3",
+    "source": "opus",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 21,
+    "severity": "minor",
+    "text": "CHANGELOG omits that a global proves Text only when the whole object has no directive.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: CHANGELOG states the global-object directive rule.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FO4",
+    "source": "opus",
+    "round": "final-1",
+    "file": ".agent/issue-288/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Record the heredoc edit slip in the ledger.",
+    "disposition": "fixed",
+    "evidence": "Ledger timeline records the heredoc slip.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FO5",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/d35.rs",
+    "line": 36,
+    "severity": "minor",
+    "text": "d35 module doc dropped \"and reachable\" (row-only dead sites).",
+    "disposition": "fixed",
+    "evidence": "508c38d6: d35 module doc restores and reachable.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FC1",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 1247,
+    "severity": "important",
+    "text": "combined_graph still emits dead edges; snapshot typed_edges, digest unresolved cone and witness BFS, ordering_engine and ExecRelation still treat dead sites as live.",
+    "disposition": "refuted",
+    "evidence": "Stated non-goal of the pre-ratified Design rev 5 (combined_graph::assemble unchanged; snapshot tree / reach / BFS oracles walk the unfiltered cone, D3): filtering at emission also changes the solver summaries, which both spec reviewers rejected. Digest and ordering (#160 files) read the cone/edges as input only; their consistency with the gate belongs to D2/D3. D3 widened in the discovery to name digest unresolved_cone, witness BFS and ordering_engine.",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FC2",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/d35.rs",
+    "line": 186,
+    "severity": "minor",
+    "text": "d35 confidence cap (lites) still includes the dead site uncertainty from L4 summaries.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: d35 doc and CHANGELOG state the confidence-cap limit (L4 summary uncertainties include dead sites; D1).",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FC3",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/model/workspace.rs",
+    "line": 786,
+    "severity": "important",
+    "text": "A variable with scope None skips the object scan; the global-proof branch fails open.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: only local/parameter skip the object scan; global or unknown scope needs a directive-free object (error_argument_proves_text); test fc3_unknown_scope_needs_the_object_scan, proof.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FC4",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/model/workspace.rs",
+    "line": 760,
+    "severity": "minor",
+    "text": "settle_dead_mark_trust builds HashSets over every call edge for a few Error sites; adds to the post-attach peak.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: settle collects bare-Error keys of trusted rows first, then one edge scan for those keys; G9 re-proved.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FC5",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 3628,
+    "severity": "minor",
+    "text": "DeadSites::of inserts every site into a HashMap then retains the dead ones; rebuilt per producer.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: DeadSites is a set of dead-marked sites vetoed by other rows; ModelRoutine::site_is_dead_marked shared with d35; M6/M7 re-proved; dead_sites span 335 ms → 16.9 ms on CDO primary.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FC6",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/model/workspace.rs",
+    "line": 645,
+    "severity": "minor",
+    "text": "has_preproc_directive uses str::lines(); CR-only line endings hide directives.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: directive scan splits on CR, LF, CRLF; g2_cr_only_line_ends_are_split with a lines() break.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FC7",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 3611,
+    "severity": "minor",
+    "text": "The fold keys sites by callsite_id only, the cone falls back to operation_id: two definitions of site; add one site_of helper.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: one pub(crate) site_of used by the fold, the cone and d35.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  },
+  {
+    "id": "FC8",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 4829,
+    "severity": "minor",
+    "text": "The r3a3 oracle shares the DeadSites filter, so it cannot catch a filter regression.",
+    "disposition": "refuted",
+    "evidence": "Known and stated (O16, Design Other limits): the oracle must use the same filter to agree with the cone; independent checks are the hand-stated C1–C6 expectations (detector_context_288_tests.rs C rows).",
+    "anchor": "commit 14118192 (implementation)",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FC9",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l4/capability_cone.rs",
+    "line": 3622,
+    "severity": "minor",
+    "text": "DeadSites is a HashMap<_, bool> filtered to true (a HashSet); d35 re-implements the trusted&&unreachable test inline.",
+    "disposition": "fixed",
+    "evidence": "508c38d6: DeadSites is a set of dead-marked sites vetoed by other rows; ModelRoutine::site_is_dead_marked shared with d35; M6/M7 re-proved; dead_sites span 335 ms → 16.9 ms on CDO primary.",
+    "anchor": "commit 508c38d6",
+    "anchor_hash": null,
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "508c38d6"
+  }
+]
