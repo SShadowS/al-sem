@@ -271,8 +271,15 @@ fn shapes_d40_still_skips_the_implicit_rec() {
 /// - The `Local*` reference routines (the same shapes on a local record) fire
 ///   nothing, before and after.
 ///
-/// Today `D37Persists`/`D37Unresolved`/`D37Arity` (d37), `D11Loaded` (d11),
-/// `D21Loaded` (d21) and `D33Filtered` (d33) also fire.
+/// Before #272 `D37Persists`/`D37Unresolved`/`D37Arity` (d37), `D11Loaded` (d11),
+/// `D21Loaded` (d21) and `D33Filtered` (d33) also fired.
+///
+/// #299 removed the 9 d11 and 4 d37 rows this fixture held: `R Cust` is a table,
+/// so its `Rec` is the receiver (the caller's record), which d11 and d37 now skip.
+/// The d37 helper-walk and d11 helper-load cases on an implicit `Rec` live on in
+/// the page copies of these routines in `tests/fixtures/issue-299/ws-owned`
+/// (`cli_caller_owned_rec`). This fixture now also pins the receiver skip; it is
+/// left byte-unchanged because `r3a2_implicit_rec_pin` pins it.
 #[test]
 fn readers_see_the_implicit_rec() {
     let fs = analyze(
@@ -288,22 +295,9 @@ d37-validate-without-persist",
     assert_eq!(
         got,
         sorted(&[
-            "d11 | R Cust | D11ByValue | L72",
-            "d11 | R Cust | D11Order | L78",
-            "d11 | R Cust | D37Arity | L42",
-            "d11 | R Cust | D37ByValue | L28",
-            "d11 | R Cust | D37NoPersist | L21",
-            "d11 | R Cust | D37Order | L57",
-            "d11 | R Cust | D37Persists | L14",
-            "d11 | R Cust | D37Unresolved | L35",
-            "d11 | R Cust | D37WrongVar | L49",
             "d21 | R Cust | D21WrongVar | L93",
             "d33 | R Cust | D33ByValue | L108",
             "d33 | R Cust | D33Unfiltered | L113",
-            "d37 | R Cust | D37ByValue | L28",
-            "d37 | R Cust | D37NoPersist | L21",
-            "d37 | R Cust | D37Order | L57",
-            "d37 | R Cust | D37WrongVar | L49",
         ])
     );
 }

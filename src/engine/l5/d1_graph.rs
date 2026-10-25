@@ -495,6 +495,7 @@ mod tests {
                 parameter_index: None,
             },
             scope: None,
+            is_receiver: false,
         }];
         let op_get = record_op("B/op0", "Get", "Rec", None, vec![], false);
         let op_next_terminator = record_op("B/op1", "Next", "Rec", None, vec![], true);

@@ -436,7 +436,7 @@ pub(crate) fn implicit_rec_persisted_by_owner(
     let is_trigger = routine.kind == "trigger";
     let named = |names: &[&str]| names.iter().any(|t| routine.name.eq_ignore_ascii_case(t));
     match routine.object_type.as_str() {
-        "Table" | "TableExtension" => !is_trigger || !named(TABLEEXT_TRIGGERS_AFTER_WRITE),
+        "Table" | "TableExtension" => table_rec_persisted_by_owner(routine),
         "Page" | "PageExtension" => {
             (is_trigger && named(PAGE_TRIGGERS_REC_DELETED))
                 || ((!is_trigger || named(PAGE_TRIGGERS_REC_PERSISTED))
@@ -444,6 +444,60 @@ pub(crate) fn implicit_rec_persisted_by_owner(
         }
         _ => false,
     }
+}
+
+/// The Table / TableExtension arm of [`implicit_rec_persisted_by_owner`]: every
+/// procedure and trigger except tableext OnAfterInsert / OnAfterModify /
+/// OnAfterRename ([`TABLEEXT_TRIGGERS_AFTER_WRITE`]). Shared with d37 (#299),
+/// which asks d39's question about a `Validate` on the receiver.
+pub(crate) fn table_rec_persisted_by_owner(routine: &ModelRoutine) -> bool {
+    routine.kind != "trigger"
+        || !TABLEEXT_TRIGGERS_AFTER_WRITE
+            .iter()
+            .any(|t| routine.name.eq_ignore_ascii_case(t))
+}
+
+/// #299: is `record_variable_name` the implicit receiver `Rec` of a Table /
+/// TableExtension routine, the record its caller (or, for a trigger, the
+/// platform) handed it? Read from the receiver flag `ir_record_variables` sets
+/// on the seeded row only; a declared `Rec` of any type gets no seeded row, and
+/// a missing flag reads `false`, so the detectors keep reporting.
+pub(crate) fn is_table_receiver_rec(routine: &ModelRoutine, record_variable_name: &str) -> bool {
+    record_variable_name.eq_fold_identifier("rec")
+        && routine
+            .record_variables
+            .iter()
+            .any(|rv| rv.is_receiver && rv.name.eq_fold_identifier("rec"))
+}
+
+/// #299: does `routine` put its receiver `Rec` in a new state after `anchor`
+/// (the `Validate` d37 judges, node `op_id`)? The shared "loaded" definition
+/// ([`record_load_points`]: own Get / Find* / Next / Init / Copy /
+/// TransferFields and `var` helpers that load), minus a point in the other arm
+/// of a branch holding the op ([`branch_exclusive`]), as d39's
+/// `reset_after_call`; plus a bare whole-record copy `Rec := Other` (both sides
+/// bare identifiers: `rhs_identifier` is set; a member target `X.Rec := v` never
+/// sets it). Assignments are not leaves of `statement_tree`, so no branch
+/// exclusion applies to them: one in the other arm keeps the finding.
+pub(crate) fn receiver_reset_after(
+    routine: &ModelRoutine,
+    ctx: &DetectorContext,
+    anchor: &PAnchor,
+    op_id: &str,
+) -> bool {
+    let tree = routine.statement_tree.as_ref();
+    record_load_points(routine, ctx)
+        .get("rec")
+        .is_some_and(|pts| {
+            pts.iter().any(|p| {
+                before_anchor(anchor, p.anchor) && !branch_exclusive(tree, op_id, p.node_id)
+            })
+        })
+        || routine.var_assignments.iter().any(|asg| {
+            asg.lhs_name == "rec"
+                && asg.rhs_identifier.is_some()
+                && before_anchor(anchor, &asg.source_anchor)
+        })
 }
 
 /// The page holding `routine` (for a PageExtension, its base page, looked up by
@@ -1874,6 +1928,7 @@ mod tests {
                 parameter_index: None,
             },
             scope: None,
+            is_receiver: false,
         }
     }
 

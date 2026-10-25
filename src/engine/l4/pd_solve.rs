@@ -787,6 +787,7 @@ mod tests {
                     parameter_index: Some(i),
                     temp_state: ts,
                     scope: Some("parameter".to_string()),
+                    is_receiver: false,
                 },
             );
         }

@@ -21,7 +21,7 @@ use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
     RECORD_LOAD_OPS, anchor_of, before_anchor, is_platform_loaded_trigger_rec,
-    record_loaded_by_assignment_before, record_loaded_by_call_before,
+    is_table_receiver_rec, record_loaded_by_assignment_before, record_loaded_by_call_before,
 };
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
@@ -48,6 +48,7 @@ pub fn detect_d11(
     let mut skipped_parse_incomplete = 0u64;
     let mut skipped_parameter = 0u64;
     let mut skipped_trigger_rec = 0u64;
+    let mut skipped_caller_owned_rec = 0u64;
 
     for routine in &ws.routines {
         // roleOf(routine) !== "primary" → skip. Source-only: every routine is
@@ -114,6 +115,14 @@ pub fn detect_d11(
                 &op.record_variable_name,
                 &op.source_anchor,
             ) {
+                continue;
+            }
+            // #299: the receiver `Rec` of a Table / TableExtension routine is the
+            // caller's (or the platform's) record; its entry state is the caller's
+            // responsibility, as for a parameter record. Checked last, so the
+            // counter holds only ops that would otherwise be reported.
+            if is_table_receiver_rec(routine, &op.record_variable_name) {
+                skipped_caller_owned_rec += 1;
                 continue;
             }
 
@@ -188,6 +197,7 @@ pub fn detect_d11(
     stats.add_skip("parseIncomplete", skipped_parse_incomplete);
     stats.add_skip("other", skipped_parameter);
     stats.add_skip("triggerRec", skipped_trigger_rec);
+    stats.add_skip("callerOwnedRec", skipped_caller_owned_rec);
     Ok(DetectorOutput {
         findings,
         stats,

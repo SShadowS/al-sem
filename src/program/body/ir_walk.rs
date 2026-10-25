@@ -2104,6 +2104,7 @@ pub fn ir_record_variables(
             is_parameter: true,
             parameter_index: Some(i as u32),
             scope: None,
+            is_receiver: false,
         });
     }
 
@@ -2121,6 +2122,7 @@ pub fn ir_record_variables(
             is_parameter: false,
             parameter_index: None,
             scope: None,
+            is_receiver: false,
         });
     }
 
@@ -2177,6 +2179,14 @@ pub fn ir_record_variables(
         } else {
             ts_known(false)
         };
+        // #299: the Table / TableExtension receiver, unless a named return value
+        // `Rec` could be the name's referent (`shadows_implicit_rec` does not look
+        // at return names; fail closed instead of guessing which one AL binds).
+        let is_receiver = matches!(o.kind, ObjectKind::Table | ObjectKind::TableExtension)
+            && !routine
+                .return_name
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case("rec"));
         out.push(PRecordVariable {
             id: format!("{}/rv/rec", routine_id),
             name: "Rec".to_string(),
@@ -2185,6 +2195,7 @@ pub fn ir_record_variables(
             is_parameter: false,
             parameter_index: None,
             scope: None,
+            is_receiver,
         });
     }
 
@@ -2209,6 +2220,7 @@ pub fn ir_record_variables(
                 is_parameter: false,
                 parameter_index: None,
                 scope: None,
+                is_receiver: false,
             });
         }
     }
@@ -2245,6 +2257,7 @@ pub fn ir_object_global_record_vars(
             is_parameter: false,
             parameter_index: None,
             scope: Some("global".to_string()),
+            is_receiver: false,
         });
     }
     out
