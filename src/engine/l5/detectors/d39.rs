@@ -29,11 +29,13 @@
 //! (`implicit_rec_persisted_by_owner`): a table / tableext procedure or field
 //! trigger hands `Rec` back to its caller, the platform writes it after the table
 //! triggers, the tableext OnBefore* triggers, and the listed triggers and the
-//! procedures of a modifiable page. It reports in a tableext OnAfterInsert /
-//! OnAfterModify / OnAfterRename, OnAfterGetRecord or any other page trigger, on an
-//! `Editable = false` / `ModifyAllowed = false` page, and wherever the routine
-//! reloads `Rec` after the call. `xRec` always reports. Known false negative: a
-//! modifiable page opened in view mode (a runtime fact).
+//! procedures of a modifiable page; page OnDeleteRecord is moot. It reports in a
+//! tableext OnAfterInsert / OnAfterModify / OnAfterRename, OnAfterGetRecord or any
+//! other page trigger, on an `Editable = false` / `ModifyAllowed = false` page, and
+//! wherever the routine reloads `Rec` after the call. `xRec` always reports. Known
+//! false negatives: a modifiable page opened in view mode (a runtime fact), and a
+//! pageext over a read-only dependency page (the model has no page properties for
+//! dependency pages).
 //!
 //! Reads the CORE `RoutineSummary.parameterRoles` via `ctx.parameter_roles_by_routine`
 //! (the `dirtyAtExit` fact), `ctx.reverse_call_graph`, and the post-upgrade per-callsite
@@ -54,6 +56,7 @@ use crate::engine::l5::detectors::{
 };
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::model::symbol_table::SymbolTable;
 use crate::program::model::workspace::Model;
 
 pub(crate) const DETECTOR: &str = "d39-record-left-dirty-across-chain";
@@ -65,6 +68,8 @@ pub fn detect_d39(
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let ws = &resolved.workspace;
+    // The owner rule finds a pageext's base page by name (#272).
+    let symbols = SymbolTable::build(&ws.objects, &[]);
     let fp_index = &ctx.fingerprint_index;
     let mut findings: Vec<Finding> = Vec::new();
     let mut candidates_considered = 0usize;
@@ -194,8 +199,8 @@ pub fn detect_d39(
                 // bucket is the match.
                 if binding.source_kind == "implicit-rec"
                     && source_name_lc == "rec"
+                    && implicit_rec_persisted_by_owner(caller, ctx, &symbols)
                     && !reset_after_call()
-                    && implicit_rec_persisted_by_owner(caller, ctx)
                 {
                     skipped_implicit_rec_owner_persists += 1;
                     continue;

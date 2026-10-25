@@ -127,7 +127,11 @@ fn shapes_rec_argument_source_kinds() {
 }
 
 /// `ws-gshadow`: a table or page object global named `Rec`, scalar or record, is
-/// not the implicit record: all four sites are `unknown` at L2.
+/// not the implicit record: all four sites are `unknown` at L2. O15: on a codeunit
+/// with `TableNo` (`G TableNo`) and in a report dataitem trigger (`G Report`) the
+/// `Rec` is typed directly and keeps that typed `local` row although an object
+/// global `Rec` is declared: the global-shadow rule applies only to objects whose
+/// own record is `Rec`.
 #[test]
 fn gshadow_rec_argument_source_kinds() {
     assert_eq!(
@@ -137,6 +141,8 @@ fn gshadow_rec_argument_source_kinds() {
             "G TRecord | ViaRecord | H.ResetIt | unknown | -",
             "G PScalar | ViaScalar | H.Num | unknown | -",
             "G PRecord | ViaRecord | H.ResetIt | unknown | -",
+            "G TableNo | OnRun | H.ResetCust | local | rec",
+            "G Report | OnAfterGetRecord | H.ResetCust | local | rec",
         ])
     );
 }

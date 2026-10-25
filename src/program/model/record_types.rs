@@ -231,7 +231,7 @@ pub fn resolve_routine_record_types(
         None => None,
     };
 
-    if let Some(own_id) = own_table_id {
+    if let Some(own_id) = &own_table_id {
         for op in routine.record_operations.iter_mut() {
             if op.table_id.is_some() {
                 continue;
@@ -399,6 +399,15 @@ pub fn resolve_routine_record_types(
             variable.temp_state = crate::program::body::scope::ts_known(true);
         }
     }
+    // ...and an argument passing the implicit `Rec`/`xRec` (#272): it has no table
+    // id of its own, its table is pass 3's own table.
+    if own_table_id
+        .as_deref()
+        .and_then(|t| symbols.table_by_id(t))
+        .is_some_and(|t| t.is_temporary)
+    {
+        mark_implicit_rec_bindings_temp(routine);
+    }
 
     // --- routine ENTRY-guard override (G-2 Part 2) -----------------------------
     //
@@ -453,16 +462,22 @@ pub fn resolve_routine_record_types(
                 variable.temp_state = crate::program::body::scope::ts_known(true);
             }
         }
-        // ...and so must a call argument that passes the implicit Rec/xRec: a
-        // callee's `var` record param bound to it writes the temporary copy.
-        // L2 leaves such a binding without a temp state when no Rec variable
-        // is declared, which the L4 PD substitution and the capability cone
-        // read as Unknown (physical).
-        for cs in routine.call_sites.iter_mut() {
-            for b in cs.argument_bindings.iter_mut() {
-                if b.source_kind == "implicit-rec" {
-                    b.source_temp_state = Some(crate::program::body::scope::ts_known(true));
-                }
+        // ...and so must a call argument that passes the implicit Rec/xRec.
+        mark_implicit_rec_bindings_temp(routine);
+    }
+}
+
+/// Force `Known(true)` on every argument binding that passes the implicit
+/// `Rec`/`xRec`: a callee's `var` record param bound to it writes the temporary
+/// copy. Such a binding has no record-variable or table id, so the overrides that
+/// key on those cannot reach it; without this, L2's state (none, or the L2-default
+/// `Known(false)`) reads as physical to d39's G-13 skip, the L4 PD substitution
+/// and the capability cone.
+fn mark_implicit_rec_bindings_temp(routine: &mut ModelRoutine) {
+    for cs in routine.call_sites.iter_mut() {
+        for b in cs.argument_bindings.iter_mut() {
+            if b.source_kind == "implicit-rec" {
+                b.source_temp_state = Some(crate::program::body::scope::ts_known(true));
             }
         }
     }

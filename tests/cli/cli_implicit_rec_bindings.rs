@@ -5,8 +5,11 @@
 //! Every test drives the REAL analyze pipeline (`run_analyze_with_exit`) over a
 //! committed fixture under `tests/fixtures/issue-272/` (not `tests/r0-corpus`: the
 //! corpus is walked by the golden differentials, which would then demand goldens).
-//! Each test asserts the EXACT set of `(detector, object, routine)` rows, so a
-//! finding that moves between routines fails as surely as a missing one.
+//! Each test asserts the EXACT set of `(detector, object, routine, line)` rows, so a
+//! finding that moves between routines, even two of one name, fails as surely as a
+//! missing one.
+//! - `ws-owner`: d39 owner-rule cases added after the final panel (a page over a
+//!   `TableType = Temporary` table, page OnDeleteRecord).
 //!
 //! - `ws-shapes`: implicit `Rec` in table / tableext / page / pageext routines, next
 //!   to the same shape on a local record (the reference that fires before and after).
@@ -71,8 +74,10 @@ fn short(detector: &str) -> &str {
     detector.split('-').next().unwrap()
 }
 
-/// `"dNN\t<object name>\t<routine name>"` for each finding of `detector_short`,
-/// sorted (a multiset: two triggers of one name in one object stay two rows).
+/// `"dNN\t<object name>\t<routine name>\tL<line>"` for each finding of
+/// `detector_short`, sorted. The line (1-based, the finding's primary location: the
+/// forwarded argument) tells apart routines of one name in one object, e.g. the
+/// three `S Card` action OnAction triggers.
 fn rows(fs: &[serde_json::Value], detector_short: &str) -> Vec<String> {
     let mut out: Vec<String> = fs
         .iter()
@@ -80,9 +85,12 @@ fn rows(fs: &[serde_json::Value], detector_short: &str) -> Vec<String> {
         .map(|f| {
             let loc = &f["primaryLocation"];
             format!(
-                "{detector_short}\t{}\t{}",
+                "{detector_short}\t{}\t{}\tL{}",
                 s(&loc["objectName"], "objectName"),
-                s(&loc["routineName"], "routineName")
+                s(&loc["routineName"], "routineName"),
+                loc["line"]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("finding has no line: {loc:#?}"))
             )
         })
         .collect();
@@ -130,24 +138,26 @@ fn shapes() -> Vec<serde_json::Value> {
 /// OnAction (`S Card Ext` E1), a tableext procedure (`ExtD41ViaRec`), a table
 /// procedure (`D41ViaRec`), bare `SetRange` + `Rec` (`D41ViaBareRec`) and a field
 /// OnValidate `xRec` (`S Cust` OnValidate); also an undeclared `xRec` next to a
-/// declared local `Rec` (`ShadowRecFwdXRec`). Unchanged: the local reference
-/// (`D41ViaLocal`), a declared local `xRec` (`ShadowDeclaredXRec`) and a codeunit
-/// global `Rec` (`ViaGlobalRec`). Today only those last three fire.
+/// declared local `Rec` (`ShadowRecFwdXRec`), and a codeunit global `Rec`
+/// (`ViaGlobalRec`): on the base it was mislabelled `implicit-rec`, which kept the
+/// L3 global backfill from rebinding it. Unchanged: the local reference
+/// (`D41ViaLocal`) and a declared local `xRec` (`ShadowDeclaredXRec`), the only two
+/// that fire on the base.
 #[test]
 fn shapes_d41_reports_the_implicit_rec() {
     assert_eq!(
         rows(&shapes(), "d41"),
         sorted(&[
-            "d41 | S Card | OnAction",
-            "d41 | S Card | ShadowDeclaredXRec",
-            "d41 | S Card | ShadowRecFwdXRec",
-            "d41 | S Card Ext | OnAction",
-            "d41 | S Cust | D41ViaBareRec",
-            "d41 | S Cust | D41ViaLocal",
-            "d41 | S Cust | D41ViaRec",
-            "d41 | S Cust | OnValidate",
-            "d41 | S Cust Ext | ExtD41ViaRec",
-            "d41 | S Global Rec | ViaGlobalRec",
+            "d41 | S Card | OnAction | L32",
+            "d41 | S Card | ShadowDeclaredXRec | L96",
+            "d41 | S Card | ShadowRecFwdXRec | L87",
+            "d41 | S Card Ext | OnAction | L127",
+            "d41 | S Cust | D41ViaBareRec | L53",
+            "d41 | S Cust | D41ViaLocal | L44",
+            "d41 | S Cust | D41ViaRec | L36",
+            "d41 | S Cust | OnValidate | L17",
+            "d41 | S Cust Ext | ExtD41ViaRec | L8",
+            "d41 | S Global Rec | ViaGlobalRec | L48",
         ])
     );
 }
@@ -165,9 +175,9 @@ fn shapes_d42_reports_the_implicit_rec() {
     assert_eq!(
         rows(&fs, "d42"),
         sorted(&[
-            "d42 | S Card | OnAction",
-            "d42 | S Cust | D42ViaLocal",
-            "d42 | S Cust | D42ViaRec",
+            "d42 | S Card | OnAction | L53",
+            "d42 | S Cust | D42ViaLocal | L85",
+            "d42 | S Cust | D42ViaRec | L77",
         ])
     );
     let via_rec = finding(&fs, "d42", "S Cust", "D42ViaRec");
@@ -198,17 +208,36 @@ fn shapes_d39_owner_rule() {
     assert_eq!(
         rows(&shapes(), "d39"),
         sorted(&[
-            "d39 | S AGR Card | OnAfterGetRecord",
-            "d39 | S Cust | D39ViaLocal",
-            "d39 | S Cust Ext | OnAfterModify",
-            "d39 | S Cust Ext2 | ExtReloadAfter",
-            "d39 | S Cust Ext2 | ExtXRec",
-            "d39 | S Cust Ext2 | OnAfterInsert",
-            "d39 | S Cust Ext2 | OnAfterRename",
-            "d39 | S NoMod Card | OnAction",
-            "d39 | S RO List | OnAction",
-            "d39 | S RO List Ext | OnAction",
+            "d39 | S AGR Card | OnAfterGetRecord | L34",
+            "d39 | S Cust | D39ViaLocal | L68",
+            "d39 | S Cust Ext | OnAfterModify | L16",
+            "d39 | S Cust Ext2 | ExtReloadAfter | L33",
+            "d39 | S Cust Ext2 | ExtXRec | L69",
+            "d39 | S Cust Ext2 | OnAfterInsert | L62",
+            "d39 | S Cust Ext2 | OnAfterRename | L41",
+            "d39 | S NoMod Card | OnAction | L17",
+            "d39 | S RO List | OnAction | L17",
+            "d39 | S RO List Ext | OnAction | L36",
         ])
+    );
+}
+
+/// A5, final-panel cases over `ws-owner` (kept out of `ws-shapes`, whose summary
+/// core A8 pins against the base):
+/// - F1: a page over a `TableType = Temporary` table (no `SourceTableTemporary`)
+///   hands a temporary `Rec`: d39's G-13 skip holds in OnAfterGetRecord, which the
+///   owner rule would report, and in OnAction.
+/// - F2: page OnDeleteRecord is exempt (the row is deleted; moot, not measured).
+/// - Control: OnAfterGetRecord on the physical `O Card` reports, so the workspace
+///   reaches d39 at all.
+#[test]
+fn owner_d39_temp_table_and_delete_record() {
+    assert_eq!(
+        rows(
+            &analyze(&fixture("ws-owner"), "d39-record-left-dirty-across-chain"),
+            "d39"
+        ),
+        sorted(&["d39 | O Card | OnAfterGetRecord | L39"])
     );
 }
 
@@ -218,7 +247,7 @@ fn shapes_d39_owner_rule() {
 fn shapes_d40_still_skips_the_implicit_rec() {
     assert_eq!(
         rows(&shapes(), "d40"),
-        sorted(&["d40 | S Cust | D40ViaLocal"])
+        sorted(&["d40 | S Cust | D40ViaLocal | L98"])
     );
 }
 
@@ -253,22 +282,22 @@ d37-validate-without-persist",
     assert_eq!(
         got,
         sorted(&[
-            "d11 | R Cust | D11ByValue",
-            "d11 | R Cust | D11Order",
-            "d11 | R Cust | D37Arity",
-            "d11 | R Cust | D37ByValue",
-            "d11 | R Cust | D37NoPersist",
-            "d11 | R Cust | D37Order",
-            "d11 | R Cust | D37Persists",
-            "d11 | R Cust | D37Unresolved",
-            "d11 | R Cust | D37WrongVar",
-            "d21 | R Cust | D21WrongVar",
-            "d33 | R Cust | D33ByValue",
-            "d33 | R Cust | D33Unfiltered",
-            "d37 | R Cust | D37ByValue",
-            "d37 | R Cust | D37NoPersist",
-            "d37 | R Cust | D37Order",
-            "d37 | R Cust | D37WrongVar",
+            "d11 | R Cust | D11ByValue | L72",
+            "d11 | R Cust | D11Order | L78",
+            "d11 | R Cust | D37Arity | L42",
+            "d11 | R Cust | D37ByValue | L28",
+            "d11 | R Cust | D37NoPersist | L21",
+            "d11 | R Cust | D37Order | L57",
+            "d11 | R Cust | D37Persists | L14",
+            "d11 | R Cust | D37Unresolved | L35",
+            "d11 | R Cust | D37WrongVar | L49",
+            "d21 | R Cust | D21WrongVar | L93",
+            "d33 | R Cust | D33ByValue | L108",
+            "d33 | R Cust | D33Unfiltered | L113",
+            "d37 | R Cust | D37ByValue | L28",
+            "d37 | R Cust | D37NoPersist | L21",
+            "d37 | R Cust | D37Order | L57",
+            "d37 | R Cust | D37WrongVar | L49",
         ])
     );
 }

@@ -26,7 +26,7 @@ FIXED: `TABLE_TRIGGERS_REC_AUTO_PERSIST` added to the `is_platform_loaded_trigge
 (covers d11/d21/d37, which consume the gate directly). d39's caller-side check was
 `is_auto_persist_trigger_rec` (`autoPersistTriggerRec` skip stat); since #272 it is the owner rule
 `implicit_rec_persisted_by_owner` (`implicitRecOwnerPersists` skip stat), which covers these triggers
-too. Tests: `tests/gap_audit_b_table_triggers.rs`
+too. Tests: [`tests/gap/gap_audit_b_table_triggers.rs`](../tests/gap/gap_audit_b_table_triggers.rs)
 (suppression + non-trigger / non-Rec controls); g9/g14 suites unchanged-green.
 
 ## Shared-root class C — loop-detector guards (Next-terminator + virtual table) missing in d2/d18 (FP)

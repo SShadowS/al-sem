@@ -75,6 +75,7 @@ use crate::engine::l5::registry::{Detector, substrate};
 use crate::program::body::features::{
     PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PExpressionInfo,
 };
+use crate::program::model::symbol_table::SymbolTable;
 use crate::program::model::workspace::{
     ModelRecordOperation, ModelRecordVariable, ModelRoutine, ModelTable,
 };
@@ -365,10 +366,12 @@ pub(crate) fn is_platform_loaded_trigger_rec(
 }
 
 /// Page / pageext triggers after which a modifiable page writes `Rec` itself
-/// (#272; TestPage on BC 28.4, a helper doing only `Validate` on `Rec`, no
-/// `Modify`). OnBeforeValidate is by analogy with OnAfterValidate (not probed);
-/// the rest were measured. Measured lost, so absent: OnAfterGetRecord. Every
-/// trigger not listed (OnOpenPage, ...) counts as not persisting.
+/// (#272; measured on the BC 28.4 Linux sidecar through TestPage, a helper doing
+/// only `Validate` on `Rec`, no `Modify`; a Windows Cronus confirmation is still
+/// owed). OnBeforeValidate is by analogy with OnAfterValidate (not probed); the
+/// rest were measured. Measured lost, so absent: OnAfterGetRecord. Every trigger
+/// not listed here or in [`PAGE_TRIGGERS_REC_DELETED`] (OnOpenPage, ...) counts as
+/// not persisting.
 const PAGE_TRIGGERS_REC_PERSISTED: &[&str] = &[
     "OnAction",
     "OnValidate",
@@ -384,10 +387,15 @@ const PAGE_TRIGGERS_REC_PERSISTED: &[&str] = &[
     "OnBeforeValidate",
 ];
 
+/// Page triggers after which the platform deletes `Rec`: a write left on it is
+/// moot (no write to lose, no fix to offer), as for table OnDelete. Not measured.
+const PAGE_TRIGGERS_REC_DELETED: &[&str] = &["OnDeleteRecord"];
+
 /// Table-extension triggers that run AFTER the platform wrote `Rec`, so a
-/// `Validate` there is lost (all three measured on BC 28.4, #272). OnAfterDelete
-/// is absent on purpose: the row is gone, so there is no write to lose and no
-/// fix to offer (the reason table OnDelete is exempt too).
+/// `Validate` there is lost (#272; all three measured on the BC 28.4 Linux
+/// sidecar, Windows Cronus confirmation owed). OnAfterDelete is absent on
+/// purpose: the row is gone, so there is no write to lose and no fix to offer
+/// (moot, not measured; the reason table OnDelete is exempt too).
 const TABLEEXT_TRIGGERS_AFTER_WRITE: &[&str] = &["OnAfterInsert", "OnAfterModify", "OnAfterRename"];
 
 /// Does someone other than `routine` persist the implicit `Rec` it leaves dirty?
@@ -396,53 +404,66 @@ const TABLEEXT_TRIGGERS_AFTER_WRITE: &[&str] = &["OnAfterInsert", "OnAfterModify
 ///   record (`Cust.Foo()`, `Cust.Validate(F)`), which the caller persists;
 /// - any other table / tableext trigger except [`TABLEEXT_TRIGGERS_AFTER_WRITE`]:
 ///   table OnInsert / OnModify / OnRename and tableext OnBefore* were measured to
-///   persist; OnDelete / OnAfterDelete are moot (the row is gone);
+///   persist; OnDelete / OnAfterDelete are moot (the row is gone; not measured);
+/// - a page OnDeleteRecord ([`PAGE_TRIGGERS_REC_DELETED`]): moot, not measured;
 /// - a Page / PageExtension procedure or one of [`PAGE_TRIGGERS_REC_PERSISTED`],
 ///   on a page that is not `Editable = false` and not `ModifyAllowed = false`
 ///   (each measured to lose the write on its own; [`page_may_modify`]).
 ///
 /// False (d39 reports) for every other trigger (OnAfterGetRecord measured lost,
-/// OnOpenPage, ...), a read-only page and every other object type.
+/// OnOpenPage, ...), a read-only page and every other object type. "Measured" is
+/// the BC 28.4 Linux sidecar through TestPage; a Windows Cronus confirmation is
+/// still owed.
 ///
-/// Known false negative, runtime-only (as before #272): a modifiable page opened
-/// in VIEW mode loses the write too (measured), but the open mode is a runtime
-/// fact this cannot see. The same holds for a page procedure called from a
-/// trigger that does not persist.
+/// Limits:
+/// - **Main limit: a pageext over a dependency page is always exempt.** A
+///   dependency (ABI, symbol-only) page carries no `Editable` / `ModifyAllowed`
+///   in the model (`abi_rows.rs` leaves both `None`), so it counts as modifiable,
+///   and the read-only rule never fires for an extension of a Base App page.
+/// - A table field OnLookup is exempt even when the field sits behind a
+///   read-only page (the Table arm does not look at pages).
+/// - An event subscriber inside a page is a page procedure here, so it is exempt
+///   like one.
+/// - Known false negative, runtime-only (as before #272): a modifiable page opened
+///   in VIEW mode loses the write too (measured), but the open mode is a runtime
+///   fact this cannot see. The same holds for a page procedure called from a
+///   trigger that does not persist.
 pub(crate) fn implicit_rec_persisted_by_owner(
     routine: &ModelRoutine,
     ctx: &DetectorContext,
+    symbols: &SymbolTable,
 ) -> bool {
     let is_trigger = routine.kind == "trigger";
     let named = |names: &[&str]| names.iter().any(|t| routine.name.eq_ignore_ascii_case(t));
     match routine.object_type.as_str() {
         "Table" | "TableExtension" => !is_trigger || !named(TABLEEXT_TRIGGERS_AFTER_WRITE),
         "Page" | "PageExtension" => {
-            (!is_trigger || named(PAGE_TRIGGERS_REC_PERSISTED)) && page_may_modify(routine, ctx)
+            named(PAGE_TRIGGERS_REC_DELETED)
+                || ((!is_trigger || named(PAGE_TRIGGERS_REC_PERSISTED))
+                    && page_may_modify(routine, ctx, symbols))
         }
         _ => false,
     }
 }
 
-/// The page holding `routine` (for a PageExtension, its base page found by name)
-/// is neither `Editable = false` nor `ModifyAllowed = false`. A page that is not
-/// in the model (e.g. a pageext's base page in a dependency the model does not
-/// hold), or a base name more than one page carries, counts as modifiable (the
-/// exemption holds; a stated limit, no fixture).
-fn page_may_modify(routine: &ModelRoutine, ctx: &DetectorContext) -> bool {
+/// The page holding `routine` (for a PageExtension, its base page, looked up by
+/// name like `record_types` pass 3 does: last-wins when several pages share the
+/// name) is neither `Editable = false` nor `ModifyAllowed = false`. A page that is
+/// not in the model counts as modifiable, and so does a dependency page, whose
+/// properties the model does not carry (see [`implicit_rec_persisted_by_owner`]'s
+/// main limit).
+fn page_may_modify(routine: &ModelRoutine, ctx: &DetectorContext, symbols: &SymbolTable) -> bool {
     let Some(&obj) = ctx.objects_by_id.get(routine.object_id.as_str()) else {
         return true;
     };
     let page = if obj.object_type == "PageExtension" {
-        let Some(base) = obj.extends_target_name.as_deref() else {
-            return true;
-        };
-        let mut pages = ctx
-            .objects_by_id
-            .values()
-            .filter(|o| o.object_type == "Page" && o.name.eq_fold_identifier(base));
-        match (pages.next(), pages.next()) {
-            (Some(&p), None) => p,
-            _ => return true,
+        match obj
+            .extends_target_name
+            .as_deref()
+            .and_then(|base| symbols.object_by_type_name("Page", base))
+        {
+            Some(p) => p,
+            None => return true,
         }
     } else {
         obj

@@ -23,6 +23,11 @@ codeunit 50302 "G H"
     begin
         R.Reset();
     end;
+
+    procedure ResetCust(var R: Record "G Cust")
+    begin
+        R.Reset();
+    end;
 }
 
 // GT1: table with a global scalar Rec
@@ -85,4 +90,38 @@ page 50306 "G PRecord"
         H.ResetIt(Rec);
         Rec.FindFirst();
     end;
+}
+
+// GC1 (O15): a codeunit TableNo Rec is typed directly; an object global named Rec
+// does not take it away (the global-shadow rule is for objects whose own record is
+// Rec). Not checked against alc.
+codeunit 50307 "G TableNo"
+{
+    TableNo = "G Cust";
+    var
+        Rec: Record "G Other";
+
+    trigger OnRun()
+    var H: Codeunit "G H";
+    begin
+        H.ResetCust(Rec);
+    end;
+}
+
+// GR1 (O15): the same for a report dataitem Rec. Not checked against alc.
+report 50308 "G Report"
+{
+    dataset
+    {
+        dataitem(D1; "G Cust")
+        {
+            trigger OnAfterGetRecord()
+            var H: Codeunit "G H";
+            begin
+                H.ResetCust(Rec);
+            end;
+        }
+    }
+    var
+        Rec: Record "G Other";
 }
