@@ -63,9 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   target is not a bare unquoted identifier (`Rec := GetRec()`, `"Rec" := Other`) is not
   seen as a new state; `Validate` followed by `Clear(Rec)` is not reported, because d37's
   older rule for a call that takes the record and cannot be resolved already hides it, for
-  any record; and `Rec := Other` in the other arm of a branch holding the `Validate` keeps
-  the d37 finding (a conservative false positive). Page `Rec`, d21 on table `Rec` and a codeunit `TableNo` `OnRun` `Rec` are
-  not changed. `src/engine/l5/detectors/mod.rs` (`is_table_receiver_rec`,
+  any record; and `Rec := Other` in the other arm of a branch keeps the finding, for d37
+  when that branch holds the `Validate` and for d11 when it holds the `Modify` (a
+  conservative false positive). Page `Rec`, d21 on table `Rec` and a codeunit `TableNo`
+  `OnRun` `Rec` are not changed. `src/engine/l5/detectors/mod.rs` (`is_table_receiver_rec`,
   `table_rec_persisted_by_owner`, `receiver_reset_after`, and `load_point_after` with
   `LoadPointCache`, now shared with d39), `d11.rs`, `d37.rs`, `d39.rs`,
   `src/program/body/ir_walk.rs` (`ir_record_variables`).
