@@ -215,6 +215,22 @@ pub enum ChangedRootsDiagnostic {
     },
 }
 
+impl ChangedRootsDiagnostic {
+    /// The `kind` string, shared by the JSON and the human output (#340).
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::FileUnmatched { .. } => "file-unmatched",
+            Self::SelectorUnmatched { .. } => "selector-unmatched",
+            Self::SelectorAmbiguous { .. } => "selector-ambiguous",
+            Self::DiffFileUnmatched { .. } => "diff-file-unmatched",
+            Self::DiffFileAmbiguous { .. } => "diff-file-ambiguous",
+            Self::HunkOutsideRoutines { .. } => "hunk-outside-routines",
+            Self::DiffFileDeleted { .. } => "diff-file-deleted",
+            Self::DiffParseError { .. } => "diff-parse-error",
+        }
+    }
+}
+
 pub struct ChangedRootsResult {
     pub roots: Vec<String>,
     pub diagnostics: Vec<ChangedRootsDiagnostic>,
@@ -1528,30 +1544,24 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
 
 fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::Value {
     let mut m = serde_json::Map::new();
+    m.insert("kind".into(), d.kind().into());
     match d {
-        ChangedRootsDiagnostic::FileUnmatched { file } => {
-            m.insert("kind".into(), "file-unmatched".into());
+        ChangedRootsDiagnostic::FileUnmatched { file }
+        | ChangedRootsDiagnostic::DiffFileUnmatched { file }
+        | ChangedRootsDiagnostic::DiffFileDeleted { file } => {
             m.insert("file".into(), file.clone().into());
         }
         ChangedRootsDiagnostic::SelectorUnmatched { selector } => {
-            m.insert("kind".into(), "selector-unmatched".into());
             m.insert("selector".into(), selector.clone().into());
         }
         ChangedRootsDiagnostic::SelectorAmbiguous {
             selector,
             candidates,
         } => {
-            m.insert("kind".into(), "selector-ambiguous".into());
             m.insert("selector".into(), selector.clone().into());
-            let cv: Vec<serde_json::Value> = candidates.iter().map(|c| c.clone().into()).collect();
-            m.insert("candidates".into(), serde_json::Value::Array(cv));
-        }
-        ChangedRootsDiagnostic::DiffFileUnmatched { file } => {
-            m.insert("kind".into(), "diff-file-unmatched".into());
-            m.insert("file".into(), file.clone().into());
+            m.insert("candidates".into(), candidates.clone().into());
         }
         ChangedRootsDiagnostic::DiffFileAmbiguous { file, candidates } => {
-            m.insert("kind".into(), "diff-file-ambiguous".into());
             m.insert("file".into(), file.clone().into());
             m.insert("candidates".into(), candidates.clone().into());
         }
@@ -1560,17 +1570,11 @@ fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::
             start_line,
             end_line,
         } => {
-            m.insert("kind".into(), "hunk-outside-routines".into());
             m.insert("file".into(), file.clone().into());
             m.insert("startLine".into(), (*start_line as u64).into());
             m.insert("endLine".into(), (*end_line as u64).into());
         }
-        ChangedRootsDiagnostic::DiffFileDeleted { file } => {
-            m.insert("kind".into(), "diff-file-deleted".into());
-            m.insert("file".into(), file.clone().into());
-        }
         ChangedRootsDiagnostic::DiffParseError { file, detail } => {
-            m.insert("kind".into(), "diff-parse-error".into());
             if let Some(file) = file {
                 m.insert("file".into(), file.clone().into());
             }
@@ -1578,6 +1582,76 @@ fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::
         }
     }
     serde_json::Value::Object(m)
+}
+
+/// One human line for a changed-roots diagnostic (#340):
+/// `changed-roots: <kind> <subject>[ <detail>]`, every string escaped so the
+/// diagnostic stays on one line.
+fn changed_roots_diagnostic_human(d: &ChangedRootsDiagnostic) -> String {
+    let list = |c: &[String]| {
+        c.iter()
+            .map(|s| escape_controls(s))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let rest = match d {
+        ChangedRootsDiagnostic::FileUnmatched { file }
+        | ChangedRootsDiagnostic::DiffFileUnmatched { file }
+        | ChangedRootsDiagnostic::DiffFileDeleted { file } => escape_controls(file),
+        ChangedRootsDiagnostic::SelectorUnmatched { selector } => escape_controls(selector),
+        ChangedRootsDiagnostic::SelectorAmbiguous {
+            selector,
+            candidates,
+        } => format!(
+            "{} (candidates: {})",
+            escape_controls(selector),
+            list(candidates)
+        ),
+        ChangedRootsDiagnostic::DiffFileAmbiguous { file, candidates } => format!(
+            "{} (candidates: {}); pass --diff-root <folder> to read diff paths relative to <folder>",
+            escape_controls(file),
+            list(candidates)
+        ),
+        ChangedRootsDiagnostic::HunkOutsideRoutines {
+            file,
+            start_line,
+            end_line,
+        } => format!(
+            "{}:{}-{}",
+            escape_controls(file),
+            *start_line as u64,
+            *end_line as u64
+        ),
+        ChangedRootsDiagnostic::DiffParseError {
+            file: Some(file),
+            detail,
+        } => format!("{}: {}", escape_controls(file), escape_controls(detail)),
+        ChangedRootsDiagnostic::DiffParseError { file: None, detail } => escape_controls(detail),
+    };
+    format!("changed-roots: {} {rest}", d.kind())
+}
+
+/// `s` with every control character, and every bidi or line-breaking format
+/// character (U+200E/F, U+202A–E, U+2066–9, U+2028/9), in its `escape_default`
+/// form (`\n`, `\t`, `\u{202e}`, …); every other character, `\` included, as
+/// it is. It guards the `changed-roots:` lines only: the entry block's strings
+/// (evidence, detail, reasons) are printed as before.
+fn escape_controls(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_control()
+            || matches!(
+                c,
+                '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+                    | '\u{2028}' | '\u{2029}'
+            )
+        {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Project a query-level diagnostic into the envelope `{code, severity, message}`
@@ -1736,7 +1810,21 @@ pub struct ChangedInputContract {
 // Human formatter (formatDigestHuman)
 // ---------------------------------------------------------------------------
 
-pub fn format_digest_human(entries: &[DigestEntryFull]) -> String {
+/// The human digest: the entry blocks, then one line per changed-roots
+/// diagnostic in input order, with no blank line between (#340).
+pub fn format_digest_human(
+    entries: &[DigestEntryFull],
+    changed: &[ChangedRootsDiagnostic],
+) -> String {
+    let mut text = format_entries_human(entries);
+    for d in changed {
+        text.push_str(&changed_roots_diagnostic_human(d));
+        text.push('\n');
+    }
+    text
+}
+
+fn format_entries_human(entries: &[DigestEntryFull]) -> String {
     if entries.is_empty() {
         return "digest: no changed roots resolved\n".to_string();
     }
@@ -2177,7 +2265,8 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
 
     // Human. The dependencies line appears only when apps were loaded, so a
     // workspace with no dependency reads the same in both modes.
-    let mut human_text = dependencies.prefix_human(format_digest_human(&entries));
+    let mut human_text =
+        dependencies.prefix_human(format_digest_human(&entries, &changed_roots.diagnostics));
     if let Some(t) = &test_coverage {
         human_text.push_str(&t.human_line());
         human_text.push('\n');
@@ -2549,12 +2638,100 @@ mod tests {
             "fact-1",
             vec![("op-a".to_string(), JoinProblem::ClassAbsent)],
         );
-        let text = format_digest_human(&[entry_with(diags)]);
+        let text = format_digest_human(&[entry_with(diags)], &[]);
         assert!(
             text.contains(
                 "diagnostic: temp-state-incoherent (DB_INSERT) reason=class-absent op=op-a"
             ),
             "reason=class-absent op=op-a missing: {text}"
+        );
+    }
+
+    /// #340 A4: with no changed-roots diagnostic the human text is byte-identical
+    /// to the pre-#340 output, trailing newline included.
+    #[test]
+    fn human_output_unchanged_without_changed_roots_diagnostics() {
+        assert_eq!(
+            format_digest_human(&[], &[]),
+            "digest: no changed roots resolved\n"
+        );
+        assert_eq!(
+            format_digest_human(&[entry_with(Vec::new())], &[]),
+            "--- R ---\n  coverage: complete\n  (no effects)\n"
+        );
+    }
+
+    /// #340 A3: one line per changed-roots diagnostic, every variant, in input
+    /// order, control characters escaped, after the entries with no blank line.
+    /// Mutations: drop the escaping -> (a); add a blank line before the
+    /// diagnostics -> (b).
+    #[test]
+    fn changed_roots_human_lines() {
+        use ChangedRootsDiagnostic as D;
+        let s = |v: &str| v.to_string();
+        let changed = vec![
+            D::FileUnmatched {
+                file: s("src/a.al"),
+            },
+            D::SelectorUnmatched { selector: s("Foo") },
+            D::SelectorAmbiguous {
+                selector: s("Bar"),
+                candidates: vec![s("c1"), s("c2")],
+            },
+            D::DiffFileUnmatched {
+                file: s("src/b.al"),
+            },
+            D::DiffFileAmbiguous {
+                file: s("x/y.al"),
+                candidates: vec![s("ws:x/y.al"), s("ws:y.al")],
+            },
+            D::HunkOutsideRoutines {
+                file: s("src/c.al"),
+                start_line: 3,
+                end_line: 5,
+            },
+            D::DiffFileDeleted {
+                file: s("src/d.al"),
+            },
+            D::DiffParseError {
+                file: Some(s("src/e.al")),
+                detail: s("bad hunk header"),
+            },
+            D::DiffParseError {
+                file: None,
+                detail: s("truncated hunk"),
+            },
+            D::FileUnmatched {
+                file: s("src/a\nb\t.al"),
+            },
+            // Bidi override and line separator are escaped; a backslash is not.
+            D::FileUnmatched {
+                file: s("src\\x\u{202e}y\u{2028}z.al"),
+            },
+        ];
+        let lines = concat!(
+            "changed-roots: file-unmatched src/a.al\n",
+            "changed-roots: selector-unmatched Foo\n",
+            "changed-roots: selector-ambiguous Bar (candidates: c1, c2)\n",
+            "changed-roots: diff-file-unmatched src/b.al\n",
+            "changed-roots: diff-file-ambiguous x/y.al (candidates: ws:x/y.al, ws:y.al); ",
+            "pass --diff-root <folder> to read diff paths relative to <folder>\n",
+            "changed-roots: hunk-outside-routines src/c.al:3-5\n",
+            "changed-roots: diff-file-deleted src/d.al\n",
+            "changed-roots: diff-parse-error src/e.al: bad hunk header\n",
+            "changed-roots: diff-parse-error truncated hunk\n",
+            "changed-roots: file-unmatched src/a\\nb\\t.al\n",
+            "changed-roots: file-unmatched src\\x\\u{202e}y\\u{2028}z.al\n",
+        );
+        // (a) no entries.
+        assert_eq!(
+            format_digest_human(&[], &changed),
+            format!("digest: no changed roots resolved\n{lines}")
+        );
+        // (b) one entry: its block, then the lines, no blank line between.
+        assert_eq!(
+            format_digest_human(&[entry_with(Vec::new())], &changed),
+            format!("--- R ---\n  coverage: complete\n  (no effects)\n{lines}")
         );
     }
 
