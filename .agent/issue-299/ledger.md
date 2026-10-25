@@ -518,3 +518,5 @@ CDO 480 / 132), every other key identical to base. Wall seconds are indicative o
 - Gates on 868e6974 all green, but master moved (#279 09854085, #326 0794b35a). Rebased onto origin/master 09854085 with no conflict; subjects unchanged.
 - Gates on H = 9f65abc6 (B = 09854085): check-goldens-coverage 0, ci-steps-all 0, check-goldens 0, cdo-gate 0 (gate-runs.jsonl).
 - Re-measure on H (release-fast, three runs one at a time): every finding set is identical to the pre-rebase head 38f1dab5's. Base App d11/d37/d39 1101/550/363, CDO primary 15/3/3, CDO all 249/31/3; the CHANGELOG numbers stand.
+- CI on 01ed4100 failed for every PR: tree-sitter-al main moved past c89c2ecb (build.rs node-types hash mismatch). This lane made the grammar bump as side PR #333 (940ba71b; no test outcome, golden or CDO number moved), merged as 7374c420; then #334 (CLAUDE.md only) landed as ba6561be.
+- Rebased onto 7374c420 (CHANGELOG conflict: kept both entries), gates all 0 on e696bcc2, and the re-measure gave finding sets identical to 38f1dab5 on all three workspaces. Rebased again onto ba6561be (CLAUDE.md only): gates on H = 54876421 (B = ba6561be) all 0.
