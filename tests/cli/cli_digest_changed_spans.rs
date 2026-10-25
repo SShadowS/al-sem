@@ -2501,8 +2501,8 @@ fn plain_diff_u_timestamped_dev_null_is_a_deletion() {
 
 /// #111 C3. A `diff -ru` run (probe P5): its `diff -ru <old> <new>` line, the
 /// timestamped headers and an `Only in` line. The change matches exactly as in
-/// C1 (the `diff -ru` line is ignored); the `Only in` line names a file only one
-/// side has, which digest does not read, so it is reported as one
+/// C1 (the `diff -ru` line is ignored); the `Only in` line names a file only the
+/// OLD tree has, which is no workspace file, so it is reported as one
 /// `diff-file-unmatched` on `<dir>/<name>`, never silently dropped.
 ///
 /// Mutations: drop the TAB cut -> `diff-file-unmatched` on the timestamped path;
@@ -2521,6 +2521,51 @@ fn plain_diff_ru_timestamped_headers_match() {
         "{ru}: {doc}"
     );
     assert!(!entries(&doc).is_empty(), "{ru}: {doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{ru}: {doc}");
+    assert_eq!(code, 0, "{ru}: {doc}");
+}
+
+/// The C3 `diff -ru` change plus an `Only in` line on `name` in the new tree, as
+/// `diff -ru ../old .` writes it from the workspace root (`Only in ./src: <name>`).
+fn ru_with_only_in(name: &str) -> String {
+    format!(
+        "diff -ru ../old/src/posting.al ./src/posting.al\n--- ../old/src/posting.al\t2026-10-21 13:03:28.701655915 +0000\n+++ ./src/posting.al\t2026-10-21 13:03:28.702477280 +0000\n{D8_POSTING_HUNK}Only in ./src: {name}\n"
+    )
+}
+
+/// #111 H-1. An `Only in` path that is a workspace file (a file the new tree
+/// added) is a whole-file hit, like a hunkless rename: every routine of
+/// `src/subscriber.al` is a root next to the hunk's `PostSalesDoc`, with no
+/// diagnostic and exit 0.
+///
+/// Mutation: send every `Only in` path to `diff-file-unmatched` -> no
+/// `HandlePosted` root and one `diff-file-unmatched`.
+#[test]
+fn only_in_workspace_file_is_a_whole_file_hit() {
+    let ru = ru_with_only_in("subscriber.al");
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(&ru));
+    assert!(diags(&doc).is_empty(), "{ru}: {doc}");
+    assert_eq!(
+        roots(&doc),
+        vec!["HandlePosted", "PostSalesDoc"],
+        "{ru}: {doc}"
+    );
+    assert_eq!(code, 0, "{ru}: {doc}");
+}
+
+/// #111 H-1. An `Only in` path that is no workspace file stays one
+/// `diff-file-unmatched` on `<dir>/<name>`; the hunk's root is unchanged.
+///
+/// Mutation: drop the `Only in` diagnostic on a miss -> no diagnostic.
+#[test]
+fn only_in_path_outside_the_workspace_stays_unmatched() {
+    let ru = ru_with_only_in("missing.al");
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(&ru));
+    assert_eq!(
+        diags(&doc),
+        vec![serde_json::json!({"file": "./src/missing.al", "kind": "diff-file-unmatched"})],
+        "{ru}: {doc}"
+    );
     assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{ru}: {doc}");
     assert_eq!(code, 0, "{ru}: {doc}");
 }

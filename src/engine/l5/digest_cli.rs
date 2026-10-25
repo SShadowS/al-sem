@@ -512,10 +512,17 @@ pub fn resolve_changed_roots(
                 hits.extend(hit);
             }
         }
-        // `diff -r`'s `Only in` files carry no hunk, so their roots are unknown:
-        // report each one, never drop it silently (#111).
+        // `diff -r`'s `Only in` files carry no hunk (#111). One that is a workspace
+        // file (the new tree added it) is a whole-file hit, like a hunkless rename;
+        // any other is reported, never dropped silently.
         for file in &parsed.only_in {
-            diagnostics.push(ChangedRootsDiagnostic::DiffFileUnmatched { file: file.clone() });
+            let key = normalize_input(file);
+            let ixs = spans.of_file(&key);
+            if ixs.is_empty() {
+                diagnostics.push(ChangedRootsDiagnostic::DiffFileUnmatched { file: file.clone() });
+            } else if !poisoned.contains(&key) {
+                hits.extend_from_slice(ixs);
+            }
         }
     }
 

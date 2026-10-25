@@ -91,8 +91,8 @@ pub struct DiffParseResult {
     pub errors: Vec<String>,
     /// Header errors, each attached to its file section's path (#72).
     pub file_errors: Vec<FileError>,
-    /// `diff -r`'s `Only in <dir>: <name>` lines, as `<dir>/<name>` joined as
-    /// written: a file only one side has, which carries no hunk (#111).
+    /// `diff -r`'s `Only in <dir>: <name>` lines, as `<dir>/<name>` with one `/`
+    /// between: a file only one side has, which carries no hunk (#111).
     pub only_in: Vec<String>,
 }
 
@@ -769,12 +769,14 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
             }
         }
         // `diff -r`: a file only one side has (#111). It is kept so the caller can
-        // report it; it is not read as an addition or deletion.
+        // match it to a workspace file or report it; the parser does not read it as
+        // an addition or deletion.
         if let Some((dir, name)) = line
             .strip_prefix("Only in ")
             .and_then(|r| r.split_once(": "))
         {
-            only_in.push(format!("{dir}/{name}"));
+            // `diff -r new/ old/` writes the dir with its trailing `/`: no `//`.
+            only_in.push(format!("{}/{name}", dir.trim_end_matches('/')));
         }
         // All other lines ignored
     }
@@ -1046,6 +1048,13 @@ mod tests {
         let r = parse_unified_diff("Only in o: del.al\n");
         assert!(r.files.is_empty());
         assert_eq!(r.only_in, vec!["o/del.al"]);
+    }
+
+    #[test]
+    fn only_in_dir_with_trailing_slash_has_one_separator() {
+        // #111 H-2: `diff -r new/ old/` writes `Only in new/: x.al`.
+        let r = parse_unified_diff("Only in new/: x.al\n");
+        assert_eq!(r.only_in, vec!["new/x.al"]);
     }
 
     #[test]
