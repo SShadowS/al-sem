@@ -20,52 +20,56 @@ use ViewUniverse::{CrossApp as X, SingleApp as S};
 /// 256 MiB in KiB: every row is rounded up to a multiple of it.
 const STEP: u64 = 262_144;
 
-/// policy check cross-app: max(Task 1's `p` 8,280,524 KiB, step 6's 7.94 GiB,
-/// Task 1's projected `U` 8,333,320 KiB) → 8 GiB. The largest known row.
-const POLICY_X: u64 = 32 * STEP;
+/// policy check cross-app, the largest row: max(`p` 8,279,568, `U`
+/// 10,056,180 KiB) → 9.75 GiB.
+const POLICY_X: u64 = 39 * STEP;
 
 /// One row per (command, universe), rounded up to the next 256 MiB: each the
 /// max of the kind's standalone CDO `VmHWM` median and the median peak of
 /// every measured shape whose heaviest standalone member it is (spec D12).
-/// Numbers: `.agent/issue-277/ledger.md` "Task 1 projection" (release-fast,
-/// `maxrss.py`, `/work/bench/160-12/task1/reading.txt`) and spec §7.3 (step
-/// 6's final bench). A kind with no row takes the largest row.
-/// No row yet: events chains and query effects, cross-app and single-app.
+/// Numbers: Task 12's bench, `docs/measurements/2026-10-25-issue-277-160-step12.md`
+/// Part 4b (release-fast, `maxrss.py`, H medians over 3–5 rounds; the
+/// letters are its manifests). A kind with no row takes the largest row.
 pub static KIND_PEAK_KIB: &[(JobKind, u64)] = &[
-    // `a` 3,142,400 KiB → 3 GiB.
-    (("analyze", X), 12 * STEP),
-    // step 6's ≈ 0.72 GB → 0.75 GiB.
+    // Part 4b: max(`a` 3,162,240, `aa`, `AS`) KiB → 3.25 GiB.
+    (("analyze", X), 13 * STEP),
+    // Part 4b: `s` 727,772 KiB → 0.75 GiB.
     (("analyze", S), 3 * STEP),
-    // max(`d` 3,146,856, `h` 3,222,396 KiB, step 6's 3.35 GiB) → 3.5 GiB.
-    (("digest", X), 14 * STEP),
-    (("policy check", X), POLICY_X),
-    // `f` (B0) 1,465,740 KiB, step 6's 1.40 GiB → 1.5 GiB.
-    (("fingerprint", S), 6 * STEP),
-    // Plan Task 10 Step 1's provisional rows (release-fast at de5b151e, max
-    // of 3 `maxrss.py` rounds; `/work/bench/160-12/task10-step1-peaks.md`).
-    // Task 12's Part 4b replaces every row.
-    // max 746,136 KiB → 0.75 GiB.
+    // Part 4b: max(`d`, `h`, `AD`, `ADF`, `O`, `Up` 3,711,548) KiB → 3.75 GiB.
+    (("digest", X), 15 * STEP),
+    // Part 4b: `ds` 747,896 KiB → 0.75 GiB.
     (("digest", S), 3 * STEP),
-    // max 751,848 KiB → 0.75 GiB.
+    (("policy check", X), POLICY_X),
+    // Part 4b: `ps` 727,824 KiB → 0.75 GiB.
     (("policy check", S), 3 * STEP),
-    // max 3,187,260 KiB → 3.25 GiB.
+    // Part 4b: `fr` 3,144,176, `fi` 3,146,120 KiB → 3.25 GiB.
+    (("fingerprint", X), 13 * STEP),
+    // Part 4b: max(`f` 1,467,800, `frs`, `fis`) KiB → 1.5 GiB.
+    (("fingerprint", S), 6 * STEP),
+    // Part 4b: `pr` 3,155,308 KiB → 3.25 GiB.
     (("prove", X), 13 * STEP),
-    // `diff $WS $WS`: max 1,472,632 KiB → 1.5 GiB.
+    // Part 4b: `prs` 731,948 KiB → 0.75 GiB.
+    (("prove", S), 3 * STEP),
+    // Part 4b: max(`df`, `dfs` 1,473,272) KiB → 1.5 GiB.
     (("diff", S), 6 * STEP),
-    // max 3,192,604 KiB → 3.25 GiB.
+    // Part 4b: `ev` 3,184,072 KiB → 3.25 GiB.
     (("events fanout", X), 13 * STEP),
-    // max 747,860 KiB → 0.75 GiB.
+    // Part 4b: `evs` 719,668 KiB → 0.75 GiB.
     (("events fanout", S), 3 * STEP),
-    // max 3,153,424 KiB → 3.25 GiB.
+    // Part 4b: `ec` 3,161,128 KiB → 3.25 GiB.
+    (("events chains", X), 13 * STEP),
+    // Part 4b: `ecs` 725,472 KiB → 0.75 GiB.
+    (("events chains", S), 3 * STEP),
+    // Part 4b: `qt` 3,167,556 KiB → 3.25 GiB.
     (("query touches", X), 13 * STEP),
-    // max 757,260 KiB → 0.75 GiB.
+    // Part 4b: `qts` 735,544 KiB → 0.75 GiB.
     (("query touches", S), 3 * STEP),
-    // max 2,585,552 KiB → 2.5 GiB.
+    // Part 4b: `qe` 3,166,676 KiB → 3.25 GiB.
+    (("query effects", X), 13 * STEP),
+    // Part 4b: `qes` 738,864 KiB → 0.75 GiB.
+    (("query effects", S), 3 * STEP),
+    // Part 4b: `g` 2,596,904 KiB → 2.5 GiB.
     (("graph", X), 10 * STEP),
-    // shortcut: not measured yet (case B forms), placeholders at the largest
-    // known row; Task 12's Part 4b measures them.
-    (("fingerprint", X), POLICY_X),
-    (("prove", S), POLICY_X),
 ];
 
 /// `P`: the largest row of any of `kinds` (a kind with no row takes the
@@ -160,6 +164,10 @@ mod tests {
                 'p' => vec![("policy check", X)],
                 'e' => vec![("events fanout", X)],
                 'q' => vec![("query touches", X)],
+                'F' => vec![("fingerprint", X)],
+                'P' => vec![("prove", S)],
+                'c' => vec![("events chains", X)],
+                'Q' => vec![("query effects", X)],
                 _ => unreachable!("no job {c}"),
             })
             .collect()
@@ -198,6 +206,20 @@ mod tests {
         assert_eq!(committed("adheq"), 4, "U−p");
     }
 
+    /// Task 12: the kinds that had placeholders or no row now carry their
+    /// measured rows, so a case-B manifest (cross-app fingerprint, single-app
+    /// prove) and the chains/effects kinds run at 4; with policy, still 2.
+    #[test]
+    fn worker_count_measured_case_b_rows() {
+        assert_eq!(committed("FP"), 4, "case B");
+        assert_eq!(committed("cQ"), 4, "events chains, query effects");
+        assert_eq!(committed("FPcQp"), 2, "with policy");
+        assert_eq!(peak_kib(&[("fingerprint", X)], KIND_PEAK_KIB), 13 * STEP);
+        assert_eq!(peak_kib(&[("prove", S)], KIND_PEAK_KIB), 3 * STEP);
+        assert_eq!(peak_kib(&[("events chains", X)], KIND_PEAK_KIB), 13 * STEP);
+        assert_eq!(peak_kib(&[("query effects", S)], KIND_PEAK_KIB), 3 * STEP);
+    }
+
     #[test]
     fn rows_are_whole_steps_and_one_per_kind() {
         for (i, (k, kib)) in KIND_PEAK_KIB.iter().enumerate() {
@@ -211,7 +233,14 @@ mod tests {
 
     #[test]
     fn a_kind_with_no_row_takes_the_largest() {
-        assert_eq!(peak_kib(&[("events chains", X)], KIND_PEAK_KIB), POLICY_X);
+        // Every command has rows; `graph` single-app is not a job kind.
+        assert!(!KIND_PEAK_KIB.iter().any(|(k, _)| *k == ("graph", S)));
+        assert_eq!(peak_kib(&[("graph", S)], KIND_PEAK_KIB), POLICY_X);
+        assert_eq!(
+            KIND_PEAK_KIB.iter().map(|(_, kib)| *kib).max(),
+            Some(POLICY_X),
+            "policy check cross-app is the largest row"
+        );
         assert_eq!(peak_kib(&[], KIND_PEAK_KIB), 0);
     }
 }
