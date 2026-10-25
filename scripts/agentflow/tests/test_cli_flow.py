@@ -4268,10 +4268,13 @@ def test_a_queued_gate_beats_and_stops_on_halt_unless_told_not_to(ctx, monkeypat
     assert not marker.exists()
 
 
-def test_a_bench_takes_every_gate_slot(root, monkeypatch):
-    """A CDO A/B bench measures wall clock and peaks, so nothing heavy may build
-    beside it. With `heavy_gates: 2`, one held slot leaves the other free for a
-    normal gate, but a `bench` waits for BOTH, and while it runs no gate starts."""
+@pytest.mark.parametrize("gate", ["bench", "cdo-gate", "cdo-gate-on-revert"])
+def test_an_exclusive_gate_takes_every_gate_slot(root, monkeypatch, gate):
+    """A CDO A/B bench measures wall clock and peaks, and `cdo-gate` alone
+    fills most of the 32 GiB tentacle (OOM-killed beside a second gate on
+    2026-10-25), so nothing heavy may build beside either. With
+    `heavy_gates: 2`, one held slot leaves the other free for a normal gate,
+    but an exclusive gate waits for BOTH, and while it runs no gate starts."""
     import contextlib
     from agentflow.state import mutex
     ctx = Ctx(Paths(root), run_id="run-test")
@@ -4281,13 +4284,13 @@ def test_a_bench_takes_every_gate_slot(root, monkeypatch):
     cmd = [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"]
     with mutex(ctx, "gate-0"):
         with pytest.raises(cli.GateQueued):
-            cli._run_gate(ctx, "bench", cmd, 1, ctx.paths.root)
+            cli._run_gate(ctx, gate, cmd, 1, ctx.paths.root)
         assert not marker.exists()
         cli._run_gate(ctx, "check-goldens", cmd, 1, ctx.paths.root)    # gate-1 is free
         assert marker.exists()
     marker.unlink()
     held = contextlib.ExitStack()
-    cli._gate_slot(ctx, "bench", True, held)                           # both slots
+    cli._gate_slot(ctx, gate, True, held)                              # both slots
     with held:
         with pytest.raises(cli.GateQueued):
             cli._run_gate(ctx, "check-goldens", cmd, 1, ctx.paths.root)

@@ -207,7 +207,10 @@ HEAVY_GATES = frozenset({"ci-steps-all", "check-goldens", "check-goldens-regen",
 # A measurement (`agentflow run --name bench -- python scripts/bench_ab.py run …`)
 # takes EVERY slot: its wall clock and peaks are the claim, and on #160 step 2 a
 # gate building beside a bench widened the digest wall band from 0.6 s to 8-16 s.
-EXCLUSIVE_GATES = frozenset({"bench"})
+# `cdo-gate` too, for memory: its `program_resolve_harness` alone peaked at
+# 23 GB on 2026-10-25, and with a second session's gate beside it the 32 GiB
+# tentacle cgroup OOM-killed it.
+EXCLUSIVE_GATES = frozenset({"bench", "cdo-gate", "cdo-gate-on-revert"})
 QUEUE_POLL_S = 15.0     # how often a queued gate retries the semaphore
 QUEUE_BEAT_S = 60.0     # how often a queued gate refreshes its run's lease
 QUEUE_TIMEOUT, HALTED_WHILE_QUEUED = "gate-queue-timeout", "halted-while-queued"
