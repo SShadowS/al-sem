@@ -158,6 +158,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
                 // identically. scope is unserialized / unread today (latent-parity).
                 scope: None,
                 is_receiver: false,
+                is_implicit_rec: false,
             }
         })
         .collect();

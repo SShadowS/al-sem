@@ -55,20 +55,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Opt-in d64 no longer reports "API page write surface not declared" for symbol-only
     API pages that do declare it. On the pinned CDO workspace with every dependency
     stripped to symbols, all 8 such findings were false positives and are gone.
+- **Model: a pageext's implicit `Rec` / `xRec` follows its base page's
+  `SourceTableTemporary`, and a declared `Rec` is never made temporary by it (#302).**
+  This changes the record temp state in the model, so every reader of it moves: record
+  operations, the record variable, and arguments that pass the implicit `Rec` (the L4
+  parameter-dependent substitution and the capability cone). Temp-aware detectors such as
+  d39 and d3 then skip it.
   - A pageext's implicit `Rec` / `xRec` is now temporary when its BASE page declares
-    `SourceTableTemporary = true` (before, only the pageext's own flag was read, and a
-    pageext never carries it). So d39 no longer reports a pageext over a read-only,
-    temporary base page, whether that page is in the workspace, a dependency's source or
-    its symbols.
-  - Pinned CDO (whose page-bearing dependencies all embed source), measured on the final
-    code against the base: 2,217 findings at `--scope primary` and 30,006 at `--scope all`
-    on both sides, 0 fingerprints moved, and both JSON payloads byte-identical. The `Rec`
-    fix above moves no CDO finding either.
-  No ABI vector or golden needed an update: no golden or ABI vector that existed before this
-  change carries these properties, so the parse is pinned by new unit and CLI tests (with
-  their own fixtures, checked by direct asserts) instead. No Windows
-  confirmation is relevant: this changes how symbols are read, not a claim about BC
-  runtime behaviour.
+    `SourceTableTemporary = true`. Before, only the pageext's own flag was read, and a
+    pageext never carries one. This holds whether the base page is in the workspace, in a
+    dependency's source or in its symbols. So d39 no longer reports a pageext over a
+    read-only, temporary base page.
+  - Only the IMPLICIT record is affected. Before, the rule marked every record named
+    `Rec` / `xRec` temporary on a `SourceTableTemporary` page, including a param, local or
+    global the routine declared itself with that name. A declared `Rec: Record X` now keeps
+    its own temp state, so d3 and d39 report it as they would any physical record. The
+    model marks the implicit row (`ModelRecordVariable.is_implicit_rec`).
+- Measured on the pinned CDO workspace (whose page-bearing dependencies all embed source),
+  final code against the base: 2,217 findings at `--scope primary` and 30,006 at
+  `--scope all` on both sides, 0 fingerprints moved, and both JSON payloads
+  byte-identical. Neither entry above moves a CDO finding. No ABI vector or golden needed
+  an update: no golden or ABI vector that existed before this change carries the page
+  properties or the shapes above, so new unit and CLI tests (with their own fixtures,
+  checked by direct asserts) pin them instead. No Windows confirmation is relevant: both
+  entries read facts the code already declares (symbol properties, `SourceTableTemporary`)
+  and pass them through the model; neither claims anything new about BC runtime
+  behaviour.
 
 ## [2.1.1] - 2026-10-25
 

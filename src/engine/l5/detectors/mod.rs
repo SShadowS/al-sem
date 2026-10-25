@@ -1981,6 +1981,7 @@ mod tests {
             },
             scope: None,
             is_receiver: false,
+            is_implicit_rec: false,
         }
     }
 

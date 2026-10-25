@@ -4,6 +4,7 @@ table 70300 "Dep Cust"
     {
         field(1; "No."; Code[20]) { }
         field(2; Name; Text[50]) { }
+        field(3; City; Text[30]) { }
     }
     keys
     {

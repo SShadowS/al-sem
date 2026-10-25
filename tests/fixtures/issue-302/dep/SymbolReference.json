@@ -10,7 +10,8 @@
       "Name": "Dep Cust",
       "Fields": [
         {"Id": 1, "Name": "No.", "TypeDefinition": {"Name": "Code"}},
-        {"Id": 2, "Name": "Name", "TypeDefinition": {"Name": "Text"}}
+        {"Id": 2, "Name": "Name", "TypeDefinition": {"Name": "Text"}},
+        {"Id": 3, "Name": "City", "TypeDefinition": {"Name": "Text"}}
       ]
     }
   ],

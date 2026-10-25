@@ -10,9 +10,12 @@
 //! `.alpackages` at test time by `symbol_app` (fixed zip timestamp, so its bytes are
 //! a pure function of the fixture), symbol-only or with its `.al` embedded.
 //!
-//! `Dep RO Temp List` is read-only AND `SourceTableTemporary`: a pageext's `Rec`
-//! over it is its base page's temporary copy (`record_types`, #302 CR1), so d39's
-//! temp skip keeps `W RO Temp Ext` silent in both runs.
+//! `Dep RO Temp List` and the workspace page `W RO Temp Base` are read-only AND
+//! `SourceTableTemporary`: the implicit `Rec` of a pageext over either is its base
+//! page's temporary copy (`record_types`, #302 CR1), so d39's temp skip keeps
+//! `W RO Temp Ext` and `W RO Temp WsExt` silent in both runs. A DECLARED physical
+//! `Rec` local is its own record (#302 F5): `W RO Temp Local` (a temporary page) and
+//! `W RO Temp LocalExt` (a pageext over one) keep reporting.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +26,7 @@ use crate::symbol_app;
 
 const DEP_GUID: &str = "22222222-0000-0000-0000-000000000302";
 const D39: &str = "d39-record-left-dirty-across-chain";
+const D3: &str = "d3-missing-setloadfields";
 const D64: &str = "d64-api-page-write-surface";
 
 fn fixture(name: &str) -> PathBuf {
@@ -181,8 +185,11 @@ fn opaque_apps(json: &serde_json::Value) -> &serde_json::Value {
 /// Test 2: a pageext over a symbol-only `Editable "0"` / `ModifyAllowed "0"`
 /// dependency page reports d39 like its embedded-source twin, with the same
 /// fingerprints. `Dep Card` (nothing declared) and `Dep Editable Card` (`"1"`) stay
-/// modifiable; `Dep RO Temp List` is read-only but temporary, so its pageext stays
-/// silent too. The workspace page `W RO List` is the control that proves the run
+/// modifiable; `Dep RO Temp List` and `W RO Temp Base` are read-only but temporary,
+/// so the implicit `Rec` of their pages and pageexts stays silent too, while a
+/// declared physical `Rec` local on a temporary page or pageext reports, in d39 and
+/// in d3 (`ReadLocal`; d3 skips a temporary record, so it reads the local's own temp
+/// state). The workspace page `W RO List` is the control that proves the run
 /// reaches the read-only rule at all.
 #[test]
 fn d39_reads_a_symbol_only_dependency_page() {
@@ -208,7 +215,14 @@ fn d39_reads_a_symbol_only_dependency_page() {
         "W NoMod Ext | OnAction",
         "W RO Ext | OnAction",
         "W RO List | OnAction",
+        "W RO Temp Local | OnAction",
+        "W RO Temp LocalExt | OnAction",
     ];
+    let expected_d3 = [
+        "W RO Temp Local | ReadLocal",
+        "W RO Temp LocalExt | ReadLocal",
+    ];
+    let detectors = format!("{D39},{D3}");
 
     // Symbol-only: the `.app` has no `.al`, and the run took the ABI path.
     let (sym_ws, sym_app) = workspace("ws", "dep", false);
@@ -217,7 +231,7 @@ fn d39_reads_a_symbol_only_dependency_page() {
         entries.iter().all(|e| !e.ends_with(".al")),
         "symbol-only .app must hold no .al: {entries:?}"
     );
-    let (sym, sym_err) = analyze(sym_ws.path(), D39, Scope::Primary);
+    let (sym, sym_err) = analyze(sym_ws.path(), &detectors, Scope::Primary);
     assert_eq!(opaque_apps(&sym), &serde_json::json!(["Dep302"]));
     let warning = sym_err.expect("symbol-only run warns on stderr");
     assert!(
@@ -226,11 +240,13 @@ fn d39_reads_a_symbol_only_dependency_page() {
     );
     let sym_rows = rows(&sym, D39);
     assert_eq!(names(&sym_rows), expected);
+    let sym_d3 = rows(&sym, D3);
+    assert_eq!(names(&sym_d3), expected_d3);
 
     // Embedded twin: the same dependency with its `.al`, read from source.
     let (emb_ws, emb_app) = workspace("ws", "dep", true);
     assert!(app_entries(&emb_app).contains(&"src/Dep.al".to_string()));
-    let (emb, emb_err) = analyze(emb_ws.path(), D39, Scope::Primary);
+    let (emb, emb_err) = analyze(emb_ws.path(), &detectors, Scope::Primary);
     assert_eq!(opaque_apps(&emb), &serde_json::json!([]));
     assert!(
         !emb_err
@@ -240,6 +256,7 @@ fn d39_reads_a_symbol_only_dependency_page() {
         "{emb_err:?}"
     );
     assert_eq!(rows(&emb, D39), sym_rows, "parity with the source path");
+    assert_eq!(rows(&emb, D3), sym_d3, "d3 parity with the source path");
 }
 
 /// Test 3: opt-in d64 over three symbol-only API pages. `Dep API Closed` (all four

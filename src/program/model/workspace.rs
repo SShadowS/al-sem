@@ -252,6 +252,11 @@ pub struct ModelRecordVariable {
     /// never rewritten by `record_types` (a temporary table or an entry guard
     /// turns the receiver's PD temp state into `Known(true)`).
     pub is_receiver: bool,
+    /// #302 F5: the routine's IMPLICIT `Rec` (the row `ir_record_variables` seeds
+    /// when no param / local / global named `Rec` shadows it), as opposed to a
+    /// declared `Rec`. Set at L3 assembly; `record_types`' page
+    /// `SourceTableTemporary` override marks only this row temporary.
+    pub is_implicit_rec: bool,
 }
 
 impl ModelRecordVariable {
@@ -1330,6 +1335,14 @@ fn project_ir(
 
             // The routine's OWN record vars (params + locals), built first so they
             // take precedence over any same-named promoted global.
+            // A `Rec` row that no param / local declares is the seeded implicit one
+            // (a shadowing global suppresses the seed and is promoted below).
+            let declares_rec = ir_routine
+                .params
+                .iter()
+                .map(|p| &p.name)
+                .chain(ir_routine.locals.iter().map(|v| &v.name))
+                .any(|n| n.eq_ignore_ascii_case("rec"));
             let mut record_variables: Vec<ModelRecordVariable> = features
                 .record_variables
                 .iter()
@@ -1343,6 +1356,7 @@ fn project_ir(
                     temp_state: rv.temp_state.clone(),
                     scope: rv.scope.clone(),
                     is_receiver: rv.is_receiver,
+                    is_implicit_rec: !declares_rec && rv.name.eq_ignore_ascii_case("rec"),
                 })
                 .collect();
             // Task 3 (temp-state) PROMOTION + SHADOWING: append object-global record
@@ -1379,6 +1393,7 @@ fn project_ir(
                         temp_state: g.temp_state.clone(),
                         scope: g.scope.clone(),
                         is_receiver: false,
+                        is_implicit_rec: false,
                     });
                 }
             }
