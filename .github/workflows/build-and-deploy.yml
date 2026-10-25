@@ -127,7 +127,8 @@ jobs:
 
   build-linux:
     needs: test
-    runs-on: ubuntu-latest
+    # glibc 2.35: std's process spawn links pidfd_spawnp at GLIBC_2.39 when built on newer glibc.
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout al-call-hierarchy
         uses: actions/checkout@v4
