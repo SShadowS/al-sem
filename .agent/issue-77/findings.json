@@ -1,0 +1,864 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Auto ambiguity checks routine-bearing files, not workspace files: a table-only Cloud/src/posting.al plus a src/posting.al lets a diff silently resolve to the wrong file's routines; decide candidate file existence independently of routine spans.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: candidate files from al_files (the workspace file set), not routine spans; A5 (R1).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Lowercasing the repository prefix imports changes from a case-distinct sibling (repo/cloud vs repo/Cloud on a case-sensitive filesystem); explicit mode has the same problem; preserve filesystem-appropriate prefix identity; add a case-distinct sibling test.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.1: exact per-folder prefix comparison on every platform (platform is not filesystem identity); A8 (case-sensitive fixture) + A8b unit pin; fallback (d) requires alias identity, never exists() of a case flip.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Ambiguous malformed sections escape the #72 veto: the poison set drops failed diff_key results; specify the ambiguity/error interaction (veto candidate keys or require disambiguation) and test both orders, including a malformed section emitting no file record.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: an ambiguous broken record blocks every candidate key, with or without a record; A12 four orders + control (R3).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Batch workers recompute an unpinned filesystem decision (canonicalize) on every planning pass; adopt fallback (c) incl. failure results; test parent/worker equivalence.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: the parent decides per job (failure included) and carries WorkerJob.diff_root; the worker never re-decides; A20 (W1), A21 (W2).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "CentralGauge compatibility is asserted, not established; schema stays 1.6.0; obtain a consumer test or an explicit open-kind contract; include a mixed result with roots and ambiguity (exit stays 0).",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2: operator decision (asked in session): bump digest schemaVersion to 1.7.0 with the additive / open-kind contract in the version comment and CHANGELOG (#69 precedent); 22 goldens move only their schemaVersion line; CentralGauge already treats kinds as open (analyze-campaign.ts:424, :1329-1331) and must add 1.7.0 to ALSEM_SCHEMAS (D3); mixed result A22 (R8).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "digest <ws> --diff-root <dir> with no diff exits 1 at the no-input check, not exit 3 as specified; A12 misses this precedence.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: lone --diff-root exits 3 before the no-input check; A18b (R10).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Ambiguity candidates take only the first span source unit per key; the index supports units differing only by case; enumerate or document representative readings.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: all units of each reading, sorted, as-written first; order is a contract; A4/A4b.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S8",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Acceptance discrimination incomplete: A9 has no distinct break; A13 is a unit test (contradicts all-through-binary); mutation outcomes stated as recorded while the table is empty; add tests for S1-S4, nested repos, submodules, symlink aliases.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: every row has its own break; A24 labelled a unit test; outcomes marked planned; nested/submodule/symlink/depth rows A13-A16. Rev 2.1: A12 adds a healthy section uniquely selecting the other candidate (Cloud/Cloud/src/posting.al) and an unrelated-file locality control, with breaks for each one-sided block; A17 break now fails on every platform (exact comparison).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S9",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Human output hides the new refusal and its --diff-root remedy.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: stated limit + discovery D2; stderr-hint fallback (b).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S10",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Help omits the no-repository fallback; the unreleased #111 CHANGELOG entry saying parent-directory diff -ru paths are unmatched needs qualifying.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: help text covers the no-repo fallback; #111 CHANGELOG lines qualified (Changes 5, 6).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Auto mode can hard-fail: the workspace is canonicalized before the --diff-root branch, so with no flag a canonicalize error gives exit 3 whenever a diff is given (base ran); with no --diff-root fall back to DiffRoot::Workspace; exit 3 only when the flag is given.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: auto falls back to Workspace when canonicalize fails; A19 (R11).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The digest schemaVersion decision is missing for a default-on kind and a new candidates key (precedent mixed: #69 bumped, #72 did not, #246 opt-in); a bump moves every digest golden.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2: operator decision (asked in session): bump digest schemaVersion to 1.7.0 with the additive / open-kind contract in the version comment and CHANGELOG (#69 precedent); 22 goldens move only their schemaVersion line; CentralGauge already treats kinds as open (analyze-campaign.ts:424, :1329-1331) and must add 1.7.0 to ALSEM_SCHEMAS (D3); mixed result A22 (R8).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The batch worker re-decides the diff root (canonicalize not memoized nor recorded), breaking the worker-decides-nothing rule; adopt fallback (c) now (same as S4).",
+    "disposition": "fixed",
+    "evidence": "As S4.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "No test pins nearest .git; add an outer + inner repo row; break = take the outermost ancestor.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 A13 (R4); break takes the outermost .git.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M1: an ambiguous record with a hunk-header error poisons neither candidate (cf. S3).",
+    "disposition": "fixed",
+    "evidence": "As S3.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M2: fallback (a) is flawed: git diff --relative also writes diff --git headers, so preferring the git-top reading for diff --git sections mis-resolves workspace-relative diffs.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: old fallback (a) dropped; new fallbacks (a)-(d).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M3: a root-relative path outside the workspace (OnPrem/...) still resolves when the workspace holds the same relative path (as base); add to Not delivered.",
+    "disposition": "fixed",
+    "evidence": "Rev 2 Not delivered lists it.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M4: canonical comparison refuses --diff-root for a symlinked workspace and on macOS on case difference; help should say a relative --diff-root resolves against the cwd.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: lexical then canonical comparison (symlinks work, A16a); help says relative --diff-root resolves against cwd; macOS case listed untested.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M5: two lines of the #111 Unreleased CHANGELOG entry go stale (CHANGELOG.md:29-31, 38-39).",
+    "disposition": "fixed",
+    "evidence": "Rev 2 Changes 6 qualifies CHANGELOG.md:29-31 and :38-39.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O10",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M6: --format human never shows the new diagnostic or remedy (pre-existing); state as a limit (cf. S9).",
+    "disposition": "fixed",
+    "evidence": "As S9.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O11",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M7: A5 break fails only one half; A8 needs a valid first hunk touching a routine; no auto not-in-git test (TMPDIR-dependent); A4 candidate order should be a stated contract.",
+    "disposition": "fixed",
+    "evidence": "Rev 2: A6a/A6b separate halves and breaks; A11 valid first hunk + control; no TMPDIR-dependent auto test; candidate order a contract.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O12",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "M8: library callers of run_digest_pipeline are hard-wired to Workspace; add to Not delivered (plus a wrong citation in P18).",
+    "disposition": "fixed",
+    "evidence": "Rev 2 Not delivered lists library callers; P18 citation corrected.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S11",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Lexical --diff-root success bypasses explicit-root validation: a nonexistent --diff-root plus a lexically contained workspace passes planning and fails later with exit 1.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.1 Decision pinning: the root must exist and be a directory before either containment test; A18c.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O13",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "N1: the spec still says 1.7.0 in four places (Classification, Changes 1, Changes 6, fallback (a) conditional); the prototype patch moves 22 goldens and 3 asserts to 1.7.0, so an implementer would ship it.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2: the spec now states one schema consistently — 1.7.0 (operator decision) — in Classification, Schema contract, Changes 1/6, A23, Measurement, R14; fallback (a) withdrawn; the remaining 1.6.0 mentions are history or the CentralGauge pin.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O14",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N2: stale prototype strings: decide_diff_root doc names pin_changed; --diff-root help is rev-1 wording.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.1 Changes 1 names both replacements; help text is Changes 5.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O15",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N3: workspace_files includes nested apps files, so a nested app file can make a path ambiguous; state it is intended.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.1 How a diff path is read: stated intended (refusal only, never a wrong root).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O16",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "N4: A8b break (a cfg(windows/macos) fold arm) never compiles on the Linux-only CI, so its discrimination proof cannot fail.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2 A8b: break is an unconditional eq_ignore_ascii_case fold; platform-gated regressions stated as review-only (ci.yml:22, :84).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O17",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N5: A12 swaps the candidate labels (as-written is Cloud/src/posting.al).",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2 A12 relabelled per A4 order, with which break each run catches. Rev 2.3: break-to-run mapping swapped (stripped-only fails the Cloud/Cloud/src/posting.al run; as-written-only fails the src/posting.al run).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O18",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N6: A12 says exit 2 while adding a healthy src/subscriber.al in the same run (that gives exit 0).",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2: locality is its own run, exit 0, HandlePosted only, break = block every file.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O19",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N7: A18c --diff-root <file> half is not caught by the stated break (a real workspace elsewhere exits 3 anyway).",
+    "disposition": "fixed",
+    "evidence": "Rev 2.2: the file half spells the workspace under the file (<t>/file/Cloud).",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O20",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-77/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N8: on-disk spelling is not always git tracked spelling (Windows case-only rename); the remedy is not --diff-root but git diff --relative or the workspace spelling.",
+    "disposition": "fixed",
+    "evidence": "Rev 2.3: remedy is git diff --relative; re-spelling the workspace helps only with --diff-root <repo top> (lexical branch keeps the as-typed spelling); auto mode canonicalizes, so re-spelling does not help there; How a diff path is read and fallback (d) corrected.",
+    "anchor": ".agent/issue-77/ledger.md ## Design (revision 2.3)",
+    "anchor_hash": "a95b36ed536d6f4b161bb6ca207e92ad41e36fe00d540700a09ca2407291873e",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round4_marks": {
+      "sol": "re-raised",
+      "opus": "re-raised"
+    }
+  },
+  {"id": "F1", "source": "sol", "round": "final-1", "file": "src/engine/l5/digest_cli.rs", "line": 254, "severity": "important", "text": "DiffRoot::below runs the workspace prefix through clean_input/strip_scheme, so a workspace folder <repo>/ws:Cloud keys as Cloud and imports a sibling Cloud's diff paths.", "disposition": "fixed", "evidence": "Fixed in c0196580: clean_segments (no scheme strip) for DiffRoot::below and strip_diff_prefix; test scheme_like_workspace_folder_keeps_its_prefix (proof row F1).", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c0196580ab37a26d2825d47d3907103db0788ce7"},
+  {"id": "F2", "source": "sol", "round": "final-1", "file": "src/bin/alsem.rs", "line": 1781, "severity": "important", "text": "Standalone --changed is classified again (digest_has_diff, decide_diff_root) after its diff was read; also G8 (Opus) and C8 (code-review): one rule derived two or three ways.", "disposition": "fixed", "evidence": "Fixed in c0196580: DigestInputs resolves --changed once; decide_diff_root(d, has_diff); the batch pin reads the already-pinned value. No probe-count test (a FIFO-unlink race is not cheap to stage); A21 covers the behaviour.", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c0196580ab37a26d2825d47d3907103db0788ce7"},
+  {"id": "F3", "source": "sol", "round": "final-1", "file": "src/bin/alsem.rs", "line": 1702, "severity": "important", "text": "The --diff-root metadata/canonicalize probes (and the auto-mode workspace canonicalize) bypass PLAN_TOUCHED, so a batch's write-conflict check misses them; also C4 (code-review).", "disposition": "fixed", "evidence": "Fixed in c0196580: plan_touch records the workspace, --diff-root and canonicalize probes, errors included; plan_read/plan_exists share it. Test diff_root_probe_is_a_batch_read (a --diff-root naming a regular file + a job whose --out writes it: refused, exit 3, file unchanged; proof row F3). A folder read conflicts only with a write of that path or a containing folder (manifest.rs read rule), so sol's file case is the test shape.", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c0196580ab37a26d2825d47d3907103db0788ce7"},
+  {"id": "F4", "source": "sol", "round": "final-1", "file": "tests/cli/cli_digest_changed_spans.rs", "line": 3147, "severity": "minor", "text": "A18c loops missing/file, so its break stops at the missing half; the is-folder guard was never seen failing; also G4 (Opus).", "disposition": "fixed", "evidence": "Fixed in c0196580: split into diff_root_must_exist and diff_root_must_be_a_folder; is_dir-only break fails the file test only (proof rows F4).", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c0196580ab37a26d2825d47d3907103db0788ce7"},
+  {"id": "F5", "source": "sol", "round": "final-1", "file": "tests/cli/cli_digest_changed_spans.rs", "line": 2804, "severity": "minor", "text": "The A6 comment says the break makes both runs ambiguous; only the repo-root run fails; also G5 (Opus).", "disposition": "fixed", "evidence": "Fixed in c0196580 (comment).", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c0196580ab37a26d2825d47d3907103db0788ce7"},
+  {"id": "F6", "source": "sol", "round": "final-1", "file": "docs/superpowers/plans/2026-10-25-issue-77-digest-diff-root.md", "line": 41, "severity": "minor", "text": "The plan's 'step 6' / 'step-6 rows' references are stale against its own step numbers.", "disposition": "fixed", "evidence": "Fixed in c65b804d: 'the acceptance tests'.", "anchor": "commit c65b804d", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c65b804dd8edeb4cbde39387122fe3eae7c4369d"},
+  {"id": "G1", "source": "opus", "round": "final-1", "file": "CHANGELOG.md", "line": 10, "severity": "minor", "text": "[Unreleased] has two ### Added sections; also C6 (code-review).", "disposition": "fixed", "evidence": "Fixed in c65b804d: each [Unreleased] group heading appears once.", "anchor": "commit c65b804d", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c65b804dd8edeb4cbde39387122fe3eae7c4369d"},
+  {"id": "G2", "source": "opus", "round": "final-1", "file": "CHANGELOG.md", "line": 153, "severity": "minor", "text": "The #246 entry still says schemaVersion stays 1.6.0, but the release ships 1.7.0.", "disposition": "fixed", "evidence": "Fixed in c65b804d: qualified (the release ships 1.7.0 through #77).", "anchor": "commit c65b804d", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c65b804dd8edeb4cbde39387122fe3eae7c4369d"},
+  {"id": "G3", "source": "opus", "round": "final-1", "file": "README.md", "line": 231, "severity": "minor", "text": "README example --diff-root .. reads as the workspace's parent; a relative --diff-root resolves against the current folder.", "disposition": "fixed", "evidence": "Fixed in c65b804d: --diff-root <repo>.", "anchor": "commit c65b804d", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c65b804dd8edeb4cbde39387122fe3eae7c4369d"},
+  {"id": "G6", "source": "opus", "round": "final-1", "file": "docs/superpowers/plans/2026-10-25-issue-77-digest-diff-root.md", "line": 28, "severity": "minor", "text": "The plan claims A21 pins the .git probes among a batch job's reads; A21 compares outputs only.", "disposition": "fixed", "evidence": "Fixed in c65b804d: points at the F3 test diff_root_probe_is_a_batch_read.", "anchor": "commit c65b804d", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c65b804dd8edeb4cbde39387122fe3eae7c4369d"},
+  {"id": "G7", "source": "opus", "round": "final-1", "file": "tests/cli/cli_digest_changed_spans.rs", "line": 1, "severity": "minor", "text": "The A12 locality run asserts roots and exit code but not diagnostics (optional).", "disposition": "fixed", "evidence": "Fixed in c0196580: the locality run asserts its parse error (proof row G7).", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c0196580ab37a26d2825d47d3907103db0788ce7"},
+  {"id": "C1", "source": "code-review", "round": "final-1", "file": "src/bin/alsem.rs", "line": 1711, "severity": "minor", "text": "Explicit --diff-root tries the as-typed spelling first, so a case-differing typed workspace (Windows/macOS) gives a prefix git's diff does not spell; a correct diff stays unmatched.", "disposition": "refuted", "evidence": "Ratified design (ledger ## Design, 'How a diff path is read', rev 2.3, S2/O20 accepted by both): the --diff-root lexical branch compares paths as typed by design (a symlinked workspace keeps its link name), a case mismatch is diff-file-unmatched (never a wrong root), and the remedy is git diff --relative or spelling the workspace as the diff does; CHANGELOG states the limit.", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}},
+  {"id": "C2", "source": "code-review", "round": "final-1", "file": "src/engine/l5/diff_parser.rs", "line": 1, "severity": "minor", "text": "diff -ru a b (trees literally named a/b): headers lose a/ b/ (#111's strip) but Only in lines do not, so with or without --diff-root one half is unmatched.", "disposition": "deferred", "evidence": "Reproduced; pre-existing since #111 (diff_parser.rs extract_path strips a/ b/ on plain headers); #77 only changes which half fails. Fixing needs a parser change (a #77 non-goal). Filed as discovery D4 (ledger ## Discoveries, 4th entry); CHANGELOG states the limit.", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}},
+  {"id": "C3", "source": "code-review", "round": "final-1", "file": "src/engine/l5/digest_cli.rs", "line": 1977, "severity": "minor", "text": "workspace_files includes nested-app files from al_files, so another app's file can make a path ambiguous.", "disposition": "refuted", "evidence": "Ratified design (ledger ## Design, Opus N3/O15 accepted by both): nested apps' files are workspace files on purpose; they can only cause a refusal (diff-file-ambiguous), never a wrong root.", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}},
+  {"id": "C5", "source": "code-review", "round": "final-1", "file": "src/bin/alsem.rs", "line": 1720, "severity": "minor", "text": "With --diff-root a missing workspace gives exit 3 or the load error depending on its spelling.", "disposition": "fixed", "evidence": "Fixed in c0196580: an unresolvable workspace defers to the load error (exit 1), as in auto mode (A19); test missing_workspace_under_diff_root_is_the_load_error (proof row C5).", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c0196580ab37a26d2825d47d3907103db0788ce7"},
+  {"id": "C7", "source": "code-review", "round": "final-1", "file": "src/engine/l5/digest_cli.rs", "line": 294, "severity": "minor", "text": "workspace_file_keys clones and re-keys every workspace file and builds ws: strings for all on each diff run.", "disposition": "fixed", "evidence": "Fixed in c0196580: ChangedInput<'a>.workspace_files is a borrowed &[WsFile]; ws: candidates built only on ambiguity (each file name is still lowercased once for the key map). A4b re-proved.", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c0196580ab37a26d2825d47d3907103db0788ce7"},
+  {"id": "C9", "source": "code-review", "round": "final-1", "file": "src/engine/l5/digest_cli.rs", "line": 273, "severity": "minor", "text": "same_folder wraps a == b; DiffRoot::below takes a bare bool.", "disposition": "refuted", "evidence": "Ratified design names both (Changes 1: DiffRoot::below(rel, explicit), same_folder; A8b unit-pins same_folder so a future fold is caught in one place).", "anchor": "commit c0196580", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}},
+  {"id": "C10", "source": "code-review", "round": "final-1", "file": "docs/superpowers/plans/2026-10-25-issue-77-digest-diff-root.md", "line": 9, "severity": "minor", "text": "The plan and the test section header reference .agent/issue-77/ledger.md and a local prototype patch, neither in the repository.", "disposition": "fixed", "evidence": "Fixed in c65b804d: the local patch reference is dropped; the ledger stays referenced because it is committed with the branch at freeze (step 12).", "anchor": "commit c65b804d", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}, "fix_commit": "c65b804dd8edeb4cbde39387122fe3eae7c4369d"},
+  {"id": "H1", "source": "opus", "round": "final-2", "file": ".agent/issue-77/ledger.md", "line": 66, "severity": "minor", "text": "Design 'Decision pinning' still names decide_diff_root(d) and lists a workspace canonicalize error as exit 3; since F2/C5 it is decide_diff_root(d, has_diff) and an unresolvable workspace is the load error (exit 1).", "disposition": "fixed", "evidence": "Ledger Timeline note 'Design text superseded by final-panel fixes (H1)': the ratified Design text is kept (editing it would re-anchor the spec), and the note states the two superseded phrases and the shipped behaviour; CHANGELOG already states it.", "anchor": ".agent/issue-77/ledger.md ## Timeline (H1 note)", "anchor_hash": null, "reviews": {"sol": "accepted", "opus": "accepted"}}
+]
