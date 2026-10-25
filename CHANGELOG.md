@@ -66,6 +66,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Stated limit: d35's confidence cap still reads the L4 summary's
   uncertainties, which include dead sites. No golden moves; on the pinned CDO
   baseline no finding moves.
+- **An object split across `#if` arms no longer lends one arm's properties to
+  the other arm's routines (#279).** A numbered object's id is its number, so
+  `#if A codeunit 50100 "Foo" … #else codeunit 50100 "Bar" … #endif` gives two
+  object rows with one id. Every reader of "this routine's object" took the
+  last row for the id, so a routine of the first arm got the second arm's name,
+  subtype, SourceTable, InherentCommitBehavior, Editable or SingleInstance. Now
+  each reads the routine's own declaring row (`DeclaringObjects::of`, #241):
+  policy `object.name` and `root.kinds`, root classification, d2, d13, d14,
+  d17, d39 (`page_may_modify`), d46, d50 (cap 4), the test-coverage Test-subtype
+  check, the return summaries' InherentCommitBehavior, the implicit `Rec`'s
+  table, and the HTML report's event-graph labels. d57 and d60 now test the
+  routine's own row, not "any row of the id". `[HandlerFunctions]` finds a
+  handler only in the test's own arm, so the other arm's same-named procedure
+  no longer makes a phantom coverage path. `DetectorContext.objects_by_id` is
+  gone (replaced by `declaring`); `FingerprintIndex::object` is renamed
+  `object_row_by_id` and is for object-scoped reads only. The retained census
+  bucket `context.objects_by_id` is now `context.declaring`. Stated limits: a
+  routine whose signature is the same in both arms is still one routine id, so
+  readers that look a routine up by id see one arm's answer; the program
+  graph still merges the arms into one node with the first arm's name. No
+  golden moves; on the pinned CDO baseline no finding moves.
 
 ### Added
 
