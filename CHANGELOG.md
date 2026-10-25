@@ -18,8 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Any other path is reported as `diff-file-unmatched` on `<dir>/<name>`.
   `src/engine/l5/diff_parser.rs` (`DiffParseResult::only_in`),
   `src/engine/l5/digest_cli.rs` (`resolve_changed_roots`). Not covered: an `Only in` line is
-  read anywhere at the top level, so one in a commit message gives a stray (loud, never
-  silent) diagnostic; an `Only in` directory is one unmatched entry, not its files, so tool
+  read anywhere at the top level, so one in a commit message gives a stray diagnostic, or,
+  when it names a workspace file, extra roots with no diagnostic; an `Only in` directory is one unmatched entry, not its files, so tool
   folders such as `.git` or `.alpackages` add noise; a directory name containing `: ` is
   split at the wrong place; and `Only in` misses share the `diff-file-unmatched` kind and
   are listed after the per-file diagnostics.
