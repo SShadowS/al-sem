@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`digest --format human` lists the changed-roots diagnostics** (#340). Until now the
+  human output dropped them, so a run could exit 0 while a diff file or `--file` went
+  unresolved and say nothing about it. Each diagnostic now gets one line after the
+  entries, `changed-roots: <kind> <subject>`, where `<kind>` is the JSON `kind`. A
+  `diff-file-ambiguous` line names its candidates and suggests `--diff-root <folder>`.
+  Control characters in a path print escaped (`\n`, `\t`), so each diagnostic stays on
+  one line. The `--tests` line stays last. The JSON does not change. Six cli-b human
+  goldens gain the line `changed-roots: file-unmatched src/Rec.Table.al`.
 - **d35 names a dependency subscriber's own unresolved call sites** (#287). This lifts
   the limit stated in the #265 entry: a subscriber that lives in a dependency app
   (reported at `--scope all`) now gets the same `; unresolved: <callee> (line n)` segment

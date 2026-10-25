@@ -8,3 +8,4 @@
     evidence: ws:src/Sender.Codeunit.al:15 "Client.Get"
     detail: method=Get
     via: 1 path(s)
+changed-roots: file-unmatched src/Rec.Table.al

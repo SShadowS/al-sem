@@ -12,3 +12,4 @@
     detail: fileOp=write-blob
     via: 1 path(s)
   unresolved: 1 callsite(s)
+changed-roots: file-unmatched src/Rec.Table.al

@@ -89,6 +89,16 @@ fn digest(ws: &Path, args: &[&str], diff: Option<&str>) -> (Value, i32) {
 
 /// [`digest`]'s run, unparsed: (stdout, stderr, exit code).
 fn digest_raw(ws: &Path, args: &[&str], diff: Option<&str>) -> (String, String, i32) {
+    digest_raw_as(ws, args, diff, "json")
+}
+
+/// [`digest_raw`] with `--format <format>`.
+fn digest_raw_as(
+    ws: &Path,
+    args: &[&str],
+    diff: Option<&str>,
+    format: &str,
+) -> (String, String, i32) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
     cmd.arg("digest").arg(ws).args(args);
     let diff_dir = tempfile::tempdir().unwrap();
@@ -98,7 +108,7 @@ fn digest_raw(ws: &Path, args: &[&str], diff: Option<&str>) -> (String, String, 
         cmd.arg("--diff").arg(&p);
     }
     let out = cmd
-        .args(["--deterministic", "--format", "json"])
+        .args(["--deterministic", "--format", format])
         .env("ALCH_DRIVER_VERSION_OVERRIDE", VERSION_OVERRIDE)
         .output()
         .expect("spawn alsem");
@@ -2575,6 +2585,53 @@ fn only_in_path_outside_the_workspace_stays_unmatched() {
     assert_eq!(code, 0, "{ru}: {doc}");
 }
 
+/// #340 A5. A human `--tests` run whose diff resolves `PostSalesDoc` and also
+/// names an unmatched file: exit 0, the entry block, then exactly one
+/// `changed-roots:` line, then the `--tests` line as the separate last line.
+///
+/// Mutation: `digest_view` passes `&[]` for the diagnostics -> no
+/// `changed-roots:` line.
+#[test]
+fn human_tests_run_lists_the_unmatched_file_before_the_tests_line() {
+    let ru = ru_with_only_in("missing.al");
+    let (stdout, stderr, code) = digest_raw_as(
+        &corpus("ws-d8-commit-in-tx"),
+        &["--tests"],
+        Some(&ru),
+        "human",
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let lines: Vec<&str> = stdout
+        .strip_suffix('\n')
+        .expect("ends in \\n")
+        .split('\n')
+        .collect();
+    let n = lines.len();
+    assert!(n >= 3, "{stdout}");
+    assert!(
+        lines[0].starts_with("--- ") && lines[0].contains("PostSalesDoc"),
+        "{stdout}"
+    );
+    assert_eq!(
+        lines[n - 2],
+        "changed-roots: diff-file-unmatched ./src/missing.al",
+        "{stdout}"
+    );
+    assert!(lines[n - 1].starts_with("test coverage: "), "{stdout}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("changed-roots:"))
+            .count(),
+        1,
+        "{stdout}"
+    );
+    assert!(
+        !lines[n - 3].is_empty(),
+        "no blank line before the diagnostic: {stdout}"
+    );
+}
+
 /// #111 C4. GNU C-quotes a name with a space and puts the TAB AFTER the closing
 /// quote (probe P7c): `+++ "./src/a b.al"<TAB><timestamp>`. Cutting at the TAB
 /// before unquoting leaves a whole quoted token, so the file `src/a b.al`
@@ -2741,6 +2798,33 @@ fn path_naming_two_files_is_ambiguous() {
     );
     assert!(roots(&doc).is_empty(), "{doc}");
     assert_eq!(code, 2, "{doc}");
+}
+
+/// #340 A1/A2. A human run on A4's ambiguous diff prints one line naming the
+/// file, its candidates and `--diff-root`; the JSON run on the same input still
+/// carries the one `diff-file-ambiguous`.
+///
+/// Mutation: `digest_view` passes `&[]` for the diagnostics -> no
+/// `changed-roots:` line.
+#[test]
+fn human_output_names_the_ambiguous_file() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = ambiguous_ws(t.path());
+    let diff = git_line9("Cloud/src/posting.al");
+    let (stdout, stderr, code) = digest_raw_as(&ws, &[], Some(&diff), "human");
+    assert_eq!(code, 2, "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "digest: no changed roots resolved\nchanged-roots: diff-file-ambiguous Cloud/src/posting.al (candidates: ws:Cloud/src/posting.al, ws:src/posting.al); pass --diff-root <folder> to read diff paths relative to <folder>\n",
+        "{stderr}"
+    );
+    let (doc, code) = digest(&ws, &[], Some(&diff));
+    assert_eq!(code, 2, "{doc}");
+    assert_eq!(
+        diags(&doc),
+        vec![ambiguous(&["ws:Cloud/src/posting.al", "ws:src/posting.al"])],
+        "{doc}"
+    );
 }
 
 /// A4b. Every unit of a reading is listed: `Cloud/src/Posting.al` next to

@@ -11,3 +11,4 @@
     evidence: ws:src/Sender.Codeunit.al:17 "Client.Get"
     detail: method=Get
     via: 1 path(s)
+changed-roots: file-unmatched src/Rec.Table.al
