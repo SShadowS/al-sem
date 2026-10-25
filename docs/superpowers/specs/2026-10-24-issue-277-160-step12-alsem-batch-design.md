@@ -1104,8 +1104,9 @@ Asked of the epic:
     steps), so `W` is derived from it.
   - **B1a, B1b**: void twice (F3). The walls' bands on the shared host (3-9 s, rerun 7-18 s) exceed what the
     void check allows, while the saving was stable at about 15.5 s per round. Reported, not gating.
-  - **B4 walls**: `H + bH ≤ P + bP` missed on 13 of 24 rows (F8), H 0-1.9 s over P and mostly inside the
-    band; every B4 peak passed. B4's walls are reported, not gating; its peaks stay gating.
+  - **B4 walls**: `H + bH ≤ P + bP` missed on 14 of 24 rows (F8): H's median is up to 1.9 s over P,
+    and on three missed rows (`a`, `ecs`, `qes`) H is at or below P and misses only on the noise band;
+    every B4 peak passed. B4's walls are reported, not gating; its peaks stay gating.
   - **B6** stays reported (12A-18). B2, B3, B2o and the B4 peaks stay gating.
 - **Stated deviation (Task 8, R7-3)**: `diff` reads both workspace sides when the job is made, before the
   first build (D3: every input is read before any write, and read-after-write is checked against them), not
