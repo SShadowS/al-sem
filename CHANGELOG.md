@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Grammar: tree-sitter-al `main` at `940ba71b`** (package version still 4.4.1; was
+  `c89c2ecb`). Two grammar fixes are in it. `ac8a8665`: an `#if` tail may have an empty
+  `#else` arm (`I := A #if X + B #else #endif;`, tree-sitter-al issue #38), and an
+  operand-prefix arm may be a unary operator alone. `f78aa68b`: an operand prefix may have
+  an empty arm (`I := #if X a + #else #endif b;`). Each of these shapes was an ERROR
+  before. Now it is a `preproc_conditional_expression_tail` or `preproc_operand_prefix`
+  beside the value it continues, which the lowerer already skips, so no lowerer change was
+  needed. The only `node-types.json` change: `preproc_operand_prefix`'s `operand` is now
+  optional and `not` is one of its operators; no named kind was added or removed, so
+  `kind_policy` and the 501 named kinds did not move. `CACHE_VERSION_GRAMMAR` is now
+  `tree-sitter-al-v4.4.1-940ba71b-native` (same length, so `dry-run.txt` did not move).
+  A new lowerer test, `empty_arm_tail_and_prefix_keep_the_value`, pins that every call
+  around these shapes stays linked with the right arity; on `c89c2ecb` it fails with no
+  call at all, because the whole body was an ERROR. Measured old against new: per-test
+  outcomes identical (4,439 run, all pass, 8 skipped, on both sides), zero goldens moved
+  (`check-goldens --regen` wrote nothing), and CDO `--program-call-graph-stats`
+  byte-identical (0 unknown edges, 0 recovered files on both sides). The pinned CDO code
+  does not use these shapes.
 - **`alsem digest --diff` reads `diff -r`'s `Only in <dir>: <name>` lines** (#111), which it
   ignored before, so a diff that adds or deletes files no longer drops them silently. The
   path is `<dir>/<name>` with one `/` between (`Only in new/: x.al` is `new/x.al`). It is
