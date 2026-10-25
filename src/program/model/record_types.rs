@@ -446,7 +446,18 @@ pub fn resolve_routine_record_types(
     // Purely ADDITIVE toward Known(true) — never downgrades. Runs after the
     // table-level override so both can apply independently; they compose without
     // interference (both only upgrade → Known(true), never downgrade).
-    if object.map(|o| o.source_table_temporary == Some(true)) == Some(true) {
+    //
+    // A PageExtension's `Rec` is its BASE page's (#302 CR1): read the base page's
+    // flag, found by name like pass 3 (last-wins when several pages share it).
+    let page_temp = |o: &ModelObject| match o.object_type.as_str() {
+        "PageExtension" => o
+            .extends_target_name
+            .as_deref()
+            .and_then(|base| symbols.object_by_type_name("Page", base))
+            .and_then(|p| p.source_table_temporary),
+        _ => o.source_table_temporary,
+    };
+    if object.and_then(page_temp) == Some(true) {
         for op in routine.record_operations.iter_mut() {
             let name = op.record_variable_name.to_lowercase();
             if name == "rec" || name == "xrec" {

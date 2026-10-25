@@ -42,3 +42,12 @@ page 70304 "Dep Editable Card"
     ModifyAllowed = true;
     layout { area(Content) { repeater(G) { field(Name; Rec.Name) { } } } }
 }
+
+page 70305 "Dep RO Temp List"
+{
+    PageType = List;
+    SourceTable = "Dep Cust";
+    Editable = false;
+    SourceTableTemporary = true;
+    layout { area(Content) { repeater(G) { field(Name; Rec.Name) { } } } }
+}

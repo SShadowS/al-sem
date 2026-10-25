@@ -86,6 +86,25 @@ pageextension 50303 "W Card Ext" extends "Dep Card"
     }
 }
 
+pageextension 50305 "W RO Temp Ext" extends "Dep RO Temp List"
+{
+    actions
+    {
+        addlast(Processing)
+        {
+            action(A5)
+            {
+                trigger OnAction()
+                var
+                    H: Codeunit "W H";
+                begin
+                    H.Dirty(Rec);
+                end;
+            }
+        }
+    }
+}
+
 pageextension 50304 "W Editable Ext" extends "Dep Editable Card"
 {
     actions

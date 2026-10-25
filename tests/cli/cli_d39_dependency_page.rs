@@ -10,9 +10,9 @@
 //! `.alpackages` at test time by `symbol_app` (fixed zip timestamp, so its bytes are
 //! a pure function of the fixture), symbol-only or with its `.al` embedded.
 //!
-//! The fixture leaves out a read-only base page with `SourceTableTemporary = true`
-//! on purpose: a pageext over one still reports d39 (the pageext's `Rec` is not
-//! marked temporary), a pre-existing false positive this test does not pin.
+//! `Dep RO Temp List` is read-only AND `SourceTableTemporary`: a pageext's `Rec`
+//! over it is its base page's temporary copy (`record_types`, #302 CR1), so d39's
+//! temp skip keeps `W RO Temp Ext` silent in both runs.
 
 use std::path::{Path, PathBuf};
 
@@ -69,37 +69,51 @@ fn app_entries(app: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The page object `{ "Id": .., "Name": "<page>", ... }` text inside `symbols`.
-fn page_text<'a>(symbols: &'a str, page: &str) -> &'a str {
-    let start = symbols
-        .find(&format!(r#""Name": "{page}""#))
-        .unwrap_or_else(|| panic!("page {page} not in symbols"));
-    let len = symbols[start..].find("]").expect("end of Properties");
-    &symbols[start..start + len]
+/// The parsed `SymbolReference.json` of `dep_dir`.
+fn symbols(dep_dir: &str) -> serde_json::Value {
+    serde_json::from_str(&read(&fixture(dep_dir).join("SymbolReference.json")))
+        .expect("fixture symbols parse")
 }
 
-/// Assert, by hand, that page `page` carries exactly the write-surface property
-/// literals `props` (`(name, value)`), each once, and no other one.
-fn assert_page_props(symbols: &str, page: &str, props: &[(&str, &str)]) {
-    let text = page_text(symbols, page);
-    for name in [
+/// Assert, by hand, the pages of `symbols` and the write-surface properties each
+/// carries, exactly: `(page, [(name, value)])`, in file order.
+fn assert_pages(symbols: &serde_json::Value, want: &[(&str, &[(&str, &str)])]) {
+    const WRITE_SURFACE: [&str; 5] = [
         "Editable",
         "InsertAllowed",
         "ModifyAllowed",
         "DeleteAllowed",
         "SourceTableTemporary",
-    ] {
-        let want = props.iter().find(|(n, _)| *n == name);
-        let literal_count = text.matches(&format!(r#"{{"Name":"{name}","#)).count();
-        match want {
-            Some((_, v)) => {
-                let literal = format!(r#"{{"Name":"{name}","Value":"{v}"}}"#);
-                assert_eq!(text.matches(&literal).count(), 1, "{page}: {literal}");
-                assert_eq!(literal_count, 1, "{page}: one {name}");
-            }
-            None => assert_eq!(literal_count, 0, "{page}: no {name}"),
-        }
-    }
+    ];
+    let got: Vec<(String, Vec<(String, String)>)> = symbols["Pages"]
+        .as_array()
+        .expect("Pages array")
+        .iter()
+        .map(|p| {
+            let props = p["Properties"]
+                .as_array()
+                .expect("Properties array")
+                .iter()
+                .map(|q| {
+                    let s = |k: &str| q[k].as_str().expect("string Name/Value").to_string();
+                    (s("Name"), s("Value"))
+                })
+                .filter(|(n, _)| WRITE_SURFACE.iter().any(|w| w.eq_ignore_ascii_case(n)))
+                .collect();
+            (p["Name"].as_str().expect("page Name").to_string(), props)
+        })
+        .collect();
+    let want: Vec<(String, Vec<(String, String)>)> = want
+        .iter()
+        .map(|(page, props)| {
+            let props = props
+                .iter()
+                .map(|(n, v)| (n.to_string(), v.to_string()))
+                .collect();
+            (page.to_string(), props)
+        })
+        .collect();
+    assert_eq!(got, want);
 }
 
 /// Run analyze; returns (stdout JSON, stderr warning).
@@ -167,25 +181,27 @@ fn opaque_apps(json: &serde_json::Value) -> &serde_json::Value {
 /// Test 2: a pageext over a symbol-only `Editable "0"` / `ModifyAllowed "0"`
 /// dependency page reports d39 like its embedded-source twin, with the same
 /// fingerprints. `Dep Card` (nothing declared) and `Dep Editable Card` (`"1"`) stay
-/// modifiable; the workspace page `W RO List` is the control that proves the run
+/// modifiable; `Dep RO Temp List` is read-only but temporary, so its pageext stays
+/// silent too. The workspace page `W RO List` is the control that proves the run
 /// reaches the read-only rule at all.
 #[test]
 fn d39_reads_a_symbol_only_dependency_page() {
-    let symbols = read(&fixture("dep/SymbolReference.json"));
-    // Preconditions, by hand: the symbols carry exactly these properties.
-    assert_eq!(
-        symbols
-            .matches(r#"{"Name":"Editable","Value":"0"}"#)
-            .count(),
-        1
-    );
-    assert_page_props(&symbols, "Dep RO List", &[("Editable", "0")]);
-    assert_page_props(&symbols, "Dep NoMod Card", &[("ModifyAllowed", "0")]);
-    assert_page_props(&symbols, "Dep Card", &[]);
-    assert_page_props(
-        &symbols,
-        "Dep Editable Card",
-        &[("Editable", "1"), ("ModifyAllowed", "1")],
+    // Precondition, by hand: the symbols carry exactly these pages and properties.
+    assert_pages(
+        &symbols("dep"),
+        &[
+            ("Dep RO List", &[("Editable", "0")]),
+            ("Dep NoMod Card", &[("ModifyAllowed", "0")]),
+            ("Dep Card", &[]),
+            (
+                "Dep Editable Card",
+                &[("Editable", "1"), ("ModifyAllowed", "1")],
+            ),
+            (
+                "Dep RO Temp List",
+                &[("Editable", "0"), ("SourceTableTemporary", "1")],
+            ),
+        ],
     );
 
     let expected = [
@@ -232,29 +248,35 @@ fn d39_reads_a_symbol_only_dependency_page() {
 /// reaches dependency pages at all.
 #[test]
 fn d64_reads_symbol_only_api_page_properties() {
-    let symbols = read(&fixture("dep-api/SymbolReference.json"));
-    assert_page_props(
+    let symbols = symbols("dep-api");
+    assert_pages(
         &symbols,
-        "Dep API Closed",
         &[
-            ("Editable", "0"),
-            ("InsertAllowed", "0"),
-            ("ModifyAllowed", "0"),
-            ("DeleteAllowed", "0"),
+            (
+                "Dep API Closed",
+                &[
+                    ("Editable", "0"),
+                    ("InsertAllowed", "0"),
+                    ("ModifyAllowed", "0"),
+                    ("DeleteAllowed", "0"),
+                ],
+            ),
+            (
+                "Dep API Temp",
+                &[("Editable", "0"), ("SourceTableTemporary", "1")],
+            ),
+            ("Dep API Open", &[]),
         ],
     );
-    assert_page_props(
-        &symbols,
-        "Dep API Temp",
-        &[("Editable", "0"), ("SourceTableTemporary", "1")],
-    );
-    assert_page_props(&symbols, "Dep API Open", &[]);
-    assert_eq!(
-        symbols
-            .matches(r#"{"Name":"PageType","Value":"API"}"#)
-            .count(),
-        3
-    );
+    let page_types: Vec<&str> = symbols["Pages"]
+        .as_array()
+        .expect("Pages array")
+        .iter()
+        .flat_map(|p| p["Properties"].as_array().expect("Properties array"))
+        .filter(|q| q["Name"] == "PageType")
+        .map(|q| q["Value"].as_str().expect("PageType value"))
+        .collect();
+    assert_eq!(page_types, ["API"; 3]);
 
     let (ws, app) = workspace("ws-api", "dep-api", false);
     let entries = app_entries(&app);

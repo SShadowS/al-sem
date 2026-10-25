@@ -50,6 +50,16 @@
         {"Name":"Editable","Value":"1"},
         {"Name":"ModifyAllowed","Value":"1"}
       ]
+    },
+    {
+      "Id": 70305,
+      "Name": "Dep RO Temp List",
+      "Properties": [
+        {"Name":"PageType","Value":"List"},
+        {"Name":"SourceTable","Value":"70300"},
+        {"Name":"Editable","Value":"0"},
+        {"Name":"SourceTableTemporary","Value":"1"}
+      ]
     }
   ]
 }

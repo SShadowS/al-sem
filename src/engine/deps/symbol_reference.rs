@@ -292,7 +292,7 @@ pub struct AbiObject {
 }
 
 /// A page's `Editable` / `InsertAllowed` / `ModifyAllowed` / `DeleteAllowed` /
-/// `SourceTableTemporary` (#302), the same facts the native path reads into
+/// `SourceTableTemporary` (#302), the same properties the native path reads into
 /// `ModelObject`. `None` = absent or not a boolean. Read by [`abi_bool`], whose
 /// value rule differs from the native one on purpose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -556,13 +556,41 @@ fn raw_object_property(
 /// `"true"` is `Some(true)`, any other present value `Some(false)`). That rule
 /// would read the symbols' `"1"` as `false`, and an unknown spelling must stay
 /// "not declared", not "declared false". Do not unify the two.
-fn abi_bool(properties: &Option<Vec<RawProperty>>, name: &str) -> Option<bool> {
-    let v = raw_object_property(properties, name)?;
-    match v.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" => Some(true),
-        "0" | "false" => Some(false),
-        _ => None,
+fn abi_bool(value: &str) -> Option<bool> {
+    let v = value.trim();
+    if v == "1" || v.eq_ignore_ascii_case("true") {
+        Some(true)
+    } else if v == "0" || v.eq_ignore_ascii_case("false") {
+        Some(false)
+    } else {
+        None
     }
+}
+
+/// A page's five write-surface booleans, in one pass over its `Properties`
+/// (names matched in any case, like [`raw_object_property`]), each read by
+/// [`abi_bool`].
+fn abi_page_props(properties: &Option<Vec<RawProperty>>) -> AbiPageProps {
+    let mut props = AbiPageProps::default();
+    // Reversed, so the FIRST of a repeated name wins, as in `raw_object_property`.
+    for p in properties.iter().flatten().rev() {
+        let name = p.name.as_deref().unwrap_or_default();
+        let slot = if name.eq_ignore_ascii_case("Editable") {
+            &mut props.editable
+        } else if name.eq_ignore_ascii_case("InsertAllowed") {
+            &mut props.insert_allowed
+        } else if name.eq_ignore_ascii_case("ModifyAllowed") {
+            &mut props.modify_allowed
+        } else if name.eq_ignore_ascii_case("DeleteAllowed") {
+            &mut props.delete_allowed
+        } else if name.eq_ignore_ascii_case("SourceTableTemporary") {
+            &mut props.source_table_temporary
+        } else {
+            continue;
+        };
+        *slot = p.value.as_deref().and_then(abi_bool);
+    }
+    props
 }
 
 /// Task 6 (G7, RV-4): a table is declared temporary when it carries the property
@@ -1351,14 +1379,7 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
                     collect_page_controls(controls, &mut page_controls);
                 }
                 abi_object.page_controls = page_controls;
-                let p = &o.properties;
-                abi_object.page_props = AbiPageProps {
-                    editable: abi_bool(p, "Editable"),
-                    insert_allowed: abi_bool(p, "InsertAllowed"),
-                    modify_allowed: abi_bool(p, "ModifyAllowed"),
-                    delete_allowed: abi_bool(p, "DeleteAllowed"),
-                    source_table_temporary: abi_bool(p, "SourceTableTemporary"),
-                };
+                abi_object.page_props = abi_page_props(&o.properties);
             }
             if let Some(ifaces) = &o.implemented_interfaces {
                 abi_object.implemented_interfaces =
