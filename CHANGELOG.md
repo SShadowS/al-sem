@@ -7,31 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **`alsem digest --diff` reads paths relative to the enclosing git top level** (#77). `git
-  diff` writes repository-root paths from any folder, so a workspace in a repository
-  subfolder (`<repo>/Cloud`) got `diff-file-unmatched` for `a/Cloud/src/posting.al`. The top
-  level is the nearest folder at or above the canonical workspace that holds `.git` (a
-  folder, or a worktree's or submodule's file), with no depth limit and no `git` command. A
-  path is read as written and with the workspace's folder (`Cloud/`) removed; a
-  workspace-relative diff still works. The prefix compares folder by folder, exactly, case
-  included, on every platform. With no enclosing repository, paths stay workspace-relative.
-- **`alsem digest --diff-root <dir>`** (#77): the folder the diff's paths are relative to,
-  for a workspace outside git or a `diff -ru old new` run from a parent folder. The
-  workspace must be inside it (as spelled, so a symlinked workspace keeps its link name, or
-  after resolving symlinks); every path is then read below it only. A root that does not
-  exist, is not a folder or does not contain the workspace, and a `--diff-root` with no
-  diff, are exit 3. In a batch the parent decides the root once and its workers use that
-  decision. `src/bin/alsem.rs` (`decide_diff_root`, `pin_diff_root`),
-  `src/engine/l5/digest_cli.rs` (`DiffRoot`, `diff_readings`, `diff_key`).
-  Not covered: `--file` / `--changed-files` still take workspace-relative paths only; a
-  diff whose prefix differs from the on-disk folder only by case stays unmatched (use `git
-  diff --relative`); macOS decomposed (NFD) folder names do not match git's composed ones;
-  `GIT_DIR` / `GIT_WORK_TREE` are not read; human output still shows no changed-roots
-  diagnostics; under auto mode a repository-root path outside the workspace still resolves
-  when the workspace holds the same relative path (as before).
-
 ### Changed
 
 - **Grammar: tree-sitter-al `main` at `940ba71b`** (package version still 4.4.1; was
@@ -201,6 +176,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`alsem digest --diff` reads paths relative to the enclosing git top level** (#77). `git
+  diff` writes repository-root paths from any folder, so a workspace in a repository
+  subfolder (`<repo>/Cloud`) got `diff-file-unmatched` for `a/Cloud/src/posting.al`. The top
+  level is the nearest folder at or above the canonical workspace that holds `.git` (a
+  folder, or a worktree's or submodule's file), with no depth limit and no `git` command. A
+  path is read as written and with the workspace's folder (`Cloud/`) removed; a
+  workspace-relative diff still works. The prefix compares folder by folder, exactly, case
+  included, on every platform, and is the folder's whole name (a folder named `ws:Cloud`
+  keeps its `ws:`). With no enclosing repository, paths stay workspace-relative.
+- **`alsem digest --diff-root <dir>`** (#77): the folder the diff's paths are relative to,
+  for a workspace outside git or a `diff -ru old new` run from a parent folder. The
+  workspace must be inside it (as spelled, so a symlinked workspace keeps its link name, or
+  after resolving symlinks); every path is then read below it only. A root that does not
+  exist, is not a folder or does not contain the workspace, and a `--diff-root` with no
+  diff, are exit 3; a workspace that does not exist is the load's error (exit 1), however
+  it is spelled, as in auto mode. In a batch the parent decides the root once and its
+  workers use that decision; the root and workspace probes count as the job's reads, so a
+  job writing the root file is refused as a conflict. `src/bin/alsem.rs`
+  (`decide_diff_root`, `pin_diff_root`), `src/engine/l5/digest_cli.rs` (`DiffRoot`,
+  `diff_readings`, `diff_key`).
+  Not covered: `--file` / `--changed-files` still take workspace-relative paths only; a
+  diff whose prefix differs from the on-disk folder only by case stays unmatched (use `git
+  diff --relative`); macOS decomposed (NFD) folder names do not match git's composed ones;
+  `GIT_DIR` / `GIT_WORK_TREE` are not read; human output still shows no changed-roots
+  diagnostics; under auto mode a repository-root path outside the workspace still resolves
+  when the workspace holds the same relative path (as before); `diff -ru a b` of trees
+  literally named `a` and `b` loses `a/`/`b/` from its headers but not from its `Only in`
+  lines (#111's prefix strip), so the two halves never both resolve.
 - **`alsem digest --include-reads`: table reads as `DB_READ` effects (#246).**
   Opt-in. Each table read site (`Get`, `Find*`, `IsEmpty`, `Count*`, `Next`,
   `CalcFields`, `CalcSums`) becomes a `DB_READ` effect with
@@ -211,8 +214,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where L4 holds the operation (about 7% of reads on CDO; see below). A
   `DB_READ`'s `factId` key also names its table, so reads of two tables
   witnessed at one operation keep distinct ids. The document gets `payload.includeReads: true`. Without the flag the
-  output is byte-identical (no golden moved). `schemaVersion` stays 1.6.0:
-  `DB_READ` and `includeReads` are opt-in and additive.
+  output is byte-identical (no golden moved). `schemaVersion` did not move for
+  it (1.6.0 at the time): `DB_READ` and `includeReads` are opt-in and additive.
+  This release ships digest 1.7.0 through #77 (see Changed).
   - **Limits:**
     - One effect per read SITE, not per table. Physical and temporary reads
       of one table are separate effects.
