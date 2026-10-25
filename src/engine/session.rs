@@ -958,6 +958,7 @@ impl View {
             );
             let req = need_l4.then(|| L4Request {
                 extra_diagnostics: std::mem::take(&mut extra_diagnostics),
+                control: None,
             });
             let (art, solved) = dc::build_detector_artifacts(
                 model,
@@ -981,7 +982,10 @@ impl View {
         // A plan with no run (query) fills `l4` alone.
         if need_l4 && l4.is_none() {
             let r = rel.as_ref().expect("rel filled above");
-            let req = L4Request { extra_diagnostics };
+            let req = L4Request {
+                extra_diagnostics,
+                control: None,
+            };
             // The `CoreSummaries` die here: nothing harvests them.
             let (solved, _core) = build_l4(model, r, req, target.cross_app_inputs().as_ref());
             *l4 = Some(solved);

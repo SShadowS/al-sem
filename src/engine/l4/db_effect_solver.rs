@@ -1658,37 +1658,52 @@ pub fn seed_fixed_leaf_rows(
         let Some(ix) = interner.get(id) else {
             continue; // a leaf not in the workspace routine set — no row.
         };
-        // Intern the leaf's effects, splitting terminal (`C`) vs PD (delta),
-        // remembering each id's OWN via.
-        let mut terminal_bits: Vec<u64> = Vec::new();
-        let mut pd_bits: Vec<u64> = Vec::new();
-        let mut via_of: HashMap<EffectId, ViaRank> = HashMap::new();
-        for e in &summary.db_effects {
+        let effects = summary.db_effects.iter().map(|e| {
             let identity = EffectIdentity {
                 op: e.op.clone(),
                 table_id: e.table_id.clone(),
                 operation_id: e.operation_id.clone(),
                 temp: e.temp_state.to_kind(),
             };
-            let eid = universe.intern(&identity);
-            via_of.insert(eid, ViaRank::from_str(&e.via));
-            match e.temp_state {
-                TempState::Known(_) | TempState::Unknown => set_bit(&mut terminal_bits, eid),
-                TempState::ParameterDependent(_) => set_bit(&mut pd_bits, eid),
-            }
-        }
-        let via_lookup = |eid: EffectId| via_of.get(&eid).copied().unwrap_or(ViaRank::Inherited);
-        // Parallel to `iter_set_bits(terminal_bits)` (ascending EffectId).
-        let base_via: Vec<ViaRank> = iter_set_bits(&terminal_bits).map(via_lookup).collect();
-        let mut pd_delta: Vec<EffectId> = Vec::new();
-        let mut delta_via: Vec<ViaRank> = Vec::new();
-        for eid in iter_set_bits(&pd_bits) {
-            pd_delta.push(eid);
-            delta_via.push(via_lookup(eid));
-        }
-        let set_ref = bundle.push_terminal_set(terminal_bits);
-        bundle.push_row(ix, set_ref, base_via, pd_delta, delta_via);
+            (identity, ViaRank::from_str(&e.via))
+        });
+        seed_row(ix, effects, universe, bundle);
     }
+}
+
+/// Push one routine's row from its settled effects, each with its OWN via:
+/// intern every identity, split terminal (`C`) from parameter-dependent
+/// (delta), and record the row on a fresh terminal set. The body of
+/// [`seed_fixed_leaf_rows`], also used by the seeded solve (#222 §4.4) to
+/// copy a baseline row.
+pub(crate) fn seed_row(
+    ix: SolveIx,
+    effects: impl Iterator<Item = (EffectIdentity, ViaRank)>,
+    universe: &mut GrowingEffectUniverse,
+    bundle: &mut SummaryBundleBuilder,
+) {
+    let mut terminal_bits: Vec<u64> = Vec::new();
+    let mut pd_bits: Vec<u64> = Vec::new();
+    let mut via_of: HashMap<EffectId, ViaRank> = HashMap::new();
+    for (identity, via) in effects {
+        let eid = universe.intern(&identity);
+        via_of.insert(eid, via);
+        match identity.temp {
+            TempStateKind::Known(_) | TempStateKind::Unknown => set_bit(&mut terminal_bits, eid),
+            TempStateKind::ParameterDependent(_) => set_bit(&mut pd_bits, eid),
+        }
+    }
+    let via_lookup = |eid: EffectId| via_of.get(&eid).copied().unwrap_or(ViaRank::Inherited);
+    // Parallel to `iter_set_bits(terminal_bits)` (ascending EffectId).
+    let base_via: Vec<ViaRank> = iter_set_bits(&terminal_bits).map(via_lookup).collect();
+    let mut pd_delta: Vec<EffectId> = Vec::new();
+    let mut delta_via: Vec<ViaRank> = Vec::new();
+    for eid in iter_set_bits(&pd_bits) {
+        pd_delta.push(eid);
+        delta_via.push(via_lookup(eid));
+    }
+    let set_ref = bundle.push_terminal_set(terminal_bits);
+    bundle.push_row(ix, set_ref, base_via, pd_delta, delta_via);
 }
 
 #[cfg(test)]

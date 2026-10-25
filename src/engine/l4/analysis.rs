@@ -13,7 +13,8 @@ use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::scc::{SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::l4::summary::RoutineSummary;
 use crate::engine::l4::summary_runner::{
-    FieldIndex, NON_CONVERGENCE_TAIL, SummarizeDiagnostic, compute_summaries_v2_bundle_with_leaves,
+    Cancelled, FieldIndex, L4Control, NON_CONVERGENCE_TAIL, SolveOutcome, SummarizeDiagnostic,
+    V2Inputs, compute_summaries_v2_bundle_seeded, compute_summaries_v2_bundle_with_leaves,
     summaries_census,
 };
 use crate::engine::l5::detector_context::CrossAppInputs;
@@ -39,9 +40,11 @@ pub struct CoreSummaries(pub HashMap<String, RoutineSummary>);
 
 /// What a caller asks [`build_l4`] for. `extra_diagnostics` is appended to
 /// `summarize_diagnostics` AFTER `warnings` are rendered, so an injected row is
-/// never printed; it is empty in every production caller.
-pub struct L4Request {
+/// never printed; it is empty in every production caller. `control` is `None`
+/// on every command; only the incremental host passes it (#222 §4.4).
+pub struct L4Request<'a> {
     pub extra_diagnostics: Vec<SummarizeDiagnostic>,
+    pub(crate) control: Option<L4Control<'a>>,
 }
 
 /// The v2 solve over the relation's Primary payload, on the relation's SCC,
@@ -56,9 +59,25 @@ pub struct L4Request {
 pub(crate) fn build_l4(
     model: &Model,
     rel: &ExecRelation,
-    req: L4Request,
+    req: L4Request<'_>,
     cross: Option<&CrossAppInputs<'_>>,
 ) -> (L4Analysis, CoreSummaries) {
+    assert!(req.control.is_none(), "build_l4 takes no control");
+    let Ok((l4, core, _)) = build_l4_controlled(model, rel, req, cross) else {
+        unreachable!("a solve without control is never cancelled")
+    };
+    (l4, core)
+}
+
+/// [`build_l4`]'s body. With `req.control` it runs the seeded solve
+/// ([`compute_summaries_v2_bundle_seeded`]) and returns its [`SolveOutcome`];
+/// without, today's solve and `None`.
+pub(crate) fn build_l4_controlled(
+    model: &Model,
+    rel: &ExecRelation,
+    req: L4Request<'_>,
+    cross: Option<&CrossAppInputs<'_>>,
+) -> Result<(L4Analysis, CoreSummaries, Option<SolveOutcome>), Cancelled> {
     let graph: &PrimaryGraph = rel.primary();
     let scc = Arc::clone(rel.scc());
     emit_scc_stats(graph, &scc);
@@ -76,15 +95,34 @@ pub(crate) fn build_l4(
         .as_ref()
         .or(cross.map(|c| c.field_index))
         .expect("a field index: the solve's own, or the cross-app base's");
-    let (bundle, core_summaries, diagnostics) = compute_summaries_v2_bundle_with_leaves(
-        &ws.routines,
-        graph,
-        &scc,
-        &model.calls.upgraded_bindings,
-        field_index,
-        leaf_summaries,
-        fixed_roles,
-    );
+    let (bundle, core_summaries, diagnostics, outcome) = match &req.control {
+        None => {
+            let (bundle, core, diagnostics) = compute_summaries_v2_bundle_with_leaves(
+                &ws.routines,
+                graph,
+                &scc,
+                &model.calls.upgraded_bindings,
+                field_index,
+                leaf_summaries,
+                fixed_roles,
+            );
+            (bundle, core, diagnostics, None)
+        }
+        Some(control) => {
+            let inputs = V2Inputs {
+                routines: &ws.routines,
+                graph,
+                scc: &scc,
+                upgraded_bindings: &model.calls.upgraded_bindings,
+                fields: field_index,
+                leaf_summaries,
+                fixed_roles,
+            };
+            let (bundle, core, diagnostics, outcome) =
+                compute_summaries_v2_bundle_seeded(&inputs, control)?;
+            (bundle, core, diagnostics, Some(outcome))
+        }
+    };
     drop(own_field_index);
     drop(summaries_span);
     summaries_census::report();
@@ -120,7 +158,7 @@ pub(crate) fn build_l4(
     for w in &l4.warnings {
         crate::engine::batch::output::job_line(w.clone());
     }
-    (l4, CoreSummaries(core_summaries))
+    Ok((l4, CoreSummaries(core_summaries), outcome))
 }
 
 /// The line each non-convergence diagnostic stands for, as [`build_l4`]

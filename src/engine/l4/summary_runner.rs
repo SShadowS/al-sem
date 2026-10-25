@@ -25,10 +25,12 @@
 use std::collections::{HashMap, HashSet};
 
 use super::combined_graph::PrimaryGraph;
-use super::db_effect_solver::{build_rvid_by_opid, seed_fixed_leaf_rows, solve_scc_db_effects};
+use super::db_effect_solver::{
+    build_rvid_by_opid, seed_fixed_leaf_rows, seed_row, solve_scc_db_effects,
+};
 use super::effect_lattice::{EffectPresence, effect_key_of, join_presence};
 use super::effect_store::{SummaryBundle, SummaryBundleBuilder};
-use super::effect_universe::GrowingEffectUniverse;
+use super::effect_universe::{EffectIdentity, GrowingEffectUniverse};
 use super::event_dispatch::{
     DispatchKind, ParamDispatch, dispatch_bindings, optional_load, shared_event_ids,
 };
@@ -1368,6 +1370,74 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     HashMap<String, RoutineSummary>,
     Vec<SummarizeDiagnostic>,
 ) {
+    let inputs = V2Inputs {
+        routines,
+        graph,
+        scc,
+        upgraded_bindings,
+        fields,
+        leaf_summaries,
+        fixed_roles,
+    };
+    let Ok((bundle, map, diagnostics, _)) = solve_v2(&inputs, None) else {
+        unreachable!("a solve without control is never cancelled")
+    };
+    (bundle, map, diagnostics)
+}
+
+/// The v2 solve's inputs, as [`compute_summaries_v2_bundle_with_leaves`]
+/// takes them one by one.
+#[derive(Clone, Copy)]
+pub(crate) struct V2Inputs<'a> {
+    pub routines: &'a [ModelRoutine],
+    pub graph: &'a PrimaryGraph,
+    pub scc: &'a SccResult,
+    pub upgraded_bindings: &'a HashMap<String, Vec<UpgradedBinding>>,
+    pub fields: &'a FieldIndex,
+    pub leaf_summaries: &'a HashMap<String, RoutineSummary>,
+    pub fixed_roles: &'a HashSet<String>,
+}
+
+/// #222 §4.4: the incremental host's entry. With `control.reuse` `None` it
+/// solves exactly as [`compute_summaries_v2_bundle_with_leaves`] (T0a); with
+/// a baseline it seeds every SCC that §4.3 R2/R3 leave clean. It calls
+/// `control.cancel` at the top of every SCC turn, and returns the new
+/// [`SolveBaseline`] in its [`SolveOutcome`].
+pub(crate) fn compute_summaries_v2_bundle_seeded(
+    inputs: &V2Inputs<'_>,
+    control: &L4Control<'_>,
+) -> Result<SeededSolve, Cancelled> {
+    let (bundle, map, diagnostics, outcome) = solve_v2(inputs, Some(control))?;
+    let outcome = outcome.expect("a controlled solve reports its outcome");
+    Ok((bundle, map, diagnostics, outcome))
+}
+
+/// A v2 solve's bundle, core map and diagnostics, plus `O`.
+pub(crate) type SolvedV2<O> = (
+    SummaryBundle,
+    HashMap<String, RoutineSummary>,
+    Vec<SummarizeDiagnostic>,
+    O,
+);
+
+/// What [`compute_summaries_v2_bundle_seeded`] returns.
+pub(crate) type SeededSolve = SolvedV2<SolveOutcome>;
+
+/// The one v2 solve body. `control` is `None` on every command path, and
+/// then nothing below differs from the pre-#222 solve.
+fn solve_v2(
+    inputs: &V2Inputs<'_>,
+    control: Option<&L4Control<'_>>,
+) -> Result<SolvedV2<Option<SolveOutcome>>, Cancelled> {
+    let V2Inputs {
+        routines,
+        graph,
+        scc,
+        upgraded_bindings,
+        fields,
+        leaf_summaries,
+        fixed_roles,
+    } = *inputs;
     pt::counter_delta("build.summaries_v2", 1);
     // --- Scaffolding: mirrors what the retired `compute_summaries_with_leaves`
     // built (in the pre-`b4181d8` tree). ---
@@ -1564,7 +1634,50 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     let mut roles_ns: u128 = 0;
     let mut db_ns: u128 = 0;
 
+    // #222 §4.3 R0-R1: the solve half of R0, the row digests and Δ, from the
+    // maps above; only a controlled (host) solve builds them.
+    let mut seeding =
+        control.map(|c| Seeding::new(c, inputs, &shared_events, &uncertainty_edges_by_from));
+
     for scc_entry in &scc.sccs {
+        // #222 §4.4: the one seed-or-solve branch.
+        if let Some(st) = seeding.as_mut() {
+            if (st.control.cancel)() {
+                return Err(Cancelled);
+            }
+            if let Some(reuse) = st.seed_from(scc_entry, graph) {
+                for id in scc_entry.members.iter().filter(|id| is_recomputed(id)) {
+                    let core = reuse
+                        .core
+                        .get(id)
+                        .unwrap_or_else(|| panic!("seeded {id}: no baseline core summary"));
+                    v2_map.insert(id.clone(), core.clone());
+                    let old_ix = reuse
+                        .bundle
+                        .routine_ix(id)
+                        .filter(|&ix| reuse.bundle.has_row(ix))
+                        .unwrap_or_else(|| panic!("seeded {id}: no baseline bundle row"));
+                    let ix = routine_interner
+                        .get(id)
+                        .expect("every recomputed member is interned at workspace setup");
+                    let effects = reuse.bundle.db_effects(old_ix).map(|e| {
+                        let identity = EffectIdentity {
+                            op: e.op.to_string(),
+                            table_id: e.table_id.to_string(),
+                            operation_id: e.operation_id.to_string(),
+                            temp: e.temp_state.clone(),
+                        };
+                        (identity, e.via)
+                    });
+                    seed_row(ix, effects, &mut universe, &mut bundle_builder);
+                }
+                let diag = reuse.solve.diag_of[&scc_entry.members].clone();
+                diagnostics.extend(diag.clone());
+                st.record(scc_entry, diag, None);
+                continue;
+            }
+        }
+
         // parameter_roles from the roles-ONLY fixpoint (the old db_effects JACOBI
         // is NOT run). Reads `v2_map` as its predecessor view (this SCC not yet
         // inserted).
@@ -1578,9 +1691,10 @@ pub fn compute_summaries_v2_bundle_with_leaves(
         // Surface the roles fixpoint's cap-hit as a summarize-stage diagnostic,
         // byte-identical to the OLD solver's message shape (severity/stage/text).
         // Never fires on the corpus (roles converge); preserves the honesty signal.
-        if let Some(members) = &cap_hit_stable_members {
-            diagnostics.push(SummarizeDiagnostic::non_convergence(members));
-        }
+        let diag = cap_hit_stable_members
+            .as_ref()
+            .map(|members| SummarizeDiagnostic::non_convergence(members));
+        diagnostics.extend(diag.clone());
 
         // New db-effect solve. Reads the SAME predecessor view (`v2_map`) for
         // side-facts; the db-effect feed-forward is on `bundle_builder` (Task
@@ -1651,6 +1765,15 @@ pub fn compute_summaries_v2_bundle_with_leaves(
             v2_map.insert(id, assembled);
         }
         summaries_census::add_since(&summaries_census::ASSEMBLE_NANOS, _asm_t);
+        if let Some(st) = seeding.as_mut() {
+            let solved = SolvedScc {
+                v2_map: &v2_map,
+                builder: &bundle_builder,
+                universe: &universe,
+                interner: &routine_interner,
+            };
+            st.record(scc_entry, diag, Some(solved));
+        }
     }
     summaries_census::add(&summaries_census::ROLES_NANOS, roles_ns as u64);
     summaries_census::add(&summaries_census::DB_NANOS, db_ns as u64);
@@ -1673,7 +1796,250 @@ pub fn compute_summaries_v2_bundle_with_leaves(
     let _t = summaries_census::start();
     let bundle = bundle_builder.finish(universe.freeze(), routine_interner, rvid_by_opid);
     summaries_census::add_since(&summaries_census::FINISH_NANOS, _t);
-    (bundle, v2_map, diagnostics)
+    Ok((bundle, v2_map, diagnostics, seeding.map(|st| st.outcome)))
+}
+
+/// #222 §4.4: the caller's stop flag, and the baseline to seed from.
+pub(crate) struct L4Control<'a> {
+    pub cancel: &'a dyn Fn() -> bool,
+    pub reuse: Option<L4Reuse<'a>>,
+}
+
+/// The last revision's solve: its [`SolveBaseline`], bundle and core map.
+pub(crate) struct L4Reuse<'a> {
+    pub solve: &'a SolveBaseline,
+    pub bundle: &'a SummaryBundle,
+    pub core: &'a HashMap<String, RoutineSummary>,
+}
+
+/// A controlled solve stopped because `cancel` returned true.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cancelled;
+
+/// What the next seeded solve compares against (§4.3): the solve half of R0,
+/// one row digest per id, one diagnostic slot per SCC key.
+#[derive(Debug, Clone, Default)]
+pub struct SolveBaseline {
+    pub solve_global: [u8; 32],
+    pub rows: HashMap<String, [u8; 32]>,
+    pub diag_of: HashMap<Vec<String>, Option<SummarizeDiagnostic>>,
+}
+
+/// A controlled solve's report.
+#[derive(Debug, Clone)]
+pub struct SolveOutcome {
+    pub baseline: SolveBaseline,
+    /// Keys of the re-solved SCCs, in solve order.
+    pub resolved: Vec<Vec<String>>,
+    pub seeded: usize,
+    pub total: usize,
+    /// No reuse was asked for, or the solve half of R0 differed.
+    pub full: bool,
+}
+
+/// A re-solved SCC's results, read to decide whether it came out different.
+struct SolvedScc<'s> {
+    v2_map: &'s HashMap<String, RoutineSummary>,
+    builder: &'s SummaryBundleBuilder,
+    universe: &'s GrowingEffectUniverse,
+    interner: &'s RoutineInterner,
+}
+
+/// The seeded solve's per-run state: Δ, the SCCs that came out different, and
+/// the outcome being built.
+struct Seeding<'c, 'a> {
+    control: &'c L4Control<'a>,
+    /// `control.reuse` when the solve half of R0 matched, else `None` (Full).
+    reuse: Option<&'c L4Reuse<'a>>,
+    delta: HashSet<String>,
+    /// Members of re-solved SCCs that came out different (R3).
+    different: HashSet<String>,
+    outcome: SolveOutcome,
+}
+
+impl<'c, 'a> Seeding<'c, 'a> {
+    fn new(
+        control: &'c L4Control<'a>,
+        inputs: &V2Inputs<'_>,
+        shared_events: &HashSet<String>,
+        uncertainty_edges_by_from: &HashMap<String, Vec<usize>>,
+    ) -> Self {
+        let solve_global = solve_global_digest(inputs.fields, inputs.graph);
+        let rows = row_digests(inputs, shared_events, uncertainty_edges_by_from);
+        let reuse = control
+            .reuse
+            .as_ref()
+            .filter(|r| r.solve.solve_global == solve_global);
+        let mut delta = HashSet::new();
+        if let Some(r) = reuse {
+            for (id, digest) in &rows {
+                if r.solve.rows.get(id) != Some(digest) {
+                    delta.insert(id.clone());
+                }
+            }
+            for id in r.solve.rows.keys() {
+                if !rows.contains_key(id) {
+                    delta.insert(id.clone());
+                }
+            }
+        }
+        Seeding {
+            control,
+            reuse,
+            delta,
+            different: HashSet::new(),
+            outcome: SolveOutcome {
+                baseline: SolveBaseline {
+                    solve_global,
+                    rows,
+                    diag_of: HashMap::new(),
+                },
+                resolved: Vec::new(),
+                seeded: 0,
+                total: inputs.scc.sccs.len(),
+                full: reuse.is_none(),
+            },
+        }
+    }
+
+    /// R2 and R3: the baseline to seed `scc` from, or `None` to re-solve it.
+    fn seed_from(&self, scc: &super::scc::Scc, graph: &PrimaryGraph) -> Option<&'c L4Reuse<'a>> {
+        let reuse = self.reuse?;
+        let successors = || {
+            scc.members
+                .iter()
+                .flat_map(|m| graph.edges_by_from.get(m).into_iter().flatten())
+                .map(|e| e.to.as_str())
+        };
+        let clean = reuse.solve.diag_of.contains_key(&scc.members)
+            && !scc.members.iter().any(|m| self.delta.contains(m))
+            && !successors().any(|t| self.delta.contains(t) || self.different.contains(t));
+        clean.then_some(reuse)
+    }
+
+    /// Record `scc`'s diagnostic slot; a re-solved SCC (`solved`) also goes
+    /// on the resolved list and, when it came out different, into R3's set.
+    fn record(
+        &mut self,
+        scc: &super::scc::Scc,
+        diag: Option<SummarizeDiagnostic>,
+        solved: Option<SolvedScc<'_>>,
+    ) {
+        let key = scc.members.clone();
+        match solved {
+            None => self.outcome.seeded += 1,
+            Some(s) => {
+                if let Some(reuse) = self.reuse
+                    && scc
+                        .members
+                        .iter()
+                        .any(|id| came_out_different(reuse, &s, id))
+                {
+                    self.different.extend(scc.members.iter().cloned());
+                }
+                self.outcome.resolved.push(key.clone());
+            }
+        }
+        self.outcome.baseline.diag_of.insert(key, diag);
+    }
+}
+
+/// R3's "came out different" for one member: new, or its core summary or its
+/// `(identity, via)` db-effect set differs from the baseline's. No
+/// `record_variable_id`: the builder's identity has none (O18).
+fn came_out_different(reuse: &L4Reuse<'_>, s: &SolvedScc<'_>, id: &str) -> bool {
+    use std::collections::BTreeSet;
+    let new: Option<BTreeSet<(String, &str)>> = s
+        .interner
+        .get(id)
+        .and_then(|ix| s.builder.row_effects(ix))
+        .map(|row| {
+            row.into_iter()
+                .map(|(e, via)| (s.universe.effect_key_cached(e).to_string(), via.as_str()))
+                .collect()
+        });
+    let old: Option<BTreeSet<(String, &str)>> = reuse
+        .bundle
+        .routine_ix(id)
+        .filter(|&ix| reuse.bundle.has_row(ix))
+        .map(|ix| {
+            reuse
+                .bundle
+                .db_effects(ix)
+                .map(|e| (e.effect_key.to_string(), e.via.as_str()))
+                .collect()
+        });
+    reuse.core.get(id) != s.v2_map.get(id) || new != old
+}
+
+/// R0's solve half: `FieldIndex` and `collided_site_callee`, sorted.
+fn solve_global_digest(fields: &FieldIndex, graph: &PrimaryGraph) -> [u8; 32] {
+    use std::collections::BTreeMap;
+    let fields: BTreeMap<_, _> = fields.iter().collect();
+    let collided: BTreeMap<_, _> = graph.collided_site_callee.iter().collect();
+    sha256_of_debug(&(fields, collided))
+}
+
+/// R1's row digests (Words): per id, in sorted id order, the `Debug` text of
+/// every model row of the id (model order), its call sites' upgraded
+/// bindings, its out-edges, one shared-event bit per `event-dispatch` edge,
+/// its uncertainty edges, its leaf summary and its fixed-role flag. A leaf
+/// with no model row is digested too: its callers read its summary.
+fn row_digests(
+    inputs: &V2Inputs<'_>,
+    shared_events: &HashSet<String>,
+    uncertainty_edges_by_from: &HashMap<String, Vec<usize>>,
+) -> HashMap<String, [u8; 32]> {
+    use std::collections::BTreeMap;
+    let mut rows_of: BTreeMap<&str, Vec<&ModelRoutine>> = BTreeMap::new();
+    for r in inputs.routines {
+        rows_of.entry(r.id.as_str()).or_default().push(r);
+    }
+    for id in inputs.leaf_summaries.keys() {
+        rows_of.entry(id.as_str()).or_default();
+    }
+    rows_of
+        .into_iter()
+        .map(|(id, rows)| {
+            let bindings: Vec<_> = rows
+                .iter()
+                .flat_map(|r| &r.call_sites)
+                .map(|cs| inputs.upgraded_bindings.get(&cs.id))
+                .collect();
+            let edges = inputs.graph.edges_by_from.get(id);
+            let shared: Vec<bool> = edges
+                .into_iter()
+                .flatten()
+                .filter(|e| e.kind == "event-dispatch")
+                .map(|e| {
+                    e.event_id
+                        .as_ref()
+                        .is_some_and(|ev| shared_events.contains(ev))
+                })
+                .collect();
+            let uncertainty: Vec<_> = uncertainty_edges_by_from
+                .get(id)
+                .into_iter()
+                .flatten()
+                .map(|&i| &inputs.graph.uncertainty_edges[i])
+                .collect();
+            let row = (
+                rows,
+                bindings,
+                edges,
+                shared,
+                uncertainty,
+                inputs.leaf_summaries.get(id),
+                inputs.fixed_roles.contains(id),
+            );
+            (id.to_string(), sha256_of_debug(&row))
+        })
+        .collect()
+}
+
+fn sha256_of_debug(value: &impl std::fmt::Debug) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(format!("{value:?}").as_bytes()).into()
 }
 
 /// Compat shim (spec Part A, "Public API"): wraps
@@ -2250,6 +2616,11 @@ fn project_summary_to_stable(
     project_routine_summary_core_internal(routine_id, s, stable_map)
 }
 
+// #222 Task 1: the seeded solve's T0a, T2 and T2b.
+#[cfg(test)]
+#[path = "summary_runner_seeded_tests.rs"]
+mod summary_runner_seeded;
+
 /// Issue #107 tests that need crate-private symbols (the binding mapping, edge
 /// metadata, the roles round cap). The behaviour rows live in
 /// `tests/gap/gap_issue107_publisher_roles.rs`.
@@ -2634,6 +3005,7 @@ codeunit 50102 Cyc
             let rel = crate::engine::l4::exec_relation::ExecRelation::single_app(&m);
             let req = crate::engine::l4::analysis::L4Request {
                 extra_diagnostics: vec![],
+                control: None,
             };
             let (l4, _) = with_roles_iteration_cap(1, || {
                 crate::engine::l4::analysis::build_l4(&m, &rel, req, None)
