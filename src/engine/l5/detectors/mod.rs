@@ -337,7 +337,9 @@ const TABLE_TRIGGERS_REC_AUTO_PERSIST: &[&str] = &["OnInsert", "OnModify", "OnDe
 /// auto-persist; d39's rule for who persists `Rec` is
 /// [`implicit_rec_persisted_by_owner`]). When unsure (any other
 /// kind / object type / trigger name / receiver) returns `false` — the
-/// detectors keep firing.
+/// detectors keep firing. d11 and d37 also skip the receiver `Rec` of EVERY
+/// Table / TableExtension routine (#299): see [`is_table_receiver_rec`],
+/// [`table_rec_persisted_by_owner`] and [`receiver_reset_after`].
 pub(crate) fn is_platform_loaded_trigger_rec(
     routine: &ModelRoutine,
     record_variable_name: &str,
@@ -399,7 +401,9 @@ const PAGE_TRIGGERS_REC_DELETED: &[&str] = &["OnDeleteRecord"];
 const TABLEEXT_TRIGGERS_AFTER_WRITE: &[&str] = &["OnAfterInsert", "OnAfterModify", "OnAfterRename"];
 
 /// Does someone other than `routine` persist the implicit `Rec` it leaves dirty?
-/// d39's owner rule (#272; it absorbs detector-audit class B). True for:
+/// d39's owner rule (#272; it absorbs detector-audit class B). Its Table arm is
+/// [`table_rec_persisted_by_owner`], which d37 also reads for its receiver skip
+/// (#299, with [`is_table_receiver_rec`] and [`receiver_reset_after`]). True for:
 /// - a Table / TableExtension procedure or field trigger: `Rec` is the caller's
 ///   record (`Cust.Foo()`, `Cust.Validate(F)`), which the caller persists;
 /// - any other table / tableext trigger except [`TABLEEXT_TRIGGERS_AFTER_WRITE`]:

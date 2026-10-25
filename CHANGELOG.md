@@ -27,6 +27,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`check-goldens --regen` wrote nothing), and CDO `--program-call-graph-stats`
   byte-identical (0 unknown edges, 0 recovered files on both sides). The pinned CDO code
   does not use these shapes.
+
+- **d11 and d37 no longer report `Rec` in a table or table extension routine** (#299).
+  There `Rec` is the receiver: the record the caller called the method on (`Cust.Foo()`),
+  or the record the platform or caller fired the trigger for. The caller owns it, as it
+  owns a parameter record, which both detectors already skipped. d11 (`Modify`/`Validate`
+  with no load) skips the receiver in every such routine. This is ownership, not proof
+  that the caller loaded the record. d37 (`Validate` with no persist) skips it when d39's
+  owner rule says the owner persists `Rec` (every routine except a table extension
+  `OnAfterInsert`/`OnAfterModify`/`OnAfterRename`) and the routine does not put `Rec` in a
+  new state after the `Validate`: its own `Get`/`Find*`/`Next`/`Init`/`Copy`/
+  `TransferFields`, a `var` helper that loads it, or `Rec := Other`. `Reset` is not a new
+  state. A declared `Rec` (a local, or a named return value `Rec`) is not the receiver and
+  is still reported. The receiver is a flag on the seeded `Rec` row
+  (`PRecordVariable.is_receiver`, not serialized), so a `TableType = Temporary` table or an
+  `IsTemporary` entry guard does not hide it. New stats key `callerOwnedRec` on both
+  detectors. Measured on this branch (release-fast, findings removed, 0 added, no other
+  detector moved): Base App single-app scope all, d11 2321 → 1101 and d37 1400 → 550; CDO
+  primary, d11 112 → 15 and d37 12 → 3; CDO all, d11 729 → 249 and d37 163 → 31. Every
+  removed finding is a d11/d37 finding on table `Rec` on the base; triage samples were all
+  false positives (Base App d11 18/18, d37 18/18, field `OnLookup` 6/6; CDO primary d37
+  9/9, d11 13/13). The table field `OnLookup` case relies on a write that was measured as
+  persisted on the BC 28.4 Linux sidecar; **a Windows Cronus confirmation is still owed**.
+  Known limits: a reload through a method called on the receiver itself (`ReloadMe()`,
+  which does `Get`) is not seen, so d37 skips that `Validate`; a replacement whose right
+  side or target is not a bare unquoted identifier (`Rec := GetRec()`, `"Rec" := Other`)
+  is not seen as a new state, so d37 skips that too; and `Rec := Other` in the other arm
+  of a branch holding the `Validate` keeps the d37 finding (a conservative false
+  positive). Page `Rec`, d21 on table `Rec` and a codeunit `TableNo` `OnRun` `Rec` are
+  not changed. `src/engine/l5/detectors/mod.rs` (`is_table_receiver_rec`,
+  `table_rec_persisted_by_owner`, `receiver_reset_after`), `d11.rs`, `d37.rs`,
+  `src/program/body/ir_walk.rs` (`ir_record_variables`).
+
 - **`alsem digest --diff` reads `diff -r`'s `Only in <dir>: <name>` lines** (#111), which it
   ignored before, so a diff that adds or deletes files no longer drops them silently. The
   path is `<dir>/<name>` with one `/` between (`Only in new/: x.al` is `new/x.al`). It is

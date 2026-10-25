@@ -3,8 +3,12 @@
 //!
 //! Flags `Modify` / `Validate` on a record variable that was never loaded
 //! earlier in the same routine (no prior Get/FindFirst/FindLast/FindSet/Find/
-//! Next/Init/Insert/Copy before the mutating op). Skips by-var parameter records
-//! (the caller is responsible for loading them). G-10/G-16: a prior call that
+//! Next/Init/Insert/Copy before the mutating op). Skips every parameter record,
+//! by-var and by-value (the caller is responsible for loading them), and, for
+//! the same reason, the receiver `Rec` of a Table / TableExtension routine
+//! (#299, [`is_table_receiver_rec`]: the record the method was called on or the
+//! trigger fired for; stats key `callerOwnedRec`, checked last). This is
+//! ownership, not proof that the caller loaded it. G-10/G-16: a prior call that
 //! loads the record also counts — the platform built-in `GetBySystemId` and any
 //! resolved callee chain that loads the by-var argument (bounded multi-hop
 //! callee summary, `detectors::record_loaded_by_call_before`) — as does a
@@ -62,7 +66,8 @@ pub fn detect_d11(
         }
         candidates_considered += 1;
 
-        // Collect by-var parameter record variable names (lowercased).
+        // Collect every parameter record variable name, by-var and by-value
+        // (lowercased).
         let param_record_names: std::collections::HashSet<String> = routine
             .record_variables
             .iter()

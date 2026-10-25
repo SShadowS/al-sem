@@ -1,5 +1,5 @@
 //! D37 — `Validate(...)` on a record variable with no subsequent `Modify` /
-//! `ModifyAll` / `Insert` to persist the change. Port of al-sem
+//! `Insert` to persist the change. Port of al-sem
 //! `src/detectors/d37-validate-without-persist.ts`.
 //!
 //! Detection (intra-routine, source-ordered): for each `Validate` op V on record-var
@@ -14,9 +14,17 @@
 //! therefore excluded from the persist set (only a genuine `Modify`/`Insert` on R
 //! persists the Validate).
 //!
-//! Suppressions: temporary records, by-var parameter records, and calls forwarding R
+//! Suppressions, in check order: temporary records; every parameter record, by-var
+//! and by-value; the G-9 platform-loaded trigger `Rec`
+//! ([`is_platform_loaded_trigger_rec`], checked BEFORE the walk, so a reset after
+//! the Validate does not matter there); a later persist on R; calls forwarding R
 //! to a helper whose summary MAY persist (persistsCurrentRecord = "yes") or is
-//! opaque/unresolved (conservative).
+//! opaque/unresolved (conservative); and last (#299, stats key `callerOwnedRec`)
+//! the receiver `Rec` of a Table / TableExtension routine
+//! ([`is_table_receiver_rec`]) when d39's Table owner rule says its owner persists
+//! it ([`table_rec_persisted_by_owner`]: not a tableext
+//! OnAfterInsert / OnAfterModify / OnAfterRename) and the routine does not put
+//! `Rec` in a new state after the Validate ([`receiver_reset_after`]).
 //!
 //! Reads the CORE `RoutineSummary.parameterRoles` via
 //! `ctx.parameter_roles_by_routine`, and the post-upgrade per-callsite bindings via
