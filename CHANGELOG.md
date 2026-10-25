@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Grammar: tree-sitter-al v4.5.0** (`91a5db62`, the release tag and `main`; was `main` at
+  `940ba71b`). A release-only bump: `grammar.js` and `node-types.json` are unchanged, and
+  `src/parser.c` differs only in its version metadata (4.4.1 → 4.5.0), so
+  `node-types.sha256`, `kind_policy` and the lowerer did not move.
+  `CACHE_VERSION_GRAMMAR` is now `tree-sitter-al-v4.5.0-91a5db62-native` (same length, so
+  `dry-run.txt` did not move); `cache_version_grammar_tracks_the_linked_grammar` requires
+  the package version in it. The two hand-made cache fixtures carry the new string.
+
 ## [2.1.1] - 2026-10-25
 
 ### Changed
