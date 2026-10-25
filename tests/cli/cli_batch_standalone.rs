@@ -87,7 +87,10 @@ fn standalone_is_a_batch_of_one() {
     };
     assert_eq!(builds(run.counters.clone()), builds(last_counters(&events)));
 
-    // The one-job family.
+    // The one-job family. The version feeds `alsemVersion` and digest's
+    // `workspaceFingerprint`, so it is pinned to the value the goldens were minted at.
+    let _env = crate::env_guard();
+    unsafe { std::env::set_var("ALCH_DRIVER_VERSION_OVERRIDE", "2.0.3") };
     let dir = batch_goldens().join("one-job");
     for (name, job) in commands() {
         let run = batch_in(std::slice::from_ref(&job), Some(root()), &[]);
@@ -126,6 +129,7 @@ fn standalone_is_a_batch_of_one() {
             "{name}: stdout"
         );
     }
+    unsafe { std::env::remove_var("ALCH_DRIVER_VERSION_OVERRIDE") };
 }
 
 /// `alsem <args>` from the repository root, traced.
