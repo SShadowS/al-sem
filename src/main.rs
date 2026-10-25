@@ -83,6 +83,11 @@ struct Args {
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
+
+    /// Experimental: run the incremental L4 host (no editor output). A crash
+    /// in it ends the server.
+    #[arg(long, hide = true)]
+    l4_host: bool,
 }
 
 fn main() -> Result<()> {
@@ -118,6 +123,7 @@ fn main() -> Result<()> {
             args.no_telemetry,
             args.no_diagnostics,
             args.dependency_source,
+            args.l4_host,
         )?;
     } else if let Some(project) = args.project {
         if args.analyze {
@@ -137,6 +143,7 @@ fn main() -> Result<()> {
             args.no_telemetry,
             args.no_diagnostics,
             args.dependency_source,
+            args.l4_host,
         )?;
     }
 
@@ -336,4 +343,22 @@ fn print_text(
         result.summary.warning_findings
     );
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// T5d (#222 §5.6): `--l4-host` parses, and `--help` does not show it.
+    /// Break: drop `hide = true`.
+    #[test]
+    fn t5d_flag_parses_and_is_hidden() {
+        let args = Args::try_parse_from(["al-call-hierarchy", "--l4-host"]).unwrap();
+        assert!(args.l4_host);
+        assert!(!Args::try_parse_from(["al-call-hierarchy"]).unwrap().l4_host);
+        let help = Args::command().render_long_help().to_string();
+        assert!(help.contains("--no-watcher"), "the help renders: {help}");
+        assert!(!help.contains("l4-host"), "the flag is hidden: {help}");
+    }
 }

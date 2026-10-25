@@ -104,6 +104,7 @@ use crate::lsp::custom::{
 use crate::lsp::diagnostics::{DiagnosticsState, compute_all, compute_for_files, rung1_cover};
 use crate::lsp::encoding::{PositionEncoding, negotiate};
 use crate::lsp::handlers::{ItemData, incoming, outgoing, prepare};
+use crate::lsp::l4_host::{HostHandle, spawn_l4_host};
 use crate::lsp::lens::code_lenses;
 use crate::lsp::snapshot::LspSnapshot;
 use crate::lsp::updater::{ChangeEvent, Rung1Delta, SharedSnapshot, SwapScope, spawn_updater};
@@ -129,6 +130,9 @@ struct ServerState {
     /// Shared with the diagnostics publisher and the watch loop, which
     /// reloads it when the workspace `.al-sem.json` changes.
     config: Arc<ConfigHandle>,
+    /// `--l4-host`: the incremental L4 host's handle and worker thread
+    /// (#222). `None` without the flag. Publishes nothing to the editor.
+    l4_host: Option<(HostHandle, JoinHandle<()>)>,
 }
 
 /// A sink for outbound `Message`s, owned by each [`RootState`] so a root
@@ -170,6 +174,8 @@ struct RootBuild {
     /// Makes this root's watch backend (production: `RecommendedWatcher`),
     /// so tests inject a fake.
     watch_backend: crate::watcher::BackendFactory,
+    /// `--l4-host`: run the incremental L4 host for this root once it builds.
+    l4_host: bool,
     /// Test seam: runs at the start of this root's build.
     #[cfg(test)]
     build_hook: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -242,15 +248,7 @@ impl RootState {
                     hook();
                 }
                 config.install_initial(config.read_disk());
-                let built = build_server_state(
-                    &self.root,
-                    self.build.encoding,
-                    config,
-                    (tx, rx),
-                    &self.build.sink,
-                    self.build.dependency_source,
-                    &self.build.dep_cache,
-                );
+                let built = build_server_state(&self.root, config, (tx, rx), &self.build);
                 match &built {
                     Some(_) => {
                         info!("Built program snapshot for workspace root {}", self.root.display());
@@ -304,6 +302,7 @@ pub fn run_server(
     no_telemetry: bool,
     no_diagnostics: bool,
     dependency_source: DependencySource,
+    l4_host: bool,
 ) -> Result<()> {
     info!("Starting AL Call Hierarchy LSP server (program-engine backend)");
 
@@ -384,7 +383,7 @@ pub fn run_server(
     // doc for the per-root fail-loud-but-isolated build semantics.
     // Watchers are started per root by `RootState::state` when (and only
     // when) that root is actually built — never for a root nothing touches.
-    let workspace = build_workspace(
+    let mut workspace = build_workspace(
         &roots,
         position_encoding,
         &connection,
@@ -393,6 +392,10 @@ pub fn run_server(
         dependency_source,
         Arc::new(DepCache::default()),
     );
+    // `--l4-host` (#222, hidden): each root runs the host once it builds.
+    for root in &mut workspace.roots {
+        root.build.l4_host = l4_host;
+    }
     if dependency_source == DependencySource::Symbols {
         info!("Dependencies indexed from symbols only (--dependency-source symbols)");
     }
@@ -443,6 +446,9 @@ pub fn run_server(
     for root_state in workspace.roots {
         if let Some(st) = root_state.into_built() {
             drop(st.tx);
+            // Not joined, like the updater: the host's worker ends once the
+            // updater's `on_swap` drops its handle clone too.
+            drop(st.l4_host);
         }
     }
 
@@ -571,21 +577,33 @@ fn primary_workspace_root(params: &InitializeParams) -> Option<PathBuf> {
 /// background updater on `channel` (created by the caller, so the watch can
 /// start before this build reads). Returns `None` when
 /// [`LspSnapshot::build_full_with_parsed`] fails (see the module doc's "no
-/// valid workspace" section) — the caller logs the reason.
+/// valid workspace" section) — the caller logs the reason. With
+/// `build.l4_host` it also spawns the incremental L4 host (#222), and every
+/// `on_swap` requests a refresh of it.
 fn build_server_state(
     workspace_root: &Path,
-    encoding: PositionEncoding,
     config: Arc<ConfigHandle>,
     (tx, rx): (mpsc::Sender<ChangeEvent>, mpsc::Receiver<ChangeEvent>),
-    sink: &MessageSink,
-    dependency_source: DependencySource,
-    dep_cache: &Arc<DepCache>,
+    build: &RootBuild,
 ) -> Option<ServerState> {
+    let (encoding, sink, dependency_source, dep_cache) = (
+        build.encoding,
+        &build.sink,
+        build.dependency_source,
+        &build.dep_cache,
+    );
     let (initial, workspace) = LspSnapshot::build_full_with_parsed_with_cache(
         workspace_root,
         dependency_source,
         dep_cache,
     )?;
+    let l4_host = build.l4_host.then(|| {
+        spawn_l4_host(
+            workspace_root.to_path_buf(),
+            al_sem::engine::batch::job::ViewUniverse::CrossApp,
+        )
+    });
+    let l4_request = l4_host.as_ref().map(|(handle, _)| handle.clone());
     let initial = Arc::new(initial);
     let shared = Arc::new(SharedSnapshot::new(Arc::clone(&initial)));
 
@@ -627,6 +645,10 @@ fn build_server_state(
         dependency_source,
         Arc::clone(dep_cache),
         move |new, scope| {
+            // Every swap, config-only ones included (P15). O(1), never waits.
+            if let Some(handle) = &l4_request {
+                handle.request();
+            }
             let cfg = config_bg.get();
             let sink = Arc::clone(&sink_bg);
             let send = move |m| sink(m);
@@ -664,6 +686,7 @@ fn build_server_state(
         updater_handle,
         encoding,
         config,
+        l4_host,
     })
 }
 
@@ -711,6 +734,7 @@ fn build_workspace(
                 dependency_source,
                 dep_cache: Arc::clone(&dep_cache),
                 watch_backend: crate::watcher::recommended_backend(),
+                l4_host: false,
                 #[cfg(test)]
                 build_hook: None,
             },
@@ -1263,6 +1287,116 @@ mod tests {
     use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall};
     use std::time::Instant;
 
+    /// A `RootBuild` with every option off except `l4_host`.
+    fn test_build(sink: &MessageSink, l4_host: bool) -> RootBuild {
+        RootBuild {
+            encoding: PositionEncoding::Utf8,
+            sink: Arc::clone(sink),
+            start_watcher: false,
+            no_diagnostics: false,
+            dependency_source: DependencySource::default(),
+            dep_cache: Arc::default(),
+            watch_backend: crate::watcher::recommended_backend(),
+            l4_host,
+            build_hook: None,
+        }
+    }
+
+    /// T5: `build_server_state` on the fixture workspace with `--l4-host` on
+    /// or off.
+    fn t5_state(dir: &Path, l4_host: bool) -> (ServerState, Connection) {
+        write_fixture_workspace(dir);
+        let (server_conn, client_conn) = Connection::memory();
+        let sink = message_sink(&server_conn);
+        let config = Arc::new(ConfigHandle::new(dir.to_path_buf(), false));
+        config.install_initial(DiagnosticConfig::default());
+        let state = build_server_state(dir, config, mpsc::channel(), &test_build(&sink, l4_host))
+            .expect("the fixture workspace builds");
+        (state, client_conn)
+    }
+
+    /// Spin (no fixed sleep) until the host's status names `generation`.
+    fn host_reaches(state: &ServerState, generation: u64) -> bool {
+        let (handle, _) = state.l4_host.as_ref().expect("the host runs");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            if handle.status().is_some_and(|s| s.generation == generation) {
+                return true;
+            }
+            std::thread::yield_now();
+        }
+        false
+    }
+
+    /// T5a (spec §5.6): without the flag there is no host, right after the
+    /// build. Break: spawn unconditionally.
+    #[test]
+    fn t5a_no_host_without_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, _client) = t5_state(dir.path(), false);
+        assert!(state.l4_host.is_none(), "no host without --l4-host");
+    }
+
+    /// T5b: with the flag, a save that swaps a new snapshot requests a
+    /// refresh: the status reaches generation 2 (spawn + one `on_swap`).
+    /// Break: no `request()` in `on_swap` → it stays at 1.
+    #[test]
+    fn t5b_didsave_requests_a_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, _client) = t5_state(dir.path(), true);
+        assert!(host_reaches(&state, 1), "the first revision is published");
+        let root = state.shared.get().workspace_root.to_path_buf();
+        let workspace = Workspace {
+            roots: vec![RootState::prebuilt(
+                root.clone(),
+                Some(state),
+                test_build(&message_sink(&Connection::memory().0), false),
+            )],
+        };
+        let state = workspace.roots[0].state().expect("prebuilt");
+        let alpha = dir.path().join("Alpha.al");
+        let text = std::fs::read_to_string(&alpha).unwrap();
+        let call = "        Beta.Process();\n";
+        assert_eq!(text.matches(call).count(), 1, "fixture: one Beta.Process()");
+        std::fs::write(
+            &alpha,
+            text.replacen(call, "        Beta.Process();\n        Extra();\n", 1),
+        )
+        .unwrap();
+        let did_save = Notification::new(
+            "textDocument/didSave".to_string(),
+            serde_json::json!({ "textDocument": {"uri": path_to_uri(&root.join("Alpha.al")).as_str()} }),
+        );
+        handle_notification(&workspace, &did_save);
+        assert!(
+            host_reaches(state, 2),
+            "status: {:?}",
+            state.l4_host.as_ref().unwrap().0.status()
+        );
+    }
+
+    /// T5c (P15): a config-only batch calls `on_swap` without a new snapshot
+    /// generation; it still requests a refresh. Break: request only when the
+    /// snapshot generation moved → the wait times out.
+    #[test]
+    fn t5c_config_only_requests_a_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, _client) = t5_state(dir.path(), true);
+        assert!(host_reaches(&state, 1), "the first revision is published");
+        let before = state.shared.get().generation;
+        state.tx.send(ChangeEvent::ConfigChanged).unwrap();
+        assert!(
+            host_reaches(&state, 2),
+            "status: {:?}",
+            state.l4_host.as_ref().unwrap().0.status()
+        );
+        assert_eq!(
+            state.shared.get().generation,
+            before,
+            "a config-only batch makes no new snapshot"
+        );
+    }
+
     fn write_fixture_workspace(dir: &Path) {
         std::fs::write(
             dir.join("app.json"),
@@ -1340,12 +1474,9 @@ mod tests {
         config.install_initial(DiagnosticConfig::default());
         let state = build_server_state(
             dir.path(),
-            PositionEncoding::Utf8,
             config,
             mpsc::channel(),
-            &sink,
-            DependencySource::default(),
-            &Arc::default(),
+            &test_build(&sink, false),
         )
         .expect("build_server_state must succeed for a valid fixture workspace");
         let root = state.shared.get().workspace_root.as_path().to_path_buf();
@@ -1362,16 +1493,7 @@ mod tests {
             roots: vec![RootState::prebuilt(
                 root,
                 Some(state),
-                RootBuild {
-                    encoding: PositionEncoding::Utf8,
-                    sink: Arc::clone(&sink),
-                    start_watcher: false,
-                    no_diagnostics: false,
-                    dependency_source: DependencySource::default(),
-                    dep_cache: Arc::default(),
-                    watch_backend: crate::watcher::recommended_backend(),
-                    build_hook: None,
-                },
+                test_build(&sink, false),
             )],
         };
         let state = workspace.roots[0].state().expect("just inserted above");
@@ -2084,12 +2206,9 @@ mod tests {
         config.install_initial(cfg);
         let state = build_server_state(
             dir.path(),
-            PositionEncoding::Utf8,
             config,
             mpsc::channel(),
-            &sink,
-            DependencySource::default(),
-            &Arc::default(),
+            &test_build(&sink, false),
         )
         .expect("build must still succeed with diagnostics disabled");
 
@@ -2149,6 +2268,7 @@ mod tests {
                 dependency_source: DependencySource::default(),
                 dep_cache: Arc::default(),
                 watch_backend: factory,
+                l4_host: false,
                 build_hook,
             },
         };

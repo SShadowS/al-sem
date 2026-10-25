@@ -85,7 +85,10 @@ pub(crate) fn run_worker(
                 host.commit();
                 let mut s = lock(&shared);
                 if s.requested == g {
-                    debug!("l4-host: published generation {g}: {report:?}");
+                    debug!(
+                        "l4-host: published generation {g}: {:?}, seeded {} of {}",
+                        report.kind, report.seeded, report.total
+                    );
                     s.status = Some(HostStatus {
                         generation: g,
                         report,
