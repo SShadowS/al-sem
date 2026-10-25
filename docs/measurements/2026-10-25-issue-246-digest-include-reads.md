@@ -7,7 +7,8 @@ every run (one worker). Raw data and scripts: `/work/bench/246/` (`run.sh`, `run
 
 Method: 3 rounds, alternating flag off / on, one process at a time, order d, h, ds, Up in each round. Before each run:
 no foreign cargo/rustc/alsem/aldump/nextest process and `memory.current` below 28 GiB (neither wait was ever needed;
-`waits.log` is empty). Outputs are byte-identical across rounds per shape and flag (sizes equal; sha256 kept for round 1).
+`waits.log` is empty). Outputs have equal byte sizes across rounds per shape and flag (only sizes were compared, and the runs did not pass
+`--deterministic`; sha256 kept for round 1).
 
 **Load.** The host load comes from outside the container and was 5-24 (1-minute average at run start 5.4-21.5, at end
 5.6-24.8). Peaks barely move with load. Walls do, so CPU-seconds (user+sys) are the primary cost figure. One flag-on `h`
@@ -59,6 +60,8 @@ Rows in `src/engine/batch/admission.rs`: `("digest", X)` = 15 * STEP = 3,932,160
 - `Up` on median 4,062,196 KiB (min 4,054,180, max 4,075,056) is **above** the X row. The rule fires.
   New value: 4,062,196 / 262,144 = 15.50, rounded up = **16 * STEP = 4,194,304 KiB** (4.0 GiB) for `("digest", X)`.
   `("digest", S)` stays 3 * STEP.
+- Final review round 1 (G-2): the raised row belongs to `--include-reads` alone, so it is a new kind,
+  `("digest reads", X)` = 16 * STEP (`("digest reads", S)` = 3 * STEP, from `ds` on). `("digest", X)` stays 15 * STEP.
 - Largest flag-on peak: 4,075,056 KiB, below the stop limit of 7,340,032 KiB. W stays 4 (29,360,128 / 4,194,304 = 7).
 
 ## Notes

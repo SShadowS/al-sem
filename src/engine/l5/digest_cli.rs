@@ -1556,6 +1556,8 @@ pub fn project_digest_document(
     // additive `temp-state-incoherent` entry diagnostic with factId, operationId
     // and reason (#69 D4).
     // Still 1.6.0: `payload.testCoverage` is opt-in (`--tests`, #254) and additive.
+    // Still 1.6.0: with `--include-reads` (#246, opt-in) a document may carry
+    // `DB_READ` effects and `payload.includeReads: true`; without it, neither.
     env.insert("schemaVersion".into(), "1.6.0".into());
 
     // The block goes in after the null drop, so its `ratio: null` survives; the

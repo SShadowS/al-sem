@@ -43,7 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and dependency-boundary rules as writes. A read reached only through a
   dependency call is a boundary group that stops at the first dependency
   routine. Reads get `detail.tempState` through the same L4 join as writes,
-  and the document gets `payload.includeReads: true`. Without the flag the
+  where L4 holds the operation (about 7% of reads on CDO; see below). A
+  `DB_READ`'s `factId` key also names its table, so reads of two tables
+  witnessed at one operation keep distinct ids. The document gets `payload.includeReads: true`. Without the flag the
   output is byte-identical (no golden moved). `schemaVersion` stays 1.6.0:
   `DB_READ` and `includeReads` are opt-in and additive.
   - **Limits:**
@@ -71,9 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
     Walls were measured under host load 5–24, so CPU-seconds are the cost
     figure (wall `d` 27.5 vs 27.4 s, `h` 58.4 vs 47.8 s, `Up` 61.0 vs 56.1 s).
-    The `Up` peak passed the batch admission row, so `("digest", X)` is now
-    16 × 256 MiB = 4,194,304 KiB (was 15). The worker count does not change
-    for any measured shape.
+    The `Up` peak passed the batch admission row, so a digest job with
+    `--include-reads` is its own kind, `("digest reads", X)` at
+    16 × 256 MiB = 4,194,304 KiB (`("digest reads", S)` at 3 × 256 MiB, from
+    `ds`). A plain digest keeps `("digest", X)` at 15. The worker count does
+    not change for any measured shape.
   - **Known `tempState` gap:** on CDO, 1,059 of `d`'s 1,133 reads (21,707 of
     `h`'s 23,248) have no `tempState` and a `temp-state-incoherent`
     (`no-l4-row`) diagnostic. This is not read-specific: the default output

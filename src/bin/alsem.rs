@@ -1216,6 +1216,8 @@ fn job_kind(command: &Commands) -> Option<JobKind> {
     };
     Some(match command {
         Commands::Analyze(a) => ("analyze", universe(a.single_app)),
+        // `--include-reads` has its own, larger admission row (#246).
+        Commands::Digest(d) if d.include_reads => ("digest reads", universe(d.single_app)),
         Commands::Digest(d) => ("digest", universe(d.single_app)),
         Commands::Prove(p) => ("prove", universe(p.single_app)),
         Commands::Fingerprint(f) => ("fingerprint", universe(fingerprint_single_app(f))),
@@ -2207,6 +2209,25 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #246 G-2: a digest's admission kind follows `--include-reads`, so only
+    /// a flag-on job takes the raised row.
+    #[test]
+    fn digest_job_kind_follows_include_reads() {
+        let kind = |args: &[&str]| {
+            let cli = Cli::try_parse_from([&["alsem", "digest", "ws"][..], args].concat()).unwrap();
+            job_kind(&cli.command)
+        };
+        assert_eq!(kind(&[]), Some(("digest", ViewUniverse::CrossApp)));
+        assert_eq!(
+            kind(&["--include-reads"]),
+            Some(("digest reads", ViewUniverse::CrossApp))
+        );
+        assert_eq!(
+            kind(&["--include-reads", "--single-app"]),
+            Some(("digest reads", ViewUniverse::SingleApp))
+        );
+    }
 
     /// Non-TTY stdout (piped) resolves `auto` → `Json`. This is the corpus-differential
     /// contract: differentials always pipe, so they always get JSON under `--format auto`.

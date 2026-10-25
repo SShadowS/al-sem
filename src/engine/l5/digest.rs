@@ -53,6 +53,8 @@ use crate::program::model::workspace::Model;
 // ===========================================================================
 
 /// `mapOp` (effect-taxonomy.ts). Returns `None` for execute/subscribe/read.
+/// Under digest's `--include-reads` (#246), [`digest_one_root`] maps a table
+/// read to `DB_READ` itself; `map_op` stays read-blind for every other reader.
 fn map_op(op: &str) -> Option<&'static str> {
     match op {
         "commit" => Some("COMMIT"),
@@ -3793,7 +3795,7 @@ fn digest_one_root<'i>(
 
         // `--include-reads` (#246): a table read is `DB_READ`. `map_op` itself
         // stays read-blind, so ordering, prove and r4f never see one.
-        let effect_type_of = |f: &Fact| {
+        let effect_type_with_reads = |f: &Fact| {
             effect_type_of(f).or_else(|| {
                 (include_reads && f.op == "read" && f.resource_kind == "table").then_some("DB_READ")
             })
@@ -3809,7 +3811,7 @@ fn digest_one_root<'i>(
                 {
                     return false;
                 }
-                effect_type_of(f).is_some()
+                effect_type_with_reads(f).is_some()
             })
             .collect();
 
@@ -3875,7 +3877,7 @@ fn digest_one_root<'i>(
         ];
 
         for fact in &effect_facts {
-            let Some(effect_type) = effect_type_of(fact) else {
+            let Some(effect_type) = effect_type_with_reads(fact) else {
                 continue;
             };
             let detail = effect_detail_of(fact, &idx.stable_id_to_display);
@@ -4172,13 +4174,21 @@ fn digest_one_root<'i>(
 
             // A kt DB effect's key carries its class (#69 D3), so a kt and an nt
             // write never share an occurrence id; nt keys are unchanged.
-            let key_effect_type = if acc.effect_type.starts_with("DB_")
+            let mut key_effect_type = if acc.effect_type.starts_with("DB_")
                 && is_known_temp_state(acc.temp_state.as_ref())
             {
                 format!("{}|kt", acc.effect_type)
             } else {
                 acc.effect_type.to_string()
             };
+            // #246 G-1: a DB_READ key also names its table, so reads of two
+            // tables witnessed at one operation (a resource-less RecordRef
+            // carrier) keep distinct ids. Write keys stay as they are.
+            if acc.effect_type == "DB_READ"
+                && let Some((_, r)) = detail.iter().find(|(k, _)| k == "resourceId")
+            {
+                key_effect_type = format!("{key_effect_type}|{r}");
+            }
             let (canonical_key, link_signature) = build_canonical_key(
                 rid,
                 &via_paths,
@@ -4269,7 +4279,7 @@ fn digest_one_root<'i>(
             // the effect (#17 — the duplicated effect-level closure is gone).
             // `DB_READ` (#246) is not graded: it stays out of the input, keeps
             // empty guarantees, and the graded effects take `scoped` in order.
-            let graded = |t: &str| !(include_reads && t == "DB_READ");
+            let graded = |t: &str| t != "DB_READ";
             let ordering_inputs: Vec<crate::engine::l5::ordering_engine::OrderingEffectInput> =
                 effects
                     .iter()

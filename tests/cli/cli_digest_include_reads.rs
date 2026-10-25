@@ -1,7 +1,8 @@
 //! #246: `alsem digest --include-reads` adds `DB_READ` effects (table reads).
 //!
 //! Every case spawns `CARGO_BIN_EXE_alsem`, so the clap arm, its default and
-//! the batch view plumbing are pinned, not only the library pipeline.
+//! the view plumbing are pinned, not only the library pipeline; G-7 runs
+//! `alsem batch` itself, so a flag that leaks to another job fails.
 //! Design: `.agent/issue-246/ledger.md` `## Design` (T2-T5).
 
 use std::path::Path;
@@ -354,6 +355,116 @@ fn reads_are_not_ordering_graded_and_move_no_label() {
 }
 
 // ---------------------------------------------------------------------------
+// G-1: reads of two tables witnessed at one resource-less RecordRef read.
+// ---------------------------------------------------------------------------
+
+/// `Mid` reads through a RecordRef of no known table, then calls a Customer
+/// and a Vendor reader (`MidW`: the same with writes). The witness lands every
+/// table's effect on the RecordRef operation, by the same via path.
+const CARRIER_AL: &str = r#"codeunit 50111 "Carrier Work"
+{
+    procedure Root(TableNo: Integer)
+    begin
+        Mid(TableNo);
+    end;
+
+    local procedure Mid(TableNo: Integer)
+    var
+        RecRef: RecordRef;
+    begin
+        RecRef.Open(TableNo);
+        RecRef.FindFirst();
+        ReadCust();
+        ReadVend();
+    end;
+
+    local procedure ReadCust()
+    var
+        Customer: Record Customer;
+    begin
+        Customer.Get('A');
+    end;
+
+    local procedure ReadVend()
+    var
+        Vendor: Record Vendor;
+    begin
+        Vendor.Get('A');
+    end;
+
+    procedure RootW(TableNo: Integer)
+    begin
+        MidW(TableNo);
+    end;
+
+    local procedure MidW(TableNo: Integer)
+    var
+        RecRef: RecordRef;
+    begin
+        RecRef.Open(TableNo);
+        RecRef.Modify();
+        WriteCust();
+        WriteVend();
+    end;
+
+    local procedure WriteCust()
+    var
+        Customer: Record Customer;
+    begin
+        Customer.Modify();
+    end;
+
+    local procedure WriteVend()
+    var
+        Vendor: Record Vendor;
+    begin
+        Vendor.Modify();
+    end;
+}
+"#;
+
+/// G-1: a `DB_READ`'s `factId` names its table. Customer's and Vendor's reads
+/// share their evidence (the RecordRef read) and via path, yet get distinct
+/// `factId`s. Writes keep their key: the same shape gives Customer's and
+/// Vendor's `DB_MODIFY` one shared `factId`, as in the default output.
+#[test]
+fn reads_of_two_tables_at_one_operation_keep_distinct_fact_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    reads_workspace(dir.path());
+    write(&dir.path().join("src/Carrier.al"), CARRIER_AL);
+    let on = digest(dir.path(), &["--file", "src/Carrier.al", "--include-reads"]);
+    let by_table = |routine: &str, ty: &str| -> Vec<(String, String, String)> {
+        let mut v: Vec<_> = effects_of(&on, routine, ty)
+            .iter()
+            .filter(|f| f["detail"]["resourceId"].is_string())
+            .map(|f| {
+                (
+                    s(&f["detail"]["resourceDisplay"]).to_string(),
+                    s(&f["factId"]).to_string(),
+                    format!("{}:{:?}", f["evidence"]["line"], via(f)),
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    let reads = by_table("Root", "DB_READ");
+    let names: Vec<&str> = reads.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(names, ["Customer", "Vendor"], "{on}");
+    assert_eq!(reads[0].2, reads[1].2, "fixture: one evidence and via path");
+    assert_ne!(reads[0].1, reads[1].1, "DB_READ factIds collide: {reads:?}");
+
+    let writes = by_table("RootW", "DB_MODIFY");
+    let names: Vec<&str> = writes.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(names, ["Customer", "Vendor"], "{on}");
+    assert_eq!(
+        writes[0].2, writes[1].2,
+        "fixture: one evidence and via path"
+    );
+    assert_eq!(writes[0].1, writes[1].1, "a write key moved: {writes:?}");
+}
+
+// ---------------------------------------------------------------------------
 // T5: a read behind a dependency call is a rule-B group.
 // ---------------------------------------------------------------------------
 
@@ -380,4 +491,29 @@ fn dependency_read_is_a_boundary_group() {
         !via(g).iter().any(|p| p.contains("Inner")),
         "the witness enters the dependency: {g}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// G-7: the flag is per job in a batch.
+// ---------------------------------------------------------------------------
+
+/// G-7: one `alsem batch` of `[digest --include-reads, digest]` on one
+/// workspace, sharing one view. Each job equals its standalone run byte for
+/// byte; the first carries `DB_READ`, the second none.
+#[test]
+fn include_reads_is_per_job_in_a_batch() {
+    use crate::cli_batch_plan::{argv, assert_each_standalone, batch, is_view, spans};
+    let dir = tempfile::tempdir().unwrap();
+    reads_workspace(dir.path());
+    let ws = dir.path().to_string_lossy().into_owned();
+    let base = ["digest", &ws, "--file", "src/Work.al", "--deterministic"];
+    let on = argv(&[&base[..], &["--format", "json", "--include-reads"]].concat());
+    let off = argv(&[&base[..], &["--format", "json"]].concat());
+    let jobs = vec![on, off];
+    let run = batch(&jobs);
+    assert_eq!(spans(&run.events, is_view).len(), 1, "one shared view");
+    assert_each_standalone(&run, &jobs, None);
+    let doc = |i: usize| -> Value { serde_json::from_slice(&run.streams(i).0).unwrap() };
+    assert!(count_reads(&doc(0)) > 0, "job 0 has no DB_READ");
+    assert_eq!(count_reads(&doc(1)), 0, "job 1 has DB_READ");
 }
