@@ -2228,18 +2228,12 @@ pub fn resolve(workspace: &mut ModelEntities) {
     // `objects`/`tables`, disjoint fields, so that is fine.
     let symbols = SymbolTable::build(&workspace.objects, &workspace.tables);
 
-    // objectId → object, so a routine maps back to its owning object. Borrowed,
-    // not cloned — `resolve_routine_record_types` takes `Option<&ModelObject>`, and
-    // `HashMap::insert` is LAST-wins on a duplicate id either way.
-    use std::collections::HashMap;
-    let object_by_id: HashMap<&str, &ModelObject> = workspace
-        .objects
-        .iter()
-        .map(|o| (o.id.as_str(), o))
-        .collect();
+    // Each routine's DECLARING object (#279): an `#if`-split object has two rows
+    // under one id, each with its own SourceTable / extends target.
+    let declaring = super::declaring::DeclaringObjects::new(&workspace.objects);
 
     for routine in &mut workspace.routines {
-        let object = object_by_id.get(routine.object_id.as_str()).copied();
+        let object = declaring.of(routine);
         resolve_routine_record_types(routine, object, &symbols);
     }
 

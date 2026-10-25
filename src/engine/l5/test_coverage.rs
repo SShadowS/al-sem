@@ -36,9 +36,10 @@ use crate::program::attributes::{find_attribute, string_arg};
 use crate::program::body::features::PCallee;
 use crate::program::body::scope::unescape_al_identifier;
 use crate::program::impact_graph::facts::{handler_names, test_page_target};
+use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::events::PublisherRef;
 use crate::program::model::role::{Role, role_of_stable_id};
-use crate::program::model::workspace::{Model, ModelRoutine};
+use crate::program::model::workspace::{Model, ModelObject, ModelRoutine};
 use crate::program::resolve::receiver::unquote_identifier;
 
 /// Why a subscriber is out of reach, beyond "no path" (spec §Why `uncovered`).
@@ -403,8 +404,7 @@ impl CoverageGraph {
         let mut g = CoverageGraph::default();
         let primary = primary_guid_of(resolved);
         let ws = &resolved.workspace;
-        let objects: HashMap<&str, &crate::program::model::workspace::ModelObject> =
-            ws.objects.iter().map(|o| (o.id.as_str(), o)).collect();
+        let declaring = DeclaringObjects::new(&ws.objects);
         fn flag(map: &mut BTreeMap<String, BTreeSet<&'static str>>, id: &str, why: &'static str) {
             map.entry(id.to_string()).or_default().insert(why);
         }
@@ -416,10 +416,16 @@ impl CoverageGraph {
                 .filter(|r| !r.stable_routine_id.is_empty())
         };
         // (owning object, folded name) → ids: the `[HandlerFunctions]` lookup.
-        let mut by_name: HashMap<(&str, String), Vec<&str>> = HashMap::new();
+        // The owner is the declaring ROW (#279), compared by address: a handler
+        // in the other arm of an `#if`-split id is not this test's handler.
+        type Owner<'o> = (&'o str, Option<*const ModelObject>);
+        fn owner<'o>(d: &DeclaringObjects<'_>, r: &'o ModelRoutine) -> Owner<'o> {
+            (r.object_id.as_str(), d.of(r).map(std::ptr::from_ref))
+        }
+        let mut by_name: HashMap<(Owner, String), Vec<&str>> = HashMap::new();
         for r in routines() {
             by_name
-                .entry((r.object_id.as_str(), folded(&r.name)))
+                .entry((owner(&declaring, r), folded(&r.name)))
                 .or_default()
                 .push(&r.stable_routine_id);
         }
@@ -462,7 +468,7 @@ impl CoverageGraph {
                     .flat_map(|list| handler_names(&list))
                 {
                     for h in by_name
-                        .get(&(r.object_id.as_str(), name))
+                        .get(&(owner(&declaring, r), name))
                         .into_iter()
                         .flatten()
                     {
@@ -473,7 +479,7 @@ impl CoverageGraph {
                     }
                 }
             }
-            let test_codeunit = objects.get(r.object_id.as_str()).is_some_and(|o| {
+            let test_codeunit = declaring.of(r).is_some_and(|o| {
                 o.object_type.eq_ignore_ascii_case("codeunit")
                     && o.object_subtype
                         .as_deref()

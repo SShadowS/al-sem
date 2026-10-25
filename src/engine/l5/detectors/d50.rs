@@ -13,7 +13,7 @@
 //! Consumes ONLY `CheckedRunImplicit` seeds from `transaction_spans`.
 //! D8/D9 ignore those seeds; D50 ignores `ExplicitCommit` seeds.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
@@ -24,7 +24,8 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::transaction_spans::SeedKind;
 use crate::program::attributes::has_attribute;
-use crate::program::model::workspace::{Model, ModelObject, ModelRoutine};
+use crate::program::model::declaring::DeclaringObjects;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 pub(crate) const DETECTOR: &str = "d50-checked-run-implicit-commit";
 const TRANSACTION_THRESHOLD_TABLES: usize = 3;
@@ -132,7 +133,7 @@ fn is_transaction_managing(routine_id: &str, ctx: &DetectorContext) -> bool {
 fn is_explicit_commit_proven_effective(
     routine_id: &str,
     ctx: &DetectorContext,
-    objects_by_id: &HashMap<&str, &ModelObject>,
+    declaring: &DeclaringObjects,
 ) -> bool {
     let Some(r) = ctx.routine_by_id.get(routine_id) else {
         return false;
@@ -191,7 +192,7 @@ fn is_explicit_commit_proven_effective(
         // Argless [CommitBehavior] or non-suppressing value — cap-4 passes.
     } else {
         // No routine-level attr → object-level InherentCommitBehavior applies.
-        let obj = objects_by_id.get(r.object_id.as_str()).copied();
+        let obj = declaring.of(r);
         if let Some(o) = obj
             && let Some(icb) = &o.inherent_commit_behavior
             && (icb == "ignore" || icb == "error")
@@ -215,9 +216,8 @@ pub fn detect_d50(
     let ws = &resolved.workspace;
     let fp_index = &ctx.fingerprint_index;
 
-    // Build objects_by_id for CommitBehavior lookup (cap 4).
-    let objects_by_id: HashMap<&str, &ModelObject> =
-        ws.objects.iter().map(|o| (o.id.as_str(), o)).collect();
+    // Each routine's declaring object, for the CommitBehavior lookup (cap 4).
+    let declaring = DeclaringObjects::new(&ws.objects);
 
     // Build routinesWithExplicitCommit from ExplicitCommit spans — O(1) membership.
     let mut routines_with_explicit_commit: HashSet<&str> = HashSet::new();
@@ -340,7 +340,7 @@ pub fn detect_d50(
         // on the same checked-run-implicit span.
         let has_proven_effective_explicit_commit = span.routines_in_span.iter().any(|rid| {
             routines_with_explicit_commit.contains(rid.as_str())
-                && is_explicit_commit_proven_effective(rid.as_str(), ctx, &objects_by_id)
+                && is_explicit_commit_proven_effective(rid.as_str(), ctx, &declaring)
         });
         let severity = if has_proven_effective_explicit_commit {
             "medium"
@@ -454,6 +454,7 @@ mod tests {
     };
     use crate::engine::root_classification::RootClassification;
     use crate::program::attributes::{AttributeArg, AttributeInfo};
+    use crate::program::model::declaring::DeclaringObjects;
     use crate::program::model::workspace::{Model, ModelEntities, ModelObject, ModelRoutine};
 
     // -----------------------------------------------------------------------
@@ -636,7 +637,7 @@ mod tests {
         let routines_slice = vec![r_seed.clone(), r_manager.clone(), r_committer.clone()];
 
         // Build a minimal object for r_committer (no ICB → cap-4 passes).
-        // detect_d50 builds its OWN objects_by_id from resolved.workspace.objects,
+        // detect_d50 builds its OWN DeclaringObjects from resolved.workspace.objects,
         // so we provide the object there (in ws_objects below).
         let obj_committer = mk_object("obj-committer", None);
         let ws_objects = vec![obj_committer.clone()];
@@ -706,7 +707,7 @@ mod tests {
         };
 
         // Build a minimal Model for detect_d50 (it uses ws.routines and ws.objects
-        // to build its objects_by_id map internally); the context borrows it.
+        // to build its DeclaringObjects internally); the context borrows it.
         let resolved = Model {
             workspace: ModelEntities {
                 objects: ws_objects,
@@ -757,7 +758,7 @@ mod tests {
         let routines = vec![r];
         let owned = minimal_ctx(&routines, vec![]);
         let ctx = owned.ctx();
-        let objects: HashMap<&str, &ModelObject> = HashMap::new();
+        let objects = DeclaringObjects::new(&[]);
         assert!(!is_explicit_commit_proven_effective("r1", &ctx, &objects));
     }
 
@@ -773,7 +774,7 @@ mod tests {
         let rc = mk_root_class("r2a", &["public-procedure"]);
         let owned = minimal_ctx(&routines, vec![rc]);
         let ctx = owned.ctx();
-        let objects: HashMap<&str, &ModelObject> = HashMap::new();
+        let objects = DeclaringObjects::new(&[]);
         assert!(!is_explicit_commit_proven_effective("r2a", &ctx, &objects));
     }
 
@@ -784,7 +785,7 @@ mod tests {
         let rc = mk_root_class("r2b", &["event-subscriber"]);
         let owned = minimal_ctx(&routines, vec![rc]);
         let ctx = owned.ctx();
-        let objects: HashMap<&str, &ModelObject> = HashMap::new();
+        let objects = DeclaringObjects::new(&[]);
         assert!(!is_explicit_commit_proven_effective("r2b", &ctx, &objects));
     }
 
@@ -801,7 +802,7 @@ mod tests {
         let rc = mk_root_class("r2c", &["onrun-codeunit"]);
         let owned = minimal_ctx(&routines, vec![rc]);
         let ctx = owned.ctx();
-        let objects: HashMap<&str, &ModelObject> = HashMap::new();
+        let objects = DeclaringObjects::new(&[]);
         assert!(!is_explicit_commit_proven_effective("r2c", &ctx, &objects));
     }
 
@@ -815,7 +816,7 @@ mod tests {
         let rc = mk_root_class("r2d", &["job-queue-entrypoint", "onrun-codeunit"]);
         let owned = minimal_ctx(&routines, vec![rc]);
         let ctx = owned.ctx();
-        let objects: HashMap<&str, &ModelObject> = HashMap::new();
+        let objects = DeclaringObjects::new(&[]);
         assert!(!is_explicit_commit_proven_effective("r2d", &ctx, &objects));
     }
 
@@ -828,7 +829,7 @@ mod tests {
         let rc = mk_root_class("r2e", &["job-queue-entrypoint"]);
         let owned = minimal_ctx(&routines, vec![rc]);
         let ctx = owned.ctx();
-        let objects: HashMap<&str, &ModelObject> = HashMap::new();
+        let objects = DeclaringObjects::new(&[]);
         assert!(is_explicit_commit_proven_effective("r2e", &ctx, &objects));
     }
 
@@ -842,7 +843,7 @@ mod tests {
         let routines = vec![r];
         let owned = minimal_ctx(&routines, vec![]);
         let ctx = owned.ctx();
-        let objects: HashMap<&str, &ModelObject> = HashMap::new();
+        let objects = DeclaringObjects::new(&[]);
         assert!(!is_explicit_commit_proven_effective("r3", &ctx, &objects));
     }
 
@@ -859,7 +860,7 @@ mod tests {
         let owned = minimal_ctx(&routines, vec![]);
         let ctx = owned.ctx();
         let obj = mk_object("obj-4a", None);
-        let objects: HashMap<&str, &ModelObject> = [("obj-4a", &obj)].into();
+        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
         assert!(!is_explicit_commit_proven_effective("r4a", &ctx, &objects));
     }
 
@@ -872,7 +873,7 @@ mod tests {
         let owned = minimal_ctx(&routines, vec![]);
         let ctx = owned.ctx();
         let obj = mk_object("obj-4b", None);
-        let objects: HashMap<&str, &ModelObject> = [("obj-4b", &obj)].into();
+        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
         assert!(!is_explicit_commit_proven_effective("r4b", &ctx, &objects));
     }
 
@@ -888,7 +889,7 @@ mod tests {
         let owned = minimal_ctx(&routines, vec![]);
         let ctx = owned.ctx();
         let obj = mk_object("obj-4c", None);
-        let objects: HashMap<&str, &ModelObject> = [("obj-4c", &obj)].into();
+        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
         assert!(!is_explicit_commit_proven_effective("r4c", &ctx, &objects));
     }
 
@@ -904,7 +905,7 @@ mod tests {
         let owned = minimal_ctx(&routines, vec![]);
         let ctx = owned.ctx();
         let obj = mk_object("obj-4d", Some("ignore"));
-        let objects: HashMap<&str, &ModelObject> = [("obj-4d", &obj)].into();
+        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
         assert!(!is_explicit_commit_proven_effective("r4d", &ctx, &objects));
     }
 
@@ -916,7 +917,7 @@ mod tests {
         let owned = minimal_ctx(&routines, vec![]);
         let ctx = owned.ctx();
         let obj = mk_object("obj-4e", Some("error"));
-        let objects: HashMap<&str, &ModelObject> = [("obj-4e", &obj)].into();
+        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
         assert!(!is_explicit_commit_proven_effective("r4e", &ctx, &objects));
     }
 
@@ -937,7 +938,7 @@ mod tests {
         let owned = minimal_ctx(&routines, vec![]);
         let ctx = owned.ctx();
         let obj = mk_object("obj-fix1a", Some("ignore")); // ICB = ignore, but irrelevant
-        let objects: HashMap<&str, &ModelObject> = [("obj-fix1a", &obj)].into();
+        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
         // FIX 1b: routine attr present → object ICB NOT consulted → TRUE.
         assert!(
             is_explicit_commit_proven_effective("r_fix1a", &ctx, &objects),
@@ -962,12 +963,51 @@ mod tests {
         let owned = minimal_ctx(&routines, vec![]);
         let ctx = owned.ctx();
         let obj = mk_object("obj-fix1b", None); // no object ICB
-        let objects: HashMap<&str, &ModelObject> = [("obj-fix1b", &obj)].into();
+        let objects = DeclaringObjects::new(std::slice::from_ref(&obj));
         // FIX 1a: case-sensitive match misses → no object ICB → TRUE.
         assert!(
             is_explicit_commit_proven_effective("r_fix1b", &ctx, &objects),
             "miscased [Commitbehavior(Ignore)] + no object ICB must return TRUE (case-sensitive miss)"
         );
+    }
+
+    /// An anchor in `f.al` covering lines `from..=to`.
+    fn span(from: u32, to: u32) -> crate::program::body::features::PAnchor {
+        crate::program::body::features::PAnchor {
+            source_unit_id: "ws:f.al".to_string(),
+            start_line: from,
+            start_column: 0,
+            end_line: to,
+            end_column: 0,
+            syntax_kind: String::new(),
+        }
+    }
+
+    /// R11 (#279): cap 4 reads the ICB of the routine's OWN declaring row. Two
+    /// rows share one id BY ASSIGNMENT (an `#if` split): lines 0-10 with ICB
+    /// "ignore", lines 11-20 with none. The routine in the first arm is
+    /// suppressed; the same routine in the second arm is not. A last-row lookup
+    /// fails the first assert, a first-row lookup the second.
+    #[test]
+    fn cap4_reads_the_declaring_arms_icb() {
+        let mut first = mk_object("obj-split", Some("ignore"));
+        first.source_anchor = Some(span(0, 10));
+        let mut second = mk_object("obj-split", None);
+        second.source_anchor = Some(span(11, 20));
+        let rows = [first, second];
+        for (line, expect) in [(2, false), (12, true)] {
+            let mut r = routine("r_split", "procedure");
+            r.object_id = "obj-split".to_string();
+            r.source_anchor = span(line, line + 2);
+            let routines = vec![r];
+            let owned = minimal_ctx(&routines, vec![]);
+            let ctx = owned.ctx();
+            assert_eq!(
+                is_explicit_commit_proven_effective("r_split", &ctx, &DeclaringObjects::new(&rows)),
+                expect,
+                "routine at line {line}"
+            );
+        }
     }
 
     // =======================================================================

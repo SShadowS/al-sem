@@ -436,8 +436,8 @@ pub fn detect_d2(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                     affected_tables.insert(t);
                 }
                 let sub_object_name = ctx
-                    .objects_by_id
-                    .get(sub_routine.object_id.as_str())
+                    .declaring
+                    .of(sub_routine)
                     .map(|o| o.name.clone())
                     .unwrap_or_else(|| sub_routine.object_id.clone());
                 let sub_app_id = sub_edge.subscriber_app_id.clone().unwrap_or_default();

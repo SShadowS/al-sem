@@ -19,6 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::{ModelEntities, ModelObject, ModelRoutine};
 
 // ---------------------------------------------------------------------------
@@ -288,16 +289,14 @@ fn kinds_for(routine: &ModelRoutine, object: &ModelObject) -> Vec<String> {
 /// `RootClassification` for every routine that qualifies as >=1 RootKind, sorted
 /// by internal RoutineId ascending. Routines whose object is missing are skipped.
 pub fn classify_roots(workspace: &ModelEntities) -> Vec<RootClassification> {
-    let objects_by_id: BTreeMap<&str, &ModelObject> = workspace
-        .objects
-        .iter()
-        .map(|o| (o.id.as_str(), o))
-        .collect();
+    // Each routine classifies against its DECLARING row (#279): an `#if`-split
+    // object has one row per arm, with its own subtype.
+    let declaring = DeclaringObjects::new(&workspace.objects);
 
     let mut result: Vec<RootClassification> = workspace
         .routines
         .iter()
-        .filter_map(|routine| ast_classification(routine, &objects_by_id))
+        .filter_map(|routine| ast_classification(routine, declaring.of(routine)?))
         .collect();
 
     // Canonical sort for determinism — RoutineId is an ASCII slash-form string.
@@ -308,12 +307,9 @@ pub fn classify_roots(workspace: &ModelEntities) -> Vec<RootClassification> {
     result
 }
 
-/// One row's AST classification (`None` = not a root, or its object is missing).
-fn ast_classification(
-    routine: &ModelRoutine,
-    objects_by_id: &BTreeMap<&str, &ModelObject>,
-) -> Option<RootClassification> {
-    let object = objects_by_id.get(routine.object_id.as_str())?;
+/// One row's AST classification against its declaring `object` (`None` = not
+/// a root).
+fn ast_classification(routine: &ModelRoutine, object: &ModelObject) -> Option<RootClassification> {
     let kinds = kinds_for(routine, object);
     if kinds.is_empty() {
         return None;
@@ -352,10 +348,9 @@ pub fn classification_per_id<'a>(
     if several.is_empty() {
         return out;
     }
-    let objects_by_id: BTreeMap<&str, &ModelObject> =
-        objects.iter().map(|o| (o.id.as_str(), o)).collect();
+    let declaring = DeclaringObjects::new(objects);
     for r in routines.iter().filter(|r| several.contains(r.id.as_str())) {
-        if let Some(own) = ast_classification(r, &objects_by_id)
+        if let Some(own) = declaring.of(r).and_then(|o| ast_classification(r, o))
             && let Some(rc) = roots.iter().find(|rc| **rc == own)
         {
             out.insert(rc.routine_id.as_str(), rc);
@@ -1368,5 +1363,120 @@ mod tests {
             diags[0].message,
             format!("{MISMATCH_PREFIX}ast-only=[\"page-action\"], config-only=[].")
         );
+    }
+
+    /// An anchor in `ws:split.al` covering lines `from..=to`.
+    fn span(from: u32, to: u32) -> PAnchor {
+        PAnchor {
+            source_unit_id: "ws:split.al".to_string(),
+            start_line: from,
+            start_column: 0,
+            end_line: to,
+            end_column: 0,
+            syntax_kind: String::new(),
+        }
+    }
+
+    /// `local procedure R()` with one signature, at lines `from..=from + 2`.
+    fn shared_local(id: &str, object_id: &str, from: u32) -> ModelRoutine {
+        let mut r = routine(id, object_id, "procedure");
+        r.access_modifier = Some("local".to_string());
+        r.source_anchor = span(from, from + 2);
+        r
+    }
+
+    /// R13a (#279): an `#if`-split codeunit, one arm `Subtype = Install`, the
+    /// other normal, each declaring `local procedure R()` with ONE signature, so
+    /// both rows share one routine id BY ASSIGNMENT. Each row classifies against
+    /// its own arm: only the Install arm's row is a root. Run in both arm
+    /// orders, so the Install row is the LAST row once and a non-root row is
+    /// last the other time; `classification_per_id` then gives the last OWNING
+    /// row's copy (class P). A last-row lookup fails the Install-first order, a
+    /// first-row lookup the Install-second order.
+    #[test]
+    fn split_arms_classify_against_their_own_row() {
+        let id = "app/Codeunit/50100";
+        for install_first in [true, false] {
+            let mut install = object(id, "Codeunit");
+            install.object_subtype = Some("Install".to_string());
+            let normal = object(id, "Codeunit");
+            let (mut a, mut b) = if install_first {
+                (install, normal)
+            } else {
+                (normal, install)
+            };
+            a.source_anchor = Some(span(0, 10));
+            b.source_anchor = Some(span(11, 20));
+            let ws = workspace(
+                vec![a, b],
+                vec![
+                    shared_local("shared", id, 2),
+                    shared_local("shared", id, 12),
+                ],
+            );
+            let roots = classify_roots(&ws);
+            let kinds: Vec<&[String]> = roots.iter().map(|rc| rc.kinds.as_slice()).collect();
+            assert_eq!(
+                kinds,
+                [["install-codeunit".to_string()].as_slice()],
+                "install_first={install_first}"
+            );
+            let per_id = classification_per_id(&roots, &ws.routines, &ws.objects);
+            assert_eq!(per_id["shared"].kinds, ["install-codeunit"]);
+        }
+    }
+
+    /// R13b (#279): three anchored rows share one routine id, in the order
+    /// Upgrade, Install, normal, each declaring the same `local procedure R()`.
+    /// `classify_roots` keeps two different copies (Upgrade, Install).
+    /// `classification_per_id` must return the copy of the LAST classified row,
+    /// Install: it walks the rows and each reads its OWN arm.
+    ///
+    /// Without the per-row walk the id keeps the copy the first loop left,
+    /// which is `upgrade-codeunit` (the greater by value); asserted here so the
+    /// first break below cannot pass unnoticed if the kind names ever sort the
+    /// other way.
+    ///
+    /// Breaks: (1) the per-id lookup back to the last-object map -> every row
+    /// sees the normal row, no copy is re-picked, Upgrade survives; (2) a
+    /// first-row pick -> every row sees the Upgrade row, Upgrade wins. Both
+    /// fail the last assert.
+    #[test]
+    fn per_id_classification_is_the_last_classified_rows() {
+        let id = "app/Codeunit/50100";
+        let mut upgrade = object(id, "Codeunit");
+        upgrade.object_subtype = Some("Upgrade".to_string());
+        upgrade.source_anchor = Some(span(0, 10));
+        let mut install = object(id, "Codeunit");
+        install.object_subtype = Some("Install".to_string());
+        install.source_anchor = Some(span(11, 20));
+        let mut normal = object(id, "Codeunit");
+        normal.source_anchor = Some(span(21, 30));
+        let ws = workspace(
+            vec![upgrade, install, normal],
+            vec![
+                shared_local("shared", id, 2),
+                shared_local("shared", id, 12),
+                shared_local("shared", id, 22),
+            ],
+        );
+        let roots = classify_roots(&ws);
+        let kinds: Vec<&[String]> = roots.iter().map(|rc| rc.kinds.as_slice()).collect();
+        assert_eq!(
+            kinds,
+            [
+                ["install-codeunit".to_string()].as_slice(),
+                ["upgrade-codeunit".to_string()].as_slice()
+            ],
+            "precondition: two copies for one id"
+        );
+        let first_loop = classification_per_id(&roots, &[], &ws.objects);
+        assert_eq!(
+            first_loop["shared"].kinds,
+            ["upgrade-codeunit"],
+            "precondition: the first loop alone keeps Upgrade"
+        );
+        let per_id = classification_per_id(&roots, &ws.routines, &ws.objects);
+        assert_eq!(per_id["shared"].kinds, ["install-codeunit"]);
     }
 }

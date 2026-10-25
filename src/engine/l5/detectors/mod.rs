@@ -453,7 +453,7 @@ pub(crate) fn implicit_rec_persisted_by_owner(
 /// properties the model does not carry (see [`implicit_rec_persisted_by_owner`]'s
 /// main limit).
 fn page_may_modify(routine: &ModelRoutine, ctx: &DetectorContext, symbols: &SymbolTable) -> bool {
-    let Some(&obj) = ctx.objects_by_id.get(routine.object_id.as_str()) else {
+    let Some(obj) = ctx.declaring.of(routine) else {
         return true;
     };
     let page = if obj.object_type == "PageExtension" {

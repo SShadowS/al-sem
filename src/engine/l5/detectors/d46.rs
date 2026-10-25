@@ -224,7 +224,7 @@ pub fn detect_d46(
         }
 
         // Only Install or Upgrade codeunits.
-        let Some(obj) = ctx.objects_by_id.get(routine.object_id.as_str()).copied() else {
+        let Some(obj) = ctx.declaring.of(routine) else {
             continue;
         };
         if obj.object_type != "Codeunit" {

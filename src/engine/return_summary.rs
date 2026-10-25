@@ -432,14 +432,9 @@ pub fn compute_return_summaries(
     routines: &[ModelRoutine],
     objects: Option<&[ModelObject]>,
 ) -> HashMap<String, RoutineReturnSummary> {
-    // Build objectId → inherentCommitBehavior lookup when objects are supplied.
-    let mut object_icb_map: HashMap<String, Option<String>> = HashMap::new();
-    if let Some(objs) = objects {
-        for obj in objs {
-            // Only store when the field is present (matches al-sem: `if (obj.inherentCommitBehavior !== undefined)`).
-            object_icb_map.insert(obj.id.clone(), obj.inherent_commit_behavior.clone());
-        }
-    }
+    // Each routine's DECLARING object, for its InherentCommitBehavior (#279: an
+    // `#if`-split id has one row per arm).
+    let declaring = objects.map(crate::program::model::declaring::DeclaringObjects::new);
 
     let mut result: HashMap<String, RoutineReturnSummary> = HashMap::new();
 
@@ -447,9 +442,11 @@ pub fn compute_return_summaries(
         let summary = compute_routine_return_summary(r);
 
         // Merge object-level InherentCommitBehavior if present and routine has no override.
-        let effective_summary = if let Some(icb_opt) = object_icb_map.get(&r.object_id) {
-            let merged_cb =
-                merge_inherent_commit_behavior(summary.commit_behavior, icb_opt.as_deref());
+        let effective_summary = if let Some(obj) = declaring.as_ref().and_then(|d| d.of(r)) {
+            let merged_cb = merge_inherent_commit_behavior(
+                summary.commit_behavior,
+                obj.inherent_commit_behavior.as_deref(),
+            );
             if merged_cb != summary.commit_behavior {
                 RoutineReturnSummary {
                     commit_behavior: merged_cb,
@@ -1030,5 +1027,37 @@ mod tests {
             Some(std::slice::from_ref(&obj)),
         );
         assert_eq!(map.get(&routine.id).unwrap().commit_behavior, "error");
+    }
+
+    /// R12 (#279): each routine merges the ICB of its OWN declaring row. Two
+    /// object rows share one id BY ASSIGNMENT (an `#if` split): lines 0-10
+    /// with ICB "ignore", lines 11-20 with none; one routine in each. A
+    /// last-row lookup makes `a` "normal", a first-row lookup makes `b`
+    /// "ignore".
+    #[test]
+    fn bulk_icb_merge_reads_the_declaring_arm() {
+        let span = |from: u32, to: u32| crate::program::body::features::PAnchor {
+            source_unit_id: "ws:f.al".to_string(),
+            start_line: from,
+            start_column: 0,
+            end_line: to,
+            end_column: 0,
+            syntax_kind: String::new(),
+        };
+        let mut first = make_object_with_icb(Some("ignore"));
+        first.source_anchor = Some(span(0, 10));
+        let mut second = make_object_with_icb(None);
+        second.source_anchor = Some(span(11, 20));
+        assert_eq!(first.id, second.id, "precondition: one id, two rows");
+        let mut a = make_routine_with_attrs(vec![], true, Some(cfn_leaf("op")));
+        a.id = "a".to_string();
+        a.object_id = first.id.clone();
+        a.source_anchor = span(2, 4);
+        let mut b = a.clone();
+        b.id = "b".to_string();
+        b.source_anchor = span(12, 14);
+        let map = compute_return_summaries(&[a, b], Some(&[first, second]));
+        assert_eq!(map["a"].commit_behavior, "ignore");
+        assert_eq!(map["b"].commit_behavior, "normal");
     }
 }

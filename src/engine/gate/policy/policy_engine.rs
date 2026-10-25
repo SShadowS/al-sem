@@ -138,8 +138,7 @@ impl<'a> PolicyModel<'a> {
         summaries: &'a HashMap<String, FullRoutineSummary>,
         raw: &'a HashMap<String, Vec<CapabilityFact>>,
     ) -> Self {
-        let objects_by_id: HashMap<&str, &ModelObject> =
-            objects.iter().map(|o| (o.id.as_str(), o)).collect();
+        let declaring = crate::program::model::declaring::DeclaringObjects::new(objects);
         // One classification per id (class P, #160 step 11b §4.6).
         let root_kinds_by_routine_id: HashMap<&str, &[String]> =
             crate::engine::root_classification::classification_per_id(
@@ -158,7 +157,7 @@ impl<'a> PolicyModel<'a> {
             .map(|e| (e.id.as_str(), e.event_name.as_str()))
             .collect();
         let field_indexes = FieldIndexes {
-            objects_by_id,
+            declaring,
             root_kinds_by_routine_id,
             tables_by_id,
             events_by_id,

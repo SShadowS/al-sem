@@ -145,8 +145,11 @@ impl<'a> FingerprintIndex<'a> {
         self.routines_by_id.get(id).copied()
     }
 
-    /// The model object with internal id `id`.
-    pub fn object(&self, id: &str) -> Option<&'a ModelObject> {
+    /// The LAST model object row with internal id `id`, for an OBJECT-scoped
+    /// read only (an object-anchored finding, an object's role). Never "a
+    /// routine's object": an `#if`-split id has one row per arm, and that is
+    /// `DeclaringObjects::of` (#279).
+    pub fn object_row_by_id(&self, id: &str) -> Option<&'a ModelObject> {
         self.objects_by_id.get(id).copied()
     }
 

@@ -115,10 +115,10 @@ pub fn detect_d17(
             if ctx.dep_routine_ids.contains(&e.from) {
                 continue;
             }
-            let Some(caller_obj) = ctx.objects_by_id.get(caller.object_id.as_str()) else {
+            let Some(caller_obj) = ctx.declaring.of(caller) else {
                 continue;
             };
-            let Some(callee_obj) = ctx.objects_by_id.get(callee.object_id.as_str()) else {
+            let Some(callee_obj) = ctx.declaring.of(callee) else {
                 continue;
             };
             if caller_obj.app_guid == callee_obj.app_guid {

@@ -555,7 +555,7 @@ pub fn dependency_object_predicate<'a>(
 ) -> impl Fn(&str) -> bool + 'a {
     move |obj_id: &str| {
         idx.fingerprints
-            .object(obj_id)
+            .object_row_by_id(obj_id)
             .is_some_and(|o| resolved.object_role(o) == Role::Dependency)
     }
 }

@@ -55,10 +55,10 @@ pub fn detect_d13(
             }
             candidates_considered += 1;
 
-            let Some(caller_obj) = ctx.objects_by_id.get(caller.object_id.as_str()) else {
+            let Some(caller_obj) = ctx.declaring.of(caller) else {
                 continue;
             };
-            let Some(callee_obj) = ctx.objects_by_id.get(callee.object_id.as_str()) else {
+            let Some(callee_obj) = ctx.declaring.of(callee) else {
                 continue;
             };
             // Only flag cross-app boundaries.
