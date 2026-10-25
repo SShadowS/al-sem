@@ -280,9 +280,8 @@ fn run_without_raw_of(drop: &str, policy: &str) -> RunOutput {
     let classes = crate::engine::root_classification::classify_roots(&model.workspace, &declaring);
     let pm = PolicyModel::new(
         &routines,
-        &model.workspace.objects,
+        &model.workspace,
         declaring,
-        &model.workspace.tables,
         &det.event_graph.events,
         &classes,
         &det.summaries,

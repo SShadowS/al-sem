@@ -24,7 +24,7 @@ use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::events::EventSymbol;
-use crate::program::model::workspace::{ModelObject, ModelRoutine, ModelTable};
+use crate::program::model::workspace::{ModelEntities, ModelRoutine, ModelTable};
 
 /// The full policy-run result (sans envelope). al-sem
 /// `Omit<PolicyRunResult, "policySource"|"policyVersion">` plus the version/source
@@ -129,14 +129,14 @@ pub struct PolicyModel<'a> {
 impl<'a> PolicyModel<'a> {
     /// Build the model-input view. `event_names` is the (id → name) map for the
     /// `capability.resource.event.name` field; callers derive it from the event
-    /// graph. `declaring` is built over `objects`, the same index the caller
-    /// gave `classify_roots` (#279: one per policy build).
-    #[allow(clippy::too_many_arguments)]
+    /// graph. `workspace` gives the object and table rows (`routines` is the
+    /// evaluated subset); `declaring` is built over `workspace.objects`, the
+    /// same index the caller gave `classify_roots` (#279: one per policy
+    /// build).
     pub fn new(
         routines: &'a [ModelRoutine],
-        objects: &'a [ModelObject],
+        workspace: &'a ModelEntities,
         declaring: DeclaringObjects<'a>,
-        tables: &'a [ModelTable],
         events: &'a [EventSymbol],
         root_classifications: &'a [crate::engine::root_classification::RootClassification],
         summaries: &'a HashMap<String, FullRoutineSummary>,
@@ -154,7 +154,7 @@ impl<'a> PolicyModel<'a> {
             .collect();
         // G-5: REAL table wins an id collision with a tableextension stub.
         let tables_by_id: HashMap<&str, &ModelTable> =
-            crate::program::model::workspace::table_by_id_preferring_real(tables);
+            crate::program::model::workspace::table_by_id_preferring_real(&workspace.tables);
         let events_by_id: HashMap<&str, &str> = events
             .iter()
             .map(|e| (e.id.as_str(), e.event_name.as_str()))
@@ -165,7 +165,7 @@ impl<'a> PolicyModel<'a> {
             tables_by_id,
             events_by_id,
         };
-        let fingerprint_index = FingerprintIndex::build(routines, objects);
+        let fingerprint_index = FingerprintIndex::build(routines, &workspace.objects);
         PolicyModel {
             routines,
             field_indexes,

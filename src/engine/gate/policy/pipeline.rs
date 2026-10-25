@@ -397,9 +397,8 @@ impl PolicyJob<'_> {
                     };
                 let model = PolicyModel::new(
                     &routines,
-                    &ws.objects,
+                    ws,
                     declaring,
-                    &ws.tables,
                     &det.event_graph.events,
                     &root_classifications,
                     &det.summaries,
