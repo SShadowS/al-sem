@@ -214,6 +214,29 @@ codeunit 50281 "C288 Subs"
         Strategy.NextKm(7);
     end;
 
+    [EventSubscriber(ObjectType::Codeunit, 51, 'OnAfterInsert', '', false, false)]
+    local procedure OnLabelOneError()
+    var
+        Strategy: Interface "I288 Strategy";
+        StopOneLbl: Label 'stop';
+    begin
+        Strategy := Enum::"E288 Strategy"::Plain;
+        Error(StopOneLbl);
+        Strategy.NextKm(8);
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, 51, 'OnBeforeInsert', '', false, false)]
+    local procedure OnCodeError()
+    var
+        Strategy: Interface "I288 Strategy";
+        StopCode: Code[20];
+    begin
+        Strategy := Enum::"E288 Strategy"::Plain;
+        StopCode := 'STOP';
+        Error(StopCode);
+        Strategy.NextKm(9);
+    end;
+
     [EventSubscriber(ObjectType::Codeunit, 51, 'OnBeforeDelete', '', false, false)]
     local procedure OnCollectibleError()
     var
@@ -601,6 +624,81 @@ codeunit 50291 "C288 Named Return U"
     end;
 
     local procedure DoCommitU()
+    begin
+        Commit();
+    end;
+}
+
+codeunit 50292 "C288 Named Return U Text"
+{
+    var
+        "STOPVÄLUE": ErrorInfo;
+
+    [EventSubscriber(ObjectType::Codeunit, 56, 'OnBeforePrint', '', false, false)]
+    local procedure OnNamedReturnTextU()
+    begin
+        WorkTextU();
+    end;
+
+    local procedure WorkTextU() "StopVälue": Text
+    var
+        Strategy: Interface "I288 Strategy";
+    begin
+        "StopVälue" := 'stop';
+        Strategy := Enum::"E288 Strategy"::Plain;
+        Error("STOPVÄLUE");
+        Strategy.NextKm(34);
+    end;
+}
+
+codeunit 50293 "C288 Escaped Quote"
+{
+    var
+        StopValue: ErrorInfo;
+        StopText: Text;
+
+    [EventSubscriber(ObjectType::Codeunit, 57, 'OnAfterPost', '', false, false)]
+    local procedure OnEscapedParamGap()
+    begin
+        WorkQ('x');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, 57, 'OnAfterValidate', '', false, false)]
+    local procedure OnEscapedParamEdge()
+    begin
+        WorkQCommit('x');
+    end;
+
+    local procedure WorkQ("""StopValue""": Text)
+    var
+        Strategy: Interface "I288 Strategy";
+    begin
+        Strategy := Enum::"E288 Strategy"::Plain;
+        StopValue.Collectible(true);
+        Error(StopValue);
+        Strategy.NextKm(35);
+    end;
+
+    local procedure WorkQCommit("""StopValue""": Text)
+    begin
+        StopValue.Collectible(true);
+        Error(StopValue);
+        DoCommitQ();
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, 57, 'OnBeforePrint', '', false, false)]
+    local procedure OnEscapedArg()
+    var
+        Strategy: Interface "I288 Strategy";
+        """StopText""": ErrorInfo;
+    begin
+        Strategy := Enum::"E288 Strategy"::Plain;
+        """StopText""".Collectible(true);
+        Error("""StopText""");
+        Strategy.NextKm(36);
+    end;
+
+    local procedure DoCommitQ()
     begin
         Commit();
     end;
@@ -1240,6 +1338,19 @@ fn g2_spaced_directives_are_detected() {
     assert_keeps_gap(&seen1(&m, "OnSpacedDirective"), "OnSpacedDirective");
 }
 
+/// G2 (FC6): a source with CR-only line ends (classic Mac files) is split
+/// into lines too, so its directives are seen.
+#[test]
+fn g2_cr_only_line_ends_are_split() {
+    let cr = "procedure P()\rbegin\r#if X288\r    exit;\r#endif\rend;\r";
+    assert!(!cr.contains('\n'), "precondition: no LF");
+    assert!(has_preproc_directive(cr), "CR-only `#if` / `#endif`");
+    assert!(
+        has_preproc_directive("begin\r\n  #else\r\nend;"),
+        "CRLF, indented"
+    );
+}
+
 /// G3: `Error(ErrInfo); Call();` keeps the gap (a collectible error goes on).
 #[test]
 fn g3_error_errorinfo_keeps_the_gap() {
@@ -1302,6 +1413,35 @@ fn g6_error_format_and_text_local_drop_the_gap() {
     for (name, s) in names.iter().zip(seen(&m, &names)) {
         assert_complete_no_d35(&s, name);
     }
+}
+
+/// [`assert_complete_no_d35`] for each of `names`, every one checked.
+fn assert_all_complete(m: &Model, names: &[&str]) {
+    let failures: Vec<String> = names
+        .iter()
+        .zip(seen(m, names))
+        .filter(|(_, s)| {
+            (
+                s.direct_status.as_str(),
+                s.reasons.is_empty(),
+                s.d35.is_none(),
+            ) != ("complete", true, true)
+        })
+        .map(|(name, s)| format!("{name}: gap kept: {} {:?}", s.direct_status, s.reasons))
+        .collect();
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+/// G6 (FS2/FO1): one-argument `Error(StopOneLbl)` (a Label local) and
+/// `Error(StopCode)` (a Code local) drop the gap.
+#[test]
+fn g6_single_argument_label_and_code_drop_the_gap() {
+    let m = build(SRC);
+    let names = ["OnLabelOneError", "OnCodeError"];
+    for name in names {
+        assert_dead_site(&m, name, "NextKm");
+    }
+    assert_all_complete(&m, &names);
 }
 
 /// G7: a directive elsewhere in the routine distrusts the whole row, so a
@@ -1429,6 +1569,97 @@ fn g12u_non_ascii_named_return_keeps_the_edge() {
     let s = seen1(&m, "OnNamedReturnEdgeU");
     assert_eq!(s.commits, EffectPresence::Yes, "OnNamedReturnEdgeU commits");
     assert_d35_via_callee(&s, "OnNamedReturnEdgeU");
+}
+
+/// G11u/G12u control (FO2): a Text named return `"StopVälue"` referenced as
+/// `"STOPVÄLUE"`, beside an ErrorInfo global `"STOPVÄLUE"`, proves the Text
+/// form, so the row is trusted and its dead call is dropped. ASCII-only
+/// equality would miss the return and read the ErrorInfo global instead.
+#[test]
+fn g11u_control_non_ascii_text_named_return_drops_the_gap() {
+    let m = build(SRC);
+    assert_dead_site(&m, "WorkTextU", "NextKm");
+    let s = seen(&m, &["WorkTextU", "OnNamedReturnTextU"]);
+    assert_complete_no_d35(&s[0], "WorkTextU");
+    assert_complete_no_d35(&s[1], "OnNamedReturnTextU");
+}
+
+/// FS1: a parameter `"""StopValue""": Text` is named `"StopValue"` WITH its
+/// quotes, so it does not shadow the ErrorInfo global `StopValue`, and
+/// `Error(StopValue)` takes the ErrorInfo form: `WorkQ` keeps its dead-marked
+/// interface gap.
+#[test]
+fn fs1_escaped_quote_parameter_keeps_the_gap() {
+    let m = build(SRC);
+    assert_dead_site(&m, "WorkQ", "NextKm");
+    let s = seen(&m, &["WorkQ", "OnEscapedParamGap"]);
+    assert_keeps_gap(&s[0], "WorkQ");
+    assert_d35_reasons(
+        &s[1],
+        "OnEscapedParamGap",
+        "interface-open-world; partly analysed: WorkQ (Codeunit 50293)",
+    );
+}
+
+/// FS1: the same shadowing keeps `WorkQCommit`'s dead-marked edge to the
+/// committing `DoCommitQ`.
+#[test]
+fn fs1_escaped_quote_parameter_keeps_the_edge() {
+    let m = build(SRC);
+    assert_dead_site(&m, "WorkQCommit", "DoCommitQ");
+    let s = seen1(&m, "OnEscapedParamEdge");
+    assert_eq!(s.commits, EffectPresence::Yes, "OnEscapedParamEdge commits");
+    assert_d35_via_callee(&s, "OnEscapedParamEdge");
+}
+
+/// FS1, the argument side: `Error("""StopText""")` names the ErrorInfo local
+/// `"StopText"` (quotes included), not the Text global `StopText` that the
+/// argument's quote-stripped `value` spells. The gap stays.
+#[test]
+fn fs1_escaped_quote_argument_keeps_the_gap() {
+    let m = build(SRC);
+    assert_dead_site(&m, "OnEscapedArg", "NextKm");
+    assert_keeps_gap(&seen1(&m, "OnEscapedArg"), "OnEscapedArg");
+}
+
+/// FC3: a variable whose scope is unknown (`None`) is treated like a global:
+/// its Text type proves the Text form only when the object is directive-free.
+/// Hand-stated: assembly always sets a scope today, so the row is built here.
+#[test]
+fn fc3_unknown_scope_needs_the_object_scan() {
+    use crate::program::body::features::PExpressionInfo;
+    use crate::program::model::workspace::{
+        ModelVariable, RoutineVariables, error_argument_proves_text,
+    };
+    let arg = PExpressionInfo {
+        kind: "identifier".to_string(),
+        text: "Msg".to_string(),
+        value: Some("Msg".to_string()),
+        qualifier: None,
+        member: None,
+    };
+    let vars = |scope: Option<&str>| {
+        RoutineVariables::from_own(vec![ModelVariable {
+            name: "msg".to_string(),
+            declared_type: "Text".to_string(),
+            is_parameter: false,
+            parameter_index: None,
+            initializer: None,
+            scope: scope.map(str::to_string),
+        }])
+    };
+    let proves = |scope: Option<&str>, object_clean: bool| {
+        error_argument_proves_text(&arg, None, None, &vars(scope), || object_clean)
+    };
+    assert!(
+        proves(Some("local"), false),
+        "control: a local needs no scan"
+    );
+    assert!(proves(None, true), "control: unknown scope, clean object");
+    assert!(
+        !proves(None, false),
+        "unknown scope in an object with a directive proves nothing"
+    );
 }
 
 // ---------------------------------------------------------------------------

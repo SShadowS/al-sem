@@ -1244,8 +1244,7 @@ fn build_typed_edge_graph(
     let mut unresolved_sources: BTreeSet<String> = BTreeSet::new();
 
     for edge in typed {
-        let site = edge.callsite_id.as_deref().or(edge.operation_id.as_deref());
-        if dead.contains(&edge.from, site) {
+        if dead.contains(&edge.from, site_of(&edge.callsite_id, &edge.operation_id)) {
             continue;
         }
         if edge.kind == "object-run-unresolved" {
@@ -3572,7 +3571,8 @@ pub(crate) fn capability_fact_sort_key(f: &PCapabilityFact) -> String {
 ///
 /// An edge whose site is in `dead` ([`DeadSites`]) adds nothing (#288): that
 /// site never runs, so it is no gap, as it is no fact in
-/// [`direct_facts_for_routine`]. An edge with no `callsite_id` is kept.
+/// [`direct_facts_for_routine`]. The site is [`site_of`] (as in the cone); an
+/// edge with neither a call site nor an operation is kept.
 ///
 /// A routine's own edges are its whole contribution, because the L4 solve never
 /// moves these kinds from a callee to a caller or between SCC members:
@@ -3596,7 +3596,10 @@ pub(crate) fn callsite_local_coverage_reasons<'e>(
     for ue in edges {
         let kind = ue.uncertainty.kind.as_str();
         if super::db_effect_solver::is_callsite_local_kind(kind)
-            && !dead.contains(&ue.from, ue.uncertainty.callsite_id.as_deref())
+            && !dead.contains(
+                &ue.from,
+                site_of(&ue.uncertainty.callsite_id, &ue.uncertainty.operation_id),
+            )
         {
             out.entry(ue.from.as_str()).or_default().insert(kind);
         }
@@ -3614,39 +3617,57 @@ pub(crate) fn callsite_local_coverage_reasons<'e>(
 /// shortcut: rests on the per-row trust gate; upgrade when the reachability
 /// mark itself is sound (the split-off discovery D2) and the gate goes away.
 #[derive(Default)]
-pub(crate) struct DeadSites<'a>(HashMap<(&'a str, &'a str), bool>);
+pub(crate) struct DeadSites<'a>(HashSet<(&'a str, &'a str)>);
 
 impl<'a> DeadSites<'a> {
     pub(crate) fn of(routines: &'a [ModelRoutine]) -> Self {
         // Built once per producer and once in d35; the span shows its cost.
         let _span = crate::engine::perf_trace::span("cone", "dead_sites");
-        let mut m: HashMap<(&str, &str), bool> = HashMap::new();
-        for r in routines {
-            let sites = r
-                .call_sites
-                .iter()
+        // A row's call and operation sites with their control context.
+        fn sites(r: &ModelRoutine) -> impl Iterator<Item = (&str, Option<&str>)> {
+            let calls = r.call_sites.iter();
+            let ops = r.operation_sites.iter();
+            calls
                 .map(|cs| (cs.id.as_str(), cs.control_context.as_deref()))
-                .chain(
-                    r.operation_sites
-                        .iter()
-                        .map(|op| (op.id.as_str(), op.control_context.as_deref())),
-                );
-            for (site, cc) in sites {
-                let dead = r.dead_marks_trusted && cc == Some("unreachable");
-                m.entry((r.id.as_str(), site))
-                    .and_modify(|d| *d &= dead)
-                    .or_insert(dead);
+                .chain(ops.map(|op| (op.id.as_str(), op.control_context.as_deref())))
+        }
+        // The candidates: every site a row believes dead.
+        let mut dead: HashSet<(&str, &str)> = routines
+            .iter()
+            .flat_map(|r| {
+                sites(r)
+                    .filter(|(_, cc)| r.site_is_dead_marked(*cc))
+                    .map(|(site, _)| (r.id.as_str(), site))
+            })
+            .collect();
+        // The veto: another row of a collided id that holds the site and does
+        // not believe it dead.
+        let ids: HashSet<&str> = dead.iter().map(|(id, _)| *id).collect();
+        for r in routines.iter().filter(|r| ids.contains(r.id.as_str())) {
+            for (site, cc) in sites(r) {
+                if !r.site_is_dead_marked(cc) {
+                    dead.remove(&(r.id.as_str(), site));
+                }
             }
         }
-        m.retain(|_, dead| *dead);
-        DeadSites(m)
+        DeadSites(dead)
     }
 
     pub(crate) fn contains(&self, from: &str, site: Option<&str>) -> bool {
         // Covariance shortens the key lifetime to the arguments'.
-        let m: &HashMap<(&str, &str), bool> = &self.0;
-        site.is_some_and(|s| m.contains_key(&(from, s)))
+        let set: &HashSet<(&str, &str)> = &self.0;
+        site.is_some_and(|s| set.contains(&(from, s)))
     }
+}
+
+/// The site an edge or an uncertainty stands at: its call site, else its
+/// operation (an implicit-trigger edge has no call site). The one key the
+/// coverage fold, the cone and d35 look up in [`DeadSites`].
+pub(crate) fn site_of<'e>(
+    callsite_id: &'e Option<String>,
+    operation_id: &'e Option<String>,
+) -> Option<&'e str> {
+    callsite_id.as_deref().or(operation_id.as_deref())
 }
 
 /// Fold a routine's call-site-local coverage reasons (`extra`, from

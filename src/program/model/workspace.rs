@@ -585,6 +585,15 @@ pub struct ModelRoutine {
     pub entry_temp_guard_receiver: Option<String>,
 }
 
+impl ModelRoutine {
+    /// Whether this row believes a site of its own with `control_context`
+    /// never runs (#288): its dead marks are trusted and the site is marked
+    /// `unreachable`. The one test `capability_cone::DeadSites` and d35 share.
+    pub(crate) fn site_is_dead_marked(&self, control_context: Option<&str>) -> bool {
+        self.dead_marks_trusted && control_context == Some("unreachable")
+    }
+}
+
 /// The assembled workspace L3 model (pre-resolve until `resolve` runs).
 #[derive(Debug, Clone)]
 pub struct ModelEntities {
@@ -679,7 +688,8 @@ pub(crate) fn declaration_start_line(r: &al_syntax::ir::RoutineDecl) -> u32 {
 /// without knowing them. A directive inside a comment or string also counts,
 /// which only distrusts more (#288).
 pub(crate) fn has_preproc_directive(text: &str) -> bool {
-    text.lines()
+    // CR, LF and CRLF all end a line (`str::lines` splits on LF only).
+    text.split(['\r', '\n'])
         .filter_map(|l| l.trim_start().strip_prefix('#'))
         .map(|rest| {
             rest.trim_start()
@@ -702,15 +712,25 @@ pub(crate) fn source_clean(source: &str, range: &std::ops::Range<usize>) -> bool
         .is_some_and(|t| !has_preproc_directive(t))
 }
 
-/// AL identifier equality with the quotes of a quoted identifier dropped.
+/// AL identifier equality of two canonical (already unquoted) names: exact
+/// apart from AL's Unicode-aware case folding. A quote inside a name is part
+/// of it (`"""X"""` is the name `"X"`), so nothing is trimmed here.
 fn same_identifier(a: &str, b: &str) -> bool {
-    a.trim_matches('"').eq_fold_identifier(b.trim_matches('"'))
+    a.eq_fold_identifier(b)
+}
+
+/// `t` without ONE pair of surrounding double quotes, as the lowerer stores a
+/// quoted identifier's name (`ident_text`); `t` itself when it is not quoted.
+fn unquote_once(t: &str) -> &str {
+    t.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(t)
 }
 
 /// A bare call to `Error` (any case, quoted or not).
 fn is_bare_error_call(cs: &crate::program::body::features::PCallSite) -> bool {
     matches!(&cs.callee, crate::program::body::features::PCallee::Bare { name }
-        if same_identifier(name, "Error"))
+        if same_identifier(unquote_once(name), "Error"))
 }
 
 /// The assembly half of [`ModelRoutine::dead_marks_trusted`] (#288). Today's
@@ -748,12 +768,6 @@ fn source_dead_mark_trust(
     if !source_clean(source, &routine.origin.byte) {
         return false;
     }
-    let texty = |ty: &str| {
-        let head = ty.split(['[', ' ']).next().unwrap_or("");
-        ["Text", "Label", "Code"]
-            .iter()
-            .any(|t| head.eq_fold_identifier(t))
-    };
     let mut object_clean =
         || *object_clean.get_or_insert_with(|| source_clean(source, &object.origin.byte));
     call_sites
@@ -761,34 +775,69 @@ fn source_dead_mark_trust(
         .filter(|cs| is_bare_error_call(cs))
         .all(|cs| match cs.argument_infos.as_slice() {
             [] => false,
-            [arg] => match arg.kind.as_str() {
-                "string_literal" => true,
-                "identifier" | "quoted_identifier" => {
-                    let name = arg.value.as_deref().unwrap_or(&arg.text);
-                    let param = variables
-                        .iter()
-                        .find(|v| v.is_parameter && same_identifier(&v.name, name));
-                    if param.is_none()
-                        && routine
-                            .return_name
-                            .as_deref()
-                            .is_some_and(|r| same_identifier(r, name))
-                    {
-                        // A named return with no type proves nothing.
-                        return routine.return_type.as_deref().is_some_and(texty);
-                    }
-                    let Some(v) =
-                        param.or_else(|| variables.iter().find(|v| same_identifier(&v.name, name)))
-                    else {
-                        return false;
-                    };
-                    texty(&v.declared_type)
-                        && (v.scope.as_deref() != Some("global") || object_clean())
-                }
-                _ => false,
-            },
+            [arg] => error_argument_proves_text(
+                arg,
+                routine.return_name.as_deref(),
+                routine.return_type.as_deref(),
+                variables,
+                &mut object_clean,
+            ),
             _ => true,
         })
+}
+
+/// Whether the one argument `arg` of a bare `Error(...)` provably selects the
+/// Text overload ([`source_dead_mark_trust`]): a string literal, or a name
+/// that resolves, in AL's scope order, to a Text, Label or Code variable.
+/// `object_clean` answers whether the enclosing object is directive-free; it
+/// is asked for every proof that does not rest on a local or a parameter
+/// (a global, or a variable whose scope is unknown).
+///
+/// Names are compared canonical (one outer quote pair off, as the lowerer and
+/// the variable table store them). The argument's `value` is NOT used: it
+/// strips every outer quote (`"""X"""` → `X`), so it can name another
+/// variable. Fails closed when the argument or any candidate name holds a
+/// quote, an escaped one (`""`) being the only way a name can.
+pub(crate) fn error_argument_proves_text(
+    arg: &crate::program::body::features::PExpressionInfo,
+    return_name: Option<&str>,
+    return_type: Option<&str>,
+    variables: &RoutineVariables,
+    mut object_clean: impl FnMut() -> bool,
+) -> bool {
+    let texty = |ty: &str| {
+        let head = ty.split(['[', ' ']).next().unwrap_or("");
+        ["Text", "Label", "Code"]
+            .iter()
+            .any(|t| head.eq_fold_identifier(t))
+    };
+    match arg.kind.as_str() {
+        "string_literal" => true,
+        "identifier" | "quoted_identifier" => {
+            let name = unquote_once(arg.text.trim());
+            if name.contains('"')
+                || return_name.is_some_and(|r| r.contains('"'))
+                || variables.iter().any(|v| v.name.contains('"'))
+            {
+                return false;
+            }
+            let param = variables
+                .iter()
+                .find(|v| v.is_parameter && same_identifier(&v.name, name));
+            if param.is_none() && return_name.is_some_and(|r| same_identifier(r, name)) {
+                // A named return with no type proves nothing.
+                return return_type.is_some_and(texty);
+            }
+            let Some(v) =
+                param.or_else(|| variables.iter().find(|v| same_identifier(&v.name, name)))
+            else {
+                return false;
+            };
+            texty(&v.declared_type)
+                && (matches!(v.scope.as_deref(), Some("local" | "parameter")) || object_clean())
+        }
+        _ => false,
+    }
 }
 
 /// The resolution half of [`ModelRoutine::dead_marks_trusted`] (#288): a row
@@ -801,25 +850,40 @@ fn source_dead_mark_trust(
 /// with any other edge, is not proven.
 pub(crate) fn settle_dead_mark_trust(m: &mut Model) {
     use crate::program::model::taxonomy::Resolution;
-    let mut builtin: std::collections::HashSet<(usize, &str)> = Default::default();
-    let mut other: std::collections::HashSet<(usize, &str)> = Default::default();
+    // The bare `Error` sites of trusted rows, then one pass over the edges
+    // that records, for those keys only, (seen a builtin edge, seen another).
+    let mut sites: HashMap<(usize, &str), (bool, bool)> = m
+        .workspace
+        .routines
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.dead_marks_trusted)
+        .flat_map(|(i, r)| {
+            r.call_sites
+                .iter()
+                .filter(|cs| is_bare_error_call(cs))
+                .map(move |cs| ((i, cs.id.as_str()), (false, false)))
+        })
+        .collect();
+    if sites.is_empty() {
+        return;
+    }
     for e in &m.calls.edges {
-        let key = (e.from_ix.get(), e.callsite_id.as_str());
-        if e.resolution == Resolution::Builtin {
-            builtin.insert(key);
-        } else {
-            other.insert(key);
+        if let Some((builtin, other)) = sites.get_mut(&(e.from_ix.get(), e.callsite_id.as_str())) {
+            if e.resolution == Resolution::Builtin {
+                *builtin = true;
+            } else {
+                *other = true;
+            }
         }
     }
-    for (i, r) in m.workspace.routines.iter_mut().enumerate() {
-        r.dead_marks_trusted &= r
-            .call_sites
-            .iter()
-            .filter(|cs| is_bare_error_call(cs))
-            .all(|cs| {
-                let key = (i, cs.id.as_str());
-                builtin.contains(&key) && !other.contains(&key)
-            });
+    let unproven: Vec<usize> = sites
+        .into_iter()
+        .filter(|(_, (builtin, other))| !builtin || *other)
+        .map(|((i, _), _)| i)
+        .collect();
+    for i in unproven {
+        m.workspace.routines[i].dead_marks_trusted = false;
     }
 }
 

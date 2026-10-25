@@ -34,15 +34,20 @@
 //! untrusted row's dead-marked site is named like a live one. The
 //! subscriber stays under "partly analysed" unless every own gap is accounted
 //! for: a site was named, every other own edge's site was found (in its own
-//! row), and no other row with its id is opaque or parse-incomplete. Primary
+//! row, and reachable), and no other row with its id is opaque or
+//! parse-incomplete. Primary
 //! subscribers only: a dependency subscriber's own edges are not on the
 //! detector context, so it keeps the #148 text (stated limit).
+//! Stated limit (#288 FC2): the unknown arm's confidence cap reads the L4
+//! summary's uncertainty set, which the db-effect solver still builds from
+//! every site, dead ones included (discovery D1); so a dropped dead gap can
+//! still lower the confidence of a finding that has other gaps.
 //!
 //! Within-detector sort by `a.id.cmp(&b.id)` (byte order).
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::engine::l4::capability_cone::DeadSites;
+use crate::engine::l4::capability_cone::{DeadSites, site_of};
 use crate::engine::l4::db_effect_solver::is_callsite_local_kind;
 use crate::engine::l5::capability_query::{EffectPresence, may_commit_derived};
 use crate::engine::l5::confidence::{UncertaintyLite, to_confidence};
@@ -314,7 +319,8 @@ fn coverage_reasons(
     for u in own_edges.into_iter().flatten() {
         // A dead site is no gap (the coverage fold leaves it out), so it is not
         // missing evidence either (#288).
-        if !is_callsite_local_kind(&u.kind) || dead.contains(&routine.id, u.callsite_id.as_deref())
+        if !is_callsite_local_kind(&u.kind)
+            || dead.contains(&routine.id, site_of(&u.callsite_id, &u.operation_id))
         {
             continue;
         }
@@ -327,9 +333,7 @@ fn coverage_reasons(
             // A trusted row's dead site that is live in another row of the id is
             // that row's gap, not this one's. An untrusted row's marks are not
             // believed, so its dead-marked site is named (#288 O24).
-            .filter(|cs| {
-                !routine.dead_marks_trusted || cs.control_context.as_deref() != Some("unreachable")
-            });
+            .filter(|cs| !routine.site_is_dead_marked(cs.control_context.as_deref()));
         let Some(cs) = cs else {
             every_site_found = false;
             continue;

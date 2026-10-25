@@ -23,11 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provably sound: its routine has no preprocessor directive, and every bare
   `Error(...)` in it takes the Text form (a string literal, two or more
   arguments, or a Text, Label or Code variable found in AL's scope order, the
-  named return value included, with AL's Unicode-aware name equality) and binds
-  to the builtin, not to an own `procedure Error`
-  (`ModelRoutine::dead_marks_trusted`, which fails closed). Elsewhere dead code
-  still counts, as before. No golden moves; on the pinned CDO baseline no
-  finding moves.
+  named return value included, with AL's Unicode-aware name equality; a name
+  holding an escaped quote proves nothing) and binds to the builtin, not to an
+  own `procedure Error` (`ModelRoutine::dead_marks_trusted`, which fails
+  closed). A proof that rests on a global variable (or a variable of unknown
+  scope) also needs the whole enclosing object free of preprocessor
+  directives, because an `#if` around the `var` section can give the name
+  another type in another build. Elsewhere dead code still counts, as before.
+  Stated limit: d35's confidence cap still reads the L4 summary's
+  uncertainties, which include dead sites. No golden moves; on the pinned CDO
+  baseline no finding moves.
 
 ## [2.1.0] - 2026-10-25
 
