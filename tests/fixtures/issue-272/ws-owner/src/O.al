@@ -76,3 +76,18 @@ page 50314 "O Temp Card"
         H.DirtyT(Rec);
     end;
 }
+
+page 50315 "O RO Card"
+{
+    PageType = Card;
+    SourceTable = "O Cust";
+    Editable = false;
+
+    // FC4: a PROCEDURE named like the trigger is not the trigger; on a read-only
+    // page the write is lost -> d39 reports
+    procedure OnDeleteRecord()
+    var H: Codeunit "O H";
+    begin
+        H.Dirty(Rec);
+    end;
+}

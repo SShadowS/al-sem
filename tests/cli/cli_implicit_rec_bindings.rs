@@ -228,6 +228,8 @@ fn shapes_d39_owner_rule() {
 ///   hands a temporary `Rec`: d39's G-13 skip holds in OnAfterGetRecord, which the
 ///   owner rule would report, and in OnAction.
 /// - F2: page OnDeleteRecord is exempt (the row is deleted; moot, not measured).
+/// - FC4: a page PROCEDURE named `OnDeleteRecord` on an `Editable = false` page
+///   (`O RO Card`) is not the trigger: it IS reported.
 /// - Control: OnAfterGetRecord on the physical `O Card` reports, so the workspace
 ///   reaches d39 at all.
 #[test]
@@ -237,7 +239,10 @@ fn owner_d39_temp_table_and_delete_record() {
             &analyze(&fixture("ws-owner"), "d39-record-left-dirty-across-chain"),
             "d39"
         ),
-        sorted(&["d39 | O Card | OnAfterGetRecord | L39"])
+        sorted(&[
+            "d39 | O Card | OnAfterGetRecord | L39",
+            "d39 | O RO Card | OnDeleteRecord | L91",
+        ])
     );
 }
 

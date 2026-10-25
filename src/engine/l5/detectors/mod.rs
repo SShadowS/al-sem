@@ -438,7 +438,7 @@ pub(crate) fn implicit_rec_persisted_by_owner(
     match routine.object_type.as_str() {
         "Table" | "TableExtension" => !is_trigger || !named(TABLEEXT_TRIGGERS_AFTER_WRITE),
         "Page" | "PageExtension" => {
-            named(PAGE_TRIGGERS_REC_DELETED)
+            (is_trigger && named(PAGE_TRIGGERS_REC_DELETED))
                 || ((!is_trigger || named(PAGE_TRIGGERS_REC_PERSISTED))
                     && page_may_modify(routine, ctx, symbols))
         }
