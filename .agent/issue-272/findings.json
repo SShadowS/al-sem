@@ -1,0 +1,870 @@
+[
+  {
+    "id": "S1",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The unconditional d39 skip is not a correctness fix: it suppresses the fixture's own lost-write case (tableext OnAfterModify), caller ownership does not protect a write the table procedure later overwrites (d39.rs:174-224 already distinguishes discarded dirt), it includes xRec although the platform-persistence guard is for Rec (mod.rs:366-388), and G-9 is a limited trigger doctrine (mod.rs:301-363).",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 change 3 + BC table: the view-mode case is no longer claimed persisted; stated as a runtime-only false negative (as today); fallback (b) covers this measured contradiction. List pages, pageext, ModifyAllowed=false in edit mode, table-level triggers, tableext Rename now measured (rev3/bcprobe-results.txt).",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S2",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The 'exact' implicit-rec label is still a heuristic: a declared record named Rec suppresses the synthetic Rec, so a forwarded undeclared xRec is missed; scalar shadows are not seen.",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 change 2: a declared Rec of any type (parameter, local, object global; scalar or record) suppresses the synthetic Rec; A2b adds ws-gshadow page/table global scalar (unknown) and global record (unknown at L2, global 50301 at L3) with L2 + final-binding tests; global-shadow break makes all 4 local on the object table (rev3/a2b-*.kinds, rev3/gshadow-final-binding.txt). AL0155: alc rejects such globals (robustness only).",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S3",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Shared-reader changes (d37 helper persistence, record_load_points, the by-var join for d11/d21, filtering for d33) have no executable acceptance coverage.",
+    "disposition": "fixed",
+    "evidence": "Design rev 2 A4: ws-readers with controls for d37 / d11 / d21 / d33 (suppressed vs reported cases, local versions); revert change 1 restores exactly the before set (run). A8 pins L4 roles byte-identical on the fixtures.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S4",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "Triage conclusions exceed the recorded evidence (d37 −182 sampled 12; d11 19 of 20; d39 ≈100% extrapolated; d40 artifact unlinked).",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 BC table: the real read-only LIST OnAction shape measured in default mode (Editable()=No): LOST; mode and property effects separated (editable list OpenView LOST = mode alone; ModifyAllowed=false list/card in edit mode LOST = property alone). FP rate stated as 2/12 = 16.7% conditional on the 10 REAL verdicts, and per distinct shape 1 real vs 2 FP; VERDICTS.tsv CDO d37 rows relabelled conservative-suppression; Windows Cronus confirmation listed as owed, with the fallback-(b)/(a) consequence pre-stated.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S5",
+    "source": "sol",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Unknown-table probe: a page without SourceTable gets no synthetic Rec; d42's PK exclusion uses the callee parameter's table.",
+    "disposition": "fixed",
+    "evidence": "Design rev 2 probe-table corrections.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O1",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "A5's break does not discriminate: change 3 had two guards.",
+    "disposition": "fixed",
+    "evidence": "Design rev 2: one guard (class B folded into implicit_rec_persisted_by_owner); measured: breaking only the new fn left the gap test green while class B existed (rev2/a5only-break-rev2b.log), breaking both fails it (rev2/a5-break-rev2b.log) → folded; A5 break (i) is the single guard returning false.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O2",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "A2's label break does not fail A2.",
+    "disposition": "fixed",
+    "evidence": "Design rev 2: A2 keeps 'revert change 1'; the label breaks moved to the new A2b sourceKind test (run: they change only sourceKind).",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O3",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "The issue's acceptance ('same d39–d42 findings as a local') is not met as written and the design did not say so.",
+    "disposition": "fixed",
+    "evidence": "Design rev 2 'Not delivered (reconciled)': d41/d42 delivered; d39 delivered with BC-measured exemptions (340 Base App exempted, 6/6 sampled persisted); d40 not delivered (C2(a) kept; deleting it adds 3,199 Base App / 52 CDO findings dominated by platform/caller-loaded Rec).",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O4",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "The page-persists (G-9) basis was unmeasured; fallback (b) could never trigger.",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 BC table + trigger lists: each row says measured, by analogy (pageext OnBeforeValidate) or moot (Delete triggers); fallback (b) now addresses the already-measured view-mode contradiction.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "re-raised",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O5",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Stale docs not listed; the new skip needs its own counter.",
+    "disposition": "fixed",
+    "evidence": "Design rev 2 change 4 lists the docs; new stat implicitRecOwnerPersists.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O6",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "d11 −20 is 17 Scan* + 2 LogLastError + 1 UpdateLineBalance.",
+    "disposition": "fixed",
+    "evidence": "Design rev 2 Measurement (fingerprints in VERDICTS.tsv).",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O7",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Change 1 also makes d37 more conservative in general.",
+    "disposition": "fixed",
+    "evidence": "Design rev 2 change 1 + CHANGELOG plan state it; A4 pins D37Unresolved and D37Arity suppressed.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O8",
+    "source": "opus",
+    "round": 1,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "Discovery: a codeunit-TableNo Rec is bound 'local', so d39 still admits it.",
+    "disposition": "fixed",
+    "evidence": "Design rev 2 Discovery D1 includes it.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round2_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S6",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "N1: global shadowing still binds a phantom Rec. Synthetic-Rec suppression checks only parameters and locals, so an object-global scalar Rec binds local and a global record Rec loses promotion (workspace.rs:1128-1139).",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 change 2 + A2b (ws-gshadow), see S2 evidence.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "S7",
+    "source": "sol",
+    "round": 2,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "important",
+    "text": "N2: the BC probe property runs used OpenView (confounded with view mode); the 10 REAL d39 are read-only list actions, never measured; 17% stated as fully verified; Windows confirmation owed.",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 BC table and fallbacks, see S4 evidence.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O9",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N1: A5 misses three guard branches (page procedure to Dirty; ModifyAllowed=false page OnAction; pageext of a read-only page).",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 A5: fixture cases + breaks P272_BREAK_PAGEPROC / MODALLOWED / PAGEEXTBASE, each run and failing as expected.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O10",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N2: pageext modify triggers missing from PAGE_TRIGGERS_REC_PERSISTED; no extension population measured.",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 change 3: OnBeforeAction/OnAfterAction/OnAfterValidate measured persisted and added, OnBeforeValidate by analogy; Population limits paragraph.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O11",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N3: TABLEEXT_TRIGGERS_AFTER_WRITE lists unmeasured OnAfterRename and omits OnAfterDelete.",
+    "disposition": "fixed",
+    "evidence": "Design rev 3: OnAfterRename measured LOST; OnAfterDelete stays exempt as moot, stated in design and code.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O12",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N4: the claim that table triggers are measured overclaims; table field OnLookup depends on page editability the Table arm never checks.",
+    "disposition": "fixed",
+    "evidence": "Design rev 3: table OnInsert/OnModify/OnRename and tableext OnBeforeRename now measured; unprobed rows listed under Owed / not checked, incl. the table field OnLookup limit.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O13",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N5: A5(i)/A6 counts wrong after the fold; A2b break outputs not saved.",
+    "disposition": "fixed",
+    "evidence": "Design rev 3: re-run on the extended fixture, A5 = +11, A6 = +21; outputs rev3/a2b-{ws-shapes,ws-gshadow}-{NONE,SHADOW,GSHADOW,LABEL,CH1}.kinds.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O14",
+    "source": "opus",
+    "round": 2,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "N6: stale Classification text; G-9 probe row not marked superseded; reload check omits is_variable without a comment.",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 Classification rewritten; probe row marked superseded; change 3 states the is_variable comment (also in the prototype).",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "round3_marks": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "O15",
+    "source": "opus",
+    "round": 3,
+    "file": ".agent/issue-272/ledger.md",
+    "line": 1,
+    "severity": "minor",
+    "text": "The global-shadow check in ir_record_variables runs for every object with an implicit Rec, incl. codeunit-TableNo and report dataitems, where AL0155 was not checked; a global Rec there would rebind OnRun Rec to the global.",
+    "disposition": "fixed",
+    "evidence": "Design rev 3 change 2 amended: the object-global part of the shadow rule applies only to Table, TableExtension, Page, PageExtension; codeunit-TableNo / report-dataitem Rec keeps the typed path.",
+    "anchor": ".agent/issue-272/ledger.md ## Design (revision 3)",
+    "anchor_hash": "632e217f90f65afeddda5191b93a6b972b8f2a7a3643873804067ceea3615505",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FS1",
+    "source": "sol",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 178,
+    "severity": "minor",
+    "text": "Qualify BC measurements: Linux sidecar/TestPage, Windows owed, delete exemptions unmeasured (moot).",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F9; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FS2",
+    "source": "sol",
+    "round": "final-1",
+    "file": "tests/cli/cli_implicit_rec_bindings.rs",
+    "line": 79,
+    "severity": "minor",
+    "text": "Finding keys lose trigger identity: several S Card.OnAction routines are indistinguishable.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F6; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FS3",
+    "source": "sol",
+    "round": "final-1",
+    "file": "tests/cli/cli_implicit_rec_bindings.rs",
+    "line": 133,
+    "severity": "minor",
+    "text": "Comment wrongly calls ViaGlobalRec unchanged; base fired only ShadowDeclaredXRec and D41ViaLocal.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F7; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FS4",
+    "source": "sol",
+    "round": "final-1",
+    "file": "docs/detector-audit.md",
+    "line": 29,
+    "severity": "minor",
+    "text": "Stale path tests/gap_audit_b_table_triggers.rs → tests/gap/.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F8; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FO1",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 427,
+    "severity": "important",
+    "text": "pageext read-only rule never fires for a dependency (ABI) base page: abi_rows sets editable/modify_allowed None; docs/CHANGELOG treat it as an edge case.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F10; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FO2",
+    "source": "opus",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 178,
+    "severity": "important",
+    "text": "\"measured on BC 28.4\" omits the Linux sidecar and the owed Windows Cronus confirmation (also mod.rs:368, :388).",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F9; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FO3",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/program/body/ir_walk.rs",
+    "line": 2156,
+    "severity": "minor",
+    "text": "The own_record_rec gate (O15) is not pinned by any fixture.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F3; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FO4",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 400,
+    "severity": "minor",
+    "text": "Doc misses limits: table field OnLookup behind a read-only page; event subscriber in a page counts as a page procedure.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F11; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FO5",
+    "source": "opus",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 180,
+    "severity": "minor",
+    "text": "CDO/Base App numbers come from the prototype, not the final head; re-measure.",
+    "disposition": "fixed",
+    "evidence": "Final head 91f62e0c re-measured: 0 fingerprint differences vs prototype on CDO primary/all/d40 and Base App full/d40; fingerprint byte-identical (/work/bench/272/final/SUMMARY.md); CHANGELOG wording fixed in 4d040f8a",
+    "anchor": "commit 4d040f8a",
+    "anchor_hash": "d4909946efaab54e31e5ccc0fff83a1ff58d7ad7e6c95db35cba2af2f7f8b2a7",
+    "reviews": {
+      "sol": "accepted-by-rule",
+      "opus": "accepted"
+    },
+    "fix_commit": "4d040f8af6f2c40330e793afa19fcb14cfa48257"
+  },
+  {
+    "id": "FO6",
+    "source": "opus",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 440,
+    "severity": "minor",
+    "text": "page_may_modify scans all objects; record_types uses symbols.object_by_type_name (different duplicate handling).",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F5; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FO7",
+    "source": "opus",
+    "round": "final-1",
+    "file": "CHANGELOG.md",
+    "line": 170,
+    "severity": "minor",
+    "text": "Fixed entry should say the object-global record Rec case is robustness only (AL0155).",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F12; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FC1",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/model/record_types.rs",
+    "line": 462,
+    "severity": "important",
+    "text": "implicit-rec binding keeps L2 temp state; TableType=Temporary override not applied to the binding, so d39 G-13 temp skip misses it.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F1; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FC2",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 431,
+    "severity": "important",
+    "text": "Same as FO1: ABI base page counts as modifiable.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F10; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FC3",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 418,
+    "severity": "important",
+    "text": "Owner rule assumes the caller persists Rec but no caller role is ever judged.",
+    "disposition": "refuted",
+    "evidence": "Stated non-goal of the spec-ratified Design rev 3 (Non-goals: \"No L4 parameter role for the receiver\"; rev 2 named the Cust.Foo() gap explicitly). The caller-owns-Rec exemption is backed by Base App triage (340 exempted, 6/6 sampled correctly exempt, rev3/delta/ba-d39-exempted.tsv). The missing receiver role is a pre-existing gap, not introduced here; filed as a discovery.",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FC4",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 372,
+    "severity": "important",
+    "text": "Page OnDeleteRecord missing from exemptions (moot write). Round 2 (sol): the name-only check for PAGE_TRIGGERS_REC_DELETED also exempts an ordinary page procedure named OnDeleteRecord, bypassing is_trigger and page modifiability.",
+    "disposition": "fixed",
+    "evidence": "91f62e0c: (is_trigger && named(PAGE_TRIGGERS_REC_DELETED)); ws-owner O RO Card procedure OnDeleteRecord now reported (A5); proof Q7",
+    "anchor": "commit 91f62e0c",
+    "anchor_hash": "a0072be6057cb22bdf10f05e8305de332b0d92fea924ff99832961db95442670",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "91f62e0c"
+  },
+  {
+    "id": "FC5",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 1277,
+    "severity": "minor",
+    "text": "xRec loose subject is ? so the CHANGELOG same-loose-fingerprint claim overreaches.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F12; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FC6",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/d37.rs",
+    "line": 260,
+    "severity": "important",
+    "text": "d37 CDO --scope all 345 → 163: recall loss from dependency callers without callee edges, untriaged.",
+    "disposition": "refuted",
+    "evidence": "Measured and disclosed in the spec-ratified Design (change 1 side effect; Measurement: 182 removed, 22 read + 160 class-only, labelled conservative-suppression in rev3/delta/VERDICTS.tsv; 221 no-callee + 1 unresolved), accepted by both reviewers as S4/S7/O7. Root cause is the pre-existing cross-app PrimaryGraph gap (Discovery D2, to be filed); suppress-unknown matches how d37 already treats a local at such sites.",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    }
+  },
+  {
+    "id": "FC7",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/program/body/ir_walk.rs",
+    "line": 1836,
+    "severity": "minor",
+    "text": "Declared-Rec shadow rule duplicated in two places.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F3; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FC8",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/d39.rs",
+    "line": 195,
+    "severity": "minor",
+    "text": "reset_after_call evaluated before the cheap owner check.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F4; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  },
+  {
+    "id": "FC9",
+    "source": "code-review",
+    "round": "final-1",
+    "file": "src/engine/l5/detectors/mod.rs",
+    "line": 440,
+    "severity": "minor",
+    "text": "page_may_modify O(objects) per candidate.",
+    "disposition": "fixed",
+    "evidence": "85e60d10: fix list item F5; proofs Q1–Q6 in the ledger",
+    "anchor": "commit 85e60d10",
+    "anchor_hash": "698d2bb84c78ac3b04d487d7eb3a5c3d9897224e03f9980746257c7779300c69",
+    "reviews": {
+      "sol": "accepted",
+      "opus": "accepted"
+    },
+    "fix_commit": "85e60d10"
+  }
+]
