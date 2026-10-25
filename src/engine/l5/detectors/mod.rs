@@ -234,6 +234,49 @@ pub(crate) fn record_load_points<'a>(
     out
 }
 
+/// [`record_load_points`] built at most once per routine for one detector run
+/// (d37, d39). Keyed by the routine's address, not its id: ids can collide.
+#[derive(Default)]
+pub(crate) struct LoadPointCache<'a>(
+    HashMap<*const ModelRoutine, HashMap<String, Vec<LoadPoint<'a>>>>,
+);
+
+impl<'a> LoadPointCache<'a> {
+    pub fn get(
+        &mut self,
+        routine: &'a ModelRoutine,
+        ctx: &DetectorContext,
+    ) -> &HashMap<String, Vec<LoadPoint<'a>>> {
+        self.0
+            .entry(std::ptr::from_ref(routine))
+            .or_insert_with(|| record_load_points(routine, ctx))
+    }
+}
+
+/// Is record variable `var_lc` (lowercased; `var_id` narrows by id when both
+/// sides carry one) put in a loaded state after `anchor`, the node `node_id`,
+/// in source order? A point in the other arm of a branch holding the node
+/// ([`branch_exclusive`]) does not count. The one "reset after" check of d39
+/// (dirt reset after a call) and d37 (#299, receiver reset after a `Validate`).
+/// Limit: source order, so a reload earlier in a loop body that runs again
+/// after the node is not seen.
+pub(crate) fn load_point_after(
+    points: &HashMap<String, Vec<LoadPoint<'_>>>,
+    tree: Option<&PCFNNode>,
+    var_lc: &str,
+    var_id: Option<&str>,
+    anchor: &PAnchor,
+    node_id: &str,
+) -> bool {
+    points.get(var_lc).is_some_and(|pts| {
+        pts.iter().any(|p| {
+            before_anchor(anchor, p.anchor)
+                && p.is_variable(var_id)
+                && !branch_exclusive(tree, node_id, p.node_id)
+        })
+    })
+}
+
 /// Whether every caller of `routine` is visible, so a detector that hands a
 /// finding up to the callers ("the owner decides") will actually judge them:
 /// either the routine has a resolved workspace caller, or it cannot be called
@@ -337,7 +380,9 @@ const TABLE_TRIGGERS_REC_AUTO_PERSIST: &[&str] = &["OnInsert", "OnModify", "OnDe
 /// auto-persist; d39's rule for who persists `Rec` is
 /// [`implicit_rec_persisted_by_owner`]). When unsure (any other
 /// kind / object type / trigger name / receiver) returns `false` — the
-/// detectors keep firing.
+/// detectors keep firing. d11 and d37 also skip the receiver `Rec` of EVERY
+/// Table / TableExtension routine (#299): see [`is_table_receiver_rec`],
+/// [`table_rec_persisted_by_owner`] and [`receiver_reset_after`].
 pub(crate) fn is_platform_loaded_trigger_rec(
     routine: &ModelRoutine,
     record_variable_name: &str,
@@ -399,7 +444,9 @@ const PAGE_TRIGGERS_REC_DELETED: &[&str] = &["OnDeleteRecord"];
 const TABLEEXT_TRIGGERS_AFTER_WRITE: &[&str] = &["OnAfterInsert", "OnAfterModify", "OnAfterRename"];
 
 /// Does someone other than `routine` persist the implicit `Rec` it leaves dirty?
-/// d39's owner rule (#272; it absorbs detector-audit class B). True for:
+/// d39's owner rule (#272; it absorbs detector-audit class B). Its Table arm is
+/// [`table_rec_persisted_by_owner`], which d37 also reads for its receiver skip
+/// (#299, with [`is_table_receiver_rec`] and [`receiver_reset_after`]). True for:
 /// - a Table / TableExtension procedure or field trigger: `Rec` is the caller's
 ///   record (`Cust.Foo()`, `Cust.Validate(F)`), which the caller persists;
 /// - any other table / tableext trigger except [`TABLEEXT_TRIGGERS_AFTER_WRITE`]:
@@ -436,7 +483,7 @@ pub(crate) fn implicit_rec_persisted_by_owner(
     let is_trigger = routine.kind == "trigger";
     let named = |names: &[&str]| names.iter().any(|t| routine.name.eq_ignore_ascii_case(t));
     match routine.object_type.as_str() {
-        "Table" | "TableExtension" => !is_trigger || !named(TABLEEXT_TRIGGERS_AFTER_WRITE),
+        "Table" | "TableExtension" => table_rec_persisted_by_owner(routine),
         "Page" | "PageExtension" => {
             (is_trigger && named(PAGE_TRIGGERS_REC_DELETED))
                 || ((!is_trigger || named(PAGE_TRIGGERS_REC_PERSISTED))
@@ -444,6 +491,70 @@ pub(crate) fn implicit_rec_persisted_by_owner(
         }
         _ => false,
     }
+}
+
+/// The Table / TableExtension arm of [`implicit_rec_persisted_by_owner`]: every
+/// procedure and trigger except tableext OnAfterInsert / OnAfterModify /
+/// OnAfterRename ([`TABLEEXT_TRIGGERS_AFTER_WRITE`]). Shared with d37 (#299),
+/// which asks d39's question about a `Validate` on the receiver.
+pub(crate) fn table_rec_persisted_by_owner(routine: &ModelRoutine) -> bool {
+    routine.kind != "trigger"
+        || !TABLEEXT_TRIGGERS_AFTER_WRITE
+            .iter()
+            .any(|t| routine.name.eq_ignore_ascii_case(t))
+}
+
+/// #299: is `record_variable_name` the implicit receiver `Rec` of a Table /
+/// TableExtension routine, the record its caller (or, for a trigger, the
+/// platform) handed it? Read from the receiver flag `ir_record_variables` sets
+/// on the seeded row only; a declared `Rec` of any type gets no seeded row, and
+/// a missing flag reads `false`, so the detectors keep reporting.
+pub(crate) fn is_table_receiver_rec(routine: &ModelRoutine, record_variable_name: &str) -> bool {
+    record_variable_name.eq_fold_identifier("rec")
+        && routine
+            .record_variables
+            .iter()
+            .any(|rv| rv.is_receiver && rv.name.eq_fold_identifier("rec"))
+}
+
+/// #299: the anchors of every bare whole-record replacement `Rec := Other` in
+/// `routine` (both sides bare identifiers: `rhs_identifier` is set; a member
+/// target `X.Rec := v` never sets it). d37 reads the ones after a `Validate`,
+/// d11 the ones before a `Modify` / `Validate`.
+pub(crate) fn bare_rec_assignments(routine: &ModelRoutine) -> impl Iterator<Item = &PAnchor> {
+    routine
+        .var_assignments
+        .iter()
+        .filter(|asg| asg.lhs_name == "rec" && asg.rhs_identifier.is_some())
+        .map(|asg| &asg.source_anchor)
+}
+
+/// #299: does `routine` put its receiver `Rec` in a new state after `anchor`
+/// (the `Validate` d37 judges, node `op_id`)? Two kinds of point:
+/// - the shared "loaded" definition ([`record_load_points`]: own Get / Find* /
+///   Next / Init / Copy / TransferFields and `var` helpers that load), read
+///   through [`load_point_after`], the same check as d39;
+/// - a bare `Rec := Other` ([`bare_rec_assignments`]). Assignments are not
+///   leaves of `statement_tree`, so no branch exclusion applies to them: one in
+///   the other arm keeps the finding.
+///
+/// `Clear(Rec)` never reaches here: d37's helper verdict already suppresses a
+/// `Validate` followed by a call that takes the record through an unresolved
+/// binding (`suppress-unknown`), which a builtin `Clear(Rec)` is.
+pub(crate) fn receiver_reset_after(
+    routine: &ModelRoutine,
+    points: &HashMap<String, Vec<LoadPoint<'_>>>,
+    anchor: &PAnchor,
+    op_id: &str,
+) -> bool {
+    load_point_after(
+        points,
+        routine.statement_tree.as_ref(),
+        "rec",
+        None,
+        anchor,
+        op_id,
+    ) || bare_rec_assignments(routine).any(|a| before_anchor(anchor, a))
 }
 
 /// The page holding `routine` (for a PageExtension, its base page, looked up by
@@ -1874,6 +1985,7 @@ mod tests {
                 parameter_index: None,
             },
             scope: None,
+            is_receiver: false,
         }
     }
 

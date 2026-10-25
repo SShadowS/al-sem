@@ -245,6 +245,11 @@ pub struct ModelRecordVariable {
     /// the L3 record-type projection is field-allowlisted, so this never reaches
     /// a golden. Populated by later tasks.
     pub scope: Option<String>,
+    /// #299: the implicit receiver `Rec` of a Table / TableExtension routine.
+    /// Forwarded from `PRecordVariable.is_receiver`; unlike `temp_state` it is
+    /// never rewritten by `record_types` (a temporary table or an entry guard
+    /// turns the receiver's PD temp state into `Known(true)`).
+    pub is_receiver: bool,
 }
 
 impl ModelRecordVariable {
@@ -1335,6 +1340,7 @@ fn project_ir(
                     parameter_index: rv.parameter_index,
                     temp_state: rv.temp_state.clone(),
                     scope: rv.scope.clone(),
+                    is_receiver: rv.is_receiver,
                 })
                 .collect();
             // Task 3 (temp-state) PROMOTION + SHADOWING: append object-global record
@@ -1370,6 +1376,7 @@ fn project_ir(
                         parameter_index: g.parameter_index,
                         temp_state: g.temp_state.clone(),
                         scope: g.scope.clone(),
+                        is_receiver: false,
                     });
                 }
             }

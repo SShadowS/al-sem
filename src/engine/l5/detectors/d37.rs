@@ -1,5 +1,5 @@
 //! D37 — `Validate(...)` on a record variable with no subsequent `Modify` /
-//! `ModifyAll` / `Insert` to persist the change. Port of al-sem
+//! `Insert` to persist the change. Port of al-sem
 //! `src/detectors/d37-validate-without-persist.ts`.
 //!
 //! Detection (intra-routine, source-ordered): for each `Validate` op V on record-var
@@ -14,9 +14,18 @@
 //! therefore excluded from the persist set (only a genuine `Modify`/`Insert` on R
 //! persists the Validate).
 //!
-//! Suppressions: temporary records, by-var parameter records, and calls forwarding R
+//! Suppressions, in check order: temporary records; every parameter record, by-var
+//! and by-value; the G-9 platform-loaded trigger `Rec`
+//! ([`is_platform_loaded_trigger_rec`], checked BEFORE the walk, so a reset after
+//! the Validate does not matter there); a later persist on R; calls forwarding R
 //! to a helper whose summary MAY persist (persistsCurrentRecord = "yes") or is
-//! opaque/unresolved (conservative).
+//! opaque/unresolved (conservative); and last (#299, stats key `callerOwnedRec`)
+//! the receiver `Rec` of a Table / TableExtension routine
+//! ([`is_table_receiver_rec`]) when d39's Table owner rule says its owner persists
+//! it ([`table_rec_persisted_by_owner`]: not a tableext
+//! OnAfterInsert / OnAfterModify / OnAfterRename) and the routine does not put
+//! `Rec` in a new state after the Validate ([`receiver_reset_after`]: a reload,
+//! a `var` helper that loads it, or a bare `Rec := Other`).
 //!
 //! Reads the CORE `RoutineSummary.parameterRoles` via
 //! `ctx.parameter_roles_by_routine`, and the post-upgrade per-callsite bindings via
@@ -25,7 +34,10 @@
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::detectors::{anchor_of, before_anchor, is_platform_loaded_trigger_rec};
+use crate::engine::l5::detectors::{
+    LoadPointCache, anchor_of, before_anchor, is_platform_loaded_trigger_rec,
+    is_table_receiver_rec, receiver_reset_after, table_rec_persisted_by_owner,
+};
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FixOption, id_list};
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
@@ -65,6 +77,9 @@ pub fn detect_d37(
     let mut skipped_temp_record = 0u64;
     let mut skipped_parameter = 0u64;
     let mut skipped_trigger_rec = 0u64;
+    let mut skipped_caller_owned_rec = 0u64;
+    // Each routine's load points, built only for a receiver `Validate`, once.
+    let mut load_points = LoadPointCache::default();
     // A collided id's call sites, each with its LAST OWNING row (#160 step 11b
     // §4.6): `site_pick` reads that row's callee and bindings.
     let site_owners = crate::program::model::projection::site_owners(
@@ -144,7 +159,22 @@ pub fn detect_d37(
                 skipped_helper_persists_unknown += 1;
                 continue;
             }
-            // "do-not-suppress" — fall through to emit.
+            // "do-not-suppress". #299: a `Validate` on the receiver `Rec` of a
+            // Table / TableExtension routine is persisted by its owner (d39's Table
+            // owner rule), unless this routine puts `Rec` in a new state after it.
+            // Checked last, so the counter holds only would-be findings.
+            if is_table_receiver_rec(routine, &op.record_variable_name)
+                && table_rec_persisted_by_owner(routine)
+                && !receiver_reset_after(
+                    routine,
+                    load_points.get(routine, ctx),
+                    &op.source_anchor,
+                    &op.id,
+                )
+            {
+                skipped_caller_owned_rec += 1;
+                continue;
+            }
 
             emit(routine, op, &mut findings, fp_index);
         }
@@ -160,6 +190,7 @@ pub fn detect_d37(
     stats.add_skip("tempRecord", skipped_temp_record);
     stats.add_skip("parameter", skipped_parameter);
     stats.add_skip("triggerRec", skipped_trigger_rec);
+    stats.add_skip("callerOwnedRec", skipped_caller_owned_rec);
     Ok(DetectorOutput::no_diag(findings, stats))
 }
 

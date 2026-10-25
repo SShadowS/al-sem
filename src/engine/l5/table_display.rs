@@ -103,6 +103,7 @@ mod tests {
                 parameter_index: None,
             },
             scope: None,
+            is_receiver: false,
         }
     }
 

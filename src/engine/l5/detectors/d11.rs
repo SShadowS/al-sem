@@ -3,8 +3,13 @@
 //!
 //! Flags `Modify` / `Validate` on a record variable that was never loaded
 //! earlier in the same routine (no prior Get/FindFirst/FindLast/FindSet/Find/
-//! Next/Init/Insert/Copy before the mutating op). Skips by-var parameter records
-//! (the caller is responsible for loading them). G-10/G-16: a prior call that
+//! Next/Init/Insert/Copy before the mutating op). Skips every parameter record,
+//! by-var and by-value (the caller is responsible for loading them), and, for
+//! the same reason, the receiver `Rec` of a Table / TableExtension routine
+//! (#299, [`is_table_receiver_rec`]: the record the method was called on or the
+//! trigger fired for; stats key `callerOwnedRec`, checked last), unless the
+//! routine replaced `Rec` itself with a bare `Rec := Other` before the op. This
+//! is ownership, not proof that the caller loaded it. G-10/G-16: a prior call that
 //! loads the record also counts — the platform built-in `GetBySystemId` and any
 //! resolved callee chain that loads the by-var argument (bounded multi-hop
 //! callee summary, `detectors::record_loaded_by_call_before`) — as does a
@@ -20,8 +25,9 @@
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{
-    RECORD_LOAD_OPS, anchor_of, before_anchor, is_platform_loaded_trigger_rec,
-    record_loaded_by_assignment_before, record_loaded_by_call_before,
+    RECORD_LOAD_OPS, anchor_of, bare_rec_assignments, before_anchor,
+    is_platform_loaded_trigger_rec, is_table_receiver_rec, record_loaded_by_assignment_before,
+    record_loaded_by_call_before,
 };
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
@@ -48,6 +54,7 @@ pub fn detect_d11(
     let mut skipped_parse_incomplete = 0u64;
     let mut skipped_parameter = 0u64;
     let mut skipped_trigger_rec = 0u64;
+    let mut skipped_caller_owned_rec = 0u64;
 
     for routine in &ws.routines {
         // roleOf(routine) !== "primary" → skip. Source-only: every routine is
@@ -61,7 +68,8 @@ pub fn detect_d11(
         }
         candidates_considered += 1;
 
-        // Collect by-var parameter record variable names (lowercased).
+        // Collect every parameter record variable name, by-var and by-value
+        // (lowercased).
         let param_record_names: std::collections::HashSet<String> = routine
             .record_variables
             .iter()
@@ -114,6 +122,18 @@ pub fn detect_d11(
                 &op.record_variable_name,
                 &op.source_anchor,
             ) {
+                continue;
+            }
+            // #299: the receiver `Rec` of a Table / TableExtension routine is the
+            // caller's (or the platform's) record; its entry state is the caller's
+            // responsibility, as for a parameter record. Checked last, so the
+            // counter holds only ops that would otherwise be reported. Not when
+            // the routine itself replaced `Rec` (bare `Rec := Other`) before the
+            // op: the state is then this routine's, not the caller's.
+            if is_table_receiver_rec(routine, &op.record_variable_name)
+                && !bare_rec_assignments(routine).any(|a| before_anchor(a, &op.source_anchor))
+            {
+                skipped_caller_owned_rec += 1;
                 continue;
             }
 
@@ -188,6 +208,7 @@ pub fn detect_d11(
     stats.add_skip("parseIncomplete", skipped_parse_incomplete);
     stats.add_skip("other", skipped_parameter);
     stats.add_skip("triggerRec", skipped_trigger_rec);
+    stats.add_skip("callerOwnedRec", skipped_caller_owned_rec);
     Ok(DetectorOutput {
         findings,
         stats,

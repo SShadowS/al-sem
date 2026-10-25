@@ -32,6 +32,7 @@
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.run_trigger`
 //!   - `PLoop.exhausting_advance`
+//!   - `PRecordVariable.is_receiver`
 //!   - `PFieldAccess.access`
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PCFNNode.is_case_else`
@@ -418,7 +419,7 @@ impl PartialEq for PLoop {
 
 impl Eq for PLoop {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 pub struct PRecordVariable {
     pub id: String,
     pub name: String,
@@ -435,6 +436,28 @@ pub struct PRecordVariable {
     /// Populated by later tasks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    /// #299: this row is the implicit receiver `Rec` of a Table / TableExtension
+    /// routine (the record the routine was called or fired on), set only where
+    /// `ir_record_variables` seeds it. Not serialized: a deserialized row reads
+    /// `false`, so every reader fails closed (the detectors keep reporting).
+    #[serde(skip)]
+    pub is_receiver: bool,
+}
+
+/// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
+/// `is_receiver` is EXCLUDED — serde-skipped internal data that a deserialized
+/// baseline row reads as `false`; including it would make every freshly-walked
+/// table receiver compare unequal to its vector counterpart (as `PVarAssignment`).
+impl PartialEq for PRecordVariable {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.name == other.name
+            && self.table_name == other.table_name
+            && self.temp_state == other.temp_state
+            && self.is_parameter == other.is_parameter
+            && self.parameter_index == other.parameter_index
+            && self.scope == other.scope
+    }
 }
 
 /// Variable initializer — a one-hop `ValueSource` projection. Kept as raw JSON
@@ -722,7 +745,10 @@ pub struct L2Projection {
 
 #[cfg(test)]
 mod tests {
-    use super::{PTempState, known_temp_suppresses, temp_state_suppresses};
+    use super::{
+        PRecordVariable, PTempState, RECEIVER_PARAM_INDEX, known_temp_suppresses,
+        temp_state_suppresses,
+    };
 
     fn ts(kind: &str, value: Option<bool>, param: Option<u32>) -> PTempState {
         PTempState {
@@ -780,7 +806,33 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 9, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 10, "scanner found {actual:?}");
         assert_eq!(documented, actual);
+    }
+
+    /// #299: a table receiver row round-trips through JSON without the flag (it is
+    /// serde-skipped, so it reads back `false`: fail closed) and still compares
+    /// equal, because `PartialEq` covers only the serialized surface.
+    #[test]
+    fn receiver_flag_is_not_serialized_and_not_compared() {
+        let row = PRecordVariable {
+            id: "r/rv/rec".to_string(),
+            name: "Rec".to_string(),
+            table_name: None,
+            temp_state: PTempState {
+                kind: "parameter-dependent".to_string(),
+                value: None,
+                parameter_index: Some(RECEIVER_PARAM_INDEX),
+            },
+            is_parameter: false,
+            parameter_index: None,
+            scope: None,
+            is_receiver: true,
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        assert!(!json.contains("eceiver"), "flag leaked into {json}");
+        let back: PRecordVariable = serde_json::from_str(&json).unwrap();
+        assert!(!back.is_receiver);
+        assert_eq!(back, row);
     }
 }
