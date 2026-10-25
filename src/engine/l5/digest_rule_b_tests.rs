@@ -112,7 +112,8 @@ fn b4_rule_b_is_off_on_the_cut() {
     let model = view.model();
     let cut = compose_snapshot(model);
     let roots: Vec<String> = stable_roots(model, &["CallWrite"]).into_iter().collect();
-    let entries = crate::engine::l5::digest::compute_digest_effects_cli(&cut, model, Some(&roots));
+    let entries =
+        crate::engine::l5::digest::compute_digest_effects_cli(&cut, model, Some(&roots), false);
     let effects = &entries[0].effects;
     assert_eq!(
         shape(effects),
@@ -326,6 +327,7 @@ fn an_event_boundary_group_is_in_the_may_relations() {
         &tree,
         model,
         Some(std::slice::from_ref(&root)),
+        false,
     );
     let effects = &entries[0].effects;
     let http: Vec<&DigestEffectResult> =
@@ -715,7 +717,7 @@ fn t3_digest_scoped_equals_unscoped() {
                 raw: WitnessScope::All,
             },
         );
-        let unscoped = digest_effects(&mut all, model, &roots, false, false);
+        let unscoped = digest_effects(&mut all, model, &roots, false, false, false);
         for root in &roots {
             let subjects: BTreeSet<String> = model
                 .workspace
@@ -738,6 +740,7 @@ fn t3_digest_scoped_equals_unscoped() {
                 &mut scoped_tree,
                 model,
                 std::slice::from_ref(root),
+                false,
                 false,
                 false,
             );
@@ -1008,7 +1011,7 @@ fn prove_scoped_equals_unscoped() {
                     raw: WitnessRequest::primary().scope(model),
                 },
             );
-            let unscoped = digest_effects(&mut all, model, &roots, false, true);
+            let unscoped = digest_effects(&mut all, model, &roots, false, true, false);
             for root in &roots {
                 let mut scoped_tree = tree_of(
                     model,
@@ -1026,6 +1029,7 @@ fn prove_scoped_equals_unscoped() {
                     std::slice::from_ref(root),
                     false,
                     true,
+                    false,
                 );
                 let mut one = |e: &DigestEffects| {
                     let entry = e.entries.iter().find(|x| &x.routine_id == root);

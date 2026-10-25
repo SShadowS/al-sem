@@ -104,6 +104,9 @@ pub struct TreeDemand {
     /// cone also counts the tree's analysis gaps it visits. Per job, so a
     /// digest on the same view never gets the count.
     pub gaps_in_cone: bool,
+    /// Digest's `--include-reads` (#246): the effects also carry `DB_READ`.
+    /// Per job, set by digest after [`digest_plan`].
+    pub include_reads: bool,
     pub read: TreeRead,
 }
 
@@ -342,6 +345,7 @@ pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: boo
                 subjects: witness.clone(),
                 tests,
                 gaps_in_cone: false,
+                include_reads: false,
                 read: TreeRead::Effects,
             },
         )]
@@ -355,6 +359,21 @@ pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: boo
         witness,
         trees,
     }
+}
+
+/// `alsem digest --include-reads` (#246): [`digest_plan`] whose tree's
+/// effects also carry `DB_READ`.
+pub fn digest_reads_plan(
+    detectors: Vec<Detector>,
+    roots: BTreeSet<String>,
+    tests: bool,
+    include_reads: bool,
+) -> Plan {
+    let mut plan = digest_plan(detectors, roots, tests);
+    for (_, tree) in &mut plan.trees {
+        tree.include_reads = include_reads;
+    }
+    plan
 }
 
 /// `alsem prove` (#160 step 9 D2): digest's plan over its one root, or none,
@@ -390,6 +409,7 @@ fn run_and_tree_plan(detectors: Vec<Detector>, subjects: WitnessRequest, read: T
                 subjects,
                 tests: false,
                 gaps_in_cone: false,
+                include_reads: false,
                 read,
             },
         )],
@@ -935,6 +955,7 @@ impl View {
                             &roots,
                             demand.tests,
                             demand.gaps_in_cone,
+                            demand.include_reads,
                         );
                         effects.insert(*job, out);
                     }
@@ -1612,6 +1633,7 @@ mod tests {
                 subjects: WitnessRequest::empty(),
                 tests: false,
                 gaps_in_cone: false,
+                include_reads: false,
                 read: TreeRead::Effects,
             },
         )]);
@@ -1636,6 +1658,7 @@ mod tests {
             subjects,
             tests: false,
             gaps_in_cone: false,
+            include_reads: false,
             read: TreeRead::Effects,
         }
     }
@@ -2211,6 +2234,7 @@ mod tests {
                 subjects: WitnessRequest::empty(),
                 tests: false,
                 gaps_in_cone: false,
+                include_reads: false,
                 read,
             },
         )])

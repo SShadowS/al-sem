@@ -3347,12 +3347,33 @@ fn digest_query(
     isolated_event_ids: Option<&std::collections::HashSet<String>>,
     ordering_witness_only: bool,
 ) -> Vec<DigestEntryResult> {
+    digest_query_reads(
+        snap,
+        roots,
+        return_summaries,
+        isolated_event_ids,
+        ordering_witness_only,
+        false,
+    )
+}
+
+/// [`digest_query`] with `include_reads` (digest's `--include-reads`, #246):
+/// table reads become `DB_READ` effects (see [`digest_one_root`]).
+fn digest_query_reads(
+    snap: &CapabilitySnapshot,
+    roots: &[String],
+    return_summaries: Option<&HashMap<String, crate::engine::return_summary::RoutineReturnSummary>>,
+    isolated_event_ids: Option<&std::collections::HashSet<String>>,
+    ordering_witness_only: bool,
+    include_reads: bool,
+) -> Vec<DigestEntryResult> {
     let mut entries = digest_query_with(
         snap,
         roots,
         return_summaries,
         isolated_event_ids,
         ordering_witness_only,
+        include_reads,
         |e| e,
     );
     // Sort entries by routineId.
@@ -3369,6 +3390,7 @@ fn digest_query_with<T: Send>(
     return_summaries: Option<&HashMap<String, crate::engine::return_summary::RoutineReturnSummary>>,
     isolated_event_ids: Option<&std::collections::HashSet<String>>,
     ordering_witness_only: bool,
+    include_reads: bool,
     reduce: impl Fn(DigestEntryResult) -> T + Sync,
 ) -> Vec<T> {
     let idx = {
@@ -3420,6 +3442,7 @@ fn digest_query_with<T: Send>(
                 return_summaries,
                 isolated_event_ids,
                 ordering_witness_only,
+                include_reads,
             )
             .map(&reduce)
         })
@@ -3760,12 +3783,21 @@ fn digest_one_root<'i>(
     return_summaries: Option<&HashMap<String, crate::engine::return_summary::RoutineReturnSummary>>,
     isolated_event_ids: Option<&std::collections::HashSet<String>>,
     ordering_witness_only: bool,
+    include_reads: bool,
 ) -> Option<DigestEntryResult> {
     {
         let display = idx.routine_display_by_id.get(rid).cloned()?;
 
         let empty_facts: Vec<&Fact> = Vec::new();
         let all_facts = idx.facts_by_routine.get(rid).unwrap_or(&empty_facts);
+
+        // `--include-reads` (#246): a table read is `DB_READ`. `map_op` itself
+        // stays read-blind, so ordering, prove and r4f never see one.
+        let effect_type_of = |f: &Fact| {
+            effect_type_of(f).or_else(|| {
+                (include_reads && f.op == "read" && f.resource_kind == "table").then_some("DB_READ")
+            })
+        };
 
         // Effect-fact filter: drop op=="execute"&&dispatch; keep iff effectTypeOf!=None.
         let effect_facts: Vec<&Fact> = all_facts
@@ -4235,9 +4267,13 @@ fn digest_one_root<'i>(
             // The ordering engine consumes each effect's conditionality (for
             // COMMIT_ON_SUCCESS_PATH). It is the SAME per-path value already stored on
             // the effect (#17 — the duplicated effect-level closure is gone).
+            // `DB_READ` (#246) is not graded: it stays out of the input, keeps
+            // empty guarantees, and the graded effects take `scoped` in order.
+            let graded = |t: &str| !(include_reads && t == "DB_READ");
             let ordering_inputs: Vec<crate::engine::l5::ordering_engine::OrderingEffectInput> =
                 effects
                     .iter()
+                    .filter(|e| graded(&e.effect_type))
                     .map(|e| {
                         let mut via_paths: Vec<Vec<QueryWitnessHop>> = e
                             .via_paths
@@ -4287,10 +4323,12 @@ fn digest_one_root<'i>(
                 return_summaries,
                 isolated_event_ids,
             );
-            for (i, eff) in effects.iter_mut().enumerate() {
-                if let Some(sg) = scoped.get(i) {
-                    eff.scoped_guarantees = sg.clone();
-                }
+            for (eff, sg) in effects
+                .iter_mut()
+                .filter(|e| graded(&e.effect_type))
+                .zip(&scoped)
+            {
+                eff.scoped_guarantees = sg.clone();
             }
         }
 
@@ -4669,7 +4707,15 @@ pub(crate) fn compute_digest_effects_for_ordering_over<T: Send>(
         Some(&isolated)
     };
     let _s = pt::span("ordering", "ordering.digest_query");
-    digest_query_with(snap, &roots, Some(&summaries), isolated_opt, true, reduce)
+    digest_query_with(
+        snap,
+        &roots,
+        Some(&summaries),
+        isolated_opt,
+        true,
+        false,
+        reduce,
+    )
 }
 
 /// The roots of `all_roots` whose cone carries an ordering ingredient: an
@@ -4715,10 +4761,12 @@ pub(crate) fn ordering_kept_roots(
 /// `only`: compute entries for these roots alone (still only reportable ones).
 /// Each root's pass is independent of the others (see `digest_query_with`), so
 /// this changes no entry; `alsem digest` passes its changed roots (#66).
+/// `include_reads`: digest's `--include-reads` (#246), table reads as `DB_READ`.
 pub fn compute_digest_effects_cli(
     snap: &CapabilitySnapshot,
     resolved: &Model,
     only: Option<&[String]>,
+    include_reads: bool,
 ) -> Vec<DigestEntryResult> {
     let mut roots = reportable_roots(resolved);
     if let Some(only) = only {
@@ -4732,7 +4780,7 @@ pub fn compute_digest_effects_cli(
         Some(&isolated)
     };
     // No routineReturnSummaries — matches TS runDigestPipeline behavior.
-    digest_query(snap, &roots, None, isolated_opt, false)
+    digest_query_reads(snap, &roots, None, isolated_opt, false, include_reads)
 }
 
 /// Project the R4-F digest-effects differential document, PRETTY-serialized with a

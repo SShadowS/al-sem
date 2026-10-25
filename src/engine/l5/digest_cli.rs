@@ -837,17 +837,18 @@ fn count_gaps_in_cone(
 /// S4 entries and each root's unresolved cone are computed first, then the
 /// identity table and the coverage are moved out (the tree's other readers are
 /// done with them). `gaps_in_cone`: prove's plan, which counts each cone's
-/// analysis gaps.
+/// analysis gaps. `include_reads`: digest's `--include-reads` (#246).
 pub(crate) fn digest_effects(
     tree: &mut CapabilitySnapshot,
     model: &Model,
     roots: &[String],
     tests: bool,
     gaps_in_cone: bool,
+    include_reads: bool,
 ) -> DigestEffects {
     let coverage_graph =
         tests.then(|| crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model));
-    let entries = compute_digest_effects_cli(tree, model, Some(roots));
+    let entries = compute_digest_effects_cli(tree, model, Some(roots), include_reads);
     let gap_subjects: Vec<&str> = if gaps_in_cone {
         tree.analysis_gaps
             .iter()
@@ -1079,7 +1080,7 @@ pub fn run_digest_query_full_from_entries(
                 let mut detail = eff.detail.clone();
                 if matches!(
                     eff.effect_type.as_str(),
-                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
+                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE" | "DB_READ"
                 ) {
                     let join = temp_states.for_effect(
                         rid,
@@ -1456,6 +1457,7 @@ fn project_query_diagnostic(d: &DigestQueryDiagnostic) -> serde_json::Value {
 /// Build the DocumentEnvelope<"digest", DigestPayload> as a serde_json::Value,
 /// then serialize it like serialize_document_value (sorted keys, null-drop,
 /// trailing \n). `test_coverage` (`--tests`, #254) is added after the null drop.
+/// `include_reads` (#246) adds `payload.includeReads: true`; off, no key.
 #[allow(clippy::too_many_arguments)] // document-envelope fields; grouping would obscure
 pub fn project_digest_document(
     workspace_fp: &str,
@@ -1468,6 +1470,7 @@ pub fn project_digest_document(
     alsem_ver: &str,
     deterministic: bool,
     test_coverage: Option<serde_json::Value>,
+    include_reads: bool,
 ) -> String {
     // payload.summary
     // rootsRequested = roots.length + queryResult.diagnostics.length (contracts/digest.ts:443).
@@ -1512,6 +1515,9 @@ pub fn project_digest_document(
     );
     payload.insert("dependencies".into(), dependencies.to_json());
     payload.insert("entries".into(), serde_json::Value::Array(entries_val));
+    if include_reads {
+        payload.insert("includeReads".into(), true.into());
+    }
     payload.insert("summary".into(), serde_json::Value::Object(summary));
     payload.insert(
         "workspaceFingerprint".into(),
@@ -1746,6 +1752,7 @@ pub fn run_digest_pipeline(
             deterministic,
             single_app,
             tests,
+            include_reads: false,
         },
     )
 }
@@ -1763,6 +1770,8 @@ pub struct DigestRequest<'a> {
     pub single_app: bool,
     /// `--tests`: add `payload.testCoverage` (#254).
     pub tests: bool,
+    /// `--include-reads`: add `DB_READ` effects and `payload.includeReads` (#246).
+    pub include_reads: bool,
 }
 
 /// [`run_digest_pipeline`] over a given detector set (#160 §4.4.4): the plan
@@ -1828,7 +1837,7 @@ impl Job for DigestJob<'_> {
     }
 
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
-        use crate::engine::session::digest_plan;
+        use crate::engine::session::digest_reads_plan;
         // The no-input check runs right after the build (an id or build error
         // still wins), before any detector run or solve (#160 §4.4.4).
         let has_input = self
@@ -1865,10 +1874,11 @@ impl Job for DigestJob<'_> {
         );
         // The plan composes the roots' raw facts, the tree over the cone graph
         // and their effects; no resolved root composes no tree (exit 2 below).
-        let plan = digest_plan(
+        let plan = digest_reads_plan(
             self.detectors.clone(),
             changed_roots.roots.iter().cloned().collect(),
             self.req.tests,
+            self.req.include_reads,
         );
         Ok(PlanPart {
             plan,
@@ -1919,6 +1929,7 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
         alsem_ver,
         deterministic,
         tests,
+        include_reads,
         ..
     } = req;
     let (alsem_ver, deterministic, tests) = (*alsem_ver, *deterministic, *tests);
@@ -1995,6 +2006,7 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
         alsem_ver,
         deterministic,
         test_coverage.as_ref().map(|t| t.to_json_value()),
+        *include_reads,
     );
 
     // Human. The dependencies line appears only when apps were loaded, so a
@@ -2088,6 +2100,7 @@ mod tests {
                         deterministic: true,
                         single_app: false,
                         tests: false,
+                        include_reads: false,
                     },
                 );
             },

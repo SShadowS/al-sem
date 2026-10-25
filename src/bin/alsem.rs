@@ -720,6 +720,18 @@ struct DigestCli {
     #[arg(long, default_value_t = false)]
     tests: bool,
 
+    /// Add DB_READ effects: one per table read site (Get, Find*, IsEmpty,
+    /// Count*, Next, CalcFields, CalcSums), with the same coverage, witness and
+    /// dependency-boundary rules as writes, and `payload.includeReads: true`.
+    /// Limits: per read SITE, not per table (physical and temporary reads of a
+    /// table are separate effects); an unresolved table has no resourceId; a
+    /// dependency-boundary group has no resourceId or tempState and names at
+    /// most 10 tables; LockTable is not a read; CalcFields reads only the
+    /// record's own table, not FlowField sources; DB_READ is NOT ordering-graded,
+    /// so its guarantees are always empty ("not graded", not "no label applies").
+    #[arg(long = "include-reads", default_value_t = false)]
+    include_reads: bool,
+
     /// A batch's decision whether `--changed` names an existing diff file,
     /// made once by the parent ([`pin_changed`]); `None`: ask the file system.
     #[arg(skip)]
@@ -1719,6 +1731,7 @@ fn plan_digest(d: DigestCli) -> Planned {
                 deterministic: d.deterministic,
                 single_app: d.single_app,
                 tests: d.tests,
+                include_reads: d.include_reads,
             };
             Box::new(DigestJob::new(req, d.format == "human", d.out.as_deref()))
         },
