@@ -68,9 +68,8 @@ pub struct ModelObject {
     /// Serialize-derived into any gate surface (R0–R3 goldens are
     /// field-allowlisted projections), so adding this never touches a golden.
     /// Populated at L3 assembly (native path) from the `PageType` property; dep
-    /// objects use `None` (the ABI projection does not expose it — no API-page
-    /// fixture in the R4-F corpus exercises it). Consumed by R4-F
-    /// `root_classification::kinds_for` to classify `api-page` roots.
+    /// objects forward the ABI projection's `page_type` (`abi_rows.rs`). Consumed
+    /// by R4-F `root_classification::kinds_for` to classify `api-page` roots.
     pub page_type: Option<String>,
     /// Object `InherentCommitBehavior` property (Codeunit / Table /
     /// TableExtension only). Canonical lower-case member: "ignore" | "error" |
@@ -82,11 +81,12 @@ pub struct ModelObject {
     /// lower-case form). Consumed by R4-F `return_summary` to merge the
     /// object-level commit behavior into each routine's `commitBehavior`.
     pub inherent_commit_behavior: Option<String>,
-    /// Page / PageExtension `SourceTable` temporary flag — `Some(true)` when the
-    /// SourceTable object is marked `TableType = Temporary`, `Some(false)` when
-    /// confirmed non-temporary, `None` when not yet resolved. Additive — ModelObject
-    /// is NOT Serialize-derived into any gate surface, so this never touches a
-    /// golden. Populated by later tasks (Task 5).
+    /// Page / PageExtension declared `SourceTableTemporary` property: `Some(true)`
+    /// when written `true`, `Some(false)` for any other written value, `None` when
+    /// absent (native path). A dependency page known only from its symbols carries
+    /// it from there (#302; symbols spell `"1"` / `"0"`, see
+    /// `symbol_reference::abi_bool`). Additive — ModelObject is NOT
+    /// Serialize-derived into any gate surface, so this never touches a golden.
     pub source_table_temporary: Option<bool>,
     /// Page / PageExtension layout controls (`part`/`systempart`/`usercontrol`) — used
     /// to resolve `CurrPage.<control>…` member calls. Empty for non-page objects.
@@ -96,7 +96,9 @@ pub struct ModelObject {
     /// Serialize-derived into any gate surface. Consumed by d57.
     pub single_instance: Option<bool>,
     /// Page `Editable` / `InsertAllowed` / `ModifyAllowed` / `DeleteAllowed`
-    /// property booleans (Page only, `None` when absent). Additive. Consumed by d64.
+    /// property booleans (Page only, `None` when absent). A dependency page known
+    /// only from its symbols carries them from there (#302). Additive. Consumed by
+    /// d64 and d39 (`page_may_modify`: `Editable` / `ModifyAllowed`).
     pub editable: Option<bool>,
     pub insert_allowed: Option<bool>,
     pub modify_allowed: Option<bool>,
@@ -250,6 +252,11 @@ pub struct ModelRecordVariable {
     /// never rewritten by `record_types` (a temporary table or an entry guard
     /// turns the receiver's PD temp state into `Known(true)`).
     pub is_receiver: bool,
+    /// #302 F5: the routine's IMPLICIT `Rec` (the row `ir_record_variables` seeds
+    /// when no param / local / global named `Rec` shadows it), as opposed to a
+    /// declared `Rec`. Set at L3 assembly; `record_types`' page
+    /// `SourceTableTemporary` override marks only this row temporary.
+    pub is_implicit_rec: bool,
 }
 
 impl ModelRecordVariable {
@@ -1328,6 +1335,14 @@ fn project_ir(
 
             // The routine's OWN record vars (params + locals), built first so they
             // take precedence over any same-named promoted global.
+            // A `Rec` row that no param / local declares is the seeded implicit one
+            // (a shadowing global suppresses the seed and is promoted below).
+            let declares_rec = ir_routine
+                .params
+                .iter()
+                .map(|p| &p.name)
+                .chain(ir_routine.locals.iter().map(|v| &v.name))
+                .any(|n| n.eq_ignore_ascii_case("rec"));
             let mut record_variables: Vec<ModelRecordVariable> = features
                 .record_variables
                 .iter()
@@ -1341,6 +1356,7 @@ fn project_ir(
                     temp_state: rv.temp_state.clone(),
                     scope: rv.scope.clone(),
                     is_receiver: rv.is_receiver,
+                    is_implicit_rec: !declares_rec && rv.name.eq_ignore_ascii_case("rec"),
                 })
                 .collect();
             // Task 3 (temp-state) PROMOTION + SHADOWING: append object-global record
@@ -1377,6 +1393,7 @@ fn project_ir(
                         temp_state: g.temp_state.clone(),
                         scope: g.scope.clone(),
                         is_receiver: false,
+                        is_implicit_rec: false,
                     });
                 }
             }

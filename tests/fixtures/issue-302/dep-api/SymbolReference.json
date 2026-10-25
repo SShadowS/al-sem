@@ -1,0 +1,49 @@
+{
+  "RuntimeVersion": "13.0",
+  "AppId": "22222222-0000-0000-0000-000000000302",
+  "Name": "Dep302",
+  "Publisher": "probe",
+  "Version": "1.0.0.0",
+  "Tables": [
+    {
+      "Id": 70300,
+      "Name": "Dep Cust",
+      "Fields": [
+        {"Id": 1, "Name": "No.", "TypeDefinition": {"Name": "Code"}},
+        {"Id": 2, "Name": "Name", "TypeDefinition": {"Name": "Text"}}
+      ]
+    }
+  ],
+  "Pages": [
+    {
+      "Id": 70311,
+      "Name": "Dep API Closed",
+      "Properties": [
+        {"Name":"PageType","Value":"API"},
+        {"Name":"SourceTable","Value":"70300"},
+        {"Name":"Editable","Value":"0"},
+        {"Name":"InsertAllowed","Value":"0"},
+        {"Name":"ModifyAllowed","Value":"0"},
+        {"Name":"DeleteAllowed","Value":"0"}
+      ]
+    },
+    {
+      "Id": 70312,
+      "Name": "Dep API Temp",
+      "Properties": [
+        {"Name":"PageType","Value":"API"},
+        {"Name":"SourceTable","Value":"70300"},
+        {"Name":"Editable","Value":"0"},
+        {"Name":"SourceTableTemporary","Value":"1"}
+      ]
+    },
+    {
+      "Id": 70313,
+      "Name": "Dep API Open",
+      "Properties": [
+        {"Name":"PageType","Value":"API"},
+        {"Name":"SourceTable","Value":"70300"}
+      ]
+    }
+  ]
+}

@@ -39,7 +39,7 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
         // + ABI agree on the ModelObject shape. Consumed by return_summary to merge
         // object-level commit behavior into each dep routine's commitBehavior.
         inherent_commit_behavior: o.inherent_commit_behavior.clone(),
-        source_table_temporary: None,
+        source_table_temporary: o.page_props.source_table_temporary,
         page_controls: o
             .page_controls
             .iter()
@@ -53,14 +53,13 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
                 target: t.clone(),
             })
             .collect(),
-        // The ABI projection does not carry `SingleInstance` / page write-surface
-        // booleans / a decl anchor — dep objects default to `None`, mirroring the
-        // `source_table_temporary: None` default above.
+        // The page write-surface booleans come from the symbols (#302). The ABI
+        // projection does not carry `SingleInstance` or a decl anchor.
         single_instance: None,
-        editable: None,
-        insert_allowed: None,
-        modify_allowed: None,
-        delete_allowed: None,
+        editable: o.page_props.editable,
+        insert_allowed: o.page_props.insert_allowed,
+        modify_allowed: o.page_props.modify_allowed,
+        delete_allowed: o.page_props.delete_allowed,
         source_anchor: None,
         declaration_only_routines: Vec::new(),
     }
@@ -159,6 +158,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
                 // identically. scope is unserialized / unread today (latent-parity).
                 scope: None,
                 is_receiver: false,
+                is_implicit_rec: false,
             }
         })
         .collect();

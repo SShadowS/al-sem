@@ -96,6 +96,7 @@ mod cli_c_events_differential;
 mod cli_c_policy_differential;
 mod cli_caller_owned_rec;
 mod cli_d35_unknown_commit;
+mod cli_d39_dependency_page;
 mod cli_decision7_precedence;
 mod cli_dependency_diagnostics;
 mod cli_diff_strict;

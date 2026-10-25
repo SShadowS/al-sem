@@ -441,24 +441,45 @@ pub fn resolve_routine_record_types(
     // A page declared `SourceTableTemporary = true` always loads its SourceTable
     // as a temporary copy — the implicit `Rec` and `xRec` are ALWAYS temporary.
     // When `object.source_table_temporary == Some(true)`, force `Known(true)` on
-    // every record op whose variable name (lowercased) is `rec` or `xrec`.
+    // every record op on the implicit `rec` / `xrec` and on the implicit `Rec` row.
     //
     // Purely ADDITIVE toward Known(true) — never downgrades. Runs after the
     // table-level override so both can apply independently; they compose without
     // interference (both only upgrade → Known(true), never downgrade).
-    if object.map(|o| o.source_table_temporary == Some(true)) == Some(true) {
+    //
+    // A PageExtension's `Rec` is its BASE page's (#302 CR1): read the base page's
+    // flag, found by name like pass 3 (last-wins when several pages share it).
+    let page_temp = |o: &ModelObject| match o.object_type.as_str() {
+        "PageExtension" => o
+            .extends_target_name
+            .as_deref()
+            .and_then(|base| symbols.object_by_type_name("Page", base))
+            .and_then(|p| p.source_table_temporary),
+        _ => o.source_table_temporary,
+    };
+    if object.and_then(page_temp) == Some(true) {
+        // Only the IMPLICIT `Rec` / `xRec` (#302 F5): a declared param, local or
+        // global of that name is its own record, temporary only if declared so.
+        let declared = |name: &str| {
+            routine
+                .record_variables
+                .iter()
+                .any(|v| !v.is_implicit_rec && v.name.eq_ignore_ascii_case(name))
+        };
+        let (rec_declared, xrec_declared) = (declared("rec"), declared("xrec"));
         for op in routine.record_operations.iter_mut() {
-            let name = op.record_variable_name.to_lowercase();
-            if name == "rec" || name == "xrec" {
+            let name = &op.record_variable_name;
+            if (name.eq_ignore_ascii_case("rec") && !rec_declared)
+                || (name.eq_ignore_ascii_case("xrec") && !xrec_declared)
+            {
                 op.temp_state = Some(crate::program::body::scope::ts_known(true));
             }
         }
-        // The implicit Rec/xRec record VARIABLE (d22 FN registration) must agree —
+        // The implicit Rec record VARIABLE (d22 FN registration) must agree —
         // on a SourceTableTemporary page it is genuinely temporary. Without this the
         // L2-default Known(false) would wrongly mark a temp-page Rec as physical.
         for variable in routine.record_variables.iter_mut() {
-            let name = variable.name.to_lowercase();
-            if name == "rec" || name == "xrec" {
+            if variable.is_implicit_rec {
                 variable.temp_state = crate::program::body::scope::ts_known(true);
             }
         }
@@ -486,6 +507,89 @@ fn mark_implicit_rec_bindings_temp(routine: &mut ModelRoutine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #302 F5: on a `SourceTableTemporary` page, the override marks the IMPLICIT
+    /// `Rec` (row and ops) temporary, never a declared `Rec` of the same name. The
+    /// precondition is stated by hand: the same row, once with `is_implicit_rec`
+    /// set and once without; `xRec` is never declared here, so its op is
+    /// temporary in both cases.
+    #[test]
+    fn page_temp_override_spares_a_declared_rec() {
+        use crate::program::body::features::PAnchor;
+        use crate::program::body::scope::ts_known;
+        use crate::program::model::workspace::{ModelRecordOperation, ModelRecordVariable};
+        let page = ModelObject {
+            id: "app/Page/1".to_string(),
+            app_guid: "app".to_string(),
+            object_type: "Page".to_string(),
+            object_number: 1,
+            object_key: "1".to_string(),
+            name: "Temp Page".to_string(),
+            source_table_name: None,
+            extends_target_name: None,
+            implements_interfaces: None,
+            object_subtype: None,
+            page_type: None,
+            inherent_commit_behavior: None,
+            source_table_temporary: Some(true),
+            page_controls: Vec::new(),
+            single_instance: None,
+            editable: None,
+            insert_allowed: None,
+            modify_allowed: None,
+            delete_allowed: None,
+            source_anchor: None,
+            declaration_only_routines: Vec::new(),
+        };
+        let symbols = SymbolTable::build(std::slice::from_ref(&page), &[]);
+        let op = |name: &str| ModelRecordOperation {
+            id: format!("op/{name}"),
+            op: "FindSet".to_string(),
+            record_variable_name: name.to_string(),
+            record_variable_id: None,
+            table_id: None,
+            temp_state: Some(ts_known(false)),
+            field_arguments: None,
+            source_anchor: PAnchor {
+                source_unit_id: "ws:p.al".to_string(),
+                start_line: 0,
+                start_column: 0,
+                end_line: 0,
+                end_column: 0,
+                syntax_kind: "x".to_string(),
+            },
+            loop_stack: Vec::new(),
+            field_argument_infos: None,
+            in_until_condition: false,
+            run_trigger: None,
+        };
+        let temp = Some(ts_known(true));
+        // (is_implicit_rec, expected: Rec row temp, Rec op temp, xRec op temp)
+        for (implicit, want) in [(true, (true, true, true)), (false, (false, false, true))] {
+            let mut r = crate::engine::l4::db_effect_solver::tests::pd_routine("r");
+            r.object_type = "Page".to_string();
+            r.record_variables = vec![ModelRecordVariable {
+                id: "r/rv/rec".to_string(),
+                name: "Rec".to_string(),
+                table_name: None,
+                table_id: None,
+                is_parameter: false,
+                parameter_index: None,
+                temp_state: ts_known(false),
+                scope: None,
+                is_receiver: false,
+                is_implicit_rec: implicit,
+            }];
+            r.record_operations = vec![op("Rec"), op("xRec")];
+            resolve_routine_record_types(&mut r, Some(&page), &symbols);
+            let got = (
+                r.record_variables[0].temp_state == ts_known(true),
+                r.record_operations[0].temp_state == temp,
+                r.record_operations[1].temp_state == temp,
+            );
+            assert_eq!(got, want, "is_implicit_rec = {implicit}");
+        }
+    }
 
     #[test]
     fn record_table_name_of_basics() {

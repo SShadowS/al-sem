@@ -287,6 +287,21 @@ pub struct AbiObject {
     pub inherent_permissions: Option<String>,
     /// The object's `InherentEntitlements` property value, raw (#27).
     pub inherent_entitlements: Option<String>,
+    /// A page's write-surface booleans (#302). Default (all `None`) elsewhere.
+    pub page_props: AbiPageProps,
+}
+
+/// A page's `Editable` / `InsertAllowed` / `ModifyAllowed` / `DeleteAllowed` /
+/// `SourceTableTemporary` (#302), the same properties the native path reads into
+/// `ModelObject`. `None` = absent or not a boolean. Read by [`abi_bool`], whose
+/// value rule differs from the native one on purpose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AbiPageProps {
+    pub editable: Option<bool>,
+    pub insert_allowed: Option<bool>,
+    pub modify_allowed: Option<bool>,
+    pub delete_allowed: Option<bool>,
+    pub source_table_temporary: Option<bool>,
 }
 
 /// `raw` as an application scope (`"OnPrem"` / `"Cloud"`), or `None` for any
@@ -531,6 +546,51 @@ fn raw_object_property(
         }
     }
     None
+}
+
+/// A boolean object property as SymbolReference.json spells it (#302): BC 28
+/// symbols write `"1"` / `"0"`; `"true"` / `"false"` are read too (trimmed, any
+/// case). Any other value, or no property, is `None`.
+///
+/// This differs ON PURPOSE from the native source rule (`workspace.rs`: exactly
+/// `"true"` is `Some(true)`, any other present value `Some(false)`). That rule
+/// would read the symbols' `"1"` as `false`, and an unknown spelling must stay
+/// "not declared", not "declared false". Do not unify the two.
+fn abi_bool(value: &str) -> Option<bool> {
+    let v = value.trim();
+    if v == "1" || v.eq_ignore_ascii_case("true") {
+        Some(true)
+    } else if v == "0" || v.eq_ignore_ascii_case("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// A page's five write-surface booleans, in one pass over its `Properties`
+/// (names matched in any case, like [`raw_object_property`]), each read by
+/// [`abi_bool`].
+fn abi_page_props(properties: &Option<Vec<RawProperty>>) -> AbiPageProps {
+    let mut props = AbiPageProps::default();
+    // Reversed, so the FIRST of a repeated name wins, as in `raw_object_property`.
+    for p in properties.iter().flatten().rev() {
+        let name = p.name.as_deref().unwrap_or_default();
+        let slot = if name.eq_ignore_ascii_case("Editable") {
+            &mut props.editable
+        } else if name.eq_ignore_ascii_case("InsertAllowed") {
+            &mut props.insert_allowed
+        } else if name.eq_ignore_ascii_case("ModifyAllowed") {
+            &mut props.modify_allowed
+        } else if name.eq_ignore_ascii_case("DeleteAllowed") {
+            &mut props.delete_allowed
+        } else if name.eq_ignore_ascii_case("SourceTableTemporary") {
+            &mut props.source_table_temporary
+        } else {
+            continue;
+        };
+        *slot = p.value.as_deref().and_then(abi_bool);
+    }
+    props
 }
 
 /// Task 6 (G7, RV-4): a table is declared temporary when it carries the property
@@ -1319,6 +1379,7 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
                     collect_page_controls(controls, &mut page_controls);
                 }
                 abi_object.page_controls = page_controls;
+                abi_object.page_props = abi_page_props(&o.properties);
             }
             if let Some(ifaces) = &o.implemented_interfaces {
                 abi_object.implemented_interfaces =
@@ -1543,6 +1604,133 @@ mod tests {
             ],
             [Some("A\"B"); 3]
         );
+    }
+
+    /// #302: a page's write-surface booleans as symbols spell them. Real BC 28
+    /// symbols write `"0"` / `"1"`; `true` / `false` (any case, trimmed) are read
+    /// too; any other value, or no property, is `None` (NOT `Some(false)`, which
+    /// is what the native `== "true"` rule would give).
+    #[test]
+    fn page_props_value_contract() {
+        // (page name, raw JSON `Value` or None for absent, expected `editable`)
+        let rows: [(&str, Option<&str>, Option<bool>); 9] = [
+            ("V one", Some("1"), Some(true)),
+            ("V zero", Some("0"), Some(false)),
+            ("V true", Some("true"), Some(true)),
+            ("V false", Some("false"), Some(false)),
+            ("V TRUE", Some("TRUE"), Some(true)),
+            ("V spaced False", Some(" False "), Some(false)),
+            ("V maybe", Some("maybe"), None),
+            ("V empty", Some(""), None),
+            ("V absent", None, None),
+        ];
+        let pages: Vec<String> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, (name, value, _))| {
+                let props = match value {
+                    Some(v) => format!(r#"[{{"Name":"Editable","Value":"{v}"}}]"#),
+                    None => "[]".to_string(),
+                };
+                format!(r#"{{"Id":{},"Name":"{name}","Properties":{props}}}"#, i + 1)
+            })
+            .collect();
+        let json = format!(
+            r#"{{"AppId":"g","Name":"D","Publisher":"p","Version":"1.0.0.0","Pages":[{}]}}"#,
+            pages.join(",")
+        );
+        // Precondition, by hand: every value under test is in the JSON as written.
+        for (name, value, _) in &rows {
+            if let Some(v) = value {
+                let literal = format!(
+                    r#""Name":"{name}","Properties":[{{"Name":"Editable","Value":"{v}"}}]"#
+                );
+                assert_eq!(json.matches(&literal).count(), 1, "{literal}");
+            }
+        }
+        let abi = parse_symbol_reference(&json);
+        assert_eq!(abi.error, None);
+        let got: Vec<(&str, Option<bool>)> = rows
+            .iter()
+            .map(|(name, ..)| {
+                let o = abi.objects.iter().find(|o| o.name == *name).unwrap();
+                (*name, o.page_props.editable)
+            })
+            .collect();
+        let want: Vec<(&str, Option<bool>)> = rows.iter().map(|(n, _, e)| (*n, *e)).collect();
+        assert_eq!(got, want);
+    }
+
+    /// #302: each of the five properties feeds its own field. The three pages
+    /// give every property a different 3-page pattern (Editable 001,
+    /// ModifyAllowed 010, InsertAllowed 011, DeleteAllowed 100,
+    /// SourceTableTemporary 101), so a field fed from the wrong property differs
+    /// on at least one page. Property names are matched in any case. A codeunit
+    /// that carries `Editable` keeps the default.
+    #[test]
+    fn page_props_field_wiring() {
+        let json = r#"{"AppId":"g","Name":"D","Publisher":"p","Version":"1.0.0.0",
+            "Pages":[
+              {"Id":1,"Name":"Wire A","Properties":[{"Name":"Editable","Value":"0"},{"Name":"ModifyAllowed","Value":"0"},{"Name":"InsertAllowed","Value":"0"},{"Name":"DeleteAllowed","Value":"1"},{"Name":"SourceTableTemporary","Value":"1"}]},
+              {"Id":2,"Name":"Wire B","Properties":[{"Name":"Editable","Value":"0"},{"Name":"modifyallowed","Value":"1"},{"Name":"InsertAllowed","Value":"1"},{"Name":"DeleteAllowed","Value":"0"},{"Name":"SourceTableTemporary","Value":"0"}]},
+              {"Id":3,"Name":"Wire C","Properties":[{"Name":"Editable","Value":"1"},{"Name":"ModifyAllowed","Value":"0"},{"Name":"InsertAllowed","Value":"1"},{"Name":"DeleteAllowed","Value":"0"},{"Name":"SourceTableTemporary","Value":"1"}]}],
+            "Codeunits":[{"Id":4,"Name":"Cu","Properties":[{"Name":"Editable","Value":"0"}]}]}"#;
+        // (Editable, ModifyAllowed, InsertAllowed, DeleteAllowed, SourceTableTemporary)
+        let values = [
+            ("Wire A", ["0", "0", "0", "1", "1"]),
+            ("Wire B", ["0", "1", "1", "0", "0"]),
+            ("Wire C", ["1", "0", "1", "0", "1"]),
+        ];
+        let names = [
+            "Editable",
+            "ModifyAllowed",
+            "InsertAllowed",
+            "DeleteAllowed",
+            "SourceTableTemporary",
+        ];
+        // Preconditions, by hand: each value is in the JSON as stated (Wire B's
+        // ModifyAllowed is spelled lower-case), and the five per-property
+        // patterns are pairwise distinct.
+        for (page, vals) in &values {
+            let start = json.find(&format!(r#""Name":"{page}""#)).unwrap();
+            let obj = &json[start..start + json[start..].find("]}").unwrap()];
+            for (name, v) in names.iter().zip(vals) {
+                let name = if *page == "Wire B" && *name == "ModifyAllowed" {
+                    "modifyallowed"
+                } else {
+                    name
+                };
+                let literal = format!(r#"{{"Name":"{name}","Value":"{v}"}}"#);
+                assert_eq!(obj.matches(&literal).count(), 1, "{page}: {literal}");
+            }
+        }
+        let patterns: Vec<String> = (0..5)
+            .map(|i| values.iter().map(|(_, v)| v[i]).collect())
+            .collect();
+        for i in 0..5 {
+            for j in i + 1..5 {
+                assert_ne!(patterns[i], patterns[j], "{} vs {}", names[i], names[j]);
+            }
+        }
+
+        let abi = parse_symbol_reference(json);
+        assert_eq!(abi.error, None);
+        let props = |n: &str| abi.objects.iter().find(|o| o.name == n).unwrap().page_props;
+        let b = |v: &str| Some(v == "1");
+        for (page, [e, m, i, d, s]) in &values {
+            assert_eq!(
+                props(page),
+                AbiPageProps {
+                    editable: b(e),
+                    modify_allowed: b(m),
+                    insert_allowed: b(i),
+                    delete_allowed: b(d),
+                    source_table_temporary: b(s),
+                },
+                "{page}"
+            );
+        }
+        assert_eq!(props("Cu"), AbiPageProps::default());
     }
 
     #[test]

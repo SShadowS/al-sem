@@ -33,9 +33,7 @@
 //! tableext OnAfterInsert / OnAfterModify / OnAfterRename, OnAfterGetRecord or any
 //! other page trigger, on an `Editable = false` / `ModifyAllowed = false` page, and
 //! wherever the routine reloads `Rec` after the call. `xRec` always reports. Known
-//! false negatives: a modifiable page opened in view mode (a runtime fact), and a
-//! pageext over a read-only dependency page (the model has no page properties for
-//! dependency pages).
+//! false negative: a modifiable page opened in view mode (a runtime fact).
 //!
 //! Reads the CORE `RoutineSummary.parameterRoles` via `ctx.parameter_roles_by_routine`
 //! (the `dirtyAtExit` fact), `ctx.reverse_call_graph`, and the post-upgrade per-callsite

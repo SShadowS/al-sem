@@ -788,6 +788,7 @@ mod tests {
                     temp_state: ts,
                     scope: Some("parameter".to_string()),
                     is_receiver: false,
+                    is_implicit_rec: false,
                 },
             );
         }

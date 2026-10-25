@@ -135,6 +135,8 @@ pub struct ProjectedObject {
     pub inherent_commit_behavior: Option<String>,
     /// Page controls (name, kind-string, target) forwarded from the ABI — see AbiObject.
     pub page_controls: Vec<(String, String, String)>,
+    /// A page's write-surface booleans (#302), forwarded from the ABI.
+    pub page_props: crate::engine::deps::symbol_reference::AbiPageProps,
 }
 
 /// The projection result — dependency model entities.
@@ -376,6 +378,7 @@ pub fn project_abi_to_index(
             implements_interfaces: o.implemented_interfaces.clone(),
             inherent_commit_behavior: o.inherent_commit_behavior.clone(),
             page_controls: o.page_controls.clone(),
+            page_props: o.page_props,
         });
         for r in &o.routines {
             routines.push(abi_routine_to_routine(
