@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A call that never runs no longer makes an analysis incomplete (#288).** A
+  call or record operation after `exit;` (or after a stop such as
+  `Error('text')`) added no fact, but it still counted as a coverage gap and as
+  an edge of the capability cone. So d35 reported "Commit may be reachable
+  (incomplete call coverage)" for a subscriber whose only gap was a dead
+  interface call, and a dead `Codeunit.Run(Id)`, a dead call to a committing
+  procedure or a dead `Insert(true)` whose `OnInsert` commits still counted.
+  Now every coverage producer (the detector context, the cross-app base, the
+  r3a3 projection and the snapshot base) and the cone's typed-edge graph skip
+  such a site (`capability_cone::DeadSites`), and d35 names only the gaps that
+  remain. A site counts as dead only where today's `unreachable` mark is
+  provably sound: its routine has no preprocessor directive, and every bare
+  `Error(...)` in it takes the Text form (a string literal, two or more
+  arguments, or a Text, Label or Code variable found in AL's scope order, the
+  named return value included, with AL's Unicode-aware name equality) and binds
+  to the builtin, not to an own `procedure Error`
+  (`ModelRoutine::dead_marks_trusted`, which fails closed). Elsewhere dead code
+  still counts, as before. No golden moves; on the pinned CDO baseline no
+  finding moves.
+
 ## [2.1.0] - 2026-10-25
 
 ### Added

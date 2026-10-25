@@ -1229,11 +1229,25 @@ fn callsite_id_for_edge(e: &TypedEdge) -> Option<String> {
 
 /// Build the typed-edge graph from the typed edges (the Cone payload,
 /// `Transfer::Cone`) + the node list. Mirrors al-sem `buildTypedEdgeGraph`.
-fn build_typed_edge_graph(typed: &[TypedEdge], nodes: &[String]) -> TypedEdgeGraph {
+///
+/// An edge from a site in `dead` is left out (#288): dead code adds no facts
+/// ([`direct_facts_for_routine`]), so it adds no callee and no unresolved
+/// source either. The site is the edge's `callsite_id`, else its
+/// `operation_id` (an implicit-trigger edge has no call site). The cone's SCCs
+/// are built over this filtered graph.
+fn build_typed_edge_graph(
+    typed: &[TypedEdge],
+    nodes: &[String],
+    dead: &DeadSites<'_>,
+) -> TypedEdgeGraph {
     let mut outgoing: HashMap<String, Vec<TypedOutEdge>> = HashMap::new();
     let mut unresolved_sources: BTreeSet<String> = BTreeSet::new();
 
     for edge in typed {
+        let site = edge.callsite_id.as_deref().or(edge.operation_id.as_deref());
+        if dead.contains(&edge.from, site) {
+            continue;
+        }
         if edge.kind == "object-run-unresolved" {
             unresolved_sources.insert(edge.from.clone());
             continue;
@@ -3150,7 +3164,7 @@ pub fn compose_cone_over_graph(
 ) -> ConeOutcome {
     crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
-    let g = build_typed_edge_graph(typed, nodes);
+    let g = build_typed_edge_graph(typed, nodes, &DeadSites::of(routines));
     let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &g.outgoing {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
@@ -3550,10 +3564,15 @@ pub(crate) fn capability_fact_sort_key(f: &PCapabilityFact) -> String {
 /// [`is_callsite_local_kind`](super::db_effect_solver::is_callsite_local_kind)
 /// selects, keyed by the edge's `from`. The reason text is the kind text.
 ///
-/// Every coverage producer calls it once over its edges and folds each row with
+/// Every coverage producer calls it once over its edges, with
+/// `DeadSites::of(&ws.routines)`, and folds each row with
 /// [`fold_uncertainty_reasons`]: the detector context and the cross-app base
 /// over `ExecRelation::uncertainty_all` (both halves), the r3a3 projection and
 /// the snapshot base over their own graph's edges.
+///
+/// An edge whose site is in `dead` ([`DeadSites`]) adds nothing (#288): that
+/// site never runs, so it is no gap, as it is no fact in
+/// [`direct_facts_for_routine`]. An edge with no `callsite_id` is kept.
 ///
 /// A routine's own edges are its whole contribution, because the L4 solve never
 /// moves these kinds from a callee to a caller or between SCC members:
@@ -3571,19 +3590,68 @@ pub(crate) fn capability_fact_sort_key(f: &PCapabilityFact) -> String {
 /// The map borrows from `edges`.
 pub(crate) fn callsite_local_coverage_reasons<'e>(
     edges: impl IntoIterator<Item = &'e UncertaintyEdge>,
+    dead: &DeadSites<'_>,
 ) -> HashMap<&'e str, BTreeSet<&'e str>> {
     let mut out: HashMap<&str, BTreeSet<&str>> = HashMap::new();
     for ue in edges {
         let kind = ue.uncertainty.kind.as_str();
-        if super::db_effect_solver::is_callsite_local_kind(kind) {
+        if super::db_effect_solver::is_callsite_local_kind(kind)
+            && !dead.contains(&ue.from, ue.uncertainty.callsite_id.as_deref())
+        {
             out.entry(ue.from.as_str()).or_default().insert(kind);
         }
     }
     out
 }
 
+/// The call and operation sites that never run (#288), for the coverage fold
+/// and the cone's edges. A (routine id, site id) pair is dead when EVERY row of
+/// that id that holds the site marks it `unreachable` AND that row's marks are
+/// trusted ([`ModelRoutine::dead_marks_trusted`], which fails closed). Rows
+/// that lack the site do not vote: an edge for the site came from a row that
+/// holds it. A site no row holds, and an edge with no site, are never dead.
+///
+/// shortcut: rests on the per-row trust gate; upgrade when the reachability
+/// mark itself is sound (the split-off discovery D2) and the gate goes away.
+#[derive(Default)]
+pub(crate) struct DeadSites<'a>(HashMap<(&'a str, &'a str), bool>);
+
+impl<'a> DeadSites<'a> {
+    pub(crate) fn of(routines: &'a [ModelRoutine]) -> Self {
+        // Built once per producer and once in d35; the span shows its cost.
+        let _span = crate::engine::perf_trace::span("cone", "dead_sites");
+        let mut m: HashMap<(&str, &str), bool> = HashMap::new();
+        for r in routines {
+            let sites = r
+                .call_sites
+                .iter()
+                .map(|cs| (cs.id.as_str(), cs.control_context.as_deref()))
+                .chain(
+                    r.operation_sites
+                        .iter()
+                        .map(|op| (op.id.as_str(), op.control_context.as_deref())),
+                );
+            for (site, cc) in sites {
+                let dead = r.dead_marks_trusted && cc == Some("unreachable");
+                m.entry((r.id.as_str(), site))
+                    .and_modify(|d| *d &= dead)
+                    .or_insert(dead);
+            }
+        }
+        m.retain(|_, dead| *dead);
+        DeadSites(m)
+    }
+
+    pub(crate) fn contains(&self, from: &str, site: Option<&str>) -> bool {
+        // Covariance shortens the key lifetime to the arguments'.
+        let m: &HashMap<(&str, &str), bool> = &self.0;
+        site.is_some_and(|s| m.contains_key(&(from, s)))
+    }
+}
+
 /// Fold a routine's call-site-local coverage reasons (`extra`, from
-/// [`callsite_local_coverage_reasons`]) into its direct coverage. A reason that
+/// [`callsite_local_coverage_reasons`], which has already left out dead sites)
+/// into its direct coverage. A reason that
 /// is new implies incomplete resolution, so `complete` drops to `partial` and
 /// the reasons come back sorted; with nothing new, both come back unchanged.
 pub(crate) fn fold_uncertainty_reasons(
@@ -3962,7 +4030,8 @@ pub(crate) fn build_cross_app_base_from(
     let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
     let empty_pub: Vec<&EventSymbol> = Vec::new();
     // #160 step 5: the one coverage fold, both uncertainty halves.
-    let uncertainty_reasons = callsite_local_coverage_reasons(rel.uncertainty_all());
+    let uncertainty_reasons =
+        callsite_local_coverage_reasons(rel.uncertainty_all(), &DeadSites::of(&ws.routines));
     for r in &ws.routines {
         let mut leaf = None;
         if dep_routine_ids.contains(&r.id) && r.body_available {
@@ -4391,7 +4460,8 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
 
     // Typed-edge graph (cone substrate) + Tarjan SCC over it.
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
-    let g = build_typed_edge_graph(&graph.typed_edges, &nodes);
+    let dead = DeadSites::of(&ws.routines);
+    let g = build_typed_edge_graph(&graph.typed_edges, &nodes, &dead);
     let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &g.outgoing {
         adjacency.insert(from.clone(), list.iter().map(|e| e.to.clone()).collect());
@@ -4421,7 +4491,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     // forwards the reason (+ adds the routine to unknownTargets). Source-only
     // `interfaceImplsKnowledgePartial` is false, so the
     // `interface-impls-unknown-in-deps` add-on never fires.
-    let uncertainty_reasons = callsite_local_coverage_reasons(&graph.uncertainty_edges);
+    let uncertainty_reasons = callsite_local_coverage_reasons(&graph.uncertainty_edges, &dead);
 
     // Per-routine direct facts (full) + direct coverage + the dedup-keyed map.
     // #160 step 11b §4.6: R2c, per row, then the projection: a collided id's
@@ -4653,7 +4723,8 @@ pub fn build_r3a3_source_only_base_over(resolved: &Model, graph: CombinedGraph) 
 
     // Per-routine UNCERTAINTY-DERIVED coverage reasons: a scan of `graph`'s
     // uncertainty edges, no L4 solve (#160 step 3).
-    let uncertainty_reasons = callsite_local_coverage_reasons(&graph.uncertainty_edges);
+    let uncertainty_reasons =
+        callsite_local_coverage_reasons(&graph.uncertainty_edges, &DeadSites::of(&ws.routines));
 
     // Per-routine direct facts (full) + uncertainty-folded direct coverage.
     // #160 step 11b §4.6: R2c, per row, then the projection (full-value union;
@@ -4755,7 +4826,9 @@ pub fn compute_r3a3_real_matrix(resolved: &Model) -> R3a3RealMatrix {
     let graph = build_combined_graph(ws, calls, event_graph);
 
     let nodes: Vec<String> = ws.routines.iter().map(|r| r.id.clone()).collect();
-    let g = build_typed_edge_graph(&graph.typed_edges, &nodes);
+    // The same filter as the cone, so this oracle cannot check it (#288's
+    // acceptance tests do).
+    let g = build_typed_edge_graph(&graph.typed_edges, &nodes, &DeadSites::of(&ws.routines));
 
     // Publisher events for the direct-fact key set.
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
@@ -6411,7 +6484,10 @@ codeunit 50111 "Cell Calls"
             ("Orphan".to_string(), set(&["ambiguous-overload"])),
         ]);
         assert_eq!(
-            owned(callsite_local_coverage_reasons(&graph.uncertainty_edges)),
+            owned(callsite_local_coverage_reasons(
+                &graph.uncertainty_edges,
+                &DeadSites::default()
+            )),
             want
         );
     }
@@ -7726,7 +7802,7 @@ codeunit 50100 C
         let nodes = strs(&["A", "C"]);
         let direct: Direct = [("C".to_string(), vec![insert("C", "t/C")])].into();
         assert_eq!(
-            build_typed_edge_graph(&typed, &nodes).outgoing["A"]
+            build_typed_edge_graph(&typed, &nodes, &DeadSites::default()).outgoing["A"]
                 .iter()
                 .filter(|e| e.to == "C")
                 .count(),

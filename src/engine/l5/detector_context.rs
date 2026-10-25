@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::engine::l4::analysis::{CoreSummaries, L4Analysis, L4Request, build_l4};
 use crate::engine::l4::capability_cone::{
-    CapabilityFact, callsite_local_coverage_reasons, compose_cone_over_graph,
+    CapabilityFact, DeadSites, callsite_local_coverage_reasons, compose_cone_over_graph,
     direct_facts_for_routine, fold_uncertainty_reasons,
 };
 use crate::engine::l4::combined_graph::{PrimaryGraph, TypedEdge};
@@ -1289,7 +1289,8 @@ pub(crate) fn det_cone_inputs_over<'e>(
     // direct facts are the full-value union, its coverage the least complete.
     let mut facts_per_row = Vec::with_capacity(ws.routines.len());
     let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
-    let uncertainty_reasons = callsite_local_coverage_reasons(uncertainty);
+    let uncertainty_reasons =
+        callsite_local_coverage_reasons(uncertainty, &DeadSites::of(&ws.routines));
     for r in &ws.routines {
         let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
         let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
@@ -3127,3 +3128,8 @@ mod tests_11b;
 #[cfg(test)]
 #[path = "detector_context_step5_tests.rs"]
 mod tests_step5;
+
+// #288 acceptance tests (dead sites): a child module, like the step 5 tests.
+#[cfg(test)]
+#[path = "detector_context_288_tests.rs"]
+mod tests_288;
