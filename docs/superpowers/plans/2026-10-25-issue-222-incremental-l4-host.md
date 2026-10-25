@@ -348,7 +348,7 @@ The loop:
 | `prepare_l4_seeded` parity, `take_l4` (Review Focus 5) | 2 |
 | T0b (single-app), T1a, T1b; Review Focus 1, 3 | 3 |
 | T1c, T1d, T1e, T1f, T1g, T1h, T1k, T1l, T1m (+ Review Focus 4), T1n, T1o, T1q, T1r | 4 |
-| T1i, T1j, T0b (cross-app) | 5 |
+| T1i, T1j, T0b (cross-app), T1s (review R4-1) | 5 |
 | T3 | 6 |
 | T4a, T4b, T4c; Review Focus 2 | 7 |
 | T5a, T5b, T5c, T5d | 8 |

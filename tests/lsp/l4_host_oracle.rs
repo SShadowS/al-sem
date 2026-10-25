@@ -22,6 +22,10 @@ use al_sem::engine::session::{View, query_plan};
 use al_sem::program::inputs::WorkspaceInputs;
 use al_sem::program::model::workspace::ModelRoutine;
 
+use crate::dep_dispatch_fixture::{
+    DEP_APP_FILE, WS_AL, write_dependency, write_own, write_own_modify,
+};
+
 const UNIVERSES: [ViewUniverse; 2] = [ViewUniverse::CrossApp, ViewUniverse::SingleApp];
 
 const APP_JSON: &str = r#"{"id":"22222222-0000-0000-0000-000000000223","name":"Host222","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50100,"to":50199}]}"#;
@@ -97,6 +101,17 @@ fn fresh_projection(dir: &Path, universe: ViewUniverse) -> L4Projection {
         .expect("a committed refresh has a projection")
 }
 
+/// A plain `View::new` + `prepare(&query_plan())` on `dir`: today's command
+/// path.
+fn query_view(dir: &Path, universe: ViewUniverse) -> View {
+    let inputs = WorkspaceInputs::read(dir, &Default::default());
+    let target =
+        AnalysisTarget::build(&inputs, universe == ViewUniverse::SingleApp, "query").unwrap();
+    let mut view = View::new(target);
+    view.prepare(&query_plan());
+    view
+}
+
 /// One fresh revision: its projection, and a `query` plan view for the model
 /// rows and the relation the preconditions read.
 struct Fresh {
@@ -107,12 +122,10 @@ struct Fresh {
 impl Fresh {
     fn of(dir: &Path, universe: ViewUniverse) -> Fresh {
         let proj = fresh_projection(dir, universe);
-        let inputs = WorkspaceInputs::read(dir, &Default::default());
-        let target =
-            AnalysisTarget::build(&inputs, universe == ViewUniverse::SingleApp, "query").unwrap();
-        let mut view = View::new(target);
-        view.prepare(&query_plan());
-        Fresh { proj, view }
+        Fresh {
+            proj,
+            view: query_view(dir, universe),
+        }
     }
 
     /// The model rows named `name` with `params` parameters, in model order.
@@ -181,35 +194,63 @@ fn case_pre(
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         write_ws(dir, r0);
-        let mut host = IncrementalHost::new(dir, universe);
-        assert_eq!(
-            refresh(&mut host).kind,
-            RefreshKind::Full(FullReason::NoBaseline),
-            "{name} {universe:?}: r0"
+        let mut host = host_r0(name, (dir, universe));
+        step(
+            name,
+            (dir, universe),
+            &mut host,
+            &edit,
+            want_kind,
+            want_resolved,
+            pre,
         );
-        let before = pre.map(|_| Fresh::of(dir, universe));
-        edit(dir);
-        let report = refresh(&mut host);
-        if let (Some(pre), Some(before)) = (pre, &before) {
-            pre(before, &Fresh::of(dir, universe));
-        }
-        assert_eq!(
-            host.projection().expect("committed"),
-            fresh_projection(dir, universe),
-            "{name} {universe:?}: oracle"
+    }
+}
+
+/// A host on `dir`, refreshed once (a Full refresh with no baseline).
+fn host_r0(name: &str, (dir, universe): (&Path, ViewUniverse)) -> IncrementalHost {
+    let mut host = IncrementalHost::new(dir, universe);
+    assert_eq!(
+        refresh(&mut host).kind,
+        RefreshKind::Full(FullReason::NoBaseline),
+        "{name} {universe:?}: r0"
+    );
+    host
+}
+
+/// One edit on a committed host: refresh, the preconditions (fresh before
+/// against fresh after), then the oracle, the kind and the minimality.
+fn step(
+    name: &str,
+    (dir, universe): (&Path, ViewUniverse),
+    host: &mut IncrementalHost,
+    edit: &dyn Fn(&Path),
+    want_kind: RefreshKind,
+    want_resolved: &[&[&str]],
+    pre: Pre<'_>,
+) {
+    let before = pre.map(|_| Fresh::of(dir, universe));
+    edit(dir);
+    let report = refresh(host);
+    if let (Some(pre), Some(before)) = (pre, &before) {
+        pre(before, &Fresh::of(dir, universe));
+    }
+    assert_eq!(
+        host.projection().expect("committed"),
+        fresh_projection(dir, universe),
+        "{name} {universe:?}: oracle"
+    );
+    assert_eq!(report.kind, want_kind, "{name} {universe:?}: kind");
+    assert_eq!(
+        report.resolved,
+        labels(want_resolved),
+        "{name} {universe:?}: re-solved SCCs"
+    );
+    if report.kind == RefreshKind::Incremental {
+        assert!(
+            report.resolved.len() < report.total,
+            "{name} {universe:?}: an incremental refresh re-solves a strict subset"
         );
-        assert_eq!(report.kind, want_kind, "{name} {universe:?}: kind");
-        assert_eq!(
-            report.resolved,
-            labels(want_resolved),
-            "{name} {universe:?}: re-solved SCCs"
-        );
-        if report.kind == RefreshKind::Incremental {
-            assert!(
-                report.resolved.len() < report.total,
-                "{name} {universe:?}: an incremental refresh re-solves a strict subset"
-            );
-        }
     }
 }
 
@@ -217,27 +258,33 @@ fn case_pre(
 /// part (db effects per id, the terminal partition), diagnostics, warnings
 /// and SCC equal what `View::new` + `prepare(&query_plan())` leaves in
 /// `view.l4()` (whose core summaries `prepare` drops). Break: the host
-/// builds its target in the other universe. On these no-dependency fixtures
-/// that break stays green (both universes give the single-app answer); it
-/// fails on `dep_dispatch_fixture::write_own` (checked in Task 3 with a
-/// reverted trial; the fixture lands with Task 5).
+/// builds its target in the other universe. On T1A that break stays green
+/// (no dependency: both universes give the single-app answer); on the
+/// cross-app fixtures (`write_own`, T1i's r0) it fails.
 #[test]
 fn t0b_fresh_host_equals_query_plan() {
-    for universe in UNIVERSES {
-        let tmp = tempfile::tempdir().unwrap();
-        write_ws(tmp.path(), T1A);
-        let host = fresh_projection(tmp.path(), universe).without_core();
-        let inputs = WorkspaceInputs::read(tmp.path(), &Default::default());
-        let target =
-            AnalysisTarget::build(&inputs, universe == ViewUniverse::SingleApp, "query").unwrap();
-        let mut view = View::new(target);
-        view.prepare(&query_plan());
-        assert!(
-            view.l4().bundle.routines_with_rows().next().is_some(),
-            "precondition: T1a has bundle rows"
-        );
-        let want = L4Projection::of(view.l4(), &HashMap::new()).without_core();
-        assert_eq!(host, want, "{universe:?}: fresh host vs the query plan");
+    type Write = fn(&Path);
+    let fixtures: [(&str, Write); 3] = [
+        ("T1A", |d| write_ws(d, T1A)),
+        ("write_own", |d| write_own(d, "")),
+        ("T1i r0", t1i_r0),
+    ];
+    for (fixture, write) in fixtures {
+        for universe in UNIVERSES {
+            let tmp = tempfile::tempdir().unwrap();
+            write(tmp.path());
+            let host = fresh_projection(tmp.path(), universe).without_core();
+            let view = query_view(tmp.path(), universe);
+            assert!(
+                view.l4().bundle.routines_with_rows().next().is_some(),
+                "precondition: {fixture} has bundle rows"
+            );
+            let want = L4Projection::of(view.l4(), &HashMap::new()).without_core();
+            assert_eq!(
+                host, want,
+                "{fixture} {universe:?}: fresh host vs the query plan"
+            );
+        }
     }
 }
 
@@ -810,6 +857,71 @@ fn t1o_collided_rows() {
     );
 }
 
+/// T1s (review R4-1): `A` dispatches `G.Go()` over interface `IGo`. The
+/// edit moves `implements IGo` from `X` (inserts `Cust`) to `Y` (inserts
+/// `Item`): only object headers change, so no routine row does, no id is
+/// new and Δ is empty; `A`'s out-edge moves from `X.Go` to `Y.Go`, both
+/// existing and unchanged. Only the `edges_by_from` part of `A`'s row digest
+/// sees it. Break: edges out of the row digest seeds `A` with `Cust`.
+#[test]
+fn t1s_interface_rebind() {
+    let go = |no: u32, name: &'static str, implements: &str, table: &str| {
+        (
+            name,
+            format!(
+                "codeunit {no} {}{implements}\n{{\n    procedure Go()\n    var\n        R: Record {table};\n    begin\n        R.Insert();\n    end;\n}}\n",
+                &name[4..name.len() - 3]
+            ),
+        )
+    };
+    let ws = fixture(&[
+        (
+            "src/IGo.al",
+            "interface IGo\n{\n    procedure Go();\n}\n".to_string(),
+        ),
+        (
+            "src/A.al",
+            cu(
+                50100,
+                "A",
+                "    procedure A()\n    var\n        G: Interface IGo;\n    begin\n        G.Go();\n    end;\n",
+            ),
+        ),
+        go(50103, "src/X.al", " implements IGo", "Cust"),
+        go(50104, "src/Y.al", "", "Item"),
+    ]);
+    let pre = |r0: &Fresh, r1: &Fresh| {
+        for n in ["A", "Go"] {
+            assert_eq!(
+                format!("{:?}", r0.rows(n, 0)),
+                format!("{:?}", r1.rows(n, 0)),
+                "precondition: every {n} row is equal at r0 and r1"
+            );
+        }
+        assert_ne!(
+            r0.edges("A", 0),
+            r1.edges("A", 0),
+            "precondition: A's out-edges move"
+        );
+        assert_ne!(
+            r0.routine("A", 0),
+            r1.routine("A", 0),
+            "precondition: A's projection differs between r0 and r1"
+        );
+    };
+    case_pre(
+        "t1s",
+        &as_refs(&ws),
+        |d| {
+            replace_once(d, "src/X.al", "X implements IGo", "X");
+            replace_once(d, "src/Y.al", "Y\n", "Y implements IGo\n");
+        },
+        RefreshKind::Incremental,
+        &[&["A.A()"]],
+        Some(&pre),
+    );
+}
+
 /// T1q: a `description` in `app.json` changes no row, but `app.json` bytes
 /// are in R0's host half. Break B15 (no `app.json` bytes in R0) makes it
 /// Incremental; the oracle holds either way.
@@ -927,4 +1039,149 @@ fn closure_error_keeps_baseline() {
         assert_eq!(report.kind, RefreshKind::Incremental, "{universe:?}");
         assert!(report.resolved.is_empty(), "{universe:?}: {report:?}");
     }
+}
+
+/// `CallChain` as `WS_AL` writes it, with the blank line after it.
+const CALL_CHAIN: &str = "    procedure CallChain()\n    var\n        Lib: Codeunit \"Dep Lib\";\n    begin\n        Lib.Outer();\n    end;\n\n";
+
+/// T1i's r0: `write_own`, with `CallChain` moved alone into codeunit
+/// `Ws Chain` (`src/Chain.al`) and calling `Lib.Inner()` directly.
+fn t1i_r0(dir: &Path) {
+    write_own(dir, "");
+    assert_eq!(WS_AL.matches(CALL_CHAIN).count(), 1, "fixture: CallChain");
+    replace_once(dir, "src/Work.al", CALL_CHAIN, "");
+    let chain = CALL_CHAIN.replacen("Lib.Outer();", "Lib.Inner();", 1);
+    assert_ne!(chain, CALL_CHAIN, "fixture: CallChain calls Inner");
+    std::fs::write(
+        dir.join("src/Chain.al"),
+        cu(50172, "\"Ws Chain\"", chain.strip_suffix('\n').unwrap()),
+    )
+    .unwrap();
+}
+
+/// T1i (cross-app): `CallChain` stops and then starts again calling the
+/// dependency's `Inner` (the only dependency routine with an L4-visible
+/// effect, its `Customer` insert). r1 drops `Inner` from the demand; r2
+/// brings it back as a new id. Break: R2 without "no member in Δ" seeds
+/// `CallChain` at r1 with the old inherited insert. REDUNDANCY (spec §5.2):
+/// demand adds and removes reach the decision only through new SCC keys and
+/// the caller's own row (T1c, T1d); the demand input is pinned by T1n.
+#[test]
+fn t1i_demand() {
+    let at = (tempfile::tempdir().unwrap(), ViewUniverse::CrossApp);
+    let dir = at.0.path();
+    t1i_r0(dir);
+    let mut host = host_r0("t1i", (dir, at.1));
+    let has_inner = |f: &Fresh| !f.rows("Inner", 0).is_empty();
+    let pre_r1 = |r0: &Fresh, r1: &Fresh| {
+        assert!(has_inner(r0), "precondition: r0's model has an Inner row");
+        assert!(!has_inner(r1), "precondition: r1's model has no Inner row");
+        assert_ne!(
+            r0.routine("CallChain", 0),
+            r1.routine("CallChain", 0),
+            "precondition: CallChain's projection differs between r0 and r1"
+        );
+    };
+    step(
+        "t1i r1",
+        (dir, at.1),
+        &mut host,
+        &|d| replace_once(d, "src/Chain.al", "        Lib.Inner();\n", ""),
+        RefreshKind::Incremental,
+        &[&["Ws Chain.CallChain()"]],
+        Some(&pre_r1),
+    );
+    let pre_r2 = |r1: &Fresh, r2: &Fresh| {
+        assert!(!has_inner(r1), "precondition: r1's model has no Inner row");
+        assert!(has_inner(r2), "precondition: r2's model has an Inner row");
+    };
+    step(
+        "t1i r2",
+        (dir, at.1),
+        &mut host,
+        &|d| {
+            replace_once(
+                d,
+                "src/Chain.al",
+                "    begin\n    end;",
+                "    begin\n        Lib.Inner();\n    end;",
+            )
+        },
+        RefreshKind::Incremental,
+        &[&["Dep Lib.Inner()"], &["Ws Chain.CallChain()"]],
+        Some(&pre_r2),
+    );
+}
+
+/// T1j (cross-app): a dependency change is Full(HostGlobal) through the
+/// closure digest (Q2), (a) bytes only (a new revision comment) and (b)
+/// semantic (`Inner` modifies instead of inserting), and (c) a package the
+/// workspace does not declare lands in `.alpackages` (nothing the analysis
+/// reads changes). Break B9 (no closure digest in R0) makes all three
+/// Incremental. REDUNDANCY for the oracle (spec
+/// §5.2): in (b) `Inner`'s own row changes, so Δ alone also answers right.
+fn t1j(name: &str, edit: &dyn Fn(&Path), pre: &dyn Fn(&Fresh, &Fresh)) {
+    let universe = ViewUniverse::CrossApp;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    write_own(dir, "");
+    let mut host = host_r0(name, (dir, universe));
+    step(
+        name,
+        (dir, universe),
+        &mut host,
+        edit,
+        RefreshKind::Full(FullReason::HostGlobal),
+        &[
+            &["Dep Lib.Inner()"],
+            &["Dep Lib.OnDepEvent()"],
+            &["Dep Lib.Outer()"],
+            &["Dep Sub.HandleDep()"],
+            &["Ws Sub.HandleInWs()"],
+            &["Ws Work.CallChain()"],
+            &["Ws Work.RaiseDep()"],
+            &["Ws Work.TouchCust()"],
+        ],
+        Some(pre),
+    );
+}
+
+fn same_projection(r0: &Fresh, r1: &Fresh) {
+    assert_eq!(r0.proj, r1.proj, "precondition: no projection changes");
+}
+
+#[test]
+fn t1j_a_dependency_bytes_only() {
+    t1j(
+        "t1j (a)",
+        &|d| write_dependency(&d.join(".alpackages").join(DEP_APP_FILE), 1),
+        &same_projection,
+    );
+}
+
+#[test]
+fn t1j_b_dependency_semantic() {
+    t1j("t1j (b)", &|d| write_own_modify(d, ""), &|r0, r1| {
+        assert_ne!(r0.proj, r1.proj, "precondition: the projection changes");
+    });
+}
+
+#[test]
+fn t1j_c_undeclared_package() {
+    const OTHER_GUID: &str = "cccc2222-0000-0000-0000-000000000222";
+    t1j(
+        "t1j (c)",
+        &|d| {
+            crate::symbol_app::write_symbol_app(
+                &d.join(".alpackages/probe_Other_1.0.0.0.app"),
+                OTHER_GUID,
+                "Other",
+                "1.0.0.0",
+                &format!(
+                    r#"{{"RuntimeVersion":"13.0","AppId":"{OTHER_GUID}","Name":"Other","Publisher":"probe","Version":"1.0.0.0"}}"#
+                ),
+            )
+        },
+        &same_projection,
+    );
 }
