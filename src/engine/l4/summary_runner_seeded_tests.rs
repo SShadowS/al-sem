@@ -20,14 +20,14 @@ use std::path::{Path, PathBuf};
 /// groups, the diagnostics, and the SCC list with its flags. No `EffectId`
 /// or `EffectSetId` number appears in it.
 #[derive(Debug, PartialEq)]
-pub(super) struct Projection {
+pub(crate) struct Projection {
     per_id: BTreeMap<String, (Option<RoutineSummary>, Option<Vec<DbEffect>>)>,
     terminal_groups: Vec<Vec<String>>,
     diagnostics: Vec<SummarizeDiagnostic>,
     sccs: Vec<(Vec<String>, bool)>,
 }
 
-pub(super) fn l4_projection(
+pub(crate) fn l4_projection(
     bundle: &SummaryBundle,
     core: &HashMap<String, RoutineSummary>,
     diagnostics: &[SummarizeDiagnostic],
@@ -535,10 +535,13 @@ fn t0a_seeded_entry_without_reuse_equals_today() {
     assert_no_failures(&failures);
 }
 
-/// T2: the baseline reused whole re-solves nothing and projects equal.
+/// T2: the baseline reused whole re-solves nothing and projects equal. At
+/// least one SCC is seeded across the cases, so a corpus with no SCC cannot
+/// pass it trivially (Task 1 review R1-2).
 #[test]
 fn t2_all_seeded_equals_fresh() {
     let mut failures = Vec::new();
+    let mut seeded_total = 0;
     for case in &all_cases() {
         let p = Prepared::new(case);
         let first = p.seeded(None);
@@ -548,6 +551,7 @@ fn t2_all_seeded_equals_fresh() {
             core: &first.1,
         };
         let second = p.seeded(Some(reuse));
+        seeded_total += second.3.seeded;
         if !second.3.resolved.is_empty() || second.3.full {
             failures.push(format!(
                 "{}: re-solved {:?} (full {})",
@@ -558,6 +562,7 @@ fn t2_all_seeded_equals_fresh() {
             failures.push(format!("{}: projection differs", case.name));
         }
     }
+    assert!(seeded_total > 0, "T2 seeded no SCC across the cases");
     assert_no_failures(&failures);
 }
 

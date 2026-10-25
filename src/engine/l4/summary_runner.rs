@@ -1799,14 +1799,15 @@ fn solve_v2(
     Ok((bundle, v2_map, diagnostics, seeding.map(|st| st.outcome)))
 }
 
-/// #222 §4.4: the caller's stop flag, and the baseline to seed from.
-pub(crate) struct L4Control<'a> {
+/// #222 §4.4: the caller's stop flag, and the baseline to seed from. `pub`
+/// with [`L4Reuse`]: `View::prepare_l4_seeded` takes it.
+pub struct L4Control<'a> {
     pub cancel: &'a dyn Fn() -> bool,
     pub reuse: Option<L4Reuse<'a>>,
 }
 
 /// The last revision's solve: its [`SolveBaseline`], bundle and core map.
-pub(crate) struct L4Reuse<'a> {
+pub struct L4Reuse<'a> {
     pub solve: &'a SolveBaseline,
     pub bundle: &'a SummaryBundle,
     pub core: &'a HashMap<String, RoutineSummary>,
@@ -2616,10 +2617,11 @@ fn project_summary_to_stable(
     project_routine_summary_core_internal(routine_id, s, stable_map)
 }
 
-// #222 Task 1: the seeded solve's T0a, T2 and T2b.
+// #222 Task 1: the seeded solve's T0a, T2 and T2b. `pub(crate)`: the
+// `View` seam's parity test reads its projection (Task 2).
 #[cfg(test)]
 #[path = "summary_runner_seeded_tests.rs"]
-mod summary_runner_seeded;
+pub(crate) mod summary_runner_seeded;
 
 /// Issue #107 tests that need crate-private symbols (the binding mapping, edge
 /// metadata, the roles round cap). The behaviour rows live in

@@ -10,11 +10,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::engine::gate::run::AnalysisTarget;
-use crate::engine::l4::analysis::{L4Analysis, L4Request, build_l4};
+use crate::engine::l4::analysis::{
+    CoreSummaries, L4Analysis, L4Request, build_l4, build_l4_controlled,
+};
 use crate::engine::l4::capability_cone::CapabilityFact;
 use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
-use crate::engine::l4::summary_runner::SummarizeDiagnostic;
+use crate::engine::l4::summary_runner::{Cancelled, L4Control, SolveOutcome, SummarizeDiagnostic};
 use crate::engine::l5::detector_context::{
     self as dc, CapabilityAnalysis, DetectorArtifacts, DetectorContext, OrderingFactsMap,
 };
@@ -640,6 +642,16 @@ fn note_release(released: &mut u16, cell: Cell) {
     *released |= cell.bit();
 }
 
+/// The `rel` cell's value. Single-app the view builds it (counted in
+/// `ExecRelation::new`, its `rel.*` census buckets printed by `single_app`);
+/// cross-app it is the base's, built, counted and census-printed with the base.
+fn relation_of(target: &AnalysisTarget) -> Arc<ExecRelation> {
+    match target {
+        AnalysisTarget::CrossApp(b) => Arc::clone(b.rel()),
+        AnalysisTarget::SingleApp(_) => Arc::new(ExecRelation::single_app(target.resolved())),
+    }
+}
+
 impl View {
     pub fn new(target: AnalysisTarget) -> View {
         View {
@@ -799,13 +811,7 @@ impl View {
             *ordering = Some(dc::fill_ordering(model));
         }
         if need_rel && rel.is_none() {
-            // Single-app the view builds it (counted in `ExecRelation::new`,
-            // its `rel.*` census buckets printed by `single_app`); cross-app it
-            // is the base's, built, counted and census-printed with the base.
-            *rel = Some(match cross_base {
-                Some(b) => Arc::clone(b.rel()),
-                None => Arc::new(ExecRelation::single_app(model)),
-            });
+            *rel = Some(relation_of(target));
         }
         // D2: ONE composition over `rel.cone()`, the det cone's inputs.
         if need_caps {
@@ -1188,6 +1194,48 @@ impl View {
         self.runs
             .remove(key)
             .unwrap_or_else(|| panic!("run {key:?} not prepared or already taken"))
+    }
+
+    /// #222 §4.1 step 4: the incremental host's one fill. `rel` as
+    /// [`View::prepare`] fills it, then `l4` through the seeded solve under
+    /// `control`; the core summaries and the solve's outcome are returned,
+    /// not dropped. `L4` is filled once: a second call, or one after
+    /// [`View::take_l4`], panics.
+    pub fn prepare_l4_seeded(
+        &mut self,
+        control: L4Control<'_>,
+    ) -> Result<(CoreSummaries, SolveOutcome), Cancelled> {
+        assert!(
+            !registry::in_detector_loop(),
+            "View::prepare_l4_seeded inside the detector loop"
+        );
+        assert!(self.l4.is_none(), "L4 filled; a View fills each cell once");
+        assert!(
+            self.released & Cell::L4.bit() == 0,
+            "L4 released; a View fills each cell once"
+        );
+        let target = &self.target;
+        let rel = Arc::clone(self.rel.get_or_insert_with(|| relation_of(target)));
+        let req = L4Request {
+            extra_diagnostics: vec![],
+            control: Some(control),
+        };
+        let cross = target.cross_app_inputs();
+        let (solved, core, outcome) =
+            build_l4_controlled(target.resolved(), &rel, req, cross.as_ref())?;
+        self.l4 = Some(solved);
+        Ok((
+            core,
+            outcome.expect("a controlled solve reports its outcome"),
+        ))
+    }
+
+    /// The `l4` cell, moved out; the cell is released (like
+    /// [`View::take_run`], #222 §4.1 step 5).
+    pub fn take_l4(&mut self) -> L4Analysis {
+        let l4 = self.l4.take().expect("l4 cell not filled");
+        note_release(&mut self.released, Cell::L4);
+        l4
     }
 }
 
@@ -1916,6 +1964,104 @@ mod tests {
             );
             assert!(msg.contains("\"probe\""), "{name}: {msg}");
         }
+    }
+
+    /// #222 Task 2: `prepare_l4_seeded` under a never-cancel control with
+    /// nothing to reuse (the host's first refresh), never cancelled.
+    fn prepare_l4_unseeded(v: &mut View) -> (CoreSummaries, SolveOutcome) {
+        let never = || false;
+        let control = L4Control {
+            cancel: &never,
+            reuse: None,
+        };
+        v.prepare_l4_seeded(control).expect("never cancelled")
+    }
+
+    /// #222 Task 2: with no baseline, `prepare_l4_seeded` leaves the `l4` that
+    /// `prepare(&query_plan())` does (bundle projection, diagnostics, SCC,
+    /// warnings) and returns the core summaries that `prepare`'s own
+    /// `build_l4` call drops (rebuilt here off the same view's model,
+    /// relation and cross-app inputs), on an r0 fixture single-app and on a
+    /// dependency-publisher fixture in both universes. DISCRIMINATION:
+    /// solving without the cross-app inputs (`None`) fails the cross-app
+    /// case (its fixed roles reach the core summaries). Stated limit: an
+    /// `l4` built over `ExecRelation::single_app` on a cross-app target stays
+    /// GREEN, redundant: the cross-app base keeps only workspace callers'
+    /// calls in `model.calls.edges`, so the Primary payload and SCC, all
+    /// `build_l4` reads, are the same.
+    #[test]
+    fn prepare_l4_seeded_without_reuse_equals_query_plan() {
+        use crate::engine::l4::summary_runner::summary_runner_seeded::l4_projection;
+        let r0 = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-d1-multi-caller");
+        let dep = tempfile::tempdir().unwrap();
+        crate::engine::l5::test_support::write_fixture_step4(dep.path());
+        for (name, dir, single_app) in [
+            ("r0 single-app", r0.as_path(), true),
+            ("dependency single-app", dep.path(), true),
+            ("dependency cross-app", dep.path(), false),
+        ] {
+            let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
+            let new_view =
+                || View::new(AnalysisTarget::build(&inputs, single_app, "query").expect("target"));
+            let mut want = new_view();
+            want.prepare(&query_plan());
+            let mut got = new_view();
+            let (got_core, outcome) = prepare_l4_unseeded(&mut got);
+            assert!(
+                outcome.full && outcome.seeded == 0,
+                "{name}: a solve with no baseline re-solves everything"
+            );
+            let req = L4Request {
+                extra_diagnostics: vec![],
+                control: None,
+            };
+            let cross = want.target().cross_app_inputs();
+            let (_, want_core) = build_l4(want.model(), want.rel(), req, cross.as_ref());
+            let project = |v: &View, core: &CoreSummaries| {
+                let l4 = v.l4();
+                (
+                    l4_projection(&l4.bundle, &core.0, &l4.summarize_diagnostics, &l4.scc),
+                    l4.warnings.clone(),
+                )
+            };
+            let (w, g) = (project(&want, &want_core), project(&got, &got_core));
+            assert!(
+                want.l4().bundle.routines_with_rows().next().is_some(),
+                "precondition: {name} has a bundle row"
+            );
+            assert_eq!(g, w, "{name}: l4 differs from the query plan's");
+        }
+    }
+
+    /// #222 Task 2 (Review Focus 5): `take_l4` moves the solve out and
+    /// releases the cell: `l4()` then panics, and so does a second
+    /// `prepare_l4_seeded`. DISCRIMINATION: dropping `note_release` from
+    /// `take_l4` leaves the second prepare unrefused.
+    #[test]
+    fn take_l4_releases_the_cell() {
+        let mut v = view();
+        let _ = prepare_l4_unseeded(&mut v);
+        let taken = v.take_l4();
+        assert!(v.l4.is_none(), "the cell is empty after the take");
+        drop(taken);
+        let msg = panic_text(
+            "l4()",
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = v.l4();
+            })),
+        );
+        assert!(msg.contains("l4 cell not filled"), "l4(): {msg}");
+        let msg = panic_text(
+            "a second prepare_l4_seeded",
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = prepare_l4_unseeded(&mut v);
+            })),
+        );
+        assert!(
+            msg.contains("L4 released; a View fills each cell once"),
+            "second prepare: {msg}"
+        );
     }
 
     /// `release_all_but` drops every filled cell but the kept ones, Ordering
