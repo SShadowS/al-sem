@@ -41,6 +41,20 @@ register is `.agent/issue-222/findings.json`.
 | F1 re-runs T2 and T2b; F1(b) needs panel approval | §9 | S5 |
 | OQ1-OQ9 recorded as decided | §11 | panel answers |
 
+### Changes in r2 (spec panel round 2)
+
+| Change | Where | Findings |
+|---|---|---|
+| Commit split from refresh (`Refresher::refresh` stages, `commit` commits); `run_worker` commits after every `Ok`, so T4a's retention break lives in `run_worker`; T4a pauses AFTER the host's last cancel check with the worker's real cancel closure | §4.1, §4.2, §5.5 | S4, O20 |
+| T0a/T2/T2b split into the unrestricted corpus and curated fixtures C1-C4; C1 reaches the cap with a hand-stated recursive roles fixture; C2 asserts the mixed path and differing numbering | §5.1, §5.3 | S5, O2, O19 |
+| T1c's combined break keeps the key match, so the new `L` is never seeded; §4.4 states a seeded member always has a baseline entry; T1f states why its break reaches the oracle | §4.4, §5.2 | O6, O22 |
+| T1i: `CallChain` calls `Inner` directly (the only dependency routine with an L4-visible effect); its projection difference is a precondition | §5.2 | O8 |
+| Report labels carry the full signature (types, `var`, return type, member), not a parameter count | §4.1, §5.2 | O16 |
+| T1r added: the core-summary half of R3 alone | §5.2, §8 A6 | O21 |
+| T1n asserts `P1`'s edges are unchanged | §5.2 | O23 |
+| T5e: `--no-telemetry`, two pipe threads, timeouts, child cleanup; compares normalized message multisets; a second break emits an extra existing-method notification | §5.6 | O24, S15 |
+| F7 never replaces T5e | §9 | S14 |
+
 ## Words
 
 - **Revision**: one frozen set of workspace inputs (`WorkspaceInputs`,
@@ -174,7 +188,8 @@ Plus small edits: one seeded variant of the solve's SCC loop (`summary_runner.rs
 pub struct IncrementalHost {
     workspace: PathBuf,
     universe: ViewUniverse,           // src/engine/batch/job.rs:29, fixed for the host's life
-    last: Option<Baseline>,           // the last COMPLETED revision only
+    last: Option<Baseline>,           // the last COMMITTED revision only
+    staged: Option<Baseline>,         // a completed refresh, until `commit`
 }
 struct Baseline {
     host_global: [u8; 32],            // §4.3 R0, host half
@@ -194,17 +209,28 @@ pub enum RefreshKind { Full(FullReason), Incremental }
 pub enum FullReason { NoBaseline, HostGlobal, SolveGlobal }  // which half of R0 fired
 pub struct RefreshReport {
     pub kind: RefreshKind,
-    pub resolved: BTreeSet<Vec<String>>,   // re-solved SCCs, as sorted labels
-                                           //   "Object.Routine/<parameter count>"
+    pub resolved: BTreeSet<Vec<String>>,   // re-solved SCCs, as sorted signature labels:
+                                           //   "Object.[Member.]Routine(var T1; T2): R",
+                                           //   the fields compute_routine_id hashes
+                                           //   (body/scope.rs:126-156), so two overloads
+                                           //   never share a label
     pub seeded: usize,
     pub total: usize,
 }
+/// What the worker drives (§4.2); the host implements it, T4's fakes wrap it.
+pub trait Refresher {
+    /// Build the next revision into `staged`. `cancel` is polled between phases and
+    /// between SCCs. On cancel or error, `last` is untouched and `staged` is cleared.
+    fn refresh(&mut self, cancel: &dyn Fn() -> bool) -> Result<RefreshReport, RefreshError>;
+    /// Move `staged` into `last`. The worker calls it after EVERY `Ok`, stale or not (OQ4).
+    fn commit(&mut self);
+}
 impl IncrementalHost {
     pub fn new(workspace: &Path, universe: ViewUniverse) -> Self;
-    /// Build the next revision. `cancel` is polled between phases and between SCCs.
-    /// On cancel, the baseline is untouched.
-    pub fn refresh(&mut self, cancel: &dyn Fn() -> bool) -> Result<RefreshReport, RefreshError>;
-    /// The baseline's projection (§4.7), for the oracle tests.
+    /// `refresh` then `commit`: what the oracle tests (T1, T3) call.
+    pub fn refresh_committed(&mut self, cancel: &dyn Fn() -> bool)
+        -> Result<RefreshReport, RefreshError>;
+    /// The committed baseline's projection (§4.7), for the oracle tests.
     pub fn projection(&self) -> Option<L4Projection>;
 }
 ```
@@ -233,8 +259,11 @@ impl IncrementalHost {
    itself (§4.4; O4).
 5. `view.take_l4()` (new, like `take_run`, `session.rs:1183`): moves the `L4Analysis`
    out and marks `Cell::L4` released. The view (model, relation) is then dropped.
-6. Only now replace `last` with the new baseline. A cancelled or failed refresh never
-   reaches this line, and nothing before it touches `last`.
+6. Only now put the new baseline into `staged`. A cancelled or failed refresh never
+   reaches this line, and nothing in `refresh` touches `last`. `commit` (called by the
+   worker, §4.2, or by `refresh_committed`) moves `staged` into `last`. The commit is a
+   separate step so the rule "a completed refresh becomes the baseline, stale or not"
+   lives in `run_worker`, where T4a can break it (S4/O20).
 
 The host never builds `det`, the cone or a run. It reuses the step-12 builder and the
 `View` cell rules; there is no second engine. Its one new engine code is the seeded loop
@@ -250,10 +279,10 @@ impl HostHandle {
     pub fn status(&self) -> Option<HostStatus>;  // lock; clone
 }
 #[derive(Clone)] pub struct HostStatus { pub generation: u64, pub report: RefreshReport }
-/// The loop, generic over its refresh so tests can script it (T4).
+/// The loop, generic over its `Refresher` so tests can script it (T4).
 pub(crate) fn run_worker(
-    shared: Arc<Mutex<Shared>>, wake: mpsc::Receiver<()>,
-    refresh: impl FnMut(&dyn Fn() -> bool) -> Result<RefreshReport, RefreshError>);
+    shared: Arc<Mutex<Shared>>, wake: mpsc::Receiver<()>, host: impl Refresher,
+    after_drain: impl Fn());                     // a no-op in production; T4b's hook
 pub fn spawn_l4_host(root: PathBuf, universe: ViewUniverse) -> (HostHandle, JoinHandle<()>);
 ```
 
@@ -263,9 +292,11 @@ pub fn spawn_l4_host(root: PathBuf, universe: ViewUniverse) -> (HostHandle, Join
   `LspSnapshot.generation`: a config-only batch calls `on_swap` without a new snapshot
   generation (P15).
 - **The loop.** The worker blocks on `wake.recv()`. It exits when every sender is gone.
-  It drains queued wakes (`try_recv`), THEN reads `g = requested` under the lock, and runs
-  `refresh(&|| lock().requested != g)`. Draining before reading `g` means no wake is left
-  for a request older than `g`; a request after the read leaves its wake queued.
+  It drains queued wakes (`try_recv`), calls `after_drain()`, THEN reads `g = requested`
+  under the lock, and runs `host.refresh(&|| lock().requested != g)`. On `Ok` it calls
+  `host.commit()` unconditionally, then the guarded publish below. Draining before reading
+  `g` means no wake is left for a request older than `g`; a request after the read leaves
+  its wake queued.
 - **How cancellation is observed.** On every refresh, the first one included (§4.1
   step 4), `cancel()` is called after the closure digest and the inputs, after the target,
   after the relation, and inside the solve at the top of every SCC turn
@@ -274,8 +305,9 @@ pub fn spawn_l4_host(root: PathBuf, universe: ViewUniverse) -> (HostHandle, Join
   logged and not published. Either way the worker then loops; the wake that came with the
   newer request is still queued, so it runs at once. Inside a phase (for example the
   program build) nothing is checked, so a cancel waits for that phase to end (S12).
-- **What a stale result does.** A refresh that runs to the end becomes the baseline even if
-  a newer request arrived after its last check: it is a settled revision whose recorded
+- **What a stale result does.** A refresh that runs to the end becomes the baseline (the
+  worker's unconditional `commit`) even if a newer request arrived after its last check:
+  it is a settled revision whose recorded
   inputs (digests) were taken from the same build as its result, so the next Δ can safely
   start from it (OQ4). It is **published** only under the one lock: `lock; if requested ==
   g { status = Some(..) }; unlock`. `request` takes the same lock to bump, so a bump either
@@ -293,6 +325,7 @@ LSP wiring, under `--l4-host` only:
 - `src/main.rs`: `#[arg(long, hide = true)] l4_host: bool`, passed to `run_server`
   (`server.rs:302`) and on to `RootBuild` (`server.rs:154-176`). Its doc comment says a
   host crash ends the server (S6).
+- `spawn_l4_host` runs `run_worker` with an `IncrementalHost` and a no-op `after_drain`.
 - `build_server_state` (`server.rs:575`): when the flag is set, `spawn_l4_host(root,
   ViewUniverse::CrossApp)` (OQ1), and the `on_swap` closure (`:629`) calls
   `handle.request()` as its first line (it holds a clone of the handle).
@@ -389,7 +422,10 @@ seeded). The loop body at `:1567` gains one branch:
 - `if cancel() { return Err(Cancelled) }`, at the top of every turn, on every refresh.
 - Decide R2/R3 for this SCC.
 - **Seeded**: only the members with `is_recomputed(id)` (`summary_runner.rs:1484-1485`)
-  are touched. For each, insert the baseline's core summary into `v2_map` (the solve
+  are touched. Each has a baseline core summary and bundle row, because its SCC's key
+  matched a baseline key (R2), so every member id is a baseline id; the seeded branch
+  `expect`s that entry with a message naming the id (O22). For each, insert the baseline's
+  core summary into `v2_map` (the solve
   assembles them with `db_effects` empty, `:1643-1651`), and push its bundle row from the
   baseline bundle: read `old.bundle.db_effects(old_ix)`, intern each identity into the
   growing universe, split terminal and parameter-dependent effects, and `push_row`. This
@@ -448,10 +484,10 @@ revisions (P16), so line shifts and the instance id cannot dirty an unrelated ro
 
 ### 5.1 The oracle harness (`tests/lsp/l4_host_oracle.rs`, new member of `tests/lsp/main.rs`)
 
-For each case: write the r0 sources into a tempdir, `host.refresh(&never)` (assert
-`Full(NoBaseline)`), apply the edit with `std::fs::write` after asserting the old text
-holds the replaced snippet exactly once, `host.refresh(&never)`, then build a SECOND, fresh
-host on the same directory and refresh it once. Assert:
+For each case: write the r0 sources into a tempdir, `host.refresh_committed(&never)`
+(assert `Full(NoBaseline)`), apply the edit with `std::fs::write` after asserting the old
+text holds the replaced snippet exactly once, `host.refresh_committed(&never)`, then build
+a SECOND, fresh host on the same directory and refresh it once. Assert:
 
 1. **oracle**: `host.projection() == fresh.projection()`;
 2. **kind**: the report's kind is the hand-stated one;
@@ -461,14 +497,11 @@ host on the same directory and refresh it once. Assert:
 The fresh side is a host with no baseline: it runs the seeded entry with nothing to reuse.
 **T0** ties that to today's command path, in two halves:
 
-- **T0a** (lib, `summary_runner.rs`): on every r0 corpus fixture, with and without a forced
-  roles cap (`with_roles_iteration_cap`, `summary_runner.rs:70`, so the diagnostic path
-  runs; precondition asserted: at least one capped SCC under the cap), and with hand-stated
-  `leaf_summaries`/`fixed_roles` maps (one routine with no out-edge as a leaf, one with an
-  out-edge as a fixed role; asserted), the seeded entry with `reuse: None` returns the same
-  bundle projection, core map and diagnostics as `compute_summaries_v2_bundle_with_leaves`.
-  Break: in the seeded entry, skip the diagnostic push of a re-solved SCC → the capped
-  variant differs.
+- **T0a** (lib, `summary_runner.rs`): on every r0 corpus fixture with no precondition, and
+  on the curated fixtures C1-C4 of §5.3 with theirs, the seeded entry with `reuse: None`
+  returns the same bundle projection, core map and diagnostics as
+  `compute_summaries_v2_bundle_with_leaves`. Break: in the seeded entry, skip the
+  diagnostic push of a re-solved SCC → C1 (the capped fixture) differs.
 - **T0b** (`tests/lsp`): on each oracle fixture, the fresh host's bundle part, diagnostics
   and SCC equal those that a plain `View::new` + `prepare(&query_plan())` leaves in
   `view.l4()`. Break: the host builds its target with the other universe → the cross-app
@@ -487,58 +520,81 @@ is the single-app answer, the cross-app contract test of CLAUDE.md); T1i and T1j
 cross-app. Every fixture below is hand-written in the test, one codeunit per routine and
 one `.al` file per codeunit (so "one routine per file"), each routine's effect stated, and
 an unrelated routine `U` (own file, its own effect) in every case, so the strict-subset
-assertion has something to keep seeded. Labels are `Codeunit.Routine/<parameter count>`.
+assertion has something to keep seeded. Labels are the signature labels of §4.1, written
+here without the object name when it equals the routine's (`L(Integer)`, `B()`).
 
 | Case | Hand-stated r0 | Edit | Kind; re-solved (hand-stated) | Break → failing assertion |
 |---|---|---|---|---|
 | T1a body | `A→B→L`; `L` inserts `Cust`; `U` inserts `Item` | `L` also modifies `Cust` (same line) | Incremental; {L},{B},{A} | B1: drop R3's "a successor SCC came out different" clause → `A` seeded (`B` is dirty only by the one-hop rule, `A` only by R3); `A`'s db effects lack the modify; oracle fails |
 | T1b body, no change at L4 | same | `L` gains `i := 1;` (an `Integer` local) | Incremental; {L},{B} (B by the one-hop rule; A and U seeded by the cutoff) | B2: drop the "came out different" test (always different) → {L},{B},{A}; minimality fails |
-| T1c signature | `A→B`, `B` calls `L(x: Integer)`; `L` inserts `Cust` | `L(x)` → `L(x; y: Integer)`, `B`'s call updated | Incremental; {L/2},{B/0},{A/0} | **Redundancy.** `B` is dirty three ways (its own row, its successor `L/2` is added, and `L/2` is a new SCC), so no single-rule break can fail. Combined break: R2 always true AND R3's "a member is new" removed → `B` seeded with its old summary, whose inherited effects carry the old `L` id in their `operation_id`; oracle fails. Each rule alone is pinned by T1d (own row), T1g (one hop), T1a (R3) |
+| T1c signature | `A→B`, `B` calls `L(x: Integer)`; `L` inserts `Cust` | `L(x)` → `L(x; y: Integer)`, `B`'s call updated | Incremental; {L(Integer; Integer)},{B()},{A()} | **Redundancy.** `B` is dirty three ways (its own row, its successor `L(Integer; Integer)` is added, and that is a new SCC), so no single-rule break can fail. Combined break: drop R2's two Δ conditions (KEEP the key match, so the new `L` has no candidate key and is solved normally, O22) AND make R3 treat a member with no baseline entry as equal → `B` (key `{B}` unchanged) is seeded with its old summary, whose inherited effects carry the old `L` id in their `operation_id`; oracle fails. Each rule alone is pinned by T1d (own row), T1g (one hop), T1a (R3) |
 | T1d edge removal | `A→L`, `A→M`; `L` inserts `Cust`, `M` inserts `Item` | delete `A`'s call to `L` | Incremental; {A} | B3: drop R2's "no member in Δ" → `A` (key `{A}` unchanged, successors `L`, `M` unchanged) is seeded and keeps the `Cust` insert; oracle fails. Redundancy: removing `edges_by_from` from the row alone stays green, because deleting the call also changes `A`'s model row (`call_sites`) |
 | T1e SCC split | `A→B`, `B↔C`, `C→A` (one SCC `{A,B,C}`); `A` has no effect of its own; `B` inserts `Cust` | delete `C→A` | Incremental; {B,C},{A} | B5: drop R2's key condition → `A` (not in Δ; its one successor `B` not in Δ; `{B,C}` came out equal) is seeded with `in_recursive_cycle = true`; oracle fails. Preconditions on the fresh hosts: `B` and `C` project EQUAL at r0 and r1; `A`'s `in_recursive_cycle` is true at r0, false at r1 (O5) |
-| T1f SCC merge | `A→B`; `B` inserts `Cust` | add `B→A` | Incremental; {A,B} | **Redundancy:** a merged SCC always holds the source of the new edge, which is in Δ, so the key rule never decides a merge. Combined break: R2 always true → `{A,B}` seeded from the old per-id summaries (`in_recursive_cycle = false`); oracle fails |
+| T1f SCC merge | `A→B`; `B` inserts `Cust` | add `B→A` | Incremental; {A,B} | **Redundancy:** a merged SCC always holds the source of the new edge, which is in Δ, so the key rule never decides a merge. Combined break: R2 always true → `{A,B}` seeded from the old per-id summaries (`in_recursive_cycle = false`); oracle fails. The break reaches the oracle: no id is new in T1f, so both seeded members have baseline entries (O22) |
 | T1g event param rename (D-1) | publisher `P(var Rec: Record Cust)` raises event `E`; subscriber `S` (own file) binds `Rec` by name and modifies it | rename `S`'s parameter so it no longer matches by name | Incremental; {S},{P} | B6: drop the one-hop rule from R2 → `P` seeded; oracle fails. Preconditions asserted on the fresh hosts: `S`'s core summary and db effects are EQUAL at r0 and r1, and `P`'s DIFFER. Without both, the case does not test D-1 (if roles carry the name, the case is re-shaped before code, not waived) |
 | T1h file add | any | add a new `.al` file | Full(HostGlobal) | B7: drop the instance id from R0 → Incremental; the kind assertion fails. Redundancy: the oracle holds either way, since every id is new and no key matches (P16) |
-| T1i demand (cross-app) | `write_own`'s dependency; the workspace rewritten so `CallChain` is alone in codeunit `Ws Chain`, file `src/Chain.al`, and `src/Work.al` is `WS_AL` without it (both replacements asserted to apply once) | r1: delete `Lib.Outer();` from `CallChain`; r2: put it back | Incremental at r1 with {Ws Chain.CallChain/0}; Incremental at r2 with {Dep Lib.Inner/0},{Dep Lib.Outer/0},{Ws Chain.CallChain/0} | Combined break: R2 always true → at r1 `CallChain` is seeded with the old inherited insert; oracle fails. **Redundancy:** demand adds and removes reach the decision only through new SCC keys and the caller's own row, which T1c and T1d pin; the demand-specific input is pinned by T1n. Preconditions: the r1 model has no `Outer`/`Inner` row, r0 and r2 have both |
+| T1i demand (cross-app) | `write_own`'s dependency; the workspace rewritten so `CallChain` is alone in codeunit `Ws Chain`, file `src/Chain.al`, and calls `Lib.Inner();` DIRECTLY, and `src/Work.al` is `WS_AL` without `CallChain` (both replacements asserted to apply once). Why `Inner` and not `Outer`: a dependency's own calls are cone-only (`capability_cone.rs:3896-3920`), so `Outer` has no out-edge in the L4 graph and is a leaf with no effect; `Inner` is a leaf carrying its `Customer` insert (`:3966-3981`; `dep_dispatch_fixture.rs:21-35`) | r1: delete `Lib.Inner();` from `CallChain`; r2: put it back | Incremental at r1 with {Ws Chain.CallChain()}; Incremental at r2 with {Dep Lib.Inner()},{Ws Chain.CallChain()} | Break: drop R2's "no member in Δ" (no id is new at r1, so the key match holds and the seed has its baseline entry) → at r1 `CallChain` is seeded with the old inherited `Customer` insert; oracle fails. Preconditions on the fresh hosts: the r1 model has no `Inner` row, r0 and r2 have one; `CallChain`'s projection DIFFERS between r0 and r1 (it carries the insert at r0 only). **Redundancy:** demand adds and removes reach the decision only through new SCC keys and the caller's own row, which T1c and T1d also pin; the demand-specific input is pinned by T1n |
 | T1j dependency change (cross-app) | `write_own` | (a) `write_dependency(.., revision 1)`: bytes only; (b) the `Inner` body `Insert` → `Modify` (as `write_own_modify`): a semantic change | Full(HostGlobal) for both | B9: drop the closure digest from R0 → Incremental; the kind assertion fails in (a) and (b). Precondition for (b): the fresh projections differ between r0 and r1. **Redundancy for the oracle:** in (b) `Inner`'s own row changes, so Δ alone also gives the right answer; the closure term is the Q2 rule and the guard for changes no row shows |
 | T1k table field | table `T`, `A` reads `T."F"` while `F` does not exist | add field `F` to `T` | Full(SolveGlobal) | B10: drop `FieldIndex` from R0 → nothing is in Δ, `A` is seeded with the unresolved field; oracle fails. Precondition: `A`'s core summary differs between the fresh r0 and r1 hosts |
 | T1l `roots.config.json` | any, with an entry point | add a `roots.config.json` | Incremental; {} (nothing re-solved) | B11: put the config bytes in R0 → Full; kind fails |
 | T1m no edit | `L` hands a `var Rec` parameter to an insert (a parameter-dependent effect; asserted on the fresh projection) | none | Incremental; {} | B12: the shared seeding helper pushes only terminal effects → `L`'s seeded row loses its parameter-dependent effect; oracle fails |
-| T1n shared-event bit (P6) | `P1(var Rec: Record Cust)` raises integration event `E`; subscriber `S` (own file) binds `Rec` and modifies it | add an overload `P2` of `E` AFTER `P1` in `P1`'s file, so `E` becomes shared | Incremental; {P1},{P2} | B13: leave the shared-event bit out of the row → `P1` (rows, edges and successor `S` unchanged) is seeded with its old dispatch; oracle fails. Preconditions: fresh `P1` summaries differ between r0 and r1; `P1`'s model row `Debug` text and `S`'s row are equal at r0 and r1 (O9) |
+| T1n shared-event bit (P6) | `P1(var Rec: Record Cust)` raises integration event `E`; subscriber `S` (own file) binds `Rec` and modifies it | add an overload `P2` of `E` AFTER `P1` in `P1`'s file, so `E` becomes shared | Incremental; {P1},{P2} | B13: leave the shared-event bit out of the row → `P1` (rows, edges and successor `S` unchanged) is seeded with its old dispatch; oracle fails. Preconditions: fresh `P1` summaries differ between r0 and r1; `P1`'s model row `Debug` text, `P1`'s `edges_by_from` list (so no resolution changed, `event_dispatch.rs:78-84`; O23) and `S`'s row are equal at r0 and r1, so `P1`'s full row digest differs ONLY by the shared-event bit (O9) |
 | T1o collided rows (step 11b) | routine `K` declared in an `#if A` / `#else` pair (two rows, one id, as `detector_context_11b_tests.rs:5-6`); the FIRST row inserts `Cust`, the last inserts `Item`; `A→K` | the first row's `Insert` → `Modify`, same line | Incremental; {K},{A} | B14: digest only the LAST row of a collided id → `K` not in Δ, `A` not one-hop dirty → both seeded with the old union; oracle fails. Preconditions: two rows of one id; the last row's `Debug` text equal at r0 and r1; fresh projections differ (S12) |
 | T1q `app.json` only | any | add a `description` to `app.json` | Full(HostGlobal) | B15: drop the `app.json` bytes from R0 → Incremental; kind fails. Redundancy for the oracle: no row changes, so seeding is right either way (S8) |
+| T1r core-summary half of R3 (O21) | table `Cust` with fields `"No."` and `F: Integer`; `A(var R: Record Cust)→B(var R: Record Cust)→L(var R: Record Cust)`, each passing its own `R` on; no routine writes the database | `L` gains `R.F := 1;` (no `Modify`) | Incremental; {L(var Record Cust)},{B(var Record Cust)},{A(var Record Cust)} | B16: R3's "came out different" compares db effects only → `B` (dirty by the one-hop rule) comes out "equal", so `A` is seeded with stale `parameter_roles` (`writesFields`); oracle fails. Preconditions on the fresh hosts: `B`'s and `A`'s db effects are EQUAL at r0 and r1; `B`'s and `A`'s `parameter_roles` DIFFER. This is the one case where only the core-summary half decides (`summary_runner.rs:1643-1651`) |
 
 ### 5.3 T2 and T2b: the seeded solve alone (lib tests, `summary_runner.rs`)
 
-Plan task 1, before any other code (the P3 gate). Both run over the r0 corpus fixtures,
-each in four variants: plain; under a forced roles cap (`with_roles_iteration_cap`, so the
-`diag_of` re-push runs); and with hand-stated `leaf_summaries` and `fixed_roles` maps (the
-cross-app solve inputs, stated on a single-app model, since a lib test cannot reach
-`tests/common`; O19), with and without the cap. Preconditions asserted per variant: at
-least one parameter-dependent effect, one SCC with two or more members, one leaf, one fixed
-role, and (capped variants) one capped SCC. The real cross-app solve is covered by T1i and
-T1j in `tests/lsp`.
+Plan task 1, before any other code (the P3 gate). Two fixture sets, kept apart (S5, O19):
 
-- **T2 (all seeded).** Solve once with `reuse: None`, keep the result as a baseline, solve
-  again with it: nothing re-solved, and the projection, core map and diagnostics equal the
-  first solve's. Break B12 (as T1m) → the projections differ.
-- **T2b (mixed; O2).** For every SCC `k` of the fixture: take the baseline from a fresh
-  solve, delete the row digests of `k`'s members from it (so they count as changed), and
-  solve again. `k` and its one-hop callers are re-solved and READ seeded callees through
-  the builder (`db_effect_solver.rs:286-321`, `settled_db.pd_ids`) with a universe whose
-  interning order differs from a fresh one; everything else is seeded. The projection
-  equals the fresh one, for every `k`. Break: push the seeded rows after the loop instead
-  of in the seeded branch → while the loop runs, a re-solved caller finds no row for a
-  seeded callee (`has_row` false, `effect_store.rs:577-579`) and inherits nothing; T2b
-  fails for every `k` with a seeded callee, while T2 (nothing re-solved, so nothing reads
-  a seeded row during the loop) stays green. That pair is the proof T2b covers what T2
-  cannot.
+- **The corpus**: every r0 corpus fixture, unrestricted. No structural precondition; a
+  fixture with no recursion or no parameter-dependent effect still has to give equal
+  projections. This is the breadth check.
+- **The curated fixtures**, hand-written in the lib test, each built to reach one special
+  path, with that path asserted as a precondition before any comparison:
+  - **C1 capped roles.** A recursive SCC `{P, Q}`: `P(var R)` passes `R` to `Q`, `Q(var R)`
+    passes it back to `P` and assigns `R.F`, so the roles fixpoint needs more than one
+    round. Solved under `with_roles_iteration_cap(1, ..)` (`summary_runner.rs:70`; the cap
+    only applies to a recursive SCC's roles loop, `:2023-2053`). Precondition: at least one
+    non-convergence diagnostic and a `fixpoint-capped` uncertainty on `P` and `Q`.
+  - **C2 seeded callee, re-solved caller, different numbering.** Callee `S(var R: Record
+    Cust)` inserts into `R` (a parameter-dependent effect) and inserts into table `Zeta`,
+    with the `Zeta` insert written FIRST in its body and the `Cust` one second; caller
+    `C` calls `S` with a `temporary` record. Preconditions: `S` is recomputed (not a leaf
+    or fixed role) and holds a parameter-dependent effect; `C`'s fresh projection holds
+    the substituted (`Known(true)`) effect; the effects' discovery order (body order) and
+    their `key_rank` order differ, so a seeded `S` interns them in a different order than
+    a solved `S`.
+  - **C3 leaf and fixed role.** Hand-stated `leaf_summaries` and `fixed_roles` maps on a
+    single-app model (one routine with no out-edge as a leaf, one with an out-edge as a
+    fixed role; asserted), the cross-app solve inputs a lib test can state without
+    `tests/common`. The real cross-app solve is covered by T1i and T1j in `tests/lsp`.
+  - **C4 multi-member SCC** with a db effect on each member (asserted).
+
+The tests:
+
+- **T2 (all seeded).** On the corpus and C1-C4: solve once with `reuse: None`, keep the
+  result as a baseline, solve again with it: nothing re-solved, and the projection, core
+  map and diagnostics equal the first solve's. Break B12 (as T1m) → C2 differs.
+- **T2b (mixed; O2).** On the corpus and C1-C4, for every SCC `k`: take the baseline from
+  a fresh solve, delete the row digests of `k`'s members from it (so they count as
+  changed), and solve again. `k` and its one-hop callers are re-solved; everything else is
+  seeded. The projection equals the fresh one, for every `k`. On C2 with `k = {C}`, the
+  mixed path is asserted, not assumed: the report shows `S` seeded and `C` re-solved; `C`
+  reads `S`'s row through the builder (`db_effect_solver.rs:286-321`,
+  `settled_db.pd_ids`); and the numbering really differs: for at least one effect
+  identity, its `EffectId` in the mixed bundle differs from the fresh bundle's
+  (`bundle.effects().universe()`, a lib test can read it). Break: push the seeded rows
+  after the loop instead of in the seeded branch → while the loop runs, `C` finds no row
+  for `S` (`has_row` false, `effect_store.rs:577-579`) and loses the substituted effect;
+  T2b fails on C2 with `k = {C}`, while T2 (nothing re-solved, so nothing reads a seeded
+  row during the loop) stays green. That pair is the proof T2b covers what T2 cannot.
 
 If T2 or T2b fails, F1 applies, and F1(a) must pass both before work goes on (§9).
 
 ### 5.4 T3: cancellation keeps the baseline (`tests/lsp`)
 
-Fixture T1a. Refresh r0 (`never`); record `projection()` and the hidden
+Fixture T1a; every call below is `refresh_committed`. Refresh r0 (`never`); record `projection()` and the hidden
 `baseline_fingerprint()` (sha256 over the baseline's host global, solve global and row
 digests). Apply T1a's edit. Refresh with a `cancel` that returns `true` on call number
 `PHASE_CHECKS + report_r0.total` (the top of the LAST SCC turn; `PHASE_CHECKS` = 3, a
@@ -552,20 +608,22 @@ after the cancel `projection()` is `None`; the first assertion fails.
 
 ### 5.5 T4: the worker (`src/lsp/l4_host.rs` lib tests, on `run_worker`)
 
-`run_worker` takes the refresh as a closure, and a test-only `after_drain` hook that runs
-between "drain the wakes" and "read `g`". Each test scripts the interleaving with
-barriers; no test sleeps for a fixed time; every wait has a timeout.
+`run_worker` takes a `Refresher` and the `after_drain` hook that runs between "drain the
+wakes" and "read `g`". Each test scripts the interleaving with barriers; no test sleeps
+for a fixed time; every wait has a timeout.
 
-- **T4a stale, complete, unpublished, retained (S3, S4).** The refresh wraps a real
-  `IncrementalHost` on fixture T1a: it waits on barrier 1, then calls
-  `host.refresh(&never)`, then records its report. Request 1 (spawn); while refresh #1
-  waits, `request()` (generation 2), then release it. Refresh #1 completes. Hold
-  refresh #2 at barrier 1 and assert: `status()` is `None` (generation 1 was superseded
-  before its publish check) and refresh #2's report, once released, is Incremental with
-  nothing re-solved (so #1 was committed as the baseline). Then `status()` reaches
-  generation 2. Breaks: (i) delete the `requested == g` guard → `status()` is generation 1
-  while #2 is held; (ii) make the host commit only when `cancel()` is false at the end →
-  #2 is `Full(NoBaseline)`.
+- **T4a stale, complete, unpublished, retained (S3, S4, O20).** The test `Refresher` wraps
+  a real `IncrementalHost` on fixture T1a. Its `refresh` calls `host.refresh(cancel)` with
+  the WORKER's own cancel closure, records the report, then waits on a barrier, so the
+  pause is AFTER the host's last internal cancel check and before `refresh` returns; its
+  `commit` calls `host.commit()`. Spawn (generation 1); refresh #1 runs to the pause (no
+  newer request yet, so it is not cancelled); the test calls `request()` (generation 2)
+  and releases the barrier. `run_worker` commits #1 and does not publish it. Refresh #2
+  runs to the pause; the test asserts `status()` is `None` and #2's recorded report is
+  Incremental with nothing re-solved (so #1 was committed). Release: `status()` reaches
+  generation 2. Both breaks are in `run_worker`: (i) delete the `requested == g` publish
+  guard → `status()` is generation 1 during #2's pause; (ii) call `commit()` only when
+  `requested == g` → #2's report is `Full(NoBaseline)`.
 - **T4b no stranded request.** The `after_drain` hook calls `request()` once. Assert the
   status reaches that request's generation. Break: swap the two statements (read `g`, then
   drain): the hook's wake is drained away, the refresh for the older `g` is cancelled at
@@ -602,14 +660,22 @@ is a no-op unless a tracer was set up from the environment, `perf_trace.rs:522-5
 `tests/lsp` (spawned binary, `env!("CARGO_BIN_EXE_al-call-hierarchy")`, as
 `tests/cli/cli_analyze_call_hierarchy_json.rs` spawns it):
 
-- **T5e** Run `--lsp --l4-host --no-watcher --verbose` on fixture T1a over stdio: send
-  `initialize`, `initialized`, one `prepareCallHierarchy` (so the root builds), wait for
-  the stderr line `l4-host: published generation 1`, then `shutdown` and `exit`. Assert
-  every stdout frame is a well-formed `Content-Length` JSON-RPC message, and the set of
-  server-sent methods equals that of the same session without `--l4-host` (Q1). This pins
-  the `main.rs` → `run_server` → `RootBuild` path (O15) and guards S7 on the real stdout.
-  Break: drop the pass-through of `l4_host` in `main.rs` → the stderr line never comes;
-  the wait times out.
+- **T5e** Run `--lsp --l4-host --no-watcher --no-telemetry --verbose` on fixture T1a over
+  stdio (O24): send `initialize`, `initialized`, one `prepareCallHierarchy` (so the root
+  builds), wait for the stderr line `l4-host: published generation 1` (`--verbose` sets
+  `env_logger` to debug on stderr, `main.rs:94-100`), then `shutdown` and `exit`. Stdout
+  and stderr are read on two threads, so a full pipe cannot block the child; every wait
+  has a timeout; the child is killed when the test's guard drops. Then run the same
+  session, on the same tempdir, without `--l4-host`. Assert: every stdout frame of both
+  runs is a well-formed `Content-Length` JSON-RPC message; and the two runs' server-to-
+  client messages are EQUAL AS MULTISETS of normalized payloads (each message re-serialized
+  with sorted object keys; notifications keyed by method and params, responses by id and
+  result), so an extra message with an existing method, or a changed payload, fails (S15).
+  This pins the `main.rs` → `run_server` → `RootBuild` path (O15) and guards S7 and Q1 on
+  the real stdout. Breaks: (i) drop the pass-through of `l4_host` in `main.rs` → the
+  stderr line never comes; the wait times out; (ii) make the worker send one extra
+  `textDocument/publishDiagnostics` for the published generation through the server's
+  sink → the multisets differ.
 
 ### 5.7 Unchanged tests
 
@@ -671,7 +737,7 @@ with `control: None`, which is today's function.
 | A3 | … after **edge removal** | T1d |
 | A4 | … after an **SCC split / merge** | T1e (the key rule's only guard), T1f (oracle; key rule redundant for merges) |
 | A5 | … after **dependency** edits | `.app` change, bytes only and semantic: T1j, as a Full refresh (Q2); demand change: T1i, incremental; the input demand can move: T1n |
-| A6 | invalidation follows **reverse reachability** | T1a (R3), T1b (cutoff, Q7), T1d (own row), T1g (one-hop rows), T1o (collided rows) |
+| A6 | invalidation follows **reverse reachability** | T1a (R3, db-effect half), T1r (R3, core-summary half), T1b (cutoff, Q7), T1d (own row), T1g (one-hop rows), T1o (collided rows) |
 | A7 | … **SCC** identity | T1e |
 | A8 | … **demand** | T1i, T1n |
 | A9 | … **config files** | T1l (`roots.config.json`: nothing re-solved); T1q (`app.json` alone: Full). `al-sem.coverage.yaml` and the policy file: **not deliverable as an invalidation, because the host never uses them** (P7; R4) |
@@ -693,7 +759,7 @@ with `control: None`, which is today's function.
 | F4 | an oracle case finds a global input missing from R0 | add it to R0 (a Full refresh), with its own T1 row and break |
 | F5 | `take_l4` breaks a `View` cell rule the panel holds | the baseline keeps the whole `View` with every cell but `l4` released (more retention, stated in §4.6) |
 | F6 | T1i shows a demand change moving `collided_site_callee` | T1i becomes Full; A5's and A8's demand half is restated as oracle-only |
-| F7 | a T4 or T5 test is timing-flaky | T4 is scripted by barriers and hooks, so a flake there is a bug to fix, not to retry. T5b, T5c and T5e wait on a condition with a timeout, never a fixed sleep; if one still flakes, it moves to a lib test that calls the `on_swap` closure directly |
+| F7 | a T4 or T5 test is timing-flaky | T4 is scripted by barriers and hooks, so a flake there is a bug to fix, not to retry. T5b, T5c and T5e wait on a condition with a timeout, never a fixed sleep. If T5b or T5c still flakes, it moves to a lib test that calls the `on_swap` closure directly. **T5e is never replaced** (it is the only guard on the CLI plumbing and the real stdout, S14): a T5e flake is fixed in its own synchronization (pipe threads, timeouts, child cleanup) |
 
 ## 10. What changes, file by file
 
