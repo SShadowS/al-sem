@@ -36,7 +36,7 @@ const TABLES_AL: &str = "table 50100 Cust\n{\n    fields\n    {\n        field(1
 const U_AL: &str = "codeunit 50109 U\n{\n    procedure U()\n    var\n        I: Record Item;\n    begin\n        I.Insert();\n    end;\n}\n";
 
 /// T1a/T1b's r0: `A→B→L`; `L` inserts `Cust`; `U` inserts `Item`.
-const T1A: &[(&str, &str)] = &[
+pub(crate) const T1A: &[(&str, &str)] = &[
     ("src/Tables.al", TABLES_AL),
     ("src/U.al", U_AL),
     (
@@ -57,7 +57,7 @@ fn never() -> bool {
     false
 }
 
-fn write_ws(dir: &Path, files: &[(&str, &str)]) {
+pub(crate) fn write_ws(dir: &Path, files: &[(&str, &str)]) {
     std::fs::write(dir.join("app.json"), APP_JSON).unwrap();
     for (rel, text) in files {
         let path = dir.join(rel);

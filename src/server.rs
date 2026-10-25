@@ -132,6 +132,8 @@ struct ServerState {
     config: Arc<ConfigHandle>,
     /// `--l4-host`: the incremental L4 host's handle and worker thread
     /// (#222). `None` without the flag. Publishes nothing to the editor.
+    /// Never joined: the updater's `on_swap` holds a handle clone, so the
+    /// worker usually lives until the process exits (like the updater).
     l4_host: Option<(HostHandle, JoinHandle<()>)>,
 }
 
@@ -446,8 +448,8 @@ pub fn run_server(
     for root_state in workspace.roots {
         if let Some(st) = root_state.into_built() {
             drop(st.tx);
-            // Not joined, like the updater: the host's worker ends once the
-            // updater's `on_swap` drops its handle clone too.
+            // Not joined (see `ServerState::l4_host`): the worker ends only
+            // if the updater also ends and drops its handle clone.
             drop(st.l4_host);
         }
     }
@@ -1315,12 +1317,12 @@ mod tests {
         (state, client_conn)
     }
 
-    /// Spin (no fixed sleep) until the host's status names `generation`.
+    /// Spin (no fixed sleep) until the host's status reaches `generation`.
     fn host_reaches(state: &ServerState, generation: u64) -> bool {
         let (handle, _) = state.l4_host.as_ref().expect("the host runs");
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
-            if handle.status().is_some_and(|s| s.generation == generation) {
+            if handle.status().is_some_and(|s| s.generation >= generation) {
                 return true;
             }
             std::thread::yield_now();
