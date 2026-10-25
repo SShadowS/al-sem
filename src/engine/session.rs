@@ -1200,7 +1200,8 @@ impl View {
     /// [`View::prepare`] fills it, then `l4` through the seeded solve under
     /// `control`; the core summaries and the solve's outcome are returned,
     /// not dropped. `L4` is filled once: a second call, or one after
-    /// [`View::take_l4`], panics.
+    /// [`View::take_l4`], panics. `rel` stays filled on `Cancelled`; `l4`
+    /// never is.
     pub fn prepare_l4_seeded(
         &mut self,
         control: L4Control<'_>,
@@ -2064,6 +2065,25 @@ mod tests {
         );
         assert!(
             msg.contains("L4 released; a View fills each cell once"),
+            "second prepare: {msg}"
+        );
+    }
+
+    /// #222 review R2-1: a second `prepare_l4_seeded` with no `take_l4` in
+    /// between panics on the "L4 filled" assert. DISCRIMINATION: deleting that
+    /// assert lets the second fill run.
+    #[test]
+    fn second_prepare_l4_seeded_without_take_panics() {
+        let mut v = view();
+        let _ = prepare_l4_unseeded(&mut v);
+        let msg = panic_text(
+            "a second prepare_l4_seeded",
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = prepare_l4_unseeded(&mut v);
+            })),
+        );
+        assert!(
+            msg.contains("L4 filled; a View fills each cell once"),
             "second prepare: {msg}"
         );
     }

@@ -263,6 +263,14 @@ impl L4Projection {
         p
     }
 
+    /// One id's core summary and db effects (the oracle cases'
+    /// per-routine preconditions).
+    pub fn routine(&self, id: &str) -> &(Option<RoutineSummary>, Option<Vec<DbEffect>>) {
+        self.per_id
+            .get(id)
+            .unwrap_or_else(|| panic!("{id}: not in the projection"))
+    }
+
     /// The projection without the core summaries: only the ids with a bundle
     /// row, each with its db effects (T0b's comparison with a `query` plan
     /// view, whose core summaries `View::prepare` drops).
