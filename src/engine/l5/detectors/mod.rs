@@ -34,6 +34,7 @@ pub mod d36;
 pub mod d37;
 pub mod d38;
 pub mod d39;
+mod d39_persist;
 pub mod d4;
 pub mod d40;
 pub mod d41;

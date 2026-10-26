@@ -63,11 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaves the record clean whenever it returns that value (the CDO shape).
   - Effect: the 3 CDO false positives in `CDOSetupData` (`InitRecurringDailyJob`, then
     `InsertJob`) are gone. Base App has 0 moves. No other detector moves.
-  - The check fails closed: when unsure it keeps the finding. That includes `try`,
-    `asserterror`, an incomplete parse, an unresolved or interface call, a ternary
-    branch, a reload or `Rec := Other`, dirt left from an earlier loop pass, and more
-    than 3 helper levels. No L4 role summary is trusted for a called routine; only its
-    own body counts.
+  - The check fails closed: when unsure it keeps the finding. That includes `try` and
+    `asserterror` (in the caller or in a helper), a `[TryFunction]` helper, an
+    incomplete parse, an unresolved or interface call, a ternary branch, a reload, any
+    whole-record assignment (`Rec := <anything>`), dirt left from an earlier loop pass,
+    a bare call to a table procedure while the record is the implicit `Rec`, a call on
+    the record that also passes it as an argument, any call at all while the record is
+    an object global, and more than 3 helper levels. No L4 role summary is trusted for
+    a called routine; only its own body counts.
   - Known limit: an event publisher that takes the record by `var` between the call and
     the save keeps the finding, because a subscriber may reload or replace the record.
     This is why the 5 Base App candidates stay reported.
@@ -76,9 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The incomplete-parse guard has no fixture test: a fixture with a parse error would
     also move other detectors and the L2 corpus.
   - Tests: `tests/cli/cli_d39_helper_persists.rs` over `tests/fixtures/issue-343/ws-helper`
-    (27 shapes, 20 expected rows) and `walk_paths` unit tests. The in-memory field
-    `PCFNNode.path_hint` changes the hash of 988 routines in `l2_features.snapshot`
-    (regenerated; nothing serialized changes). The fixture-root tripwire counts 47
+    (36 shapes, 29 expected rows) and `walk_paths` unit tests. The in-memory field
+    `PCFNNode.path_hint` changes the hash of 988 distinct routine keys (1013 snapshot
+    entries; overloads share a key) in `l2_features.snapshot` (regenerated; nothing
+    serialized changes). The fixture-root tripwire counts 47
     `tests/fixtures` app dirs (was 46).
 
 - **Digest `--diff`: a file that is not AL source gets its own kind, `diff-file-not-al`**

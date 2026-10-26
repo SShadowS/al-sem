@@ -68,8 +68,8 @@ fn d39_rows() -> Vec<String> {
 /// procedure), A9 (helper persisting through its own helper), A20 (three
 /// helper levels), A26 (a helper between that provably leaves the record be)
 /// and A27 (a guard whose callee's helper provably makes no dirt) are skipped.
-/// Every other shape reports; each is named in the fixture. On base
-/// `506149da` all 27 report.
+/// Every other shape reports; each is named in the fixture. Without #343 all
+/// 36 report (measured on a `506149da` build).
 #[test]
 fn d39_counts_a_helper_that_persists_on_every_path() {
     let mut expected = vec![
@@ -95,6 +95,16 @@ fn d39_counts_a_helper_that_persists_on_every_path() {
         "IndirectReplace\tL372",
         "WrappedReceiverInClean\tL396",
         "PublisherBeforePersist\tL413",
+        // Final panel round 1: more fail-closed shapes.
+        "TryHelperShape\tL462",
+        "AssignFromCall\tL475",
+        "GlobalTouch\tL491",
+        "AssignInHelperClean\tL519",
+        "AssignDirectClean\tL539",
+        "AssertInHelper\tL554",
+        "EarlyExitHelper\tL570",
+        "AliasSave\tL578",
+        "OnAfterModify\tL7", // HExt.al
     ];
     expected.sort();
     assert_eq!(d39_rows(), expected);

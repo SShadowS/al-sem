@@ -267,20 +267,20 @@ codeunit 50343 "H Mgt"
     end;
 
     // Dirty on exit(false) through a call on the record (OP2a / S4).
-    local procedure InitViaReceiver(var Job: Record "H Job"): Boolean
+    local procedure InitViaReceiver(var Job: Record "H Job"; Stop: Boolean): Boolean
     begin
         Job.DirtyMe();
-        if Job.Name = '' then
+        if Stop then
             exit(false);
         Job.Validate(Name, 'y');
         exit(true);
     end;
 
-    procedure ReceiverInClean()              // A18: d39
+    procedure ReceiverInClean(Stop: Boolean) // A18: d39 (Stop = true: dirty via DirtyMe, then exit(false))
     var
         Job: Record "H Job";
     begin
-        if not InitViaReceiver(Job) then
+        if not InitViaReceiver(Job, Stop) then
             exit;
         InsertJob(Job, false);
     end;
@@ -380,20 +380,20 @@ codeunit 50343 "H Mgt"
     end;
 
     // Dirty on exit(false) through a wrapper around a call on the record.
-    local procedure InitViaWrapper(var Job: Record "H Job"): Boolean
+    local procedure InitViaWrapper(var Job: Record "H Job"; Stop: Boolean): Boolean
     begin
         Wrapper(Job);
-        if Job.Name = '' then
+        if Stop then
             exit(false);
         Job.Validate(Name, 'w');
         exit(true);
     end;
 
-    procedure WrappedReceiverInClean()       // A24: d39
+    procedure WrappedReceiverInClean(Stop: Boolean) // A24: d39 (Stop = true: dirty via Wrapper, then exit(false))
     var
         Job: Record "H Job";
     begin
-        if not InitViaWrapper(Job) then
+        if not InitViaWrapper(Job, Stop) then
             exit;
         InsertJob(Job, false);
     end;
@@ -445,5 +445,147 @@ codeunit 50343 "H Mgt"
         if not InitViaCleanHelper(Job) then
             exit;
         InsertJob(Job, false);
+    end;
+
+    // ---- final panel round 1 ------------------------------------------------
+
+    [TryFunction]
+    local procedure TrySave(var Job: Record "H Job")
+    begin
+        Job.Insert();
+    end;
+
+    procedure TryHelperShape()               // A28: d39 (a [TryFunction] helper: its errors are caught)
+    var
+        Job: Record "H Job";
+    begin
+        Dirt(Job);
+        if TrySave(Job) then;
+    end;
+
+    local procedure GetTemplate() Result: Record "H Job"
+    begin
+        Result."No." := 'T';
+    end;
+
+    procedure AssignFromCall()               // A29: d39 (`Job := <call>` replaces the record)
+    var
+        Job: Record "H Job";
+    begin
+        Dirt(Job);
+        Job := GetTemplate();
+        InsertJob(Job, false);
+    end;
+
+    var
+        GJob: Record "H Job";
+        GTemplate: Record "H Job";
+
+    local procedure ResetGlobal()
+    begin
+        GJob := GTemplate;
+    end;
+
+    procedure GlobalTouch()                  // A30: d39 (a call that does not pass the global still reaches it)
+    begin
+        Dirt(GJob);
+        ResetGlobal();
+        InsertJob(GJob, false);
+    end;
+
+    local procedure CopyIn(var Job: Record "H Job")
+    var
+        Other: Record "H Job";
+    begin
+        Other.Validate(Name, 'lost');
+        Job := Other;
+    end;
+
+    // Dirty on exit(false) through a helper that replaces the record.
+    local procedure InitViaAssign(var Job: Record "H Job"; Stop: Boolean): Boolean
+    begin
+        if Stop then begin
+            CopyIn(Job);
+            exit(false);
+        end;
+        Job.Validate(Name, 'a');
+        exit(true);
+    end;
+
+    procedure AssignInHelperClean(Stop: Boolean) // A31: d39
+    var
+        Job: Record "H Job";
+    begin
+        if not InitViaAssign(Job, Stop) then
+            exit;
+        InsertJob(Job, false);
+    end;
+
+    // Dirty on exit(false) through a direct whole-record assignment.
+    local procedure InitAssignDirect(var Job: Record "H Job"; Other: Record "H Job"; Stop: Boolean): Boolean
+    begin
+        if Stop then begin
+            Job := Other;
+            exit(false);
+        end;
+        Job.Validate(Name, 'd');
+        exit(true);
+    end;
+
+    procedure AssignDirectClean(Other: Record "H Job"; Stop: Boolean) // A32: d39
+    var
+        Job: Record "H Job";
+    begin
+        if not InitAssignDirect(Job, Other, Stop) then
+            exit;
+        InsertJob(Job, false);
+    end;
+
+    local procedure TouchAssert(var Job: Record "H Job"): Boolean
+    begin
+        asserterror Error('expected');
+        exit(Job.Name <> '');
+    end;
+
+    procedure AssertInHelper()               // A33: d39 (the helper between holds an asserterror)
+    var
+        Job: Record "H Job";
+    begin
+        Dirt(Job);
+        if TouchAssert(Job) then;
+        InsertJob(Job, false);
+    end;
+
+    local procedure InsertJobUnless(var Job: Record "H Job"; Skip: Boolean)
+    begin
+        if Skip then
+            exit;
+        Job.Insert();
+    end;
+
+    procedure EarlyExitHelper(Skip: Boolean) // A34: d39 (the helper may exit before its Insert; no publisher)
+    var
+        Job: Record "H Job";
+    begin
+        Dirt(Job);
+        InsertJobUnless(Job, Skip);
+    end;
+
+    procedure AliasSave(Template: Record "H Job") // A35: d39 (the receiver is also passed by var)
+    var
+        Job: Record "H Job";
+    begin
+        Dirt(Job);
+        Job.SaveAlias(Job, Template);
+    end;
+
+    procedure DirtPublic(var Job: Record "H Job")
+    begin
+        Job.Validate(Name, 'p');
+    end;
+
+    procedure SaveRec(var Job: Record "H Job")
+    begin
+        Job.Insert();
     end;
 }
