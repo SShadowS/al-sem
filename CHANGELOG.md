@@ -16,8 +16,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CACHE_VERSION_GRAMMAR` is now `tree-sitter-al-v4.5.0-91a5db62-native` (same length, so
   `dry-run.txt` did not move); `cache_version_grammar_tracks_the_linked_grammar` requires
   the package version in it. The two hand-made cache fixtures carry the new string.
+- **Digest `schemaVersion` is 1.8.0** (#353). It adds the `diff-file-not-al` kind and
+  narrows `diff-file-unmatched` and `diff-file-deleted` to AL paths (see Fixed). Consumers
+  that pin 1.7.0, such as CentralGauge's `ALSEM_SCHEMAS`, must add 1.8.0 before a release
+  ships it. Merging this releases nothing: v2.1.1 still ships 1.7.0.
+  The 21 cli-b digest JSON goldens and the `one-job` batch golden change only in that line.
 
 ### Fixed
+
+- **Digest `--diff`: a file that is not AL source gets its own kind, `diff-file-not-al`**
+  (#353). Until now every non-AL file in a diff (`app.json`, `.xlf`, `LICENSE`) was
+  reported as `diff-file-unmatched`, so a consumer counting unmatched AL files counted
+  them too. A diff path counts as AL when it ends in `.al` in any case
+  (`source_text::has_al_extension`, the test workspace discovery uses). A non-AL record
+  makes no roots and gives one `{kind: "diff-file-not-al", file}` diagnostic (human:
+  `changed-roots: diff-file-not-al <file>`). A rejected hunk header keeps its
+  `diff-parse-error` too. A rename from an AL path to a non-AL one is `diff-file-deleted`
+  on the old path. An `Only in` path is `diff-file-not-al` only when no workspace file
+  lies below it, because it may be a folder. This narrows the #111 entry's "reported as
+  `diff-file-unmatched`" to AL paths. `diff-file-unmatched` now means an AL path with no
+  routine-bearing workspace file. Limits: the rule reads paths only, so a folder named
+  `x.al` reads as AL. An `Only in` folder of workspace files stays `diff-file-unmatched`,
+  and its roots are still lost. A folder that only the old tree has reads as
+  `diff-file-not-al`. `--file` / `--changed-files` (`file-unmatched`) do not change.
 
 - **`digest --format human` lists the changed-roots diagnostics** (#340). Until now the
   human output dropped them, so a run could exit 0 while a diff file or `--file` went
