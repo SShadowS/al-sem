@@ -1859,8 +1859,8 @@ fn declaration_only_procedures_are_roots() {
         "(a) {doc}"
     );
     assert!(diags(&doc).is_empty(), "(a) {doc}");
-    // (f) the additive keys shipped in digest 1.5.0 (current: 1.7.0, #77).
-    assert_eq!(doc["schemaVersion"], "1.7.0");
+    // (f) the additive keys shipped in digest 1.5.0 (current: 1.8.0, #353).
+    assert_eq!(doc["schemaVersion"], "1.8.0");
 
     // (b) `--file` on IFoo: both methods.
     let (doc, code) = digest(ws, &["--file", "src/IFoo.Interface.al"], None);
@@ -2543,8 +2543,13 @@ fn plain_diff_ru_timestamped_headers_match() {
 /// The C3 `diff -ru` change plus an `Only in` line on `name` in the new tree, as
 /// `diff -ru ../old .` writes it from the workspace root (`Only in ./src: <name>`).
 fn ru_with_only_in(name: &str) -> String {
+    ru_with_only_in_dir("./src", name)
+}
+
+/// [`ru_with_only_in`] with the `Only in` line's folder `dir` (`Only in <dir>: <name>`).
+fn ru_with_only_in_dir(dir: &str, name: &str) -> String {
     format!(
-        "diff -ru ../old/src/posting.al ./src/posting.al\n--- ../old/src/posting.al\t2026-10-21 13:03:28.701655915 +0000\n+++ ./src/posting.al\t2026-10-21 13:03:28.702477280 +0000\n{D8_POSTING_HUNK}Only in ./src: {name}\n"
+        "diff -ru ../old/src/posting.al ./src/posting.al\n--- ../old/src/posting.al\t2026-10-21 13:03:28.701655915 +0000\n+++ ./src/posting.al\t2026-10-21 13:03:28.702477280 +0000\n{D8_POSTING_HUNK}Only in {dir}: {name}\n"
     )
 }
 
@@ -3547,4 +3552,325 @@ fn ambiguous_file_keeps_other_roots() {
     );
     assert_eq!(roots(&doc), vec!["HandlePosted"], "{doc}");
     assert_eq!(code, 0, "{doc}");
+}
+
+// ---------------------------------------------------------------------------
+// #353: a diff path that is not AL-looking is `diff-file-not-al`
+// ---------------------------------------------------------------------------
+
+/// A `diff --git` section modifying line 1 of `path` (the bytes do not matter:
+/// only the path is read for a non-AL file).
+fn git_mod(path: &str) -> String {
+    format!(
+        "diff --git a/{path} b/{path}\n{}",
+        one_line_diff(path, 1, "x")
+    )
+}
+
+/// The d8 `PostSalesDoc` change as a `diff --git` section.
+fn git_posting_change() -> String {
+    format!(
+        "diff --git a/src/posting.al b/src/posting.al\n--- a/src/posting.al\n+++ b/src/posting.al\n{D8_POSTING_HUNK}"
+    )
+}
+
+/// `[{kind, file}, ...]` of `pairs`, in order.
+fn kinds_on(pairs: &[(&str, &str)]) -> Vec<Value> {
+    pairs
+        .iter()
+        .map(|(kind, file)| serde_json::json!({"kind": kind, "file": file}))
+        .collect()
+}
+
+const NON_AL: [&str; 4] = [
+    "app.json",
+    "Translations/x.g.xlf",
+    "permissions.xml",
+    "LICENSE",
+];
+
+/// #353 A1. A diff touching `PostSalesDoc` and four non-AL files (`app.json`, a
+/// `.xlf`, a `.xml`, an extensionless `LICENSE`): the routine's root, the same
+/// entries as the AL hunk alone, exit 0, and exactly one `diff-file-not-al` per
+/// non-AL file in diff order; the human output carries those four lines.
+///
+/// Mutation: guard 1 always reads a path as AL -> four `diff-file-unmatched`.
+#[test]
+fn non_al_diff_files_are_their_own_kind() {
+    let ws = corpus("ws-d8-commit-in-tx");
+    let al_only = git_posting_change();
+    let diff = format!(
+        "{al_only}{}",
+        NON_AL.iter().map(|p| git_mod(p)).collect::<String>()
+    );
+    let (alone, code) = digest(&ws, &[], Some(&al_only));
+    assert_eq!(code, 0, "precondition: {alone}");
+    let (doc, code) = digest(&ws, &[], Some(&diff));
+    let want: Vec<(&str, &str)> = NON_AL.iter().map(|p| ("diff-file-not-al", *p)).collect();
+    assert_eq!(diags(&doc), kinds_on(&want), "{diff}: {doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{diff}: {doc}");
+    assert_eq!(entries(&doc), entries(&alone), "{diff}: {doc}");
+    assert_eq!(code, 0, "{diff}: {doc}");
+
+    let (stdout, stderr, code) = digest_raw_as(&ws, &[], Some(&diff), "human");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let lines: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.starts_with("changed-roots:"))
+        .collect();
+    let want: Vec<String> = NON_AL
+        .iter()
+        .map(|p| format!("changed-roots: diff-file-not-al {p}"))
+        .collect();
+    assert_eq!(lines, want, "{stdout}");
+}
+
+/// #353 A2. AL-looking paths with no workspace file stay `diff-file-unmatched`,
+/// in any extension case: `src/Missing.al` and `src/Other.Al`, in order, exit 2.
+///
+/// Mutation: `has_al_extension` compares case-sensitively -> `src/Other.Al` is
+/// `diff-file-not-al`.
+#[test]
+fn al_looking_paths_stay_unmatched() {
+    let diff = format!("{}{}", git_mod("src/Missing.al"), git_mod("src/Other.Al"));
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(&diff));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[
+            ("diff-file-unmatched", "src/Missing.al"),
+            ("diff-file-unmatched", "src/Other.Al"),
+        ]),
+        "{diff}: {doc}"
+    );
+    assert!(entries(&doc).is_empty(), "{diff}: {doc}");
+    assert_eq!(code, 2, "{diff}: {doc}");
+}
+
+/// #353 A3 (a). A deleted `app.json` is `diff-file-not-al`, not
+/// `diff-file-deleted` (a deleted `.al` stays `diff-file-deleted`:
+/// `plain_diff_u_timestamped_dev_null_is_a_deletion`).
+///
+/// Mutation: run the check after the deleted branch -> `diff-file-deleted`.
+#[test]
+fn deleted_non_al_file_is_not_al() {
+    let diff = "diff --git a/app.json b/app.json\ndeleted file mode 100644\n--- a/app.json\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-x\n";
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(diff));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-not-al", "app.json")]),
+        "{doc}"
+    );
+    assert!(entries(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #353 A3 (b). An `Only in ./: app.json` line is `diff-file-not-al` on
+/// `./app.json`; the hunk's root is unchanged.
+///
+/// Mutation: skip the check in the `Only in` loop -> `diff-file-unmatched`.
+#[test]
+fn only_in_non_al_file_is_not_al() {
+    let ru = ru_with_only_in_dir("./", "app.json");
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(&ru));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-not-al", "./app.json")]),
+        "{ru}: {doc}"
+    );
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{ru}: {doc}");
+    assert_eq!(code, 0, "{ru}: {doc}");
+}
+
+/// #353 A3 (c). An `Only in .: src` line names a folder holding workspace files:
+/// it keeps today's `diff-file-unmatched` on `./src` (its roots are lost, a
+/// stated limit), never `diff-file-not-al`.
+///
+/// Mutation: drop the folder-prefix check -> `diff-file-not-al`.
+#[test]
+fn only_in_workspace_folder_stays_unmatched() {
+    let ru = ru_with_only_in_dir(".", "src");
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(&ru));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-unmatched", "./src")]),
+        "{ru}: {doc}"
+    );
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{ru}: {doc}");
+    assert_eq!(code, 0, "{ru}: {doc}");
+}
+
+/// #353 A3 (d). A rename `src/posting.al` -> `src/posting.json` with a hunk: AL
+/// source left the workspace, so `diff-file-deleted` on the OLD path, no roots.
+///
+/// Mutation: report the rename on its new path -> `diff-file-not-al` on
+/// `src/posting.json`.
+#[test]
+fn rename_from_al_to_non_al_is_a_deletion() {
+    let diff = "diff --git a/src/posting.al b/src/posting.json
+similarity index 90%
+rename from src/posting.al
+rename to src/posting.json
+--- a/src/posting.al
++++ b/src/posting.json
+@@ -9,1 +9,1 @@
+-        Header.\"Status Posted\" := false;
++        Header.\"Status Posted\" := true;
+";
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(diff));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-deleted", "src/posting.al")]),
+        "{doc}"
+    );
+    assert!(entries(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #353 A3 (e). A hunkless rename `src/old.json` -> `src/posting.al` (a workspace
+/// file) is handled on its new path as before: every routine of the file, no
+/// diagnostic.
+///
+/// Mutation: classify on `old_path.unwrap_or(path)` -> `diff-file-not-al` on
+/// `src/old.json`.
+#[test]
+fn rename_from_non_al_to_al_takes_the_new_file() {
+    let diff = "diff --git a/src/old.json b/src/posting.al
+similarity index 100%
+rename from src/old.json
+rename to src/posting.al
+";
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(diff));
+    assert!(diags(&doc).is_empty(), "{doc}");
+    assert_eq!(
+        roots(&doc),
+        vec!["OnAfterPostSalesDoc", "PostSalesDoc"],
+        "{doc}"
+    );
+    assert_eq!(code, 0, "{doc}");
+}
+
+/// #353 A4. Invariants: (a) a diff of only `app.json` has no entries, exit 2,
+/// one `diff-file-not-al`; (b) `app.json` with a rejected hunk header keeps its
+/// `diff-parse-error` and also gets `diff-file-not-al`; (c) `--file app.json` is
+/// `file-unmatched` as before.
+#[test]
+fn non_al_invariants() {
+    let ws = corpus("ws-d8-commit-in-tx");
+    // (a)
+    let diff = git_mod("app.json");
+    let (doc, code) = digest(&ws, &[], Some(&diff));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-not-al", "app.json")]),
+        "(a): {doc}"
+    );
+    assert!(entries(&doc).is_empty(), "(a): {doc}");
+    assert_eq!(code, 2, "(a): {doc}");
+
+    // (b)
+    let diff =
+        "diff --git a/app.json b/app.json\n--- a/app.json\n+++ b/app.json\n@@ garbage @@\n-x\n+y\n";
+    let (doc, code) = digest(&ws, &[], Some(diff));
+    assert_malformed_error_of(&doc, "app.json", "(b)");
+    let rest: Vec<Value> = diags(&doc)
+        .into_iter()
+        .filter(|d| d["kind"] != "diff-parse-error")
+        .collect();
+    assert_eq!(
+        rest,
+        kinds_on(&[("diff-file-not-al", "app.json")]),
+        "(b): {doc}"
+    );
+    assert_eq!(diags(&doc).len(), 2, "(b): {doc}");
+    assert_eq!(code, 2, "(b): {doc}");
+
+    // (c)
+    let (doc, code) = digest(&ws, &["--file", "app.json"], None);
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("file-unmatched", "app.json")]),
+        "(c): {doc}"
+    );
+    assert_eq!(code, 2, "(c): {doc}");
+}
+
+/// #353 final panel H1. A git copy `src/posting.al` -> `src/posting.json` (the
+/// parser gives it an `old_path`, kind Modified) deleted nothing: exactly one
+/// `diff-file-not-al` on the new path, no `diff-file-deleted`.
+///
+/// Mutation: drop the `Renamed` kind check in the rename arm ->
+/// `diff-file-deleted` on `src/posting.al`.
+#[test]
+fn copy_from_al_to_non_al_is_not_al() {
+    let diff = "diff --git a/src/posting.al b/src/posting.json
+similarity index 90%
+copy from src/posting.al
+copy to src/posting.json
+--- a/src/posting.al
++++ b/src/posting.json
+@@ -9,1 +9,1 @@
+-        Header.\"Status Posted\" := false;
++        Header.\"Status Posted\" := true;
+";
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(diff));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-not-al", "src/posting.json")]),
+        "{doc}"
+    );
+    assert!(entries(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #353 final panel H2 (and F3). Under a diff-root prefix, an `Only in` folder
+/// that IS the prefix (`Only in .: Cloud`, workspace `<top>/Cloud`) or a folder
+/// above it (`Only in .: apps`, workspace `<top>/apps/Cloud`) holds workspace
+/// files, so it stays `diff-file-unmatched`; a sibling folder with nothing of
+/// the workspace below it is `diff-file-not-al`.
+///
+/// Mutation: drop the prefix/parent branch of `holds_workspace_files` ->
+/// `./Cloud` and `./apps` are `diff-file-not-al`.
+#[test]
+fn only_in_diff_root_prefix_folder_stays_unmatched() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let ru = "Only in .: Cloud\nOnly in .: repo-sibling-folder\n";
+    let (doc, code) = digest(&ws, &[], Some(ru));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[
+            ("diff-file-unmatched", "./Cloud"),
+            ("diff-file-not-al", "./repo-sibling-folder"),
+        ]),
+        "{doc}"
+    );
+    assert_eq!(code, 2, "{doc}");
+
+    std::fs::create_dir_all(t.path().join("deep/.git")).unwrap();
+    let deep = t.path().join("deep/apps/Cloud");
+    d8_workspace(&deep, &d8_posting());
+    let (doc, code) = digest(&deep, &[], Some("Only in .: apps\n"));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-unmatched", "./apps")]),
+        "{doc}"
+    );
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #353 final panel H3. A `--- /dev/null` / `+++ /dev/null` record has no path
+/// (the parser's `unknown` placeholder, no `old_path`): it stays
+/// `diff-file-deleted` on `unknown`, as before #353.
+///
+/// Mutation: drop the placeholder skip -> `diff-file-not-al` on `unknown`.
+#[test]
+fn dev_null_both_sides_stays_deleted() {
+    let diff = "--- /dev/null\n+++ /dev/null\n";
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(diff));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-deleted", "unknown")]),
+        "{doc}"
+    );
+    assert_eq!(code, 2, "{doc}");
 }

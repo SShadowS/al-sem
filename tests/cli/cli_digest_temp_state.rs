@@ -274,8 +274,8 @@ fn collect_temp_states(v: &Value, out: &mut BTreeSet<String>) {
 fn check_mode(single_app: bool) -> Vec<String> {
     let (mode, doc) = &docs()[if single_app { 0 } else { 1 }];
     let mut failures = Vec::new();
-    if doc["schemaVersion"] != "1.7.0" {
-        failures.push(format!("schemaVersion {} != 1.7.0", doc["schemaVersion"]));
+    if doc["schemaVersion"] != "1.8.0" {
+        failures.push(format!("schemaVersion {} != 1.8.0", doc["schemaVersion"]));
     }
 
     // Every DB_INSERT in the routine has the expected value.

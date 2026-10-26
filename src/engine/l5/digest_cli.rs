@@ -207,6 +207,10 @@ pub enum ChangedRootsDiagnostic {
     DiffFileDeleted {
         file: String,
     },
+    /// A diff path that does not look like an AL file (#353): no roots.
+    DiffFileNotAl {
+        file: String,
+    },
     DiffParseError {
         /// The file the error belongs to (a hunk-header error, #72); `None`
         /// for a truncated hunk or a header error whose section names no path.
@@ -226,6 +230,7 @@ impl ChangedRootsDiagnostic {
             Self::DiffFileAmbiguous { .. } => "diff-file-ambiguous",
             Self::HunkOutsideRoutines { .. } => "hunk-outside-routines",
             Self::DiffFileDeleted { .. } => "diff-file-deleted",
+            Self::DiffFileNotAl { .. } => "diff-file-not-al",
             Self::DiffParseError { .. } => "diff-parse-error",
         }
     }
@@ -326,17 +331,68 @@ fn workspace_file_keys(files: &[crate::program::inputs::WsFile]) -> FileKeys<'_>
 /// as written, then below the git top level. A file counts whether or not it
 /// holds a routine, so a table-only reading still makes a path ambiguous.
 fn diff_readings(files: &FileKeys<'_>, root: &DiffRoot, path: &str) -> Vec<String> {
+    path_readings(root, path)
+        .filter(|k| files.contains_key(k))
+        .collect()
+}
+
+/// Every key `path` may name under `root`, file or not: as written, then below
+/// the git top level.
+fn path_readings(root: &DiffRoot, path: &str) -> impl Iterator<Item = String> {
     let as_written = || Some(normalize_input(path));
     let readings = match root {
         DiffRoot::Workspace => [as_written(), None],
         DiffRoot::Explicit(p) => [strip_diff_prefix(p, path), None],
         DiffRoot::GitTop(p) => [as_written(), strip_diff_prefix(p, path)],
     };
-    readings
-        .into_iter()
-        .flatten()
-        .filter(|k| files.contains_key(k))
-        .collect()
+    readings.into_iter().flatten()
+}
+
+/// Every folder key that holds a workspace file (`src` for `src/x.al`), built
+/// once per diff run, and only when an `Only in` path needs it (#353).
+fn workspace_folders(files: &FileKeys<'_>) -> std::collections::HashSet<String> {
+    let mut folders = std::collections::HashSet::new();
+    for key in files.keys() {
+        let mut end = key.len();
+        while let Some(i) = key[..end].rfind('/') {
+            if !folders.insert(key[..i].to_string()) {
+                break; // its ancestors are in already
+            }
+            end = i;
+        }
+    }
+    folders
+}
+
+/// Whether a workspace file lies below `path`, an `Only in` path that may be a
+/// folder (#353): a reading is a workspace folder, or `path` is the diff
+/// root's prefix or a folder above it (no reading exists there) and the
+/// workspace has a file.
+fn holds_workspace_files(
+    folders: &std::collections::HashSet<String>,
+    any_file: bool,
+    root: &DiffRoot,
+    path: &str,
+) -> bool {
+    path_readings(root, path).any(|r| folders.contains(&r))
+        || (any_file && at_or_above_prefix(root, path))
+}
+
+/// Whether `path`'s folders are the first folders of the diff root's prefix
+/// ([`same_folder`]): it is the prefix or a folder above it.
+fn at_or_above_prefix(root: &DiffRoot, path: &str) -> bool {
+    let (DiffRoot::GitTop(prefix) | DiffRoot::Explicit(prefix)) = root else {
+        return false;
+    };
+    let mut want = prefix.split('/');
+    clean_segments(&path.replace('\\', "/"))
+        .split('/')
+        .all(|seg| want.next().is_some_and(|w| same_folder(seg, w)))
+}
+
+/// Whether a diff path looks like an AL file (#353), as workspace discovery reads one.
+fn al_looking(path: &str) -> bool {
+    crate::source_text::has_al_extension(std::path::Path::new(path))
 }
 
 /// The span-index key a diff path names under `root`, or the diagnostic. One
@@ -624,6 +680,26 @@ pub fn resolve_changed_roots(
             .flat_map(|fe| diff_readings(&files, &input.diff_root, &fe.path))
             .collect();
         for diff_file in &parsed.files {
+            // #353: a record whose path (a deletion's `---` path, else the new
+            // one) is not AL-looking makes no roots. Renamed away from AL, it
+            // deleted AL source; a copy to a non-AL name (also with an
+            // `old_path`) deleted nothing. A deletion with no `---` path (the
+            // `unknown` placeholder) stays `diff-file-deleted`.
+            let placeholder =
+                diff_file.kind == DiffFileKind::Deleted && diff_file.old_path.is_none();
+            if !placeholder && !al_looking(&diff_file.path) {
+                diagnostics.push(match diff_file.old_path.as_deref() {
+                    Some(old) if diff_file.kind == DiffFileKind::Renamed && al_looking(old) => {
+                        ChangedRootsDiagnostic::DiffFileDeleted {
+                            file: old.to_string(),
+                        }
+                    }
+                    _ => ChangedRootsDiagnostic::DiffFileNotAl {
+                        file: diff_file.path.clone(),
+                    },
+                });
+                continue;
+            }
             if diff_file.kind == DiffFileKind::Deleted {
                 diagnostics.push(ChangedRootsDiagnostic::DiffFileDeleted {
                     file: diff_file.path.clone(),
@@ -667,7 +743,21 @@ pub fn resolve_changed_roots(
         // `diff -r`'s `Only in` files carry no hunk (#111). One that is a workspace
         // file (the new tree added it) is a whole-file hit, like a hunkless rename;
         // any other is reported, never dropped silently.
+        let mut folders = None;
         for file in &parsed.only_in {
+            // #353: a folder of workspace files keeps `diff-file-unmatched` (its
+            // roots are lost, a stated limit).
+            if !al_looking(file)
+                && !holds_workspace_files(
+                    folders.get_or_insert_with(|| workspace_folders(&files)),
+                    !files.is_empty(),
+                    &input.diff_root,
+                    file,
+                )
+            {
+                diagnostics.push(ChangedRootsDiagnostic::DiffFileNotAl { file: file.clone() });
+                continue;
+            }
             match diff_key(&spans, &files, &input.diff_root, file) {
                 Err(d) => diagnostics.push(d),
                 Ok(key) if !poisoned.contains(&key) => hits.extend_from_slice(spans.of_file(&key)),
@@ -1548,7 +1638,8 @@ fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::
     match d {
         ChangedRootsDiagnostic::FileUnmatched { file }
         | ChangedRootsDiagnostic::DiffFileUnmatched { file }
-        | ChangedRootsDiagnostic::DiffFileDeleted { file } => {
+        | ChangedRootsDiagnostic::DiffFileDeleted { file }
+        | ChangedRootsDiagnostic::DiffFileNotAl { file } => {
             m.insert("file".into(), file.clone().into());
         }
         ChangedRootsDiagnostic::SelectorUnmatched { selector } => {
@@ -1597,7 +1688,8 @@ fn changed_roots_diagnostic_human(d: &ChangedRootsDiagnostic) -> String {
     let rest = match d {
         ChangedRootsDiagnostic::FileUnmatched { file }
         | ChangedRootsDiagnostic::DiffFileUnmatched { file }
-        | ChangedRootsDiagnostic::DiffFileDeleted { file } => escape_controls(file),
+        | ChangedRootsDiagnostic::DiffFileDeleted { file }
+        | ChangedRootsDiagnostic::DiffFileNotAl { file } => escape_controls(file),
         ChangedRootsDiagnostic::SelectorUnmatched { selector } => escape_controls(selector),
         ChangedRootsDiagnostic::SelectorAmbiguous {
             selector,
@@ -1784,11 +1876,19 @@ pub fn project_digest_document(
     // Still 1.6.0: with `--include-reads` (#246, opt-in) a document may carry
     // `DB_READ` effects and `payload.includeReads: true`; without it, neither.
     // 1.7.0: additive default-on `diff-file-ambiguous` changed-roots diagnostic
-    // with `file` and `candidates` (#77). Contract: a minor bump is additive;
+    // with `file` and `candidates` (#77). Contract: a minor bump removes and
+    // renames no field; it may add a field or kind, and (as 1.8.0 does) narrow
+    // what an existing kind covers, so the same input can count differently;
     // `changedRootsDiagnostics[].kind` is an open set (a consumer treats an
     // unknown kind as a diagnostic, not a parse error); exit 0 does not mean
     // every diff file resolved.
-    env.insert("schemaVersion".into(), "1.7.0".into());
+    // 1.8.0: new `diff-file-not-al` changed-roots diagnostic with `file`
+    // (#353): a diff path that is not AL-looking. NOT purely additive:
+    // `diff-file-unmatched` and `diff-file-deleted` narrow to AL-looking paths
+    // (the old side of an AL -> non-AL rename is `diff-file-deleted`). The one
+    // exception: an `Only in` folder holding workspace files stays
+    // `diff-file-unmatched`.
+    env.insert("schemaVersion".into(), "1.8.0".into());
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
     // keep-nulls sort then orders it (and the payload key it lands in).
@@ -2693,6 +2793,9 @@ mod tests {
             D::DiffFileDeleted {
                 file: s("src/d.al"),
             },
+            D::DiffFileNotAl {
+                file: s("app.json"),
+            },
             D::DiffParseError {
                 file: Some(s("src/e.al")),
                 detail: s("bad hunk header"),
@@ -2718,6 +2821,7 @@ mod tests {
             "pass --diff-root <folder> to read diff paths relative to <folder>\n",
             "changed-roots: hunk-outside-routines src/c.al:3-5\n",
             "changed-roots: diff-file-deleted src/d.al\n",
+            "changed-roots: diff-file-not-al app.json\n",
             "changed-roots: diff-parse-error src/e.al: bad hunk header\n",
             "changed-roots: diff-parse-error truncated hunk\n",
             "changed-roots: file-unmatched src/a\\nb\\t.al\n",
