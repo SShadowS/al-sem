@@ -12,7 +12,7 @@
 use super::features::{
     PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PConditionGuard,
     PConditionReference, PExpressionInfo, PFieldAccess, PLoop, POperationSite, PRecordOperation,
-    PTempState, PUnreachableStatement, PVarAssignment,
+    PTempState, PUnreachableStatement, PVarAssignment, PathHint,
 };
 use super::node_util::Utf16Cols;
 use super::record_op::{FIELD_ARGS_OPS, record_op_type};
@@ -1397,6 +1397,7 @@ fn cfn_node(kind: &str) -> PCFNNode {
         else_children: None,
         is_case_else: false,
         source_range: None,
+        path_hint: None,
     }
 }
 
@@ -1537,7 +1538,21 @@ impl<'a> IrCfn<'a> {
                 self.harvest(*start, out);
                 self.harvest(*end, out);
             }
-            Ternary { .. } | TypeOp { .. } | List(_) => {
+            Ternary {
+                cond,
+                then_value,
+                else_value,
+            } => {
+                self.harvest(*cond, out);
+                // #343: only one alternative runs.
+                let start = out.len();
+                self.harvest(*then_value, out);
+                self.harvest(*else_value, out);
+                for l in &mut out[start..] {
+                    l.path_hint = Some(PathHint::MayRun);
+                }
+            }
+            TypeOp { .. } | List(_) => {
                 for c in e.kind.children() {
                     self.harvest(c, out);
                 }
@@ -1630,6 +1645,37 @@ impl<'a> IrCfn<'a> {
         }
     }
 
+    /// #343: a condition that is wholly `C(..)` / `not C(..)` (through
+    /// parentheses), as [`PathHint::CondCall`]. Only when `C` is the last
+    /// top-level leaf of `leaves` (the condition's harvested leaves), where the
+    /// path walk looks for it; otherwise no hint.
+    fn cond_call(&self, cond: ExprId, leaves: &[PCFNNode]) -> Option<PathHint> {
+        let (cs, negated) = self.cond_call_site(cond)?;
+        (leaves.last().and_then(|l| l.callsite_id.as_ref()) == Some(cs))
+            .then_some(PathHint::CondCall { negated })
+    }
+
+    fn cond_call_site(&self, cond: ExprId) -> Option<(&String, bool)> {
+        use ExprKind::*;
+        let strip = |mut e: ExprId| {
+            while let Parenthesized(x) = &self.ir().expr(e).kind {
+                e = *x;
+            }
+            e
+        };
+        let mut e = strip(cond);
+        let mut negated = false;
+        if let Unary {
+            op: UnaryOp::Not,
+            operand,
+        } = &self.ir().expr(e).kind
+        {
+            e = strip(*operand);
+            negated = true;
+        }
+        self.spine.cs_id_by_expr.get(&e).map(|cs| (cs, negated))
+    }
+
     fn harvest_vec(&self, eid: ExprId) -> Vec<PCFNNode> {
         let mut v = Vec::new();
         self.harvest(eid, &mut v);
@@ -1650,7 +1696,9 @@ impl<'a> IrCfn<'a> {
                 let mut n = cfn_node("if");
                 n.children = Some(vec![self.build_block(*then_block)]);
                 n.else_children = else_block.map(|b| vec![self.build_block(b)]);
-                n.condition_leaves = some_if(self.harvest_vec(*cond));
+                let leaves = self.harvest_vec(*cond);
+                n.path_hint = self.cond_call(*cond, &leaves);
+                n.condition_leaves = some_if(leaves);
                 n.condition_guard = self.simple_guard(*cond);
                 n
             }
@@ -1712,11 +1760,21 @@ impl<'a> IrCfn<'a> {
             Exit(x) => {
                 let mut n = cfn_node("exit");
                 n.condition_leaves = x.map(|e| self.harvest_vec(e)).and_then(some_if);
+                n.path_hint = x.and_then(|e| match &self.ir().expr(e).kind {
+                    ExprKind::Literal(al_syntax::ir::Literal::Bool(b)) => Some(PathHint::Exit(*b)),
+                    _ => None,
+                });
                 n
             }
-            With { body, .. } | AssertError(body) => {
+            With { body, .. } => {
                 let mut n = cfn_node("other");
                 n.children = Some(vec![self.build_block(*body)]);
+                n
+            }
+            AssertError(body) => {
+                let mut n = cfn_node("other");
+                n.children = Some(vec![self.build_block(*body)]);
+                n.path_hint = Some(PathHint::AssertError);
                 n
             }
             Assignment { target, value, .. } => {

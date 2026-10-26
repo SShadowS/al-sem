@@ -9,7 +9,8 @@
 //! SERDE-SKIP DRIFT: the digest is over the `Debug` representation, NOT serde JSON —
 //! deliberately, so it covers the `#[serde(skip)]` (and `PartialEq`-excluded) fields
 //! that a serialized golden CANNOT see: `PRecordOperation.in_until_condition` /
-//! `run_trigger`, `PCFNNode.source_range` / `is_case_else`, `PVarAssignment.rhs_identifier`,
+//! `run_trigger`, `PCFNNode.source_range` / `is_case_else` / `path_hint`,
+//! `PVarAssignment.rhs_identifier`,
 //! `PRecordVariable.is_receiver`.
 //! Four such load-bearing fields silently broke during the migration precisely
 //! because the dual-run byte gate (serde + PartialEq) was blind to them; this gate

@@ -796,6 +796,7 @@ fn walk_cfg(
                 else_children: None,
                 is_case_else: false,
                 source_range: None,
+                path_hint: None,
             };
             loop_stack.push(LoopFrame::default());
             let mut body_pre = pre;
@@ -1919,6 +1920,7 @@ mod tests {
             else_children: None,
             is_case_else: false,
             source_range: None,
+            path_hint: None,
         }
     }
 

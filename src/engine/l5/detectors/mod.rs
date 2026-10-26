@@ -73,7 +73,7 @@ use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::{LooseSubject, SourceAnchor};
 use crate::engine::l5::registry::{Detector, substrate};
 use crate::program::body::features::{
-    PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PExpressionInfo,
+    PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PExpressionInfo, PathHint,
 };
 use crate::program::model::symbol_table::SymbolTable;
 use crate::program::model::workspace::{
@@ -275,6 +275,199 @@ pub(crate) fn load_point_after(
                 && !branch_exclusive(tree, node_id, p.node_id)
         })
     })
+}
+
+/// A set of abstract path states (a bitset) for [`walk_paths`].
+pub(crate) type PathStates = u8;
+
+/// One question asked of every path through a routine's `statement_tree`
+/// (#343). The walk carries a set of states along each path; the question
+/// says how a leaf changes them and what an exit with them means.
+pub(crate) trait PathQuestion {
+    /// An `op` / `call` / `error` leaf, after its argument leaves.
+    fn leaf(&mut self, leaf: &PCFNNode, s: PathStates) -> PathStates;
+    /// Entry to an `if` arm that runs only when call `cs_id` returned `value`.
+    fn arm(&mut self, _cs_id: &str, _value: bool, s: PathStates) -> PathStates {
+        s
+    }
+    /// A routine exit: an `exit` (with its literal Boolean value, if any) or
+    /// the end of the body (`None`).
+    fn exit(&mut self, value: Option<bool>, s: PathStates);
+    /// A node the walk cannot see through (`try`, a stray `break`, too deep).
+    fn opaque(&mut self);
+}
+
+/// Walks every path of `tree` from its entry with the states `init`, and
+/// reports the end of the body as an exit. An `error` leaf ends its path with
+/// no exit. A loop runs to a fixpoint (its body may run zero or more times;
+/// `repeat` at least once); a `while` condition runs on every pass, a `for` /
+/// `foreach` header once before the loop; `break` joins the loop's exit,
+/// `continue` its head. A leaf from one alternative of a ternary
+/// ([`PathHint::MayRun`]) may or may not run. Fails closed: `try`, an
+/// `asserterror` statement (its error is caught, the path goes on), a stray
+/// `break` / `continue` and a tree deeper than [`MAX_PATH_DEPTH`] call
+/// [`PathQuestion::opaque`].
+pub(crate) fn walk_paths(tree: &PCFNNode, init: PathStates, q: &mut dyn PathQuestion) {
+    let mut loops = Vec::new();
+    let end = walk_path_node(tree, init, q, &mut loops, 0);
+    if end != 0 {
+        q.exit(None, end);
+    }
+}
+
+const MAX_PATH_DEPTH: usize = 256;
+
+/// Per enclosing loop: the states seen at a `break` and at a `continue`.
+type LoopJoins = Vec<(PathStates, PathStates)>;
+
+fn walk_path_list(
+    list: Option<&[PCFNNode]>,
+    mut s: PathStates,
+    q: &mut dyn PathQuestion,
+    loops: &mut LoopJoins,
+    depth: usize,
+) -> PathStates {
+    for c in list.into_iter().flatten() {
+        s = walk_path_node(c, s, q, loops, depth + 1);
+    }
+    s
+}
+
+fn walk_path_node(
+    n: &PCFNNode,
+    s: PathStates,
+    q: &mut dyn PathQuestion,
+    loops: &mut LoopJoins,
+    depth: usize,
+) -> PathStates {
+    if s == 0 {
+        return 0;
+    }
+    if depth > MAX_PATH_DEPTH {
+        q.opaque();
+        return s;
+    }
+    match n.path_hint {
+        Some(PathHint::MayRun) => s | walk_path_kind(n, s, q, loops, depth),
+        Some(PathHint::AssertError) => {
+            q.opaque();
+            s
+        }
+        _ => walk_path_kind(n, s, q, loops, depth),
+    }
+}
+
+fn walk_path_kind(
+    n: &PCFNNode,
+    s: PathStates,
+    q: &mut dyn PathQuestion,
+    loops: &mut LoopJoins,
+    depth: usize,
+) -> PathStates {
+    let leaves = n.condition_leaves.as_deref();
+    let kids = n.children.as_deref();
+    match n.kind.as_str() {
+        "op" | "call" | "error" => {
+            let s = walk_path_list(leaves, s, q, loops, depth);
+            let s = q.leaf(n, s);
+            if n.kind == "error" { 0 } else { s }
+        }
+        "if" => {
+            let s = walk_path_list(leaves, s, q, loops, depth);
+            let cond_call = match n.path_hint {
+                Some(PathHint::CondCall { negated }) => leaves
+                    .and_then(|l| l.last())
+                    .and_then(|l| l.callsite_id.as_deref())
+                    .map(|cs| (cs, negated)),
+                _ => None,
+            };
+            let (then_in, else_in) = match cond_call {
+                Some((cs, negated)) => (q.arm(cs, !negated, s), q.arm(cs, negated, s)),
+                None => (s, s),
+            };
+            let t = walk_path_list(kids, then_in, q, loops, depth);
+            let e = match n.else_children.as_deref() {
+                Some(e) => walk_path_list(Some(e), else_in, q, loops, depth),
+                None => else_in,
+            };
+            t | e
+        }
+        "case" => {
+            let s = walk_path_list(leaves, s, q, loops, depth);
+            let (mut out, mut has_else) = (0, false);
+            for br in kids.into_iter().flatten() {
+                has_else |= br.is_case_else;
+                out |= walk_path_node(br, s, q, loops, depth + 1);
+            }
+            if has_else { out } else { out | s }
+        }
+        "while" | "for" | "foreach" => {
+            // A `for` / `foreach` header runs once; a `while` condition every pass.
+            let once = n.kind != "while";
+            let mut head = if once {
+                walk_path_list(leaves, s, q, loops, depth)
+            } else {
+                s
+            };
+            loop {
+                let c = if once {
+                    head
+                } else {
+                    walk_path_list(leaves, head, q, loops, depth)
+                };
+                loops.push((0, 0));
+                let b = walk_path_list(kids, c, q, loops, depth);
+                let (brk, cont) = loops.pop().unwrap_or_default();
+                let next = head | b | cont;
+                if next == head {
+                    return c | brk;
+                }
+                head = next;
+            }
+        }
+        "repeat" => {
+            let mut head = s;
+            loop {
+                loops.push((0, 0));
+                let b = walk_path_list(kids, head, q, loops, depth);
+                let (brk, cont) = loops.pop().unwrap_or_default();
+                let c = walk_path_list(leaves, b | cont, q, loops, depth);
+                let next = head | c;
+                if next == head {
+                    return c | brk;
+                }
+                head = next;
+            }
+        }
+        "exit" => {
+            let s = walk_path_list(leaves, s, q, loops, depth);
+            if s != 0 {
+                let value = match n.path_hint {
+                    Some(PathHint::Exit(v)) => Some(v),
+                    _ => None,
+                };
+                q.exit(value, s);
+            }
+            0
+        }
+        "break" | "continue" => {
+            match loops.last_mut() {
+                Some(l) if n.kind == "break" => l.0 |= s,
+                Some(l) => l.1 |= s,
+                None => q.opaque(),
+            }
+            0
+        }
+        "try" => {
+            q.opaque();
+            s
+        }
+        // block, other, case-branch, and any kind not named above.
+        _ => {
+            let s = walk_path_list(leaves, s, q, loops, depth);
+            walk_path_list(kids, s, q, loops, depth)
+        }
+    }
 }
 
 /// Whether every caller of `routine` is visible, so a detector that hands a
@@ -2174,5 +2367,208 @@ mod issue21_predicate_tests {
             whole_set_break(&op, "loop0"),
             Some(WholeSetBreak::SkipsRows)
         );
+    }
+}
+
+/// #343: `walk_paths` over hand-built trees, with a toy question: leaf `d`
+/// makes dirt, leaf `p` saves it, an exit (or the end) with unsaved dirt
+/// fails, and an opaque node fails.
+#[cfg(test)]
+mod walk_paths_tests {
+    use super::*;
+
+    const UNSAVED: PathStates = 2;
+    const SAVED: PathStates = 4;
+
+    #[derive(Default)]
+    struct Toy {
+        failed: bool,
+    }
+
+    impl PathQuestion for Toy {
+        fn leaf(&mut self, leaf: &PCFNNode, s: PathStates) -> PathStates {
+            match leaf.callsite_id.as_deref() {
+                Some("d") => UNSAVED,
+                Some("p") if s & UNSAVED != 0 => (s & !UNSAVED) | SAVED,
+                _ => s,
+            }
+        }
+        fn arm(&mut self, cs_id: &str, value: bool, s: PathStates) -> PathStates {
+            // `d` leaves nothing unsaved when it returned false.
+            if cs_id == "d" && !value {
+                (s & !UNSAVED) | SAVED
+            } else {
+                s
+            }
+        }
+        fn exit(&mut self, _value: Option<bool>, s: PathStates) {
+            self.failed |= s & UNSAVED != 0;
+        }
+        fn opaque(&mut self) {
+            self.failed = true;
+        }
+    }
+
+    fn node(kind: &str) -> PCFNNode {
+        PCFNNode {
+            kind: kind.to_string(),
+            operation_id: None,
+            callsite_id: None,
+            condition_guard: None,
+            condition_leaves: None,
+            children: None,
+            else_children: None,
+            is_case_else: false,
+            source_range: None,
+            path_hint: None,
+        }
+    }
+    fn call(id: &str) -> PCFNNode {
+        let mut n = node(if id == "error" { "error" } else { "call" });
+        n.callsite_id = Some(id.to_string());
+        n
+    }
+    fn block(kids: Vec<PCFNNode>) -> PCFNNode {
+        let mut n = node("block");
+        n.children = Some(kids);
+        n
+    }
+    fn iff(then: Vec<PCFNNode>, els: Option<Vec<PCFNNode>>) -> PCFNNode {
+        let mut n = node("if");
+        n.children = Some(vec![block(then)]);
+        n.else_children = els.map(|e| vec![block(e)]);
+        n
+    }
+    fn looped(kind: &str, kids: Vec<PCFNNode>) -> PCFNNode {
+        let mut n = node(kind);
+        n.children = Some(if kind == "repeat" {
+            kids
+        } else {
+            vec![block(kids)]
+        });
+        n
+    }
+    fn branch(kids: Vec<PCFNNode>, is_else: bool) -> PCFNNode {
+        let mut n = node("case-branch");
+        n.children = Some(vec![block(kids)]);
+        n.is_case_else = is_else;
+        n
+    }
+    fn ok(tree: PCFNNode) -> bool {
+        let mut q = Toy::default();
+        walk_paths(&tree, 1, &mut q);
+        !q.failed
+    }
+
+    #[test]
+    fn sequence_and_exit() {
+        assert!(ok(block(vec![call("d"), call("p")])));
+        assert!(!ok(block(vec![call("d")])), "end of body with dirt");
+        assert!(
+            !ok(block(vec![
+                call("d"),
+                iff(vec![node("exit")], None),
+                call("p")
+            ])),
+            "an exit before the save"
+        );
+    }
+
+    #[test]
+    fn nested_if_joins_every_arm() {
+        let inner = |els: bool| iff(vec![call("p")], els.then(|| vec![call("p")]));
+        assert!(ok(block(vec![
+            call("d"),
+            iff(vec![inner(true)], Some(vec![call("p")]))
+        ])));
+        assert!(!ok(block(vec![
+            call("d"),
+            iff(vec![inner(false)], Some(vec![call("p")]))
+        ])));
+        assert!(
+            !ok(block(vec![call("d"), iff(vec![call("p")], None)])),
+            "if without else"
+        );
+    }
+
+    #[test]
+    fn case_without_else_falls_through() {
+        let case = |with_else: bool| {
+            let mut n = node("case");
+            let mut brs = vec![branch(vec![call("p")], false)];
+            if with_else {
+                brs.push(branch(vec![call("p")], true));
+            }
+            n.children = Some(brs);
+            n
+        };
+        assert!(ok(block(vec![call("d"), case(true)])));
+        assert!(!ok(block(vec![call("d"), case(false)])));
+    }
+
+    #[test]
+    fn loops_run_zero_or_more_times() {
+        assert!(
+            !ok(block(vec![call("d"), looped("while", vec![call("p")])])),
+            "while: zero passes"
+        );
+        assert!(
+            ok(block(vec![call("d"), looped("repeat", vec![call("p")])])),
+            "repeat: at least one"
+        );
+        // A break before the save leaves the loop with dirt.
+        let brk = looped("repeat", vec![iff(vec![node("break")], None), call("p")]);
+        assert!(!ok(block(vec![call("d"), brk])));
+        // Dirt made in the body, saved after the loop.
+        assert!(ok(block(vec![looped("while", vec![call("d")]), call("p")])));
+        // A `for` header runs once, before the body: it saves nothing made in it.
+        let mut f = looped("for", vec![call("d")]);
+        f.condition_leaves = Some(vec![call("p")]);
+        assert!(!ok(block(vec![f])));
+    }
+
+    #[test]
+    fn continue_joins_the_loop_condition() {
+        // `d; repeat if c then continue; p; until x;` -> the `continue` path
+        // skips `p`, reaches `until` with dirt, and may leave the loop.
+        let body = vec![iff(vec![node("continue")], None), call("p")];
+        assert!(!ok(block(vec![call("d"), looped("repeat", body)])));
+        // The same loop with the save after it is fine.
+        let body = vec![iff(vec![node("continue")], None), call("p")];
+        assert!(ok(block(vec![
+            call("d"),
+            looped("repeat", body),
+            call("p")
+        ])));
+    }
+
+    #[test]
+    fn error_ends_a_path_and_opaque_nodes_fail() {
+        assert!(ok(block(vec![iff(vec![call("d"), call("error")], None)])));
+        assert!(!ok(block(vec![call("d"), call("p"), node("try")])), "try");
+        assert!(
+            !ok(block(vec![call("d"), call("p"), node("break")])),
+            "stray break"
+        );
+        let mut ae = node("other");
+        ae.children = Some(vec![block(vec![call("error")])]);
+        ae.path_hint = Some(PathHint::AssertError);
+        assert!(!ok(block(vec![call("d"), call("p"), ae])), "asserterror");
+    }
+
+    #[test]
+    fn may_run_leaf_and_cond_call_arms() {
+        let mut maybe = call("p");
+        maybe.path_hint = Some(PathHint::MayRun);
+        assert!(!ok(block(vec![call("d"), maybe])));
+        // `if not d() then exit; p` passes; `if d() then exit; p` does not.
+        let guard = |negated: bool| {
+            let mut n = iff(vec![node("exit")], None);
+            n.condition_leaves = Some(vec![call("d")]);
+            n.path_hint = Some(PathHint::CondCall { negated });
+            n
+        };
+        assert!(ok(block(vec![guard(true), call("p")])));
+        assert!(!ok(block(vec![guard(false), call("p")])));
     }
 }
