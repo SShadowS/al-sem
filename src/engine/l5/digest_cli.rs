@@ -348,13 +348,46 @@ fn path_readings(root: &DiffRoot, path: &str) -> impl Iterator<Item = String> {
     readings.into_iter().flatten()
 }
 
-/// Whether a workspace file lies below `path` under any reading: an `Only in`
-/// path may be a folder (#353).
-fn holds_workspace_files(files: &FileKeys<'_>, root: &DiffRoot, path: &str) -> bool {
-    path_readings(root, path).any(|r| {
-        let dir = format!("{r}/");
-        files.keys().any(|k| k.starts_with(&dir))
-    })
+/// Every folder key that holds a workspace file (`src` for `src/x.al`), built
+/// once per diff run, and only when an `Only in` path needs it (#353).
+fn workspace_folders(files: &FileKeys<'_>) -> std::collections::HashSet<String> {
+    let mut folders = std::collections::HashSet::new();
+    for key in files.keys() {
+        let mut end = key.len();
+        while let Some(i) = key[..end].rfind('/') {
+            if !folders.insert(key[..i].to_string()) {
+                break; // its ancestors are in already
+            }
+            end = i;
+        }
+    }
+    folders
+}
+
+/// Whether a workspace file lies below `path`, an `Only in` path that may be a
+/// folder (#353): a reading is a workspace folder, or `path` is the diff
+/// root's prefix or a folder above it (no reading exists there) and the
+/// workspace has a file.
+fn holds_workspace_files(
+    folders: &std::collections::HashSet<String>,
+    any_file: bool,
+    root: &DiffRoot,
+    path: &str,
+) -> bool {
+    path_readings(root, path).any(|r| folders.contains(&r))
+        || (any_file && at_or_above_prefix(root, path))
+}
+
+/// Whether `path`'s folders are the first folders of the diff root's prefix
+/// ([`same_folder`]): it is the prefix or a folder above it.
+fn at_or_above_prefix(root: &DiffRoot, path: &str) -> bool {
+    let (DiffRoot::GitTop(prefix) | DiffRoot::Explicit(prefix)) = root else {
+        return false;
+    };
+    let mut want = prefix.split('/');
+    clean_segments(&path.replace('\\', "/"))
+        .split('/')
+        .all(|seg| want.next().is_some_and(|w| same_folder(seg, w)))
 }
 
 /// Whether a diff path looks like an AL file (#353), as workspace discovery reads one.
@@ -649,12 +682,18 @@ pub fn resolve_changed_roots(
         for diff_file in &parsed.files {
             // #353: a record whose path (a deletion's `---` path, else the new
             // one) is not AL-looking makes no roots. Renamed away from AL, it
-            // deleted AL source.
-            if !al_looking(&diff_file.path) {
+            // deleted AL source; a copy to a non-AL name (also with an
+            // `old_path`) deleted nothing. A deletion with no `---` path (the
+            // `unknown` placeholder) stays `diff-file-deleted`.
+            let placeholder =
+                diff_file.kind == DiffFileKind::Deleted && diff_file.old_path.is_none();
+            if !placeholder && !al_looking(&diff_file.path) {
                 diagnostics.push(match diff_file.old_path.as_deref() {
-                    Some(old) if al_looking(old) => ChangedRootsDiagnostic::DiffFileDeleted {
-                        file: old.to_string(),
-                    },
+                    Some(old) if diff_file.kind == DiffFileKind::Renamed && al_looking(old) => {
+                        ChangedRootsDiagnostic::DiffFileDeleted {
+                            file: old.to_string(),
+                        }
+                    }
                     _ => ChangedRootsDiagnostic::DiffFileNotAl {
                         file: diff_file.path.clone(),
                     },
@@ -704,10 +743,18 @@ pub fn resolve_changed_roots(
         // `diff -r`'s `Only in` files carry no hunk (#111). One that is a workspace
         // file (the new tree added it) is a whole-file hit, like a hunkless rename;
         // any other is reported, never dropped silently.
+        let mut folders = None;
         for file in &parsed.only_in {
             // #353: a folder of workspace files keeps `diff-file-unmatched` (its
             // roots are lost, a stated limit).
-            if !al_looking(file) && !holds_workspace_files(&files, &input.diff_root, file) {
+            if !al_looking(file)
+                && !holds_workspace_files(
+                    folders.get_or_insert_with(|| workspace_folders(&files)),
+                    !files.is_empty(),
+                    &input.diff_root,
+                    file,
+                )
+            {
                 diagnostics.push(ChangedRootsDiagnostic::DiffFileNotAl { file: file.clone() });
                 continue;
             }
@@ -1829,14 +1876,18 @@ pub fn project_digest_document(
     // Still 1.6.0: with `--include-reads` (#246, opt-in) a document may carry
     // `DB_READ` effects and `payload.includeReads: true`; without it, neither.
     // 1.7.0: additive default-on `diff-file-ambiguous` changed-roots diagnostic
-    // with `file` and `candidates` (#77). Contract: a minor bump is additive;
+    // with `file` and `candidates` (#77). Contract: a minor bump removes and
+    // renames no field; it may add a field or kind, and (as 1.8.0 does) narrow
+    // what an existing kind covers, so the same input can count differently;
     // `changedRootsDiagnostics[].kind` is an open set (a consumer treats an
     // unknown kind as a diagnostic, not a parse error); exit 0 does not mean
     // every diff file resolved.
-    // 1.8.0: additive `diff-file-not-al` changed-roots diagnostic with `file`
-    // (#353): a diff path that is not AL-looking. `diff-file-unmatched` and
-    // `diff-file-deleted` now name AL-looking paths only (the old side of an
-    // AL -> non-AL rename is `diff-file-deleted`).
+    // 1.8.0: new `diff-file-not-al` changed-roots diagnostic with `file`
+    // (#353): a diff path that is not AL-looking. NOT purely additive:
+    // `diff-file-unmatched` and `diff-file-deleted` narrow to AL-looking paths
+    // (the old side of an AL -> non-AL rename is `diff-file-deleted`). The one
+    // exception: an `Only in` folder holding workspace files stays
+    // `diff-file-unmatched`.
     env.insert("schemaVersion".into(), "1.8.0".into());
 
     // The block goes in after the null drop, so its `ratio: null` survives; the

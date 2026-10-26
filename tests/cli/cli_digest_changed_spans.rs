@@ -3729,6 +3729,9 @@ rename to src/posting.json
 /// #353 A3 (e). A hunkless rename `src/old.json` -> `src/posting.al` (a workspace
 /// file) is handled on its new path as before: every routine of the file, no
 /// diagnostic.
+///
+/// Mutation: classify on `old_path.unwrap_or(path)` -> `diff-file-not-al` on
+/// `src/old.json`.
 #[test]
 fn rename_from_non_al_to_al_takes_the_new_file() {
     let diff = "diff --git a/src/old.json b/src/posting.al
@@ -3789,4 +3792,85 @@ fn non_al_invariants() {
         "(c): {doc}"
     );
     assert_eq!(code, 2, "(c): {doc}");
+}
+
+/// #353 final panel H1. A git copy `src/posting.al` -> `src/posting.json` (the
+/// parser gives it an `old_path`, kind Modified) deleted nothing: exactly one
+/// `diff-file-not-al` on the new path, no `diff-file-deleted`.
+///
+/// Mutation: drop the `Renamed` kind check in the rename arm ->
+/// `diff-file-deleted` on `src/posting.al`.
+#[test]
+fn copy_from_al_to_non_al_is_not_al() {
+    let diff = "diff --git a/src/posting.al b/src/posting.json
+similarity index 90%
+copy from src/posting.al
+copy to src/posting.json
+--- a/src/posting.al
++++ b/src/posting.json
+@@ -9,1 +9,1 @@
+-        Header.\"Status Posted\" := false;
++        Header.\"Status Posted\" := true;
+";
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(diff));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-not-al", "src/posting.json")]),
+        "{doc}"
+    );
+    assert!(entries(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #353 final panel H2 (and F3). Under a diff-root prefix, an `Only in` folder
+/// that IS the prefix (`Only in .: Cloud`, workspace `<top>/Cloud`) or a folder
+/// above it (`Only in .: apps`, workspace `<top>/apps/Cloud`) holds workspace
+/// files, so it stays `diff-file-unmatched`; a sibling folder with nothing of
+/// the workspace below it is `diff-file-not-al`.
+///
+/// Mutation: drop the prefix/parent branch of `holds_workspace_files` ->
+/// `./Cloud` and `./apps` are `diff-file-not-al`.
+#[test]
+fn only_in_diff_root_prefix_folder_stays_unmatched() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let ru = "Only in .: Cloud\nOnly in .: repo-sibling-folder\n";
+    let (doc, code) = digest(&ws, &[], Some(ru));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[
+            ("diff-file-unmatched", "./Cloud"),
+            ("diff-file-not-al", "./repo-sibling-folder"),
+        ]),
+        "{doc}"
+    );
+    assert_eq!(code, 2, "{doc}");
+
+    std::fs::create_dir_all(t.path().join("deep/.git")).unwrap();
+    let deep = t.path().join("deep/apps/Cloud");
+    d8_workspace(&deep, &d8_posting());
+    let (doc, code) = digest(&deep, &[], Some("Only in .: apps\n"));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-unmatched", "./apps")]),
+        "{doc}"
+    );
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #353 final panel H3. A `--- /dev/null` / `+++ /dev/null` record has no path
+/// (the parser's `unknown` placeholder, no `old_path`): it stays
+/// `diff-file-deleted` on `unknown`, as before #353.
+///
+/// Mutation: drop the placeholder skip -> `diff-file-not-al` on `unknown`.
+#[test]
+fn dev_null_both_sides_stays_deleted() {
+    let diff = "--- /dev/null\n+++ /dev/null\n";
+    let (doc, code) = digest(&corpus("ws-d8-commit-in-tx"), &[], Some(diff));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[("diff-file-deleted", "unknown")]),
+        "{doc}"
+    );
+    assert_eq!(code, 2, "{doc}");
 }
