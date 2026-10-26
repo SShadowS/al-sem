@@ -89,17 +89,20 @@ fn diagnostics_json(diag_vec: &[crate::engine::l5::registry::Diagnostic]) -> ser
 // Changed-root resolution
 // ---------------------------------------------------------------------------
 
-/// Strip URI scheme prefix from a snapshot source path.
+/// The path after a `ws:` scheme: a workspace unit id, the one id form a file
+/// input takes (#339).
+fn ws_rest(p: &str) -> Option<&str> {
+    p.strip_prefix("ws:")
+}
+
+/// Strip URI scheme prefix (`ws:`, [`ws_rest`], or `app:<guid>:`) from a
+/// snapshot source path.
 fn strip_scheme(p: &str) -> String {
-    if let Some(rest) = p.strip_prefix("ws:") {
-        return rest.replace('\\', "/");
-    }
-    if let Some(rest) = p.strip_prefix("app:")
-        && let Some(i) = rest.find(':')
-    {
-        return rest[i + 1..].replace('\\', "/");
-    }
-    p.replace('\\', "/")
+    let app_rest = || {
+        let rest = p.strip_prefix("app:")?;
+        rest.find(':').map(|i| &rest[i + 1..])
+    };
+    ws_rest(p).or_else(app_rest).unwrap_or(p).replace('\\', "/")
 }
 
 /// Normalize an input path for comparison: strip scheme, forward-slash, a
@@ -183,6 +186,12 @@ pub enum ChangedRootsDiagnostic {
     FileUnmatched {
         file: String,
     },
+    /// A file input that names a workspace file both as workspace-relative and
+    /// as git-top-relative (#339); it gives no roots.
+    FileAmbiguous {
+        file: String,
+        candidates: Vec<String>,
+    },
     SelectorUnmatched {
         selector: String,
     },
@@ -224,6 +233,7 @@ impl ChangedRootsDiagnostic {
     fn kind(&self) -> &'static str {
         match self {
             Self::FileUnmatched { .. } => "file-unmatched",
+            Self::FileAmbiguous { .. } => "file-ambiguous",
             Self::SelectorUnmatched { .. } => "selector-unmatched",
             Self::SelectorAmbiguous { .. } => "selector-ambiguous",
             Self::DiffFileUnmatched { .. } => "diff-file-unmatched",
@@ -251,13 +261,15 @@ pub struct ChangedInput<'a> {
     pub diff_text: Option<String>,
     pub diff_root: DiffRoot,
     /// The workspace's `.al` files (`WorkspaceInputs::al_files`): which
-    /// readings of a diff path name a FILE, routines or not (#77).
+    /// readings of a changed path (a diff's or a file input's) name a FILE,
+    /// routines or not (#77, #339).
     pub workspace_files: &'a [crate::program::inputs::WsFile],
 }
 
-/// What a diff's paths are relative to (#77), held as the workspace's path
-/// below that directory, `/`-joined with its case kept (`Cloud`, never empty:
-/// a root that IS the workspace is [`DiffRoot::Workspace`]).
+/// What changed paths (a diff's and the file inputs, #77, #339) are relative
+/// to, held as the workspace's path below that directory, `/`-joined with its
+/// case kept (`Cloud`, never empty: a root that IS the workspace is
+/// [`DiffRoot::Workspace`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DiffRoot {
     /// Paths are workspace-relative.
@@ -315,7 +327,8 @@ fn strip_diff_prefix(prefix: &str, path: &str) -> Option<String> {
 /// file's `rel_posix` (several spellings may share a key).
 type FileKeys<'a> = HashMap<String, Vec<&'a str>>;
 
-/// [`FileKeys`] of `files`, built once per diff run.
+/// [`FileKeys`] of `files`, built at most once per [`resolve_changed_roots`]
+/// call (only when a file input or a diff is read) and read by both steps.
 fn workspace_file_keys(files: &[crate::program::inputs::WsFile]) -> FileKeys<'_> {
     let mut by_key = FileKeys::new();
     for f in files {
@@ -395,15 +408,27 @@ fn al_looking(path: &str) -> bool {
     crate::source_text::has_al_extension(std::path::Path::new(path))
 }
 
-/// The span-index key a diff path names under `root`, or the diagnostic. One
-/// reading: that file, `diff-file-unmatched` when it holds no routine (as
-/// before #77). Two: `diff-file-ambiguous` with every unit of both readings.
-fn diff_key(
+/// What a changed path (a diff's or a file input's) names under a [`DiffRoot`].
+#[derive(Debug, PartialEq, Eq)]
+enum PathMatch {
+    /// One reading, a file holding a routine: its span-index key.
+    One(String),
+    /// Two readings: every unit of both (`ws:<rel>`), each reading's sorted, as
+    /// written first.
+    Ambiguous(Vec<String>),
+    /// No reading, or one whose file holds no routine.
+    None,
+}
+
+/// What `path` names under `root` (#77, #339). One reading: that file,
+/// [`PathMatch::None`] when it holds no routine. Two: ambiguous, decided by the
+/// workspace FILES ([`diff_readings`]).
+fn match_path(
     spans: &RoutineSpanIndex,
     files: &FileKeys<'_>,
     root: &DiffRoot,
     path: &str,
-) -> Result<String, ChangedRootsDiagnostic> {
+) -> PathMatch {
     let readings = diff_readings(files, root, path);
     // A reading's units (`ws:<rel>`), sorted.
     let units = |key: &String| {
@@ -413,14 +438,71 @@ fn diff_key(
         u
     };
     match &readings[..] {
-        [key] if !spans.of_file(key).is_empty() => Ok(key.clone()),
-        [_, _] => Err(ChangedRootsDiagnostic::DiffFileAmbiguous {
-            file: path.to_string(),
-            candidates: readings.iter().flat_map(units).collect(),
-        }),
-        _ => Err(ChangedRootsDiagnostic::DiffFileUnmatched {
-            file: path.to_string(),
-        }),
+        [key] if !spans.of_file(key).is_empty() => PathMatch::One(key.clone()),
+        [_, _] => PathMatch::Ambiguous(readings.iter().flat_map(units).collect()),
+        _ => PathMatch::None,
+    }
+}
+
+/// The span-index key a diff path names under `root` ([`match_path`]), or
+/// `diff-file-ambiguous` / `diff-file-unmatched`.
+fn diff_key(
+    spans: &RoutineSpanIndex,
+    files: &FileKeys<'_>,
+    root: &DiffRoot,
+    path: &str,
+) -> Result<String, ChangedRootsDiagnostic> {
+    let file = path.to_string();
+    match match_path(spans, files, root, path) {
+        PathMatch::One(key) => Ok(key),
+        PathMatch::Ambiguous(candidates) => {
+            Err(ChangedRootsDiagnostic::DiffFileAmbiguous { file, candidates })
+        }
+        PathMatch::None => Err(ChangedRootsDiagnostic::DiffFileUnmatched { file }),
+    }
+}
+
+/// The declarations (indices into `spans.spans`) a file input names under
+/// `root` (#339), or `file-ambiguous` / `file-unmatched`. A `ws:` id names one
+/// workspace FILE exactly (case kept, after the `\` and segment clean-up) under
+/// every root, so a candidate copied from `file-ambiguous` picks its one file;
+/// one holding no routine is `file-unmatched`. An id naming no workspace file
+/// is read as a path ([`match_path`]): a folder may be named `ws:Cloud` (#77).
+/// Every other input, `app:<guid>:…` included, is a path.
+fn file_hits(
+    spans: &RoutineSpanIndex,
+    files: &FileKeys<'_>,
+    root: &DiffRoot,
+    path: &str,
+) -> Result<Vec<usize>, ChangedRootsDiagnostic> {
+    let file = path.to_string();
+    if let Some(rest) = ws_rest(path) {
+        let clean = |p: &str| clean_segments(&p.replace('\\', "/"));
+        let exact = clean(rest);
+        let key = normalize_input(path);
+        if files
+            .get(&key)
+            .is_some_and(|fs| fs.iter().any(|f| clean(f) == exact))
+        {
+            let unit = format!("ws:{exact}");
+            let ixs: Vec<usize> = spans
+                .of_file(&key)
+                .iter()
+                .copied()
+                .filter(|&i| spans.spans[i].source_unit_id == unit)
+                .collect();
+            if ixs.is_empty() {
+                return Err(ChangedRootsDiagnostic::FileUnmatched { file });
+            }
+            return Ok(ixs);
+        }
+    }
+    match match_path(spans, files, root, path) {
+        PathMatch::One(key) => Ok(spans.of_file(&key).to_vec()),
+        PathMatch::Ambiguous(candidates) => {
+            Err(ChangedRootsDiagnostic::FileAmbiguous { file, candidates })
+        }
+        PathMatch::None => Err(ChangedRootsDiagnostic::FileUnmatched { file }),
     }
 }
 
@@ -607,13 +689,16 @@ pub fn resolve_changed_roots(
     // Selector indexes (5-form resolveSelector cascade).
     let selector_idx = build_selector_indexes(identities, primary_app_guid);
 
-    // 1. File-based matching
+    // Both the file step and the diff step read paths by these (#339); built
+    // on first use, so a routine-only run never builds them.
+    let files = std::cell::LazyCell::new(|| workspace_file_keys(input.workspace_files));
+
+    // 1. File-based matching: a file input reads like a diff path (#339).
     for file in input.files.iter().flatten() {
-        let ixs = spans.of_file(&normalize_input(file));
-        if ixs.is_empty() {
-            diagnostics.push(ChangedRootsDiagnostic::FileUnmatched { file: file.clone() });
+        match file_hits(&spans, &files, &input.diff_root, file) {
+            Ok(ixs) => hits.extend(ixs),
+            Err(d) => diagnostics.push(d),
         }
-        hits.extend_from_slice(ixs);
     }
 
     // 2. Routine selector matching (port of resolveSelector — 5-form cascade).
@@ -673,7 +758,6 @@ pub fn resolve_changed_roots(
         // would hide the error (#72). Keyed by every file the errored path may
         // name (#77): an ambiguous one vetoes both, as its changes are unknown
         // for either.
-        let files = workspace_file_keys(input.workspace_files);
         let poisoned: std::collections::HashSet<String> = parsed
             .file_errors
             .iter()
@@ -1652,7 +1736,8 @@ fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::
             m.insert("selector".into(), selector.clone().into());
             m.insert("candidates".into(), candidates.clone().into());
         }
-        ChangedRootsDiagnostic::DiffFileAmbiguous { file, candidates } => {
+        ChangedRootsDiagnostic::FileAmbiguous { file, candidates }
+        | ChangedRootsDiagnostic::DiffFileAmbiguous { file, candidates } => {
             m.insert("file".into(), file.clone().into());
             m.insert("candidates".into(), candidates.clone().into());
         }
@@ -1697,6 +1782,11 @@ fn changed_roots_diagnostic_human(d: &ChangedRootsDiagnostic) -> String {
         } => format!(
             "{} (candidates: {})",
             escape_controls(selector),
+            list(candidates)
+        ),
+        ChangedRootsDiagnostic::FileAmbiguous { file, candidates } => format!(
+            "{} (candidates: {}); pass one candidate as --file, or --diff-root <folder> to read paths relative to <folder>",
+            escape_controls(file),
             list(candidates)
         ),
         ChangedRootsDiagnostic::DiffFileAmbiguous { file, candidates } => format!(
@@ -1888,6 +1978,10 @@ pub fn project_digest_document(
     // (the old side of an AL -> non-AL rename is `diff-file-deleted`). The one
     // exception: an `Only in` folder holding workspace files stays
     // `diff-file-unmatched`.
+    // Still 1.8.0 (unreleased): new `file-ambiguous` changed-roots diagnostic
+    // with `file` and `candidates` (#339): file inputs read paths as diffs do
+    // (#77). Not purely additive on the file side either: a file input that
+    // resolved as written may now be `file-ambiguous` and give no roots.
     env.insert("schemaVersion".into(), "1.8.0".into());
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
@@ -2119,7 +2213,7 @@ pub struct DigestRequest<'a> {
     pub tests: bool,
     /// `--include-reads`: add `DB_READ` effects and `payload.includeReads` (#246).
     pub include_reads: bool,
-    /// What `diff_text`'s paths are relative to (#77).
+    /// What `diff_text`'s and `changed_files`' paths are relative to (#77, #339).
     pub diff_root: DiffRoot,
 }
 
@@ -2811,6 +2905,11 @@ mod tests {
             D::FileUnmatched {
                 file: s("src\\x\u{202e}y\u{2028}z.al"),
             },
+            // #339: the file and a candidate are escaped too.
+            D::FileAmbiguous {
+                file: s("C\tl/a\u{202e}.al"),
+                candidates: vec![s("ws:C\nl/a.al"), s("ws:a.al")],
+            },
         ];
         let lines = concat!(
             "changed-roots: file-unmatched src/a.al\n",
@@ -2826,6 +2925,8 @@ mod tests {
             "changed-roots: diff-parse-error truncated hunk\n",
             "changed-roots: file-unmatched src/a\\nb\\t.al\n",
             "changed-roots: file-unmatched src\\x\\u{202e}y\\u{2028}z.al\n",
+            "changed-roots: file-ambiguous C\\tl/a\\u{202e}.al (candidates: ws:C\\nl/a.al, ws:a.al); ",
+            "pass one candidate as --file, or --diff-root <folder> to read paths relative to <folder>\n",
         );
         // (a) no entries.
         assert_eq!(

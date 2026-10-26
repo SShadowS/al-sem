@@ -941,6 +941,7 @@ impl Job for ProveJob<'_> {
             routines: Some(vec![self.routine_selector.to_string()]),
             diff_text: None,
             diff_root: Default::default(),
+            // No file inputs here; any would need the workspace files (#339).
             workspace_files: &[],
         };
         let changed_roots = resolve_changed_roots(
