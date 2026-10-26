@@ -99,7 +99,21 @@ fn digest_raw_as(
     diff: Option<&str>,
     format: &str,
 ) -> (String, String, i32) {
+    digest_raw_in(None, ws, args, diff, format)
+}
+
+/// [`digest_raw_as`] run from `cwd` (the test's own when `None`).
+fn digest_raw_in(
+    cwd: Option<&Path>,
+    ws: &Path,
+    args: &[&str],
+    diff: Option<&str>,
+    format: &str,
+) -> (String, String, i32) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
     cmd.arg("digest").arg(ws).args(args);
     let diff_dir = tempfile::tempdir().unwrap();
     if let Some(d) = diff {
@@ -3370,9 +3384,19 @@ fn lone_diff_root_is_exit_3() {
     let t = tempfile::tempdir().unwrap();
     let ws = t.path().join("Cloud");
     d8_workspace(&ws, &d8_posting());
-    let (_, stderr, code) = digest_raw(&ws, &["--diff-root", arg(t.path())], None);
-    assert_eq!(code, 3, "{stderr}");
-    assert!(stderr.contains("--diff-root needs a diff"), "{stderr}");
+    // #339 A3(d): a routine selector reads no path either.
+    for rest in [&[][..], &["--routine", "PostSalesDoc"]] {
+        let mut args = vec!["--diff-root", arg(t.path())];
+        args.extend_from_slice(rest);
+        let (_, stderr, code) = digest_raw(&ws, &args, None);
+        assert_eq!(code, 3, "{rest:?}: {stderr}");
+        assert!(
+            stderr.contains(
+                "al-sem: digest: --diff-root needs a diff or file inputs (--diff, --file or --changed)"
+            ),
+            "{rest:?}: {stderr}"
+        );
+    }
 }
 
 /// A19. Auto mode never fails planning: a missing workspace with `--diff`
@@ -3456,8 +3480,6 @@ fn batch_worker_uses_the_carried_decision() {
 /// unmatched in the worker, `PostSalesDoc` standalone.
 #[test]
 fn batch_workers_decide_the_diff_root_as_standalone() {
-    use crate::cli_batch_plan::{argv, standalone_in};
-    use crate::cli_batch_writes::{job, lines, run_manifest_doc};
     let t = tempfile::tempdir().unwrap();
     let ws = repo_ws(&t.path().join("a"));
     let amb = ambiguous_ws(&t.path().join("b"));
@@ -3468,12 +3490,7 @@ fn batch_workers_decide_the_diff_root_as_standalone() {
     let other = t.path().join("other");
     std::fs::create_dir_all(&other).unwrap();
     let repo = t.path().join("a/repo");
-    let d = |ws: &Path, rest: &[&str]| {
-        let mut a = vec!["digest", arg(ws)];
-        a.extend_from_slice(rest);
-        a.push("--deterministic");
-        argv(&a)
-    };
+    let d = digest_argv;
     let batches = [
         vec![
             d(&ws, &["--diff", arg(&diff)]),
@@ -3483,6 +3500,26 @@ fn batch_workers_decide_the_diff_root_as_standalone() {
         ],
         vec![d(&ws, &["--diff", arg(&rel)])],
     ];
+    assert_eq!(
+        batches_as_standalone(t.path(), &batches),
+        vec![Some(0), Some(2), Some(3), Some(0), Some(0)],
+    );
+}
+
+/// `digest <ws> <rest> --deterministic` as a manifest argv.
+fn digest_argv(ws: &Path, rest: &[&str]) -> Vec<String> {
+    let mut a = vec!["digest", arg(ws)];
+    a.extend_from_slice(rest);
+    a.push("--deterministic");
+    crate::cli_batch_plan::argv(&a)
+}
+
+/// Runs `batches` as one manifest (every batch but the last in a worker),
+/// asserts each job's exit, stdout and stderr equal its standalone run's, and
+/// returns the exits.
+fn batches_as_standalone(t: &Path, batches: &[Vec<Vec<String>>]) -> Vec<Option<i64>> {
+    use crate::cli_batch_plan::standalone_in;
+    use crate::cli_batch_writes::{job, lines, run_manifest_doc};
     let mut streams = Vec::new();
     let doc = serde_json::json!({
         "batches": batches
@@ -3494,8 +3531,8 @@ fn batch_workers_decide_the_diff_root_as_standalone() {
                     .enumerate()
                     .map(|(i, a)| {
                         let (o, e) = (
-                            t.path().join(format!("{b}.{i}.out")),
-                            t.path().join(format!("{b}.{i}.err")),
+                            t.join(format!("{b}.{i}.out")),
+                            t.join(format!("{b}.{i}.err")),
                         );
                         let a: Vec<&str> = a.iter().map(String::as_str).collect();
                         let j = job(&a, Some(&o), Some(&e));
@@ -3507,7 +3544,7 @@ fn batch_workers_decide_the_diff_root_as_standalone() {
             })
             .collect::<Vec<_>>(),
     });
-    let (out, _) = run_manifest_doc(t.path(), &doc, None, &[], None);
+    let (out, _) = run_manifest_doc(t, &doc, None, &[], None);
     let lines = lines(&out);
     let jobs: Vec<&Vec<String>> = batches.iter().flatten().collect();
     assert_eq!(lines.len(), jobs.len(), "{out:?}");
@@ -3522,12 +3559,7 @@ fn batch_workers_decide_the_diff_root_as_standalone() {
             "{what}: stderr"
         );
     }
-    let exits: Vec<Option<i64>> = lines.iter().map(|l| l["exit"].as_i64()).collect();
-    assert_eq!(
-        exits,
-        vec![Some(0), Some(2), Some(3), Some(0), Some(0)],
-        "{lines:?}"
-    );
+    lines.iter().map(|l| l["exit"].as_i64()).collect()
 }
 
 /// A22. An ambiguous file does not stop the rest: with a resolving
@@ -3873,4 +3905,299 @@ fn dev_null_both_sides_stays_deleted() {
         "{doc}"
     );
     assert_eq!(code, 2, "{doc}");
+}
+
+// ---------------------------------------------------------------------------
+// #339: file inputs (`--file`, `--changed a.al,…`) read paths like `--diff`
+// ---------------------------------------------------------------------------
+
+/// The routines `src/posting.al` declares (`PostSalesDoc`, `OnAfterPostSalesDoc`).
+const POSTING_ROUTINES: [&str; 2] = ["OnAfterPostSalesDoc", "PostSalesDoc"];
+
+/// Asserts `doc` roots exactly `src/posting.al`'s routines with no diagnostic, exit 0.
+fn assert_posting_file(doc: &Value, code: i32, ctx: &str) {
+    assert!(diags(doc).is_empty(), "{ctx}: {doc}");
+    assert_eq!(roots(doc), POSTING_ROUTINES, "{ctx}: {doc}");
+    assert_eq!(code, 0, "{ctx}: {doc}");
+}
+
+/// The `file-ambiguous` diagnostic of `Cloud/src/posting.al`.
+fn file_ambiguous(candidates: &[&str]) -> Value {
+    serde_json::json!({
+        "kind": "file-ambiguous",
+        "file": "Cloud/src/posting.al",
+        "candidates": candidates,
+    })
+}
+
+/// The one `file-unmatched` diagnostic of `file`.
+fn file_unmatched(file: &str) -> Vec<Value> {
+    vec![serde_json::json!({"kind": "file-unmatched", "file": file})]
+}
+
+/// #339 A1. A `Cloud/`-prefixed `--file` (as `git status` prints it from the
+/// top level) resolves the same entries as the workspace-relative one: with
+/// `./`, with the file name in another case (only the prefix folder compares
+/// exactly), and as a `--changed` comma list run from a folder where no such
+/// path exists.
+///
+/// Mutations: `reads_paths()` returns `has_diff()` only -> `file-unmatched`;
+/// the file step looks up `normalize_input` only -> `file-unmatched`.
+#[test]
+fn git_top_relative_file_equals_workspace_relative() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let (base, code) = digest(&ws, &["--file", "src/posting.al"], None);
+    assert_posting_file(&base, code, "precondition");
+    for spelling in [
+        "Cloud/src/posting.al",
+        "./Cloud/src/posting.al",
+        "Cloud/SRC/POSTING.AL",
+    ] {
+        let (doc, code) = digest(&ws, &["--file", spelling], None);
+        assert_posting_file(&doc, code, spelling);
+        assert_eq!(entries(&doc), entries(&base), "{spelling}");
+    }
+    let changed = "Cloud/src/posting.al,Cloud/src/posting.al";
+    assert!(!t.path().join(changed).exists(), "precondition: not a path");
+    let (stdout, stderr, code) =
+        digest_raw_in(Some(t.path()), &ws, &["--changed", changed], None, "json");
+    let doc: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{e}: {stderr}"));
+    assert_posting_file(&doc, code, "--changed");
+    assert_eq!(entries(&doc), entries(&base), "--changed");
+}
+
+/// #339 A2. A `--file` naming a workspace file both as written and below the
+/// git top is `file-ambiguous` (JSON and human), gives no roots and does not
+/// stop another input; each `ws:` candidate picks its one file.
+///
+/// Mutations: `Ambiguous` maps to the first reading -> roots, no diagnostic;
+/// a `ws:` input goes through `match_path` -> see `diff_root_reads_file_inputs`.
+#[test]
+fn file_naming_two_files_is_ambiguous() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = ambiguous_ws(t.path());
+    let both = ["ws:Cloud/src/posting.al", "ws:src/posting.al"];
+    let file = ["--file", "Cloud/src/posting.al"];
+    let (doc, code) = digest(&ws, &file, None);
+    assert_eq!(diags(&doc), vec![file_ambiguous(&both)], "{doc}");
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+
+    let (stdout, stderr, code) = digest_raw_as(&ws, &file, None, "human");
+    assert_eq!(code, 2, "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "digest: no changed roots resolved\nchanged-roots: file-ambiguous Cloud/src/posting.al (candidates: ws:Cloud/src/posting.al, ws:src/posting.al); pass one candidate as --file, or --diff-root <folder> to read paths relative to <folder>\n",
+        "{stderr}"
+    );
+
+    // A bare `PostSalesDoc` is itself ambiguous here (the copy declares it).
+    let mut mixed = file.to_vec();
+    mixed.extend(["--routine", "D8PostingChain::PostSalesDoc"]);
+    let (doc, code) = digest(&ws, &mixed, None);
+    assert_eq!(diags(&doc), vec![file_ambiguous(&both)], "{doc}");
+    assert_eq!(roots(&doc), vec!["PostSalesDoc"], "{doc}");
+    let e = entry(&doc, "PostSalesDoc");
+    assert_eq!(
+        e["routine"]["objectDisplay"], "Codeunit D8PostingChain",
+        "{doc}"
+    );
+    assert_eq!(code, 0, "{doc}");
+
+    for (id, object) in [
+        ("ws:Cloud/src/posting.al", "Codeunit D8PostingChainCopy"),
+        ("ws:src/posting.al", "Codeunit D8PostingChain"),
+    ] {
+        let (doc, code) = digest(&ws, &["--file", id], None);
+        assert_posting_file(&doc, code, id);
+        let e = entry(&doc, "PostSalesDoc");
+        assert_eq!(e["routine"]["objectDisplay"], object, "{id}: {doc}");
+    }
+
+    if !case_sensitive(t.path()) {
+        println!("skipped the case-distinct units: the file system folds case");
+        return;
+    }
+    write(
+        &ws.join("src/Posting.al"),
+        &posting_copy(50196, "D8PostingChainCopy3"),
+    );
+    let (doc, code) = digest(&ws, &file, None);
+    assert_eq!(
+        diags(&doc),
+        vec![file_ambiguous(&[
+            "ws:Cloud/src/posting.al",
+            "ws:src/Posting.al",
+            "ws:src/posting.al",
+        ])],
+        "{doc}"
+    );
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #339 A2 (table only). Ambiguity is decided by the workspace's FILES, as
+/// for a diff (#77 `table_only_reading_still_ambiguous`).
+///
+/// Mutation: `match_path` keeps only readings whose file holds a routine ->
+/// the stripped reading alone roots the posting routines.
+#[test]
+fn table_only_file_reading_still_ambiguous() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    write(
+        &ws.join("Cloud/src/posting.al"),
+        "table 50197 D8OnlyTable\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n}\n",
+    );
+    let (doc, code) = digest(&ws, &["--file", "Cloud/src/posting.al"], None);
+    assert_eq!(
+        diags(&doc),
+        vec![file_ambiguous(&[
+            "ws:Cloud/src/posting.al",
+            "ws:src/posting.al"
+        ])],
+        "{doc}"
+    );
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #339 A3(a). With `--diff-root`, a plain file path is read relative to it
+/// only (one rule for every changed path); a `ws:` id is read as written. In
+/// a mixed run, the workspace-relative `--file` is now unmatched while the
+/// diff still roots.
+///
+/// Mutations: the lone check stays `!has_diff` -> exit 3; a `ws:` input goes
+/// through `match_path` -> `file-unmatched` on `ws:src/posting.al`.
+#[test]
+fn diff_root_reads_file_inputs() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let repo = t.path().join("repo");
+    let root = ["--diff-root", arg(&repo)];
+    let with = |file: &'static str| [root[0], root[1], "--file", file];
+    for file in ["Cloud/src/posting.al", "ws:src/posting.al"] {
+        let (doc, code) = digest(&ws, &with(file), None);
+        assert_posting_file(&doc, code, file);
+    }
+    let (doc, code) = digest(&ws, &with("src/posting.al"), None);
+    assert_eq!(diags(&doc), file_unmatched("src/posting.al"), "{doc}");
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+
+    let diff = git_line9("Cloud/src/subscriber.al");
+    let (doc, code) = digest(&ws, &with("src/posting.al"), Some(&diff));
+    assert_eq!(diags(&doc), file_unmatched("src/posting.al"), "{doc}");
+    assert_eq!(roots(&doc), vec!["HandlePosted"], "{doc}");
+    assert_eq!(code, 0, "{doc}");
+    let (doc, code) = digest(&ws, &with("Cloud/src/posting.al"), Some(&diff));
+    assert!(diags(&doc).is_empty(), "{doc}");
+    assert_eq!(
+        roots(&doc),
+        vec!["HandlePosted", "OnAfterPostSalesDoc", "PostSalesDoc"],
+        "{doc}"
+    );
+    assert_eq!(code, 0, "{doc}");
+}
+
+/// #339 A3(b). With no `.git` above the workspace, file paths stay
+/// workspace-relative, as before.
+#[test]
+fn file_inputs_without_git_are_workspace_relative() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("Cloud");
+    d8_workspace(&ws, &d8_posting());
+    let (doc, code) = digest(&ws, &["--file", "Cloud/src/posting.al"], None);
+    assert_eq!(diags(&doc), file_unmatched("Cloud/src/posting.al"), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+    let (doc, code) = digest(&ws, &["--file", "src/posting.al"], None);
+    assert_posting_file(&doc, code, "workspace-relative");
+}
+
+/// #339 A3(c). A `--diff-root` that is a regular file, with file inputs only,
+/// reaches #77's validation: exit 3, `is not a folder`.
+///
+/// Mutation: the lone check stays `!has_diff` -> `needs a diff` instead.
+#[test]
+fn diff_root_file_with_file_inputs_is_exit_3() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    write(&t.path().join("file"), "x");
+    let (_, stderr, code) = digest_raw(
+        &ws,
+        &[
+            "--diff-root",
+            arg(&t.path().join("file")),
+            "--file",
+            "src/posting.al",
+        ],
+        None,
+    );
+    assert_eq!(code, 3, "{stderr}");
+    assert!(stderr.contains("is not a folder"), "{stderr}");
+}
+
+/// #339 A3(e). A file input keeps its whole-file roots when the same file's
+/// diff section has a rejected hunk header (#72 vetoes diff-derived roots
+/// only); with a healthy diff of that file, its roots are the file's set, once.
+#[test]
+fn file_input_with_a_diff_of_the_same_file() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let file = ["--file", "src/posting.al"];
+    let bad = format!("{POSTING_PAIR}@@ garbage @@\n{LINE9_BODY}");
+    let (doc, code) = digest(&ws, &file, Some(&bad));
+    assert_eq!(roots(&doc), POSTING_ROUTINES, "{doc}");
+    assert_malformed_error_of(&doc, "src/posting.al", "rejected header");
+    assert_eq!(diags(&doc).len(), 1, "{doc}");
+    assert_eq!(code, 0, "{doc}");
+
+    let (base, _) = digest(&ws, &file, None);
+    let (doc, code) = digest(&ws, &file, Some(&git_line9("src/posting.al")));
+    assert_posting_file(&doc, code, "healthy diff");
+    assert_eq!(entries(&doc), entries(&base), "{doc}");
+}
+
+/// #339 A3(f). Under the git top, an absolute path to a workspace file and a
+/// wrong-case prefix folder stay `file-unmatched` (stated limits).
+#[test]
+fn file_input_boundaries_under_git_top() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let abs = ws.join("src/posting.al");
+    for file in [arg(&abs), "cloud/src/posting.al"] {
+        let (doc, code) = digest(&ws, &["--file", file], None);
+        assert_eq!(diags(&doc), file_unmatched(file), "{doc}");
+        assert!(roots(&doc).is_empty(), "{doc}");
+        assert_eq!(code, 2, "{doc}");
+    }
+}
+
+/// #339 A4. A batch decides the path root for a file-only job as standalone
+/// does: in the parent (a one-job manifest) and in a worker (batch 0 of two),
+/// next to a worker job with an explicit `--diff-root`.
+///
+/// Mutation: the batch path keeps `has_diff()` -> the batch job is
+/// `file-unmatched` while standalone resolves.
+#[test]
+fn batch_decides_the_root_for_file_only_jobs() {
+    use crate::cli_batch_plan::{assert_each_standalone, batch};
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let repo = t.path().join("repo");
+    let file_only = digest_argv(&ws, &["--file", "Cloud/src/posting.al"]);
+    let run = batch(std::slice::from_ref(&file_only));
+    assert_each_standalone(&run, std::slice::from_ref(&file_only), None);
+    assert_eq!(run.lines()[0]["exit"], 0, "{:?}", run.lines());
+
+    let explicit = digest_argv(
+        &ws,
+        &["--diff-root", arg(&repo), "--file", "Cloud/src/posting.al"],
+    );
+    let routine = digest_argv(&ws, &["--routine", "HandlePosted"]);
+    assert_eq!(
+        batches_as_standalone(t.path(), &[vec![file_only, explicit], vec![routine]]),
+        vec![Some(0), Some(0), Some(0)],
+    );
 }

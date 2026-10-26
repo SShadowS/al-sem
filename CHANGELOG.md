@@ -21,8 +21,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that pin 1.7.0, such as CentralGauge's `ALSEM_SCHEMAS`, must add 1.8.0 before a release
   ships it. Merging this releases nothing: v2.1.1 still ships 1.7.0.
   The 21 cli-b digest JSON goldens and the `one-job` batch golden change only in that line.
+  Still unreleased, 1.8.0 also gains the `file-ambiguous` kind (#339, see Fixed). It is
+  not purely additive on the file side either: a `--file` that resolved as written can
+  now be `file-ambiguous` and give no roots.
+- **Digest `--diff-root` now reads file inputs too** (#339). With `--diff-root`, a plain
+  `--file` path is read relative to that folder only, as a diff path is. So
+  `--diff d --diff-root <repo> --file src/x.al`, with the workspace at `<repo>/Cloud`,
+  used to resolve and is now `file-unmatched`; write `Cloud/src/x.al` or `ws:src/x.al`.
+  `--diff-root` with only file inputs used to fail (exit 3) and now works. A
+  `--diff-root` with no diff and no file input (alone, or with `--routine` only) is still
+  exit 3, now with `--diff-root needs a diff or file inputs (--diff, --file or --changed)`.
 
 ### Fixed
+
+- **Digest `--file` and `--changed a.al,…` read paths like `--diff`** (#339). A file
+  path may now be relative to the git top level (automatic mode, as #77 reads diff
+  paths) or to `--diff-root` (explicit mode), not only to the workspace: run from the
+  repository top, `--file Cloud/src/posting.al` resolves like `--file src/posting.al`.
+  A path naming a workspace file both ways gives no roots and one
+  `{kind: "file-ambiguous", file, candidates}` diagnostic (human:
+  `changed-roots: file-ambiguous <file> (candidates: …); pass one candidate as --file,
+  or --diff-root <folder> to read paths relative to <folder>`). A `ws:` id is read as
+  written under every root, so a copied candidate picks its one file. A batch decides
+  the root for a file-only job as a standalone run does. Limits: `--changed X` is still
+  read as a diff when `X` exists relative to the current folder, so `--changed
+  Cloud/src/posting.al` run from the git top is parsed as diff text; absolute paths stay
+  `file-unmatched`; prefix folders compare exactly, case included
+  (`cloud/src/posting.al` under `Cloud` stays `file-unmatched`).
 
 - **Digest `--diff`: a file that is not AL source gets its own kind, `diff-file-not-al`**
   (#353). Until now a non-AL file that a diff changed, added or listed in an `Only in`

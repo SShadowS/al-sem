@@ -672,8 +672,9 @@ struct DigestCli {
     /// Path to the AL workspace root.
     workspace: String,
 
-    /// Workspace-relative source file(s) to treat as changed.
-    /// May be repeated. Mutually exclusive with --order (rejected).
+    /// Source file(s) to treat as changed: workspace- or git-top-relative (or
+    /// relative to --diff-root), or a `ws:` id, read as written. May be
+    /// repeated. Mutually exclusive with --order (rejected).
     #[arg(long = "file", action = clap::ArgAction::Append)]
     file: Vec<String>,
 
@@ -686,16 +687,19 @@ struct DigestCli {
     diff: Option<String>,
 
     /// Convenience alias — auto-detect: existing file path → --diff; comma-list with
-    /// `.al` entries → --changed-files; else → --changed-routines.
+    /// `.al` entries → --changed-files (read as --file paths are); else →
+    /// --changed-routines.
     #[arg(long = "changed")]
     changed: Option<String>,
 
-    /// The folder the diff's paths are relative to (a relative path resolves
-    /// against the current directory). The workspace must be inside it, as
+    /// The folder the diff's and the file inputs' paths are relative to (a
+    /// relative path resolves against the current directory; a `ws:` id is
+    /// read as written). The workspace must be inside it, as
     /// spelled or after resolving symlinks. Default: the nearest enclosing git
     /// top level (a `.git` folder or file at or above the workspace), where a
     /// path may also be workspace-relative; a path naming a workspace file both
-    /// ways is reported `diff-file-ambiguous` and gives no roots. With no
+    /// ways is reported `diff-file-ambiguous` (a diff path) or `file-ambiguous`
+    /// (a file input) and gives no roots. With no
     /// enclosing repository, paths are workspace-relative. Folder names compare
     /// exactly, case included, on every platform.
     #[arg(long = "diff-root")]
@@ -1665,7 +1669,7 @@ fn pin_diff_root(
     };
     // The batch parse pinned `--changed` ([`pin_changed`]), so this asks the
     // file system nothing more about it.
-    let root = decided.unwrap_or_else(|| decide_diff_root(d, DigestInputs::of(d).has_diff()));
+    let root = decided.unwrap_or_else(|| decide_diff_root(d, DigestInputs::of(d).reads_paths()));
     d.diff_root_decided = Some(root.clone());
     Some(root)
 }
@@ -1702,9 +1706,15 @@ impl DigestInputs {
     fn has_diff(&self) -> bool {
         self.diff.as_deref().is_some_and(|s| !s.trim().is_empty())
     }
+
+    /// Whether changed paths are read: a diff, or file inputs (#339).
+    fn reads_paths(&self) -> bool {
+        self.has_diff() || !self.files.is_empty()
+    }
 }
 
-/// What a digest's diff paths are relative to (#77), decided once per run
+/// What a digest's changed paths (a diff's and the file inputs, #77, #339) are
+/// relative to, decided once per run
 /// ([`pin_diff_root`]). `--diff-root`: it must be an existing folder; the
 /// workspace's path below it, first as spelled (a symlinked workspace keeps
 /// its link name), else canonically; not inside it is an error; a workspace
@@ -1712,11 +1722,11 @@ impl DigestInputs {
 /// nearest folder at or above the canonical workspace holding `.git` (a
 /// folder, or a worktree's or submodule's file); none, or a workspace that
 /// cannot be canonicalized: the workspace itself (auto mode never fails). No
-/// diff (`has_diff`, decided once by the caller): the workspace, probing
-/// nothing. Every probe is recorded ([`plan_touch`]), so a batch job's reads
+/// changed path read (`reads_paths`, decided once by the caller): the
+/// workspace, probing nothing. Every probe is recorded ([`plan_touch`]), so a batch job's reads
 /// hold `--diff-root` and the workspace even when the probe fails.
-fn decide_diff_root(d: &DigestCli, has_diff: bool) -> Result<DiffRoot, String> {
-    if !has_diff {
+fn decide_diff_root(d: &DigestCli, reads_paths: bool) -> Result<DiffRoot, String> {
+    if !reads_paths {
         return Ok(DiffRoot::Workspace);
     }
     plan_touch(Path::new(&d.workspace));
@@ -1795,7 +1805,7 @@ fn plan_digest(d: DigestCli) -> Planned {
     // Resolve the --changed alias FIRST, once: the diff decision below and the
     // diff-root decision both use this one answer (#77).
     let inputs = DigestInputs::of(&d);
-    let has_diff = inputs.has_diff();
+    let (has_diff, reads_paths) = (inputs.has_diff(), inputs.reads_paths());
     let DigestInputs {
         files: file_inputs,
         routines: routine_inputs,
@@ -1807,10 +1817,11 @@ fn plan_digest(d: DigestCli) -> Planned {
     // wording (the pipeline's own message is the internal run-digest-pipeline one).
     let has_files = !file_inputs.is_empty();
     let has_routines = !routine_inputs.is_empty();
-    // Before the no-input check: a lone `--diff-root` is a flag misuse (exit 3).
-    if d.diff_root.is_some() && !has_diff {
+    // Before the no-input check: a `--diff-root` with no path to read is a flag
+    // misuse (exit 3).
+    if d.diff_root.is_some() && !reads_paths {
         return failed(
-            "al-sem: digest: --diff-root needs a diff (--diff or --changed <file>)",
+            "al-sem: digest: --diff-root needs a diff or file inputs (--diff, --file or --changed)",
             exit::CONFIG_ERROR,
             1,
         );
@@ -1852,7 +1863,7 @@ fn plan_digest(d: DigestCli) -> Planned {
     let diff_root = match d
         .diff_root_decided
         .clone()
-        .unwrap_or_else(|| decide_diff_root(&d, has_diff))
+        .unwrap_or_else(|| decide_diff_root(&d, reads_paths))
     {
         Ok(r) => r,
         Err(line) => return failed(line, exit::CONFIG_ERROR, 1),
