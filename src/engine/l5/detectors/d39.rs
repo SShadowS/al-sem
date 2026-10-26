@@ -37,9 +37,10 @@
 //! incomplete parse, an unresolved or interface call taking the record, a
 //! ternary alternative, any whole-record assignment, an earlier loop pass's
 //! unsaved write, a bare table-procedure call on the implicit `Rec`, a receiver
-//! call that also passes the record, any call while the record is an object
-//! global, more than 3 helper levels, and any `var`
-//! call between the call and the persist whose own body is not proven to leave
+//! call that also passes the record, any call other than a builtin that does not
+//! take the record while the record is an object global, more than 3 helper
+//! levels, and any `var` call between the call and the persist whose own body is
+//! not proven to leave
 //! the record be (no L4 role is trusted for it; an event publisher never is,
 //! since its subscribers are not read). The clean-return proof likewise trusts
 //! only bodies proven to make no dirt. A `var` event publisher anywhere between

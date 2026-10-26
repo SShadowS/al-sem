@@ -68,8 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     incomplete parse, an unresolved or interface call, a ternary branch, a reload, any
     whole-record assignment (`Rec := <anything>`), dirt left from an earlier loop pass,
     a bare call to a table procedure while the record is the implicit `Rec`, a call on
-    the record that also passes it as an argument, any call at all while the record is
-    an object global, and more than 3 helper levels. No L4 role summary is trusted for
+    the record that also passes it as an argument, any call other than a builtin that
+    does not take the record while the record is an object global, and more than 3
+    helper levels. No L4 role summary is trusted for
     a called routine; only its own body counts.
   - Known limit: an event publisher that takes the record by `var` between the call and
     the save keeps the finding, because a subscriber may reload or replace the record.
