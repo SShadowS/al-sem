@@ -4035,6 +4035,46 @@ fn file_naming_two_files_is_ambiguous() {
     );
     assert!(roots(&doc).is_empty(), "{doc}");
     assert_eq!(code, 2, "{doc}");
+
+    // W1: a `ws:` id picks its one unit exactly, though both share a key.
+    for (id, object) in [
+        ("ws:src/Posting.al", "Codeunit D8PostingChainCopy3"),
+        ("ws:src/posting.al", "Codeunit D8PostingChain"),
+    ] {
+        let (doc, code) = digest(&ws, &["--file", id], None);
+        assert_posting_file(&doc, code, id);
+        let e = entry(&doc, "PostSalesDoc");
+        assert_eq!(e["routine"]["objectDisplay"], object, "{id}: {doc}");
+        assert_eq!(anchor(e).0, id, "{id}: {doc}");
+    }
+}
+
+/// #339 W2. A `ws:` id that names no unit is read as a path: a workspace
+/// folder literally named `ws:Cloud`, with `--diff-root` its parent, resolves
+/// `--file ws:Cloud/src/posting.al` as the diff path does (#77 F1). Skips
+/// where `:` cannot be in a folder name.
+///
+/// Mutation: no `match_path` fallback for an id -> `file-unmatched`.
+#[cfg(unix)]
+#[test]
+fn ws_named_folder_resolves_under_diff_root() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws:Cloud");
+    if std::fs::create_dir_all(&ws).is_err() {
+        return;
+    }
+    d8_workspace(&ws, &d8_posting());
+    let (doc, code) = digest(
+        &ws,
+        &[
+            "--diff-root",
+            arg(t.path()),
+            "--file",
+            "ws:Cloud/src/posting.al",
+        ],
+        None,
+    );
+    assert_posting_file(&doc, code, "ws:Cloud folder");
 }
 
 /// #339 A2 (table only). Ambiguity is decided by the workspace's FILES, as

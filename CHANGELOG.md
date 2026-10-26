@@ -41,9 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A path naming a workspace file both ways gives no roots and one
   `{kind: "file-ambiguous", file, candidates}` diagnostic (human:
   `changed-roots: file-ambiguous <file> (candidates: …); pass one candidate as --file,
-  or --diff-root <folder> to read paths relative to <folder>`). A `ws:` id is read as
-  written under every root, so a copied candidate picks its one file. A batch decides
-  the root for a file-only job as a standalone run does. Limits: `--changed X` is still
+  or --diff-root <folder> to read paths relative to <folder>`). A `ws:` id names one
+  workspace file exactly, case kept, under every root, so a copied candidate picks its
+  one file even next to a case-distinct sibling. A `ws:` id that names no file is read
+  as a path, so a workspace folder literally named `ws:Cloud` still resolves under
+  `--diff-root`, as a diff path does. `app:<guid>:` inputs are paths, as before. A
+  batch decides the root for a file-only job as a standalone run does. Limits: `--changed X` is still
   read as a diff when `X` exists relative to the current folder, so `--changed
   Cloud/src/posting.al` run from the git top is parsed as diff text; absolute paths stay
   `file-unmatched`; prefix folders compare exactly, case included

@@ -89,17 +89,20 @@ fn diagnostics_json(diag_vec: &[crate::engine::l5::registry::Diagnostic]) -> ser
 // Changed-root resolution
 // ---------------------------------------------------------------------------
 
-/// Strip URI scheme prefix from a snapshot source path.
+/// The path after a `ws:` scheme: a workspace unit id, the one id form a file
+/// input takes (#339).
+fn ws_rest(p: &str) -> Option<&str> {
+    p.strip_prefix("ws:")
+}
+
+/// Strip URI scheme prefix (`ws:`, [`ws_rest`], or `app:<guid>:`) from a
+/// snapshot source path.
 fn strip_scheme(p: &str) -> String {
-    if let Some(rest) = p.strip_prefix("ws:") {
-        return rest.replace('\\', "/");
-    }
-    if let Some(rest) = p.strip_prefix("app:")
-        && let Some(i) = rest.find(':')
-    {
-        return rest[i + 1..].replace('\\', "/");
-    }
-    p.replace('\\', "/")
+    let app_rest = || {
+        let rest = p.strip_prefix("app:")?;
+        rest.find(':').map(|i| &rest[i + 1..])
+    };
+    ws_rest(p).or_else(app_rest).unwrap_or(p).replace('\\', "/")
 }
 
 /// Normalize an input path for comparison: strip scheme, forward-slash, a
@@ -264,9 +267,9 @@ pub struct ChangedInput<'a> {
 }
 
 /// What changed paths (a diff's and the file inputs, #77, #339) are relative
-/// to, held as the workspace's path
-/// below that directory, `/`-joined with its case kept (`Cloud`, never empty:
-/// a root that IS the workspace is [`DiffRoot::Workspace`]).
+/// to, held as the workspace's path below that directory, `/`-joined with its
+/// case kept (`Cloud`, never empty: a root that IS the workspace is
+/// [`DiffRoot::Workspace`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DiffRoot {
     /// Paths are workspace-relative.
@@ -324,8 +327,8 @@ fn strip_diff_prefix(prefix: &str, path: &str) -> Option<String> {
 /// file's `rel_posix` (several spellings may share a key).
 type FileKeys<'a> = HashMap<String, Vec<&'a str>>;
 
-/// [`FileKeys`] of `files`, built once per [`resolve_changed_roots`] call and
-/// read by its file and diff steps alike.
+/// [`FileKeys`] of `files`, built at most once per [`resolve_changed_roots`]
+/// call (only when a file input or a diff is read) and read by both steps.
 fn workspace_file_keys(files: &[crate::program::inputs::WsFile]) -> FileKeys<'_> {
     let mut by_key = FileKeys::new();
     for f in files {
@@ -459,41 +462,38 @@ fn diff_key(
     }
 }
 
-/// The span-index key a file input names under `root` (#339), or
-/// `file-ambiguous` / `file-unmatched`. A scheme id (`ws:…`, `app:<guid>:…`) is
-/// a snapshot id, not a file-system path: its one reading is as written under
+/// The declarations (indices into `spans.spans`) a file input names under
+/// `root` (#339), or `file-ambiguous` / `file-unmatched`. A `ws:` id names one
+/// workspace unit exactly (case kept, after the `\` and segment clean-up) under
 /// every root, so a candidate copied from `file-ambiguous` picks its one file.
-fn file_key(
+/// An id naming no unit is read as a path ([`match_path`]): a folder may be
+/// named `ws:Cloud` (#77). Every other input, `app:<guid>:…` included, is a path.
+fn file_hits(
     spans: &RoutineSpanIndex,
     files: &FileKeys<'_>,
     root: &DiffRoot,
     path: &str,
-) -> Result<String, ChangedRootsDiagnostic> {
-    let file = path.to_string();
-    let matched = if has_scheme(path) {
-        let key = normalize_input(path);
-        if spans.of_file(&key).is_empty() {
-            PathMatch::None
-        } else {
-            PathMatch::One(key)
+) -> Result<Vec<usize>, ChangedRootsDiagnostic> {
+    if let Some(rest) = ws_rest(path) {
+        let unit = format!("ws:{}", clean_segments(&rest.replace('\\', "/")));
+        let exact: Vec<usize> = spans
+            .of_file(&normalize_input(path))
+            .iter()
+            .copied()
+            .filter(|&i| spans.spans[i].source_unit_id == unit)
+            .collect();
+        if !exact.is_empty() {
+            return Ok(exact);
         }
-    } else {
-        match_path(spans, files, root, path)
-    };
-    match matched {
-        PathMatch::One(key) => Ok(key),
+    }
+    let file = path.to_string();
+    match match_path(spans, files, root, path) {
+        PathMatch::One(key) => Ok(spans.of_file(&key).to_vec()),
         PathMatch::Ambiguous(candidates) => {
             Err(ChangedRootsDiagnostic::FileAmbiguous { file, candidates })
         }
         PathMatch::None => Err(ChangedRootsDiagnostic::FileUnmatched { file }),
     }
-}
-
-/// Whether `p` carries the scheme [`strip_scheme`] strips.
-fn has_scheme(p: &str) -> bool {
-    p.starts_with("ws:")
-        || p.strip_prefix("app:")
-            .is_some_and(|rest| rest.contains(':'))
 }
 
 /// One routine DECLARATION's span (#71). Lines are 0-based and inclusive.
@@ -679,13 +679,14 @@ pub fn resolve_changed_roots(
     // Selector indexes (5-form resolveSelector cascade).
     let selector_idx = build_selector_indexes(identities, primary_app_guid);
 
-    // Both the file step and the diff step read paths by these (#339).
-    let files = workspace_file_keys(input.workspace_files);
+    // Both the file step and the diff step read paths by these (#339); built
+    // on first use, so a routine-only run never builds them.
+    let files = std::cell::LazyCell::new(|| workspace_file_keys(input.workspace_files));
 
     // 1. File-based matching: a file input reads like a diff path (#339).
     for file in input.files.iter().flatten() {
-        match file_key(&spans, &files, &input.diff_root, file) {
-            Ok(key) => hits.extend_from_slice(spans.of_file(&key)),
+        match file_hits(&spans, &files, &input.diff_root, file) {
+            Ok(ixs) => hits.extend(ixs),
             Err(d) => diagnostics.push(d),
         }
     }

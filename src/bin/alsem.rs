@@ -672,8 +672,9 @@ struct DigestCli {
     /// Path to the AL workspace root.
     workspace: String,
 
-    /// Source file(s) to treat as changed: workspace- or git-top-relative (or
-    /// relative to --diff-root), or a `ws:` id, read as written. May be
+    /// Source file(s) to treat as changed: a path relative to the workspace or
+    /// to the git top level, or a `ws:` id naming one workspace file exactly.
+    /// With --diff-root, a path is read relative to that folder only. May be
     /// repeated. Mutually exclusive with --order (rejected).
     #[arg(long = "file", action = clap::ArgAction::Append)]
     file: Vec<String>,
@@ -687,21 +688,20 @@ struct DigestCli {
     diff: Option<String>,
 
     /// Convenience alias — auto-detect: existing file path → --diff; comma-list with
-    /// `.al` entries → --changed-files (read as --file paths are); else →
-    /// --changed-routines.
+    /// `.al` entries → read like --file paths; else → --changed-routines.
     #[arg(long = "changed")]
     changed: Option<String>,
 
     /// The folder the diff's and the file inputs' paths are relative to (a
-    /// relative path resolves against the current directory; a `ws:` id is
-    /// read as written). The workspace must be inside it, as
-    /// spelled or after resolving symlinks. Default: the nearest enclosing git
-    /// top level (a `.git` folder or file at or above the workspace), where a
-    /// path may also be workspace-relative; a path naming a workspace file both
+    /// relative path resolves against the current directory; a `ws:` id still
+    /// names its workspace file). The workspace must be inside it, as spelled
+    /// or after resolving symlinks. Default: the nearest enclosing git top
+    /// level (a `.git` folder or file at or above the workspace), where a path
+    /// may also be workspace-relative; a path naming a workspace file both
     /// ways is reported `diff-file-ambiguous` (a diff path) or `file-ambiguous`
-    /// (a file input) and gives no roots. With no
-    /// enclosing repository, paths are workspace-relative. Folder names compare
-    /// exactly, case included, on every platform.
+    /// (a file input) and gives no roots. With no enclosing repository, paths
+    /// are workspace-relative. Folder names compare exactly, case included, on
+    /// every platform.
     #[arg(long = "diff-root")]
     diff_root: Option<String>,
 
@@ -1714,17 +1714,17 @@ impl DigestInputs {
 }
 
 /// What a digest's changed paths (a diff's and the file inputs, #77, #339) are
-/// relative to, decided once per run
-/// ([`pin_diff_root`]). `--diff-root`: it must be an existing folder; the
-/// workspace's path below it, first as spelled (a symlinked workspace keeps
-/// its link name), else canonically; not inside it is an error; a workspace
-/// that cannot be canonicalized is left to the load's error. Else the
-/// nearest folder at or above the canonical workspace holding `.git` (a
-/// folder, or a worktree's or submodule's file); none, or a workspace that
-/// cannot be canonicalized: the workspace itself (auto mode never fails). No
-/// changed path read (`reads_paths`, decided once by the caller): the
-/// workspace, probing nothing. Every probe is recorded ([`plan_touch`]), so a batch job's reads
-/// hold `--diff-root` and the workspace even when the probe fails.
+/// relative to, decided once per run ([`pin_diff_root`]). `--diff-root`: it
+/// must be an existing folder; the workspace's path below it, first as spelled
+/// (a symlinked workspace keeps its link name), else canonically; not inside
+/// it is an error; a workspace that cannot be canonicalized is left to the
+/// load's error. Else the nearest folder at or above the canonical workspace
+/// holding `.git` (a folder, or a worktree's or submodule's file); none, or a
+/// workspace that cannot be canonicalized: the workspace itself (auto mode
+/// never fails). No changed path read (`reads_paths`, decided once by the
+/// caller): the workspace, probing nothing. Every probe is recorded
+/// ([`plan_touch`]), so a batch job's reads hold `--diff-root` and the
+/// workspace even when the probe fails.
 fn decide_diff_root(d: &DigestCli, reads_paths: bool) -> Result<DiffRoot, String> {
     if !reads_paths {
         return Ok(DiffRoot::Workspace);
