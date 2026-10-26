@@ -25,6 +25,30 @@
 //! and a whole-record assignment (`Cust := Other`) is not a record op, so it does
 //! not count as a reset.
 //!
+//! #343 (`helperPersists`): a candidate is also skipped when, on EVERY path in
+//! the caller from the call to an exit, the record is persisted, by the caller
+//! or by a later call that hands it `var` (or as the receiver of a table
+//! procedure) to a helper that itself persists it on every path, with nothing
+//! reloading, initing or copying into it first. A path needs no persist when it
+//! runs only on the `if C(..)` / `if not C(..)` arm where the callee returned
+//! the Boolean literal on which it provably leaves the record clean. The walk is
+//! `walk_paths` over `statement_tree` and fails closed (keeps the finding): an
+//! `exit` before the persist, `try`, `asserterror`, a `[TryFunction]` helper, an
+//! incomplete parse, an unresolved or interface call taking the record, a
+//! ternary alternative, any whole-record assignment, an earlier loop pass's
+//! unsaved write, a bare table-procedure call on the implicit `Rec`, a receiver
+//! call that also passes the record, any call other than a builtin that does not
+//! take the record while the record is an object global, more than 3 helper
+//! levels, and any `var` call between the call and the persist whose own body is
+//! not proven to leave
+//! the record be (no L4 role is trusted for it; an event publisher never is,
+//! since its subscribers are not read). The clean-return proof likewise trusts
+//! only bodies proven to make no dirt. A `var` event publisher anywhere between
+//! the call and the persist keeps the finding (#343 F5): a subscriber may reload
+//! or replace the record. Known false negatives: an `IsHandled` exit or an
+//! `OnBefore..` publisher before a helper's persist, a compound guard, a
+//! non-literal return. The proofs live in `d39_persist`.
+//!
 //! An implicit `Rec` (#272) is reported only where nobody else persists it
 //! (`implicit_rec_persisted_by_owner`): a table / tableext procedure or field
 //! trigger hands `Rec` back to its caller, the platform writes it after the table
@@ -48,6 +72,7 @@
 use crate::engine::l4::effect_lattice::EffectPresence;
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
+use crate::engine::l5::detectors::d39_persist::Proofs;
 use crate::engine::l5::detectors::{
     LoadPointCache, anchor_of, before_anchor, callee_param_table_subject,
     implicit_rec_persisted_by_owner, load_point_after,
@@ -75,8 +100,11 @@ pub fn detect_d39(
     let mut skipped_temp_record = 0u64;
     let mut skipped_implicit_rec_owner_persists = 0u64;
     let mut skipped_dirt_returned_to_caller = 0u64;
+    let mut skipped_helper_persists = 0u64;
     // Each caller's load points, built once however many calls it makes.
     let mut load_points = LoadPointCache::default();
+    // #343 `helperPersists` proofs, memoized for this run.
+    let proofs = Proofs::new(ctx);
 
     for callee in &ws.routines {
         if !callee.body_available {
@@ -236,6 +264,26 @@ pub fn detect_d39(
                     skipped_caller_persists += 1;
                     continue; // callerPersists
                 }
+                // #343: on every path from the call to an exit the record is
+                // persisted, by the caller or by a later call to a helper that
+                // persists it on every path, with no reload / init / copy first;
+                // or that path runs only when the callee returned the value on
+                // which it leaves the record clean.
+                if !reset_after_call()
+                    && proofs.persisted_on_every_path_after(
+                        caller,
+                        cs,
+                        (
+                            &source_name_lc,
+                            binding.source_record_variable_id.as_deref(),
+                        ),
+                        binding.source_kind == "global",
+                        (callee, role.parameter_index),
+                    )
+                {
+                    skipped_helper_persists += 1;
+                    continue; // helperPersists
+                }
 
                 // Emit.
                 let path = vec![
@@ -332,5 +380,6 @@ pub fn detect_d39(
         skipped_implicit_rec_owner_persists,
     );
     stats.add_skip("dirtReturnedToCaller", skipped_dirt_returned_to_caller);
+    stats.add_skip("helperPersists", skipped_helper_persists);
     Ok(DetectorOutput::no_diag(findings, stats))
 }

@@ -37,6 +37,7 @@
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PCFNNode.is_case_else`
 //!   - `PCFNNode.source_range`
+//!   - `PCFNNode.path_hint`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
 use serde::{Deserialize, Serialize};
@@ -587,10 +588,11 @@ pub struct PConditionGuard {
 /// conditionGuard, ordered conditionLeaves. sourceAnchor DROPPED.
 ///
 /// `PartialEq`/`Eq` are implemented MANUALLY (not derived) so the in-memory-only
-/// `is_case_else` marker is EXCLUDED from equality — it never serializes, so a
-/// freshly-built node (marker set) must still compare equal to a golden node
-/// deserialized without it (marker defaulted false). Keeping it out of `==`
-/// preserves L2 vector parity (the vectors compare via `PartialEq`).
+/// `is_case_else` / `source_range` / `path_hint` markers are EXCLUDED from
+/// equality. They never serialize, so a freshly-built node (markers set) must
+/// still compare equal to a golden node deserialized without them (markers
+/// defaulted). Keeping them out of `==` preserves L2 vector parity (the vectors
+/// compare via `PartialEq`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PCFNNode {
     pub kind: String,
@@ -623,11 +625,33 @@ pub struct PCFNNode {
     /// EXCLUDED from `PartialEq`.
     #[serde(skip, default)]
     pub source_range: Option<(u32, u32, u32, u32)>,
+    /// In-memory ONLY (#343): what a must-path walk needs that the kind does not
+    /// say ([`PathHint`]). EXCLUDED from `PartialEq`.
+    #[serde(skip, default)]
+    pub path_hint: Option<PathHint>,
+}
+
+/// In-memory-only facts on a [`PCFNNode`] for path walks (#343,
+/// `detectors::walk_paths`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathHint {
+    /// On an `if` whose whole condition is a call `C(..)` or `not C(..)`
+    /// (through parentheses): whether it is negated. The call is the `if`'s
+    /// last top-level condition leaf.
+    CondCall { negated: bool },
+    /// On an `exit(true)` / `exit(false)`: the literal value.
+    Exit(bool),
+    /// On the node of an `asserterror` statement: an error inside is caught.
+    AssertError,
+    /// On a leaf harvested from one alternative of a ternary expression: it
+    /// may or may not run.
+    MayRun,
 }
 
 impl PartialEq for PCFNNode {
     fn eq(&self, other: &Self) -> bool {
-        // `is_case_else` is deliberately omitted — it is an in-memory-only marker.
+        // The in-memory-only markers (`is_case_else`, `source_range`,
+        // `path_hint`) are deliberately omitted.
         self.kind == other.kind
             && self.operation_id == other.operation_id
             && self.callsite_id == other.callsite_id
@@ -806,7 +830,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 10, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 11, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

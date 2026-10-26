@@ -379,6 +379,7 @@ mod tests {
             else_children: None,
             is_case_else: false,
             source_range: None,
+            path_hint: None,
         }
     }
 

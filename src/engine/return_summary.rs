@@ -576,6 +576,7 @@ mod tests {
             else_children: None,
             is_case_else: false,
             source_range: None,
+            path_hint: None,
         }
     }
 
@@ -590,6 +591,7 @@ mod tests {
             else_children: None,
             is_case_else: false,
             source_range: None,
+            path_hint: None,
         }
     }
 
@@ -608,6 +610,7 @@ mod tests {
             else_children: Some(else_children),
             is_case_else: false,
             source_range: None,
+            path_hint: None,
         }
     }
 

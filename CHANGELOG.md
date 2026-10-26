@@ -53,6 +53,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stay `file-unmatched`; prefix folders compare exactly, case included
   (`cloud/src/posting.al` under `Cloud` stays `file-unmatched`).
 
+- **d39 no longer reports a record that a later helper saves on every path** (#343).
+  Before, d39's `callerPersists` skip counted only the caller's own `Modify` / `Insert`
+  / `Rename` after the call. Now a new skip, `helperPersists`, also counts a later call
+  that hands the record to a helper (as a `var` argument, or as the receiver of a table
+  procedure) whose own body saves it on every path. The check follows the paths of the
+  caller's statement tree: an `exit` reached before the save keeps the finding. An exit
+  on the `if not C(..) then exit` arm also needs no save when `C`'s body proves it
+  leaves the record clean whenever it returns that value (the CDO shape).
+  - Effect: the 3 CDO false positives in `CDOSetupData` (`InitRecurringDailyJob`, then
+    `InsertJob`) are gone. Base App has 0 moves. No other detector moves.
+  - The check fails closed: when unsure it keeps the finding. That includes `try` and
+    `asserterror` (in the caller or in a helper), a `[TryFunction]` helper, an
+    incomplete parse, an unresolved or interface call, a ternary branch, a reload, any
+    whole-record assignment (`Rec := <anything>`), dirt left from an earlier loop pass,
+    a bare call to a table procedure while the record is the implicit `Rec`, a call on
+    the record that also passes it as an argument, any call other than a builtin that
+    does not take the record while the record is an object global, and more than 3
+    helper levels. No L4 role summary is trusted for
+    a called routine; only its own body counts.
+  - Known limit: an event publisher that takes the record by `var` between the call and
+    the save keeps the finding, because a subscriber may reload or replace the record.
+    This is why the 5 Base App candidates stay reported.
+  - A helper that exits early (`if IsHandled then exit;`) before its save also keeps
+    the finding.
+  - The incomplete-parse guard has no fixture test: a fixture with a parse error would
+    also move other detectors and the L2 corpus.
+  - Tests: `tests/cli/cli_d39_helper_persists.rs` over `tests/fixtures/issue-343/ws-helper`
+    (36 shapes, 29 expected rows) and `walk_paths` unit tests. The in-memory field
+    `PCFNNode.path_hint` changes the hash of 988 distinct routine keys (1013 snapshot
+    entries; overloads share a key) in `l2_features.snapshot` (regenerated; nothing
+    serialized changes). The fixture-root tripwire counts 47
+    `tests/fixtures` app dirs (was 46).
+
 - **Digest `--diff`: a file that is not AL source gets its own kind, `diff-file-not-al`**
   (#353). Until now a non-AL file that a diff changed, added or listed in an `Only in`
   line (`app.json`, `.xlf`, `LICENSE`) was reported as `diff-file-unmatched`, so a

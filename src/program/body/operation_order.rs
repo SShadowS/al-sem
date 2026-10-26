@@ -528,6 +528,7 @@ fn walk_loop_node(
             else_children: None,
             is_case_else: false,
             source_range: None,
+            path_hint: None,
         };
         walk_block(&synthetic, loop_frame_id, on_success_path, false, result);
         return;
