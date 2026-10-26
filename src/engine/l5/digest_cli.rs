@@ -464,29 +464,39 @@ fn diff_key(
 
 /// The declarations (indices into `spans.spans`) a file input names under
 /// `root` (#339), or `file-ambiguous` / `file-unmatched`. A `ws:` id names one
-/// workspace unit exactly (case kept, after the `\` and segment clean-up) under
-/// every root, so a candidate copied from `file-ambiguous` picks its one file.
-/// An id naming no unit is read as a path ([`match_path`]): a folder may be
-/// named `ws:Cloud` (#77). Every other input, `app:<guid>:…` included, is a path.
+/// workspace FILE exactly (case kept, after the `\` and segment clean-up) under
+/// every root, so a candidate copied from `file-ambiguous` picks its one file;
+/// one holding no routine is `file-unmatched`. An id naming no workspace file
+/// is read as a path ([`match_path`]): a folder may be named `ws:Cloud` (#77).
+/// Every other input, `app:<guid>:…` included, is a path.
 fn file_hits(
     spans: &RoutineSpanIndex,
     files: &FileKeys<'_>,
     root: &DiffRoot,
     path: &str,
 ) -> Result<Vec<usize>, ChangedRootsDiagnostic> {
+    let file = path.to_string();
     if let Some(rest) = ws_rest(path) {
-        let unit = format!("ws:{}", clean_segments(&rest.replace('\\', "/")));
-        let exact: Vec<usize> = spans
-            .of_file(&normalize_input(path))
-            .iter()
-            .copied()
-            .filter(|&i| spans.spans[i].source_unit_id == unit)
-            .collect();
-        if !exact.is_empty() {
-            return Ok(exact);
+        let clean = |p: &str| clean_segments(&p.replace('\\', "/"));
+        let exact = clean(rest);
+        let key = normalize_input(path);
+        if files
+            .get(&key)
+            .is_some_and(|fs| fs.iter().any(|f| clean(f) == exact))
+        {
+            let unit = format!("ws:{exact}");
+            let ixs: Vec<usize> = spans
+                .of_file(&key)
+                .iter()
+                .copied()
+                .filter(|&i| spans.spans[i].source_unit_id == unit)
+                .collect();
+            if ixs.is_empty() {
+                return Err(ChangedRootsDiagnostic::FileUnmatched { file });
+            }
+            return Ok(ixs);
         }
     }
-    let file = path.to_string();
     match match_path(spans, files, root, path) {
         PathMatch::One(key) => Ok(spans.of_file(&key).to_vec()),
         PathMatch::Ambiguous(candidates) => {

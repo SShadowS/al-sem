@@ -4047,6 +4047,17 @@ fn file_naming_two_files_is_ambiguous() {
         assert_eq!(e["routine"]["objectDisplay"], object, "{id}: {doc}");
         assert_eq!(anchor(e).0, id, "{id}: {doc}");
     }
+
+    // W11: an id naming a table-only file is unmatched; it never falls back to
+    // its routine-bearing case sibling.
+    write(
+        &ws.join("src/Posting.al"),
+        "table 50196 D8OnlyTable\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n}\n",
+    );
+    let (doc, code) = digest(&ws, &["--file", "ws:src/Posting.al"], None);
+    assert_eq!(diags(&doc), file_unmatched("ws:src/Posting.al"), "{doc}");
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
 }
 
 /// #339 W2. A `ws:` id that names no unit is read as a path: a workspace
