@@ -1426,4 +1426,52 @@ mod release_checks {
              {RECURSIVE_SCC_BOUND:?} (samples: {samples:?})"
         );
     }
+
+    /// Jobs in [`batch_write_check_is_not_quadratic`]'s manifest.
+    const WRITE_CHECK_JOBS: usize = 2000;
+
+    /// G14: `alsem batch`'s write-set check (`check_write_sets`) runs before any
+    /// build. It asked, for every job and every other job's write, whether the
+    /// job's workspace read takes that file, and recomputed the workspace's
+    /// package scope (file-system path resolution) for each pair: n² of those
+    /// calls. 800 `query effects` jobs on Continia DO spent ~25 s in it, 5,488
+    /// over ten minutes. Each distinct workspace is now resolved once.
+    ///
+    /// Not a 3x-of-baseline bound like the rows above: the old code is
+    /// orders of magnitude slower here (2,000 jobs is 8 million pairs), so a
+    /// bound of 1 s cannot flake on a loaded runner and still fails any return
+    /// to the pair scan.
+    #[test]
+    fn batch_write_check_is_not_quadratic() {
+        let _serial = serial();
+        use al_sem::engine::batch::manifest::{JobPaths, Target, check_write_sets};
+        let ws = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/analyze-json");
+        assert!(ws.join("app.json").is_file(), "precondition: a workspace");
+        let out = TempDir::new().expect("out dir");
+        // The shape of the peer's manifest: every job reads the one workspace
+        // and writes its own stdout and stderr outside it.
+        let jobs: Vec<(String, JobPaths)> = (0..WRITE_CHECK_JOBS)
+            .map(|i| {
+                let paths = JobPaths {
+                    writes: vec![
+                        Target::File(out.path().join(format!("{i}.json"))),
+                        Target::File(out.path().join(format!("{i}.err"))),
+                    ],
+                    reads: vec![],
+                    workspaces: vec![ws.clone()],
+                };
+                (format!("job {i}"), paths)
+            })
+            .collect();
+        let cwd = std::env::current_dir().expect("cwd");
+        let start = Instant::now();
+        let checked = check_write_sets(&jobs, &cwd);
+        let took = start.elapsed();
+        assert_eq!(checked, Ok(()), "precondition: no clash in this manifest");
+        println!("[perf_bounds] batch_write_check({WRITE_CHECK_JOBS} jobs): {took:?}");
+        assert!(
+            took < Duration::from_secs(1),
+            "check_write_sets over {WRITE_CHECK_JOBS} jobs took {took:?}: is the pair scan back?"
+        );
+    }
 }

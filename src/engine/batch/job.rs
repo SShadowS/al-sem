@@ -6,7 +6,7 @@
 
 use std::any::Any;
 use std::cell::{OnceCell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
@@ -365,6 +365,76 @@ impl std::fmt::Debug for ViewFailure {
     }
 }
 
+/// Where on a view each cell and run is last read: the position of the last
+/// demand whose plan reads it. A demand at position `k` must keep what a later
+/// demand reads, which is exactly what is last read after `k`. Built once per
+/// view in one pass, so each question is one lookup. It replaces handing every
+/// demand copies of all later demands' reads, which made a view of n demands
+/// cost O(n²): 5,488 `query effects` jobs on one view ran for over ten minutes
+/// (G14).
+#[derive(Default)]
+pub(crate) struct LastReads {
+    cells: HashMap<Cell, usize>,
+    runs: HashMap<RunKey, usize>,
+}
+
+impl LastReads {
+    /// Record that the demand at `pos` reads `cells` and `runs`. Called in
+    /// increasing `pos` order, so the last call for a key wins.
+    pub(crate) fn record(&mut self, pos: usize, cells: &[Cell], runs: &[RunKey]) {
+        for c in cells {
+            self.cells.insert(*c, pos);
+        }
+        for r in runs {
+            match self.runs.get_mut(r) {
+                Some(last) => *last = pos,
+                None => {
+                    self.runs.insert(r.clone(), pos);
+                }
+            }
+        }
+    }
+
+    /// The reads of the demands after `pos`.
+    pub(crate) fn after(&self, pos: usize) -> LaterReads<'_> {
+        LaterReads {
+            last: Some(self),
+            pos,
+        }
+    }
+}
+
+/// What the demands after one position on a view read ([`LastReads::after`]).
+#[derive(Clone, Copy)]
+pub(crate) struct LaterReads<'a> {
+    last: Option<&'a LastReads>,
+    pos: usize,
+}
+
+impl LaterReads<'_> {
+    /// No later demand: a test's one-demand run (`run_on_target`).
+    #[cfg(test)]
+    pub(crate) const NONE: LaterReads<'static> = LaterReads { last: None, pos: 0 };
+
+    fn reads_cell(&self, cell: Cell) -> bool {
+        self.last
+            .is_some_and(|l| l.cells.get(&cell).is_some_and(|&last| last > self.pos))
+    }
+
+    fn reads_run(&self, key: &RunKey) -> bool {
+        self.last
+            .is_some_and(|l| l.runs.get(key).is_some_and(|&last| last > self.pos))
+    }
+
+    fn cells(&self) -> impl Iterator<Item = Cell> + '_ {
+        self.last
+            .into_iter()
+            .flat_map(|l| &l.cells)
+            .filter(|(_, last)| **last > self.pos)
+            .map(|(cell, _)| *cell)
+    }
+}
+
 /// One demand's access to its prepared view. Releases go through the driver
 /// (D6.1, D6.2): a cell or run that a later demand on the view reads stays.
 pub struct ViewCx<'a> {
@@ -374,8 +444,7 @@ pub struct ViewCx<'a> {
     pub(crate) job: JobId,
     pub(crate) keys: Vec<RunKey>,
     pub(crate) has_tree: bool,
-    pub(crate) later_cells: Vec<Cell>,
-    pub(crate) later_runs: Vec<RunKey>,
+    pub(crate) later: LaterReads<'a>,
     pub(crate) carry: Option<Box<dyn Any + Send>>,
     /// Every run handed to a job on the view, under `ALSEM_RETAINED_CENSUS=1`
     /// only (D11): `Weak`, so the allocation's address stays unique while the
@@ -434,7 +503,7 @@ impl ViewCx<'_> {
     /// The run's output; the view's own copy is dropped unless a later demand
     /// reads it. Always the view's one allocation, never a copy (D11).
     pub fn take_run(&mut self, key: &RunKey) -> Arc<RunOutput> {
-        let run = if self.later_runs.contains(key) {
+        let run = if self.later.reads_run(key) {
             self.view.run(key)
         } else {
             self.view.take_run(key)
@@ -448,14 +517,14 @@ impl ViewCx<'_> {
 
     /// [`View::release`], unless a later demand reads `cell`.
     pub fn release(&mut self, cell: Cell) {
-        if !self.later_cells.contains(&cell) {
+        if !self.later.reads_cell(cell) {
             self.view.release(cell);
         }
     }
 
     /// [`View::release_all_but`], keeping what a later demand reads too.
     pub fn release_all_but(&mut self, keep: &[Cell]) {
-        let keep: Vec<Cell> = keep.iter().chain(&self.later_cells).copied().collect();
+        let keep: Vec<Cell> = keep.iter().copied().chain(self.later.cells()).collect();
         self.view.release_all_but(&keep);
     }
 }
