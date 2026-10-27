@@ -61,7 +61,7 @@ pub struct View {
 }
 
 /// A run's identity: its detectors, their mask and its scope.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunKey {
     pub detectors: Vec<String>,
     pub demanded: u32,
@@ -275,7 +275,7 @@ fn read_inventory(
 }
 
 /// The cells [`View::release`] drops.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Cell {
     Det,
     L4,

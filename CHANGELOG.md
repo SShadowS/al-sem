@@ -73,6 +73,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alsem batch` time is linear in the number of jobs again** (G14). The write-set
+  check that runs before any build (`check_write_sets`) asked, for every job and every
+  other job's write, whether the job's workspace read takes that file, and redid the
+  workspace's package scope (file-system path resolution) for each pair. 800
+  `query effects` jobs on Continia DO spent ~25 s there and 5,488 ran over ten
+  minutes before the first job. Each distinct workspace is now resolved once, each
+  pair of a workspace and a write asked once, and the read and write-write checks
+  look targets up instead of scanning every pair; the first clash reported is the
+  pair scan's. Measured on DO (release-fast): 200 jobs 3.1 → 1.7 s, 800 jobs 29.8 →
+  4.7 s, 5,488 jobs in one manifest 29.4 s (the 28 × 200-job workaround on 4
+  processes: 30 s), every one of the 10,976 output files byte-identical to the old
+  binary's. A view's demands also no longer each get copies of all later demands'
+  reads (`ViewCx::later_cells`/`later_runs`, another O(n²)): one last-reader table per
+  view answers the same question (about 2 s of the 5,488-job run, one run each).
+  Guard: `perf_bounds::batch_write_check_is_not_quadratic` (2,000 jobs under 1 s;
+  8.8 ms now, 162.6 s with the old check).
 - **A failed program build now says why.** `build_context_with` and the
   `LspSnapshot::build_full*` builders returned `Option` and dropped the snapshot
   builder's error, so `--analyze` warned only "the program snapshot could not be built"
