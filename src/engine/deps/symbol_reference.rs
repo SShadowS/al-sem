@@ -19,12 +19,13 @@ use crate::program::attributes::{AttributeArg, AttributeInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// "integration" | "business" | "unknown" — only meaningful when the routine kind
-/// is `event-publisher`.
+/// "integration" | "business" | "internal" | "unknown" — only meaningful when the
+/// routine kind is `event-publisher`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbiEventKind {
     Integration,
     Business,
+    Internal,
     Unknown,
 }
 
@@ -33,6 +34,7 @@ impl AbiEventKind {
         match self {
             AbiEventKind::Integration => "integration",
             AbiEventKind::Business => "business",
+            AbiEventKind::Internal => "internal",
             AbiEventKind::Unknown => "unknown",
         }
     }
@@ -1019,6 +1021,11 @@ fn parse_method(m: &RawMethod) -> AbiRoutine {
             "businessevent" => {
                 kind = "event-publisher".to_string();
                 event_kind = AbiEventKind::Business;
+            }
+            // G10: an internal event publishes too (subscribers in the same module).
+            "internalevent" => {
+                kind = "event-publisher".to_string();
+                event_kind = AbiEventKind::Internal;
             }
             "eventsubscriber" => {
                 kind = "event-subscriber".to_string();

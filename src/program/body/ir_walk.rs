@@ -2925,12 +2925,15 @@ pub fn ir_enclosing_member(routine: &RoutineDecl) -> Option<String> {
 }
 
 /// Routine kind for id/classification (mirrors classify_kind): event-subscriber /
-/// event-publisher from attributes, else trigger / procedure.
+/// event-publisher from attributes, else trigger / procedure. `[InternalEvent]`
+/// publishes like `[IntegrationEvent]`/`[BusinessEvent]` (G10: it was a
+/// "procedure", so the model's event graph, `events fanout` and the detectors
+/// left it out, and its routine id carried the procedure kind).
 pub fn ir_routine_kind(routine: &RoutineDecl) -> &'static str {
     let has = |n: &str| routine.attributes.iter().any(|a| a == n);
     if has("eventsubscriber") {
         "event-subscriber"
-    } else if has("integrationevent") || has("businessevent") {
+    } else if has("integrationevent") || has("businessevent") || has("internalevent") {
         "event-publisher"
     } else if routine.kind == al_syntax::ir::RoutineKind::Trigger {
         "trigger"

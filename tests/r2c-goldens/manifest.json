@@ -27,6 +27,7 @@
   "coverageMatrix": {
     "integrationPublishers": 43,
     "businessPublishers": 5,
+    "internalPublishers": 1,
     "unknownKindSymbols": 9,
     "isolatedPublishers": 5,
     "symbolsWithElementName": 1,
@@ -610,11 +611,12 @@
     {
       "fixture": "ws-r0-canon-stress",
       "goldenFile": "ws-r0-canon-stress.l3eg.golden.json",
-      "eventCount": 3,
+      "eventCount": 4,
       "edgeCount": 1,
       "coverage": {
         "integrationPublishers": 2,
         "businessPublishers": 1,
+        "internalPublishers": 1,
         "unknownKindSymbols": 0,
         "isolatedPublishers": 0,
         "symbolsWithElementName": 0,

@@ -53,7 +53,7 @@ codeunit 70000 "Canon Stress Publisher"
     begin
     end;
 
-    // InternalEvent must classify as `procedure`, NOT event-publisher.
+    // InternalEvent is an event-publisher too (G10), of event kind "internal".
     [InternalEvent(false)]
     procedure OnInternalSignal()
     begin

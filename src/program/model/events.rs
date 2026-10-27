@@ -112,22 +112,26 @@ fn publisher_event_kind(attrs: &[AttributeInfo]) -> &'static str {
         "integration"
     } else if find_attribute(attrs, "BusinessEvent").is_some() {
         "business"
+    } else if find_attribute(attrs, "InternalEvent").is_some() {
+        "internal"
     } else {
         "unknown"
     }
 }
 
 /// Parse the `Isolated` boolean. `[IntegrationEvent(.,.,Isolated)]` (index 2) /
-/// `[BusinessEvent(.,Isolated)]` (index 1). EVERY reading of either kind is read
-/// (several per-build readings, #104): isolated in any build is an isolation
-/// barrier. Returns Some(true) when any reading is `true` or carries the arg as a
-/// non-literal (conservative, Rule 5: prefer exclusion over a false weave); None
-/// when every reading is absent / explicit-false. `InternalEvent` is not read.
+/// `[BusinessEvent(.,Isolated)]` / `[InternalEvent(.,Isolated)]` (index 1). EVERY
+/// reading of each kind is read (several per-build readings, #104): isolated in
+/// any build is an isolation barrier. Returns Some(true) when any reading is
+/// `true` or carries the arg as a non-literal (conservative, Rule 5: prefer
+/// exclusion over a false weave); None when every reading is absent /
+/// explicit-false. (`InternalEvent` was not read while internal events were no
+/// publishers, G10.)
 fn parse_isolated(attrs: &[AttributeInfo]) -> Option<bool> {
     let isolated = attrs.iter().any(|a| {
         let index = match a.name.to_lowercase().as_str() {
             "integrationevent" => 2,
-            "businessevent" => 1,
+            "businessevent" | "internalevent" => 1,
             _ => return false,
         };
         // explicit false → not isolated; true → isolated; present non-literal →
@@ -900,9 +904,8 @@ mod tests {
         );
     }
 
-    /// Single-attribute behaviour and the stated limit: a non-literal `Isolated`
-    /// arg is conservatively isolated; explicit false / absent are not;
-    /// `InternalEvent` is never read.
+    /// Single-attribute behaviour: a non-literal `Isolated` arg is conservatively
+    /// isolated; explicit false / absent are not; `InternalEvent` reads index 1.
     #[test]
     fn isolated_single_attribute_table() {
         let mut non_literal = attr("IntegrationEvent", &[false, false]);
@@ -930,8 +933,13 @@ mod tests {
         );
         assert_eq!(
             isolated(vec![attr("InternalEvent", &[false, true])]),
+            (Some(true), true),
+            "InternalEvent(IncludeSender, Isolated = true)"
+        );
+        assert_eq!(
+            isolated(vec![attr("InternalEvent", &[false, false])]),
             (None, false),
-            "InternalEvent stays unread"
+            "InternalEvent(IncludeSender, Isolated = false)"
         );
     }
 }

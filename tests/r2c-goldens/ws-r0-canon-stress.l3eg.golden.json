@@ -45,6 +45,20 @@
       "publisherRoutineId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000#7f06a5bc600b42b9e23d13c21743d89ae37521cabc8a07b1165d937df1570715"
     },
     {
+      "id": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000::OnInternalSignal::fb03a86d7bbacf6d6292aed0f74ec3315c49e05895738470fd4c29b1f58dc058",
+      "publisherObjectId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000",
+      "eventName": "OnInternalSignal",
+      "eventKind": "internal",
+      "signatureHash": "fb03a86d7bbacf6d6292aed0f74ec3315c49e05895738470fd4c29b1f58dc058",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000#fb03a86d7bbacf6d6292aed0f74ec3315c49e05895738470fd4c29b1f58dc058"
+    },
+    {
       "id": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000::OnLegacyPost::c7377e506cfec0cb61c02e034b0ed817a21958f0ceb0470b42fe74d83b90b878",
       "publisherObjectId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000",
       "eventName": "OnLegacyPost",

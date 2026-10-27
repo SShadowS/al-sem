@@ -1237,7 +1237,10 @@ const L3EG_TEST_NAME: &str = "differential_l3_event_graph_match_goldens";
 struct EventGraphCoverage {
     integration_publishers: usize,
     business_publishers: usize,
-    /// Synthesized maybe/unknown symbols (eventKind neither integration nor business).
+    /// `[InternalEvent]` publishers (G10: classified as procedures before, so
+    /// the event graph held none).
+    internal_publishers: usize,
+    /// Synthesized maybe/unknown symbols (eventKind none of the three above).
     unknown_kind_symbols: usize,
     isolated_publishers: usize,
     symbols_with_element_name: usize,
@@ -1250,6 +1253,7 @@ impl EventGraphCoverage {
     fn add(&mut self, o: &EventGraphCoverage) {
         self.integration_publishers += o.integration_publishers;
         self.business_publishers += o.business_publishers;
+        self.internal_publishers += o.internal_publishers;
         self.unknown_kind_symbols += o.unknown_kind_symbols;
         self.isolated_publishers += o.isolated_publishers;
         self.symbols_with_element_name += o.symbols_with_element_name;
@@ -1259,7 +1263,7 @@ impl EventGraphCoverage {
     }
 }
 
-/// Count the 8 coverage axes from ONE projection `Value` (golden OR rust — same
+/// Count the 9 coverage axes from ONE projection `Value` (golden OR rust — same
 /// shape). Faithful port of al-sem `countCoverage` (`scripts/dump-l3-event-graph.ts`).
 fn event_graph_coverage_of(proj: &serde_json::Value) -> EventGraphCoverage {
     let mut c = EventGraphCoverage::default();
@@ -1271,6 +1275,7 @@ fn event_graph_coverage_of(proj: &serde_json::Value) -> EventGraphCoverage {
             match str_of(s, "eventKind").as_str() {
                 "integration" => c.integration_publishers += 1,
                 "business" => c.business_publishers += 1,
+                "internal" => c.internal_publishers += 1,
                 _ => c.unknown_kind_symbols += 1,
             }
             if s.get("isolated").and_then(|v| v.as_bool()) == Some(true) {
@@ -1632,12 +1637,13 @@ fn differential_l3_event_graph_match_goldens() {
     // --- COVERAGE MATRIX gate (anti-degenerate, fail-on-zero) ---------------
     eprintln!(
         "R2c L3eg coverage matrix (set={set:?}, {} fixture(s)):\n  \
-         integrationPublishers={} businessPublishers={} unknownKindSymbols={} \
-         isolatedPublishers={} symbolsWithElementName={} resolvedEdges={} \
-         maybeEdges={} unknownEdges={}",
+         integrationPublishers={} businessPublishers={} internalPublishers={} \
+         unknownKindSymbols={} isolatedPublishers={} symbolsWithElementName={} \
+         resolvedEdges={} maybeEdges={} unknownEdges={}",
         goldens.len(),
         rust_cov.integration_publishers,
         rust_cov.business_publishers,
+        rust_cov.internal_publishers,
         rust_cov.unknown_kind_symbols,
         rust_cov.isolated_publishers,
         rust_cov.symbols_with_element_name,
@@ -1648,9 +1654,10 @@ fn differential_l3_event_graph_match_goldens() {
     // Fail-on-zero per axis ONLY for the full corpus (the small dev set cannot
     // populate every axis — e.g. business publishers / element names are rare).
     if set == "full" || set.is_empty() {
-        let axes: [(&str, usize); 8] = [
+        let axes: [(&str, usize); 9] = [
             ("integrationPublishers", rust_cov.integration_publishers),
             ("businessPublishers", rust_cov.business_publishers),
+            ("internalPublishers", rust_cov.internal_publishers),
             ("unknownKindSymbols", rust_cov.unknown_kind_symbols),
             ("isolatedPublishers", rust_cov.isolated_publishers),
             ("symbolsWithElementName", rust_cov.symbols_with_element_name),
@@ -1761,6 +1768,7 @@ fn l3eg_coverage_matrix_matches_manifest_oracle() {
     let manifest_cov = EventGraphCoverage {
         integration_publishers: mget("integrationPublishers"),
         business_publishers: mget("businessPublishers"),
+        internal_publishers: mget("internalPublishers"),
         unknown_kind_symbols: mget("unknownKindSymbols"),
         isolated_publishers: mget("isolatedPublishers"),
         symbols_with_element_name: mget("symbolsWithElementName"),

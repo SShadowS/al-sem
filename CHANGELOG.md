@@ -73,6 +73,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`[InternalEvent]` routines are event publishers** (G10). Both routine-kind rules
+  (`ir_walk::ir_routine_kind`, which the model uses, and `engine::snapshot`'s
+  `classify_kind_ir`) and the `.app`-symbols side (`symbol_reference::parse_method`,
+  a new `AbiEventKind::Internal`) left an internal event a plain "procedure", after
+  the retired al-sem reference. The program engine's own event binding already knew
+  better, but the model's event graph, `events fanout` and every detector that reads
+  the kind did not: on Continia DO 29.0 `events fanout` reported 208 publishers where
+  the source has 217 (DO's three `[InternalEvent(false)]` events and six of CDN's), and
+  d19 reported all 8 parameters of DO's three internal events as unused (8 of 8 false
+  positives, triaged against the source; no other finding moved). The event graph now
+  gives them event kind `internal` and reads `[InternalEvent(IncludeSender, Isolated)]`'s
+  `Isolated` (index 1). Goldens: `ws-r0-canon-stress`'s internal event (its fixture
+  comment said the old rule) moves in five families; the R2c coverage matrix gains an
+  `internalPublishers` axis (the event was counted as an unknown kind), and the R3a-3
+  manifest and the policy facts oracle (amended by hand: its recorder no longer
+  exists) gain its one direct `publish` fact. Test:
+  `gap_d19_event_publisher_skip::internal_event_publisher_parameters_are_not_flagged`,
+  which fails with the old rule ("classified procedure").
 - **`alsem batch` time is linear in the number of jobs again** (G14). The write-set
   check that runs before any build (`check_write_sets`) asked, for every job and every
   other job's write, whether the job's workspace read takes that file, and redid the

@@ -9,6 +9,11 @@
 //! `facts:` mode selects per primary routine, as counts and the sha256 of the
 //! rendering below. The parent path no longer exists, so the oracle cannot be
 //! re-minted: a mismatch is a change in what policy rules see.
+//!
+//! Amended by hand (2026-10-28, G10): `r0/ws-r0-canon-stress` (cross and single)
+//! gained one direct fact, the `publish` of its `[InternalEvent]` routine, which
+//! is now an event publisher like the integration and business ones (`direct`
+//! 4 → 5, `any` 5 → 6, new sha256). No other case moved.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

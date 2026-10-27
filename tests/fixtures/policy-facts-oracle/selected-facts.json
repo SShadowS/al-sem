@@ -2381,18 +2381,18 @@
       "sha256": "368922926353b568c008e008e609db8c8fd2b3996efd07788baf4841a56f4ba9"
     },
     "r0/ws-r0-canon-stress cross": {
-      "any": 5,
-      "direct": 4,
+      "any": 6,
+      "direct": 5,
       "inherited": 1,
       "routines": 16,
-      "sha256": "56bbcb5aa7f8afa7c58a4037b22d88aa6928656e2380fe02be26be4e6ebefed3"
+      "sha256": "68e407fccfa6896f7401c55d922387538bbb674912a042722a318377324bcc6a"
     },
     "r0/ws-r0-canon-stress single": {
-      "any": 5,
-      "direct": 4,
+      "any": 6,
+      "direct": 5,
       "inherited": 1,
       "routines": 16,
-      "sha256": "56bbcb5aa7f8afa7c58a4037b22d88aa6928656e2380fe02be26be4e6ebefed3"
+      "sha256": "68e407fccfa6896f7401c55d922387538bbb674912a042722a318377324bcc6a"
     },
     "r0/ws-r2a-record-types cross": {
       "any": 8,

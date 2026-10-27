@@ -330,7 +330,9 @@ fn abi_routine_kind_from_str(
                     (AbiEventKind::Integration, Some(PublisherKind::Integration))
                 }
                 SrAbiEventKind::Business => (AbiEventKind::Business, Some(PublisherKind::Business)),
-                SrAbiEventKind::Unknown => (AbiEventKind::Internal, Some(PublisherKind::Internal)),
+                SrAbiEventKind::Internal | SrAbiEventKind::Unknown => {
+                    (AbiEventKind::Internal, Some(PublisherKind::Internal))
+                }
             };
             (AbiRoutineKind::EventPublisher, abi_ek, pk)
         }

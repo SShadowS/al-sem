@@ -170,6 +170,38 @@ codeunit 50251 "D19 Business Publisher"
     );
 }
 
+/// Case 2b (G10) — `[InternalEvent]` publishes too: its subscribers must be in the
+/// same module, but its parameters are just as much the event's signature. It
+/// was classified a plain procedure, so d19 flagged all 8 parameters of Continia
+/// DO 29.0's three internal events (all 8 false positives, triaged against the
+/// source). The signature is DO's `OnBeforeIsOnpremInstalled`.
+#[test]
+fn internal_event_publisher_parameters_are_not_flagged() {
+    let src = r#"
+codeunit 50257 "D19 Internal Publisher"
+{
+    [InternalEvent(false)]
+    local procedure OnBeforeIsOnpremInstalled(var IsInstalled: Boolean; var IsHandled: Boolean)
+    begin
+    end;
+}
+"#;
+    let run = run_d19(src);
+    run.assert_assembled("OnBeforeIsOnpremInstalled", "event-publisher", 2);
+    assert!(
+        run.findings.is_empty(),
+        "an InternalEvent publisher's parameters exist for its subscribers too. \
+         findings: {:#?}",
+        run.findings
+    );
+    assert_eq!(
+        run.skip("eventPublisher"),
+        1,
+        "the publisher must be booked as an eventPublisher skip. skipped: {:?}",
+        run.skipped
+    );
+}
+
 /// Case 3 — attribute names are lowercased at `ir/decl.rs` before
 /// `ir_routine_kind` compares them, so mixed ASCII casing classifies identically.
 #[test]
