@@ -1,2 +1,6 @@
 Base-binary record (#277 Task 1, T20). Minted from `alsem` built at 1134bed1 (`cdo` profile),
 run from the repository root with RUST_LOG=off, stdout and stderr merged (`2>&1`). Never regenerated.
+
+Re-minted 2026-10-28 (continai-gaps): the analyze report gained an `encryptedPackages`
+field, which moved every summary golden; the record was rebuilt from `alsem` built at
+e4013c0d (dev profile) with the same command and merge. The record's `alsemVersion` line is normalized by the test, so only the new field moved.

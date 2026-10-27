@@ -213,6 +213,15 @@ pub const EMBEDDED_AL_SOURCE_CAP: u64 = 16 * 1024 * 1024;
 /// System Application ~15 MB. 512 MB gives >11x headroom over BaseApp.
 pub const READY_TO_RUN_APP_CAP: u64 = 512 * 1024 * 1024;
 
+/// The RC4 stream of a runtime (`.NEA`) `.app` package
+/// (`engine::deps::app_package_zip`): the stream's header-declared size,
+/// checked before it is read. The descrambled zip inside it is bounded per
+/// entry by the same readers that open a plain package's zip.
+///
+/// Largest real sample so far: 14,015,741 bytes (Continia Document Output
+/// 29.0.0.213763, 2026-10-27).
+pub const RUNTIME_APP_STREAM_CAP: u64 = 512 * 1024 * 1024;
+
 /// Cap for a `.cbor.gz` capability-snapshot artifact (the cli-b diff engine's
 /// serialized whole-workspace analysis — `deserialize_snapshot`'s `gunzip`).
 /// This is a REASONED bound, not a directly measured one: generating a real

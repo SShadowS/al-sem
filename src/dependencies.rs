@@ -93,6 +93,11 @@ pub struct UnreadableDependency {
     pub name: Option<String>,
     pub version: Option<String>,
     pub error: String,
+    /// An encrypted package
+    /// ([`crate::engine::deps::app_package_zip::EncryptedApp`]): it holds an
+    /// app, but nothing of it is readable, so `guid`, `name` and `version` are
+    /// `None`.
+    pub encrypted: bool,
 }
 
 /// What [`load_all_apps`] set aside rather than loaded.
@@ -684,12 +689,16 @@ pub fn load_all_apps_from(
             }
             Err(e) => {
                 warn!("{}", manifest_read_warning(&path, &e));
+                let encrypted = e
+                    .downcast_ref::<crate::engine::deps::app_package_zip::EncryptedApp>()
+                    .is_some();
                 unreadable_apps.push(UnreadableDependency {
                     path,
                     guid: None,
                     name: None,
                     version: None,
                     error: format!("{e:#}"),
+                    encrypted,
                 });
             }
         }
@@ -776,6 +785,8 @@ pub fn load_all_apps_from(
                 name: Some(best.meta.name.clone()),
                 version: Some(best.meta.version.clone()),
                 error,
+                // Its manifest was read, so it is not encrypted.
+                encrypted: false,
             });
         }
         // Every candidate ranked BELOW the winner (if one was found) is a
@@ -1437,6 +1448,45 @@ mod tests {
                 .iter()
                 .any(|d| d.dropped_version == "24.0.0.0" && d.guid == guid),
             "the promoted fallback copy (24.0) must NOT be reported as a dropped duplicate; got {dropped:#?}"
+        );
+    }
+
+    /// A runtime (`.NEA`) package loads as a REAL dependency — manifest,
+    /// symbols, everything — not as an `UnreadableDependency` flagged
+    /// `encrypted`. Before the descramble, the manifest read failed and the
+    /// package landed in `unreadable_apps`; this pins the load path the
+    /// dependency loader, ABI ingest and LSP all share.
+    #[test]
+    fn runtime_package_loads_as_a_readable_dependency() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let alpackages = dir.path().join(".alpackages");
+        std::fs::create_dir_all(&alpackages).unwrap();
+        let guid = "0745e76d-0b72-4641-87c2-ee45db5d2c32"; // CDN's real id
+        write_app_with_symbols(
+            &alpackages,
+            "Continia_CDN_29.0.0.213759.app",
+            guid,
+            "29.0.0.213759",
+            r#"{"Codeunits":[{"Id":6086220,"Name":"CTS-CDN API Url Mgt.","Methods":[{"Name":"DoIt","Id":1}]}]}"#,
+        );
+        // Wrap the plain package's zip in the runtime form (the same
+        // `wrap_runtime` the app_package_zip tests use).
+        let plain = std::fs::read(alpackages.join("Continia_CDN_29.0.0.213759.app")).unwrap();
+        let inner_zip = crate::engine::deps::app_package_zip::strip_app_header(&plain).to_vec();
+        let runtime = crate::engine::deps::app_package_zip::test_apps::wrap_runtime(&inner_zip);
+        std::fs::write(alpackages.join("Continia_CDN_29.0.0.213759.app"), &runtime).unwrap();
+
+        let (kept, report) = load_all_apps(dir.path()).expect("load_all_apps");
+        assert_eq!(
+            kept.len(),
+            1,
+            "the runtime package must load as a dependency; report: {report:?}"
+        );
+        assert_eq!(kept[0].dependency.app_id, guid);
+        assert_eq!(kept[0].dependency.version, "29.0.0.213759");
+        assert!(
+            report.unreadable.is_empty(),
+            "a readable runtime package must not be reported unreadable"
         );
     }
 

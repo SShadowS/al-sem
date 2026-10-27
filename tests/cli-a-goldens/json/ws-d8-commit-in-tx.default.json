@@ -386,6 +386,7 @@
           "skipped": {}
         }
       ],
+      "encryptedPackages": [],
       "opaqueApps": [],
       "routinesAnalyzed": 3,
       "sourceUnitsParsed": 2,

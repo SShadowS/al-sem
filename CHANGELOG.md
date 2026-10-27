@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Runtime (`.NEA`) `.app` packages are read, not reported as encrypted** (branch
+  `continai-gaps`, Continia's public 29.0 release as the sample set). These are BC
+  runtime packages — the same `.NEA` form BC has shipped for years, scrambled with a
+  fixed, public RC4 key (community-documented: hougaard.com, `SimonOfHH/D365BCAppHelper`,
+  `businessdev.ALbuild`), not encrypted. `engine::deps::app_package_zip` now detects the
+  mark, descrambles the stream (`capped_io::RUNTIME_APP_STREAM_CAP`, a new 512 MB cap on
+  the declared stream length), and opens the plain zip: manifest, `SymbolReference.json`
+  and embedded source read through the same public readers as a plain package, so the
+  dependency loader, ABI ingest, LSP embedded-source and L4 artifacts get the real app
+  (measured end-to-end on the 36-file CDN workspace: coverage holds, 22,188 classified
+  edges, unknown 542/2.4%, ABI 383/383 mapped). `EncryptedApp` remains as the failure
+  channel: a `.NEA` package whose stream cannot be descrambled (truncated, over the cap,
+  not a zip) is named in `payload.summary.encryptedPackages` and counted unreadable for
+  that stated reason — a future key or format change surfaces loudly, not as silent
+  absence. Format notes: `docs/encrypted-app-packages.md` (rewritten: layout, scramble,
+  trailer now identified as an `NXSB` + PKCS#7/CMS code-signing signature, per-package
+  contents).
+- **`subscriber_arity_bound` saturates on the `UNKNOWN_ARITY` sentinel** (`usize::MAX`,
+  the ABI arity sentinel) instead of overflowing: debug panicked
+  (`attempt to add with overflow`), release would wrap to 0 and admit every subscriber
+  as a Sender match. The two `params_count + 1` comparisons in `resolve::index` use
+  `checked_add` for the same reason. Exposed by the runtime-package read (dep routines
+  with `parameters_known == false` now reach the event wiring); measured on the 10
+  Continia packages, zero real occurrences of the panicking shape (an unknown-arity
+  publisher with `IncludeSender: true`), so behavior changes nowhere real.
+
 - **The test runners refuse a zero `RLIMIT_RTTIME`** (`scripts/require-rttime`, called by
   `ci-steps` test/task-affected/perf-bounds, `check-goldens` (so the pre-commit hook)
   and `cdo-gate`). Under a zero realtime timeout the kernel SIGKILLs ordinary test
