@@ -390,9 +390,15 @@ impl SubscriberIndex {
                             let picked: Option<&(RoutineNodeId, bool)> = if exact.len() == 1 {
                                 Some(exact[0])
                             } else if exact.is_empty() {
+                                // `checked_add`: a `params_count` of
+                                // `UNKNOWN_ARITY` (`usize::MAX`) must stay
+                                // never-equal, not wrap to 0 and admit every
+                                // subscriber as a Sender match.
                                 let sender: Vec<&(RoutineNodeId, bool)> = candidates
                                     .iter()
-                                    .filter(|(rid, _)| rid.params_count + 1 == sub_params)
+                                    .filter(|(rid, _)| {
+                                        rid.params_count.checked_add(1) == Some(sub_params)
+                                    })
                                     .collect();
                                 (sender.len() == 1).then(|| sender[0])
                             } else {
@@ -1376,7 +1382,9 @@ pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> u
                     && pr.id.name_lc == event_name_lc
                     && pr.publisher_kind.is_some()
                     && pr.include_sender.is_none()
-                    && pr.id.params_count + 1 == sub_params
+                    // `checked_add`: `UNKNOWN_ARITY` (`usize::MAX`) must stay
+                    // never-equal, not wrap to 0.
+                    && pr.id.params_count.checked_add(1) == Some(sub_params)
                 {
                     count += 1;
                 }

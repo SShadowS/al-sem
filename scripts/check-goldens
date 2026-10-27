@@ -186,6 +186,8 @@ if ! cargo nextest --version >/dev/null 2>&1; then
     echo "check-goldens: cargo-nextest is required (cargo install cargo-nextest --locked)" >&2
     exit 1
 fi
+# A zero RLIMIT_RTTIME makes the kernel SIGKILL test processes at random.
+"$(dirname "$0")/require-rttime" || exit 1
 
 if [[ "${1:-}" == "--regen" ]]; then
     echo "check-goldens: regenerating (REGEN_TEMP_GOLDENS=1) — INSPECT the diff before committing"

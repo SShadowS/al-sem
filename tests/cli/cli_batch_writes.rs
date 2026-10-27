@@ -58,7 +58,12 @@ pub(crate) fn run_manifest_doc(
     }
     let mut child = cmd.spawn().unwrap();
     let mut pipe = child.stdin.take().unwrap();
-    pipe.write_all(stdin.unwrap_or_default()).unwrap();
+    // A batch none of whose jobs reads stdin may exit before this write lands;
+    // the test compares its output, so a closed pipe is not a failure.
+    match pipe.write_all(stdin.unwrap_or_default()) {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => panic!("write stdin: {e}"),
+        _ => {}
+    }
     drop(pipe);
     let out = child.wait_with_output().unwrap();
     let text = std::fs::read_to_string(&trace).unwrap_or_default();

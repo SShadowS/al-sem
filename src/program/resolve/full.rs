@@ -1786,13 +1786,15 @@ pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String
 /// reuses those products, so nothing reads dependency text. The tier is held
 /// until the build returns, so it cannot die in between. Otherwise the
 /// snapshot is built again with the text.
-#[must_use]
+///
+/// The error is the reason, worded like [`build_snapshot_res`]'s, so a caller
+/// can tell the user why there is no program (#G2: it used to be dropped).
 pub fn build_context_with(
     workspace_root: &Path,
     dependency_source: DependencySource,
     profile: BuildProfile,
     dep_cache: &DepCache,
-) -> Option<ProgramContext> {
+) -> Result<ProgramContext, String> {
     let builder = SnapshotBuilder {
         workspace_root: workspace_root.to_path_buf(),
         // Local providers are NOT part of `DepKey`: a caller that sets them
@@ -1800,9 +1802,10 @@ pub fn build_context_with(
         // checkout and the embedded source of the same `.app` would share.
         local_providers: vec![],
     };
+    let snapshot_failed = |e: anyhow::Error| format!("snapshot build failed: {e:#}");
     let (snap, _dropped) = builder
         .build_deferring_dependency_text(dependency_source, dep_cache)
-        .ok()?;
+        .map_err(snapshot_failed)?;
     let mut held = None;
     let snap = if snap.has_deferred_dependency_text() {
         held = dep_cache
@@ -1814,14 +1817,14 @@ pub fn build_context_with(
             drop(snap);
             builder
                 .build_with_options(dependency_source, dep_cache)
-                .ok()?
+                .map_err(snapshot_failed)?
                 .0
         }
     } else {
         snap
     };
     crate::census_hook::mark("1.snapshot");
-    let ctx = build_context_from_snapshot_cached(snap, profile, dep_cache).ok();
+    let ctx = build_context_from_snapshot_cached(snap, profile, dep_cache);
     drop(held);
     ctx
 }
@@ -2024,6 +2027,12 @@ pub struct FreshCoverage {
     /// (and whether the primary needs them) is unknown: `"{path}: {error}"`,
     /// sorted.
     pub unidentified_packages: Vec<String>,
+    /// The encrypted ones among them (G3): no manifest, symbols or source can
+    /// be read, so the analysis cannot see into the app at all. Each is its
+    /// package key (`.alpackages/<file>`, `../.alpackages/<file>` for an
+    /// ancestor's cache, as in the dependency-closure digest), sorted. The file
+    /// name is the only hint of what app it holds.
+    pub encrypted_packages: Vec<String>,
     /// The primary app's `[EventSubscriber]`s that bound to no publisher
     /// (ambiguous, orphaned, or publisher object not found; engine-switch
     /// S5.2b). Such a subscriber's dispatch is unknown, yet it is no call edge,
@@ -2251,7 +2260,7 @@ pub fn build_program_with_coverage_profiled(
     // `2.parse` (the command path had no mark between the snapshot and the parse).
     crate::census_hook::mark("1.snapshot");
     let (ctx, report) = fresh_program_from_snapshot_with(snap, profile)?;
-    let fc = reduce_fresh_coverage(&ctx, &report, &load.unreadable);
+    let fc = reduce_fresh_coverage(&ctx, &report, &load.unreadable, &inputs.workspace);
     Ok((ctx, report, fc))
 }
 
@@ -2357,11 +2366,13 @@ impl LoadedDependencies {
 
 /// Reduce a [`fresh_program_from_snapshot`] result to the preflight status.
 /// `unreadable` is the dependency loader's list of packages it could not read
-/// (`DependencyLoadReport::unreadable`).
+/// (`DependencyLoadReport::unreadable`); `workspace_root` keys the encrypted
+/// ones.
 pub fn reduce_fresh_coverage(
     ctx: &ProgramContext,
     report: &ProgramReport,
     unreadable: &[crate::dependencies::UnreadableDependency],
+    workspace_root: &Path,
 ) -> FreshCoverage {
     let opaque_apps = {
         let _s = pt::span("preflight", "preflight.opaque_closure");
@@ -2377,6 +2388,15 @@ pub fn reduce_fresh_coverage(
         .map(|u| format!("{}: {}", u.path.display(), u.error))
         .collect();
     unidentified_packages.sort();
+    let mut encrypted_packages: Vec<String> = unreadable
+        .iter()
+        .filter(|u| u.encrypted)
+        .map(|u| {
+            super::semantic_golden::package_key(workspace_root, &u.path)
+                .unwrap_or_else(|| u.path.display().to_string())
+        })
+        .collect();
+    encrypted_packages.sort();
     let unbound_subscriptions = {
         use crate::program::resolve::index::{SubscriberIndex, SubscriptionOutcome};
         SubscriberIndex::build(&ctx.graph)
@@ -2406,6 +2426,7 @@ pub fn reduce_fresh_coverage(
         opaque_apps,
         ledger,
         unidentified_packages,
+        encrypted_packages,
     }
 }
 

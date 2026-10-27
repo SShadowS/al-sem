@@ -286,7 +286,7 @@ use crate::source_text::read_al_source;
 fn read_root_app_guid(workspace: &Path) -> Option<String> {
     let app_json_path = workspace.join("app.json");
     let text = std::fs::read_to_string(&app_json_path).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let value = crate::source_text::parse_app_json(&text).ok()?;
     let id = value.get("id")?.as_str()?;
     if id.is_empty() {
         None

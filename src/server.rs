@@ -250,17 +250,25 @@ impl RootState {
                     hook();
                 }
                 config.install_initial(config.read_disk());
-                let built = build_server_state(&self.root, config, (tx, rx), &self.build);
-                match &built {
-                    Some(_) => {
-                        info!("Built program snapshot for workspace root {}", self.root.display());
+                match build_server_state(&self.root, config, (tx, rx), &self.build) {
+                    Ok(state) => {
+                        info!(
+                            "Built program snapshot for workspace root {}",
+                            self.root.display()
+                        );
+                        Some(state)
                     }
-                    None => warn!(
-                        "Failed to build the program snapshot for workspace root {}                          (missing/invalid app.json?) — every request under this root                          will return an empty result until a valid single-app AL                          workspace is opened there; other configured roots are                          unaffected.",
-                        self.root.display()
-                    ),
+                    Err(reason) => {
+                        warn!(
+                            "Failed to build the program snapshot for workspace root {} \
+                             ({reason}) — every request under this root will return an \
+                             empty result until a valid single-app AL workspace is opened \
+                             there; other configured roots are unaffected.",
+                            self.root.display()
+                        );
+                        None
+                    }
                 }
-                built
             })
             .as_ref()
     }
@@ -577,9 +585,9 @@ fn primary_workspace_root(params: &InitializeParams) -> Option<PathBuf> {
 
 /// Build the initial snapshot, publish its diagnostics, and spawn the
 /// background updater on `channel` (created by the caller, so the watch can
-/// start before this build reads). Returns `None` when
+/// start before this build reads). Returns the reason when
 /// [`LspSnapshot::build_full_with_parsed`] fails (see the module doc's "no
-/// valid workspace" section) — the caller logs the reason. With
+/// valid workspace" section) — the caller logs it. With
 /// `build.l4_host` it also spawns the incremental L4 host (#222), and every
 /// `on_swap` requests a refresh of it.
 fn build_server_state(
@@ -587,7 +595,7 @@ fn build_server_state(
     config: Arc<ConfigHandle>,
     (tx, rx): (mpsc::Sender<ChangeEvent>, mpsc::Receiver<ChangeEvent>),
     build: &RootBuild,
-) -> Option<ServerState> {
+) -> Result<ServerState, String> {
     let (encoding, sink, dependency_source, dep_cache) = (
         build.encoding,
         &build.sink,
@@ -682,7 +690,7 @@ fn build_server_state(
         },
     );
 
-    Some(ServerState {
+    Ok(ServerState {
         shared,
         tx,
         updater_handle,

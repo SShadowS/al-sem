@@ -570,38 +570,36 @@ pub struct LspSnapshot {
 
 impl LspSnapshot {
     /// Full batch build — snapshot → dep layer → assemble → resolve per file
-    /// → derive indexes. Returns `None` when the underlying snapshot/program
-    /// context build fails (fail-closed, mirrors
-    /// [`crate::program::resolve::full::resolve_full_program`]).
-    #[must_use]
-    pub fn build_full(workspace_root: &Path) -> Option<LspSnapshot> {
+    /// → derive indexes. Returns the reason when the underlying
+    /// snapshot/program context build fails (fail-closed, mirrors
+    /// [`crate::program::resolve::full::resolve_full_program`]), e.g.
+    /// `snapshot build failed: parse app.json: …`.
+    pub fn build_full(workspace_root: &Path) -> Result<LspSnapshot, String> {
         Self::build_full_with(workspace_root, DependencySource::default())
     }
 
     /// [`Self::build_full`] with an explicit [`DependencySource`].
-    #[must_use]
     pub fn build_full_with(
         workspace_root: &Path,
         dependency_source: DependencySource,
-    ) -> Option<LspSnapshot> {
+    ) -> Result<LspSnapshot, String> {
         Self::build_full_with_cache(workspace_root, dependency_source, &DepCache::default())
     }
 
     /// [`Self::build_full_with`], sharing the dependency tier through
     /// `dep_cache` with every other root that loads the same dependencies.
-    #[must_use]
     pub fn build_full_with_cache(
         workspace_root: &Path,
         dependency_source: DependencySource,
         dep_cache: &DepCache,
-    ) -> Option<LspSnapshot> {
+    ) -> Result<LspSnapshot, String> {
         let ctx = build_context_with(
             workspace_root,
             dependency_source,
             BuildProfile::LIGHT,
             dep_cache,
         )?;
-        Some(Self::from_context(ctx, workspace_root).0)
+        Ok(Self::from_context(ctx, workspace_root).0)
     }
 
     /// As [`Self::build_full`], but ALSO returns the ONE workspace
@@ -629,18 +627,18 @@ impl LspSnapshot {
     /// [`Updater`](crate::lsp::updater::Updater) exactly as `main.rs`/
     /// `server.rs` eventually will, so this is the arc's real future public
     /// server-construction surface, not test-only scaffolding.
-    #[must_use]
-    pub fn build_full_with_parsed(workspace_root: &Path) -> Option<(LspSnapshot, ParsedUnit)> {
+    pub fn build_full_with_parsed(
+        workspace_root: &Path,
+    ) -> Result<(LspSnapshot, ParsedUnit), String> {
         Self::build_full_with_parsed_with(workspace_root, DependencySource::default())
     }
 
     /// [`Self::build_full_with_parsed`] with an explicit [`DependencySource`]
     /// — what the server's first build and the updater's full rebuild use.
-    #[must_use]
     pub fn build_full_with_parsed_with(
         workspace_root: &Path,
         dependency_source: DependencySource,
-    ) -> Option<(LspSnapshot, ParsedUnit)> {
+    ) -> Result<(LspSnapshot, ParsedUnit), String> {
         Self::build_full_with_parsed_with_cache(
             workspace_root,
             dependency_source,
@@ -650,19 +648,18 @@ impl LspSnapshot {
 
     /// [`Self::build_full_with_parsed_with`], sharing the dependency tier
     /// through `dep_cache` — what the server's per-root builds use.
-    #[must_use]
     pub fn build_full_with_parsed_with_cache(
         workspace_root: &Path,
         dependency_source: DependencySource,
         dep_cache: &DepCache,
-    ) -> Option<(LspSnapshot, ParsedUnit)> {
+    ) -> Result<(LspSnapshot, ParsedUnit), String> {
         let ctx = build_context_with(
             workspace_root,
             dependency_source,
             BuildProfile::LIGHT,
             dep_cache,
         )?;
-        Some(Self::from_context(ctx, workspace_root))
+        Ok(Self::from_context(ctx, workspace_root))
     }
 
     /// The composition shared by [`Self::build_full`]/
@@ -1400,6 +1397,23 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         write_fixture_workspace(dir.path());
         dir
+    }
+
+    /// A UTF-8 BOM before `app.json` (common from VS Code on Windows; the AL
+    /// compiler accepts it) must not empty the snapshot. It did: `serde_json`
+    /// rejected the BOM and the build returned `None` with no reason.
+    #[test]
+    fn build_full_accepts_a_bom_in_app_json() {
+        let dir = fixture_dir();
+        let plain = LspSnapshot::build_full(dir.path()).expect("build_full without BOM");
+        let app_json = dir.path().join("app.json");
+        let mut bytes = b"\xEF\xBB\xBF".to_vec();
+        bytes.extend(std::fs::read(&app_json).expect("read app.json"));
+        std::fs::write(&app_json, bytes).expect("write BOM app.json");
+        let bom = LspSnapshot::build_full(dir.path()).expect("build_full with BOM");
+        let edges = |s: &LspSnapshot| s.edges_by_file.values().map(|v| v.len()).sum::<usize>();
+        assert!(edges(&plain) > 0);
+        assert_eq!(edges(&bom), edges(&plain));
     }
 
     // ── build_full: union equals a direct resolve_full_program run ────────

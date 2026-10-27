@@ -279,6 +279,27 @@ pub fn dependency_closure_entries(workspace_root: &Path) -> ClosureEntries {
     dependency_closure_entries_from(workspace_root, &files, &unreadable)
 }
 
+/// The key of a package cache folder: `.alpackages/` for the workspace's own,
+/// one `../` per level above `workspace_root` for an ancestor's
+/// (`../.alpackages/`). `None` when `folder` is not in `workspace_root` or one of
+/// its ancestors.
+pub(crate) fn alpackages_folder_key(workspace_root: &Path, folder: &Path) -> Option<String> {
+    folder
+        .parent()
+        .and_then(|owner| workspace_root.ancestors().position(|a| a == owner))
+        .map(|ups| format!("{}.alpackages/", "../".repeat(ups)))
+}
+
+/// A package's key in that scheme: its folder's key and its file name
+/// (`.alpackages/x.app`, `../.alpackages/y.app`).
+pub(crate) fn package_key(workspace_root: &Path, package: &Path) -> Option<String> {
+    let folder = alpackages_folder_key(workspace_root, package.parent()?)?;
+    Some(format!(
+        "{folder}{}",
+        package.file_name()?.to_string_lossy()
+    ))
+}
+
 /// [`dependency_closure_entries`] over a discovery already made (the
 /// `WorkspaceInputs`'s closure lists).
 pub(crate) fn dependency_closure_entries_from(
@@ -286,21 +307,16 @@ pub(crate) fn dependency_closure_entries_from(
     files: &[crate::dependencies::DiscoveredAppFile],
     unreadable: &[(std::path::PathBuf, std::io::Error)],
 ) -> ClosureEntries {
-    // How many levels above `workspace_root` a cache folder sits (0 = its own).
     // Every discovered folder should be `<ancestor>/.alpackages`; one that is
     // not is an explicit `OutsideWalk` error, never silently keyed as the own cache.
     let folder_key = |folder: &Path| -> Result<String, (String, ClosureErrorKind, String)> {
-        folder
-            .parent()
-            .and_then(|owner| workspace_root.ancestors().position(|a| a == owner))
-            .map(|ups| format!("{}.alpackages/", "../".repeat(ups)))
-            .ok_or_else(|| {
-                (
-                    folder.display().to_string(),
-                    ClosureErrorKind::OutsideWalk,
-                    "not an ancestor's .alpackages".to_string(),
-                )
-            })
+        alpackages_folder_key(workspace_root, folder).ok_or_else(|| {
+            (
+                folder.display().to_string(),
+                ClosureErrorKind::OutsideWalk,
+                "not an ancestor's .alpackages".to_string(),
+            )
+        })
     };
     let mut out = ClosureEntries::default();
     for (folder, e) in unreadable {

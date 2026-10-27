@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Runtime (`.NEA`) `.app` packages are read, not reported as encrypted** (branch
+  `continai-gaps`, Continia's public 29.0 release as the sample set). These are BC
+  runtime packages — the same `.NEA` form BC has shipped for years, scrambled with a
+  fixed, public RC4 key (community-documented: hougaard.com, `SimonOfHH/D365BCAppHelper`,
+  `businessdev.ALbuild`), not encrypted. `engine::deps::app_package_zip` now detects the
+  mark, descrambles the stream (`capped_io::RUNTIME_APP_STREAM_CAP`, a new 512 MB cap on
+  the declared stream length), and opens the plain zip: manifest, `SymbolReference.json`
+  and embedded source read through the same public readers as a plain package, so the
+  dependency loader, ABI ingest, LSP embedded-source and L4 artifacts get the real app
+  (measured end-to-end on the 36-file CDN workspace: coverage holds, 22,188 classified
+  edges, unknown 542/2.4%, ABI 383/383 mapped). `EncryptedApp` remains as the failure
+  channel: a `.NEA` package whose stream cannot be descrambled (truncated, over the cap,
+  not a zip) is named in `payload.summary.encryptedPackages` and counted unreadable for
+  that stated reason — a future key or format change surfaces loudly, not as silent
+  absence. Format notes: `docs/encrypted-app-packages.md` (rewritten: layout, scramble,
+  trailer now identified as an `NXSB` + PKCS#7/CMS code-signing signature, per-package
+  contents).
+- **`subscriber_arity_bound` saturates on the `UNKNOWN_ARITY` sentinel** (`usize::MAX`,
+  the ABI arity sentinel) instead of overflowing: debug panicked
+  (`attempt to add with overflow`), release would wrap to 0 and admit every subscriber
+  as a Sender match. The two `params_count + 1` comparisons in `resolve::index` use
+  `checked_add` for the same reason. Exposed by the runtime-package read (dep routines
+  with `parameters_known == false` now reach the event wiring); measured on the 10
+  Continia packages, zero real occurrences of the panicking shape (an unknown-arity
+  publisher with `IncludeSender: true`), so behavior changes nowhere real.
+
+- **The test runners refuse a zero `RLIMIT_RTTIME`** (`scripts/require-rttime`, called by
+  `ci-steps` test/task-affected/perf-bounds, `check-goldens` (so the pre-commit hook)
+  and `cdo-gate`). Under a zero realtime timeout the kernel SIGKILLs ordinary test
+  processes at random and logs nothing; on 2026-10-27 that read as flaky tests (6 of 8
+  full nextest runs lost one to five tests, a different set each time). Cause on that
+  Omarchy desktop: rtkit was not installed, so the portal gave PipeWire's `module-rt`
+  in the desktop shell a zero budget, applied as a hard limit to everything launched
+  from it. Confirmed by bpftrace (`SI_KERNEL` from `posix_cpu_timers_work`) and by
+  raising the limit: 0 kills in 9 runs. The script names the cause and the fix. A
+  system without `/proc/self/limits` is not checked.
+
 ### Changed
 
 - **Grammar: tree-sitter-al v4.5.0** (`91a5db62`, the release tag and `main`; was `main` at
@@ -33,6 +72,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exit 3, now with `--diff-root needs a diff or file inputs (--diff, --file or --changed)`.
 
 ### Fixed
+
+- **A failed program build now says why.** `build_context_with` and the
+  `LspSnapshot::build_full*` builders returned `Option` and dropped the snapshot
+  builder's error, so `--analyze` warned only "the program snapshot could not be built"
+  (a BOM or a typo in `app.json` looked like any other failure). They now return
+  `Result<_, String>` with the reason, e.g. `snapshot build failed: parse
+  <ws>/app.json: EOF while parsing a value at line 1 column 8`, and every consumer
+  prints it: the `--analyze` call-graph warning (a missing `app.json` keeps its plain
+  "no app.json at the project root"), the `--project` index report, the LSP server's
+  per-root build warning (whose text had also lost a line continuation and carried
+  long runs of spaces) and the updater's rung-3 rebuild warning. Test:
+  `cli_analyze_call_hierarchy_json::unusable_app_json_warning_names_the_builder_reason`,
+  which fails with the old fixed message.
+- **A UTF-8 BOM in `app.json` no longer empties the program.** VS Code on Windows
+  often writes one and the AL compiler accepts it, but `serde_json` rejected it: the
+  root `app.json` failed to parse, the snapshot build returned nothing, and
+  `--analyze` said only "the program snapshot could not be built" (Continia DO 29.0's
+  `app.json` has a BOM). Every `app.json` read now goes through
+  `source_text::parse_app_json`, which drops a leading BOM: the workspace inputs, the
+  root app id, the model instance id's version, the dependency list
+  (`dependencies::parse_app_json`), the compiler golden's `preprocessorSymbols` and
+  `mint-goldens`' workspace id.
+- **Two batch test helpers no longer fail on a closed stdin pipe.** They write the
+  diff text to every command they start, and a command that never reads its stdin
+  can exit before the write lands; the write then failed with `BrokenPipe` and
+  `cli_batch_contract::batch_equals_standalone` failed at random. A closed pipe is now
+  ignored there (any other write error still fails). Proven with a 3 s delay before
+  the write: the old code fails with exactly that panic, the new code passes.
 
 - **Digest `--file` and `--changed a.al,…` read paths like `--diff`** (#339). A file
   path may now be relative to the git top level (automatic mode, as #77 reads diff

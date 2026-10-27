@@ -633,6 +633,32 @@ fn no_app_json_degrades_to_null() {
     );
 }
 
+// ── An app.json that cannot be used: the warning says why (#G2) ───────────
+
+#[test]
+fn unusable_app_json_warning_names_the_builder_reason() {
+    // The builder's reason used to be dropped: the warning said only "the
+    // program snapshot could not be built", which hid a BOM or a typo.
+    let ws = tempfile::tempdir().expect("workspace");
+    std::fs::copy(
+        repo_root().join(NOAPP_FIXTURE).join("Solo.Codeunit.al"),
+        ws.path().join("Solo.Codeunit.al"),
+    )
+    .expect("copy fixture source");
+    std::fs::write(ws.path().join("app.json"), "{ \"id\": ").expect("write app.json");
+    let project = ws.path().to_str().expect("utf-8 temp path");
+    let out = run_analyze(project, "json");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let warning = stderr
+        .lines()
+        .find(|l| l.starts_with("warning: call graph unavailable for "))
+        .unwrap_or_else(|| panic!("no call-graph warning; stderr: {stderr}"));
+    assert!(
+        warning.contains("(snapshot build failed: parse ") && warning.contains("app.json: "),
+        "the warning must carry the builder's parse reason: {warning}"
+    );
+}
+
 // ── A nested app's files get no routine_id (the root guid is not theirs) ──
 
 #[test]

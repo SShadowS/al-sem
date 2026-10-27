@@ -60,6 +60,10 @@ require_nextest() {
     return 1
 }
 
+# A zero RLIMIT_RTTIME makes the kernel SIGKILL test processes at random; the
+# script says why (2026-10-27).
+require_rttime() { "$(dirname "$0")/require-rttime"; }
+
 # `-p al-sem -p al-sem-benches`: the root package and the benches, which moved to
 # their own package on 2026-10-20 (`benches/Cargo.toml`). Without the second `-p`
 # a root-package run would no longer format or lint the bench sources.
@@ -111,6 +115,7 @@ run_gen_syntax() {
 run_test() {
     require_grammar || return 1
     require_nextest || return 1
+    require_rttime || return 1
     local stamp_before stamp_after stamp_file
     stamp_before="$("$(dirname "$0")/tree-stamp")" || return 1
     env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run --workspace || return 1
@@ -158,6 +163,7 @@ affected_filter() {
 run_task_affected() {
     require_grammar || return 1
     require_nextest || return 1
+    require_rttime || return 1
     local base filter
     base="$(git merge-base HEAD origin/master 2>/dev/null)" || base="HEAD"
     filter="$( { git diff --name-only "$base"; git diff --name-only --cached; git ls-files --others --exclude-standard; } | sort -u | affected_filter)"
@@ -173,7 +179,7 @@ run_task_affected() {
 
 run_build() { require_grammar || return 1; cargo build --release; }
 
-run_perf_bounds() { require_grammar || return 1; cargo test --release --test perf_bounds; }
+run_perf_bounds() { require_grammar || return 1; require_rttime || return 1; cargo test --release --test perf_bounds; }
 
 case "$step" in
     fmt)         run_fmt ;;
