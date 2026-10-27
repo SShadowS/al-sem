@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root app id, the model instance id's version, the dependency list
   (`dependencies::parse_app_json`), the compiler golden's `preprocessorSymbols` and
   `mint-goldens`' workspace id.
+- **Two batch test helpers no longer fail on a closed stdin pipe.** They write the
+  diff text to every command they start, and a command that never reads its stdin
+  can exit before the write lands; the write then failed with `BrokenPipe` and
+  `cli_batch_contract::batch_equals_standalone` failed at random. A closed pipe is now
+  ignored there (any other write error still fails). Proven with a 3 s delay before
+  the write: the old code fails with exactly that panic, the new code passes.
 
 - **Digest `--file` and `--changed a.al,…` read paths like `--diff`** (#339). A file
   path may now be relative to the git top level (automatic mode, as #77 reads diff

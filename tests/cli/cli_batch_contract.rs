@@ -62,7 +62,12 @@ fn spawn(exe: &str, args: &[String], cwd: &Path, env: &[(&str, &str)], stdin: &[
         cmd.env(k, v);
     }
     let mut child = cmd.spawn().unwrap();
-    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    // A command that never reads its stdin may exit before this write lands;
+    // the test compares its output, so a closed pipe is not a failure.
+    match child.stdin.take().unwrap().write_all(stdin) {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => panic!("write stdin: {e}"),
+        _ => {}
+    }
     child.wait_with_output().unwrap()
 }
 
