@@ -921,25 +921,28 @@ impl Updater {
     /// reflects whatever content generated any pending rung-1 edits, so
     /// there is nothing in `pending` a disk re-read wouldn't already pick up.
     fn apply_rung3(&mut self, cur: &LspSnapshot) -> Option<(LspSnapshot, Rung)> {
-        let Some((mut snapshot, workspace)) = LspSnapshot::build_full_with_parsed_with_cache(
+        let built = LspSnapshot::build_full_with_parsed_with_cache(
             &self.workspace_root,
             self.dependency_source,
             &self.dep_cache,
-        ) else {
-            // Fail-closed (unchanged): `cur` stays published, `self.workspace`
-            // stays untouched. But a silently-dropped rung-3 rebuild (e.g. a
-            // deleted/malformed `app.json`, or an unreadable workspace root)
-            // is otherwise INVISIBLE — nothing else observes this path. Log
-            // it so an operator can tell "the server is stuck serving a
-            // stale snapshot" from "there was nothing to update."
-            warn!(
-                "rung-3 rebuild failed for workspace {} — the previous snapshot \
-                 (generation {}) remains published; check the workspace root's \
-                 app.json and .alpackages",
-                self.workspace_root.display(),
-                cur.generation
-            );
-            return None;
+        );
+        let (mut snapshot, workspace) = match built {
+            Ok(built) => built,
+            Err(reason) => {
+                // Fail-closed (unchanged): `cur` stays published, `self.workspace`
+                // stays untouched. But a silently-dropped rung-3 rebuild (e.g. a
+                // deleted/malformed `app.json`, or an unreadable workspace root)
+                // is otherwise INVISIBLE — nothing else observes this path. Log
+                // it so an operator can tell "the server is stuck serving a
+                // stale snapshot" from "there was nothing to update."
+                warn!(
+                    "rung-3 rebuild failed for workspace {} ({reason}) — the previous \
+                 snapshot (generation {}) remains published",
+                    self.workspace_root.display(),
+                    cur.generation
+                );
+                return None;
+            }
         };
         // `build_full_with_parsed` always produces generation 0 (a fresh
         // batch build has no prior generation) — override so the counter

@@ -570,38 +570,36 @@ pub struct LspSnapshot {
 
 impl LspSnapshot {
     /// Full batch build — snapshot → dep layer → assemble → resolve per file
-    /// → derive indexes. Returns `None` when the underlying snapshot/program
-    /// context build fails (fail-closed, mirrors
-    /// [`crate::program::resolve::full::resolve_full_program`]).
-    #[must_use]
-    pub fn build_full(workspace_root: &Path) -> Option<LspSnapshot> {
+    /// → derive indexes. Returns the reason when the underlying
+    /// snapshot/program context build fails (fail-closed, mirrors
+    /// [`crate::program::resolve::full::resolve_full_program`]), e.g.
+    /// `snapshot build failed: parse app.json: …`.
+    pub fn build_full(workspace_root: &Path) -> Result<LspSnapshot, String> {
         Self::build_full_with(workspace_root, DependencySource::default())
     }
 
     /// [`Self::build_full`] with an explicit [`DependencySource`].
-    #[must_use]
     pub fn build_full_with(
         workspace_root: &Path,
         dependency_source: DependencySource,
-    ) -> Option<LspSnapshot> {
+    ) -> Result<LspSnapshot, String> {
         Self::build_full_with_cache(workspace_root, dependency_source, &DepCache::default())
     }
 
     /// [`Self::build_full_with`], sharing the dependency tier through
     /// `dep_cache` with every other root that loads the same dependencies.
-    #[must_use]
     pub fn build_full_with_cache(
         workspace_root: &Path,
         dependency_source: DependencySource,
         dep_cache: &DepCache,
-    ) -> Option<LspSnapshot> {
+    ) -> Result<LspSnapshot, String> {
         let ctx = build_context_with(
             workspace_root,
             dependency_source,
             BuildProfile::LIGHT,
             dep_cache,
         )?;
-        Some(Self::from_context(ctx, workspace_root).0)
+        Ok(Self::from_context(ctx, workspace_root).0)
     }
 
     /// As [`Self::build_full`], but ALSO returns the ONE workspace
@@ -629,18 +627,18 @@ impl LspSnapshot {
     /// [`Updater`](crate::lsp::updater::Updater) exactly as `main.rs`/
     /// `server.rs` eventually will, so this is the arc's real future public
     /// server-construction surface, not test-only scaffolding.
-    #[must_use]
-    pub fn build_full_with_parsed(workspace_root: &Path) -> Option<(LspSnapshot, ParsedUnit)> {
+    pub fn build_full_with_parsed(
+        workspace_root: &Path,
+    ) -> Result<(LspSnapshot, ParsedUnit), String> {
         Self::build_full_with_parsed_with(workspace_root, DependencySource::default())
     }
 
     /// [`Self::build_full_with_parsed`] with an explicit [`DependencySource`]
     /// — what the server's first build and the updater's full rebuild use.
-    #[must_use]
     pub fn build_full_with_parsed_with(
         workspace_root: &Path,
         dependency_source: DependencySource,
-    ) -> Option<(LspSnapshot, ParsedUnit)> {
+    ) -> Result<(LspSnapshot, ParsedUnit), String> {
         Self::build_full_with_parsed_with_cache(
             workspace_root,
             dependency_source,
@@ -650,19 +648,18 @@ impl LspSnapshot {
 
     /// [`Self::build_full_with_parsed_with`], sharing the dependency tier
     /// through `dep_cache` — what the server's per-root builds use.
-    #[must_use]
     pub fn build_full_with_parsed_with_cache(
         workspace_root: &Path,
         dependency_source: DependencySource,
         dep_cache: &DepCache,
-    ) -> Option<(LspSnapshot, ParsedUnit)> {
+    ) -> Result<(LspSnapshot, ParsedUnit), String> {
         let ctx = build_context_with(
             workspace_root,
             dependency_source,
             BuildProfile::LIGHT,
             dep_cache,
         )?;
-        Some(Self::from_context(ctx, workspace_root))
+        Ok(Self::from_context(ctx, workspace_root))
     }
 
     /// The composition shared by [`Self::build_full`]/

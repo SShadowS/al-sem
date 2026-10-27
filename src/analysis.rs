@@ -268,22 +268,22 @@ pub fn analyze_project(
     let files =
         crate::source_text::discover_al_files(project, crate::source_text::NestedApps::Walk)?;
     let snap = graph.and_then(|source| {
-        let snap = LspSnapshot::build_full_with(project, source);
-        if snap.is_none() {
-            // The builder reports no reason; the one we can tell apart is a
-            // missing root app.json.
-            let reason = if project.join("app.json").is_file() {
-                "the program snapshot could not be built"
-            } else {
-                "no app.json at the project root"
-            };
-            eprintln!(
-                "warning: call graph unavailable for {} ({reason}): \
-                 fan_in and fan_out are null and unused procedures are not reported",
-                project.display()
-            );
-        }
-        snap
+        LspSnapshot::build_full_with(project, source)
+            .map_err(|reason| {
+                // A missing app.json gets a plain reason; the builder's names
+                // the file and the OS error, whose wording varies by platform.
+                let reason = if project.join("app.json").is_file() {
+                    reason
+                } else {
+                    "no app.json at the project root".to_string()
+                };
+                eprintln!(
+                    "warning: call graph unavailable for {} ({reason}): \
+                     fan_in and fan_out are null and unused procedures are not reported",
+                    project.display()
+                );
+            })
+            .ok()
     });
     let graph = snap.as_ref().map(Graph::new);
     let app_guid = crate::source_text::read_root_app_guid(project);

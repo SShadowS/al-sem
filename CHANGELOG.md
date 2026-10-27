@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A failed program build now says why.** `build_context_with` and the
+  `LspSnapshot::build_full*` builders returned `Option` and dropped the snapshot
+  builder's error, so `--analyze` warned only "the program snapshot could not be built"
+  (a BOM or a typo in `app.json` looked like any other failure). They now return
+  `Result<_, String>` with the reason, e.g. `snapshot build failed: parse
+  <ws>/app.json: EOF while parsing a value at line 1 column 8`, and every consumer
+  prints it: the `--analyze` call-graph warning (a missing `app.json` keeps its plain
+  "no app.json at the project root"), the `--project` index report, the LSP server's
+  per-root build warning (whose text had also lost a line continuation and carried
+  long runs of spaces) and the updater's rung-3 rebuild warning. Test:
+  `cli_analyze_call_hierarchy_json::unusable_app_json_warning_names_the_builder_reason`,
+  which fails with the old fixed message.
 - **A UTF-8 BOM in `app.json` no longer empties the program.** VS Code on Windows
   often writes one and the AL compiler accepts it, but `serde_json` rejected it: the
   root `app.json` failed to parse, the snapshot build returned nothing, and

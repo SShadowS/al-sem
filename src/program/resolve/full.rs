@@ -1786,13 +1786,15 @@ pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String
 /// reuses those products, so nothing reads dependency text. The tier is held
 /// until the build returns, so it cannot die in between. Otherwise the
 /// snapshot is built again with the text.
-#[must_use]
+///
+/// The error is the reason, worded like [`build_snapshot_res`]'s, so a caller
+/// can tell the user why there is no program (#G2: it used to be dropped).
 pub fn build_context_with(
     workspace_root: &Path,
     dependency_source: DependencySource,
     profile: BuildProfile,
     dep_cache: &DepCache,
-) -> Option<ProgramContext> {
+) -> Result<ProgramContext, String> {
     let builder = SnapshotBuilder {
         workspace_root: workspace_root.to_path_buf(),
         // Local providers are NOT part of `DepKey`: a caller that sets them
@@ -1800,9 +1802,10 @@ pub fn build_context_with(
         // checkout and the embedded source of the same `.app` would share.
         local_providers: vec![],
     };
+    let snapshot_failed = |e: anyhow::Error| format!("snapshot build failed: {e:#}");
     let (snap, _dropped) = builder
         .build_deferring_dependency_text(dependency_source, dep_cache)
-        .ok()?;
+        .map_err(snapshot_failed)?;
     let mut held = None;
     let snap = if snap.has_deferred_dependency_text() {
         held = dep_cache
@@ -1814,14 +1817,14 @@ pub fn build_context_with(
             drop(snap);
             builder
                 .build_with_options(dependency_source, dep_cache)
-                .ok()?
+                .map_err(snapshot_failed)?
                 .0
         }
     } else {
         snap
     };
     crate::census_hook::mark("1.snapshot");
-    let ctx = build_context_from_snapshot_cached(snap, profile, dep_cache).ok();
+    let ctx = build_context_from_snapshot_cached(snap, profile, dep_cache);
     drop(held);
     ctx
 }
