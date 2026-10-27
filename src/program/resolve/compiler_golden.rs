@@ -336,7 +336,7 @@ fn program_pairs(
 fn defined_symbols(workspace_root: &Path) -> HashSet<String> {
     std::fs::read_to_string(workspace_root.join("app.json"))
         .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|t| crate::source_text::parse_app_json(&t).ok())
         .and_then(|v| {
             v.get("preprocessorSymbols")?.as_array().map(|a| {
                 a.iter()

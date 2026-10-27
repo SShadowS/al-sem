@@ -59,7 +59,7 @@ fn read_root_app_version(workspace: &Path) -> String {
     let Ok(text) = std::fs::read_to_string(workspace.join("app.json")) else {
         return DEFAULT.to_string();
     };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(value) = crate::source_text::parse_app_json(&text) else {
         return DEFAULT.to_string();
     };
     value

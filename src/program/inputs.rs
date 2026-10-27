@@ -297,7 +297,7 @@ impl WorkspaceInputs {
         let app_json_value = app_json
             .text()
             .ok()
-            .map(|t| serde_json::from_str(t).map_err(|e| e.to_string()));
+            .map(|t| crate::source_text::parse_app_json(t).map_err(|e| e.to_string()));
         let app_json_paths = if build_only {
             Vec::new()
         } else {

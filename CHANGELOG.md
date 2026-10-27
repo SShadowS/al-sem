@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A UTF-8 BOM in `app.json` no longer empties the program.** VS Code on Windows
+  often writes one and the AL compiler accepts it, but `serde_json` rejected it: the
+  root `app.json` failed to parse, the snapshot build returned nothing, and
+  `--analyze` said only "the program snapshot could not be built" (Continia DO 29.0's
+  `app.json` has a BOM). Every `app.json` read now goes through
+  `source_text::parse_app_json`, which drops a leading BOM: the workspace inputs, the
+  root app id, the model instance id's version, the dependency list
+  (`dependencies::parse_app_json`), the compiler golden's `preprocessorSymbols` and
+  `mint-goldens`' workspace id.
+
 - **Digest `--file` and `--changed a.al,…` read paths like `--diff`** (#339). A file
   path may now be relative to the git top level (automatic mode, as #77 reads diff
   paths) or to `--diff-root` (explicit mode), not only to the workspace: run from the
