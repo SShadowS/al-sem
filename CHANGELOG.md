@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The test runners refuse a zero `RLIMIT_RTTIME`** (`scripts/require-rttime`, called by
+  `ci-steps` test/task-affected/perf-bounds, `check-goldens` (so the pre-commit hook)
+  and `cdo-gate`). Under a zero realtime timeout the kernel SIGKILLs ordinary test
+  processes at random and logs nothing; on 2026-10-27 that read as flaky tests (6 of 8
+  full nextest runs lost one to five tests, a different set each time). Cause on that
+  Omarchy desktop: rtkit was not installed, so the portal gave PipeWire's `module-rt`
+  in the desktop shell a zero budget, applied as a hard limit to everything launched
+  from it. Confirmed by bpftrace (`SI_KERNEL` from `posix_cpu_timers_work`) and by
+  raising the limit: 0 kills in 9 runs. The script names the cause and the fix. A
+  system without `/proc/self/limits` is not checked.
+
 ### Changed
 
 - **Grammar: tree-sitter-al v4.5.0** (`91a5db62`, the release tag and `main`; was `main` at

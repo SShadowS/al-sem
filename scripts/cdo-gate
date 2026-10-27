@@ -46,6 +46,9 @@ profile=(--profile cdo)
 # 72-84 s here (peak ~3.2 GB both). nextest runs one process per test, and
 # program_resolve_harness rebuilds its shared CDO context (`CDO_SHARED`) in each.
 
+# A zero RLIMIT_RTTIME makes the kernel SIGKILL test processes at random.
+"$(dirname "$0")/require-rttime" || exit 1
+
 status=0
 
 # ⟨2026-10-20⟩ 4 threads, not 1: measured on CDO, cdo profile, warm, two runs each:
