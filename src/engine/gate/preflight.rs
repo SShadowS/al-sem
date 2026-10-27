@@ -137,6 +137,7 @@ mod tests {
             opaque_apps: vec![],
             ledger: vec![],
             unidentified_packages: vec![],
+            encrypted_packages: vec![],
             unbound_subscriptions: 0,
             files_without_object: vec![],
         }
@@ -215,6 +216,7 @@ mod tests {
             opaque_apps: vec!["Dep".into()],
             ledger: vec![entry("Broken", None, Some("bad zip"))],
             unidentified_packages: vec![],
+            encrypted_packages: vec![],
             unbound_subscriptions: 3,
             files_without_object: vec![],
         };

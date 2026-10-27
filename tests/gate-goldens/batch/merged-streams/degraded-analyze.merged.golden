@@ -262,6 +262,7 @@ al-sem: warning: analysis coverage degraded — 1 unknown resolution edge(s)
           "skipped": {}
         }
       ],
+      "encryptedPackages": [],
       "opaqueApps": [],
       "routinesAnalyzed": 1,
       "sourceUnitsParsed": 2,

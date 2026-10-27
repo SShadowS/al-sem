@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Encrypted `.app` packages are recognised and listed** (G3). Every package of
+  Continia's public 29.0 release is encrypted: the usual 40-byte NAVX header, then
+  `.NEA` and an encrypted payload where a zip (`PK\x03\x04`) starts. Nothing inside can
+  be read, not even the manifest, so the app's id, name and version are unknown (the
+  header's GUID is not the app id). The loader used to log "Failed to open .app as ZIP
+  archive" and the analysis carried on without saying what was missing. Now
+  `open_app_file` returns a typed `EncryptedApp` error ("encrypted .app package: its
+  manifest, symbols and source cannot be read") instead of treating the file as a
+  package with no zip, the loader marks the package `encrypted` in its unreadable
+  list, and `alsem analyze --format json` lists every one in
+  `payload.summary.encryptedPackages` by its package key (`.alpackages/<file>`,
+  `../.alpackages/<file>` for an ancestor's cache; the dependency-closure digest's
+  scheme, now one shared `package_key`). The key is always present, empty when no
+  package is encrypted; every analyze JSON golden gained it, and the hand-amended
+  `merged-streams` base record says so in its `RECORD`. Their dependency diagnostics
+  say "encrypted" too. The preflight's degrade rules are unchanged: a call into the
+  app is already an unknown edge. Checked on all 36 packages of the four Continia
+  29.0 workspaces.
 - **The test runners refuse a zero `RLIMIT_RTTIME`** (`scripts/require-rttime`, called by
   `ci-steps` test/task-affected/perf-bounds, `check-goldens` (so the pre-commit hook)
   and `cdo-gate`). Under a zero realtime timeout the kernel SIGKILLs ordinary test

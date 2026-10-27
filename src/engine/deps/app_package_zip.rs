@@ -24,6 +24,43 @@ use std::path::Path;
 /// `.app` files start with a 40-byte NAVX header, then a standard zip.
 pub const NAVX_HEADER_SIZE: u64 = 40;
 
+/// The bytes at offset 36 of an encrypted `.app`: the header's closing `NAVX`
+/// followed by `.NEA` where an ordinary package's zip (`PK\x03\x04`) starts.
+const ENCRYPTED_MARK: &[u8; 8] = b"NAVX.NEA";
+
+/// An encrypted `.app` (G3; seen on every package of Continia's public 29.0
+/// release, 2026-10): an ordinary NAVX header, then an encrypted payload in
+/// place of the zip. Nothing inside it can be read without the key, not even
+/// the manifest, so the app's id, name and version are unknown; only its file
+/// name says what it might be. The header's GUID is not the app id (checked
+/// against the apps' own `app.json`s).
+#[derive(Debug)]
+pub struct EncryptedApp {
+    pub path: std::path::PathBuf,
+}
+
+/// Without the path: every caller's message already starts with it.
+impl std::fmt::Display for EncryptedApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("encrypted .app package: its manifest, symbols and source cannot be read")
+    }
+}
+
+impl std::error::Error for EncryptedApp {}
+
+/// `head` (a `.app`'s first bytes) is an encrypted package's header.
+pub fn is_encrypted_app_header(head: &[u8]) -> bool {
+    head.starts_with(b"NAVX") && head.get(36..44) == Some(&ENCRYPTED_MARK[..])
+}
+
+/// The `.app` at `path` is an encrypted package (`false` when it cannot be read).
+fn is_encrypted_app_file(path: &Path) -> bool {
+    let mut head = [0u8; 44];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|()| is_encrypted_app_header(&head))
+}
+
 /// The root entry that marks a Ready-to-Run package.
 const READY_TO_RUN_MANIFEST: &str = "readytorunappmanifest.json";
 
@@ -151,6 +188,8 @@ pub fn app_zip_bytes(app_bytes: &[u8]) -> Cow<'_, [u8]> {
 /// anonymous temp file (deleted when the archive is dropped), not into memory.
 ///
 /// `Ok(None)` when the file holds no zip at all (a symbol-only runtime app).
+/// An encrypted package is an [`EncryptedApp`] error: its contents exist but
+/// cannot be read, which is not the same as having none.
 pub fn open_app_file(path: &Path) -> anyhow::Result<Option<zip::ZipArchive<AppReader>>> {
     let file =
         std::fs::File::open(path).with_context(|| format!("open .app: {}", path.display()))?;
@@ -160,6 +199,12 @@ pub fn open_app_file(path: &Path) -> anyhow::Result<Option<zip::ZipArchive<AppRe
         .with_context(|| format!("skip NAVX header: {}", path.display()))?;
     let mut archive = match zip::ZipArchive::new(Box::new(reader) as AppReader) {
         Ok(a) => a,
+        Err(zip::result::ZipError::InvalidArchive(_)) if is_encrypted_app_file(path) => {
+            return Err(EncryptedApp {
+                path: path.to_path_buf(),
+            }
+            .into());
+        }
         Err(zip::result::ZipError::InvalidArchive(_)) => return Ok(None),
         Err(e) => {
             return Err(e).with_context(|| format!("reading zip in .app: {}", path.display()));
@@ -412,6 +457,25 @@ pub(crate) mod test_apps {
         ])
     }
 
+    /// An encrypted `.app` with the layout of Continia's 29.0 packages: the
+    /// 40-byte NAVX header (size 40, version 2, a GUID, the payload length,
+    /// closing `NAVX`), then `.NEA` and an opaque payload with no zip in it.
+    pub(crate) fn build_encrypted_app() -> Vec<u8> {
+        let payload: Vec<u8> = b".NEA\0\0\0\x01"
+            .iter()
+            .copied()
+            .chain((0..2048u32).map(|i| (i * 37 % 251) as u8))
+            .collect();
+        let mut out = b"NAVX".to_vec();
+        out.extend_from_slice(&40u32.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&[0x47; 16]);
+        out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        out.extend_from_slice(b"NAVX");
+        out.extend_from_slice(&payload);
+        out
+    }
+
     /// A `NavxManifest.xml` for app `guid`.
     pub(crate) fn manifest_xml(guid: &str, name: &str) -> String {
         format!(
@@ -487,6 +551,36 @@ mod tests {
         let mut archive = open_app_file(&path).unwrap().expect("a zip");
         assert!(archive.by_name("NavxManifest.xml").is_ok());
         assert!(archive.by_name(READY_TO_RUN_MANIFEST).is_err());
+    }
+
+    /// G3: an encrypted package is an `EncryptedApp` error, not `Ok(None)` (a
+    /// package with no zip, whose contents are simply absent). A header-only
+    /// file with no `.NEA` mark keeps `Ok(None)`.
+    #[test]
+    fn open_app_file_reports_an_encrypted_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let encrypted = dir.path().join("Core 29.0.0.221304 - 29.0.app");
+        std::fs::write(&encrypted, test_apps::build_encrypted_app()).unwrap();
+        let err = open_app_file(&encrypted).err().expect("an error, not Ok");
+        let e = err.downcast_ref::<EncryptedApp>().expect("an EncryptedApp");
+        assert_eq!(e.path, encrypted);
+
+        let no_zip = dir.path().join("runtime.app");
+        let mut bytes = test_apps::build_encrypted_app();
+        bytes[36..44].copy_from_slice(b"NAVX\0\0\0\0");
+        std::fs::write(&no_zip, bytes).unwrap();
+        assert!(open_app_file(&no_zip).unwrap().is_none());
+    }
+
+    #[test]
+    fn encrypted_header_needs_navx_and_the_nea_mark() {
+        let enc = test_apps::build_encrypted_app();
+        assert!(is_encrypted_app_header(&enc));
+        assert!(!is_encrypted_app_header(&test_apps::build_app(&[])));
+        assert!(!is_encrypted_app_header(&enc[..43]), "too short");
+        let mut no_magic = enc.clone();
+        no_magic[0] = b'X';
+        assert!(!is_encrypted_app_header(&no_magic));
     }
 
     #[test]

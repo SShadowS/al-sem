@@ -93,6 +93,11 @@ pub struct UnreadableDependency {
     pub name: Option<String>,
     pub version: Option<String>,
     pub error: String,
+    /// An encrypted package
+    /// ([`crate::engine::deps::app_package_zip::EncryptedApp`]): it holds an
+    /// app, but nothing of it is readable, so `guid`, `name` and `version` are
+    /// `None`.
+    pub encrypted: bool,
 }
 
 /// What [`load_all_apps`] set aside rather than loaded.
@@ -684,12 +689,16 @@ pub fn load_all_apps_from(
             }
             Err(e) => {
                 warn!("{}", manifest_read_warning(&path, &e));
+                let encrypted = e
+                    .downcast_ref::<crate::engine::deps::app_package_zip::EncryptedApp>()
+                    .is_some();
                 unreadable_apps.push(UnreadableDependency {
                     path,
                     guid: None,
                     name: None,
                     version: None,
                     error: format!("{e:#}"),
+                    encrypted,
                 });
             }
         }
@@ -776,6 +785,8 @@ pub fn load_all_apps_from(
                 name: Some(best.meta.name.clone()),
                 version: Some(best.meta.version.clone()),
                 error,
+                // Its manifest was read, so it is not encrypted.
+                encrypted: false,
             });
         }
         // Every candidate ranked BELOW the winner (if one was found) is a

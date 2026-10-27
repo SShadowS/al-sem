@@ -954,6 +954,9 @@ fn analyze_view(
                     diagnostics: &run_diagnostics,
                     detector_stats: &run_detector_stats,
                     coverage: &coverage,
+                    encrypted_packages: fresh
+                        .as_ref()
+                        .map_or(&[], |f| f.encrypted_packages.as_slice()),
                     deterministic: args.deterministic,
                     driver_version: inputs.driver_version.clone(),
                     evidence: evidence.as_deref(),
@@ -1107,6 +1110,9 @@ pub(crate) fn empty_output_result(
                 diagnostics: &diagnostics,
                 detector_stats: &[],
                 coverage: &empty_coverage,
+                encrypted_packages: fresh
+                    .as_ref()
+                    .map_or(&[], |f| f.encrypted_packages.as_slice()),
                 deterministic: args.deterministic,
                 driver_version: inputs.driver_version.clone(),
                 evidence: if args.with_evidence {

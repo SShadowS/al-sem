@@ -284,6 +284,11 @@ pub struct JsonFormatInputs<'a> {
     pub detector_stats: &'a [DetectorStats],
     /// Coverage from `resolved.project_coverage_inputs`.
     pub coverage: &'a AnalysisCoverage,
+    /// The program build's encrypted dependency packages
+    /// (`FreshCoverage::encrypted_packages`), emitted as
+    /// `payload.summary.encryptedPackages` (G3). Empty when the coverage could
+    /// not be verified.
+    pub encrypted_packages: &'a [String],
     /// `--deterministic` flag (pins `generatedAt`).
     pub deterministic: bool,
     /// Effective driver version (from `driver_version()`).
@@ -347,6 +352,10 @@ pub fn build_analyze_json(inputs: &JsonFormatInputs<'_>) -> String {
     summary.insert(
         "detectorStats".to_string(),
         serde_json::Value::Array(stats_arr),
+    );
+    summary.insert(
+        "encryptedPackages".to_string(),
+        inputs.encrypted_packages.into(),
     );
     summary.insert(
         "opaqueApps".to_string(),
