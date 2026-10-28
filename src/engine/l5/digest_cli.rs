@@ -1266,6 +1266,16 @@ pub(crate) fn digest_effects_each(
             for i in dead {
                 entry.effects[i].literal_unreachable = true;
             }
+            // A listed witness path that cannot run is not evidence: drop it.
+            // When none is left for a still-reachable effect, a live path exists
+            // that was not listed.
+            for e in entry.effects.iter_mut().filter(|e| !e.literal_unreachable) {
+                let before = e.via_paths.len();
+                e.via_paths.retain(|p| reach.path_live(p));
+                if e.via_paths.len() < before && e.via_paths.is_empty() {
+                    e.via_paths_truncated = true;
+                }
+            }
         }
     }
     let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers

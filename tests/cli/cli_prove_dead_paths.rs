@@ -28,6 +28,30 @@ codeunit 50231 "G23 Handler"
         RunReport(false);
     end;
 
+    // As on DO: through a recursive SCC (where the cone keeps no guard), the
+    // dead path is short and the live one long, so the witness search lists
+    // the dead one first.
+    procedure DocBoth()
+    begin
+        RunReportRec(false, 0); // the dead call
+        Hop1();
+    end;
+
+    local procedure Hop1()
+    begin
+        Hop2();
+    end;
+
+    local procedure Hop2()
+    begin
+        Hop3();
+    end;
+
+    local procedure Hop3()
+    begin
+        RunReportRec(true, 0);
+    end;
+
     procedure DocSaveRecursive()
     begin
         RunReportRec(false, 0);
@@ -183,4 +207,33 @@ fn a_write_behind_a_literal_false_guard_is_not_a_write() {
         let r = prove(routine);
         assert_eq!(r["answer"], "yes", "{routine}: the path can run: {r}");
     }
+
+    // The evidence lists only paths that can run, never one through the dead
+    // `RunReportRec(false, 0)` call; with the live path left unlisted (the
+    // witness search took the short dead one), it says so (`viaPathsTruncated`).
+    let dead_line = SOURCE
+        .lines()
+        .position(|l| l.contains("// the dead call"))
+        .expect("the dead call is in SOURCE");
+    let both = prove("DocBoth");
+    assert_eq!(both["answer"], "yes", "{both}");
+    let evidence = both["evidence"]
+        .as_array()
+        .unwrap_or_else(|| panic!("evidence: {both}"));
+    let first_hop_lines: Vec<u64> = evidence
+        .iter()
+        .flat_map(|e| e["viaPaths"].as_array().cloned().unwrap_or_default())
+        .filter_map(|p| p[0]["anchor"]["line"].as_u64())
+        .collect();
+    assert!(
+        evidence
+            .iter()
+            .all(|e| e["viaPaths"].as_array().is_some_and(|p| !p.is_empty())
+                || e["viaPathsTruncated"] == true),
+        "an effect with no listed path says a live one went unlisted: {both}"
+    );
+    assert!(
+        !first_hop_lines.contains(&(dead_line as u64)),
+        "no listed path starts at the dead call (0-based line {dead_line}): {first_hop_lines:?}"
+    );
 }

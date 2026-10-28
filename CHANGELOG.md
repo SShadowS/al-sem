@@ -185,6 +185,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`prove` evidence lists no witness path that cannot run** (G23 follow-up). The
+  witness search took the shortest path to an effect. Through a recursive SCC that
+  could be one dead under a literal argument (Continia DO's `DocSave` →
+  `RunReport(false)` → `if UseQueue then QueueMail`), although the effect is reached
+  by a longer live path. Each listed path is now replayed with `literal_reach`'s
+  rules (`path_live`) and dropped when a hop's guard contradicts what the call chain
+  binds. When that leaves an effect with no listed path, `viaPathsTruncated` is set,
+  because a live path exists that was not listed. Test: `cli_prove_dead_paths`
+  `DocBoth` (fails with the replay off, and with the truncation flag off).
 - **Calls into Microsoft's `Base64Convert` platform codeunit have known behaviour.**
   `Base64Convert` (codeunit 2000000024 of the `System` symbol package) is `[Native]`:
   there is no AL body, so a call was an `unfetched-dependency`, an opaque cone. The

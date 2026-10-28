@@ -228,6 +228,33 @@ impl<'a> LiteralReach<'a> {
         Some((plain, states))
     }
 
+    /// Whether a listed witness path can run: replayed from the root with no
+    /// known values, each hop's call site must not contradict what is known,
+    /// and a direct or variable-typed call binds the callee as in the search.
+    pub(crate) fn path_live(&self, path: &[crate::engine::l5::digest::ProjectedHop]) -> bool {
+        let mut b: Bindings = Vec::new();
+        for hop in path {
+            let h = &hop.inner;
+            let from = h.from_routine_id.as_str();
+            let site = h.callsite_id.as_deref().or(h.operation_id.as_deref());
+            if let Some(s) = site
+                && contradicts(self.reqs_at(from, s), &b)
+            {
+                return false;
+            }
+            let Some(to) = h.to_routine_id.as_deref() else {
+                break;
+            };
+            b = match (h.edge_kind.as_deref(), h.callsite_id.as_deref()) {
+                (Some("direct-call" | "variable-typed-call"), Some(cs)) => {
+                    self.bind(from, cs, to, &b)
+                }
+                _ => Vec::new(),
+            };
+        }
+        true
+    }
+
     /// The indices of `effects` (one root's) unreachable from `root` under
     /// literal arguments (module doc).
     pub(crate) fn unreachable_effects(
