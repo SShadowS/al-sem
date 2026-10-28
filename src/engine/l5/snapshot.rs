@@ -1477,6 +1477,8 @@ pub(crate) fn compose_tree(
         .filter(|r| {
             !r.body_available
                 && model.routine_role(r) == crate::program::model::role::Role::Dependency
+                // A cataloged platform native has known behaviour (no unfetched body).
+                && crate::program::model::platform_natives::pure_native(r).is_none()
         })
         .map(|r| r.id.as_str())
         .collect();
@@ -2810,6 +2812,7 @@ fn derive_analysis_gaps(resolved: &Model, base: &TreeInputs<'_>) -> Vec<Snapshot
         if !r.body_available
             && !r.parse_incomplete
             && is_dependency_role(r)
+            && crate::program::model::platform_natives::pure_native(r).is_none()
             && let Some(guid) = object_id_app_guid(&r.object_id)
             && source_less(guid)
         {
@@ -2831,7 +2834,9 @@ fn derive_analysis_gaps(resolved: &Model, base: &TreeInputs<'_>) -> Vec<Snapshot
         if r.body_available || r.parse_incomplete {
             continue;
         }
-        if !is_dependency_role(r) {
+        if !is_dependency_role(r)
+            || crate::program::model::platform_natives::pure_native(r).is_some()
+        {
             continue;
         }
         if object_id_app_guid(&r.object_id).is_some_and(|g| opaque_apps.contains(g)) {

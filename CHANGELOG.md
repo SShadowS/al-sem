@@ -185,6 +185,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Calls into Microsoft's `Base64Convert` platform codeunit have known behaviour.**
+  `Base64Convert` (codeunit 2000000024 of the `System` symbol package) is `[Native]`:
+  there is no AL body, so a call was an `unfetched-dependency`, an opaque cone. The
+  package also made its app a `symbol-only-boundary` analysis gap. Together they kept
+  `prove … no` at `unknown` (35 call sites in Continia DO's claim cones, reached through
+  System Application's `Base64 Convert Impl.`). `program::model::platform_natives` is
+  now a curated catalog. `[Native]` alone is not enough: `Agent Utilities.
+  DeleteCustomAgent` or `Index Management.DisableKey` have effects, so only methods
+  whose behaviour is known are listed. A cataloged routine has no database, UI or commit
+  effect; `FromBase64` keeps an implicit error (a malformed string). The same predicate
+  serves all four places that saw the routine as opaque: its direct facts in the cone,
+  its call sites (`resolved`, not `unfetched-dependency`), the gap derivation, and the
+  gap count's app-prefix match. On DO with BC 29's `System` symbols added to
+  `.alpackages`, 19 of the 39 claims a Base64 call blocked now answer `no`, all as
+  expected. Test: `cli_prove_platform_natives` (an uncataloged native stays opaque; it
+  fails with an empty catalog, and with the gap exemption off).
 - **`prove` follows literal Boolean arguments through recursive SCCs** (G23). The
   cone's `param_guard` drops a fact behind `if P then` when every path binds `P` to the
   opposite literal, but only through a non-recursive singleton SCC: a recursive SCC

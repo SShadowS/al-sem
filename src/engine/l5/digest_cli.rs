@@ -1171,6 +1171,7 @@ pub struct UnresolvedCone {
 fn count_gaps_in_cone(
     gap_subjects: &[&str],
     visited_ids: &std::collections::HashSet<String>,
+    known_natives: &std::collections::HashSet<&str>,
 ) -> usize {
     let mut count = 0usize;
     for subject in gap_subjects {
@@ -1180,9 +1181,14 @@ fn count_gaps_in_cone(
             continue;
         }
         // App-level (symbol-only-boundary) match: subject is a bare app GUID and some
-        // visited routine has a stable id of the form `{appGuid}:Type:{n}#hash`.
+        // visited routine has a stable id of the form `{appGuid}:Type:{n}#hash`. A
+        // cataloged platform native (`platform_natives`) has known behaviour: it
+        // does not put its app's gap in the cone.
         let prefix = format!("{}:", subject);
-        if visited_ids.iter().any(|v| v.starts_with(&prefix)) {
+        if visited_ids
+            .iter()
+            .any(|v| v.starts_with(&prefix) && !known_natives.contains(v.as_str()))
+        {
             count += 1;
         }
     }
@@ -1231,6 +1237,14 @@ pub(crate) fn digest_effects_each(
     } else {
         Vec::new()
     };
+    // Cataloged platform natives: they do not bring their app's gap.
+    let natives: std::collections::HashSet<&str> = model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| crate::program::model::platform_natives::pure_native(r).is_some())
+        .map(|r| r.stable_routine_id.as_str())
+        .collect();
     // One query over every reader's roots: the per-root work is independent
     // (one worker per root), and the per-call work (the tree's indexes, the
     // reportable roots) is whole-program, so a call per reader repeated it
@@ -1270,8 +1284,9 @@ pub(crate) fn digest_effects_each(
                     (
                         r.clone(),
                         UnresolvedCone {
-                            gaps_in_cone: gaps_in_cone
-                                .then(|| count_gaps_in_cone(&gap_subjects, &c.visited_ids)),
+                            gaps_in_cone: gaps_in_cone.then(|| {
+                                count_gaps_in_cone(&gap_subjects, &c.visited_ids, &natives)
+                            }),
                             items: c.items,
                             traversal: c.traversal,
                         },
@@ -3040,7 +3055,7 @@ mod tests {
             "11112222-0000-0000-0000-00000000aaaa", // matches via `{guid}:` prefix
             "99998888-0000-0000-0000-00000000cccc", // no visited routine in this app
         ];
-        let count = count_gaps_in_cone(&gap_subjects, &visited);
+        let count = count_gaps_in_cone(&gap_subjects, &visited, &Default::default());
         assert_eq!(
             count, 1,
             "exactly the app-level-matching gap is in cone (the prefix branch must fire)"
@@ -3057,7 +3072,7 @@ mod tests {
 
         // A parse-incomplete gap whose subject IS a visited StableRoutineId.
         let gap_subjects = vec![rid.as_str()];
-        let count = count_gaps_in_cone(&gap_subjects, &visited);
+        let count = count_gaps_in_cone(&gap_subjects, &visited, &Default::default());
         assert_eq!(count, 1, "direct routine-subject gap must match");
     }
 
@@ -3070,7 +3085,7 @@ mod tests {
         visited.insert("aaaa1111-0000-0000-0000-00000000dddd:Codeunit:70000#beadfeed".to_string());
 
         let gap_subjects = vec!["zzzz9999-0000-0000-0000-00000000eeee"];
-        let count = count_gaps_in_cone(&gap_subjects, &visited);
+        let count = count_gaps_in_cone(&gap_subjects, &visited, &Default::default());
         assert_eq!(count, 0, "unrelated gap subject must not be counted");
     }
 }

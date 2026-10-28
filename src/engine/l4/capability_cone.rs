@@ -522,6 +522,29 @@ pub(crate) fn direct_facts_for_routine(
     routine: &ModelRoutine,
     publisher_events: &[&EventSymbol],
 ) -> (Vec<CapabilityFact>, String, Vec<String>) {
+    // A cataloged platform native: known behaviour, no AL body needed.
+    if let Some(n) = crate::program::model::platform_natives::pure_native(routine) {
+        let facts = if n.may_error {
+            vec![CapabilityFact {
+                subject: routine.id.clone(),
+                op: "error-implicit",
+                resource_kind: "error",
+                resource_id: None,
+                resource_arg_source: None,
+                confidence: "static",
+                provenance: "direct",
+                via: "self",
+                witness_operation_id: None,
+                witness_callsite_id: None,
+                witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: None,
+                extra: None,
+            }]
+        } else {
+            Vec::new()
+        };
+        return (facts, "complete".to_string(), Vec::new());
+    }
     if !routine.body_available {
         return (
             Vec::new(),
