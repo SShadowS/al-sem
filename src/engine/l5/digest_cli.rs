@@ -1571,13 +1571,18 @@ pub fn run_digest_query_full_from_entries(
                     eff.effect_type.as_str(),
                     "DB_INSERT" | "DB_MODIFY" | "DB_DELETE" | "DB_READ"
                 ) {
-                    let join = temp_states.for_effect(
-                        rid,
-                        &eff.origin_operation_ids,
-                        is_known_temp_state(eff.temp_state.as_ref()),
-                    );
-                    if let Some(ts) = join.render() {
-                        detail.push(("tempState".to_string(), ts));
+                    let kt = is_known_temp_state(eff.temp_state.as_ref());
+                    let join = temp_states.for_effect(rid, &eff.origin_operation_ids, kt);
+                    match join.render() {
+                        Some(ts) => detail.push(("tempState".to_string(), ts)),
+                        // G31: a root L4 holds no rows for (a dependency root:
+                        // the summary bundle has none). The cone fact's own class
+                        // is frame-correct (#69 D1), so a known-temporary write
+                        // says so; any other class stays absent (not known).
+                        None if kt && join.states.is_empty() => {
+                            detail.push(("tempState".to_string(), "known(true)".to_string()));
+                        }
+                        None => {}
                     }
                     entry_diagnostics.extend(incoherence_diagnostics(
                         &eff.effect_type,

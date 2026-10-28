@@ -155,8 +155,14 @@ pub fn write_own(dir: &Path, extra_al: &str) {
 pub fn write_own_inner(dir: &Path, extra_al: &str, inner: &str) {
     let lib = DEP_LIB_AL.replacen("Cust.Insert();\n        Commit();", inner, 1);
     assert_ne!(lib, DEP_LIB_AL, "fixture: Inner's insert is replaced");
+    write_own_lib(dir, extra_al, &lib);
+}
+
+/// [`write_own`] with `lib` as the dependency's `Lib.al` (it must keep
+/// `Dep Lib.Outer`, which the workspace calls).
+pub fn write_own_lib(dir: &Path, extra_al: &str, lib: &str) {
     write_workspace(dir, extra_al);
-    write_dependency_lib(&dir.join(".alpackages").join(DEP_APP_FILE), 0, &lib);
+    write_dependency_lib(&dir.join(".alpackages").join(DEP_APP_FILE), 0, lib);
 }
 
 /// #161's text: [`write_own`] whose `Inner` does `Cust.Modify()` instead of

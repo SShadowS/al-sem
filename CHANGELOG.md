@@ -246,6 +246,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A known-temporary write the root's L4 summary has no row for says so.** A DB
+  effect's `tempState` is joined from the root's L4 rows; with none (a dependency
+  root, a write inside a dependency boundary group) it was absent, so `prove` counted
+  a temporary record as a table write (from `Sales-Calc. Discount.OnRun`:
+  `TempCustLedgEntry.DeleteAll` as a `Cust. Ledger Entry` write). The cone fact's own
+  class is frame-correct (#69 D1), so a known-temporary one is now `known(true)`;
+  any other class stays absent. Test `cli_dependency_roots`.
 - **A record of a namespace-qualified type writes its table, and a write to a table
   that is not known rules out `writes-table`'s `no`.** The model's record-type parse
   (`record_types::record_table_name_of`) took a qualified type's whole dotted path as

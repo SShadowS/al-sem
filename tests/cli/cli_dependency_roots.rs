@@ -89,3 +89,48 @@ fn a_dependency_root_follows_the_dependency_code() {
         "the path into Inner: {dep}"
     );
 }
+
+/// A dependency root's L4 summary holds no rows, so its writes' `tempState`
+/// is read off the cone fact's own class: a write to a temporary record is no
+/// table write (it read `writes-table: yes` with no temp state at all).
+#[test]
+fn a_dependency_roots_temporary_write_is_no_table_write() {
+    let lib = r#"codeunit 10 "Dep Lib"
+{
+    procedure Outer()
+    begin
+        Inner();
+    end;
+
+    procedure Inner()
+    var
+        TempCust: Record Customer temporary;
+    begin
+        TempCust.Insert();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnDepEvent()
+    begin
+    end;
+}
+"#;
+    let t = tempfile::tempdir().unwrap();
+    dd::write_own_lib(t.path(), "", lib);
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(t.path(), &Default::default());
+    let target = al_sem::engine::gate::run::AnalysisTarget::build(&inputs, false, "t")
+        .expect("cross-app target");
+    let m = target.resolved();
+    let outer = m
+        .workspace
+        .routines
+        .iter()
+        .find(|r| {
+            r.name == "Outer" && m.routine_role(r) == al_sem::program::model::role::Role::Dependency
+        })
+        .expect("precondition: Dep Lib.Outer is a dependency routine")
+        .stable_routine_id
+        .clone();
+    let r = prove(t.path(), &outer);
+    assert_eq!(r["answer"], "no", "{r}");
+}
