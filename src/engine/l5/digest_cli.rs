@@ -15,6 +15,7 @@
 //!   - formatDigestHuman → human text
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
@@ -1114,12 +1115,17 @@ impl<'a> DbTempStates<'a> {
 /// What digest's query reads of its tree (#160 step 6 D7 (5), A1-16): per
 /// root its S4 entry and its unresolved cone, plus the tree's identity table
 /// and coverage. Computed while the tree is alive; the tree is then released.
+///
+/// The identity table and the coverage are whole-program and the same for
+/// every reader of one tree, so the readers of a shared tree share one copy
+/// (G16: one copy per `prove` job, over a program holding Base Application's
+/// source, held ~0.2 GB per job until the job ran).
 #[derive(Default)]
 pub struct DigestEffects {
     pub entries: Vec<DigestEntryResult>,
     pub unresolved: BTreeMap<String, UnresolvedCone>,
-    pub coverage: Vec<SnapshotCoverageRecord>,
-    pub identities: SnapshotIdentityTable,
+    pub coverage: Arc<Vec<SnapshotCoverageRecord>>,
+    pub identities: Arc<SnapshotIdentityTable>,
     /// `--tests` (#254): the test-coverage graph over the same tree.
     pub coverage_graph: Option<crate::engine::l5::test_coverage::CoverageGraph>,
 }
@@ -1184,7 +1190,25 @@ pub(crate) fn digest_effects(
 ) -> DigestEffects {
     let coverage_graph =
         tests.then(|| crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model));
-    let entries = compute_digest_effects_cli(tree, model, Some(roots), include_reads);
+    let mut out = digest_effects_each(tree, model, &[roots], gaps_in_cone, include_reads);
+    let mut one = out.pop().expect("one reader, one result");
+    one.coverage_graph = coverage_graph;
+    one
+}
+
+/// [`digest_effects`] (without `--tests`) for several readers of ONE tree, in
+/// order (G16): each reader's S4 entries and unresolved cones off the same
+/// tree, then the identity table and the coverage moved out once and shared.
+/// Over a tree whose subjects include a reader's roots, a reader's entries and
+/// cones are those of a tree over its roots alone
+/// (`prove_scoped_equals_unscoped`, `t3_digest_scoped_equals_unscoped`).
+pub(crate) fn digest_effects_each(
+    tree: &mut CapabilitySnapshot,
+    model: &Model,
+    readers: &[&[String]],
+    gaps_in_cone: bool,
+    include_reads: bool,
+) -> Vec<DigestEffects> {
     let gap_subjects: Vec<&str> = if gaps_in_cone {
         tree.analysis_gaps
             .iter()
@@ -1193,28 +1217,57 @@ pub(crate) fn digest_effects(
     } else {
         Vec::new()
     };
-    let unresolved = roots
+    // One query over every reader's roots: the per-root work is independent
+    // (one worker per root), and the per-call work (the tree's indexes, the
+    // reportable roots) is whole-program, so a call per reader repeated it
+    // (G16: ~1 s per `prove` job over Base Application's source). Each reader
+    // then takes the entries of its own roots, in the query's sorted order.
+    let all: Vec<String> = readers
         .iter()
-        .map(|r| {
-            let c = unresolved_cone(tree, r);
-            (
-                r.clone(),
-                UnresolvedCone {
-                    gaps_in_cone: gaps_in_cone
-                        .then(|| count_gaps_in_cone(&gap_subjects, &c.visited_ids)),
-                    items: c.items,
-                    traversal: c.traversal,
-                },
-            )
+        .flat_map(|r| r.iter().cloned())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect();
+    let all_entries = compute_digest_effects_cli(tree, model, Some(&all), include_reads);
+    let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers
+        .iter()
+        .map(|roots| {
+            let own: std::collections::HashSet<&str> = roots.iter().map(String::as_str).collect();
+            let entries: Vec<DigestEntryResult> = all_entries
+                .iter()
+                .filter(|e| own.contains(e.routine_id.as_str()))
+                .cloned()
+                .collect();
+            let unresolved = roots
+                .iter()
+                .map(|r| {
+                    let c = unresolved_cone(tree, r);
+                    (
+                        r.clone(),
+                        UnresolvedCone {
+                            gaps_in_cone: gaps_in_cone
+                                .then(|| count_gaps_in_cone(&gap_subjects, &c.visited_ids)),
+                            items: c.items,
+                            traversal: c.traversal,
+                        },
+                    )
+                })
+                .collect();
+            (entries, unresolved)
         })
         .collect();
-    DigestEffects {
-        entries,
-        unresolved,
-        coverage: std::mem::take(&mut tree.coverage),
-        identities: std::mem::take(&mut tree.identities),
-        coverage_graph,
-    }
+    drop(gap_subjects);
+    let coverage = Arc::new(std::mem::take(&mut tree.coverage));
+    let identities = Arc::new(std::mem::take(&mut tree.identities));
+    read.into_iter()
+        .map(|(entries, unresolved)| DigestEffects {
+            entries,
+            unresolved,
+            coverage: Arc::clone(&coverage),
+            identities: Arc::clone(&identities),
+            coverage_graph: None,
+        })
+        .collect()
 }
 
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),
@@ -1235,7 +1288,7 @@ pub fn run_digest_query_full_from_entries(
 
     // Coverage map
     let mut coverage_by_id: HashMap<&str, (&str, Vec<&str>)> = HashMap::new();
-    for rec in &effects.coverage {
+    for rec in effects.coverage.iter() {
         let reasons: Vec<&str> = rec.reasons.iter().map(|s| s.as_str()).collect();
         coverage_by_id.insert(
             rec.subject.as_str(),

@@ -98,6 +98,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alsem batch` with many `prove`/`digest` jobs no longer grows per job** (G16).
+  Every tree job on a view composed its own tree in the view's one `prepare`, and
+  each tree is a whole-program snapshot: a derive per job, and each job's result
+  kept its own copy of the tree's identity table and coverage until the job ran.
+  Over Continia DO with Base Application's source (G4), 408 `prove` jobs passed 40 GB
+  with no output after ten minutes. Now consecutive `Effects` readers with the same
+  flags (not `--tests`) share ONE tree over the union of their roots, answered by ONE
+  digest query (`digest_effects_each`), and share the two tables (`DigestEffects`
+  holds them by `Arc`). A root's entries and cones are those of its own tree
+  (`prove_scoped_equals_unscoped`). Measured on that workspace (release-fast,
+  `reaches-ui` jobs): 10 jobs 45 s / 4.4 GB → 28 s / 3.5 GB, 40 jobs 175 s / 10.1 GB →
+  33 s / 4.2 GB peak, every output byte-identical to the old binary's. Test:
+  `cli_batch_plan::batch_prove_jobs_share_one_tree` (one tree, each job equal to its
+  standalone run; without the grouping it builds two). `batch_counters_one_per_view`'s
+  second digest now shares the first's tree (snap 2 → 1).
 - **`prove … reaches-ui` sees pages and reports opening, and `Hyperlink`** (G15). It
   counted only `UI_MESSAGE`, `UI_CONFIRM` and `UI_ERROR`, so the `UI_WINDOW_OPEN` the
   digest already had for `Page.Run`/`RunModal`, `Report.Run`/`RunModal` and `StrMenu`

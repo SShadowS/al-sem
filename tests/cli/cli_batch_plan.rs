@@ -256,8 +256,9 @@ fn batch_counters_one_per_view() {
     };
     assert_row("five jobs, one view", &run.counters, one_view());
 
-    // A second digest with other roots: its own tree (snap 2) off the one
-    // witness pass (witness 1).
+    // A second digest with other roots, the same flags: it shares the first
+    // digest's tree (snap 1, G16: one tree over both jobs' roots) off the one
+    // witness pass (witness 1), and still equals its standalone run.
     let mut six = jobs.clone();
     six.push(argv(&[
         "digest",
@@ -272,9 +273,37 @@ fn batch_counters_one_per_view() {
         "five jobs + a second digest",
         &run.counters,
         Row {
-            snap: 2,
+            snap: 1,
             ..one_view()
         },
+    );
+}
+
+/// G16: many `prove` jobs on one view share ONE tree (snap 1) instead of one
+/// whole-program tree each, and every job still equals its standalone run. Two
+/// jobs ask the same routine (different questions), so a root shared by two
+/// readers is covered too. Before, each job derived its own tree and kept its
+/// identity table and coverage until it ran: 408 jobs over Base Application's
+/// source passed 40 GB before the first output.
+#[test]
+fn batch_prove_jobs_share_one_tree() {
+    let (_d, ws) = ws_dep();
+    let jobs: Vec<Vec<String>> = [
+        ("CallLib", "may-commit"),
+        ("CommitAfterDep", "may-commit"),
+        ("CallLib", "reaches-ui"),
+        ("CommitAfterDep", "throws-error"),
+    ]
+    .iter()
+    .map(|(routine, question)| argv(&["prove", &ws, routine, question, "--deterministic"]))
+    .collect();
+    let run = batch(&jobs);
+    assert_each_standalone(&run, &jobs, None);
+    assert_eq!(
+        count(&run.counters, "build.snapshot"),
+        1,
+        "four prove jobs, one tree: {:?}",
+        run.counters
     );
 }
 

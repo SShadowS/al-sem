@@ -871,10 +871,37 @@ impl View {
                 source_less: crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
             });
             let mut map = raw.take().expect("raw filled above");
-            let scopes: Vec<BTreeSet<String>> = plan
-                .trees
+            // G16: consecutive `Effects` readers with the same flags (and no
+            // `--tests`) share ONE tree over the union of their subjects. A
+            // reader's entries and cones off it equal those off a tree over
+            // its own roots (`prove_scoped_equals_unscoped`). Each tree is a
+            // whole-program snapshot, so one per job cost a derive and its
+            // tables per job: 408 `prove` jobs over a program with Base
+            // Application's source grew past 40 GB before the first output.
+            let groups: Vec<Vec<usize>> = {
+                let shares = |a: &TreeDemand, b: &TreeDemand| {
+                    matches!((&a.read, &b.read), (TreeRead::Effects, TreeRead::Effects))
+                        && !a.tests
+                        && !b.tests
+                        && a.gaps_in_cone == b.gaps_in_cone
+                        && a.include_reads == b.include_reads
+                };
+                let mut groups: Vec<Vec<usize>> = Vec::new();
+                for (i, (_, d)) in plan.trees.iter().enumerate() {
+                    match groups.last_mut() {
+                        Some(g) if shares(&plan.trees[g[0]].1, d) => g.push(i),
+                        _ => groups.push(vec![i]),
+                    }
+                }
+                groups
+            };
+            let scopes: Vec<BTreeSet<String>> = groups
                 .iter()
-                .map(|(_, t)| t.subjects.subjects(model))
+                .map(|g| {
+                    g.iter()
+                        .flat_map(|&i| plan.trees[i].1.subjects.subjects(model))
+                        .collect()
+                })
                 .collect();
             // The raw readers after the trees: the part of the request no
             // tree asks. Policy, the one such reader, asks `primary` alone; no
@@ -890,8 +917,8 @@ impl View {
                 primary: plan.witness.primary,
             };
             let rest_scope = rest.subjects(model);
-            for (i, ((job, demand), scope)) in plan.trees.iter().zip(&scopes).enumerate() {
-                let last_tree = i + 1 == plan.trees.len();
+            for (i, (group, scope)) in groups.iter().zip(&scopes).enumerate() {
+                let last_tree = i + 1 == groups.len();
                 let later = |id: &str| {
                     rest_scope.contains(id) || scopes[i + 1..].iter().any(|s| s.contains(id))
                 };
@@ -943,10 +970,17 @@ impl View {
                 }
                 // No tree read asks `primary`: digest, prove and the query ask
                 // their roots, inventory nothing (#277 D5.1's table).
-                assert!(!demand.subjects.primary, "no tree read asks primary");
+                for &m in group {
+                    assert!(
+                        !plan.trees[m].1.subjects.primary,
+                        "no tree read asks primary"
+                    );
+                }
+                let (job, demand) = &plan.trees[group[0]];
                 let roots = &demand.subjects.ids;
                 match &demand.read {
-                    TreeRead::Effects => {
+                    TreeRead::Effects if demand.tests => {
+                        // `--tests` keeps its own tree: never grouped.
                         let t = tree.as_mut().expect("tree filled above");
                         let roots: Vec<String> = roots.iter().cloned().collect();
                         let out = crate::engine::l5::digest_cli::digest_effects(
@@ -958,6 +992,24 @@ impl View {
                             demand.include_reads,
                         );
                         effects.insert(*job, out);
+                    }
+                    TreeRead::Effects => {
+                        let t = tree.as_mut().expect("tree filled above");
+                        let roots: Vec<Vec<String>> = group
+                            .iter()
+                            .map(|&m| plan.trees[m].1.subjects.ids.iter().cloned().collect())
+                            .collect();
+                        let readers: Vec<&[String]> = roots.iter().map(Vec::as_slice).collect();
+                        let outs = crate::engine::l5::digest_cli::digest_effects_each(
+                            t,
+                            model,
+                            &readers,
+                            demand.gaps_in_cone,
+                            demand.include_reads,
+                        );
+                        for (&m, out) in group.iter().zip(outs) {
+                            effects.insert(plan.trees[m].0, out);
+                        }
                     }
                     TreeRead::FingerprintQuery(read) => {
                         let t = tree.as_ref().expect("tree filled above");
