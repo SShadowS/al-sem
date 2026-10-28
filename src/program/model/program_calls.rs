@@ -2121,10 +2121,20 @@ impl<'a> Converter<'a> {
             let object_id = self.model_object_id(&o.id);
             callees.iter().any(|t| t.object_id == object_id) || dependency.contains(&o.id)
         };
+        // G24: also a closed enum mapping a value to a codeunit outside the
+        // program: that value dispatches to code no route reaches.
         let unresolved_impls: Vec<(String, String)> = impls
             .iter()
             .filter(|o| !reached(o))
             .map(|o| (self.model_object_id(&o.id), "not-found".to_string()))
+            .chain(facts.into_iter().flat_map(|f| {
+                f.interface_unmapped_enums.iter().map(|e| {
+                    (
+                        self.model_object_id(e),
+                        "enum-implementation-not-found".to_string(),
+                    )
+                })
+            }))
             .collect();
         // #264 (spec §5): closed only when every candidate is in the model, the
         // rule `test_coverage` applies, so every MODEL reader (combined graph,

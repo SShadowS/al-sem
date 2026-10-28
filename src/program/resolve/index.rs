@@ -246,6 +246,11 @@ pub struct ResolveIndex {
     report_extensions: HashMap<String, Vec<ObjectNodeId>>,
     /// Lowercased interface name → all object ids that implement it.
     implementers: HashMap<String, Vec<ObjectNodeId>>,
+    /// Lowercased interface name → the CLOSED enums implementing it (G24):
+    /// only they carry their value mappings (`ObjectNode::enum_impls`), read
+    /// by [`Self::unmapped_enum_implementers`]. Apart from `implementers`,
+    /// which is codeunits only (an enum has no methods to dispatch to).
+    closed_enum_implementers: HashMap<String, Vec<ObjectNodeId>>,
 }
 
 /// Event subscriptions resolved over a [`ProgramGraph`]: which subscribers
@@ -558,6 +563,7 @@ impl ResolveIndex {
         let mut page_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
         let mut report_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
         let mut implementers: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
+        let mut closed_enum_implementers: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
 
         for obj in &graph.objects {
             // By-number: first sorted entry wins for a given (app, kind, id).
@@ -622,6 +628,16 @@ impl ResolveIndex {
                     }
                 }
             }
+            if obj.closed_enum {
+                for iface in &obj.implements {
+                    let list = closed_enum_implementers
+                        .entry(iface.fold_identifier())
+                        .or_default();
+                    if !list.contains(&obj.id) {
+                        list.push(obj.id.clone());
+                    }
+                }
+            }
         }
 
         ResolveIndex {
@@ -633,6 +649,7 @@ impl ResolveIndex {
             page_extensions,
             report_extensions,
             implementers,
+            closed_enum_implementers,
         }
     }
 
@@ -651,6 +668,7 @@ impl ResolveIndex {
             page_extensions,
             report_extensions,
             implementers,
+            closed_enum_implementers,
         } = self;
         vec![
             ("objs_by_number", Box::new(objs_by_number)),
@@ -664,6 +682,10 @@ impl ResolveIndex {
             ("page_extensions", Box::new(page_extensions)),
             ("report_extensions", Box::new(report_extensions)),
             ("implementers", Box::new(implementers)),
+            (
+                "closed_enum_implementers",
+                Box::new(closed_enum_implementers),
+            ),
         ]
     }
 
@@ -939,6 +961,47 @@ impl ResolveIndex {
             .get(interface_name_lc)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    /// G24: the closed enums implementing `interface_name_lc` that map a value
+    /// (an `Implementation`, `DefaultImplementation` or
+    /// `UnknownValueImplementation`) to a codeunit that does not resolve,
+    /// strictly from the enum's own app, to exactly one codeunit. Such a value
+    /// dispatches to code outside the program, whatever routes the site has.
+    /// Only closed enums carry their mappings (`ObjectNode::enum_impls`), so an
+    /// extensible enum is never listed here. A mapped codeunit must declare
+    /// the interface itself, so one that exists anywhere in the program is an
+    /// implementer the site's routes cover (or a to-less dependency route):
+    /// what this finds is a mapping into an app missing from the closure.
+    pub fn unmapped_enum_implementers(
+        &self,
+        graph: &ProgramGraph,
+        interface_name_lc: &str,
+    ) -> Vec<ObjectNodeId> {
+        self.closed_enum_implementers
+            .get(interface_name_lc)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|id| graph.object(id))
+            .filter(|o| {
+                o.enum_impls
+                    .iter()
+                    .filter(|(i, _)| i.as_ref() == interface_name_lc)
+                    .any(|(_, codeunit)| {
+                        !matches!(
+                            self.resolve_object_ref_strict(
+                                graph,
+                                o.id.clone(),
+                                ObjectKind::Codeunit,
+                                codeunit
+                            ),
+                            ObjectRefResolution::Unique(_)
+                        )
+                    })
+            })
+            .map(|o| o.id.clone())
+            .collect()
     }
 
     /// Resolve field `field_lc` against the VISIBILITY-SCOPED table field

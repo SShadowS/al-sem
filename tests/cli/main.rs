@@ -122,6 +122,7 @@ mod cli_numberless_object_ids;
 mod cli_object_display;
 mod cli_p1_enclosing_member;
 mod cli_p1_inventory;
+mod cli_prove_closed_world;
 mod cli_prove_cross_app;
 mod cli_prove_reaches_ui;
 mod cli_prove_temp_writes;

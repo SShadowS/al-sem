@@ -600,6 +600,15 @@ struct ProveCli {
     /// at more memory and time.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// Assume the loaded world is all there is (G24): an interface call
+    /// dispatches only to the implementations loaded, which the cone already
+    /// follows, so its open-world row stops blocking. A site with an
+    /// implementer that could not be resolved still blocks. A result that
+    /// relies on it carries `assumptions: ["closed-world"]`, and its
+    /// obligations count the waived rows in `closedWorldRows`.
+    #[arg(long = "closed-world", default_value_t = false)]
+    closed_world: bool,
 }
 
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
@@ -1954,6 +1963,7 @@ fn plan_prove(p: ProveCli) -> Planned {
                 alsem_ver: version,
                 deterministic: p.deterministic,
                 single_app: p.single_app,
+                closed_world: p.closed_world,
                 human: p.format == "human",
                 out: p.out.as_deref(),
             })

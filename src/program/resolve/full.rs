@@ -142,6 +142,12 @@ pub struct SiteFacts {
     /// candidate is a model routine; a symbol-only implementer keeps the
     /// model's site open (its body is not analysed).
     pub interface_closed_over: Vec<ObjectNodeId>,
+    /// G24: the closed enums implementing the interface that map a value to a
+    /// codeunit outside the program
+    /// ([`ResolveIndex::unmapped_enum_implementers`]). The model lists them
+    /// in `DispatchMeta.unresolved_impls`, so a closed-world `prove` keeps the
+    /// site open.
+    pub interface_unmapped_enums: Vec<ObjectNodeId>,
     /// The member call's receiver as the resolver typed it.
     pub receiver: Option<ReceiverFact>,
     /// The object an object run (`Page.Run(Page::X)`, `PageVar.RunModal()`)
@@ -722,6 +728,8 @@ fn resolve_call_site_obligation(
                         crate::program::resolve::closed_enum::closed_over(
                             &cx, *receiver, name_lc, &r,
                         );
+                    facts_out.interface_unmapped_enums =
+                        index.unmapped_enum_implementers(graph, name_lc);
                 }
                 (s, r)
             } else {

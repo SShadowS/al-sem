@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`prove --closed-world`** (G24): assume the loaded world is all there is. An
+  interface call then dispatches only to the loaded implementations, which the cone
+  already follows, so its open-world row stops blocking (`obligations.closedWorldRows`
+  counts them), and coverage that is partial only through `interface-open-world` counts
+  as complete. A site a closed world cannot follow still blocks: one with no
+  implementer in the model, a dependency implementer whose body is not loaded (a
+  to-less route), or a closed enum that maps a value to a codeunit outside the
+  program. That last one is now listed in the site's `unresolvedCandidates`
+  (`enum-implementation-not-found`, from the new `ResolveIndex::
+  unmapped_enum_implementers`). An answer that holds only under the assumption (the
+  open world answers differently) carries `assumptions: ["closed-world"]`. A decided
+  answer both worlds give is the open-world result, unlabelled. When both stay
+  `unknown`, the result is the closed world's, so its blockers are what remains after
+  the assumption. Without the flag nothing changes. On Continia DO it waives
+  interface sites in 41 of the 88 undecided claims (`TelemetryLogger.LogMessage`,
+  `FieldChainEvaluator.EvaluateFieldChain` and others) but decides none of them yet:
+  each still has blockers outside interface dispatch, mostly calls into Continia's
+  `Core`, which ships no AL. Limit: an extensible enum's value mappings are not
+  extracted, so a mapping of one into an app missing from the package closure is not
+  seen. Test: `cli_prove_closed_world`, with discrimination proofs on each guard.
 - **Dependencies given as source folders** (G4). A workspace can name dependency
   apps that exist only as source, a folder with its own `app.json` and `.al` files
   and no `.app` (e.g. a BC.History checkout of Base Application), in
