@@ -263,6 +263,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two more argument shapes pick an overload.** A value of a built-in option type
+  (`TextEncoding::UTF8`, `Verbosity::Normal`; `arg_dispatch::BUILTIN_OPTION_TYPES`)
+  types as that type, so System Application's
+  `TempBlob.CreateInStream(TextEncoding::UTF8)` no longer stays `ambiguousResolved`
+  with `CreateInStream(var InStream)`. A framework variable's member without
+  parentheses (`Response.Content`) types as the kind it returns, when that kind's
+  name is an AL type. Test `builtin_option_values_and_framework_members_type_arguments`.
 - **A negative synthesized method id no longer breaks the file's parse.** The
   grammar takes no negative number as an attribute argument, so `[MethodId(-5)]`
   made the whole synthesized file `Recovered` and every object in it

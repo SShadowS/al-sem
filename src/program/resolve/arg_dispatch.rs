@@ -113,7 +113,9 @@ use crate::program::node_extract::{AbiParamRetained, AbiParams, ObjectRef, Routi
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{BuiltinId, RouteTarget};
 use crate::program::resolve::extract::WithState;
-use crate::program::resolve::framework_returns::record_builtin_return_kind;
+use crate::program::resolve::framework_returns::{
+    framework_return_kind, record_builtin_return_kind,
+};
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::receiver::{
     CallerScopeSymbol, FrameworkKind, ParsedType, ReceiverType, caller_scope_symbol,
@@ -226,6 +228,37 @@ pub(crate) enum LiteralKind {
     Bool,
     Decimal,
 }
+
+/// AL's built-in option types, folded: a `T::V` value of one types as `T`'s
+/// base keyword ([`base_keyword`]), as a parameter declared `T` does.
+const BUILTIN_OPTION_TYPES: &[&str] = &[
+    "action",
+    "clienttype",
+    "commitbehavior",
+    "dataclassification",
+    "datascope",
+    "defaultlayout",
+    "executioncontext",
+    "executionmode",
+    "fieldclass",
+    "fieldtype",
+    "inherentpermissionsscope",
+    "isolationlevel",
+    "objecttype",
+    "pagebackgroundtaskerrorlevel",
+    "permissionobjecttype",
+    "reportformat",
+    "reportlayouttype",
+    "securityfilter",
+    "securityoperationresult",
+    "tableconnectiontype",
+    "telemetryscope",
+    "testpermissions",
+    "textencoding",
+    "transactionmodel",
+    "transactiontype",
+    "verbosity",
+];
 
 /// Lowercase the leading whitespace-delimited token of a declared type string
 /// and strip a trailing `[N]` length suffix — mirrors
@@ -800,7 +833,64 @@ fn type_one_arg(
             };
             let table_id = match caller_scope_symbol(base_name, routine, object_globals) {
                 CallerScopeSymbol::Found(Some(base_ty_text)) => {
-                    let ParsedType::Record { table_ref } = classify_type_text(base_ty_text) else {
+                    let parsed = classify_type_text(base_ty_text);
+                    // A framework variable's parens-less member
+                    // (`Response.Content`): the kind it returns
+                    // (`framework_returns`), named by its AL keyword. Only a
+                    // kind whose name IS one types; a generic or grouped kind
+                    // (List, Xml) or a modelling one (Scalar, PageInstance)
+                    // stays untyped.
+                    if let ParsedType::Framework(kind) = &parsed {
+                        let member_lc = unquote_identifier(member).fold_identifier();
+                        use FrameworkKind as F;
+                        return match framework_return_kind(kind, &member_lc, true, 0) {
+                            Some(
+                                k @ (F::JsonObject
+                                | F::JsonToken
+                                | F::JsonArray
+                                | F::JsonValue
+                                | F::HttpClient
+                                | F::HttpRequestMessage
+                                | F::HttpResponseMessage
+                                | F::HttpContent
+                                | F::HttpHeaders
+                                | F::InStream
+                                | F::OutStream
+                                | F::TextBuilder
+                                | F::Text
+                                | F::BigText
+                                | F::SecretText
+                                | F::Date
+                                | F::DateTime
+                                | F::Time
+                                | F::Duration
+                                | F::Guid
+                                | F::Media
+                                | F::Notification
+                                | F::ErrorInfo
+                                | F::RecordId
+                                | F::ModuleInfo
+                                | F::DataTransfer
+                                | F::SessionSettings
+                                | F::FilterPageBuilder
+                                | F::File
+                                | F::FileUpload
+                                | F::Version),
+                            ) => {
+                                let ty = format!("{k:?}");
+                                ArgDispatchInfo {
+                                    canonical: dispatch_canonical_type_text(
+                                        &ty, from, graph, index,
+                                    ),
+                                    exact_text: Some(normalize_type_text(&ty)),
+                                    literal_kind: None,
+                                    var_passable: false,
+                                }
+                            }
+                            _ => ArgDispatchInfo::untyped(),
+                        };
+                    }
+                    let ParsedType::Record { table_ref } = parsed else {
                         return ArgDispatchInfo::untyped();
                     };
                     match index.resolve_object_ref(
@@ -998,7 +1088,27 @@ fn type_one_arg(
             match &file.ir.expr(*enum_type).kind {
                 ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
                     match caller_scope_symbol(n, routine, object_globals) {
-                        CallerScopeSymbol::NotFound => enum_named(n),
+                        CallerScopeSymbol::NotFound => {
+                            let named = enum_named(n);
+                            // A value of a built-in option type
+                            // (`TextEncoding::UTF8`, `Verbosity::Normal`): its
+                            // type is that keyword, as a parameter declared with
+                            // it canonicalizes (System Application's
+                            // `TempBlob.CreateInStream(TextEncoding::UTF8)` stayed
+                            // ambiguous with `CreateInStream(var InStream)`).
+                            match BUILTIN_OPTION_TYPES
+                                .iter()
+                                .find(|t| t.eq_ignore_ascii_case(n))
+                            {
+                                Some(t) if named.canonical.is_none() => ArgDispatchInfo {
+                                    canonical: Some(CanonicalArgType::Base(t.to_string())),
+                                    exact_text: Some(t.to_string()),
+                                    literal_kind: None,
+                                    var_passable: false,
+                                },
+                                _ => named,
+                            }
+                        }
                         CallerScopeSymbol::Found(Some(ty))
                             if ty.trim_start().to_ascii_lowercase().starts_with("enum ") =>
                         {

@@ -5288,6 +5288,60 @@ codeunit 50173 "SV Caller"
     assert_stays_ambiguous_resolved(&report, "shadowingvar");
 }
 
+/// Two argument shapes that typed as nothing, so a same-arity overload pair
+/// stayed `ambiguousResolved`. A value of a built-in option type
+/// (`TextEncoding::UTF8`) is that type: System Application's
+/// `TempBlob.CreateInStream(TextEncoding::UTF8)` against
+/// `CreateInStream(var InStream)`. A framework variable's parens-less member
+/// (`Response.Content`) is the kind the member returns (`framework_returns`).
+/// Neither call has a second reading: an InStream cannot take an option value,
+/// and Text cannot take an HttpContent.
+#[test]
+fn builtin_option_values_and_framework_members_type_arguments() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-828282828282", "name": "ProbeBO", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50190, "to": 50199 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"codeunit 50190 "BO Target"
+{
+    procedure P(var S: InStream) begin end;
+    procedure P(E: TextEncoding): Boolean begin end;
+    procedure Q(C: HttpContent) begin end;
+    procedure Q(T: Text) begin end;
+}
+
+codeunit 50191 "BO Caller"
+{
+    procedure OptionValue()
+    var
+        T: Codeunit "BO Target";
+    begin
+        T.P(TextEncoding::UTF8);
+    end;
+
+    procedure FrameworkMember()
+    var
+        T: Codeunit "BO Target";
+        Response: HttpResponseMessage;
+    begin
+        T.Q(Response.Content);
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    assert_binds_param(&report, tmp.path(), "optionvalue", "e: textencoding");
+    assert_binds_param(&report, tmp.path(), "frameworkmember", "c: httpcontent");
+}
+
 /// Synthesized calls by method id (spec 2026-10-28 transpiled runtime bodies,
 /// §8.3): `T."__alsem_mid_<n>"(…)` binds the one routine of `T` whose AL method id
 /// is `n`, computed from its declared signature, whatever the name, the arity
