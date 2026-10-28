@@ -31,7 +31,22 @@ pub struct DispatchMeta {
     /// model routine (no dependency target, no unresolved implementer): the
     /// site's candidate set is then closed. Empty = open.
     pub closed_over: Vec<String>,
+    /// G29: the interface is one of [`PUBLISHER_SCOPED_INTERFACES`]: the
+    /// implementation a call reaches is one registered by an app whose
+    /// publisher is on the call stack, never an arbitrary app's.
+    pub publisher_scoped: bool,
 }
+
+/// G29: interfaces whose implementations are selected by the publishers on the
+/// call stack, as (declaring app GUID, folded interface name). System
+/// Application's `Telemetry Logger`: `Telemetry Impl.` logs through the loggers
+/// that `Telemetry Loggers.GetTelemetryLogger(Publisher, …)` and
+/// `GetRelevantTelemetryLoggers` return, the ones registered (in the
+/// `OnRegisterTelemetryLogger` event) by an app of a publisher on the call
+/// stack. When every such app is loaded, the loaded implementers are all a
+/// call can reach: the `caller-publishers-loaded` assumption.
+pub const PUBLISHER_SCOPED_INTERFACES: &[(&str, &str)] =
+    &[("63ca2fa4-4f03-4f2b-a480-172fef340d3f", "telemetry logger")];
 
 /// An external (out-of-index) type reference on a member edge.
 #[derive(Debug, Clone, PartialEq, Eq)]

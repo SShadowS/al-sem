@@ -609,6 +609,16 @@ struct ProveCli {
     /// obligations count the waived rows in `closedWorldRows`.
     #[arg(long = "closed-world", default_value_t = false)]
     closed_world: bool,
+
+    /// Assume every app whose publisher is on the call stack is loaded (G29):
+    /// a publisher-scoped interface call (System Application's `Telemetry
+    /// Logger`, which logs through the loggers the call stack's publishers
+    /// registered) dispatches only to the loaded implementations. Narrower
+    /// than `--closed-world`, which implies it. A result that relies on it
+    /// carries `assumptions: ["caller-publishers-loaded"]`, and its
+    /// obligations count the waived rows in `callerPublishersRows`.
+    #[arg(long = "caller-publishers-loaded", default_value_t = false)]
+    caller_publishers_loaded: bool,
 }
 
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
@@ -1964,6 +1974,7 @@ fn plan_prove(p: ProveCli) -> Planned {
                 deterministic: p.deterministic,
                 single_app: p.single_app,
                 closed_world: p.closed_world,
+                caller_publishers_loaded: p.caller_publishers_loaded,
                 human: p.format == "human",
                 out: p.out.as_deref(),
             })

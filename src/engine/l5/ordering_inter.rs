@@ -2074,6 +2074,7 @@ mod tests {
             unresolved_candidates: None,
             result_consumed: None,
             under_asserterror: None,
+            publisher_scoped: false,
         });
         snap.operation_index.push(SnapshotOperationEvidence {
             operation_id: "opValidate".to_string(),

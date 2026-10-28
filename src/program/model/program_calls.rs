@@ -2103,6 +2103,20 @@ impl<'a> Converter<'a> {
             .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
             .min_by_key(|o| o.id.app != self.primary)
             .map_or_else(|| name_lc.clone(), |o| o.name.to_string());
+        // G29: every interface of this name is the cataloged one.
+        let mut named = self
+            .graph
+            .objects
+            .iter()
+            .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
+            .peekable();
+        let publisher_scoped = named.peek().is_some()
+            && named.all(|o| {
+                let guid = &self.graph.apps.resolve(o.id.app).guid;
+                crate::program::model::calls::PUBLISHER_SCOPED_INTERFACES
+                    .iter()
+                    .any(|(g, n)| guid.eq_ignore_ascii_case(g) && *n == name_lc)
+            });
         let implements = |kinds: &[ObjectKind]| -> Vec<&ObjectNode> {
             let mut v: Vec<&ObjectNode> = self
                 .graph
@@ -2161,6 +2175,7 @@ impl<'a> Converter<'a> {
                 .map(|o| self.model_object_id(&o.id))
                 .collect(),
             closed_over,
+            publisher_scoped,
         };
         let base = || {
             let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);

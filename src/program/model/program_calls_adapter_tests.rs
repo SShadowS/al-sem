@@ -408,6 +408,7 @@ fn interface_with_workspace_and_dependency_implementers() {
         unresolved_impls: Vec::new(),
         enum_implementers: Vec::new(),
         closed_over: Vec::new(),
+        publisher_scoped: false,
     });
     let mut dep = edge(
         a.routine("Caller"),

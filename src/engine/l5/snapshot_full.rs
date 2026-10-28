@@ -3411,6 +3411,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             }]),
             result_consumed: Some(true),
             under_asserterror: Some(true),
+            publisher_scoped: false,
         };
         let mut frame = frames().remove(1);
         frame.branch_always_terminates = Some(true);

@@ -144,26 +144,72 @@ pub struct ProveObligations {
     pub analysis_gaps: usize,
     pub coverage_complete: bool,
     pub cone_truncated: bool,
-    /// `--closed-world` (G24): the open-world interface rows waived because
-    /// the cone already follows every loaded implementation
-    /// ([`closed_world_waives`]), and whether coverage counted as complete
-    /// only by that assumption. Both 0/false without the flag.
-    pub closed_world: bool,
-    pub closed_world_rows: usize,
+    /// The world the obligations were counted in, the open-world interface
+    /// rows it waived because the cone already follows every loaded
+    /// implementation ([`world_waives`]), and whether coverage counted as
+    /// complete only by that assumption. 0/false in the open world.
+    pub world: World,
+    pub waived_rows: usize,
     pub coverage_closed_by_assumption: bool,
-    /// The answer holds only in the closed world: the open world answers
-    /// differently ([`prove_with_callers`]). The `closed-world` label.
-    pub answer_relies_on_closed_world: bool,
+    /// The answer holds only in `world`: the open world answers differently
+    /// ([`prove_with_callers`]). The [`World::label`] label.
+    pub answer_relies_on_world: bool,
 }
 
-/// G24: under `--closed-world`, an open-world interface site whose every
-/// implementer is in the model is no obligation: the cone follows each loaded
-/// implementation, and the assumption is that no other exists. A site with an
-/// implementer outside the model (a body not loaded, an enum value mapped to a
-/// codeunit that is not loaded, an implementer no route reached) is still
-/// open, even in a closed world.
-fn closed_world_waives(item: &UnresolvedConeItem, closed_world: bool) -> bool {
-    closed_world && item.open_world == Some(true) && item.closed_world_followable
+/// What a prove run assumes about code outside the loaded program, weakest
+/// first. Each world waives the open-world rows of the one before it and more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum World {
+    /// Nothing: an interface site may reach an implementer not loaded.
+    #[default]
+    Open,
+    /// `--caller-publishers-loaded` (G29): every app whose publisher is on the
+    /// call stack is loaded, so a publisher-scoped interface site
+    /// (`Telemetry Logger`) reaches only loaded implementers.
+    CallerPublishers,
+    /// `--closed-world` (G24): no implementer exists beyond the loaded ones.
+    Closed,
+}
+
+impl World {
+    /// The `assumptions` label of an answer that holds only in this world.
+    #[must_use]
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            World::Open => None,
+            World::CallerPublishers => Some("caller-publishers-loaded"),
+            World::Closed => Some("closed-world"),
+        }
+    }
+
+    /// The world a prove run's flags ask for: `--closed-world` assumes more
+    /// than `--caller-publishers-loaded`, so it wins.
+    #[must_use]
+    pub fn of_flags(closed_world: bool, caller_publishers_loaded: bool) -> World {
+        if closed_world {
+            World::Closed
+        } else if caller_publishers_loaded {
+            World::CallerPublishers
+        } else {
+            World::Open
+        }
+    }
+}
+
+/// G24/G29: in a world beyond the open one, an open-world interface site whose
+/// every implementer is in the model is no obligation when the world assumes no
+/// other implementer exists: the cone follows each loaded implementation. The
+/// closed world assumes it of every site, the caller-publishers world of a
+/// publisher-scoped site only. A site with an implementer outside the model (a
+/// body not loaded, an enum value mapped to a codeunit that is not loaded, an
+/// implementer no route reached) is still open, in every world.
+fn world_waives(item: &UnresolvedConeItem, world: World) -> bool {
+    let assumed = match world {
+        World::Open => false,
+        World::CallerPublishers => item.publisher_scoped,
+        World::Closed => true,
+    };
+    assumed && item.open_world == Some(true) && item.closed_world_followable
 }
 
 /// The coverage reason an open-world interface site gives the routine.
@@ -186,15 +232,15 @@ pub struct ProveResult {
 fn compute_obligations(
     entry: &DigestEntryFull,
     gaps_in_cone_count: usize,
-    closed_world: bool,
+    world: World,
 ) -> ProveObligations {
     let mut unresolved_callsites = 0usize;
     let mut open_world_rows = 0usize;
-    let mut closed_world_rows = 0usize;
+    let mut waived_rows = 0usize;
 
     for item in &entry.unresolved {
-        if closed_world_waives(item, closed_world) {
-            closed_world_rows += 1;
+        if world_waives(item, world) {
+            waived_rows += 1;
         } else if item.open_world == Some(true) {
             open_world_rows += 1;
         } else {
@@ -205,12 +251,12 @@ fn compute_obligations(
     }
 
     // Coverage that is partial ONLY through interface open world is complete
-    // in a closed world, when the closed world waived every open-world site
-    // (at least one: a reason with no site here to waive stays partial).
+    // in a world that waived every open-world site (at least one: a reason
+    // with no site here to waive stays partial).
     let complete = entry.coverage_status == "complete";
     let coverage_closed_by_assumption = !complete
-        && closed_world
-        && closed_world_rows > 0
+        && world != World::Open
+        && waived_rows > 0
         && open_world_rows == 0
         && entry.coverage_status == "partial"
         && !entry.coverage_reasons.is_empty()
@@ -225,10 +271,10 @@ fn compute_obligations(
         analysis_gaps: gaps_in_cone_count,
         coverage_complete: complete || coverage_closed_by_assumption,
         cone_truncated: entry.unresolved_traversal.truncated,
-        closed_world,
-        closed_world_rows,
+        world,
+        waived_rows,
         coverage_closed_by_assumption,
-        answer_relies_on_closed_world: false,
+        answer_relies_on_world: false,
     }
 }
 
@@ -269,7 +315,7 @@ fn build_obligation_blockers(
 
     // Open-world dispatch rows (less the ones a closed world waived)
     for item in &entry.unresolved {
-        if item.open_world != Some(true) || closed_world_waives(item, oblg.closed_world) {
+        if item.open_world != Some(true) || world_waives(item, oblg.world) {
             continue;
         }
         let anchor = item.callsite_file.as_ref().map(|f| BlockerAnchor {
@@ -773,39 +819,50 @@ pub fn prove(
     gaps_in_cone_count: usize,
     question: &ProveQuestion,
 ) -> ProveResult {
-    prove_with_callers(entry, gaps_in_cone_count, question, &HashMap::new(), false)
+    prove_with_callers(
+        entry,
+        gaps_in_cone_count,
+        question,
+        &HashMap::new(),
+        World::Open,
+    )
 }
 
 /// [`prove`] with the caller-dependent writes resolved through callers
 /// ([`resolve_caller_dependent_writes`]): those effects count as matches (G25);
-/// `closed_world` waives the open-world rows [`closed_world_waives`] (G24).
+/// `world` waives the open-world rows [`world_waives`] (G24, G29).
 ///
-/// The `closed-world` label marks exactly the answers that hold only if no
-/// implementer exists beyond the loaded ones: the closed-world answer DIFFERS
-/// from the open-world one. A decided answer both worlds give (a `yes` with
-/// its witness) rests on no assumption: the open-world result, unlabelled.
-/// When both stay `unknown`, the closed-world result, unlabelled: its
-/// blockers are what is left once the assumption is made, so a verifier sees
-/// what to fix next.
+/// An answer is labelled with the WEAKEST world, up to `world`, whose answer
+/// DIFFERS from the open-world one: it holds only under that world's
+/// assumption ([`World::label`]). A decided answer the open world gives too (a
+/// `yes` with its witness) rests on no assumption: the open-world result,
+/// unlabelled. When every world stays `unknown`, the result of `world`,
+/// unlabelled: its blockers are what is left once the assumption is made, so
+/// a verifier sees what to fix next.
 pub fn prove_with_callers(
     entry: &DigestEntryFull,
     gaps_in_cone_count: usize,
     question: &ProveQuestion,
     via_callers: &HashMap<usize, CallerRef>,
-    closed_world: bool,
+    world: World,
 ) -> ProveResult {
-    let open = prove_in_world(entry, gaps_in_cone_count, question, via_callers, false);
-    if !closed_world {
-        return open;
+    let run = |w| prove_in_world(entry, gaps_in_cone_count, question, via_callers, w);
+    let open = run(World::Open);
+    let mut last = None;
+    for w in [World::CallerPublishers, World::Closed] {
+        if w > world {
+            break;
+        }
+        let mut assumed = run(w);
+        if assumed.answer != open.answer {
+            assumed.obligations.answer_relies_on_world = true;
+            return assumed;
+        }
+        last = Some(assumed);
     }
-    let mut closed = prove_in_world(entry, gaps_in_cone_count, question, via_callers, true);
-    if closed.answer != open.answer {
-        closed.obligations.answer_relies_on_closed_world = true;
-        closed
-    } else if closed.answer == ProveAnswer::Unknown {
-        closed
-    } else {
-        open
+    match last {
+        Some(assumed) if assumed.answer == ProveAnswer::Unknown => assumed,
+        _ => open,
     }
 }
 
@@ -814,9 +871,9 @@ fn prove_in_world(
     gaps_in_cone_count: usize,
     question: &ProveQuestion,
     via_callers: &HashMap<usize, CallerRef>,
-    closed_world: bool,
+    world: World,
 ) -> ProveResult {
-    let oblg = compute_obligations(entry, gaps_in_cone_count, closed_world);
+    let oblg = compute_obligations(entry, gaps_in_cone_count, world);
 
     // G22: a truncated witness caps how many via paths an effect lists, and an
     // unavailable evidence anchor loses where it sits; the effect itself stays
@@ -892,12 +949,14 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
         "unresolvedCallsites".into(),
         (o.unresolved_callsites as u64).into(),
     );
-    // G24: only under `--closed-world`, so an open-world document is unchanged.
-    if o.closed_world {
-        m.insert(
-            "closedWorldRows".into(),
-            (o.closed_world_rows as u64).into(),
-        );
+    // G24/G29: only beyond the open world, so an open-world document is unchanged.
+    let waived_key = match o.world {
+        World::Open => None,
+        World::CallerPublishers => Some("callerPublishersRows"),
+        World::Closed => Some("closedWorldRows"),
+    };
+    if let Some(key) = waived_key {
+        m.insert(key.into(), (o.waived_rows as u64).into());
     }
     serde_json::Value::Object(m)
 }
@@ -979,9 +1038,12 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         "obligations".into(),
         obligations_to_value(&prove_result.obligations),
     );
-    // G24: the label a KB needs for an answer that holds only in a closed world.
-    if prove_result.obligations.answer_relies_on_closed_world {
-        result_obj.insert("assumptions".into(), serde_json::json!(["closed-world"]));
+    // G24/G29: the label a KB needs for an answer that holds only in a world
+    // beyond the open one.
+    if prove_result.obligations.answer_relies_on_world
+        && let Some(label) = prove_result.obligations.world.label()
+    {
+        result_obj.insert("assumptions".into(), serde_json::json!([label]));
     }
 
     // routine ref
@@ -1186,6 +1248,7 @@ pub(crate) fn prove_pipeline_with(
         deterministic,
         single_app,
         closed_world: false,
+        caller_publishers_loaded: false,
         human: false,
         out: None,
     };
@@ -1218,6 +1281,7 @@ pub(crate) fn prove_on_target(
             crate::engine::gate::run::AnalysisTarget::SingleApp(_)
         ),
         closed_world: false,
+        caller_publishers_loaded: false,
         human: false,
         out: None,
     };
@@ -1245,6 +1309,9 @@ pub struct ProveJob<'a> {
     /// `--closed-world` (G24): an interface call dispatches only to the loaded
     /// implementations.
     pub closed_world: bool,
+    /// `--caller-publishers-loaded` (G29): a publisher-scoped interface call
+    /// (`Telemetry Logger`) dispatches only to the loaded implementations.
+    pub caller_publishers_loaded: bool,
     /// `--format human`: the human text, else the JSON.
     pub human: bool,
     pub out: Option<&'a str>,
@@ -1323,6 +1390,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         alsem_ver,
         deterministic,
         closed_world,
+        caller_publishers_loaded,
         ..
     } = *job;
     // The roots `resolve` resolved off the model, before the composition.
@@ -1341,10 +1409,10 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             analysis_gaps: 0,
             coverage_complete: false,
             cone_truncated: false,
-            closed_world: false,
-            closed_world_rows: 0,
+            world: World::Open,
+            waived_rows: 0,
             coverage_closed_by_assumption: false,
-            answer_relies_on_closed_world: false,
+            answer_relies_on_world: false,
         };
         let dummy_result = ProveResult {
             answer: ProveAnswer::Unknown,
@@ -1446,7 +1514,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         gaps_in_cone_count,
         &parsed_question,
         &via_callers,
-        closed_world,
+        World::of_flags(closed_world, caller_publishers_loaded),
     );
 
     // Project document
@@ -1820,6 +1888,7 @@ mod tests {
             candidates: None,
             open_world,
             closed_world_followable: false,
+            publisher_scoped: false,
             owning_routine: "test-routine".to_string(),
             owning_routine_display: "TestRoutine".to_string(),
         }

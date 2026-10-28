@@ -806,6 +806,10 @@ pub struct SnapshotCallsiteResolution {
     pub result_consumed: Option<bool>,
     #[serde(rename = "underAsserterror", skip_serializing_if = "Option::is_none")]
     pub under_asserterror: Option<bool>,
+    /// G29: an interface site whose implementations the call stack's publishers
+    /// select (`DispatchMeta::publisher_scoped`). Not serialized.
+    #[serde(skip)]
+    pub publisher_scoped: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2597,6 +2601,10 @@ fn derive_callsite_resolutions(
                 },
                 result_consumed: rc,
                 under_asserterror: if ua { Some(true) } else { None },
+                publisher_scoped: representative
+                    .dispatch_meta
+                    .as_ref()
+                    .is_some_and(|dm| dm.publisher_scoped),
             });
             continue;
         }
@@ -2659,6 +2667,7 @@ fn derive_callsite_resolutions(
             unresolved_candidates: None,
             result_consumed: None,
             under_asserterror: None,
+            publisher_scoped: false,
         });
     }
 
@@ -2699,6 +2708,7 @@ fn classify_resolution(
             unresolved_candidates: None,
             result_consumed,
             under_asserterror: ua,
+            publisher_scoped: false,
         }
     };
 
