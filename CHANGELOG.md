@@ -263,6 +263,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A write with no known table is never hidden in a dependency group, nor shown
+  at another write.** Digest's producer-proof search matched facts with
+  `fact_equivalent`, which treats a missing resource as equal to any, so an
+  unresolved table write was proved by a typed parameter-bound producer's path:
+  `prove`'s `unknown-table-write` blockers pointed at a typed insert (Continia DO:
+  three anchored at a `CDO File` insert). Proved at its own operation, such a
+  write inside a dependency is a boundary group's, and a group listed only the
+  resources its facts name, so the write vanished and `prove` could answer `no`
+  past it. A group now counts them (`detail.unresolvedResources`), and `prove`
+  blocks on such a group. Test
+  `an_unknown_table_write_is_never_witnessed_by_a_typed_producer`.
 - **`ModuleInfo.Id()`/`PackageId()` return `Guid`, `Name()`/`Publisher()` `Text`**
   (`framework_returns`). System Application's
   `IsCapabilityRegistered(Capability, CallerModuleInfo.Id())` and

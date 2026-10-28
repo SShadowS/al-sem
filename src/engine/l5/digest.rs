@@ -1049,6 +1049,11 @@ fn enumerate_proofs<'i>(
             !st.seed
                 && (st.temp_state == TempStateKind::Known(true)) == kt
                 && fact_equivalent(&idx.capability_facts[st.producer_fact], f)
+                // As `is_bfs_carrier`: a producer naming a resource never
+                // witnesses a fact with none (an unresolved write was shown at
+                // a typed producer's operation), nor the other way round.
+                && idx.capability_facts[st.producer_fact].resource_id.is_some()
+                    == f.resource_id.is_some()
         })
         .map(|&s| Node {
             state: s,
@@ -3878,6 +3883,10 @@ fn digest_one_root<'i>(
             /// G33: a group's facts' originating operations per resource;
             /// `None` once one of its facts names no operation.
             group_ops: BTreeMap<String, Option<BTreeSet<String>>>,
+            /// A group's facts that name no resource (an unresolved table
+            /// write in the dependency): the group's resource list is then
+            /// not the whole of what it writes.
+            group_unresolved: usize,
         }
         let mut effect_map: Vec<(String, AccumulatedEffect)> = Vec::new();
         // O(1) key → position index over effect_map (same keys, same positions —
@@ -4090,6 +4099,9 @@ fn digest_one_root<'i>(
                         acc.via.fold_cond(c);
                     }
                     acc.via.truncated |= input_truncated;
+                    if acc.group.is_some() && fact.resource_id.is_none() {
+                        acc.group_unresolved += 1;
+                    }
                     if let (Some((_, resources)), Some(r)) = (&mut acc.group, &fact.resource_id) {
                         resources.entry(r.clone()).or_insert_with(|| {
                             resource_display_of(fact, &idx.stable_id_to_display)
@@ -4146,6 +4158,7 @@ fn digest_one_root<'i>(
                         },
                         group: bnd.clone().map(|b| (b, BTreeMap::new())),
                         group_ops: BTreeMap::new(),
+                        group_unresolved: 0,
                     };
                     merge(&mut acc);
                     effect_map.push((key, acc));
@@ -4210,19 +4223,30 @@ fn digest_one_root<'i>(
             // enters, its distinct resources' count and the first 10 of them,
             // in resource-id order. Values stay strings.
             let detail = match &acc.group {
-                Some((b, resources)) => vec![
-                    ("boundary".to_string(), b.display.clone()),
-                    ("resourceCount".to_string(), resources.len().to_string()),
-                    (
-                        "resources".to_string(),
-                        resources
-                            .values()
-                            .take(10)
-                            .map(String::as_str)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    ),
-                ],
+                Some((b, resources)) => {
+                    let mut d = vec![
+                        ("boundary".to_string(), b.display.clone()),
+                        ("resourceCount".to_string(), resources.len().to_string()),
+                        (
+                            "resources".to_string(),
+                            resources
+                                .values()
+                                .take(10)
+                                .map(String::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ),
+                    ];
+                    // Writes beyond the boundary whose table is not known: the
+                    // resources above are not all the group writes.
+                    if acc.group_unresolved > 0 {
+                        d.push((
+                            "unresolvedResources".to_string(),
+                            acc.group_unresolved.to_string(),
+                        ));
+                    }
+                    d
+                }
                 None => acc.detail,
             };
 
