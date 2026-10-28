@@ -1,7 +1,10 @@
 # Transpiled bodies for runtime packages without AL source
 
-Status: draft for the owner, 2026-10-28, at base `d47a7099` (branch `continai-gaps`).
-Asked for by the CONtinAI verifier session (G24 follow-up). Not yet reviewed by a panel.
+Status: draft, 2026-10-28, at base `d47a7099` (branch `continai-gaps`). Asked for by the
+CONtinAI verifier session (G24 follow-up). Not yet reviewed by a panel.
+
+**Decided by the owner (2026-10-28): route A (§3, §8), and building it in this public
+repo is fine (Q2: yes, with hand-written fixtures only).**
 
 ## 1. Problem
 
@@ -111,19 +114,74 @@ unconditional. Reading P7's control flow for unconditional facts is a later phas
 4. Provenance is visible: evidence anchors point at the C# file and line
    (`dep:<guid>:bin/COD6192821.cs:<line>`), with `sourceKind: "transpiled"`.
 
-## 6. Phases
+## 6. Phases (route A)
 
-1. Reader + census: parse every C# file of a package into method summaries; a census
-   test on a fixture that lists every runtime-call shape found and fails on a new
-   unclassified one.
-2. Model and cone: the `transpiled` body kind, facts and resolved edges, and the gap
-   and coverage rules. Measure DO's claims.
-3. Events: transpiled publishers and subscribers in the event graph.
-4. Conditionality from control flow (unconditional facts for the MUST question).
+1. **Method ids + the resolver rule** (§8.1 P11, §8.3), testable with hand-written AL:
+   the id function pinned by the alc probe ids; `__alsem_mid_<n>` binding on source and
+   ABI targets.
+2. **C# reader + census:** read every C# file of a package into per-method statements;
+   a census test on a hand-written fixture lists every runtime-call shape and fails on a
+   new unclassified one.
+3. **Synthesizer** (§8.2): declarations from P10 + symbols, bodies from phase 2.
+4. **Hook + measure:** `extract_embedded_source`, cache version, the `transpiled`
+   provenance on anchors; measure DO's claims.
+5. Later: conditionality from control flow (unconditional facts for the MUST question).
 
-## 7. Questions for the owner
+## 7. Questions for the owner (answered)
 
-- Q1: route B (recommended) or A?
-- Q2: Is reading a publisher's transpiled code acceptable in this public repo? (Only the
-  descrambling key and the format are documented today; this reads program logic. The
-  fixtures would be hand-written C# in the transpiler's shape, never Continia's code.)
+- Q1: route B (recommended) or A? **A.**
+- Q2: Is reading a publisher's transpiled code acceptable in this public repo? **Yes**,
+  with hand-written fixtures in the transpiler's shape, never a publisher's code.
+
+## 8. Route A design
+
+### 8.1 More facts
+
+- **P10 Per-object metadata.** `bin/<KIND><id>.xml` (286 in Core: 135 `CodeUnit`, 64
+  `MetaTable`, 59 pages, 17 enums, 2 queries, 2 interfaces, permission sets) holds each
+  object's declaration: a table's fields (id, name, `Datatype`, length, `FieldClass`, …),
+  keys and properties. With `SymbolReference.json` (routine signatures, ids, attributes)
+  it is enough to declare every object without its code.
+- **P11 The method id is computable.** alc's `MethodSymbol.CalculateMethodId` (runtime ≥
+  Spring 2021; read from alc 18.0 `Microsoft.Dynamics.Nav.CodeAnalysis`, reimplemented,
+  not copied): FNV-1a over the UTF-16LE upper-cased name, then `Combine` with the return
+  type's `NavTypeKind`, then per parameter `Combine(i, isVar, kind)` (kind with the
+  `_ReturnValue` bit cleared for the kinds `ReturnValuesAddedForRuntimeVersion7` lists;
+  an array is `Array`), plus each parameter's subtype hash (object id, or 1) when the
+  method can be overloaded (not an event, subscriber or handler) and a parameter is an
+  object type. `Combine(a, b) = ((a << 5) + a + (a >> 27)) ^ b` on `i32`.
+  Checked: 14 of 14 probe methods compiled with alc 18.0.43; 1536 of 1568 of Core's
+  methods. The 32 misses all take a generic (`List of [...]`, `Dictionary`) or
+  `ModuleInfo` parameter; not yet understood, so such a target stays unresolved.
+
+### 8.2 Shape
+
+1. **Where:** `snapshot::embedded::extract_embedded_source`. A package with no `.al` but
+   with `bin/*.cs` gets synthesized `SourceFile`s, one per object, at virtual paths
+   `transpiled/<KIND><id>.al`. The cache key carries a synthesizer version.
+2. **Declarations** from P10 + the symbols: every object, field, key, enum value,
+   implementation and routine signature (with its attributes: events, subscribers,
+   `[TryFunction]`, access).
+3. **Bodies** from the C#, per routine found by `MethodId` (P1). In source order, each
+   statement that has an effect or calls code becomes one AL statement, inside
+   `if <branch> then` (§4) unless proven unconditional later:
+   - record operations on the record variable, declared `Record <table id>` with
+     `temporary` from P3; `TrapError` keeps the Boolean (`if X.Insert() then;`),
+     `ThrowError` is a statement (§2 P4);
+   - `Commit()`, `Error('')`, `Message('')`, `Confirm('')`, `Hyperlink('')`, page and
+     report runs, `Codeunit.Run`;
+   - calls into the same object by name; calls on a codeunit variable as
+     `Cu."__alsem_mid_<method id>"(args)` (§8.3);
+   - anything else the census (§6 phase 1) classifies as effectful but the writer cannot
+     express: a call to the undeclared `"__alsem_untranslated"('<shape>')`, so it is an
+     unresolved call with its shape in the detail, never silence.
+4. **Arguments:** a record variable passed is passed (temp-state flows through); any
+   other argument is a local of the parameter's type.
+
+### 8.3 Calls by method id
+
+The synthesized AL names a cross-object target only by method id (the C# has no name,
+and the target may be a source-only app with no symbols). The resolver gets one new
+rule: a member call whose name is `__alsem_mid_<n>` binds to the routine of the receiver's
+object whose method id (P11, from its declared signature) is `n`. Exactly one match
+binds; zero or more stays unresolved. ABI routines use their symbol `Id` directly.
