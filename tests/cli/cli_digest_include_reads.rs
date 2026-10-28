@@ -355,12 +355,13 @@ fn reads_are_not_ordering_graded_and_move_no_label() {
 }
 
 // ---------------------------------------------------------------------------
-// G-1: reads of two tables witnessed at one resource-less RecordRef read.
+// G-1: reads of two tables below a resource-less RecordRef read.
 // ---------------------------------------------------------------------------
 
 /// `Mid` reads through a RecordRef of no known table, then calls a Customer
-/// and a Vendor reader (`MidW`: the same with writes). The witness lands every
-/// table's effect on the RecordRef operation, by the same via path.
+/// and a Vendor reader (`MidW`: the same with writes). The witness landed every
+/// table's effect on the RecordRef operation, by the same via path; it now
+/// lands each on its own operation (`digest::is_bfs_carrier`).
 const CARRIER_AL: &str = r#"codeunit 50111 "Carrier Work"
 {
     procedure Root(TableNo: Integer)
@@ -423,12 +424,13 @@ const CARRIER_AL: &str = r#"codeunit 50111 "Carrier Work"
 }
 "#;
 
-/// G-1: a `DB_READ`'s `factId` names its table. Customer's and Vendor's reads
-/// share their evidence (the RecordRef read) and via path, yet get distinct
-/// `factId`s. Writes keep their key: the same shape gives Customer's and
-/// Vendor's `DB_MODIFY` one shared `factId`, as in the default output.
+/// G-1: Customer's and Vendor's reads get distinct `factId`s. A RecordRef
+/// operation of no known table is no witness of a table's effect: an ordinary
+/// fact with no resource never becomes one naming a table at a caller. Each
+/// read and each write is witnessed by its own operation, through its own
+/// reader (they shared the RecordRef's evidence, and the writes one `factId`).
 #[test]
-fn reads_of_two_tables_at_one_operation_keep_distinct_fact_ids() {
+fn reads_of_two_tables_below_a_recordref_keep_their_own_witness() {
     let dir = tempfile::tempdir().unwrap();
     reads_workspace(dir.path());
     write(&dir.path().join("src/Carrier.al"), CARRIER_AL);
@@ -451,17 +453,16 @@ fn reads_of_two_tables_at_one_operation_keep_distinct_fact_ids() {
     let reads = by_table("Root", "DB_READ");
     let names: Vec<&str> = reads.iter().map(|r| r.0.as_str()).collect();
     assert_eq!(names, ["Customer", "Vendor"], "{on}");
-    assert_eq!(reads[0].2, reads[1].2, "fixture: one evidence and via path");
+    assert!(reads[0].2.contains("Mid>ReadCust"), "{reads:?}");
+    assert!(reads[1].2.contains("Mid>ReadVend"), "{reads:?}");
     assert_ne!(reads[0].1, reads[1].1, "DB_READ factIds collide: {reads:?}");
 
     let writes = by_table("RootW", "DB_MODIFY");
     let names: Vec<&str> = writes.iter().map(|r| r.0.as_str()).collect();
     assert_eq!(names, ["Customer", "Vendor"], "{on}");
-    assert_eq!(
-        writes[0].2, writes[1].2,
-        "fixture: one evidence and via path"
-    );
-    assert_eq!(writes[0].1, writes[1].1, "a write key moved: {writes:?}");
+    assert!(writes[0].2.contains("MidW>WriteCust"), "{writes:?}");
+    assert!(writes[1].2.contains("MidW>WriteVend"), "{writes:?}");
+    assert_ne!(writes[0].1, writes[1].1, "{writes:?}");
 }
 
 // ---------------------------------------------------------------------------

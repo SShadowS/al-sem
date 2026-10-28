@@ -256,6 +256,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cone through one counted as complete and d35 reported nothing
   (`combined_graph::keyword_run_kind`). `prove` already blocked on it. Tests
   `cli_d35_unknown_commit` V6, V7.
+- **An operation on a table of no known resource is no witness of a table's effect.**
+  The digest's witness search (`digest::is_bfs_carrier`) accepted any direct fact of
+  the same operation whose resource is unknown as the carrier of an inherited fact
+  that names a table (`fact_equivalent`'s one-sided leniency). Such an ordinary fact
+  never becomes one naming a table at a caller (only the producer solve binds one),
+  so it was a false witness: on Continia DO a temporary `RecRef.Insert` was shown
+  writing 156 tables, among them `Cust. Ledger Entry`, that dependency boundaries
+  below it write. Each effect is now witnessed by its own producer or boundary.
+  Test `cli_digest_include_reads` (its G-1 fixture had relied on the shared witness).
 - **A local RecordRef opened only temporary is temporary in a routine that branches.**
   The RecordRef temp-state pass (`record_types`) needed a routine with no branching.
   A LOCAL RecordRef whose every `Open` is `Open(_, true)`, with no `GetTable`/`Copy`,

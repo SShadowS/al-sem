@@ -912,7 +912,16 @@ fn is_pd_snap(d: &Fact) -> bool {
 /// witnessed by [`enumerate_proofs`] instead; arena states are never BFS
 /// carriers (a state's class holds only in its own routine's frame).
 fn is_bfs_carrier(d: &Fact, f: &Fact) -> bool {
-    !is_pd_snap(d) && is_known_temp_snap(d) == is_known_temp_snap(f) && fact_equivalent(d, f)
+    !is_pd_snap(d)
+        && is_known_temp_snap(d) == is_known_temp_snap(f)
+        && fact_equivalent(d, f)
+        // An ORDINARY fact with no resource stays one at every caller (only the
+        // producer solve binds one, and a producer is no carrier), so it never
+        // carries a fact that names a resource. `fact_equivalent`'s one-sided
+        // leniency made one the witness of every same-op fact: Continia DO's
+        // temporary `RecRef.Insert` was shown writing 156 tables that a
+        // dependency boundary below it writes.
+        && !(f.resource_id.is_some() && d.resource_id.is_none())
 }
 
 /// What [`enumerate_proofs`] found.
@@ -4205,8 +4214,9 @@ fn digest_one_root<'i>(
                 acc.effect_type.to_string()
             };
             // #246 G-1: a DB_READ key also names its table, so reads of two
-            // tables witnessed at one operation (a resource-less RecordRef
-            // carrier) keep distinct ids. Write keys stay as they are.
+            // tables witnessed at one operation keep distinct ids. (The case
+            // that showed it, a resource-less RecordRef carrier, is no witness
+            // any more: `is_bfs_carrier`.) Write keys stay as they are.
             if acc.effect_type == "DB_READ"
                 && let Some((_, r)) = detail.iter().find(|(k, _)| k == "resourceId")
             {
