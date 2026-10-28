@@ -115,6 +115,73 @@ pub fn extract_ui_window_open(
     (facts, vec![])
 }
 
+// ─── Client dialogs (G26) ────────────────────────────────────────────────────
+
+/// The client dialog a CALL SITE opens (G26), as its capability op:
+/// - `ui-file-dialog`: `UploadIntoStream`, `DownloadFromStream`, `Upload`,
+///   `Download`, bare or on `File` (the keyword or a `File` variable): the
+///   client's file picker or download prompt.
+/// - `ui-progress`: `Open` / `Update` on a `Dialog` variable: a progress window.
+///
+/// Both are interactive UI that needs a client, which is what `prove …
+/// reaches-ui` asks. Other `File` members (`Open`, `Read`, …) and anything
+/// else: `None`.
+pub(crate) fn ui_dialog_call(
+    callee: &PCallee,
+    receiver_type_of: &dyn Fn(&str) -> String,
+) -> Option<&'static str> {
+    let is_file_dialog = |name: &str| {
+        matches!(
+            name.to_ascii_lowercase().as_str(),
+            "uploadintostream" | "downloadfromstream" | "upload" | "download"
+        )
+    };
+    match callee {
+        PCallee::Bare { name } if is_file_dialog(name) => Some("ui-file-dialog"),
+        PCallee::Member { receiver, method } => {
+            let r = receiver.to_ascii_lowercase();
+            let declared = receiver_type_of(&r).to_ascii_lowercase();
+            if is_file_dialog(method) && (r == "file" || declared == "file") {
+                Some("ui-file-dialog")
+            } else if (method.eq_ignore_ascii_case("open") || method.eq_ignore_ascii_case("update"))
+                && declared == "dialog"
+            {
+                Some("ui-progress")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+pub fn extract_ui_dialog(
+    ctx: &ExtractionContext,
+    _routine: &PRoutine,
+) -> (Vec<CapabilityFact>, Vec<CoverageReason>) {
+    let receiver_type_of = |r: &str| ctx.receiver_type_of(r);
+    let facts = ctx
+        .features
+        .call_sites
+        .iter()
+        .filter_map(|cs| {
+            let op = ui_dialog_call(&cs.callee, &receiver_type_of)?;
+            Some(CapabilityFact {
+                op: op.to_string(),
+                resource_kind: "ui".to_string(),
+                confidence: "static".to_string(),
+                provenance: "direct".to_string(),
+                via: "self".to_string(),
+                resource_arg_source: None,
+                witness_operation_id: None,
+                witness_callsite_id: Some(cs.id.clone()),
+                extra: None,
+            })
+        })
+        .collect();
+    (facts, vec![])
+}
+
 // ─── Events (SUBSCRIBE only) ─────────────────────────────────────────────────
 
 pub fn extract_events(

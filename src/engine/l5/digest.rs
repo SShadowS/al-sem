@@ -74,6 +74,11 @@ fn map_op(op: &str) -> Option<&'static str> {
         "ui-confirm" => Some("UI_CONFIRM"),
         "ui-error" => Some("UI_ERROR"),
         "ui-window-open" => Some("UI_WINDOW_OPEN"),
+        // G26: a client file picker / download prompt, and a progress window.
+        // Their own types, so the ordering engine's UI_WINDOW_OPEN grading is
+        // unchanged; `prove … reaches-ui` counts both.
+        "ui-file-dialog" => Some("UI_FILE_DIALOG"),
+        "ui-progress" => Some("UI_PROGRESS"),
         "error-throw" => Some("ERROR_THROW"),
         // G20: a record lookup whose Boolean is discarded, TestField, FieldError.
         // Not ERROR_THROW: the ordering engine grades that as an explicit Error.

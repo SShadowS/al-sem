@@ -72,6 +72,49 @@ codeunit 50152 "G15 Shapes"
     begin
         Error('');
     end;
+
+    // G26: client file dialogs and progress windows are interactive UI.
+    procedure UploadBare()
+    var
+        InS: InStream;
+        FileName: Text;
+    begin
+        UploadIntoStream('', '', '', FileName, InS);
+    end;
+
+    procedure DownloadOnFile()
+    var
+        InS: InStream;
+        FileName: Text;
+    begin
+        File.DownloadFromStream(InS, '', '', '', FileName);
+    end;
+
+    procedure Progress()
+    var
+        Window: Dialog;
+    begin
+        Window.Open('#1');
+        Window.Update(1, 'x');
+    end;
+
+    // DO's shape: a field trigger reaching the dialog through a helper.
+    procedure ImportWithDialog()
+    begin
+        UploadBare();
+    end;
+
+    procedure Update()
+    begin
+    end;
+
+    // The control: `Update` on a codeunit variable opens nothing.
+    procedure NotADialog()
+    var
+        S: Codeunit "G15 Shapes";
+    begin
+        S.Update();
+    end;
 }
 page 50153 "G15 FactBox"
 {
@@ -154,6 +197,10 @@ fn every_ui_opening_call_reaches_ui() {
         ("ReportRun", "Report.Run"),
         ("HyperlinkCall", "Hyperlink"),
         ("OnDrillDown", "Page.Run"),
+        ("UploadBare", "UploadIntoStream"),
+        ("DownloadOnFile", "File.DownloadFromStream"),
+        ("Progress", "Window.Open"),
+        ("ImportWithDialog", "UploadIntoStream"),
     ] {
         let r = prove(routine);
         assert_eq!(r["answer"], "yes", "{routine}: {r}");
@@ -169,12 +216,14 @@ fn every_ui_opening_call_reaches_ui() {
         );
     }
 
-    let control = prove("NoUi");
-    assert_eq!(control["answer"], "no", "the control has no UI: {control}");
-    assert_eq!(
-        control["obligations"]["coverageComplete"], true,
-        "precondition: the control's cone is complete, so `no` is a real answer"
-    );
+    for routine in ["NoUi", "NotADialog"] {
+        let control = prove(routine);
+        assert_eq!(control["answer"], "no", "{routine} has no UI: {control}");
+        assert_eq!(
+            control["obligations"]["coverageComplete"], true,
+            "precondition: {routine}'s cone is complete, so `no` is a real answer"
+        );
+    }
 
     // G18: an Error, raised or caught by a TryFunction, is no interactive UI;
     // it stays `throws-error`'s.

@@ -579,7 +579,8 @@ struct ProveCli {
     /// Prove question: may-commit | commits-on-success-path | writes-table:<name>
     ///   | publishes-event:<name> | reaches-ui | throws-error. `reaches-ui` is
     ///   interactive UI (Message, Confirm, StrMenu, Page/Report Run or RunModal,
-    ///   Hyperlink); an Error is `throws-error`'s.
+    ///   Hyperlink, UploadIntoStream/DownloadFromStream/Upload/Download, a
+    ///   Dialog's Open/Update); an Error is `throws-error`'s.
     question: String,
 
     /// Output format: json | human. Defaults to json.

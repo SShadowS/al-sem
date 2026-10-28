@@ -109,6 +109,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`prove … reaches-ui` counts client file dialogs and progress windows** (G26, a
+  regression G18 exposed). `UploadIntoStream`, `DownloadFromStream`, `Upload` and
+  `Download` (bare, or on `File` as a keyword or a `File` variable) and `Open` /
+  `Update` on a `Dialog` variable produced no effect at all. Routines reaching one
+  answered `yes` only through an `Error` on the same path, which G18 stopped counting
+  as UI, so they turned into a confident wrong `no`. They are now the capability ops
+  `ui-file-dialog` / `ui-progress`, effects `UI_FILE_DIALOG` / `UI_PROGRESS`. One
+  classifier (`ui_dialog_call`) serves the body extractor and the capability cone. They
+  are their own types, so the ordering engine's `UI_WINDOW_OPEN` grading does not
+  change. On Continia DO, 1 of 73 `reaches-ui` claims moved
+  (EMAIL-TPLM-010.c2, `no` → `yes` through `UploadIntoStream`) and none contradicts
+  its expectation. Test: `cli_prove_reaches_ui` (bare, `File.`, `Dialog`, transitive,
+  and an `Update` on a codeunit variable as control). It fails when the cone drops the
+  facts, and when the `Dialog` receiver check is dropped.
 - **`prove … writes-table` resolves a caller-dependent write through the callers**
   (G25). A write to a `var` record parameter, or a table method's own `Rec`, whose
   temporariness is the caller's (G17b) answered `unknown`. It is now asked in the

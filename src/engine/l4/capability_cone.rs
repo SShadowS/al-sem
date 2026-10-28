@@ -1037,6 +1037,33 @@ pub(crate) fn direct_facts_for_routine(
         });
     }
 
+    // ── client dialogs (G26) ────────────────────────────────────────────────
+    // File pickers / download prompts and progress windows: the body
+    // extractor's own classifier, so the two cannot drift.
+    for cs in &call_sites {
+        let Some(op) = crate::program::body::capability::ui_events_error::ui_dialog_call(
+            &cs.callee,
+            &receiver_type_of,
+        ) else {
+            continue;
+        };
+        facts.push(CapabilityFact {
+            subject: routine.id.clone(),
+            op,
+            resource_kind: "ui",
+            resource_id: None,
+            resource_arg_source: None,
+            confidence: "static",
+            provenance: "direct",
+            via: "self",
+            witness_operation_id: None,
+            witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
+            extra: None,
+        });
+    }
+
     // ── events family — SUBSCRIBE side (al-sem events.ts) ──────────────────
     // A routine with an [EventSubscriber(...)] attribute emits one subscribe fact.
     if routine

@@ -303,13 +303,23 @@ fn sort_blockers(mut blockers: Vec<ProveBlocker>) -> Vec<ProveBlocker> {
 const DB_WRITE_TYPES: &[&str] = &["DB_INSERT", "DB_MODIFY", "DB_DELETE"];
 /// What `reaches-ui` counts as UI: INTERACTIVE UI, a dialog or window a user
 /// must see or answer (`Message`, `Confirm`, `StrMenu`, `Page`/`Report`
-/// `Run`/`RunModal`, `Hyperlink`). `UI_WINDOW_OPEN` was missing (G15), so a
-/// routine opening a page answered `no` with full coverage claimed.
+/// `Run`/`RunModal`, `Hyperlink`, a client file dialog, a progress window).
+/// `UI_WINDOW_OPEN` was missing (G15), so a routine opening a page answered
+/// `no` with full coverage claimed; file dialogs and progress windows had no
+/// effect at all (G26), and routines reaching one answered `yes` only through
+/// an `Error` on the same path until G18.
 ///
 /// An `Error` is not counted (G18): it is `throws-error`'s question, and as UI
 /// it was wrong where it never surfaces, e.g. an `Error('')` caught by a
 /// `[TryFunction]`. The two questions no longer overlap.
-const UI_TYPES: &[&str] = &["UI_MESSAGE", "UI_CONFIRM", "UI_WINDOW_OPEN", "UI_HYPERLINK"];
+const UI_TYPES: &[&str] = &[
+    "UI_MESSAGE",
+    "UI_CONFIRM",
+    "UI_WINDOW_OPEN",
+    "UI_HYPERLINK",
+    "UI_FILE_DIALOG",
+    "UI_PROGRESS",
+];
 
 /// Case-insensitive match of `query` against the resourceDisplay or the
 /// trailing segment of the resourceId (after the last '/').
