@@ -5,7 +5,10 @@
 //! Log.FieldNo(SystemCreatedAt))` has two 2-parameter overloads, `(Integer,
 //! Integer)` and `(Integer, JsonArray)`. Argument typing knew record
 //! built-ins only as `Text`/`RecordId`/`Guid`/`DateTime`, so the call stayed
-//! `ambiguousResolved` (Continia DO: 12 such dependency sites).
+//! `ambiguousResolved` (Continia DO: 12 such dependency sites). Likewise a
+//! framework method's Integer result: `GetIntegrationTableMapping(Mapping,
+//! RecordID.TableNo())` over `(…, RecordId)` / `(…, Integer)`, and a List's
+//! `Count()`.
 
 use std::process::Command;
 
@@ -30,9 +33,13 @@ codeunit 50322 "RI Caller"
     var
         T: Record "RI T";
         Lib: Codeunit "RI Lib";
+        Rid: RecordId;
+        L: List of [Integer];
     begin
         Lib.Add(Database::"RI T", T.FieldNo(Stamp));
         Lib.Add(Database::"RI T", T.Count());
+        Lib.Add(Database::"RI T", Rid.TableNo());
+        Lib.Add(Database::"RI T", L.Count());
     end;
 }
 "#;
@@ -61,8 +68,9 @@ fn a_record_integer_builtin_argument_picks_the_integer_overload() {
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stats JSON");
     let s = &v["primaryScoped"];
-    // Both `Add` calls bind to source; `FieldNo` and `Count` are catalog.
-    assert_eq!(s["resolvedSource"], 2, "{s}");
+    // Every `Add` call binds to source; the Integer-returning methods are
+    // catalog.
+    assert_eq!(s["resolvedSource"], 4, "{s}");
     assert_eq!(s["ambiguousResolved"], 0, "{s}");
     assert_eq!(s["unknown"], 0, "{s}");
 }

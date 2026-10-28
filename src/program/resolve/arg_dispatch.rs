@@ -1551,6 +1551,25 @@ fn type_call_result_arg_member(
         match &base_receiver {
             // A framework method (`Token.AsValue()`): the kind it returns.
             ReceiverType::Framework(kind) => {
+                // An Integer result, which the return table's generic
+                // `Scalar` does not say (MS Learn methods-auto/recordid, /list,
+                // /dictionary, /jsonarray, /text): Base Application's
+                // `GetIntegrationTableMapping(Mapping, RecordID.TableNo())` over
+                // `(…, RecordId)` / `(…, Integer)` stayed ambiguous.
+                use crate::program::resolve::receiver::FrameworkKind as F;
+                if matches!(
+                    (kind, member_lc.as_str(), inner_arity),
+                    (F::RecordId, "tableno", 0)
+                        | (F::List | F::Dictionary | F::JsonArray, "count", 0)
+                        | (F::Text, "indexof" | "lastindexof", 1 | 2)
+                ) {
+                    return ArgDispatchInfo {
+                        canonical: Some(CanonicalArgType::Base("integer".to_string())),
+                        exact_text: Some("integer".to_string()),
+                        literal_kind: None,
+                        var_passable: false,
+                    };
+                }
                 return framework_kind_arg(
                     framework_return_kind(kind, &member_lc, true, inner_arity),
                     from,
@@ -2117,7 +2136,12 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
         if !arg.var_passable {
             return true;
         }
-        if matches!(param.canonical, CanonicalArgType::Base(_))
+        // Not for a DotNet type: every one canonicalizes to `dotnet`, and a
+        // `var` DotNet parameter takes a derived class (Base Application's
+        // `XMLDOMMgt.AddAttribute(DocumentElement, …)` passes a `DotNet
+        // XmlElement` to `var XMLNode: DotNet XmlNode`), so two aliases are
+        // not proven apart.
+        if matches!(&param.canonical, CanonicalArgType::Base(b) if b != "dotnet")
             && arg.exact_text.as_deref() != Some(param.exact_text.as_str())
         {
             return true;

@@ -263,6 +263,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Overload selection: a DotNet argument picks the DotNet `var` overload, and
+  framework methods' Integer results type.** Every DotNet type canonicalizes to
+  `dotnet`, and the `var` exact-text rule called a `DotNet XmlElement` against
+  `var DotNet XmlNode` incompatible, so Base Application's
+  `XMLDOMMgt.AddAttribute(DocumentElement, …)` over `(var DotNet XmlNode; …)` /
+  `(var XmlNode; …)` lost both candidates (a `var` DotNet parameter takes a
+  derived class; two aliases are now undecided). `RecordId.TableNo()`,
+  `Count()` of a List/Dictionary/JsonArray and `Text.IndexOf`/`LastIndexOf`
+  now type as Integer (`GetIntegrationTableMapping(Mapping,
+  RecordID.TableNo())`). Continia DO's dependency-body `ambiguousResolved`:
+  59 → 49. Tests `cli_dotnet_var_overload`, `cli_record_integer_builtin_arg`.
+
 - **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
   table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var
   FilterRecord: RecordRef)` modifies whatever table it holds, so `prove …
