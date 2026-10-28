@@ -109,6 +109,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A truncated witness no longer blocks a decided `prove` answer** (G22). Any effect
+  whose via paths were capped (or whose evidence anchor was unavailable) made every
+  question `unknown` with `witness-truncated`. Truncation caps how many paths an
+  effect lists; the effect stays listed, so it cannot hide a match: a MAY question's
+  `no` now stands. The MUST question (`commits-on-success-path`) judges
+  "unconditional" over a COMMIT's paths, so it still blocks, but only on a COMMIT whose
+  own paths were cut short. On Continia DO, all 18 claims whose only blocker this was
+  are now decided (`no`). Tests: `prove` unit tests
+  `a_truncated_witness_does_not_block_a_may_no`,
+  `a_truncated_commit_still_blocks_the_must_question`,
+  `evidence_unavailable_does_not_block_a_may_no` (the two old tests pinned the
+  blocker on `may-commit`).
 - **`prove … throws-error` sees implicit runtime errors** (G20). Only an explicit
   `Error` counted, so Continia DO's `CDO E-Mail.Init`, whose unguarded `DOSetup.Get();`
   raises an error when the setup record is missing, answered `no`. A record lookup

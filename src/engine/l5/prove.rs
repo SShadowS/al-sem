@@ -605,17 +605,22 @@ pub fn prove(
 ) -> ProveResult {
     let oblg = compute_obligations(entry, gaps_in_cone_count);
 
-    let witness_truncated = entry.effects.iter().any(|e| e.via_paths_truncated)
-        || entry
-            .entry_diagnostics
-            .iter()
-            .any(|d| d.kind == "evidence-unavailable");
-
+    // G22: a truncated witness caps how many via paths an effect lists, and an
+    // unavailable evidence anchor loses where it sits; the effect itself stays
+    // in `entry.effects` either way. A MAY question decides on which effects
+    // exist, so neither can hide a match: a `no` stands. The MUST question
+    // judges "unconditional" over a COMMIT's paths, so a COMMIT whose paths
+    // were cut short still blocks it. (It blocked every question on any
+    // effect's truncation: 49 of Continia DO's undecided claims.)
     match question {
         ProveQuestion::CommitsOnSuccessPath => {
-            evaluate_must_question(entry, oblg, witness_truncated)
+            let commit_paths_truncated = entry
+                .effects
+                .iter()
+                .any(|e| e.effect_type == "COMMIT" && e.via_paths_truncated);
+            evaluate_must_question(entry, oblg, commit_paths_truncated)
         }
-        _ => evaluate_may_question(entry, oblg, question, witness_truncated),
+        _ => evaluate_may_question(entry, oblg, question, false),
     }
 }
 
@@ -1629,10 +1634,12 @@ mod tests {
 
     // -- witness-truncated oracle -------------------------------------------
 
-    /// An effect with viaPathsTruncated=true → witness-truncated blocker
-    /// (even though there is NO matching effect, so it's unknown, not yes).
+    /// G22: another effect's truncated via paths do not block a MAY `no`: the
+    /// effect is still listed, only its paths are capped, so it cannot hide a
+    /// match. The MUST question still blocks on a COMMIT whose paths were cut
+    /// short ([`a_truncated_commit_still_blocks_the_must_question`]).
     #[test]
-    fn witness_truncated_via_paths_truncated() {
+    fn a_truncated_witness_does_not_block_a_may_no() {
         use crate::engine::l5::conditionality::UNKNOWN;
         let effect = DigestEffectFull {
             effect_type: "EVENT_PUBLISH".to_string(),
@@ -1656,20 +1663,49 @@ mod tests {
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::MayCommit);
+        assert_eq!(result.answer, ProveAnswer::No, "{:?}", result.blocked_by);
+        assert!(result.blocked_by.is_none());
+    }
+
+    /// The MUST question judges "unconditional" over a COMMIT's paths, so a
+    /// COMMIT with truncated paths blocks it with `witness-truncated`.
+    #[test]
+    fn a_truncated_commit_still_blocks_the_must_question() {
+        let commit = DigestEffectFull {
+            effect_type: "COMMIT".to_string(),
+            detail: vec![],
+            provenance: "direct",
+            evidence: FullAnchor {
+                source_kind: "source",
+                file: Some("ws:src/Test.al".to_string()),
+                line: Some(5),
+                column: Some(4),
+                excerpt: None,
+            },
+            via_paths: vec![],
+            via_paths_truncated: true,
+            conditionality: crate::engine::l5::conditionality::UNCONDITIONAL,
+            transaction_context: "unknown",
+            guarantees: vec![],
+            fact_id: "abcdef1234567890".to_string(),
+            scoped_guarantees: vec![],
+            group_resources: vec![],
+        };
+        let entry = minimal_entry("complete", vec![], vec![commit], vec![], false);
+        let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
         assert_eq!(result.answer, ProveAnswer::Unknown);
         let blockers = result.blocked_by.as_deref().unwrap_or(&[]);
-        let wt = blockers.iter().find(|b| b.kind == "witness-truncated");
         assert!(
-            wt.is_some(),
+            blockers.iter().any(|b| b.kind == "witness-truncated"),
             "expected witness-truncated blocker; got: {:?}",
             blockers.iter().map(|b| b.kind).collect::<Vec<_>>()
         );
     }
 
-    /// An entry diagnostic with kind "evidence-unavailable" also sets
-    /// witness_truncated and produces a witness-truncated blocker.
+    /// G22: an unavailable evidence anchor does not block a MAY `no` either: the
+    /// effect it belongs to is still listed.
     #[test]
-    fn witness_truncated_via_evidence_unavailable_diagnostic() {
+    fn evidence_unavailable_does_not_block_a_may_no() {
         let entry = minimal_entry(
             "complete",
             vec![],
@@ -1685,14 +1721,8 @@ mod tests {
             false,
         );
         let result = prove(&entry, 0, &ProveQuestion::MayCommit);
-        assert_eq!(result.answer, ProveAnswer::Unknown);
-        let blockers = result.blocked_by.as_deref().unwrap_or(&[]);
-        let wt = blockers.iter().find(|b| b.kind == "witness-truncated");
-        assert!(
-            wt.is_some(),
-            "expected witness-truncated blocker; got: {:?}",
-            blockers.iter().map(|b| b.kind).collect::<Vec<_>>()
-        );
+        assert_eq!(result.answer, ProveAnswer::No, "{:?}", result.blocked_by);
+        assert!(result.blocked_by.is_none());
     }
 
     // -- Blocker sort oracle ------------------------------------------------
