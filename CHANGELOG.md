@@ -263,6 +263,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Page.Run(0, Rec)` runs the lookup page of `Rec`'s table.** Page `0` is the
+  table's `LookupPageId` (or one a table extension sets); with none, the platform
+  shows a page of its own, which runs no AL code. The run was dynamic
+  (`Page.Run(<dynamic>)`), which `prove` and every cone blocked on. For a record of a
+  workspace table it now reaches that page's lifecycle triggers, or nothing (the
+  model's `Builtin` run); `Partial`, since a table extension outside the program may
+  set another page (`ProgramGraph::lookup_pages`, `resolve::full::zero_page_table`).
+  Continia DO: `CDO E-Mail Log.ShowLog`. Test `cli_lookup_page_run`.
 - **A Variant's type tests resolve.** `V.IsRecord()`, `V.IsGuid()` and the other `Is…`
   methods of the AL `Variant` type are platform built-ins with no AL code behind
   them, whatever the Variant holds; a Variant receiver made every member call an open

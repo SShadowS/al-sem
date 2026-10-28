@@ -817,7 +817,51 @@ fn resolve_call_site_obligation(
                 "XmlPort" => Some(ObjectKind::XmlPort),
                 _ => None,
             };
-            if let Some(okind) = okind_opt {
+            // `Page.Run(0, Rec)` / `Page.RunModal(0, Rec)`: the lookup page of
+            // `Rec`'s table, when that is a workspace table.
+            let lookup = (okind_opt == Some(ObjectKind::Page) && target_ref.is_none())
+                .then(|| zero_page_table(call_args, file, routine, obj, obj_node_opt, graph, index))
+                .flatten()
+                .and_then(|t| graph.lookup_pages.get(&t).map(|pages| (t, pages)));
+            if let Some((table, pages)) = lookup {
+                let mut routes = Vec::new();
+                for v in pages {
+                    let (text, is_name) =
+                        match crate::program::impact_graph::facts::property_object_ref(v) {
+                            crate::program::node_extract::ObjectRef::Id(n) => {
+                                (n.to_string(), false)
+                            }
+                            crate::program::node_extract::ObjectRef::Name { raw, .. } => {
+                                (raw, true)
+                            }
+                        };
+                    let (_, _, r) = resolve_object_run(
+                        caller_app,
+                        ObjectKind::Page,
+                        Some(&text),
+                        is_name,
+                        graph,
+                        index,
+                        surface,
+                    );
+                    routes.extend(r);
+                }
+                // A table with no lookup page: the platform shows a page of its
+                // own, which runs no AL code (`program_calls`' empty run).
+                if routes.is_empty() {
+                    facts_out.run_target = Some(table);
+                }
+                // A table extension outside the program may set another page.
+                (
+                    EdgeKind::Run,
+                    DispatchShape::Multicast,
+                    SetCompleteness::Partial {
+                        reason: OpenWorldReason::ReverseDependentExtensions,
+                    },
+                    routes,
+                    None,
+                )
+            } else if let Some(okind) = okind_opt {
                 let (shape, completeness, routes) = resolve_object_run(
                     caller_app,
                     okind,
@@ -1194,6 +1238,45 @@ pub(crate) fn resolve_file_obligations(
         indeterminate,
         site_facts,
         parenless,
+    }
+}
+
+/// The table of `Rec` in `Page.Run(0, Rec)` / `Page.RunModal(0, Rec)`: the
+/// first argument the literal `0`, the second a variable (the implicit `Rec`
+/// included) typed as a record of a known table. `None` for any other shape.
+fn zero_page_table(
+    args: &[al_syntax::ir::ExprId],
+    file: &al_syntax::ir::AlFile,
+    routine: &al_syntax::ir::RoutineDecl,
+    obj: &al_syntax::ir::ObjectDecl,
+    obj_node: Option<&ObjectNode>,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> Option<ObjectNodeId> {
+    use al_syntax::ir::{ExprKind, Literal};
+    let [first, second, ..] = args else {
+        return None;
+    };
+    if !matches!(&file.ir.expr(*first).kind, ExprKind::Literal(Literal::Int(n)) if n.trim() == "0")
+    {
+        return None;
+    }
+    let name = match &file.ir.expr(*second).kind {
+        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n.fold_identifier(),
+        _ => return None,
+    };
+    match infer_receiver_type(
+        &name,
+        routine,
+        &obj.globals,
+        obj_node?,
+        graph,
+        index,
+        None,
+        None,
+    ) {
+        ReceiverType::Record { table: Some(t) } => Some(t),
+        _ => None,
     }
 }
 

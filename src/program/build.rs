@@ -391,9 +391,11 @@ pub fn assemble_program_graph(
             .iter()
             .find(|u| u.id == snap.workspace_app)
             .is_some_and(|u| u.internals_visible_to.is_empty()),
+        lookup_pages: HashMap::new(),
         abi_ingest_errors: dep.abi_ingest_errors.clone(),
         workspace_rows,
     };
+    graph.lookup_pages = workspace_lookup_pages(&graph, ws_app_ref, ws_unit);
 
     // ── Inject synthetic platform-event publishers ───────────────────────────
     // Binds subscribers to the table's implicit DB-trigger / validate events,
@@ -559,6 +561,49 @@ fn loaded_friend(snap: &AppSetSnapshot, friend: &crate::app_package::FriendApp) 
                 && u.id.publisher.eq_ignore_ascii_case(&friend.publisher)
         })
     })
+}
+
+/// [`ProgramGraph::lookup_pages`]: every workspace table, with the
+/// `LookupPageId` values it and the workspace's table extensions of it
+/// declare. An extension whose base table does not resolve to a workspace
+/// table adds nothing.
+fn workspace_lookup_pages(
+    graph: &ProgramGraph,
+    ws_app_ref: AppRef,
+    ws_unit: &ParsedUnit,
+) -> HashMap<ObjectNodeId, Vec<String>> {
+    let lookup = |o: &al_syntax::ir::ObjectDecl| -> Vec<String> {
+        o.properties
+            .iter()
+            .filter(|p| p.name.eq_ignore_ascii_case("lookuppageid"))
+            .map(|p| p.value.trim().to_string())
+            .collect()
+    };
+    let objects = || ws_unit.files.iter().flat_map(|pf| &pf.file.objects);
+    let mut out: HashMap<ObjectNodeId, Vec<String>> = objects()
+        .filter(|o| o.kind == ObjectKind::Table)
+        .map(|o| {
+            let id = ObjectNodeId {
+                app: ws_app_ref,
+                kind: ObjectKind::Table,
+                key: ObjKey::from_source(o),
+            };
+            (id, lookup(o))
+        })
+        .collect();
+    for ext in objects().filter(|o| o.kind == ObjectKind::TableExtension) {
+        let Some(base) = ext
+            .extends_target
+            .as_deref()
+            .and_then(|t| graph.resolve_object(ws_app_ref, ObjectKind::Table, t))
+        else {
+            continue;
+        };
+        if let Some(pages) = out.get_mut(&base.id) {
+            pages.extend(lookup(ext));
+        }
+    }
+    out
 }
 
 /// G28: the workspace interfaces declared `Access = Internal` whose every

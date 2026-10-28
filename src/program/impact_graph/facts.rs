@@ -249,7 +249,7 @@ fn first_string_arg(
 }
 
 /// A property's object reference: `"Customer List"`, `22`, `Page::"X"`.
-fn property_object_ref(value: &str) -> ObjectRef {
+pub(crate) fn property_object_ref(value: &str) -> ObjectRef {
     let v = value.trim();
     let v = match v.split_once("::") {
         Some((_, rest)) => rest.trim(),

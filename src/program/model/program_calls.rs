@@ -1712,7 +1712,9 @@ impl<'a> Converter<'a> {
                         if t.app == self.primary {
                             c.adapter_workspace_run_no_entry += 1;
                             e.dispatch_kind = object_run_dispatch_kind(match t.kind {
-                                ObjectKind::Page => "Page",
+                                // A table: `Page.Run(0, Rec)` of a table with
+                                // no lookup page (`resolve::full`).
+                                ObjectKind::Page | ObjectKind::Table => "Page",
                                 ObjectKind::Report => "Report",
                                 _ => "Codeunit",
                             });

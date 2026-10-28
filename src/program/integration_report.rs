@@ -428,6 +428,7 @@ mod tests {
             friends: Default::default(),
             closed_internal_interfaces: Default::default(),
             workspace_friendless: false,
+            lookup_pages: Default::default(),
             abi_ingest_errors: Default::default(),
             workspace_rows: Default::default(),
         };

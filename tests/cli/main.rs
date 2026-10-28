@@ -121,6 +121,7 @@ mod cli_implicit_rec_bindings;
 mod cli_implicit_trigger_cone;
 mod cli_inputs_frozen;
 mod cli_inventory_cross_app;
+mod cli_lookup_page_run;
 mod cli_loose_fingerprint;
 mod cli_numberless_object_ids;
 mod cli_object_display;
