@@ -100,6 +100,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Rename` is a table write in the digest and `prove`** (G19). The capability
+  facts had it (op `rename`), but the digest's effect taxonomy had no entry for it,
+  so it was no effect at all and `writes-table` answered a confident `no` for
+  Continia DO's `CDO Document Template Line.OnRename` (`MovedLineAttachment.Rename(...)`).
+  It is now a `DB_MODIFY` (a rename rewrites the row's key; the evidence keeps the
+  `.Rename`), so it also gets the temp-state rule (G17) and the ordering engine's
+  write handling. No golden moved; both DO claims now `yes` with the rename as
+  evidence. Test: `cli_prove_temp_writes` (a persistent and a temporary rename).
 - **`prove … writes-table` does not count temporary records** (G17, G17b). It matched
   every DB write by table, so a write to a record declared `temporary` or on a
   `SourceTableTemporary` page answered `yes`. It now reads each write's `tempState`

@@ -59,7 +59,10 @@ fn map_op(op: &str) -> Option<&'static str> {
     match op {
         "commit" => Some("COMMIT"),
         "insert" => Some("DB_INSERT"),
-        "modify" => Some("DB_MODIFY"),
+        // `Rename` changes a row's primary key: a modify of the row (G19: with no
+        // entry it was no effect at all, so `writes-table` never saw it). The
+        // evidence excerpt keeps the `.Rename`.
+        "modify" | "rename" => Some("DB_MODIFY"),
         "delete" => Some("DB_DELETE"),
         "publish" => Some("EVENT_PUBLISH"),
         "send" => Some("HTTP"),

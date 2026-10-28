@@ -65,6 +65,23 @@ codeunit 50172 "G17 Writes"
         T.Code := 'X';
         T.Insert();
     end;
+
+    // G19: a rename writes the row (its primary key).
+    procedure RenamePersistent()
+    var
+        T: Record "G17 T";
+    begin
+        T.Get('A');
+        T.Rename('B');
+    end;
+
+    procedure RenameTemporary()
+    var
+        TempT: Record "G17 T" temporary;
+    begin
+        TempT.Get('A');
+        TempT.Rename('B');
+    end;
 }
 "#;
 
@@ -126,12 +143,17 @@ fn writes_table_skips_temporary_records() {
     };
 
     // The controls: a persistent write, and one through the parameter.
-    for routine in ["Persistent", "CallerPassesPersistent"] {
+    for routine in ["Persistent", "CallerPassesPersistent", "RenamePersistent"] {
         let r = prove(routine);
         assert_eq!(r["answer"], "yes", "{routine} writes the table: {r}");
     }
     // Temporary on every path: no table is written.
-    for routine in ["TempVariable", "OnOpenPage", "CallerPassesTemporary"] {
+    for routine in [
+        "TempVariable",
+        "OnOpenPage",
+        "CallerPassesTemporary",
+        "RenameTemporary",
+    ] {
         let r = prove(routine);
         assert_eq!(
             r["answer"], "no",
