@@ -234,6 +234,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `this.Global` argument is typed, so the overload it picks resolves.** Argument
+  typing (`arg_dispatch::type_one_arg`) read a bare identifier, a literal and
+  `Rec.Field`, but not `this.X`, which names an object global only. A call
+  overloaded on that argument stayed an ambiguous pair: Continia CDN's
+  `this.Utilities.IsPurchaseDocument(this.CreationFactory)` (overloaded on
+  `Codeunit` against `Integer`) blocked 30 cone rows of DO claims. Several `#if`
+  declarations of the global leave it untyped. Test `cli_this_argument`.
 - **One routine id and declared line bases across `graph`, `fingerprint` and
   `prove`** (G13), so a consumer can join their outputs.
   - `alsem graph` nodes carry `stableRoutineId`, the id the other commands use, on

@@ -693,6 +693,34 @@ fn type_one_arg(
             }
             None => ArgDispatchInfo::untyped(),
         },
+        // `Foo(this.Global)`: `this.` names an object GLOBAL only, never a
+        // local or parameter (the keyword's whole point), and a `with` cannot
+        // rebind it. Typed as the bare identifier arm types the global.
+        // Without it an overload set picked on such an argument stayed
+        // ambiguous (Continia CDN: `this.Utilities.IsPurchaseDocument(
+        // this.CreationFactory)`, overloaded on `Codeunit` against `Integer`).
+        ExprKind::Member { object, member, .. }
+            if matches!(
+                &file.ir.expr(*object).kind,
+                ExprKind::Identifier(t) if t.eq_ignore_ascii_case("this")
+            ) =>
+        {
+            let global_lc = unquote_identifier(member).fold_identifier();
+            let mut decls = object_globals
+                .iter()
+                .filter(|v| v.name.fold_identifier() == global_lc);
+            match (decls.next().and_then(|v| v.ty.as_deref()), decls.next()) {
+                (Some(ty), None) => ArgDispatchInfo {
+                    canonical: dispatch_canonical_type_text(ty, from, graph, index),
+                    exact_text: Some(normalize_type_text(ty)),
+                    literal_kind: None,
+                    var_passable: true,
+                },
+                // No such global, no type text, or several declarations (`#if`
+                // arms that may differ): untyped, never a guess.
+                _ => ArgDispatchInfo::untyped(),
+            }
+        }
         // Member-field arg (Task 4, receiver-closure-and-arg-increments plan
         // — `Foo(Rec.Field)` / `Foo(Rec."Quoted Field")`): types the field's
         // DECLARED type via the SAME `field_in_table` machinery
