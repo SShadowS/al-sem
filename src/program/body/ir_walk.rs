@@ -1412,6 +1412,7 @@ fn cfn_node(kind: &str) -> PCFNNode {
         source_range: None,
         path_hint: None,
         table_case: None,
+        field_exit_guard: None,
     }
 }
 
@@ -1607,6 +1608,51 @@ impl<'a> IrCfn<'a> {
         leaf
     }
 
+    /// G36: `(R folded, N)` when `cond` is `not R.FieldExist(N)` (through
+    /// parentheses, `N` an integer literal) and `then_block` is a lone `exit`.
+    fn field_exit_guard(&self, cond: ExprId, then_block: BlockId) -> Option<(String, i64)> {
+        use ExprKind::*;
+        let [BlockItem::Stmt(s)] = self.ir().block(then_block).items.as_slice() else {
+            return None;
+        };
+        if !matches!(self.ir().stmt(*s).kind, al_syntax::ir::StmtKind::Exit(_)) {
+            return None;
+        }
+        let strip = |mut e: ExprId| {
+            while let Parenthesized(x) = &self.ir().expr(e).kind {
+                e = *x;
+            }
+            e
+        };
+        let Unary {
+            op: UnaryOp::Not,
+            operand,
+        } = &self.ir().expr(strip(cond)).kind
+        else {
+            return None;
+        };
+        let Call { function, args } = &self.ir().expr(strip(*operand)).kind else {
+            return None;
+        };
+        let [arg] = args.as_slice() else {
+            return None;
+        };
+        let Member { object, member, .. } = &self.ir().expr(*function).kind else {
+            return None;
+        };
+        if !member.eq_ignore_ascii_case("fieldexist") {
+            return None;
+        }
+        let receiver = match &self.ir().expr(*object).kind {
+            Identifier(n) | QuotedIdentifier(n) => n.to_ascii_lowercase(),
+            _ => return None,
+        };
+        let Literal(al_syntax::ir::Literal::Int(n)) = &self.ir().expr(strip(*arg)).kind else {
+            return None;
+        };
+        Some((receiver, n.trim().parse().ok()?))
+    }
+
     /// G33: `R` (folded) when `e` is `R.Number` (`R.Number()` too), parentheses
     /// removed.
     fn number_receiver(&self, mut e: ExprId) -> Option<String> {
@@ -1754,6 +1800,9 @@ impl<'a> IrCfn<'a> {
                 n.path_hint = self.cond_call(*cond, &leaves);
                 n.condition_leaves = some_if(leaves);
                 n.condition_guard = self.simple_guard(*cond);
+                if else_block.is_none() {
+                    n.field_exit_guard = self.field_exit_guard(*cond, *then_block);
+                }
                 n
             }
             Case {

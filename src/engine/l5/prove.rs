@@ -559,7 +559,7 @@ fn writes_caller_dependent(eff: &DigestEffectFull) -> bool {
 /// and is no unknown write. A group that also holds writes whose table is not
 /// known (`unresolvedResources`) is one: its resource list is not all it
 /// writes.
-fn writes_unknown_table(eff: &DigestEffectFull) -> bool {
+pub(crate) fn writes_unknown_table(eff: &DigestEffectFull) -> bool {
     let has = |key: &str| eff.detail.iter().any(|(k, _)| k == key);
     DB_WRITE_TYPES.contains(&eff.effect_type.as_str())
         && !eff.literal_unreachable
@@ -608,15 +608,20 @@ fn evaluate_may_question(
     question: &ProveQuestion,
     witness_truncated: bool,
     via_callers: &HashMap<usize, CallerRef>,
+    field_guarded: &HashMap<usize, bool>,
 ) -> ProveResult {
-    // A caller-dependent write a caller resolves to a real table counts (G25).
+    // A caller-dependent write a caller resolves to a real table counts (G25),
+    // as does a field-guarded write the asked table has the field of (G36).
     let matching: Vec<usize> = entry
         .effects
         .iter()
         .enumerate()
         // G23: an effect the root cannot reach under literal arguments does not.
         .filter(|(i, e)| {
-            (effect_matches(e, question) || via_callers.contains_key(i)) && !e.literal_unreachable
+            (effect_matches(e, question)
+                || via_callers.contains_key(i)
+                || field_guarded.get(i) == Some(&true))
+                && !e.literal_unreachable
         })
         .map(|(i, _)| i)
         .collect();
@@ -657,12 +662,15 @@ fn evaluate_may_question(
     };
     // A write whose table is not known (a RecordRef opened on a computed
     // number, a record type that did not resolve) may write the asked table:
-    // it rules out `no`. It was no match, so the answer was `no`.
+    // it rules out `no`. It was no match, so the answer was `no`. One whose
+    // field guard the asked table cannot pass does not (G36).
     let unknown_table: Vec<ProveBlocker> = match question {
         ProveQuestion::WritesTable { .. } => entry
             .effects
             .iter()
-            .filter(|e| writes_unknown_table(e))
+            .enumerate()
+            .filter(|(i, e)| writes_unknown_table(e) && field_guarded.get(i) != Some(&false))
+            .map(|(_, e)| e)
             .map(|e| ProveBlocker {
                 kind: "unknown-table-write",
                 detail: format!("{} on a table that is not known", e.effect_type),
@@ -914,12 +922,16 @@ pub fn prove(
         gaps_in_cone_count,
         question,
         &HashMap::new(),
+        &HashMap::new(),
         World::Strict,
     )
 }
 
 /// [`prove`] with the caller-dependent writes resolved through callers
 /// ([`resolve_caller_dependent_writes`]): those effects count as matches (G25);
+/// `field_guarded` says which field-guarded writes of unknown table may write
+/// the asked table and which cannot
+/// ([`crate::engine::l5::field_guard::resolve_field_guarded_writes`], G36);
 /// `world` waives the open-world rows [`world_waives`] (G24, G29).
 ///
 /// An answer is labelled with the WEAKEST world, up to `world`, whose answer
@@ -934,9 +946,19 @@ pub fn prove_with_callers(
     gaps_in_cone_count: usize,
     question: &ProveQuestion,
     via_callers: &HashMap<usize, CallerRef>,
+    field_guarded: &HashMap<usize, bool>,
     world: World,
 ) -> ProveResult {
-    let run = |w| prove_in_world(entry, gaps_in_cone_count, question, via_callers, w);
+    let run = |w| {
+        prove_in_world(
+            entry,
+            gaps_in_cone_count,
+            question,
+            via_callers,
+            field_guarded,
+            w,
+        )
+    };
     let strict = run(World::Strict);
     let mut last = None;
     for w in [World::LoadedSubscribers, World::Closed] {
@@ -961,6 +983,7 @@ fn prove_in_world(
     gaps_in_cone_count: usize,
     question: &ProveQuestion,
     via_callers: &HashMap<usize, CallerRef>,
+    field_guarded: &HashMap<usize, bool>,
     world: World,
 ) -> ProveResult {
     let oblg = compute_obligations(entry, gaps_in_cone_count, world);
@@ -980,7 +1003,7 @@ fn prove_in_world(
                 .any(|e| e.effect_type == "COMMIT" && e.via_paths_truncated);
             evaluate_must_question(entry, oblg, commit_paths_truncated)
         }
-        _ => evaluate_may_question(entry, oblg, question, false, via_callers),
+        _ => evaluate_may_question(entry, oblg, question, false, via_callers, field_guarded),
     }
 }
 
@@ -1585,6 +1608,18 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
                 &parsed_question,
             )
         });
+    // G36: field-guarded RecordRef writes, judged against the asked table.
+    let field_guarded = match (&parsed_question, query_full.entries.first()) {
+        (ProveQuestion::WritesTable { table }, Some(entry)) => {
+            crate::engine::l5::field_guard::resolve_field_guarded_writes(
+                resolved,
+                crate::engine::l5::digest_cli::primary_guid_of(resolved).unwrap_or(""),
+                entry,
+                table,
+            )
+        }
+        _ => HashMap::new(),
+    };
     // The bundle's only borrower is dead: release `l4`.
     drop(temp_states);
     drop(owners);
@@ -1604,6 +1639,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         gaps_in_cone_count,
         &parsed_question,
         &via_callers,
+        &field_guarded,
         World::of_flags(closed_world),
     );
     prove_result.obligations.relies_on_loaded_subscribers =

@@ -798,6 +798,7 @@ fn walk_cfg(
                 source_range: None,
                 path_hint: None,
                 table_case: None,
+                field_exit_guard: None,
             };
             loop_stack.push(LoopFrame::default());
             let mut body_pre = pre;
@@ -1923,6 +1924,7 @@ mod tests {
             source_range: None,
             path_hint: None,
             table_case: None,
+            field_exit_guard: None,
         }
     }
 

@@ -40,6 +40,7 @@
 //!   - `PCFNNode.source_range`
 //!   - `PCFNNode.path_hint`
 //!   - `PCFNNode.table_case`
+//!   - `PCFNNode.field_exit_guard`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
 use serde::{Deserialize, Serialize};
@@ -642,6 +643,12 @@ pub struct PCFNNode {
     /// its branches' tables ([`TableCase`]). EXCLUDED from `PartialEq`.
     #[serde(skip, default)]
     pub table_case: Option<TableCase>,
+    /// In-memory ONLY (G36): on an `if` with no `else` whose condition is
+    /// `not R.FieldExist(N)` and whose then-branch is only `exit`: `(R folded,
+    /// N)`. Past it, `R` holds a table that has field `N`. EXCLUDED from
+    /// `PartialEq`.
+    #[serde(skip, default)]
+    pub field_exit_guard: Option<(String, i64)>,
 }
 
 /// G33: what a `case R.Number of Database::"T": …` says about the tables.
@@ -853,7 +860,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 13, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 14, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

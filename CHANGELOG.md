@@ -263,6 +263,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
+  table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var
+  FilterRecord: RecordRef)` modifies whatever table it holds, so `prove …
+  writes-table` had an `unknown-table-write` for every table. Past its
+  `FieldExist(6175274)` guard, only tables a DO extension gives that field
+  (Sales Header and the other documents) can be written: such a table's
+  question now answers `yes`, and a table the workspace declares without the
+  field `no` (a dependency's table keeps the blocker: an extension of it in
+  another loaded app may not be in the model). The guard must be a top-level
+  statement and the RecordRef not rebound after it (`GetTable`, `Open`,
+  `Copy`, `Close`, passed on, assigned). 15 of the HandledState slice's
+  unknowns decide (`engine::l5::field_guard`). Test
+  `cli_prove_field_guarded_write`.
+
+- **A table extension's fields reach its base table when a table shares the
+  extension's number.** The model's extension-field merge looked the
+  extension's stub up by its id (`app/table/<extension number>`) and took the
+  LAST row of that id: a real table of the same number when it came later.
+  Continia DO's `CDOSalesHeaderExt` (6175275) and its table 6175275 `CDO
+  E-Mail Template Merge Field`: Sales Header got that table's fields and lost
+  the extension's (G-5). The merge now takes the stub, and a base is a real
+  table. Pinned by `cli_prove_field_guarded_write`.
+
 - **`Page.Run(0, Rec)` on a dependency's table runs that table's lookup page**
   (G37). Only a workspace table's `LookupPageId` was known, so Continia DO's
   `Page.Run(0, TempServDocLog)` on Base Application's `Service Document Log`
