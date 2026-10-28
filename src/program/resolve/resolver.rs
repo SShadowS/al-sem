@@ -2328,11 +2328,15 @@ fn dispatch_entry_trigger(
             }
         }
         _ => {
-            // No extension mechanism: the declared trigger, or a closed empty set.
-            let shape = if routes.is_empty() {
-                DispatchShape::Multicast
-            } else {
+            // No extension mechanism: the one declared trigger, or a closed
+            // set of every trigger the run reaches (an XmlPort's `Export` runs
+            // `OnPreXmlPort` and its elements' triggers: all of them, not one
+            // of them, so never `Exact` with several routes, which reads as an
+            // ambiguous overload set). Empty is a closed empty set.
+            let shape = if routes.len() == 1 {
                 DispatchShape::Exact
+            } else {
+                DispatchShape::Multicast
             };
             return (shape, SetCompleteness::Complete, routes);
         }

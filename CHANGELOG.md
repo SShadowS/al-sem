@@ -263,6 +263,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An XmlPort's `Export`/`Import`/`Run` is a multicast over every trigger it
+  reaches.** With no extension mechanism, the entry dispatch was `Exact` whenever
+  it had any route, so an xmlport run reaching `OnPreXmlPort` and its elements'
+  triggers read as an ambiguous overload set and `prove` blocked on it (Base
+  Application's `ICOutboxImpExpXML.Export()`). Test
+  `an_xmlport_export_reaches_all_its_triggers`.
+- **Two more call results type an argument.** A record's platform method
+  (`Line.RecordId()`) types as its documented return, and an enum value's
+  `Names.Get(i)`/`Ordinals.Get(i)` as `Text`/`Integer`: Business Foundation's
+  `AddAction(ErrorInfo, NoSeriesLine.RecordId(), …)` and System Application's
+  `SetHttpMethod(Method.Names.Get(…))` no longer stay `ambiguousResolved`. Test
+  `record_builtin_and_enum_list_results_pick_overloads`.
 - **A report dataitem or xmlport table element named as a receiver is a record
   operation.** The body pass took only globals, parameters and locals as record
   receivers, so `"Job Ledger Entry".Modify()` from a nested dataitem's trigger, or

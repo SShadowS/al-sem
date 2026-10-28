@@ -1385,6 +1385,35 @@ fn type_call_result_arg_member(
                 None => return ArgDispatchInfo::untyped(),
             }
         }
+        // An enum value's name or ordinal list read by `Get`
+        // (`Method.Names.Get(i)`, a `List of [Text]`; `Ordinals`, of
+        // [Integer]): System Application's `SetHttpMethod(Method.Names.Get(
+        // …))` over `Text` / `Enum "Http Method"` stayed ambiguous.
+        ExprKind::Member {
+            object,
+            member: list,
+            ..
+        } if unquote_identifier(member).fold_identifier() == "get" && inner_arity == 1 => {
+            let is_enum = match &file.ir.expr(*object).kind {
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => matches!(
+                    caller_scope_symbol(n, routine, object_globals),
+                    CallerScopeSymbol::Found(Some(t))
+                        if t.trim_start().to_ascii_lowercase().starts_with("enum ")
+                ),
+                _ => false,
+            };
+            let keyword = match unquote_identifier(list).fold_identifier().as_str() {
+                "names" if is_enum => "text",
+                "ordinals" if is_enum => "integer",
+                _ => return ArgDispatchInfo::untyped(),
+            };
+            return ArgDispatchInfo {
+                canonical: Some(CanonicalArgType::Base(keyword.to_string())),
+                exact_text: Some(keyword.to_string()),
+                literal_kind: None,
+                var_passable: false,
+            };
+        }
         // Any other multi-hop base (a Call, a deeper Member, …) — out of
         // this increment's scope, decline rather than guess.
         _ => return ArgDispatchInfo::untyped(),
@@ -1407,6 +1436,27 @@ fn type_call_result_arg_member(
     let [route] = routes.as_slice() else {
         return ArgDispatchInfo::untyped();
     };
+    // A record's platform method (`Line.RecordId()`): its documented return
+    // (`record_builtin_return_kind`), as the parens-less `Rec.RecordId` arm
+    // types it. Business Foundation's `AddAction(ErrorInfo, Line.RecordId(),
+    // …)` over `RecordId` / `Code[20]` stayed ambiguous.
+    if matches!(route.target, RouteTarget::Builtin(_))
+        && matches!(base_receiver, ReceiverType::Record { .. })
+    {
+        let keyword = match record_builtin_return_kind(&member_lc, true, inner_arity) {
+            Some(FrameworkKind::RecordId) => "recordid",
+            Some(FrameworkKind::Guid) => "guid",
+            Some(FrameworkKind::DateTime) => "datetime",
+            Some(FrameworkKind::Text) => "text",
+            _ => return ArgDispatchInfo::untyped(),
+        };
+        return ArgDispatchInfo {
+            canonical: Some(CanonicalArgType::Base(keyword.to_string())),
+            exact_text: Some(keyword.to_string()),
+            literal_kind: None,
+            var_passable: false,
+        };
+    }
     if matches!(
         route.target,
         RouteTarget::Unresolved | RouteTarget::Builtin(_)

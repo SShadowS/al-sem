@@ -5348,6 +5348,122 @@ codeunit 50191 "BO Caller"
     assert_binds_param(&report, tmp.path(), "frameworkmember", "c: httpcontent");
 }
 
+/// An XmlPort's `Export` runs every trigger it reaches (`OnPreXmlPort`, an
+/// element's `OnBeforePassVariable`): a multicast over all of them. It was
+/// `Exact` with several routes, which the model reads as an ambiguous overload
+/// set, so `prove` blocked on Base Application's
+/// `ICOutboxImpExpXML.Export()`.
+#[test]
+fn an_xmlport_export_reaches_all_its_triggers() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-888888888888", "name": "ProbeXP", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50240, "to": 50249 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"xmlport 50240 "XP Port"
+{
+    schema
+    {
+        textelement(Root)
+        {
+            textelement(Name)
+            {
+                trigger OnBeforePassVariable()
+                begin
+                end;
+            }
+        }
+    }
+
+    trigger OnPreXmlPort()
+    begin
+    end;
+}
+codeunit 50241 "XP Caller"
+{
+    procedure Go()
+    var
+        Port: XmlPort "XP Port";
+    begin
+        Port.Export();
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    let edge = &outer_call_edge(&report, "go").edge;
+    assert_eq!(edge.shape, DispatchShape::Multicast, "{edge:?}");
+    assert_eq!(edge.routes.len(), 2, "{edge:?}");
+}
+
+/// Two call results that typed as nothing, each the one discriminating
+/// argument of a same-arity overload pair: a record's platform method
+/// (Business Foundation's `AddAction(ErrorInfo, NoSeriesLine.RecordId(), …)`
+/// over `RecordId` / `Code[20]`), and an enum value's name list read by `Get`
+/// (System Application's `SetHttpMethod(Method.Names.Get(…))` over `Text` /
+/// `Enum "Http Method"`).
+#[test]
+fn record_builtin_and_enum_list_results_pick_overloads() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-878787878787", "name": "ProbeAA", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50230, "to": 50239 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"table 50230 "AA Line"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+codeunit 50231 "AA Errors"
+{
+    procedure ThrowLine(Line: Record "AA Line"; ActionDictionary: Dictionary of [Text, Text])
+    var
+        ErrorInfo: ErrorInfo;
+    begin
+        AddAction(ErrorInfo, Line.RecordId(), ActionDictionary);
+    end;
+
+    procedure ThrowCode(NoSeriesCode: Code[20]; ActionDictionary: Dictionary of [Text, Text])
+    var
+        ErrorInfo: ErrorInfo;
+    begin
+        AddAction(ErrorInfo, NoSeriesCode, ActionDictionary);
+    end;
+
+    local procedure AddAction(var ErrorInfo: ErrorInfo; RecordId: RecordId; ActionDictionary: Dictionary of [Text, Text]) begin end;
+    local procedure AddAction(var ErrorInfo: ErrorInfo; NoSeriesCode: Code[20]; ActionDictionary: Dictionary of [Text, Text]) begin end;
+
+    procedure SetMethod(Method: Enum "AA Method")
+    begin
+        SetHttpMethod(Method.Names.Get(Method.Ordinals.IndexOf(Method.AsInteger())));
+    end;
+
+    procedure SetHttpMethod(MethodName: Text) begin end;
+    procedure SetHttpMethod(Method: Enum "AA Method") begin end;
+}
+enum 50232 "AA Method" { value(0; GET) { } value(1; POST) { } }
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    assert_binds_param(&report, tmp.path(), "throwline", "recordid: recordid");
+    assert_binds_param(&report, tmp.path(), "throwcode", "noseriescode: code[20]");
+    assert_binds_param(&report, tmp.path(), "setmethod", "methodname: text");
+}
+
 /// Three argument shapes that left a same-arity overload pair
 /// `ambiguousResolved`, each with one reading only:
 /// - a text literal where the rival takes an `Integer` (Continia DO's
