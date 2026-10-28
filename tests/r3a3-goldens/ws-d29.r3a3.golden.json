@@ -28,8 +28,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -70,8 +70,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -87,6 +87,14 @@
 		{
 			"routineId": "11111111-0000-0000-0000-00000000d290:Codeunit:51300#82f666c0eaebc63968584c2ae92c028a93863b7c42bcd0f8a3daa1e09d6c8a4d",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d290:Codeunit:51300#82f666c0eaebc63968584c2ae92c028a93863b7c42bcd0f8a3daa1e09d6c8a4d/op0"
+				},
 				{
 					"op": "read",
 					"resourceKind": "table",
@@ -112,8 +120,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -154,8 +162,8 @@
 					"provenance": "direct",
 					"via": "self",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

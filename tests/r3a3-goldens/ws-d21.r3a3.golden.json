@@ -4,6 +4,22 @@
 			"routineId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#4d09051e52af2d8e6ab4ff133c2ed7e11fca0e2d8b2fd5a11b86862ab550c3fa",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#4d09051e52af2d8e6ab4ff133c2ed7e11fca0e2d8b2fd5a11b86862ab550c3fa/op0"
+				},
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#4d09051e52af2d8e6ab4ff133c2ed7e11fca0e2d8b2fd5a11b86862ab550c3fa/op1"
+				},
+				{
 					"op": "read",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -33,7 +49,16 @@
 		},
 		{
 			"routineId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#ac4892dee8fab00ea0460ff08fc9b53ce4b13997a781569302d8509d37b19241",
-			"capabilityFactsDirect": [],
+			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#ac4892dee8fab00ea0460ff08fc9b53ce4b13997a781569302d8509d37b19241/op0"
+				}
+			],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#ac4892dee8fab00ea0460ff08fc9b53ce4b13997a781569302d8509d37b19241",
@@ -45,7 +70,16 @@
 		},
 		{
 			"routineId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#c483447967b17b04cfef9d7ca72d6728c0f402bd351f453351bcd71f83d85669",
-			"capabilityFactsDirect": [],
+			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#c483447967b17b04cfef9d7ca72d6728c0f402bd351f453351bcd71f83d85669/op0"
+				}
+			],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#c483447967b17b04cfef9d7ca72d6728c0f402bd351f453351bcd71f83d85669",

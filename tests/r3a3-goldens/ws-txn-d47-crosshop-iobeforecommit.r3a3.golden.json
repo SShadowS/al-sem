@@ -12,6 +12,14 @@
 					"witnessOperationId": "11111111-0000-0000-0000-0000000d4707:Codeunit:50000#302dc2332e7a9ae6fb0474a4d66e256730ee465bd1df06a0f8f46b10716cf434/op2"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-0000000d4707:Codeunit:50000#302dc2332e7a9ae6fb0474a4d66e256730ee465bd1df06a0f8f46b10716cf434/op0"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -61,15 +69,15 @@
 					},
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4707:Codeunit:50000#302dc2332e7a9ae6fb0474a4d66e256730ee465bd1df06a0f8f46b10716cf434/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Get",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "resp",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "resp"
+						},
+						"kind": "http",
+						"method": "Get"
 					}
 				}
 			],
@@ -96,15 +104,15 @@
 					},
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4707:Codeunit:50001#cf1494626ea00642639f1b86e348d62477694361a624251216b9cbbf3f0b47ea/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Get",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "resp",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "resp"
+						},
+						"kind": "http",
+						"method": "Get"
 					}
 				}
 			],

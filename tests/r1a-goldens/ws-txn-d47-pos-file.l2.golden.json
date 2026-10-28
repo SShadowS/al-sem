@@ -370,6 +370,14 @@
             "value": "line"
           },
           "witnessCallsiteId": "r0/f29ebb74d1a73584164b028c23c381a827ffee92e5bd13a2cec9b404465794d6/cs0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/f29ebb74d1a73584164b028c23c381a827ffee92e5bd13a2cec9b404465794d6/op0"
         }
       ],
       "capabilityStatus": "complete",

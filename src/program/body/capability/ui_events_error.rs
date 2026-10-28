@@ -154,6 +154,49 @@ pub fn extract_events(
 
 // ─── Error ───────────────────────────────────────────────────────────────────
 
+/// The implicit runtime error a RECORD OPERATION may raise (G20), named for the
+/// fact: `Get` / `FindFirst` / `FindLast` / `FindSet` when the op is a statement
+/// (its Boolean discarded, so a missing record raises an error), `TestField`
+/// always. Record operations are their own list (`PRecordOperation`), not call
+/// sites. With [`implicit_error_call`], the ONE rule: the body extractor and
+/// the L4 cone both call them.
+pub(crate) fn implicit_error_record_op(
+    op: &str,
+    in_statement_position: bool,
+) -> Option<&'static str> {
+    match op {
+        "Get" if in_statement_position => Some("Get"),
+        "FindFirst" if in_statement_position => Some("FindFirst"),
+        "FindLast" if in_statement_position => Some("FindLast"),
+        "FindSet" if in_statement_position => Some("FindSet"),
+        "TestField" => Some("TestField"),
+        _ => None,
+    }
+}
+
+/// The implicit runtime error a CALL SITE may raise (G20): `FieldError`, which
+/// is no record operation, on a record (a variable declared `Record …`, by the
+/// extractor's own `receiver_type_of`, or the implicit `Rec` / `xRec`) or bare
+/// in table or page code. Anything else, an `HttpClient.Get` included: `None`.
+pub(crate) fn implicit_error_call(
+    callee: &PCallee,
+    receiver_type_of: &dyn Fn(&str) -> String,
+) -> Option<&'static str> {
+    match callee {
+        PCallee::Member { receiver, method } if method.eq_ignore_ascii_case("fielderror") => {
+            let r = receiver.to_ascii_lowercase();
+            let is_record = r == "rec"
+                || r == "xrec"
+                || receiver_type_of(&r)
+                    .to_ascii_lowercase()
+                    .starts_with("record");
+            is_record.then_some("FieldError")
+        }
+        PCallee::Bare { name } if name.eq_ignore_ascii_case("fielderror") => Some("FieldError"),
+        _ => None,
+    }
+}
+
 pub fn extract_error(
     ctx: &ExtractionContext,
     _routine: &PRoutine,
@@ -173,6 +216,31 @@ pub fn extract_error(
                 witness_callsite_id: None,
                 extra: None,
             });
+        }
+    }
+    // Implicit runtime errors (G20): their own op, as in the L4 cone.
+    let implicit = |witness_operation_id: Option<String>, witness_callsite_id: Option<String>| {
+        CapabilityFact {
+            op: "error-implicit".to_string(),
+            resource_kind: "error".to_string(),
+            confidence: "static".to_string(),
+            provenance: "direct".to_string(),
+            via: "self".to_string(),
+            resource_arg_source: None,
+            witness_operation_id,
+            witness_callsite_id,
+            extra: None,
+        }
+    };
+    for op in &ctx.features.record_operations {
+        if implicit_error_record_op(&op.op, op.in_statement_position).is_some() {
+            facts.push(implicit(Some(op.id.clone()), None));
+        }
+    }
+    let type_of = |name: &str| ctx.receiver_type_of(name);
+    for cs in &ctx.features.call_sites {
+        if implicit_error_call(&cs.callee, &type_of).is_some() {
+            facts.push(implicit(None, Some(cs.id.clone())));
         }
     }
 

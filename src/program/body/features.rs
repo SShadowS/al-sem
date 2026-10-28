@@ -30,6 +30,7 @@
 //!   - `PCallSite.in_statement_position`
 //!   - `PCallSite.receiver_temp_state`
 //!   - `PRecordOperation.in_until_condition`
+//!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
 //!   - `PLoop.exhausting_advance`
 //!   - `PRecordVariable.is_receiver`
@@ -347,6 +348,13 @@ pub struct PRecordOperation {
     /// safe: an exact structural proof, anything else keeps firing).
     #[serde(skip)]
     pub in_until_condition: bool,
+    /// True iff the op is the outermost expression of a bare call statement, so
+    /// a lookup's Boolean is discarded (`PCallSite.in_statement_position`'s twin).
+    /// G20: an unguarded `Get`/`FindFirst`/`FindLast`/`FindSet` raises an error
+    /// when no record matches. INTERNAL-ONLY like `in_until_condition`
+    /// (`serde(skip)`, excluded from `PartialEq`).
+    #[serde(skip)]
+    pub in_statement_position: bool,
     /// Detector-audit d29 FP-1: the literal `RunTrigger` argument of a mutating
     /// op — `Insert([RunTrigger])` / `Modify([RunTrigger])` / `Delete([RunTrigger])` /
     /// `DeleteAll([RunTrigger])` (arg 0) and `ModifyAll(Field, Value[, RunTrigger])`
@@ -830,7 +838,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 11, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 12, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

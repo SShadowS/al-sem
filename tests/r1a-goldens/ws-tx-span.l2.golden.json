@@ -398,6 +398,22 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "r0/5c8de947831615b67b8848dfb66b0c87c1250113a0c310280a1f710e23b3b5fd/op2"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/5c8de947831615b67b8848dfb66b0c87c1250113a0c310280a1f710e23b3b5fd/op0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/5c8de947831615b67b8848dfb66b0c87c1250113a0c310280a1f710e23b3b5fd/op3"
         }
       ],
       "capabilityStatus": "complete",

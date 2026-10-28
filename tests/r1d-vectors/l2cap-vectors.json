@@ -78,6 +78,14 @@
             },
             "opSubtype": "Delete"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/2fb67181c209ce544af4cdb5db74d366c8dfdf47e0b1624561c635d342cf1711/op0"
         }
       ],
       "expectedStatus": "complete",
@@ -90,6 +98,7 @@
         "NO fact carries a resourceId (L3, stripped)",
         "NO nested ValueSource carries a tableId (L3, deep-stripped)",
         "FindSet → op=read, resourceKind=table, opSubtype=FindSet",
+        "a statement-position FindSet (its Boolean discarded) → also op=error-implicit (G20)",
         "Modify → op=modify, opSubtype=Modify",
         "Insert → op=insert",
         "Delete → op=delete",
@@ -653,6 +662,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "r0/92bc50c5c60f108456e82eec90ef4c2f1cc12cdfffbdfd721dfcd404eae982b1/op1"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/92bc50c5c60f108456e82eec90ef4c2f1cc12cdfffbdfd721dfcd404eae982b1/op0"
         }
       ],
       "expectedStatus": "complete",

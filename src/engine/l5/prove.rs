@@ -419,7 +419,11 @@ fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
             effect_resource_matches(eff, event)
         }
         ProveQuestion::ReachesUi => UI_TYPES.contains(&eff.effect_type.as_str()),
-        ProveQuestion::ThrowsError => eff.effect_type == "ERROR_THROW",
+        // An explicit Error, or an implicit runtime error (G20: an unguarded
+        // Get/FindFirst/FindLast/FindSet, TestField, FieldError).
+        ProveQuestion::ThrowsError => {
+            eff.effect_type == "ERROR_THROW" || eff.effect_type == "ERROR_IMPLICIT"
+        }
     }
 }
 

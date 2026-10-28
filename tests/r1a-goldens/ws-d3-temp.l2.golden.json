@@ -189,6 +189,14 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/0119c54aa1f80f1d796136436d2901efb1208b0af7e7bff12726ff02dd6c4982/op0"
         }
       ],
       "capabilityStatus": "complete",

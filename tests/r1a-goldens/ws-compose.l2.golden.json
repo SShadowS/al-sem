@@ -213,6 +213,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/0f4bfd68b3b1c9ceca6634bf99ea26eaffdce2b86cbd65260a8da46655b15124/op0"
         }
       ],
       "capabilityStatus": "complete",

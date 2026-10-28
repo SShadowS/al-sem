@@ -14,6 +14,15 @@
 					"witnessCallsiteId": "44444444-4444-4444-4444-444444444444:Codeunit:50100#cb01deefa01c77b7b956a4b280cfec1b430a6b3948de68e9348999e3b4867125/cs0"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0",
+					"witnessCallsiteId": "44444444-4444-4444-4444-444444444444:Codeunit:50100#cb01deefa01c77b7b956a4b280cfec1b430a6b3948de68e9348999e3b4867125/cs0"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -71,7 +80,17 @@
 					}
 				}
 			],
-			"capabilityFactsInherited": [],
+			"capabilityFactsInherited": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "implicit-trigger",
+					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0",
+					"witnessFirstHopOperationId": "44444444-4444-4444-4444-444444444444:Codeunit:50101#a409707d31efb836493088d2e29cbb71f098f017068b06ed0050ddea85f49f92/op1"
+				}
+			],
 			"coverage": {
 				"subject": "44444444-4444-4444-4444-444444444444:Codeunit:50101#a409707d31efb836493088d2e29cbb71f098f017068b06ed0050ddea85f49f92",
 				"directStatus": "complete",
@@ -114,7 +133,17 @@
 					}
 				}
 			],
-			"capabilityFactsInherited": [],
+			"capabilityFactsInherited": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "implicit-trigger",
+					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0",
+					"witnessFirstHopOperationId": "44444444-4444-4444-4444-444444444444:Codeunit:50104#0ee6887b7588b60e569e5a6c679fb8766b5f347483371aa05d47b20126091e7e/op1"
+				}
+			],
 			"coverage": {
 				"subject": "44444444-4444-4444-4444-444444444444:Codeunit:50104#0ee6887b7588b60e569e5a6c679fb8766b5f347483371aa05d47b20126091e7e",
 				"directStatus": "complete",
@@ -134,6 +163,15 @@
 					"provenance": "inherited",
 					"via": "call",
 					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Codeunit:50101#a409707d31efb836493088d2e29cbb71f098f017068b06ed0050ddea85f49f92/op2",
+					"witnessCallsiteId": "44444444-4444-4444-4444-444444444444:Codeunit:50104#351217b0668cdf1652d23b4416c3be54899eaaac2017209b4b39d43e3a57ae16/cs0"
+				},
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0",
 					"witnessCallsiteId": "44444444-4444-4444-4444-444444444444:Codeunit:50104#351217b0668cdf1652d23b4416c3be54899eaaac2017209b4b39d43e3a57ae16/cs0"
 				},
 				{
@@ -166,7 +204,16 @@
 		},
 		{
 			"routineId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e",
-			"capabilityFactsDirect": [],
+			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0"
+				}
+			],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "44444444-4444-4444-4444-444444444444:Table:50102#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e",

@@ -558,6 +558,14 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/351d8a05c42ec18fbdd1f6199878c03f7de580045fd6a45a79774fef88f8bc3e/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -751,6 +759,14 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/ecb39b9386c5bf67e3060180c8ec4d9be95fc89bc57f08331986f29bea384af7/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -1062,6 +1078,14 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/d2c078eaff2ea5e880d302f4cccdafc9a048542d9ebbd462cd6af7a15859e80c/op2"
         }
       ],
       "capabilityStatus": "complete",

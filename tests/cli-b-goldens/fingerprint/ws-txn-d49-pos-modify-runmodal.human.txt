@@ -13,6 +13,10 @@ Codeunit D49 Sender::ModifyThenRunModal  [public-procedure]
     TableData "11111111-0000-0000-0000-0000000d4902/table/50100" MR
 
   witnesses:
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct Rec.Get at ws:src/Sender.Codeunit.al:11:8
+
     execute page — 1 path shown
       Path 1/1 shown:
         call Page.RunModal at ws:src/Sender.Codeunit.al:14:8

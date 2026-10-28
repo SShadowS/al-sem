@@ -191,6 +191,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/75fd210c862a7fd4af39c4f6865af6782e3d90694eb7efc03dee6736cfb8d927/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -379,6 +387,14 @@
             },
             "opSubtype": "Get"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/7c26561cb04ec3c92725f1a6531a078711b33eb92c9f4d3659bc5831c2a73387/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -559,6 +575,14 @@
             },
             "opSubtype": "Get"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/49c48945530a2f3a0e55cc4d37676f3880f017cb91b9b9d0cc96bb716fa0f523/op0"
         }
       ],
       "capabilityStatus": "complete",

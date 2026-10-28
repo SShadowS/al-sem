@@ -1047,6 +1047,7 @@ impl<'a> SpineCtx<'a> {
                         loop_stack: loop_stack.clone(),
                         source_anchor: anchor.clone(),
                         in_until_condition: self.in_until,
+                        in_statement_position: self.in_stmt_position,
                         // RunTrigger literal arg of a trigger-firing op (Insert/
                         // Modify/Delete/DeleteAll → arg 0; ModifyAll → arg 2) —
                         // Some(bool) iff that arg is a boolean literal. L5/d29 input

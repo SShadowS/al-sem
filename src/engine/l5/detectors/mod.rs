@@ -2263,6 +2263,7 @@ mod issue21_predicate_tests {
             },
             loop_stack: vec!["loop0".to_string()],
             in_until_condition: true,
+            in_statement_position: false,
             run_trigger: None,
         }
     }

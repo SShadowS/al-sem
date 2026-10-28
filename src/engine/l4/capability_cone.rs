@@ -1086,6 +1086,45 @@ pub(crate) fn direct_facts_for_routine(
         }
     }
 
+    // ── implicit runtime errors (G20) ───────────────────────────────────────
+    // A record lookup in statement position (its Boolean discarded) raises an
+    // error when no record matches; TestField and FieldError may always raise
+    // one. Their own op, not `error-throw`: the ordering engine and the
+    // detectors read `error-throw` as an explicit `Error`, and every unguarded
+    // `Get` is not that. `prove … throws-error` counts both. No resource id (a
+    // resource id is an identity, the snapshot's closure rule): like
+    // `error-throw`, the evidence's excerpt names the call.
+    {
+        use crate::program::body::capability::ui_events_error::{
+            implicit_error_call, implicit_error_record_op,
+        };
+        let implicit = |op: Option<String>, cs: Option<String>| CapabilityFact {
+            subject: routine.id.clone(),
+            op: "error-implicit",
+            resource_kind: "error",
+            resource_id: None,
+            resource_arg_source: None,
+            confidence: "static",
+            provenance: "direct",
+            via: "self",
+            witness_operation_id: op,
+            witness_callsite_id: cs,
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
+            extra: None,
+        };
+        for op in &record_ops {
+            if implicit_error_record_op(&op.op, op.in_statement_position).is_some() {
+                facts.push(implicit(Some(op.id.clone()), None));
+            }
+        }
+        for cs in &call_sites {
+            if implicit_error_call(&cs.callee, &receiver_type_of).is_some() {
+                facts.push(implicit(None, Some(cs.id.clone())));
+            }
+        }
+    }
+
     // ── publisher-fact injection (summary-runner.ts:615-632) ───────────────
     // One direct `publish` fact per EventSymbol whose publisherRoutineId is this
     // routine. Appended AFTER the family facts (al-sem `facts = [...facts, f]`).

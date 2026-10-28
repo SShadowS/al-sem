@@ -109,6 +109,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`prove … throws-error` sees implicit runtime errors** (G20). Only an explicit
+  `Error` counted, so Continia DO's `CDO E-Mail.Init`, whose unguarded `DOSetup.Get();`
+  raises an error when the setup record is missing, answered `no`. A record lookup
+  whose Boolean is discarded (`Get`, `FindFirst`, `FindLast`, `FindSet` in statement
+  position), `TestField` and `FieldError` on a record now give an `error-implicit` fact
+  (`ERROR_IMPLICIT` effect), from one shared rule in both extractors
+  (`implicit_error_record_op`, `implicit_error_call`); record operations carry
+  `in_statement_position` as call sites do. Their own op, not `error-throw`: the
+  ordering engine and the detectors read `error-throw` as an explicit `Error`, and DO's
+  findings did not move (2,203). Only `throws-error` counts both. `if X.Get(...)`, an
+  `HttpClient.Get` statement and other non-record calls give none; `Codeunit.Run` is
+  left to the run codeunit's own errors (a caught `if Codeunit.Run` is not modelled).
+  Goldens: 192 files gain the facts (an r3a3 HTTP fact's `extra` keys were also
+  re-ordered, values unchanged); the `l2cap` vectors gain two expected facts; the
+  never-regenerated split record `full-snapshot.r5b.cross-app` was re-minted through the
+  new explicit `REMINT_SPLIT_RECORDS=1` (its `RECORD` says why; the diff is the one new
+  fact); the R3a-3 manifest gains the 146 facts (127 direct, 19 inherited); the policy
+  facts oracle, whose recorder is gone, was re-recorded through the new
+  `REMINT_POLICY_FACTS_ORACLE=1` (118 of 446 cases gain facts, none loses one).
+  DO: all four claims now `yes`, with the lookup or `TestField` as evidence. Test:
+  `cli_prove_throws_error::throws_error_sees_implicit_runtime_errors` (guarded lookups
+  and `HttpClient.Get` are controls).
 - **`Rename` is a table write in the digest and `prove`** (G19). The capability
   facts had it (op `rename`), but the digest's effect taxonomy had no entry for it,
   so it was no effect at all and `writes-table` answered a confident `no` for

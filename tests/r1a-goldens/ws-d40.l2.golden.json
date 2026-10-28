@@ -871,6 +871,14 @@
             },
             "opSubtype": "Get"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/c77e36c3a6061c8f57a2b2acf3805183d9771803445cfffcad91504fb3ee18a5/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -1075,6 +1083,14 @@
             },
             "opSubtype": "Modify"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/0d8721d8d1c18dba266bf0a93bfc630ccdfb604da858d3aad97ec3b2016df412/op0"
         }
       ],
       "capabilityStatus": "complete",

@@ -394,6 +394,14 @@
               }
             }
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/e78563a8d158a66a1a0e6bf88c6dd9d8afb1e9b338e4d4c7463da5745d83cae3/op0"
         }
       ],
       "capabilityStatus": "complete",

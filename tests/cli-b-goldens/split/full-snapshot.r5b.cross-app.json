@@ -144,6 +144,15 @@
   "capabilityFacts": [
     {
       "confidence": "static",
+      "op": "error-implicit",
+      "provenance": "direct",
+      "resourceKind": "error",
+      "subject": "11111111-0000-0000-0000-0000000000aa:Codeunit:70000#7c9c656c6885f02abe0c1f891e42bdfc6eb8c291ca998b24ff5c1ae48f6c44f6",
+      "via": "self",
+      "witnessOperationId": "1dc54afacf55e729/3548616a952a79d4dc3015e8ea9e732388c246e882be50494b6ddc505b251247/op1"
+    },
+    {
+      "confidence": "static",
       "extra": {
         "kind": "table",
         "opSubtype": "FindFirst",

@@ -75,6 +75,9 @@ fn map_op(op: &str) -> Option<&'static str> {
         "ui-error" => Some("UI_ERROR"),
         "ui-window-open" => Some("UI_WINDOW_OPEN"),
         "error-throw" => Some("ERROR_THROW"),
+        // G20: a record lookup whose Boolean is discarded, TestField, FieldError.
+        // Not ERROR_THROW: the ordering engine grades that as an explicit Error.
+        "error-implicit" => Some("ERROR_IMPLICIT"),
         _ => None,
     }
 }

@@ -19,6 +19,9 @@
     evidence: ws:src/posting.al:14 "Header.Modify"
     detail: resourceId=11111111-0000-0000-0000-00000000d80a/table/36, resourceDisplay=Sales Header, tempState=known(false)
     via: 1 path(s)
+  [ERROR_IMPLICIT] direct
+    evidence: ws:src/posting.al:7 "Header.Get"
+    via: 1 path(s)
   [EVENT_PUBLISH] transitive
     evidence: (unavailable)
     detail: resourceId=11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc, resourceDisplay=onafterpostsalesdoc, eventClass=Integration

@@ -330,6 +330,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessCallsiteId": "r0/ca3b15d587f4c795a8372c27d4d8246d15cff0a2298060331703b54f917e6fdb/cs0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/ca3b15d587f4c795a8372c27d4d8246d15cff0a2298060331703b54f917e6fdb/op0"
         }
       ],
       "capabilityStatus": "complete",

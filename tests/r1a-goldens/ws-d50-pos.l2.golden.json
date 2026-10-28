@@ -727,6 +727,14 @@
             },
             "opSubtype": "Insert"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/51e409590829da9fe3650346b5e1e19d31ec8726c45a813e76acfb989ca6b695/op0"
         }
       ],
       "capabilityStatus": "complete",

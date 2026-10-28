@@ -678,6 +678,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/967704bb9297f11919464f2b53bd61a22c010c37b5cb24e4380d25507437519e/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -954,6 +962,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/a1d0db60fba502df001d04d903fc802003650da30ae54222fa849b3876d460b5/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -1459,6 +1475,14 @@
             "kind": "event",
             "eventClass": "Integration"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/0c4468fb829752cad0004d3ca5d804cf725acd7ecbd26546bbee70296806db26/op0"
         }
       ],
       "capabilityStatus": "complete",

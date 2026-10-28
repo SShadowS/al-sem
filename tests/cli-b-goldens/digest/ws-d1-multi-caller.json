@@ -65,6 +65,28 @@
               ]
             ],
             "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.FindSet",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 32,
+              "sourceKind": "source"
+            },
+            "factId": "8a960f0208feec72",
+            "guarantees": [],
+            "provenance": "direct",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              []
+            ],
+            "viaPathsTruncated": false
           }
         ],
         "entryDiagnostics": [],
@@ -134,6 +156,28 @@
               ]
             ],
             "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.FindSet",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 40,
+              "sourceKind": "source"
+            },
+            "factId": "c96eaff8bb22fc2e",
+            "guarantees": [],
+            "provenance": "direct",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              []
+            ],
+            "viaPathsTruncated": false
           }
         ],
         "entryDiagnostics": [],
@@ -201,6 +245,28 @@
                   "toRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
                 }
               ]
+            ],
+            "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.FindSet",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 24,
+              "sourceKind": "source"
+            },
+            "factId": "3c45dc6484f64ada",
+            "guarantees": [],
+            "provenance": "direct",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              []
             ],
             "viaPathsTruncated": false
           }
@@ -280,7 +346,7 @@
     "summary": {
       "rootsRequested": 4,
       "rootsResolved": 4,
-      "totalEffects": 4,
+      "totalEffects": 7,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"

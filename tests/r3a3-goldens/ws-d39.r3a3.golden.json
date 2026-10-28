@@ -4,6 +4,14 @@
 			"routineId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#19b2a700e36745a749bf18750e08ce9d528a2299fe6295411f72a8d3ce9701ae",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#19b2a700e36745a749bf18750e08ce9d528a2299fe6295411f72a8d3ce9701ae/op0"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "unresolved",
@@ -50,6 +58,14 @@
 		{
 			"routineId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#338223a36f4f71f00d1687727b90f514c8bb77519ed5e9043f80c366ea58baf1",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#338223a36f4f71f00d1687727b90f514c8bb77519ed5e9043f80c366ea58baf1/op0"
+				},
 				{
 					"op": "read",
 					"resourceKind": "table",
@@ -122,6 +138,14 @@
 		{
 			"routineId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#f39f4972f1fc7bc9550469d22a987c26c3766c8e9e7037ca940e7def8f006503",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#f39f4972f1fc7bc9550469d22a987c26c3766c8e9e7037ca940e7def8f006503/op0"
+				},
 				{
 					"op": "read",
 					"resourceKind": "table",

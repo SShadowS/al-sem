@@ -13,6 +13,10 @@ Codeunit D47 Sender::SendThenCommit  [public-procedure]
       Path 1/1 shown:
         direct commit at ws:src/Sender.Codeunit.al:18:8
 
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct Rec.Get at ws:src/Sender.Codeunit.al:14:8
+
     modify table "11111111-0000-0000-0000-0000000d4702/table/50100" — 1 path shown
       Path 1/1 shown:
         direct Rec.Modify at ws:src/Sender.Codeunit.al:16:8

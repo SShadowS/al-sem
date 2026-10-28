@@ -181,6 +181,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/98a9e60fd8d73a85f3e28c7e362f073120ce7b0cf7be33572a2da5567cffb75c/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -632,6 +640,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/0b796737518d5c974c33d8ecd2f304051e5dc15a3f64d65a3b95a34128e2ddf4/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -908,6 +924,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/6df71008e3361a4f3369ad1680197ffba74c8413dc0f0d04eda11b1a0b7267e9/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -1090,6 +1114,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/454fc77236fa78a634bd65015ec88972537b2676e368793cef37b14874973253/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -1344,6 +1376,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/ff7424c79f0dca91a0e095617cb21ed63d3c8154d29af5c1e8610a9e43510b52/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -1922,6 +1962,14 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/dbfa4e5470e304c58abeab604932d5d85edb420a9d4c062f9154df23c6b8b0e8/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -2772,6 +2820,30 @@
             },
             "opSubtype": "FindLast"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/2e7f832b44ab07c6cad34813ec68d52fa926f9a1f80341d6d0e5761ff6cbe44a/op0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/2e7f832b44ab07c6cad34813ec68d52fa926f9a1f80341d6d0e5761ff6cbe44a/op1"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/2e7f832b44ab07c6cad34813ec68d52fa926f9a1f80341d6d0e5761ff6cbe44a/op2"
         }
       ],
       "capabilityStatus": "complete",
@@ -3309,6 +3381,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/f27a249e3af068fcd14b9c3c0247649cd9a1eac660e425824ae1b2e86518ee27/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -3543,6 +3623,22 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/f046bb370877ba85248b3cdbc1254c878c430e9415fc3dbbf80bf07eb52d4270/op0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/f046bb370877ba85248b3cdbc1254c878c430e9415fc3dbbf80bf07eb52d4270/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -3738,6 +3834,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/ff2f3a950d5e92cd06d3ed4536e6fbffff785857e16fef5226fa80a21a339f8a/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -3903,6 +4007,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/06172624f27452aad94fefe6d51ef60d9c2ed3658b172aa1dfc82370a28b25d9/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -4269,6 +4381,22 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/719cccf29fb3894b71bed6c01ab756466861f7904ba71da07ba92946a9667e30/op0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/719cccf29fb3894b71bed6c01ab756466861f7904ba71da07ba92946a9667e30/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -4535,6 +4663,22 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/75210636c226a8cf3ee495ff06e0a7d780aff5dee5f624a5c1b887e2a8eb3d07/op0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/75210636c226a8cf3ee495ff06e0a7d780aff5dee5f624a5c1b887e2a8eb3d07/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -4685,6 +4829,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/59d1080a4678dd4cffeee65af7797524db4e1bbb9e2ed1ee3efa86ab0e11c45c/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -4904,6 +5056,14 @@
             },
             "opSubtype": "FindSet"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/8318677c84a347623b640bf2759bf3400e51b40cbed8c6cec3ff939daed25f2e/op0"
         }
       ],
       "capabilityStatus": "complete",

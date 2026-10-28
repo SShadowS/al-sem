@@ -304,6 +304,11 @@ pub struct ModelRecordOperation {
     /// walk, an exact structural proof). Forwarded for d1 to suppress the terminator
     /// `Next()`. Never serialized (the L3 projection is field-allowlisted).
     pub in_until_condition: bool,
+    /// G20: the op is a bare call statement, so a lookup's Boolean is discarded
+    /// (`PRecordOperation.in_statement_position`, forwarded): an unguarded
+    /// `Get`/`FindFirst`/`FindLast`/`FindSet` raises an error when no record
+    /// matches. Never serialized.
+    pub in_statement_position: bool,
     /// Detector-audit d29 FP-1: literal `RunTrigger` arg of a mutating op
     /// (`Modify`/`Delete`/`DeleteAll`/`ModifyAll`). `Some(false)` ⇒ trigger
     /// re-firing suppressed (no recursive-event loop). Forwarded for d29. Never
@@ -1427,6 +1432,7 @@ fn project_ir(
                     loop_stack: op.loop_stack.clone(),
                     field_argument_infos: op.field_argument_infos.clone(),
                     in_until_condition: op.in_until_condition,
+                    in_statement_position: op.in_statement_position,
                     run_trigger: op.run_trigger,
                 })
                 .collect();

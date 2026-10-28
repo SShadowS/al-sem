@@ -256,6 +256,14 @@
             "kind": "dispatch",
             "objectType": "Codeunit"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/727e1d45baad13c4e423be835c50c77cbbae30e6939aff233226d9f3093ce54a/op0"
         }
       ],
       "capabilityStatus": "complete",

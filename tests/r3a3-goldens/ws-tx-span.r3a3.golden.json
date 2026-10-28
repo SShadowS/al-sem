@@ -12,6 +12,22 @@
 					"witnessOperationId": "11111111-0000-0000-0000-0000000ff8a1:Codeunit:50101#a15fbfb887bf1826e3f04ea76d6346e88cbd57b0a934f4d9a6a5b5385f360d7e/op2"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-0000000ff8a1:Codeunit:50101#a15fbfb887bf1826e3f04ea76d6346e88cbd57b0a934f4d9a6a5b5385f360d7e/op0"
+				},
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-0000000ff8a1:Codeunit:50101#a15fbfb887bf1826e3f04ea76d6346e88cbd57b0a934f4d9a6a5b5385f360d7e/op3"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",

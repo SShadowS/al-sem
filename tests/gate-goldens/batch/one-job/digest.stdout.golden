@@ -65,6 +65,28 @@
               ]
             ],
             "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.FindSet",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 24,
+              "sourceKind": "source"
+            },
+            "factId": "3c45dc6484f64ada",
+            "guarantees": [],
+            "provenance": "direct",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              []
+            ],
+            "viaPathsTruncated": false
           }
         ],
         "entryDiagnostics": [],
@@ -90,7 +112,7 @@
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
-      "totalEffects": 1,
+      "totalEffects": 2,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "450419199dc399835e4930b0b2b8568717dbc88066e20fa77134485d64043dee"

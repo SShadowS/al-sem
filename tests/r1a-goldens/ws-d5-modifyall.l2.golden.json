@@ -5312,6 +5312,14 @@
             },
             "opSubtype": "Next"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/402546b88cac76f92a112529a6d6f50d810a911ad4620521982cb1f349799bfa/op1"
         }
       ],
       "capabilityStatus": "complete",

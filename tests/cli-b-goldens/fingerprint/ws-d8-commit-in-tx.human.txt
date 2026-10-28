@@ -18,6 +18,10 @@ Codeunit D8PostingChain::PostSalesDoc  [public-procedure]
           → event 11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc
             → direct commit at ws:src/subscriber.al:10:8
 
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct Header.Get at ws:src/posting.al:7:8
+
     insert table "11111111-0000-0000-0000-00000000d80a/table/50100" — 1 path shown
       Path 1/1 shown:
         OnAfterPostSalesDoc (via OnAfterPostSalesDoc at ws:src/posting.al:12:8)

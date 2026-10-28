@@ -48,6 +48,15 @@
     "capabilityFacts": [
       {
         "confidence": "static",
+        "op": "error-implicit",
+        "provenance": "direct",
+        "resourceKind": "error",
+        "subject": "11111111-0000-0000-0000-0000000d4701:Codeunit:50000#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf",
+        "via": "self",
+        "witnessOperationId": "fdc6b75ea570d51f/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0"
+      },
+      {
+        "confidence": "static",
         "extra": {
           "kind": "table",
           "opSubtype": "Modify",
