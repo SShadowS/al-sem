@@ -5288,6 +5288,80 @@ codeunit 50173 "SV Caller"
     assert_stays_ambiguous_resolved(&report, "shadowingvar");
 }
 
+/// Synthesized calls by method id (spec 2026-10-28 transpiled runtime bodies,
+/// §8.3): `T."__alsem_mid_<n>"(…)` binds the one routine of `T` whose AL method id
+/// is `n`, computed from its declared signature, whatever the name, the arity
+/// picks or the argument types say. The ids are the compiler's (the
+/// `method_id` module's alc-probe test pins the function): `P(Integer)` is
+/// -226272512, `P(Text)` -222078196, `Q(var Record "MI T")` 2000513576 with the
+/// table's id 50181 folded in, `Q(Integer)` -190766007. An id no routine has
+/// stays unresolved.
+#[test]
+fn synthesized_calls_bind_by_method_id() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-818181818181", "name": "ProbeMI", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50180, "to": 50189 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"table 50181 "MI T"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+
+codeunit 50182 "MI Target"
+{
+    procedure P(X: Integer) begin end;
+    procedure P(X: Text) begin end;
+    procedure Q(var R: Record "MI T") begin end;
+    procedure Q(X: Integer) begin end;
+}
+
+codeunit 50183 "MI Caller"
+{
+    procedure ByIdText()
+    var
+        T: Codeunit "MI Target";
+        I: Integer;
+    begin
+        T."__alsem_mid_-222078196"(I);
+    end;
+
+    procedure ByIdRecord()
+    var
+        T: Codeunit "MI Target";
+        R: Record "MI T";
+    begin
+        T."__alsem_mid_2000513576"(R);
+    end;
+
+    procedure ByIdNone()
+    var
+        T: Codeunit "MI Target";
+    begin
+        T."__alsem_mid_12345"();
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    // The argument is an Integer, yet the id names the Text overload.
+    assert_binds_param(&report, tmp.path(), "byidtext", "x: text");
+    assert_binds_param(&report, tmp.path(), "byidrecord", "record \"mi t\"");
+    let edge = &outer_call_edge(&report, "byidnone").edge;
+    assert!(
+        matches!(edge.routes.as_slice(), [r] if matches!(r.evidence, Evidence::Unknown(_))),
+        "an id no routine has stays unresolved: {edge:?}"
+    );
+}
+
 /// Test 23n (deferred-increment guard): `ws-overload-field-discriminator`'s
 /// CORRECTED (Task 4, receiver-closure-and-arg-increments plan — a
 /// documented rebaseline, not a regression; renamed per this codebase's M1

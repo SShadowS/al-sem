@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AL method ids, and calls bound by them** (phase 1 of transpiled runtime bodies,
+  spec `docs/superpowers/specs/2026-10-28-transpiled-runtime-bodies-design.md`). The
+  new `program::resolve::method_id` computes the id the AL compiler gives a routine
+  (`[MethodId(n)]` in BC's transpiled C#, `Id` in `SymbolReference.json`) from its
+  signature: FNV-1a of the upper-cased name, combined with the return type's and each
+  parameter's type kind, `var` flag and, for an overloadable routine with an object
+  parameter, each parameter's subtype. It matches 16 of 16 ids alc 18.0.43 gave a
+  probe app and all 1715 computable methods of Continia's Core 29.0. A signature with a
+  generic (`List`, `Dictionary`) or `DotNet` parameter whose subtype counts has no id,
+  so a call to it stays unresolved. The resolver binds a member call named
+  `__alsem_mid_<n>` (what synthesized source will emit for a call the C# names only by
+  id) to the one routine of the receiver's object with that id, source or ABI. Limit:
+  ABI type text drops array dimensions, so an ABI routine with an array parameter does
+  not match. Tests: `method_id` unit tests (the alc ids);
+  `synthesized_calls_bind_by_method_id` (an id picks the overload the argument types
+  would not, a `Record` parameter folds in its table id, an unknown id stays
+  unresolved), failing with the rule off or the subtype id wrong.
 - **`prove --closed-world`** (G24): assume the loaded world is all there is. An
   interface call then dispatches only to the loaded implementations, which the cone
   already follows, so its open-world row stops blocking (`obligations.closedWorldRows`

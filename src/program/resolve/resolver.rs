@@ -272,6 +272,116 @@ fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool 
         .is_some_and(|i| graph.routines[i].source_overload_aliased)
 }
 
+/// The AL method id of routine `r` from its declared signature
+/// ([`crate::program::resolve::method_id`]): a source routine's parameters from
+/// `surface`, an ABI routine's from its retained parameters. Object subtypes
+/// resolve strictly from the routine's own object. `None` when any part of the
+/// signature is not reproducible.
+pub(crate) fn routine_method_id(
+    r: &crate::program::node_extract::RoutineNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+    surface: &DeclSurface,
+) -> Option<i32> {
+    use crate::program::node_extract::AbiParams;
+    use crate::program::resolve::index::ObjectRefResolution;
+    use crate::program::resolve::method_id::{SigParam, SubtypeHash, method_id, parse_type};
+    use crate::program::resolve::receiver::ParsedType;
+    let from = r.id.object.clone();
+    let resolve_ref = |kind: ObjectKind, text: &str| -> Option<&ObjectNode> {
+        let ParsedType::Object { object_ref, .. } =
+            crate::program::resolve::receiver::parse_object_kind_type(kind, text)
+        else {
+            return None;
+        };
+        match index.resolve_object_ref_strict(graph, from.clone(), kind, &object_ref) {
+            ObjectRefResolution::Unique(id) => graph.object(&id),
+            _ => None,
+        }
+    };
+    let mut sig: Vec<SigParam> = Vec::new();
+    // Per parameter, an ABI subtype's id and raw name when the symbols give them.
+    let mut abi_subtypes: Vec<(Option<i64>, Option<&str>)> = Vec::new();
+    match &r.abi_params {
+        AbiParams::Complete(ps) => {
+            for p in ps {
+                sig.push(SigParam {
+                    is_var: p.is_var,
+                    ty: parse_type(&p.type_text)?,
+                });
+                abi_subtypes.push((p.subtype_id, p.subtype_raw_name.as_deref()));
+            }
+        }
+        AbiParams::Missing => {
+            for p in &surface.get(&r.id)?.params {
+                sig.push(SigParam {
+                    is_var: p.by_ref,
+                    ty: parse_type(p.ty.as_deref()?)?,
+                });
+                abi_subtypes.push((None, None));
+            }
+        }
+        AbiParams::CollapsedUntrusted => return None,
+    }
+    let ret = match r.return_type.as_deref() {
+        Some(t) => Some(parse_type(t)?),
+        None => None,
+    };
+    let overloadable = r.publisher_kind.is_none() && r.event_subscribers.is_empty();
+    method_id(&r.name, ret.as_ref(), &sig, overloadable, |i, ty| {
+        let (abi_id, abi_name) = abi_subtypes[i];
+        let abi_name = abi_name.map(str::to_string);
+        if ty.is_interface() {
+            let text = abi_name.unwrap_or_else(|| ty.subtype_text.clone());
+            let o = resolve_ref(ObjectKind::Interface, &text)?;
+            return Some(SubtypeHash::InterfaceName(o.name.to_string()));
+        }
+        let kind = ty.subtype_object_kind()?;
+        if let Some(id) = abi_id {
+            return i32::try_from(id).ok().map(SubtypeHash::ObjectId);
+        }
+        let text = abi_name.unwrap_or_else(|| ty.subtype_text.clone());
+        let o = resolve_ref(kind, &text)?;
+        i32::try_from(o.declared_id?)
+            .ok()
+            .map(SubtypeHash::ObjectId)
+    })
+}
+
+/// A synthesized call by method id (`Cu."__alsem_mid_<n>"(…)`, spec
+/// `2026-10-28-transpiled-runtime-bodies-design.md` §8.3): the one non-trigger
+/// routine of `obj_id` whose [`routine_method_id`] is `n`, or unresolved.
+fn resolve_by_method_id(
+    obj_id: &ObjectNodeId,
+    obj_tier: TrustTier,
+    n: i32,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+    surface: &DeclSurface,
+) -> (DispatchShape, Vec<Route>) {
+    let matched: Vec<&RoutineNodeId> = graph
+        .routines
+        .run_by(|r| r.id.object.cmp(obj_id))
+        .filter(|r| !r.is_trigger)
+        .filter(|r| routine_method_id(r, graph, index, surface) == Some(n))
+        .map(|r| &r.id)
+        .collect();
+    match matched.as_slice() {
+        [rid] => (
+            DispatchShape::Exact,
+            vec![make_routine_route(rid, obj_tier, surface, graph)],
+        ),
+        [] => (
+            DispatchShape::Exact,
+            vec![unresolved_route(UnknownReason::IndexIntegrationGap)],
+        ),
+        _ => (
+            DispatchShape::Exact,
+            vec![unresolved_route(UnknownReason::OverloadAmbiguous)],
+        ),
+    }
+}
+
 /// Try to resolve `name_lc` with `arity` arguments inside `obj_id`, as called
 /// from the identity `from_object` (Task 1 — beyond-1B.3b-follow-up:
 /// PER-CANDIDATE access filtering; see [`routine_candidate_is_visible`]).
@@ -336,7 +446,8 @@ fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool 
 /// visible, prevalidated-concrete candidate case, which is
 /// `(DispatchShape::AmbiguousOverload, vec![one route per candidate])` — see
 /// the `_` arm's doc below for the prevalidation contract.
-#[allow(clippy::too_many_arguments)] // 8 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `build` (S9.0e); each is a distinct identity/lookup input, grouping would obscure call sites.
+#[allow(clippy::too_many_arguments)]
+// 8 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `build` (S9.0e); each is a distinct identity/lookup input, grouping would obscure call sites.
 fn resolve_in_object(
     obj_id: &ObjectNodeId,
     obj_tier: TrustTier,
@@ -359,6 +470,12 @@ fn resolve_in_object(
     // (the same wrappers as `args`).
     build: &[(String, bool)],
 ) -> Option<(DispatchShape, Vec<Route>)> {
+    // A synthesized call by method id binds by id, never by name.
+    if let Some(n) = crate::program::resolve::method_id::synthesized_call_id(name_lc) {
+        return Some(resolve_by_method_id(
+            obj_id, obj_tier, n, graph, index, surface,
+        ));
+    }
     // A trigger is never a call candidate: AL code cannot call one, so a field
     // trigger `OnValidate` and a procedure `OnValidate` in the same object are
     // not overloads of each other (#63; triggers are reached by role, through

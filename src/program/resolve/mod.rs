@@ -22,6 +22,7 @@ pub mod full;
 pub mod global_builtins;
 pub mod index;
 pub mod member_catalog;
+pub mod method_id;
 pub mod receiver;
 pub mod recordref_returns;
 pub mod resolver;
