@@ -913,6 +913,19 @@ impl ResolveIndex {
             .is_some_and(|c| c.len() == 1)
     }
 
+    /// The one object of `kind` named `name_lc` (folded) in the whole program,
+    /// or `None` when there is none or more than one.
+    pub fn unique_object(&self, kind: ObjectKind, name_lc: &str) -> Option<&ObjectNodeId> {
+        match self
+            .objects_by_name
+            .get(&(kind, name_lc.to_string()))?
+            .as_slice()
+        {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
     /// All `TableExtension` objects whose `extends_target` (lowercased) equals
     /// `base_table_name_lc` — [`WorldMode::AnalyzedSnapshot`], whole-program
     /// view (extensions live in reverse-dependent apps, outside the base

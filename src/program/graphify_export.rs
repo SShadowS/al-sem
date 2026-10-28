@@ -1173,6 +1173,7 @@ mod tests {
             routines: routines.into(),
             obj_index,
             friends: Default::default(),
+            closed_internal_interfaces: Default::default(),
             abi_ingest_errors: Default::default(),
             workspace_rows: Default::default(),
         };
@@ -1352,6 +1353,7 @@ mod tests {
             routines: routines.into(),
             obj_index,
             friends: Default::default(),
+            closed_internal_interfaces: Default::default(),
             abi_ingest_errors: Default::default(),
             workspace_rows: Default::default(),
         };

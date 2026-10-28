@@ -1,13 +1,15 @@
 //! Builds a `ProgramGraph` from an `AppSetSnapshot`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+
+use al_syntax::ir::ObjectKind;
 
 use crate::program::abi_ingest::AbiCache;
 use crate::program::dep_cache::{DepCache, DepKey, DepNodes};
 use crate::program::dep_summary::{BuildParse, DepUnitSummary, summarize_file};
 use crate::program::graph::{AbiIngestError, ObjectIndex, ProgramGraph};
-use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
+use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
 use crate::program::node_set::NodeSet;
 use crate::program::profile::BuildProfile;
@@ -383,6 +385,7 @@ pub fn assemble_program_graph(
         routines,
         obj_index,
         friends: dep.friends.clone(),
+        closed_internal_interfaces: closed_internal_interfaces(ws_app_ref, ws_unit, snap),
         abi_ingest_errors: dep.abi_ingest_errors.clone(),
         workspace_rows,
     };
@@ -524,38 +527,74 @@ fn wire_friend_authorizations(
     for (i, unit) in snap.apps.iter().enumerate() {
         let exposing_ref = app_refs[i];
         for friend in &unit.internals_visible_to {
-            // Same GUID-first, name+publisher-fallback resolution as the
-            // dependency wiring above — a `<Module>` friend entry carries no
-            // version, so the fallback compares publisher instead.
-            let by_guid = (!friend.app_id.is_empty())
-                .then(|| {
-                    snap.apps
-                        .iter()
-                        .zip(app_refs.iter())
-                        .find(|(u, _)| {
-                            !u.id.guid.is_empty() && u.id.guid.eq_ignore_ascii_case(&friend.app_id)
-                        })
-                        .map(|(_, r)| *r)
-                })
-                .flatten();
-            let friend_ref = by_guid.or_else(|| {
-                snap.apps
-                    .iter()
-                    .zip(app_refs.iter())
-                    .find(|(u, _)| {
-                        u.id.name.eq_ignore_ascii_case(&friend.name)
-                            && u.id.publisher.eq_ignore_ascii_case(&friend.publisher)
-                    })
-                    .map(|(_, r)| *r)
-            });
-
-            if let Some(friend_ref) = friend_ref {
-                friends.entry(exposing_ref).or_default().insert(friend_ref);
+            if let Some(f) = loaded_friend(snap, friend) {
+                friends.entry(exposing_ref).or_default().insert(app_refs[f]);
             }
             // Friends not present in the snapshot are silently skipped (open-world).
         }
     }
     friends
+}
+
+/// The index in `snap.apps` of the loaded app a friend entry names, or `None`
+/// when no loaded app matches. Same GUID-first, name+publisher-fallback
+/// resolution as the dependency wiring above — a `<Module>` friend entry
+/// carries no version, so the fallback compares publisher instead.
+fn loaded_friend(snap: &AppSetSnapshot, friend: &crate::app_package::FriendApp) -> Option<usize> {
+    let by_guid = (!friend.app_id.is_empty())
+        .then(|| {
+            snap.apps.iter().position(|u| {
+                !u.id.guid.is_empty() && u.id.guid.eq_ignore_ascii_case(&friend.app_id)
+            })
+        })
+        .flatten();
+    by_guid.or_else(|| {
+        snap.apps.iter().position(|u| {
+            u.id.name.eq_ignore_ascii_case(&friend.name)
+                && u.id.publisher.eq_ignore_ascii_case(&friend.publisher)
+        })
+    })
+}
+
+/// G28: the workspace interfaces declared `Access = Internal` whose every
+/// implementer is loaded. Only the declaring app and its `internalsVisibleTo`
+/// friends can name an internal interface, so once every friend the workspace
+/// manifest declares is a loaded app, no app outside the program can implement
+/// it. Empty when some friend is not loaded (open-world).
+fn closed_internal_interfaces(
+    ws_app_ref: AppRef,
+    ws_unit: &ParsedUnit,
+    snap: &AppSetSnapshot,
+) -> HashSet<ObjectNodeId> {
+    let friends_loaded = snap
+        .apps
+        .iter()
+        .find(|u| u.id == snap.workspace_app)
+        .is_some_and(|u| {
+            u.internals_visible_to
+                .iter()
+                .all(|f| loaded_friend(snap, f).is_some())
+        });
+    if !friends_loaded {
+        return HashSet::new();
+    }
+    ws_unit
+        .files
+        .iter()
+        .flat_map(|pf| &pf.file.objects)
+        .filter(|o| o.kind == ObjectKind::Interface)
+        .filter(|o| {
+            o.properties.iter().any(|p| {
+                p.name.eq_ignore_ascii_case("access")
+                    && p.value.trim().eq_ignore_ascii_case("internal")
+            })
+        })
+        .map(|o| ObjectNodeId {
+            app: ws_app_ref,
+            kind: ObjectKind::Interface,
+            key: ObjKey::from_source(o),
+        })
+        .collect()
 }
 
 /// Synthetic platform-publisher arity: a generous upper bound so the resolve

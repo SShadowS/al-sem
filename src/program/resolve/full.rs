@@ -728,6 +728,20 @@ fn resolve_call_site_obligation(
                         crate::program::resolve::closed_enum::closed_over(
                             &cx, *receiver, name_lc, &r,
                         );
+                    // G28: an internal interface no unloaded app can implement
+                    // reaches exactly its routes, whatever the receiver holds.
+                    let real = |x: &Route| {
+                        !matches!(x.target, RouteTarget::Unresolved)
+                            && !matches!(x.evidence, Evidence::Unknown(_))
+                    };
+                    if facts_out.interface_closed_over.is_empty()
+                        && !r.is_empty()
+                        && r.iter().all(real)
+                        && let Some(i) = index.unique_object(ObjectKind::Interface, name_lc)
+                        && graph.closed_internal_interfaces.contains(i)
+                    {
+                        facts_out.interface_closed_over = vec![i.clone()];
+                    }
                     facts_out.interface_unmapped_enums =
                         index.unmapped_enum_implementers(graph, name_lc);
                 }

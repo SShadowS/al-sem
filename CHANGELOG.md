@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An internal interface with every friend loaded is a closed dispatch site** (G28).
+  Only the declaring app and the apps its manifest lists in `internalsVisibleTo` can
+  implement an interface declared `Access = Internal`. When every such friend is a
+  loaded app, a call on the interface reaches only the implementers the program holds,
+  so the site is closed in the open world, with no assumption label (the model marks it
+  as #264 marks a closed-enum site, `DispatchMeta::closed_over`). On Continia DO this
+  covers `CDO Module License`. A public interface, a name two objects share, a route
+  that does not resolve, or a declared friend that is not loaded keeps the site open.
+  `ProgramGraph::closed_internal_interfaces`; test `cli_prove_internal_interface`.
+
 - **AL synthesized for runtime packages that ship no AL** (phases 2–4 of transpiled
   runtime bodies, spec `docs/superpowers/specs/2026-10-28-transpiled-runtime-bodies-design.md`,
   route A). A `.app` with no `.al` but with BC's transpiled C# (`bin/*.cs`) and its

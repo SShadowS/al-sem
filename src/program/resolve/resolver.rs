@@ -3760,6 +3760,7 @@ mod tests {
             routines: routines.into(),
             obj_index,
             friends: friends_map,
+            closed_internal_interfaces: Default::default(),
             abi_ingest_errors: Default::default(),
             workspace_rows: Default::default(),
         }

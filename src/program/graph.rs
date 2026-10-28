@@ -2,7 +2,7 @@
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId};
 use crate::program::node_extract::{ObjectNode, RoutineNode};
@@ -55,6 +55,12 @@ pub struct ProgramGraph {
     /// (Step 3b); empty in every in-memory test fixture that doesn't
     /// explicitly wire it (`..Default::default()`).
     pub friends: HashMap<AppRef, BTreeSet<AppRef>>,
+    /// G28: the workspace interfaces declared `Access = Internal` while every
+    /// `internalsVisibleTo` friend of the workspace is loaded. No app outside
+    /// the program can implement one, so a call on it dispatches only to the
+    /// implementers the program holds. Empty in dependency-only and in-memory
+    /// test graphs.
+    pub closed_internal_interfaces: HashSet<ObjectNodeId>,
     /// Per-app dependency-ABI ingest diagnostics (Tier-1 remediation, H-3):
     /// one entry per SymbolOnly dep whose `SymbolReference.json` could not
     /// be read or parsed. Previously this signal (`SymbolReferenceAbi::
