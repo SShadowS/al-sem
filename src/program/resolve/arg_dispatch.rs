@@ -918,38 +918,66 @@ fn type_one_arg(
         // overloads (alc 18.0.41.45789 + altool graph: `EN(Enum)`/`EN(InStream)`
         // and `EI(Enum)`/`EI(Integer)` both bind the Enum overload). Only a
         // bare qualifier that names an enum: `R.Kind::A` (an option field's
-        // value) and `K::A` with `K` a caller-scope variable are option values,
+        // value) and `K::A` with `K` an Option variable are option values,
         // which bind `Integer` (`EI(R.Kind::A)` binds `EI(Integer)`), so they
-        // stay untyped. Gated on `with` like the bare-identifier arm: a field
-        // of the `with` record could take the name.
+        // stay untyped. G27: `K::A` with `K` a variable DECLARED `Enum X` is a
+        // value of X (BaseApp's `PriceSourceList.Add(SourceType::"All
+        // Customers")`, `SourceType: Enum "Price Source Type"`), typed as the
+        // bare `K` is; and the keyword form `Enum::"X"::A` is X's. Gated on
+        // `with` like the bare-identifier arm: a field of the `with` record
+        // could take the name.
         ExprKind::QualifiedEnum { enum_type, .. } => {
             if with_state != WithState::NoWithProven {
                 return ArgDispatchInfo::untyped();
             }
-            let name = match &file.ir.expr(*enum_type).kind {
-                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n,
-                _ => return ArgDispatchInfo::untyped(),
+            let enum_named = |name: &String| {
+                let oref = ObjectRef::Name {
+                    raw: name.clone(),
+                    normalized_lc: name.fold_identifier(),
+                };
+                match index.resolve_object_ref(graph, from.clone(), ObjectKind::Enum, &oref) {
+                    ObjectRefResolution::Unique(id) => ArgDispatchInfo {
+                        canonical: Some(CanonicalArgType::Object(id)),
+                        exact_text: Some(normalize_type_text(&format!("Enum \"{name}\""))),
+                        literal_kind: None,
+                        var_passable: false,
+                    },
+                    ObjectRefResolution::Ambiguous
+                    | ObjectRefResolution::OutOfClosure
+                    | ObjectRefResolution::Unresolved => ArgDispatchInfo::untyped(),
+                }
             };
-            if !matches!(
-                caller_scope_symbol(name, routine, object_globals),
-                CallerScopeSymbol::NotFound
-            ) {
-                return ArgDispatchInfo::untyped();
-            }
-            let oref = ObjectRef::Name {
-                raw: name.clone(),
-                normalized_lc: name.fold_identifier(),
-            };
-            match index.resolve_object_ref(graph, from.clone(), ObjectKind::Enum, &oref) {
-                ObjectRefResolution::Unique(id) => ArgDispatchInfo {
-                    canonical: Some(CanonicalArgType::Object(id)),
-                    exact_text: Some(normalize_type_text(&format!("Enum \"{name}\""))),
-                    literal_kind: None,
-                    var_passable: false,
-                },
-                ObjectRefResolution::Ambiguous
-                | ObjectRefResolution::OutOfClosure
-                | ObjectRefResolution::Unresolved => ArgDispatchInfo::untyped(),
+            match &file.ir.expr(*enum_type).kind {
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
+                    match caller_scope_symbol(n, routine, object_globals) {
+                        CallerScopeSymbol::NotFound => enum_named(n),
+                        CallerScopeSymbol::Found(Some(ty))
+                            if ty.trim_start().to_ascii_lowercase().starts_with("enum ") =>
+                        {
+                            ArgDispatchInfo {
+                                canonical: dispatch_canonical_type_text(ty, from, graph, index),
+                                exact_text: Some(normalize_type_text(ty)),
+                                literal_kind: None,
+                                var_passable: false,
+                            }
+                        }
+                        // An Option variable (an option value), no type text,
+                        // or a malformed duplicate: never a guess.
+                        CallerScopeSymbol::Found(_) | CallerScopeSymbol::MalformedDuplicate => {
+                            ArgDispatchInfo::untyped()
+                        }
+                    }
+                }
+                // `Enum::"X"::A`: the inner `Enum::"X"` names X.
+                ExprKind::QualifiedEnum {
+                    enum_type: keyword,
+                    value: x,
+                } if matches!(&file.ir.expr(*keyword).kind,
+                    ExprKind::Identifier(k) if k.eq_ignore_ascii_case("enum")) =>
+                {
+                    enum_named(x)
+                }
+                _ => ArgDispatchInfo::untyped(),
             }
         }
         // Any other expression shape stays untyped.

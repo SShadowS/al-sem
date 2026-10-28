@@ -324,6 +324,7 @@ fn enum_identity(cx: &ClosedEnumCx, value: ExprId, interface_lc: &str) -> Option
 ///   only warns): X from the object that declares the field;
 /// - `Enum::"X"::V`, `"X"::V` (no variable named X in scope) and
 ///   `Enum::"X".FromInteger(n)`: X from the calling object;
+/// - `K::V` with `K` a variable declared `Enum X` (G27): X, as the bare `K`;
 /// - a bare call `F(..)` where no variable is named F (an array `F` makes
 ///   `F(1)` an index) and `resolve_bare` gives exactly one source routine: its
 ///   declared `Enum X` return type, X from that routine's object.
@@ -342,6 +343,13 @@ fn value_enum(cx: &ClosedEnumCx, e: ExprId) -> Option<ObjectNodeId> {
                     && !implicit_rec_may_have_field(cx, &x.fold_identifier()) =>
             {
                 enum_by_name(cx, x, from)
+            }
+            // G27: `K::V` with `K` a variable declared `Enum X` is a value of
+            // X, as the bare `K` is (an Option `K` is no enum: `None`).
+            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x)
+                if in_scope(cx, &x.fold_identifier()) =>
+            {
+                declared_enum(cx, declared_type(cx, &x.fold_identifier())?, from)
             }
             _ => None,
         },
@@ -1235,6 +1243,13 @@ enum 50106 "Other Kind" implements "Other Strategy"
                 "",
                 "",
                 "        S := Enum::\"Demo Kind\"::Standard;",
+            ),
+            // G27: an enum variable qualifies a value of its enum.
+            (
+                "FromVariableQualifier",
+                "",
+                "        K: Enum \"Demo Kind\";",
+                "        S := K::Standard;",
             ),
             (
                 "FromInteger",

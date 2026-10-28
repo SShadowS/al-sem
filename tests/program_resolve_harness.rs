@@ -5185,7 +5185,8 @@ fn assert_binds_param(
 /// value (`R.Opt::A`, an option variable's `K::A`, also when the variable is
 /// named like the enum) to the Integer one. Only the
 /// enum value is typed; the option values stay untyped, so those calls stay
-/// ambiguous (never mistyped as the enum).
+/// ambiguous (never mistyped as the enum). G27 adds an enum VARIABLE's `K::A`
+/// and `Enum::"X"::A`, both enum values.
 #[test]
 fn enum_value_arguments_type_as_their_enum_and_option_values_do_not() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -5253,12 +5254,33 @@ codeunit 50173 "SV Caller"
     begin
         T.EI("SV Kind"::Open);
     end;
+
+    procedure EnumVarQualifier()
+    var
+        T: Codeunit "SV Target";
+        K: Enum "SV Kind";
+    begin
+        T.EI(K::Open);
+    end;
+
+    procedure EnumKeywordQualifier()
+    var
+        T: Codeunit "SV Target";
+    begin
+        T.EI(Enum::"SV Kind"::Open);
+    end;
 }
 "#,
     )
     .expect("write probe");
     let report = resolve_full_program(tmp.path()).expect("resolve");
     assert_binds_param(&report, tmp.path(), "enumvalue", "enum");
+    // G27: a variable DECLARED `Enum X` qualifies a value of X, and so does the
+    // keyword form `Enum::"X"`. alc/altool 18.0.43.1464 binds both `EI(K::Open)`
+    // and `EI(Enum::"SV Kind"::Open)` to `EI(Enum)` (graph extract, 2026-10-28);
+    // BaseApp's `PriceSourceList.Add(SourceType::"All Customers")` is the shape.
+    assert_binds_param(&report, tmp.path(), "enumvarqualifier", "enum");
+    assert_binds_param(&report, tmp.path(), "enumkeywordqualifier", "enum");
     assert_stays_ambiguous_resolved(&report, "optionfield");
     assert_stays_ambiguous_resolved(&report, "optionvar");
     // A local option variable named like the enum shadows it: the compiler binds

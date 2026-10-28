@@ -109,6 +109,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An enum value qualified by an enum VARIABLE, or written `Enum::"X"::V`, types as
+  the enum** (G27), so an overloaded call binds the Enum overload, as the compiler does
+  (alc/altool 18.0.43.1464, `graph extract`: `EI(K::Open)` with `K: Enum "SV Kind"`
+  and `EI(Enum::"SV Kind"::Open)` both bind `EI(Enum)` over `EI(Integer)`). Only an
+  unshadowed `"X"::V` was typed, so BaseApp's
+  `PriceSourceList.Add(SourceType::"All Customers")` (`SourceType: Enum "Price Source
+  Type"`, overloads `Add(Enum)` / `Add(Record "Price Source")`) stayed
+  `ambiguous`. That was 65 unresolved rows in 5 of Continia DO's prove claims, all gone
+  (the claims still have other blockers). The same `K::V` shape now also closes an
+  interface site over a closed enum (`closed_enum::value_enum`). An Option variable's
+  `K::A` stays an option value (untyped), as before. Tests: the S9.5c enum-value
+  harness test and closed-enum T3, each failing with its arm removed.
 - **`prove … reaches-ui` counts client file dialogs and progress windows** (G26, a
   regression G18 exposed). `UploadIntoStream`, `DownloadFromStream`, `Upload` and
   `Download` (bare, or on `File` as a keyword or a `File` variable) and `Open` /
