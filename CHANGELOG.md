@@ -263,6 +263,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Framework and RecordRef call results type an argument.** A framework method's
+  call result (`Token.AsValue()`) types as the kind it returns, and so does a
+  framework call on one (`Token.AsValue().AsText()`); a `RecordRef`/`FieldRef`
+  method with parentheses (`RecRef.Number()`) as its parens-less form. Continia
+  CDN's `SetSeverity(SeverityToken.AsValue().AsText())` and
+  `IsSalesDocument(RecordRef.Number())` no longer stay `ambiguousResolved`. Test
+  `record_builtin_and_enum_list_results_pick_overloads`.
 - **An XmlPort's `Export`/`Import`/`Run` is a multicast over every trigger it
   reaches.** With no extension mechanism, the entry dispatch was `Exact` whenever
   it had any route, so an xmlport run reaching `OnPreXmlPort` and its elements'

@@ -5408,7 +5408,9 @@ codeunit 50241 "XP Caller"
 /// (Business Foundation's `AddAction(ErrorInfo, NoSeriesLine.RecordId(), …)`
 /// over `RecordId` / `Code[20]`), and an enum value's name list read by `Get`
 /// (System Application's `SetHttpMethod(Method.Names.Get(…))` over `Text` /
-/// `Enum "Http Method"`).
+/// `Enum "Http Method"`), a RecordRef's `Number()` (Continia CDN's
+/// `IsSalesDocument(RecordRef.Number())`), and a framework call chain
+/// (`Token.AsValue().AsText()`).
 #[test]
 fn record_builtin_and_enum_list_results_pick_overloads() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -5453,6 +5455,27 @@ codeunit 50231 "AA Errors"
 
     procedure SetHttpMethod(MethodName: Text) begin end;
     procedure SetHttpMethod(Method: Enum "AA Method") begin end;
+
+    procedure RefNumberCall()
+    var
+        RecRef: RecordRef;
+    begin
+        IsSales(RecRef.Number());
+    end;
+
+    procedure IsSales(Factory: Codeunit "AA Errors"): Boolean begin end;
+    procedure IsSales(TableNo: Integer): Boolean begin end;
+    procedure IsSales(DocumentTable: Variant): Boolean begin end;
+
+    procedure JsonChain()
+    var
+        SeverityToken: JsonToken;
+    begin
+        SetSeverity(SeverityToken.AsValue().AsText());
+    end;
+
+    procedure SetSeverity(NewSeverity: Text) begin end;
+    procedure SetSeverity(NewSeverity: Enum "AA Method") begin end;
 }
 enum 50232 "AA Method" { value(0; GET) { } value(1; POST) { } }
 "#,
@@ -5462,6 +5485,12 @@ enum 50232 "AA Method" { value(0; GET) { } value(1; POST) { } }
     assert_binds_param(&report, tmp.path(), "throwline", "recordid: recordid");
     assert_binds_param(&report, tmp.path(), "throwcode", "noseriescode: code[20]");
     assert_binds_param(&report, tmp.path(), "setmethod", "methodname: text");
+    // A RecordRef's `Number()` with parentheses, as the parens-less form;
+    // an exact Integer beats the Variant overload.
+    assert_binds_param(&report, tmp.path(), "refnumbercall", "tableno: integer");
+    // A framework call on a framework call result (Continia CDN's
+    // `SetSeverity(SeverityToken.AsValue().AsText())`).
+    assert_binds_param(&report, tmp.path(), "jsonchain", "newseverity: text");
 }
 
 /// Three argument shapes that left a same-arity overload pair

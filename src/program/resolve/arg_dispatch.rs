@@ -260,6 +260,63 @@ const BUILTIN_OPTION_TYPES: &[&str] = &[
     "verbosity",
 ];
 
+/// A framework kind a member returns (`framework_returns`) as an argument,
+/// named by its AL keyword. Only a kind whose name IS one types; a generic or
+/// grouped kind (List, Xml) or a modelling one (Scalar, PageInstance) stays
+/// untyped. Never var-passable: it is a call result.
+fn framework_kind_arg(
+    kind: Option<FrameworkKind>,
+    from: &ObjectNodeId,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> ArgDispatchInfo {
+    use FrameworkKind as F;
+    match kind {
+        Some(
+            k @ (F::JsonObject
+            | F::JsonToken
+            | F::JsonArray
+            | F::JsonValue
+            | F::HttpClient
+            | F::HttpRequestMessage
+            | F::HttpResponseMessage
+            | F::HttpContent
+            | F::HttpHeaders
+            | F::InStream
+            | F::OutStream
+            | F::TextBuilder
+            | F::Text
+            | F::BigText
+            | F::SecretText
+            | F::Date
+            | F::DateTime
+            | F::Time
+            | F::Duration
+            | F::Guid
+            | F::Media
+            | F::Notification
+            | F::ErrorInfo
+            | F::RecordId
+            | F::ModuleInfo
+            | F::DataTransfer
+            | F::SessionSettings
+            | F::FilterPageBuilder
+            | F::File
+            | F::FileUpload
+            | F::Version),
+        ) => {
+            let ty = format!("{k:?}");
+            ArgDispatchInfo {
+                canonical: dispatch_canonical_type_text(&ty, from, graph, index),
+                exact_text: Some(normalize_type_text(&ty)),
+                literal_kind: None,
+                var_passable: false,
+            }
+        }
+        _ => ArgDispatchInfo::untyped(),
+    }
+}
+
 /// A parens-less member of a `RecordRef`/`FieldRef` value (`base`, folded) as
 /// an argument: the type its method returns (MS Learn, methods-auto/recordref
 /// and /fieldref). `RecRef.Number` is an Integer, so
@@ -933,53 +990,12 @@ fn type_one_arg(
                     // stays untyped.
                     if let ParsedType::Framework(kind) = &parsed {
                         let member_lc = unquote_identifier(member).fold_identifier();
-                        use FrameworkKind as F;
-                        return match framework_return_kind(kind, &member_lc, true, 0) {
-                            Some(
-                                k @ (F::JsonObject
-                                | F::JsonToken
-                                | F::JsonArray
-                                | F::JsonValue
-                                | F::HttpClient
-                                | F::HttpRequestMessage
-                                | F::HttpResponseMessage
-                                | F::HttpContent
-                                | F::HttpHeaders
-                                | F::InStream
-                                | F::OutStream
-                                | F::TextBuilder
-                                | F::Text
-                                | F::BigText
-                                | F::SecretText
-                                | F::Date
-                                | F::DateTime
-                                | F::Time
-                                | F::Duration
-                                | F::Guid
-                                | F::Media
-                                | F::Notification
-                                | F::ErrorInfo
-                                | F::RecordId
-                                | F::ModuleInfo
-                                | F::DataTransfer
-                                | F::SessionSettings
-                                | F::FilterPageBuilder
-                                | F::File
-                                | F::FileUpload
-                                | F::Version),
-                            ) => {
-                                let ty = format!("{k:?}");
-                                ArgDispatchInfo {
-                                    canonical: dispatch_canonical_type_text(
-                                        &ty, from, graph, index,
-                                    ),
-                                    exact_text: Some(normalize_type_text(&ty)),
-                                    literal_kind: None,
-                                    var_passable: false,
-                                }
-                            }
-                            _ => ArgDispatchInfo::untyped(),
-                        };
+                        return framework_kind_arg(
+                            framework_return_kind(kind, &member_lc, true, 0),
+                            from,
+                            graph,
+                            index,
+                        );
                     }
                     let ParsedType::Record { table_ref } = parsed else {
                         return ArgDispatchInfo::untyped();
@@ -1414,9 +1430,33 @@ fn type_call_result_arg_member(
                 var_passable: false,
             };
         }
-        // Any other multi-hop base (a Call, a deeper Member, …) — out of
-        // this increment's scope, decline rather than guess.
-        _ => return ArgDispatchInfo::untyped(),
+        // Any other multi-hop base (a Call, a deeper Member, …): only a
+        // framework-typed one types the call, by the kind its member returns
+        // (`Token.AsValue().AsText()`, Continia CDN's `SetSeverity(…)` over
+        // `Text` / `Enum`). Anything else declines rather than guesses.
+        _ => {
+            let base = type_one_arg(
+                file,
+                file.ir.expr(base_expr),
+                routine,
+                object_globals,
+                from,
+                graph,
+                index,
+                surface,
+                with_state,
+            );
+            let member_lc = unquote_identifier(member).fold_identifier();
+            return match base.exact_text.as_deref().map(classify_type_text) {
+                Some(ParsedType::Framework(kind)) => framework_kind_arg(
+                    framework_return_kind(&kind, &member_lc, true, inner_arity),
+                    from,
+                    graph,
+                    index,
+                ),
+                _ => ArgDispatchInfo::untyped(),
+            };
+        }
     };
     let Some(from_object) = object_by_id(graph, from) else {
         return ArgDispatchInfo::untyped();
@@ -1440,6 +1480,28 @@ fn type_call_result_arg_member(
     // (`record_builtin_return_kind`), as the parens-less `Rec.RecordId` arm
     // types it. Business Foundation's `AddAction(ErrorInfo, Line.RecordId(),
     // …)` over `RecordId` / `Code[20]` stayed ambiguous.
+    // A RecordRef's/FieldRef's (`RecRef.Number()`, Continia CDN's
+    // `IsSalesDocument(RecordRef.Number())`), as the parens-less form.
+    if matches!(route.target, RouteTarget::Builtin(_)) {
+        match &base_receiver {
+            // A framework method (`Token.AsValue()`): the kind it returns.
+            ReceiverType::Framework(kind) => {
+                return framework_kind_arg(
+                    framework_return_kind(kind, &member_lc, true, inner_arity),
+                    from,
+                    graph,
+                    index,
+                );
+            }
+            ReceiverType::RecordRef => {
+                return ref_member_arg("recordref", member, from, graph, index);
+            }
+            ReceiverType::FieldRef => {
+                return ref_member_arg("fieldref", member, from, graph, index);
+            }
+            _ => {}
+        }
+    }
     if matches!(route.target, RouteTarget::Builtin(_))
         && matches!(base_receiver, ReceiverType::Record { .. })
     {
