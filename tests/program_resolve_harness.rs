@@ -5348,6 +5348,107 @@ codeunit 50191 "BO Caller"
     assert_binds_param(&report, tmp.path(), "frameworkmember", "c: httpcontent");
 }
 
+/// Three argument shapes that left a same-arity overload pair
+/// `ambiguousResolved`, each with one reading only:
+/// - a text literal where the rival takes an `Integer` (Continia DO's
+///   `EMailLog.InitNewEntry(…, '', …)`): the C6 gate guards a Text/Code
+///   choice, and an Integer cannot take `''`;
+/// - a table's own field named bare (Base Application's
+///   `Cust.CheckBlockedCustOnJnls(Cust, "Document Type", false)` in Gen.
+///   Journal Line, over `Enum` / `var Record`);
+/// - a RecordRef's `Number`, on a variable or a call result (Continia CDN's
+///   `IsPurchaseDocument(RecRef.Number)` /
+///   `IsPurchaseDocument(Factory.GetHeader().Number)`, over `Integer` /
+///   `Codeunit`).
+#[test]
+fn literals_own_fields_and_ref_members_pick_overloads() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-858585858585", "name": "ProbeLE", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50210, "to": 50219 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"table 50210 "LE Log"
+{
+    fields { field(1; K; Integer) { } field(2; Type; Option) { OptionMembers = A,Skip; } field(3; "Linked to Table"; Option) { OptionMembers = " ",Customer; } }
+    keys { key(PK; K) { } }
+
+    procedure InitNewEntry(NewType: Integer; SentWith: Integer; Code1: Code[20]; Lang: Code[10]; TemplateLineNo: Integer; ReportID: Integer; RecRef: RecordRef; LinkedToTable: Integer; LinkedToCode: Code[20]; Recipients: Text; CC: Text; BCC: Text; Filename: Text; NewSubject: Text) begin end;
+    procedure InitNewEntry(NewType: Integer; SentWith: Integer; Code1: Code[20]; Lang: Code[10]; Variant: Code[20]; ReportID: Integer; RecRef: RecordRef; LinkedToTable: Integer; LinkedToCode: Code[20]; Recipients: Text; CC: Text; BCC: Text; Filename: Text; NewSubject: Text) begin end;
+
+    procedure CheckBlocked(DocType: Enum "LE Doc Type"; Transaction: Boolean) begin end;
+    procedure CheckBlocked(var Other: Record "LE Log"; Transaction: Boolean) begin end;
+}
+
+table 50212 "LE Doc"
+{
+    fields { field(1; K; Integer) { } field(2; "Document Type"; Enum "LE Doc Type") { } }
+    keys { key(PK; K) { } }
+
+    procedure OwnFieldOtherTable()
+    var
+        L: Record "LE Log";
+    begin
+        L.CheckBlocked("Document Type", false);
+    end;
+}
+
+enum 50213 "LE Doc Type" { value(0; Invoice) { } }
+
+codeunit 50214 "LE Factory"
+{
+    procedure GetHeader(): RecordRef begin end;
+}
+
+codeunit 50215 "LE Util"
+{
+    procedure IsPurchase(Factory: Codeunit "LE Factory"): Boolean begin end;
+    procedure IsPurchase(TableNo: Integer): Boolean begin end;
+}
+
+codeunit 50211 "LE Caller"
+{
+    procedure TextLiteral()
+    var
+        L: Record "LE Log";
+        RecRef: RecordRef;
+        SendCode: Code[20];
+        CustomerNo: Code[20];
+    begin
+        L.InitNewEntry(L.Type::Skip, 0, SendCode, '', '', 0, RecRef, L."Linked to Table"::Customer, CustomerNo, '', '', '', '', '');
+    end;
+
+    procedure RefNumber()
+    var
+        U: Codeunit "LE Util";
+        RecRef: RecordRef;
+    begin
+        U.IsPurchase(RecRef.Number);
+    end;
+
+    procedure CallRefNumber()
+    var
+        U: Codeunit "LE Util";
+        F: Codeunit "LE Factory";
+    begin
+        U.IsPurchase(F.GetHeader().Number);
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    assert_binds_param(&report, tmp.path(), "textliteral", "variant: code[20]");
+    assert_binds_param(&report, tmp.path(), "ownfieldothertable", "doctype: enum");
+    assert_binds_param(&report, tmp.path(), "refnumber", "tableno: integer");
+    assert_binds_param(&report, tmp.path(), "callrefnumber", "tableno: integer");
+}
+
 /// A dependency's source routine takes the method id its app's symbols
 /// declare: a `Dictionary`/`List` parameter's subtype hash cannot be computed
 /// from the signature, so before, `__alsem_mid_<n>` to it stayed unresolved

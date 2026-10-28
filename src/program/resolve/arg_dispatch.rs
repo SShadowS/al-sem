@@ -260,6 +260,35 @@ const BUILTIN_OPTION_TYPES: &[&str] = &[
     "verbosity",
 ];
 
+/// A parens-less member of a `RecordRef`/`FieldRef` value (`base`, folded) as
+/// an argument: the type its method returns (MS Learn, methods-auto/recordref
+/// and /fieldref). `RecRef.Number` is an Integer, so
+/// `IsPurchaseDocument(RecRef.Number)` picks `(Integer)` over
+/// `(Codeunit "…Factory")` (Continia CDN). Any other member stays untyped.
+fn ref_member_arg(
+    base: &str,
+    member: &str,
+    from: &ObjectNodeId,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> ArgDispatchInfo {
+    let member_lc = unquote_identifier(member).fold_identifier();
+    let ty = match (base, member_lc.as_str()) {
+        (_, "number") => "Integer",
+        ("recordref", "fieldcount" | "keycount" | "count") => "Integer",
+        (_, "name" | "caption") => "Text",
+        ("recordref", "getfilters" | "getview" | "getposition" | "currentkey") => "Text",
+        ("recordref", "recordid") => "RecordId",
+        _ => return ArgDispatchInfo::untyped(),
+    };
+    ArgDispatchInfo {
+        canonical: dispatch_canonical_type_text(ty, from, graph, index),
+        exact_text: Some(normalize_type_text(ty)),
+        literal_kind: None,
+        var_passable: false,
+    }
+}
+
 /// Lowercase the leading whitespace-delimited token of a declared type string
 /// and strip a trailing `[N]` length suffix — mirrors
 /// `receiver::classify_type_text`'s own tokenization, but returns the raw
@@ -720,12 +749,46 @@ fn type_one_arg(
                         _ => ArgDispatchInfo::untyped(),
                     }
                 }
-                // Found but no declared type text, not found at all in
-                // caller scope, or a malformed same-scope duplicate —
-                // untyped either way, never a guess.
-                CallerScopeSymbol::Found(None)
-                | CallerScopeSymbol::NotFound
-                | CallerScopeSymbol::MalformedDuplicate => ArgDispatchInfo::untyped(),
+                // Not in caller scope, inside an object with an implicit
+                // record: a field of it, as the `Rec.Field` arm below types
+                // one (a table's own `"Document Type"`; Base Application's
+                // `Cust.CheckBlockedCustOnJnls(Cust, "Document Type", false)`
+                // in Gen. Journal Line stayed ambiguous between its `Enum` and
+                // `var Record` overloads). A name the table also declares as
+                // a routine stays untyped.
+                CallerScopeSymbol::NotFound => {
+                    let field_lc = unquote_identifier(name).fold_identifier();
+                    let Some(o) = object_by_id(graph, from) else {
+                        return ArgDispatchInfo::untyped();
+                    };
+                    let ReceiverType::Record { table: Some(id) } =
+                        infer_implicit_rec(routine, o, graph, index)
+                    else {
+                        return ArgDispatchInfo::untyped();
+                    };
+                    if index.table_scope_has_routine(graph, o, &id, &field_lc) {
+                        return ArgDispatchInfo::untyped();
+                    }
+                    match index.field_in_table(graph, o, &id, &field_lc) {
+                        Some(field) => ArgDispatchInfo {
+                            canonical: dispatch_canonical_type_text(
+                                &field.type_text,
+                                from,
+                                graph,
+                                index,
+                            ),
+                            exact_text: Some(normalize_type_text(&field.type_text)),
+                            literal_kind: None,
+                            var_passable: true,
+                        },
+                        None => ArgDispatchInfo::untyped(),
+                    }
+                }
+                // Found but no declared type text, or a malformed same-scope
+                // duplicate — untyped either way, never a guess.
+                CallerScopeSymbol::Found(None) | CallerScopeSymbol::MalformedDuplicate => {
+                    ArgDispatchInfo::untyped()
+                }
             }
         }
         ExprKind::Literal(lit) => match literal_canonical(lit) {
@@ -824,9 +887,28 @@ fn type_one_arg(
             }
             let base_name = match &file.ir.expr(*object).kind {
                 ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n,
-                // Multi-hop base (itself a Member/Call/…) — out of this
-                // increment's scope, decline rather than guess.
-                _ => return ArgDispatchInfo::untyped(),
+                // Multi-hop base (itself a Member/Call/…): only a RecordRef or
+                // FieldRef one types its member
+                // (`Factory.GetHeader().Number`), off the base's own type.
+                _ => {
+                    let base = type_one_arg(
+                        file,
+                        file.ir.expr(*object),
+                        routine,
+                        object_globals,
+                        from,
+                        graph,
+                        index,
+                        surface,
+                        with_state,
+                    );
+                    return match base.exact_text.as_deref() {
+                        Some(kw @ ("recordref" | "fieldref")) => {
+                            ref_member_arg(kw, member, from, graph, index)
+                        }
+                        _ => ArgDispatchInfo::untyped(),
+                    };
+                }
             };
             let Some(from_object) = object_by_id(graph, from) else {
                 return ArgDispatchInfo::untyped();
@@ -834,6 +916,15 @@ fn type_one_arg(
             let table_id = match caller_scope_symbol(base_name, routine, object_globals) {
                 CallerScopeSymbol::Found(Some(base_ty_text)) => {
                     let parsed = classify_type_text(base_ty_text);
+                    match parsed {
+                        ParsedType::RecordRef => {
+                            return ref_member_arg("recordref", member, from, graph, index);
+                        }
+                        ParsedType::FieldRef => {
+                            return ref_member_arg("fieldref", member, from, graph, index);
+                        }
+                        _ => {}
+                    }
                     // A framework variable's parens-less member
                     // (`Response.Content`): the kind it returns
                     // (`framework_returns`), named by its AL keyword. Only a
@@ -1934,13 +2025,24 @@ pub(crate) fn pick_candidate(
         if types_at_pos.iter().any(|t| t.is_any()) {
             return None;
         }
-        // C6 literal-forbidden-family gate, stated verbatim (module doc):
-        // the MERE PRESENCE of a "contextually usable but unproven" target
-        // family at this position degrades the whole call.
+        // C6 literal-forbidden-family gate (module doc): a "contextually
+        // usable but unproven" target family at this position degrades the
+        // whole call while another candidate could still take the literal
+        // there. When every other candidate is proven unable to (a text
+        // literal against `Integer`), the gate has no choice to guard and rule
+        // (B) decides: Continia DO's `EMailLog.InitNewEntry(…, '', …)` over
+        // `TemplateLineNo: Integer` / `TemplateVariantValueCode: Code[20]`
+        // binds the `Code[20]` overload.
         if let Some(lk) = args[pos].literal_kind {
             let forbidden = literal_forbidden_families(lk);
+            let viable: Vec<&CanonicalArgType> = candidates
+                .iter()
+                .filter(|c| !position_provably_incompatible(&args[pos], &c[pos]))
+                .map(|c| &c[pos].canonical)
+                .collect();
             if !forbidden.is_empty()
-                && types_at_pos.iter().any(
+                && viable.len() > 1
+                && viable.iter().any(
                     |t| matches!(t, CanonicalArgType::Base(b) if forbidden.contains(&b.as_str())),
                 )
             {

@@ -263,6 +263,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three more argument shapes pick an overload.** The C6 literal gate degraded a
+  call whenever a `Code` candidate faced a text literal, even when the rival took
+  an `Integer` that cannot take the literal at all; it now guards only a choice
+  still open (Continia DO's `EMailLog.InitNewEntry(…, '', …)`). A table's own
+  field named bare types as the field (Base Application's
+  `Cust.CheckBlockedCustOnJnls(Cust, "Document Type", false)`). A `RecordRef`/
+  `FieldRef` member without parentheses (`Number`, `Name`, `Caption`, …) types as
+  its documented return, on a variable or a call result (Continia CDN's
+  `IsPurchaseDocument(RecRef.Number)`). Test
+  `literals_own_fields_and_ref_members_pick_overloads`.
 - **Calls by method id reach dependency routines whose id a signature cannot
   give.** A dependency's source routine now takes the id its app's
   `SymbolReference.json` declares (`RoutineNode::abi_method_id`), matched by
