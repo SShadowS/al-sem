@@ -416,6 +416,7 @@ mod tests {
             is_internal: false,
             is_protected: false,
             parameters_known: true,
+            method_id: None,
             attributes: vec![],
             attributes_parsed: vec![],
         }

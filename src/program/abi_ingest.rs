@@ -454,6 +454,84 @@ fn load_abi(unit: &AppUnit, cache: &AbiCache) -> Option<Arc<SymbolReferenceAbi>>
     }
 }
 
+/// One symbol entry's parameters, `(var, folded type text)`, and method id.
+pub(crate) type SymbolOverload = (Vec<(bool, String)>, i32);
+
+/// The method ids `unit`'s symbols declare, by (object, folded name, arity),
+/// each with the parameters it was declared with. A source routine's node id
+/// fingerprints its parameters differently from an ABI one's, so a
+/// dependency's source routine is matched on this key and, among overloads,
+/// on its parameter types ([`symbol_method_id_of`]).
+pub(crate) fn symbol_method_ids(
+    unit: &AppUnit,
+    app: AppRef,
+    cache: &AbiCache,
+) -> std::collections::HashMap<(ObjectNodeId, SharedStr, usize), Vec<SymbolOverload>> {
+    let mut out: std::collections::HashMap<_, Vec<SymbolOverload>> =
+        std::collections::HashMap::new();
+    let Some(abi) = load_abi(unit, cache) else {
+        return out;
+    };
+    for abi_obj in &abi.objects {
+        let obj_id = abi_object_node_id(app, abi_obj);
+        for routine in &abi_obj.routines {
+            let Some(id) = routine.method_id.filter(|_| routine.parameters_known) else {
+                continue;
+            };
+            let params = routine
+                .parameters
+                .iter()
+                .map(|p| (p.is_var, fold_type_text(&p.type_text)))
+                .collect();
+            out.entry((
+                obj_id.clone(),
+                routine.name.fold_identifier().into(),
+                routine.parameters.len(),
+            ))
+            .or_default()
+            .push((params, id));
+        }
+    }
+    out
+}
+
+/// The symbols' method id of a source routine with `params` (`(var, type
+/// text)`), among `overloads` of its name and arity: the one entry, or the one
+/// whose parameter types match. `None` when no entry or several fit.
+pub(crate) fn symbol_method_id_of(
+    overloads: &[SymbolOverload],
+    params: &[(bool, Option<&str>)],
+) -> Option<i32> {
+    if let [(_, id)] = overloads {
+        return Some(*id);
+    }
+    // The symbols' text of a generic type is its bare keyword (`dictionary`):
+    // it matches the source type's leading keyword.
+    let same_type = |abi: &str, src: &str| {
+        let src = fold_type_text(src);
+        src == abi || (!abi.contains(' ') && src.split(' ').next() == Some(abi))
+    };
+    let mut fitting = overloads.iter().filter(|(abi, _)| {
+        abi.iter()
+            .zip(params)
+            .all(|((v, t), (sv, st))| v == sv && st.is_some_and(|st| same_type(t, st)))
+    });
+    match (fitting.next(), fitting.next()) {
+        (Some((_, id)), None) => Some(*id),
+        _ => None,
+    }
+}
+
+/// A type text folded for comparison: lowercase, quotes dropped, whitespace
+/// collapsed.
+fn fold_type_text(t: &str) -> String {
+    t.replace('"', "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 /// `(objects, routines)` that [`ingest_abi`] builds from `abi`: one
 /// `ObjectNode` per ABI object and one `RoutineNode` per ABI routine, with
 /// no filtering.
@@ -666,6 +744,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
                 // folding yet — same rationale as `abi_overload_collapsed`
                 // above).
                 abi_params: retain_abi_params(routine),
+                abi_method_id: routine.method_id,
             });
         }
     }
@@ -775,6 +854,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -797,6 +877,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -819,6 +900,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -841,6 +923,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1022,6 +1105,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1036,6 +1120,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1050,6 +1135,7 @@ mod tests {
                         is_internal: true,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1067,6 +1153,7 @@ mod tests {
                         is_internal: false,
                         is_protected: true,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1183,6 +1270,7 @@ mod tests {
                     is_internal: false,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 }],
@@ -1301,6 +1389,7 @@ codeunit 50900 "Subscriber CU"
                     is_internal: true,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 }],
@@ -1587,6 +1676,7 @@ codeunit 50900 "Subscriber CU"
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1601,6 +1691,7 @@ codeunit 50900 "Subscriber CU"
                         is_internal: false,
                         is_protected: false,
                         parameters_known: false,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1683,6 +1774,7 @@ codeunit 50900 "Subscriber CU"
                     is_internal: false,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 }],
@@ -2092,6 +2184,7 @@ codeunit 50900 "Subscriber CU"
             event_kind: SrAbiEventKind::Unknown,
             parameters: vec![],
             parameters_known: false,
+            method_id: None,
             return_type_text: None,
             return_type_id: None,
             is_local: false,

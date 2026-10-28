@@ -4197,6 +4197,7 @@ codeunit 50100 "C"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let mut topology = DependencyGraph::default();
@@ -4422,6 +4423,7 @@ codeunit 50700 "Caller"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params,
+            abi_method_id: None,
         }
     }
 

@@ -69,7 +69,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 5: `ObjectNode::query_columns` (engine-switch S9.0e).
 /// 6: `RoutineNode::preproc_context` (engine-switch S9.0e).
 /// 7: `ObjectNode::closed_enum` / `enum_impls` (#264).
-pub const PACK_SCHEMA: u32 = 7;
+/// 8: `RoutineMeta::method_id` / `try_function`.
+pub const PACK_SCHEMA: u32 = 8;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -486,6 +487,7 @@ mod tests {
             name_origin: origin("identifier", 110, 127),
             virtual_path: "src/Sales/SalesPost.Codeunit.al".into(),
             method_id: Some(-42),
+            try_function: true,
         }
     }
 
@@ -527,12 +529,28 @@ mod tests {
         assert_eq!(back, pack);
     }
 
+    /// Schema 8: a routine's method ids are pack payload (the symbols' id on
+    /// the node, the declared id and `[TryFunction]` flag on its meta).
+    /// Stated precondition: set by assignment, whatever the fixture holds.
+    #[test]
+    fn pack_round_trips_method_ids() {
+        assert_eq!(PACK_SCHEMA, 8);
+        let mut pack = sample_pack();
+        pack.files[0].routines[0].abi_method_id = Some(-42);
+        let meta = &mut pack.files[0].routine_meta[0].1;
+        (meta.method_id, meta.try_function) = (Some(-7), true);
+        pack.self_hash = compute_self_hash(&pack);
+        let back = decode(&encode(&pack).expect("encode")).expect("decode");
+        assert_eq!(back.files[0].routines[0].abi_method_id, Some(-42));
+        let meta = &back.files[0].routine_meta[0].1;
+        assert_eq!((meta.method_id, meta.try_function), (Some(-7), true));
+    }
+
     /// T31 (#264): the closed-enum fact is pack payload. Stated precondition:
     /// the object carries `closed_enum: true` and one `enum_impls` entry by
     /// assignment, whatever the shared fixture holds.
     #[test]
     fn pack_round_trips_closed_enum() {
-        assert_eq!(PACK_SCHEMA, 7);
         let mut pack = sample_pack();
         let obj = &mut pack.files[0].objects[0];
         obj.closed_enum = true;

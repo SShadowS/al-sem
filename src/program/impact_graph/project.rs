@@ -1262,6 +1262,7 @@ mod tests {
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             };
             f(&mut r);
             let id = r.id.clone();

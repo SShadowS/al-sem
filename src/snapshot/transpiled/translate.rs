@@ -408,13 +408,39 @@ enum Receiver<'a> {
     Scope,
 }
 
-fn receiver(chain: &[String]) -> Receiver<'_> {
-    let segs: Vec<&str> = chain[..chain.len() - 1]
+/// A call chain's receiver segments: the method dropped, and the scope
+/// plumbing (`Target`, `Value`).
+fn receiver_segs(chain: &[String]) -> Vec<&str> {
+    chain[..chain.len() - 1]
         .iter()
         .map(String::as_str)
         .filter(|s| *s != "Target" && *s != "Value")
-        .collect();
-    let scope = |s: &str| s.starts_with('γ') || s.starts_with('β');
+        .collect()
+}
+
+fn is_scope(s: &str) -> bool {
+    s.starts_with('γ') || s.starts_with('β')
+}
+
+/// The members between a variable receiver and the method, as AL calls:
+/// `webResponse.ALContent.ALReadAs` reads `Content()` of `webResponse`. `None`
+/// when one of them is C# without an AL name; empty for a direct call.
+fn member_path(chain: &[String]) -> Option<Vec<String>> {
+    let segs = receiver_segs(chain);
+    let rest: &[&str] = match segs.as_slice() {
+        [s, _, rest @ ..] if is_scope(s) => rest,
+        ["this", _, rest @ ..] => rest,
+        [first, rest @ ..] if first.starts_with(char::is_lowercase) && !is_scope(first) => rest,
+        _ => &[],
+    };
+    rest.iter()
+        .map(|m| al_method_name(m).map(|n| format!("{n}()")))
+        .collect()
+}
+
+fn receiver(chain: &[String]) -> Receiver<'_> {
+    let segs = receiver_segs(chain);
+    let scope = is_scope;
     match segs.as_slice() {
         [] => Receiver::This,
         [s] if scope(s) => Receiver::Scope,
@@ -976,13 +1002,34 @@ impl Tx<'_> {
                             self.untranslated("interface dispatch", line);
                         }
                     }
-                    VarType::Plain(_) => {
+                    VarType::Plain(ty) => {
                         if PURE_INSTANCE.contains(&method) {
                             return;
                         }
                         if let Some(al) = al_method_name(method) {
+                            let path = member_path(&c.chain);
+                            // An option or enum the C# shows as `NavOption`
+                            // (declared `Integer`): its members (`Names()`,
+                            // `Ordinals()`, then the list's) read metadata only.
+                            if ty == "Integer" && path.as_ref().is_none_or(|p| !p.is_empty()) {
+                                return;
+                            }
+                            let Some(path) = path else {
+                                self.untranslated(&format!("member chain .{method}"), line);
+                                return;
+                            };
+                            // The runtime's name for `HttpContent.WriteFrom`.
+                            let al = if al == "LoadFrom" {
+                                "WriteFrom".into()
+                            } else {
+                                al
+                            };
+                            let target = std::iter::once(name)
+                                .chain(path)
+                                .collect::<Vec<_>>()
+                                .join(".");
                             let a = self.args(&c.args).join(", ");
-                            self.push(&format!("{name}.{al}({a});"), line);
+                            self.push(&format!("{target}.{al}({a});"), line);
                         }
                     }
                     VarType::Unknown => {
@@ -1393,6 +1440,57 @@ public sealed class Codeunit50100 : NavCodeunit
         for (s, n) in v.iter().take(40) {
             eprintln!("{n:6} {s}");
         }
+    }
+
+    /// A generic type's comma (`NavDictionary<NavText, NavText>`) splits no
+    /// scope local or argument; a property between the variable and the method
+    /// (`resp.ALContent.ALReadAs`) is kept as an AL call; `ALLoadFrom` is
+    /// `WriteFrom`; a C# member with no AL name leaves the call untranslated; an
+    /// option's member chain (`kind.ALNames.ALIndexOf`) reads metadata only.
+    #[test]
+    fn keeps_generic_types_and_member_paths() {
+        const SRC: &str = r#"
+public sealed class Codeunit50102 : NavCodeunit
+{
+    [NavName("Send")]
+    [MethodId(5)]
+    public async ValueTask Send()
+    {
+        ALMethodScope<(NavDictionary<NavText, NavText> dict, NavHttpClient client, NavHttpContent content, NavHttpResponseMessage resp, NavText body, NavOption kind)> γscope = default;
+        γscope = new ALMethodScope<(NavDictionary<NavText, NavText> dict, NavHttpClient client, NavHttpContent content, NavHttpResponseMessage resp, NavText body, NavOption kind)>(this, "Send", MethodScopeFlags.None, 5);
+        γscope.Target.kind.Value.ALNames.ALIndexOf(new NavText(γscope.Target.body));
+        γscope.Target.dict.ALAdd(DataError.ThrowError, new NavText("a"), γscope.Target.body);
+        γscope.Target.content.ALLoadFrom(γscope.Target.body);
+        γscope.Target.client.Value.ALDefaultRequestHeaders.ALAdd(DataError.ThrowError, new NavText("h"), new NavText("v"));
+        γscope.Target.resp.ALContent.ALReadAs(DataError.ThrowError, new ByRef<NavText>(() => γscope.Target.body, setValue => γscope.Target.body = setValue));
+        γscope.Target.resp.Inner.ALReadAs(DataError.ThrowError, new ByRef<NavText>(() => γscope.Target.body, setValue => γscope.Target.body = setValue));
+    }
+}
+"#;
+        let classes = classes(&lex(SRC));
+        let globals = class_globals(&classes[0]);
+        let cx = ObjectCx::of(&classes[0], "Codeunit", &globals);
+        let body = translate(&cx, classes[0].methods().next().unwrap());
+        let text: Vec<String> = body
+            .lines
+            .iter()
+            .map(|l| l.split(" // cs").next().unwrap().trim().to_string())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "\"dict\".Add('', \"body\");",
+                "\"content\".WriteFrom(\"body\");",
+                "\"client\".DefaultRequestHeaders().Add('', '');",
+                "\"resp\".Content().ReadAs(\"body\");",
+                "\"__alsem_untranslated\"('member chain .ALReadAs');",
+            ]
+        );
+        let dict = body.locals.iter().find(|(n, _)| n == "\"dict\"");
+        assert_eq!(
+            dict.map(|(_, t)| t.as_str()),
+            Some("Dictionary of [Text, Text]")
+        );
     }
 
     #[test]

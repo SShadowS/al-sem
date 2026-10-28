@@ -234,10 +234,14 @@ fn build_dep_nodes(
     // dedup unions event facts per source file only.
     let mut source_unit = 1u32..;
     for unit in summaries {
+        let method_ids = symbol_method_ids(snap, &unit.app, apps, abi_cache);
         for mut file in unit.files {
             let file_unit = source_unit.next().and_then(std::num::NonZeroU32::new);
+            let meta: HashMap<&RoutineNodeId, &RoutineMeta> =
+                file.routine_meta.iter().map(|(id, m)| (id, m)).collect();
             for r in &mut file.routines {
                 r.source_unit = file_unit;
+                r.abi_method_id = source_method_id(&method_ids, r, meta.get(&r.id).copied());
             }
             file.objects.share_strings(&mut pool);
             file.routines.share_strings(&mut pool);
@@ -322,6 +326,47 @@ fn build_dep_nodes(
         lsp: Default::default(),
         lsp_events: Default::default(),
     }
+}
+
+/// The method ids dependency `app`'s symbols declare
+/// (`abi_ingest::symbol_method_ids`), for that app's source routines: the
+/// runtime's id a compiled caller invokes them by, which a signature cannot
+/// always give (a `Dictionary of [Text, Text]` parameter). Empty when the app
+/// has no symbols.
+type SymbolMethodIds = HashMap<
+    (ObjectNodeId, crate::program::node::SharedStr, usize),
+    Vec<crate::program::abi_ingest::SymbolOverload>,
+>;
+
+fn symbol_method_ids(
+    snap: &AppSetSnapshot,
+    app: &crate::snapshot::identity::AppId,
+    apps: &mut AppRegistry,
+    abi_cache: &AbiCache,
+) -> SymbolMethodIds {
+    let Some(unit) = snap.apps.iter().find(|u| &u.id == app) else {
+        return HashMap::new();
+    };
+    crate::program::abi_ingest::symbol_method_ids(unit, apps.intern(app), abi_cache)
+}
+
+/// Source routine `r`'s method id in its app's symbols (`meta`: its declared
+/// parameters). A trigger or member routine has none there.
+fn source_method_id(
+    ids: &SymbolMethodIds,
+    r: &RoutineNode,
+    meta: Option<&RoutineMeta>,
+) -> Option<i32> {
+    if r.is_trigger || r.id.enclosing_member_lc.is_some() {
+        return None;
+    }
+    let overloads = ids.get(&(r.id.object.clone(), r.id.name_lc.clone(), r.id.params_count))?;
+    let params: Vec<(bool, Option<&str>)> = meta?
+        .params
+        .iter()
+        .map(|p| (p.by_ref, p.ty.as_deref()))
+        .collect();
+    crate::program::abi_ingest::symbol_method_id_of(overloads, &params)
 }
 
 /// Merge a [`DepLayer`] with a freshly-extracted PRIMARY (workspace)
@@ -743,6 +788,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
                 // Synthesized, not ingested from any `SymbolReference.json`
                 // — no ABI parameter metadata exists to retain.
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             });
         }
     }
@@ -1671,6 +1717,7 @@ codeunit 50100 "Ws2 Cu"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 
@@ -1714,6 +1761,7 @@ codeunit 50100 "Ws2 Cu"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 

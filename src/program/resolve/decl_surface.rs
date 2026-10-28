@@ -72,6 +72,10 @@ pub struct RoutineMeta {
     /// enum parameter the C# shows as `NavOption`).
     #[serde(default)]
     pub method_id: Option<i32>,
+    /// A `[TryFunction]`: one declaring no return value returns `Boolean`, and
+    /// the compiler's method id hashes that return.
+    #[serde(default)]
+    pub try_function: bool,
 }
 
 /// The id a `[MethodId(n)]` attribute of `decl` declares.
@@ -112,6 +116,10 @@ impl RoutineMeta {
             name_origin: decl.name_origin.clone(),
             virtual_path: virtual_path.into(),
             method_id: declared_method_id(decl),
+            try_function: decl
+                .attributes_parsed
+                .iter()
+                .any(|a| a.name.eq_ignore_ascii_case("tryfunction")),
         }
     }
 }

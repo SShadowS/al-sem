@@ -190,6 +190,10 @@ pub struct AbiParameter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbiRoutine {
     pub name: String,
+    /// The method id the symbols declare (`Id`): the runtime's own, which a
+    /// compiled caller invokes it by. A signature cannot always give it (a
+    /// generic `Dictionary`/`List` parameter's subtype hash).
+    pub method_id: Option<i32>,
     /// One of the al-sem `RoutineKind` strings: "procedure" | "event-publisher" |
     /// "event-subscriber".
     pub kind: String,
@@ -443,6 +447,8 @@ struct RawParam {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct RawMethod {
+    #[serde(rename = "Id")]
+    id: Option<i64>,
     #[serde(rename = "Name")]
     name: Option<String>,
     #[serde(rename = "Parameters")]
@@ -1043,6 +1049,7 @@ fn parse_method(m: &RawMethod) -> AbiRoutine {
 
     AbiRoutine {
         name: m.name.clone().unwrap_or_default(),
+        method_id: m.id.and_then(|i| i32::try_from(i).ok()),
         kind,
         event_kind,
         parameters: m

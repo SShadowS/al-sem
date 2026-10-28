@@ -33,6 +33,10 @@ use cdo::cdo_ws_or_enforce;
 #[path = "common/regen.rs"]
 mod regen;
 
+#[path = "common/symbol_app.rs"]
+#[allow(dead_code)]
+mod symbol_app;
+
 /// Shared CDO substrate (2026-07-15 shared-substrate spec): ONE snapshot →
 /// graph → parse → full-resolve build, consumed by every read-only CDO test.
 /// The engine's own determinism test (two independent builds, below) licenses
@@ -482,6 +486,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                     is_internal: false,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 },
@@ -515,6 +520,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                     is_internal: false,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 },
@@ -5342,6 +5348,120 @@ codeunit 50191 "BO Caller"
     assert_binds_param(&report, tmp.path(), "frameworkmember", "c: httpcontent");
 }
 
+/// A dependency's source routine takes the method id its app's symbols
+/// declare: a `Dictionary`/`List` parameter's subtype hash cannot be computed
+/// from the signature, so before, `__alsem_mid_<n>` to it stayed unresolved
+/// (Continia Core's calls to Continia System Application's
+/// `GetDictionary(var Dictionary of [Text, Text])`, symbol id 169123018). Two
+/// overloads of one arity are told apart by their parameter types (the
+/// symbols name a generic type by its keyword alone).
+#[test]
+fn dependency_source_routines_take_their_symbol_method_ids() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    let dep_guid = "dddddddd-1111-2222-3333-838383838383";
+    std::fs::write(
+        tmp.path().join("app.json"),
+        format!(
+            r#"{{ "id": "dddddddd-1111-2222-3333-848484848484", "name": "ProbeSM", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{{ "from": 50200, "to": 50209 }}],
+  "dependencies": [{{ "id": "{dep_guid}", "name": "SMDep", "publisher": "probe", "version": "1.0.0.0" }}] }}"#
+        ),
+    )
+    .expect("write app.json");
+    let dep_al = r#"codeunit 60200 "SM Dims"
+{
+    procedure GetDictionary(var Dict: Dictionary of [Text, Text])
+    begin
+    end;
+
+    procedure SetValue(var Dict: Dictionary of [Text, Text]; N: Integer)
+    begin
+    end;
+
+    procedure SetValue(var Dict: Dictionary of [Text, Text]; T: Text)
+    begin
+    end;
+}
+"#;
+    let dict = r#"{"Name":"Dict","IsVar":true,"TypeDefinition":{"Name":"Dictionary","TypeArguments":[{"Name":"Text"},{"Name":"Text"}]}}"#;
+    let symbols = format!(
+        r#"{{"Codeunits":[{{"Id":60200,"Name":"SM Dims","Methods":[
+{{"Id":169123018,"Name":"GetDictionary","Parameters":[{dict}]}},
+{{"Id":777,"Name":"SetValue","Parameters":[{dict},{{"Name":"N","TypeDefinition":{{"Name":"Integer"}}}}]}},
+{{"Id":888,"Name":"SetValue","Parameters":[{dict},{{"Name":"T","TypeDefinition":{{"Name":"Text"}}}}]}}]}}],
+"AppId":"{dep_guid}","Name":"SMDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    symbol_app::write_source_app(
+        &tmp.path()
+            .join(".alpackages")
+            .join("probe_SMDep_1.0.0.0.app"),
+        dep_guid,
+        "SMDep",
+        "1.0.0.0",
+        &symbols,
+        &[("src/Dims.al", dep_al)],
+        "",
+    );
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"codeunit 50200 "SM Caller"
+{
+    procedure ByGenericParam()
+    var
+        D: Codeunit "SM Dims";
+        X: Dictionary of [Text, Text];
+    begin
+        D."__alsem_mid_169123018"(X);
+    end;
+
+    procedure ByIntegerOverload()
+    var
+        D: Codeunit "SM Dims";
+        X: Dictionary of [Text, Text];
+    begin
+        D."__alsem_mid_777"(X, 1);
+    end;
+
+    procedure ByTextOverload()
+    var
+        D: Codeunit "SM Dims";
+        X: Dictionary of [Text, Text];
+    begin
+        D."__alsem_mid_888"(X, 1);
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    // The bound routine's name and arity, off its node id.
+    let bound = |caller: &str| -> String {
+        let edge = &outer_call_edge(&report, caller).edge;
+        match edge.routes.as_slice() {
+            [r] => match &r.target {
+                RouteTarget::Routine(rid) => format!("{}/{}", rid.name_lc, rid.params_count),
+                t => format!("{t:?}"),
+            },
+            rs => format!("{rs:?}"),
+        }
+    };
+    assert_eq!(bound("bygenericparam"), "getdictionary/1");
+    assert_eq!(bound("byintegeroverload"), "setvalue/2");
+    assert_eq!(bound("bytextoverload"), "setvalue/2");
+    // The two `SetValue`s by their second parameter's type, off the routes.
+    let target = |caller: &str| match &outer_call_edge(&report, caller).edge.routes[0].target {
+        RouteTarget::Routine(rid) => rid.clone(),
+        t => panic!("{caller}: {t:?}"),
+    };
+    assert_ne!(
+        target("byintegeroverload"),
+        target("bytextoverload"),
+        "each id binds its own overload"
+    );
+}
+
 /// Synthesized calls by method id (spec 2026-10-28 transpiled runtime bodies,
 /// §8.3): `T."__alsem_mid_<n>"(…)` binds the one routine of `T` whose AL method id
 /// is `n`, computed from its declared signature, whatever the name, the arity
@@ -5384,6 +5504,8 @@ codeunit 50182 "MI Target"
     procedure Q(X: Integer) begin end;
     [MethodId('-777')]
     procedure Declared(X: Integer) begin end;
+    [TryFunction]
+    procedure IsValidUri(UriString: Text) begin end;
 }
 
 codeunit 50183 "MI Caller"
@@ -5419,6 +5541,14 @@ codeunit 50183 "MI Caller"
         T."__alsem_mid_-777"(I);
     end;
 
+    procedure ByIdTryFunction()
+    var
+        T: Codeunit "MI Target";
+        S: Text;
+    begin
+        T."__alsem_mid_-248270644"(S);
+    end;
+
     procedure ByIdTableMethod()
     var
         R: Record "MI T";
@@ -5441,6 +5571,10 @@ codeunit 50183 "MI Caller"
     // routine's id, not the one its signature gives. A negative id is written
     // quoted: the grammar takes no negative attribute argument.
     assert_binds_param(&report, tmp.path(), "byiddeclared", "declared");
+    // A `[TryFunction]` declaring no return value hashes a `Boolean` return:
+    // -248270644 is the id Continia Core's compiled C# calls System
+    // Application's `Uri.IsValidUri(Text)` by.
+    assert_binds_param(&report, tmp.path(), "byidtryfunction", "isvaliduri");
     let edge = &outer_call_edge(&report, "byidnone").edge;
     assert!(
         matches!(edge.routes.as_slice(), [r] if matches!(r.evidence, Evidence::Unknown(_))),

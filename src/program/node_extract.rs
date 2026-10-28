@@ -436,6 +436,12 @@ pub struct RoutineNode {
     /// that field's doc), so reading it for arg-type dispatch must be
     /// structurally impossible, not merely convention-guarded.
     pub abi_params: AbiParams,
+    /// The method id the app's symbols declare for this routine
+    /// (`AbiRoutine::method_id`): set at ingestion for a `SymbolOnly`
+    /// routine, and for a dependency's source routine by its node id
+    /// (`build::attach_symbol_method_ids`). `None` for the workspace, and when
+    /// the symbols give none or the node id matches no symbol entry.
+    pub abi_method_id: Option<i32>,
 }
 
 impl ShareStrings for ObjectNode {
@@ -975,6 +981,9 @@ pub fn extract_nodes(
                 // lives in `DeclSurface`/`RoutineMeta`, never here — see
                 // `RoutineNode::abi_params`'s doc.
                 abi_params: AbiParams::Missing,
+                // Attached from the app's symbols, when it has them
+                // (`build::attach_symbol_method_ids`).
+                abi_method_id: None,
             });
         }
     }
@@ -1057,6 +1066,7 @@ pub(crate) mod test_fixtures {
                 subtype_raw_name: Some("Customer".into()),
                 subtype_tag: SubtypeTag::Full,
             }]),
+            abi_method_id: Some(-42),
         }
     }
 

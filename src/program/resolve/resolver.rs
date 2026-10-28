@@ -304,6 +304,10 @@ pub(crate) fn routine_method_id(
     if let Some(id) = surface.get(&r.id).and_then(|m| m.method_id) {
         return Some(id);
     }
+    // The id the app's symbols declare: also the runtime's.
+    if let Some(id) = r.abi_method_id {
+        return Some(id);
+    }
     let mut sig: Vec<SigParam> = Vec::new();
     // Per parameter, an ABI subtype's id and raw name when the symbols give them.
     let mut abi_subtypes: Vec<(Option<i64>, Option<&str>)> = Vec::new();
@@ -330,6 +334,10 @@ pub(crate) fn routine_method_id(
     }
     let ret = match r.return_type.as_deref() {
         Some(t) => Some(parse_type(t)?),
+        // A `[TryFunction]` declaring no return value returns `Boolean`, and
+        // its id hashes that (System Application's `Uri.IsValidUri(Text)` is
+        // -248270644, the runtime's id for it in a compiled caller).
+        None if surface.get(&r.id).is_some_and(|m| m.try_function) => Some(parse_type("Boolean")?),
         None => None,
     };
     let overloadable = r.publisher_kind.is_none() && r.event_subscribers.is_empty();
@@ -4995,6 +5003,7 @@ pageextension 52911 "ExtA" extends BasePage
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let mut topology = DependencyGraph::default();
@@ -5171,6 +5180,7 @@ pageextension 52911 "ExtA" extends BasePage
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let mut topology = DependencyGraph::default();
@@ -5366,6 +5376,7 @@ pageextension 52911 "ExtA" extends BasePage
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params,
+                abi_method_id: None,
             }
         }
 
@@ -5532,6 +5543,7 @@ codeunit 50611 "MixedCU"
                 subtype_raw_name: None,
                 subtype_tag: SubtypeTag::NoSubtype,
             }]),
+            abi_method_id: None,
         });
         graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -5612,6 +5624,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         });
         graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -5757,6 +5770,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let mut topology = DependencyGraph::default();
@@ -5974,6 +5988,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let obj_index = ObjectIndex::build(&objects);
@@ -6144,6 +6159,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         };
 
         let subscriber = RoutineNode {
@@ -6180,6 +6196,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         };
 
         let mut routines = vec![publisher, subscriber];
@@ -11293,6 +11310,7 @@ codeunit 50000 "Caller"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         });
 
         // Regular procedure: abi_routine_kind=Procedure, abi_event_kind=None.
@@ -11322,6 +11340,7 @@ codeunit 50000 "Caller"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         });
 
         objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -13589,6 +13608,7 @@ codeunit 53971 "OverloadNCaller"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             }
         }
         let routines = vec![
@@ -13980,6 +14000,7 @@ codeunit 53975 "Overload3Caller"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             },
             RoutineNode {
                 id: RoutineNodeId {
@@ -14007,6 +14028,7 @@ codeunit 53975 "Overload3Caller"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             },
         ];
 
@@ -14192,6 +14214,7 @@ codeunit 60152 "AliasTarget"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             },
             RoutineNode {
                 id: real_id.clone(),
@@ -14213,6 +14236,7 @@ codeunit 60152 "AliasTarget"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             },
         ];
 

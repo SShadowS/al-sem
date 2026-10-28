@@ -350,6 +350,41 @@ impl Attribute {
 }
 
 /// Split `toks[from..to]` at top-level commas.
+/// The index after the generic argument list `<…>` opening at `i`
+/// (`NavDictionary<NavText, NavText>`, `ByRef<NavList<NavText>>`), or `None`
+/// when the `<` is a comparison: a generic list follows a type name (PascalCase;
+/// C# locals are camelCase) and holds only type tokens.
+fn generic_end(toks: &[Token], i: usize) -> Option<usize> {
+    if !toks[i].is_punct("<")
+        || !i
+            .checked_sub(1)
+            .and_then(|p| toks[p].ident())
+            .is_some_and(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
+    {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (j, t) in toks.iter().enumerate().skip(i) {
+        if t.is_punct("<") {
+            depth += 1;
+        } else if t.is_punct(">") {
+            depth -= 1;
+            if depth == 0 {
+                return Some(j + 1);
+            }
+        } else if !(t.ident().is_some()
+            || t.is_punct(",")
+            || t.is_punct(".")
+            || t.is_punct("[")
+            || t.is_punct("]")
+            || t.is_punct("?"))
+        {
+            return None;
+        }
+    }
+    None
+}
+
 pub(crate) fn split_commas(toks: &[Token]) -> Vec<Vec<Token>> {
     let mut out = Vec::new();
     let mut cur = Vec::new();
@@ -363,6 +398,11 @@ pub(crate) fn split_commas(toks: &[Token]) -> Vec<Vec<Token>> {
             continue;
         }
         // A generic argument list `<A, B>` in a type: skip it as one unit.
+        if let Some(end) = generic_end(toks, i) {
+            cur.extend_from_slice(&toks[i..end]);
+            i = end;
+            continue;
+        }
         if t.is_punct(",") {
             out.push(std::mem::take(&mut cur));
         } else {

@@ -263,6 +263,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Calls by method id reach dependency routines whose id a signature cannot
+  give.** A dependency's source routine now takes the id its app's
+  `SymbolReference.json` declares (`RoutineNode::abi_method_id`), matched by
+  object, name and arity, then by parameter types among overloads. A
+  `Dictionary`/`List` parameter's part of the id cannot be computed (Continia
+  Core's calls to Continia System Application's
+  `GetDictionary(var Dictionary of [Text, Text])`). A `[TryFunction]` that declares
+  no return value hashes a `Boolean` return, as the compiler does (System
+  Application's `Uri.IsValidUri(Text)`, `TryInitializeFromCurrentApp()`).
+  `PACK_SCHEMA` 8. Tests `dependency_source_routines_take_their_symbol_method_ids`,
+  `synthesized_calls_bind_by_method_id`.
+- **AL synthesized from transpiled C# keeps a call's member path and generic
+  types.** `webResponse.ALContent.ALReadAs(…)` was written `"webResponse".ReadAs(…)`
+  (no such method) and `client.ALDefaultRequestHeaders.ALAdd` became
+  `"client".Add`; they now read `.Content().ReadAs(…)` and
+  `.DefaultRequestHeaders().Add(…)`. A comma inside a generic type
+  (`NavDictionary<NavText, NavText>`) split the scope's locals and the call's
+  arguments, so a Dictionary local was declared `Text`. `ALLoadFrom` is
+  `HttpContent.WriteFrom`, and an option's `Names()`/`Ordinals()` chain reads only
+  metadata. Extraction scheme 5. Continia DO's dependency-body unknown call edges:
+  91 → 44 (with the method-id fix above; 38 of the 44 are the System Application
+  source/symbols version gap). Test `keeps_generic_types_and_member_paths`.
 - **Two more argument shapes pick an overload.** A value of a built-in option type
   (`TextEncoding::UTF8`, `Verbosity::Normal`; `arg_dispatch::BUILTIN_OPTION_TYPES`)
   types as that type, so System Application's
