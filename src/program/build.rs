@@ -221,8 +221,34 @@ fn build_dep_nodes(
         .map(|unit| crate::program::abi_ingest::abi_node_counts(unit, abi_cache))
         .fold((0, 0), |(o, r), (uo, ur)| (o + uo, r + ur));
     let source_files = || summaries.iter().flat_map(|unit| &unit.files);
-    let object_total = abi_object_total + source_files().map(|f| f.objects.len()).sum::<usize>();
-    let routine_total = abi_routine_total + source_files().map(|f| f.routines.len()).sum::<usize>();
+    // Step 2c's nodes, built here so the reservation counts them: the control
+    // add-ins a dependency with source declares only in its symbols (see
+    // `source_app_symbol_control_addins`).
+    let in_source: std::collections::HashSet<&ObjectNodeId> = source_files()
+        .flat_map(|f| f.objects.iter().map(|o| &o.id))
+        .collect();
+    let symbol_addins: Vec<(Vec<ObjectNode>, Vec<RoutineNode>)> = snap
+        .apps
+        .iter()
+        .filter(|unit| unit.source.is_some() && unit.id != snap.workspace_app)
+        .map(|unit| {
+            crate::program::abi_ingest::source_app_symbol_control_addins(
+                unit,
+                apps.intern(&unit.id),
+                abi_cache,
+                |id| in_source.contains(id),
+            )
+        })
+        .collect();
+    let (addin_object_total, addin_routine_total) = symbol_addins
+        .iter()
+        .fold((0, 0), |(o, r), (uo, ur)| (o + uo.len(), r + ur.len()));
+    let object_total = abi_object_total
+        + addin_object_total
+        + source_files().map(|f| f.objects.len()).sum::<usize>();
+    let routine_total = abi_routine_total
+        + addin_routine_total
+        + source_files().map(|f| f.routines.len()).sum::<usize>();
     let meta_total = source_files().map(|f| f.routine_meta.len()).sum();
     let mut pool = StrPool::default();
     let mut objects: Vec<ObjectNode> = Vec::with_capacity(object_total);
@@ -288,7 +314,15 @@ fn build_dep_nodes(
         routines.extend(abi_routines);
     }
 
-    // The count-first contract: steps 2 and 2b filled exactly the counted
+    // ── Step 2c: a source dependency's symbol-only control add-ins ───────────
+    for (mut addin_objects, mut addin_routines) in symbol_addins {
+        addin_objects.share_strings(&mut pool);
+        addin_routines.share_strings(&mut pool);
+        objects.extend(addin_objects);
+        routines.extend(addin_routines);
+    }
+
+    // The count-first contract: steps 2, 2b and 2c filled exactly the counted
     // totals, and no list grew past its single reservation. `dep_meta` is
     // reserved exactly too: step 2 extends it with `meta_total` entries.
     debug_assert_eq!(

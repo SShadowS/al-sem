@@ -558,6 +558,35 @@ pub(crate) fn abi_node_counts(unit: &AppUnit, cache: &AbiCache) -> (usize, usize
 /// (H-3's `error` field covers the latter). Local and internal routines are
 /// no longer skipped (H-1) — see the loop-entry doc below.
 pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestResult {
+    ingest_abi_objects(unit, app, cache, |_| true)
+}
+
+/// The control add-ins a dependency WITH source declares only in its symbols:
+/// the nodes [`ingest_abi`] gives for each `ControlAddIn` whose id
+/// `in_source` does not hold. A package need not embed a `controladdin`'s
+/// `.al` (Continia's CDN embeds the page with `usercontrol(RefreshTimer;
+/// "CTS-CDN Refresh Timer")` but not the add-in), and an add-in has no AL body,
+/// so its symbols say all source would: its procedures and events. Without it,
+/// `CurrPage.RefreshTimer.Schedule(..)` had no add-in to resolve against.
+pub(crate) fn source_app_symbol_control_addins(
+    unit: &AppUnit,
+    app: AppRef,
+    cache: &AbiCache,
+    in_source: impl Fn(&ObjectNodeId) -> bool,
+) -> (Vec<ObjectNode>, Vec<RoutineNode>) {
+    let result = ingest_abi_objects(unit, app, cache, |id| {
+        id.kind == ObjectKind::ControlAddIn && !in_source(id)
+    });
+    (result.objects, result.routines)
+}
+
+/// [`ingest_abi`] over the ABI objects whose node id `keep` holds.
+fn ingest_abi_objects(
+    unit: &AppUnit,
+    app: AppRef,
+    cache: &AbiCache,
+    keep: impl Fn(&ObjectNodeId) -> bool,
+) -> AbiIngestResult {
     let Some(abi) = load_abi(unit, cache) else {
         return AbiIngestResult {
             objects: vec![],
@@ -568,12 +597,20 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
 
     // Presized to the exact counts `abi_node_counts` reports (issue #84), so
     // no app's vectors carry growth-by-doubling slack.
-    let (object_count, routine_count) = node_counts(&abi);
-    let mut objects: Vec<ObjectNode> = Vec::with_capacity(object_count);
+    let kept: Vec<(
+        &crate::engine::deps::symbol_reference::AbiObject,
+        ObjectNodeId,
+    )> = abi
+        .objects
+        .iter()
+        .map(|o| (o, abi_object_node_id(app, o)))
+        .filter(|(_, id)| keep(id))
+        .collect();
+    let routine_count = kept.iter().map(|(o, _)| o.routines.len()).sum();
+    let mut objects: Vec<ObjectNode> = Vec::with_capacity(kept.len());
     let mut routines: Vec<RoutineNode> = Vec::with_capacity(routine_count);
 
-    for abi_obj in &abi.objects {
-        let obj_id = abi_object_node_id(app, abi_obj);
+    for (abi_obj, obj_id) in kept {
         let kind = obj_id.kind;
 
         // Table fields (Task 3) — Table/TableExtension only. The physical

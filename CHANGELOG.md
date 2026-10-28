@@ -263,6 +263,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A dependency page's `CurrPage.<usercontrol>` call resolves against an add-in
+  its package declares only in symbols.** Continia's CDN embeds
+  `usercontrol(RefreshTimer; "CTS-CDN Refresh Timer")` and calls
+  `CurrPage.RefreshTimer.Schedule(..)`, but ships no `controladdin` `.al`. A
+  dependency with source took no objects from its symbols, so the add-in was
+  missing (`compoundReceiver`). It now takes the control add-ins its source
+  lacks (an add-in has no AL body, so its symbols say all source would). And a
+  symbol add-in was read with no procedures at all, so every call to one was
+  `memberNotFound`; its `Methods` are now its procedures (its `Events`, as in
+  source, are none). Test `cli_dependency_symbol_control_addin`.
+
+- **A symbol-only method with no parameters is called with none.** The compiler
+  leaves an empty array out of `SymbolReference.json`, so such a method has no
+  `Parameters` key (BC 29's Base Application: 7211 methods so, one
+  `"Parameters": []`). Ingestion read the missing key as an unknown arity, which
+  no call matches: every 0-argument call into a symbol-only package was an
+  `arityMismatch` unknown, and those methods had no symbol method id. Continia
+  DO's dependency-body unknowns: 41 → 2 (the 38 `arityMismatch` calls into
+  Microsoft's `System` package, e.g. `AgentUtilities.
+  BlockPageFromBeingOpenedByAgent()`, and the `compoundReceiver` `.Get` on
+  `IndexManagement.GetSupportedOptimizedTextSearchLanguages()`). Earlier notes
+  called these 38 a platform version skew; the symbols declare every one. Test
+  `cli_parameterless_symbol_method`.
+
 - **A write with no known table is never hidden in a dependency group, nor shown
   at another write.** Digest's producer-proof search matched facts with
   `fact_equivalent`, which treats a missing resource as equal to any, so an

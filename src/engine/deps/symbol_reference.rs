@@ -199,12 +199,12 @@ pub struct AbiRoutine {
     pub kind: String,
     pub event_kind: AbiEventKind,
     pub parameters: Vec<AbiParameter>,
-    /// Whether `parameters` reflects a genuinely-parsed `Parameters` JSON array
-    /// (present in the source JSON, even if empty for a true 0-arg procedure) vs.
-    /// the field being absent/unparseable — arity is TRI-STATE (Task 1, round-2
-    /// hardening): `false` here means the candidate's arity is UNKNOWN, never
-    /// zero. Consumers (`abi_ingest`) must never treat an unknown arity as a
-    /// concrete `0` — see `abi_ingest::UNKNOWN_ARITY`.
+    /// Whether `parameters` is the routine's real parameter list — arity is
+    /// TRI-STATE (Task 1, round-2 hardening): `false` means the candidate's
+    /// arity is UNKNOWN, never zero, and consumers (`abi_ingest`) must never
+    /// treat it as a concrete `0` — see `abi_ingest::UNKNOWN_ARITY`. Parsed
+    /// symbols always know it: a missing `Parameters` key is how the compiler
+    /// writes a method with none (see `parse_method`).
     pub parameters_known: bool,
     /// Reconstructed SOURCE-SHAPED return-type text (Task 2) — see
     /// [`reconstruct_return_type_text`] for the full fail-closed rule set.
@@ -1040,12 +1040,14 @@ fn parse_method(m: &RawMethod) -> AbiRoutine {
         }
     }
 
-    // Tri-state arity (Task 1, round-2 hardening): `Some(_)` — even `Some(vec![])`
-    // for a genuine 0-arg procedure — means the JSON carried a real `Parameters`
-    // array; `None` means the field was absent/unparseable, so the arity is
-    // UNKNOWN, never zero. `abi_ingest` maps `!parameters_known` to a sentinel
-    // that can never arity-match a real call site.
-    let parameters_known = m.parameters.is_some();
+    // The compiler leaves an empty array out of `SymbolReference.json`, so a
+    // method with no `Parameters` key takes none: a known arity of 0. (BC 29's
+    // Base Application spells 7211 of its methods so and one `"Parameters":
+    // []`.) Reading the missing key as an unknown arity made every 0-argument
+    // call to a symbol-only method an arity mismatch (`AgentUtilities.
+    // BlockPageFromBeingOpenedByAgent()`), and left those methods without a
+    // symbol method id.
+    let parameters_known = true;
 
     AbiRoutine {
         name: m.name.clone().unwrap_or_default(),
@@ -1527,11 +1529,19 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
     ];
     for (key, object_type) in BARE {
         for o in raw_objects(root, key) {
+            // A control add-in's `Methods` are its AL-callable procedures, as
+            // source lowers them; its `Events` are raised by the client, never
+            // called, so (as in source) they are no routines.
+            let routines = if object_type == "ControlAddIn" {
+                o.methods.iter().flatten().map(parse_method).collect()
+            } else {
+                Vec::new()
+            };
             let mut abi_object = AbiObject {
                 object_type: object_type.to_string(),
                 object_number: o.id.unwrap_or(0),
                 name: o.name.clone().unwrap_or_default(),
-                routines: Vec::new(),
+                routines,
                 ..Default::default()
             };
             if let Some(ifaces) = &o.implemented_interfaces {
@@ -1905,31 +1915,25 @@ mod tests {
     }
 
     #[test]
-    fn parse_method_arity_is_tri_state() {
+    fn parse_method_without_parameters_takes_none() {
         // "Parameters":[] (present, empty) → known arity 0.
         let json_present = r##"{"Name":"Foo","Parameters":[]}"##;
         let raw_present: RawMethod = serde_json::from_str(json_present).unwrap();
         let m_present = parse_method(&raw_present);
-        assert!(
-            m_present.parameters_known,
-            "an explicit empty Parameters array is a KNOWN 0-arity, not unknown"
-        );
+        assert!(m_present.parameters_known);
         assert_eq!(m_present.parameters.len(), 0);
 
-        // No "Parameters" key at all → unknown arity, never zero.
-        let json_absent = r##"{"Name":"Foo"}"##;
+        // No "Parameters" key, as the compiler writes a method with none (the
+        // platform's `"Agent Utilities".BlockPageFromBeingOpenedByAgent`) →
+        // the same known arity 0.
+        let json_absent = r##"{"Name":"Foo","Id":7}"##;
         let raw_absent: RawMethod = serde_json::from_str(json_absent).unwrap();
         let m_absent = parse_method(&raw_absent);
         assert!(
-            !m_absent.parameters_known,
-            "an absent Parameters field must be UNKNOWN arity, never zero"
+            m_absent.parameters_known,
+            "a missing Parameters key is a method with no parameters"
         );
-        assert_eq!(
-            m_absent.parameters.len(),
-            0,
-            "the parameters Vec is still empty for display purposes, but \
-             parameters_known=false is what callers must gate on"
-        );
+        assert_eq!(m_absent.parameters.len(), 0);
     }
 
     // -- Task 2: structured ABI return types (`Subtype`) ---------------------
