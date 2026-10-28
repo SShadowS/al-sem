@@ -263,6 +263,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Page.Run(0, Rec)` on a dependency's table runs that table's lookup page**
+  (G37). Only a workspace table's `LookupPageId` was known, so Continia DO's
+  `Page.Run(0, TempServDocLog)` on Base Application's `Service Document Log`
+  (`LookupPageID = "Service Document Log"`) was a dynamic run and `prove`'s
+  `unresolved-callsite`. Every table with source now carries its
+  `LookupPageId` (`ObjectNode::lookup_pages`, pack schema 11), joined with the
+  loaded table extensions of it; a symbol-only table's is not read yet. Test
+  `cli_dependency_lookup_page_run`.
+
 - **An array parameter takes part in overload selection.** Argument typing read
   `array[8] of Text[100]` as a malformed generic clause (`of` with no `[..]`),
   so an array parameter was untyped and degraded every overload pick of its

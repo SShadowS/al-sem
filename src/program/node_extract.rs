@@ -195,6 +195,11 @@ pub struct ObjectNode {
     /// `UnknownValueImplementation`, union over `#if` arms, document order, no
     /// duplicates. Empty unless [`Self::closed_enum`].
     pub enum_impls: Vec<(SharedStr, ObjectRef)>,
+    /// A Table's or TableExtension's `LookupPageId` values (raw property
+    /// text, union over `#if` arms); empty for every other kind and for a
+    /// symbol-only table. `Page.Run(0, Rec)` runs that page
+    /// ([`crate::program::graph::ProgramGraph::lookup_pages`]).
+    pub lookup_pages: Vec<SharedStr>,
 }
 
 /// One retained ABI parameter's dispatch-relevant metadata (Task 2, roadmap-
@@ -482,6 +487,9 @@ impl ShareStrings for ObjectNode {
         }
         for (iface, _) in &mut self.enum_impls {
             pool.share(iface);
+        }
+        for page in &mut self.lookup_pages {
+            pool.share(page);
         }
     }
 }
@@ -946,6 +954,15 @@ pub fn extract_nodes(
             parse_incomplete,
             closed_enum,
             enum_impls,
+            lookup_pages: if matches!(obj.kind, ObjectKind::Table | ObjectKind::TableExtension) {
+                obj.properties
+                    .iter()
+                    .filter(|p| p.name.eq_ignore_ascii_case("lookuppageid"))
+                    .map(|p| p.value.trim().into())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             internal: obj.properties.iter().any(|p| {
                 p.name.eq_ignore_ascii_case("access")
                     && p.value.trim().eq_ignore_ascii_case("internal")
@@ -1126,6 +1143,7 @@ pub(crate) mod test_fixtures {
             // Maximal, not realistic: a Page carries no closure fact.
             closed_enum: true,
             enum_impls: vec![("icustominterface".into(), ObjectRef::Id(50101))],
+            lookup_pages: vec!["\"Demo Lookup\"".into()],
             internal: true,
         }
     }

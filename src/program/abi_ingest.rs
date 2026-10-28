@@ -664,6 +664,8 @@ fn ingest_abi_objects(
             closed_enum: false,
             internal: false,
             enum_impls: Vec::new(),
+            // Symbol-only tables' `LookupPageID` is not read (yet).
+            lookup_pages: Vec::new(),
         });
 
         for routine in &abi_obj.routines {

@@ -102,6 +102,7 @@ mod cli_d39_helper_persists;
 mod cli_dataitem_record_ops;
 mod cli_decision7_precedence;
 mod cli_dependency_diagnostics;
+mod cli_dependency_lookup_page_run;
 mod cli_dependency_roots;
 mod cli_dependency_symbol_control_addin;
 mod cli_diff_strict;

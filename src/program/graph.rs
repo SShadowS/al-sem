@@ -65,10 +65,10 @@ pub struct ProgramGraph {
     /// only workspace code calls its `internal` routines. False in
     /// dependency-only and in-memory test graphs.
     pub workspace_friendless: bool,
-    /// Every workspace table → the `LookupPageId` values (raw property text)
-    /// it and the workspace's table extensions of it declare; empty when none
-    /// does. `Page.Run(0, Rec)` runs that page (`resolve::full`). Empty in
-    /// dependency-only and in-memory test graphs.
+    /// Every table with source (any app) → the `LookupPageId` values (raw
+    /// property text) it and the loaded table extensions of it declare; empty
+    /// when none does. `Page.Run(0, Rec)` runs that page (`resolve::full`).
+    /// Empty in dependency-only and in-memory test graphs.
     pub lookup_pages: HashMap<ObjectNodeId, Vec<String>>,
     /// Per-app dependency-ABI ingest diagnostics (Tier-1 remediation, H-3):
     /// one entry per SymbolOnly dep whose `SymbolReference.json` could not
@@ -268,6 +268,7 @@ mod tests {
             closed_enum: false,
             internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
         };
 
         let mut objects = vec![
@@ -361,6 +362,7 @@ mod tests {
             closed_enum: false,
             internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
         };
 
         let mut objects = vec![

@@ -72,7 +72,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 8: `RoutineMeta::method_id` / `try_function`.
 /// 9: `ObjectNode::internal`.
 /// 10: `AbiParamRetained::array_dims`.
-pub const PACK_SCHEMA: u32 = 10;
+/// 11: `ObjectNode::lookup_pages`.
+pub const PACK_SCHEMA: u32 = 11;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -533,17 +534,19 @@ mod tests {
 
     /// Schemas 8 and 9: a routine's method ids are pack payload (the symbols'
     /// id on the node, the declared id and `[TryFunction]` flag on its meta),
-    /// and so is an object's `Access = Internal`. (Schema 10 changed only
+    /// and so is an object's `Access = Internal` (schema 9) and a table's
+    /// `LookupPageId` values (schema 11). (Schema 10 changed only
     /// `AbiParamRetained`, which no source routine in a pack carries.)
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 10);
+        assert_eq!(PACK_SCHEMA, 11);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         let meta = &mut pack.files[0].routine_meta[0].1;
         (meta.method_id, meta.try_function) = (Some(-7), true);
         pack.files[0].objects[0].internal = true;
+        pack.files[0].objects[0].lookup_pages = vec!["\"Demo List\"".into()];
         pack.self_hash = compute_self_hash(&pack);
         let back = decode(&encode(&pack).expect("encode")).expect("decode");
         assert_eq!(back.files[0].routines[0].abi_method_id, Some(-42));
@@ -552,6 +555,11 @@ mod tests {
         assert!(
             back.files[0].objects[0].internal,
             "schema 9: ObjectNode::internal"
+        );
+        assert_eq!(
+            back.files[0].objects[0].lookup_pages,
+            [crate::program::str_pool::SharedStr::from("\"Demo List\"")],
+            "schema 11: ObjectNode::lookup_pages"
         );
     }
 

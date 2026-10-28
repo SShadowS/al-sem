@@ -1088,6 +1088,7 @@ mod tests {
             closed_enum: false,
             internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
         }
     }
 

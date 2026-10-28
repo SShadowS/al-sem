@@ -9,7 +9,7 @@ use crate::program::abi_ingest::AbiCache;
 use crate::program::dep_cache::{DepCache, DepKey, DepNodes};
 use crate::program::dep_summary::{BuildParse, DepUnitSummary, summarize_file};
 use crate::program::graph::{AbiIngestError, ObjectIndex, ProgramGraph};
-use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node::{AppRef, AppRegistry, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
 use crate::program::node_set::NodeSet;
 use crate::program::profile::BuildProfile;
@@ -474,7 +474,7 @@ pub fn assemble_program_graph(
         abi_ingest_errors: dep.abi_ingest_errors.clone(),
         workspace_rows,
     };
-    graph.lookup_pages = workspace_lookup_pages(&graph, ws_app_ref, ws_unit);
+    graph.lookup_pages = source_lookup_pages(&graph);
     graph.closed_internal_interfaces = closed_internal_interfaces(&graph, snap);
 
     // ── Inject synthetic platform-event publishers ───────────────────────────
@@ -643,44 +643,36 @@ fn loaded_friend(snap: &AppSetSnapshot, friend: &crate::app_package::FriendApp) 
     })
 }
 
-/// [`ProgramGraph::lookup_pages`]: every workspace table, with the
-/// `LookupPageId` values it and the workspace's table extensions of it
-/// declare. An extension whose base table does not resolve to a workspace
-/// table adds nothing.
-fn workspace_lookup_pages(
-    graph: &ProgramGraph,
-    ws_app_ref: AppRef,
-    ws_unit: &ParsedUnit,
-) -> HashMap<ObjectNodeId, Vec<String>> {
-    let lookup = |o: &al_syntax::ir::ObjectDecl| -> Vec<String> {
-        o.properties
-            .iter()
-            .filter(|p| p.name.eq_ignore_ascii_case("lookuppageid"))
-            .map(|p| p.value.trim().to_string())
-            .collect()
-    };
-    let objects = || ws_unit.files.iter().flat_map(|pf| &pf.file.objects);
-    let mut out: HashMap<ObjectNodeId, Vec<String>> = objects()
-        .filter(|o| o.kind == ObjectKind::Table)
-        .map(|o| {
-            let id = ObjectNodeId {
-                app: ws_app_ref,
-                kind: ObjectKind::Table,
-                key: ObjKey::from_source(o),
-            };
-            (id, lookup(o))
-        })
+/// [`ProgramGraph::lookup_pages`]: every table with source, in any app, with
+/// the `LookupPageId` values it and the loaded table extensions of it declare
+/// (`ObjectNode::lookup_pages`). An extension whose base table does not
+/// resolve to a table with source adds nothing. A dependency's table counts
+/// as the workspace's does: Continia DO's `Page.Run(0, TempServDocLog)` on
+/// Base Application's `Service Document Log` (`LookupPageID = "Service
+/// Document Log"`) was an unresolved dynamic run.
+fn source_lookup_pages(graph: &ProgramGraph) -> HashMap<ObjectNodeId, Vec<String>> {
+    let pages =
+        |o: &ObjectNode| -> Vec<String> { o.lookup_pages.iter().map(|p| p.to_string()).collect() };
+    let mut out: HashMap<ObjectNodeId, Vec<String>> = graph
+        .objects
+        .iter()
+        .filter(|o| o.id.kind == ObjectKind::Table && o.tier != TrustTier::SymbolOnly)
+        .map(|o| (o.id.clone(), pages(o)))
         .collect();
-    for ext in objects().filter(|o| o.kind == ObjectKind::TableExtension) {
+    for ext in graph
+        .objects
+        .iter()
+        .filter(|o| o.id.kind == ObjectKind::TableExtension && o.tier != TrustTier::SymbolOnly)
+    {
         let Some(base) = ext
             .extends_target
             .as_deref()
-            .and_then(|t| graph.resolve_object(ws_app_ref, ObjectKind::Table, t))
+            .and_then(|t| graph.resolve_object(ext.id.app, ObjectKind::Table, t))
         else {
             continue;
         };
-        if let Some(pages) = out.get_mut(&base.id) {
-            pages.extend(lookup(ext));
+        if let Some(found) = out.get_mut(&base.id) {
+            found.extend(pages(ext));
         }
     }
     out

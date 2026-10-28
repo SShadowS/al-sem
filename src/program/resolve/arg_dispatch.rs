@@ -3710,6 +3710,7 @@ mod tests {
             closed_enum: false,
             internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
         };
         let caller = ObjectNode {
             id: ObjectNodeId {
@@ -3734,6 +3735,7 @@ mod tests {
             closed_enum: false,
             internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
         };
         let from_id = caller.id.clone();
         let mut objects = vec![table, caller];
@@ -4465,6 +4467,7 @@ codeunit 50100 "C"
                 closed_enum: false,
                 internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
             },
             ObjectNode {
                 id: dep_id.clone(),
@@ -4485,6 +4488,7 @@ codeunit 50100 "C"
                 closed_enum: false,
                 internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
             },
         ];
         objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -4651,6 +4655,7 @@ codeunit 50700 "Caller"
             closed_enum: false,
             internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
         };
         let objects = vec![table];
         let obj_index = ObjectIndex::build(&objects);
@@ -4695,6 +4700,7 @@ codeunit 50700 "Caller"
                 closed_enum: false,
                 internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
             })
             .collect();
         let obj_index = ObjectIndex::build(&objects);
@@ -4773,6 +4779,7 @@ codeunit 50700 "Caller"
             closed_enum: false,
             internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
         };
         let objects = vec![object];
         let obj_index = ObjectIndex::build(&objects);
