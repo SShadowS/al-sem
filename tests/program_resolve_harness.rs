@@ -5328,7 +5328,7 @@ codeunit 50182 "MI Target"
     procedure P(X: Text) begin end;
     procedure Q(var R: Record "MI T") begin end;
     procedure Q(X: Integer) begin end;
-    [MethodId(777)]
+    [MethodId('-777')]
     procedure Declared(X: Integer) begin end;
 }
 
@@ -5362,7 +5362,7 @@ codeunit 50183 "MI Caller"
         T: Codeunit "MI Target";
         I: Integer;
     begin
-        T."__alsem_mid_777"(I);
+        T."__alsem_mid_-777"(I);
     end;
 
     procedure ByIdTableMethod()
@@ -5384,7 +5384,8 @@ codeunit 50183 "MI Caller"
     assert_binds_param(&report, tmp.path(), "byidtablemethod", "isvalid");
     assert_binds_param(&report, tmp.path(), "byidowntable", "isvalid");
     // A declared `[MethodId(n)]` (synthesized AL carries the runtime's) is the
-    // routine's id, not the one its signature gives.
+    // routine's id, not the one its signature gives. A negative id is written
+    // quoted: the grammar takes no negative attribute argument.
     assert_binds_param(&report, tmp.path(), "byiddeclared", "declared");
     let edge = &outer_call_edge(&report, "byidnone").edge;
     assert!(

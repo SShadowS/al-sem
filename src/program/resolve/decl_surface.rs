@@ -81,7 +81,12 @@ fn declared_method_id(decl: &RoutineDecl) -> Option<i32> {
         .find(|a| a.name.eq_ignore_ascii_case("methodid"))
         .and_then(|a| {
             let (_, rest) = a.raw.split_once('(')?;
-            rest.split_once(')')?.0.trim().parse().ok()
+            rest.split_once(')')?
+                .0
+                .trim()
+                .trim_matches('\'')
+                .parse()
+                .ok()
         })
 }
 
@@ -420,12 +425,15 @@ mod tests {
     }
 
     /// A `[MethodId(n)]` attribute (synthesized from a runtime package) is the
-    /// routine's declared id; a routine without one declares none.
+    /// routine's declared id; a routine without one declares none. A negative
+    /// id is written quoted (the grammar takes no negative attribute argument),
+    /// and the file parses clean.
     #[test]
     fn method_id_attribute_is_the_declared_id() {
         let file = al_syntax::parse(
-            "codeunit 50100 C\n{\n    [MethodId(1859663910)]\n    local procedure A(var S: Integer)\n    begin\n    end;\n\n    [MethodId(-42)]\n    procedure B()\n    begin\n    end;\n\n    procedure D()\n    begin\n    end;\n}\n",
+            "codeunit 50100 C\n{\n    [MethodId(1859663910)]\n    local procedure A(var S: Integer)\n    begin\n    end;\n\n    [MethodId('-42')]\n    procedure B()\n    begin\n    end;\n\n    procedure D()\n    begin\n    end;\n}\n",
         );
+        assert_eq!(file.parse_status, al_syntax::ir::ParseStatus::Clean);
         let ids: Vec<Option<i32>> = file.objects[0]
             .routines
             .iter()

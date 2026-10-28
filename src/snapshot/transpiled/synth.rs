@@ -186,6 +186,14 @@ fn symbol_attributes(m: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The `[MethodId('n')]` attribute a synthesized routine carries
+/// (`decl_surface::declared_method_id` reads it). The id is quoted because the
+/// grammar takes no negative number as an attribute argument: `[MethodId(-5)]`
+/// made the whole file `Recovered`, and every object in it parse-incomplete.
+fn method_id_attribute(id: i32) -> String {
+    format!("[MethodId('{id}')]")
+}
+
 /// `[NavEventSubscriber(ObjectType.CodeUnit, 80, "OnX", id, "Elem", opts)]` as AL.
 fn subscriber_attribute(m: &Method) -> Option<String> {
     let a = m.attribute("NavEventSubscriber")?;
@@ -355,7 +363,7 @@ fn routines<'a>(o: &Value, class: Option<&'a Class>, interface: bool) -> Vec<Rou
         // The id the runtime calls it by (`"__alsem_mid_<n>"` calls bind to
         // it): computing it from the signature fails for an enum parameter
         // the C# shows only as `NavOption`.
-        attributes.extend(id.map(|i| format!("[MethodId({i})]")));
+        attributes.extend(id.map(method_id_attribute));
         let sym_params = arr(m, "Parameters");
         // C# names by position, so the body's references match.
         let names: Vec<String> = match cs {
@@ -415,7 +423,7 @@ fn routines<'a>(o: &Value, class: Option<&'a Class>, interface: bool) -> Vec<Rou
             out.push(Routine {
                 attributes: subscriber_attribute(m)
                     .into_iter()
-                    .chain(std::iter::once(format!("[MethodId({id})]")))
+                    .chain(std::iter::once(method_id_attribute(id)))
                     .collect(),
                 access: "local ",
                 name: name.to_string(),
@@ -771,6 +779,32 @@ pub(crate) fn synthesize(symbols: &Value, cs: &[(String, String)]) -> Vec<(Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A routine's method id is written so the file still parses clean when
+    /// the id is negative (half of all ids are), and reads back as declared.
+    #[test]
+    fn a_negative_method_id_keeps_the_file_clean() {
+        let symbols: Value = serde_json::from_str(
+            r#"{ "Codeunits": [ { "Id": 6192855, "Name": "CSC DB Reader", "Methods": [
+                { "Id": -324976780, "Name": "GetName" },
+                { "Id": 798086828, "Name": "GetCreator" } ] } ] }"#,
+        )
+        .expect("json");
+        let files = synthesize(&symbols, &[]);
+        let [(_, text)] = files.as_slice() else {
+            panic!("one file: {files:?}")
+        };
+        let f = al_syntax::parse(text);
+        assert_eq!(f.parse_status, al_syntax::ir::ParseStatus::Clean, "{text}");
+        let ids: Vec<Option<i32>> = f.objects[0]
+            .routines
+            .iter()
+            .map(|r| {
+                crate::program::resolve::decl_surface::RoutineMeta::from_decl(r, "C.al").method_id
+            })
+            .collect();
+        assert_eq!(ids, vec![Some(-324976780), Some(798086828)], "{text}");
+    }
 
     /// Gated on `TRANSPILED_SYMBOLS` (a real package's `SymbolReference.json`)
     /// and `TRANSPILED_CS_DIR` (its `bin/*.cs`), never committed; with

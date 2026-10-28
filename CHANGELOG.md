@@ -263,6 +263,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A negative synthesized method id no longer breaks the file's parse.** The
+  grammar takes no negative number as an attribute argument, so `[MethodId(-5)]`
+  made the whole synthesized file `Recovered` and every object in it
+  parse-incomplete. Half of all method ids are negative. A parse-incomplete object
+  is not read as loaded source, so a run of a codeunit with no `OnRun` stayed
+  `external` instead of running nothing (Continia Core: `"databaseReader".Run()` on
+  `CSC DB Reader`). The id is now written quoted, `[MethodId('-5')]`, and read either
+  way. Extraction scheme 4. Tests `a_negative_method_id_keeps_the_file_clean`,
+  `method_id_attribute_is_the_declared_id`, `synthesized_calls_bind_by_method_id`.
 - **Synthesized runtime code binds by the runtime's own method ids.** AL synthesized
   from a transpiled package (`snapshot::transpiled`) now writes `[MethodId(n)]` on
   every routine whose id the symbols or the C# give, and the resolver takes a

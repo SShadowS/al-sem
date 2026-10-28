@@ -24,8 +24,9 @@ pub fn cache_dir() -> PathBuf {
 /// The version of what extraction produces for a package, in the cache file's
 /// name. Bump it when [`extract_embedded_source`]'s output for an unchanged
 /// `.app` changes (2: AL synthesized from transpiled C#; its own changes too;
-/// 3: synthesized routines carry their `[MethodId(n)]`).
-pub const EXTRACTION_SCHEME: u32 = 3;
+/// 3: synthesized routines carry their `[MethodId(n)]`; 4: the id is quoted,
+/// since a negative one made the file `Recovered`).
+pub const EXTRACTION_SCHEME: u32 = 4;
 
 /// Return embedded AL source for `app_path`, using the content-addressed
 /// on-disk cache when available.
