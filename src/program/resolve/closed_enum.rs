@@ -135,12 +135,12 @@ pub(crate) fn closed_enum_sources(
 }
 
 /// Whether two half-open byte ranges share a byte.
-fn overlaps(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
+pub(super) fn overlaps(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
 /// The folded name of `e` when it is a (quoted) identifier, parentheses removed.
-fn name_of(ir: &Ir, e: ExprId) -> Option<String> {
+pub(super) fn name_of(ir: &Ir, e: ExprId) -> Option<String> {
     match &ir.expr(unparen(ir, e)).kind {
         ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => Some(n.fold_identifier()),
         _ => None,
@@ -166,13 +166,20 @@ fn is_interface_local(cx: &ClosedEnumCx, v_lc: &str, interface_lc: &str) -> bool
 /// one), or `None` when any occurrence is not admitted, the body holds a
 /// `with`, or the lowerer left a statement or expression unmodelled.
 fn allowlisted_writes(ir: &Ir, body: BlockId, v_lc: &str) -> Option<Vec<ExprId>> {
+    let writes = admitted_writes(ir, body, v_lc)?;
+    (!writes.is_empty()).then_some(writes)
+}
+
+/// [`allowlisted_writes`] that admits a body with no write (G30: one routine
+/// of several that may write an object global).
+pub(super) fn admitted_writes(ir: &Ir, body: BlockId, v_lc: &str) -> Option<Vec<ExprId>> {
     let mut walk = Occurrences {
         ir,
         v_lc,
         writes: Vec::new(),
     };
     walk.block(body)?;
-    (!walk.writes.is_empty()).then_some(walk.writes)
+    Some(walk.writes)
 }
 
 /// The rule-3 walk: every block (every `#if` branch), statement and expression.
@@ -555,7 +562,7 @@ fn in_scope(cx: &ClosedEnumCx, name_lc: &str) -> bool {
 }
 
 /// `e` with parentheses removed.
-fn unparen(ir: &Ir, mut e: ExprId) -> ExprId {
+pub(super) fn unparen(ir: &Ir, mut e: ExprId) -> ExprId {
     while let ExprKind::Parenthesized(inner) = &ir.expr(e).kind {
         e = *inner;
     }

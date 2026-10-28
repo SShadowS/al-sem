@@ -127,6 +127,7 @@ mod cli_p1_inventory;
 mod cli_prove_closed_world;
 mod cli_prove_cross_app;
 mod cli_prove_dead_paths;
+mod cli_prove_interface_holder;
 mod cli_prove_internal_interface;
 mod cli_prove_loaded_subscribers;
 mod cli_prove_platform_natives;

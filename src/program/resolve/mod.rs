@@ -21,6 +21,7 @@ pub mod framework_returns;
 pub mod full;
 pub mod global_builtins;
 pub mod index;
+pub mod interface_holder;
 pub mod member_catalog;
 pub mod method_id;
 pub mod receiver;

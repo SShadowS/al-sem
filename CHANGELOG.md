@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An interface held in a codeunit global, set only from codeunit variables, is a
+  closed dispatch site** (G30). An interface call on an object global of a workspace
+  codeunit dispatches over the codeunits the global can hold when the codeunit itself
+  is the only writer: every write, in every routine, stores a `Codeunit X` variable
+  or a parameter of a `local`/`internal` routine (not an event subscriber, and the
+  workspace names no `internalsVisibleTo` friend), and every call of that routine
+  passes a `Codeunit X` variable there. The site is then `Complete`, its routes
+  narrowed to those codeunits, with no assumption label. Phase 1 records both facts
+  per call site (`SiteFacts::interface_holder`, `argument_codeunits`); a post-pass
+  (`resolve::interface_holder::close_holder_sites`) closes the site once every call
+  edge is known. Every doubt keeps the site open: a `protected var`, a codeunit that
+  implements an interface, a parse issue, any other read or write of the global
+  (passing it on, `Clear`), a public setter, one caller passing anything else. On
+  Continia DO this is `CDO Template Variant Mgt`'s `FieldChainEvaluator`
+  (`SetFieldChainEvaluator`): 348 → 359 proven. Test `cli_prove_interface_holder`.
 - **`prove` labels the answers that assume no subscriber beyond the loaded ones**
   (Q6, G29). The cone follows the LOADED subscribers of every event, so events are
   closed over them while interfaces are open; that was unlabelled. prove now has

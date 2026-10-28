@@ -2137,9 +2137,18 @@ impl<'a> Converter<'a> {
         };
         // G24: also a closed enum mapping a value to a codeunit outside the
         // program: that value dispatches to code no route reaches.
+        // G30: a site closed over the codeunits an object global can hold
+        // dropped its routes to every other implementer on purpose: those are
+        // not unreached.
+        let holder_closed = facts.is_some_and(|f| {
+            !f.interface_closed_over.is_empty()
+                && f.interface_closed_over
+                    .iter()
+                    .all(|o| o.kind == ObjectKind::Codeunit)
+        });
         let unresolved_impls: Vec<(String, String)> = impls
             .iter()
-            .filter(|o| !reached(o))
+            .filter(|o| !holder_closed && !reached(o))
             .map(|o| (self.model_object_id(&o.id), "not-found".to_string()))
             .chain(facts.into_iter().flat_map(|f| {
                 f.interface_unmapped_enums.iter().map(|e| {

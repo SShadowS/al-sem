@@ -61,6 +61,10 @@ pub struct ProgramGraph {
     /// implementers the program holds. Empty in dependency-only and in-memory
     /// test graphs.
     pub closed_internal_interfaces: HashSet<ObjectNodeId>,
+    /// G30: the workspace manifest names no `internalsVisibleTo` friend, so
+    /// only workspace code calls its `internal` routines. False in
+    /// dependency-only and in-memory test graphs.
+    pub workspace_friendless: bool,
     /// Per-app dependency-ABI ingest diagnostics (Tier-1 remediation, H-3):
     /// one entry per SymbolOnly dep whose `SymbolReference.json` could not
     /// be read or parsed. Previously this signal (`SymbolReferenceAbi::

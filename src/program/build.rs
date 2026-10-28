@@ -386,6 +386,11 @@ pub fn assemble_program_graph(
         obj_index,
         friends: dep.friends.clone(),
         closed_internal_interfaces: closed_internal_interfaces(ws_app_ref, ws_unit, snap),
+        workspace_friendless: snap
+            .apps
+            .iter()
+            .find(|u| u.id == snap.workspace_app)
+            .is_some_and(|u| u.internals_visible_to.is_empty()),
         abi_ingest_errors: dep.abi_ingest_errors.clone(),
         workspace_rows,
     };

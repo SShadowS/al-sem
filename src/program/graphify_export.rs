@@ -1174,6 +1174,7 @@ mod tests {
             obj_index,
             friends: Default::default(),
             closed_internal_interfaces: Default::default(),
+            workspace_friendless: false,
             abi_ingest_errors: Default::default(),
             workspace_rows: Default::default(),
         };
@@ -1354,6 +1355,7 @@ mod tests {
             obj_index,
             friends: Default::default(),
             closed_internal_interfaces: Default::default(),
+            workspace_friendless: false,
             abi_ingest_errors: Default::default(),
             workspace_rows: Default::default(),
         };

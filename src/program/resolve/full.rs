@@ -148,6 +148,15 @@ pub struct SiteFacts {
     /// in `DispatchMeta.unresolved_impls`, so a closed-world `prove` keeps the
     /// site open.
     pub interface_unmapped_enums: Vec<ObjectNodeId>,
+    /// G30: what every write to the object global this interface call's
+    /// receiver names stores
+    /// ([`crate::program::resolve::interface_holder::holder_sources`]); closed
+    /// after phase 1 (`close_holder_sites`). `None` when not provable.
+    pub interface_holder: Option<Vec<crate::program::resolve::interface_holder::HolderSource>>,
+    /// G30: per argument, the codeunit of a codeunit variable passed there,
+    /// when the call's one target has an `Interface` parameter
+    /// ([`crate::program::resolve::interface_holder::argument_codeunits`]).
+    pub argument_codeunits: Vec<Option<ObjectNodeId>>,
     /// The member call's receiver as the resolver typed it.
     pub receiver: Option<ReceiverFact>,
     /// The object an object run (`Page.Run(Page::X)`, `PageVar.RunModal()`)
@@ -742,6 +751,13 @@ fn resolve_call_site_obligation(
                     {
                         facts_out.interface_closed_over = vec![i.clone()];
                     }
+                    // G30: an object global its own codeunit alone writes.
+                    if facts_out.interface_closed_over.is_empty() {
+                        facts_out.interface_holder =
+                            crate::program::resolve::interface_holder::holder_sources(
+                                &cx, *receiver, name_lc,
+                            );
+                    }
                     facts_out.interface_unmapped_enums =
                         index.unmapped_enum_implementers(graph, name_lc);
                 }
@@ -1098,6 +1114,25 @@ pub(crate) fn resolve_file_obligations(
                 if facts.open.is_empty() {
                     facts.open = site_open_bounds(&site.shape, site.arity, shape, &routes);
                 }
+                // G30: the codeunit variables passed to a routine's interface
+                // parameters (`interface_holder::close_holder_sites` reads them).
+                if let [route] = routes.as_slice()
+                    && let RouteTarget::Routine(target) = &route.target
+                {
+                    let args = crate::program::resolve::interface_holder::argument_codeunits(
+                        graph,
+                        index,
+                        &obj_node_id,
+                        routine,
+                        &obj.globals,
+                        &pf.file.ir,
+                        &site.args,
+                        target,
+                    );
+                    if args.iter().any(Option::is_some) {
+                        facts.argument_codeunits = args;
+                    }
+                }
                 if facts != SiteFacts::default() {
                     site_facts.push((obl_id.clone(), facts));
                 }
@@ -1365,6 +1400,14 @@ fn resolve_full_program_from_parts(
         indeterminate.extend(file_res.indeterminate);
         site_facts.extend(file_res.site_facts);
     }
+
+    // ── Phase 1b (G30): interface sites on an object global its own codeunit
+    // writes, closed once every call of the writing routines is known ────────
+    crate::program::resolve::interface_holder::close_holder_sites(
+        graph,
+        &mut classified_edges,
+        &mut site_facts,
+    );
 
     // ── Phase 2: publisher event flow obligations (all apps) ──────────────────
     // emit_event_flow_edges processes ALL graph.routines (no app filter).

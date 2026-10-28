@@ -3761,6 +3761,7 @@ mod tests {
             obj_index,
             friends: friends_map,
             closed_internal_interfaces: Default::default(),
+            workspace_friendless: false,
             abi_ingest_errors: Default::default(),
             workspace_rows: Default::default(),
         }
