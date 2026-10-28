@@ -504,7 +504,10 @@ fn evaluate_may_question(
         .effects
         .iter()
         .enumerate()
-        .filter(|(i, e)| effect_matches(e, question) || via_callers.contains_key(i))
+        // G23: an effect the root cannot reach under literal arguments does not.
+        .filter(|(i, e)| {
+            (effect_matches(e, question) || via_callers.contains_key(i)) && !e.literal_unreachable
+        })
         .map(|(i, _)| i)
         .collect();
 
@@ -1929,6 +1932,7 @@ mod tests {
             group_resources: vec![],
             origin_operation_ids: vec![],
             effect_is_kt: false,
+            literal_unreachable: false,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::MayCommit);
@@ -1961,6 +1965,7 @@ mod tests {
             group_resources: vec![],
             origin_operation_ids: vec![],
             effect_is_kt: false,
+            literal_unreachable: false,
         };
         let entry = minimal_entry("complete", vec![], vec![commit], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -2093,6 +2098,7 @@ mod tests {
             group_resources: vec![],
             origin_operation_ids: vec![],
             effect_is_kt: false,
+            literal_unreachable: false,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -2142,6 +2148,7 @@ mod tests {
             group_resources: vec![],
             origin_operation_ids: vec![],
             effect_is_kt: false,
+            literal_unreachable: false,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);

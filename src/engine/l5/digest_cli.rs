@@ -945,6 +945,10 @@ pub struct DigestEffectFull {
     /// same write in a CALLER's frame (G25). Not serialized.
     pub origin_operation_ids: Vec<String>,
     pub effect_is_kt: bool,
+    /// G23: unreachable from the root once literal Boolean arguments are
+    /// followed ([`crate::engine::l5::literal_reach`]); a MAY question does not
+    /// count it. Not serialized.
+    pub literal_unreachable: bool,
 }
 
 pub struct FullAnchor {
@@ -1238,7 +1242,18 @@ pub(crate) fn digest_effects_each(
         .collect::<BTreeSet<String>>()
         .into_iter()
         .collect();
-    let all_entries = compute_digest_effects_cli(tree, model, Some(&all), include_reads);
+    let mut all_entries = compute_digest_effects_cli(tree, model, Some(&all), include_reads);
+    // G23, prove's read only: effects a root cannot reach once literal Boolean
+    // arguments are followed through recursive SCCs, where the cone drops guards.
+    if gaps_in_cone {
+        let reach = crate::engine::l5::literal_reach::LiteralReach::new(&tree.typed_edges, model);
+        for entry in &mut all_entries {
+            let dead = reach.unreachable_effects(&entry.routine_id, &entry.effects);
+            for i in dead {
+                entry.effects[i].literal_unreachable = true;
+            }
+        }
+    }
     let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers
         .iter()
         .map(|roots| {
@@ -1512,6 +1527,7 @@ pub fn run_digest_query_full_from_entries(
                     group_resources: std::mem::take(&mut eff.group_resources),
                     origin_operation_ids: eff.origin_operation_ids.clone(),
                     effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
+                    literal_unreachable: eff.literal_unreachable,
                 });
             }
         }

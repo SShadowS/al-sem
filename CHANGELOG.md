@@ -185,6 +185,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`prove` follows literal Boolean arguments through recursive SCCs** (G23). The
+  cone's `param_guard` drops a fact behind `if P then` when every path binds `P` to the
+  opposite literal, but only through a non-recursive singleton SCC: a recursive SCC
+  shares one cone, so its members' requirements were dropped and a write behind
+  `if UseQueue then` counted for a caller passing `false`. On Continia DO, `RunReport`
+  and `RunReportID` sit in a 489-routine recursive SCC. `literal_reach` now runs, for
+  `prove`'s read, a per-root reachability over the snapshot's own edges. Its state is a
+  routine plus the known literal values of its usable guard parameters (the cone's own
+  frames). A direct call binds a literal or forwards a known parameter; every other edge
+  kind binds nothing. An effect counts as unreachable only when every origin operation's
+  routine is reached with guards ignored but never with its own requirements met. A
+  graph or id mismatch never drops an effect, and the search gives up (drops nothing)
+  past 400,000 states. The two DO claims the peer named stay `yes`, correctly as a MAY:
+  `DocSave` also reaches `DocHandle(true)` through `Codeunit.Run("Sales-Calc. Discount")`
+  → a Sales Line `OnDelete` → the approval workflow's `ExecuteResponses` →
+  `Sales-Post` → DO's `OnAfterFinalizePosting` subscriber. Test: `cli_prove_dead_paths`
+  (the recursive case answered `yes` before; it fails with the mark ignored; controls
+  for a literal `true`, the root's own parameter, a reassigned parameter and one passed
+  to a `var`).
 - **An enum value qualified by an enum VARIABLE, or written `Enum::"X"::V`, types as
   the enum** (G27), so an overloaded call binds the Enum overload, as the compiler does
   (alc/altool 18.0.43.1464, `graph extract`: `EI(K::Open)` with `K: Enum "SV Kind"`

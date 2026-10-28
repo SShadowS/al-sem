@@ -3238,6 +3238,10 @@ pub struct DigestEffectResult {
     /// order (#160 step 9 D2 (6)): `detail` lists at most 10, prove matches
     /// every member. Not serialized; empty off a group.
     pub group_resources: Vec<(String, String)>,
+    /// G23: the root cannot reach the effect once literal Boolean arguments
+    /// are followed ([`crate::engine::l5::literal_reach`]). Set only for
+    /// `prove`'s read; not serialized.
+    pub literal_unreachable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -4258,6 +4262,7 @@ fn digest_one_root<'i>(
                 origin_operation_ids: acc.origin_operation_ids.into_iter().collect(),
                 scoped_guarantees: Vec::new(),
                 group_resources,
+                literal_unreachable: false,
             });
         }
 
