@@ -430,7 +430,7 @@ pub fn assemble_program_graph(
         routines,
         obj_index,
         friends: dep.friends.clone(),
-        closed_internal_interfaces: closed_internal_interfaces(ws_app_ref, ws_unit, snap),
+        closed_internal_interfaces: HashSet::new(),
         workspace_friendless: snap
             .apps
             .iter()
@@ -441,6 +441,7 @@ pub fn assemble_program_graph(
         workspace_rows,
     };
     graph.lookup_pages = workspace_lookup_pages(&graph, ws_app_ref, ws_unit);
+    graph.closed_internal_interfaces = closed_internal_interfaces(&graph, snap);
 
     // ── Inject synthetic platform-event publishers ───────────────────────────
     // Binds subscribers to the table's implicit DB-trigger / validate events,
@@ -651,44 +652,34 @@ fn workspace_lookup_pages(
     out
 }
 
-/// G28: the workspace interfaces declared `Access = Internal` whose every
-/// implementer is loaded. Only the declaring app and its `internalsVisibleTo`
-/// friends can name an internal interface, so once every friend the workspace
-/// manifest declares is a loaded app, no app outside the program can implement
-/// it. Empty when some friend is not loaded (open-world).
+/// G28: the interfaces declared `Access = Internal` whose every implementer is
+/// loaded, in any app with source. Only the declaring app and its
+/// `internalsVisibleTo` friends can name an internal interface, so once every
+/// friend that app's manifest declares is a loaded app, no app outside the
+/// program can implement it. An app with a friend not loaded closes none
+/// (open-world). A dependency's interface closes too: Continia CDN's internal
+/// `IEndpointCreator` (CDN's friends all loaded) was dispatched open-world.
 fn closed_internal_interfaces(
-    ws_app_ref: AppRef,
-    ws_unit: &ParsedUnit,
+    graph: &ProgramGraph,
     snap: &AppSetSnapshot,
 ) -> HashSet<ObjectNodeId> {
-    let friends_loaded = snap
+    let closed_apps: HashSet<AppRef> = snap
         .apps
         .iter()
-        .find(|u| u.id == snap.workspace_app)
-        .is_some_and(|u| {
+        .filter(|u| u.source.is_some() || u.id == snap.workspace_app)
+        .filter(|u| {
             u.internals_visible_to
                 .iter()
                 .all(|f| loaded_friend(snap, f).is_some())
-        });
-    if !friends_loaded {
-        return HashSet::new();
-    }
-    ws_unit
-        .files
+        })
+        .filter_map(|u| graph.apps.find(&u.id))
+        .collect();
+    graph
+        .objects
         .iter()
-        .flat_map(|pf| &pf.file.objects)
-        .filter(|o| o.kind == ObjectKind::Interface)
-        .filter(|o| {
-            o.properties.iter().any(|p| {
-                p.name.eq_ignore_ascii_case("access")
-                    && p.value.trim().eq_ignore_ascii_case("internal")
-            })
-        })
-        .map(|o| ObjectNodeId {
-            app: ws_app_ref,
-            kind: ObjectKind::Interface,
-            key: ObjKey::from_source(o),
-        })
+        .filter(|o| o.id.kind == ObjectKind::Interface && o.internal)
+        .filter(|o| closed_apps.contains(&o.id.app))
+        .map(|o| o.id.clone())
         .collect()
 }
 

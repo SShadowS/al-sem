@@ -266,6 +266,7 @@ mod tests {
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         };
 
@@ -358,6 +359,7 @@ mod tests {
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         };
 

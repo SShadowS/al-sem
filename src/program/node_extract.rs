@@ -185,6 +185,11 @@ pub struct ObjectNode {
     /// ([`enum_closure`], #264). `false` for every other object, and for every
     /// symbol-only enum (ABI extensibility is not modelled).
     pub closed_enum: bool,
+    /// A SOURCE object declared `Access = Internal`: only its app and that
+    /// app's `internalsVisibleTo` friends can name it (G28 closes such an
+    /// interface's dispatch once every friend is loaded,
+    /// `build::closed_internal_interfaces`). `false` for a symbol-only object.
+    pub internal: bool,
     /// `(interface name folded, implementing codeunit)` for every value's
     /// `Implementation` pair, every `DefaultImplementation` and every
     /// `UnknownValueImplementation`, union over `#if` arms, document order, no
@@ -937,6 +942,10 @@ pub fn extract_nodes(
             parse_incomplete,
             closed_enum,
             enum_impls,
+            internal: obj.properties.iter().any(|p| {
+                p.name.eq_ignore_ascii_case("access")
+                    && p.value.trim().eq_ignore_ascii_case("internal")
+            }),
         });
         // Computed once per object — same value for every routine in the object.
         let subscriber_instance_manual = read_event_subscriber_instance(obj);
@@ -1112,6 +1121,7 @@ pub(crate) mod test_fixtures {
             // Maximal, not realistic: a Page carries no closure fact.
             closed_enum: true,
             enum_impls: vec![("icustominterface".into(), ObjectRef::Id(50101))],
+            internal: true,
         }
     }
 }

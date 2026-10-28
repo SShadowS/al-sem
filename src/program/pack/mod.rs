@@ -70,7 +70,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 6: `RoutineNode::preproc_context` (engine-switch S9.0e).
 /// 7: `ObjectNode::closed_enum` / `enum_impls` (#264).
 /// 8: `RoutineMeta::method_id` / `try_function`.
-pub const PACK_SCHEMA: u32 = 8;
+/// 9: `ObjectNode::internal`.
+pub const PACK_SCHEMA: u32 = 9;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -529,21 +530,27 @@ mod tests {
         assert_eq!(back, pack);
     }
 
-    /// Schema 8: a routine's method ids are pack payload (the symbols' id on
-    /// the node, the declared id and `[TryFunction]` flag on its meta).
+    /// Schemas 8 and 9: a routine's method ids are pack payload (the symbols'
+    /// id on the node, the declared id and `[TryFunction]` flag on its meta),
+    /// and so is an object's `Access = Internal`.
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 8);
+        assert_eq!(PACK_SCHEMA, 9);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         let meta = &mut pack.files[0].routine_meta[0].1;
         (meta.method_id, meta.try_function) = (Some(-7), true);
+        pack.files[0].objects[0].internal = true;
         pack.self_hash = compute_self_hash(&pack);
         let back = decode(&encode(&pack).expect("encode")).expect("decode");
         assert_eq!(back.files[0].routines[0].abi_method_id, Some(-42));
         let meta = &back.files[0].routine_meta[0].1;
         assert_eq!((meta.method_id, meta.try_function), (Some(-7), true));
+        assert!(
+            back.files[0].objects[0].internal,
+            "schema 9: ObjectNode::internal"
+        );
     }
 
     /// T31 (#264): the closed-enum fact is pack payload. Stated precondition:

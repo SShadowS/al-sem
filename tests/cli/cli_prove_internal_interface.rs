@@ -121,3 +121,80 @@ fn internal_interface_with_every_friend_loaded_is_closed() {
     assert_eq!(friend["answer"], "unknown", "{friend}");
     assert!(blocks_on_dispatch(&friend), "{friend}");
 }
+
+/// A DEPENDENCY's internal interface closes the same way, on its own
+/// manifest's friends: Continia CDN's `IEndpointCreator` (internal, every CDN
+/// friend loaded), held in a local filled from a factory getter, was
+/// dispatched open-world from CDN's own code.
+fn prove_dep_run(dep_friends_xml: &str) -> serde_json::Value {
+    let lib = r#"interface "G28 Dep Creator"
+{
+    Access = Internal;
+    procedure Create();
+}
+codeunit 12 "G28 Dep Real Creator" implements "G28 Dep Creator"
+{
+    procedure Create()
+    begin
+    end;
+}
+codeunit 13 "G28 Dep Factory"
+{
+    var
+        Creator: Interface "G28 Dep Creator";
+
+    internal procedure SetCreator(NewCreator: Interface "G28 Dep Creator")
+    begin
+        Creator := NewCreator;
+    end;
+
+    internal procedure GetCreator(): Interface "G28 Dep Creator"
+    begin
+        exit(Creator);
+    end;
+}
+codeunit 10 "Dep Lib"
+{
+    procedure Outer()
+    var
+        Factory: Codeunit "G28 Dep Factory";
+        Creator: Interface "G28 Dep Creator";
+    begin
+        Creator := Factory.GetCreator();
+        Creator.Create();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnDepEvent()
+    begin
+    end;
+}
+"#;
+    let t = tempfile::tempdir().unwrap();
+    crate::dep_dispatch_fixture::write_own_lib_manifest(t.path(), "", lib, dep_friends_xml);
+    alsem(
+        t.path(),
+        &[
+            "prove",
+            t.path().to_str().unwrap(),
+            "CallChain",
+            "writes-table:Customer",
+            "--deterministic",
+        ],
+    )["payload"]["result"]
+        .clone()
+}
+
+#[test]
+fn a_dependencys_internal_interface_with_every_friend_loaded_is_closed() {
+    let closed = prove_dep_run("");
+    assert_eq!(closed["answer"], "no", "{closed}");
+    assert!(!blocks_on_dispatch(&closed), "{closed}");
+
+    // A friend of the dependency that is not loaded could implement it.
+    let open = prove_dep_run(
+        r#"<InternalsVisibleTo><Module Id="28282828-0000-4000-8000-0000000000ff" Name="G28 Dep Tests" Publisher="probe" /></InternalsVisibleTo>"#,
+    );
+    assert_eq!(open["answer"], "unknown", "{open}");
+    assert!(blocks_on_dispatch(&open), "{open}");
+}

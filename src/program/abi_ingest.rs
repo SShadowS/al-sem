@@ -624,6 +624,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
             // A symbol-only enum stays open: symbol extensibility and value
             // mappings are not modelled (#264, Discovery D1).
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         });
 

@@ -4953,6 +4953,7 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
             ObjectNode {
@@ -4972,6 +4973,7 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
         ];
@@ -5126,6 +5128,7 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
             ObjectNode {
@@ -5145,6 +5148,7 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
         ];
@@ -5326,6 +5330,7 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
             ObjectNode {
@@ -5345,6 +5350,7 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
         ];
@@ -5721,6 +5727,7 @@ codeunit 50612 "MixedCU2"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
             ObjectNode {
@@ -5740,6 +5747,7 @@ codeunit 50612 "MixedCU2"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
         ];
@@ -5959,6 +5967,7 @@ codeunit 50612 "MixedCU2"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         }];
 
@@ -6110,6 +6119,7 @@ codeunit 50612 "MixedCU2"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
             ObjectNode {
@@ -6129,6 +6139,7 @@ codeunit 50612 "MixedCU2"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
         ];
@@ -6709,6 +6720,7 @@ codeunit 50203 "NoTriggerCU"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         }];
         let mut topology = DependencyGraph::default();
@@ -7008,6 +7020,7 @@ codeunit 50300 "OverloadCU"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         };
         (graph, index, surface, from_obj)
@@ -11280,6 +11293,7 @@ codeunit 50000 "Caller"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         });
 
@@ -13553,6 +13567,7 @@ codeunit 53971 "OverloadNCaller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
             ObjectNode {
@@ -13572,6 +13587,7 @@ codeunit 53971 "OverloadNCaller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
         ];
@@ -13948,6 +13964,7 @@ codeunit 53975 "Overload3Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
             ObjectNode {
@@ -13967,6 +13984,7 @@ codeunit 53975 "Overload3Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
         ];
@@ -14147,6 +14165,7 @@ codeunit 53975 "Overload3Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
             ObjectNode {
@@ -14166,6 +14185,7 @@ codeunit 53975 "Overload3Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
         ];

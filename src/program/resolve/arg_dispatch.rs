@@ -3496,6 +3496,7 @@ mod tests {
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         };
         let caller = ObjectNode {
@@ -3519,6 +3520,7 @@ mod tests {
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         };
         let from_id = caller.id.clone();
@@ -4249,6 +4251,7 @@ codeunit 50100 "C"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
             ObjectNode {
@@ -4268,6 +4271,7 @@ codeunit 50100 "C"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             },
         ];
@@ -4432,6 +4436,7 @@ codeunit 50700 "Caller"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         };
         let objects = vec![table];
@@ -4475,6 +4480,7 @@ codeunit 50700 "Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
             })
             .collect();
@@ -4552,6 +4558,7 @@ codeunit 50700 "Caller"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
         };
         let objects = vec![object];

@@ -263,6 +263,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **G28 closes a dependency's internal interfaces too.** An interface declared
+  `Access = Internal` in any app with source closes its dispatch when every friend
+  that app's manifest lists is loaded; before, only the workspace's own did.
+  Continia CDN's internal `IEndpointCreator`, `IPartyIdentificationCreator` and
+  `IPartyTaxSchemeCreator`, held in locals filled from factory getters, were
+  dispatched open-world from CDN's own code (the `CTS-CDN Party Type` path of
+  `IPartyInformationCreator` stays open: that enum is extensible). An object's
+  `Access = Internal` is now `ObjectNode::internal`; `PACK_SCHEMA` 9. Test
+  `a_dependencys_internal_interface_with_every_friend_loaded_is_closed`.
 - **Three more argument shapes pick an overload.** The C6 literal gate degraded a
   call whenever a `Code` candidate faced a text literal, even when the rival took
   an `Integer` that cannot take the literal at all; it now guards only a choice
