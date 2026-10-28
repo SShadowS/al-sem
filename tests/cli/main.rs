@@ -124,6 +124,7 @@ mod cli_p1_enclosing_member;
 mod cli_p1_inventory;
 mod cli_prove_cross_app;
 mod cli_prove_reaches_ui;
+mod cli_prove_temp_writes;
 mod cli_query_differential;
 mod cli_s6_consumers;
 mod cli_sarif_rule_catalog;

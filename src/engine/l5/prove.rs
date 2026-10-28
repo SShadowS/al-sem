@@ -367,15 +367,50 @@ fn effect_resource_matches(eff: &DigestEffectFull, query: &str) -> bool {
             .any(|(id, display)| name_or_id_matches(Some(display), Some(id), query))
 }
 
+/// The record temp states a DB effect's `tempState` detail lists (several when
+/// its originating operations disagree), e.g. `["known(true)"]`; empty when the
+/// detail is absent.
+fn temp_states(eff: &DigestEffectFull) -> Vec<&str> {
+    eff.detail
+        .iter()
+        .find(|(k, _)| k == "tempState")
+        .map(|(_, v)| v.split(',').map(str::trim).collect())
+        .unwrap_or_default()
+}
+
+/// G17: the write is to a temporary record on every path: no table is written.
+fn writes_only_temporary(eff: &DigestEffectFull) -> bool {
+    let states = temp_states(eff);
+    !states.is_empty() && states.iter().all(|s| *s == "known(true)")
+}
+
+/// G17b: the write is to a record parameter whose temporariness is the
+/// caller's (`parameter-dependent(i)`), and to nothing known to be persistent.
+/// Asked of the routine itself the answer depends on its callers; a caller's
+/// own frame resolves it (known(true) for a temporary argument).
+fn writes_caller_dependent(eff: &DigestEffectFull) -> bool {
+    let states = temp_states(eff);
+    states.iter().any(|s| s.starts_with("parameter-dependent"))
+        && states
+            .iter()
+            .all(|s| *s == "known(true)" || s.starts_with("parameter-dependent"))
+}
+
+/// `writes-table`'s table and write kind, temp state aside.
+fn is_table_write(eff: &DigestEffectFull, table: &str) -> bool {
+    DB_WRITE_TYPES.contains(&eff.effect_type.as_str()) && effect_resource_matches(eff, table)
+}
+
 fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
     match question {
         ProveQuestion::MayCommit => eff.effect_type == "COMMIT",
         ProveQuestion::CommitsOnSuccessPath => eff.effect_type == "COMMIT",
         ProveQuestion::WritesTable { table } => {
-            if !DB_WRITE_TYPES.contains(&eff.effect_type.as_str()) {
-                return false;
-            }
-            effect_resource_matches(eff, table)
+            // A temporary record is no table write (G17); a caller-dependent
+            // one is decided below, as neither a yes nor a no (G17b).
+            is_table_write(eff, table)
+                && !writes_only_temporary(eff)
+                && !writes_caller_dependent(eff)
         }
         ProveQuestion::PublishesEvent { event } => {
             if eff.effect_type != "EVENT_PUBLISH" {
@@ -415,7 +450,33 @@ fn evaluate_may_question(
         };
     }
 
-    if obligations_clear(&oblg, witness_truncated) {
+    // G17b: writes whose table is real only if the caller passes a persistent
+    // record. They rule out `no`, but they are no `yes` either.
+    let caller_dependent: Vec<ProveBlocker> = match question {
+        ProveQuestion::WritesTable { table } => entry
+            .effects
+            .iter()
+            .filter(|e| is_table_write(e, table) && writes_caller_dependent(e))
+            .map(|e| ProveBlocker {
+                kind: "temp-state-depends-on-caller",
+                detail: format!(
+                    "{} on a record parameter: a table write only if the caller passes \
+                     a record that is not temporary",
+                    e.effect_type
+                ),
+                anchor: Some(BlockerAnchor {
+                    source_kind: e.evidence.source_kind.to_string(),
+                    file: e.evidence.file.clone(),
+                    line: e.evidence.line,
+                    column: e.evidence.column,
+                    excerpt: e.evidence.excerpt.clone(),
+                }),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    if caller_dependent.is_empty() && obligations_clear(&oblg, witness_truncated) {
         return ProveResult {
             answer: ProveAnswer::No,
             evidence: None,
@@ -424,7 +485,8 @@ fn evaluate_may_question(
         };
     }
 
-    let blockers = build_obligation_blockers(entry, &oblg, witness_truncated);
+    let mut blockers = build_obligation_blockers(entry, &oblg, witness_truncated);
+    blockers.extend(caller_dependent);
     ProveResult {
         answer: ProveAnswer::Unknown,
         evidence: None,

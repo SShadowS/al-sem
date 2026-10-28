@@ -100,6 +100,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`prove … writes-table` does not count temporary records** (G17, G17b). It matched
+  every DB write by table, so a write to a record declared `temporary` or on a
+  `SourceTableTemporary` page answered `yes`. It now reads each write's `tempState`
+  (#65, joined in the asked routine's own frame): a write that is `known(true)` on
+  every path is no table write; a write to a `var` record parameter whose state is the
+  caller's (`parameter-dependent`, nothing known persistent) answers `unknown` with
+  the new blocker `temp-state-depends-on-caller` when nothing else decides it, while
+  a caller passing a temporary record sees `known(true)` and gets `no`. On Continia
+  DO, the 8 claims this contradicted: 2 are now `no` as claimed, 6 `unknown` (other
+  open blockers), none `yes`. Tests: `cli_prove_temp_writes::writes_table_skips_temporary_records`
+  (each rule removed alone fails it); `cli_implicit_trigger_cone::a3_temporary_receiver_stays_non_physical`
+  now pins `no` (it pinned `yes` with the temporary write as evidence).
 - **A source-folder dependency includes its module folders** (G21). G4 first read a
   folder without the folders under it that hold their own `app.json`, to keep nested
   test apps out. In BC.History those are the app's modules, so most of Base and System
