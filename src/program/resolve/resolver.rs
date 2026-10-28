@@ -721,7 +721,12 @@ fn resolve_in_object(
             // not merely a convention check) — no unknown-metadata candidate
             // is ever filtered out of the competition, its mere presence
             // degrades the whole call (module doc's cardinal rule).
-            if !args.is_empty() {
+            // Two candidates that exist in no common build are no overloads of
+            // each other but `#if` alternatives: only one is compiled, so the
+            // argument types cannot choose between them (with `CLEAN27` only
+            // the `var array[15] of Text` arm exists, and a `Text[80]` array
+            // binds it).
+            if !args.is_empty() && !has_build_alternatives(&visible, graph) {
                 let mut candidate_params = Vec::with_capacity(visible.len());
                 let mut all_known = true;
                 for rid in &visible {
@@ -892,6 +897,27 @@ fn object_has_member_candidate(
         return true;
     }
     candidates.any(|rid| rid.params_count == arity)
+}
+
+/// Whether two of `candidates` exist in no common build: every node of one
+/// has build conditions that contradict every node of the other.
+fn has_build_alternatives(candidates: &[&RoutineNodeId], graph: &ProgramGraph) -> bool {
+    let contexts = |rid: &RoutineNodeId| -> Vec<&[(String, bool)]> {
+        graph
+            .routines
+            .run_by(|p| p.id.cmp(rid))
+            .map(|n| &*n.preproc_context)
+            .collect()
+    };
+    let all: Vec<Vec<&[(String, bool)]>> = candidates.iter().map(|rid| contexts(rid)).collect();
+    all.iter().enumerate().any(|(i, a)| {
+        all[i + 1..].iter().any(|b| {
+            !a.is_empty()
+                && !b.is_empty()
+                && a.iter()
+                    .all(|x| b.iter().all(|y| al_syntax::ir::preproc_contradicts(x, y)))
+        })
+    })
 }
 
 /// Whether candidate `rid` exists in no build the call site's build context
@@ -5402,6 +5428,7 @@ pageextension 52911 "ExtA" extends BasePage
                     subtype_id: None,
                     subtype_raw_name: None,
                     subtype_tag: SubtypeTag::NoSubtype,
+                    array_dims: None,
                 }]),
             ),
             abi_node(&dep_obj_id, 222, AbiParams::Missing),
@@ -5552,6 +5579,7 @@ codeunit 50611 "MixedCU"
                 subtype_id: None,
                 subtype_raw_name: None,
                 subtype_tag: SubtypeTag::NoSubtype,
+                array_dims: None,
             }]),
             abi_method_id: None,
         });

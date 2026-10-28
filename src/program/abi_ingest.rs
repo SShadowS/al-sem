@@ -111,6 +111,7 @@ fn retain_abi_params(routine: &AbiRoutine) -> AbiParams {
                 subtype_id: p.subtype_id,
                 subtype_raw_name: p.subtype_raw_name.as_deref().map(SharedStr::from),
                 subtype_tag: p.subtype_tag,
+                array_dims: p.array_dims.as_deref().map(SharedStr::from),
             })
             .collect(),
     )
@@ -875,6 +876,7 @@ mod tests {
                                 subtype_id: None,
                                 subtype_raw_name: None,
                                 subtype_tag: SubtypeTag::NoSubtype,
+                                array_dims: None,
                             },
                             AbiParameter {
                                 name: "p2".into(),
@@ -884,6 +886,7 @@ mod tests {
                                 subtype_id: None,
                                 subtype_raw_name: None,
                                 subtype_tag: SubtypeTag::NoSubtype,
+                                array_dims: None,
                             },
                         ],
                         return_type_text: None,
@@ -908,6 +911,7 @@ mod tests {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         }],
                         return_type_text: None,
                         return_type_id: None,
@@ -931,6 +935,7 @@ mod tests {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         }],
                         return_type_text: None,
                         return_type_id: None,
@@ -954,6 +959,7 @@ mod tests {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         }],
                         return_type_text: None,
                         return_type_id: None,
@@ -1876,6 +1882,7 @@ codeunit 50900 "Subscriber CU"
             subtype_id,
             subtype_raw_name: subtype_raw_name.map(String::from),
             subtype_tag,
+            array_dims: None,
         }
     }
 

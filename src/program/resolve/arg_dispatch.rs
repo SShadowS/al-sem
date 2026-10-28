@@ -166,6 +166,58 @@ pub(crate) enum CanonicalArgType {
         base: String,
         args: Vec<GenericArgType>,
     },
+    /// An array (`array[8] of Text[100]`): its dimensions, whitespace-free
+    /// (`"8"`, `"2,3"`), and its element type. An array never binds a
+    /// non-array parameter nor a non-array an array one, so the pair is
+    /// incompatible; two arrays that differ are undecided, never eliminated.
+    /// Before this an array read as a malformed generic clause (`of` with no
+    /// `[..]`), so one array parameter degraded every overload pick of its
+    /// name: Base Application's `VendorRemitToAddress(Rec, array[8] of
+    /// Text[100])` / `(Rec, Record "Remit Address Buffer")`.
+    Array {
+        dims: String,
+        elem: Box<CanonicalArgType>,
+    },
+}
+
+/// The shape of a declared type text's `array[..] of <element>` prefix.
+enum ArrayShape<'a> {
+    NotArray,
+    Array {
+        dims: String,
+        elem: &'a str,
+    },
+    /// `array` with no well-formed `[..] of <element>`: undecided.
+    Malformed,
+}
+
+/// Split `array[<dims>] of <element>` (any case, any spacing) off `ty_text`.
+fn split_array_type(ty_text: &str) -> ArrayShape<'_> {
+    let trimmed = ty_text.trim();
+    let Some(head) = trimmed.get(..5).filter(|h| h.eq_ignore_ascii_case("array")) else {
+        return ArrayShape::NotArray;
+    };
+    let rest = trimmed[head.len()..].trim_start();
+    if !rest.starts_with('[') {
+        // `ArrayX` / `Array` as a name, not the keyword.
+        return ArrayShape::NotArray;
+    }
+    let Some(close) = rest.find(']') else {
+        return ArrayShape::Malformed;
+    };
+    let dims: String = rest[1..close]
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let after = rest[close + 1..].trim_start();
+    let elem = match after.get(..2) {
+        Some(of) if of.eq_ignore_ascii_case("of") => after[2..].trim(),
+        _ => return ArrayShape::Malformed,
+    };
+    if dims.is_empty() || elem.is_empty() || !after[2..].starts_with(char::is_whitespace) {
+        return ArrayShape::Malformed;
+    }
+    ArrayShape::Array { dims, elem }
 }
 
 /// Recursively-parsed identity of ONE generic type ARGUMENT (`Dictionary of
@@ -558,6 +610,16 @@ pub(crate) fn dispatch_canonical_type_text(
     if ty_text.trim().is_empty() {
         return None;
     }
+    match split_array_type(ty_text) {
+        ArrayShape::NotArray => {}
+        ArrayShape::Array { dims, elem } => {
+            return Some(CanonicalArgType::Array {
+                dims,
+                elem: Box::new(dispatch_canonical_type_text(elem, from, graph, index)?),
+            });
+        }
+        ArrayShape::Malformed => return None,
+    }
     let resolve = |kind: ObjectKind, oref: &ObjectRef| match index.resolve_object_ref(
         graph,
         from.clone(),
@@ -852,8 +914,11 @@ fn type_one_arg(
             Some((canonical, kind)) => {
                 let text = match &canonical {
                     CanonicalArgType::Base(s) => s.clone(),
-                    // `literal_canonical` never produces `Object(..)`/`Generic(..)`.
-                    CanonicalArgType::Object(_) | CanonicalArgType::Generic { .. } => {
+                    // `literal_canonical` never produces `Object(..)`/`Generic(..)`/
+                    // `Array(..)`.
+                    CanonicalArgType::Object(_)
+                    | CanonicalArgType::Generic { .. }
+                    | CanonicalArgType::Array { .. } => {
                         unreachable!("literal_canonical only ever returns CanonicalArgType::Base")
                     }
                 };
@@ -1505,7 +1570,17 @@ fn type_call_result_arg_member(
     if matches!(route.target, RouteTarget::Builtin(_))
         && matches!(base_receiver, ReceiverType::Record { .. })
     {
+        // `Count`/`CountApprox` and `FieldNo` return an Integer (MS Learn,
+        // methods-auto/record), which the table's generic `Scalar` does not
+        // say: Base Application's `AddAllowedTable(Database::"…",
+        // Log.FieldNo(SystemCreatedAt))` over `(Integer, Integer)` /
+        // `(Integer, JsonArray)` stayed ambiguous.
+        let integer = matches!(
+            (member_lc.as_str(), inner_arity),
+            ("count" | "countapprox", 0) | ("fieldno", 1)
+        );
         let keyword = match record_builtin_return_kind(&member_lc, true, inner_arity) {
+            _ if integer => "integer",
             Some(FrameworkKind::RecordId) => "recordid",
             Some(FrameworkKind::Guid) => "guid",
             Some(FrameworkKind::DateTime) => "datetime",
@@ -1865,9 +1940,22 @@ pub(crate) fn candidate_param_infos_abi(
     };
     let mut out = Vec::with_capacity(params.len());
     for p in params {
+        let elem = abi_param_canonical(p, &rid.object, graph, index)?;
+        // An array parameter's symbols give its element type and, apart, its
+        // dimensions (`AbiParamRetained::array_dims`).
+        let (canonical, exact_text) = match &p.array_dims {
+            Some(dims) => (
+                CanonicalArgType::Array {
+                    dims: dims.chars().filter(|c| !c.is_whitespace()).collect(),
+                    elem: Box::new(elem),
+                },
+                normalize_type_text(&format!("array[{dims}] of {}", p.type_text)),
+            ),
+            None => (elem, normalize_type_text(&p.type_text)),
+        };
         out.push(ParamDispatchInfo {
-            canonical: abi_param_canonical(p, &rid.object, graph, index)?,
-            exact_text: normalize_type_text(&p.type_text),
+            canonical,
+            exact_text,
             by_ref: p.is_var,
         });
     }
@@ -1953,10 +2041,13 @@ fn position_exact_match(arg: &ArgDispatchInfo, param: &ParamDispatchInfo) -> boo
             return false;
         }
         // Length-EXACT identity for `var`, Base (scalar/Text/Code) types
-        // only — object-bearing types have no "length" concept; the
-        // canonical Object(..) equality above already IS their exact
-        // identity.
-        if matches!(param.canonical, CanonicalArgType::Base(_)) {
+        // and arrays (whose element carries the length) only — object-
+        // bearing types have no "length" concept; the canonical Object(..)
+        // equality above already IS their exact identity.
+        if matches!(
+            param.canonical,
+            CanonicalArgType::Base(_) | CanonicalArgType::Array { .. }
+        ) {
             match &arg.exact_text {
                 Some(a_text) if *a_text == param.exact_text => {}
                 _ => return false,
@@ -2003,6 +2094,15 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
         return false;
     }
     if arg_canonical != &param.canonical {
+        // An array and a non-array never bind; two different arrays are not
+        // proven apart (element conversions are not modelled).
+        match (arg_canonical, &param.canonical) {
+            (CanonicalArgType::Array { .. }, CanonicalArgType::Array { .. }) => return false,
+            (CanonicalArgType::Array { .. }, _) | (_, CanonicalArgType::Array { .. }) => {
+                return true;
+            }
+            _ => {}
+        }
         return !matches!(
             (arg_canonical, &param.canonical),
             (CanonicalArgType::Base(a), CanonicalArgType::Base(b)) if same_soft_family(a, b)
@@ -4517,6 +4617,7 @@ codeunit 50700 "Caller"
             subtype_id,
             subtype_raw_name: subtype_raw_name.map(Into::into),
             subtype_tag,
+            array_dims: None,
         }
     }
 

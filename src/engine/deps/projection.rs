@@ -442,6 +442,7 @@ mod tests {
                 subtype_id: None,
                 subtype_raw_name: None,
                 subtype_tag: SubtypeTag::NoSubtype,
+                array_dims: None,
             }],
             Some("Integer"),
         );

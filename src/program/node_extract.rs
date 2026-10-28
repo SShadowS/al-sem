@@ -224,6 +224,10 @@ pub struct AbiParamRetained {
     pub subtype_id: Option<i64>,
     pub subtype_raw_name: Option<SharedStr>,
     pub subtype_tag: SubtypeTag,
+    /// An array parameter's dimensions (`"8"`, `"2,3"`); `type_text` is then
+    /// its element type. See
+    /// [`crate::engine::deps::symbol_reference::AbiParameter::array_dims`].
+    pub array_dims: Option<SharedStr>,
 }
 
 /// The STRUCTURAL guard over a [`RoutineNode`]'s retained ABI parameter
@@ -1074,6 +1078,7 @@ pub(crate) mod test_fixtures {
                 subtype_id: Some(18),
                 subtype_raw_name: Some("Customer".into()),
                 subtype_tag: SubtypeTag::Full,
+                array_dims: None,
             }]),
             abi_method_id: Some(-42),
         }

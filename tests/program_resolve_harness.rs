@@ -479,6 +479,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                         subtype_id: None,
                         subtype_raw_name: None,
                         subtype_tag: SubtypeTag::NoSubtype,
+                        array_dims: None,
                     }],
                     return_type_text: None,
                     return_type_id: None,
@@ -503,6 +504,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         },
                         AbiParameter {
                             name: "p2".into(),
@@ -512,6 +514,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         },
                     ],
                     return_type_text: None,

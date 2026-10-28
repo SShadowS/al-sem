@@ -71,7 +71,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 7: `ObjectNode::closed_enum` / `enum_impls` (#264).
 /// 8: `RoutineMeta::method_id` / `try_function`.
 /// 9: `ObjectNode::internal`.
-pub const PACK_SCHEMA: u32 = 9;
+/// 10: `AbiParamRetained::array_dims`.
+pub const PACK_SCHEMA: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -532,11 +533,12 @@ mod tests {
 
     /// Schemas 8 and 9: a routine's method ids are pack payload (the symbols'
     /// id on the node, the declared id and `[TryFunction]` flag on its meta),
-    /// and so is an object's `Access = Internal`.
+    /// and so is an object's `Access = Internal`. (Schema 10 changed only
+    /// `AbiParamRetained`, which no source routine in a pack carries.)
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 9);
+        assert_eq!(PACK_SCHEMA, 10);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         let meta = &mut pack.files[0].routine_meta[0].1;

@@ -263,6 +263,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An array parameter takes part in overload selection.** Argument typing read
+  `array[8] of Text[100]` as a malformed generic clause (`of` with no `[..]`),
+  so an array parameter was untyped and degraded every overload pick of its
+  name: Base Application's `VendorRemitToAddress(Rec, array[8] of Text[100])` /
+  `(Rec, Record "Remit Address Buffer")` stayed `ambiguousResolved` for both
+  argument kinds. An array now types as its dimensions plus element type; it
+  never binds a non-array (nor the other way round), and two different arrays
+  stay undecided. A symbol parameter's `ArrayDimensions` were dropped too (its
+  text is the element type), so a symbol array parameter looked scalar; they are
+  now read (`AbiParamRetained::array_dims`, pack schema 10). Argument types
+  never choose between two `#if` alternatives (candidates that exist in no
+  common build): only one is compiled, and the other build binds the other one
+  (`overload_candidates_are_narrowed_to_the_call_sites_build`, which array
+  typing would otherwise have broken). Test `cli_array_param_overload`.
+
+- **A record's `FieldNo(..)` / `Count()` argument is an Integer in overload
+  selection.** Base Application's `AddAllowedTable(Database::"…",
+  Log.FieldNo(SystemCreatedAt))` over `(Integer, Integer)` / `(Integer,
+  JsonArray)` stayed ambiguous. Test `cli_record_integer_builtin_arg`. With the
+  array fix, Continia DO's dependency-body `ambiguousResolved`: 86 → 59.
+
 - **A dependency page's `CurrPage.<usercontrol>` call resolves against an add-in
   its package declares only in symbols.** Continia's CDN embeds
   `usercontrol(RefreshTimer; "CTS-CDN Refresh Timer")` and calls

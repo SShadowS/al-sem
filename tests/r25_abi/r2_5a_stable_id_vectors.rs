@@ -48,6 +48,7 @@ fn routine_from_sig_row(row: &Value) -> AbiRoutine {
                 subtype_id: None,
                 subtype_raw_name: None,
                 subtype_tag: SubtypeTag::NoSubtype,
+                array_dims: None,
             }
         })
         .collect();

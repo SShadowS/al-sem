@@ -184,6 +184,12 @@ pub struct AbiParameter {
     pub subtype_raw_name: Option<String>,
     /// See [`SubtypeTag`].
     pub subtype_tag: SubtypeTag,
+    /// An array parameter's dimensions (`TypeDefinition.ArrayDimensions`,
+    /// comma-joined: `"8"`, `"2,3"`); `type_text` is then its ELEMENT type
+    /// (`ColumnCaptions: array[12] of Text` is `{"Name": "Text",
+    /// "ArrayDimensions": [12]}`). `None` for a non-array. Not folded into
+    /// any fingerprint; overload dispatch reads it.
+    pub array_dims: Option<String>,
 }
 
 /// A routine signature from `SymbolReference.json`. No body, no anchor, no per-run id.
@@ -433,6 +439,9 @@ struct RawTypeDef {
     /// no nested object identity.
     #[serde(rename = "Subtype")]
     subtype: Option<RawSubtype>,
+    /// An array's dimensions (`array[12] of Text` → `[12]`).
+    #[serde(rename = "ArrayDimensions")]
+    array_dimensions: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -1078,6 +1087,12 @@ fn parse_method(m: &RawMethod) -> AbiRoutine {
                     subtype_id,
                     subtype_raw_name,
                     subtype_tag,
+                    array_dims: p
+                        .type_definition
+                        .as_ref()
+                        .and_then(|t| t.array_dimensions.as_deref())
+                        .filter(|d| !d.is_empty())
+                        .map(|d| d.iter().map(i64::to_string).collect::<Vec<_>>().join(",")),
                 }
             })
             .collect(),
@@ -1911,6 +1926,31 @@ mod tests {
         assert!(
             !pub_r.is_protected,
             "absent IsProtected must default to false"
+        );
+    }
+
+    /// An array parameter's `ArrayDimensions` are read apart from its element
+    /// type (Base Application's `SetMatrixColumns(ColumnCaptions: array[12]
+    /// of Text)`); a plain parameter has none.
+    #[test]
+    fn parse_method_reads_array_dimensions() {
+        let json = r##"{"Name":"SetMatrixColumns","Parameters":[
+            {"Name":"ColumnCaptions","TypeDefinition":{"Name":"Text","ArrayDimensions":[12]}},
+            {"Name":"Grid","TypeDefinition":{"Name":"Code[20]","ArrayDimensions":[2,3]}},
+            {"Name":"N","TypeDefinition":{"Name":"Integer"}}]}"##;
+        let m = parse_method(&serde_json::from_str::<RawMethod>(json).unwrap());
+        let got: Vec<(&str, Option<&str>)> = m
+            .parameters
+            .iter()
+            .map(|p| (p.type_text.as_str(), p.array_dims.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Text", Some("12")),
+                ("Code[20]", Some("2,3")),
+                ("Integer", None)
+            ]
         );
     }
 
