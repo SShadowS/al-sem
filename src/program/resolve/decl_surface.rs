@@ -66,6 +66,23 @@ pub struct RoutineMeta {
     #[serde(with = "crate::program::pack::origin_wire")]
     pub name_origin: Origin,
     pub virtual_path: SharedStr,
+    /// The method id a `[MethodId(n)]` attribute declares: AL synthesized
+    /// from a transpiled runtime package carries the runtime's own
+    /// (`snapshot::transpiled`), which a signature cannot always give (an
+    /// enum parameter the C# shows as `NavOption`).
+    #[serde(default)]
+    pub method_id: Option<i32>,
+}
+
+/// The id a `[MethodId(n)]` attribute of `decl` declares.
+fn declared_method_id(decl: &RoutineDecl) -> Option<i32> {
+    decl.attributes_parsed
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case("methodid"))
+        .and_then(|a| {
+            let (_, rest) = a.raw.split_once('(')?;
+            rest.split_once(')')?.0.trim().parse().ok()
+        })
 }
 
 impl RoutineMeta {
@@ -89,6 +106,7 @@ impl RoutineMeta {
             origin: decl.origin.clone(),
             name_origin: decl.name_origin.clone(),
             virtual_path: virtual_path.into(),
+            method_id: declared_method_id(decl),
         }
     }
 }
@@ -399,6 +417,21 @@ mod tests {
                 text: src.into(),
             }],
         }
+    }
+
+    /// A `[MethodId(n)]` attribute (synthesized from a runtime package) is the
+    /// routine's declared id; a routine without one declares none.
+    #[test]
+    fn method_id_attribute_is_the_declared_id() {
+        let file = al_syntax::parse(
+            "codeunit 50100 C\n{\n    [MethodId(1859663910)]\n    local procedure A(var S: Integer)\n    begin\n    end;\n\n    [MethodId(-42)]\n    procedure B()\n    begin\n    end;\n\n    procedure D()\n    begin\n    end;\n}\n",
+        );
+        let ids: Vec<Option<i32>> = file.objects[0]
+            .routines
+            .iter()
+            .map(|r| RoutineMeta::from_decl(r, "C.al").method_id)
+            .collect();
+        assert_eq!(ids, vec![Some(1859663910), Some(-42), None]);
     }
 
     /// S10.3: `DepMeta` answers exactly as the `HashMap` it replaces, built

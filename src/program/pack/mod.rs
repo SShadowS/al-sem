@@ -485,6 +485,7 @@ mod tests {
             origin: origin("procedure", 100, 240),
             name_origin: origin("identifier", 110, 127),
             virtual_path: "src/Sales/SalesPost.Codeunit.al".into(),
+            method_id: Some(-42),
         }
     }
 

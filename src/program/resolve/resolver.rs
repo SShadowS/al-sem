@@ -299,6 +299,11 @@ pub(crate) fn routine_method_id(
             _ => None,
         }
     };
+    // A declared id (`[MethodId(n)]`, synthesized from a runtime package) is
+    // the runtime's own: no signature to recompute it from.
+    if let Some(id) = surface.get(&r.id).and_then(|m| m.method_id) {
+        return Some(id);
+    }
     let mut sig: Vec<SigParam> = Vec::new();
     // Per parameter, an ABI subtype's id and raw name when the symbols give them.
     let mut abi_subtypes: Vec<(Option<i64>, Option<&str>)> = Vec::new();

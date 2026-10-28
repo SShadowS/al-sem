@@ -5328,6 +5328,8 @@ codeunit 50182 "MI Target"
     procedure P(X: Text) begin end;
     procedure Q(var R: Record "MI T") begin end;
     procedure Q(X: Integer) begin end;
+    [MethodId(777)]
+    procedure Declared(X: Integer) begin end;
 }
 
 codeunit 50183 "MI Caller"
@@ -5355,6 +5357,14 @@ codeunit 50183 "MI Caller"
         T."__alsem_mid_12345"();
     end;
 
+    procedure ByIdDeclared()
+    var
+        T: Codeunit "MI Target";
+        I: Integer;
+    begin
+        T."__alsem_mid_777"(I);
+    end;
+
     procedure ByIdTableMethod()
     var
         R: Record "MI T";
@@ -5373,6 +5383,9 @@ codeunit 50183 "MI Caller"
     // variable, and bare from inside the table.
     assert_binds_param(&report, tmp.path(), "byidtablemethod", "isvalid");
     assert_binds_param(&report, tmp.path(), "byidowntable", "isvalid");
+    // A declared `[MethodId(n)]` (synthesized AL carries the runtime's) is the
+    // routine's id, not the one its signature gives.
+    assert_binds_param(&report, tmp.path(), "byiddeclared", "declared");
     let edge = &outer_call_edge(&report, "byidnone").edge;
     assert!(
         matches!(edge.routes.as_slice(), [r] if matches!(r.evidence, Evidence::Unknown(_))),

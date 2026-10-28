@@ -350,8 +350,12 @@ fn routines<'a>(o: &Value, class: Option<&'a Class>, interface: bool) -> Vec<Rou
         if let Some(i) = id {
             seen.insert(i);
         }
-        let attributes = symbol_attributes(m);
+        let mut attributes = symbol_attributes(m);
         let is_event = attributes.iter().any(|a| a.contains("Event("));
+        // The id the runtime calls it by (`"__alsem_mid_<n>"` calls bind to
+        // it): computing it from the signature fails for an enum parameter
+        // the C# shows only as `NavOption`.
+        attributes.extend(id.map(|i| format!("[MethodId({i})]")));
         let sym_params = arr(m, "Parameters");
         // C# names by position, so the body's references match.
         let names: Vec<String> = match cs {
@@ -409,7 +413,10 @@ fn routines<'a>(o: &Value, class: Option<&'a Class>, interface: bool) -> Vec<Rou
             let params: Option<Vec<String>> = m.params.iter().map(cs_param).collect();
             let Some(params) = params else { continue };
             out.push(Routine {
-                attributes: subscriber_attribute(m).into_iter().collect(),
+                attributes: subscriber_attribute(m)
+                    .into_iter()
+                    .chain(std::iter::once(format!("[MethodId({id})]")))
+                    .collect(),
                 access: "local ",
                 name: name.to_string(),
                 params,

@@ -263,6 +263,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Synthesized runtime code binds by the runtime's own method ids.** AL synthesized
+  from a transpiled package (`snapshot::transpiled`) now writes `[MethodId(n)]` on
+  every routine whose id the symbols or the C# give, and the resolver takes a
+  declared id over the one it computes from the signature
+  (`RoutineMeta::method_id`). A routine only the C# declares (a `local procedure`)
+  got its signature from C# types, where an enum parameter shows as `NavOption`
+  (declared `Integer`), so its computed id was wrong and every `"__alsem_mid_<n>"`
+  call to it stayed unresolved (Continia Core: `CSC Licensing.GetLicenseState`,
+  `__alsem_mid_1859663910`). Extraction scheme 3 (`EXTRACTION_SCHEME`). Continia DO's
+  dependency-body unknown call edges: 214 → 91. Tests
+  `synthesized_calls_bind_by_method_id`, `method_id_attribute_is_the_declared_id`.
 - **`Page.Run(0, Rec)` runs the lookup page of `Rec`'s table.** Page `0` is the
   table's `LookupPageId` (or one a table extension sets); with none, the platform
   shows a page of its own, which runs no AL code. The run was dynamic
