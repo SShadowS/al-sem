@@ -1523,17 +1523,34 @@ pub fn run_digest_query_full_from_entries(
                     TX_UNKNOWN
                 };
 
-                // Evidence anchor
-                let evidence = FullAnchor {
-                    source_kind: eff.evidence.source_kind,
-                    file: eff.evidence.file.clone(),
-                    line: eff.evidence.line,
-                    column: eff.evidence.column,
-                    excerpt: eff.evidence.excerpt.clone(),
+                // Evidence anchor. G32: an event publication is the publisher
+                // routine's own fact, with no operation to cite: its anchor is the
+                // call into the publisher, the last hop of its shortest path.
+                let publish_call = (eff.evidence.source_kind == "unavailable"
+                    && eff.effect_type == "EVENT_PUBLISH")
+                    .then(|| eff.via_paths.iter().min_by_key(|p| p.len()))
+                    .flatten()
+                    .and_then(|p| p.last())
+                    .and_then(|h| Some((h.inner.anchor.as_ref()?, &h.inner)));
+                let evidence = match publish_call {
+                    Some((a, hop)) => FullAnchor {
+                        source_kind: "source",
+                        file: Some(a.file.clone()),
+                        line: a.line,
+                        column: a.column,
+                        excerpt: hop.callee_display.clone(),
+                    },
+                    None => FullAnchor {
+                        source_kind: eff.evidence.source_kind,
+                        file: eff.evidence.file.clone(),
+                        line: eff.evidence.line,
+                        column: eff.evidence.column,
+                        excerpt: eff.evidence.excerpt.clone(),
+                    },
                 };
 
                 // evidence-unavailable diagnostic
-                if eff.evidence.source_kind == "unavailable" {
+                if evidence.source_kind == "unavailable" {
                     entry_diagnostics.push(EntryDiagnostic {
                         kind: "evidence-unavailable",
                         effect_type: Some(eff.effect_type.clone()),

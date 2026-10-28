@@ -25,7 +25,11 @@
             "resourceId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc"
           },
           "evidence": {
-            "sourceKind": "unavailable"
+            "column": 8,
+            "excerpt": "OnAfterPostSalesDoc",
+            "file": "ws:src/posting.al",
+            "line": 12,
+            "sourceKind": "source"
           },
           "factId": "9a275bc82593f13c",
           "guarantees": [

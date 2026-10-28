@@ -2,5 +2,5 @@
   question: publishes-event:onafterpostsalesdoc
   answer:   yes
   evidence: 1 effect(s)
-    [EVENT_PUBLISH] transitive — (unavailable)
+    [EVENT_PUBLISH] transitive — ws:src/posting.al:12
   obligations: all clear

@@ -246,6 +246,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`publishes-event` evidence cites the publish call** (G32). An event publication is
+  the publisher routine's own fact, with no operation to cite, so its evidence read
+  `sourceKind: unavailable` (35 proven answers on Continia DO had no file or line).
+  Its anchor is now the call into the publisher, the last hop of its shortest witness
+  path. Test `cli_prove_event_anchor`.
 - **A known-temporary write the root's L4 summary has no row for says so.** A DB
   effect's `tempState` is joined from the root's L4 rows; with none (a dependency
   root, a write inside a dependency boundary group) it was absent, so `prove` counted
