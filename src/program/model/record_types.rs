@@ -366,6 +366,78 @@ pub fn resolve_routine_record_types(
         }
     }
 
+    // --- pass: a LOCAL RecordRef only ever opened temporary, with branching ----
+    //
+    // The pass above needs a routine with no branching, since it reads one Open
+    // per variable. A local RecordRef whose EVERY `Open` is `Open(_, true)` holds
+    // a temporary table on every path, branches or not: an op before any Open is a
+    // runtime error, not a write. Only when nothing else can bind it: no
+    // `GetTable`/`Copy`, no assignment to it, and never passed as an argument
+    // (a callee could open it otherwise). Continia DO's `TryMatchTypedFilter`
+    // opens `CDO Typed Value Buffer` temporary under a `case`; its
+    // `RecRef.Insert` was a write to an unknown, possibly persistent, table.
+    if routine.has_branching {
+        let locals: Vec<String> = routine
+            .variables
+            .iter()
+            .filter(|v| {
+                v.declared_type.trim().eq_ignore_ascii_case("recordref")
+                    && !v.is_parameter
+                    && v.scope.as_deref() == Some("local")
+            })
+            .map(|v| v.name.to_lowercase())
+            .collect();
+        let always_temp: std::collections::HashSet<String> = locals
+            .into_iter()
+            .filter(|v_lc| {
+                let mut opened = false;
+                for cs in &routine.call_sites {
+                    if cs
+                        .argument_texts
+                        .iter()
+                        .any(|a| a.trim().to_lowercase() == *v_lc)
+                    {
+                        return false;
+                    }
+                    let crate::program::body::features::PCallee::Member { receiver, method } =
+                        &cs.callee
+                    else {
+                        continue;
+                    };
+                    if receiver.to_lowercase() != *v_lc {
+                        continue;
+                    }
+                    match method.to_lowercase().as_str() {
+                        "open" => {
+                            let temp = cs
+                                .argument_texts
+                                .get(1)
+                                .is_some_and(|t| t.trim().eq_ignore_ascii_case("true"));
+                            if !temp {
+                                return false;
+                            }
+                            opened = true;
+                        }
+                        "gettable" | "copy" => return false,
+                        _ => {}
+                    }
+                }
+                opened
+                    && !routine
+                        .var_assignments
+                        .iter()
+                        .any(|a| a.lhs_name.trim().to_lowercase() == *v_lc)
+            })
+            .collect();
+        if !always_temp.is_empty() {
+            for op in routine.record_operations.iter_mut() {
+                if always_temp.contains(&op.record_variable_name.to_lowercase()) {
+                    op.temp_state = Some(crate::program::body::scope::ts_known(true));
+                }
+            }
+        }
+    }
+
     // --- FINAL override pass (Task 4 / G3, RV-8): table-level temp precedence --
     //
     // "One precedence rule everywhere: table-level temp (`TableType = Temporary`)

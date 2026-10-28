@@ -256,6 +256,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cone through one counted as complete and d35 reported nothing
   (`combined_graph::keyword_run_kind`). `prove` already blocked on it. Tests
   `cli_d35_unknown_commit` V6, V7.
+- **A local RecordRef opened only temporary is temporary in a routine that branches.**
+  The RecordRef temp-state pass (`record_types`) needed a routine with no branching.
+  A LOCAL RecordRef whose every `Open` is `Open(_, true)`, with no `GetTable`/`Copy`,
+  no assignment to it and never passed on, holds a temporary table on every path (an
+  op before any `Open` is a runtime error, not a write), so its ops are now
+  `known(true)`. Continia DO: `TryMatchTypedFilter`'s `RecRef.Insert` on `CDO Typed
+  Value Buffer`. Test `cli_recordref_open_temporary`.
+- **An implicit `Rec`/`xRec` argument is typed, so the overload it picks resolves.**
+  An undeclared `Rec`/`xRec` passed to a call was untyped, so an overload set over
+  record types stayed ambiguous: Continia DO's `LineAttachment.SetTemplateFilter(xRec)`
+  in a table's `OnDelete`. It is now the object's implicit record, as the `Rec.Field`
+  argument arm already typed it (`receiver::infer_implicit_rec`). Test
+  `cli_implicit_rec_argument`.
 - **A `this.Global` argument is typed, so the overload it picks resolves.** Argument
   typing (`arg_dispatch::type_one_arg`) read a bare identifier, a literal and
   `Rec.Field`, but not `this.X`, which names an object global only. A call

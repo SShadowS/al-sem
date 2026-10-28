@@ -667,6 +667,26 @@ fn type_one_arg(
                     literal_kind: None,
                     var_passable: true,
                 },
+                // An undeclared `Rec`/`xRec` is the object's implicit record,
+                // typed as the `Rec.Field` arm below types its base (the
+                // receiver typer's Step 3b). Without it an overload picked on
+                // the record (`SetTemplateFilter(Rec)` on Continia DO, over
+                // two record types) stayed ambiguous.
+                CallerScopeSymbol::NotFound
+                    if matches!(name.fold_identifier().as_str(), "rec" | "xrec") =>
+                {
+                    match object_by_id(graph, from)
+                        .map(|o| infer_implicit_rec(routine, o, graph, index))
+                    {
+                        Some(ReceiverType::Record { table: Some(id) }) => ArgDispatchInfo {
+                            canonical: Some(CanonicalArgType::Object(id)),
+                            exact_text: None,
+                            literal_kind: None,
+                            var_passable: true,
+                        },
+                        _ => ArgDispatchInfo::untyped(),
+                    }
+                }
                 // Found but no declared type text, not found at all in
                 // caller scope, or a malformed same-scope duplicate —
                 // untyped either way, never a guess.
