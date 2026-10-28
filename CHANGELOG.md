@@ -263,6 +263,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ModuleInfo.Id()`/`PackageId()` return `Guid`, `Name()`/`Publisher()` `Text`**
+  (`framework_returns`). System Application's
+  `IsCapabilityRegistered(Capability, CallerModuleInfo.Id())` and
+  `IsCapabilityActive(…, CallerModuleInfo.Id())` stayed ambiguous between their
+  `ModuleInfo` and `Guid` overloads. Test
+  `record_builtin_and_enum_list_results_pick_overloads`.
 - **Framework and RecordRef call results type an argument.** A framework method's
   call result (`Token.AsValue()`) types as the kind it returns, and so does a
   framework call on one (`Token.AsValue().AsText()`); a `RecordRef`/`FieldRef`

@@ -5476,6 +5476,16 @@ codeunit 50231 "AA Errors"
 
     procedure SetSeverity(NewSeverity: Text) begin end;
     procedure SetSeverity(NewSeverity: Enum "AA Method") begin end;
+
+    procedure ModuleId()
+    var
+        CallerModuleInfo: ModuleInfo;
+    begin
+        IsRegistered(CallerModuleInfo.Id());
+    end;
+
+    procedure IsRegistered(CallerModuleInfo: ModuleInfo): Boolean begin end;
+    procedure IsRegistered(AppId: Guid): Boolean begin end;
 }
 enum 50232 "AA Method" { value(0; GET) { } value(1; POST) { } }
 "#,
@@ -5491,6 +5501,9 @@ enum 50232 "AA Method" { value(0; GET) { } value(1; POST) { } }
     // A framework call on a framework call result (Continia CDN's
     // `SetSeverity(SeverityToken.AsValue().AsText())`).
     assert_binds_param(&report, tmp.path(), "jsonchain", "newseverity: text");
+    // `ModuleInfo.Id()` is a Guid (System Application's
+    // `IsCapabilityRegistered(Capability, CallerModuleInfo.Id())`).
+    assert_binds_param(&report, tmp.path(), "moduleid", "appid: guid");
 }
 
 /// Three argument shapes that left a same-arity overload pair
